@@ -23,6 +23,7 @@ const MT5EAGuide = () => {
 
 //--- [ ZIGZAG++ SETTINGS ] -----------------------------------------
 input string   InpZigZagHeader = "=== ZIGZAG++ SETTINGS ===";  // ___
+input ENUM_TIMEFRAMES InpZigZagTimeframe = PERIOD_CURRENT;  // ZigZag Timeframe
 input int      InpDepth        = 12;          // ZigZag Depth
 input int      InpDeviation    = 5;           // ZigZag Deviation (pips)
 input int      InpBackstep     = 2;           // ZigZag Backstep
@@ -30,6 +31,14 @@ input color    InpBullColor    = clrLime;     // Bull Color (HL labels)
 input color    InpBearColor    = clrRed;      // Bear Color (HH, LH labels)
 input bool     InpShowLabels   = true;        // Show HH/HL/LH/LL Labels
 input bool     InpShowLines    = true;        // Show ZigZag Lines
+
+// ZigZag Signal Mode
+enum ENUM_ZIGZAG_SIGNAL_MODE
+{
+   ZIGZAG_BOTH = 0,     // Both Signals (LL,HL=BUY | HH,LH=SELL)
+   ZIGZAG_SINGLE = 1    // Single Signal (LL=BUY | HH=SELL)
+};
+input ENUM_ZIGZAG_SIGNAL_MODE InpZigZagSignalMode = ZIGZAG_BOTH;  // ZigZag Signal Mode
 
 //--- [ CDC ACTION ZONE SETTINGS ] ----------------------------------
 input string   InpCDCHeader    = "=== CDC ACTION ZONE SETTINGS ===";  // ___
@@ -395,12 +404,12 @@ void CalculateZigZagPP()
    for(int i = InpDepth; i < barsToAnalyze - InpDepth; i++)
    {
       // Check for swing high
-      double high = iHigh(_Symbol, PERIOD_CURRENT, i);
+      double high = iHigh(_Symbol, InpZigZagTimeframe, i);
       bool isSwingHigh = true;
       for(int j = 1; j <= InpDepth; j++)
       {
-         if(iHigh(_Symbol, PERIOD_CURRENT, i - j) >= high || 
-            iHigh(_Symbol, PERIOD_CURRENT, i + j) >= high)
+         if(iHigh(_Symbol, InpZigZagTimeframe, i - j) >= high || 
+            iHigh(_Symbol, InpZigZagTimeframe, i + j) >= high)
          {
             isSwingHigh = false;
             break;
@@ -417,12 +426,12 @@ void CalculateZigZagPP()
       }
       
       // Check for swing low
-      double low = iLow(_Symbol, PERIOD_CURRENT, i);
+      double low = iLow(_Symbol, InpZigZagTimeframe, i);
       bool isSwingLow = true;
       for(int j = 1; j <= InpDepth; j++)
       {
-         if(iLow(_Symbol, PERIOD_CURRENT, i - j) <= low || 
-            iLow(_Symbol, PERIOD_CURRENT, i + j) <= low)
+         if(iLow(_Symbol, InpZigZagTimeframe, i - j) <= low || 
+            iLow(_Symbol, InpZigZagTimeframe, i + j) <= low)
          {
             isSwingLow = false;
             break;
@@ -518,7 +527,7 @@ void CalculateZigZagPP()
       ZigZagPoint zp;
       zp.price = zzPrices[i];
       zp.barIndex = zzBars[i];
-      zp.time = iTime(_Symbol, PERIOD_CURRENT, zzBars[i]);
+      zp.time = iTime(_Symbol, InpZigZagTimeframe, zzBars[i]);
       zp.direction = zzDirs[i];
       
       if(zzDirs[i] == 1)  // High point
@@ -1656,18 +1665,36 @@ string AnalyzeSignal()
    Print("*** NEW ZigZag++ Point Confirmed! ***");
    Print("Label: ", LastZZLabel, " | Time: ", TimeToString(newestPointTime), " | CDC: ", CDCTrend);
    
-   // BUY Signal: ZigZag closed at LL or HL (Low points)
-   if(LastZZLabel == "LL" || LastZZLabel == "HL")
+   // BUY Signal: Based on ZigZag Signal Mode
+   if(InpZigZagSignalMode == ZIGZAG_BOTH)
    {
-      Print(">>> NEW LOW point (", LastZZLabel, ") - Triggering BUY signal!");
-      return "BUY";
+      // Both Signals: LL or HL triggers BUY
+      if(LastZZLabel == "LL" || LastZZLabel == "HL")
+      {
+         Print(">>> NEW LOW point (", LastZZLabel, ") - Triggering BUY signal! [Both Mode]");
+         return "BUY";
+      }
+      // Both Signals: HH or LH triggers SELL
+      if(LastZZLabel == "HH" || LastZZLabel == "LH")
+      {
+         Print(">>> NEW HIGH point (", LastZZLabel, ") - Triggering SELL signal! [Both Mode]");
+         return "SELL";
+      }
    }
-   
-   // SELL Signal: ZigZag closed at HH or LH (High points)
-   if(LastZZLabel == "HH" || LastZZLabel == "LH")
+   else // ZIGZAG_SINGLE
    {
-      Print(">>> NEW HIGH point (", LastZZLabel, ") - Triggering SELL signal!");
-      return "SELL";
+      // Single Signal: Only LL triggers BUY
+      if(LastZZLabel == "LL")
+      {
+         Print(">>> NEW LL point - Triggering BUY signal! [Single Mode]");
+         return "BUY";
+      }
+      // Single Signal: Only HH triggers SELL
+      if(LastZZLabel == "HH")
+      {
+         Print(">>> NEW HH point - Triggering SELL signal! [Single Mode]");
+         return "SELL";
+      }
    }
    
    return "WAIT";
