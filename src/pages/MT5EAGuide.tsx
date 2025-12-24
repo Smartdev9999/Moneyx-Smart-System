@@ -590,6 +590,44 @@ void CalculateZigZagPP()
 }
 
 //+------------------------------------------------------------------+
+//| Convert ZigZag Timeframe time to Chart Timeframe time             |
+//+------------------------------------------------------------------+
+datetime ConvertToChartTime(datetime zzTime)
+{
+   // If using current timeframe, no conversion needed
+   if(InpZigZagTimeframe == PERIOD_CURRENT || InpZigZagTimeframe == Period())
+      return zzTime;
+   
+   // Find the bar index on current chart that corresponds to this time
+   int chartBar = iBarShift(_Symbol, PERIOD_CURRENT, zzTime, false);
+   if(chartBar < 0) chartBar = 0;
+   
+   // Return the time of that bar on the current chart
+   return iTime(_Symbol, PERIOD_CURRENT, chartBar);
+}
+
+//+------------------------------------------------------------------+
+//| Get price at ZigZag point mapped to Chart Timeframe               |
+//+------------------------------------------------------------------+
+double GetChartPrice(ZigZagPoint &zp)
+{
+   // If using current timeframe, use original price
+   if(InpZigZagTimeframe == PERIOD_CURRENT || InpZigZagTimeframe == Period())
+      return zp.price;
+   
+   // Find the bar on current chart
+   int chartBar = iBarShift(_Symbol, PERIOD_CURRENT, zp.time, false);
+   if(chartBar < 0) chartBar = 0;
+   
+   // For high points, use the high of that bar range
+   // For low points, use the low of that bar range
+   if(zp.direction == 1)  // High point
+      return iHigh(_Symbol, PERIOD_CURRENT, chartBar);
+   else  // Low point
+      return iLow(_Symbol, PERIOD_CURRENT, chartBar);
+}
+
+//+------------------------------------------------------------------+
 //| Draw ZigZag++ Lines and Labels on Chart                           |
 //+------------------------------------------------------------------+
 void DrawZigZagOnChart()
@@ -599,13 +637,17 @@ void DrawZigZagOnChart()
       ZigZagPoint p1 = ZZPoints[i];
       ZigZagPoint p2 = ZZPoints[i + 1];
       
+      // Convert times to chart timeframe for drawing
+      datetime p1ChartTime = ConvertToChartTime(p1.time);
+      datetime p2ChartTime = ConvertToChartTime(p2.time);
+      
       // Draw line
       if(InpShowLines)
       {
          string lineName = ZZPrefix + "Line_" + IntegerToString(i);
          color lineColor = (p1.direction == 1) ? InpBearColor : InpBullColor;
          
-         ObjectCreate(0, lineName, OBJ_TREND, 0, p2.time, p2.price, p1.time, p1.price);
+         ObjectCreate(0, lineName, OBJ_TREND, 0, p2ChartTime, p2.price, p1ChartTime, p1.price);
          ObjectSetInteger(0, lineName, OBJPROP_COLOR, lineColor);
          ObjectSetInteger(0, lineName, OBJPROP_WIDTH, 2);
          ObjectSetInteger(0, lineName, OBJPROP_RAY_RIGHT, false);
@@ -620,7 +662,7 @@ void DrawZigZagOnChart()
          color labelColor = (p1.label == "LL" || p1.label == "HL") ? InpBullColor : InpBearColor;
          ENUM_ANCHOR_POINT anchor = (p1.direction == 1) ? ANCHOR_LOWER : ANCHOR_UPPER;
          
-         ObjectCreate(0, labelName, OBJ_TEXT, 0, p1.time, p1.price);
+         ObjectCreate(0, labelName, OBJ_TEXT, 0, p1ChartTime, p1.price);
          ObjectSetString(0, labelName, OBJPROP_TEXT, p1.label);
          ObjectSetInteger(0, labelName, OBJPROP_COLOR, labelColor);
          ObjectSetInteger(0, labelName, OBJPROP_FONTSIZE, 10);
@@ -633,12 +675,14 @@ void DrawZigZagOnChart()
    if(InpShowLabels && ZZPointCount > 0)
    {
       int last = ZZPointCount - 1;
+      datetime lastChartTime = ConvertToChartTime(ZZPoints[last].time);
+      
       string labelName = ZZPrefix + "Label_" + IntegerToString(last);
       color labelColor = (ZZPoints[last].label == "LL" || ZZPoints[last].label == "HL") ? 
                           InpBullColor : InpBearColor;
       ENUM_ANCHOR_POINT anchor = (ZZPoints[last].direction == 1) ? ANCHOR_LOWER : ANCHOR_UPPER;
       
-      ObjectCreate(0, labelName, OBJ_TEXT, 0, ZZPoints[last].time, ZZPoints[last].price);
+      ObjectCreate(0, labelName, OBJ_TEXT, 0, lastChartTime, ZZPoints[last].price);
       ObjectSetString(0, labelName, OBJPROP_TEXT, ZZPoints[last].label);
       ObjectSetInteger(0, labelName, OBJPROP_COLOR, labelColor);
       ObjectSetInteger(0, labelName, OBJPROP_FONTSIZE, 10);
