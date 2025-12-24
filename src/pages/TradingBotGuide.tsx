@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { ArrowLeft, Database, Calculator, Brain, Send, AlertTriangle, CheckCircle2, XCircle } from 'lucide-react';
+import { ArrowLeft, Database, Calculator, Brain, Send, AlertTriangle, CheckCircle2, XCircle, FileCode, ArrowRight } from 'lucide-react';
 import CodeBlock from '@/components/CodeBlock';
 import StepCard from '@/components/StepCard';
 
@@ -889,6 +889,31 @@ export function useTradingBot(symbol: string = 'BTCUSDT') {
               </div>
             </div>
           </div>
+        </div>
+      </section>
+
+      {/* MT5 EA Guide CTA */}
+      <section className="container py-8">
+        <div className="max-w-4xl mx-auto">
+          <Link 
+            to="/mt5-ea-guide"
+            className="block glass-card rounded-2xl p-8 border-2 border-primary/30 hover:border-primary/60 transition-all duration-300 group"
+          >
+            <div className="flex items-center gap-6">
+              <div className="p-4 rounded-xl bg-primary/20 text-primary group-hover:scale-110 transition-transform">
+                <FileCode className="w-8 h-8" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-xl font-bold text-foreground mb-2">
+                  ต้องการใช้กับ MT5?
+                </h3>
+                <p className="text-muted-foreground">
+                  ดูโค้ด EA (Expert Advisor) ฉบับเต็มสำหรับ MetaTrader 5 พร้อมใช้งาน
+                </p>
+              </div>
+              <ArrowRight className="w-6 h-6 text-primary group-hover:translate-x-2 transition-transform" />
+            </div>
+          </Link>
         </div>
       </section>
 
