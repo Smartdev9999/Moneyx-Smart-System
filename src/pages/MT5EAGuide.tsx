@@ -1430,8 +1430,7 @@ void CheckGridProfitSide()
    int buyCount = CountPositions(POSITION_TYPE_BUY);
    if(buyCount > 0)
    {
-      // Count profit grid orders (orders above initial price)
-      double firstBuyPrice = GetFirstPositionPrice(POSITION_TYPE_BUY);
+      // Count profit grid orders by checking comment (more reliable than price comparison)
       int profitGridCount = 0;
       
       for(int i = 0; i < PositionsTotal(); i++)
@@ -1442,7 +1441,8 @@ void CheckGridProfitSide()
             {
                if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
                {
-                  if(PositionGetDouble(POSITION_PRICE_OPEN) > firstBuyPrice)
+                  string comment = PositionGetString(POSITION_COMMENT);
+                  if(StringFind(comment, "Grid Profit") >= 0)
                      profitGridCount++;
                }
             }
@@ -1458,13 +1458,17 @@ void CheckGridProfitSide()
          // Check signal requirement
          if(InpGridProfitOnlySignal && !IsTradeAllowed("BUY"))
             return;
-         
-         double lastBuyPrice = GetLastPositionPrice(POSITION_TYPE_BUY);
-         int distance = GetGridDistance(false, profitGridCount);
-         
-         // Price went UP from last buy by grid distance
-         if(currentPrice - lastBuyPrice >= distance * _Point)
-         {
+          
+          // Get initial order price and last buy price
+          double initialBuyPrice = GetFirstPositionPrice(POSITION_TYPE_BUY);
+          double lastBuyPrice = GetLastPositionPrice(POSITION_TYPE_BUY);
+          int distance = GetGridDistance(false, profitGridCount);
+          
+          // Grid Profit only triggers when:
+          // 1. Current price is ABOVE initial order price (profit zone for BUY)
+          // 2. Price went UP from last buy by grid distance
+          if(currentPrice > initialBuyPrice && currentPrice - lastBuyPrice >= distance * _Point)
+          {
             // Grid Profit uses gridLevel starting from 1 (Initial Order is the base)
             // profitGridCount=0 means first Grid Profit order, which should use level 1
             double lot = GetGridLotSize(false, profitGridCount + 1);
@@ -1484,8 +1488,7 @@ void CheckGridProfitSide()
    int sellCount = CountPositions(POSITION_TYPE_SELL);
    if(sellCount > 0)
    {
-      // Count profit grid orders (orders below initial price)
-      double firstSellPrice = GetFirstPositionPrice(POSITION_TYPE_SELL);
+      // Count profit grid orders by checking comment (more reliable than price comparison)
       int profitGridCount = 0;
       
       for(int i = 0; i < PositionsTotal(); i++)
@@ -1496,7 +1499,8 @@ void CheckGridProfitSide()
             {
                if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_SELL)
                {
-                  if(PositionGetDouble(POSITION_PRICE_OPEN) < firstSellPrice)
+                  string comment = PositionGetString(POSITION_COMMENT);
+                  if(StringFind(comment, "Grid Profit") >= 0)
                      profitGridCount++;
                }
             }
@@ -1512,13 +1516,17 @@ void CheckGridProfitSide()
          // Check signal requirement
          if(InpGridProfitOnlySignal && !IsTradeAllowed("SELL"))
             return;
-         
-         double lastSellPrice = GetLastPositionPrice(POSITION_TYPE_SELL);
-         int distance = GetGridDistance(false, profitGridCount);
-         
-         // Price went DOWN from last sell by grid distance
-         if(lastSellPrice - currentPrice >= distance * _Point)
-         {
+          
+          // Get initial order price and last sell price
+          double initialSellPrice = GetFirstPositionPrice(POSITION_TYPE_SELL);
+          double lastSellPrice = GetLastPositionPrice(POSITION_TYPE_SELL);
+          int distance = GetGridDistance(false, profitGridCount);
+          
+          // Grid Profit only triggers when:
+          // 1. Current price is BELOW initial order price (profit zone for SELL)
+          // 2. Price went DOWN from last sell by grid distance
+          if(currentPrice < initialSellPrice && lastSellPrice - currentPrice >= distance * _Point)
+          {
             // Grid Profit uses gridLevel starting from 1 (Initial Order is the base)
             // profitGridCount=0 means first Grid Profit order, which should use level 1
             double lot = GetGridLotSize(false, profitGridCount + 1);
