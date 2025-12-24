@@ -264,24 +264,30 @@ void ParseStringToIntArray(string inputStr, int &arr[])
 
 //+------------------------------------------------------------------+
 //| Get Lot Size for Grid based on level                               |
+//| gridLevel = 0 is the FIRST order (uses InitialLot)                |
+//| gridLevel = 1,2,3... are GRID orders (uses InitialLot + AddLot)   |
 //+------------------------------------------------------------------+
 double GetGridLotSize(bool isLossSide, int gridLevel)
 {
-   double lots[];
-   if(isLossSide)
-      ParseStringToDoubleArray(InpGridLossCustomLot, lots);
-   else
-      ParseStringToDoubleArray(InpGridProfitCustomLot, lots);
+   double addLot = isLossSide ? InpGridLossAddLot : InpGridProfitAddLot;
    
-   if(gridLevel < ArraySize(lots))
-      return lots[gridLevel];
-   else if(ArraySize(lots) > 0)
-   {
-      double lastLot = lots[ArraySize(lots) - 1];
-      double addLot = isLossSide ? InpGridLossAddLot : InpGridProfitAddLot;
-      return lastLot + addLot * (gridLevel - ArraySize(lots) + 1);
-   }
-   return InpInitialLot;
+   // Grid level 0 = First order = Initial Lot
+   // Grid level 1 = Second order = Initial Lot + AddLot
+   // Grid level 2 = Third order = Initial Lot + AddLot*2
+   // etc.
+   
+   double calculatedLot = InpInitialLot + (addLot * gridLevel);
+   
+   // Normalize lot size to broker requirements
+   double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   double maxLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+   double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   
+   calculatedLot = MathMax(minLot, calculatedLot);
+   calculatedLot = MathMin(maxLot, calculatedLot);
+   calculatedLot = MathFloor(calculatedLot / lotStep) * lotStep;
+   
+   return NormalizeDouble(calculatedLot, 2);
 }
 
 //+------------------------------------------------------------------+
