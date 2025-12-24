@@ -632,16 +632,19 @@ double GetChartPrice(ZigZagPoint &zp)
 //+------------------------------------------------------------------+
 void DrawZigZagOnChart()
 {
+   // Draw on BOTH current chart AND ZigZag timeframe for visibility
+   bool drawBothTimeframes = (InpZigZagTimeframe != PERIOD_CURRENT && InpZigZagTimeframe != Period());
+   
    for(int i = 0; i < ZZPointCount - 1; i++)
    {
       ZigZagPoint p1 = ZZPoints[i];
       ZigZagPoint p2 = ZZPoints[i + 1];
       
-      // Convert times to chart timeframe for drawing
+      // Convert times to chart timeframe for drawing on current chart
       datetime p1ChartTime = ConvertToChartTime(p1.time);
       datetime p2ChartTime = ConvertToChartTime(p2.time);
       
-      // Draw line
+      // === Draw on CURRENT CHART (converted times) ===
       if(InpShowLines)
       {
          string lineName = ZZPrefix + "Line_" + IntegerToString(i);
@@ -655,7 +658,6 @@ void DrawZigZagOnChart()
          ObjectSetInteger(0, lineName, OBJPROP_BACK, false);
       }
       
-      // Draw label on p1 (current point)
       if(InpShowLabels)
       {
          string labelName = ZZPrefix + "Label_" + IntegerToString(i);
@@ -669,6 +671,37 @@ void DrawZigZagOnChart()
          ObjectSetString(0, labelName, OBJPROP_FONT, "Arial Bold");
          ObjectSetInteger(0, labelName, OBJPROP_ANCHOR, anchor);
       }
+      
+      // === Draw on ZIGZAG TIMEFRAME (original times) - for viewing in that TF ===
+      if(drawBothTimeframes)
+      {
+         if(InpShowLines)
+         {
+            string lineName = ZZPrefix + "TF_Line_" + IntegerToString(i);
+            color lineColor = (p1.direction == 1) ? InpBearColor : InpBullColor;
+            
+            ObjectCreate(0, lineName, OBJ_TREND, 0, p2.time, p2.price, p1.time, p1.price);
+            ObjectSetInteger(0, lineName, OBJPROP_COLOR, lineColor);
+            ObjectSetInteger(0, lineName, OBJPROP_WIDTH, 2);
+            ObjectSetInteger(0, lineName, OBJPROP_RAY_RIGHT, false);
+            ObjectSetInteger(0, lineName, OBJPROP_SELECTABLE, false);
+            ObjectSetInteger(0, lineName, OBJPROP_BACK, false);
+         }
+         
+         if(InpShowLabels)
+         {
+            string labelName = ZZPrefix + "TF_Label_" + IntegerToString(i);
+            color labelColor = (p1.label == "LL" || p1.label == "HL") ? InpBullColor : InpBearColor;
+            ENUM_ANCHOR_POINT anchor = (p1.direction == 1) ? ANCHOR_LOWER : ANCHOR_UPPER;
+            
+            ObjectCreate(0, labelName, OBJ_TEXT, 0, p1.time, p1.price);
+            ObjectSetString(0, labelName, OBJPROP_TEXT, p1.label);
+            ObjectSetInteger(0, labelName, OBJPROP_COLOR, labelColor);
+            ObjectSetInteger(0, labelName, OBJPROP_FONTSIZE, 10);
+            ObjectSetString(0, labelName, OBJPROP_FONT, "Arial Bold");
+            ObjectSetInteger(0, labelName, OBJPROP_ANCHOR, anchor);
+         }
+      }
    }
    
    // Draw label for last point
@@ -677,6 +710,7 @@ void DrawZigZagOnChart()
       int last = ZZPointCount - 1;
       datetime lastChartTime = ConvertToChartTime(ZZPoints[last].time);
       
+      // Current chart
       string labelName = ZZPrefix + "Label_" + IntegerToString(last);
       color labelColor = (ZZPoints[last].label == "LL" || ZZPoints[last].label == "HL") ? 
                           InpBullColor : InpBearColor;
@@ -688,6 +722,18 @@ void DrawZigZagOnChart()
       ObjectSetInteger(0, labelName, OBJPROP_FONTSIZE, 10);
       ObjectSetString(0, labelName, OBJPROP_FONT, "Arial Bold");
       ObjectSetInteger(0, labelName, OBJPROP_ANCHOR, anchor);
+      
+      // ZigZag Timeframe
+      if(drawBothTimeframes)
+      {
+         string labelNameTF = ZZPrefix + "TF_Label_" + IntegerToString(last);
+         ObjectCreate(0, labelNameTF, OBJ_TEXT, 0, ZZPoints[last].time, ZZPoints[last].price);
+         ObjectSetString(0, labelNameTF, OBJPROP_TEXT, ZZPoints[last].label);
+         ObjectSetInteger(0, labelNameTF, OBJPROP_COLOR, labelColor);
+         ObjectSetInteger(0, labelNameTF, OBJPROP_FONTSIZE, 10);
+         ObjectSetString(0, labelNameTF, OBJPROP_FONT, "Arial Bold");
+         ObjectSetInteger(0, labelNameTF, OBJPROP_ANCHOR, anchor);
+      }
    }
 }
 
