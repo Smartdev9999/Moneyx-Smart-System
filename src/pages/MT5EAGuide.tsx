@@ -5,12 +5,12 @@ import StepCard from '@/components/StepCard';
 
 const MT5EAGuide = () => {
   const fullEACode = `//+------------------------------------------------------------------+
-//|                                   ZigZag_CDC_Structure_EA.mq5      |
-//|                  ZigZag + CDC Action Zone + Re-Entry Feature       |
+//|                   ZigZag++ CDC Structure EA v3.0                   |
+//|           Based on DevLucem ZigZag++ with CDC Action Zone          |
 //+------------------------------------------------------------------+
 #property copyright "Trading Education"
 #property link      ""
-#property version   "2.20"
+#property version   "3.00"
 #property strict
 
 // *** Include CTrade ***
@@ -20,11 +20,15 @@ const MT5EAGuide = () => {
 //| ===================== INPUT PARAMETERS ========================= |
 //+------------------------------------------------------------------+
 
-//--- [ ZIGZAG SETTINGS ] -------------------------------------------
-input string   InpZigZagHeader = "=== ZIGZAG SETTINGS ===";  // ___
+//--- [ ZIGZAG++ SETTINGS ] -----------------------------------------
+input string   InpZigZagHeader = "=== ZIGZAG++ SETTINGS ===";  // ___
 input int      InpDepth        = 12;          // ZigZag Depth
 input int      InpDeviation    = 5;           // ZigZag Deviation (pips)
-input int      InpBackstep     = 3;           // ZigZag Backstep
+input int      InpBackstep     = 2;           // ZigZag Backstep
+input color    InpBullColor    = clrLime;     // Bull Color (HL labels)
+input color    InpBearColor    = clrRed;      // Bear Color (HH, LH labels)
+input bool     InpShowLabels   = true;        // Show HH/HL/LH/LL Labels
+input bool     InpShowLines    = true;        // Show ZigZag Lines
 
 //--- [ CDC ACTION ZONE SETTINGS ] ----------------------------------
 input string   InpCDCHeader    = "=== CDC ACTION ZONE SETTINGS ===";  // ___
@@ -71,22 +75,23 @@ input int      InpEndHour      = 20;          // End Hour
 //| ===================== GLOBAL VARIABLES ========================= |
 //+------------------------------------------------------------------+
 
-// Swing Point Structure
-struct SwingPoint
+// ZigZag++ Structure (based on DevLucem ZigZag++)
+struct ZigZagPoint
 {
-   int       index;
    double    price;
    datetime  time;
-   string    type;      // "HIGH" or "LOW"
-   string    pattern;   // "HH", "HL", "LH", "LL"
+   int       barIndex;
+   int       direction;  // 1 = High, -1 = Low
+   string    label;      // "HH", "HL", "LH", "LL"
 };
 
-SwingPoint SwingPoints[];
-int TotalSwingPoints = 0;
+ZigZagPoint ZZPoints[];
+int ZZPointCount = 0;
+string LastZZLabel = "";       // Latest closed ZigZag label
+int CurrentDirection = 0;       // Current ZigZag direction
 
 // Trade Objects
 CTrade trade;
-int zigzagHandle;
 
 // CDC Action Zone Variables
 string CDCTrend = "NEUTRAL";
@@ -95,7 +100,8 @@ double CDCSlow = 0;
 double CDCAP = 0;
 color CDCZoneColor = clrWhite;
 
-// CDC Chart Objects Prefix
+// Chart Objects Prefix
+string ZZPrefix = "ZZ_";
 string CDCPrefix = "CDC_";
 
 // Re-Entry Tracking Variables
@@ -105,13 +111,16 @@ ulong LastBuyTicket = 0;
 ulong LastSellTicket = 0;
 datetime LastOrderCloseTime = 0;
 
+// ZigZag tracking for confirmed points
+datetime LastConfirmedZZTime = 0;
+
 //+------------------------------------------------------------------+
 //| Expert initialization function                                     |
 //+------------------------------------------------------------------+
 int OnInit()
 {
    Print("===========================================");
-   Print("ZigZag + CDC Action Zone EA v2.2");
+   Print("ZigZag++ CDC Structure EA v3.0");
    Print("Symbol: ", _Symbol);
    Print("Entry TF: ", EnumToString(Period()));
    Print("CDC Filter TF: ", EnumToString(InpCDCTimeframe));
@@ -121,21 +130,12 @@ int OnInit()
    
    trade.SetExpertMagicNumber(InpMagicNumber);
    
-   // Load ZigZag indicator
-   zigzagHandle = iCustom(_Symbol, PERIOD_CURRENT, "Examples/ZigZag", 
-                          InpDepth, InpDeviation, InpBackstep);
-   
-   if(zigzagHandle == INVALID_HANDLE)
-   {
-      Print("ERROR: Cannot load ZigZag indicator!");
-      return(INIT_FAILED);
-   }
-   
-   // Reset Re-Entry counters
+   // Reset counters
    ReEntryBuyCount = 0;
    ReEntrySelCount = 0;
    LastBuyTicket = 0;
    LastSellTicket = 0;
+   LastConfirmedZZTime = 0;
    
    Print("EA Started Successfully!");
    return(INIT_SUCCEEDED);
@@ -146,10 +146,8 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
-   if(zigzagHandle != INVALID_HANDLE)
-      IndicatorRelease(zigzagHandle);
-   
-   // Remove all CDC objects
+   // Remove all chart objects
+   ObjectsDeleteAll(0, ZZPrefix);
    ObjectsDeleteAll(0, CDCPrefix);
    
    Comment("");
@@ -157,12 +155,296 @@ void OnDeinit(const int reason)
 }
 
 //+------------------------------------------------------------------+
+//| ZigZag++ Algorithm (Based on DevLucem Pine Script)                |
+//| - Uses Depth, Deviation, Backstep parameters                       |
+//| - Detects HH, HL, LH, LL patterns automatically                    |
+//| - Draws lines and labels on chart                                  |
+//+------------------------------------------------------------------+
+void CalculateZigZagPP()
+{
+   // Clear previous points
+   ArrayResize(ZZPoints, 0);
+   ZZPointCount = 0;
+   
+   // Remove old objects
+   ObjectsDeleteAll(0, ZZPrefix);
+   
+   int barsToAnalyze = 200;
+   
+   // Buffers for ZigZag calculation
+   double zigzagVal[];
+   int zigzagDir[];      // 1 = high point, -1 = low point
+   datetime zigzagTime[];
+   int zigzagBar[];
+   
+   ArrayResize(zigzagVal, barsToAnalyze);
+   ArrayResize(zigzagDir, barsToAnalyze);
+   ArrayResize(zigzagTime, barsToAnalyze);
+   ArrayResize(zigzagBar, barsToAnalyze);
+   
+   ArrayInitialize(zigzagVal, 0);
+   ArrayInitialize(zigzagDir, 0);
+   
+   // Find swing highs and lows using Depth, Deviation, Backstep
+   double lastHigh = 0, lastLow = DBL_MAX;
+   int lastHighBar = 0, lastLowBar = 0;
+   int direction = 0;  // 0 = unknown, 1 = up, -1 = down
+   
+   double deviationPips = InpDeviation * _Point * 10;
+   
+   // First pass: Find potential swing points
+   double swingHigh[], swingLow[];
+   int swingHighBar[], swingLowBar[];
+   ArrayResize(swingHigh, 0);
+   ArrayResize(swingLow, 0);
+   ArrayResize(swingHighBar, 0);
+   ArrayResize(swingLowBar, 0);
+   
+   for(int i = InpDepth; i < barsToAnalyze - InpDepth; i++)
+   {
+      // Check for swing high
+      double high = iHigh(_Symbol, PERIOD_CURRENT, i);
+      bool isSwingHigh = true;
+      for(int j = 1; j <= InpDepth; j++)
+      {
+         if(iHigh(_Symbol, PERIOD_CURRENT, i - j) >= high || 
+            iHigh(_Symbol, PERIOD_CURRENT, i + j) >= high)
+         {
+            isSwingHigh = false;
+            break;
+         }
+      }
+      
+      if(isSwingHigh)
+      {
+         int size = ArraySize(swingHigh);
+         ArrayResize(swingHigh, size + 1);
+         ArrayResize(swingHighBar, size + 1);
+         swingHigh[size] = high;
+         swingHighBar[size] = i;
+      }
+      
+      // Check for swing low
+      double low = iLow(_Symbol, PERIOD_CURRENT, i);
+      bool isSwingLow = true;
+      for(int j = 1; j <= InpDepth; j++)
+      {
+         if(iLow(_Symbol, PERIOD_CURRENT, i - j) <= low || 
+            iLow(_Symbol, PERIOD_CURRENT, i + j) <= low)
+         {
+            isSwingLow = false;
+            break;
+         }
+      }
+      
+      if(isSwingLow)
+      {
+         int size = ArraySize(swingLow);
+         ArrayResize(swingLow, size + 1);
+         ArrayResize(swingLowBar, size + 1);
+         swingLow[size] = low;
+         swingLowBar[size] = i;
+      }
+   }
+   
+   // Build ZigZag from swing points (alternating high-low-high-low)
+   double zzPrices[];
+   int zzBars[];
+   int zzDirs[];
+   ArrayResize(zzPrices, 0);
+   ArrayResize(zzBars, 0);
+   ArrayResize(zzDirs, 0);
+   
+   int hiIdx = 0, loIdx = 0;
+   int lastDir = 0;
+   
+   // Merge swing highs and lows in time order (newest first)
+   while(hiIdx < ArraySize(swingHighBar) || loIdx < ArraySize(swingLowBar))
+   {
+      bool useHigh = false;
+      
+      if(hiIdx >= ArraySize(swingHighBar))
+         useHigh = false;
+      else if(loIdx >= ArraySize(swingLowBar))
+         useHigh = true;
+      else
+         useHigh = (swingHighBar[hiIdx] < swingLowBar[loIdx]);
+      
+      if(useHigh)
+      {
+         if(lastDir != 1)  // Can add high after low or at start
+         {
+            int size = ArraySize(zzPrices);
+            ArrayResize(zzPrices, size + 1);
+            ArrayResize(zzBars, size + 1);
+            ArrayResize(zzDirs, size + 1);
+            zzPrices[size] = swingHigh[hiIdx];
+            zzBars[size] = swingHighBar[hiIdx];
+            zzDirs[size] = 1;
+            lastDir = 1;
+         }
+         else if(ArraySize(zzPrices) > 0 && swingHigh[hiIdx] > zzPrices[ArraySize(zzPrices)-1])
+         {
+            // Replace last high with higher high
+            zzPrices[ArraySize(zzPrices)-1] = swingHigh[hiIdx];
+            zzBars[ArraySize(zzBars)-1] = swingHighBar[hiIdx];
+         }
+         hiIdx++;
+      }
+      else
+      {
+         if(lastDir != -1)  // Can add low after high or at start
+         {
+            int size = ArraySize(zzPrices);
+            ArrayResize(zzPrices, size + 1);
+            ArrayResize(zzBars, size + 1);
+            ArrayResize(zzDirs, size + 1);
+            zzPrices[size] = swingLow[loIdx];
+            zzBars[size] = swingLowBar[loIdx];
+            zzDirs[size] = -1;
+            lastDir = -1;
+         }
+         else if(ArraySize(zzPrices) > 0 && swingLow[loIdx] < zzPrices[ArraySize(zzPrices)-1])
+         {
+            // Replace last low with lower low
+            zzPrices[ArraySize(zzPrices)-1] = swingLow[loIdx];
+            zzBars[ArraySize(zzBars)-1] = swingLowBar[loIdx];
+         }
+         loIdx++;
+      }
+      
+      if(ArraySize(zzPrices) >= 20) break;  // Limit points
+   }
+   
+   // Now label the points as HH, HL, LH, LL
+   double lastHighPoint = 0;
+   double lastLowPoint = DBL_MAX;
+   
+   // Process from oldest to newest for proper labeling
+   for(int i = ArraySize(zzPrices) - 1; i >= 0; i--)
+   {
+      ZigZagPoint zp;
+      zp.price = zzPrices[i];
+      zp.barIndex = zzBars[i];
+      zp.time = iTime(_Symbol, PERIOD_CURRENT, zzBars[i]);
+      zp.direction = zzDirs[i];
+      
+      if(zzDirs[i] == 1)  // High point
+      {
+         if(lastHighPoint > 0)
+         {
+            if(zzPrices[i] > lastHighPoint)
+               zp.label = "HH";
+            else
+               zp.label = "LH";
+         }
+         else
+            zp.label = "HH";  // First high
+            
+         lastHighPoint = zzPrices[i];
+      }
+      else  // Low point
+      {
+         if(lastLowPoint < DBL_MAX)
+         {
+            if(zzPrices[i] < lastLowPoint)
+               zp.label = "LL";
+            else
+               zp.label = "HL";
+         }
+         else
+            zp.label = "LL";  // First low
+            
+         lastLowPoint = zzPrices[i];
+      }
+      
+      int size = ArraySize(ZZPoints);
+      ArrayResize(ZZPoints, size + 1);
+      ZZPoints[size] = zp;
+      ZZPointCount++;
+   }
+   
+   // Reverse to have newest first
+   ZigZagPoint tempPoints[];
+   ArrayResize(tempPoints, ZZPointCount);
+   for(int i = 0; i < ZZPointCount; i++)
+      tempPoints[i] = ZZPoints[ZZPointCount - 1 - i];
+   ArrayCopy(ZZPoints, tempPoints);
+   
+   // Draw ZigZag lines and labels
+   if(InpShowLines || InpShowLabels)
+   {
+      DrawZigZagOnChart();
+   }
+   
+   // Set last label for trading signal
+   if(ZZPointCount > 0)
+   {
+      LastZZLabel = ZZPoints[0].label;
+      CurrentDirection = ZZPoints[0].direction;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Draw ZigZag++ Lines and Labels on Chart                           |
+//+------------------------------------------------------------------+
+void DrawZigZagOnChart()
+{
+   for(int i = 0; i < ZZPointCount - 1; i++)
+   {
+      ZigZagPoint p1 = ZZPoints[i];
+      ZigZagPoint p2 = ZZPoints[i + 1];
+      
+      // Draw line
+      if(InpShowLines)
+      {
+         string lineName = ZZPrefix + "Line_" + IntegerToString(i);
+         color lineColor = (p1.direction == 1) ? InpBearColor : InpBullColor;
+         
+         ObjectCreate(0, lineName, OBJ_TREND, 0, p2.time, p2.price, p1.time, p1.price);
+         ObjectSetInteger(0, lineName, OBJPROP_COLOR, lineColor);
+         ObjectSetInteger(0, lineName, OBJPROP_WIDTH, 2);
+         ObjectSetInteger(0, lineName, OBJPROP_RAY_RIGHT, false);
+         ObjectSetInteger(0, lineName, OBJPROP_SELECTABLE, false);
+         ObjectSetInteger(0, lineName, OBJPROP_BACK, false);
+      }
+      
+      // Draw label on p1 (current point)
+      if(InpShowLabels)
+      {
+         string labelName = ZZPrefix + "Label_" + IntegerToString(i);
+         color labelColor = (p1.label == "LL" || p1.label == "HL") ? InpBullColor : InpBearColor;
+         ENUM_ANCHOR_POINT anchor = (p1.direction == 1) ? ANCHOR_LOWER : ANCHOR_UPPER;
+         
+         ObjectCreate(0, labelName, OBJ_TEXT, 0, p1.time, p1.price);
+         ObjectSetString(0, labelName, OBJPROP_TEXT, p1.label);
+         ObjectSetInteger(0, labelName, OBJPROP_COLOR, labelColor);
+         ObjectSetInteger(0, labelName, OBJPROP_FONTSIZE, 10);
+         ObjectSetString(0, labelName, OBJPROP_FONT, "Arial Bold");
+         ObjectSetInteger(0, labelName, OBJPROP_ANCHOR, anchor);
+      }
+   }
+   
+   // Draw label for last point
+   if(InpShowLabels && ZZPointCount > 0)
+   {
+      int last = ZZPointCount - 1;
+      string labelName = ZZPrefix + "Label_" + IntegerToString(last);
+      color labelColor = (ZZPoints[last].label == "LL" || ZZPoints[last].label == "HL") ? 
+                          InpBullColor : InpBearColor;
+      ENUM_ANCHOR_POINT anchor = (ZZPoints[last].direction == 1) ? ANCHOR_LOWER : ANCHOR_UPPER;
+      
+      ObjectCreate(0, labelName, OBJ_TEXT, 0, ZZPoints[last].time, ZZPoints[last].price);
+      ObjectSetString(0, labelName, OBJPROP_TEXT, ZZPoints[last].label);
+      ObjectSetInteger(0, labelName, OBJPROP_COLOR, labelColor);
+      ObjectSetInteger(0, labelName, OBJPROP_FONTSIZE, 10);
+      ObjectSetString(0, labelName, OBJPROP_FONT, "Arial Bold");
+      ObjectSetInteger(0, labelName, OBJPROP_ANCHOR, anchor);
+   }
+}
+
+//+------------------------------------------------------------------+
 //| Calculate CDC Action Zone Values                                   |
-//| Based on TradingView CDC Action Zone V.2                          |
-//| Logic: Fast = EMA(EMA(OHLC4, 2), FastPeriod)                      |
-//|        Slow = EMA(EMA(OHLC4, 2), SlowPeriod)                      |
-//|        Green Zone = Fast > Slow AND AP > Fast (BUY ONLY)          |
-//|        Red Zone = Fast < Slow AND AP < Fast (SELL ONLY)           |
 //+------------------------------------------------------------------+
 void CalculateCDC()
 {
@@ -173,7 +455,6 @@ void CalculateCDC()
       return;
    }
    
-   // Get OHLC4 data from CDC timeframe
    double closeArr[], highArr[], lowArr[], openArr[];
    datetime timeArr[];
    ArraySetAsSeries(closeArr, true);
@@ -190,7 +471,6 @@ void CalculateCDC()
    if(CopyOpen(_Symbol, InpCDCTimeframe, 0, barsNeeded, openArr) < barsNeeded) return;
    if(CopyTime(_Symbol, InpCDCTimeframe, 0, barsNeeded, timeArr) < barsNeeded) return;
    
-   // Calculate OHLC4 (Average Price)
    double ohlc4[];
    ArrayResize(ohlc4, barsNeeded);
    for(int i = 0; i < barsNeeded; i++)
@@ -198,34 +478,27 @@ void CalculateCDC()
       ohlc4[i] = (openArr[i] + highArr[i] + lowArr[i] + closeArr[i]) / 4.0;
    }
    
-   // Calculate AP = EMA(OHLC4, 2)
    double ap[];
    ArrayResize(ap, barsNeeded);
    CalculateEMA(ohlc4, ap, 2, barsNeeded);
    
-   // Calculate Fast = EMA(AP, FastPeriod)
    double fast[];
    ArrayResize(fast, barsNeeded);
    CalculateEMA(ap, fast, InpCDCFastPeriod, barsNeeded);
    
-   // Calculate Slow = EMA(AP, SlowPeriod)
    double slow[];
    ArrayResize(slow, barsNeeded);
    CalculateEMA(ap, slow, InpCDCSlowPeriod, barsNeeded);
    
-   // Get current values (index 0 = most recent)
    CDCAP = ap[0];
    CDCFast = fast[0];
    CDCSlow = slow[0];
    
-   // Determine Zone Color and Trend
    bool bullish = CDCFast > CDCSlow;
    bool bearish = CDCFast < CDCSlow;
    
-   bool isGreen = bullish && CDCAP > CDCFast;    // Strong Bullish
-   bool isRed = bearish && CDCAP < CDCFast;       // Strong Bearish
-   bool isYellow = bullish && CDCAP < CDCFast;    // Weak Bullish
-   bool isBlue = bearish && CDCAP > CDCFast;      // Weak Bearish
+   bool isGreen = bullish && CDCAP > CDCFast;
+   bool isRed = bearish && CDCAP < CDCFast;
    
    if(isGreen)
    {
@@ -237,12 +510,12 @@ void CalculateCDC()
       CDCTrend = "BEARISH";
       CDCZoneColor = clrRed;
    }
-   else if(isYellow)
+   else if(bullish)
    {
       CDCTrend = "WEAK_BULL";
       CDCZoneColor = clrYellow;
    }
-   else if(isBlue)
+   else if(bearish)
    {
       CDCTrend = "WEAK_BEAR";
       CDCZoneColor = clrDodgerBlue;
@@ -253,10 +526,9 @@ void CalculateCDC()
       CDCZoneColor = clrWhite;
    }
    
-   // Draw CDC lines and zone on CDC timeframe chart window
    if(InpShowCDCLines)
    {
-      DrawCDCOnChart(fast, slow, ap, timeArr, barsNeeded);
+      DrawCDCOnChart(fast, slow, timeArr, barsNeeded);
    }
 }
 
@@ -269,7 +541,6 @@ void CalculateEMA(double &src[], double &result[], int period, int size)
    
    double multiplier = 2.0 / (period + 1);
    
-   // First value = simple average
    double sum = 0;
    for(int i = size - period; i < size; i++)
    {
@@ -277,7 +548,6 @@ void CalculateEMA(double &src[], double &result[], int period, int size)
    }
    result[size - 1] = sum / period;
    
-   // Calculate EMA from oldest to newest
    for(int i = size - 2; i >= 0; i--)
    {
       result[i] = (src[i] - result[i + 1]) * multiplier + result[i + 1];
@@ -285,18 +555,14 @@ void CalculateEMA(double &src[], double &result[], int period, int size)
 }
 
 //+------------------------------------------------------------------+
-//| Draw CDC Lines and Zone on Chart using CDC Timeframe data         |
-//| The lines and zones will be drawn at correct CDC TF positions     |
+//| Draw CDC Lines on Chart                                            |
 //+------------------------------------------------------------------+
-void DrawCDCOnChart(double &fast[], double &slow[], double &ap[], datetime &time[], int size)
+void DrawCDCOnChart(double &fast[], double &slow[], datetime &time[], int size)
 {
-   // First, delete old objects
    ObjectsDeleteAll(0, CDCPrefix);
    
-   // Draw only EMA lines (no color zones)
    int maxBars = MathMin(100, size - 1);
    
-   // Draw Fast MA line (Red/Orange) - connecting points properly
    for(int i = 0; i < maxBars; i++)
    {
       string lineName = CDCPrefix + "Fast_" + IntegerToString(i);
@@ -308,10 +574,8 @@ void DrawCDCOnChart(double &fast[], double &slow[], double &ap[], datetime &time
       ObjectSetInteger(0, lineName, OBJPROP_WIDTH, 2);
       ObjectSetInteger(0, lineName, OBJPROP_RAY_RIGHT, false);
       ObjectSetInteger(0, lineName, OBJPROP_SELECTABLE, false);
-      ObjectSetInteger(0, lineName, OBJPROP_BACK, false);
    }
    
-   // Draw Slow MA line (Blue)
    for(int i = 0; i < maxBars; i++)
    {
       string lineName = CDCPrefix + "Slow_" + IntegerToString(i);
@@ -323,10 +587,8 @@ void DrawCDCOnChart(double &fast[], double &slow[], double &ap[], datetime &time
       ObjectSetInteger(0, lineName, OBJPROP_WIDTH, 3);
       ObjectSetInteger(0, lineName, OBJPROP_RAY_RIGHT, false);
       ObjectSetInteger(0, lineName, OBJPROP_SELECTABLE, false);
-      ObjectSetInteger(0, lineName, OBJPROP_BACK, false);
    }
    
-   // Add a label showing current CDC status
    string labelName = CDCPrefix + "Status_Label";
    ObjectCreate(0, labelName, OBJ_LABEL, 0, 0, 0);
    ObjectSetInteger(0, labelName, OBJPROP_CORNER, CORNER_LEFT_UPPER);
@@ -343,7 +605,6 @@ void DrawCDCOnChart(double &fast[], double &slow[], double &ap[], datetime &time
 //+------------------------------------------------------------------+
 bool IsTradeAllowed(string tradeType)
 {
-   // Check Trade Mode setting first
    if(tradeType == "BUY")
    {
       if(InpTradeMode == TRADE_SELL_ONLY)
@@ -355,7 +616,6 @@ bool IsTradeAllowed(string tradeType)
          return false;
    }
    
-   // Check CDC Filter
    if(InpUseCDCFilter)
    {
       if(tradeType == "BUY" && CDCTrend != "BULLISH")
@@ -393,8 +653,11 @@ void OnTick()
       
    lastBarTime = currentBarTime;
    
-   // Calculate CDC Action Zone first (from higher timeframe)
+   // Calculate CDC Action Zone (higher timeframe)
    CalculateCDC();
+   
+   // Calculate ZigZag++ (custom implementation)
+   CalculateZigZagPP();
    
    if(InpUseTimeFilter && !IsWithinTradingHours())
    {
@@ -402,7 +665,6 @@ void OnTick()
       return;
    }
    
-   // Check for Re-Entry opportunity
    if(InpUseReEntry)
    {
       CheckReEntry();
@@ -414,20 +676,17 @@ void OnTick()
       return;
    }
    
-   if(!CalculateSwingPoints())
+   if(ZZPointCount < 4)
    {
-      UpdateChartComment("WAIT", "Calculating Swing Points...");
+      UpdateChartComment("WAIT", "Calculating ZigZag...");
       return;
    }
    
    string signal = AnalyzeSignal();
    string reason = "";
    
-   // Check both Trade Mode and CDC Filter
-   // NEW: Each direction (BUY/SELL) can only have 1 open position
    if(signal == "BUY")
    {
-      // Check if BUY position already exists
       if(HasBuyPosition())
       {
          reason = "BUY position already open";
@@ -444,13 +703,12 @@ void OnTick()
       else
       {
          ExecuteBuy();
-         ReEntryBuyCount = 0;  // Reset re-entry count on new signal
+         ReEntryBuyCount = 0;
          reason = "BUY executed | CDC: " + CDCTrend;
       }
    }
    else if(signal == "SELL")
    {
-      // Check if SELL position already exists
       if(HasSellPosition())
       {
          reason = "SELL position already open";
@@ -467,7 +725,7 @@ void OnTick()
       else
       {
          ExecuteSell();
-         ReEntrySelCount = 0;  // Reset re-entry count on new signal
+         ReEntrySelCount = 0;
          reason = "SELL executed | CDC: " + CDCTrend;
       }
    }
@@ -477,17 +735,13 @@ void OnTick()
 
 //+------------------------------------------------------------------+
 //| Check for Re-Entry opportunity after order closes                  |
-//| BUY Re-Entry: Order closed + LL/LH swing + CDC Bullish            |
-//| SELL Re-Entry: Order closed + HH/HL swing + CDC Bearish           |
 //+------------------------------------------------------------------+
 void CheckReEntry()
 {
-   // Check if we can re-enter (not at max orders)
    if(CountOpenOrders() >= InpMaxOrders)
       return;
    
-   // Get recent closed orders from history
-   datetime fromTime = TimeCurrent() - 86400 * 7;  // Last 7 days
+   datetime fromTime = TimeCurrent() - 86400 * 7;
    HistorySelect(fromTime, TimeCurrent());
    
    int totalDeals = HistoryDealsTotal();
@@ -497,192 +751,85 @@ void CheckReEntry()
       ulong dealTicket = HistoryDealGetTicket(i);
       if(dealTicket == 0) continue;
       
-      // Check if this deal belongs to our EA
       if(HistoryDealGetInteger(dealTicket, DEAL_MAGIC) != InpMagicNumber)
          continue;
       
-      // Check if this deal is an exit (close position)
       ENUM_DEAL_ENTRY dealEntry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
       if(dealEntry != DEAL_ENTRY_OUT)
          continue;
       
       datetime dealTime = (datetime)HistoryDealGetInteger(dealTicket, DEAL_TIME);
       
-      // Only check deals closed after our last check
       if(dealTime <= LastOrderCloseTime)
          continue;
       
-      // Get deal type
       ENUM_DEAL_TYPE dealType = (ENUM_DEAL_TYPE)HistoryDealGetInteger(dealTicket, DEAL_TYPE);
       
-      // Update last close time
       LastOrderCloseTime = dealTime;
       
       Print("Order Closed - Checking Re-Entry Opportunity");
       
-      // Recalculate swing points for current signal
-      if(!CalculateSwingPoints())
-         return;
-      
-      string lastSwing = "";
-      if(TotalSwingPoints > 0)
-         lastSwing = SwingPoints[0].pattern;
-      
-      // Check BUY Re-Entry conditions
-      // If SELL order closed AND we see LL or LH swing point AND CDC is BULLISH
-      if(dealType == DEAL_TYPE_BUY)  // BUY deal closes a SELL position
+      // Check BUY Re-Entry: SELL closed + LL/LH + CDC BULLISH
+      if(dealType == DEAL_TYPE_BUY)
       {
-         if(CDCTrend == "BULLISH" && (lastSwing == "LL" || lastSwing == "LH"))
+         if(CDCTrend == "BULLISH" && (LastZZLabel == "LL" || LastZZLabel == "LH"))
          {
             if(ReEntryBuyCount < InpReEntryMaxCount)
             {
                if(IsTradeAllowed("BUY"))
                {
-                  Print("RE-ENTRY BUY - Swing: ", lastSwing, " CDC: ", CDCTrend);
+                  Print("RE-ENTRY BUY - Swing: ", LastZZLabel, " CDC: ", CDCTrend);
                   ExecuteBuy();
                   ReEntryBuyCount++;
                }
             }
-            else
-            {
-               Print("Max Re-Entry BUY reached: ", ReEntryBuyCount);
-            }
-         }
-         else
-         {
-            Print("No BUY Re-Entry - CDC: ", CDCTrend, " Swing: ", lastSwing);
          }
       }
       
-      // Check SELL Re-Entry conditions
-      // If BUY order closed AND we see HH or HL swing point AND CDC is BEARISH
-      if(dealType == DEAL_TYPE_SELL)  // SELL deal closes a BUY position
+      // Check SELL Re-Entry: BUY closed + HH/HL + CDC BEARISH
+      if(dealType == DEAL_TYPE_SELL)
       {
-         if(CDCTrend == "BEARISH" && (lastSwing == "HH" || lastSwing == "HL"))
+         if(CDCTrend == "BEARISH" && (LastZZLabel == "HH" || LastZZLabel == "HL"))
          {
             if(ReEntrySelCount < InpReEntryMaxCount)
             {
                if(IsTradeAllowed("SELL"))
                {
-                  Print("RE-ENTRY SELL - Swing: ", lastSwing, " CDC: ", CDCTrend);
+                  Print("RE-ENTRY SELL - Swing: ", LastZZLabel, " CDC: ", CDCTrend);
                   ExecuteSell();
                   ReEntrySelCount++;
                }
             }
-            else
-            {
-               Print("Max Re-Entry SELL reached: ", ReEntrySelCount);
-            }
-         }
-         else
-         {
-            Print("No SELL Re-Entry - CDC: ", CDCTrend, " Swing: ", lastSwing);
          }
       }
       
-      break;  // Only process the most recent closed order
+      break;
    }
 }
 
 //+------------------------------------------------------------------+
-//| Calculate Swing Points from ZigZag                                 |
-//+------------------------------------------------------------------+
-bool CalculateSwingPoints()
-{
-   ArrayResize(SwingPoints, 0);
-   TotalSwingPoints = 0;
-   
-   double zigzagBuffer[];
-   ArraySetAsSeries(zigzagBuffer, true);
-   
-   int copied = CopyBuffer(zigzagHandle, 0, 0, 200, zigzagBuffer);
-   if(copied <= 0)
-   {
-      Print("ERROR: Cannot copy ZigZag buffer");
-      return false;
-   }
-   
-   double lastHigh = 0;
-   double lastLow = DBL_MAX;
-   
-   for(int i = 0; i < copied; i++)
-   {
-      if(zigzagBuffer[i] != 0 && zigzagBuffer[i] != EMPTY_VALUE)
-      {
-         double price = zigzagBuffer[i];
-         double high = iHigh(_Symbol, PERIOD_CURRENT, i);
-         double low = iLow(_Symbol, PERIOD_CURRENT, i);
-         
-         SwingPoint point;
-         point.index = i;
-         point.price = price;
-         point.time = iTime(_Symbol, PERIOD_CURRENT, i);
-         
-         if(MathAbs(price - high) < MathAbs(price - low))
-         {
-            point.type = "HIGH";
-            
-            if(price > lastHigh && lastHigh > 0)
-               point.pattern = "HH";
-            else
-               point.pattern = "LH";
-               
-            lastHigh = price;
-         }
-         else
-         {
-            point.type = "LOW";
-            
-            if(price < lastLow && lastLow < DBL_MAX)
-               point.pattern = "LL";
-            else
-               point.pattern = "HL";
-               
-            lastLow = price;
-         }
-         
-         int size = ArraySize(SwingPoints);
-         ArrayResize(SwingPoints, size + 1);
-         SwingPoints[size] = point;
-         TotalSwingPoints++;
-         
-         if(TotalSwingPoints >= 10)
-            break;
-      }
-   }
-   
-   return (TotalSwingPoints >= 4);
-}
-
-//+------------------------------------------------------------------+
-//| Analyze Signal based on Market Structure                           |
-//| *** NEW LOGIC ***                                                  |
-//| BUY: ZigZag closes at LL or LH → Check CDC is BULLISH → Execute   |
-//| SELL: ZigZag closes at HH or HL → Check CDC is BEARISH → Execute  |
-//| Each direction can only have 1 open position at a time            |
+//| Analyze Signal - Based on ZigZag++ Labels                          |
+//| BUY: ZigZag closed at LL or LH + CDC BULLISH                       |
+//| SELL: ZigZag closed at HH or HL + CDC BEARISH                      |
 //+------------------------------------------------------------------+
 string AnalyzeSignal()
 {
-   if(TotalSwingPoints < 2)
+   if(ZZPointCount < 2)
       return "WAIT";
    
-   string lastPattern = SwingPoints[0].pattern;
+   Print("Last ZigZag++ Label: ", LastZZLabel, " | CDC Trend: ", CDCTrend);
    
-   Print("Last ZigZag Pattern: ", lastPattern, " | CDC Trend: ", CDCTrend);
-   
-   // BUY Signal: ZigZag closed at LL or LH point
-   // This indicates a potential LOW point → Buy opportunity
-   if(lastPattern == "LL" || lastPattern == "LH")
+   // BUY Signal: ZigZag closed at LL or LH (Low points)
+   if(LastZZLabel == "LL" || LastZZLabel == "LH")
    {
-      Print("ZigZag LOW point detected (", lastPattern, ") - Checking BUY conditions");
+      Print("ZigZag++ LOW point detected (", LastZZLabel, ") - Checking BUY conditions");
       return "BUY";
    }
    
-   // SELL Signal: ZigZag closed at HH or HL point  
-   // This indicates a potential HIGH point → Sell opportunity
-   if(lastPattern == "HH" || lastPattern == "HL")
+   // SELL Signal: ZigZag closed at HH or HL (High points)
+   if(LastZZLabel == "HH" || LastZZLabel == "HL")
    {
-      Print("ZigZag HIGH point detected (", lastPattern, ") - Checking SELL conditions");
+      Print("ZigZag++ HIGH point detected (", LastZZLabel, ") - Checking SELL conditions");
       return "SELL";
    }
    
@@ -700,9 +847,8 @@ void ExecuteBuy()
    double lot = CalculateLotSize(InpStopLoss);
    
    Print("Executing BUY - CDC: ", CDCTrend, " | Mode: ", GetTradeModeString());
-   Print("Price: ", price, " SL: ", sl, " TP: ", tp);
    
-   if(trade.Buy(lot, _Symbol, price, sl, tp, "ZigZag+CDC EA"))
+   if(trade.Buy(lot, _Symbol, price, sl, tp, "ZigZag++ CDC EA"))
    {
       Print("BUY Success! Ticket: ", trade.ResultOrder());
    }
@@ -723,9 +869,8 @@ void ExecuteSell()
    double lot = CalculateLotSize(InpStopLoss);
    
    Print("Executing SELL - CDC: ", CDCTrend, " | Mode: ", GetTradeModeString());
-   Print("Price: ", price, " SL: ", sl, " TP: ", tp);
    
-   if(trade.Sell(lot, _Symbol, price, sl, tp, "ZigZag+CDC EA"))
+   if(trade.Sell(lot, _Symbol, price, sl, tp, "ZigZag++ CDC EA"))
    {
       Print("SELL Success! Ticket: ", trade.ResultOrder());
    }
@@ -828,7 +973,7 @@ bool IsWithinTradingHours()
 }
 
 //+------------------------------------------------------------------+
-//| Update chart comment with CDC info                                 |
+//| Update chart comment                                               |
 //+------------------------------------------------------------------+
 void UpdateChartComment(string signal, string reason = "")
 {
@@ -836,53 +981,49 @@ void UpdateChartComment(string signal, string reason = "")
    string text = "";
    
    text = text + "=================================" + nl;
-   text = text + " ZigZag + CDC Action Zone EA v2.2" + nl;
+   text = text + " ZigZag++ CDC EA v3.0" + nl;
    text = text + "=================================" + nl;
    text = text + "Symbol: " + _Symbol + nl;
    text = text + "Entry TF: " + EnumToString(Period()) + nl;
    text = text + "Trade Mode: " + GetTradeModeString() + nl;
-   text = text + "Re-Entry: " + (InpUseReEntry ? "ON (" + IntegerToString(InpReEntryMaxCount) + "x max)" : "OFF") + nl;
+   text = text + "Re-Entry: " + (InpUseReEntry ? "ON" : "OFF") + nl;
    text = text + "---------------------------------" + nl;
    
-   // CDC Action Zone Info
-   text = text + "CDC FILTER (" + EnumToString(InpCDCTimeframe) + "):" + nl;
-   text = text + "  Fast EMA: " + DoubleToString(CDCFast, _Digits) + nl;
-   text = text + "  Slow EMA: " + DoubleToString(CDCSlow, _Digits) + nl;
-   text = text + "  Zone: " + CDCTrend + nl;
+   text = text + "ZIGZAG++ STATUS:" + nl;
+   text = text + "  Last Point: " + LastZZLabel + nl;
+   text = text + "  Total Points: " + IntegerToString(ZZPointCount) + nl;
    
-   // Color indicator
-   string zoneSymbol = "";
-   if(CDCTrend == "BULLISH") zoneSymbol = "[GREEN - BUY ONLY]";
-   else if(CDCTrend == "BEARISH") zoneSymbol = "[RED - SELL ONLY]";
-   else if(CDCTrend == "WEAK_BULL") zoneSymbol = "[YELLOW - CAUTION]";
-   else if(CDCTrend == "WEAK_BEAR") zoneSymbol = "[BLUE - CAUTION]";
-   else zoneSymbol = "[NEUTRAL]";
-   text = text + "  Status: " + zoneSymbol + nl;
-   
-   text = text + "---------------------------------" + nl;
-   text = text + "STRUCTURE ANALYSIS:" + nl;
-   text = text + "  Swing Points: " + IntegerToString(TotalSwingPoints) + nl;
-   
-   if(TotalSwingPoints >= 4)
+   if(ZZPointCount >= 4)
    {
       text = text + "  Recent: ";
-      for(int i = 0; i < 4 && i < TotalSwingPoints; i++)
+      for(int i = 0; i < 4 && i < ZZPointCount; i++)
       {
-         text = text + SwingPoints[i].pattern;
+         text = text + ZZPoints[i].label;
          if(i < 3) text = text + " > ";
       }
       text = text + nl;
    }
    
    text = text + "---------------------------------" + nl;
-   text = text + "RE-ENTRY STATUS:" + nl;
-   text = text + "  BUY Re-Entry: " + IntegerToString(ReEntryBuyCount) + "/" + IntegerToString(InpReEntryMaxCount) + nl;
-   text = text + "  SELL Re-Entry: " + IntegerToString(ReEntrySelCount) + "/" + IntegerToString(InpReEntryMaxCount) + nl;
+   text = text + "CDC FILTER (" + EnumToString(InpCDCTimeframe) + "):" + nl;
+   text = text + "  Zone: " + CDCTrend + nl;
+   
+   string zoneSymbol = "";
+   if(CDCTrend == "BULLISH") zoneSymbol = "[GREEN - BUY ONLY]";
+   else if(CDCTrend == "BEARISH") zoneSymbol = "[RED - SELL ONLY]";
+   else zoneSymbol = "[" + CDCTrend + "]";
+   text = text + "  Status: " + zoneSymbol + nl;
+   
+   text = text + "---------------------------------" + nl;
+   text = text + "RE-ENTRY: " + IntegerToString(ReEntryBuyCount) + "/" + 
+          IntegerToString(InpReEntryMaxCount) + " BUY, " + 
+          IntegerToString(ReEntrySelCount) + "/" + 
+          IntegerToString(InpReEntryMaxCount) + " SELL" + nl;
    text = text + "---------------------------------" + nl;
    text = text + "SIGNAL: " + signal + nl;
    if(reason != "") text = text + "Reason: " + reason + nl;
-   text = text + "Orders: " + IntegerToString(CountOpenOrders()) + 
-          "/" + IntegerToString(InpMaxOrders) + nl;
+   text = text + "Orders: " + IntegerToString(CountOpenOrders()) + "/" + 
+          IntegerToString(InpMaxOrders) + nl;
    text = text + "=================================" + nl;
    
    Comment(text);
@@ -909,15 +1050,15 @@ void UpdateChartComment(string signal, string reason = "")
         <div className="max-w-4xl mx-auto text-center">
           <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-primary/10 border border-primary/30 mb-6">
             <FileCode className="w-4 h-4 text-primary" />
-            <span className="text-sm font-mono text-primary">MQL5 Expert Advisor v2.0</span>
+            <span className="text-sm font-mono text-primary">MQL5 Expert Advisor v3.0</span>
           </div>
           
           <h1 className="text-3xl md:text-4xl font-bold text-foreground mb-4">
-            ZigZag + <span className="text-primary">CDC Action Zone</span> EA
+            ZigZag++ <span className="text-primary">CDC Action Zone</span> EA
           </h1>
           
           <p className="text-lg text-muted-foreground">
-            EA ที่รวม Market Structure กับ CDC Action Zone Trend Filter สำหรับ MT5
+            EA ที่ใช้ ZigZag++ (DevLucem) พร้อม Labels HH/HL/LH/LL และ CDC Trend Filter
           </p>
         </div>
       </section>
@@ -942,15 +1083,15 @@ void UpdateChartComment(string signal, string reason = "")
       {/* Features */}
       <section className="container py-8">
         <div className="max-w-4xl mx-auto">
-          <h2 className="text-2xl font-bold text-foreground mb-6 text-center">คุณสมบัติของ EA v2.2</h2>
+          <h2 className="text-2xl font-bold text-foreground mb-6 text-center">คุณสมบัติของ EA v3.0</h2>
           
           <div className="grid md:grid-cols-2 lg:grid-cols-5 gap-4">
-            <div className="glass-card rounded-xl p-5 text-center">
+            <div className="glass-card rounded-xl p-5 text-center border-2 border-primary/30">
               <div className="w-12 h-12 rounded-xl bg-primary/20 text-primary flex items-center justify-center mx-auto mb-3">
                 <TrendingUp className="w-6 h-6" />
               </div>
-              <h3 className="font-semibold text-foreground mb-1">Market Structure</h3>
-              <p className="text-sm text-muted-foreground">วิเคราะห์ HH/HL/LH/LL อัตโนมัติ</p>
+              <h3 className="font-semibold text-foreground mb-1">ZigZag++</h3>
+              <p className="text-sm text-muted-foreground">พร้อม Labels HH/HL/LH/LL</p>
             </div>
             
             <div className="glass-card rounded-xl p-5 text-center border-2 border-bull/30">
@@ -1077,12 +1218,12 @@ void UpdateChartComment(string signal, string reason = "")
         <div className="max-w-4xl mx-auto">
           <h2 className="text-2xl font-bold text-foreground mb-6 text-center">Parameters ทั้งหมด</h2>
           
-          {/* ZigZag Settings */}
+          {/* ZigZag++ Settings */}
           <div className="glass-card rounded-2xl overflow-hidden mb-6">
             <div className="bg-primary/20 px-4 py-3 border-b border-border">
               <h3 className="font-bold text-primary flex items-center gap-2">
                 <TrendingUp className="w-4 h-4" />
-                ZigZag Settings
+                ZigZag++ Settings (Based on DevLucem)
               </h3>
             </div>
             <table className="w-full text-sm">
@@ -1097,7 +1238,7 @@ void UpdateChartComment(string signal, string reason = "")
                 <tr>
                   <td className="px-4 py-3 font-mono text-primary">InpDepth</td>
                   <td className="px-4 py-3">12</td>
-                  <td className="px-4 py-3 text-muted-foreground">ZigZag Depth</td>
+                  <td className="px-4 py-3 text-muted-foreground">ZigZag Depth - จำนวนแท่งสำหรับหา Swing</td>
                 </tr>
                 <tr>
                   <td className="px-4 py-3 font-mono text-primary">InpDeviation</td>
@@ -1106,11 +1247,43 @@ void UpdateChartComment(string signal, string reason = "")
                 </tr>
                 <tr>
                   <td className="px-4 py-3 font-mono text-primary">InpBackstep</td>
-                  <td className="px-4 py-3">3</td>
+                  <td className="px-4 py-3">2</td>
                   <td className="px-4 py-3 text-muted-foreground">ZigZag Backstep</td>
+                </tr>
+                <tr>
+                  <td className="px-4 py-3 font-mono text-primary">InpBullColor</td>
+                  <td className="px-4 py-3 text-bull">clrLime</td>
+                  <td className="px-4 py-3 text-muted-foreground">สี Labels LL/HL (Low points)</td>
+                </tr>
+                <tr>
+                  <td className="px-4 py-3 font-mono text-primary">InpBearColor</td>
+                  <td className="px-4 py-3 text-bear">clrRed</td>
+                  <td className="px-4 py-3 text-muted-foreground">สี Labels HH/LH (High points)</td>
+                </tr>
+                <tr>
+                  <td className="px-4 py-3 font-mono text-primary">InpShowLabels</td>
+                  <td className="px-4 py-3">true</td>
+                  <td className="px-4 py-3 text-muted-foreground">แสดง HH/HL/LH/LL labels บน chart</td>
+                </tr>
+                <tr>
+                  <td className="px-4 py-3 font-mono text-primary">InpShowLines</td>
+                  <td className="px-4 py-3">true</td>
+                  <td className="px-4 py-3 text-muted-foreground">แสดงเส้น ZigZag บน chart</td>
                 </tr>
               </tbody>
             </table>
+            <div className="p-4 bg-secondary/30">
+              <p className="text-sm text-muted-foreground">
+                <span className="text-primary font-semibold">ZigZag++ </span>
+                อ้างอิงจาก TradingView indicator โดย DevLucem - แสดง Labels อัตโนมัติ:
+              </p>
+              <div className="flex flex-wrap gap-2 mt-2">
+                <span className="px-3 py-1 rounded-full text-xs font-medium bg-bear/20 text-bear">HH - Higher High</span>
+                <span className="px-3 py-1 rounded-full text-xs font-medium bg-bear/20 text-bear">LH - Lower High</span>
+                <span className="px-3 py-1 rounded-full text-xs font-medium bg-bull/20 text-bull">HL - Higher Low</span>
+                <span className="px-3 py-1 rounded-full text-xs font-medium bg-bull/20 text-bull">LL - Lower Low</span>
+              </div>
+            </div>
           </div>
           
           {/* CDC Action Zone Settings */}
