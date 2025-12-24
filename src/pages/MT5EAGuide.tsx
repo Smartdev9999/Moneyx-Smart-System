@@ -1460,7 +1460,9 @@ void CheckGridProfitSide()
          // Price went UP from last buy by grid distance
          if(currentPrice - lastBuyPrice >= distance * _Point)
          {
-            double lot = GetGridLotSize(false, profitGridCount);
+            // Grid Profit uses gridLevel starting from 1 (Initial Order is the base)
+            // profitGridCount=0 means first Grid Profit order, which should use level 1
+            double lot = GetGridLotSize(false, profitGridCount + 1);
             double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
             
             Print("Grid Profit BUY #", profitGridCount, " | Lot: ", lot, " | Distance: ", distance);
@@ -1512,7 +1514,9 @@ void CheckGridProfitSide()
          // Price went DOWN from last sell by grid distance
          if(lastSellPrice - currentPrice >= distance * _Point)
          {
-            double lot = GetGridLotSize(false, profitGridCount);
+            // Grid Profit uses gridLevel starting from 1 (Initial Order is the base)
+            // profitGridCount=0 means first Grid Profit order, which should use level 1
+            double lot = GetGridLotSize(false, profitGridCount + 1);
             double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
             
             Print("Grid Profit SELL #", profitGridCount, " | Lot: ", lot, " | Distance: ", distance);
