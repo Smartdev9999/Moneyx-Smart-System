@@ -364,12 +364,16 @@ void CalculateZigZagPP()
       ZZPointCount++;
    }
    
-   // Reverse to have newest first
+   // Reverse to have newest first (manual copy - ArrayCopy doesn't work with structs containing strings)
    ZigZagPoint tempPoints[];
    ArrayResize(tempPoints, ZZPointCount);
    for(int i = 0; i < ZZPointCount; i++)
       tempPoints[i] = ZZPoints[ZZPointCount - 1 - i];
-   ArrayCopy(ZZPoints, tempPoints);
+   
+   // Manual copy back (cannot use ArrayCopy with structs containing objects)
+   ArrayResize(ZZPoints, ZZPointCount);
+   for(int i = 0; i < ZZPointCount; i++)
+      ZZPoints[i] = tempPoints[i];
    
    // Draw ZigZag lines and labels
    if(InpShowLines || InpShowLabels)
