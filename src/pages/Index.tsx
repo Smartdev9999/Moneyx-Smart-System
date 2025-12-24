@@ -1,4 +1,5 @@
-import { Layers, Settings2, ArrowDownUp, Palette, RefreshCw, Hash } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Layers, Settings2, ArrowDownUp, Palette, RefreshCw, Hash, Code2, ArrowRight } from 'lucide-react';
 import ZigZagChart from '@/components/ZigZagChart';
 import ParameterCard from '@/components/ParameterCard';
 import PatternBadge from '@/components/PatternBadge';
@@ -175,6 +176,31 @@ const Index = () => {
               </li>
             </ul>
           </div>
+        </div>
+      </section>
+
+      {/* Trading Bot Guide CTA */}
+      <section className="container py-12">
+        <div className="max-w-3xl mx-auto">
+          <Link 
+            to="/trading-bot-guide"
+            className="block glass-card rounded-2xl p-8 border-2 border-primary/30 hover:border-primary/60 transition-all duration-300 group"
+          >
+            <div className="flex items-center gap-6">
+              <div className="p-4 rounded-xl bg-primary/20 text-primary group-hover:scale-110 transition-transform">
+                <Code2 className="w-8 h-8" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-xl font-bold text-foreground mb-2">
+                  คู่มือโค้ด Trading Bot ฉบับเต็ม
+                </h3>
+                <p className="text-muted-foreground">
+                  ดูโค้ดทุกขั้นตอนพร้อมคำอธิบายละเอียด สำหรับสร้างระบบเทรดอัตโนมัติ
+                </p>
+              </div>
+              <ArrowRight className="w-6 h-6 text-primary group-hover:translate-x-2 transition-transform" />
+            </div>
+          </Link>
         </div>
       </section>
 
