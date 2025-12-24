@@ -293,61 +293,8 @@ void DrawCDCOnChart(double &fast[], double &slow[], double &ap[], datetime &time
    // First, delete old objects
    ObjectsDeleteAll(0, CDCPrefix);
    
-   // Draw zone fill as rectangles between Fast and Slow lines
+   // Draw only EMA lines (no color zones)
    int maxBars = MathMin(100, size - 1);
-   
-   for(int i = 0; i < maxBars; i++)
-   {
-      // Get bar times from the CDC timeframe
-      datetime t1 = time[i + 1];
-      datetime t2 = time[i];
-      
-      // Get the next bar time for proper rectangle width
-      // For the last bar, estimate the next bar time
-      datetime t2End;
-      if(i == 0)
-      {
-         // Estimate next bar time based on CDC timeframe
-         int tfSeconds = PeriodSeconds(InpCDCTimeframe);
-         t2End = t2 + tfSeconds;
-      }
-      else
-      {
-         t2End = t2;
-      }
-      
-      double fastVal = fast[i];
-      double slowVal = slow[i];
-      double apVal = ap[i];
-      
-      // Determine zone color for this bar
-      bool bullish = fast[i] > slow[i];
-      bool bearish = fast[i] < slow[i];
-      
-      color zoneColor;
-      if(bullish && apVal > fast[i])
-         zoneColor = clrLime;          // Green - Strong Bullish
-      else if(bearish && apVal < fast[i])
-         zoneColor = clrRed;           // Red - Strong Bearish
-      else if(bullish && apVal < fast[i])
-         zoneColor = clrYellow;        // Yellow - Weak Bullish
-      else if(bearish && apVal > fast[i])
-         zoneColor = clrDodgerBlue;    // Blue - Weak Bearish
-      else
-         zoneColor = clrGray;
-      
-      // Create filled zone rectangle between the two MA lines
-      string zoneName = CDCPrefix + "Zone_" + IntegerToString(i);
-      double zoneTop = MathMax(fastVal, slowVal);
-      double zoneBottom = MathMin(fastVal, slowVal);
-      
-      ObjectCreate(0, zoneName, OBJ_RECTANGLE, 0, t1, zoneTop, t2End, zoneBottom);
-      ObjectSetInteger(0, zoneName, OBJPROP_COLOR, zoneColor);
-      ObjectSetInteger(0, zoneName, OBJPROP_FILL, true);
-      ObjectSetInteger(0, zoneName, OBJPROP_BACK, true);
-      ObjectSetInteger(0, zoneName, OBJPROP_SELECTABLE, false);
-      ObjectSetInteger(0, zoneName, OBJPROP_WIDTH, 1);
-   }
    
    // Draw Fast MA line (Red/Orange) - connecting points properly
    for(int i = 0; i < maxBars; i++)
@@ -477,38 +424,51 @@ void OnTick()
    string reason = "";
    
    // Check both Trade Mode and CDC Filter
+   // NEW: Each direction (BUY/SELL) can only have 1 open position
    if(signal == "BUY")
    {
-      if(!IsTradeAllowed("BUY"))
+      // Check if BUY position already exists
+      if(HasBuyPosition())
+      {
+         reason = "BUY position already open";
+         signal = "WAIT";
+      }
+      else if(!IsTradeAllowed("BUY"))
       {
          if(InpTradeMode == TRADE_SELL_ONLY)
             reason = "Trade Mode: SELL ONLY";
          else if(InpUseCDCFilter && CDCTrend != "BULLISH")
-            reason = "CDC Zone not Green (" + CDCTrend + ")";
+            reason = "CDC not Bullish (" + CDCTrend + ") - BUY blocked";
          signal = "WAIT";
       }
       else
       {
          ExecuteBuy();
          ReEntryBuyCount = 0;  // Reset re-entry count on new signal
-         reason = "CDC: " + CDCTrend + " | Mode: " + GetTradeModeString();
+         reason = "BUY executed | CDC: " + CDCTrend;
       }
    }
    else if(signal == "SELL")
    {
-      if(!IsTradeAllowed("SELL"))
+      // Check if SELL position already exists
+      if(HasSellPosition())
+      {
+         reason = "SELL position already open";
+         signal = "WAIT";
+      }
+      else if(!IsTradeAllowed("SELL"))
       {
          if(InpTradeMode == TRADE_BUY_ONLY)
             reason = "Trade Mode: BUY ONLY";
          else if(InpUseCDCFilter && CDCTrend != "BEARISH")
-            reason = "CDC Zone not Red (" + CDCTrend + ")";
+            reason = "CDC not Bearish (" + CDCTrend + ") - SELL blocked";
          signal = "WAIT";
       }
       else
       {
          ExecuteSell();
          ReEntrySelCount = 0;  // Reset re-entry count on new signal
-         reason = "CDC: " + CDCTrend + " | Mode: " + GetTradeModeString();
+         reason = "SELL executed | CDC: " + CDCTrend;
       }
    }
    
@@ -696,43 +656,34 @@ bool CalculateSwingPoints()
 
 //+------------------------------------------------------------------+
 //| Analyze Signal based on Market Structure                           |
+//| *** NEW LOGIC ***                                                  |
+//| BUY: ZigZag closes at LL or LH → Check CDC is BULLISH → Execute   |
+//| SELL: ZigZag closes at HH or HL → Check CDC is BEARISH → Execute  |
+//| Each direction can only have 1 open position at a time            |
 //+------------------------------------------------------------------+
 string AnalyzeSignal()
 {
-   if(TotalSwingPoints < 4)
+   if(TotalSwingPoints < 2)
       return "WAIT";
    
-   int hhCount = 0, hlCount = 0, lhCount = 0, llCount = 0;
+   string lastPattern = SwingPoints[0].pattern;
    
-   for(int i = 0; i < 4 && i < TotalSwingPoints; i++)
+   Print("Last ZigZag Pattern: ", lastPattern, " | CDC Trend: ", CDCTrend);
+   
+   // BUY Signal: ZigZag closed at LL or LH point
+   // This indicates a potential LOW point → Buy opportunity
+   if(lastPattern == "LL" || lastPattern == "LH")
    {
-      if(SwingPoints[i].pattern == "HH") hhCount++;
-      else if(SwingPoints[i].pattern == "HL") hlCount++;
-      else if(SwingPoints[i].pattern == "LH") lhCount++;
-      else if(SwingPoints[i].pattern == "LL") llCount++;
+      Print("ZigZag LOW point detected (", lastPattern, ") - Checking BUY conditions");
+      return "BUY";
    }
    
-   Print("Pattern: HH=", hhCount, " HL=", hlCount, 
-         " LH=", lhCount, " LL=", llCount);
-   
-   // BUY Signal: Uptrend (HH + HL) and last point is HL
-   if(hhCount >= 1 && hlCount >= 1)
+   // SELL Signal: ZigZag closed at HH or HL point  
+   // This indicates a potential HIGH point → Sell opportunity
+   if(lastPattern == "HH" || lastPattern == "HL")
    {
-      if(SwingPoints[0].pattern == "HL")
-      {
-         Print("Structure BUY Signal detected");
-         return "BUY";
-      }
-   }
-   
-   // SELL Signal: Downtrend (LL + LH) and last point is LH
-   if(llCount >= 1 && lhCount >= 1)
-   {
-      if(SwingPoints[0].pattern == "LH")
-      {
-         Print("Structure SELL Signal detected");
-         return "SELL";
-      }
+      Print("ZigZag HIGH point detected (", lastPattern, ") - Checking SELL conditions");
+      return "SELL";
    }
    
    return "WAIT";
@@ -826,6 +777,44 @@ int CountOpenOrders()
       }
    }
    return count;
+}
+
+//+------------------------------------------------------------------+
+//| Check if BUY position already exists                               |
+//+------------------------------------------------------------------+
+bool HasBuyPosition()
+{
+   for(int i = 0; i < PositionsTotal(); i++)
+   {
+      if(PositionGetSymbol(i) == _Symbol)
+      {
+         if(PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
+         {
+            if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
+               return true;
+         }
+      }
+   }
+   return false;
+}
+
+//+------------------------------------------------------------------+
+//| Check if SELL position already exists                              |
+//+------------------------------------------------------------------+
+bool HasSellPosition()
+{
+   for(int i = 0; i < PositionsTotal(); i++)
+   {
+      if(PositionGetSymbol(i) == _Symbol)
+      {
+         if(PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
+         {
+            if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_SELL)
+               return true;
+         }
+      }
+   }
+   return false;
 }
 
 //+------------------------------------------------------------------+
