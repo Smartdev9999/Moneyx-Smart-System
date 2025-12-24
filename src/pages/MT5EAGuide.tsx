@@ -6,11 +6,11 @@ import StepCard from '@/components/StepCard';
 const MT5EAGuide = () => {
   const fullEACode = `//+------------------------------------------------------------------+
 //|                                   ZigZag_CDC_Structure_EA.mq5      |
-//|                          ZigZag + CDC Action Zone Trend Filter     |
+//|                  ZigZag + CDC Action Zone + Re-Entry Feature       |
 //+------------------------------------------------------------------+
 #property copyright "Trading Education"
 #property link      ""
-#property version   "2.10"
+#property version   "2.20"
 #property strict
 
 // *** Include CTrade ***
@@ -43,6 +43,11 @@ enum ENUM_TRADE_MODE
    TRADE_SELL_ONLY = 2  // Sell Only
 };
 input ENUM_TRADE_MODE InpTradeMode = TRADE_BUY_SELL;  // Trade Mode
+
+//--- [ RE-ENTRY SETTINGS ] -----------------------------------------
+input string   InpReEntryHeader = "=== RE-ENTRY SETTINGS ===";  // ___
+input bool     InpUseReEntry = true;       // Enable Re-Entry Feature
+input int      InpReEntryMaxCount = 3;     // Max Re-Entry per Direction
 
 //--- [ TRADING SETTINGS ] ------------------------------------------
 input string   InpTradingHeader = "=== TRADING SETTINGS ===";  // ___
@@ -93,17 +98,25 @@ color CDCZoneColor = clrWhite;
 // CDC Chart Objects Prefix
 string CDCPrefix = "CDC_";
 
+// Re-Entry Tracking Variables
+int ReEntryBuyCount = 0;
+int ReEntrySelCount = 0;
+ulong LastBuyTicket = 0;
+ulong LastSellTicket = 0;
+datetime LastOrderCloseTime = 0;
+
 //+------------------------------------------------------------------+
 //| Expert initialization function                                     |
 //+------------------------------------------------------------------+
 int OnInit()
 {
    Print("===========================================");
-   Print("ZigZag + CDC Action Zone EA v2.1");
+   Print("ZigZag + CDC Action Zone EA v2.2");
    Print("Symbol: ", _Symbol);
    Print("Entry TF: ", EnumToString(Period()));
    Print("CDC Filter TF: ", EnumToString(InpCDCTimeframe));
    Print("Trade Mode: ", EnumToString(InpTradeMode));
+   Print("Re-Entry: ", InpUseReEntry ? "Enabled" : "Disabled");
    Print("===========================================");
    
    trade.SetExpertMagicNumber(InpMagicNumber);
@@ -117,6 +130,12 @@ int OnInit()
       Print("ERROR: Cannot load ZigZag indicator!");
       return(INIT_FAILED);
    }
+   
+   // Reset Re-Entry counters
+   ReEntryBuyCount = 0;
+   ReEntrySelCount = 0;
+   LastBuyTicket = 0;
+   LastSellTicket = 0;
    
    Print("EA Started Successfully!");
    return(INIT_SUCCEEDED);
@@ -436,6 +455,12 @@ void OnTick()
       return;
    }
    
+   // Check for Re-Entry opportunity
+   if(InpUseReEntry)
+   {
+      CheckReEntry();
+   }
+   
    if(CountOpenOrders() >= InpMaxOrders)
    {
       UpdateChartComment("WAIT", "Max orders reached");
@@ -465,6 +490,7 @@ void OnTick()
       else
       {
          ExecuteBuy();
+         ReEntryBuyCount = 0;  // Reset re-entry count on new signal
          reason = "CDC: " + CDCTrend + " | Mode: " + GetTradeModeString();
       }
    }
@@ -481,11 +507,121 @@ void OnTick()
       else
       {
          ExecuteSell();
+         ReEntrySelCount = 0;  // Reset re-entry count on new signal
          reason = "CDC: " + CDCTrend + " | Mode: " + GetTradeModeString();
       }
    }
    
    UpdateChartComment(signal, reason);
+}
+
+//+------------------------------------------------------------------+
+//| Check for Re-Entry opportunity after order closes                  |
+//| BUY Re-Entry: Order closed + LL/LH swing + CDC Bullish            |
+//| SELL Re-Entry: Order closed + HH/HL swing + CDC Bearish           |
+//+------------------------------------------------------------------+
+void CheckReEntry()
+{
+   // Check if we can re-enter (not at max orders)
+   if(CountOpenOrders() >= InpMaxOrders)
+      return;
+   
+   // Get recent closed orders from history
+   datetime fromTime = TimeCurrent() - 86400 * 7;  // Last 7 days
+   HistorySelect(fromTime, TimeCurrent());
+   
+   int totalDeals = HistoryDealsTotal();
+   
+   for(int i = totalDeals - 1; i >= 0; i--)
+   {
+      ulong dealTicket = HistoryDealGetTicket(i);
+      if(dealTicket == 0) continue;
+      
+      // Check if this deal belongs to our EA
+      if(HistoryDealGetInteger(dealTicket, DEAL_MAGIC) != InpMagicNumber)
+         continue;
+      
+      // Check if this deal is an exit (close position)
+      ENUM_DEAL_ENTRY dealEntry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
+      if(dealEntry != DEAL_ENTRY_OUT)
+         continue;
+      
+      datetime dealTime = (datetime)HistoryDealGetInteger(dealTicket, DEAL_TIME);
+      
+      // Only check deals closed after our last check
+      if(dealTime <= LastOrderCloseTime)
+         continue;
+      
+      // Get deal type
+      ENUM_DEAL_TYPE dealType = (ENUM_DEAL_TYPE)HistoryDealGetInteger(dealTicket, DEAL_TYPE);
+      
+      // Update last close time
+      LastOrderCloseTime = dealTime;
+      
+      Print("Order Closed - Checking Re-Entry Opportunity");
+      
+      // Recalculate swing points for current signal
+      if(!CalculateSwingPoints())
+         return;
+      
+      string lastSwing = "";
+      if(TotalSwingPoints > 0)
+         lastSwing = SwingPoints[0].pattern;
+      
+      // Check BUY Re-Entry conditions
+      // If SELL order closed AND we see LL or LH swing point AND CDC is BULLISH
+      if(dealType == DEAL_TYPE_BUY)  // BUY deal closes a SELL position
+      {
+         if(CDCTrend == "BULLISH" && (lastSwing == "LL" || lastSwing == "LH"))
+         {
+            if(ReEntryBuyCount < InpReEntryMaxCount)
+            {
+               if(IsTradeAllowed("BUY"))
+               {
+                  Print("RE-ENTRY BUY - Swing: ", lastSwing, " CDC: ", CDCTrend);
+                  ExecuteBuy();
+                  ReEntryBuyCount++;
+               }
+            }
+            else
+            {
+               Print("Max Re-Entry BUY reached: ", ReEntryBuyCount);
+            }
+         }
+         else
+         {
+            Print("No BUY Re-Entry - CDC: ", CDCTrend, " Swing: ", lastSwing);
+         }
+      }
+      
+      // Check SELL Re-Entry conditions
+      // If BUY order closed AND we see HH or HL swing point AND CDC is BEARISH
+      if(dealType == DEAL_TYPE_SELL)  // SELL deal closes a BUY position
+      {
+         if(CDCTrend == "BEARISH" && (lastSwing == "HH" || lastSwing == "HL"))
+         {
+            if(ReEntrySelCount < InpReEntryMaxCount)
+            {
+               if(IsTradeAllowed("SELL"))
+               {
+                  Print("RE-ENTRY SELL - Swing: ", lastSwing, " CDC: ", CDCTrend);
+                  ExecuteSell();
+                  ReEntrySelCount++;
+               }
+            }
+            else
+            {
+               Print("Max Re-Entry SELL reached: ", ReEntrySelCount);
+            }
+         }
+         else
+         {
+            Print("No SELL Re-Entry - CDC: ", CDCTrend, " Swing: ", lastSwing);
+         }
+      }
+      
+      break;  // Only process the most recent closed order
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -711,11 +847,12 @@ void UpdateChartComment(string signal, string reason = "")
    string text = "";
    
    text = text + "=================================" + nl;
-   text = text + " ZigZag + CDC Action Zone EA v2.1" + nl;
+   text = text + " ZigZag + CDC Action Zone EA v2.2" + nl;
    text = text + "=================================" + nl;
    text = text + "Symbol: " + _Symbol + nl;
    text = text + "Entry TF: " + EnumToString(Period()) + nl;
    text = text + "Trade Mode: " + GetTradeModeString() + nl;
+   text = text + "Re-Entry: " + (InpUseReEntry ? "ON (" + IntegerToString(InpReEntryMaxCount) + "x max)" : "OFF") + nl;
    text = text + "---------------------------------" + nl;
    
    // CDC Action Zone Info
@@ -748,6 +885,10 @@ void UpdateChartComment(string signal, string reason = "")
       text = text + nl;
    }
    
+   text = text + "---------------------------------" + nl;
+   text = text + "RE-ENTRY STATUS:" + nl;
+   text = text + "  BUY Re-Entry: " + IntegerToString(ReEntryBuyCount) + "/" + IntegerToString(InpReEntryMaxCount) + nl;
+   text = text + "  SELL Re-Entry: " + IntegerToString(ReEntrySelCount) + "/" + IntegerToString(InpReEntryMaxCount) + nl;
    text = text + "---------------------------------" + nl;
    text = text + "SIGNAL: " + signal + nl;
    if(reason != "") text = text + "Reason: " + reason + nl;
@@ -812,9 +953,9 @@ void UpdateChartComment(string signal, string reason = "")
       {/* Features */}
       <section className="container py-8">
         <div className="max-w-4xl mx-auto">
-          <h2 className="text-2xl font-bold text-foreground mb-6 text-center">คุณสมบัติของ EA v2.0</h2>
+          <h2 className="text-2xl font-bold text-foreground mb-6 text-center">คุณสมบัติของ EA v2.2</h2>
           
-          <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="grid md:grid-cols-2 lg:grid-cols-5 gap-4">
             <div className="glass-card rounded-xl p-5 text-center">
               <div className="w-12 h-12 rounded-xl bg-primary/20 text-primary flex items-center justify-center mx-auto mb-3">
                 <TrendingUp className="w-6 h-6" />
@@ -829,6 +970,14 @@ void UpdateChartComment(string signal, string reason = "")
               </div>
               <h3 className="font-semibold text-foreground mb-1">CDC Trend Filter</h3>
               <p className="text-sm text-muted-foreground">ฟิลเตอร์เทรนด์จาก TradingView</p>
+            </div>
+            
+            <div className="glass-card rounded-xl p-5 text-center border-2 border-purple-500/30">
+              <div className="w-12 h-12 rounded-xl bg-purple-500/20 text-purple-500 flex items-center justify-center mx-auto mb-3">
+                <TrendingUp className="w-6 h-6" />
+              </div>
+              <h3 className="font-semibold text-foreground mb-1">Re-Entry</h3>
+              <p className="text-sm text-muted-foreground">เปิดออเดอร์ใหม่เมื่อยังอยู่ในเทรนด์</p>
             </div>
             
             <div className="glass-card rounded-xl p-5 text-center">
@@ -1051,6 +1200,60 @@ void UpdateChartComment(string signal, string reason = "")
                 <span className="px-3 py-1 rounded-full text-xs font-medium bg-foreground/10 text-foreground">Buy and Sell - เทรดทั้ง 2 ทิศทาง</span>
                 <span className="px-3 py-1 rounded-full text-xs font-medium bg-bull/20 text-bull">Buy Only - ซื้อเท่านั้น</span>
                 <span className="px-3 py-1 rounded-full text-xs font-medium bg-bear/20 text-bear">Sell Only - ขายเท่านั้น</span>
+              </div>
+            </div>
+          </div>
+          
+          {/* Re-Entry Settings */}
+          <div className="glass-card rounded-2xl overflow-hidden mb-6">
+            <div className="bg-purple-500/20 px-4 py-3 border-b border-border">
+              <h3 className="font-bold text-purple-500 flex items-center gap-2">
+                <TrendingUp className="w-4 h-4" />
+                Re-Entry Settings
+              </h3>
+            </div>
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border bg-secondary/50">
+                  <th className="px-4 py-3 text-left font-semibold text-foreground">Parameter</th>
+                  <th className="px-4 py-3 text-left font-semibold text-foreground">ค่าเริ่มต้น</th>
+                  <th className="px-4 py-3 text-left font-semibold text-foreground">คำอธิบาย</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                <tr className="bg-purple-500/5">
+                  <td className="px-4 py-3 font-mono text-purple-500">InpUseReEntry</td>
+                  <td className="px-4 py-3">true</td>
+                  <td className="px-4 py-3 text-muted-foreground">เปิด/ปิดฟีเจอร์ Re-Entry</td>
+                </tr>
+                <tr className="bg-purple-500/5">
+                  <td className="px-4 py-3 font-mono text-purple-500">InpReEntryMaxCount</td>
+                  <td className="px-4 py-3">3</td>
+                  <td className="px-4 py-3 text-muted-foreground">จำนวน Re-Entry สูงสุดต่อทิศทาง</td>
+                </tr>
+              </tbody>
+            </table>
+            <div className="p-4 bg-secondary/30">
+              <p className="text-sm font-semibold text-foreground mb-3">Re-Entry Logic:</p>
+              <div className="grid md:grid-cols-2 gap-4">
+                <div className="p-3 rounded-lg bg-bull/10 border border-bull/30">
+                  <p className="font-semibold text-bull mb-2">BUY Re-Entry</p>
+                  <ul className="text-xs text-muted-foreground space-y-1">
+                    <li>• ออเดอร์เดิมปิด (TP/SL)</li>
+                    <li>• Swing Point ล่าสุด = LL หรือ LH</li>
+                    <li>• CDC Zone = BULLISH (สีเขียว)</li>
+                    <li>→ เปิด BUY ใหม่</li>
+                  </ul>
+                </div>
+                <div className="p-3 rounded-lg bg-bear/10 border border-bear/30">
+                  <p className="font-semibold text-bear mb-2">SELL Re-Entry</p>
+                  <ul className="text-xs text-muted-foreground space-y-1">
+                    <li>• ออเดอร์เดิมปิด (TP/SL)</li>
+                    <li>• Swing Point ล่าสุด = HH หรือ HL</li>
+                    <li>• CDC Zone = BEARISH (สีแดง)</li>
+                    <li>→ เปิด SELL ใหม่</li>
+                  </ul>
+                </div>
               </div>
             </div>
           </div>
