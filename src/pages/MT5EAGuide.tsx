@@ -498,31 +498,16 @@ void CalculateCDC()
    CDCFast = fast[0];
    CDCSlow = slow[0];
    
-   bool bullish = CDCFast > CDCSlow;
-   bool bearish = CDCFast < CDCSlow;
-   
-   bool isGreen = bullish && CDCAP > CDCFast;
-   bool isRed = bearish && CDCAP < CDCFast;
-   
-   if(isGreen)
+   // Simple CDC: Fast above Slow = BULLISH, Fast below Slow = BEARISH
+   if(CDCFast > CDCSlow)
    {
       CDCTrend = "BULLISH";
       CDCZoneColor = clrLime;
    }
-   else if(isRed)
+   else if(CDCFast < CDCSlow)
    {
       CDCTrend = "BEARISH";
       CDCZoneColor = clrRed;
-   }
-   else if(bullish)
-   {
-      CDCTrend = "WEAK_BULL";
-      CDCZoneColor = clrYellow;
-   }
-   else if(bearish)
-   {
-      CDCTrend = "WEAK_BEAR";
-      CDCZoneColor = clrDodgerBlue;
    }
    else
    {
