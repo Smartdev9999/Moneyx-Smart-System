@@ -7,140 +7,131 @@ const MT5EAGuide = () => {
   const fullEACode = `//+------------------------------------------------------------------+
 //|                                           ZigZag_Structure_EA.mq5 |
 //|                                    Based on ZigCycleBarCount Logic |
-//|                                             สำหรับการศึกษาเท่านั้น |
 //+------------------------------------------------------------------+
 #property copyright "Trading Education"
 #property link      ""
 #property version   "1.00"
 #property strict
 
+// *** สำคัญมาก! ต้อง include ไฟล์นี้เพื่อใช้ CTrade ***
+#include <Trade/Trade.mqh>
+
 //+------------------------------------------------------------------+
 //| ===================== INPUT PARAMETERS ========================= |
-//| ผู้ใช้สามารถปรับค่าได้จากหน้าต่าง EA Settings                     |
 //+------------------------------------------------------------------+
 
 // === ZigZag Settings ===
-input int      InpDepth        = 12;          // Depth (จำนวนแท่งหา High/Low)
-input int      InpDeviation    = 5;           // Deviation (ค่าเบี่ยงเบน pips)
+input int      InpDepth        = 12;          // Depth
+input int      InpDeviation    = 5;           // Deviation (pips)
 input int      InpBackstep     = 3;           // Backstep
 
 // === Trading Settings ===
-input double   InpLotSize      = 0.01;        // Lot Size (ขนาดออเดอร์)
+input double   InpLotSize      = 0.01;        // Lot Size
 input int      InpStopLoss     = 50;          // Stop Loss (pips)
 input int      InpTakeProfit   = 100;         // Take Profit (pips)
-input int      InpMagicNumber  = 123456;      // Magic Number (ID ของ EA)
+input int      InpMagicNumber  = 123456;      // Magic Number
 
 // === Risk Management ===
-input double   InpMaxRiskPercent = 2.0;       // Max Risk % ต่อออเดอร์
-input int      InpMaxOrders    = 1;           // จำนวนออเดอร์สูงสุด
+input double   InpMaxRiskPercent = 2.0;       // Max Risk %
+input int      InpMaxOrders    = 1;           // Max Orders
 
 // === Time Filter ===
-input bool     InpUseTimeFilter = false;      // ใช้ Time Filter
-input int      InpStartHour    = 8;           // เริ่มเทรด (ชั่วโมง)
-input int      InpEndHour      = 20;          // หยุดเทรด (ชั่วโมง)
+input bool     InpUseTimeFilter = false;      // Use Time Filter
+input int      InpStartHour    = 8;           // Start Hour
+input int      InpEndHour      = 20;          // End Hour
 
 //+------------------------------------------------------------------+
 //| ===================== GLOBAL VARIABLES ========================= |
 //+------------------------------------------------------------------+
 
-// เก็บข้อมูล Swing Points
+// Swing Point Structure
 struct SwingPoint
 {
-   int       index;      // ตำแหน่งแท่งเทียน
-   double    price;      // ราคา
-   datetime  time;       // เวลา
-   string    type;       // "HIGH" หรือ "LOW"
-   string    pattern;    // "HH", "HL", "LH", "LL"
+   int       index;
+   double    price;
+   datetime  time;
+   string    type;      // "HIGH" or "LOW"
+   string    pattern;   // "HH", "HL", "LH", "LL"
 };
 
-SwingPoint SwingPoints[];  // Array เก็บ Swing Points ทั้งหมด
-int TotalSwingPoints = 0;  // จำนวน Swing Points
+SwingPoint SwingPoints[];
+int TotalSwingPoints = 0;
 
-// ตัวแปรสำหรับ Trade
-CTrade trade;              // Object สำหรับส่งคำสั่งเทรด
-int zigzagHandle;          // Handle ของ ZigZag indicator
+// Trade Objects
+CTrade trade;
+int zigzagHandle;
 
 //+------------------------------------------------------------------+
-//| ===================== INITIALIZATION =========================== |
+//| Expert initialization function                                     |
 //+------------------------------------------------------------------+
 int OnInit()
 {
    Print("===========================================");
-   Print("ZigZag Structure EA กำลังเริ่มทำงาน...");
+   Print("ZigZag Structure EA Starting...");
    Print("Symbol: ", _Symbol);
    Print("Timeframe: ", EnumToString(Period()));
    Print("===========================================");
    
-   // ตั้งค่า Magic Number
    trade.SetExpertMagicNumber(InpMagicNumber);
    
-   // โหลด ZigZag indicator
-   zigzagHandle = iCustom(_Symbol, PERIOD_CURRENT, "Examples\\ZigZag", 
+   // Load ZigZag indicator (use forward slash for path)
+   zigzagHandle = iCustom(_Symbol, PERIOD_CURRENT, "Examples/ZigZag", 
                           InpDepth, InpDeviation, InpBackstep);
    
    if(zigzagHandle == INVALID_HANDLE)
    {
-      Print("❌ ไม่สามารถโหลด ZigZag indicator ได้!");
+      Print("ERROR: Cannot load ZigZag indicator!");
       return(INIT_FAILED);
    }
    
-   Print("✅ EA เริ่มทำงานสำเร็จ!");
+   Print("EA Started Successfully!");
    return(INIT_SUCCEEDED);
 }
 
 //+------------------------------------------------------------------+
-//| ===================== DEINITIALIZATION ========================= |
+//| Expert deinitialization function                                   |
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
-   // ปล่อย indicator handle
    if(zigzagHandle != INVALID_HANDLE)
       IndicatorRelease(zigzagHandle);
       
-   Print("EA หยุดทำงาน - เหตุผล: ", reason);
+   Print("EA Stopped - Reason: ", reason);
 }
 
 //+------------------------------------------------------------------+
-//| ===================== MAIN TICK FUNCTION ======================= |
-//| ฟังก์ชันนี้จะถูกเรียกทุกครั้งที่มีราคาใหม่เข้ามา                   |
+//| Expert tick function                                               |
 //+------------------------------------------------------------------+
 void OnTick()
 {
-   // === ตรวจสอบว่าเป็นแท่งเทียนใหม่หรือไม่ ===
-   // เพื่อไม่ให้ทำงานซ้ำในแท่งเดิม
    static datetime lastBarTime = 0;
    datetime currentBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
    
    if(lastBarTime == currentBarTime)
-      return;  // ยังเป็นแท่งเดิม - ไม่ทำอะไร
+      return;
       
    lastBarTime = currentBarTime;
    
-   // === ตรวจสอบ Time Filter ===
    if(InpUseTimeFilter && !IsWithinTradingHours())
    {
-      Comment("⏰ นอกเวลาเทรด - รอ...");
+      Comment("Outside trading hours - Waiting...");
       return;
    }
    
-   // === ตรวจสอบจำนวนออเดอร์ ===
    if(CountOpenOrders() >= InpMaxOrders)
    {
-      Comment("📊 มีออเดอร์เปิดอยู่แล้ว: ", CountOpenOrders());
+      Comment("Max orders reached: ", CountOpenOrders());
       return;
    }
    
-   // === คำนวณ Swing Points ===
    if(!CalculateSwingPoints())
    {
-      Comment("⚠️ ไม่สามารถคำนวณ Swing Points ได้");
+      Comment("Cannot calculate Swing Points");
       return;
    }
    
-   // === วิเคราะห์สัญญาณ ===
    string signal = AnalyzeSignal();
    
-   // === ส่งคำสั่งเทรด ===
    if(signal == "BUY")
    {
       ExecuteBuy();
@@ -150,33 +141,29 @@ void OnTick()
       ExecuteSell();
    }
    
-   // === อัพเดท Comment บนหน้าจอ ===
    UpdateChartComment(signal);
 }
 
 //+------------------------------------------------------------------+
-//| ===================== CALCULATE SWING POINTS =================== |
-//| คำนวณหา Swing High และ Swing Low จาก ZigZag                      |
+//| Calculate Swing Points from ZigZag                                 |
 //+------------------------------------------------------------------+
 bool CalculateSwingPoints()
 {
-   // รีเซ็ต array
    ArrayResize(SwingPoints, 0);
    TotalSwingPoints = 0;
    
-   // ดึงข้อมูล ZigZag
    double zigzagBuffer[];
    ArraySetAsSeries(zigzagBuffer, true);
    
    int copied = CopyBuffer(zigzagHandle, 0, 0, 200, zigzagBuffer);
    if(copied <= 0)
    {
-      Print("❌ ไม่สามารถดึงข้อมูล ZigZag ได้");
+      Print("ERROR: Cannot copy ZigZag buffer");
       return false;
    }
    
-   // หา Swing Points จาก ZigZag
-   double lastHigh = 0, lastLow = DBL_MAX;
+   double lastHigh = 0;
+   double lastLow = DBL_MAX;
    
    for(int i = 0; i < copied; i++)
    {
@@ -191,59 +178,50 @@ bool CalculateSwingPoints()
          point.price = price;
          point.time = iTime(_Symbol, PERIOD_CURRENT, i);
          
-         // ตรวจสอบว่าเป็น High หรือ Low
          if(MathAbs(price - high) < MathAbs(price - low))
          {
-            // เป็น Swing High
             point.type = "HIGH";
             
-            // กำหนด pattern
             if(price > lastHigh && lastHigh > 0)
-               point.pattern = "HH";  // Higher High
+               point.pattern = "HH";
             else
-               point.pattern = "LH";  // Lower High
+               point.pattern = "LH";
                
             lastHigh = price;
          }
          else
          {
-            // เป็น Swing Low
             point.type = "LOW";
             
-            // กำหนด pattern
             if(price < lastLow && lastLow < DBL_MAX)
-               point.pattern = "LL";  // Lower Low
+               point.pattern = "LL";
             else
-               point.pattern = "HL";  // Higher Low
+               point.pattern = "HL";
                
             lastLow = price;
          }
          
-         // เพิ่มเข้า array
          int size = ArraySize(SwingPoints);
          ArrayResize(SwingPoints, size + 1);
          SwingPoints[size] = point;
          TotalSwingPoints++;
          
-         // เก็บแค่ 10 จุดล่าสุด
          if(TotalSwingPoints >= 10)
             break;
       }
    }
    
-   return (TotalSwingPoints >= 4);  // ต้องมีอย่างน้อย 4 จุด
+   return (TotalSwingPoints >= 4);
 }
 
 //+------------------------------------------------------------------+
-//| ===================== ANALYZE SIGNAL =========================== |
-//| วิเคราะห์โครงสร้างตลาดและสร้างสัญญาณเทรด                           |
+//| Analyze Signal based on Market Structure                           |
 //+------------------------------------------------------------------+
 string AnalyzeSignal()
 {
    if(TotalSwingPoints < 4)
       return "WAIT";
    
-   // ดู 4 จุดล่าสุด
    int hhCount = 0, hlCount = 0, lhCount = 0, llCount = 0;
    
    for(int i = 0; i < 4 && i < TotalSwingPoints; i++)
@@ -257,24 +235,22 @@ string AnalyzeSignal()
    Print("Pattern Count: HH=", hhCount, " HL=", hlCount, 
          " LH=", lhCount, " LL=", llCount);
    
-   // === สัญญาณซื้อ ===
-   // Uptrend (HH + HL) และจุดล่าสุดเป็น HL
+   // BUY Signal: Uptrend (HH + HL) and last point is HL
    if(hhCount >= 1 && hlCount >= 1)
    {
       if(SwingPoints[0].pattern == "HL")
       {
-         Print("🟢 พบสัญญาณ BUY - Uptrend + Higher Low");
+         Print("BUY Signal - Uptrend + Higher Low");
          return "BUY";
       }
    }
    
-   // === สัญญาณขาย ===
-   // Downtrend (LL + LH) และจุดล่าสุดเป็น LH
+   // SELL Signal: Downtrend (LL + LH) and last point is LH
    if(llCount >= 1 && lhCount >= 1)
    {
       if(SwingPoints[0].pattern == "LH")
       {
-         Print("🔴 พบสัญญาณ SELL - Downtrend + Lower High");
+         Print("SELL Signal - Downtrend + Lower High");
          return "SELL";
       }
    }
@@ -283,7 +259,7 @@ string AnalyzeSignal()
 }
 
 //+------------------------------------------------------------------+
-//| ===================== EXECUTE BUY ============================== |
+//| Execute BUY order                                                  |
 //+------------------------------------------------------------------+
 void ExecuteBuy()
 {
@@ -292,24 +268,21 @@ void ExecuteBuy()
    double tp = price + InpTakeProfit * _Point * 10;
    double lot = CalculateLotSize(InpStopLoss);
    
-   Print("📈 กำลังส่งคำสั่ง BUY...");
-   Print("   Price: ", price);
-   Print("   SL: ", sl);
-   Print("   TP: ", tp);
-   Print("   Lot: ", lot);
+   Print("Executing BUY...");
+   Print("Price: ", price, " SL: ", sl, " TP: ", tp, " Lot: ", lot);
    
-   if(trade.Buy(lot, _Symbol, price, sl, tp, "ZigZag Structure EA"))
+   if(trade.Buy(lot, _Symbol, price, sl, tp, "ZigZag EA"))
    {
-      Print("✅ BUY สำเร็จ! Ticket: ", trade.ResultOrder());
+      Print("BUY Success! Ticket: ", trade.ResultOrder());
    }
    else
    {
-      Print("❌ BUY ล้มเหลว! Error: ", trade.ResultRetcode());
+      Print("BUY Failed! Error: ", trade.ResultRetcode());
    }
 }
 
 //+------------------------------------------------------------------+
-//| ===================== EXECUTE SELL ============================= |
+//| Execute SELL order                                                 |
 //+------------------------------------------------------------------+
 void ExecuteSell()
 {
@@ -318,45 +291,36 @@ void ExecuteSell()
    double tp = price - InpTakeProfit * _Point * 10;
    double lot = CalculateLotSize(InpStopLoss);
    
-   Print("📉 กำลังส่งคำสั่ง SELL...");
-   Print("   Price: ", price);
-   Print("   SL: ", sl);
-   Print("   TP: ", tp);
-   Print("   Lot: ", lot);
+   Print("Executing SELL...");
+   Print("Price: ", price, " SL: ", sl, " TP: ", tp, " Lot: ", lot);
    
-   if(trade.Sell(lot, _Symbol, price, sl, tp, "ZigZag Structure EA"))
+   if(trade.Sell(lot, _Symbol, price, sl, tp, "ZigZag EA"))
    {
-      Print("✅ SELL สำเร็จ! Ticket: ", trade.ResultOrder());
+      Print("SELL Success! Ticket: ", trade.ResultOrder());
    }
    else
    {
-      Print("❌ SELL ล้มเหลว! Error: ", trade.ResultRetcode());
+      Print("SELL Failed! Error: ", trade.ResultRetcode());
    }
 }
 
 //+------------------------------------------------------------------+
-//| ===================== CALCULATE LOT SIZE ======================= |
-//| คำนวณ Lot Size ตาม Risk Management                                |
+//| Calculate Lot Size based on Risk Management                        |
 //+------------------------------------------------------------------+
 double CalculateLotSize(int slPips)
 {
-   // ถ้าตั้งค่า Lot Size ไว้แน่นอน
    if(InpMaxRiskPercent <= 0)
       return InpLotSize;
    
-   // คำนวณตาม % ความเสี่ยง
    double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    double riskAmount = accountBalance * InpMaxRiskPercent / 100;
    
-   // มูลค่า pip ต่อ lot
    double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
    double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
    double pipValue = tickValue * (10 * _Point / tickSize);
    
-   // คำนวณ lot
    double calculatedLot = riskAmount / (slPips * pipValue);
    
-   // ปรับให้อยู่ในขอบเขต
    double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
    double maxLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
    double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
@@ -368,10 +332,8 @@ double CalculateLotSize(int slPips)
 }
 
 //+------------------------------------------------------------------+
-//| ===================== HELPER FUNCTIONS ========================= |
+//| Count open orders for this EA                                      |
 //+------------------------------------------------------------------+
-
-// นับจำนวนออเดอร์ที่เปิดอยู่
 int CountOpenOrders()
 {
    int count = 0;
@@ -386,7 +348,9 @@ int CountOpenOrders()
    return count;
 }
 
-// ตรวจสอบเวลาเทรด
+//+------------------------------------------------------------------+
+//| Check if within trading hours                                      |
+//+------------------------------------------------------------------+
 bool IsWithinTradingHours()
 {
    MqlDateTime dt;
@@ -394,42 +358,37 @@ bool IsWithinTradingHours()
    return (dt.hour >= InpStartHour && dt.hour < InpEndHour);
 }
 
-// อัพเดท Comment บนหน้าจอ
+//+------------------------------------------------------------------+
+//| Update chart comment                                               |
+//+------------------------------------------------------------------+
 void UpdateChartComment(string signal)
 {
+   string nl = "\\n";
    string text = "";
-   text += "╔══════════════════════════════════╗\\n";
-   text += "║    ZigZag Structure EA v1.0      ║\\n";
-   text += "╠══════════════════════════════════╣\\n";
-   text += "║ Symbol: " + _Symbol + "\\n";
-   text += "║ Swing Points: " + IntegerToString(TotalSwingPoints) + "\\n";
-   text += "║──────────────────────────────────║\\n";
    
-   // แสดง Pattern ล่าสุด
+   text = text + "==============================" + nl;
+   text = text + "  ZigZag Structure EA v1.0   " + nl;
+   text = text + "==============================" + nl;
+   text = text + "Symbol: " + _Symbol + nl;
+   text = text + "Swing Points: " + IntegerToString(TotalSwingPoints) + nl;
+   text = text + "------------------------------" + nl;
+   
    if(TotalSwingPoints >= 4)
    {
-      text += "║ Recent Patterns:\\n";
+      text = text + "Recent Patterns:" + nl;
       for(int i = 0; i < 4 && i < TotalSwingPoints; i++)
       {
-         text += "║   " + IntegerToString(i+1) + ". " + 
-                 SwingPoints[i].pattern + " @ " + 
-                 DoubleToString(SwingPoints[i].price, _Digits) + "\\n";
+         text = text + "  " + IntegerToString(i+1) + ". " + 
+                SwingPoints[i].pattern + " @ " + 
+                DoubleToString(SwingPoints[i].price, _Digits) + nl;
       }
    }
    
-   text += "║──────────────────────────────────║\\n";
-   text += "║ Current Signal: ";
-   
-   if(signal == "BUY")
-      text += "🟢 BUY\\n";
-   else if(signal == "SELL")
-      text += "🔴 SELL\\n";
-   else
-      text += "⏳ WAIT\\n";
-   
-   text += "║ Open Orders: " + IntegerToString(CountOpenOrders()) + "/" + 
-           IntegerToString(InpMaxOrders) + "\\n";
-   text += "╚══════════════════════════════════╝\\n";
+   text = text + "------------------------------" + nl;
+   text = text + "Signal: " + signal + nl;
+   text = text + "Open Orders: " + IntegerToString(CountOpenOrders()) + 
+          "/" + IntegerToString(InpMaxOrders) + nl;
+   text = text + "==============================" + nl;
    
    Comment(text);
 }
