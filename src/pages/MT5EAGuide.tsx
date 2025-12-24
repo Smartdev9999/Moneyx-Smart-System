@@ -1340,7 +1340,10 @@ void CheckGridLossSide()
    
    // Check BUY Grid (when price goes down = loss side for BUY)
    int buyCount = CountPositions(POSITION_TYPE_BUY);
-   if(buyCount > 0 && buyCount < InpGridLossMaxTrades)
+   // Grid Loss count = buyCount - 1 (excluding Initial Order)
+   // Max Grid = Initial Order + Max Grid Loss orders
+   int buyGridLossCount = buyCount - 1;
+   if(buyCount > 0 && buyGridLossCount < InpGridLossMaxTrades)
    {
       // Check if should skip same candle
       if(InpGridLossDontOpenSameCandle && currentBarTime == InitialBuyBarTime)
@@ -1376,7 +1379,9 @@ void CheckGridLossSide()
    
    // Check SELL Grid (when price goes up = loss side for SELL)
    int sellCount = CountPositions(POSITION_TYPE_SELL);
-   if(sellCount > 0 && sellCount < InpGridLossMaxTrades)
+   // Grid Loss count = sellCount - 1 (excluding Initial Order)
+   int sellGridLossCount = sellCount - 1;
+   if(sellCount > 0 && sellGridLossCount < InpGridLossMaxTrades)
    {
       // Check if should skip same candle
       if(InpGridLossDontOpenSameCandle && currentBarTime == InitialSellBarTime)
