@@ -205,6 +205,8 @@ string TPPrefix = "TP_";
 // Extra chart for viewing ZigZag timeframe objects
 long ZZTFChartId = 0;
 
+// ZigZag tracking for confirmed points
+datetime LastConfirmedZZTime = 0;
 
 // Grid Tracking
 datetime InitialBuyBarTime = 0;
