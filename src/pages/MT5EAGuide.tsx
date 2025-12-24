@@ -10,7 +10,7 @@ const MT5EAGuide = () => {
 //+------------------------------------------------------------------+
 #property copyright "Trading Education"
 #property link      ""
-#property version   "2.00"
+#property version   "2.10"
 #property strict
 
 // *** Include CTrade ***
@@ -20,29 +20,44 @@ const MT5EAGuide = () => {
 //| ===================== INPUT PARAMETERS ========================= |
 //+------------------------------------------------------------------+
 
-// === ZigZag Settings ===
+//--- [ ZIGZAG SETTINGS ] -------------------------------------------
+input string   InpZigZagHeader = "=== ZIGZAG SETTINGS ===";  // ___
 input int      InpDepth        = 12;          // ZigZag Depth
 input int      InpDeviation    = 5;           // ZigZag Deviation (pips)
 input int      InpBackstep     = 3;           // ZigZag Backstep
 
-// === CDC Action Zone Settings ===
+//--- [ CDC ACTION ZONE SETTINGS ] ----------------------------------
+input string   InpCDCHeader    = "=== CDC ACTION ZONE SETTINGS ===";  // ___
 input bool     InpUseCDCFilter = true;        // Use CDC Action Zone Filter
 input ENUM_TIMEFRAMES InpCDCTimeframe = PERIOD_D1;  // CDC Filter Timeframe
 input int      InpCDCFastPeriod = 12;         // CDC Fast EMA Period
 input int      InpCDCSlowPeriod = 26;         // CDC Slow EMA Period
 input bool     InpShowCDCLines = true;        // Show CDC Lines on Chart
 
-// === Trading Settings ===
+//--- [ TRADE MODE SETTINGS ] ---------------------------------------
+input string   InpTradeModeHeader = "=== TRADE MODE SETTINGS ===";  // ___
+enum ENUM_TRADE_MODE
+{
+   TRADE_BUY_SELL = 0,  // Buy and Sell
+   TRADE_BUY_ONLY = 1,  // Buy Only
+   TRADE_SELL_ONLY = 2  // Sell Only
+};
+input ENUM_TRADE_MODE InpTradeMode = TRADE_BUY_SELL;  // Trade Mode
+
+//--- [ TRADING SETTINGS ] ------------------------------------------
+input string   InpTradingHeader = "=== TRADING SETTINGS ===";  // ___
 input double   InpLotSize      = 0.01;        // Lot Size
 input int      InpStopLoss     = 50;          // Stop Loss (pips)
 input int      InpTakeProfit   = 100;         // Take Profit (pips)
 input int      InpMagicNumber  = 123456;      // Magic Number
 
-// === Risk Management ===
+//--- [ RISK MANAGEMENT ] -------------------------------------------
+input string   InpRiskHeader   = "=== RISK MANAGEMENT ===";  // ___
 input double   InpMaxRiskPercent = 2.0;       // Max Risk %
 input int      InpMaxOrders    = 1;           // Max Orders
 
-// === Time Filter ===
+//--- [ TIME FILTER ] -----------------------------------------------
+input string   InpTimeHeader   = "=== TIME FILTER ===";  // ___
 input bool     InpUseTimeFilter = false;      // Use Time Filter
 input int      InpStartHour    = 8;           // Start Hour
 input int      InpEndHour      = 20;          // End Hour
@@ -75,16 +90,20 @@ double CDCSlow = 0;
 double CDCAP = 0;
 color CDCZoneColor = clrWhite;
 
+// CDC Chart Objects Prefix
+string CDCPrefix = "CDC_";
+
 //+------------------------------------------------------------------+
 //| Expert initialization function                                     |
 //+------------------------------------------------------------------+
 int OnInit()
 {
    Print("===========================================");
-   Print("ZigZag + CDC Action Zone EA v2.0");
+   Print("ZigZag + CDC Action Zone EA v2.1");
    Print("Symbol: ", _Symbol);
    Print("Entry TF: ", EnumToString(Period()));
    Print("CDC Filter TF: ", EnumToString(InpCDCTimeframe));
+   Print("Trade Mode: ", EnumToString(InpTradeMode));
    Print("===========================================");
    
    trade.SetExpertMagicNumber(InpMagicNumber);
@@ -99,13 +118,6 @@ int OnInit()
       return(INIT_FAILED);
    }
    
-   // Create CDC objects for visual display
-   if(InpShowCDCLines && InpUseCDCFilter)
-   {
-      ObjectCreate(0, "CDC_Fast_Line", OBJ_TREND, 0, 0, 0);
-      ObjectCreate(0, "CDC_Slow_Line", OBJ_TREND, 0, 0, 0);
-   }
-   
    Print("EA Started Successfully!");
    return(INIT_SUCCEEDED);
 }
@@ -118,18 +130,8 @@ void OnDeinit(const int reason)
    if(zigzagHandle != INVALID_HANDLE)
       IndicatorRelease(zigzagHandle);
    
-   // Remove CDC objects
-   ObjectDelete(0, "CDC_Fast_Line");
-   ObjectDelete(0, "CDC_Slow_Line");
-   ObjectDelete(0, "CDC_Zone_Label");
-   
-   // Remove zone rectangles and lines
-   for(int i = 0; i < 100; i++)
-   {
-      ObjectDelete(0, "CDC_Zone_" + IntegerToString(i));
-      ObjectDelete(0, "CDC_Fast_" + IntegerToString(i));
-      ObjectDelete(0, "CDC_Slow_" + IntegerToString(i));
-   }
+   // Remove all CDC objects
+   ObjectsDeleteAll(0, CDCPrefix);
    
    Comment("");
    Print("EA Stopped - Reason: ", reason);
@@ -154,17 +156,20 @@ void CalculateCDC()
    
    // Get OHLC4 data from CDC timeframe
    double closeArr[], highArr[], lowArr[], openArr[];
+   datetime timeArr[];
    ArraySetAsSeries(closeArr, true);
    ArraySetAsSeries(highArr, true);
    ArraySetAsSeries(lowArr, true);
    ArraySetAsSeries(openArr, true);
+   ArraySetAsSeries(timeArr, true);
    
-   int barsNeeded = InpCDCSlowPeriod * 3 + 10;
+   int barsNeeded = InpCDCSlowPeriod * 3 + 50;
    
    if(CopyClose(_Symbol, InpCDCTimeframe, 0, barsNeeded, closeArr) < barsNeeded) return;
    if(CopyHigh(_Symbol, InpCDCTimeframe, 0, barsNeeded, highArr) < barsNeeded) return;
    if(CopyLow(_Symbol, InpCDCTimeframe, 0, barsNeeded, lowArr) < barsNeeded) return;
    if(CopyOpen(_Symbol, InpCDCTimeframe, 0, barsNeeded, openArr) < barsNeeded) return;
+   if(CopyTime(_Symbol, InpCDCTimeframe, 0, barsNeeded, timeArr) < barsNeeded) return;
    
    // Calculate OHLC4 (Average Price)
    double ohlc4[];
@@ -229,10 +234,10 @@ void CalculateCDC()
       CDCZoneColor = clrWhite;
    }
    
-   // Draw CDC lines and zone on chart
+   // Draw CDC lines and zone on CDC timeframe chart window
    if(InpShowCDCLines)
    {
-      DrawCDCOnChart(fast, slow, ap, barsNeeded);
+      DrawCDCOnChart(fast, slow, ap, timeArr, barsNeeded);
    }
 }
 
@@ -261,78 +266,151 @@ void CalculateEMA(double &src[], double &result[], int period, int size)
 }
 
 //+------------------------------------------------------------------+
-//| Draw CDC Lines and Zone on Chart                                   |
+//| Draw CDC Lines and Zone on Chart using CDC Timeframe data         |
+//| The lines and zones will be drawn at correct CDC TF positions     |
 //+------------------------------------------------------------------+
-void DrawCDCOnChart(double &fast[], double &slow[], double &ap[], int size)
+void DrawCDCOnChart(double &fast[], double &slow[], double &ap[], datetime &time[], int size)
 {
-   // Draw zone fill as rectangles
-   int maxBars = MathMin(50, size - 1);
+   // First, delete old objects
+   ObjectsDeleteAll(0, CDCPrefix);
+   
+   // Draw zone fill as rectangles between Fast and Slow lines
+   int maxBars = MathMin(100, size - 1);
    
    for(int i = 0; i < maxBars; i++)
    {
-      string objName = "CDC_Zone_" + IntegerToString(i);
-      datetime t1 = iTime(_Symbol, InpCDCTimeframe, i + 1);
-      datetime t2 = iTime(_Symbol, InpCDCTimeframe, i);
+      // Get bar times from the CDC timeframe
+      datetime t1 = time[i + 1];
+      datetime t2 = time[i];
       
-      double fastVal1 = fast[i + 1];
-      double slowVal1 = slow[i + 1];
-      double fastVal2 = fast[i];
-      double slowVal2 = slow[i];
+      // Get the next bar time for proper rectangle width
+      // For the last bar, estimate the next bar time
+      datetime t2End;
+      if(i == 0)
+      {
+         // Estimate next bar time based on CDC timeframe
+         int tfSeconds = PeriodSeconds(InpCDCTimeframe);
+         t2End = t2 + tfSeconds;
+      }
+      else
+      {
+         t2End = t2;
+      }
+      
+      double fastVal = fast[i];
+      double slowVal = slow[i];
+      double apVal = ap[i];
       
       // Determine zone color for this bar
       bool bullish = fast[i] > slow[i];
       bool bearish = fast[i] < slow[i];
       
       color zoneColor;
-      if(bullish && ap[i] > fast[i])
+      if(bullish && apVal > fast[i])
          zoneColor = clrLime;          // Green - Strong Bullish
-      else if(bearish && ap[i] < fast[i])
+      else if(bearish && apVal < fast[i])
          zoneColor = clrRed;           // Red - Strong Bearish
-      else if(bullish && ap[i] < fast[i])
+      else if(bullish && apVal < fast[i])
          zoneColor = clrYellow;        // Yellow - Weak Bullish
-      else if(bearish && ap[i] > fast[i])
+      else if(bearish && apVal > fast[i])
          zoneColor = clrDodgerBlue;    // Blue - Weak Bearish
       else
          zoneColor = clrGray;
       
-      // Create filled zone
-      ObjectDelete(0, objName);
-      ObjectCreate(0, objName, OBJ_RECTANGLE, 0, t1, MathMax(fastVal1, slowVal1), t2, MathMin(fastVal2, slowVal2));
-      ObjectSetInteger(0, objName, OBJPROP_COLOR, zoneColor);
-      ObjectSetInteger(0, objName, OBJPROP_FILL, true);
-      ObjectSetInteger(0, objName, OBJPROP_BACK, true);
-      ObjectSetInteger(0, objName, OBJPROP_SELECTABLE, false);
-      ObjectSetInteger(0, objName, OBJPROP_WIDTH, 1);
+      // Create filled zone rectangle between the two MA lines
+      string zoneName = CDCPrefix + "Zone_" + IntegerToString(i);
+      double zoneTop = MathMax(fastVal, slowVal);
+      double zoneBottom = MathMin(fastVal, slowVal);
+      
+      ObjectCreate(0, zoneName, OBJ_RECTANGLE, 0, t1, zoneTop, t2End, zoneBottom);
+      ObjectSetInteger(0, zoneName, OBJPROP_COLOR, zoneColor);
+      ObjectSetInteger(0, zoneName, OBJPROP_FILL, true);
+      ObjectSetInteger(0, zoneName, OBJPROP_BACK, true);
+      ObjectSetInteger(0, zoneName, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(0, zoneName, OBJPROP_WIDTH, 1);
    }
    
-   // Draw Fast MA line (Red/Orange)
+   // Draw Fast MA line (Red/Orange) - connecting points properly
    for(int i = 0; i < maxBars; i++)
    {
-      string lineName = "CDC_Fast_" + IntegerToString(i);
-      datetime t1 = iTime(_Symbol, InpCDCTimeframe, i + 1);
-      datetime t2 = iTime(_Symbol, InpCDCTimeframe, i);
+      string lineName = CDCPrefix + "Fast_" + IntegerToString(i);
+      datetime t1 = time[i + 1];
+      datetime t2 = time[i];
       
-      ObjectDelete(0, lineName);
       ObjectCreate(0, lineName, OBJ_TREND, 0, t1, fast[i + 1], t2, fast[i]);
       ObjectSetInteger(0, lineName, OBJPROP_COLOR, clrOrangeRed);
       ObjectSetInteger(0, lineName, OBJPROP_WIDTH, 2);
       ObjectSetInteger(0, lineName, OBJPROP_RAY_RIGHT, false);
       ObjectSetInteger(0, lineName, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(0, lineName, OBJPROP_BACK, false);
    }
    
    // Draw Slow MA line (Blue)
    for(int i = 0; i < maxBars; i++)
    {
-      string lineName = "CDC_Slow_" + IntegerToString(i);
-      datetime t1 = iTime(_Symbol, InpCDCTimeframe, i + 1);
-      datetime t2 = iTime(_Symbol, InpCDCTimeframe, i);
+      string lineName = CDCPrefix + "Slow_" + IntegerToString(i);
+      datetime t1 = time[i + 1];
+      datetime t2 = time[i];
       
-      ObjectDelete(0, lineName);
       ObjectCreate(0, lineName, OBJ_TREND, 0, t1, slow[i + 1], t2, slow[i]);
       ObjectSetInteger(0, lineName, OBJPROP_COLOR, clrDodgerBlue);
       ObjectSetInteger(0, lineName, OBJPROP_WIDTH, 3);
       ObjectSetInteger(0, lineName, OBJPROP_RAY_RIGHT, false);
       ObjectSetInteger(0, lineName, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(0, lineName, OBJPROP_BACK, false);
+   }
+   
+   // Add a label showing current CDC status
+   string labelName = CDCPrefix + "Status_Label";
+   ObjectCreate(0, labelName, OBJ_LABEL, 0, 0, 0);
+   ObjectSetInteger(0, labelName, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+   ObjectSetInteger(0, labelName, OBJPROP_XDISTANCE, 10);
+   ObjectSetInteger(0, labelName, OBJPROP_YDISTANCE, 50);
+   ObjectSetString(0, labelName, OBJPROP_TEXT, "CDC (" + EnumToString(InpCDCTimeframe) + "): " + CDCTrend);
+   ObjectSetInteger(0, labelName, OBJPROP_COLOR, CDCZoneColor);
+   ObjectSetInteger(0, labelName, OBJPROP_FONTSIZE, 12);
+   ObjectSetString(0, labelName, OBJPROP_FONT, "Arial Bold");
+}
+
+//+------------------------------------------------------------------+
+//| Check if trade is allowed based on Trade Mode and CDC             |
+//+------------------------------------------------------------------+
+bool IsTradeAllowed(string tradeType)
+{
+   // Check Trade Mode setting first
+   if(tradeType == "BUY")
+   {
+      if(InpTradeMode == TRADE_SELL_ONLY)
+         return false;
+   }
+   else if(tradeType == "SELL")
+   {
+      if(InpTradeMode == TRADE_BUY_ONLY)
+         return false;
+   }
+   
+   // Check CDC Filter
+   if(InpUseCDCFilter)
+   {
+      if(tradeType == "BUY" && CDCTrend != "BULLISH")
+         return false;
+      if(tradeType == "SELL" && CDCTrend != "BEARISH")
+         return false;
+   }
+   
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| Get Trade Mode description                                         |
+//+------------------------------------------------------------------+
+string GetTradeModeString()
+{
+   switch(InpTradeMode)
+   {
+      case TRADE_BUY_ONLY:  return "BUY ONLY";
+      case TRADE_SELL_ONLY: return "SELL ONLY";
+      default:              return "BUY/SELL";
    }
 }
 
@@ -349,7 +427,7 @@ void OnTick()
       
    lastBarTime = currentBarTime;
    
-   // Calculate CDC Action Zone first
+   // Calculate CDC Action Zone first (from higher timeframe)
    CalculateCDC();
    
    if(InpUseTimeFilter && !IsWithinTradingHours())
@@ -373,31 +451,37 @@ void OnTick()
    string signal = AnalyzeSignal();
    string reason = "";
    
-   // Apply CDC Filter
+   // Check both Trade Mode and CDC Filter
    if(signal == "BUY")
    {
-      if(InpUseCDCFilter && CDCTrend != "BULLISH")
+      if(!IsTradeAllowed("BUY"))
       {
-         reason = "CDC Zone not Green (" + CDCTrend + ")";
+         if(InpTradeMode == TRADE_SELL_ONLY)
+            reason = "Trade Mode: SELL ONLY";
+         else if(InpUseCDCFilter && CDCTrend != "BULLISH")
+            reason = "CDC Zone not Green (" + CDCTrend + ")";
          signal = "WAIT";
       }
       else
       {
          ExecuteBuy();
-         reason = "CDC Confirmed BULLISH";
+         reason = "CDC: " + CDCTrend + " | Mode: " + GetTradeModeString();
       }
    }
    else if(signal == "SELL")
    {
-      if(InpUseCDCFilter && CDCTrend != "BEARISH")
+      if(!IsTradeAllowed("SELL"))
       {
-         reason = "CDC Zone not Red (" + CDCTrend + ")";
+         if(InpTradeMode == TRADE_BUY_ONLY)
+            reason = "Trade Mode: BUY ONLY";
+         else if(InpUseCDCFilter && CDCTrend != "BEARISH")
+            reason = "CDC Zone not Red (" + CDCTrend + ")";
          signal = "WAIT";
       }
       else
       {
          ExecuteSell();
-         reason = "CDC Confirmed BEARISH";
+         reason = "CDC: " + CDCTrend + " | Mode: " + GetTradeModeString();
       }
    }
    
@@ -528,7 +612,7 @@ void ExecuteBuy()
    double tp = price + InpTakeProfit * _Point * 10;
    double lot = CalculateLotSize(InpStopLoss);
    
-   Print("Executing BUY - CDC: ", CDCTrend);
+   Print("Executing BUY - CDC: ", CDCTrend, " | Mode: ", GetTradeModeString());
    Print("Price: ", price, " SL: ", sl, " TP: ", tp);
    
    if(trade.Buy(lot, _Symbol, price, sl, tp, "ZigZag+CDC EA"))
@@ -551,7 +635,7 @@ void ExecuteSell()
    double tp = price - InpTakeProfit * _Point * 10;
    double lot = CalculateLotSize(InpStopLoss);
    
-   Print("Executing SELL - CDC: ", CDCTrend);
+   Print("Executing SELL - CDC: ", CDCTrend, " | Mode: ", GetTradeModeString());
    Print("Price: ", price, " SL: ", sl, " TP: ", tp);
    
    if(trade.Sell(lot, _Symbol, price, sl, tp, "ZigZag+CDC EA"))
@@ -627,10 +711,11 @@ void UpdateChartComment(string signal, string reason = "")
    string text = "";
    
    text = text + "=================================" + nl;
-   text = text + " ZigZag + CDC Action Zone EA v2.0" + nl;
+   text = text + " ZigZag + CDC Action Zone EA v2.1" + nl;
    text = text + "=================================" + nl;
    text = text + "Symbol: " + _Symbol + nl;
    text = text + "Entry TF: " + EnumToString(Period()) + nl;
+   text = text + "Trade Mode: " + GetTradeModeString() + nl;
    text = text + "---------------------------------" + nl;
    
    // CDC Action Zone Info
@@ -852,9 +937,52 @@ void UpdateChartComment(string signal, string reason = "")
       {/* Parameters Explanation */}
       <section className="container py-8">
         <div className="max-w-4xl mx-auto">
-          <h2 className="text-2xl font-bold text-foreground mb-6 text-center">Parameters ใหม่</h2>
+          <h2 className="text-2xl font-bold text-foreground mb-6 text-center">Parameters ทั้งหมด</h2>
           
-          <div className="glass-card rounded-2xl overflow-hidden">
+          {/* ZigZag Settings */}
+          <div className="glass-card rounded-2xl overflow-hidden mb-6">
+            <div className="bg-primary/20 px-4 py-3 border-b border-border">
+              <h3 className="font-bold text-primary flex items-center gap-2">
+                <TrendingUp className="w-4 h-4" />
+                ZigZag Settings
+              </h3>
+            </div>
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border bg-secondary/50">
+                  <th className="px-4 py-3 text-left font-semibold text-foreground">Parameter</th>
+                  <th className="px-4 py-3 text-left font-semibold text-foreground">ค่าเริ่มต้น</th>
+                  <th className="px-4 py-3 text-left font-semibold text-foreground">คำอธิบาย</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                <tr>
+                  <td className="px-4 py-3 font-mono text-primary">InpDepth</td>
+                  <td className="px-4 py-3">12</td>
+                  <td className="px-4 py-3 text-muted-foreground">ZigZag Depth</td>
+                </tr>
+                <tr>
+                  <td className="px-4 py-3 font-mono text-primary">InpDeviation</td>
+                  <td className="px-4 py-3">5</td>
+                  <td className="px-4 py-3 text-muted-foreground">ZigZag Deviation (pips)</td>
+                </tr>
+                <tr>
+                  <td className="px-4 py-3 font-mono text-primary">InpBackstep</td>
+                  <td className="px-4 py-3">3</td>
+                  <td className="px-4 py-3 text-muted-foreground">ZigZag Backstep</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          
+          {/* CDC Action Zone Settings */}
+          <div className="glass-card rounded-2xl overflow-hidden mb-6">
+            <div className="bg-bull/20 px-4 py-3 border-b border-border">
+              <h3 className="font-bold text-bull flex items-center gap-2">
+                <Filter className="w-4 h-4" />
+                CDC Action Zone Settings
+              </h3>
+            </div>
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-border bg-secondary/50">
@@ -887,22 +1015,149 @@ void UpdateChartComment(string signal, string reason = "")
                 <tr className="bg-bull/5">
                   <td className="px-4 py-3 font-mono text-bull">InpShowCDCLines</td>
                   <td className="px-4 py-3">true</td>
-                  <td className="px-4 py-3 text-muted-foreground">แสดงเส้น EMA และแถบสีบน chart (สำหรับ backtest)</td>
+                  <td className="px-4 py-3 text-muted-foreground">แสดงเส้น EMA และแถบสีบน chart</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          
+          {/* Trade Mode Settings */}
+          <div className="glass-card rounded-2xl overflow-hidden mb-6">
+            <div className="bg-yellow-500/20 px-4 py-3 border-b border-border">
+              <h3 className="font-bold text-yellow-500 flex items-center gap-2">
+                <Settings className="w-4 h-4" />
+                Trade Mode Settings
+              </h3>
+            </div>
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border bg-secondary/50">
+                  <th className="px-4 py-3 text-left font-semibold text-foreground">Parameter</th>
+                  <th className="px-4 py-3 text-left font-semibold text-foreground">ค่าเริ่มต้น</th>
+                  <th className="px-4 py-3 text-left font-semibold text-foreground">คำอธิบาย</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                <tr className="bg-yellow-500/5">
+                  <td className="px-4 py-3 font-mono text-yellow-500">InpTradeMode</td>
+                  <td className="px-4 py-3">Buy and Sell</td>
+                  <td className="px-4 py-3 text-muted-foreground">เลือก Buy/Sell, Buy Only, หรือ Sell Only</td>
+                </tr>
+              </tbody>
+            </table>
+            <div className="p-4 bg-secondary/30">
+              <p className="text-sm text-muted-foreground mb-2">ตัวเลือก Trade Mode:</p>
+              <div className="flex flex-wrap gap-2">
+                <span className="px-3 py-1 rounded-full text-xs font-medium bg-foreground/10 text-foreground">Buy and Sell - เทรดทั้ง 2 ทิศทาง</span>
+                <span className="px-3 py-1 rounded-full text-xs font-medium bg-bull/20 text-bull">Buy Only - ซื้อเท่านั้น</span>
+                <span className="px-3 py-1 rounded-full text-xs font-medium bg-bear/20 text-bear">Sell Only - ขายเท่านั้น</span>
+              </div>
+            </div>
+          </div>
+          
+          {/* Trading Settings */}
+          <div className="glass-card rounded-2xl overflow-hidden mb-6">
+            <div className="bg-secondary px-4 py-3 border-b border-border">
+              <h3 className="font-bold text-foreground flex items-center gap-2">
+                <TrendingDown className="w-4 h-4" />
+                Trading Settings
+              </h3>
+            </div>
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border bg-secondary/50">
+                  <th className="px-4 py-3 text-left font-semibold text-foreground">Parameter</th>
+                  <th className="px-4 py-3 text-left font-semibold text-foreground">ค่าเริ่มต้น</th>
+                  <th className="px-4 py-3 text-left font-semibold text-foreground">คำอธิบาย</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                <tr>
+                  <td className="px-4 py-3 font-mono text-foreground">InpLotSize</td>
+                  <td className="px-4 py-3">0.01</td>
+                  <td className="px-4 py-3 text-muted-foreground">Lot Size เริ่มต้น</td>
                 </tr>
                 <tr>
-                  <td className="px-4 py-3 font-mono text-primary">InpDepth</td>
-                  <td className="px-4 py-3">12</td>
-                  <td className="px-4 py-3 text-muted-foreground">ZigZag Depth</td>
-                </tr>
-                <tr>
-                  <td className="px-4 py-3 font-mono text-primary">InpStopLoss</td>
+                  <td className="px-4 py-3 font-mono text-foreground">InpStopLoss</td>
                   <td className="px-4 py-3">50</td>
                   <td className="px-4 py-3 text-muted-foreground">Stop Loss (pips)</td>
                 </tr>
                 <tr>
-                  <td className="px-4 py-3 font-mono text-primary">InpTakeProfit</td>
+                  <td className="px-4 py-3 font-mono text-foreground">InpTakeProfit</td>
                   <td className="px-4 py-3">100</td>
                   <td className="px-4 py-3 text-muted-foreground">Take Profit (pips)</td>
+                </tr>
+                <tr>
+                  <td className="px-4 py-3 font-mono text-foreground">InpMagicNumber</td>
+                  <td className="px-4 py-3">123456</td>
+                  <td className="px-4 py-3 text-muted-foreground">Magic Number สำหรับระบุ Order</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          
+          {/* Risk Management */}
+          <div className="glass-card rounded-2xl overflow-hidden mb-6">
+            <div className="bg-bear/20 px-4 py-3 border-b border-border">
+              <h3 className="font-bold text-bear flex items-center gap-2">
+                <Shield className="w-4 h-4" />
+                Risk Management
+              </h3>
+            </div>
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border bg-secondary/50">
+                  <th className="px-4 py-3 text-left font-semibold text-foreground">Parameter</th>
+                  <th className="px-4 py-3 text-left font-semibold text-foreground">ค่าเริ่มต้น</th>
+                  <th className="px-4 py-3 text-left font-semibold text-foreground">คำอธิบาย</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                <tr className="bg-bear/5">
+                  <td className="px-4 py-3 font-mono text-bear">InpMaxRiskPercent</td>
+                  <td className="px-4 py-3">2.0</td>
+                  <td className="px-4 py-3 text-muted-foreground">% ความเสี่ยงสูงสุดต่อออเดอร์</td>
+                </tr>
+                <tr className="bg-bear/5">
+                  <td className="px-4 py-3 font-mono text-bear">InpMaxOrders</td>
+                  <td className="px-4 py-3">1</td>
+                  <td className="px-4 py-3 text-muted-foreground">จำนวนออเดอร์สูงสุดที่เปิดได้</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          
+          {/* Time Filter */}
+          <div className="glass-card rounded-2xl overflow-hidden">
+            <div className="bg-blue-500/20 px-4 py-3 border-b border-border">
+              <h3 className="font-bold text-blue-500 flex items-center gap-2">
+                <Info className="w-4 h-4" />
+                Time Filter
+              </h3>
+            </div>
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border bg-secondary/50">
+                  <th className="px-4 py-3 text-left font-semibold text-foreground">Parameter</th>
+                  <th className="px-4 py-3 text-left font-semibold text-foreground">ค่าเริ่มต้น</th>
+                  <th className="px-4 py-3 text-left font-semibold text-foreground">คำอธิบาย</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                <tr className="bg-blue-500/5">
+                  <td className="px-4 py-3 font-mono text-blue-500">InpUseTimeFilter</td>
+                  <td className="px-4 py-3">false</td>
+                  <td className="px-4 py-3 text-muted-foreground">เปิด/ปิดฟิลเตอร์เวลา</td>
+                </tr>
+                <tr className="bg-blue-500/5">
+                  <td className="px-4 py-3 font-mono text-blue-500">InpStartHour</td>
+                  <td className="px-4 py-3">8</td>
+                  <td className="px-4 py-3 text-muted-foreground">ชั่วโมงเริ่มเทรด</td>
+                </tr>
+                <tr className="bg-blue-500/5">
+                  <td className="px-4 py-3 font-mono text-blue-500">InpEndHour</td>
+                  <td className="px-4 py-3">20</td>
+                  <td className="px-4 py-3 text-muted-foreground">ชั่วโมงหยุดเทรด</td>
                 </tr>
               </tbody>
             </table>
