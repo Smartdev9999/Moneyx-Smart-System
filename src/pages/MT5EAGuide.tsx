@@ -65,8 +65,19 @@ input int      InpMagicNumber  = 123456;     // Magic Number
 
 //--- [ GRID LOSS SIDE SETTINGS ] -----------------------------------
 input string   InpGridLossHeader = "----- Grid Loss Side -----";  // ___
-input string   InpGridLossCustomLot = "0.01;0.02;0.03;0.04;0.05";  // Custom Lot (separate by semicolon ;)
 input int      InpGridLossMaxTrades = 5;     // Max Grid Trades (0 - Disable Grid Trade)
+
+// Grid Lot Mode
+enum ENUM_GRID_LOT_MODE
+{
+   GRID_LOT_CUSTOM = 0,    // Custom Lot (use string)
+   GRID_LOT_ADD = 1        // Add Lot (InitialLot + AddLot*Level)
+};
+input ENUM_GRID_LOT_MODE InpGridLossLotMode = GRID_LOT_ADD;  // Grid Lot Mode
+input string   InpGridLossCustomLot = "0.01;0.02;0.03;0.04;0.05";  // Custom Lot (separate by semicolon ;)
+input double   InpGridLossAddLot = 0.4;      // Add Lot per Level (0 = Same as Initial)
+
+// Grid Gap Mode
 enum ENUM_GRID_GAP_TYPE
 {
    GAP_FIXED_POINTS = 0,    // Fixed Points
@@ -75,7 +86,7 @@ enum ENUM_GRID_GAP_TYPE
 input ENUM_GRID_GAP_TYPE InpGridLossGapType = GAP_FIXED_POINTS;  // Grid Gap Type
 input int      InpGridLossPoints = 50;       // Grid Points (points)
 input string   InpGridLossCustomDist = "100;200;300;400;500";  // Custom Grid Distance (separate by semicolon ;)
-input double   InpGridLossAddLot = 0.01;     // Add Lot (0 - Disable Adding Lot)
+
 input bool     InpGridLossOnlySignal = false;  // Grid Trade Only in Signal
 input bool     InpGridLossNewCandle = true;    // Grid Trade Only New Candle
 input bool     InpGridLossDontOpenSameCandle = true;  // Don't Open in Same Initial Candle
@@ -83,16 +94,21 @@ input bool     InpGridLossDontOpenSameCandle = true;  // Don't Open in Same Init
 //--- [ GRID PROFIT SIDE SETTINGS ] ---------------------------------
 input string   InpGridProfitHeader = "----- Grid Profit Side -----";  // ___
 input bool     InpUseGridProfit = true;      // Use Profit Grid
-input string   InpGridProfitCustomLot = "0.01;0.02;0.03;0.04;0.05";  // Custom Lot (separate by semicolon ;)
 input int      InpGridProfitMaxTrades = 3;   // Max Grid Trades (0 - Disable Grid Trade)
+
+// Grid Lot Mode
+input ENUM_GRID_LOT_MODE InpGridProfitLotMode = GRID_LOT_ADD;  // Grid Lot Mode
+input string   InpGridProfitCustomLot = "0.01;0.02;0.03;0.04;0.05";  // Custom Lot (separate by semicolon ;)
+input double   InpGridProfitAddLot = 0.4;    // Add Lot per Level (0 = Same as Initial)
+
+// Grid Gap Mode
 input ENUM_GRID_GAP_TYPE InpGridProfitGapType = GAP_CUSTOM_DISTANCE;  // Grid Gap Type
 input int      InpGridProfitPoints = 100;    // Grid Points (points)
 input string   InpGridProfitCustomDist = "100;200;500";  // Custom Grid Distance (separate by semicolon ;)
-input double   InpGridProfitAddLot = 0.0;    // Add Lot (0 - Disable Adding Lot)
+
 input bool     InpGridProfitOnlySignal = false;  // Grid Trade Only in Signal
 input bool     InpGridProfitNewCandle = true;    // Grid Trade Only New Candle
 input bool     InpGridProfitDontOpenSameCandle = true;  // Don't Open in Same Initial Candle
-
 //--- [ TAKE PROFIT SETTINGS ] --------------------------------------
 input string   InpTPHeader = "=== TAKE PROFIT SETTINGS ===";  // ___
 
@@ -265,18 +281,37 @@ void ParseStringToIntArray(string inputStr, int &arr[])
 //+------------------------------------------------------------------+
 //| Get Lot Size for Grid based on level                               |
 //| gridLevel = 0 is the FIRST order (uses InitialLot)                |
-//| gridLevel = 1,2,3... are GRID orders (uses InitialLot + AddLot)   |
+//| gridLevel = 1,2,3... are GRID orders                              |
 //+------------------------------------------------------------------+
 double GetGridLotSize(bool isLossSide, int gridLevel)
 {
-   double addLot = isLossSide ? InpGridLossAddLot : InpGridProfitAddLot;
+   ENUM_GRID_LOT_MODE lotMode = isLossSide ? InpGridLossLotMode : InpGridProfitLotMode;
+   double calculatedLot = InpInitialLot;
    
-   // Grid level 0 = First order = Initial Lot
-   // Grid level 1 = Second order = Initial Lot + AddLot
-   // Grid level 2 = Third order = Initial Lot + AddLot*2
-   // etc.
-   
-   double calculatedLot = InpInitialLot + (addLot * gridLevel);
+   if(lotMode == GRID_LOT_CUSTOM)
+   {
+      // Custom Lot Mode: Use the lot array from string
+      double lots[];
+      if(isLossSide)
+         ParseStringToDoubleArray(InpGridLossCustomLot, lots);
+      else
+         ParseStringToDoubleArray(InpGridProfitCustomLot, lots);
+      
+      if(gridLevel < ArraySize(lots))
+         calculatedLot = lots[gridLevel];
+      else if(ArraySize(lots) > 0)
+         calculatedLot = lots[ArraySize(lots) - 1];  // Use last value for levels beyond array
+   }
+   else  // GRID_LOT_ADD
+   {
+      // Add Lot Mode: InitialLot + (AddLot * gridLevel)
+      double addLot = isLossSide ? InpGridLossAddLot : InpGridProfitAddLot;
+      
+      // Grid level 0 = First order = Initial Lot
+      // Grid level 1 = Second order = Initial Lot + AddLot
+      // Grid level 2 = Third order = Initial Lot + AddLot*2
+      calculatedLot = InpInitialLot + (addLot * gridLevel);
+   }
    
    // Normalize lot size to broker requirements
    double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
