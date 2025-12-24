@@ -821,19 +821,33 @@ string AnalyzeSignal()
    if(ZZPointCount < 2)
       return "WAIT";
    
-   Print("Last ZigZag++ Label: ", LastZZLabel, " | CDC Trend: ", CDCTrend);
+   // Get the newest confirmed ZigZag point (index 0 is newest)
+   datetime newestPointTime = ZZPoints[0].time;
+   
+   // Check if this is a NEW confirmed point (not the same as last time)
+   if(newestPointTime == LastConfirmedZZTime)
+   {
+      // No new point - wait for next one
+      return "WAIT";
+   }
+   
+   // NEW ZigZag point confirmed! Update tracking time
+   LastConfirmedZZTime = newestPointTime;
+   
+   Print("*** NEW ZigZag++ Point Confirmed! ***");
+   Print("Label: ", LastZZLabel, " | Time: ", TimeToString(newestPointTime), " | CDC: ", CDCTrend);
    
    // BUY Signal: ZigZag closed at LL or HL (Low points - bottom of swing)
    if(LastZZLabel == "LL" || LastZZLabel == "HL")
    {
-      Print("ZigZag++ LOW point detected (", LastZZLabel, ") - Checking BUY conditions");
+      Print(">>> NEW LOW point (", LastZZLabel, ") - Triggering BUY signal!");
       return "BUY";
    }
    
    // SELL Signal: ZigZag closed at HH or LH (High points - top of swing)
    if(LastZZLabel == "HH" || LastZZLabel == "LH")
    {
-      Print("ZigZag++ HIGH point detected (", LastZZLabel, ") - Checking SELL conditions");
+      Print(">>> NEW HIGH point (", LastZZLabel, ") - Triggering SELL signal!");
       return "SELL";
    }
    
