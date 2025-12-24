@@ -5,12 +5,13 @@ import StepCard from '@/components/StepCard';
 
 const MT5EAGuide = () => {
   const fullEACode = `//+------------------------------------------------------------------+
-//|                   ZigZag++ CDC Structure EA v3.0                   |
+//|                   ZigZag++ CDC Structure EA v4.0                   |
 //|           Based on DevLucem ZigZag++ with CDC Action Zone          |
+//|           + Grid Trading System (Loss & Profit Side)               |
 //+------------------------------------------------------------------+
 #property copyright "Trading Education"
 #property link      ""
-#property version   "3.00"
+#property version   "4.00"
 #property strict
 
 // *** Include CTrade ***
@@ -48,22 +49,58 @@ enum ENUM_TRADE_MODE
 };
 input ENUM_TRADE_MODE InpTradeMode = TRADE_BUY_SELL;  // Trade Mode
 
-//--- [ RE-ENTRY SETTINGS ] -----------------------------------------
-input string   InpReEntryHeader = "=== RE-ENTRY SETTINGS ===";  // ___
-input bool     InpUseReEntry = true;       // Enable Re-Entry Feature
-input int      InpReEntryMaxCount = 3;     // Max Re-Entry per Direction
-
 //--- [ TRADING SETTINGS ] ------------------------------------------
 input string   InpTradingHeader = "=== TRADING SETTINGS ===";  // ___
-input double   InpLotSize      = 0.01;        // Lot Size
-input int      InpStopLoss     = 50;          // Stop Loss (pips)
-input int      InpTakeProfit   = 100;         // Take Profit (pips)
-input int      InpMagicNumber  = 123456;      // Magic Number
+enum ENUM_LOT_MODE
+{
+   LOT_FIXED = 0,       // Fixed Lot
+   LOT_RISK_PERCENT = 1,  // Risk % of Balance
+   LOT_RISK_DOLLAR = 2    // Fixed Dollar Risk
+};
+input ENUM_LOT_MODE InpLotMode = LOT_FIXED;  // Lot Mode
+input double   InpInitialLot   = 0.01;       // Initial Lot Size
+input double   InpRiskPercent  = 1.0;        // Risk % of Balance (for Risk Mode)
+input double   InpRiskDollar   = 50.0;       // Fixed Dollar Risk (for Risk Mode)
+input int      InpStopLoss     = 50;         // Stop Loss (pips)
+input int      InpTakeProfit   = 100;        // Take Profit (pips)
+input int      InpMagicNumber  = 123456;     // Magic Number
 
-//--- [ RISK MANAGEMENT ] -------------------------------------------
-input string   InpRiskHeader   = "=== RISK MANAGEMENT ===";  // ___
-input double   InpMaxRiskPercent = 2.0;       // Max Risk %
-input int      InpMaxOrders    = 1;           // Max Orders
+//--- [ GRID LOSS SIDE SETTINGS ] -----------------------------------
+input string   InpGridLossHeader = "----- Grid Loss Side -----";  // ___
+input string   InpGridLossCustomLot = "0.01;0.02;0.03;0.04;0.05";  // Custom Lot (separate by semicolon ;)
+input int      InpGridLossMaxTrades = 5;     // Max Grid Trades (0 - Disable Grid Trade)
+enum ENUM_GRID_GAP_TYPE
+{
+   GAP_FIXED_POINTS = 0,    // Fixed Points
+   GAP_CUSTOM_DISTANCE = 1  // Custom Distance
+};
+input ENUM_GRID_GAP_TYPE InpGridLossGapType = GAP_FIXED_POINTS;  // Grid Gap Type
+input int      InpGridLossPoints = 50;       // Grid Points (points)
+input string   InpGridLossCustomDist = "100;200;300;400;500";  // Custom Grid Distance (separate by semicolon ;)
+input double   InpGridLossAddLot = 0.01;     // Add Lot (0 - Disable Adding Lot)
+input bool     InpGridLossOnlySignal = false;  // Grid Trade Only in Signal
+input bool     InpGridLossNewCandle = true;    // Grid Trade Only New Candle
+input bool     InpGridLossDontOpenSameCandle = true;  // Don't Open in Same Initial Candle
+
+//--- [ GRID PROFIT SIDE SETTINGS ] ---------------------------------
+input string   InpGridProfitHeader = "----- Grid Profit Side -----";  // ___
+input bool     InpUseGridProfit = true;      // Use Profit Grid
+input string   InpGridProfitCustomLot = "0.01;0.02;0.03;0.04;0.05";  // Custom Lot (separate by semicolon ;)
+input int      InpGridProfitMaxTrades = 3;   // Max Grid Trades (0 - Disable Grid Trade)
+input ENUM_GRID_GAP_TYPE InpGridProfitGapType = GAP_CUSTOM_DISTANCE;  // Grid Gap Type
+input int      InpGridProfitPoints = 100;    // Grid Points (points)
+input string   InpGridProfitCustomDist = "100;200;500";  // Custom Grid Distance (separate by semicolon ;)
+input double   InpGridProfitAddLot = 0.0;    // Add Lot (0 - Disable Adding Lot)
+input bool     InpGridProfitOnlySignal = false;  // Grid Trade Only in Signal
+input bool     InpGridProfitNewCandle = true;    // Grid Trade Only New Candle
+input bool     InpGridProfitDontOpenSameCandle = true;  // Don't Open in Same Initial Candle
+
+//--- [ CLOSE ALL SETTINGS ] ----------------------------------------
+input string   InpCloseAllHeader = "=== CLOSE ALL SETTINGS ===";  // ___
+input bool     InpUseCloseAllProfit = true;  // Use Close All at Target Profit
+input double   InpCloseAllProfitAmount = 100.0;  // Close All Profit Amount ($)
+input bool     InpUseCloseAllLoss = true;    // Use Close All at Max Loss
+input double   InpCloseAllLossAmount = 50.0; // Close All Max Loss Amount ($)
 
 //--- [ TIME FILTER ] -----------------------------------------------
 input string   InpTimeHeader   = "=== TIME FILTER ===";  // ___
@@ -104,15 +141,16 @@ color CDCZoneColor = clrWhite;
 string ZZPrefix = "ZZ_";
 string CDCPrefix = "CDC_";
 
-// Re-Entry Tracking Variables
-int ReEntryBuyCount = 0;
-int ReEntrySelCount = 0;
-ulong LastBuyTicket = 0;
-ulong LastSellTicket = 0;
-datetime LastOrderCloseTime = 0;
-
 // ZigZag tracking for confirmed points
 datetime LastConfirmedZZTime = 0;
+
+// Grid Tracking
+datetime InitialBuyBarTime = 0;
+datetime InitialSellBarTime = 0;
+int GridBuyCount = 0;
+int GridSellCount = 0;
+datetime LastGridBuyTime = 0;
+datetime LastGridSellTime = 0;
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                     |
@@ -120,22 +158,24 @@ datetime LastConfirmedZZTime = 0;
 int OnInit()
 {
    Print("===========================================");
-   Print("ZigZag++ CDC Structure EA v3.0");
+   Print("ZigZag++ CDC Structure EA v4.0 + Grid");
    Print("Symbol: ", _Symbol);
    Print("Entry TF: ", EnumToString(Period()));
    Print("CDC Filter TF: ", EnumToString(InpCDCTimeframe));
    Print("Trade Mode: ", EnumToString(InpTradeMode));
-   Print("Re-Entry: ", InpUseReEntry ? "Enabled" : "Disabled");
+   Print("Lot Mode: ", EnumToString(InpLotMode));
+   Print("Grid Loss Max: ", InpGridLossMaxTrades);
+   Print("Grid Profit Max: ", InpGridProfitMaxTrades);
    Print("===========================================");
    
    trade.SetExpertMagicNumber(InpMagicNumber);
    
    // Reset counters
-   ReEntryBuyCount = 0;
-   ReEntrySelCount = 0;
-   LastBuyTicket = 0;
-   LastSellTicket = 0;
    LastConfirmedZZTime = 0;
+   GridBuyCount = 0;
+   GridSellCount = 0;
+   InitialBuyBarTime = 0;
+   InitialSellBarTime = 0;
    
    Print("EA Started Successfully!");
    return(INIT_SUCCEEDED);
@@ -155,10 +195,78 @@ void OnDeinit(const int reason)
 }
 
 //+------------------------------------------------------------------+
+//| Parse semicolon-separated string to array                          |
+//+------------------------------------------------------------------+
+void ParseStringToDoubleArray(string input, double &arr[])
+{
+   string parts[];
+   int count = StringSplit(input, ';', parts);
+   ArrayResize(arr, count);
+   for(int i = 0; i < count; i++)
+   {
+      arr[i] = StringToDouble(parts[i]);
+   }
+}
+
+void ParseStringToIntArray(string input, int &arr[])
+{
+   string parts[];
+   int count = StringSplit(input, ';', parts);
+   ArrayResize(arr, count);
+   for(int i = 0; i < count; i++)
+   {
+      arr[i] = (int)StringToInteger(parts[i]);
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Get Lot Size for Grid based on level                               |
+//+------------------------------------------------------------------+
+double GetGridLotSize(bool isLossSide, int gridLevel)
+{
+   double lots[];
+   if(isLossSide)
+      ParseStringToDoubleArray(InpGridLossCustomLot, lots);
+   else
+      ParseStringToDoubleArray(InpGridProfitCustomLot, lots);
+   
+   if(gridLevel < ArraySize(lots))
+      return lots[gridLevel];
+   else if(ArraySize(lots) > 0)
+   {
+      double lastLot = lots[ArraySize(lots) - 1];
+      double addLot = isLossSide ? InpGridLossAddLot : InpGridProfitAddLot;
+      return lastLot + addLot * (gridLevel - ArraySize(lots) + 1);
+   }
+   return InpInitialLot;
+}
+
+//+------------------------------------------------------------------+
+//| Get Grid Distance for level                                        |
+//+------------------------------------------------------------------+
+int GetGridDistance(bool isLossSide, int gridLevel)
+{
+   ENUM_GRID_GAP_TYPE gapType = isLossSide ? InpGridLossGapType : InpGridProfitGapType;
+   int fixedPoints = isLossSide ? InpGridLossPoints : InpGridProfitPoints;
+   string customDist = isLossSide ? InpGridLossCustomDist : InpGridProfitCustomDist;
+   
+   if(gapType == GAP_FIXED_POINTS)
+      return fixedPoints;
+   
+   // Custom Distance
+   int distances[];
+   ParseStringToIntArray(customDist, distances);
+   
+   if(gridLevel < ArraySize(distances))
+      return distances[gridLevel];
+   else if(ArraySize(distances) > 0)
+      return distances[ArraySize(distances) - 1];
+   
+   return fixedPoints;
+}
+
+//+------------------------------------------------------------------+
 //| ZigZag++ Algorithm (Based on DevLucem Pine Script)                |
-//| - Uses Depth, Deviation, Backstep parameters                       |
-//| - Detects HH, HL, LH, LL patterns automatically                    |
-//| - Draws lines and labels on chart                                  |
 //+------------------------------------------------------------------+
 void CalculateZigZagPP()
 {
@@ -364,13 +472,12 @@ void CalculateZigZagPP()
       ZZPointCount++;
    }
    
-   // Reverse to have newest first (manual copy - ArrayCopy doesn't work with structs containing strings)
+   // Reverse to have newest first
    ZigZagPoint tempPoints[];
    ArrayResize(tempPoints, ZZPointCount);
    for(int i = 0; i < ZZPointCount; i++)
       tempPoints[i] = ZZPoints[ZZPointCount - 1 - i];
    
-   // Manual copy back (cannot use ArrayCopy with structs containing objects)
    ArrayResize(ZZPoints, ZZPointCount);
    for(int i = 0; i < ZZPointCount; i++)
       ZZPoints[i] = tempPoints[i];
@@ -630,10 +737,395 @@ string GetTradeModeString()
 }
 
 //+------------------------------------------------------------------+
+//| Calculate Lot Size based on Lot Mode                               |
+//+------------------------------------------------------------------+
+double CalculateLotSize()
+{
+   double lot = InpInitialLot;
+   
+   if(InpLotMode == LOT_RISK_PERCENT)
+   {
+      double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+      double riskAmount = balance * InpRiskPercent / 100.0;
+      double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
+      double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+      double pipValue = tickValue * (10 * _Point / tickSize);
+      lot = riskAmount / (InpStopLoss * pipValue);
+   }
+   else if(InpLotMode == LOT_RISK_DOLLAR)
+   {
+      double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
+      double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+      double pipValue = tickValue * (10 * _Point / tickSize);
+      lot = InpRiskDollar / (InpStopLoss * pipValue);
+   }
+   
+   // Normalize lot size
+   double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   double maxLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+   double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   
+   lot = MathMax(minLot, MathMin(maxLot, lot));
+   lot = MathFloor(lot / lotStep) * lotStep;
+   
+   return lot;
+}
+
+//+------------------------------------------------------------------+
+//| Get Total Floating Profit/Loss for this EA                         |
+//+------------------------------------------------------------------+
+double GetTotalFloatingPL()
+{
+   double totalPL = 0;
+   for(int i = 0; i < PositionsTotal(); i++)
+   {
+      if(PositionGetSymbol(i) == _Symbol)
+      {
+         if(PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
+         {
+            totalPL += PositionGetDouble(POSITION_PROFIT);
+         }
+      }
+   }
+   return totalPL;
+}
+
+//+------------------------------------------------------------------+
+//| Close All Positions                                                |
+//+------------------------------------------------------------------+
+void CloseAllPositions()
+{
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      if(PositionGetSymbol(i) == _Symbol)
+      {
+         if(PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
+         {
+            ulong ticket = PositionGetInteger(POSITION_TICKET);
+            trade.PositionClose(ticket);
+         }
+      }
+   }
+   
+   // Reset grid counters
+   GridBuyCount = 0;
+   GridSellCount = 0;
+   InitialBuyBarTime = 0;
+   InitialSellBarTime = 0;
+}
+
+//+------------------------------------------------------------------+
+//| Check Close All Conditions                                         |
+//+------------------------------------------------------------------+
+void CheckCloseAllConditions()
+{
+   double totalPL = GetTotalFloatingPL();
+   
+   // Check Close All at Target Profit
+   if(InpUseCloseAllProfit && totalPL >= InpCloseAllProfitAmount)
+   {
+      Print("Close All - Target Profit Reached: $", totalPL);
+      CloseAllPositions();
+      return;
+   }
+   
+   // Check Close All at Max Loss
+   if(InpUseCloseAllLoss && totalPL <= -InpCloseAllLossAmount)
+   {
+      Print("Close All - Max Loss Reached: $", totalPL);
+      CloseAllPositions();
+      return;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Count positions by type                                            |
+//+------------------------------------------------------------------+
+int CountPositions(ENUM_POSITION_TYPE posType)
+{
+   int count = 0;
+   for(int i = 0; i < PositionsTotal(); i++)
+   {
+      if(PositionGetSymbol(i) == _Symbol)
+      {
+         if(PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
+         {
+            if(PositionGetInteger(POSITION_TYPE) == posType)
+               count++;
+         }
+      }
+   }
+   return count;
+}
+
+//+------------------------------------------------------------------+
+//| Get Last Position Price by type                                    |
+//+------------------------------------------------------------------+
+double GetLastPositionPrice(ENUM_POSITION_TYPE posType)
+{
+   double lastPrice = 0;
+   datetime lastTime = 0;
+   
+   for(int i = 0; i < PositionsTotal(); i++)
+   {
+      if(PositionGetSymbol(i) == _Symbol)
+      {
+         if(PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
+         {
+            if(PositionGetInteger(POSITION_TYPE) == posType)
+            {
+               datetime posTime = (datetime)PositionGetInteger(POSITION_TIME);
+               if(posTime > lastTime)
+               {
+                  lastTime = posTime;
+                  lastPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+               }
+            }
+         }
+      }
+   }
+   return lastPrice;
+}
+
+//+------------------------------------------------------------------+
+//| Get First Position Price by type                                   |
+//+------------------------------------------------------------------+
+double GetFirstPositionPrice(ENUM_POSITION_TYPE posType)
+{
+   double firstPrice = 0;
+   datetime firstTime = D'2099.01.01';
+   
+   for(int i = 0; i < PositionsTotal(); i++)
+   {
+      if(PositionGetSymbol(i) == _Symbol)
+      {
+         if(PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
+         {
+            if(PositionGetInteger(POSITION_TYPE) == posType)
+            {
+               datetime posTime = (datetime)PositionGetInteger(POSITION_TIME);
+               if(posTime < firstTime)
+               {
+                  firstTime = posTime;
+                  firstPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+               }
+            }
+         }
+      }
+   }
+   return firstPrice;
+}
+
+//+------------------------------------------------------------------+
+//| Check and Execute Grid Loss Side                                   |
+//+------------------------------------------------------------------+
+void CheckGridLossSide()
+{
+   if(InpGridLossMaxTrades <= 0) return;
+   
+   datetime currentBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
+   double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   
+   // Check BUY Grid (when price goes down = loss side for BUY)
+   int buyCount = CountPositions(POSITION_TYPE_BUY);
+   if(buyCount > 0 && buyCount < InpGridLossMaxTrades)
+   {
+      // Check if should skip same candle
+      if(InpGridLossDontOpenSameCandle && currentBarTime == InitialBuyBarTime)
+         return;
+      
+      // Check new candle requirement
+      if(InpGridLossNewCandle && currentBarTime == LastGridBuyTime)
+         return;
+      
+      // Check signal requirement
+      if(InpGridLossOnlySignal && !IsTradeAllowed("BUY"))
+         return;
+      
+      double lastBuyPrice = GetLastPositionPrice(POSITION_TYPE_BUY);
+      int gridLevel = buyCount;
+      int distance = GetGridDistance(true, gridLevel - 1);
+      
+      // Price went DOWN from last buy by grid distance
+      if(lastBuyPrice - currentPrice >= distance * _Point)
+      {
+         double lot = GetGridLotSize(true, gridLevel);
+         double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+         
+         Print("Grid Loss BUY #", gridLevel, " | Lot: ", lot, " | Distance: ", distance);
+         
+         if(trade.Buy(lot, _Symbol, price, 0, 0, "Grid Loss BUY #" + IntegerToString(gridLevel)))
+         {
+            LastGridBuyTime = currentBarTime;
+            GridBuyCount = buyCount + 1;
+         }
+      }
+   }
+   
+   // Check SELL Grid (when price goes up = loss side for SELL)
+   int sellCount = CountPositions(POSITION_TYPE_SELL);
+   if(sellCount > 0 && sellCount < InpGridLossMaxTrades)
+   {
+      // Check if should skip same candle
+      if(InpGridLossDontOpenSameCandle && currentBarTime == InitialSellBarTime)
+         return;
+      
+      // Check new candle requirement
+      if(InpGridLossNewCandle && currentBarTime == LastGridSellTime)
+         return;
+      
+      // Check signal requirement
+      if(InpGridLossOnlySignal && !IsTradeAllowed("SELL"))
+         return;
+      
+      double lastSellPrice = GetLastPositionPrice(POSITION_TYPE_SELL);
+      int gridLevel = sellCount;
+      int distance = GetGridDistance(true, gridLevel - 1);
+      
+      // Price went UP from last sell by grid distance
+      if(currentPrice - lastSellPrice >= distance * _Point)
+      {
+         double lot = GetGridLotSize(true, gridLevel);
+         double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+         
+         Print("Grid Loss SELL #", gridLevel, " | Lot: ", lot, " | Distance: ", distance);
+         
+         if(trade.Sell(lot, _Symbol, price, 0, 0, "Grid Loss SELL #" + IntegerToString(gridLevel)))
+         {
+            LastGridSellTime = currentBarTime;
+            GridSellCount = sellCount + 1;
+         }
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Check and Execute Grid Profit Side                                 |
+//+------------------------------------------------------------------+
+void CheckGridProfitSide()
+{
+   if(!InpUseGridProfit || InpGridProfitMaxTrades <= 0) return;
+   
+   datetime currentBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
+   double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   
+   // Check BUY Grid Profit (when price goes up = profit side for BUY)
+   int buyCount = CountPositions(POSITION_TYPE_BUY);
+   if(buyCount > 0)
+   {
+      // Count profit grid orders (orders above initial price)
+      double firstBuyPrice = GetFirstPositionPrice(POSITION_TYPE_BUY);
+      int profitGridCount = 0;
+      
+      for(int i = 0; i < PositionsTotal(); i++)
+      {
+         if(PositionGetSymbol(i) == _Symbol)
+         {
+            if(PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
+            {
+               if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
+               {
+                  if(PositionGetDouble(POSITION_PRICE_OPEN) > firstBuyPrice)
+                     profitGridCount++;
+               }
+            }
+         }
+      }
+      
+      if(profitGridCount < InpGridProfitMaxTrades)
+      {
+         // Check new candle requirement
+         if(InpGridProfitNewCandle && currentBarTime == LastGridBuyTime)
+            return;
+         
+         // Check signal requirement
+         if(InpGridProfitOnlySignal && !IsTradeAllowed("BUY"))
+            return;
+         
+         double lastBuyPrice = GetLastPositionPrice(POSITION_TYPE_BUY);
+         int distance = GetGridDistance(false, profitGridCount);
+         
+         // Price went UP from last buy by grid distance
+         if(currentPrice - lastBuyPrice >= distance * _Point)
+         {
+            double lot = GetGridLotSize(false, profitGridCount);
+            double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+            
+            Print("Grid Profit BUY #", profitGridCount, " | Lot: ", lot, " | Distance: ", distance);
+            
+            if(trade.Buy(lot, _Symbol, price, 0, 0, "Grid Profit BUY #" + IntegerToString(profitGridCount)))
+            {
+               LastGridBuyTime = currentBarTime;
+            }
+         }
+      }
+   }
+   
+   // Check SELL Grid Profit (when price goes down = profit side for SELL)
+   int sellCount = CountPositions(POSITION_TYPE_SELL);
+   if(sellCount > 0)
+   {
+      // Count profit grid orders (orders below initial price)
+      double firstSellPrice = GetFirstPositionPrice(POSITION_TYPE_SELL);
+      int profitGridCount = 0;
+      
+      for(int i = 0; i < PositionsTotal(); i++)
+      {
+         if(PositionGetSymbol(i) == _Symbol)
+         {
+            if(PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
+            {
+               if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_SELL)
+               {
+                  if(PositionGetDouble(POSITION_PRICE_OPEN) < firstSellPrice)
+                     profitGridCount++;
+               }
+            }
+         }
+      }
+      
+      if(profitGridCount < InpGridProfitMaxTrades)
+      {
+         // Check new candle requirement
+         if(InpGridProfitNewCandle && currentBarTime == LastGridSellTime)
+            return;
+         
+         // Check signal requirement
+         if(InpGridProfitOnlySignal && !IsTradeAllowed("SELL"))
+            return;
+         
+         double lastSellPrice = GetLastPositionPrice(POSITION_TYPE_SELL);
+         int distance = GetGridDistance(false, profitGridCount);
+         
+         // Price went DOWN from last sell by grid distance
+         if(lastSellPrice - currentPrice >= distance * _Point)
+         {
+            double lot = GetGridLotSize(false, profitGridCount);
+            double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+            
+            Print("Grid Profit SELL #", profitGridCount, " | Lot: ", lot, " | Distance: ", distance);
+            
+            if(trade.Sell(lot, _Symbol, price, 0, 0, "Grid Profit SELL #" + IntegerToString(profitGridCount)))
+            {
+               LastGridSellTime = currentBarTime;
+            }
+         }
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
 //| Expert tick function                                               |
 //+------------------------------------------------------------------+
 void OnTick()
 {
+   // Check Close All conditions first
+   CheckCloseAllConditions();
+   
+   // Check Grid conditions (every tick for real-time)
+   CheckGridLossSide();
+   CheckGridProfitSide();
+   
    static datetime lastBarTime = 0;
    datetime currentBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
    
@@ -654,17 +1146,6 @@ void OnTick()
       return;
    }
    
-   if(InpUseReEntry)
-   {
-      CheckReEntry();
-   }
-   
-   if(CountOpenOrders() >= InpMaxOrders)
-   {
-      UpdateChartComment("WAIT", "Max orders reached");
-      return;
-   }
-   
    if(ZZPointCount < 4)
    {
       UpdateChartComment("WAIT", "Calculating ZigZag...");
@@ -676,7 +1157,7 @@ void OnTick()
    
    if(signal == "BUY")
    {
-      if(HasBuyPosition())
+      if(CountPositions(POSITION_TYPE_BUY) > 0)
       {
          reason = "BUY position already open";
          signal = "WAIT";
@@ -692,13 +1173,12 @@ void OnTick()
       else
       {
          ExecuteBuy();
-         ReEntryBuyCount = 0;
          reason = "BUY executed | CDC: " + CDCTrend;
       }
    }
    else if(signal == "SELL")
    {
-      if(HasSellPosition())
+      if(CountPositions(POSITION_TYPE_SELL) > 0)
       {
          reason = "SELL position already open";
          signal = "WAIT";
@@ -714,7 +1194,6 @@ void OnTick()
       else
       {
          ExecuteSell();
-         ReEntrySelCount = 0;
          reason = "SELL executed | CDC: " + CDCTrend;
       }
    }
@@ -723,83 +1202,7 @@ void OnTick()
 }
 
 //+------------------------------------------------------------------+
-//| Check for Re-Entry opportunity after order closes                  |
-//+------------------------------------------------------------------+
-void CheckReEntry()
-{
-   if(CountOpenOrders() >= InpMaxOrders)
-      return;
-   
-   datetime fromTime = TimeCurrent() - 86400 * 7;
-   HistorySelect(fromTime, TimeCurrent());
-   
-   int totalDeals = HistoryDealsTotal();
-   
-   for(int i = totalDeals - 1; i >= 0; i--)
-   {
-      ulong dealTicket = HistoryDealGetTicket(i);
-      if(dealTicket == 0) continue;
-      
-      if(HistoryDealGetInteger(dealTicket, DEAL_MAGIC) != InpMagicNumber)
-         continue;
-      
-      ENUM_DEAL_ENTRY dealEntry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
-      if(dealEntry != DEAL_ENTRY_OUT)
-         continue;
-      
-      datetime dealTime = (datetime)HistoryDealGetInteger(dealTicket, DEAL_TIME);
-      
-      if(dealTime <= LastOrderCloseTime)
-         continue;
-      
-      ENUM_DEAL_TYPE dealType = (ENUM_DEAL_TYPE)HistoryDealGetInteger(dealTicket, DEAL_TYPE);
-      
-      LastOrderCloseTime = dealTime;
-      
-      Print("Order Closed - Checking Re-Entry Opportunity");
-      
-      // Check BUY Re-Entry: SELL closed + LL/HL (Low points) + CDC BULLISH
-      if(dealType == DEAL_TYPE_BUY)
-      {
-         if(CDCTrend == "BULLISH" && (LastZZLabel == "LL" || LastZZLabel == "HL"))
-         {
-            if(ReEntryBuyCount < InpReEntryMaxCount)
-            {
-               if(IsTradeAllowed("BUY"))
-               {
-                  Print("RE-ENTRY BUY - Swing: ", LastZZLabel, " CDC: ", CDCTrend);
-                  ExecuteBuy();
-                  ReEntryBuyCount++;
-               }
-            }
-         }
-      }
-      
-      // Check SELL Re-Entry: BUY closed + HH/LH (High points) + CDC BEARISH
-      if(dealType == DEAL_TYPE_SELL)
-      {
-         if(CDCTrend == "BEARISH" && (LastZZLabel == "HH" || LastZZLabel == "LH"))
-         {
-            if(ReEntrySelCount < InpReEntryMaxCount)
-            {
-               if(IsTradeAllowed("SELL"))
-               {
-                  Print("RE-ENTRY SELL - Swing: ", LastZZLabel, " CDC: ", CDCTrend);
-                  ExecuteSell();
-                  ReEntrySelCount++;
-               }
-            }
-         }
-      }
-      
-      break;
-   }
-}
-
-//+------------------------------------------------------------------+
 //| Analyze Signal - Based on ZigZag++ Labels                          |
-//| BUY: ZigZag closed at LL or HL (Low points - Green labels)         |
-//| SELL: ZigZag closed at HH or LH (High points - Red labels)         |
 //+------------------------------------------------------------------+
 string AnalyzeSignal()
 {
@@ -809,27 +1212,26 @@ string AnalyzeSignal()
    // Get the newest confirmed ZigZag point (index 0 is newest)
    datetime newestPointTime = ZZPoints[0].time;
    
-   // Check if this is a NEW confirmed point (not the same as last time)
+   // Check if this is a NEW confirmed point
    if(newestPointTime == LastConfirmedZZTime)
    {
-      // No new point - wait for next one
       return "WAIT";
    }
    
-   // NEW ZigZag point confirmed! Update tracking time
+   // NEW ZigZag point confirmed!
    LastConfirmedZZTime = newestPointTime;
    
    Print("*** NEW ZigZag++ Point Confirmed! ***");
    Print("Label: ", LastZZLabel, " | Time: ", TimeToString(newestPointTime), " | CDC: ", CDCTrend);
    
-   // BUY Signal: ZigZag closed at LL or HL (Low points - bottom of swing)
+   // BUY Signal: ZigZag closed at LL or HL (Low points)
    if(LastZZLabel == "LL" || LastZZLabel == "HL")
    {
       Print(">>> NEW LOW point (", LastZZLabel, ") - Triggering BUY signal!");
       return "BUY";
    }
    
-   // SELL Signal: ZigZag closed at HH or LH (High points - top of swing)
+   // SELL Signal: ZigZag closed at HH or LH (High points)
    if(LastZZLabel == "HH" || LastZZLabel == "LH")
    {
       Print(">>> NEW HIGH point (", LastZZLabel, ") - Triggering SELL signal!");
@@ -845,15 +1247,16 @@ string AnalyzeSignal()
 void ExecuteBuy()
 {
    double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-   double sl = price - InpStopLoss * _Point * 10;
-   double tp = price + InpTakeProfit * _Point * 10;
-   double lot = CalculateLotSize(InpStopLoss);
+   double lot = CalculateLotSize();
    
-   Print("Executing BUY - CDC: ", CDCTrend, " | Mode: ", GetTradeModeString());
+   Print("Executing BUY - CDC: ", CDCTrend, " | Mode: ", GetTradeModeString(), " | Lot Mode: ", EnumToString(InpLotMode));
    
-   if(trade.Buy(lot, _Symbol, price, sl, tp, "ZigZag++ CDC EA"))
+   // Grid orders have no SL/TP - will use Close All
+   if(trade.Buy(lot, _Symbol, price, 0, 0, "ZigZag++ Initial BUY"))
    {
       Print("BUY Success! Ticket: ", trade.ResultOrder());
+      InitialBuyBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
+      GridBuyCount = 1;
    }
    else
    {
@@ -867,47 +1270,21 @@ void ExecuteBuy()
 void ExecuteSell()
 {
    double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   double sl = price + InpStopLoss * _Point * 10;
-   double tp = price - InpTakeProfit * _Point * 10;
-   double lot = CalculateLotSize(InpStopLoss);
+   double lot = CalculateLotSize();
    
-   Print("Executing SELL - CDC: ", CDCTrend, " | Mode: ", GetTradeModeString());
+   Print("Executing SELL - CDC: ", CDCTrend, " | Mode: ", GetTradeModeString(), " | Lot Mode: ", EnumToString(InpLotMode));
    
-   if(trade.Sell(lot, _Symbol, price, sl, tp, "ZigZag++ CDC EA"))
+   // Grid orders have no SL/TP - will use Close All
+   if(trade.Sell(lot, _Symbol, price, 0, 0, "ZigZag++ Initial SELL"))
    {
       Print("SELL Success! Ticket: ", trade.ResultOrder());
+      InitialSellBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
+      GridSellCount = 1;
    }
    else
    {
       Print("SELL Failed! Error: ", trade.ResultRetcode());
    }
-}
-
-//+------------------------------------------------------------------+
-//| Calculate Lot Size based on Risk Management                        |
-//+------------------------------------------------------------------+
-double CalculateLotSize(int slPips)
-{
-   if(InpMaxRiskPercent <= 0)
-      return InpLotSize;
-   
-   double accountBalance = AccountInfoDouble(ACCOUNT_BALANCE);
-   double riskAmount = accountBalance * InpMaxRiskPercent / 100;
-   
-   double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
-   double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
-   double pipValue = tickValue * (10 * _Point / tickSize);
-   
-   double calculatedLot = riskAmount / (slPips * pipValue);
-   
-   double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
-   double maxLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
-   double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
-   
-   calculatedLot = MathMax(minLot, MathMin(maxLot, calculatedLot));
-   calculatedLot = MathFloor(calculatedLot / lotStep) * lotStep;
-   
-   return calculatedLot;
 }
 
 //+------------------------------------------------------------------+
@@ -925,44 +1302,6 @@ int CountOpenOrders()
       }
    }
    return count;
-}
-
-//+------------------------------------------------------------------+
-//| Check if BUY position already exists                               |
-//+------------------------------------------------------------------+
-bool HasBuyPosition()
-{
-   for(int i = 0; i < PositionsTotal(); i++)
-   {
-      if(PositionGetSymbol(i) == _Symbol)
-      {
-         if(PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
-         {
-            if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
-               return true;
-         }
-      }
-   }
-   return false;
-}
-
-//+------------------------------------------------------------------+
-//| Check if SELL position already exists                              |
-//+------------------------------------------------------------------+
-bool HasSellPosition()
-{
-   for(int i = 0; i < PositionsTotal(); i++)
-   {
-      if(PositionGetSymbol(i) == _Symbol)
-      {
-         if(PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
-         {
-            if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_SELL)
-               return true;
-         }
-      }
-   }
-   return false;
 }
 
 //+------------------------------------------------------------------+
@@ -984,12 +1323,12 @@ void UpdateChartComment(string signal, string reason = "")
    string text = "";
    
    text = text + "=================================" + nl;
-   text = text + " ZigZag++ CDC EA v3.0" + nl;
+   text = text + " ZigZag++ CDC EA v4.0 + Grid" + nl;
    text = text + "=================================" + nl;
    text = text + "Symbol: " + _Symbol + nl;
    text = text + "Entry TF: " + EnumToString(Period()) + nl;
    text = text + "Trade Mode: " + GetTradeModeString() + nl;
-   text = text + "Re-Entry: " + (InpUseReEntry ? "ON" : "OFF") + nl;
+   text = text + "Lot Mode: " + EnumToString(InpLotMode) + nl;
    text = text + "---------------------------------" + nl;
    
    text = text + "ZIGZAG++ STATUS:" + nl;
@@ -1018,15 +1357,14 @@ void UpdateChartComment(string signal, string reason = "")
    text = text + "  Status: " + zoneSymbol + nl;
    
    text = text + "---------------------------------" + nl;
-   text = text + "RE-ENTRY: " + IntegerToString(ReEntryBuyCount) + "/" + 
-          IntegerToString(InpReEntryMaxCount) + " BUY, " + 
-          IntegerToString(ReEntrySelCount) + "/" + 
-          IntegerToString(InpReEntryMaxCount) + " SELL" + nl;
+   text = text + "GRID STATUS:" + nl;
+   text = text + "  BUY Positions: " + IntegerToString(CountPositions(POSITION_TYPE_BUY)) + nl;
+   text = text + "  SELL Positions: " + IntegerToString(CountPositions(POSITION_TYPE_SELL)) + nl;
+   text = text + "  Total P/L: $" + DoubleToString(GetTotalFloatingPL(), 2) + nl;
    text = text + "---------------------------------" + nl;
    text = text + "SIGNAL: " + signal + nl;
    if(reason != "") text = text + "Reason: " + reason + nl;
-   text = text + "Orders: " + IntegerToString(CountOpenOrders()) + "/" + 
-          IntegerToString(InpMaxOrders) + nl;
+   text = text + "Total Orders: " + IntegerToString(CountOpenOrders()) + nl;
    text = text + "=================================" + nl;
    
    Comment(text);
@@ -1053,15 +1391,15 @@ void UpdateChartComment(string signal, string reason = "")
         <div className="max-w-4xl mx-auto text-center">
           <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-primary/10 border border-primary/30 mb-6">
             <FileCode className="w-4 h-4 text-primary" />
-            <span className="text-sm font-mono text-primary">MQL5 Expert Advisor v3.0</span>
+            <span className="text-sm font-mono text-primary">MQL5 Expert Advisor v4.0 + Grid</span>
           </div>
           
           <h1 className="text-3xl md:text-4xl font-bold text-foreground mb-4">
-            ZigZag++ <span className="text-primary">CDC Action Zone</span> EA
+            ZigZag++ <span className="text-primary">CDC Action Zone</span> EA + Grid
           </h1>
           
           <p className="text-lg text-muted-foreground">
-            EA ที่ใช้ ZigZag++ (DevLucem) พร้อม Labels HH/HL/LH/LL และ CDC Trend Filter
+            EA ที่ใช้ ZigZag++ (DevLucem) พร้อม CDC Trend Filter และ Grid Trading System
           </p>
         </div>
       </section>
@@ -1086,7 +1424,7 @@ void UpdateChartComment(string signal, string reason = "")
       {/* Features */}
       <section className="container py-8">
         <div className="max-w-4xl mx-auto">
-          <h2 className="text-2xl font-bold text-foreground mb-6 text-center">คุณสมบัติของ EA v3.0</h2>
+          <h2 className="text-2xl font-bold text-foreground mb-6 text-center">คุณสมบัติของ EA v4.0</h2>
           
           <div className="grid md:grid-cols-2 lg:grid-cols-5 gap-4">
             <div className="glass-card rounded-xl p-5 text-center border-2 border-primary/30">
@@ -1107,10 +1445,10 @@ void UpdateChartComment(string signal, string reason = "")
             
             <div className="glass-card rounded-xl p-5 text-center border-2 border-purple-500/30">
               <div className="w-12 h-12 rounded-xl bg-purple-500/20 text-purple-500 flex items-center justify-center mx-auto mb-3">
-                <TrendingUp className="w-6 h-6" />
+                <Settings className="w-6 h-6" />
               </div>
-              <h3 className="font-semibold text-foreground mb-1">Re-Entry</h3>
-              <p className="text-sm text-muted-foreground">เปิดออเดอร์ใหม่เมื่อยังอยู่ในเทรนด์</p>
+              <h3 className="font-semibold text-foreground mb-1">Grid Trading</h3>
+              <p className="text-sm text-muted-foreground">Loss Side & Profit Side พร้อม Custom Lot</p>
             </div>
             
             <div className="glass-card rounded-xl p-5 text-center">
@@ -1633,7 +1971,7 @@ void UpdateChartComment(string signal, string reason = "")
       {/* Full Code */}
       <section className="container py-8">
         <div className="max-w-5xl mx-auto">
-          <h2 className="text-2xl font-bold text-foreground mb-6 text-center">โค้ด EA ฉบับเต็ม (v2.0 + CDC Filter)</h2>
+          <h2 className="text-2xl font-bold text-foreground mb-6 text-center">โค้ด EA ฉบับเต็ม (v4.0 + Grid Trading)</h2>
           <CodeBlock
             code={fullEACode}
             language="MQL5"
