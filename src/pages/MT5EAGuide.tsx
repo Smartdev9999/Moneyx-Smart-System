@@ -197,10 +197,11 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 //| Parse semicolon-separated string to array                          |
 //+------------------------------------------------------------------+
-void ParseStringToDoubleArray(string input, double &arr[])
+void ParseStringToDoubleArray(string inputStr, double &arr[])
 {
    string parts[];
-   int count = StringSplit(input, ';', parts);
+   ushort sep = StringGetCharacter(";", 0);
+   int count = StringSplit(inputStr, sep, parts);
    ArrayResize(arr, count);
    for(int i = 0; i < count; i++)
    {
@@ -208,10 +209,11 @@ void ParseStringToDoubleArray(string input, double &arr[])
    }
 }
 
-void ParseStringToIntArray(string input, int &arr[])
+void ParseStringToIntArray(string inputStr, int &arr[])
 {
    string parts[];
-   int count = StringSplit(input, ';', parts);
+   ushort sep = StringGetCharacter(";", 0);
+   int count = StringSplit(inputStr, sep, parts);
    ArrayResize(arr, count);
    for(int i = 0; i < count; i++)
    {
