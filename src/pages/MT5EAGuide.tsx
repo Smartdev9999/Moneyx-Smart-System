@@ -61,8 +61,6 @@ input ENUM_LOT_MODE InpLotMode = LOT_FIXED;  // Lot Mode
 input double   InpInitialLot   = 0.01;       // Initial Lot Size
 input double   InpRiskPercent  = 1.0;        // Risk % of Balance (for Risk Mode)
 input double   InpRiskDollar   = 50.0;       // Fixed Dollar Risk (for Risk Mode)
-input int      InpStopLoss     = 50;         // Stop Loss (pips)
-input int      InpTakeProfit   = 100;        // Take Profit (pips)
 input int      InpMagicNumber  = 123456;     // Magic Number
 
 //--- [ GRID LOSS SIDE SETTINGS ] -----------------------------------
@@ -95,12 +93,49 @@ input bool     InpGridProfitOnlySignal = false;  // Grid Trade Only in Signal
 input bool     InpGridProfitNewCandle = true;    // Grid Trade Only New Candle
 input bool     InpGridProfitDontOpenSameCandle = true;  // Don't Open in Same Initial Candle
 
-//--- [ CLOSE ALL SETTINGS ] ----------------------------------------
-input string   InpCloseAllHeader = "=== CLOSE ALL SETTINGS ===";  // ___
-input bool     InpUseCloseAllProfit = true;  // Use Close All at Target Profit
-input double   InpCloseAllProfitAmount = 100.0;  // Close All Profit Amount ($)
-input bool     InpUseCloseAllLoss = true;    // Use Close All at Max Loss
-input double   InpCloseAllLossAmount = 50.0; // Close All Max Loss Amount ($)
+//--- [ TAKE PROFIT SETTINGS ] --------------------------------------
+input string   InpTPHeader = "=== TAKE PROFIT SETTINGS ===";  // ___
+
+// TP Fixed Dollar
+input bool     InpUseTPDollar = true;        // Use TP Fixed Dollar
+input double   InpTPDollarAmount = 100.0;    // TP Dollar Amount ($)
+
+// TP in Points
+input bool     InpUseTPPoints = false;       // Use TP in Points (from Average Price)
+input int      InpTPPoints = 2000;           // TP Points (points)
+
+// TP Percent of Balance
+input bool     InpUseTPPercent = false;      // Use TP % of Balance
+input double   InpTPPercent = 5.0;           // TP Percent of Balance (%)
+
+// Group TP (Accumulated Profit)
+input bool     InpUseGroupTP = false;        // Use Group TP (Accumulated)
+input double   InpGroupTPAmount = 3000.0;    // Group TP Target ($)
+
+// Visual Lines
+input bool     InpShowAverageLine = true;    // Show Average Price Line
+input bool     InpShowTPLine = true;         // Show TP Line
+input color    InpAverageLineColor = clrYellow;  // Average Line Color
+input color    InpTPLineColor = clrLime;     // TP Line Color
+
+//--- [ STOP LOSS SETTINGS ] ----------------------------------------
+input string   InpSLHeader = "=== STOP LOSS SETTINGS ===";  // ___
+
+// SL Fixed Dollar
+input bool     InpUseSLDollar = true;        // Use SL Fixed Dollar
+input double   InpSLDollarAmount = 50.0;     // SL Dollar Amount ($)
+
+// SL in Points
+input bool     InpUseSLPoints = false;       // Use SL in Points (from Average Price)
+input int      InpSLPoints = 1000;           // SL Points (points)
+
+// SL Percent of Balance
+input bool     InpUseSLPercent = false;      // Use SL % of Balance
+input double   InpSLPercent = 3.0;           // SL Percent of Balance (%)
+
+// Visual Lines
+input bool     InpShowSLLine = true;         // Show SL Line
+input color    InpSLLineColor = clrRed;      // SL Line Color
 
 //--- [ TIME FILTER ] -----------------------------------------------
 input string   InpTimeHeader   = "=== TIME FILTER ===";  // ___
@@ -140,6 +175,7 @@ color CDCZoneColor = clrWhite;
 // Chart Objects Prefix
 string ZZPrefix = "ZZ_";
 string CDCPrefix = "CDC_";
+string TPPrefix = "TP_";
 
 // ZigZag tracking for confirmed points
 datetime LastConfirmedZZTime = 0;
@@ -151,6 +187,10 @@ int GridBuyCount = 0;
 int GridSellCount = 0;
 datetime LastGridBuyTime = 0;
 datetime LastGridSellTime = 0;
+
+// Group TP Accumulated Profit Tracking
+double AccumulatedProfit = 0.0;
+double LastClosedProfit = 0.0;
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                     |
@@ -189,6 +229,7 @@ void OnDeinit(const int reason)
    // Remove all chart objects
    ObjectsDeleteAll(0, ZZPrefix);
    ObjectsDeleteAll(0, CDCPrefix);
+   ObjectsDeleteAll(0, TPPrefix);
    
    Comment("");
    Print("EA Stopped - Reason: ", reason);
@@ -752,14 +793,14 @@ double CalculateLotSize()
       double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
       double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
       double pipValue = tickValue * (10 * _Point / tickSize);
-      lot = riskAmount / (InpStopLoss * pipValue);
+      lot = riskAmount / (InpSLPoints * pipValue);
    }
    else if(InpLotMode == LOT_RISK_DOLLAR)
    {
       double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
       double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
       double pipValue = tickValue * (10 * _Point / tickSize);
-      lot = InpRiskDollar / (InpStopLoss * pipValue);
+      lot = InpRiskDollar / (InpSLPoints * pipValue);
    }
    
    // Normalize lot size
@@ -793,6 +834,209 @@ double GetTotalFloatingPL()
 }
 
 //+------------------------------------------------------------------+
+//| Get Floating PL by Position Type (BUY/SELL)                        |
+//+------------------------------------------------------------------+
+double GetFloatingPLByType(ENUM_POSITION_TYPE posType)
+{
+   double pl = 0;
+   for(int i = 0; i < PositionsTotal(); i++)
+   {
+      if(PositionGetSymbol(i) == _Symbol)
+      {
+         if(PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
+         {
+            if(PositionGetInteger(POSITION_TYPE) == posType)
+            {
+               pl += PositionGetDouble(POSITION_PROFIT);
+            }
+         }
+      }
+   }
+   return pl;
+}
+
+//+------------------------------------------------------------------+
+//| Get Average Price and Total Lots by Position Type                  |
+//+------------------------------------------------------------------+
+void GetAveragePriceAndLots(ENUM_POSITION_TYPE posType, double &avgPrice, double &totalLots)
+{
+   double sumPriceLot = 0;
+   totalLots = 0;
+   
+   for(int i = 0; i < PositionsTotal(); i++)
+   {
+      if(PositionGetSymbol(i) == _Symbol)
+      {
+         if(PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
+         {
+            if(PositionGetInteger(POSITION_TYPE) == posType)
+            {
+               double price = PositionGetDouble(POSITION_PRICE_OPEN);
+               double lot = PositionGetDouble(POSITION_VOLUME);
+               sumPriceLot += price * lot;
+               totalLots += lot;
+            }
+         }
+      }
+   }
+   
+   if(totalLots > 0)
+      avgPrice = sumPriceLot / totalLots;
+   else
+      avgPrice = 0;
+}
+
+//+------------------------------------------------------------------+
+//| Calculate TP Price based on Average Price and TP Points            |
+//+------------------------------------------------------------------+
+double CalculateTPPrice(ENUM_POSITION_TYPE posType, double avgPrice)
+{
+   if(!InpUseTPPoints || avgPrice == 0) return 0;
+   
+   if(posType == POSITION_TYPE_BUY)
+      return avgPrice + InpTPPoints * _Point;
+   else
+      return avgPrice - InpTPPoints * _Point;
+}
+
+//+------------------------------------------------------------------+
+//| Calculate SL Price based on Average Price and SL Points            |
+//+------------------------------------------------------------------+
+double CalculateSLPrice(ENUM_POSITION_TYPE posType, double avgPrice)
+{
+   if(!InpUseSLPoints || avgPrice == 0) return 0;
+   
+   if(posType == POSITION_TYPE_BUY)
+      return avgPrice - InpSLPoints * _Point;
+   else
+      return avgPrice + InpSLPoints * _Point;
+}
+
+//+------------------------------------------------------------------+
+//| Draw Average Price, TP and SL Lines                                |
+//+------------------------------------------------------------------+
+void DrawTPSLLines()
+{
+   // Remove old lines
+   ObjectsDeleteAll(0, TPPrefix);
+   
+   double avgBuy, lotsBuy, avgSell, lotsSell;
+   GetAveragePriceAndLots(POSITION_TYPE_BUY, avgBuy, lotsBuy);
+   GetAveragePriceAndLots(POSITION_TYPE_SELL, avgSell, lotsSell);
+   
+   datetime startTime = iTime(_Symbol, PERIOD_D1, 10);
+   datetime endTime = TimeCurrent() + 86400 * 5;
+   
+   // Draw BUY Average Line and TP/SL
+   if(avgBuy > 0 && InpShowAverageLine)
+   {
+      string lineName = TPPrefix + "AvgBuy";
+      ObjectCreate(0, lineName, OBJ_HLINE, 0, 0, avgBuy);
+      ObjectSetInteger(0, lineName, OBJPROP_COLOR, InpAverageLineColor);
+      ObjectSetInteger(0, lineName, OBJPROP_WIDTH, 2);
+      ObjectSetInteger(0, lineName, OBJPROP_STYLE, STYLE_DASH);
+      ObjectSetString(0, lineName, OBJPROP_TEXT, "AVG BUY: " + DoubleToString(avgBuy, _Digits));
+      
+      // TP Line for BUY
+      if(InpShowTPLine && InpUseTPPoints)
+      {
+         double tpPrice = CalculateTPPrice(POSITION_TYPE_BUY, avgBuy);
+         string tpLineName = TPPrefix + "TPBuy";
+         ObjectCreate(0, tpLineName, OBJ_HLINE, 0, 0, tpPrice);
+         ObjectSetInteger(0, tpLineName, OBJPROP_COLOR, InpTPLineColor);
+         ObjectSetInteger(0, tpLineName, OBJPROP_WIDTH, 2);
+         ObjectSetInteger(0, tpLineName, OBJPROP_STYLE, STYLE_DOT);
+         ObjectSetString(0, tpLineName, OBJPROP_TEXT, "TP BUY: " + DoubleToString(tpPrice, _Digits));
+      }
+      
+      // SL Line for BUY
+      if(InpShowSLLine && InpUseSLPoints)
+      {
+         double slPrice = CalculateSLPrice(POSITION_TYPE_BUY, avgBuy);
+         string slLineName = TPPrefix + "SLBuy";
+         ObjectCreate(0, slLineName, OBJ_HLINE, 0, 0, slPrice);
+         ObjectSetInteger(0, slLineName, OBJPROP_COLOR, InpSLLineColor);
+         ObjectSetInteger(0, slLineName, OBJPROP_WIDTH, 2);
+         ObjectSetInteger(0, slLineName, OBJPROP_STYLE, STYLE_DOT);
+         ObjectSetString(0, slLineName, OBJPROP_TEXT, "SL BUY: " + DoubleToString(slPrice, _Digits));
+      }
+   }
+   
+   // Draw SELL Average Line and TP/SL
+   if(avgSell > 0 && InpShowAverageLine)
+   {
+      string lineName = TPPrefix + "AvgSell";
+      ObjectCreate(0, lineName, OBJ_HLINE, 0, 0, avgSell);
+      ObjectSetInteger(0, lineName, OBJPROP_COLOR, InpAverageLineColor);
+      ObjectSetInteger(0, lineName, OBJPROP_WIDTH, 2);
+      ObjectSetInteger(0, lineName, OBJPROP_STYLE, STYLE_DASH);
+      ObjectSetString(0, lineName, OBJPROP_TEXT, "AVG SELL: " + DoubleToString(avgSell, _Digits));
+      
+      // TP Line for SELL
+      if(InpShowTPLine && InpUseTPPoints)
+      {
+         double tpPrice = CalculateTPPrice(POSITION_TYPE_SELL, avgSell);
+         string tpLineName = TPPrefix + "TPSell";
+         ObjectCreate(0, tpLineName, OBJ_HLINE, 0, 0, tpPrice);
+         ObjectSetInteger(0, tpLineName, OBJPROP_COLOR, InpTPLineColor);
+         ObjectSetInteger(0, tpLineName, OBJPROP_WIDTH, 2);
+         ObjectSetInteger(0, tpLineName, OBJPROP_STYLE, STYLE_DOT);
+         ObjectSetString(0, tpLineName, OBJPROP_TEXT, "TP SELL: " + DoubleToString(tpPrice, _Digits));
+      }
+      
+      // SL Line for SELL
+      if(InpShowSLLine && InpUseSLPoints)
+      {
+         double slPrice = CalculateSLPrice(POSITION_TYPE_SELL, avgSell);
+         string slLineName = TPPrefix + "SLSell";
+         ObjectCreate(0, slLineName, OBJ_HLINE, 0, 0, slPrice);
+         ObjectSetInteger(0, slLineName, OBJPROP_COLOR, InpSLLineColor);
+         ObjectSetInteger(0, slLineName, OBJPROP_WIDTH, 2);
+         ObjectSetInteger(0, slLineName, OBJPROP_STYLE, STYLE_DOT);
+         ObjectSetString(0, slLineName, OBJPROP_TEXT, "SL SELL: " + DoubleToString(slPrice, _Digits));
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Close positions by type                                            |
+//+------------------------------------------------------------------+
+double ClosePositionsByType(ENUM_POSITION_TYPE posType)
+{
+   double closedProfit = 0;
+   
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      if(PositionGetSymbol(i) == _Symbol)
+      {
+         if(PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
+         {
+            if(PositionGetInteger(POSITION_TYPE) == posType)
+            {
+               closedProfit += PositionGetDouble(POSITION_PROFIT);
+               ulong ticket = PositionGetInteger(POSITION_TICKET);
+               trade.PositionClose(ticket);
+            }
+         }
+      }
+   }
+   
+   // Reset grid counters for this side
+   if(posType == POSITION_TYPE_BUY)
+   {
+      GridBuyCount = 0;
+      InitialBuyBarTime = 0;
+   }
+   else
+   {
+      GridSellCount = 0;
+      InitialSellBarTime = 0;
+   }
+   
+   return closedProfit;
+}
+
+//+------------------------------------------------------------------+
 //| Close All Positions                                                |
 //+------------------------------------------------------------------+
 void CloseAllPositions()
@@ -809,34 +1053,159 @@ void CloseAllPositions()
       }
    }
    
-   // Reset grid counters
+   // Reset all counters
    GridBuyCount = 0;
    GridSellCount = 0;
    InitialBuyBarTime = 0;
    InitialSellBarTime = 0;
+   AccumulatedProfit = 0;
 }
 
 //+------------------------------------------------------------------+
-//| Check Close All Conditions                                         |
+//| Check TP/SL Conditions (Advanced Close Logic)                      |
 //+------------------------------------------------------------------+
-void CheckCloseAllConditions()
+void CheckTPSLConditions()
 {
+   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
    double totalPL = GetTotalFloatingPL();
+   double buyPL = GetFloatingPLByType(POSITION_TYPE_BUY);
+   double sellPL = GetFloatingPLByType(POSITION_TYPE_SELL);
    
-   // Check Close All at Target Profit
-   if(InpUseCloseAllProfit && totalPL >= InpCloseAllProfitAmount)
+   int buyCount = CountPositions(POSITION_TYPE_BUY);
+   int sellCount = CountPositions(POSITION_TYPE_SELL);
+   
+   double avgBuy, lotsBuy, avgSell, lotsSell;
+   GetAveragePriceAndLots(POSITION_TYPE_BUY, avgBuy, lotsBuy);
+   GetAveragePriceAndLots(POSITION_TYPE_SELL, avgSell, lotsSell);
+   
+   double currentBid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double currentAsk = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   
+   // ========== TAKE PROFIT LOGIC ==========
+   
+   // 1. TP Fixed Dollar - Close each side when reaches target
+   if(InpUseTPDollar)
    {
-      Print("Close All - Target Profit Reached: $", totalPL);
-      CloseAllPositions();
-      return;
+      if(buyPL >= InpTPDollarAmount && buyCount > 0)
+      {
+         Print("TP Dollar - BUY side reached $", buyPL);
+         double closed = ClosePositionsByType(POSITION_TYPE_BUY);
+         if(InpUseGroupTP) AccumulatedProfit += closed;
+      }
+      if(sellPL >= InpTPDollarAmount && sellCount > 0)
+      {
+         Print("TP Dollar - SELL side reached $", sellPL);
+         double closed = ClosePositionsByType(POSITION_TYPE_SELL);
+         if(InpUseGroupTP) AccumulatedProfit += closed;
+      }
    }
    
-   // Check Close All at Max Loss
-   if(InpUseCloseAllLoss && totalPL <= -InpCloseAllLossAmount)
+   // 2. TP in Points - Close when price reaches TP from average
+   if(InpUseTPPoints)
    {
-      Print("Close All - Max Loss Reached: $", totalPL);
-      CloseAllPositions();
-      return;
+      if(buyCount > 0 && avgBuy > 0)
+      {
+         double tpPrice = CalculateTPPrice(POSITION_TYPE_BUY, avgBuy);
+         if(currentBid >= tpPrice)
+         {
+            Print("TP Points - BUY side hit TP at ", tpPrice);
+            double closed = ClosePositionsByType(POSITION_TYPE_BUY);
+            if(InpUseGroupTP) AccumulatedProfit += closed;
+         }
+      }
+      if(sellCount > 0 && avgSell > 0)
+      {
+         double tpPrice = CalculateTPPrice(POSITION_TYPE_SELL, avgSell);
+         if(currentAsk <= tpPrice)
+         {
+            Print("TP Points - SELL side hit TP at ", tpPrice);
+            double closed = ClosePositionsByType(POSITION_TYPE_SELL);
+            if(InpUseGroupTP) AccumulatedProfit += closed;
+         }
+      }
+   }
+   
+   // 3. TP Percent of Balance
+   if(InpUseTPPercent)
+   {
+      double tpAmount = balance * InpTPPercent / 100.0;
+      if(buyPL >= tpAmount && buyCount > 0)
+      {
+         Print("TP Percent - BUY side reached ", InpTPPercent, "% ($", buyPL, ")");
+         double closed = ClosePositionsByType(POSITION_TYPE_BUY);
+         if(InpUseGroupTP) AccumulatedProfit += closed;
+      }
+      if(sellPL >= tpAmount && sellCount > 0)
+      {
+         Print("TP Percent - SELL side reached ", InpTPPercent, "% ($", sellPL, ")");
+         double closed = ClosePositionsByType(POSITION_TYPE_SELL);
+         if(InpUseGroupTP) AccumulatedProfit += closed;
+      }
+   }
+   
+   // 4. Group TP (Accumulated Profit)
+   if(InpUseGroupTP)
+   {
+      double combinedProfit = AccumulatedProfit + totalPL;
+      if(combinedProfit >= InpGroupTPAmount)
+      {
+         Print("Group TP Reached! Accumulated: $", AccumulatedProfit, " + Current: $", totalPL, " = $", combinedProfit);
+         CloseAllPositions();
+         AccumulatedProfit = 0;  // Reset after closing all
+         return;
+      }
+   }
+   
+   // ========== STOP LOSS LOGIC ==========
+   
+   // 1. SL Fixed Dollar
+   if(InpUseSLDollar)
+   {
+      if(buyPL <= -InpSLDollarAmount && buyCount > 0)
+      {
+         Print("SL Dollar - BUY side hit $", -InpSLDollarAmount);
+         ClosePositionsByType(POSITION_TYPE_BUY);
+      }
+      if(sellPL <= -InpSLDollarAmount && sellCount > 0)
+      {
+         Print("SL Dollar - SELL side hit $", -InpSLDollarAmount);
+         ClosePositionsByType(POSITION_TYPE_SELL);
+      }
+   }
+   
+   // 2. SL in Points
+   if(InpUseSLPoints)
+   {
+      if(buyCount > 0 && avgBuy > 0)
+      {
+         double slPrice = CalculateSLPrice(POSITION_TYPE_BUY, avgBuy);
+         if(currentBid <= slPrice)
+         {
+            Print("SL Points - BUY side hit SL at ", slPrice);
+            ClosePositionsByType(POSITION_TYPE_BUY);
+         }
+      }
+      if(sellCount > 0 && avgSell > 0)
+      {
+         double slPrice = CalculateSLPrice(POSITION_TYPE_SELL, avgSell);
+         if(currentAsk >= slPrice)
+         {
+            Print("SL Points - SELL side hit SL at ", slPrice);
+            ClosePositionsByType(POSITION_TYPE_SELL);
+         }
+      }
+   }
+   
+   // 3. SL Percent of Balance
+   if(InpUseSLPercent)
+   {
+      double slAmount = balance * InpSLPercent / 100.0;
+      if(totalPL <= -slAmount)
+      {
+         Print("SL Percent - Total loss reached ", InpSLPercent, "% ($", totalPL, ")");
+         CloseAllPositions();
+         return;
+      }
    }
 }
 
@@ -1121,8 +1490,11 @@ void CheckGridProfitSide()
 //+------------------------------------------------------------------+
 void OnTick()
 {
-   // Check Close All conditions first
-   CheckCloseAllConditions();
+   // Check TP/SL conditions first (every tick)
+   CheckTPSLConditions();
+   
+   // Draw TP/SL lines (every tick for real-time update)
+   DrawTPSLLines();
    
    // Check Grid conditions (every tick for real-time)
    CheckGridLossSide();
@@ -1362,7 +1734,22 @@ void UpdateChartComment(string signal, string reason = "")
    text = text + "GRID STATUS:" + nl;
    text = text + "  BUY Positions: " + IntegerToString(CountPositions(POSITION_TYPE_BUY)) + nl;
    text = text + "  SELL Positions: " + IntegerToString(CountPositions(POSITION_TYPE_SELL)) + nl;
-   text = text + "  Total P/L: $" + DoubleToString(GetTotalFloatingPL(), 2) + nl;
+   text = text + "  Floating P/L: $" + DoubleToString(GetTotalFloatingPL(), 2) + nl;
+   
+   // Average Price Info
+   double avgBuy, lotsBuy, avgSell, lotsSell;
+   GetAveragePriceAndLots(POSITION_TYPE_BUY, avgBuy, lotsBuy);
+   GetAveragePriceAndLots(POSITION_TYPE_SELL, avgSell, lotsSell);
+   
+   if(avgBuy > 0)
+      text = text + "  AVG BUY: " + DoubleToString(avgBuy, _Digits) + nl;
+   if(avgSell > 0)
+      text = text + "  AVG SELL: " + DoubleToString(avgSell, _Digits) + nl;
+   
+   // Group TP Info
+   if(InpUseGroupTP)
+      text = text + "  Accumulated: $" + DoubleToString(AccumulatedProfit, 2) + nl;
+   
    text = text + "---------------------------------" + nl;
    text = text + "SIGNAL: " + signal + nl;
    if(reason != "") text = text + "Reason: " + reason + nl;
