@@ -202,8 +202,9 @@ string ZZPrefix = "ZZ_";
 string CDCPrefix = "CDC_";
 string TPPrefix = "TP_";
 
-// ZigZag tracking for confirmed points
-datetime LastConfirmedZZTime = 0;
+// Extra chart for viewing ZigZag timeframe objects
+long ZZTFChartId = 0;
+
 
 // Grid Tracking
 datetime InitialBuyBarTime = 0;
@@ -226,6 +227,7 @@ int OnInit()
    Print("ZigZag++ CDC Structure EA v4.0 + Grid");
    Print("Symbol: ", _Symbol);
    Print("Entry TF: ", EnumToString(Period()));
+   Print("ZigZag TF: ", EnumToString(InpZigZagTimeframe));
    Print("CDC Filter TF: ", EnumToString(InpCDCTimeframe));
    Print("Trade Mode: ", EnumToString(InpTradeMode));
    Print("Lot Mode: ", EnumToString(InpLotMode));
@@ -234,6 +236,17 @@ int OnInit()
    Print("===========================================");
    
    trade.SetExpertMagicNumber(InpMagicNumber);
+   
+   // Open a chart for the selected ZigZag timeframe (so you can SEE the objects there)
+   ZZTFChartId = 0;
+   if(InpZigZagTimeframe != PERIOD_CURRENT && InpZigZagTimeframe != Period())
+   {
+      ZZTFChartId = ChartOpen(_Symbol, InpZigZagTimeframe);
+      if(ZZTFChartId > 0)
+         Print("ZigZag TF chart opened: ", ZZTFChartId, " (", EnumToString(InpZigZagTimeframe), ")");
+      else
+         Print("WARNING: Could not open ZigZag TF chart for ", EnumToString(InpZigZagTimeframe));
+   }
    
    // Reset counters
    LastConfirmedZZTime = 0;
@@ -251,10 +264,18 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
-   // Remove all chart objects
+   // Remove all chart objects (current chart)
    ObjectsDeleteAll(0, ZZPrefix);
    ObjectsDeleteAll(0, CDCPrefix);
    ObjectsDeleteAll(0, TPPrefix);
+   
+   // Remove ZigZag objects from the ZigZag timeframe chart (if opened)
+   if(ZZTFChartId > 0)
+   {
+      ObjectsDeleteAll(ZZTFChartId, ZZPrefix);
+      ChartClose(ZZTFChartId);
+      ZZTFChartId = 0;
+   }
    
    Comment("");
    Print("EA Stopped - Reason: ", reason);
@@ -673,19 +694,21 @@ void DrawZigZagOnChart()
       }
       
       // === Draw on ZIGZAG TIMEFRAME (original times) - for viewing in that TF ===
-      if(drawBothTimeframes)
+      // NOTE: Objects only appear on the chart they are created on.
+      // We therefore create them on a dedicated chart for InpZigZagTimeframe.
+      if(drawBothTimeframes && ZZTFChartId > 0)
       {
          if(InpShowLines)
          {
             string lineName = ZZPrefix + "TF_Line_" + IntegerToString(i);
             color lineColor = (p1.direction == 1) ? InpBearColor : InpBullColor;
             
-            ObjectCreate(0, lineName, OBJ_TREND, 0, p2.time, p2.price, p1.time, p1.price);
-            ObjectSetInteger(0, lineName, OBJPROP_COLOR, lineColor);
-            ObjectSetInteger(0, lineName, OBJPROP_WIDTH, 2);
-            ObjectSetInteger(0, lineName, OBJPROP_RAY_RIGHT, false);
-            ObjectSetInteger(0, lineName, OBJPROP_SELECTABLE, false);
-            ObjectSetInteger(0, lineName, OBJPROP_BACK, false);
+            ObjectCreate(ZZTFChartId, lineName, OBJ_TREND, 0, p2.time, p2.price, p1.time, p1.price);
+            ObjectSetInteger(ZZTFChartId, lineName, OBJPROP_COLOR, lineColor);
+            ObjectSetInteger(ZZTFChartId, lineName, OBJPROP_WIDTH, 2);
+            ObjectSetInteger(ZZTFChartId, lineName, OBJPROP_RAY_RIGHT, false);
+            ObjectSetInteger(ZZTFChartId, lineName, OBJPROP_SELECTABLE, false);
+            ObjectSetInteger(ZZTFChartId, lineName, OBJPROP_BACK, false);
          }
          
          if(InpShowLabels)
@@ -694,12 +717,12 @@ void DrawZigZagOnChart()
             color labelColor = (p1.label == "LL" || p1.label == "HL") ? InpBullColor : InpBearColor;
             ENUM_ANCHOR_POINT anchor = (p1.direction == 1) ? ANCHOR_LOWER : ANCHOR_UPPER;
             
-            ObjectCreate(0, labelName, OBJ_TEXT, 0, p1.time, p1.price);
-            ObjectSetString(0, labelName, OBJPROP_TEXT, p1.label);
-            ObjectSetInteger(0, labelName, OBJPROP_COLOR, labelColor);
-            ObjectSetInteger(0, labelName, OBJPROP_FONTSIZE, 10);
-            ObjectSetString(0, labelName, OBJPROP_FONT, "Arial Bold");
-            ObjectSetInteger(0, labelName, OBJPROP_ANCHOR, anchor);
+            ObjectCreate(ZZTFChartId, labelName, OBJ_TEXT, 0, p1.time, p1.price);
+            ObjectSetString(ZZTFChartId, labelName, OBJPROP_TEXT, p1.label);
+            ObjectSetInteger(ZZTFChartId, labelName, OBJPROP_COLOR, labelColor);
+            ObjectSetInteger(ZZTFChartId, labelName, OBJPROP_FONTSIZE, 10);
+            ObjectSetString(ZZTFChartId, labelName, OBJPROP_FONT, "Arial Bold");
+            ObjectSetInteger(ZZTFChartId, labelName, OBJPROP_ANCHOR, anchor);
          }
       }
    }
@@ -724,15 +747,15 @@ void DrawZigZagOnChart()
       ObjectSetInteger(0, labelName, OBJPROP_ANCHOR, anchor);
       
       // ZigZag Timeframe
-      if(drawBothTimeframes)
+      if(drawBothTimeframes && ZZTFChartId > 0)
       {
          string labelNameTF = ZZPrefix + "TF_Label_" + IntegerToString(last);
-         ObjectCreate(0, labelNameTF, OBJ_TEXT, 0, ZZPoints[last].time, ZZPoints[last].price);
-         ObjectSetString(0, labelNameTF, OBJPROP_TEXT, ZZPoints[last].label);
-         ObjectSetInteger(0, labelNameTF, OBJPROP_COLOR, labelColor);
-         ObjectSetInteger(0, labelNameTF, OBJPROP_FONTSIZE, 10);
-         ObjectSetString(0, labelNameTF, OBJPROP_FONT, "Arial Bold");
-         ObjectSetInteger(0, labelNameTF, OBJPROP_ANCHOR, anchor);
+         ObjectCreate(ZZTFChartId, labelNameTF, OBJ_TEXT, 0, ZZPoints[last].time, ZZPoints[last].price);
+         ObjectSetString(ZZTFChartId, labelNameTF, OBJPROP_TEXT, ZZPoints[last].label);
+         ObjectSetInteger(ZZTFChartId, labelNameTF, OBJPROP_COLOR, labelColor);
+         ObjectSetInteger(ZZTFChartId, labelNameTF, OBJPROP_FONTSIZE, 10);
+         ObjectSetString(ZZTFChartId, labelNameTF, OBJPROP_FONT, "Arial Bold");
+         ObjectSetInteger(ZZTFChartId, labelNameTF, OBJPROP_ANCHOR, anchor);
       }
    }
 }
