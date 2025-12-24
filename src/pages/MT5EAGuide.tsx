@@ -773,10 +773,10 @@ void CheckReEntry()
       
       Print("Order Closed - Checking Re-Entry Opportunity");
       
-      // Check BUY Re-Entry: SELL closed + LL/LH + CDC BULLISH
+      // Check BUY Re-Entry: SELL closed + LL/HL (Low points) + CDC BULLISH
       if(dealType == DEAL_TYPE_BUY)
       {
-         if(CDCTrend == "BULLISH" && (LastZZLabel == "LL" || LastZZLabel == "LH"))
+         if(CDCTrend == "BULLISH" && (LastZZLabel == "LL" || LastZZLabel == "HL"))
          {
             if(ReEntryBuyCount < InpReEntryMaxCount)
             {
@@ -790,10 +790,10 @@ void CheckReEntry()
          }
       }
       
-      // Check SELL Re-Entry: BUY closed + HH/HL + CDC BEARISH
+      // Check SELL Re-Entry: BUY closed + HH/LH (High points) + CDC BEARISH
       if(dealType == DEAL_TYPE_SELL)
       {
-         if(CDCTrend == "BEARISH" && (LastZZLabel == "HH" || LastZZLabel == "HL"))
+         if(CDCTrend == "BEARISH" && (LastZZLabel == "HH" || LastZZLabel == "LH"))
          {
             if(ReEntrySelCount < InpReEntryMaxCount)
             {
@@ -813,8 +813,8 @@ void CheckReEntry()
 
 //+------------------------------------------------------------------+
 //| Analyze Signal - Based on ZigZag++ Labels                          |
-//| BUY: ZigZag closed at LL or LH + CDC BULLISH                       |
-//| SELL: ZigZag closed at HH or HL + CDC BEARISH                      |
+//| BUY: ZigZag closed at LL or HL (Low points - Green labels)         |
+//| SELL: ZigZag closed at HH or LH (High points - Red labels)         |
 //+------------------------------------------------------------------+
 string AnalyzeSignal()
 {
@@ -823,15 +823,15 @@ string AnalyzeSignal()
    
    Print("Last ZigZag++ Label: ", LastZZLabel, " | CDC Trend: ", CDCTrend);
    
-   // BUY Signal: ZigZag closed at LL or LH (Low points)
-   if(LastZZLabel == "LL" || LastZZLabel == "LH")
+   // BUY Signal: ZigZag closed at LL or HL (Low points - bottom of swing)
+   if(LastZZLabel == "LL" || LastZZLabel == "HL")
    {
       Print("ZigZag++ LOW point detected (", LastZZLabel, ") - Checking BUY conditions");
       return "BUY";
    }
    
-   // SELL Signal: ZigZag closed at HH or HL (High points)
-   if(LastZZLabel == "HH" || LastZZLabel == "HL")
+   // SELL Signal: ZigZag closed at HH or LH (High points - top of swing)
+   if(LastZZLabel == "HH" || LastZZLabel == "LH")
    {
       Print("ZigZag++ HIGH point detected (", LastZZLabel, ") - Checking SELL conditions");
       return "SELL";
