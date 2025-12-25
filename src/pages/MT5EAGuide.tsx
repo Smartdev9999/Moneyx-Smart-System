@@ -331,6 +331,7 @@ double BBBasis = 0;
 string BBSignal = "NONE";  // "BUY", "SELL", "NONE"
 datetime LastBBSignalTime = 0;
 string BBPrefix = "BB_";
+int BBHandle = INVALID_HANDLE;  // Bollinger Bands indicator handle
 
 // Bollinger Bands Signal Reset
 bool g_bbBuyResetPhaseBelowBand = false;   // Price has touched/closed above upper band
@@ -410,10 +411,39 @@ int OnInit()
    // Reset counters
    LastConfirmedZZTime = 0;
    LastEMASignalTime = 0;
+   LastBBSignalTime = 0;
    GridBuyCount = 0;
    GridSellCount = 0;
    InitialBuyBarTime = 0;
    InitialSellBarTime = 0;
+   
+   // Initialize Bollinger Bands indicator handle
+   if(InpSignalStrategy == STRATEGY_BOLLINGER)
+   {
+      // Get MA method for iBands
+      ENUM_MA_METHOD maMethod = MODE_SMA;
+      if(InpBBMAType == BB_MA_EMA) maMethod = MODE_EMA;
+      else if(InpBBMAType == BB_MA_SMMA) maMethod = MODE_SMMA;
+      else if(InpBBMAType == BB_MA_WMA) maMethod = MODE_LWMA;
+      
+      BBHandle = iBands(_Symbol, InpBBTimeframe, InpBBPeriod, 0, InpBBDeviation, PRICE_CLOSE);
+      
+      if(BBHandle == INVALID_HANDLE)
+      {
+         Print("ERROR: Failed to create Bollinger Bands indicator handle!");
+      }
+      else
+      {
+         Print("Bollinger Bands indicator initialized - Period: ", InpBBPeriod, " | Deviation: ", InpBBDeviation);
+         
+         // Add BB indicator to chart for visual display
+         if(InpShowBBLines)
+         {
+            ChartIndicatorAdd(0, 0, BBHandle);
+            Print("Bollinger Bands indicator added to chart");
+         }
+      }
+   }
    
    Print("Signal Strategy: ", EnumToString(InpSignalStrategy));
    Print("EA Started Successfully!");
@@ -431,6 +461,16 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, TPPrefix);
    ObjectsDeleteAll(0, EMAPrefix);
    ObjectsDeleteAll(0, PAPrefix);  // Remove PA arrows and labels
+   ObjectsDeleteAll(0, BBPrefix);  // Remove BB objects
+   
+   // Release Bollinger Bands indicator handle
+   if(BBHandle != INVALID_HANDLE)
+   {
+      // Remove indicator from chart before releasing handle
+      ChartIndicatorDelete(0, 0, ChartIndicatorName(0, 0, ChartIndicatorsTotal(0, 0) - 1));
+      IndicatorRelease(BBHandle);
+      BBHandle = INVALID_HANDLE;
+   }
    
    // Remove ZigZag objects from the ZigZag timeframe chart (if opened)
    if(ZZTFChartId > 0)
@@ -3463,69 +3503,36 @@ string AnalyzeEMAChannelSignal()
 //+------------------------------------------------------------------+
 void CalculateBollingerBands()
 {
-   double closeArr[];
-   ArraySetAsSeries(closeArr, true);
-   
-   int barsNeeded = InpBBPeriod + 10;
-   if(CopyClose(_Symbol, InpBBTimeframe, 0, barsNeeded, closeArr) < barsNeeded)
+   // Use iBands indicator handle for accurate calculation
+   if(BBHandle == INVALID_HANDLE)
    {
-      Print("Warning: Not enough data for Bollinger Bands calculation");
+      Print("Warning: Bollinger Bands handle not initialized");
       return;
    }
    
-   // Calculate MA (Basis) based on selected type
-   double sum = 0;
+   double upperArr[], lowerArr[], basisArr[];
+   ArraySetAsSeries(upperArr, true);
+   ArraySetAsSeries(lowerArr, true);
+   ArraySetAsSeries(basisArr, true);
    
-   if(InpBBMAType == BB_MA_SMA)
-   {
-      // Simple Moving Average
-      for(int i = 0; i < InpBBPeriod; i++)
-         sum += closeArr[i];
-      BBBasis = sum / InpBBPeriod;
-   }
-   else if(InpBBMAType == BB_MA_EMA)
-   {
-      // Exponential Moving Average
-      double multiplier = 2.0 / (InpBBPeriod + 1);
-      BBBasis = closeArr[InpBBPeriod - 1];
-      for(int i = InpBBPeriod - 2; i >= 0; i--)
-         BBBasis = (closeArr[i] - BBBasis) * multiplier + BBBasis;
-   }
-   else if(InpBBMAType == BB_MA_SMMA)
-   {
-      // Smoothed Moving Average (RMA)
-      for(int i = 0; i < InpBBPeriod; i++)
-         sum += closeArr[i];
-      BBBasis = sum / InpBBPeriod;
-   }
-   else if(InpBBMAType == BB_MA_WMA)
-   {
-      // Weighted Moving Average
-      double weightSum = 0;
-      for(int i = 0; i < InpBBPeriod; i++)
-      {
-         int weight = InpBBPeriod - i;
-         sum += closeArr[i] * weight;
-         weightSum += weight;
-      }
-      BBBasis = sum / weightSum;
-   }
+   // Copy buffer data from indicator
+   // Buffer 0 = Base (Middle), Buffer 1 = Upper, Buffer 2 = Lower
+   if(CopyBuffer(BBHandle, 0, 0, 10, basisArr) < 10) return;
+   if(CopyBuffer(BBHandle, 1, 0, 10, upperArr) < 10) return;
+   if(CopyBuffer(BBHandle, 2, 0, 10, lowerArr) < 10) return;
    
-   // Calculate Standard Deviation
-   double variance = 0;
-   for(int i = 0; i < InpBBPeriod; i++)
-   {
-      double diff = closeArr[i] - BBBasis;
-      variance += diff * diff;
-   }
-   double stdDev = MathSqrt(variance / InpBBPeriod);
-   
-   // Calculate Upper and Lower Bands
-   BBUpper = BBBasis + (InpBBDeviation * stdDev);
-   BBLower = BBBasis - (InpBBDeviation * stdDev);
-   
-   // Determine signal based on close position relative to bands
+   // Get values at signal bar
    int signalBar = (InpBBSignalBar == EMA_CURRENT_BAR) ? 0 : 1;
+   
+   BBBasis = basisArr[signalBar];
+   BBUpper = upperArr[signalBar];
+   BBLower = lowerArr[signalBar];
+   
+   // Get close price at signal bar
+   double closeArr[];
+   ArraySetAsSeries(closeArr, true);
+   if(CopyClose(_Symbol, InpBBTimeframe, 0, 10, closeArr) < 10) return;
+   
    double signalClose = closeArr[signalBar];
    
    // SELL signal: Price closes ABOVE upper band
@@ -3543,47 +3550,8 @@ void CalculateBollingerBands()
       BBSignal = "NONE";
    }
    
-   // Draw Bollinger Bands lines on chart
-   if(InpShowBBLines)
-   {
-      DrawBollingerLines();
-   }
-}
-
-//+------------------------------------------------------------------+
-//| Draw Bollinger Bands Lines on Chart                                |
-//+------------------------------------------------------------------+
-void DrawBollingerLines()
-{
-   datetime time0 = iTime(_Symbol, InpBBTimeframe, 0);
-   datetime time1 = iTime(_Symbol, InpBBTimeframe, 1);
-   
-   // Upper Band Line
-   string upperName = BBPrefix + "Upper";
-   ObjectDelete(0, upperName);
-   ObjectCreate(0, upperName, OBJ_TREND, 0, time1, BBUpper, time0, BBUpper);
-   ObjectSetInteger(0, upperName, OBJPROP_COLOR, InpBBUpperColor);
-   ObjectSetInteger(0, upperName, OBJPROP_WIDTH, 2);
-   ObjectSetInteger(0, upperName, OBJPROP_RAY_RIGHT, true);
-   ObjectSetInteger(0, upperName, OBJPROP_STYLE, STYLE_SOLID);
-   
-   // Lower Band Line
-   string lowerName = BBPrefix + "Lower";
-   ObjectDelete(0, lowerName);
-   ObjectCreate(0, lowerName, OBJ_TREND, 0, time1, BBLower, time0, BBLower);
-   ObjectSetInteger(0, lowerName, OBJPROP_COLOR, InpBBLowerColor);
-   ObjectSetInteger(0, lowerName, OBJPROP_WIDTH, 2);
-   ObjectSetInteger(0, lowerName, OBJPROP_RAY_RIGHT, true);
-   ObjectSetInteger(0, lowerName, OBJPROP_STYLE, STYLE_SOLID);
-   
-   // Basis (Middle) Line
-   string basisName = BBPrefix + "Basis";
-   ObjectDelete(0, basisName);
-   ObjectCreate(0, basisName, OBJ_TREND, 0, time1, BBBasis, time0, BBBasis);
-   ObjectSetInteger(0, basisName, OBJPROP_COLOR, InpBBBasisColor);
-   ObjectSetInteger(0, basisName, OBJPROP_WIDTH, 1);
-   ObjectSetInteger(0, basisName, OBJPROP_RAY_RIGHT, true);
-   ObjectSetInteger(0, basisName, OBJPROP_STYLE, STYLE_DOT);
+   // Note: Bollinger Bands lines are displayed via ChartIndicatorAdd() in OnInit()
+   // No need to draw objects manually - the indicator handle displays the lines automatically
 }
 
 //+------------------------------------------------------------------+
