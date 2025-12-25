@@ -426,36 +426,59 @@ void ParseStringToIntArray(string inputStr, int &arr[])
 
 //+------------------------------------------------------------------+
 //| Get Lot Size for Grid based on level                               |
-//| gridLevel = 0 is the FIRST order (uses InitialLot)                |
-//| gridLevel = 1,2,3... are GRID orders                              |
+//| *** Grid Loss และ Grid Profit แยกนับ level กันอิสระ ***            |
+//|                                                                    |
+//| Initial Order = level 0 = InpInitialLot (เป็นตัวกลาง)               |
+//|                                                                    |
+//| Grid Loss Side:                                                    |
+//|   - gridLevel = 1 = First Grid Loss = InitialLot + AddLotLoss      |
+//|   - gridLevel = 2 = Second Grid Loss = InitialLot + AddLotLoss*2   |
+//|                                                                    |
+//| Grid Profit Side:                                                  |
+//|   - gridLevel = 1 = First Grid Profit = InitialLot + AddLotProfit  |
+//|   - gridLevel = 2 = Second Grid Profit = InitialLot + AddLotProfit*2|
+//|                                                                    |
+//| ตัวอย่าง: InitialLot=1, AddLotLoss=1, AddLotProfit=0.5            |
+//|   Initial Order: 1.0 lot                                           |
+//|   Grid Profit #1: 1.0 + 0.5*1 = 1.5 lot                            |
+//|   Grid Loss #1: 1.0 + 1.0*1 = 2.0 lot                              |
+//|   Grid Profit #2: 1.0 + 0.5*2 = 2.0 lot                            |
+//|   Grid Loss #2: 1.0 + 1.0*2 = 3.0 lot                              |
 //+------------------------------------------------------------------+
 double GetGridLotSize(bool isLossSide, int gridLevel)
 {
    ENUM_GRID_LOT_MODE lotMode = isLossSide ? InpGridLossLotMode : InpGridProfitLotMode;
    double calculatedLot = InpInitialLot;
    
-   if(lotMode == GRID_LOT_CUSTOM)
+   // gridLevel = 0 means Initial Order (uses InitialLot only)
+   if(gridLevel == 0)
+   {
+      calculatedLot = InpInitialLot;
+   }
+   else if(lotMode == GRID_LOT_CUSTOM)
    {
       // Custom Lot Mode: Use the lot array from string
+      // Index 0 = First Grid order (not Initial Order)
       double lots[];
       if(isLossSide)
          ParseStringToDoubleArray(InpGridLossCustomLot, lots);
       else
          ParseStringToDoubleArray(InpGridProfitCustomLot, lots);
       
-      if(gridLevel < ArraySize(lots))
-         calculatedLot = lots[gridLevel];
+      int idx = gridLevel - 1;  // Adjust for 0-based array
+      if(idx < ArraySize(lots))
+         calculatedLot = lots[idx];
       else if(ArraySize(lots) > 0)
          calculatedLot = lots[ArraySize(lots) - 1];  // Use last value for levels beyond array
    }
    else  // GRID_LOT_ADD
    {
       // Add Lot Mode: InitialLot + (AddLot * gridLevel)
+      // Grid Loss และ Grid Profit ใช้ AddLot ของตัวเอง แยกกันอิสระ
       double addLot = isLossSide ? InpGridLossAddLot : InpGridProfitAddLot;
       
-      // Grid level 0 = First order = Initial Lot
-      // Grid level 1 = Second order = Initial Lot + AddLot
-      // Grid level 2 = Third order = Initial Lot + AddLot*2
+      // gridLevel = 1 = First Grid = InitialLot + AddLot*1
+      // gridLevel = 2 = Second Grid = InitialLot + AddLot*2
       calculatedLot = InpInitialLot + (addLot * gridLevel);
    }
    
@@ -2677,18 +2700,22 @@ void CheckGridLossSide()
          return;
       
       double lastBuyPrice = GetLastPositionPrice(POSITION_TYPE_BUY);
-      int gridLevel = buyCount;
-      int distance = GetGridDistance(true, gridLevel - 1);
+      
+      // *** Grid Loss นับ level แยกจาก Grid Profit ***
+      // buyGridLossCount = จำนวน Grid Loss orders ที่มีอยู่แล้ว (ไม่รวม Initial Order)
+      // gridLevel สำหรับ Grid Loss = buyGridLossCount + 1 (ออเดอร์ถัดไป)
+      int gridLossLevel = buyGridLossCount + 1;
+      int distance = GetGridDistance(true, buyGridLossCount);
       
       // Price went DOWN from last buy by grid distance
       if(lastBuyPrice - currentPrice >= distance * _Point)
       {
-         double lot = GetGridLotSize(true, gridLevel);
+         double lot = GetGridLotSize(true, gridLossLevel);
          double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
          
-         Print("Grid Loss BUY #", gridLevel, " | Lot: ", lot, " | Distance: ", distance);
+         Print("Grid Loss BUY #", gridLossLevel, " | Lot: ", lot, " | Distance: ", distance);
          
-         if(trade.Buy(lot, _Symbol, price, 0, 0, "Grid Loss BUY #" + IntegerToString(gridLevel)))
+         if(trade.Buy(lot, _Symbol, price, 0, 0, "Grid Loss BUY #" + IntegerToString(gridLossLevel)))
          {
             LastGridBuyTime = currentBarTime;
             GridBuyCount = buyCount + 1;
@@ -2715,18 +2742,22 @@ void CheckGridLossSide()
          return;
       
       double lastSellPrice = GetLastPositionPrice(POSITION_TYPE_SELL);
-      int gridLevel = sellCount;
-      int distance = GetGridDistance(true, gridLevel - 1);
+      
+      // *** Grid Loss นับ level แยกจาก Grid Profit ***
+      // sellGridLossCount = จำนวน Grid Loss orders ที่มีอยู่แล้ว (ไม่รวม Initial Order)
+      // gridLevel สำหรับ Grid Loss = sellGridLossCount + 1 (ออเดอร์ถัดไป)
+      int gridLossLevel = sellGridLossCount + 1;
+      int distance = GetGridDistance(true, sellGridLossCount);
       
       // Price went UP from last sell by grid distance
       if(currentPrice - lastSellPrice >= distance * _Point)
       {
-         double lot = GetGridLotSize(true, gridLevel);
+         double lot = GetGridLotSize(true, gridLossLevel);
          double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
          
-         Print("Grid Loss SELL #", gridLevel, " | Lot: ", lot, " | Distance: ", distance);
+         Print("Grid Loss SELL #", gridLossLevel, " | Lot: ", lot, " | Distance: ", distance);
          
-         if(trade.Sell(lot, _Symbol, price, 0, 0, "Grid Loss SELL #" + IntegerToString(gridLevel)))
+         if(trade.Sell(lot, _Symbol, price, 0, 0, "Grid Loss SELL #" + IntegerToString(gridLossLevel)))
          {
             LastGridSellTime = currentBarTime;
             GridSellCount = sellCount + 1;
