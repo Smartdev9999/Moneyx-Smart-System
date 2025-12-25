@@ -1102,9 +1102,10 @@ void DrawEMAChannelOnChart(double &emaHigh[], double &emaLow[], datetime &time[]
 {
    ObjectsDeleteAll(0, EMAPrefix);
    
-   int maxBars = MathMin(100, size - 1);
+   // Extended to show full chart - use 500 bars for maximum visibility
+   int maxBars = MathMin(500, size - 1);
    
-   // Draw EMA High line
+   // Draw EMA High line with smooth style
    for(int i = 0; i < maxBars; i++)
    {
       string lineName = EMAPrefix + "High_" + IntegerToString(i);
@@ -1114,11 +1115,13 @@ void DrawEMAChannelOnChart(double &emaHigh[], double &emaLow[], datetime &time[]
       ObjectCreate(0, lineName, OBJ_TREND, 0, t1, emaHigh[i + 1], t2, emaHigh[i]);
       ObjectSetInteger(0, lineName, OBJPROP_COLOR, InpEMAHighColor);
       ObjectSetInteger(0, lineName, OBJPROP_WIDTH, 2);
+      ObjectSetInteger(0, lineName, OBJPROP_STYLE, STYLE_SOLID);  // Smooth solid line
       ObjectSetInteger(0, lineName, OBJPROP_RAY_RIGHT, false);
       ObjectSetInteger(0, lineName, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(0, lineName, OBJPROP_BACK, true);  // Draw in background for smoother appearance
    }
    
-   // Draw EMA Low line
+   // Draw EMA Low line with smooth style
    for(int i = 0; i < maxBars; i++)
    {
       string lineName = EMAPrefix + "Low_" + IntegerToString(i);
@@ -1128,8 +1131,10 @@ void DrawEMAChannelOnChart(double &emaHigh[], double &emaLow[], datetime &time[]
       ObjectCreate(0, lineName, OBJ_TREND, 0, t1, emaLow[i + 1], t2, emaLow[i]);
       ObjectSetInteger(0, lineName, OBJPROP_COLOR, InpEMALowColor);
       ObjectSetInteger(0, lineName, OBJPROP_WIDTH, 2);
+      ObjectSetInteger(0, lineName, OBJPROP_STYLE, STYLE_SOLID);  // Smooth solid line
       ObjectSetInteger(0, lineName, OBJPROP_RAY_RIGHT, false);
       ObjectSetInteger(0, lineName, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(0, lineName, OBJPROP_BACK, true);  // Draw in background for smoother appearance
    }
    
    // Draw status label
