@@ -985,25 +985,29 @@ void CalculateEMAChannel()
    double prevEMALow = emaLowArr[prevBar];
    
    // Check for EMA Channel crossover
-   // BUY Signal: Price crosses ABOVE both EMA lines (was below, now above)
-   bool wasBelow = (prevClose < prevEMALow);
-   bool isAbove = (signalClose > EMAHigh);
+   // BUY Signal: Price is NOW above both EMA lines AND was previously NOT above both (inside or below channel)
+   bool nowAboveBoth = (signalClose > EMAHigh && signalClose > EMALow);
+   bool prevNotAboveBoth = (prevClose <= prevEMAHigh || prevClose <= prevEMALow);
    
-   // SELL Signal: Price crosses BELOW both EMA lines (was above, now below)
-   bool wasAbove = (prevClose > prevEMAHigh);
-   bool isBelow = (signalClose < EMALow);
+   // SELL Signal: Price is NOW below both EMA lines AND was previously NOT below both (inside or above channel)
+   bool nowBelowBoth = (signalClose < EMAHigh && signalClose < EMALow);
+   bool prevNotBelowBoth = (prevClose >= prevEMALow || prevClose >= prevEMAHigh);
    
    EMASignal = "NONE";
    
-   if(wasBelow && isAbove)
+   if(nowAboveBoth && prevNotAboveBoth)
    {
       EMASignal = "BUY";
-      Print("EMA Channel: BUY Signal - Price crossed ABOVE channel | Close: ", signalClose, " > EMA High: ", EMAHigh);
+      Print("EMA Channel: BUY Signal - Price crossed ABOVE channel");
+      Print("  Signal Close: ", signalClose, " > EMA High: ", EMAHigh, " & EMA Low: ", EMALow);
+      Print("  Prev Close: ", prevClose, " | Prev EMA High: ", prevEMAHigh, " | Prev EMA Low: ", prevEMALow);
    }
-   else if(wasAbove && isBelow)
+   else if(nowBelowBoth && prevNotBelowBoth)
    {
       EMASignal = "SELL";
-      Print("EMA Channel: SELL Signal - Price crossed BELOW channel | Close: ", signalClose, " < EMA Low: ", EMALow);
+      Print("EMA Channel: SELL Signal - Price crossed BELOW channel");
+      Print("  Signal Close: ", signalClose, " < EMA Low: ", EMALow, " & EMA High: ", EMAHigh);
+      Print("  Prev Close: ", prevClose, " | Prev EMA High: ", prevEMAHigh, " | Prev EMA Low: ", prevEMALow);
    }
    
    // Draw EMA lines on chart
