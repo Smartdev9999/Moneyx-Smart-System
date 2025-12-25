@@ -3322,18 +3322,18 @@ void UpdateEMASignalResetStatus()
    double signalClose = closeArr[signalBar];
    
    // *** BUY SIGNAL RESET CHECK ***
-   // Step 1: Price must close BELOW both EMA lines
+   // Step 1: Price must close BELOW any EMA line (either one)
    // Step 2: Price must then close ABOVE both EMA lines again
    if(g_waitBuySignalReset)
    {
-      bool nowBelowBoth = (signalClose < EMAHigh && signalClose < EMALow);
+      bool nowBelowAny = (signalClose < EMAHigh || signalClose < EMALow);
       bool nowAboveBoth = (signalClose > EMAHigh && signalClose > EMALow);
       
-      if(!g_buyResetPhaseBelowEMA && nowBelowBoth)
+      if(!g_buyResetPhaseBelowEMA && nowBelowAny)
       {
-         // Step 1 complete: Price closed below EMA
+         // Step 1 complete: Price closed below any EMA line
          g_buyResetPhaseBelowEMA = true;
-         Print("*** BUY Reset Phase 1 Complete - Price closed BELOW EMA channel ***");
+         Print("*** BUY Reset Phase 1 Complete - Price closed BELOW EMA line ***");
       }
       else if(g_buyResetPhaseBelowEMA && nowAboveBoth)
       {
@@ -3345,18 +3345,18 @@ void UpdateEMASignalResetStatus()
    }
    
    // *** SELL SIGNAL RESET CHECK ***
-   // Step 1: Price must close ABOVE both EMA lines
+   // Step 1: Price must close ABOVE any EMA line (either one)
    // Step 2: Price must then close BELOW both EMA lines again
    if(g_waitSellSignalReset)
    {
-      bool nowAboveBoth = (signalClose > EMAHigh && signalClose > EMALow);
+      bool nowAboveAny = (signalClose > EMAHigh || signalClose > EMALow);
       bool nowBelowBoth = (signalClose < EMAHigh && signalClose < EMALow);
       
-      if(!g_sellResetPhaseAboveEMA && nowAboveBoth)
+      if(!g_sellResetPhaseAboveEMA && nowAboveAny)
       {
-         // Step 1 complete: Price closed above EMA
+         // Step 1 complete: Price closed above any EMA line
          g_sellResetPhaseAboveEMA = true;
-         Print("*** SELL Reset Phase 1 Complete - Price closed ABOVE EMA channel ***");
+         Print("*** SELL Reset Phase 1 Complete - Price closed ABOVE EMA line ***");
       }
       else if(g_sellResetPhaseAboveEMA && nowBelowBoth)
       {
