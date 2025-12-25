@@ -214,6 +214,8 @@ input bool     InpPATweezerBottom = true;     // Tweezer Bottom
 input bool     InpPAMorningStar = true;       // Morning Star (3-Candle)
 input bool     InpPAOutsideCandleBull = true; // Outside Candle Reversal (Bullish)
 input bool     InpPAPullbackBuy = true;       // Pullback Buy Pattern
+input bool     InpPAInsideCandleBull = true;  // Inside Candle Reversal (Bullish)
+input bool     InpPABullHotdog = true;        // Bullish Hotdog Pattern
 
 // Bearish PA Patterns
 input string   InpPABearHeader = "----- Bearish Patterns -----";  // ___
@@ -223,12 +225,15 @@ input bool     InpPATweezerTop = true;        // Tweezer Top
 input bool     InpPAEveningStar = true;       // Evening Star (3-Candle)
 input bool     InpPAOutsideCandleBear = true; // Outside Candle Reversal (Bearish)
 input bool     InpPAPullbackSell = true;      // Pullback Sell Pattern
+input bool     InpPAInsideCandleBear = true;  // Inside Candle Reversal (Bearish)
+input bool     InpPABearHotdog = true;        // Bearish Hotdog Pattern
 
 // PA Detection Settings
 input string   InpPASettingsHeader = "----- PA Detection Settings -----";  // ___
 input double   InpPAPinRatio = 2.0;           // Pin Bar Tail/Body Ratio (min)
 input double   InpPABodyMinRatio = 0.3;       // Engulfing Body Min Ratio (of range)
 input double   InpPADojiMaxRatio = 0.2;       // Doji Max Body Ratio (for indecision)
+input double   InpPASpinningTopRatio = 0.3;   // Spinning Top Max Body Ratio
 
 //--- [ TIME FILTER ] -----------------------------------------------
 input string   InpTimeHeader   = "=== TIME FILTER ===";  // ___
@@ -1544,6 +1549,147 @@ bool IsPullbackSell(int shift)
 }
 
 //+------------------------------------------------------------------+
+//| Detect Inside Candle Reversal (Bullish)                            |
+//| - 3 candle pattern: first candle, inside candle, then bullish     |
+//+------------------------------------------------------------------+
+bool IsInsideCandleBullish(int shift)
+{
+   if(!InpPAInsideCandleBull) return false;
+   if(shift < 2) return false;
+   
+   // Candle 1 (current): Must be bullish
+   if(!IsBullishCandle(shift)) return false;
+   
+   // Candle 2 (middle): Inside candle - high and low within candle 3
+   double midHigh = iHigh(_Symbol, PERIOD_CURRENT, shift + 1);
+   double midLow = iLow(_Symbol, PERIOD_CURRENT, shift + 1);
+   double firstHigh = iHigh(_Symbol, PERIOD_CURRENT, shift + 2);
+   double firstLow = iLow(_Symbol, PERIOD_CURRENT, shift + 2);
+   
+   // Middle candle is inside first candle
+   bool isInside = midHigh <= firstHigh && midLow >= firstLow;
+   
+   // First candle should be bearish (for bullish reversal)
+   bool firstBearish = IsBearishCandle(shift + 2);
+   
+   return isInside && firstBearish;
+}
+
+//+------------------------------------------------------------------+
+//| Detect Inside Candle Reversal (Bearish)                            |
+//| - 3 candle pattern: first candle, inside candle, then bearish     |
+//+------------------------------------------------------------------+
+bool IsInsideCandleBearish(int shift)
+{
+   if(!InpPAInsideCandleBear) return false;
+   if(shift < 2) return false;
+   
+   // Candle 1 (current): Must be bearish
+   if(!IsBearishCandle(shift)) return false;
+   
+   // Candle 2 (middle): Inside candle - high and low within candle 3
+   double midHigh = iHigh(_Symbol, PERIOD_CURRENT, shift + 1);
+   double midLow = iLow(_Symbol, PERIOD_CURRENT, shift + 1);
+   double firstHigh = iHigh(_Symbol, PERIOD_CURRENT, shift + 2);
+   double firstLow = iLow(_Symbol, PERIOD_CURRENT, shift + 2);
+   
+   // Middle candle is inside first candle
+   bool isInside = midHigh <= firstHigh && midLow >= firstLow;
+   
+   // First candle should be bullish (for bearish reversal)
+   bool firstBullish = IsBullishCandle(shift + 2);
+   
+   return isInside && firstBullish;
+}
+
+//+------------------------------------------------------------------+
+//| Detect Bullish Hotdog Pattern                                      |
+//| - Price faked up then moved lower, but broke two previous highs   |
+//+------------------------------------------------------------------+
+bool IsBullishHotdog(int shift)
+{
+   if(!InpPABullHotdog) return false;
+   if(shift < 3) return false;
+   
+   // Current candle must be bullish
+   if(!IsBullishCandle(shift)) return false;
+   
+   double currHigh = iHigh(_Symbol, PERIOD_CURRENT, shift);
+   double currClose = iClose(_Symbol, PERIOD_CURRENT, shift);
+   double prev1High = iHigh(_Symbol, PERIOD_CURRENT, shift + 1);
+   double prev2High = iHigh(_Symbol, PERIOD_CURRENT, shift + 2);
+   double prev3High = iHigh(_Symbol, PERIOD_CURRENT, shift + 3);
+   
+   // Previous candles had small bodies (indecision)
+   bool prev1Small = IsDoji(shift + 1) || IsSpinningTop(shift + 1);
+   bool prev2Small = IsDoji(shift + 2) || IsSpinningTop(shift + 2);
+   
+   // Current candle breaks above previous highs
+   bool breaksHighs = currHigh > prev1High && currHigh > prev2High;
+   
+   // There was a fake move down followed by reversal up
+   double prev1Low = iLow(_Symbol, PERIOD_CURRENT, shift + 1);
+   double prev2Low = iLow(_Symbol, PERIOD_CURRENT, shift + 2);
+   bool fakedDown = prev1Low < prev2Low || prev1Low < prev3High;
+   
+   return breaksHighs && (prev1Small || prev2Small || fakedDown);
+}
+
+//+------------------------------------------------------------------+
+//| Detect Bearish Hotdog Pattern                                      |
+//| - Price faked down then moved higher, but broke two previous lows |
+//+------------------------------------------------------------------+
+bool IsBearishHotdog(int shift)
+{
+   if(!InpPABearHotdog) return false;
+   if(shift < 3) return false;
+   
+   // Current candle must be bearish
+   if(!IsBearishCandle(shift)) return false;
+   
+   double currLow = iLow(_Symbol, PERIOD_CURRENT, shift);
+   double currClose = iClose(_Symbol, PERIOD_CURRENT, shift);
+   double prev1Low = iLow(_Symbol, PERIOD_CURRENT, shift + 1);
+   double prev2Low = iLow(_Symbol, PERIOD_CURRENT, shift + 2);
+   double prev3Low = iLow(_Symbol, PERIOD_CURRENT, shift + 3);
+   
+   // Previous candles had small bodies (indecision)
+   bool prev1Small = IsDoji(shift + 1) || IsSpinningTop(shift + 1);
+   bool prev2Small = IsDoji(shift + 2) || IsSpinningTop(shift + 2);
+   
+   // Current candle breaks below previous lows
+   bool breaksLows = currLow < prev1Low && currLow < prev2Low;
+   
+   // There was a fake move up followed by reversal down
+   double prev1High = iHigh(_Symbol, PERIOD_CURRENT, shift + 1);
+   double prev2High = iHigh(_Symbol, PERIOD_CURRENT, shift + 2);
+   bool fakedUp = prev1High > prev2High || prev1High > prev3Low;
+   
+   return breaksLows && (prev1Small || prev2Small || fakedUp);
+}
+
+//+------------------------------------------------------------------+
+//| Check if candle is Spinning Top (indecision with long tails)      |
+//+------------------------------------------------------------------+
+bool IsSpinningTop(int shift)
+{
+   double body = GetCandleBody(shift);
+   double range = GetCandleRange(shift);
+   double upperTail = GetUpperTail(shift);
+   double lowerTail = GetLowerTail(shift);
+   
+   if(range <= 0) return false;
+   
+   // Small body relative to range
+   bool smallBody = (body / range) <= InpPASpinningTopRatio;
+   
+   // Both tails are significant (at least 20% of range each)
+   bool longTails = (upperTail / range) >= 0.2 && (lowerTail / range) >= 0.2;
+   
+   return smallBody && longTails;
+}
+
+//+------------------------------------------------------------------+
 //| Check for ANY Bullish PA Pattern on the last closed candle        |
 //+------------------------------------------------------------------+
 string DetectBullishPA(int shift)
@@ -1560,6 +1706,10 @@ string DetectBullishPA(int shift)
       return "OUTSIDE_CANDLE_BULL";
    if(IsPullbackBuy(shift))
       return "PULLBACK_BUY";
+   if(IsInsideCandleBullish(shift))
+      return "INSIDE_CANDLE_BULL";
+   if(IsBullishHotdog(shift))
+      return "BULL_HOTDOG";
    
    return "NONE";
 }
@@ -1581,6 +1731,10 @@ string DetectBearishPA(int shift)
       return "OUTSIDE_CANDLE_BEAR";
    if(IsPullbackSell(shift))
       return "PULLBACK_SELL";
+   if(IsInsideCandleBearish(shift))
+      return "INSIDE_CANDLE_BEAR";
+   if(IsBearishHotdog(shift))
+      return "BEAR_HOTDOG";
    
    return "NONE";
 }
