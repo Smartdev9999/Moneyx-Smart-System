@@ -1748,13 +1748,25 @@ void DrawPAArrow(string tradeType, string paPattern, datetime barTime, double pr
 {
    string uniqueId = IntegerToString((long)barTime);
    
+   // Get average candle range for dynamic offset
+   double avgRange = 0;
+   for(int i = 1; i <= 10; i++)
+   {
+      avgRange += iHigh(_Symbol, PERIOD_CURRENT, i) - iLow(_Symbol, PERIOD_CURRENT, i);
+   }
+   avgRange /= 10;
+   
+   // Dynamic offsets based on average range
+   double arrowOffset = avgRange * 0.3;    // Arrow distance from candle
+   double labelOffset = avgRange * 0.8;    // Label distance from candle (further than arrow)
+   
    // Create Arrow Object
    string arrowName = PAPrefix + "Arrow_" + uniqueId;
    
    if(tradeType == "BUY")
    {
       // Draw UP arrow below the low
-      double arrowPrice = iLow(_Symbol, PERIOD_CURRENT, 1) - 20 * _Point;
+      double arrowPrice = iLow(_Symbol, PERIOD_CURRENT, 1) - arrowOffset;
       ObjectCreate(0, arrowName, OBJ_ARROW_UP, 0, barTime, arrowPrice);
       ObjectSetInteger(0, arrowName, OBJPROP_COLOR, clrLime);
       ObjectSetInteger(0, arrowName, OBJPROP_WIDTH, 3);
@@ -1762,7 +1774,7 @@ void DrawPAArrow(string tradeType, string paPattern, datetime barTime, double pr
    else // SELL
    {
       // Draw DOWN arrow above the high
-      double arrowPrice = iHigh(_Symbol, PERIOD_CURRENT, 1) + 20 * _Point;
+      double arrowPrice = iHigh(_Symbol, PERIOD_CURRENT, 1) + arrowOffset;
       ObjectCreate(0, arrowName, OBJ_ARROW_DOWN, 0, barTime, arrowPrice);
       ObjectSetInteger(0, arrowName, OBJPROP_COLOR, clrRed);
       ObjectSetInteger(0, arrowName, OBJPROP_WIDTH, 3);
@@ -1770,17 +1782,17 @@ void DrawPAArrow(string tradeType, string paPattern, datetime barTime, double pr
    ObjectSetInteger(0, arrowName, OBJPROP_SELECTABLE, false);
    ObjectSetInteger(0, arrowName, OBJPROP_HIDDEN, false);
    
-   // Create Text Label for PA Pattern
+   // Create Text Label for PA Pattern (further away from candle)
    string labelName = PAPrefix + "Label_" + uniqueId;
    double labelPrice;
    
    if(tradeType == "BUY")
    {
-      labelPrice = iLow(_Symbol, PERIOD_CURRENT, 1) - 50 * _Point;
+      labelPrice = iLow(_Symbol, PERIOD_CURRENT, 1) - labelOffset;
    }
    else
    {
-      labelPrice = iHigh(_Symbol, PERIOD_CURRENT, 1) + 50 * _Point;
+      labelPrice = iHigh(_Symbol, PERIOD_CURRENT, 1) + labelOffset;
    }
    
    ObjectCreate(0, labelName, OBJ_TEXT, 0, barTime, labelPrice);
