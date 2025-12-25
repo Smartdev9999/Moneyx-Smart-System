@@ -25,7 +25,17 @@ const MT5EAGuide = () => {
 enum ENUM_SIGNAL_STRATEGY
 {
    STRATEGY_ZIGZAG = 0,      // ZigZag++ Structure
-   STRATEGY_EMA_CHANNEL = 1  // EMA Channel (High/Low)
+   STRATEGY_EMA_CHANNEL = 1, // EMA Channel (High/Low)
+   STRATEGY_BOLLINGER = 2    // Bollinger Bands
+};
+
+// Bollinger Bands MA Type
+enum ENUM_BB_MA_TYPE
+{
+   BB_MA_SMA = 0,    // SMA
+   BB_MA_EMA = 1,    // EMA
+   BB_MA_SMMA = 2,   // SMMA (RMA)
+   BB_MA_WMA = 3     // WMA
 };
 
 // ZigZag Signal Mode
@@ -108,6 +118,18 @@ input color    InpEMAHighColor = clrDodgerBlue;  // EMA High Line Color
 input color    InpEMALowColor = clrOrangeRed;    // EMA Low Line Color
 input bool     InpShowEMALines = true;        // Show EMA Lines on Chart
 input ENUM_EMA_SIGNAL_BAR InpEMASignalBar = EMA_LAST_BAR_CLOSED;  // Signal Bar Index
+
+//--- [ BOLLINGER BANDS SETTINGS ] ----------------------------------
+input string   InpBBHeader = "=== BOLLINGER BANDS SETTINGS ===";  // ___
+input ENUM_TIMEFRAMES InpBBTimeframe = PERIOD_CURRENT;  // Bollinger Bands Timeframe
+input int      InpBBPeriod = 20;              // BB Period (Length)
+input double   InpBBDeviation = 2.0;          // BB Deviation (StdDev Multiplier)
+input ENUM_BB_MA_TYPE InpBBMAType = BB_MA_SMA;  // BB MA Type
+input color    InpBBUpperColor = clrRed;      // BB Upper Band Color
+input color    InpBBLowerColor = clrGreen;    // BB Lower Band Color
+input color    InpBBBasisColor = clrBlue;     // BB Basis (Middle) Color
+input bool     InpShowBBLines = true;         // Show BB Lines on Chart
+input ENUM_EMA_SIGNAL_BAR InpBBSignalBar = EMA_LAST_BAR_CLOSED;  // BB Signal Bar Index
 
 //--- [ CDC ACTION ZONE SETTINGS ] ----------------------------------
 input string   InpCDCHeader    = "=== CDC ACTION ZONE SETTINGS ===";  // ___
@@ -301,6 +323,18 @@ double EMAHigh = 0;
 double EMALow = 0;
 string EMASignal = "NONE";  // "BUY", "SELL", "NONE"
 datetime LastEMASignalTime = 0;
+
+// Bollinger Bands Variables
+double BBUpper = 0;
+double BBLower = 0;
+double BBBasis = 0;
+string BBSignal = "NONE";  // "BUY", "SELL", "NONE"
+datetime LastBBSignalTime = 0;
+string BBPrefix = "BB_";
+
+// Bollinger Bands Signal Reset
+bool g_bbBuyResetPhaseBelowBand = false;   // Price has touched/closed above upper band
+bool g_bbSellResetPhaseAboveBand = false;  // Price has touched/closed below lower band
 
 // Extra chart for viewing ZigZag timeframe objects
 long ZZTFChartId = 0;
@@ -3014,6 +3048,11 @@ void OnTick()
       // Calculate EMA Channel
       CalculateEMAChannel();
    }
+   else if(InpSignalStrategy == STRATEGY_BOLLINGER)
+   {
+      // Calculate Bollinger Bands
+      CalculateBollingerBands();
+   }
    
    if(InpUseTimeFilter && !IsWithinTradingHours())
    {
@@ -3162,6 +3201,10 @@ string AnalyzeSignal()
    else if(InpSignalStrategy == STRATEGY_EMA_CHANNEL)
    {
       return AnalyzeEMAChannelSignal();
+   }
+   else if(InpSignalStrategy == STRATEGY_BOLLINGER)
+   {
+      return AnalyzeBollingerSignal();
    }
    
    return "WAIT";
@@ -3409,6 +3452,242 @@ string AnalyzeEMAChannelSignal()
          return "WAIT";
       }
       Print(">>> EMA Channel SELL Signal Confirmed!");
+      return "SELL";
+   }
+   
+   return "WAIT";
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Bollinger Bands                                          |
+//+------------------------------------------------------------------+
+void CalculateBollingerBands()
+{
+   double closeArr[];
+   ArraySetAsSeries(closeArr, true);
+   
+   int barsNeeded = InpBBPeriod + 10;
+   if(CopyClose(_Symbol, InpBBTimeframe, 0, barsNeeded, closeArr) < barsNeeded)
+   {
+      Print("Warning: Not enough data for Bollinger Bands calculation");
+      return;
+   }
+   
+   // Calculate MA (Basis) based on selected type
+   double sum = 0;
+   
+   if(InpBBMAType == BB_MA_SMA)
+   {
+      // Simple Moving Average
+      for(int i = 0; i < InpBBPeriod; i++)
+         sum += closeArr[i];
+      BBBasis = sum / InpBBPeriod;
+   }
+   else if(InpBBMAType == BB_MA_EMA)
+   {
+      // Exponential Moving Average
+      double multiplier = 2.0 / (InpBBPeriod + 1);
+      BBBasis = closeArr[InpBBPeriod - 1];
+      for(int i = InpBBPeriod - 2; i >= 0; i--)
+         BBBasis = (closeArr[i] - BBBasis) * multiplier + BBBasis;
+   }
+   else if(InpBBMAType == BB_MA_SMMA)
+   {
+      // Smoothed Moving Average (RMA)
+      for(int i = 0; i < InpBBPeriod; i++)
+         sum += closeArr[i];
+      BBBasis = sum / InpBBPeriod;
+   }
+   else if(InpBBMAType == BB_MA_WMA)
+   {
+      // Weighted Moving Average
+      double weightSum = 0;
+      for(int i = 0; i < InpBBPeriod; i++)
+      {
+         int weight = InpBBPeriod - i;
+         sum += closeArr[i] * weight;
+         weightSum += weight;
+      }
+      BBBasis = sum / weightSum;
+   }
+   
+   // Calculate Standard Deviation
+   double variance = 0;
+   for(int i = 0; i < InpBBPeriod; i++)
+   {
+      double diff = closeArr[i] - BBBasis;
+      variance += diff * diff;
+   }
+   double stdDev = MathSqrt(variance / InpBBPeriod);
+   
+   // Calculate Upper and Lower Bands
+   BBUpper = BBBasis + (InpBBDeviation * stdDev);
+   BBLower = BBBasis - (InpBBDeviation * stdDev);
+   
+   // Determine signal based on close position relative to bands
+   int signalBar = (InpBBSignalBar == EMA_CURRENT_BAR) ? 0 : 1;
+   double signalClose = closeArr[signalBar];
+   
+   // SELL signal: Price closes ABOVE upper band
+   // BUY signal: Price closes BELOW lower band
+   if(signalClose > BBUpper)
+   {
+      BBSignal = "SELL";
+   }
+   else if(signalClose < BBLower)
+   {
+      BBSignal = "BUY";
+   }
+   else
+   {
+      BBSignal = "NONE";
+   }
+   
+   // Draw Bollinger Bands lines on chart
+   if(InpShowBBLines)
+   {
+      DrawBollingerLines();
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Draw Bollinger Bands Lines on Chart                                |
+//+------------------------------------------------------------------+
+void DrawBollingerLines()
+{
+   datetime time0 = iTime(_Symbol, InpBBTimeframe, 0);
+   datetime time1 = iTime(_Symbol, InpBBTimeframe, 1);
+   
+   // Upper Band Line
+   string upperName = BBPrefix + "Upper";
+   ObjectDelete(0, upperName);
+   ObjectCreate(0, upperName, OBJ_TREND, 0, time1, BBUpper, time0, BBUpper);
+   ObjectSetInteger(0, upperName, OBJPROP_COLOR, InpBBUpperColor);
+   ObjectSetInteger(0, upperName, OBJPROP_WIDTH, 2);
+   ObjectSetInteger(0, upperName, OBJPROP_RAY_RIGHT, true);
+   ObjectSetInteger(0, upperName, OBJPROP_STYLE, STYLE_SOLID);
+   
+   // Lower Band Line
+   string lowerName = BBPrefix + "Lower";
+   ObjectDelete(0, lowerName);
+   ObjectCreate(0, lowerName, OBJ_TREND, 0, time1, BBLower, time0, BBLower);
+   ObjectSetInteger(0, lowerName, OBJPROP_COLOR, InpBBLowerColor);
+   ObjectSetInteger(0, lowerName, OBJPROP_WIDTH, 2);
+   ObjectSetInteger(0, lowerName, OBJPROP_RAY_RIGHT, true);
+   ObjectSetInteger(0, lowerName, OBJPROP_STYLE, STYLE_SOLID);
+   
+   // Basis (Middle) Line
+   string basisName = BBPrefix + "Basis";
+   ObjectDelete(0, basisName);
+   ObjectCreate(0, basisName, OBJ_TREND, 0, time1, BBBasis, time0, BBBasis);
+   ObjectSetInteger(0, basisName, OBJPROP_COLOR, InpBBBasisColor);
+   ObjectSetInteger(0, basisName, OBJPROP_WIDTH, 1);
+   ObjectSetInteger(0, basisName, OBJPROP_RAY_RIGHT, true);
+   ObjectSetInteger(0, basisName, OBJPROP_STYLE, STYLE_DOT);
+}
+
+//+------------------------------------------------------------------+
+//| Check and Update Signal Reset Status for Bollinger Strategy        |
+//+------------------------------------------------------------------+
+void UpdateBBSignalResetStatus()
+{
+   // Get current price relative to BB bands
+   int signalBar = (InpBBSignalBar == EMA_CURRENT_BAR) ? 0 : 1;
+   
+   double closeArr[];
+   ArraySetAsSeries(closeArr, true);
+   if(CopyClose(_Symbol, InpBBTimeframe, 0, 10, closeArr) < 10) return;
+   
+   double signalClose = closeArr[signalBar];
+   
+   // *** BUY SIGNAL RESET CHECK ***
+   // For BB: After BUY closes, price must go back ABOVE lower band (into channel)
+   // then close BELOW lower band again to trigger new BUY
+   if(g_waitBuySignalReset)
+   {
+      bool nowAboveLower = (signalClose > BBLower);
+      bool nowBelowLower = (signalClose < BBLower);
+      
+      if(!g_bbBuyResetPhaseBelowBand && nowAboveLower)
+      {
+         // Step 1 complete: Price went back into the channel (above lower band)
+         g_bbBuyResetPhaseBelowBand = true;
+         Print("*** BB BUY Reset Phase 1 Complete - Price returned ABOVE lower band ***");
+      }
+      else if(g_bbBuyResetPhaseBelowBand && nowBelowLower)
+      {
+         // Step 2 complete: Price closed below lower band again - BUY reset complete!
+         g_waitBuySignalReset = false;
+         g_bbBuyResetPhaseBelowBand = false;
+         Print("*** BB BUY Signal Reset Complete - Ready for new BUY signal! ***");
+      }
+   }
+   
+   // *** SELL SIGNAL RESET CHECK ***
+   // For BB: After SELL closes, price must go back BELOW upper band (into channel)
+   // then close ABOVE upper band again to trigger new SELL
+   if(g_waitSellSignalReset)
+   {
+      bool nowBelowUpper = (signalClose < BBUpper);
+      bool nowAboveUpper = (signalClose > BBUpper);
+      
+      if(!g_bbSellResetPhaseAboveBand && nowBelowUpper)
+      {
+         // Step 1 complete: Price went back into the channel (below upper band)
+         g_bbSellResetPhaseAboveBand = true;
+         Print("*** BB SELL Reset Phase 1 Complete - Price returned BELOW upper band ***");
+      }
+      else if(g_bbSellResetPhaseAboveBand && nowAboveUpper)
+      {
+         // Step 2 complete: Price closed above upper band again - SELL reset complete!
+         g_waitSellSignalReset = false;
+         g_bbSellResetPhaseAboveBand = false;
+         Print("*** BB SELL Signal Reset Complete - Ready for new SELL signal! ***");
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Analyze Bollinger Bands Signal                                     |
+//+------------------------------------------------------------------+
+string AnalyzeBollingerSignal()
+{
+   datetime currentBarTime = iTime(_Symbol, InpBBTimeframe, 0);
+   
+   // For Last Bar Closed mode, check if this is a new bar
+   if(InpBBSignalBar == EMA_LAST_BAR_CLOSED)
+   {
+      if(currentBarTime == LastBBSignalTime)
+      {
+         return "WAIT";
+      }
+      LastBBSignalTime = currentBarTime;
+   }
+   
+   // *** UPDATE SIGNAL RESET STATUS ***
+   UpdateBBSignalResetStatus();
+   
+   // Return the BB signal calculated in CalculateBollingerBands()
+   if(BBSignal == "BUY")
+   {
+      // *** CHECK IF BUY SIGNAL RESET IS REQUIRED ***
+      if(g_waitBuySignalReset)
+      {
+         Print(">>> BB BUY Signal detected but waiting for reset (Phase 1: ", g_bbBuyResetPhaseBelowBand ? "Complete" : "Pending", ")");
+         return "WAIT";
+      }
+      Print(">>> Bollinger Bands BUY Signal Confirmed! (Price closed BELOW lower band)");
+      return "BUY";
+   }
+   else if(BBSignal == "SELL")
+   {
+      // *** CHECK IF SELL SIGNAL RESET IS REQUIRED ***
+      if(g_waitSellSignalReset)
+      {
+         Print(">>> BB SELL Signal detected but waiting for reset (Phase 1: ", g_bbSellResetPhaseAboveBand ? "Complete" : "Pending", ")");
+         return "WAIT";
+      }
+      Print(">>> Bollinger Bands SELL Signal Confirmed! (Price closed ABOVE upper band)");
       return "SELL";
    }
    
