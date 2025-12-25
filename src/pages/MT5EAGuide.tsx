@@ -258,6 +258,10 @@ datetime InitialBuyBarTime = 0;
 datetime InitialSellBarTime = 0;
 int GridBuyCount = 0;
 int GridSellCount = 0;
+
+// Hedge Lock Flags (prevent multiple hedge orders)
+bool g_isHedgedBuy = false;   // True when BUY side is already hedged
+bool g_isHedgedSell = false;  // True when SELL side is already hedged
 datetime LastGridBuyTime = 0;
 datetime LastGridSellTime = 0;
 
@@ -1364,16 +1368,18 @@ double ClosePositionsByType(ENUM_POSITION_TYPE posType)
       }
    }
    
-   // Reset grid counters for this side
+   // Reset grid counters and hedge flag for this side
    if(posType == POSITION_TYPE_BUY)
    {
       GridBuyCount = 0;
       InitialBuyBarTime = 0;
+      g_isHedgedBuy = false;  // Reset hedge flag when positions closed
    }
    else
    {
       GridSellCount = 0;
       InitialSellBarTime = 0;
+      g_isHedgedSell = false;  // Reset hedge flag when positions closed
    }
    
    return closedProfit;
@@ -1381,19 +1387,39 @@ double ClosePositionsByType(ENUM_POSITION_TYPE posType)
 
 //+------------------------------------------------------------------+
 //| Hedge positions by type (open opposite position to lock loss)      |
+//| Opens exactly ONE hedge order and sets flag to prevent repeats     |
 //+------------------------------------------------------------------+
 bool HedgePositionsByType(ENUM_POSITION_TYPE posType, double totalLots)
 {
+   // Check if already hedged - PREVENT MULTIPLE HEDGE ORDERS
+   if(posType == POSITION_TYPE_BUY && g_isHedgedBuy)
+   {
+      Print("BUY side already hedged - skipping");
+      return false;
+   }
+   if(posType == POSITION_TYPE_SELL && g_isHedgedSell)
+   {
+      Print("SELL side already hedged - skipping");
+      return false;
+   }
+   
    // Calculate opposite order type
    ENUM_ORDER_TYPE hedgeType = (posType == POSITION_TYPE_BUY) ? ORDER_TYPE_SELL : ORDER_TYPE_BUY;
    string hedgeTypeStr = (hedgeType == ORDER_TYPE_BUY) ? "BUY" : "SELL";
    
    double price = (hedgeType == ORDER_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
    
-   // Open hedge position with total lots
+   // Open hedge position with total lots - ONLY ONCE
    if(trade.PositionOpen(_Symbol, hedgeType, totalLots, price, 0, 0, "HEDGE_LOCK"))
    {
       Print("HEDGE ", hedgeTypeStr, " opened: ", totalLots, " lots at ", price, " to lock loss");
+      
+      // Set hedge flag to prevent further hedge orders
+      if(posType == POSITION_TYPE_BUY)
+         g_isHedgedBuy = true;
+      else
+         g_isHedgedSell = true;
+         
       return true;
    }
    else
@@ -1469,6 +1495,10 @@ void CloseAllPositions()
    InitialBuyBarTime = 0;
    InitialSellBarTime = 0;
    AccumulatedProfit = 0;
+   
+   // Reset hedge flags when all positions closed
+   g_isHedgedBuy = false;
+   g_isHedgedSell = false;
 }
 
 //+------------------------------------------------------------------+
