@@ -294,6 +294,7 @@ string ZZPrefix = "ZZ_";
 string CDCPrefix = "CDC_";
 string TPPrefix = "TP_";
 string EMAPrefix = "EMA_";
+string PAPrefix = "PA_";  // Price Action arrows and labels
 
 // EMA Channel Variables
 double EMAHigh = 0;
@@ -382,6 +383,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, CDCPrefix);
    ObjectsDeleteAll(0, TPPrefix);
    ObjectsDeleteAll(0, EMAPrefix);
+   ObjectsDeleteAll(0, PAPrefix);  // Remove PA arrows and labels
    
    // Remove ZigZag objects from the ZigZag timeframe chart (if opened)
    if(ZZTFChartId > 0)
@@ -1740,23 +1742,133 @@ string DetectBearishPA(int shift)
 }
 
 //+------------------------------------------------------------------+
-//| Check if PA confirmation is satisfied for BUY                      |
-//| Returns: true if PA found OR PA not required                       |
+//| Draw PA Arrow and Label on Chart                                   |
 //+------------------------------------------------------------------+
-bool CheckBuyPAConfirmation()
+void DrawPAArrow(string tradeType, string paPattern, datetime barTime, double price)
+{
+   string uniqueId = IntegerToString((long)barTime);
+   
+   // Create Arrow Object
+   string arrowName = PAPrefix + "Arrow_" + uniqueId;
+   
+   if(tradeType == "BUY")
+   {
+      // Draw UP arrow below the low
+      double arrowPrice = iLow(_Symbol, PERIOD_CURRENT, 1) - 20 * _Point;
+      ObjectCreate(0, arrowName, OBJ_ARROW_UP, 0, barTime, arrowPrice);
+      ObjectSetInteger(0, arrowName, OBJPROP_COLOR, clrLime);
+      ObjectSetInteger(0, arrowName, OBJPROP_WIDTH, 3);
+   }
+   else // SELL
+   {
+      // Draw DOWN arrow above the high
+      double arrowPrice = iHigh(_Symbol, PERIOD_CURRENT, 1) + 20 * _Point;
+      ObjectCreate(0, arrowName, OBJ_ARROW_DOWN, 0, barTime, arrowPrice);
+      ObjectSetInteger(0, arrowName, OBJPROP_COLOR, clrRed);
+      ObjectSetInteger(0, arrowName, OBJPROP_WIDTH, 3);
+   }
+   ObjectSetInteger(0, arrowName, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, arrowName, OBJPROP_HIDDEN, false);
+   
+   // Create Text Label for PA Pattern
+   string labelName = PAPrefix + "Label_" + uniqueId;
+   double labelPrice;
+   
+   if(tradeType == "BUY")
+   {
+      labelPrice = iLow(_Symbol, PERIOD_CURRENT, 1) - 50 * _Point;
+   }
+   else
+   {
+      labelPrice = iHigh(_Symbol, PERIOD_CURRENT, 1) + 50 * _Point;
+   }
+   
+   ObjectCreate(0, labelName, OBJ_TEXT, 0, barTime, labelPrice);
+   ObjectSetString(0, labelName, OBJPROP_TEXT, paPattern);
+   ObjectSetInteger(0, labelName, OBJPROP_COLOR, tradeType == "BUY" ? clrLime : clrRed);
+   ObjectSetInteger(0, labelName, OBJPROP_FONTSIZE, 8);
+   ObjectSetString(0, labelName, OBJPROP_FONT, "Arial Bold");
+   ObjectSetInteger(0, labelName, OBJPROP_ANCHOR, tradeType == "BUY" ? ANCHOR_UPPER : ANCHOR_LOWER);
+   ObjectSetInteger(0, labelName, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, labelName, OBJPROP_HIDDEN, false);
+   
+   Print("PA Arrow drawn: ", tradeType, " | Pattern: ", paPattern, " | Time: ", TimeToString(barTime));
+}
+
+//+------------------------------------------------------------------+
+//| Get readable PA Pattern name                                       |
+//+------------------------------------------------------------------+
+string GetPAPatternName(string paCode)
+{
+   if(paCode == "HAMMER") return "Hammer";
+   if(paCode == "BULL_ENGULFING") return "Bull Engulf";
+   if(paCode == "TWEEZER_BOTTOM") return "Twzr Bottom";
+   if(paCode == "MORNING_STAR") return "Morn Star";
+   if(paCode == "OUTSIDE_CANDLE_BULL") return "Outside Bull";
+   if(paCode == "PULLBACK_BUY") return "Pullback";
+   if(paCode == "INSIDE_CANDLE_BULL") return "Inside Bull";
+   if(paCode == "BULL_HOTDOG") return "Bull Hotdog";
+   
+   if(paCode == "SHOOTING_STAR") return "Shoot Star";
+   if(paCode == "BEAR_ENGULFING") return "Bear Engulf";
+   if(paCode == "TWEEZER_TOP") return "Twzr Top";
+   if(paCode == "EVENING_STAR") return "Even Star";
+   if(paCode == "OUTSIDE_CANDLE_BEAR") return "Outside Bear";
+   if(paCode == "PULLBACK_SELL") return "Pullback";
+   if(paCode == "INSIDE_CANDLE_BEAR") return "Inside Bear";
+   if(paCode == "BEAR_HOTDOG") return "Bear Hotdog";
+   
+   return paCode;
+}
+
+//+------------------------------------------------------------------+
+//| Check if PA confirmation is satisfied for BUY                      |
+//| Returns: pattern name if PA found, "NONE" if not                   |
+//+------------------------------------------------------------------+
+string CheckBuyPAConfirmationWithPattern()
 {
    if(!InpUsePAConfirm)
-      return true;  // PA not required
+      return "NO_PA_REQUIRED";  // PA not required
    
    // Check last closed candle (shift=1)
    string paPattern = DetectBullishPA(1);
    if(paPattern != "NONE")
    {
       Print(">>> BULLISH PA CONFIRMED: ", paPattern);
-      return true;
+      return paPattern;
    }
    
-   return false;
+   return "NONE";
+}
+
+//+------------------------------------------------------------------+
+//| Check if PA confirmation is satisfied for SELL                     |
+//| Returns: pattern name if PA found, "NONE" if not                   |
+//+------------------------------------------------------------------+
+string CheckSellPAConfirmationWithPattern()
+{
+   if(!InpUsePAConfirm)
+      return "NO_PA_REQUIRED";  // PA not required
+   
+   // Check last closed candle (shift=1)
+   string paPattern = DetectBearishPA(1);
+   if(paPattern != "NONE")
+   {
+      Print(">>> BEARISH PA CONFIRMED: ", paPattern);
+      return paPattern;
+   }
+   
+   return "NONE";
+}
+
+//+------------------------------------------------------------------+
+//| Check if PA confirmation is satisfied for BUY                      |
+//| Returns: true if PA found OR PA not required                       |
+//+------------------------------------------------------------------+
+bool CheckBuyPAConfirmation()
+{
+   string result = CheckBuyPAConfirmationWithPattern();
+   return result != "NONE";
 }
 
 //+------------------------------------------------------------------+
@@ -1765,18 +1877,8 @@ bool CheckBuyPAConfirmation()
 //+------------------------------------------------------------------+
 bool CheckSellPAConfirmation()
 {
-   if(!InpUsePAConfirm)
-      return true;  // PA not required
-   
-   // Check last closed candle (shift=1)
-   string paPattern = DetectBearishPA(1);
-   if(paPattern != "NONE")
-   {
-      Print(">>> BEARISH PA CONFIRMED: ", paPattern);
-      return true;
-   }
-   
-   return false;
+   string result = CheckSellPAConfirmationWithPattern();
+   return result != "NONE";
 }
 
 //+------------------------------------------------------------------+
@@ -1807,13 +1909,19 @@ void HandlePendingSignal()
    // Check for PA confirmation
    if(g_pendingSignal == "BUY")
    {
-      if(CheckBuyPAConfirmation())
+      string paPattern = CheckBuyPAConfirmationWithPattern();
+      if(paPattern != "NONE")
       {
          // Check if trade is still allowed
          if(CountPositions(POSITION_TYPE_BUY) == 0 && IsTradeAllowed("BUY"))
          {
+            // Draw PA arrow on chart
+            datetime signalBar = iTime(_Symbol, PERIOD_CURRENT, 1);
+            double signalPrice = iLow(_Symbol, PERIOD_CURRENT, 1);
+            DrawPAArrow("BUY", GetPAPatternName(paPattern), signalBar, signalPrice);
+            
             ExecuteBuy();
-            Print("BUY executed after PA confirmation (waited ", g_paWaitCount, " candles)");
+            Print("BUY executed after PA confirmation (", paPattern, ") - waited ", g_paWaitCount, " candles");
          }
          g_pendingSignal = "NONE";
          g_paWaitCount = 0;
@@ -1825,13 +1933,19 @@ void HandlePendingSignal()
    }
    else if(g_pendingSignal == "SELL")
    {
-      if(CheckSellPAConfirmation())
+      string paPattern = CheckSellPAConfirmationWithPattern();
+      if(paPattern != "NONE")
       {
          // Check if trade is still allowed
          if(CountPositions(POSITION_TYPE_SELL) == 0 && IsTradeAllowed("SELL"))
          {
+            // Draw PA arrow on chart
+            datetime signalBar = iTime(_Symbol, PERIOD_CURRENT, 1);
+            double signalPrice = iHigh(_Symbol, PERIOD_CURRENT, 1);
+            DrawPAArrow("SELL", GetPAPatternName(paPattern), signalBar, signalPrice);
+            
             ExecuteSell();
-            Print("SELL executed after PA confirmation (waited ", g_paWaitCount, " candles)");
+            Print("SELL executed after PA confirmation (", paPattern, ") - waited ", g_paWaitCount, " candles");
          }
          g_pendingSignal = "NONE";
          g_paWaitCount = 0;
@@ -2829,10 +2943,19 @@ void OnTick()
          if(InpUsePAConfirm)
          {
             // Check if PA is already present
-            if(CheckBuyPAConfirmation())
+            string paPattern = CheckBuyPAConfirmationWithPattern();
+            if(paPattern != "NONE")
             {
+               // Draw PA arrow on chart
+               datetime signalBar = iTime(_Symbol, PERIOD_CURRENT, 1);
+               double signalPrice = iLow(_Symbol, PERIOD_CURRENT, 1);
+               if(paPattern != "NO_PA_REQUIRED")
+               {
+                  DrawPAArrow("BUY", GetPAPatternName(paPattern), signalBar, signalPrice);
+               }
+               
                ExecuteBuy();
-               reason = "BUY executed with PA | CDC: " + CDCTrend;
+               reason = "BUY executed with PA (" + GetPAPatternName(paPattern) + ") | CDC: " + CDCTrend;
             }
             else
             {
@@ -2873,10 +2996,19 @@ void OnTick()
          if(InpUsePAConfirm)
          {
             // Check if PA is already present
-            if(CheckSellPAConfirmation())
+            string paPattern = CheckSellPAConfirmationWithPattern();
+            if(paPattern != "NONE")
             {
+               // Draw PA arrow on chart
+               datetime signalBar = iTime(_Symbol, PERIOD_CURRENT, 1);
+               double signalPrice = iHigh(_Symbol, PERIOD_CURRENT, 1);
+               if(paPattern != "NO_PA_REQUIRED")
+               {
+                  DrawPAArrow("SELL", GetPAPatternName(paPattern), signalBar, signalPrice);
+               }
+               
                ExecuteSell();
-               reason = "SELL executed with PA | CDC: " + CDCTrend;
+               reason = "SELL executed with PA (" + GetPAPatternName(paPattern) + ") | CDC: " + CDCTrend;
             }
             else
             {
