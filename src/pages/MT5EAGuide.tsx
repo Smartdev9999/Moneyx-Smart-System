@@ -330,6 +330,19 @@ string g_pendingSignal = "NONE";       // "BUY", "SELL", or "NONE"
 datetime g_signalBarTime = 0;          // Time when signal was detected
 int g_paWaitCount = 0;                 // Number of candles waited for PA
 
+// *** SIGNAL RESET TRACKING ***
+// After closing positions, require signal to reset before allowing new entries
+// BUY Reset: Price must close BELOW EMA first, then close ABOVE EMA again
+// SELL Reset: Price must close ABOVE EMA first, then close BELOW EMA again
+bool g_waitBuySignalReset = false;     // True when waiting for BUY signal to reset
+bool g_waitSellSignalReset = false;    // True when waiting for SELL signal to reset
+bool g_buyResetPhaseBelowEMA = false;  // True when price has closed below EMA (step 1 of BUY reset)
+bool g_sellResetPhaseAboveEMA = false; // True when price has closed above EMA (step 1 of SELL reset)
+
+// For ZigZag Strategy Reset
+bool g_buyResetWaitOppositeSignal = false;  // Wait for HH/LH before allowing BUY again
+bool g_sellResetWaitOppositeSignal = false; // Wait for LL/HL before allowing SELL again
+
 //+------------------------------------------------------------------+
 //| Expert initialization function                                     |
 //+------------------------------------------------------------------+
@@ -2290,12 +2303,24 @@ double ClosePositionsByType(ENUM_POSITION_TYPE posType)
       GridBuyCount = 0;
       InitialBuyBarTime = 0;
       g_isHedgedBuy = false;  // Reset hedge flag when positions closed
+      
+      // *** SET BUY SIGNAL RESET FLAG ***
+      g_waitBuySignalReset = true;
+      g_buyResetPhaseBelowEMA = false;
+      g_buyResetWaitOppositeSignal = true;
+      Print("*** BUY Signal Reset Required - Wait for price to cross below EMA then above ***");
    }
    else
    {
       GridSellCount = 0;
       InitialSellBarTime = 0;
       g_isHedgedSell = false;  // Reset hedge flag when positions closed
+      
+      // *** SET SELL SIGNAL RESET FLAG ***
+      g_waitSellSignalReset = true;
+      g_sellResetPhaseAboveEMA = false;
+      g_sellResetWaitOppositeSignal = true;
+      Print("*** SELL Signal Reset Required - Wait for price to cross above EMA then below ***");
    }
    
    // Reset global hedge lock if no more hedge positions
@@ -2437,6 +2462,17 @@ void CloseAllPositions()
    g_isHedgedBuy = false;
    g_isHedgedSell = false;
    g_isHedgeLocked = false;  // Reset global hedge lock
+   
+   // *** SET SIGNAL RESET FLAGS ***
+   // After closing all positions, require signal to reset before new entries
+   g_waitBuySignalReset = true;
+   g_waitSellSignalReset = true;
+   g_buyResetPhaseBelowEMA = false;
+   g_sellResetPhaseAboveEMA = false;
+   g_buyResetWaitOppositeSignal = true;
+   g_sellResetWaitOppositeSignal = true;
+   
+   Print("*** Signal Reset Required - Waiting for new signal cycle ***");
 }
 
 //+------------------------------------------------------------------+
@@ -3154,18 +3190,71 @@ string AnalyzeZigZagSignal()
    Print("*** NEW ZigZag++ Point Confirmed! ***");
    Print("Label: ", LastZZLabel, " | Time: ", TimeToString(newestPointTime), " | CDC: ", CDCTrend);
    
+   // *** UPDATE ZIGZAG SIGNAL RESET STATUS ***
+   // For ZigZag: BUY reset requires HH/LH point first, then LL/HL
+   // For ZigZag: SELL reset requires LL/HL point first, then HH/LH
+   if(g_waitBuySignalReset)
+   {
+      if(LastZZLabel == "HH" || LastZZLabel == "LH")
+      {
+         // Opposite signal detected - BUY reset phase 1 complete
+         g_buyResetWaitOppositeSignal = false;
+         Print("*** BUY Reset Phase 1 Complete - Opposite point (", LastZZLabel, ") detected ***");
+      }
+   }
+   
+   if(g_waitSellSignalReset)
+   {
+      if(LastZZLabel == "LL" || LastZZLabel == "HL")
+      {
+         // Opposite signal detected - SELL reset phase 1 complete
+         g_sellResetWaitOppositeSignal = false;
+         Print("*** SELL Reset Phase 1 Complete - Opposite point (", LastZZLabel, ") detected ***");
+      }
+   }
+   
    // BUY Signal: Based on ZigZag Signal Mode
    if(InpZigZagSignalMode == ZIGZAG_BOTH)
    {
       // Both Signals: LL or HL triggers BUY
       if(LastZZLabel == "LL" || LastZZLabel == "HL")
       {
+         // *** CHECK IF BUY SIGNAL RESET IS REQUIRED ***
+         if(g_waitBuySignalReset)
+         {
+            if(g_buyResetWaitOppositeSignal)
+            {
+               Print(">>> BUY Signal detected but waiting for opposite signal (HH/LH) first");
+               return "WAIT";
+            }
+            else
+            {
+               // Reset complete - allow this BUY signal
+               g_waitBuySignalReset = false;
+               Print("*** BUY Signal Reset Complete - Executing new BUY! ***");
+            }
+         }
          Print(">>> NEW LOW point (", LastZZLabel, ") - Triggering BUY signal! [Both Mode]");
          return "BUY";
       }
       // Both Signals: HH or LH triggers SELL
       if(LastZZLabel == "HH" || LastZZLabel == "LH")
       {
+         // *** CHECK IF SELL SIGNAL RESET IS REQUIRED ***
+         if(g_waitSellSignalReset)
+         {
+            if(g_sellResetWaitOppositeSignal)
+            {
+               Print(">>> SELL Signal detected but waiting for opposite signal (LL/HL) first");
+               return "WAIT";
+            }
+            else
+            {
+               // Reset complete - allow this SELL signal
+               g_waitSellSignalReset = false;
+               Print("*** SELL Signal Reset Complete - Executing new SELL! ***");
+            }
+         }
          Print(">>> NEW HIGH point (", LastZZLabel, ") - Triggering SELL signal! [Both Mode]");
          return "SELL";
       }
@@ -3175,18 +3264,108 @@ string AnalyzeZigZagSignal()
       // Single Signal: Only LL triggers BUY
       if(LastZZLabel == "LL")
       {
+         // *** CHECK IF BUY SIGNAL RESET IS REQUIRED ***
+         if(g_waitBuySignalReset)
+         {
+            if(g_buyResetWaitOppositeSignal)
+            {
+               Print(">>> LL detected but waiting for opposite signal (HH) first");
+               return "WAIT";
+            }
+            else
+            {
+               g_waitBuySignalReset = false;
+               Print("*** BUY Signal Reset Complete - Executing new BUY! ***");
+            }
+         }
          Print(">>> NEW LL point - Triggering BUY signal! [Single Mode]");
          return "BUY";
       }
       // Single Signal: Only HH triggers SELL
       if(LastZZLabel == "HH")
       {
+         // *** CHECK IF SELL SIGNAL RESET IS REQUIRED ***
+         if(g_waitSellSignalReset)
+         {
+            if(g_sellResetWaitOppositeSignal)
+            {
+               Print(">>> HH detected but waiting for opposite signal (LL) first");
+               return "WAIT";
+            }
+            else
+            {
+               g_waitSellSignalReset = false;
+               Print("*** SELL Signal Reset Complete - Executing new SELL! ***");
+            }
+         }
          Print(">>> NEW HH point - Triggering SELL signal! [Single Mode]");
          return "SELL";
       }
    }
    
    return "WAIT";
+}
+
+//+------------------------------------------------------------------+
+//| Check and Update Signal Reset Status for EMA Strategy              |
+//| Returns true if signal is allowed (reset complete or not required) |
+//+------------------------------------------------------------------+
+void UpdateEMASignalResetStatus()
+{
+   // Get current price relative to EMA
+   int signalBar = (InpEMASignalBar == EMA_CURRENT_BAR) ? 0 : 1;
+   
+   double closeArr[];
+   ArraySetAsSeries(closeArr, true);
+   if(CopyClose(_Symbol, InpEMATimeframe, 0, 10, closeArr) < 10) return;
+   
+   double signalClose = closeArr[signalBar];
+   
+   // *** BUY SIGNAL RESET CHECK ***
+   // Step 1: Price must close BELOW both EMA lines
+   // Step 2: Price must then close ABOVE both EMA lines again
+   if(g_waitBuySignalReset)
+   {
+      bool nowBelowBoth = (signalClose < EMAHigh && signalClose < EMALow);
+      bool nowAboveBoth = (signalClose > EMAHigh && signalClose > EMALow);
+      
+      if(!g_buyResetPhaseBelowEMA && nowBelowBoth)
+      {
+         // Step 1 complete: Price closed below EMA
+         g_buyResetPhaseBelowEMA = true;
+         Print("*** BUY Reset Phase 1 Complete - Price closed BELOW EMA channel ***");
+      }
+      else if(g_buyResetPhaseBelowEMA && nowAboveBoth)
+      {
+         // Step 2 complete: Price closed above EMA again - BUY reset complete!
+         g_waitBuySignalReset = false;
+         g_buyResetPhaseBelowEMA = false;
+         Print("*** BUY Signal Reset Complete - Ready for new BUY signal! ***");
+      }
+   }
+   
+   // *** SELL SIGNAL RESET CHECK ***
+   // Step 1: Price must close ABOVE both EMA lines
+   // Step 2: Price must then close BELOW both EMA lines again
+   if(g_waitSellSignalReset)
+   {
+      bool nowAboveBoth = (signalClose > EMAHigh && signalClose > EMALow);
+      bool nowBelowBoth = (signalClose < EMAHigh && signalClose < EMALow);
+      
+      if(!g_sellResetPhaseAboveEMA && nowAboveBoth)
+      {
+         // Step 1 complete: Price closed above EMA
+         g_sellResetPhaseAboveEMA = true;
+         Print("*** SELL Reset Phase 1 Complete - Price closed ABOVE EMA channel ***");
+      }
+      else if(g_sellResetPhaseAboveEMA && nowBelowBoth)
+      {
+         // Step 2 complete: Price closed below EMA again - SELL reset complete!
+         g_waitSellSignalReset = false;
+         g_sellResetPhaseAboveEMA = false;
+         Print("*** SELL Signal Reset Complete - Ready for new SELL signal! ***");
+      }
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -3206,14 +3385,29 @@ string AnalyzeEMAChannelSignal()
       LastEMASignalTime = currentBarTime;
    }
    
+   // *** UPDATE SIGNAL RESET STATUS ***
+   UpdateEMASignalResetStatus();
+   
    // Return the EMA signal calculated in CalculateEMAChannel()
    if(EMASignal == "BUY")
    {
+      // *** CHECK IF BUY SIGNAL RESET IS REQUIRED ***
+      if(g_waitBuySignalReset)
+      {
+         Print(">>> BUY Signal detected but waiting for reset (Phase 1: ", g_buyResetPhaseBelowEMA ? "Complete" : "Pending", ")");
+         return "WAIT";
+      }
       Print(">>> EMA Channel BUY Signal Confirmed!");
       return "BUY";
    }
    else if(EMASignal == "SELL")
    {
+      // *** CHECK IF SELL SIGNAL RESET IS REQUIRED ***
+      if(g_waitSellSignalReset)
+      {
+         Print(">>> SELL Signal detected but waiting for reset (Phase 1: ", g_sellResetPhaseAboveEMA ? "Complete" : "Pending", ")");
+         return "WAIT";
+      }
       Print(">>> EMA Channel SELL Signal Confirmed!");
       return "SELL";
    }
