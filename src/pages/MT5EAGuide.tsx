@@ -1288,6 +1288,9 @@ void DrawTPSLLines()
    // Remove old lines
    ObjectsDeleteAll(0, TPPrefix);
    
+   // If hedge locked, don't draw any TP/SL lines
+   if(g_isHedgeLocked) return;
+   
    double avgBuy, lotsBuy, avgSell, lotsSell;
    GetAveragePriceAndLots(POSITION_TYPE_BUY, avgBuy, lotsBuy);
    GetAveragePriceAndLots(POSITION_TYPE_SELL, avgSell, lotsSell);
@@ -1419,7 +1422,14 @@ double ClosePositionsByType(ENUM_POSITION_TYPE posType)
 //+------------------------------------------------------------------+
 bool HedgePositionsByType(ENUM_POSITION_TYPE posType, double totalLots)
 {
-   // Check if already hedged - PREVENT MULTIPLE HEDGE ORDERS
+   // If global hedge lock is already active - NO MORE HEDGE ORDERS AT ALL
+   if(g_isHedgeLocked)
+   {
+      Print("HEDGE LOCK already active - NO more hedge orders allowed");
+      return false;
+   }
+   
+   // Check if this side already hedged - PREVENT MULTIPLE HEDGE ORDERS
    if(posType == POSITION_TYPE_BUY && g_isHedgedBuy)
    {
       Print("BUY side already hedged - skipping");
@@ -1441,7 +1451,7 @@ bool HedgePositionsByType(ENUM_POSITION_TYPE posType, double totalLots)
    if(trade.PositionOpen(_Symbol, hedgeType, totalLots, price, 0, 0, "HEDGE_LOCK"))
    {
       Print("HEDGE ", hedgeTypeStr, " opened: ", totalLots, " lots at ", price, " to lock loss");
-      Print("*** HEDGE LOCK ACTIVATED - All trading stopped until manual close ***");
+      Print("*** HEDGE LOCK ACTIVATED - All trading & TP/SL stopped until manual close ***");
       
       // Set hedge flag to prevent further hedge orders
       if(posType == POSITION_TYPE_BUY)
@@ -1449,8 +1459,11 @@ bool HedgePositionsByType(ENUM_POSITION_TYPE posType, double totalLots)
       else
          g_isHedgedSell = true;
       
-      // Set global hedge lock - STOPS ALL TRADING
+      // Set global hedge lock - STOPS ALL TRADING AND TP/SL
       g_isHedgeLocked = true;
+      
+      // Remove all TP/SL lines immediately
+      ObjectsDeleteAll(0, TPPrefix);
          
       return true;
    }
@@ -1539,6 +1552,12 @@ void CloseAllPositions()
 //+------------------------------------------------------------------+
 void CheckTPSLConditions()
 {
+   // If hedge locked, skip ALL TP/SL checks - wait for manual close only
+   if(g_isHedgeLocked)
+   {
+      return;
+   }
+   
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
    double totalPL = GetTotalFloatingPL();
    double buyPL = GetFloatingPLByType(POSITION_TYPE_BUY);
