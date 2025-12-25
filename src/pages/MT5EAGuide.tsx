@@ -182,6 +182,7 @@ input color    InpTPLineColor = clrLime;     // TP Line Color
 
 //--- [ STOP LOSS SETTINGS ] ----------------------------------------
 input string   InpSLHeader = "=== STOP LOSS SETTINGS ===";  // ___
+input bool     InpUseSLSettings = true;      // Enable Stop Loss Settings
 input ENUM_SL_ACTION_MODE InpSLActionMode = SL_ACTION_CLOSE;  // SL Action Mode
 
 // SL Fixed Dollar
@@ -259,9 +260,10 @@ datetime InitialSellBarTime = 0;
 int GridBuyCount = 0;
 int GridSellCount = 0;
 
-// Hedge Lock Flags (prevent multiple hedge orders)
+// Hedge Lock Flags (prevent multiple hedge orders and stop all trading)
 bool g_isHedgedBuy = false;   // True when BUY side is already hedged
 bool g_isHedgedSell = false;  // True when SELL side is already hedged
+bool g_isHedgeLocked = false; // True when ANY hedge is active - stops ALL new orders
 datetime LastGridBuyTime = 0;
 datetime LastGridSellTime = 0;
 
@@ -1382,6 +1384,13 @@ double ClosePositionsByType(ENUM_POSITION_TYPE posType)
       g_isHedgedSell = false;  // Reset hedge flag when positions closed
    }
    
+   // Reset global hedge lock if no more hedge positions
+   if(!g_isHedgedBuy && !g_isHedgedSell)
+   {
+      g_isHedgeLocked = false;
+      Print("Hedge lock released - trading resumed");
+   }
+   
    return closedProfit;
 }
 
@@ -1413,12 +1422,16 @@ bool HedgePositionsByType(ENUM_POSITION_TYPE posType, double totalLots)
    if(trade.PositionOpen(_Symbol, hedgeType, totalLots, price, 0, 0, "HEDGE_LOCK"))
    {
       Print("HEDGE ", hedgeTypeStr, " opened: ", totalLots, " lots at ", price, " to lock loss");
+      Print("*** HEDGE LOCK ACTIVATED - All trading stopped until manual close ***");
       
       // Set hedge flag to prevent further hedge orders
       if(posType == POSITION_TYPE_BUY)
          g_isHedgedBuy = true;
       else
          g_isHedgedSell = true;
+      
+      // Set global hedge lock - STOPS ALL TRADING
+      g_isHedgeLocked = true;
          
       return true;
    }
@@ -1499,6 +1512,7 @@ void CloseAllPositions()
    // Reset hedge flags when all positions closed
    g_isHedgedBuy = false;
    g_isHedgedSell = false;
+   g_isHedgeLocked = false;  // Reset global hedge lock
 }
 
 //+------------------------------------------------------------------+
@@ -1597,6 +1611,9 @@ void CheckTPSLConditions()
    }
    
    // ========== STOP LOSS LOGIC ==========
+   // Skip if SL Settings is disabled
+   if(!InpUseSLSettings) return;
+   
    // Mode: SL_ACTION_CLOSE = Close positions | SL_ACTION_HEDGE = Open hedge to lock loss
    
    // 1. SL Fixed Dollar
@@ -1943,11 +1960,19 @@ void CheckGridProfitSide()
 //+------------------------------------------------------------------+
 void OnTick()
 {
-   // Check TP/SL conditions first (every tick)
+   // Check TP/SL conditions first (every tick) - this still runs even in hedge lock
    CheckTPSLConditions();
    
    // Draw TP/SL lines (every tick for real-time update)
    DrawTPSLLines();
+   
+   // *** HEDGE LOCK CHECK ***
+   // If hedge is active, stop ALL trading activities (no Grid, no new signals)
+   if(g_isHedgeLocked)
+   {
+      UpdateChartComment("HEDGE_LOCKED", "Positions locked - Manual close required");
+      return;  // Exit OnTick - no further trading until manual intervention
+   }
    
    // Check Grid conditions (every tick for real-time)
    CheckGridLossSide();
