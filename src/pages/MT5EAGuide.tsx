@@ -21,6 +21,15 @@ const MT5EAGuide = () => {
 //| ===================== INPUT PARAMETERS ========================= |
 //+------------------------------------------------------------------+
 
+//--- [ SIGNAL STRATEGY SETTINGS ] ----------------------------------
+input string   InpSignalHeader = "=== SIGNAL STRATEGY SETTINGS ===";  // ___
+enum ENUM_SIGNAL_STRATEGY
+{
+   STRATEGY_ZIGZAG = 0,      // ZigZag++ Structure
+   STRATEGY_EMA_CHANNEL = 1  // EMA Channel (High/Low)
+};
+input ENUM_SIGNAL_STRATEGY InpSignalStrategy = STRATEGY_ZIGZAG;  // Signal Strategy
+
 //--- [ ZIGZAG++ SETTINGS ] -----------------------------------------
 input string   InpZigZagHeader = "=== ZIGZAG++ SETTINGS ===";  // ___
 input ENUM_TIMEFRAMES InpZigZagTimeframe = PERIOD_CURRENT;  // ZigZag Timeframe
@@ -39,6 +48,23 @@ enum ENUM_ZIGZAG_SIGNAL_MODE
    ZIGZAG_SINGLE = 1    // Single Signal (LL=BUY | HH=SELL)
 };
 input ENUM_ZIGZAG_SIGNAL_MODE InpZigZagSignalMode = ZIGZAG_BOTH;  // ZigZag Signal Mode
+
+//--- [ EMA CHANNEL SETTINGS ] --------------------------------------
+input string   InpEMAHeader = "=== EMA CHANNEL SETTINGS ===";  // ___
+input ENUM_TIMEFRAMES InpEMATimeframe = PERIOD_CURRENT;  // EMA Channel Timeframe
+input int      InpEMAHighPeriod = 20;         // EMA High Period
+input int      InpEMALowPeriod = 20;          // EMA Low Period
+input color    InpEMAHighColor = clrDodgerBlue;  // EMA High Line Color
+input color    InpEMALowColor = clrOrangeRed;    // EMA Low Line Color
+input bool     InpShowEMALines = true;        // Show EMA Lines on Chart
+
+// EMA Signal Bar Index
+enum ENUM_EMA_SIGNAL_BAR
+{
+   EMA_CURRENT_BAR = 0,    // Current Bar (Real-time)
+   EMA_LAST_BAR_CLOSED = 1 // Last Bar Closed (Confirmed)
+};
+input ENUM_EMA_SIGNAL_BAR InpEMASignalBar = EMA_LAST_BAR_CLOSED;  // Signal Bar Index
 
 //--- [ CDC ACTION ZONE SETTINGS ] ----------------------------------
 input string   InpCDCHeader    = "=== CDC ACTION ZONE SETTINGS ===";  // ___
@@ -201,6 +227,13 @@ color CDCZoneColor = clrWhite;
 string ZZPrefix = "ZZ_";
 string CDCPrefix = "CDC_";
 string TPPrefix = "TP_";
+string EMAPrefix = "EMA_";
+
+// EMA Channel Variables
+double EMAHigh = 0;
+double EMALow = 0;
+string EMASignal = "NONE";  // "BUY", "SELL", "NONE"
+datetime LastEMASignalTime = 0;
 
 // Extra chart for viewing ZigZag timeframe objects
 long ZZTFChartId = 0;
@@ -252,11 +285,13 @@ int OnInit()
    
    // Reset counters
    LastConfirmedZZTime = 0;
+   LastEMASignalTime = 0;
    GridBuyCount = 0;
    GridSellCount = 0;
    InitialBuyBarTime = 0;
    InitialSellBarTime = 0;
    
+   Print("Signal Strategy: ", EnumToString(InpSignalStrategy));
    Print("EA Started Successfully!");
    return(INIT_SUCCEEDED);
 }
@@ -270,6 +305,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, ZZPrefix);
    ObjectsDeleteAll(0, CDCPrefix);
    ObjectsDeleteAll(0, TPPrefix);
+   ObjectsDeleteAll(0, EMAPrefix);
    
    // Remove ZigZag objects from the ZigZag timeframe chart (if opened)
    if(ZZTFChartId > 0)
@@ -905,7 +941,133 @@ void DrawCDCOnChart(double &fast[], double &slow[], datetime &time[], int size)
 }
 
 //+------------------------------------------------------------------+
-//| Check if trade is allowed based on Trade Mode and CDC             |
+//| Calculate EMA Channel Values                                       |
+//+------------------------------------------------------------------+
+void CalculateEMAChannel()
+{
+   if(InpSignalStrategy != STRATEGY_EMA_CHANNEL)
+      return;
+   
+   double highArr[], lowArr[], closeArr[];
+   datetime timeArr[];
+   ArraySetAsSeries(highArr, true);
+   ArraySetAsSeries(lowArr, true);
+   ArraySetAsSeries(closeArr, true);
+   ArraySetAsSeries(timeArr, true);
+   
+   int barsNeeded = MathMax(InpEMAHighPeriod, InpEMALowPeriod) * 3 + 50;
+   
+   if(CopyHigh(_Symbol, InpEMATimeframe, 0, barsNeeded, highArr) < barsNeeded) return;
+   if(CopyLow(_Symbol, InpEMATimeframe, 0, barsNeeded, lowArr) < barsNeeded) return;
+   if(CopyClose(_Symbol, InpEMATimeframe, 0, barsNeeded, closeArr) < barsNeeded) return;
+   if(CopyTime(_Symbol, InpEMATimeframe, 0, barsNeeded, timeArr) < barsNeeded) return;
+   
+   // Calculate EMA of High prices
+   double emaHighArr[];
+   ArrayResize(emaHighArr, barsNeeded);
+   CalculateEMA(highArr, emaHighArr, InpEMAHighPeriod, barsNeeded);
+   
+   // Calculate EMA of Low prices
+   double emaLowArr[];
+   ArrayResize(emaLowArr, barsNeeded);
+   CalculateEMA(lowArr, emaLowArr, InpEMALowPeriod, barsNeeded);
+   
+   // Determine signal bar index based on setting
+   int signalBar = (InpEMASignalBar == EMA_CURRENT_BAR) ? 0 : 1;
+   int prevBar = signalBar + 1;
+   
+   EMAHigh = emaHighArr[signalBar];
+   EMALow = emaLowArr[signalBar];
+   
+   double signalClose = closeArr[signalBar];
+   double prevClose = closeArr[prevBar];
+   double prevEMAHigh = emaHighArr[prevBar];
+   double prevEMALow = emaLowArr[prevBar];
+   
+   // Check for EMA Channel crossover
+   // BUY Signal: Price crosses ABOVE both EMA lines (was below, now above)
+   bool wasBelow = (prevClose < prevEMALow);
+   bool isAbove = (signalClose > EMAHigh);
+   
+   // SELL Signal: Price crosses BELOW both EMA lines (was above, now below)
+   bool wasAbove = (prevClose > prevEMAHigh);
+   bool isBelow = (signalClose < EMALow);
+   
+   EMASignal = "NONE";
+   
+   if(wasBelow && isAbove)
+   {
+      EMASignal = "BUY";
+      Print("EMA Channel: BUY Signal - Price crossed ABOVE channel | Close: ", signalClose, " > EMA High: ", EMAHigh);
+   }
+   else if(wasAbove && isBelow)
+   {
+      EMASignal = "SELL";
+      Print("EMA Channel: SELL Signal - Price crossed BELOW channel | Close: ", signalClose, " < EMA Low: ", EMALow);
+   }
+   
+   // Draw EMA lines on chart
+   if(InpShowEMALines)
+   {
+      DrawEMAChannelOnChart(emaHighArr, emaLowArr, timeArr, barsNeeded);
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Draw EMA Channel Lines on Chart                                    |
+//+------------------------------------------------------------------+
+void DrawEMAChannelOnChart(double &emaHigh[], double &emaLow[], datetime &time[], int size)
+{
+   ObjectsDeleteAll(0, EMAPrefix);
+   
+   int maxBars = MathMin(100, size - 1);
+   
+   // Draw EMA High line
+   for(int i = 0; i < maxBars; i++)
+   {
+      string lineName = EMAPrefix + "High_" + IntegerToString(i);
+      datetime t1 = time[i + 1];
+      datetime t2 = time[i];
+      
+      ObjectCreate(0, lineName, OBJ_TREND, 0, t1, emaHigh[i + 1], t2, emaHigh[i]);
+      ObjectSetInteger(0, lineName, OBJPROP_COLOR, InpEMAHighColor);
+      ObjectSetInteger(0, lineName, OBJPROP_WIDTH, 2);
+      ObjectSetInteger(0, lineName, OBJPROP_RAY_RIGHT, false);
+      ObjectSetInteger(0, lineName, OBJPROP_SELECTABLE, false);
+   }
+   
+   // Draw EMA Low line
+   for(int i = 0; i < maxBars; i++)
+   {
+      string lineName = EMAPrefix + "Low_" + IntegerToString(i);
+      datetime t1 = time[i + 1];
+      datetime t2 = time[i];
+      
+      ObjectCreate(0, lineName, OBJ_TREND, 0, t1, emaLow[i + 1], t2, emaLow[i]);
+      ObjectSetInteger(0, lineName, OBJPROP_COLOR, InpEMALowColor);
+      ObjectSetInteger(0, lineName, OBJPROP_WIDTH, 2);
+      ObjectSetInteger(0, lineName, OBJPROP_RAY_RIGHT, false);
+      ObjectSetInteger(0, lineName, OBJPROP_SELECTABLE, false);
+   }
+   
+   // Draw status label
+   string labelName = EMAPrefix + "Status_Label";
+   ObjectCreate(0, labelName, OBJ_LABEL, 0, 0, 0);
+   ObjectSetInteger(0, labelName, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+   ObjectSetInteger(0, labelName, OBJPROP_XDISTANCE, 10);
+   ObjectSetInteger(0, labelName, OBJPROP_YDISTANCE, 70);
+   
+   string signalBarText = (InpEMASignalBar == EMA_CURRENT_BAR) ? "Current" : "LastClosed";
+   string statusText = "EMA Channel (" + EnumToString(InpEMATimeframe) + ") [" + signalBarText + "]";
+   statusText += " | H: " + DoubleToString(EMAHigh, _Digits) + " L: " + DoubleToString(EMALow, _Digits);
+   
+   ObjectSetString(0, labelName, OBJPROP_TEXT, statusText);
+   ObjectSetInteger(0, labelName, OBJPROP_COLOR, clrWhite);
+   ObjectSetInteger(0, labelName, OBJPROP_FONTSIZE, 10);
+   ObjectSetString(0, labelName, OBJPROP_FONT, "Arial");
+}
+
+
 //+------------------------------------------------------------------+
 bool IsTradeAllowed(string tradeType)
 {
@@ -1693,8 +1855,17 @@ void OnTick()
    // Calculate CDC Action Zone (higher timeframe)
    CalculateCDC();
    
-   // Calculate ZigZag++ (custom implementation)
-   CalculateZigZagPP();
+   // Calculate based on selected Signal Strategy
+   if(InpSignalStrategy == STRATEGY_ZIGZAG)
+   {
+      // Calculate ZigZag++ (custom implementation)
+      CalculateZigZagPP();
+   }
+   else if(InpSignalStrategy == STRATEGY_EMA_CHANNEL)
+   {
+      // Calculate EMA Channel
+      CalculateEMAChannel();
+   }
    
    if(InpUseTimeFilter && !IsWithinTradingHours())
    {
@@ -1702,7 +1873,8 @@ void OnTick()
       return;
    }
    
-   if(ZZPointCount < 4)
+   // Check if we have enough data based on strategy
+   if(InpSignalStrategy == STRATEGY_ZIGZAG && ZZPointCount < 4)
    {
       UpdateChartComment("WAIT", "Calculating ZigZag...");
       return;
@@ -1758,9 +1930,27 @@ void OnTick()
 }
 
 //+------------------------------------------------------------------+
-//| Analyze Signal - Based on ZigZag++ Labels                          |
+//| Analyze Signal - Based on Selected Strategy                        |
 //+------------------------------------------------------------------+
 string AnalyzeSignal()
+{
+   // Route to the appropriate signal analysis based on strategy
+   if(InpSignalStrategy == STRATEGY_ZIGZAG)
+   {
+      return AnalyzeZigZagSignal();
+   }
+   else if(InpSignalStrategy == STRATEGY_EMA_CHANNEL)
+   {
+      return AnalyzeEMAChannelSignal();
+   }
+   
+   return "WAIT";
+}
+
+//+------------------------------------------------------------------+
+//| Analyze ZigZag Signal                                              |
+//+------------------------------------------------------------------+
+string AnalyzeZigZagSignal()
 {
    if(ZZPointCount < 2)
       return "WAIT";
@@ -1810,6 +2000,38 @@ string AnalyzeSignal()
          Print(">>> NEW HH point - Triggering SELL signal! [Single Mode]");
          return "SELL";
       }
+   }
+   
+   return "WAIT";
+}
+
+//+------------------------------------------------------------------+
+//| Analyze EMA Channel Signal                                         |
+//+------------------------------------------------------------------+
+string AnalyzeEMAChannelSignal()
+{
+   datetime currentBarTime = iTime(_Symbol, InpEMATimeframe, 0);
+   
+   // For Last Bar Closed mode, check if this is a new bar
+   if(InpEMASignalBar == EMA_LAST_BAR_CLOSED)
+   {
+      if(currentBarTime == LastEMASignalTime)
+      {
+         return "WAIT";
+      }
+      LastEMASignalTime = currentBarTime;
+   }
+   
+   // Return the EMA signal calculated in CalculateEMAChannel()
+   if(EMASignal == "BUY")
+   {
+      Print(">>> EMA Channel BUY Signal Confirmed!");
+      return "BUY";
+   }
+   else if(EMASignal == "SELL")
+   {
+      Print(">>> EMA Channel SELL Signal Confirmed!");
+      return "SELL";
    }
    
    return "WAIT";
@@ -1901,23 +2123,39 @@ void UpdateChartComment(string signal, string reason = "")
    text = text + "=================================" + nl;
    text = text + "Symbol: " + _Symbol + nl;
    text = text + "Entry TF: " + EnumToString(Period()) + nl;
+   text = text + "Signal Strategy: " + EnumToString(InpSignalStrategy) + nl;
    text = text + "Trade Mode: " + GetTradeModeString() + nl;
    text = text + "Lot Mode: " + EnumToString(InpLotMode) + nl;
    text = text + "---------------------------------" + nl;
    
-   text = text + "ZIGZAG++ STATUS:" + nl;
-   text = text + "  Last Point: " + LastZZLabel + nl;
-   text = text + "  Total Points: " + IntegerToString(ZZPointCount) + nl;
-   
-   if(ZZPointCount >= 4)
+   // Show status based on selected strategy
+   if(InpSignalStrategy == STRATEGY_ZIGZAG)
    {
-      text = text + "  Recent: ";
-      for(int i = 0; i < 4 && i < ZZPointCount; i++)
+      text = text + "ZIGZAG++ STATUS:" + nl;
+      text = text + "  TF: " + EnumToString(InpZigZagTimeframe) + nl;
+      text = text + "  Last Point: " + LastZZLabel + nl;
+      text = text + "  Total Points: " + IntegerToString(ZZPointCount) + nl;
+      
+      if(ZZPointCount >= 4)
       {
-         text = text + ZZPoints[i].label;
-         if(i < 3) text = text + " > ";
+         text = text + "  Recent: ";
+         for(int i = 0; i < 4 && i < ZZPointCount; i++)
+         {
+            text = text + ZZPoints[i].label;
+            if(i < 3) text = text + " > ";
+         }
+         text = text + nl;
       }
-      text = text + nl;
+   }
+   else if(InpSignalStrategy == STRATEGY_EMA_CHANNEL)
+   {
+      text = text + "EMA CHANNEL STATUS:" + nl;
+      text = text + "  TF: " + EnumToString(InpEMATimeframe) + nl;
+      text = text + "  EMA High (" + IntegerToString(InpEMAHighPeriod) + "): " + DoubleToString(EMAHigh, _Digits) + nl;
+      text = text + "  EMA Low (" + IntegerToString(InpEMALowPeriod) + "): " + DoubleToString(EMALow, _Digits) + nl;
+      string signalBarMode = (InpEMASignalBar == EMA_CURRENT_BAR) ? "Current Bar" : "Last Bar Closed";
+      text = text + "  Signal Mode: " + signalBarMode + nl;
+      text = text + "  Signal: " + EMASignal + nl;
    }
    
    text = text + "---------------------------------" + nl;
