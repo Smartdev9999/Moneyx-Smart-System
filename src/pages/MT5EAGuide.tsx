@@ -18,16 +18,66 @@ const MT5EAGuide = () => {
 #include <Trade/Trade.mqh>
 
 //+------------------------------------------------------------------+
-//| ===================== INPUT PARAMETERS ========================= |
+//| ======================= ENUMERATIONS =========================== |
 //+------------------------------------------------------------------+
 
-//--- [ SIGNAL STRATEGY SETTINGS ] ----------------------------------
-input string   InpSignalHeader = "=== SIGNAL STRATEGY SETTINGS ===";  // ___
+// Signal Strategy Selection
 enum ENUM_SIGNAL_STRATEGY
 {
    STRATEGY_ZIGZAG = 0,      // ZigZag++ Structure
    STRATEGY_EMA_CHANNEL = 1  // EMA Channel (High/Low)
 };
+
+// ZigZag Signal Mode
+enum ENUM_ZIGZAG_SIGNAL_MODE
+{
+   ZIGZAG_BOTH = 0,     // Both Signals (LL,HL=BUY | HH,LH=SELL)
+   ZIGZAG_SINGLE = 1    // Single Signal (LL=BUY | HH=SELL)
+};
+
+// EMA Signal Bar Index
+enum ENUM_EMA_SIGNAL_BAR
+{
+   EMA_CURRENT_BAR = 0,    // Current Bar (Real-time)
+   EMA_LAST_BAR_CLOSED = 1 // Last Bar Closed (Confirmed)
+};
+
+// Trade Mode
+enum ENUM_TRADE_MODE
+{
+   TRADE_BUY_SELL = 0,  // Buy and Sell
+   TRADE_BUY_ONLY = 1,  // Buy Only
+   TRADE_SELL_ONLY = 2  // Sell Only
+};
+
+// Lot Calculation Mode
+enum ENUM_LOT_MODE
+{
+   LOT_FIXED = 0,       // Fixed Lot
+   LOT_RISK_PERCENT = 1,  // Risk % of Balance
+   LOT_RISK_DOLLAR = 2    // Fixed Dollar Risk
+};
+
+// Grid Lot Mode
+enum ENUM_GRID_LOT_MODE
+{
+   GRID_LOT_CUSTOM = 0,    // Custom Lot (use string)
+   GRID_LOT_ADD = 1        // Add Lot (InitialLot + AddLot*Level)
+};
+
+// Grid Gap Type
+enum ENUM_GRID_GAP_TYPE
+{
+   GAP_FIXED_POINTS = 0,    // Fixed Points
+   GAP_CUSTOM_DISTANCE = 1  // Custom Distance
+};
+
+//+------------------------------------------------------------------+
+//| ===================== INPUT PARAMETERS ========================= |
+//+------------------------------------------------------------------+
+
+//--- [ SIGNAL STRATEGY SETTINGS ] ----------------------------------
+input string   InpSignalHeader = "=== SIGNAL STRATEGY SETTINGS ===";  // ___
 input ENUM_SIGNAL_STRATEGY InpSignalStrategy = STRATEGY_ZIGZAG;  // Signal Strategy
 
 //--- [ ZIGZAG++ SETTINGS ] -----------------------------------------
@@ -40,13 +90,6 @@ input color    InpBullColor    = clrLime;     // Bull Color (HL labels)
 input color    InpBearColor    = clrRed;      // Bear Color (HH, LH labels)
 input bool     InpShowLabels   = true;        // Show HH/HL/LH/LL Labels
 input bool     InpShowLines    = true;        // Show ZigZag Lines
-
-// ZigZag Signal Mode
-enum ENUM_ZIGZAG_SIGNAL_MODE
-{
-   ZIGZAG_BOTH = 0,     // Both Signals (LL,HL=BUY | HH,LH=SELL)
-   ZIGZAG_SINGLE = 1    // Single Signal (LL=BUY | HH=SELL)
-};
 input ENUM_ZIGZAG_SIGNAL_MODE InpZigZagSignalMode = ZIGZAG_BOTH;  // ZigZag Signal Mode
 
 //--- [ EMA CHANNEL SETTINGS ] --------------------------------------
@@ -57,13 +100,6 @@ input int      InpEMALowPeriod = 20;          // EMA Low Period
 input color    InpEMAHighColor = clrDodgerBlue;  // EMA High Line Color
 input color    InpEMALowColor = clrOrangeRed;    // EMA Low Line Color
 input bool     InpShowEMALines = true;        // Show EMA Lines on Chart
-
-// EMA Signal Bar Index
-enum ENUM_EMA_SIGNAL_BAR
-{
-   EMA_CURRENT_BAR = 0,    // Current Bar (Real-time)
-   EMA_LAST_BAR_CLOSED = 1 // Last Bar Closed (Confirmed)
-};
 input ENUM_EMA_SIGNAL_BAR InpEMASignalBar = EMA_LAST_BAR_CLOSED;  // Signal Bar Index
 
 //--- [ CDC ACTION ZONE SETTINGS ] ----------------------------------
@@ -76,22 +112,10 @@ input bool     InpShowCDCLines = true;        // Show CDC Lines on Chart
 
 //--- [ TRADE MODE SETTINGS ] ---------------------------------------
 input string   InpTradeModeHeader = "=== TRADE MODE SETTINGS ===";  // ___
-enum ENUM_TRADE_MODE
-{
-   TRADE_BUY_SELL = 0,  // Buy and Sell
-   TRADE_BUY_ONLY = 1,  // Buy Only
-   TRADE_SELL_ONLY = 2  // Sell Only
-};
 input ENUM_TRADE_MODE InpTradeMode = TRADE_BUY_SELL;  // Trade Mode
 
 //--- [ TRADING SETTINGS ] ------------------------------------------
 input string   InpTradingHeader = "=== TRADING SETTINGS ===";  // ___
-enum ENUM_LOT_MODE
-{
-   LOT_FIXED = 0,       // Fixed Lot
-   LOT_RISK_PERCENT = 1,  // Risk % of Balance
-   LOT_RISK_DOLLAR = 2    // Fixed Dollar Risk
-};
 input ENUM_LOT_MODE InpLotMode = LOT_FIXED;  // Lot Mode
 input double   InpInitialLot   = 0.01;       // Initial Lot Size
 input double   InpRiskPercent  = 1.0;        // Risk % of Balance (for Risk Mode)
@@ -101,27 +125,12 @@ input int      InpMagicNumber  = 123456;     // Magic Number
 //--- [ GRID LOSS SIDE SETTINGS ] -----------------------------------
 input string   InpGridLossHeader = "----- Grid Loss Side -----";  // ___
 input int      InpGridLossMaxTrades = 5;     // Max Grid Trades (0 - Disable Grid Trade)
-
-// Grid Lot Mode
-enum ENUM_GRID_LOT_MODE
-{
-   GRID_LOT_CUSTOM = 0,    // Custom Lot (use string)
-   GRID_LOT_ADD = 1        // Add Lot (InitialLot + AddLot*Level)
-};
 input ENUM_GRID_LOT_MODE InpGridLossLotMode = GRID_LOT_ADD;  // Grid Lot Mode
 input string   InpGridLossCustomLot = "0.01;0.02;0.03;0.04;0.05";  // Custom Lot (separate by semicolon ;)
 input double   InpGridLossAddLot = 0.4;      // Add Lot per Level (0 = Same as Initial)
-
-// Grid Gap Mode
-enum ENUM_GRID_GAP_TYPE
-{
-   GAP_FIXED_POINTS = 0,    // Fixed Points
-   GAP_CUSTOM_DISTANCE = 1  // Custom Distance
-};
 input ENUM_GRID_GAP_TYPE InpGridLossGapType = GAP_FIXED_POINTS;  // Grid Gap Type
 input int      InpGridLossPoints = 50;       // Grid Points (points)
 input string   InpGridLossCustomDist = "100;200;300;400;500";  // Custom Grid Distance (separate by semicolon ;)
-
 input bool     InpGridLossOnlySignal = false;  // Grid Trade Only in Signal
 input bool     InpGridLossNewCandle = true;    // Grid Trade Only New Candle
 input bool     InpGridLossDontOpenSameCandle = true;  // Don't Open in Same Initial Candle
@@ -130,17 +139,12 @@ input bool     InpGridLossDontOpenSameCandle = true;  // Don't Open in Same Init
 input string   InpGridProfitHeader = "----- Grid Profit Side -----";  // ___
 input bool     InpUseGridProfit = true;      // Use Profit Grid
 input int      InpGridProfitMaxTrades = 3;   // Max Grid Trades (0 - Disable Grid Trade)
-
-// Grid Lot Mode
 input ENUM_GRID_LOT_MODE InpGridProfitLotMode = GRID_LOT_ADD;  // Grid Lot Mode
 input string   InpGridProfitCustomLot = "0.01;0.02;0.03;0.04;0.05";  // Custom Lot (separate by semicolon ;)
 input double   InpGridProfitAddLot = 0.4;    // Add Lot per Level (0 = Same as Initial)
-
-// Grid Gap Mode
 input ENUM_GRID_GAP_TYPE InpGridProfitGapType = GAP_CUSTOM_DISTANCE;  // Grid Gap Type
 input int      InpGridProfitPoints = 100;    // Grid Points (points)
 input string   InpGridProfitCustomDist = "100;200;500";  // Custom Grid Distance (separate by semicolon ;)
-
 input bool     InpGridProfitOnlySignal = false;  // Grid Trade Only in Signal
 input bool     InpGridProfitNewCandle = true;    // Grid Trade Only New Candle
 input bool     InpGridProfitDontOpenSameCandle = true;  // Don't Open in Same Initial Candle
