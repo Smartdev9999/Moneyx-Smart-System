@@ -2682,9 +2682,25 @@ void CheckGridLossSide()
    
    // Check BUY Grid (when price goes down = loss side for BUY)
    int buyCount = CountPositions(POSITION_TYPE_BUY);
-   // Grid Loss count = buyCount - 1 (excluding Initial Order)
-   // Max Grid = Initial Order + Max Grid Loss orders
-   int buyGridLossCount = buyCount - 1;
+   
+   // *** นับ Grid Loss orders แยกจาก Grid Profit โดยดูจาก comment ***
+   int buyGridLossCount = 0;
+   for(int i = 0; i < PositionsTotal(); i++)
+   {
+      if(PositionGetSymbol(i) == _Symbol)
+      {
+         if(PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
+         {
+            if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
+            {
+               string comment = PositionGetString(POSITION_COMMENT);
+               if(StringFind(comment, "Grid Loss") >= 0)
+                  buyGridLossCount++;
+            }
+         }
+      }
+   }
+   
    if(buyCount > 0 && buyGridLossCount < InpGridLossMaxTrades)
    {
       // Check if should skip same candle
@@ -2702,7 +2718,7 @@ void CheckGridLossSide()
       double lastBuyPrice = GetLastPositionPrice(POSITION_TYPE_BUY);
       
       // *** Grid Loss นับ level แยกจาก Grid Profit ***
-      // buyGridLossCount = จำนวน Grid Loss orders ที่มีอยู่แล้ว (ไม่รวม Initial Order)
+      // buyGridLossCount = จำนวน Grid Loss orders ที่มีอยู่แล้ว (นับจาก comment)
       // gridLevel สำหรับ Grid Loss = buyGridLossCount + 1 (ออเดอร์ถัดไป)
       int gridLossLevel = buyGridLossCount + 1;
       int distance = GetGridDistance(true, buyGridLossCount);
@@ -2725,8 +2741,25 @@ void CheckGridLossSide()
    
    // Check SELL Grid (when price goes up = loss side for SELL)
    int sellCount = CountPositions(POSITION_TYPE_SELL);
-   // Grid Loss count = sellCount - 1 (excluding Initial Order)
-   int sellGridLossCount = sellCount - 1;
+   
+   // *** นับ Grid Loss orders แยกจาก Grid Profit โดยดูจาก comment ***
+   int sellGridLossCount = 0;
+   for(int i = 0; i < PositionsTotal(); i++)
+   {
+      if(PositionGetSymbol(i) == _Symbol)
+      {
+         if(PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
+         {
+            if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_SELL)
+            {
+               string comment = PositionGetString(POSITION_COMMENT);
+               if(StringFind(comment, "Grid Loss") >= 0)
+                  sellGridLossCount++;
+            }
+         }
+      }
+   }
+   
    if(sellCount > 0 && sellGridLossCount < InpGridLossMaxTrades)
    {
       // Check if should skip same candle
@@ -2744,7 +2777,7 @@ void CheckGridLossSide()
       double lastSellPrice = GetLastPositionPrice(POSITION_TYPE_SELL);
       
       // *** Grid Loss นับ level แยกจาก Grid Profit ***
-      // sellGridLossCount = จำนวน Grid Loss orders ที่มีอยู่แล้ว (ไม่รวม Initial Order)
+      // sellGridLossCount = จำนวน Grid Loss orders ที่มีอยู่แล้ว (นับจาก comment)
       // gridLevel สำหรับ Grid Loss = sellGridLossCount + 1 (ออเดอร์ถัดไป)
       int gridLossLevel = sellGridLossCount + 1;
       int distance = GetGridDistance(true, sellGridLossCount);
