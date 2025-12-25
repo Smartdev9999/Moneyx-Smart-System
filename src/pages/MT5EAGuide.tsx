@@ -204,8 +204,27 @@ input color    InpSLLineColor = clrRed;      // SL Line Color
 //--- [ TIME FILTER ] -----------------------------------------------
 input string   InpTimeHeader   = "=== TIME FILTER ===";  // ___
 input bool     InpUseTimeFilter = false;      // Use Time Filter
-input int      InpStartHour    = 8;           // Start Hour
-input int      InpEndHour      = 20;          // End Hour
+
+// Tradable Time Sessions [Server Time] (format: hh:mm-hh:mm)
+input string   InpSession1 = "03:10-12:40";   // Tradable Session #1 [hh:mm-hh:mm]
+input string   InpSession2 = "15:10-22:00";   // Tradable Session #2 [hh:mm-hh:mm]
+input string   InpSession3 = "";              // Tradable Session #3 [hh:mm-hh:mm]
+
+// Friday Special Sessions (if empty, use normal sessions)
+input string   InpFridayHeader = "----- Friday Sessions -----";  // ___
+input string   InpFridaySession1 = "03:10-12:40";  // Friday Session #1 [hh:mm-hh:mm]
+input string   InpFridaySession2 = "";             // Friday Session #2 [hh:mm-hh:mm]
+input string   InpFridaySession3 = "";             // Friday Session #3 [hh:mm-hh:mm]
+
+// Tradable Day Settings
+input string   InpDayHeader = "----- Tradable Days -----";  // ___
+input bool     InpTradeMonday = true;         // Monday
+input bool     InpTradeTuesday = true;        // Tuesday
+input bool     InpTradeWednesday = true;      // Wednesday
+input bool     InpTradeThursday = true;       // Thursday
+input bool     InpTradeFriday = true;         // Friday
+input bool     InpTradeSaturday = false;      // Saturday
+input bool     InpTradeSunday = false;        // Sunday
 
 //+------------------------------------------------------------------+
 //| ===================== GLOBAL VARIABLES ========================= |
@@ -2235,13 +2254,127 @@ int CountOpenOrders()
 }
 
 //+------------------------------------------------------------------+
+//| Parse time string "hh:mm" to minutes from midnight               |
+//+------------------------------------------------------------------+
+int ParseTimeToMinutes(string timeStr)
+{
+   if(StringLen(timeStr) < 5) return -1;
+   
+   int colonPos = StringFind(timeStr, ":");
+   if(colonPos < 0) return -1;
+   
+   string hourStr = StringSubstr(timeStr, 0, colonPos);
+   string minStr = StringSubstr(timeStr, colonPos + 1, 2);
+   
+   int hour = (int)StringToInteger(hourStr);
+   int min = (int)StringToInteger(minStr);
+   
+   if(hour < 0 || hour > 23 || min < 0 || min > 59) return -1;
+   
+   return hour * 60 + min;
+}
+
+//+------------------------------------------------------------------+
+//| Parse session string "hh:mm-hh:mm" and check if time is in range |
+//+------------------------------------------------------------------+
+bool IsTimeInSession(string session, int currentMinutes)
+{
+   if(StringLen(session) < 11) return false;  // Minimum "00:00-23:59"
+   
+   int dashPos = StringFind(session, "-");
+   if(dashPos < 0) return false;
+   
+   string startStr = StringSubstr(session, 0, dashPos);
+   string endStr = StringSubstr(session, dashPos + 1);
+   
+   int startMinutes = ParseTimeToMinutes(startStr);
+   int endMinutes = ParseTimeToMinutes(endStr);
+   
+   if(startMinutes < 0 || endMinutes < 0) return false;
+   
+   // Handle normal case (e.g., 08:00-20:00)
+   if(startMinutes <= endMinutes)
+   {
+      return (currentMinutes >= startMinutes && currentMinutes < endMinutes);
+   }
+   // Handle overnight case (e.g., 22:00-06:00)
+   else
+   {
+      return (currentMinutes >= startMinutes || currentMinutes < endMinutes);
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Check if current day is allowed for trading                       |
+//+------------------------------------------------------------------+
+bool IsTradableDay(int dayOfWeek)
+{
+   switch(dayOfWeek)
+   {
+      case 0: return InpTradeSunday;
+      case 1: return InpTradeMonday;
+      case 2: return InpTradeTuesday;
+      case 3: return InpTradeWednesday;
+      case 4: return InpTradeThursday;
+      case 5: return InpTradeFriday;
+      case 6: return InpTradeSaturday;
+      default: return false;
+   }
+}
+
+//+------------------------------------------------------------------+
 //| Check if within trading hours                                      |
 //+------------------------------------------------------------------+
 bool IsWithinTradingHours()
 {
    MqlDateTime dt;
    TimeToStruct(TimeCurrent(), dt);
-   return (dt.hour >= InpStartHour && dt.hour < InpEndHour);
+   
+   // Check if trading day is allowed
+   if(!IsTradableDay(dt.day_of_week))
+      return false;
+   
+   // Calculate current time in minutes from midnight
+   int currentMinutes = dt.hour * 60 + dt.min;
+   
+   // Check if Friday - use Friday sessions if available
+   bool isFriday = (dt.day_of_week == 5);
+   
+   if(isFriday)
+   {
+      // Check Friday sessions first (if any are set)
+      bool hasFridaySessions = (StringLen(InpFridaySession1) >= 5 || 
+                                 StringLen(InpFridaySession2) >= 5 || 
+                                 StringLen(InpFridaySession3) >= 5);
+      
+      if(hasFridaySessions)
+      {
+         // Use Friday sessions
+         if(StringLen(InpFridaySession1) >= 5 && IsTimeInSession(InpFridaySession1, currentMinutes))
+            return true;
+         if(StringLen(InpFridaySession2) >= 5 && IsTimeInSession(InpFridaySession2, currentMinutes))
+            return true;
+         if(StringLen(InpFridaySession3) >= 5 && IsTimeInSession(InpFridaySession3, currentMinutes))
+            return true;
+            
+         return false;  // Friday has special sessions but not in any
+      }
+      // If no Friday sessions set, fall through to normal sessions
+   }
+   
+   // Check normal sessions
+   if(StringLen(InpSession1) >= 5 && IsTimeInSession(InpSession1, currentMinutes))
+      return true;
+   if(StringLen(InpSession2) >= 5 && IsTimeInSession(InpSession2, currentMinutes))
+      return true;
+   if(StringLen(InpSession3) >= 5 && IsTimeInSession(InpSession3, currentMinutes))
+      return true;
+   
+   // If no sessions are set, allow trading all day
+   if(StringLen(InpSession1) < 5 && StringLen(InpSession2) < 5 && StringLen(InpSession3) < 5)
+      return true;
+   
+   return false;
 }
 
 //+------------------------------------------------------------------+
