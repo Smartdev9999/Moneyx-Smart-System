@@ -21,6 +21,33 @@ const MT5EAGuide = () => {
 //| ======================= ENUMERATIONS =========================== |
 //+------------------------------------------------------------------+
 
+// Timeframe Selection (Built-in MQL5 Enum)
+enum ENUM_TIMEFRAMES
+{
+   PERIOD_CURRENT = 0,   // Current Timeframe
+   PERIOD_M1 = 1,        // 1 Minute
+   PERIOD_M2 = 2,        // 2 Minutes
+   PERIOD_M3 = 3,        // 3 Minutes
+   PERIOD_M4 = 4,        // 4 Minutes
+   PERIOD_M5 = 5,        // 5 Minutes
+   PERIOD_M6 = 6,        // 6 Minutes
+   PERIOD_M10 = 10,      // 10 Minutes
+   PERIOD_M12 = 12,      // 12 Minutes
+   PERIOD_M15 = 15,      // 15 Minutes
+   PERIOD_M20 = 20,      // 20 Minutes
+   PERIOD_M30 = 30,      // 30 Minutes
+   PERIOD_H1 = 16385,    // 1 Hour
+   PERIOD_H2 = 16386,    // 2 Hours
+   PERIOD_H3 = 16387,    // 3 Hours
+   PERIOD_H4 = 16388,    // 4 Hours
+   PERIOD_H6 = 16390,    // 6 Hours
+   PERIOD_H8 = 16392,    // 8 Hours
+   PERIOD_H12 = 16396,   // 12 Hours
+   PERIOD_D1 = 16408,    // Daily
+   PERIOD_W1 = 32769,    // Weekly
+   PERIOD_MN1 = 49153    // Monthly
+};
+
 // Signal Strategy Selection
 enum ENUM_SIGNAL_STRATEGY
 {
