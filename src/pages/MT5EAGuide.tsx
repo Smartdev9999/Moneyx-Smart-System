@@ -21,31 +21,32 @@ const MT5EAGuide = () => {
 //| ======================= ENUMERATIONS =========================== |
 //+------------------------------------------------------------------+
 
-// Timeframe Selection (Built-in MQL5 Enum)
-enum ENUM_TIMEFRAMES
+// Timeframe Selection (Dropdown-friendly wrapper for MQL5 ENUM_TIMEFRAMES)
+// NOTE: We intentionally avoid PERIOD_* names because they already exist as built-ins.
+enum ENUM_TIMEFRAMES_MENU
 {
-   PERIOD_CURRENT = 0,   // Current Timeframe
-   PERIOD_M1 = 1,        // 1 Minute
-   PERIOD_M2 = 2,        // 2 Minutes
-   PERIOD_M3 = 3,        // 3 Minutes
-   PERIOD_M4 = 4,        // 4 Minutes
-   PERIOD_M5 = 5,        // 5 Minutes
-   PERIOD_M6 = 6,        // 6 Minutes
-   PERIOD_M10 = 10,      // 10 Minutes
-   PERIOD_M12 = 12,      // 12 Minutes
-   PERIOD_M15 = 15,      // 15 Minutes
-   PERIOD_M20 = 20,      // 20 Minutes
-   PERIOD_M30 = 30,      // 30 Minutes
-   PERIOD_H1 = 16385,    // 1 Hour
-   PERIOD_H2 = 16386,    // 2 Hours
-   PERIOD_H3 = 16387,    // 3 Hours
-   PERIOD_H4 = 16388,    // 4 Hours
-   PERIOD_H6 = 16390,    // 6 Hours
-   PERIOD_H8 = 16392,    // 8 Hours
-   PERIOD_H12 = 16396,   // 12 Hours
-   PERIOD_D1 = 16408,    // Daily
-   PERIOD_W1 = 32769,    // Weekly
-   PERIOD_MN1 = 49153    // Monthly
+   TF_CURRENT = 0,   // Current Timeframe
+   TF_M1 = 1,        // 1 Minute
+   TF_M2 = 2,        // 2 Minutes
+   TF_M3 = 3,        // 3 Minutes
+   TF_M4 = 4,        // 4 Minutes
+   TF_M5 = 5,        // 5 Minutes
+   TF_M6 = 6,        // 6 Minutes
+   TF_M10 = 10,      // 10 Minutes
+   TF_M12 = 12,      // 12 Minutes
+   TF_M15 = 15,      // 15 Minutes
+   TF_M20 = 20,      // 20 Minutes
+   TF_M30 = 30,      // 30 Minutes
+   TF_H1 = 16385,    // 1 Hour
+   TF_H2 = 16386,    // 2 Hours
+   TF_H3 = 16387,    // 3 Hours
+   TF_H4 = 16388,    // 4 Hours
+   TF_H6 = 16390,    // 6 Hours
+   TF_H8 = 16392,    // 8 Hours
+   TF_H12 = 16396,   // 12 Hours
+   TF_D1 = 16408,    // Daily
+   TF_W1 = 32769,    // Weekly
+   TF_MN1 = 49153    // Monthly
 };
 
 // Signal Strategy Selection
@@ -109,7 +110,7 @@ input ENUM_SIGNAL_STRATEGY InpSignalStrategy = STRATEGY_ZIGZAG;  // Signal Strat
 
 //--- [ ZIGZAG++ SETTINGS ] -----------------------------------------
 input string   InpZigZagHeader = "=== ZIGZAG++ SETTINGS ===";  // ___
-input ENUM_TIMEFRAMES InpZigZagTimeframe = PERIOD_CURRENT;  // ZigZag Timeframe
+input ENUM_TIMEFRAMES_MENU InpZigZagTimeframe = TF_CURRENT;  // ZigZag Timeframe
 input int      InpDepth        = 12;          // ZigZag Depth
 input int      InpDeviation    = 5;           // ZigZag Deviation (pips)
 input int      InpBackstep     = 2;           // ZigZag Backstep
@@ -121,7 +122,7 @@ input ENUM_ZIGZAG_SIGNAL_MODE InpZigZagSignalMode = ZIGZAG_BOTH;  // ZigZag Sign
 
 //--- [ EMA CHANNEL SETTINGS ] --------------------------------------
 input string   InpEMAHeader = "=== EMA CHANNEL SETTINGS ===";  // ___
-input ENUM_TIMEFRAMES InpEMATimeframe = PERIOD_CURRENT;  // EMA Channel Timeframe
+input ENUM_TIMEFRAMES_MENU InpEMATimeframe = TF_CURRENT;  // EMA Channel Timeframe
 input int      InpEMAHighPeriod = 20;         // EMA High Period
 input int      InpEMALowPeriod = 20;          // EMA Low Period
 input color    InpEMAHighColor = clrDodgerBlue;  // EMA High Line Color
@@ -132,7 +133,7 @@ input ENUM_EMA_SIGNAL_BAR InpEMASignalBar = EMA_LAST_BAR_CLOSED;  // Signal Bar 
 //--- [ CDC ACTION ZONE SETTINGS ] ----------------------------------
 input string   InpCDCHeader    = "=== CDC ACTION ZONE SETTINGS ===";  // ___
 input bool     InpUseCDCFilter = true;        // Use CDC Action Zone Filter
-input ENUM_TIMEFRAMES InpCDCTimeframe = PERIOD_D1;  // CDC Filter Timeframe
+input ENUM_TIMEFRAMES_MENU InpCDCTimeframe = TF_D1;  // CDC Filter Timeframe
 input int      InpCDCFastPeriod = 12;         // CDC Fast EMA Period
 input int      InpCDCSlowPeriod = 26;         // CDC Slow EMA Period
 input bool     InpShowCDCLines = true;        // Show CDC Lines on Chart
@@ -305,9 +306,9 @@ int OnInit()
    
    // Open a chart for the selected ZigZag timeframe (so you can SEE the objects there)
    ZZTFChartId = 0;
-   if(InpZigZagTimeframe != PERIOD_CURRENT && InpZigZagTimeframe != Period())
+   if(InpZigZagTimeframe != TF_CURRENT && InpZigZagTimeframe != Period())
    {
-      ZZTFChartId = ChartOpen(_Symbol, InpZigZagTimeframe);
+      ZZTFChartId = ChartOpen(_Symbol, (ENUM_TIMEFRAMES)InpZigZagTimeframe);
       if(ZZTFChartId > 0)
          Print("ZigZag TF chart opened: ", ZZTFChartId, " (", EnumToString(InpZigZagTimeframe), ")");
       else
@@ -685,7 +686,7 @@ void CalculateZigZagPP()
 datetime ConvertToChartTime(datetime zzTime)
 {
    // If using current timeframe, no conversion needed
-   if(InpZigZagTimeframe == PERIOD_CURRENT || InpZigZagTimeframe == Period())
+   if(InpZigZagTimeframe == TF_CURRENT || InpZigZagTimeframe == Period())
       return zzTime;
    
    // Find the bar index on current chart that corresponds to this time
@@ -702,7 +703,7 @@ datetime ConvertToChartTime(datetime zzTime)
 double GetChartPrice(ZigZagPoint &zp)
 {
    // If using current timeframe, use original price
-   if(InpZigZagTimeframe == PERIOD_CURRENT || InpZigZagTimeframe == Period())
+   if(InpZigZagTimeframe == TF_CURRENT || InpZigZagTimeframe == Period())
       return zp.price;
    
    // Find the bar on current chart
@@ -723,7 +724,7 @@ double GetChartPrice(ZigZagPoint &zp)
 void DrawZigZagOnChart()
 {
    // Draw on BOTH current chart AND ZigZag timeframe for visibility
-   bool drawBothTimeframes = (InpZigZagTimeframe != PERIOD_CURRENT && InpZigZagTimeframe != Period());
+   bool drawBothTimeframes = (InpZigZagTimeframe != TF_CURRENT && InpZigZagTimeframe != Period());
    
    for(int i = 0; i < ZZPointCount - 1; i++)
    {
