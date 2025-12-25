@@ -1757,8 +1757,8 @@ void DrawPAArrow(string tradeType, string paPattern, datetime barTime, double pr
    avgRange /= 10;
    
    // Dynamic offsets based on average range
-   double arrowOffset = avgRange * 0.3;    // Arrow distance from candle
-   double labelOffset = avgRange * 0.8;    // Label distance from candle (further than arrow)
+   double arrowOffset = avgRange * 0.4;    // Arrow distance from candle
+   double labelOffset = avgRange * 1.2;    // Label distance from candle (much further than arrow)
    
    // Create Arrow Object
    string arrowName = PAPrefix + "Arrow_" + uniqueId;
