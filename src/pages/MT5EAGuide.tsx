@@ -201,6 +201,35 @@ input double   InpSLPercent = 3.0;           // SL Percent of Balance (%)
 input bool     InpShowSLLine = true;         // Show SL Line
 input color    InpSLLineColor = clrRed;      // SL Line Color
 
+//--- [ PRICE ACTION CONFIRMATION SETTINGS ] ------------------------
+input string   InpPAHeader = "=== PRICE ACTION CONFIRMATION ===";  // ___
+input bool     InpUsePAConfirm = false;       // Use Price Action Confirmation
+input int      InpPALookback = 3;             // Max Candles to Wait for PA (1-10)
+
+// Bullish PA Patterns
+input string   InpPABullHeader = "----- Bullish Patterns -----";  // ___
+input bool     InpPAHammer = true;            // Hammer / Pin Bar (Bullish)
+input bool     InpPABullEngulfing = true;     // Bullish Engulfing
+input bool     InpPATweezerBottom = true;     // Tweezer Bottom
+input bool     InpPAMorningStar = true;       // Morning Star (3-Candle)
+input bool     InpPAOutsideCandleBull = true; // Outside Candle Reversal (Bullish)
+input bool     InpPAPullbackBuy = true;       // Pullback Buy Pattern
+
+// Bearish PA Patterns
+input string   InpPABearHeader = "----- Bearish Patterns -----";  // ___
+input bool     InpPAShootingStar = true;      // Shooting Star / Pin Bar (Bearish)
+input bool     InpPABearEngulfing = true;     // Bearish Engulfing
+input bool     InpPATweezerTop = true;        // Tweezer Top
+input bool     InpPAEveningStar = true;       // Evening Star (3-Candle)
+input bool     InpPAOutsideCandleBear = true; // Outside Candle Reversal (Bearish)
+input bool     InpPAPullbackSell = true;      // Pullback Sell Pattern
+
+// PA Detection Settings
+input string   InpPASettingsHeader = "----- PA Detection Settings -----";  // ___
+input double   InpPAPinRatio = 2.0;           // Pin Bar Tail/Body Ratio (min)
+input double   InpPABodyMinRatio = 0.3;       // Engulfing Body Min Ratio (of range)
+input double   InpPADojiMaxRatio = 0.2;       // Doji Max Body Ratio (for indecision)
+
 //--- [ TIME FILTER ] -----------------------------------------------
 input string   InpTimeHeader   = "=== TIME FILTER ===";  // ___
 input bool     InpUseTimeFilter = false;      // Use Time Filter
@@ -289,6 +318,11 @@ datetime LastGridSellTime = 0;
 // Group TP Accumulated Profit Tracking
 double AccumulatedProfit = 0.0;
 double LastClosedProfit = 0.0;
+
+// Price Action Confirmation Tracking
+string g_pendingSignal = "NONE";       // "BUY", "SELL", or "NONE"
+datetime g_signalBarTime = 0;          // Time when signal was detected
+int g_paWaitCount = 0;                 // Number of candles waited for PA
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                     |
@@ -1108,6 +1142,556 @@ void DrawEMAChannelOnChart(double &emaHigh[], double &emaLow[], datetime &time[]
    ObjectSetString(0, labelName, OBJPROP_FONT, "Arial");
 }
 
+
+//+------------------------------------------------------------------+
+//| ================== PRICE ACTION DETECTION ====================== |
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//| Check if candle is Bullish                                         |
+//+------------------------------------------------------------------+
+bool IsBullishCandle(int shift)
+{
+   double open = iOpen(_Symbol, PERIOD_CURRENT, shift);
+   double close = iClose(_Symbol, PERIOD_CURRENT, shift);
+   return close > open;
+}
+
+//+------------------------------------------------------------------+
+//| Check if candle is Bearish                                         |
+//+------------------------------------------------------------------+
+bool IsBearishCandle(int shift)
+{
+   double open = iOpen(_Symbol, PERIOD_CURRENT, shift);
+   double close = iClose(_Symbol, PERIOD_CURRENT, shift);
+   return close < open;
+}
+
+//+------------------------------------------------------------------+
+//| Get candle body size                                               |
+//+------------------------------------------------------------------+
+double GetCandleBody(int shift)
+{
+   double open = iOpen(_Symbol, PERIOD_CURRENT, shift);
+   double close = iClose(_Symbol, PERIOD_CURRENT, shift);
+   return MathAbs(close - open);
+}
+
+//+------------------------------------------------------------------+
+//| Get candle range (high - low)                                      |
+//+------------------------------------------------------------------+
+double GetCandleRange(int shift)
+{
+   double high = iHigh(_Symbol, PERIOD_CURRENT, shift);
+   double low = iLow(_Symbol, PERIOD_CURRENT, shift);
+   return high - low;
+}
+
+//+------------------------------------------------------------------+
+//| Get upper tail size                                                |
+//+------------------------------------------------------------------+
+double GetUpperTail(int shift)
+{
+   double high = iHigh(_Symbol, PERIOD_CURRENT, shift);
+   double open = iOpen(_Symbol, PERIOD_CURRENT, shift);
+   double close = iClose(_Symbol, PERIOD_CURRENT, shift);
+   return high - MathMax(open, close);
+}
+
+//+------------------------------------------------------------------+
+//| Get lower tail size                                                |
+//+------------------------------------------------------------------+
+double GetLowerTail(int shift)
+{
+   double low = iLow(_Symbol, PERIOD_CURRENT, shift);
+   double open = iOpen(_Symbol, PERIOD_CURRENT, shift);
+   double close = iClose(_Symbol, PERIOD_CURRENT, shift);
+   return MathMin(open, close) - low;
+}
+
+//+------------------------------------------------------------------+
+//| Check if candle is a Doji (indecision)                             |
+//+------------------------------------------------------------------+
+bool IsDoji(int shift)
+{
+   double range = GetCandleRange(shift);
+   if(range <= 0) return false;
+   double body = GetCandleBody(shift);
+   return (body / range) <= InpPADojiMaxRatio;
+}
+
+//+------------------------------------------------------------------+
+//| Detect Hammer/Pin Bar (Bullish) - Long lower tail, small body up  |
+//+------------------------------------------------------------------+
+bool IsHammer(int shift)
+{
+   if(!InpPAHammer) return false;
+   
+   double body = GetCandleBody(shift);
+   double lowerTail = GetLowerTail(shift);
+   double upperTail = GetUpperTail(shift);
+   
+   if(body <= 0) return false;
+   
+   // Hammer: long lower tail >= body * ratio, small upper tail
+   bool longLowerTail = lowerTail >= body * InpPAPinRatio;
+   bool smallUpperTail = upperTail <= body * 0.5;
+   bool bullishClose = IsBullishCandle(shift);
+   
+   return longLowerTail && smallUpperTail && bullishClose;
+}
+
+//+------------------------------------------------------------------+
+//| Detect Shooting Star/Pin Bar (Bearish) - Long upper tail          |
+//+------------------------------------------------------------------+
+bool IsShootingStar(int shift)
+{
+   if(!InpPAShootingStar) return false;
+   
+   double body = GetCandleBody(shift);
+   double lowerTail = GetLowerTail(shift);
+   double upperTail = GetUpperTail(shift);
+   
+   if(body <= 0) return false;
+   
+   // Shooting Star: long upper tail >= body * ratio, small lower tail
+   bool longUpperTail = upperTail >= body * InpPAPinRatio;
+   bool smallLowerTail = lowerTail <= body * 0.5;
+   bool bearishClose = IsBearishCandle(shift);
+   
+   return longUpperTail && smallLowerTail && bearishClose;
+}
+
+//+------------------------------------------------------------------+
+//| Detect Bullish Engulfing Pattern                                   |
+//+------------------------------------------------------------------+
+bool IsBullishEngulfing(int shift)
+{
+   if(!InpPABullEngulfing) return false;
+   if(shift < 1) return false;
+   
+   // Current candle must be bullish
+   if(!IsBullishCandle(shift)) return false;
+   // Previous candle must be bearish
+   if(!IsBearishCandle(shift + 1)) return false;
+   
+   double currOpen = iOpen(_Symbol, PERIOD_CURRENT, shift);
+   double currClose = iClose(_Symbol, PERIOD_CURRENT, shift);
+   double prevOpen = iOpen(_Symbol, PERIOD_CURRENT, shift + 1);
+   double prevClose = iClose(_Symbol, PERIOD_CURRENT, shift + 1);
+   
+   // Current body engulfs previous body
+   bool engulfs = currOpen <= prevClose && currClose >= prevOpen;
+   
+   // Current body is significant
+   double currRange = GetCandleRange(shift);
+   double currBody = GetCandleBody(shift);
+   bool significantBody = currRange > 0 && (currBody / currRange) >= InpPABodyMinRatio;
+   
+   return engulfs && significantBody;
+}
+
+//+------------------------------------------------------------------+
+//| Detect Bearish Engulfing Pattern                                   |
+//+------------------------------------------------------------------+
+bool IsBearishEngulfing(int shift)
+{
+   if(!InpPABearEngulfing) return false;
+   if(shift < 1) return false;
+   
+   // Current candle must be bearish
+   if(!IsBearishCandle(shift)) return false;
+   // Previous candle must be bullish
+   if(!IsBullishCandle(shift + 1)) return false;
+   
+   double currOpen = iOpen(_Symbol, PERIOD_CURRENT, shift);
+   double currClose = iClose(_Symbol, PERIOD_CURRENT, shift);
+   double prevOpen = iOpen(_Symbol, PERIOD_CURRENT, shift + 1);
+   double prevClose = iClose(_Symbol, PERIOD_CURRENT, shift + 1);
+   
+   // Current body engulfs previous body
+   bool engulfs = currOpen >= prevClose && currClose <= prevOpen;
+   
+   // Current body is significant
+   double currRange = GetCandleRange(shift);
+   double currBody = GetCandleBody(shift);
+   bool significantBody = currRange > 0 && (currBody / currRange) >= InpPABodyMinRatio;
+   
+   return engulfs && significantBody;
+}
+
+//+------------------------------------------------------------------+
+//| Detect Tweezer Bottom Pattern (2 candles with same low)           |
+//+------------------------------------------------------------------+
+bool IsTweezerBottom(int shift)
+{
+   if(!InpPATweezerBottom) return false;
+   if(shift < 1) return false;
+   
+   double currLow = iLow(_Symbol, PERIOD_CURRENT, shift);
+   double prevLow = iLow(_Symbol, PERIOD_CURRENT, shift + 1);
+   
+   // Lows are approximately equal (within 10 points)
+   double tolerance = 10 * _Point;
+   bool sameLows = MathAbs(currLow - prevLow) <= tolerance;
+   
+   // Both candles have long lower tails
+   double currLowerTail = GetLowerTail(shift);
+   double prevLowerTail = GetLowerTail(shift + 1);
+   double currRange = GetCandleRange(shift);
+   double prevRange = GetCandleRange(shift + 1);
+   
+   bool currLongTail = currRange > 0 && (currLowerTail / currRange) >= 0.4;
+   bool prevLongTail = prevRange > 0 && (prevLowerTail / prevRange) >= 0.4;
+   
+   // Current candle should be bullish (reversal confirmation)
+   bool bullishCurrent = IsBullishCandle(shift);
+   
+   return sameLows && currLongTail && prevLongTail && bullishCurrent;
+}
+
+//+------------------------------------------------------------------+
+//| Detect Tweezer Top Pattern (2 candles with same high)             |
+//+------------------------------------------------------------------+
+bool IsTweezerTop(int shift)
+{
+   if(!InpPATweezerTop) return false;
+   if(shift < 1) return false;
+   
+   double currHigh = iHigh(_Symbol, PERIOD_CURRENT, shift);
+   double prevHigh = iHigh(_Symbol, PERIOD_CURRENT, shift + 1);
+   
+   // Highs are approximately equal (within 10 points)
+   double tolerance = 10 * _Point;
+   bool sameHighs = MathAbs(currHigh - prevHigh) <= tolerance;
+   
+   // Both candles have long upper tails
+   double currUpperTail = GetUpperTail(shift);
+   double prevUpperTail = GetUpperTail(shift + 1);
+   double currRange = GetCandleRange(shift);
+   double prevRange = GetCandleRange(shift + 1);
+   
+   bool currLongTail = currRange > 0 && (currUpperTail / currRange) >= 0.4;
+   bool prevLongTail = prevRange > 0 && (prevUpperTail / prevRange) >= 0.4;
+   
+   // Current candle should be bearish (reversal confirmation)
+   bool bearishCurrent = IsBearishCandle(shift);
+   
+   return sameHighs && currLongTail && prevLongTail && bearishCurrent;
+}
+
+//+------------------------------------------------------------------+
+//| Detect Morning Star Pattern (3 candles bullish reversal)          |
+//+------------------------------------------------------------------+
+bool IsMorningStar(int shift)
+{
+   if(!InpPAMorningStar) return false;
+   if(shift < 2) return false;
+   
+   // Candle 3 (oldest): Bearish
+   if(!IsBearishCandle(shift + 2)) return false;
+   
+   // Candle 2 (middle): Doji/Indecision (small body)
+   if(!IsDoji(shift + 1)) return false;
+   
+   // Candle 1 (current/newest): Bullish
+   if(!IsBullishCandle(shift)) return false;
+   
+   // Current candle closes above midpoint of first candle
+   double firstOpen = iOpen(_Symbol, PERIOD_CURRENT, shift + 2);
+   double firstClose = iClose(_Symbol, PERIOD_CURRENT, shift + 2);
+   double firstMid = (firstOpen + firstClose) / 2.0;
+   double currClose = iClose(_Symbol, PERIOD_CURRENT, shift);
+   
+   return currClose >= firstMid;
+}
+
+//+------------------------------------------------------------------+
+//| Detect Evening Star Pattern (3 candles bearish reversal)          |
+//+------------------------------------------------------------------+
+bool IsEveningStar(int shift)
+{
+   if(!InpPAEveningStar) return false;
+   if(shift < 2) return false;
+   
+   // Candle 3 (oldest): Bullish
+   if(!IsBullishCandle(shift + 2)) return false;
+   
+   // Candle 2 (middle): Doji/Indecision (small body)
+   if(!IsDoji(shift + 1)) return false;
+   
+   // Candle 1 (current/newest): Bearish
+   if(!IsBearishCandle(shift)) return false;
+   
+   // Current candle closes below midpoint of first candle
+   double firstOpen = iOpen(_Symbol, PERIOD_CURRENT, shift + 2);
+   double firstClose = iClose(_Symbol, PERIOD_CURRENT, shift + 2);
+   double firstMid = (firstOpen + firstClose) / 2.0;
+   double currClose = iClose(_Symbol, PERIOD_CURRENT, shift);
+   
+   return currClose <= firstMid;
+}
+
+//+------------------------------------------------------------------+
+//| Detect Outside Candle Reversal (Bullish)                           |
+//| - Price faked down then broke above 2 previous candle highs       |
+//+------------------------------------------------------------------+
+bool IsOutsideCandleBullish(int shift)
+{
+   if(!InpPAOutsideCandleBull) return false;
+   if(shift < 2) return false;
+   
+   // Current candle must be bullish
+   if(!IsBullishCandle(shift)) return false;
+   
+   double currHigh = iHigh(_Symbol, PERIOD_CURRENT, shift);
+   double currLow = iLow(_Symbol, PERIOD_CURRENT, shift);
+   double prev1High = iHigh(_Symbol, PERIOD_CURRENT, shift + 1);
+   double prev2High = iHigh(_Symbol, PERIOD_CURRENT, shift + 2);
+   double prev1Low = iLow(_Symbol, PERIOD_CURRENT, shift + 1);
+   double prev2Low = iLow(_Symbol, PERIOD_CURRENT, shift + 2);
+   
+   // Current candle breaks above both previous highs
+   bool breakHighs = currHigh > prev1High && currHigh > prev2High;
+   
+   // Current candle went below at least one previous low (faked down)
+   bool fakedDown = currLow < prev1Low || currLow < prev2Low;
+   
+   return breakHighs && fakedDown;
+}
+
+//+------------------------------------------------------------------+
+//| Detect Outside Candle Reversal (Bearish)                           |
+//| - Price faked up then broke below 2 previous candle lows          |
+//+------------------------------------------------------------------+
+bool IsOutsideCandleBearish(int shift)
+{
+   if(!InpPAOutsideCandleBear) return false;
+   if(shift < 2) return false;
+   
+   // Current candle must be bearish
+   if(!IsBearishCandle(shift)) return false;
+   
+   double currHigh = iHigh(_Symbol, PERIOD_CURRENT, shift);
+   double currLow = iLow(_Symbol, PERIOD_CURRENT, shift);
+   double prev1High = iHigh(_Symbol, PERIOD_CURRENT, shift + 1);
+   double prev2High = iHigh(_Symbol, PERIOD_CURRENT, shift + 2);
+   double prev1Low = iLow(_Symbol, PERIOD_CURRENT, shift + 1);
+   double prev2Low = iLow(_Symbol, PERIOD_CURRENT, shift + 2);
+   
+   // Current candle breaks below both previous lows
+   bool breakLows = currLow < prev1Low && currLow < prev2Low;
+   
+   // Current candle went above at least one previous high (faked up)
+   bool fakedUp = currHigh > prev1High || currHigh > prev2High;
+   
+   return breakLows && fakedUp;
+}
+
+//+------------------------------------------------------------------+
+//| Detect Pullback Buy Pattern                                        |
+//| - Uptrend with pullback, then broke previous candle highs         |
+//+------------------------------------------------------------------+
+bool IsPullbackBuy(int shift)
+{
+   if(!InpPAPullbackBuy) return false;
+   if(shift < 3) return false;
+   
+   // Current candle must be bullish
+   if(!IsBullishCandle(shift)) return false;
+   
+   // Check for uptrend with pullback pattern
+   // Candles 4,3: Bullish (uptrend)
+   // Candle 2: Bearish (pullback)
+   // Candle 1: Bullish and breaks previous high
+   
+   double currHigh = iHigh(_Symbol, PERIOD_CURRENT, shift);
+   double prev1High = iHigh(_Symbol, PERIOD_CURRENT, shift + 1);
+   double prev2High = iHigh(_Symbol, PERIOD_CURRENT, shift + 2);
+   
+   // Current breaks previous highs
+   bool breaksHighs = currHigh > prev1High && currHigh > prev2High;
+   
+   // There was a pullback (bearish candle in recent history)
+   bool hadPullback = IsBearishCandle(shift + 1) || IsBearishCandle(shift + 2);
+   
+   return breaksHighs && hadPullback;
+}
+
+//+------------------------------------------------------------------+
+//| Detect Pullback Sell Pattern                                       |
+//| - Downtrend with pullback, then broke previous candle lows        |
+//+------------------------------------------------------------------+
+bool IsPullbackSell(int shift)
+{
+   if(!InpPAPullbackSell) return false;
+   if(shift < 3) return false;
+   
+   // Current candle must be bearish
+   if(!IsBearishCandle(shift)) return false;
+   
+   double currLow = iLow(_Symbol, PERIOD_CURRENT, shift);
+   double prev1Low = iLow(_Symbol, PERIOD_CURRENT, shift + 1);
+   double prev2Low = iLow(_Symbol, PERIOD_CURRENT, shift + 2);
+   
+   // Current breaks previous lows
+   bool breaksLows = currLow < prev1Low && currLow < prev2Low;
+   
+   // There was a pullback (bullish candle in recent history)
+   bool hadPullback = IsBullishCandle(shift + 1) || IsBullishCandle(shift + 2);
+   
+   return breaksLows && hadPullback;
+}
+
+//+------------------------------------------------------------------+
+//| Check for ANY Bullish PA Pattern on the last closed candle        |
+//+------------------------------------------------------------------+
+string DetectBullishPA(int shift)
+{
+   if(IsHammer(shift))
+      return "HAMMER";
+   if(IsBullishEngulfing(shift))
+      return "BULL_ENGULFING";
+   if(IsTweezerBottom(shift))
+      return "TWEEZER_BOTTOM";
+   if(IsMorningStar(shift))
+      return "MORNING_STAR";
+   if(IsOutsideCandleBullish(shift))
+      return "OUTSIDE_CANDLE_BULL";
+   if(IsPullbackBuy(shift))
+      return "PULLBACK_BUY";
+   
+   return "NONE";
+}
+
+//+------------------------------------------------------------------+
+//| Check for ANY Bearish PA Pattern on the last closed candle        |
+//+------------------------------------------------------------------+
+string DetectBearishPA(int shift)
+{
+   if(IsShootingStar(shift))
+      return "SHOOTING_STAR";
+   if(IsBearishEngulfing(shift))
+      return "BEAR_ENGULFING";
+   if(IsTweezerTop(shift))
+      return "TWEEZER_TOP";
+   if(IsEveningStar(shift))
+      return "EVENING_STAR";
+   if(IsOutsideCandleBearish(shift))
+      return "OUTSIDE_CANDLE_BEAR";
+   if(IsPullbackSell(shift))
+      return "PULLBACK_SELL";
+   
+   return "NONE";
+}
+
+//+------------------------------------------------------------------+
+//| Check if PA confirmation is satisfied for BUY                      |
+//| Returns: true if PA found OR PA not required                       |
+//+------------------------------------------------------------------+
+bool CheckBuyPAConfirmation()
+{
+   if(!InpUsePAConfirm)
+      return true;  // PA not required
+   
+   // Check last closed candle (shift=1)
+   string paPattern = DetectBullishPA(1);
+   if(paPattern != "NONE")
+   {
+      Print(">>> BULLISH PA CONFIRMED: ", paPattern);
+      return true;
+   }
+   
+   return false;
+}
+
+//+------------------------------------------------------------------+
+//| Check if PA confirmation is satisfied for SELL                     |
+//| Returns: true if PA found OR PA not required                       |
+//+------------------------------------------------------------------+
+bool CheckSellPAConfirmation()
+{
+   if(!InpUsePAConfirm)
+      return true;  // PA not required
+   
+   // Check last closed candle (shift=1)
+   string paPattern = DetectBearishPA(1);
+   if(paPattern != "NONE")
+   {
+      Print(">>> BEARISH PA CONFIRMED: ", paPattern);
+      return true;
+   }
+   
+   return false;
+}
+
+//+------------------------------------------------------------------+
+//| Handle Pending Signal with PA Confirmation                         |
+//+------------------------------------------------------------------+
+void HandlePendingSignal()
+{
+   if(!InpUsePAConfirm || g_pendingSignal == "NONE")
+      return;
+   
+   datetime currentBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
+   
+   // Check if we've exceeded max wait candles
+   if(currentBarTime != g_signalBarTime)
+   {
+      g_paWaitCount++;
+      g_signalBarTime = currentBarTime;
+      
+      if(g_paWaitCount > InpPALookback)
+      {
+         Print("PA TIMEOUT: Waited ", InpPALookback, " candles - Signal cancelled");
+         g_pendingSignal = "NONE";
+         g_paWaitCount = 0;
+         return;
+      }
+   }
+   
+   // Check for PA confirmation
+   if(g_pendingSignal == "BUY")
+   {
+      if(CheckBuyPAConfirmation())
+      {
+         // Check if trade is still allowed
+         if(CountPositions(POSITION_TYPE_BUY) == 0 && IsTradeAllowed("BUY"))
+         {
+            ExecuteBuy();
+            Print("BUY executed after PA confirmation (waited ", g_paWaitCount, " candles)");
+         }
+         g_pendingSignal = "NONE";
+         g_paWaitCount = 0;
+      }
+      else
+      {
+         Print("Waiting for Bullish PA... (", g_paWaitCount, "/", InpPALookback, ")");
+      }
+   }
+   else if(g_pendingSignal == "SELL")
+   {
+      if(CheckSellPAConfirmation())
+      {
+         // Check if trade is still allowed
+         if(CountPositions(POSITION_TYPE_SELL) == 0 && IsTradeAllowed("SELL"))
+         {
+            ExecuteSell();
+            Print("SELL executed after PA confirmation (waited ", g_paWaitCount, " candles)");
+         }
+         g_pendingSignal = "NONE";
+         g_paWaitCount = 0;
+      }
+      else
+      {
+         Print("Waiting for Bearish PA... (", g_paWaitCount, "/", InpPALookback, ")");
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| ================== END PRICE ACTION DETECTION ================== |
+//+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
 bool IsTradeAllowed(string tradeType)
@@ -2024,6 +2608,13 @@ void OnTick()
       
    lastBarTime = currentBarTime;
    
+   // *** PRICE ACTION CONFIRMATION CHECK ***
+   // Handle pending signals waiting for PA confirmation
+   if(InpUsePAConfirm && g_pendingSignal != "NONE")
+   {
+      HandlePendingSignal();
+   }
+   
    // Calculate CDC Action Zone (higher timeframe)
    CalculateCDC();
    
@@ -2052,6 +2643,14 @@ void OnTick()
       return;
    }
    
+   // If we have a pending signal waiting for PA, don't look for new signals
+   if(InpUsePAConfirm && g_pendingSignal != "NONE")
+   {
+      string paInfo = "Waiting PA for " + g_pendingSignal + " (" + IntegerToString(g_paWaitCount) + "/" + IntegerToString(InpPALookback) + ")";
+      UpdateChartComment("PA_WAIT", paInfo);
+      return;
+   }
+   
    string signal = AnalyzeSignal();
    string reason = "";
    
@@ -2072,8 +2671,31 @@ void OnTick()
       }
       else
       {
-         ExecuteBuy();
-         reason = "BUY executed | CDC: " + CDCTrend;
+         // *** PRICE ACTION CONFIRMATION ***
+         if(InpUsePAConfirm)
+         {
+            // Check if PA is already present
+            if(CheckBuyPAConfirmation())
+            {
+               ExecuteBuy();
+               reason = "BUY executed with PA | CDC: " + CDCTrend;
+            }
+            else
+            {
+               // Set pending signal - wait for PA
+               g_pendingSignal = "BUY";
+               g_signalBarTime = currentBarTime;
+               g_paWaitCount = 0;
+               reason = "BUY signal detected - Waiting for PA confirmation";
+               Print(">>> BUY signal stored - Waiting for Bullish PA...");
+               signal = "PA_WAIT";
+            }
+         }
+         else
+         {
+            ExecuteBuy();
+            reason = "BUY executed | CDC: " + CDCTrend;
+         }
       }
    }
    else if(signal == "SELL")
@@ -2093,8 +2715,31 @@ void OnTick()
       }
       else
       {
-         ExecuteSell();
-         reason = "SELL executed | CDC: " + CDCTrend;
+         // *** PRICE ACTION CONFIRMATION ***
+         if(InpUsePAConfirm)
+         {
+            // Check if PA is already present
+            if(CheckSellPAConfirmation())
+            {
+               ExecuteSell();
+               reason = "SELL executed with PA | CDC: " + CDCTrend;
+            }
+            else
+            {
+               // Set pending signal - wait for PA
+               g_pendingSignal = "SELL";
+               g_signalBarTime = currentBarTime;
+               g_paWaitCount = 0;
+               reason = "SELL signal detected - Waiting for PA confirmation";
+               Print(">>> SELL signal stored - Waiting for Bearish PA...");
+               signal = "PA_WAIT";
+            }
+         }
+         else
+         {
+            ExecuteSell();
+            reason = "SELL executed | CDC: " + CDCTrend;
+         }
       }
    }
    
