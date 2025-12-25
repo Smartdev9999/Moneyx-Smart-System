@@ -72,6 +72,13 @@ enum ENUM_GRID_GAP_TYPE
    GAP_CUSTOM_DISTANCE = 1  // Custom Distance
 };
 
+// Stop Loss Action Mode
+enum ENUM_SL_ACTION_MODE
+{
+   SL_ACTION_CLOSE = 0,     // Close Positions (Stop Loss)
+   SL_ACTION_HEDGE = 1      // Hedge Positions (Lock Loss)
+};
+
 //+------------------------------------------------------------------+
 //| ===================== INPUT PARAMETERS ========================= |
 //+------------------------------------------------------------------+
@@ -175,6 +182,7 @@ input color    InpTPLineColor = clrLime;     // TP Line Color
 
 //--- [ STOP LOSS SETTINGS ] ----------------------------------------
 input string   InpSLHeader = "=== STOP LOSS SETTINGS ===";  // ___
+input ENUM_SL_ACTION_MODE InpSLActionMode = SL_ACTION_CLOSE;  // SL Action Mode
 
 // SL Fixed Dollar
 input bool     InpUseSLDollar = true;        // Use SL Fixed Dollar
@@ -1372,6 +1380,73 @@ double ClosePositionsByType(ENUM_POSITION_TYPE posType)
 }
 
 //+------------------------------------------------------------------+
+//| Hedge positions by type (open opposite position to lock loss)      |
+//+------------------------------------------------------------------+
+bool HedgePositionsByType(ENUM_POSITION_TYPE posType, double totalLots)
+{
+   // Calculate opposite order type
+   ENUM_ORDER_TYPE hedgeType = (posType == POSITION_TYPE_BUY) ? ORDER_TYPE_SELL : ORDER_TYPE_BUY;
+   string hedgeTypeStr = (hedgeType == ORDER_TYPE_BUY) ? "BUY" : "SELL";
+   
+   double price = (hedgeType == ORDER_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   
+   // Open hedge position with total lots
+   if(trade.PositionOpen(_Symbol, hedgeType, totalLots, price, 0, 0, "HEDGE_LOCK"))
+   {
+      Print("HEDGE ", hedgeTypeStr, " opened: ", totalLots, " lots at ", price, " to lock loss");
+      return true;
+   }
+   else
+   {
+      Print("HEDGE ", hedgeTypeStr, " failed: ", trade.ResultRetcodeDescription());
+      return false;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Execute SL Action based on mode (Close or Hedge)                   |
+//+------------------------------------------------------------------+
+void ExecuteSLAction(ENUM_POSITION_TYPE posType, double totalLots, string reason)
+{
+   if(InpSLActionMode == SL_ACTION_CLOSE)
+   {
+      Print(reason, " - Closing positions");
+      ClosePositionsByType(posType);
+   }
+   else // SL_ACTION_HEDGE
+   {
+      Print(reason, " - Hedging with ", totalLots, " lots");
+      HedgePositionsByType(posType, totalLots);
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Execute SL Action for All Positions (Close or Hedge)               |
+//+------------------------------------------------------------------+
+void ExecuteSLActionAll(double buyLots, double sellLots, string reason)
+{
+   if(InpSLActionMode == SL_ACTION_CLOSE)
+   {
+      Print(reason, " - Closing all positions");
+      CloseAllPositions();
+   }
+   else // SL_ACTION_HEDGE
+   {
+      // Hedge both sides if they exist
+      if(buyLots > 0)
+      {
+         Print(reason, " - Hedging BUY side with ", buyLots, " lots");
+         HedgePositionsByType(POSITION_TYPE_BUY, buyLots);
+      }
+      if(sellLots > 0)
+      {
+         Print(reason, " - Hedging SELL side with ", sellLots, " lots");
+         HedgePositionsByType(POSITION_TYPE_SELL, sellLots);
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
 //| Close All Positions                                                |
 //+------------------------------------------------------------------+
 void CloseAllPositions()
@@ -1492,19 +1567,18 @@ void CheckTPSLConditions()
    }
    
    // ========== STOP LOSS LOGIC ==========
+   // Mode: SL_ACTION_CLOSE = Close positions | SL_ACTION_HEDGE = Open hedge to lock loss
    
    // 1. SL Fixed Dollar
    if(InpUseSLDollar)
    {
       if(buyPL <= -InpSLDollarAmount && buyCount > 0)
       {
-         Print("SL Dollar - BUY side hit $", -InpSLDollarAmount);
-         ClosePositionsByType(POSITION_TYPE_BUY);
+         ExecuteSLAction(POSITION_TYPE_BUY, lotsBuy, "SL Dollar - BUY side hit $" + DoubleToString(-InpSLDollarAmount, 2));
       }
       if(sellPL <= -InpSLDollarAmount && sellCount > 0)
       {
-         Print("SL Dollar - SELL side hit $", -InpSLDollarAmount);
-         ClosePositionsByType(POSITION_TYPE_SELL);
+         ExecuteSLAction(POSITION_TYPE_SELL, lotsSell, "SL Dollar - SELL side hit $" + DoubleToString(-InpSLDollarAmount, 2));
       }
    }
    
@@ -1516,8 +1590,7 @@ void CheckTPSLConditions()
          double slPrice = CalculateSLPrice(POSITION_TYPE_BUY, avgBuy);
          if(currentBid <= slPrice)
          {
-            Print("SL Points - BUY side hit SL at ", slPrice);
-            ClosePositionsByType(POSITION_TYPE_BUY);
+            ExecuteSLAction(POSITION_TYPE_BUY, lotsBuy, "SL Points - BUY side hit SL at " + DoubleToString(slPrice, _Digits));
          }
       }
       if(sellCount > 0 && avgSell > 0)
@@ -1525,8 +1598,7 @@ void CheckTPSLConditions()
          double slPrice = CalculateSLPrice(POSITION_TYPE_SELL, avgSell);
          if(currentAsk >= slPrice)
          {
-            Print("SL Points - SELL side hit SL at ", slPrice);
-            ClosePositionsByType(POSITION_TYPE_SELL);
+            ExecuteSLAction(POSITION_TYPE_SELL, lotsSell, "SL Points - SELL side hit SL at " + DoubleToString(slPrice, _Digits));
          }
       }
    }
@@ -1537,8 +1609,7 @@ void CheckTPSLConditions()
       double slAmount = balance * InpSLPercent / 100.0;
       if(totalPL <= -slAmount)
       {
-         Print("SL Percent - Total loss reached ", InpSLPercent, "% ($", totalPL, ")");
-         CloseAllPositions();
+         ExecuteSLActionAll(lotsBuy, lotsSell, "SL Percent - Total loss reached " + DoubleToString(InpSLPercent, 1) + "% ($" + DoubleToString(totalPL, 2) + ")");
          return;
       }
    }
