@@ -251,7 +251,6 @@ input bool     InpPAOutsideCandleBull = true; // Outside Candle Reversal (Bullis
 input bool     InpPAPullbackBuy = true;       // Pullback Buy Pattern
 input bool     InpPAInsideCandleBull = true;  // Inside Candle Reversal (Bullish)
 input bool     InpPABullHotdog = true;        // Bullish Hotdog Pattern
-input bool     InpPAStrongBullCandle = true;  // Strong Bullish Candle (simple reversal)
 
 // Bearish PA Patterns
 input string   InpPABearHeader = "----- Bearish Patterns -----";  // ___
@@ -263,7 +262,6 @@ input bool     InpPAOutsideCandleBear = true; // Outside Candle Reversal (Bearis
 input bool     InpPAPullbackSell = true;      // Pullback Sell Pattern
 input bool     InpPAInsideCandleBear = true;  // Inside Candle Reversal (Bearish)
 input bool     InpPABearHotdog = true;        // Bearish Hotdog Pattern
-input bool     InpPAStrongBearCandle = true;  // Strong Bearish Candle (simple reversal)
 
 // PA Detection Settings
 input string   InpPASettingsHeader = "----- PA Detection Settings -----";  // ___
@@ -336,14 +334,6 @@ string PAPrefix = "PA_";  // Price Action arrows and labels
 // Track which candle (shift) produced the most recent PA confirmation
 int g_lastPABuyShift = 1;
 int g_lastPASellShift = 1;
-
-// *** PA REALTIME DRAWING ***
-// Track the last bar time where PA was scanned to prevent duplicate draws
-datetime g_lastPAScanBarTime = 0;
-// Track which bars have already been drawn with PA arrows (to prevent duplicates)
-// Use a simple array to store drawn bar times (max 500 bars)
-datetime g_drawnPABars[];
-int g_drawnPABarsCount = 0;
 
 // EMA Channel Variables
 double EMAHigh = 0;
@@ -1878,72 +1868,6 @@ bool IsBearishHotdog(int shift)
 }
 
 //+------------------------------------------------------------------+
-//| Detect Strong Bullish Candle (Simple Reversal)                     |
-//| - Just a significant bullish candle with good body                 |
-//| - Easiest PA to detect - any strong bullish close at support       |
-//+------------------------------------------------------------------+
-bool IsStrongBullishCandle(int shift)
-{
-   if(!InpPAStrongBullCandle) return false;
-   
-   // Must be bullish
-   if(!IsBullishCandle(shift)) return false;
-   
-   double body = GetCandleBody(shift);
-   double range = GetCandleRange(shift);
-   
-   if(range <= 0) return false;
-   
-   // Body must be significant (at least 40% of range)
-   bool significantBody = (body / range) >= 0.4;
-   
-   // Body must be larger than average (comparison with prev candles)
-   double avgBody = 0;
-   for(int i = shift + 1; i <= shift + 5; i++)
-   {
-      avgBody += GetCandleBody(i);
-   }
-   avgBody /= 5;
-   
-   bool largerThanAvg = body >= avgBody * 0.8;  // At least 80% of average
-   
-   return significantBody && largerThanAvg;
-}
-
-//+------------------------------------------------------------------+
-//| Detect Strong Bearish Candle (Simple Reversal)                     |
-//| - Just a significant bearish candle with good body                 |
-//| - Easiest PA to detect - any strong bearish close at resistance    |
-//+------------------------------------------------------------------+
-bool IsStrongBearishCandle(int shift)
-{
-   if(!InpPAStrongBearCandle) return false;
-   
-   // Must be bearish
-   if(!IsBearishCandle(shift)) return false;
-   
-   double body = GetCandleBody(shift);
-   double range = GetCandleRange(shift);
-   
-   if(range <= 0) return false;
-   
-   // Body must be significant (at least 40% of range)
-   bool significantBody = (body / range) >= 0.4;
-   
-   // Body must be larger than average (comparison with prev candles)
-   double avgBody = 0;
-   for(int i = shift + 1; i <= shift + 5; i++)
-   {
-      avgBody += GetCandleBody(i);
-   }
-   avgBody /= 5;
-   
-   bool largerThanAvg = body >= avgBody * 0.8;  // At least 80% of average
-   
-   return significantBody && largerThanAvg;
-}
-
-//+------------------------------------------------------------------+
 //| Check if candle is Spinning Top (indecision with long tails)      |
 //+------------------------------------------------------------------+
 bool IsSpinningTop(int shift)
@@ -1985,8 +1909,6 @@ string DetectBullishPA(int shift)
       return "INSIDE_CANDLE_BULL";
    if(IsBullishHotdog(shift))
       return "BULL_HOTDOG";
-   if(IsStrongBullishCandle(shift))
-      return "STRONG_BULL";
    
    return "NONE";
 }
@@ -2012,8 +1934,6 @@ string DetectBearishPA(int shift)
       return "INSIDE_CANDLE_BEAR";
    if(IsBearishHotdog(shift))
       return "BEAR_HOTDOG";
-   if(IsStrongBearishCandle(shift))
-      return "STRONG_BEAR";
    
    return "NONE";
 }
@@ -2097,7 +2017,6 @@ string GetPAPatternName(string paCode)
    if(paCode == "PULLBACK_BUY") return "Pullback";
    if(paCode == "INSIDE_CANDLE_BULL") return "Inside Bull";
    if(paCode == "BULL_HOTDOG") return "Bull Hotdog";
-   if(paCode == "STRONG_BULL") return "Strong Bull";
    
    if(paCode == "SHOOTING_STAR") return "Shoot Star";
    if(paCode == "BEAR_ENGULFING") return "Bear Engulf";
@@ -2107,84 +2026,11 @@ string GetPAPatternName(string paCode)
    if(paCode == "PULLBACK_SELL") return "Pullback";
    if(paCode == "INSIDE_CANDLE_BEAR") return "Inside Bear";
    if(paCode == "BEAR_HOTDOG") return "Bear Hotdog";
-   if(paCode == "STRONG_BEAR") return "Strong Bear";
    
    return paCode;
 }
 
 //+------------------------------------------------------------------+
-//| Check if a bar time was already drawn with PA arrow                |
-//+------------------------------------------------------------------+
-bool IsPABarAlreadyDrawn(datetime barTime)
-{
-   for(int i = 0; i < g_drawnPABarsCount; i++)
-   {
-      if(g_drawnPABars[i] == barTime)
-         return true;
-   }
-   return false;
-}
-
-//+------------------------------------------------------------------+
-//| Add a bar time to the drawn PA bars list                           |
-//+------------------------------------------------------------------+
-void AddDrawnPABar(datetime barTime)
-{
-   // Limit array size to 500 entries
-   if(g_drawnPABarsCount >= 500)
-   {
-      // Shift array: remove oldest entry
-      for(int i = 0; i < 499; i++)
-         g_drawnPABars[i] = g_drawnPABars[i + 1];
-      g_drawnPABarsCount = 499;
-   }
-   
-   ArrayResize(g_drawnPABars, g_drawnPABarsCount + 1);
-   g_drawnPABars[g_drawnPABarsCount] = barTime;
-   g_drawnPABarsCount++;
-}
-
-//+------------------------------------------------------------------+
-//| Scan and Draw ALL PA Patterns on Chart (Realtime)                  |
-//| This function scans recent bars and draws PA arrows/labels         |
-//| for ALL detected patterns - independent of trading logic           |
-//| Called on every new bar in OnTick()                                |
-//+------------------------------------------------------------------+
-void ScanAndDrawAllPA()
-{
-   // Scan the last N closed bars for PA patterns
-   int scanRange = MathMin(50, Bars(_Symbol, PERIOD_CURRENT) - 1);
-   
-   for(int shift = 1; shift <= scanRange; shift++)
-   {
-      datetime barTime = iTime(_Symbol, PERIOD_CURRENT, shift);
-      
-      // Skip if this bar was already drawn
-      if(IsPABarAlreadyDrawn(barTime))
-         continue;
-      
-      // Check for Bullish PA
-      string bullishPA = DetectBullishPA(shift);
-      if(bullishPA != "NONE")
-      {
-         double price = iLow(_Symbol, PERIOD_CURRENT, shift);
-         DrawPAArrow("BUY", GetPAPatternName(bullishPA), barTime, price);
-         AddDrawnPABar(barTime);
-         continue;  // Only one arrow per bar
-      }
-      
-      // Check for Bearish PA
-      string bearishPA = DetectBearishPA(shift);
-      if(bearishPA != "NONE")
-      {
-         double price = iHigh(_Symbol, PERIOD_CURRENT, shift);
-         DrawPAArrow("SELL", GetPAPatternName(bearishPA), barTime, price);
-         AddDrawnPABar(barTime);
-      }
-   }
-}
-
-
 //| Check if PA confirmation is satisfied for BUY                      |
 //| Returns: pattern name if PA found, "NONE" if not                   |
 //| IMPORTANT: PA must occur AFTER the signal touch time               |
@@ -3428,14 +3274,6 @@ void OnTick()
    {
       // Calculate Smart Money Concepts (Order Blocks)
       CalculateSMC();
-   }
-   
-   // *** SCAN AND DRAW ALL PA PATTERNS (Realtime) ***
-   // This draws PA arrows on chart for all detected patterns
-   // Independent of trading logic - just for visualization
-   if(InpUsePAConfirm)
-   {
-      ScanAndDrawAllPA();
    }
    
    // *** PRICE ACTION CONFIRMATION CHECK ***
