@@ -365,6 +365,11 @@ bool g_smcSellResetPhaseComplete = false;
 bool g_smcBuyTouchedOB = false;   // Price touched Bullish OB (support)
 bool g_smcSellTouchedOB = false;  // Price touched Bearish OB (resistance)
 
+// Track if price is CURRENTLY touching an OB zone (this tick)
+// (Needed for reset logic: "move away" should mean "not touching now")
+bool g_smcBuyTouchingNow = false;
+bool g_smcSellTouchingNow = false;
+
 // Order Block Structure
 struct OrderBlockData
 {
@@ -4208,18 +4213,18 @@ void CheckOBTouch(double closePrice, double highPrice, double lowPrice)
    // Flags are only reset when:
    // 1. Order is executed (in ExecuteBuy/ExecuteSell)
    // 2. Signal reset is required (after position closes)
-   
+
    // Current tick touch detection
    bool currentTickBuyTouch = false;
    bool currentTickSellTouch = false;
-   
+
    // Check Bullish OB touch (price dipped into support zone)
    for(int i = 0; i < BullishOBCount; i++)
    {
       if(BullishOBs[i].mitigated) continue;
-      
+
       bool touched = false;
-      
+
       // Price entered the Bullish OB zone (support)
       if(lowPrice <= BullishOBs[i].high && lowPrice >= BullishOBs[i].low)
       {
@@ -4230,11 +4235,11 @@ void CheckOBTouch(double closePrice, double highPrice, double lowPrice)
       {
          touched = true;
       }
-      
+
       if(touched)
       {
          currentTickBuyTouch = true;
-         
+
          // IMPORTANT: If price moved from OB#1 to OB#2 (or #3) while waiting for PA,
          // we must switch the active OB and stop counting the previous one.
          // So: update the active OB if different from the previous touched OB.
@@ -4244,7 +4249,7 @@ void CheckOBTouch(double closePrice, double highPrice, double lowPrice)
             g_smcBuyTouchedOB = true;
             g_smcBuyTouchedOBName = BullishOBs[i].objName;
             g_smcBuyTouchTime = iTime(_Symbol, PERIOD_CURRENT, 0);  // Use bar time, not tick time!
-            
+
             // If we are already waiting for PA on BUY, switch context to this new OB.
             if(InpUsePAConfirm && InpSignalStrategy == STRATEGY_SMC && g_pendingSignal == "BUY")
             {
@@ -4261,14 +4266,14 @@ void CheckOBTouch(double closePrice, double highPrice, double lowPrice)
          break;
       }
    }
-   
+
    // Check Bearish OB touch (price spiked into resistance zone)
    for(int i = 0; i < BearishOBCount; i++)
    {
       if(BearishOBs[i].mitigated) continue;
-      
+
       bool touched = false;
-      
+
       // Price entered the Bearish OB zone (resistance)
       if(highPrice >= BearishOBs[i].low && highPrice <= BearishOBs[i].high)
       {
@@ -4279,11 +4284,11 @@ void CheckOBTouch(double closePrice, double highPrice, double lowPrice)
       {
          touched = true;
       }
-      
+
       if(touched)
       {
          currentTickSellTouch = true;
-         
+
          // Switch active OB if a different box is touched while waiting for PA
          if(!g_smcSellTouchedOBPersist || g_smcSellTouchedOBName != BearishOBs[i].objName)
          {
@@ -4291,7 +4296,7 @@ void CheckOBTouch(double closePrice, double highPrice, double lowPrice)
             g_smcSellTouchedOB = true;
             g_smcSellTouchedOBName = BearishOBs[i].objName;
             g_smcSellTouchTime = iTime(_Symbol, PERIOD_CURRENT, 0);  // Use bar time, not tick time!
-            
+
             if(InpUsePAConfirm && InpSignalStrategy == STRATEGY_SMC && g_pendingSignal == "SELL")
             {
                g_signalTouchTime = g_smcSellTouchTime;
@@ -4307,8 +4312,12 @@ void CheckOBTouch(double closePrice, double highPrice, double lowPrice)
          break;
       }
    }
-   
-   // Update instant touch flags for current tick (used for SMCSignal generation)
+
+   // Track CURRENT touch (used by reset logic)
+   g_smcBuyTouchingNow = currentTickBuyTouch;
+   g_smcSellTouchingNow = currentTickSellTouch;
+
+   // Keep the SMC signal trigger based on persistent touch (so PA can be confirmed after the touch)
    g_smcBuyTouchedOB = g_smcBuyTouchedOBPersist;
    g_smcSellTouchedOB = g_smcSellTouchedOBPersist;
 }
@@ -4363,14 +4372,15 @@ void UpdateSMCSignalResetStatus()
 {
    // For SMC: Reset requires price to move away from OB zone
    // then touch it again for new signal
-   
+
    if(g_waitBuySignalReset && InpSignalStrategy == STRATEGY_SMC)
    {
       // BUY reset: Wait for price to move above all Bullish OBs
       // then touch one again
-      
-      // Phase 1: Price must NOT be touching any OB (moved away)
-      if(g_smcBuyResetRequired && !g_smcBuyTouchedOBPersist && !g_smcBuyTouchedOB)
+
+      // Phase 1: Price must NOT be touching any OB RIGHT NOW (moved away)
+      // NOTE: g_smcBuyTouchedOBPersist means "touched before" (for PA), not "touching now".
+      if(g_smcBuyResetRequired && !g_smcBuyTouchingNow)
       {
          g_smcBuyResetPhaseComplete = true;
          Print("*** SMC BUY Reset Phase 1 Complete - Price moved away from OB ***");
@@ -4384,14 +4394,15 @@ void UpdateSMCSignalResetStatus()
          Print("*** SMC BUY Signal Reset Complete - Ready for new BUY signal! ***");
       }
    }
-   
+
    if(g_waitSellSignalReset && InpSignalStrategy == STRATEGY_SMC)
    {
       // SELL reset: Wait for price to move below all Bearish OBs
       // then touch one again
-      
-      // Phase 1: Price must NOT be touching any OB (moved away)
-      if(g_smcSellResetRequired && !g_smcSellTouchedOBPersist && !g_smcSellTouchedOB)
+
+      // Phase 1: Price must NOT be touching any OB RIGHT NOW (moved away)
+      // NOTE: g_smcSellTouchedOBPersist means "touched before" (for PA), not "touching now".
+      if(g_smcSellResetRequired && !g_smcSellTouchingNow)
       {
          g_smcSellResetPhaseComplete = true;
          Print("*** SMC SELL Reset Phase 1 Complete - Price moved away from OB ***");
