@@ -3302,10 +3302,16 @@ void OnTick()
             // Set pending signal - wait for PA to occur AFTER this touch
             g_pendingSignal = "BUY";
             g_signalBarTime = currentBarTime;
-            g_signalTouchTime = currentBarTime;  // PA must occur AFTER this time
+            
+            // CRITICAL: currentBarTime is the NEW bar open time.
+            // The signal/OB touch logically belongs to the previous closed candle (shift=1)
+            // (and for SMC we may have an explicit touch timestamp).
+            datetime fallbackTouch = iTime(_Symbol, PERIOD_CURRENT, 1);
+            g_signalTouchTime = (InpSignalStrategy == STRATEGY_SMC && g_smcBuyTouchTime > 0) ? g_smcBuyTouchTime : fallbackTouch;
+            
             g_paWaitCount = 0;
             reason = "BUY signal detected - Waiting for PA confirmation AFTER touch";
-            Print(">>> BUY signal stored at ", TimeToString(currentBarTime), " - Waiting for Bullish PA AFTER this time...");
+            Print(">>> BUY signal stored | TouchTime=", TimeToString(g_signalTouchTime), " | NowBar=", TimeToString(currentBarTime), " - Waiting for Bullish PA AFTER touch...");
             signal = "PA_WAIT";
          }
          else
@@ -3342,10 +3348,16 @@ void OnTick()
             // Set pending signal - wait for PA to occur AFTER this touch
             g_pendingSignal = "SELL";
             g_signalBarTime = currentBarTime;
-            g_signalTouchTime = currentBarTime;  // PA must occur AFTER this time
+            
+            // CRITICAL: currentBarTime is the NEW bar open time.
+            // The signal/OB touch logically belongs to the previous closed candle (shift=1)
+            // (and for SMC we may have an explicit touch timestamp).
+            datetime fallbackTouch = iTime(_Symbol, PERIOD_CURRENT, 1);
+            g_signalTouchTime = (InpSignalStrategy == STRATEGY_SMC && g_smcSellTouchTime > 0) ? g_smcSellTouchTime : fallbackTouch;
+            
             g_paWaitCount = 0;
             reason = "SELL signal detected - Waiting for PA confirmation AFTER touch";
-            Print(">>> SELL signal stored at ", TimeToString(currentBarTime), " - Waiting for Bearish PA AFTER this time...");
+            Print(">>> SELL signal stored | TouchTime=", TimeToString(g_signalTouchTime), " | NowBar=", TimeToString(currentBarTime), " - Waiting for Bearish PA AFTER touch...");
             signal = "PA_WAIT";
          }
          else
