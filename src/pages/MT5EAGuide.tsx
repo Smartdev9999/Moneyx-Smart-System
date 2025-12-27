@@ -2047,11 +2047,12 @@ string CheckBuyPAConfirmationWithPattern(datetime signalTouchTime = 0)
    {
       datetime candleTime = iTime(_Symbol, PERIOD_CURRENT, shift);
       
-      // *** CRITICAL CHECK: PA must occur STRICTLY AFTER the signal touch ***
-      // Using candle open time as reference: require next candle(s) after touch.
-      if(signalTouchTime > 0 && candleTime <= signalTouchTime)
+      // *** CRITICAL CHECK: PA must occur ON or AFTER the signal touch candle ***
+      // Using '<' to allow PA in the SAME candle as touch (touch bar can close as PA)
+      // Example: OB touched at bar X, PA forms when bar X closes → valid!
+      if(signalTouchTime > 0 && candleTime < signalTouchTime)
       {
-         // This PA candle is from BEFORE/AT the touch candle - skip it
+         // This PA candle is from BEFORE the touch candle - skip it
          continue;
       }
       
@@ -2083,8 +2084,9 @@ string CheckSellPAConfirmationWithPattern(datetime signalTouchTime = 0)
    {
       datetime candleTime = iTime(_Symbol, PERIOD_CURRENT, shift);
       
-      // *** CRITICAL CHECK: PA must occur STRICTLY AFTER the signal touch ***
-      if(signalTouchTime > 0 && candleTime <= signalTouchTime)
+      // *** CRITICAL CHECK: PA must occur ON or AFTER the signal touch candle ***
+      // Using '<' to allow PA in the SAME candle as touch
+      if(signalTouchTime > 0 && candleTime < signalTouchTime)
       {
          continue;
       }
