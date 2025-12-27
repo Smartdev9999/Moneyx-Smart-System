@@ -379,6 +379,12 @@ OrderBlockData BearishOBs[];
 int BullishOBCount = 0;
 int BearishOBCount = 0;
 
+// SMC Touch State - Persist across ticks for PA confirmation
+bool g_smcBuyTouchedOBPersist = false;   // Persists until used or reset
+bool g_smcSellTouchedOBPersist = false;  // Persists until used or reset
+datetime g_smcBuyTouchTime = 0;          // Time when buy touch detected
+datetime g_smcSellTouchTime = 0;         // Time when sell touch detected
+
 // SMC Swing Points
 double SMCSwingHigh = 0;
 double SMCSwingLow = 0;
@@ -2448,7 +2454,21 @@ double ClosePositionsByType(ENUM_POSITION_TYPE posType)
       g_waitBuySignalReset = true;
       g_buyResetPhaseBelowEMA = false;
       g_buyResetWaitOppositeSignal = true;
-      Print("*** BUY Signal Reset Required - Wait for price to cross below EMA then above ***");
+      
+      // *** RESET SMC TOUCH FLAGS ***
+      if(InpSignalStrategy == STRATEGY_SMC)
+      {
+         g_smcBuyTouchedOBPersist = false;
+         g_smcBuyTouchedOB = false;
+         g_smcBuyTouchTime = 0;
+         g_smcBuyResetRequired = true;
+         g_smcBuyResetPhaseComplete = false;
+         Print("*** SMC BUY Signal Reset Required - Wait for price to move away then touch OB again ***");
+      }
+      else
+      {
+         Print("*** BUY Signal Reset Required - Wait for price to cross below EMA then above ***");
+      }
    }
    else
    {
@@ -2460,7 +2480,21 @@ double ClosePositionsByType(ENUM_POSITION_TYPE posType)
       g_waitSellSignalReset = true;
       g_sellResetPhaseAboveEMA = false;
       g_sellResetWaitOppositeSignal = true;
-      Print("*** SELL Signal Reset Required - Wait for price to cross above EMA then below ***");
+      
+      // *** RESET SMC TOUCH FLAGS ***
+      if(InpSignalStrategy == STRATEGY_SMC)
+      {
+         g_smcSellTouchedOBPersist = false;
+         g_smcSellTouchedOB = false;
+         g_smcSellTouchTime = 0;
+         g_smcSellResetRequired = true;
+         g_smcSellResetPhaseComplete = false;
+         Print("*** SMC SELL Signal Reset Required - Wait for price to move away then touch OB again ***");
+      }
+      else
+      {
+         Print("*** SELL Signal Reset Required - Wait for price to cross above EMA then below ***");
+      }
    }
    
    // Reset global hedge lock if no more hedge positions
@@ -3886,24 +3920,41 @@ void DetectOrderBlocks(double &highArr[], double &lowArr[], double &openArr[],
    }
    
    // Check mitigation of existing Order Blocks
+   // IMPORTANT: OB is only mitigated when price FULLY closes through it (not just touches)
+   // This ensures OB stays visible until price has completely penetrated and closed beyond it
    double currentLow = lowArr[0];
    double currentHigh = highArr[0];
+   double currentClose = closeArr[0];
    
    for(int i = 0; i < BullishOBCount; i++)
    {
-      if(!BullishOBs[i].mitigated && currentLow < BullishOBs[i].low)
+      if(!BullishOBs[i].mitigated)
       {
-         BullishOBs[i].mitigated = true;
-         ObjectDelete(0, BullishOBs[i].objName);
+         // Bullish OB (support) is mitigated only when:
+         // 1. Price CLOSES below the OB low (completely penetrated)
+         // Just touching or dipping into the zone does NOT mitigate it
+         if(currentClose < BullishOBs[i].low)
+         {
+            BullishOBs[i].mitigated = true;
+            ObjectDelete(0, BullishOBs[i].objName);
+            Print(">>> Bullish OB Mitigated! Price closed below zone: ", BullishOBs[i].low);
+         }
       }
    }
    
    for(int i = 0; i < BearishOBCount; i++)
    {
-      if(!BearishOBs[i].mitigated && currentHigh > BearishOBs[i].high)
+      if(!BearishOBs[i].mitigated)
       {
-         BearishOBs[i].mitigated = true;
-         ObjectDelete(0, BearishOBs[i].objName);
+         // Bearish OB (resistance) is mitigated only when:
+         // 1. Price CLOSES above the OB high (completely penetrated)
+         // Just touching or spiking into the zone does NOT mitigate it
+         if(currentClose > BearishOBs[i].high)
+         {
+            BearishOBs[i].mitigated = true;
+            ObjectDelete(0, BearishOBs[i].objName);
+            Print(">>> Bearish OB Mitigated! Price closed above zone: ", BearishOBs[i].high);
+         }
       }
    }
 }
@@ -4045,12 +4096,18 @@ void DrawOrderBlocks()
 
 //+------------------------------------------------------------------+
 //| Check if price touched an Order Block                              |
+//| IMPORTANT: Touch flags PERSIST until used for order or reset       |
 //+------------------------------------------------------------------+
 void CheckOBTouch(double closePrice, double highPrice, double lowPrice)
 {
-   // Reset touch flags
-   g_smcBuyTouchedOB = false;
-   g_smcSellTouchedOB = false;
+   // DON'T reset touch flags every tick - let them persist for PA confirmation
+   // Flags are only reset when:
+   // 1. Order is executed (in ExecuteBuy/ExecuteSell)
+   // 2. Signal reset is required (after position closes)
+   
+   // Current tick touch detection
+   bool currentTickBuyTouch = false;
+   bool currentTickSellTouch = false;
    
    // Check Bullish OB touch (price dipped into support zone)
    for(int i = 0; i < BullishOBCount; i++)
@@ -4060,15 +4117,27 @@ void CheckOBTouch(double closePrice, double highPrice, double lowPrice)
       // Price entered the Bullish OB zone (support)
       if(lowPrice <= BullishOBs[i].high && lowPrice >= BullishOBs[i].low)
       {
-         g_smcBuyTouchedOB = true;
-         Print(">>> Price touched Bullish Order Block! Zone: ", BullishOBs[i].low, " - ", BullishOBs[i].high);
+         currentTickBuyTouch = true;
+         if(!g_smcBuyTouchedOBPersist)
+         {
+            g_smcBuyTouchedOBPersist = true;
+            g_smcBuyTouchedOB = true;
+            g_smcBuyTouchTime = TimeCurrent();
+            Print(">>> Price touched Bullish Order Block! Zone: ", BullishOBs[i].low, " - ", BullishOBs[i].high, " | Signal persisted for PA");
+         }
          break;
       }
       // Price closed inside the zone
       if(closePrice <= BullishOBs[i].high && closePrice >= BullishOBs[i].low)
       {
-         g_smcBuyTouchedOB = true;
-         Print(">>> Price closed in Bullish Order Block! Zone: ", BullishOBs[i].low, " - ", BullishOBs[i].high);
+         currentTickBuyTouch = true;
+         if(!g_smcBuyTouchedOBPersist)
+         {
+            g_smcBuyTouchedOBPersist = true;
+            g_smcBuyTouchedOB = true;
+            g_smcBuyTouchTime = TimeCurrent();
+            Print(">>> Price closed in Bullish Order Block! Zone: ", BullishOBs[i].low, " - ", BullishOBs[i].high, " | Signal persisted for PA");
+         }
          break;
       }
    }
@@ -4081,18 +4150,34 @@ void CheckOBTouch(double closePrice, double highPrice, double lowPrice)
       // Price entered the Bearish OB zone (resistance)
       if(highPrice >= BearishOBs[i].low && highPrice <= BearishOBs[i].high)
       {
-         g_smcSellTouchedOB = true;
-         Print(">>> Price touched Bearish Order Block! Zone: ", BearishOBs[i].low, " - ", BearishOBs[i].high);
+         currentTickSellTouch = true;
+         if(!g_smcSellTouchedOBPersist)
+         {
+            g_smcSellTouchedOBPersist = true;
+            g_smcSellTouchedOB = true;
+            g_smcSellTouchTime = TimeCurrent();
+            Print(">>> Price touched Bearish Order Block! Zone: ", BearishOBs[i].low, " - ", BearishOBs[i].high, " | Signal persisted for PA");
+         }
          break;
       }
       // Price closed inside the zone
       if(closePrice >= BearishOBs[i].low && closePrice <= BearishOBs[i].high)
       {
-         g_smcSellTouchedOB = true;
-         Print(">>> Price closed in Bearish Order Block! Zone: ", BearishOBs[i].low, " - ", BearishOBs[i].high);
+         currentTickSellTouch = true;
+         if(!g_smcSellTouchedOBPersist)
+         {
+            g_smcSellTouchedOBPersist = true;
+            g_smcSellTouchedOB = true;
+            g_smcSellTouchTime = TimeCurrent();
+            Print(">>> Price closed in Bearish Order Block! Zone: ", BearishOBs[i].low, " - ", BearishOBs[i].high, " | Signal persisted for PA");
+         }
          break;
       }
    }
+   
+   // Update instant touch flags for current tick (used for SMCSignal generation)
+   g_smcBuyTouchedOB = g_smcBuyTouchedOBPersist;
+   g_smcSellTouchedOB = g_smcSellTouchedOBPersist;
 }
 
 //+------------------------------------------------------------------+
@@ -4146,16 +4231,19 @@ void UpdateSMCSignalResetStatus()
    // For SMC: Reset requires price to move away from OB zone
    // then touch it again for new signal
    
-   if(g_waitBuySignalReset)
+   if(g_waitBuySignalReset && InpSignalStrategy == STRATEGY_SMC)
    {
       // BUY reset: Wait for price to move above all Bullish OBs
       // then touch one again
-      if(g_smcBuyResetRequired && !g_smcBuyTouchedOB)
+      
+      // Phase 1: Price must NOT be touching any OB (moved away)
+      if(g_smcBuyResetRequired && !g_smcBuyTouchedOBPersist && !g_smcBuyTouchedOB)
       {
          g_smcBuyResetPhaseComplete = true;
          Print("*** SMC BUY Reset Phase 1 Complete - Price moved away from OB ***");
       }
-      else if(g_smcBuyResetPhaseComplete && g_smcBuyTouchedOB)
+      // Phase 2: Price touches OB again after moving away
+      else if(g_smcBuyResetPhaseComplete && g_smcBuyTouchedOBPersist)
       {
          g_waitBuySignalReset = false;
          g_smcBuyResetRequired = false;
@@ -4164,16 +4252,19 @@ void UpdateSMCSignalResetStatus()
       }
    }
    
-   if(g_waitSellSignalReset)
+   if(g_waitSellSignalReset && InpSignalStrategy == STRATEGY_SMC)
    {
       // SELL reset: Wait for price to move below all Bearish OBs
       // then touch one again
-      if(g_smcSellResetRequired && !g_smcSellTouchedOB)
+      
+      // Phase 1: Price must NOT be touching any OB (moved away)
+      if(g_smcSellResetRequired && !g_smcSellTouchedOBPersist && !g_smcSellTouchedOB)
       {
          g_smcSellResetPhaseComplete = true;
          Print("*** SMC SELL Reset Phase 1 Complete - Price moved away from OB ***");
       }
-      else if(g_smcSellResetPhaseComplete && g_smcSellTouchedOB)
+      // Phase 2: Price touches OB again after moving away
+      else if(g_smcSellResetPhaseComplete && g_smcSellTouchedOBPersist)
       {
          g_waitSellSignalReset = false;
          g_smcSellResetRequired = false;
@@ -4243,6 +4334,15 @@ void ExecuteBuy()
       Print("BUY Success! Ticket: ", trade.ResultOrder());
       InitialBuyBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
       GridBuyCount = 1;
+      
+      // *** RESET SMC TOUCH FLAGS AFTER ORDER EXECUTION ***
+      if(InpSignalStrategy == STRATEGY_SMC)
+      {
+         g_smcBuyTouchedOBPersist = false;
+         g_smcBuyTouchedOB = false;
+         g_smcBuyTouchTime = 0;
+         Print(">>> SMC BUY touch flags reset after order execution");
+      }
    }
    else
    {
@@ -4266,6 +4366,15 @@ void ExecuteSell()
       Print("SELL Success! Ticket: ", trade.ResultOrder());
       InitialSellBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
       GridSellCount = 1;
+      
+      // *** RESET SMC TOUCH FLAGS AFTER ORDER EXECUTION ***
+      if(InpSignalStrategy == STRATEGY_SMC)
+      {
+         g_smcSellTouchedOBPersist = false;
+         g_smcSellTouchedOB = false;
+         g_smcSellTouchTime = 0;
+         Print(">>> SMC SELL touch flags reset after order execution");
+      }
    }
    else
    {
