@@ -1813,16 +1813,16 @@ bool IsInsideCandleBearish(int shift)
 bool IsBullishHotdog(int shift)
 {
    if(!InpPABullHotdog) return false;
-   if(shift < 3) return false;
+   // shift=1 is the last CLOSED candle; we need 3 more candles back (shift+3),
+   // so minimum shift is 1 (not 3). Using 3 causes a consistent 3-bar delay.
+   if(shift < 1) return false;
    
    // Current candle must be bullish
    if(!IsBullishCandle(shift)) return false;
    
    double currHigh = iHigh(_Symbol, PERIOD_CURRENT, shift);
-   double currClose = iClose(_Symbol, PERIOD_CURRENT, shift);
    double prev1High = iHigh(_Symbol, PERIOD_CURRENT, shift + 1);
    double prev2High = iHigh(_Symbol, PERIOD_CURRENT, shift + 2);
-   double prev3High = iHigh(_Symbol, PERIOD_CURRENT, shift + 3);
    
    // Previous candles had small bodies (indecision)
    bool prev1Small = IsDoji(shift + 1) || IsSpinningTop(shift + 1);
@@ -1834,7 +1834,8 @@ bool IsBullishHotdog(int shift)
    // There was a fake move down followed by reversal up
    double prev1Low = iLow(_Symbol, PERIOD_CURRENT, shift + 1);
    double prev2Low = iLow(_Symbol, PERIOD_CURRENT, shift + 2);
-   bool fakedDown = prev1Low < prev2Low || prev1Low < prev3High;
+   double prev3Low = iLow(_Symbol, PERIOD_CURRENT, shift + 3);
+   bool fakedDown = prev1Low < prev2Low || prev1Low < prev3Low;
    
    return breaksHighs && (prev1Small || prev2Small || fakedDown);
 }
@@ -1846,16 +1847,15 @@ bool IsBullishHotdog(int shift)
 bool IsBearishHotdog(int shift)
 {
    if(!InpPABearHotdog) return false;
-   if(shift < 3) return false;
+   // shift=1 is the last CLOSED candle; using 3 forces a 3-bar confirmation delay.
+   if(shift < 1) return false;
    
    // Current candle must be bearish
    if(!IsBearishCandle(shift)) return false;
    
    double currLow = iLow(_Symbol, PERIOD_CURRENT, shift);
-   double currClose = iClose(_Symbol, PERIOD_CURRENT, shift);
    double prev1Low = iLow(_Symbol, PERIOD_CURRENT, shift + 1);
    double prev2Low = iLow(_Symbol, PERIOD_CURRENT, shift + 2);
-   double prev3Low = iLow(_Symbol, PERIOD_CURRENT, shift + 3);
    
    // Previous candles had small bodies (indecision)
    bool prev1Small = IsDoji(shift + 1) || IsSpinningTop(shift + 1);
@@ -1867,7 +1867,8 @@ bool IsBearishHotdog(int shift)
    // There was a fake move up followed by reversal down
    double prev1High = iHigh(_Symbol, PERIOD_CURRENT, shift + 1);
    double prev2High = iHigh(_Symbol, PERIOD_CURRENT, shift + 2);
-   bool fakedUp = prev1High > prev2High || prev1High > prev3Low;
+   double prev3High = iHigh(_Symbol, PERIOD_CURRENT, shift + 3);
+   bool fakedUp = prev1High > prev2High || prev1High > prev3High;
    
    return breaksLows && (prev1Small || prev2Small || fakedUp);
 }
