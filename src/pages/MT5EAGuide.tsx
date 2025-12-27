@@ -386,8 +386,10 @@ int BearishOBCount = 0;
 // SMC Touch State - Persist across ticks for PA confirmation
 bool g_smcBuyTouchedOBPersist = false;   // Persists until used or reset
 bool g_smcSellTouchedOBPersist = false;  // Persists until used or reset
-datetime g_smcBuyTouchTime = 0;          // Time when buy touch detected
-datetime g_smcSellTouchTime = 0;         // Time when sell touch detected
+string g_smcBuyTouchedOBName = "";       // Which Bullish OB is currently active for PA
+string g_smcSellTouchedOBName = "";      // Which Bearish OB is currently active for PA
+datetime g_smcBuyTouchTime = 0;          // Time when buy touch detected (TimeCurrent)
+datetime g_smcSellTouchTime = 0;         // Time when sell touch detected (TimeCurrent)
 
 // SMC Swing Points
 double SMCSwingHigh = 0;
@@ -4211,29 +4213,45 @@ void CheckOBTouch(double closePrice, double highPrice, double lowPrice)
    {
       if(BullishOBs[i].mitigated) continue;
       
+      bool touched = false;
+      
       // Price entered the Bullish OB zone (support)
       if(lowPrice <= BullishOBs[i].high && lowPrice >= BullishOBs[i].low)
       {
-         currentTickBuyTouch = true;
-         if(!g_smcBuyTouchedOBPersist)
-         {
-            g_smcBuyTouchedOBPersist = true;
-            g_smcBuyTouchedOB = true;
-            g_smcBuyTouchTime = TimeCurrent();
-            Print(">>> Price touched Bullish Order Block! Zone: ", BullishOBs[i].low, " - ", BullishOBs[i].high, " | Signal persisted for PA");
-         }
-         break;
+         touched = true;
       }
       // Price closed inside the zone
-      if(closePrice <= BullishOBs[i].high && closePrice >= BullishOBs[i].low)
+      else if(closePrice <= BullishOBs[i].high && closePrice >= BullishOBs[i].low)
+      {
+         touched = true;
+      }
+      
+      if(touched)
       {
          currentTickBuyTouch = true;
-         if(!g_smcBuyTouchedOBPersist)
+         
+         // IMPORTANT: If price moved from OB#1 to OB#2 (or #3) while waiting for PA,
+         // we must switch the active OB and stop counting the previous one.
+         // So: update the active OB if different from the previous touched OB.
+         if(!g_smcBuyTouchedOBPersist || g_smcBuyTouchedOBName != BullishOBs[i].objName)
          {
             g_smcBuyTouchedOBPersist = true;
             g_smcBuyTouchedOB = true;
+            g_smcBuyTouchedOBName = BullishOBs[i].objName;
             g_smcBuyTouchTime = TimeCurrent();
-            Print(">>> Price closed in Bullish Order Block! Zone: ", BullishOBs[i].low, " - ", BullishOBs[i].high, " | Signal persisted for PA");
+            
+            // If we are already waiting for PA on BUY, switch context to this new OB.
+            if(InpUsePAConfirm && InpSignalStrategy == STRATEGY_SMC && g_pendingSignal == "BUY")
+            {
+               g_signalTouchTime = g_smcBuyTouchTime;
+               g_signalBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
+               g_paWaitCount = 0;
+               Print(">>> SWITCH BUY OB: now waiting PA on ", g_smcBuyTouchedOBName, " | TouchTime=", TimeToString(g_signalTouchTime));
+            }
+            else
+            {
+               Print(">>> Price touched Bullish Order Block! Zone: ", BullishOBs[i].low, " - ", BullishOBs[i].high, " | Active OB for PA: ", g_smcBuyTouchedOBName);
+            }
          }
          break;
       }
@@ -4244,29 +4262,42 @@ void CheckOBTouch(double closePrice, double highPrice, double lowPrice)
    {
       if(BearishOBs[i].mitigated) continue;
       
+      bool touched = false;
+      
       // Price entered the Bearish OB zone (resistance)
       if(highPrice >= BearishOBs[i].low && highPrice <= BearishOBs[i].high)
       {
-         currentTickSellTouch = true;
-         if(!g_smcSellTouchedOBPersist)
-         {
-            g_smcSellTouchedOBPersist = true;
-            g_smcSellTouchedOB = true;
-            g_smcSellTouchTime = TimeCurrent();
-            Print(">>> Price touched Bearish Order Block! Zone: ", BearishOBs[i].low, " - ", BearishOBs[i].high, " | Signal persisted for PA");
-         }
-         break;
+         touched = true;
       }
       // Price closed inside the zone
-      if(closePrice >= BearishOBs[i].low && closePrice <= BearishOBs[i].high)
+      else if(closePrice >= BearishOBs[i].low && closePrice <= BearishOBs[i].high)
+      {
+         touched = true;
+      }
+      
+      if(touched)
       {
          currentTickSellTouch = true;
-         if(!g_smcSellTouchedOBPersist)
+         
+         // Switch active OB if a different box is touched while waiting for PA
+         if(!g_smcSellTouchedOBPersist || g_smcSellTouchedOBName != BearishOBs[i].objName)
          {
             g_smcSellTouchedOBPersist = true;
             g_smcSellTouchedOB = true;
+            g_smcSellTouchedOBName = BearishOBs[i].objName;
             g_smcSellTouchTime = TimeCurrent();
-            Print(">>> Price closed in Bearish Order Block! Zone: ", BearishOBs[i].low, " - ", BearishOBs[i].high, " | Signal persisted for PA");
+            
+            if(InpUsePAConfirm && InpSignalStrategy == STRATEGY_SMC && g_pendingSignal == "SELL")
+            {
+               g_signalTouchTime = g_smcSellTouchTime;
+               g_signalBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
+               g_paWaitCount = 0;
+               Print(">>> SWITCH SELL OB: now waiting PA on ", g_smcSellTouchedOBName, " | TouchTime=", TimeToString(g_signalTouchTime));
+            }
+            else
+            {
+               Print(">>> Price touched Bearish Order Block! Zone: ", BearishOBs[i].low, " - ", BearishOBs[i].high, " | Active OB for PA: ", g_smcSellTouchedOBName);
+            }
          }
          break;
       }
@@ -4437,6 +4468,7 @@ bool ExecuteBuy()
       {
          g_smcBuyTouchedOBPersist = false;
          g_smcBuyTouchedOB = false;
+         g_smcBuyTouchedOBName = "";
          g_smcBuyTouchTime = 0;
          Print(">>> SMC BUY touch flags reset after order execution");
       }
@@ -4469,6 +4501,7 @@ bool ExecuteSell()
       {
          g_smcSellTouchedOBPersist = false;
          g_smcSellTouchedOB = false;
+         g_smcSellTouchedOBName = "";
          g_smcSellTouchTime = 0;
          Print(">>> SMC SELL touch flags reset after order execution");
       }
