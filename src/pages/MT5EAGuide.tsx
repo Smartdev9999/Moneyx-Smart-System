@@ -421,6 +421,7 @@ double LastClosedProfit = 0.0;
 // Price Action Confirmation Tracking
 string g_pendingSignal = "NONE";       // "BUY", "SELL", or "NONE"
 datetime g_signalBarTime = 0;          // Time when signal was detected
+datetime g_signalTouchTime = 0;        // Time when OB/signal touch occurred (PA must come AFTER this)
 int g_paWaitCount = 0;                 // Number of candles waited for PA
 
 // *** SIGNAL RESET TRACKING ***
@@ -2027,23 +2028,36 @@ string GetPAPatternName(string paCode)
 //+------------------------------------------------------------------+
 //| Check if PA confirmation is satisfied for BUY                      |
 //| Returns: pattern name if PA found, "NONE" if not                   |
+//| IMPORTANT: PA must occur AFTER the signal touch time               |
+//| signalTouchTime = time when OB touch/signal occurred               |
+//|                   PA candle must close AFTER this time             |
 //+------------------------------------------------------------------+
-string CheckBuyPAConfirmationWithPattern()
+string CheckBuyPAConfirmationWithPattern(datetime signalTouchTime = 0)
 {
    if(!InpUsePAConfirm)
       return "NO_PA_REQUIRED";  // PA not required
    
    // Scan recent closed candles for PA within lookback window.
-   // This prevents missing PA that happened 2-3 candles after the touch.
+   // CRITICAL: PA candle time must be >= signalTouchTime (PA must come AFTER signal)
    int maxLookback = MathMax(1, MathMin(InpPALookback, 10));
    
    for(int shift = 1; shift <= maxLookback; shift++)
    {
+      datetime candleTime = iTime(_Symbol, PERIOD_CURRENT, shift);
+      
+      // *** CRITICAL CHECK: PA must occur AFTER the signal touch ***
+      // If signalTouchTime is set, only count PA that happened AFTER the touch
+      if(signalTouchTime > 0 && candleTime < signalTouchTime)
+      {
+         // This PA candle is from BEFORE the signal touch - skip it
+         continue;
+      }
+      
       string paPattern = DetectBullishPA(shift);
       if(paPattern != "NONE")
       {
          g_lastPABuyShift = shift;
-         Print(">>> BULLISH PA CONFIRMED: ", paPattern, " | shift=", shift);
+         Print(">>> BULLISH PA CONFIRMED: ", paPattern, " | shift=", shift, " | candleTime=", TimeToString(candleTime), " | touchTime=", TimeToString(signalTouchTime));
          return paPattern;
       }
    }
@@ -2054,8 +2068,9 @@ string CheckBuyPAConfirmationWithPattern()
 //+------------------------------------------------------------------+
 //| Check if PA confirmation is satisfied for SELL                     |
 //| Returns: pattern name if PA found, "NONE" if not                   |
+//| IMPORTANT: PA must occur AFTER the signal touch time               |
 //+------------------------------------------------------------------+
-string CheckSellPAConfirmationWithPattern()
+string CheckSellPAConfirmationWithPattern(datetime signalTouchTime = 0)
 {
    if(!InpUsePAConfirm)
       return "NO_PA_REQUIRED";  // PA not required
@@ -2064,11 +2079,19 @@ string CheckSellPAConfirmationWithPattern()
    
    for(int shift = 1; shift <= maxLookback; shift++)
    {
+      datetime candleTime = iTime(_Symbol, PERIOD_CURRENT, shift);
+      
+      // *** CRITICAL CHECK: PA must occur AFTER the signal touch ***
+      if(signalTouchTime > 0 && candleTime < signalTouchTime)
+      {
+         continue;
+      }
+      
       string paPattern = DetectBearishPA(shift);
       if(paPattern != "NONE")
       {
          g_lastPASellShift = shift;
-         Print(">>> BEARISH PA CONFIRMED: ", paPattern, " | shift=", shift);
+         Print(">>> BEARISH PA CONFIRMED: ", paPattern, " | shift=", shift, " | candleTime=", TimeToString(candleTime), " | touchTime=", TimeToString(signalTouchTime));
          return paPattern;
       }
    }
@@ -2098,6 +2121,8 @@ bool CheckSellPAConfirmation()
 
 //+------------------------------------------------------------------+
 //| Handle Pending Signal with PA Confirmation                         |
+//| IMPORTANT: PA must occur AFTER g_signalTouchTime                   |
+//| g_signalTouchTime is set when OB touch/signal first occurred       |
 //+------------------------------------------------------------------+
 void HandlePendingSignal()
 {
@@ -2114,17 +2139,19 @@ void HandlePendingSignal()
       
       if(g_paWaitCount > InpPALookback)
       {
-         Print("PA TIMEOUT: Waited ", InpPALookback, " candles - Signal cancelled");
+         Print("PA TIMEOUT: Waited ", InpPALookback, " candles - Signal cancelled | TouchTime=", TimeToString(g_signalTouchTime));
          g_pendingSignal = "NONE";
          g_paWaitCount = 0;
+         g_signalTouchTime = 0;  // Reset touch time
          return;
       }
    }
    
    // Check for PA confirmation
+   // CRITICAL: Pass g_signalTouchTime to ensure PA occurred AFTER the signal/OB touch
    if(g_pendingSignal == "BUY")
    {
-      string paPattern = CheckBuyPAConfirmationWithPattern();
+      string paPattern = CheckBuyPAConfirmationWithPattern(g_signalTouchTime);
       if(paPattern != "NONE")
       {
          // Check if trade is still allowed
@@ -2137,19 +2164,20 @@ void HandlePendingSignal()
             DrawPAArrow("BUY", GetPAPatternName(paPattern), signalBar, signalPrice);
             
             ExecuteBuy();
-            Print("BUY executed after PA confirmation (", paPattern, ") - waited ", g_paWaitCount, " candles");
+            Print("BUY executed after PA confirmation (", paPattern, ") - waited ", g_paWaitCount, " candles | TouchTime=", TimeToString(g_signalTouchTime));
          }
          g_pendingSignal = "NONE";
          g_paWaitCount = 0;
+         g_signalTouchTime = 0;  // Reset touch time
       }
       else
       {
-         Print("Waiting for Bullish PA... (", g_paWaitCount, "/", InpPALookback, ")");
+         Print("Waiting for Bullish PA AFTER touch... (", g_paWaitCount, "/", InpPALookback, ") | TouchTime=", TimeToString(g_signalTouchTime));
       }
    }
    else if(g_pendingSignal == "SELL")
    {
-      string paPattern = CheckSellPAConfirmationWithPattern();
+      string paPattern = CheckSellPAConfirmationWithPattern(g_signalTouchTime);
       if(paPattern != "NONE")
       {
          // Check if trade is still allowed
@@ -2162,14 +2190,15 @@ void HandlePendingSignal()
             DrawPAArrow("SELL", GetPAPatternName(paPattern), signalBar, signalPrice);
             
             ExecuteSell();
-            Print("SELL executed after PA confirmation (", paPattern, ") - waited ", g_paWaitCount, " candles");
+            Print("SELL executed after PA confirmation (", paPattern, ") - waited ", g_paWaitCount, " candles | TouchTime=", TimeToString(g_signalTouchTime));
          }
          g_pendingSignal = "NONE";
          g_paWaitCount = 0;
+         g_signalTouchTime = 0;  // Reset touch time
       }
       else
       {
-         Print("Waiting for Bearish PA... (", g_paWaitCount, "/", InpPALookback, ")");
+         Print("Waiting for Bearish PA AFTER touch... (", g_paWaitCount, "/", InpPALookback, ") | TouchTime=", TimeToString(g_signalTouchTime));
       }
    }
 }
@@ -3266,32 +3295,18 @@ void OnTick()
          // *** PRICE ACTION CONFIRMATION ***
          if(InpUsePAConfirm)
          {
-            // Check if PA is already present
-            string paPattern = CheckBuyPAConfirmationWithPattern();
-            if(paPattern != "NONE")
-            {
-               // Draw PA arrow on chart (use the candle where PA was detected)
-               int shift = g_lastPABuyShift;
-               datetime signalBar = iTime(_Symbol, PERIOD_CURRENT, shift);
-               double signalPrice = iLow(_Symbol, PERIOD_CURRENT, shift);
-               if(paPattern != "NO_PA_REQUIRED")
-               {
-                  DrawPAArrow("BUY", GetPAPatternName(paPattern), signalBar, signalPrice);
-               }
-               
-               ExecuteBuy();
-               reason = "BUY executed with PA (" + GetPAPatternName(paPattern) + ") | CDC: " + CDCTrend;
-            }
-            else
-            {
-               // Set pending signal - wait for PA
-               g_pendingSignal = "BUY";
-               g_signalBarTime = currentBarTime;
-               g_paWaitCount = 0;
-               reason = "BUY signal detected - Waiting for PA confirmation";
-               Print(">>> BUY signal stored - Waiting for Bullish PA...");
-               signal = "PA_WAIT";
-            }
+            // *** IMPORTANT: Do NOT check for old PA patterns ***
+            // PA must occur AFTER the signal/OB touch, not before
+            // So we always set pending signal and wait for PA to occur on next candle(s)
+            
+            // Set pending signal - wait for PA to occur AFTER this touch
+            g_pendingSignal = "BUY";
+            g_signalBarTime = currentBarTime;
+            g_signalTouchTime = currentBarTime;  // PA must occur AFTER this time
+            g_paWaitCount = 0;
+            reason = "BUY signal detected - Waiting for PA confirmation AFTER touch";
+            Print(">>> BUY signal stored at ", TimeToString(currentBarTime), " - Waiting for Bullish PA AFTER this time...");
+            signal = "PA_WAIT";
          }
          else
          {
@@ -3320,32 +3335,18 @@ void OnTick()
          // *** PRICE ACTION CONFIRMATION ***
          if(InpUsePAConfirm)
          {
-            // Check if PA is already present
-            string paPattern = CheckSellPAConfirmationWithPattern();
-            if(paPattern != "NONE")
-            {
-               // Draw PA arrow on chart (use the candle where PA was detected)
-               int shift = g_lastPASellShift;
-               datetime signalBar = iTime(_Symbol, PERIOD_CURRENT, shift);
-               double signalPrice = iHigh(_Symbol, PERIOD_CURRENT, shift);
-               if(paPattern != "NO_PA_REQUIRED")
-               {
-                  DrawPAArrow("SELL", GetPAPatternName(paPattern), signalBar, signalPrice);
-               }
-               
-               ExecuteSell();
-               reason = "SELL executed with PA (" + GetPAPatternName(paPattern) + ") | CDC: " + CDCTrend;
-            }
-            else
-            {
-               // Set pending signal - wait for PA
-               g_pendingSignal = "SELL";
-               g_signalBarTime = currentBarTime;
-               g_paWaitCount = 0;
-               reason = "SELL signal detected - Waiting for PA confirmation";
-               Print(">>> SELL signal stored - Waiting for Bearish PA...");
-               signal = "PA_WAIT";
-            }
+            // *** IMPORTANT: Do NOT check for old PA patterns ***
+            // PA must occur AFTER the signal/OB touch, not before
+            // So we always set pending signal and wait for PA to occur on next candle(s)
+            
+            // Set pending signal - wait for PA to occur AFTER this touch
+            g_pendingSignal = "SELL";
+            g_signalBarTime = currentBarTime;
+            g_signalTouchTime = currentBarTime;  // PA must occur AFTER this time
+            g_paWaitCount = 0;
+            reason = "SELL signal detected - Waiting for PA confirmation AFTER touch";
+            Print(">>> SELL signal stored at ", TimeToString(currentBarTime), " - Waiting for Bearish PA AFTER this time...");
+            signal = "PA_WAIT";
          }
          else
          {
