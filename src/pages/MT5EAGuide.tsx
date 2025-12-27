@@ -251,6 +251,7 @@ input bool     InpPAOutsideCandleBull = true; // Outside Candle Reversal (Bullis
 input bool     InpPAPullbackBuy = true;       // Pullback Buy Pattern
 input bool     InpPAInsideCandleBull = true;  // Inside Candle Reversal (Bullish)
 input bool     InpPABullHotdog = true;        // Bullish Hotdog Pattern
+input bool     InpPAStrongBullCandle = true;  // Strong Bullish Candle (simple reversal)
 
 // Bearish PA Patterns
 input string   InpPABearHeader = "----- Bearish Patterns -----";  // ___
@@ -262,6 +263,7 @@ input bool     InpPAOutsideCandleBear = true; // Outside Candle Reversal (Bearis
 input bool     InpPAPullbackSell = true;      // Pullback Sell Pattern
 input bool     InpPAInsideCandleBear = true;  // Inside Candle Reversal (Bearish)
 input bool     InpPABearHotdog = true;        // Bearish Hotdog Pattern
+input bool     InpPAStrongBearCandle = true;  // Strong Bearish Candle (simple reversal)
 
 // PA Detection Settings
 input string   InpPASettingsHeader = "----- PA Detection Settings -----";  // ___
@@ -1868,6 +1870,72 @@ bool IsBearishHotdog(int shift)
 }
 
 //+------------------------------------------------------------------+
+//| Detect Strong Bullish Candle (Simple Reversal)                     |
+//| - Just a significant bullish candle with good body                 |
+//| - Easiest PA to detect - any strong bullish close at support       |
+//+------------------------------------------------------------------+
+bool IsStrongBullishCandle(int shift)
+{
+   if(!InpPAStrongBullCandle) return false;
+   
+   // Must be bullish
+   if(!IsBullishCandle(shift)) return false;
+   
+   double body = GetCandleBody(shift);
+   double range = GetCandleRange(shift);
+   
+   if(range <= 0) return false;
+   
+   // Body must be significant (at least 40% of range)
+   bool significantBody = (body / range) >= 0.4;
+   
+   // Body must be larger than average (comparison with prev candles)
+   double avgBody = 0;
+   for(int i = shift + 1; i <= shift + 5; i++)
+   {
+      avgBody += GetCandleBody(i);
+   }
+   avgBody /= 5;
+   
+   bool largerThanAvg = body >= avgBody * 0.8;  // At least 80% of average
+   
+   return significantBody && largerThanAvg;
+}
+
+//+------------------------------------------------------------------+
+//| Detect Strong Bearish Candle (Simple Reversal)                     |
+//| - Just a significant bearish candle with good body                 |
+//| - Easiest PA to detect - any strong bearish close at resistance    |
+//+------------------------------------------------------------------+
+bool IsStrongBearishCandle(int shift)
+{
+   if(!InpPAStrongBearCandle) return false;
+   
+   // Must be bearish
+   if(!IsBearishCandle(shift)) return false;
+   
+   double body = GetCandleBody(shift);
+   double range = GetCandleRange(shift);
+   
+   if(range <= 0) return false;
+   
+   // Body must be significant (at least 40% of range)
+   bool significantBody = (body / range) >= 0.4;
+   
+   // Body must be larger than average (comparison with prev candles)
+   double avgBody = 0;
+   for(int i = shift + 1; i <= shift + 5; i++)
+   {
+      avgBody += GetCandleBody(i);
+   }
+   avgBody /= 5;
+   
+   bool largerThanAvg = body >= avgBody * 0.8;  // At least 80% of average
+   
+   return significantBody && largerThanAvg;
+}
+
+//+------------------------------------------------------------------+
 //| Check if candle is Spinning Top (indecision with long tails)      |
 //+------------------------------------------------------------------+
 bool IsSpinningTop(int shift)
@@ -1909,6 +1977,8 @@ string DetectBullishPA(int shift)
       return "INSIDE_CANDLE_BULL";
    if(IsBullishHotdog(shift))
       return "BULL_HOTDOG";
+   if(IsStrongBullishCandle(shift))
+      return "STRONG_BULL";
    
    return "NONE";
 }
@@ -1934,6 +2004,8 @@ string DetectBearishPA(int shift)
       return "INSIDE_CANDLE_BEAR";
    if(IsBearishHotdog(shift))
       return "BEAR_HOTDOG";
+   if(IsStrongBearishCandle(shift))
+      return "STRONG_BEAR";
    
    return "NONE";
 }
@@ -2017,6 +2089,7 @@ string GetPAPatternName(string paCode)
    if(paCode == "PULLBACK_BUY") return "Pullback";
    if(paCode == "INSIDE_CANDLE_BULL") return "Inside Bull";
    if(paCode == "BULL_HOTDOG") return "Bull Hotdog";
+   if(paCode == "STRONG_BULL") return "Strong Bull";
    
    if(paCode == "SHOOTING_STAR") return "Shoot Star";
    if(paCode == "BEAR_ENGULFING") return "Bear Engulf";
@@ -2026,6 +2099,7 @@ string GetPAPatternName(string paCode)
    if(paCode == "PULLBACK_SELL") return "Pullback";
    if(paCode == "INSIDE_CANDLE_BEAR") return "Inside Bear";
    if(paCode == "BEAR_HOTDOG") return "Bear Hotdog";
+   if(paCode == "STRONG_BEAR") return "Strong Bear";
    
    return paCode;
 }
