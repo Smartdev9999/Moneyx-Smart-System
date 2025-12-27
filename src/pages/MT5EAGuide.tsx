@@ -4238,7 +4238,7 @@ void CheckOBTouch(double closePrice, double highPrice, double lowPrice)
             g_smcBuyTouchedOBPersist = true;
             g_smcBuyTouchedOB = true;
             g_smcBuyTouchedOBName = BullishOBs[i].objName;
-            g_smcBuyTouchTime = TimeCurrent();
+            g_smcBuyTouchTime = iTime(_Symbol, PERIOD_CURRENT, 0);  // Use bar time, not tick time!
             
             // If we are already waiting for PA on BUY, switch context to this new OB.
             if(InpUsePAConfirm && InpSignalStrategy == STRATEGY_SMC && g_pendingSignal == "BUY")
@@ -4285,7 +4285,7 @@ void CheckOBTouch(double closePrice, double highPrice, double lowPrice)
             g_smcSellTouchedOBPersist = true;
             g_smcSellTouchedOB = true;
             g_smcSellTouchedOBName = BearishOBs[i].objName;
-            g_smcSellTouchTime = TimeCurrent();
+            g_smcSellTouchTime = iTime(_Symbol, PERIOD_CURRENT, 0);  // Use bar time, not tick time!
             
             if(InpUsePAConfirm && InpSignalStrategy == STRATEGY_SMC && g_pendingSignal == "SELL")
             {
