@@ -1696,21 +1696,23 @@ bool IsOutsideCandleBearish(int shift)
 bool IsPullbackBuy(int shift)
 {
    if(!InpPAPullbackBuy) return false;
-   if(shift < 3) return false;
+   // Need at least 3 candles of history from the reference point
+   // shift=1 needs shift+1 and shift+2, so minimum shift is 1
+   if(shift < 1) return false;
    
-   // Current candle must be bullish
+   // Current candle (shift) must be bullish
    if(!IsBullishCandle(shift)) return false;
    
    // Check for uptrend with pullback pattern
-   // Candles 4,3: Bullish (uptrend)
-   // Candle 2: Bearish (pullback)
-   // Candle 1: Bullish and breaks previous high
+   // Pattern: Bullish move → Bearish pullback → Bullish continuation (current)
+   // Current (shift): Bullish and breaks previous highs
+   // Previous (shift+1 or shift+2): Had a bearish pullback candle
    
    double currHigh = iHigh(_Symbol, PERIOD_CURRENT, shift);
    double prev1High = iHigh(_Symbol, PERIOD_CURRENT, shift + 1);
    double prev2High = iHigh(_Symbol, PERIOD_CURRENT, shift + 2);
    
-   // Current breaks previous highs
+   // Current breaks previous highs (bullish continuation)
    bool breaksHighs = currHigh > prev1High && currHigh > prev2High;
    
    // There was a pullback (bearish candle in recent history)
@@ -1726,16 +1728,17 @@ bool IsPullbackBuy(int shift)
 bool IsPullbackSell(int shift)
 {
    if(!InpPAPullbackSell) return false;
-   if(shift < 3) return false;
+   // Need at least 3 candles of history from the reference point
+   if(shift < 1) return false;
    
-   // Current candle must be bearish
+   // Current candle (shift) must be bearish
    if(!IsBearishCandle(shift)) return false;
    
    double currLow = iLow(_Symbol, PERIOD_CURRENT, shift);
    double prev1Low = iLow(_Symbol, PERIOD_CURRENT, shift + 1);
    double prev2Low = iLow(_Symbol, PERIOD_CURRENT, shift + 2);
    
-   // Current breaks previous lows
+   // Current breaks previous lows (bearish continuation)
    bool breaksLows = currLow < prev1Low && currLow < prev2Low;
    
    // There was a pullback (bullish candle in recent history)
