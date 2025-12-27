@@ -26,7 +26,8 @@ enum ENUM_SIGNAL_STRATEGY
 {
    STRATEGY_ZIGZAG = 0,      // ZigZag++ Structure
    STRATEGY_EMA_CHANNEL = 1, // EMA Channel (High/Low)
-   STRATEGY_BOLLINGER = 2    // Bollinger Bands
+   STRATEGY_BOLLINGER = 2,   // Bollinger Bands
+   STRATEGY_SMC = 3          // Smart Money Concepts (Order Block)
 };
 
 // Bollinger Bands MA Type
@@ -131,7 +132,19 @@ input color    InpBBBasisColor = clrBlue;     // BB Basis (Middle) Color
 input bool     InpShowBBLines = true;         // Show BB Lines on Chart
 input ENUM_EMA_SIGNAL_BAR InpBBSignalBar = EMA_LAST_BAR_CLOSED;  // BB Signal Bar Index
 
-//--- [ CDC ACTION ZONE SETTINGS ] ----------------------------------
+//--- [ SMART MONEY CONCEPTS SETTINGS ] -----------------------------
+input string   InpSMCHeader = "=== SMART MONEY CONCEPTS (ORDER BLOCK) ===";  // ___
+input ENUM_TIMEFRAMES InpSMCTimeframe = PERIOD_CURRENT;  // SMC Timeframe
+input int      InpSMCSwingLength = 50;        // Swing Detection Length (bars)
+input int      InpSMCInternalLength = 5;      // Internal Structure Length
+input int      InpSMCMaxOrderBlocks = 5;      // Max Order Blocks to Display
+input bool     InpSMCShowBullishOB = true;    // Show Bullish Order Blocks
+input bool     InpSMCShowBearishOB = true;    // Show Bearish Order Blocks
+input color    InpSMCBullOBColor = clrDodgerBlue;   // Bullish OB Color
+input color    InpSMCBearOBColor = clrCrimson;      // Bearish OB Color
+input bool     InpSMCRequireTouch = true;     // Require Price Touch OB (for signal)
+input ENUM_EMA_SIGNAL_BAR InpSMCSignalBar = EMA_LAST_BAR_CLOSED;  // SMC Signal Bar Index
+
 input string   InpCDCHeader    = "=== CDC ACTION ZONE SETTINGS ===";  // ___
 input bool     InpUseCDCFilter = true;        // Use CDC Action Zone Filter
 input ENUM_TIMEFRAMES InpCDCTimeframe = PERIOD_D1;  // CDC Filter Timeframe
@@ -337,7 +350,42 @@ int BBHandle = INVALID_HANDLE;  // Bollinger Bands indicator handle
 bool g_bbBuyResetPhaseBelowBand = false;   // Price has touched/closed above upper band
 bool g_bbSellResetPhaseAboveBand = false;  // Price has touched/closed below lower band
 
-// Extra chart for viewing ZigZag timeframe objects
+// Smart Money Concepts (Order Block) Variables
+string SMCPrefix = "SMC_";
+string SMCSignal = "NONE";  // "BUY", "SELL", "NONE"
+datetime LastSMCSignalTime = 0;
+bool g_smcBuyResetRequired = false;
+bool g_smcSellResetRequired = false;
+bool g_smcBuyResetPhaseComplete = false;
+bool g_smcSellResetPhaseComplete = false;
+bool g_smcBuyTouchedOB = false;   // Price touched Bullish OB (support)
+bool g_smcSellTouchedOB = false;  // Price touched Bearish OB (resistance)
+
+// Order Block Structure
+struct OrderBlockData
+{
+   double   high;           // OB High price
+   double   low;            // OB Low price
+   datetime time;           // OB formation time
+   int      barIndex;       // Bar index when OB formed
+   int      bias;           // +1 = Bullish, -1 = Bearish
+   bool     mitigated;      // True if price has broken through OB
+   string   objName;        // Chart object name
+};
+
+// Order Block Arrays
+OrderBlockData BullishOBs[];
+OrderBlockData BearishOBs[];
+int BullishOBCount = 0;
+int BearishOBCount = 0;
+
+// SMC Swing Points
+double SMCSwingHigh = 0;
+double SMCSwingLow = 0;
+datetime SMCSwingHighTime = 0;
+datetime SMCSwingLowTime = 0;
+int SMCTrend = 0;  // +1 = Bullish, -1 = Bearish, 0 = Neutral
+
 long ZZTFChartId = 0;
 
 // ZigZag tracking for confirmed points
@@ -412,10 +460,21 @@ int OnInit()
    LastConfirmedZZTime = 0;
    LastEMASignalTime = 0;
    LastBBSignalTime = 0;
+   LastSMCSignalTime = 0;
    GridBuyCount = 0;
    GridSellCount = 0;
    InitialBuyBarTime = 0;
    InitialSellBarTime = 0;
+   
+   // Initialize SMC Order Block arrays
+   if(InpSignalStrategy == STRATEGY_SMC)
+   {
+      ArrayResize(BullishOBs, InpSMCMaxOrderBlocks);
+      ArrayResize(BearishOBs, InpSMCMaxOrderBlocks);
+      BullishOBCount = 0;
+      BearishOBCount = 0;
+      Print("Smart Money Concepts initialized - Swing Length: ", InpSMCSwingLength, " | Max OBs: ", InpSMCMaxOrderBlocks);
+   }
    
    // Initialize Bollinger Bands indicator handle
    if(InpSignalStrategy == STRATEGY_BOLLINGER)
@@ -462,6 +521,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, EMAPrefix);
    ObjectsDeleteAll(0, PAPrefix);  // Remove PA arrows and labels
    ObjectsDeleteAll(0, BBPrefix);  // Remove BB objects
+   ObjectsDeleteAll(0, SMCPrefix); // Remove SMC Order Block objects
    
    // Release Bollinger Bands indicator handle
    if(BBHandle != INVALID_HANDLE)
@@ -471,6 +531,12 @@ void OnDeinit(const int reason)
       IndicatorRelease(BBHandle);
       BBHandle = INVALID_HANDLE;
    }
+   
+   // Clear SMC arrays
+   ArrayFree(BullishOBs);
+   ArrayFree(BearishOBs);
+   BullishOBCount = 0;
+   BearishOBCount = 0;
    
    // Remove ZigZag objects from the ZigZag timeframe chart (if opened)
    if(ZZTFChartId > 0)
@@ -3093,6 +3159,11 @@ void OnTick()
       // Calculate Bollinger Bands
       CalculateBollingerBands();
    }
+   else if(InpSignalStrategy == STRATEGY_SMC)
+   {
+      // Calculate Smart Money Concepts (Order Blocks)
+      CalculateSMC();
+   }
    
    if(InpUseTimeFilter && !IsWithinTradingHours())
    {
@@ -3245,6 +3316,10 @@ string AnalyzeSignal()
    else if(InpSignalStrategy == STRATEGY_BOLLINGER)
    {
       return AnalyzeBollingerSignal();
+   }
+   else if(InpSignalStrategy == STRATEGY_SMC)
+   {
+      return AnalyzeSMCSignal();
    }
    
    return "WAIT";
@@ -3663,8 +3738,498 @@ string AnalyzeBollingerSignal()
 }
 
 //+------------------------------------------------------------------+
-//| Execute BUY order                                                  |
+//| Calculate Smart Money Concepts (Order Blocks)                      |
+//| Based on swing structure detection and order block identification  |
 //+------------------------------------------------------------------+
+void CalculateSMC()
+{
+   // Get price data
+   double highArr[], lowArr[], closeArr[], openArr[];
+   ArraySetAsSeries(highArr, true);
+   ArraySetAsSeries(lowArr, true);
+   ArraySetAsSeries(closeArr, true);
+   ArraySetAsSeries(openArr, true);
+   
+   int barsNeeded = InpSMCSwingLength + 20;
+   if(CopyHigh(_Symbol, InpSMCTimeframe, 0, barsNeeded, highArr) < barsNeeded) return;
+   if(CopyLow(_Symbol, InpSMCTimeframe, 0, barsNeeded, lowArr) < barsNeeded) return;
+   if(CopyClose(_Symbol, InpSMCTimeframe, 0, barsNeeded, closeArr) < barsNeeded) return;
+   if(CopyOpen(_Symbol, InpSMCTimeframe, 0, barsNeeded, openArr) < barsNeeded) return;
+   
+   datetime timeArr[];
+   ArraySetAsSeries(timeArr, true);
+   if(CopyTime(_Symbol, InpSMCTimeframe, 0, barsNeeded, timeArr) < barsNeeded) return;
+   
+   // Detect Swing High and Swing Low using lookback
+   int lookback = InpSMCInternalLength;
+   
+   // Find current swing points
+   for(int i = lookback; i < barsNeeded - lookback; i++)
+   {
+      // Check for Swing High
+      bool isSwingHigh = true;
+      for(int j = 1; j <= lookback; j++)
+      {
+         if(highArr[i] <= highArr[i-j] || highArr[i] <= highArr[i+j])
+         {
+            isSwingHigh = false;
+            break;
+         }
+      }
+      
+      if(isSwingHigh && highArr[i] > SMCSwingHigh)
+      {
+         SMCSwingHigh = highArr[i];
+         SMCSwingHighTime = timeArr[i];
+      }
+      
+      // Check for Swing Low
+      bool isSwingLow = true;
+      for(int j = 1; j <= lookback; j++)
+      {
+         if(lowArr[i] >= lowArr[i-j] || lowArr[i] >= lowArr[i+j])
+         {
+            isSwingLow = false;
+            break;
+         }
+      }
+      
+      if(isSwingLow && (SMCSwingLow == 0 || lowArr[i] < SMCSwingLow))
+      {
+         SMCSwingLow = lowArr[i];
+         SMCSwingLowTime = timeArr[i];
+      }
+   }
+   
+   // Determine trend based on structure
+   double currentClose = closeArr[0];
+   if(currentClose > SMCSwingHigh && SMCSwingHigh > 0)
+   {
+      SMCTrend = 1;  // Bullish - price broke above swing high
+   }
+   else if(currentClose < SMCSwingLow && SMCSwingLow > 0)
+   {
+      SMCTrend = -1; // Bearish - price broke below swing low
+   }
+   
+   // Detect Order Blocks
+   // Bullish OB: Last bearish candle before a strong bullish move
+   // Bearish OB: Last bullish candle before a strong bearish move
+   DetectOrderBlocks(highArr, lowArr, openArr, closeArr, timeArr, barsNeeded);
+   
+   // Draw Order Blocks on chart
+   DrawOrderBlocks();
+   
+   // Check for price touch on Order Blocks
+   CheckOBTouch(closeArr[0], highArr[0], lowArr[0]);
+   
+   // Generate SMC Signal
+   GenerateSMCSignal(closeArr, lowArr, highArr);
+}
+
+//+------------------------------------------------------------------+
+//| Detect Order Blocks based on structure breaks                      |
+//+------------------------------------------------------------------+
+void DetectOrderBlocks(double &highArr[], double &lowArr[], double &openArr[], 
+                       double &closeArr[], datetime &timeArr[], int barsTotal)
+{
+   int lookback = InpSMCInternalLength;
+   
+   // Scan for new Order Blocks (limit to recent bars for performance)
+   int scanLimit = MathMin(50, barsTotal - lookback - 1);
+   
+   for(int i = lookback; i < scanLimit; i++)
+   {
+      // Check for Bullish Order Block
+      // Condition: Bearish candle followed by strong bullish move that breaks structure
+      if(closeArr[i] < openArr[i])  // Bearish candle
+      {
+         // Check if next candles made a strong bullish move
+         bool strongBullishMove = false;
+         for(int j = i - 1; j >= 1; j--)
+         {
+            if(closeArr[j] > highArr[i] + (highArr[i] - lowArr[i]))
+            {
+               strongBullishMove = true;
+               break;
+            }
+            if(j < i - 3) break;  // Only check 3 bars ahead
+         }
+         
+         if(strongBullishMove && InpSMCShowBullishOB)
+         {
+            AddBullishOB(highArr[i], lowArr[i], timeArr[i], i);
+         }
+      }
+      
+      // Check for Bearish Order Block
+      // Condition: Bullish candle followed by strong bearish move that breaks structure
+      if(closeArr[i] > openArr[i])  // Bullish candle
+      {
+         // Check if next candles made a strong bearish move
+         bool strongBearishMove = false;
+         for(int j = i - 1; j >= 1; j--)
+         {
+            if(closeArr[j] < lowArr[i] - (highArr[i] - lowArr[i]))
+            {
+               strongBearishMove = true;
+               break;
+            }
+            if(j < i - 3) break;  // Only check 3 bars ahead
+         }
+         
+         if(strongBearishMove && InpSMCShowBearishOB)
+         {
+            AddBearishOB(highArr[i], lowArr[i], timeArr[i], i);
+         }
+      }
+   }
+   
+   // Check mitigation of existing Order Blocks
+   double currentLow = lowArr[0];
+   double currentHigh = highArr[0];
+   
+   for(int i = 0; i < BullishOBCount; i++)
+   {
+      if(!BullishOBs[i].mitigated && currentLow < BullishOBs[i].low)
+      {
+         BullishOBs[i].mitigated = true;
+         ObjectDelete(0, BullishOBs[i].objName);
+      }
+   }
+   
+   for(int i = 0; i < BearishOBCount; i++)
+   {
+      if(!BearishOBs[i].mitigated && currentHigh > BearishOBs[i].high)
+      {
+         BearishOBs[i].mitigated = true;
+         ObjectDelete(0, BearishOBs[i].objName);
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Add Bullish Order Block to array                                   |
+//+------------------------------------------------------------------+
+void AddBullishOB(double high, double low, datetime time, int barIndex)
+{
+   // Check if this OB already exists
+   for(int i = 0; i < BullishOBCount; i++)
+   {
+      if(BullishOBs[i].time == time) return;  // Already exists
+   }
+   
+   // Add new OB (shift array if full)
+   if(BullishOBCount >= InpSMCMaxOrderBlocks)
+   {
+      // Remove oldest (last in array)
+      ObjectDelete(0, BullishOBs[BullishOBCount - 1].objName);
+      // Shift array
+      for(int i = BullishOBCount - 1; i > 0; i--)
+      {
+         BullishOBs[i] = BullishOBs[i - 1];
+      }
+      BullishOBCount = InpSMCMaxOrderBlocks - 1;
+   }
+   
+   // Add to beginning (newest first)
+   if(BullishOBCount < InpSMCMaxOrderBlocks)
+   {
+      BullishOBs[BullishOBCount].high = high;
+      BullishOBs[BullishOBCount].low = low;
+      BullishOBs[BullishOBCount].time = time;
+      BullishOBs[BullishOBCount].barIndex = barIndex;
+      BullishOBs[BullishOBCount].bias = 1;
+      BullishOBs[BullishOBCount].mitigated = false;
+      BullishOBs[BullishOBCount].objName = SMCPrefix + "BullOB_" + IntegerToString((long)time);
+      BullishOBCount++;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Add Bearish Order Block to array                                   |
+//+------------------------------------------------------------------+
+void AddBearishOB(double high, double low, datetime time, int barIndex)
+{
+   // Check if this OB already exists
+   for(int i = 0; i < BearishOBCount; i++)
+   {
+      if(BearishOBs[i].time == time) return;  // Already exists
+   }
+   
+   // Add new OB (shift array if full)
+   if(BearishOBCount >= InpSMCMaxOrderBlocks)
+   {
+      // Remove oldest (last in array)
+      ObjectDelete(0, BearishOBs[BearishOBCount - 1].objName);
+      // Shift array
+      for(int i = BearishOBCount - 1; i > 0; i--)
+      {
+         BearishOBs[i] = BearishOBs[i - 1];
+      }
+      BearishOBCount = InpSMCMaxOrderBlocks - 1;
+   }
+   
+   // Add to beginning (newest first)
+   if(BearishOBCount < InpSMCMaxOrderBlocks)
+   {
+      BearishOBs[BearishOBCount].high = high;
+      BearishOBs[BearishOBCount].low = low;
+      BearishOBs[BearishOBCount].time = time;
+      BearishOBs[BearishOBCount].barIndex = barIndex;
+      BearishOBs[BearishOBCount].bias = -1;
+      BearishOBs[BearishOBCount].mitigated = false;
+      BearishOBs[BearishOBCount].objName = SMCPrefix + "BearOB_" + IntegerToString((long)time);
+      BearishOBCount++;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Draw Order Blocks as rectangles on chart                           |
+//+------------------------------------------------------------------+
+void DrawOrderBlocks()
+{
+   datetime currentTime = TimeCurrent();
+   datetime endTime = currentTime + PeriodSeconds(InpSMCTimeframe) * 50;
+   
+   // Draw Bullish Order Blocks
+   for(int i = 0; i < BullishOBCount; i++)
+   {
+      if(BullishOBs[i].mitigated) continue;
+      
+      string objName = BullishOBs[i].objName;
+      
+      if(ObjectFind(0, objName) < 0)
+      {
+         ObjectCreate(0, objName, OBJ_RECTANGLE, 0, 
+                     BullishOBs[i].time, BullishOBs[i].high,
+                     endTime, BullishOBs[i].low);
+      }
+      else
+      {
+         ObjectSetInteger(0, objName, OBJPROP_TIME, 1, endTime);
+      }
+      
+      ObjectSetInteger(0, objName, OBJPROP_COLOR, InpSMCBullOBColor);
+      ObjectSetInteger(0, objName, OBJPROP_FILL, true);
+      ObjectSetInteger(0, objName, OBJPROP_BACK, true);
+      ObjectSetInteger(0, objName, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(0, objName, OBJPROP_HIDDEN, false);
+   }
+   
+   // Draw Bearish Order Blocks
+   for(int i = 0; i < BearishOBCount; i++)
+   {
+      if(BearishOBs[i].mitigated) continue;
+      
+      string objName = BearishOBs[i].objName;
+      
+      if(ObjectFind(0, objName) < 0)
+      {
+         ObjectCreate(0, objName, OBJ_RECTANGLE, 0,
+                     BearishOBs[i].time, BearishOBs[i].high,
+                     endTime, BearishOBs[i].low);
+      }
+      else
+      {
+         ObjectSetInteger(0, objName, OBJPROP_TIME, 1, endTime);
+      }
+      
+      ObjectSetInteger(0, objName, OBJPROP_COLOR, InpSMCBearOBColor);
+      ObjectSetInteger(0, objName, OBJPROP_FILL, true);
+      ObjectSetInteger(0, objName, OBJPROP_BACK, true);
+      ObjectSetInteger(0, objName, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(0, objName, OBJPROP_HIDDEN, false);
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Check if price touched an Order Block                              |
+//+------------------------------------------------------------------+
+void CheckOBTouch(double closePrice, double highPrice, double lowPrice)
+{
+   // Reset touch flags
+   g_smcBuyTouchedOB = false;
+   g_smcSellTouchedOB = false;
+   
+   // Check Bullish OB touch (price dipped into support zone)
+   for(int i = 0; i < BullishOBCount; i++)
+   {
+      if(BullishOBs[i].mitigated) continue;
+      
+      // Price entered the Bullish OB zone (support)
+      if(lowPrice <= BullishOBs[i].high && lowPrice >= BullishOBs[i].low)
+      {
+         g_smcBuyTouchedOB = true;
+         Print(">>> Price touched Bullish Order Block! Zone: ", BullishOBs[i].low, " - ", BullishOBs[i].high);
+         break;
+      }
+      // Price closed inside the zone
+      if(closePrice <= BullishOBs[i].high && closePrice >= BullishOBs[i].low)
+      {
+         g_smcBuyTouchedOB = true;
+         Print(">>> Price closed in Bullish Order Block! Zone: ", BullishOBs[i].low, " - ", BullishOBs[i].high);
+         break;
+      }
+   }
+   
+   // Check Bearish OB touch (price spiked into resistance zone)
+   for(int i = 0; i < BearishOBCount; i++)
+   {
+      if(BearishOBs[i].mitigated) continue;
+      
+      // Price entered the Bearish OB zone (resistance)
+      if(highPrice >= BearishOBs[i].low && highPrice <= BearishOBs[i].high)
+      {
+         g_smcSellTouchedOB = true;
+         Print(">>> Price touched Bearish Order Block! Zone: ", BearishOBs[i].low, " - ", BearishOBs[i].high);
+         break;
+      }
+      // Price closed inside the zone
+      if(closePrice >= BearishOBs[i].low && closePrice <= BearishOBs[i].high)
+      {
+         g_smcSellTouchedOB = true;
+         Print(">>> Price closed in Bearish Order Block! Zone: ", BearishOBs[i].low, " - ", BearishOBs[i].high);
+         break;
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Generate SMC Signal based on OB touch and trend                    |
+//+------------------------------------------------------------------+
+void GenerateSMCSignal(double &closeArr[], double &lowArr[], double &highArr[])
+{
+   SMCSignal = "NONE";
+   
+   int signalBar = (InpSMCSignalBar == EMA_CURRENT_BAR) ? 0 : 1;
+   
+   // BUY Signal: Bullish trend + Price touched Bullish OB (support)
+   // If PA confirmation is enabled, it will be checked in OnTick
+   if(SMCTrend >= 0)  // Bullish or Neutral trend
+   {
+      if(g_smcBuyTouchedOB)
+      {
+         if(InpSMCRequireTouch)
+         {
+            SMCSignal = "BUY";
+         }
+         else
+         {
+            SMCSignal = "BUY";
+         }
+      }
+   }
+   
+   // SELL Signal: Bearish trend + Price touched Bearish OB (resistance)
+   if(SMCTrend <= 0)  // Bearish or Neutral trend
+   {
+      if(g_smcSellTouchedOB)
+      {
+         if(InpSMCRequireTouch)
+         {
+            SMCSignal = "SELL";
+         }
+         else
+         {
+            SMCSignal = "SELL";
+         }
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Update SMC Signal Reset Status                                     |
+//+------------------------------------------------------------------+
+void UpdateSMCSignalResetStatus()
+{
+   // For SMC: Reset requires price to move away from OB zone
+   // then touch it again for new signal
+   
+   if(g_waitBuySignalReset)
+   {
+      // BUY reset: Wait for price to move above all Bullish OBs
+      // then touch one again
+      if(g_smcBuyResetRequired && !g_smcBuyTouchedOB)
+      {
+         g_smcBuyResetPhaseComplete = true;
+         Print("*** SMC BUY Reset Phase 1 Complete - Price moved away from OB ***");
+      }
+      else if(g_smcBuyResetPhaseComplete && g_smcBuyTouchedOB)
+      {
+         g_waitBuySignalReset = false;
+         g_smcBuyResetRequired = false;
+         g_smcBuyResetPhaseComplete = false;
+         Print("*** SMC BUY Signal Reset Complete - Ready for new BUY signal! ***");
+      }
+   }
+   
+   if(g_waitSellSignalReset)
+   {
+      // SELL reset: Wait for price to move below all Bearish OBs
+      // then touch one again
+      if(g_smcSellResetRequired && !g_smcSellTouchedOB)
+      {
+         g_smcSellResetPhaseComplete = true;
+         Print("*** SMC SELL Reset Phase 1 Complete - Price moved away from OB ***");
+      }
+      else if(g_smcSellResetPhaseComplete && g_smcSellTouchedOB)
+      {
+         g_waitSellSignalReset = false;
+         g_smcSellResetRequired = false;
+         g_smcSellResetPhaseComplete = false;
+         Print("*** SMC SELL Signal Reset Complete - Ready for new SELL signal! ***");
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Analyze Smart Money Concepts Signal                                |
+//+------------------------------------------------------------------+
+string AnalyzeSMCSignal()
+{
+   datetime currentBarTime = iTime(_Symbol, InpSMCTimeframe, 0);
+   
+   // For Last Bar Closed mode, check if this is a new bar
+   if(InpSMCSignalBar == EMA_LAST_BAR_CLOSED)
+   {
+      if(currentBarTime == LastSMCSignalTime)
+      {
+         return "WAIT";
+      }
+      LastSMCSignalTime = currentBarTime;
+   }
+   
+   // *** UPDATE SIGNAL RESET STATUS ***
+   UpdateSMCSignalResetStatus();
+   
+   // Return the SMC signal calculated in CalculateSMC()
+   if(SMCSignal == "BUY")
+   {
+      // *** CHECK IF BUY SIGNAL RESET IS REQUIRED ***
+      if(g_waitBuySignalReset)
+      {
+         Print(">>> SMC BUY Signal detected but waiting for reset (Phase 1: ", g_smcBuyResetPhaseComplete ? "Complete" : "Pending", ")");
+         return "WAIT";
+      }
+      Print(">>> Smart Money Concepts BUY Signal Confirmed! (Price touched Bullish Order Block)");
+      return "BUY";
+   }
+   else if(SMCSignal == "SELL")
+   {
+      // *** CHECK IF SELL SIGNAL RESET IS REQUIRED ***
+      if(g_waitSellSignalReset)
+      {
+         Print(">>> SMC SELL Signal detected but waiting for reset (Phase 1: ", g_smcSellResetPhaseComplete ? "Complete" : "Pending", ")");
+         return "WAIT";
+      }
+      Print(">>> Smart Money Concepts SELL Signal Confirmed! (Price touched Bearish Order Block)");
+      return "SELL";
+   }
+   
+   return "WAIT";
+}
+
 void ExecuteBuy()
 {
    double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
