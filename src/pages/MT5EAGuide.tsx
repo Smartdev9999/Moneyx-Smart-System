@@ -2045,11 +2045,11 @@ string CheckBuyPAConfirmationWithPattern(datetime signalTouchTime = 0)
    {
       datetime candleTime = iTime(_Symbol, PERIOD_CURRENT, shift);
       
-      // *** CRITICAL CHECK: PA must occur AFTER the signal touch ***
-      // If signalTouchTime is set, only count PA that happened AFTER the touch
-      if(signalTouchTime > 0 && candleTime < signalTouchTime)
+      // *** CRITICAL CHECK: PA must occur STRICTLY AFTER the signal touch ***
+      // Using candle open time as reference: require next candle(s) after touch.
+      if(signalTouchTime > 0 && candleTime <= signalTouchTime)
       {
-         // This PA candle is from BEFORE the signal touch - skip it
+         // This PA candle is from BEFORE/AT the touch candle - skip it
          continue;
       }
       
@@ -2081,8 +2081,8 @@ string CheckSellPAConfirmationWithPattern(datetime signalTouchTime = 0)
    {
       datetime candleTime = iTime(_Symbol, PERIOD_CURRENT, shift);
       
-      // *** CRITICAL CHECK: PA must occur AFTER the signal touch ***
-      if(signalTouchTime > 0 && candleTime < signalTouchTime)
+      // *** CRITICAL CHECK: PA must occur STRICTLY AFTER the signal touch ***
+      if(signalTouchTime > 0 && candleTime <= signalTouchTime)
       {
          continue;
       }
@@ -2157,18 +2157,32 @@ void HandlePendingSignal()
          // Check if trade is still allowed
          if(CountPositions(POSITION_TYPE_BUY) == 0 && IsTradeAllowed("BUY"))
          {
-            // Draw PA arrow on chart (use the candle where PA was detected)
-            int shift = g_lastPABuyShift;
-            datetime signalBar = iTime(_Symbol, PERIOD_CURRENT, shift);
-            double signalPrice = iLow(_Symbol, PERIOD_CURRENT, shift);
-            DrawPAArrow("BUY", GetPAPatternName(paPattern), signalBar, signalPrice);
-            
-            ExecuteBuy();
-            Print("BUY executed after PA confirmation (", paPattern, ") - waited ", g_paWaitCount, " candles | TouchTime=", TimeToString(g_signalTouchTime));
+            // Try to execute first; only draw PA + clear pending if success
+            if(ExecuteBuy())
+            {
+               // Draw PA arrow on chart (use the candle where PA was detected)
+               int shift = g_lastPABuyShift;
+               datetime signalBar = iTime(_Symbol, PERIOD_CURRENT, shift);
+               double signalPrice = iLow(_Symbol, PERIOD_CURRENT, shift);
+               DrawPAArrow("BUY", GetPAPatternName(paPattern), signalBar, signalPrice);
+               
+               Print("BUY executed after PA confirmation (", paPattern, ") - waited ", g_paWaitCount, " candles | TouchTime=", TimeToString(g_signalTouchTime));
+               g_pendingSignal = "NONE";
+               g_paWaitCount = 0;
+               g_signalTouchTime = 0;  // Reset touch time
+            }
+            else
+            {
+               // Keep pending signal to retry next candle (prevents missing entry due to temporary trade failure)
+               Print("BUY execution failed after PA; keeping pending to retry | Retcode=", trade.ResultRetcode());
+            }
          }
-         g_pendingSignal = "NONE";
-         g_paWaitCount = 0;
-         g_signalTouchTime = 0;  // Reset touch time
+         else
+         {
+            // Trade no longer allowed -> keep waiting (do not discard) until timeout
+            Print("BUY blocked after PA due to filters; keeping pending | CDC=", CDCTrend);
+         }
+         
       }
       else
       {
@@ -2183,18 +2197,30 @@ void HandlePendingSignal()
          // Check if trade is still allowed
          if(CountPositions(POSITION_TYPE_SELL) == 0 && IsTradeAllowed("SELL"))
          {
-            // Draw PA arrow on chart (use the candle where PA was detected)
-            int shift = g_lastPASellShift;
-            datetime signalBar = iTime(_Symbol, PERIOD_CURRENT, shift);
-            double signalPrice = iHigh(_Symbol, PERIOD_CURRENT, shift);
-            DrawPAArrow("SELL", GetPAPatternName(paPattern), signalBar, signalPrice);
-            
-            ExecuteSell();
-            Print("SELL executed after PA confirmation (", paPattern, ") - waited ", g_paWaitCount, " candles | TouchTime=", TimeToString(g_signalTouchTime));
+            // Try to execute first; only draw PA + clear pending if success
+            if(ExecuteSell())
+            {
+               // Draw PA arrow on chart (use the candle where PA was detected)
+               int shift = g_lastPASellShift;
+               datetime signalBar = iTime(_Symbol, PERIOD_CURRENT, shift);
+               double signalPrice = iHigh(_Symbol, PERIOD_CURRENT, shift);
+               DrawPAArrow("SELL", GetPAPatternName(paPattern), signalBar, signalPrice);
+               
+               Print("SELL executed after PA confirmation (", paPattern, ") - waited ", g_paWaitCount, " candles | TouchTime=", TimeToString(g_signalTouchTime));
+               g_pendingSignal = "NONE";
+               g_paWaitCount = 0;
+               g_signalTouchTime = 0;  // Reset touch time
+            }
+            else
+            {
+               Print("SELL execution failed after PA; keeping pending to retry | Retcode=", trade.ResultRetcode());
+            }
          }
-         g_pendingSignal = "NONE";
-         g_paWaitCount = 0;
-         g_signalTouchTime = 0;  // Reset touch time
+         else
+         {
+            Print("SELL blocked after PA due to filters; keeping pending | CDC=", CDCTrend);
+         }
+         
       }
       else
       {
@@ -3316,8 +3342,10 @@ void OnTick()
          }
          else
          {
-            ExecuteBuy();
-            reason = "BUY executed | CDC: " + CDCTrend;
+            if(ExecuteBuy())
+               reason = "BUY executed | CDC: " + CDCTrend;
+            else
+               reason = "BUY failed to execute | CDC: " + CDCTrend;
          }
       }
    }
@@ -3362,8 +3390,10 @@ void OnTick()
          }
          else
          {
-            ExecuteSell();
-            reason = "SELL executed | CDC: " + CDCTrend;
+            if(ExecuteSell())
+               reason = "SELL executed | CDC: " + CDCTrend;
+            else
+               reason = "SELL failed to execute | CDC: " + CDCTrend;
          }
       }
    }
@@ -4388,7 +4418,7 @@ string AnalyzeSMCSignal()
    return "WAIT";
 }
 
-void ExecuteBuy()
+bool ExecuteBuy()
 {
    double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
    double lot = CalculateLotSize();
@@ -4410,17 +4440,17 @@ void ExecuteBuy()
          g_smcBuyTouchTime = 0;
          Print(">>> SMC BUY touch flags reset after order execution");
       }
+      return true;
    }
-   else
-   {
-      Print("BUY Failed! Error: ", trade.ResultRetcode());
-   }
+   
+   Print("BUY Failed! Retcode: ", trade.ResultRetcode(), " | LastError: ", GetLastError());
+   return false;
 }
 
 //+------------------------------------------------------------------+
 //| Execute SELL order                                                 |
 //+------------------------------------------------------------------+
-void ExecuteSell()
+bool ExecuteSell()
 {
    double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
    double lot = CalculateLotSize();
@@ -4442,11 +4472,11 @@ void ExecuteSell()
          g_smcSellTouchTime = 0;
          Print(">>> SMC SELL touch flags reset after order execution");
       }
+      return true;
    }
-   else
-   {
-      Print("SELL Failed! Error: ", trade.ResultRetcode());
-   }
+   
+   Print("SELL Failed! Retcode: ", trade.ResultRetcode(), " | LastError: ", GetLastError());
+   return false;
 }
 
 //+------------------------------------------------------------------+
