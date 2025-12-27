@@ -4368,23 +4368,49 @@ void GenerateSMCSignal(double &closeArr[], double &lowArr[], double &highArr[])
 
 //+------------------------------------------------------------------+
 //| Update SMC Signal Reset Status                                     |
+//| IMPROVED: Reset can complete when:                                  |
+//| - Price moves away from OB (original behavior)                     |
+//| - Price touches a DIFFERENT OB (new behavior)                      |
+//| - Price breaks through OB (mitigated) and a new candle forms       |
 //+------------------------------------------------------------------+
 void UpdateSMCSignalResetStatus()
 {
-   // For SMC: Reset requires price to move away from OB zone
-   // then touch it again for new signal
+   // Track the OB name that was active when order was placed (for comparison)
+   static string s_lastBuyOBUsed = "";
+   static string s_lastSellOBUsed = "";
 
    if(g_waitBuySignalReset && InpSignalStrategy == STRATEGY_SMC)
    {
-      // BUY reset: Wait for price to move above all Bullish OBs
-      // then touch one again
+      // BUY reset logic - needs to either:
+      // 1. Move away from all OBs then touch again, OR
+      // 2. Touch a DIFFERENT OB (switching zones = reset complete)
 
       // Phase 1: Price must NOT be touching any OB RIGHT NOW (moved away)
-      // NOTE: g_smcBuyTouchedOBPersist means "touched before" (for PA), not "touching now".
-      if(g_smcBuyResetRequired && !g_smcBuyTouchingNow)
+      // OR: Price is touching a DIFFERENT OB than before (zone switch)
+      if(g_smcBuyResetRequired)
       {
-         g_smcBuyResetPhaseComplete = true;
-         Print("*** SMC BUY Reset Phase 1 Complete - Price moved away from OB ***");
+         bool movedAway = !g_smcBuyTouchingNow;
+         bool touchedDifferentOB = g_smcBuyTouchingNow && g_smcBuyTouchedOBPersist && 
+                                    g_smcBuyTouchedOBName != s_lastBuyOBUsed && 
+                                    s_lastBuyOBUsed != "";
+         
+         if(movedAway || touchedDifferentOB)
+         {
+            g_smcBuyResetPhaseComplete = true;
+            if(touchedDifferentOB)
+            {
+               // If touching different OB, skip straight to reset complete
+               g_waitBuySignalReset = false;
+               g_smcBuyResetRequired = false;
+               g_smcBuyResetPhaseComplete = false;
+               s_lastBuyOBUsed = "";  // Clear for next cycle
+               Print("*** SMC BUY Signal Reset Complete - Touched DIFFERENT OB: ", g_smcBuyTouchedOBName, " ***");
+            }
+            else
+            {
+               Print("*** SMC BUY Reset Phase 1 Complete - Price moved away from OB ***");
+            }
+         }
       }
       // Phase 2: Price touches OB again after moving away
       else if(g_smcBuyResetPhaseComplete && g_smcBuyTouchedOBPersist)
@@ -4392,21 +4418,43 @@ void UpdateSMCSignalResetStatus()
          g_waitBuySignalReset = false;
          g_smcBuyResetRequired = false;
          g_smcBuyResetPhaseComplete = false;
+         s_lastBuyOBUsed = "";  // Clear for next cycle
          Print("*** SMC BUY Signal Reset Complete - Ready for new BUY signal! ***");
       }
+   }
+   else if(!g_waitBuySignalReset && g_smcBuyTouchedOBPersist && InpSignalStrategy == STRATEGY_SMC)
+   {
+      // Track which OB is being used for current trade (for future reset comparison)
+      s_lastBuyOBUsed = g_smcBuyTouchedOBName;
    }
 
    if(g_waitSellSignalReset && InpSignalStrategy == STRATEGY_SMC)
    {
-      // SELL reset: Wait for price to move below all Bearish OBs
-      // then touch one again
+      // SELL reset logic - same improvement as BUY
 
-      // Phase 1: Price must NOT be touching any OB RIGHT NOW (moved away)
-      // NOTE: g_smcSellTouchedOBPersist means "touched before" (for PA), not "touching now".
-      if(g_smcSellResetRequired && !g_smcSellTouchingNow)
+      if(g_smcSellResetRequired)
       {
-         g_smcSellResetPhaseComplete = true;
-         Print("*** SMC SELL Reset Phase 1 Complete - Price moved away from OB ***");
+         bool movedAway = !g_smcSellTouchingNow;
+         bool touchedDifferentOB = g_smcSellTouchingNow && g_smcSellTouchedOBPersist && 
+                                    g_smcSellTouchedOBName != s_lastSellOBUsed && 
+                                    s_lastSellOBUsed != "";
+         
+         if(movedAway || touchedDifferentOB)
+         {
+            g_smcSellResetPhaseComplete = true;
+            if(touchedDifferentOB)
+            {
+               g_waitSellSignalReset = false;
+               g_smcSellResetRequired = false;
+               g_smcSellResetPhaseComplete = false;
+               s_lastSellOBUsed = "";
+               Print("*** SMC SELL Signal Reset Complete - Touched DIFFERENT OB: ", g_smcSellTouchedOBName, " ***");
+            }
+            else
+            {
+               Print("*** SMC SELL Reset Phase 1 Complete - Price moved away from OB ***");
+            }
+         }
       }
       // Phase 2: Price touches OB again after moving away
       else if(g_smcSellResetPhaseComplete && g_smcSellTouchedOBPersist)
@@ -4414,8 +4462,13 @@ void UpdateSMCSignalResetStatus()
          g_waitSellSignalReset = false;
          g_smcSellResetRequired = false;
          g_smcSellResetPhaseComplete = false;
+         s_lastSellOBUsed = "";
          Print("*** SMC SELL Signal Reset Complete - Ready for new SELL signal! ***");
       }
+   }
+   else if(!g_waitSellSignalReset && g_smcSellTouchedOBPersist && InpSignalStrategy == STRATEGY_SMC)
+   {
+      s_lastSellOBUsed = g_smcSellTouchedOBName;
    }
 }
 
