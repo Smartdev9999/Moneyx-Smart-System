@@ -3185,12 +3185,9 @@ void OnTick()
       
    lastBarTime = currentBarTime;
    
-   // *** PRICE ACTION CONFIRMATION CHECK ***
-   // Handle pending signals waiting for PA confirmation
-   if(InpUsePAConfirm && g_pendingSignal != "NONE")
-   {
-      HandlePendingSignal();
-   }
+   // *** IMPORTANT: Calculate Indicators FIRST before PA confirmation ***
+   // This ensures that SMC OB touch, CDC trend, etc. are already determined
+   // before we check for PA confirmation as the final step.
    
    // Calculate CDC Action Zone (higher timeframe)
    CalculateCDC();
@@ -3215,6 +3212,14 @@ void OnTick()
    {
       // Calculate Smart Money Concepts (Order Blocks)
       CalculateSMC();
+   }
+   
+   // *** PRICE ACTION CONFIRMATION CHECK ***
+   // Handle pending signals waiting for PA confirmation
+   // This runs AFTER indicators are calculated, so we have updated SMC OB touch, CDC trend, etc.
+   if(InpUsePAConfirm && g_pendingSignal != "NONE")
+   {
+      HandlePendingSignal();
    }
    
    if(InpUseTimeFilter && !IsWithinTradingHours())
