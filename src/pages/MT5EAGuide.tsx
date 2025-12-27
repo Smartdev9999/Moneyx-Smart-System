@@ -331,6 +331,10 @@ string TPPrefix = "TP_";
 string EMAPrefix = "EMA_";
 string PAPrefix = "PA_";  // Price Action arrows and labels
 
+// Track which candle (shift) produced the most recent PA confirmation
+int g_lastPABuyShift = 1;
+int g_lastPASellShift = 1;
+
 // EMA Channel Variables
 double EMAHigh = 0;
 double EMALow = 0;
@@ -1952,16 +1956,16 @@ void DrawPAArrow(string tradeType, string paPattern, datetime barTime, double pr
    
    if(tradeType == "BUY")
    {
-      // Draw UP arrow below the low
-      double arrowPrice = iLow(_Symbol, PERIOD_CURRENT, 1) - arrowOffset;
+      // Draw UP arrow below the candle low (price)
+      double arrowPrice = price - arrowOffset;
       ObjectCreate(0, arrowName, OBJ_ARROW_UP, 0, barTime, arrowPrice);
       ObjectSetInteger(0, arrowName, OBJPROP_COLOR, clrLime);
       ObjectSetInteger(0, arrowName, OBJPROP_WIDTH, 3);
    }
    else // SELL
    {
-      // Draw DOWN arrow above the high
-      double arrowPrice = iHigh(_Symbol, PERIOD_CURRENT, 1) + arrowOffset;
+      // Draw DOWN arrow above the candle high (price)
+      double arrowPrice = price + arrowOffset;
       ObjectCreate(0, arrowName, OBJ_ARROW_DOWN, 0, barTime, arrowPrice);
       ObjectSetInteger(0, arrowName, OBJPROP_COLOR, clrRed);
       ObjectSetInteger(0, arrowName, OBJPROP_WIDTH, 3);
@@ -1975,11 +1979,11 @@ void DrawPAArrow(string tradeType, string paPattern, datetime barTime, double pr
    
    if(tradeType == "BUY")
    {
-      labelPrice = iLow(_Symbol, PERIOD_CURRENT, 1) - labelOffset;
+      labelPrice = price - labelOffset;
    }
    else
    {
-      labelPrice = iHigh(_Symbol, PERIOD_CURRENT, 1) + labelOffset;
+      labelPrice = price + labelOffset;
    }
    
    ObjectCreate(0, labelName, OBJ_TEXT, 0, barTime, labelPrice);
@@ -2029,12 +2033,19 @@ string CheckBuyPAConfirmationWithPattern()
    if(!InpUsePAConfirm)
       return "NO_PA_REQUIRED";  // PA not required
    
-   // Check last closed candle (shift=1)
-   string paPattern = DetectBullishPA(1);
-   if(paPattern != "NONE")
+   // Scan recent closed candles for PA within lookback window.
+   // This prevents missing PA that happened 2-3 candles after the touch.
+   int maxLookback = MathMax(1, MathMin(InpPALookback, 10));
+   
+   for(int shift = 1; shift <= maxLookback; shift++)
    {
-      Print(">>> BULLISH PA CONFIRMED: ", paPattern);
-      return paPattern;
+      string paPattern = DetectBullishPA(shift);
+      if(paPattern != "NONE")
+      {
+         g_lastPABuyShift = shift;
+         Print(">>> BULLISH PA CONFIRMED: ", paPattern, " | shift=", shift);
+         return paPattern;
+      }
    }
    
    return "NONE";
@@ -2049,12 +2060,17 @@ string CheckSellPAConfirmationWithPattern()
    if(!InpUsePAConfirm)
       return "NO_PA_REQUIRED";  // PA not required
    
-   // Check last closed candle (shift=1)
-   string paPattern = DetectBearishPA(1);
-   if(paPattern != "NONE")
+   int maxLookback = MathMax(1, MathMin(InpPALookback, 10));
+   
+   for(int shift = 1; shift <= maxLookback; shift++)
    {
-      Print(">>> BEARISH PA CONFIRMED: ", paPattern);
-      return paPattern;
+      string paPattern = DetectBearishPA(shift);
+      if(paPattern != "NONE")
+      {
+         g_lastPASellShift = shift;
+         Print(">>> BEARISH PA CONFIRMED: ", paPattern, " | shift=", shift);
+         return paPattern;
+      }
    }
    
    return "NONE";
@@ -2114,9 +2130,10 @@ void HandlePendingSignal()
          // Check if trade is still allowed
          if(CountPositions(POSITION_TYPE_BUY) == 0 && IsTradeAllowed("BUY"))
          {
-            // Draw PA arrow on chart
-            datetime signalBar = iTime(_Symbol, PERIOD_CURRENT, 1);
-            double signalPrice = iLow(_Symbol, PERIOD_CURRENT, 1);
+            // Draw PA arrow on chart (use the candle where PA was detected)
+            int shift = g_lastPABuyShift;
+            datetime signalBar = iTime(_Symbol, PERIOD_CURRENT, shift);
+            double signalPrice = iLow(_Symbol, PERIOD_CURRENT, shift);
             DrawPAArrow("BUY", GetPAPatternName(paPattern), signalBar, signalPrice);
             
             ExecuteBuy();
@@ -2138,9 +2155,10 @@ void HandlePendingSignal()
          // Check if trade is still allowed
          if(CountPositions(POSITION_TYPE_SELL) == 0 && IsTradeAllowed("SELL"))
          {
-            // Draw PA arrow on chart
-            datetime signalBar = iTime(_Symbol, PERIOD_CURRENT, 1);
-            double signalPrice = iHigh(_Symbol, PERIOD_CURRENT, 1);
+            // Draw PA arrow on chart (use the candle where PA was detected)
+            int shift = g_lastPASellShift;
+            datetime signalBar = iTime(_Symbol, PERIOD_CURRENT, shift);
+            double signalPrice = iHigh(_Symbol, PERIOD_CURRENT, shift);
             DrawPAArrow("SELL", GetPAPatternName(paPattern), signalBar, signalPrice);
             
             ExecuteSell();
@@ -3247,9 +3265,10 @@ void OnTick()
             string paPattern = CheckBuyPAConfirmationWithPattern();
             if(paPattern != "NONE")
             {
-               // Draw PA arrow on chart
-               datetime signalBar = iTime(_Symbol, PERIOD_CURRENT, 1);
-               double signalPrice = iLow(_Symbol, PERIOD_CURRENT, 1);
+               // Draw PA arrow on chart (use the candle where PA was detected)
+               int shift = g_lastPABuyShift;
+               datetime signalBar = iTime(_Symbol, PERIOD_CURRENT, shift);
+               double signalPrice = iLow(_Symbol, PERIOD_CURRENT, shift);
                if(paPattern != "NO_PA_REQUIRED")
                {
                   DrawPAArrow("BUY", GetPAPatternName(paPattern), signalBar, signalPrice);
@@ -3300,9 +3319,10 @@ void OnTick()
             string paPattern = CheckSellPAConfirmationWithPattern();
             if(paPattern != "NONE")
             {
-               // Draw PA arrow on chart
-               datetime signalBar = iTime(_Symbol, PERIOD_CURRENT, 1);
-               double signalPrice = iHigh(_Symbol, PERIOD_CURRENT, 1);
+               // Draw PA arrow on chart (use the candle where PA was detected)
+               int shift = g_lastPASellShift;
+               datetime signalBar = iTime(_Symbol, PERIOD_CURRENT, shift);
+               double signalPrice = iHigh(_Symbol, PERIOD_CURRENT, shift);
                if(paPattern != "NO_PA_REQUIRED")
                {
                   DrawPAArrow("SELL", GetPAPatternName(paPattern), signalBar, signalPrice);
