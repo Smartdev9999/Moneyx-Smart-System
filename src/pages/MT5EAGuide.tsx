@@ -3990,31 +3990,46 @@ void AddBullishOB(double high, double low, datetime time, int barIndex)
       if(BullishOBs[i].time == time) return;  // Already exists
    }
    
-   // Add new OB (shift array if full)
+   // If array is full, ONLY remove an OB if it's already mitigated.
+   // Otherwise, keep existing zones (don't make untouched zones disappear).
    if(BullishOBCount >= InpSMCMaxOrderBlocks)
    {
-      // Remove oldest (last in array)
-      ObjectDelete(0, BullishOBs[BullishOBCount - 1].objName);
-      // Shift array
-      for(int i = BullishOBCount - 1; i > 0; i--)
+      int removeIndex = -1;
+      for(int i = BullishOBCount - 1; i >= 0; i--)
       {
-         BullishOBs[i] = BullishOBs[i - 1];
+         if(BullishOBs[i].mitigated)
+         {
+            removeIndex = i;
+            break;
+         }
       }
-      BullishOBCount = InpSMCMaxOrderBlocks - 1;
+      
+      if(removeIndex >= 0)
+      {
+         ObjectDelete(0, BullishOBs[removeIndex].objName);
+         for(int k = removeIndex; k < BullishOBCount - 1; k++)
+         {
+            BullishOBs[k] = BullishOBs[k + 1];
+         }
+         BullishOBCount--;
+      }
+      else
+      {
+         // No mitigated OBs to free a slot; skip adding new to preserve existing zones
+         Print(">>> SMC: Bullish OB limit reached and none mitigated - keeping existing zones (no delete)");
+         return;
+      }
    }
    
-   // Add to beginning (newest first)
-   if(BullishOBCount < InpSMCMaxOrderBlocks)
-   {
-      BullishOBs[BullishOBCount].high = high;
-      BullishOBs[BullishOBCount].low = low;
-      BullishOBs[BullishOBCount].time = time;
-      BullishOBs[BullishOBCount].barIndex = barIndex;
-      BullishOBs[BullishOBCount].bias = 1;
-      BullishOBs[BullishOBCount].mitigated = false;
-      BullishOBs[BullishOBCount].objName = SMCPrefix + "BullOB_" + IntegerToString((long)time);
-      BullishOBCount++;
-   }
+   // Add new OB
+   BullishOBs[BullishOBCount].high = high;
+   BullishOBs[BullishOBCount].low = low;
+   BullishOBs[BullishOBCount].time = time;
+   BullishOBs[BullishOBCount].barIndex = barIndex;
+   BullishOBs[BullishOBCount].bias = 1;
+   BullishOBs[BullishOBCount].mitigated = false;
+   BullishOBs[BullishOBCount].objName = SMCPrefix + "BullOB_" + IntegerToString((long)time);
+   BullishOBCount++;
 }
 
 //+------------------------------------------------------------------+
@@ -4028,31 +4043,45 @@ void AddBearishOB(double high, double low, datetime time, int barIndex)
       if(BearishOBs[i].time == time) return;  // Already exists
    }
    
-   // Add new OB (shift array if full)
+   // If array is full, ONLY remove an OB if it's already mitigated.
+   // Otherwise, keep existing zones (don't make untouched zones disappear).
    if(BearishOBCount >= InpSMCMaxOrderBlocks)
    {
-      // Remove oldest (last in array)
-      ObjectDelete(0, BearishOBs[BearishOBCount - 1].objName);
-      // Shift array
-      for(int i = BearishOBCount - 1; i > 0; i--)
+      int removeIndex = -1;
+      for(int i = BearishOBCount - 1; i >= 0; i--)
       {
-         BearishOBs[i] = BearishOBs[i - 1];
+         if(BearishOBs[i].mitigated)
+         {
+            removeIndex = i;
+            break;
+         }
       }
-      BearishOBCount = InpSMCMaxOrderBlocks - 1;
+      
+      if(removeIndex >= 0)
+      {
+         ObjectDelete(0, BearishOBs[removeIndex].objName);
+         for(int k = removeIndex; k < BearishOBCount - 1; k++)
+         {
+            BearishOBs[k] = BearishOBs[k + 1];
+         }
+         BearishOBCount--;
+      }
+      else
+      {
+         Print(">>> SMC: Bearish OB limit reached and none mitigated - keeping existing zones (no delete)");
+         return;
+      }
    }
    
-   // Add to beginning (newest first)
-   if(BearishOBCount < InpSMCMaxOrderBlocks)
-   {
-      BearishOBs[BearishOBCount].high = high;
-      BearishOBs[BearishOBCount].low = low;
-      BearishOBs[BearishOBCount].time = time;
-      BearishOBs[BearishOBCount].barIndex = barIndex;
-      BearishOBs[BearishOBCount].bias = -1;
-      BearishOBs[BearishOBCount].mitigated = false;
-      BearishOBs[BearishOBCount].objName = SMCPrefix + "BearOB_" + IntegerToString((long)time);
-      BearishOBCount++;
-   }
+   // Add new OB
+   BearishOBs[BearishOBCount].high = high;
+   BearishOBs[BearishOBCount].low = low;
+   BearishOBs[BearishOBCount].time = time;
+   BearishOBs[BearishOBCount].barIndex = barIndex;
+   BearishOBs[BearishOBCount].bias = -1;
+   BearishOBs[BearishOBCount].mitigated = false;
+   BearishOBs[BearishOBCount].objName = SMCPrefix + "BearOB_" + IntegerToString((long)time);
+   BearishOBCount++;
 }
 
 //+------------------------------------------------------------------+
