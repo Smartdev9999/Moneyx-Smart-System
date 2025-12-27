@@ -396,6 +396,9 @@ string g_smcSellTouchedOBName = "";      // Which Bearish OB is currently active
 datetime g_smcBuyTouchTime = 0;          // Time when buy touch detected (TimeCurrent)
 datetime g_smcSellTouchTime = 0;         // Time when sell touch detected (TimeCurrent)
 
+// Track which OB was USED to open the last initial order (for reset comparisons)
+string g_smcLastBuyOBUsed = "";
+string g_smcLastSellOBUsed = "";
 // SMC Swing Points
 double SMCSwingHigh = 0;
 double SMCSwingLow = 0;
@@ -4375,35 +4378,28 @@ void GenerateSMCSignal(double &closeArr[], double &lowArr[], double &highArr[])
 //+------------------------------------------------------------------+
 void UpdateSMCSignalResetStatus()
 {
-   // Track the OB name that was active when order was placed (for comparison)
-   static string s_lastBuyOBUsed = "";
-   static string s_lastSellOBUsed = "";
-
    if(g_waitBuySignalReset && InpSignalStrategy == STRATEGY_SMC)
    {
-      // BUY reset logic - needs to either:
-      // 1. Move away from all OBs then touch again, OR
-      // 2. Touch a DIFFERENT OB (switching zones = reset complete)
+      // BUY reset logic:
+      // - Either price moves away from the OB zone, then touches again
+      // - Or price touches a DIFFERENT OB than the one used to open the last order
 
-      // Phase 1: Price must NOT be touching any OB RIGHT NOW (moved away)
-      // OR: Price is touching a DIFFERENT OB than before (zone switch)
       if(g_smcBuyResetRequired)
       {
          bool movedAway = !g_smcBuyTouchingNow;
-         bool touchedDifferentOB = g_smcBuyTouchingNow && g_smcBuyTouchedOBPersist && 
-                                    g_smcBuyTouchedOBName != s_lastBuyOBUsed && 
-                                    s_lastBuyOBUsed != "";
-         
+         bool touchedDifferentOB = g_smcBuyTouchingNow && g_smcBuyTouchedOBPersist &&
+                                    g_smcLastBuyOBUsed != "" &&
+                                    g_smcBuyTouchedOBName != g_smcLastBuyOBUsed;
+
          if(movedAway || touchedDifferentOB)
          {
             g_smcBuyResetPhaseComplete = true;
             if(touchedDifferentOB)
             {
-               // If touching different OB, skip straight to reset complete
                g_waitBuySignalReset = false;
                g_smcBuyResetRequired = false;
                g_smcBuyResetPhaseComplete = false;
-               s_lastBuyOBUsed = "";  // Clear for next cycle
+               g_smcLastBuyOBUsed = "";
                Print("*** SMC BUY Signal Reset Complete - Touched DIFFERENT OB: ", g_smcBuyTouchedOBName, " ***");
             }
             else
@@ -4412,33 +4408,25 @@ void UpdateSMCSignalResetStatus()
             }
          }
       }
-      // Phase 2: Price touches OB again after moving away
       else if(g_smcBuyResetPhaseComplete && g_smcBuyTouchedOBPersist)
       {
          g_waitBuySignalReset = false;
          g_smcBuyResetRequired = false;
          g_smcBuyResetPhaseComplete = false;
-         s_lastBuyOBUsed = "";  // Clear for next cycle
+         g_smcLastBuyOBUsed = "";
          Print("*** SMC BUY Signal Reset Complete - Ready for new BUY signal! ***");
       }
-   }
-   else if(!g_waitBuySignalReset && g_smcBuyTouchedOBPersist && InpSignalStrategy == STRATEGY_SMC)
-   {
-      // Track which OB is being used for current trade (for future reset comparison)
-      s_lastBuyOBUsed = g_smcBuyTouchedOBName;
    }
 
    if(g_waitSellSignalReset && InpSignalStrategy == STRATEGY_SMC)
    {
-      // SELL reset logic - same improvement as BUY
-
       if(g_smcSellResetRequired)
       {
          bool movedAway = !g_smcSellTouchingNow;
-         bool touchedDifferentOB = g_smcSellTouchingNow && g_smcSellTouchedOBPersist && 
-                                    g_smcSellTouchedOBName != s_lastSellOBUsed && 
-                                    s_lastSellOBUsed != "";
-         
+         bool touchedDifferentOB = g_smcSellTouchingNow && g_smcSellTouchedOBPersist &&
+                                    g_smcLastSellOBUsed != "" &&
+                                    g_smcSellTouchedOBName != g_smcLastSellOBUsed;
+
          if(movedAway || touchedDifferentOB)
          {
             g_smcSellResetPhaseComplete = true;
@@ -4447,7 +4435,7 @@ void UpdateSMCSignalResetStatus()
                g_waitSellSignalReset = false;
                g_smcSellResetRequired = false;
                g_smcSellResetPhaseComplete = false;
-               s_lastSellOBUsed = "";
+               g_smcLastSellOBUsed = "";
                Print("*** SMC SELL Signal Reset Complete - Touched DIFFERENT OB: ", g_smcSellTouchedOBName, " ***");
             }
             else
@@ -4456,19 +4444,14 @@ void UpdateSMCSignalResetStatus()
             }
          }
       }
-      // Phase 2: Price touches OB again after moving away
       else if(g_smcSellResetPhaseComplete && g_smcSellTouchedOBPersist)
       {
          g_waitSellSignalReset = false;
          g_smcSellResetRequired = false;
          g_smcSellResetPhaseComplete = false;
-         s_lastSellOBUsed = "";
+         g_smcLastSellOBUsed = "";
          Print("*** SMC SELL Signal Reset Complete - Ready for new SELL signal! ***");
       }
-   }
-   else if(!g_waitSellSignalReset && g_smcSellTouchedOBPersist && InpSignalStrategy == STRATEGY_SMC)
-   {
-      s_lastSellOBUsed = g_smcSellTouchedOBName;
    }
 }
 
@@ -4536,11 +4519,14 @@ bool ExecuteBuy()
       // *** RESET SMC TOUCH FLAGS AFTER ORDER EXECUTION ***
       if(InpSignalStrategy == STRATEGY_SMC)
       {
+         // Remember which OB was used to open this order (for reset comparisons)
+         g_smcLastBuyOBUsed = g_smcBuyTouchedOBName;
+
          g_smcBuyTouchedOBPersist = false;
          g_smcBuyTouchedOB = false;
          g_smcBuyTouchedOBName = "";
          g_smcBuyTouchTime = 0;
-         Print(">>> SMC BUY touch flags reset after order execution");
+         Print(">>> SMC BUY touch flags reset after order execution | LastOBUsed=", g_smcLastBuyOBUsed);
       }
       return true;
    }
@@ -4569,11 +4555,14 @@ bool ExecuteSell()
       // *** RESET SMC TOUCH FLAGS AFTER ORDER EXECUTION ***
       if(InpSignalStrategy == STRATEGY_SMC)
       {
+         // Remember which OB was used to open this order (for reset comparisons)
+         g_smcLastSellOBUsed = g_smcSellTouchedOBName;
+
          g_smcSellTouchedOBPersist = false;
          g_smcSellTouchedOB = false;
          g_smcSellTouchedOBName = "";
          g_smcSellTouchTime = 0;
-         Print(">>> SMC SELL touch flags reset after order execution");
+         Print(">>> SMC SELL touch flags reset after order execution | LastOBUsed=", g_smcLastSellOBUsed);
       }
       return true;
    }
