@@ -4166,35 +4166,21 @@ void AddBullishOB(double high, double low, datetime time, int barIndex)
       if(BullishOBs[i].time == time) return;  // Already exists
    }
    
-   // If array is full, ONLY remove an OB if it's already mitigated.
-   // Otherwise, keep existing zones (don't make untouched zones disappear).
+   // FIFO (Circular Buffer): If array is full, remove the OLDEST OB (index 0)
+   // This ensures OBs keep updating even when max limit is reached
    if(BullishOBCount >= InpSMCMaxOrderBlocks)
    {
-      int removeIndex = -1;
-      for(int i = BullishOBCount - 1; i >= 0; i--)
-      {
-         if(BullishOBs[i].mitigated)
-         {
-            removeIndex = i;
-            break;
-         }
-      }
+      // Delete the oldest OB object from chart
+      ObjectDelete(0, BullishOBs[0].objName);
       
-      if(removeIndex >= 0)
+      // Shift all elements left (remove oldest at index 0)
+      for(int k = 0; k < BullishOBCount - 1; k++)
       {
-         ObjectDelete(0, BullishOBs[removeIndex].objName);
-         for(int k = removeIndex; k < BullishOBCount - 1; k++)
-         {
-            BullishOBs[k] = BullishOBs[k + 1];
-         }
-         BullishOBCount--;
+         BullishOBs[k] = BullishOBs[k + 1];
       }
-      else
-      {
-         // No mitigated OBs to free a slot; skip adding new to preserve existing zones
-         Print(">>> SMC: Bullish OB limit reached and none mitigated - keeping existing zones (no delete)");
-         return;
-      }
+      BullishOBCount--;
+      
+      Print(">>> SMC: Bullish OB FIFO rotation - removed oldest OB to add new one");
    }
    
    // Add new OB
@@ -4219,34 +4205,21 @@ void AddBearishOB(double high, double low, datetime time, int barIndex)
       if(BearishOBs[i].time == time) return;  // Already exists
    }
    
-   // If array is full, ONLY remove an OB if it's already mitigated.
-   // Otherwise, keep existing zones (don't make untouched zones disappear).
+   // FIFO (Circular Buffer): If array is full, remove the OLDEST OB (index 0)
+   // This ensures OBs keep updating even when max limit is reached
    if(BearishOBCount >= InpSMCMaxOrderBlocks)
    {
-      int removeIndex = -1;
-      for(int i = BearishOBCount - 1; i >= 0; i--)
-      {
-         if(BearishOBs[i].mitigated)
-         {
-            removeIndex = i;
-            break;
-         }
-      }
+      // Delete the oldest OB object from chart
+      ObjectDelete(0, BearishOBs[0].objName);
       
-      if(removeIndex >= 0)
+      // Shift all elements left (remove oldest at index 0)
+      for(int k = 0; k < BearishOBCount - 1; k++)
       {
-         ObjectDelete(0, BearishOBs[removeIndex].objName);
-         for(int k = removeIndex; k < BearishOBCount - 1; k++)
-         {
-            BearishOBs[k] = BearishOBs[k + 1];
-         }
-         BearishOBCount--;
+         BearishOBs[k] = BearishOBs[k + 1];
       }
-      else
-      {
-         Print(">>> SMC: Bearish OB limit reached and none mitigated - keeping existing zones (no delete)");
-         return;
-      }
+      BearishOBCount--;
+      
+      Print(">>> SMC: Bearish OB FIFO rotation - removed oldest OB to add new one");
    }
    
    // Add new OB
