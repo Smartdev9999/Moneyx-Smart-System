@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { Layers, Settings2, ArrowDownUp, Palette, RefreshCw, Hash, Code2, ArrowRight } from 'lucide-react';
+import { Layers, Settings2, ArrowDownUp, Palette, RefreshCw, Hash, Code2, ArrowRight, FileCode, TrendingUp } from 'lucide-react';
 import ZigZagChart from '@/components/ZigZagChart';
 import ParameterCard from '@/components/ParameterCard';
 import PatternBadge from '@/components/PatternBadge';
@@ -181,7 +181,7 @@ const Index = () => {
 
       {/* Trading Bot Guide CTA */}
       <section className="container py-12">
-        <div className="max-w-3xl mx-auto">
+        <div className="max-w-3xl mx-auto space-y-4">
           <Link 
             to="/trading-bot-guide"
             className="block glass-card rounded-2xl p-8 border-2 border-primary/30 hover:border-primary/60 transition-all duration-300 group"
@@ -199,6 +199,46 @@ const Index = () => {
                 </p>
               </div>
               <ArrowRight className="w-6 h-6 text-primary group-hover:translate-x-2 transition-transform" />
+            </div>
+          </Link>
+
+          <Link 
+            to="/mt5-ea-guide"
+            className="block glass-card rounded-2xl p-8 border-2 border-cyan-500/30 hover:border-cyan-500/60 transition-all duration-300 group"
+          >
+            <div className="flex items-center gap-6">
+              <div className="p-4 rounded-xl bg-cyan-500/20 text-cyan-400 group-hover:scale-110 transition-transform">
+                <FileCode className="w-8 h-8" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-xl font-bold text-foreground mb-2">
+                  MT5 Expert Advisor (EA)
+                </h3>
+                <p className="text-muted-foreground">
+                  โค้ด EA ฉบับเต็มสำหรับ MetaTrader 5 พร้อม Dashboard และ Grid Trading
+                </p>
+              </div>
+              <ArrowRight className="w-6 h-6 text-cyan-400 group-hover:translate-x-2 transition-transform" />
+            </div>
+          </Link>
+
+          <Link 
+            to="/mt5-indicator-guide"
+            className="block glass-card rounded-2xl p-8 border-2 border-green-500/30 hover:border-green-500/60 transition-all duration-300 group"
+          >
+            <div className="flex items-center gap-6">
+              <div className="p-4 rounded-xl bg-green-500/20 text-green-400 group-hover:scale-110 transition-transform">
+                <TrendingUp className="w-8 h-8" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-xl font-bold text-foreground mb-2">
+                  MT5 Indicator (EMA, BB, ZigZag, PA, CDC)
+                </h3>
+                <p className="text-muted-foreground">
+                  รวม 5 Indicators ในตัวเดียว พร้อม Settings เลือกเปิด/ปิดแต่ละตัว
+                </p>
+              </div>
+              <ArrowRight className="w-6 h-6 text-green-400 group-hover:translate-x-2 transition-transform" />
             </div>
           </Link>
         </div>
