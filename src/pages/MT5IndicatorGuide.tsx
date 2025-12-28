@@ -1221,6 +1221,7 @@ void DrawOrderBlocks()
       ObjectSetInteger(0, objName, OBJPROP_FILL, true);
       ObjectSetInteger(0, objName, OBJPROP_BACK, true);
       ObjectSetInteger(0, objName, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(0, objName, OBJPROP_WIDTH, 0);  // Remove border lines
    }
    
    // Draw Bearish Order Blocks (Resistance - Red)
@@ -1245,6 +1246,7 @@ void DrawOrderBlocks()
       ObjectSetInteger(0, objName, OBJPROP_FILL, true);
       ObjectSetInteger(0, objName, OBJPROP_BACK, true);
       ObjectSetInteger(0, objName, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(0, objName, OBJPROP_WIDTH, 0);  // Remove border lines
    }
 }
 
