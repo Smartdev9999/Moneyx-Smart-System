@@ -687,7 +687,7 @@ void CreateDashboard()
    int valueW = 140;
    
    // ========== SYSTEM NAME HEADER (แทน Logo) ==========
-   // กรอบสีฟ้าพร้อมชื่อระบบ "Moneyx Smart System"
+   // กรอบสีฟ้าพร้อมชื่อระบบ Moneyx Smart System
    int headerH = 35;
    CreateDashLabel(DashPrefix + "TitleFrame", x, y, w, headerH, C'70,130,180'); // กรอบสีฟ้า
    CreateDashText(DashPrefix + "TitleText", x + (w / 2), y + 8, "Moneyx Smart System", clrWhite, 14, true);
