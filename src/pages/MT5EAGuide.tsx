@@ -164,9 +164,10 @@ input bool     InpUseAutoScale = false;      // Enable Auto Balance Scaling
 input double   InpBaseAccount = 1000.0;      // Base Account Size ($) - multiplier base
 // Auto Scale จะปรับขนาดอัตโนมัติสำหรับ:
 // - Trade Settings: Initial Lot, Grid Loss Lot, Grid Profit Lot
-// - Take Profit: TP Dollar, TP Points, Group TP
-// - Stop Loss: SL Dollar, SL Points
-// ตัวอย่าง: Base=1000$, Account=2000$ → ทุกค่าจะ x2
+// - Take Profit: TP Dollar, Group TP ($ only)
+// - Stop Loss: SL Dollar ($ only)
+// หมายเหตุ: TP/SL Points ไม่ปรับตาม Scale เพราะเป็นระยะทางคงที่
+// ตัวอย่าง: Base=1000$, Account=2000$ → ค่าที่เป็น $ และ Lot จะ x2
 
 //--- [ TRADING SETTINGS ] ------------------------------------------
 input string   InpTradingHeader = "=== TRADING SETTINGS ===";  // ___
@@ -660,15 +661,9 @@ double ApplyScaleDollar(double baseDollar)
    return NormalizeDouble(baseDollar * factor, 2);
 }
 
-//+------------------------------------------------------------------+
-//| Apply Auto Scale to Points (TP/SL)                                 |
-//| Returns scaled points based on account balance                     |
-//+------------------------------------------------------------------+
-int ApplyScalePoints(int basePoints)
-{
-   double factor = GetScaleFactor();
-   return (int)MathRound(basePoints * factor);
-}
+// หมายเหตุ: TP/SL Points ไม่ต้องปรับ Scale เพราะเป็นจำนวน points คงที่
+// การปิดกำไร/ขาดทุนมี 2 แบบ: 1) ไปชนเส้น TP/SL Points 2) ถึง $ ที่กำหนด
+// ดังนั้นปรับเฉพาะค่า $ เท่านั้นเพื่อไม่ให้คลาดเคลื่อน
 
 //+------------------------------------------------------------------+
 //| Parse semicolon-separated string to array                          |
@@ -2395,8 +2390,7 @@ double CalculateLotSize()
       double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
       double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
       double pipValue = tickValue * (10 * _Point / tickSize);
-      int scaledSLPoints = ApplyScalePoints(InpSLPoints);
-      lot = riskAmount / (scaledSLPoints * pipValue);
+      lot = riskAmount / (InpSLPoints * pipValue);
    }
    else if(InpLotMode == LOT_RISK_DOLLAR)
    {
@@ -2404,8 +2398,7 @@ double CalculateLotSize()
       double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
       double pipValue = tickValue * (10 * _Point / tickSize);
       double scaledRiskDollar = ApplyScaleDollar(InpRiskDollar);
-      int scaledSLPoints = ApplyScalePoints(InpSLPoints);
-      lot = scaledRiskDollar / (scaledSLPoints * pipValue);
+      lot = scaledRiskDollar / (InpSLPoints * pipValue);
    }
    else
    {
@@ -2503,12 +2496,11 @@ double CalculateTPPrice(ENUM_POSITION_TYPE posType, double avgPrice)
 {
    if(!InpUseTPPoints || avgPrice == 0) return 0;
    
-   int scaledTPPoints = ApplyScalePoints(InpTPPoints);
-   
+   // TP Points ไม่ปรับ Scale เพราะเป็นระยะทางคงที่
    if(posType == POSITION_TYPE_BUY)
-      return avgPrice + scaledTPPoints * _Point;
+      return avgPrice + InpTPPoints * _Point;
    else
-      return avgPrice - scaledTPPoints * _Point;
+      return avgPrice - InpTPPoints * _Point;
 }
 
 //+------------------------------------------------------------------+
@@ -2518,12 +2510,11 @@ double CalculateSLPrice(ENUM_POSITION_TYPE posType, double avgPrice)
 {
    if(!InpUseSLPoints || avgPrice == 0) return 0;
    
-   int scaledSLPoints = ApplyScalePoints(InpSLPoints);
-   
+   // SL Points ไม่ปรับ Scale เพราะเป็นระยะทางคงที่
    if(posType == POSITION_TYPE_BUY)
-      return avgPrice - scaledSLPoints * _Point;
+      return avgPrice - InpSLPoints * _Point;
    else
-      return avgPrice + scaledSLPoints * _Point;
+      return avgPrice + InpSLPoints * _Point;
 }
 
 //+------------------------------------------------------------------+
