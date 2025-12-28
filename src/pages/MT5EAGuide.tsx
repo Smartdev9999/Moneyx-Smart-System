@@ -2538,24 +2538,30 @@ double ClosePositionsByType(ENUM_POSITION_TYPE posType)
       GridBuyCount = 0;
       InitialBuyBarTime = 0;
       g_isHedgedBuy = false;  // Reset hedge flag when positions closed
-      
-      // *** SET BUY SIGNAL RESET FLAG ***
-      g_waitBuySignalReset = true;
-      g_buyResetPhaseBelowEMA = false;
-      g_buyResetWaitOppositeSignal = true;
-      
-      // *** RESET SMC TOUCH FLAGS ***
+
+      // NOTE (SMC): We do NOT run per-side "signal reset" anymore.
+      // Entry is re-armed ONLY when ALL EA positions are flat (see ResetSMCEntryCycle in OnTick).
       if(InpSignalStrategy == STRATEGY_SMC)
       {
+         g_waitBuySignalReset = false;
+         g_smcBuyResetRequired = false;
+         g_smcBuyResetPhaseComplete = false;
+
+         // Clear BUY-side touch context so a NEW touch after flat is required.
          g_smcBuyTouchedOBPersist = false;
          g_smcBuyTouchedOB = false;
+         g_smcBuyTouchedOBName = "";
          g_smcBuyTouchTime = 0;
-         g_smcBuyResetRequired = true;
-         g_smcBuyResetPhaseComplete = false;
-         Print("*** SMC BUY Signal Reset Required - Wait for price to move away then touch OB again ***");
+
+         Print("*** SMC BUY: BUY positions closed - entries will re-arm only when ALL positions are flat ***");
       }
       else
       {
+         // *** SET BUY SIGNAL RESET FLAG ***
+         g_waitBuySignalReset = true;
+         g_buyResetPhaseBelowEMA = false;
+         g_buyResetWaitOppositeSignal = true;
+
          Print("*** BUY Signal Reset Required - Wait for price to cross below EMA then above ***");
       }
    }
@@ -2564,24 +2570,30 @@ double ClosePositionsByType(ENUM_POSITION_TYPE posType)
       GridSellCount = 0;
       InitialSellBarTime = 0;
       g_isHedgedSell = false;  // Reset hedge flag when positions closed
-      
-      // *** SET SELL SIGNAL RESET FLAG ***
-      g_waitSellSignalReset = true;
-      g_sellResetPhaseAboveEMA = false;
-      g_sellResetWaitOppositeSignal = true;
-      
-      // *** RESET SMC TOUCH FLAGS ***
+
+      // NOTE (SMC): We do NOT run per-side "signal reset" anymore.
+      // Entry is re-armed ONLY when ALL EA positions are flat (see ResetSMCEntryCycle in OnTick).
       if(InpSignalStrategy == STRATEGY_SMC)
       {
+         g_waitSellSignalReset = false;
+         g_smcSellResetRequired = false;
+         g_smcSellResetPhaseComplete = false;
+
+         // Clear SELL-side touch context so a NEW touch after flat is required.
          g_smcSellTouchedOBPersist = false;
          g_smcSellTouchedOB = false;
+         g_smcSellTouchedOBName = "";
          g_smcSellTouchTime = 0;
-         g_smcSellResetRequired = true;
-         g_smcSellResetPhaseComplete = false;
-         Print("*** SMC SELL Signal Reset Required - Wait for price to move away then touch OB again ***");
+
+         Print("*** SMC SELL: SELL positions closed - entries will re-arm only when ALL positions are flat ***");
       }
       else
       {
+         // *** SET SELL SIGNAL RESET FLAG ***
+         g_waitSellSignalReset = true;
+         g_sellResetPhaseAboveEMA = false;
+         g_sellResetWaitOppositeSignal = true;
+
          Print("*** SELL Signal Reset Required - Wait for price to cross above EMA then below ***");
       }
    }
@@ -2725,6 +2737,37 @@ void CloseAllPositions()
    g_isHedgedBuy = false;
    g_isHedgedSell = false;
    g_isHedgeLocked = false;  // Reset global hedge lock
+
+   if(InpSignalStrategy == STRATEGY_SMC)
+   {
+      // SMC entries re-arm only when ALL positions are flat (handled in OnTick).
+      g_waitBuySignalReset = false;
+      g_waitSellSignalReset = false;
+      g_smcBuyResetRequired = false;
+      g_smcSellResetRequired = false;
+      g_smcBuyResetPhaseComplete = false;
+      g_smcSellResetPhaseComplete = false;
+
+      // Clear touch & pending PA context so a NEW OB touch is required.
+      g_smcBuyTouchedOBPersist = false;
+      g_smcSellTouchedOBPersist = false;
+      g_smcBuyTouchedOB = false;
+      g_smcSellTouchedOB = false;
+      g_smcBuyTouchedOBName = "";
+      g_smcSellTouchedOBName = "";
+      g_smcBuyTouchTime = 0;
+      g_smcSellTouchTime = 0;
+      g_smcLastBuyOBUsed = "";
+      g_smcLastSellOBUsed = "";
+
+      g_pendingSignal = "NONE";
+      g_paWaitCount = 0;
+      g_signalTouchTime = 0;
+      g_signalBarTime = 0;
+
+      Print("*** SMC: All positions closed - waiting for a NEW OB touch to start a new entry cycle ***");
+      return;
+   }
    
    // *** SET SIGNAL RESET FLAGS ***
    // After closing all positions, require signal to reset before new entries
@@ -3243,6 +3286,43 @@ void OnTick()
       UpdateChartComment("HEDGE_LOCKED", "Positions locked - Manual close required");
       return;  // Exit OnTick - no further trading until manual intervention
    }
+
+   // ========== SMC ENTRY CYCLE (NEW LOGIC) ==========
+   // Concept:
+   // - While ANY EA position is open: OB logic does nothing (no new SMC touches recorded)
+   // - When ALL EA positions become flat: reset SMC state and wait for a NEW OB touch
+   static bool s_hadAnyPositions = false;
+   bool hasAnyPositions = (CountOpenOrders() > 0);
+   if(s_hadAnyPositions && !hasAnyPositions && InpSignalStrategy == STRATEGY_SMC)
+   {
+      // Reset SMC state only on transition: positions > 0  ->  0
+      g_waitBuySignalReset = false;
+      g_waitSellSignalReset = false;
+      g_smcBuyResetRequired = false;
+      g_smcSellResetRequired = false;
+      g_smcBuyResetPhaseComplete = false;
+      g_smcSellResetPhaseComplete = false;
+
+      g_smcBuyTouchedOBPersist = false;
+      g_smcSellTouchedOBPersist = false;
+      g_smcBuyTouchedOB = false;
+      g_smcSellTouchedOB = false;
+      g_smcBuyTouchedOBName = "";
+      g_smcSellTouchedOBName = "";
+      g_smcBuyTouchTime = 0;
+      g_smcSellTouchTime = 0;
+      g_smcLastBuyOBUsed = "";
+      g_smcLastSellOBUsed = "";
+
+      g_pendingSignal = "NONE";
+      g_paWaitCount = 0;
+      g_signalTouchTime = 0;
+      g_signalBarTime = 0;
+
+      Print("*** SMC: Flat detected (all positions closed) - waiting for NEW OB touch to start next entry cycle ***");
+   }
+   s_hadAnyPositions = hasAnyPositions;
+   // ================================================
    
    // Check Grid conditions (every tick for real-time)
    CheckGridLossSide();
@@ -4213,6 +4293,15 @@ void DrawOrderBlocks()
 //+------------------------------------------------------------------+
 void CheckOBTouch(double closePrice, double highPrice, double lowPrice)
 {
+   // NEW SMC RULE: while ANY EA position is open, Order Blocks are "frozen"
+   // (no new touches recorded). We only start tracking touches again after we are flat.
+   if(CountOpenOrders() > 0)
+   {
+      g_smcBuyTouchingNow = false;
+      g_smcSellTouchingNow = false;
+      return;
+   }
+
    // DON'T reset touch flags every tick - let them persist for PA confirmation
    // Flags are only reset when:
    // 1. Order is executed (in ExecuteBuy/ExecuteSell)
@@ -4471,6 +4560,13 @@ void UpdateSMCSignalResetStatus()
 string AnalyzeSMCSignal()
 {
    datetime currentBarTime = iTime(_Symbol, InpSMCTimeframe, 0);
+
+   // While ANY EA position is open, we do not generate new SMC entries.
+   // Entries are re-armed only after we are flat and price touches an OB again.
+   if(CountOpenOrders() > 0)
+   {
+      return "WAIT";
+   }
    
    // For Last Bar Closed mode, check if this is a new bar
    if(InpSMCSignalBar == EMA_LAST_BAR_CLOSED)
