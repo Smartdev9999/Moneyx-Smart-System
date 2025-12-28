@@ -3287,41 +3287,73 @@ void OnTick()
       return;  // Exit OnTick - no further trading until manual intervention
    }
 
-   // ========== SMC ENTRY CYCLE (NEW LOGIC) ==========
+   // ========== SMC ENTRY CYCLE (NEW LOGIC - PER SIDE) ==========
    // Concept:
-   // - While ANY EA position is open: OB logic does nothing (no new SMC touches recorded)
-   // - When ALL EA positions become flat: reset SMC state and wait for a NEW OB touch
-   static bool s_hadAnyPositions = false;
-   bool hasAnyPositions = (CountOpenOrders() > 0);
-   if(s_hadAnyPositions && !hasAnyPositions && InpSignalStrategy == STRATEGY_SMC)
+   // - OB detection stops ONLY for the side that has open orders
+   // - When BUY orders close: reset BUY SMC state only
+   // - When SELL orders close: reset SELL SMC state only
+   // - Each side is independent
+   static int s_prevBuyCount = 0;
+   static int s_prevSellCount = 0;
+   
+   int curBuyCount = CountPositions(POSITION_TYPE_BUY);
+   int curSellCount = CountPositions(POSITION_TYPE_SELL);
+   
+   if(InpSignalStrategy == STRATEGY_SMC)
    {
-      // Reset SMC state only on transition: positions > 0  ->  0
-      g_waitBuySignalReset = false;
-      g_waitSellSignalReset = false;
-      g_smcBuyResetRequired = false;
-      g_smcSellResetRequired = false;
-      g_smcBuyResetPhaseComplete = false;
-      g_smcSellResetPhaseComplete = false;
-
-      g_smcBuyTouchedOBPersist = false;
-      g_smcSellTouchedOBPersist = false;
-      g_smcBuyTouchedOB = false;
-      g_smcSellTouchedOB = false;
-      g_smcBuyTouchedOBName = "";
-      g_smcSellTouchedOBName = "";
-      g_smcBuyTouchTime = 0;
-      g_smcSellTouchTime = 0;
-      g_smcLastBuyOBUsed = "";
-      g_smcLastSellOBUsed = "";
-
-      g_pendingSignal = "NONE";
-      g_paWaitCount = 0;
-      g_signalTouchTime = 0;
-      g_signalBarTime = 0;
-
-      Print("*** SMC: Flat detected (all positions closed) - waiting for NEW OB touch to start next entry cycle ***");
+      // Check if BUY side just became flat (had orders, now zero)
+      if(s_prevBuyCount > 0 && curBuyCount == 0)
+      {
+         // Reset BUY SMC state only
+         g_waitBuySignalReset = false;
+         g_smcBuyResetRequired = false;
+         g_smcBuyResetPhaseComplete = false;
+         g_smcBuyTouchedOBPersist = false;
+         g_smcBuyTouchedOB = false;
+         g_smcBuyTouchedOBName = "";
+         g_smcBuyTouchTime = 0;
+         g_smcLastBuyOBUsed = "";
+         
+         // Only clear pending signal if it was BUY
+         if(g_pendingSignal == "BUY")
+         {
+            g_pendingSignal = "NONE";
+            g_paWaitCount = 0;
+            g_signalTouchTime = 0;
+            g_signalBarTime = 0;
+         }
+         
+         Print("*** SMC BUY: Flat detected (BUY positions closed) - waiting for NEW Bullish OB touch ***");
+      }
+      
+      // Check if SELL side just became flat (had orders, now zero)
+      if(s_prevSellCount > 0 && curSellCount == 0)
+      {
+         // Reset SELL SMC state only
+         g_waitSellSignalReset = false;
+         g_smcSellResetRequired = false;
+         g_smcSellResetPhaseComplete = false;
+         g_smcSellTouchedOBPersist = false;
+         g_smcSellTouchedOB = false;
+         g_smcSellTouchedOBName = "";
+         g_smcSellTouchTime = 0;
+         g_smcLastSellOBUsed = "";
+         
+         // Only clear pending signal if it was SELL
+         if(g_pendingSignal == "SELL")
+         {
+            g_pendingSignal = "NONE";
+            g_paWaitCount = 0;
+            g_signalTouchTime = 0;
+            g_signalBarTime = 0;
+         }
+         
+         Print("*** SMC SELL: Flat detected (SELL positions closed) - waiting for NEW Bearish OB touch ***");
+      }
    }
-   s_hadAnyPositions = hasAnyPositions;
+   
+   s_prevBuyCount = curBuyCount;
+   s_prevSellCount = curSellCount;
    // ================================================
    
    // Check Grid conditions (every tick for real-time)
@@ -4290,16 +4322,41 @@ void DrawOrderBlocks()
 //+------------------------------------------------------------------+
 //| Check if price touched an Order Block                              |
 //| IMPORTANT: Touch flags PERSIST until used for order or reset       |
+//| NEW RULE: OB detection stops ONLY for the side that has open orders|
+//| - If BUY orders exist: BUY OB touch frozen, SELL OB still active   |
+//| - If SELL orders exist: SELL OB touch frozen, BUY OB still active  |
+//| - If BOTH exist: both sides frozen                                  |
 //+------------------------------------------------------------------+
 void CheckOBTouch(double closePrice, double highPrice, double lowPrice)
 {
-   // NEW SMC RULE: while ANY EA position is open, Order Blocks are "frozen"
-   // (no new touches recorded). We only start tracking touches again after we are flat.
-   if(CountOpenOrders() > 0)
+   // Check which sides have open positions
+   int buyCount = CountPositions(POSITION_TYPE_BUY);
+   int sellCount = CountPositions(POSITION_TYPE_SELL);
+   
+   bool freezeBuySide = (buyCount > 0);   // Freeze BUY OB detection if BUY orders exist
+   bool freezeSellSide = (sellCount > 0); // Freeze SELL OB detection if SELL orders exist
+   
+   // If BUY side is frozen, don't detect new BUY OB touches
+   if(freezeBuySide)
    {
       g_smcBuyTouchingNow = false;
       g_smcSellTouchingNow = false;
       return;
+   }
+   }
+   else
+   {
+      // BUY side NOT frozen - can detect BUY OB touches
+   }
+   
+   // If SELL side is frozen, don't detect new SELL OB touches  
+   if(freezeSellSide)
+   {
+      g_smcSellTouchingNow = false;
+   }
+   else
+   {
+      // SELL side NOT frozen - can detect SELL OB touches
    }
 
    // DON'T reset touch flags every tick - let them persist for PA confirmation
@@ -4312,103 +4369,118 @@ void CheckOBTouch(double closePrice, double highPrice, double lowPrice)
    bool currentTickSellTouch = false;
 
    // Check Bullish OB touch (price dipped into support zone)
-   for(int i = 0; i < BullishOBCount; i++)
+   // ONLY if BUY side is NOT frozen
+   if(!freezeBuySide)
    {
-      if(BullishOBs[i].mitigated) continue;
-
-      bool touched = false;
-
-      // Price entered the Bullish OB zone (support)
-      if(lowPrice <= BullishOBs[i].high && lowPrice >= BullishOBs[i].low)
+      for(int i = 0; i < BullishOBCount; i++)
       {
-         touched = true;
-      }
-      // Price closed inside the zone
-      else if(closePrice <= BullishOBs[i].high && closePrice >= BullishOBs[i].low)
-      {
-         touched = true;
-      }
+         if(BullishOBs[i].mitigated) continue;
 
-      if(touched)
-      {
-         currentTickBuyTouch = true;
+         bool touched = false;
 
-         // IMPORTANT: If price moved from OB#1 to OB#2 (or #3) while waiting for PA,
-         // we must switch the active OB and stop counting the previous one.
-         // So: update the active OB if different from the previous touched OB.
-         if(!g_smcBuyTouchedOBPersist || g_smcBuyTouchedOBName != BullishOBs[i].objName)
+         // Price entered the Bullish OB zone (support)
+         if(lowPrice <= BullishOBs[i].high && lowPrice >= BullishOBs[i].low)
          {
-            g_smcBuyTouchedOBPersist = true;
-            g_smcBuyTouchedOB = true;
-            g_smcBuyTouchedOBName = BullishOBs[i].objName;
-            g_smcBuyTouchTime = iTime(_Symbol, PERIOD_CURRENT, 0);  // Use bar time, not tick time!
-
-            // If we are already waiting for PA on BUY, switch context to this new OB.
-            if(InpUsePAConfirm && InpSignalStrategy == STRATEGY_SMC && g_pendingSignal == "BUY")
-            {
-               g_signalTouchTime = g_smcBuyTouchTime;
-               g_signalBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
-               g_paWaitCount = 0;
-               Print(">>> SWITCH BUY OB: now waiting PA on ", g_smcBuyTouchedOBName, " | TouchTime=", TimeToString(g_signalTouchTime));
-            }
-            else
-            {
-               Print(">>> Price touched Bullish Order Block! Zone: ", BullishOBs[i].low, " - ", BullishOBs[i].high, " | Active OB for PA: ", g_smcBuyTouchedOBName);
-            }
+            touched = true;
          }
-         break;
+         // Price closed inside the zone
+         else if(closePrice <= BullishOBs[i].high && closePrice >= BullishOBs[i].low)
+         {
+            touched = true;
+         }
+
+         if(touched)
+         {
+            currentTickBuyTouch = true;
+
+            // IMPORTANT: If price moved from OB#1 to OB#2 (or #3) while waiting for PA,
+            // we must switch the active OB and stop counting the previous one.
+            // So: update the active OB if different from the previous touched OB.
+            if(!g_smcBuyTouchedOBPersist || g_smcBuyTouchedOBName != BullishOBs[i].objName)
+            {
+               g_smcBuyTouchedOBPersist = true;
+               g_smcBuyTouchedOB = true;
+               g_smcBuyTouchedOBName = BullishOBs[i].objName;
+               g_smcBuyTouchTime = iTime(_Symbol, PERIOD_CURRENT, 0);  // Use bar time, not tick time!
+
+               // If we are already waiting for PA on BUY, switch context to this new OB.
+               if(InpUsePAConfirm && InpSignalStrategy == STRATEGY_SMC && g_pendingSignal == "BUY")
+               {
+                  g_signalTouchTime = g_smcBuyTouchTime;
+                  g_signalBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
+                  g_paWaitCount = 0;
+                  Print(">>> SWITCH BUY OB: now waiting PA on ", g_smcBuyTouchedOBName, " | TouchTime=", TimeToString(g_signalTouchTime));
+               }
+               else
+               {
+                  Print(">>> Price touched Bullish Order Block! Zone: ", BullishOBs[i].low, " - ", BullishOBs[i].high, " | Active OB for PA: ", g_smcBuyTouchedOBName);
+               }
+            }
+            break;
+         }
       }
    }
 
    // Check Bearish OB touch (price spiked into resistance zone)
-   for(int i = 0; i < BearishOBCount; i++)
+   // ONLY if SELL side is NOT frozen
+   if(!freezeSellSide)
    {
-      if(BearishOBs[i].mitigated) continue;
-
-      bool touched = false;
-
-      // Price entered the Bearish OB zone (resistance)
-      if(highPrice >= BearishOBs[i].low && highPrice <= BearishOBs[i].high)
+      for(int i = 0; i < BearishOBCount; i++)
       {
-         touched = true;
-      }
-      // Price closed inside the zone
-      else if(closePrice >= BearishOBs[i].low && closePrice <= BearishOBs[i].high)
-      {
-         touched = true;
-      }
+         if(BearishOBs[i].mitigated) continue;
 
-      if(touched)
-      {
-         currentTickSellTouch = true;
+         bool touched = false;
 
-         // Switch active OB if a different box is touched while waiting for PA
-         if(!g_smcSellTouchedOBPersist || g_smcSellTouchedOBName != BearishOBs[i].objName)
+         // Price entered the Bearish OB zone (resistance)
+         if(highPrice >= BearishOBs[i].low && highPrice <= BearishOBs[i].high)
          {
-            g_smcSellTouchedOBPersist = true;
-            g_smcSellTouchedOB = true;
-            g_smcSellTouchedOBName = BearishOBs[i].objName;
-            g_smcSellTouchTime = iTime(_Symbol, PERIOD_CURRENT, 0);  // Use bar time, not tick time!
-
-            if(InpUsePAConfirm && InpSignalStrategy == STRATEGY_SMC && g_pendingSignal == "SELL")
-            {
-               g_signalTouchTime = g_smcSellTouchTime;
-               g_signalBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
-               g_paWaitCount = 0;
-               Print(">>> SWITCH SELL OB: now waiting PA on ", g_smcSellTouchedOBName, " | TouchTime=", TimeToString(g_signalTouchTime));
-            }
-            else
-            {
-               Print(">>> Price touched Bearish Order Block! Zone: ", BearishOBs[i].low, " - ", BearishOBs[i].high, " | Active OB for PA: ", g_smcSellTouchedOBName);
-            }
+            touched = true;
          }
-         break;
+         // Price closed inside the zone
+         else if(closePrice >= BearishOBs[i].low && closePrice <= BearishOBs[i].high)
+         {
+            touched = true;
+         }
+
+         if(touched)
+         {
+            currentTickSellTouch = true;
+
+            // Switch active OB if a different box is touched while waiting for PA
+            if(!g_smcSellTouchedOBPersist || g_smcSellTouchedOBName != BearishOBs[i].objName)
+            {
+               g_smcSellTouchedOBPersist = true;
+               g_smcSellTouchedOB = true;
+               g_smcSellTouchedOBName = BearishOBs[i].objName;
+               g_smcSellTouchTime = iTime(_Symbol, PERIOD_CURRENT, 0);  // Use bar time, not tick time!
+
+               if(InpUsePAConfirm && InpSignalStrategy == STRATEGY_SMC && g_pendingSignal == "SELL")
+               {
+                  g_signalTouchTime = g_smcSellTouchTime;
+                  g_signalBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
+                  g_paWaitCount = 0;
+                  Print(">>> SWITCH SELL OB: now waiting PA on ", g_smcSellTouchedOBName, " | TouchTime=", TimeToString(g_signalTouchTime));
+               }
+               else
+               {
+                  Print(">>> Price touched Bearish Order Block! Zone: ", BearishOBs[i].low, " - ", BearishOBs[i].high, " | Active OB for PA: ", g_smcSellTouchedOBName);
+               }
+            }
+            break;
+         }
       }
    }
 
    // Track CURRENT touch (used by reset logic)
-   g_smcBuyTouchingNow = currentTickBuyTouch;
-   g_smcSellTouchingNow = currentTickSellTouch;
+   // For frozen sides, keep the touch status as false
+   if(!freezeBuySide)
+   {
+      g_smcBuyTouchingNow = currentTickBuyTouch;
+   }
+   if(!freezeSellSide)
+   {
+      g_smcSellTouchingNow = currentTickSellTouch;
+   }
 
    // Keep the SMC signal trigger based on persistent touch (so PA can be confirmed after the touch)
    g_smcBuyTouchedOB = g_smcBuyTouchedOBPersist;
@@ -4556,17 +4628,17 @@ void UpdateSMCSignalResetStatus()
 
 //+------------------------------------------------------------------+
 //| Analyze Smart Money Concepts Signal                                |
+//| NEW RULE: Check per-side, not global                               |
+//| - BUY signal blocked only if BUY orders exist                      |
+//| - SELL signal blocked only if SELL orders exist                    |
 //+------------------------------------------------------------------+
 string AnalyzeSMCSignal()
 {
    datetime currentBarTime = iTime(_Symbol, InpSMCTimeframe, 0);
 
-   // While ANY EA position is open, we do not generate new SMC entries.
-   // Entries are re-armed only after we are flat and price touches an OB again.
-   if(CountOpenOrders() > 0)
-   {
-      return "WAIT";
-   }
+   // Check which sides have open positions
+   int buyCount = CountPositions(POSITION_TYPE_BUY);
+   int sellCount = CountPositions(POSITION_TYPE_SELL);
    
    // For Last Bar Closed mode, check if this is a new bar
    if(InpSMCSignalBar == EMA_LAST_BAR_CLOSED)
@@ -4584,6 +4656,12 @@ string AnalyzeSMCSignal()
    // Return the SMC signal calculated in CalculateSMC()
    if(SMCSignal == "BUY")
    {
+      // *** BLOCK BUY ONLY if BUY orders exist ***
+      if(buyCount > 0)
+      {
+         return "WAIT";  // BUY side frozen
+      }
+      
       // *** CHECK IF BUY SIGNAL RESET IS REQUIRED ***
       if(g_waitBuySignalReset)
       {
@@ -4595,6 +4673,12 @@ string AnalyzeSMCSignal()
    }
    else if(SMCSignal == "SELL")
    {
+      // *** BLOCK SELL ONLY if SELL orders exist ***
+      if(sellCount > 0)
+      {
+         return "WAIT";  // SELL side frozen
+      }
+      
       // *** CHECK IF SELL SIGNAL RESET IS REQUIRED ***
       if(g_waitSellSignalReset)
       {
