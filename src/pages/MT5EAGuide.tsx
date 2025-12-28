@@ -4393,7 +4393,11 @@ void UpdateSMCSignalResetStatus()
 
          if(movedAway || touchedDifferentOB)
          {
+            // Phase 1: price moved away OR we touched a different OB.
+            // IMPORTANT: once Phase 1 is complete, we must allow Phase 2 (touch again)
+            // so we clear the "required" flag when movedAway happens.
             g_smcBuyResetPhaseComplete = true;
+
             if(touchedDifferentOB)
             {
                g_waitBuySignalReset = false;
@@ -4404,6 +4408,8 @@ void UpdateSMCSignalResetStatus()
             }
             else
             {
+               // Allow Phase 2 to run on the next OB touch
+               g_smcBuyResetRequired = false;
                Print("*** SMC BUY Reset Phase 1 Complete - Price moved away from OB ***");
             }
          }
@@ -4429,7 +4435,9 @@ void UpdateSMCSignalResetStatus()
 
          if(movedAway || touchedDifferentOB)
          {
+            // Phase 1 complete
             g_smcSellResetPhaseComplete = true;
+
             if(touchedDifferentOB)
             {
                g_waitSellSignalReset = false;
@@ -4440,6 +4448,8 @@ void UpdateSMCSignalResetStatus()
             }
             else
             {
+               // Allow Phase 2 to run on the next OB touch
+               g_smcSellResetRequired = false;
                Print("*** SMC SELL Reset Phase 1 Complete - Price moved away from OB ***");
             }
          }
