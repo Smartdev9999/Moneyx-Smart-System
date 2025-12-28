@@ -229,6 +229,10 @@ input double   InpTPPercent = 5.0;           // TP Percent of Balance (%)
 input bool     InpUseGroupTP = false;        // Use Group TP (Accumulated)
 input double   InpGroupTPAmount = 3000.0;    // Group TP Target ($)
 
+// Accumulate Close (สะสมกำไรเพื่อปิดรวบ)
+input bool     InpUseAccumulateClose = true;      // Use Accumulate Close
+input double   InpAccumulateTarget = 20000.0;     // Accumulate Close Target ($)
+
 // Visual Lines
 input bool     InpShowAverageLine = true;    // Show Average Price Line
 input bool     InpShowTPLine = true;         // Show TP Line
@@ -477,6 +481,11 @@ datetime LastGridSellTime = 0;
 double AccumulatedProfit = 0.0;
 double LastClosedProfit = 0.0;
 
+// Accumulate Close Tracking (สะสมกำไรจาก order ที่ปิดไป)
+double g_accumulateClosedProfit = 0.0;    // กำไรสะสมจาก order ที่ปิดไปแล้ว
+int g_lastKnownPositionCount = 0;          // จำนวน position ล่าสุดเพื่อ detect การปิด
+double g_lastKnownFloatingPL = 0.0;        // Floating P/L ล่าสุด
+
 // Price Action Confirmation Tracking
 string g_pendingSignal = "NONE";       // "BUY", "SELL", or "NONE"
 datetime g_signalBarTime = 0;          // Time when signal was detected
@@ -721,8 +730,8 @@ void CreateDashboard()
    
    y += rowH + 2;
    
-   // Detail Section Sidebar Label
-   CreateDashLabel(DashPrefix + "DetailSide", x, y, 25, rowH * 12, InpDashHeaderColor);
+   // Detail Section Sidebar Label (เพิ่มความสูงสำหรับ Accumulate Close)
+   CreateDashLabel(DashPrefix + "DetailSide", x, y, 25, rowH * 13, InpDashHeaderColor);
    CreateDashText(DashPrefix + "DetailD", x + 7, y + 10, "D", clrWhite, 9, true);
    CreateDashText(DashPrefix + "DetailE", x + 7, y + 30, "E", clrWhite, 9, true);
    CreateDashText(DashPrefix + "DetailT", x + 7, y + 50, "T", clrWhite, 9, true);
@@ -735,7 +744,7 @@ void CreateDashboard()
    int detailW = w - 25;
    string detailLabels[] = {"Balance", "Equity", "Margin", "Margin Level", "Floating P/L", 
                             "Current Trend", "Fix Scaling", "Position Buy P/L", "Position Sell P/L", 
-                            "Current DD%", "Max DD%"};
+                            "Current DD%", "Max DD%", "Accumulate Close"};
    
    for(int i = 0; i < ArraySize(detailLabels); i++)
    {
@@ -928,8 +937,12 @@ void UpdateDashboard()
    ObjectSetString(0, DashPrefix + "BtnPause", OBJPROP_TEXT, g_eaIsPaused ? "Start" : "Pause");
    ObjectSetInteger(0, DashPrefix + "BtnPause", OBJPROP_BGCOLOR, g_eaIsPaused ? clrGreen : clrOrangeRed);
    
-   // Update Detail Values
-   string detailValues[11];
+   // Update Detail Values (เพิ่ม Accumulate Close)
+   // คำนวณ Total P/L รวม (Floating + Accumulated Closed)
+   double totalPLForAccumulate = floatingPL + g_accumulateClosedProfit;
+   int currentPosCount = buyCount + sellCount;
+   
+   string detailValues[12];
    detailValues[0] = DoubleToString(balance, 2) + "$";
    detailValues[1] = DoubleToString(equity, 2) + "$";
    detailValues[2] = DoubleToString(margin, 2) + "$";
@@ -941,8 +954,10 @@ void UpdateDashboard()
    detailValues[8] = (sellPL >= 0 ? "+" : "") + DoubleToString(sellPL, 2) + "$ (" + DoubleToString(sellLots, 2) + "L," + IntegerToString(sellCount) + "ord)";
    detailValues[9] = (floatingPL >= 0 ? "+" : "-") + DoubleToString(MathAbs(currentDD), 1) + "%";
    detailValues[10] = DoubleToString(g_maxDrawdownPercent, 1) + "%";
+   // Accumulate Close: แสดงกำไรสะสมปัจจุบันและ Target
+   detailValues[11] = (totalPLForAccumulate >= 0 ? "+" : "") + DoubleToString(totalPLForAccumulate, 0) + "$ (Tg: " + DoubleToString(InpAccumulateTarget, 0) + "$)";
    
-   color valueColors[11];
+   color valueColors[12];
    valueColors[0] = clrWhite;
    valueColors[1] = clrWhite;
    valueColors[2] = clrWhite;
@@ -954,8 +969,9 @@ void UpdateDashboard()
    valueColors[8] = (sellPL >= 0) ? clrLime : clrOrangeRed;
    valueColors[9] = (currentDD <= 10) ? clrLime : (currentDD <= 20) ? clrYellow : clrOrangeRed;
    valueColors[10] = (g_maxDrawdownPercent <= 15) ? clrLime : (g_maxDrawdownPercent <= 30) ? clrYellow : clrOrangeRed;
+   valueColors[11] = (totalPLForAccumulate >= InpAccumulateTarget * 0.8) ? clrLime : (totalPLForAccumulate >= 0) ? clrYellow : clrOrangeRed;
    
-   for(int i = 0; i < 11; i++)
+   for(int i = 0; i < 12; i++)
    {
       ObjectSetString(0, DashPrefix + "DetailVal" + IntegerToString(i), OBJPROP_TEXT, detailValues[i]);
       ObjectSetInteger(0, DashPrefix + "DetailVal" + IntegerToString(i), OBJPROP_COLOR, valueColors[i]);
@@ -1110,6 +1126,140 @@ void CloseAllPositions(ENUM_POSITION_TYPE posType)
          trade.PositionClose(ticket);
       }
    }
+}
+
+//+------------------------------------------------------------------+
+//| ================== ACCUMULATE CLOSE SYSTEM ====================== |
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//| Track and Accumulate Closed Profit                                 |
+//| - เรียกทุก tick เพื่อ track กำไรจาก order ที่ปิดไป                   |
+//| - Reset เมื่อไม่มี order ค้าง                                       |
+//| - ทำงานได้ทั้งใน Working และ Pause mode                            |
+//+------------------------------------------------------------------+
+void TrackAccumulateProfit()
+{
+   if(!InpUseAccumulateClose) return;
+   
+   int currentPosCount = 0;
+   double currentFloatingPL = 0.0;
+   
+   // นับจำนวน position และ floating P/L ปัจจุบัน
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(PositionSelectByTicket(ticket))
+      {
+         if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+         if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
+         
+         currentPosCount++;
+         currentFloatingPL += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+      }
+   }
+   
+   // ถ้าไม่มี position แล้ว → Reset Accumulate
+   if(currentPosCount == 0)
+   {
+      if(g_accumulateClosedProfit != 0.0)
+      {
+         Print("ACCUMULATE CLOSE: Reset - No positions remaining. Last accumulated: ", 
+               DoubleToString(g_accumulateClosedProfit, 2), "$");
+      }
+      g_accumulateClosedProfit = 0.0;
+      g_lastKnownPositionCount = 0;
+      g_lastKnownFloatingPL = 0.0;
+      return;
+   }
+   
+   // ตรวจสอบว่ามี position ถูกปิดไปหรือไม่ (จำนวนลดลง)
+   if(g_lastKnownPositionCount > 0 && currentPosCount < g_lastKnownPositionCount)
+   {
+      // มี position ถูกปิด → คำนวณกำไรที่ปิดไป
+      // Profit ที่ปิด = (Floating เก่า) - (Floating ใหม่) + (Balance เปลี่ยน)
+      // วิธีง่าย: ใช้ History ล่าสุด
+      
+      double closedProfit = GetRecentClosedProfit();
+      g_accumulateClosedProfit += closedProfit;
+      
+      Print("ACCUMULATE CLOSE: Position closed. Profit: ", DoubleToString(closedProfit, 2), 
+            "$ | Total Accumulated: ", DoubleToString(g_accumulateClosedProfit, 2), "$");
+   }
+   
+   // Update tracking variables
+   g_lastKnownPositionCount = currentPosCount;
+   g_lastKnownFloatingPL = currentFloatingPL;
+}
+
+//+------------------------------------------------------------------+
+//| Get Recent Closed Profit from History                              |
+//| ดึงกำไรจาก order ที่เพิ่งปิดไปล่าสุด                                  |
+//+------------------------------------------------------------------+
+double GetRecentClosedProfit()
+{
+   double totalProfit = 0.0;
+   datetime now = TimeCurrent();
+   datetime startTime = now - 60;  // ดูย้อนหลัง 60 วินาที
+   
+   if(!HistorySelect(startTime, now)) return 0.0;
+   
+   int totalDeals = HistoryDealsTotal();
+   for(int i = totalDeals - 1; i >= 0; i--)
+   {
+      ulong dealTicket = HistoryDealGetTicket(i);
+      if(dealTicket == 0) continue;
+      
+      // เฉพาะ EA ของเรา
+      if(HistoryDealGetInteger(dealTicket, DEAL_MAGIC) != InpMagicNumber) continue;
+      if(HistoryDealGetString(dealTicket, DEAL_SYMBOL) != _Symbol) continue;
+      
+      // เฉพาะ deal ที่เป็นการปิด position
+      ENUM_DEAL_ENTRY entry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
+      if(entry != DEAL_ENTRY_OUT && entry != DEAL_ENTRY_INOUT) continue;
+      
+      totalProfit += HistoryDealGetDouble(dealTicket, DEAL_PROFIT) + 
+                     HistoryDealGetDouble(dealTicket, DEAL_SWAP) + 
+                     HistoryDealGetDouble(dealTicket, DEAL_COMMISSION);
+   }
+   
+   return totalProfit;
+}
+
+//+------------------------------------------------------------------+
+//| Check and Execute Accumulate Close                                 |
+//| ตรวจสอบว่ากำไรสะสมถึงเป้าหมายหรือยัง ถ้าถึงให้ปิดทั้งหมด              |
+//| ทำงานได้ทั้งใน Working และ Pause mode                              |
+//+------------------------------------------------------------------+
+bool CheckAccumulateClose()
+{
+   if(!InpUseAccumulateClose) return false;
+   
+   double currentFloatingPL = AccountInfoDouble(ACCOUNT_PROFIT);
+   
+   // คำนวณ Total P/L = Floating + Accumulated Closed
+   double totalPL = currentFloatingPL + g_accumulateClosedProfit;
+   
+   // ถ้าถึงเป้าหมาย → ปิดทั้งหมด
+   if(totalPL >= InpAccumulateTarget)
+   {
+      Print("=== ACCUMULATE CLOSE TARGET REACHED ===");
+      Print("Accumulated Closed: ", DoubleToString(g_accumulateClosedProfit, 2), "$");
+      Print("Current Floating: ", DoubleToString(currentFloatingPL, 2), "$");
+      Print("Total P/L: ", DoubleToString(totalPL, 2), "$ >= Target: ", DoubleToString(InpAccumulateTarget, 2), "$");
+      Print("Closing ALL positions...");
+      
+      // ปิด order ทั้งหมด
+      CloseAllPositions(POSITION_TYPE_BUY);
+      CloseAllPositions(POSITION_TYPE_SELL);
+      
+      // Reset accumulate (จะถูก reset อีกครั้งใน TrackAccumulateProfit เมื่อ position = 0)
+      Print("=== ACCUMULATE CLOSE COMPLETED ===");
+      
+      return true;
+   }
+   
+   return false;
 }
 
 //+------------------------------------------------------------------+
@@ -3945,6 +4095,13 @@ void OnTick()
    // Update Dashboard every tick
    UpdateDashboard();
    
+   // *** ACCUMULATE CLOSE SYSTEM - ทำงานทุก tick ไม่ว่าจะ Pause หรือไม่ ***
+   TrackAccumulateProfit();
+   if(CheckAccumulateClose())
+   {
+      return;  // ปิด order แล้ว รอ tick ถัดไป
+   }
+   
    // Check TP/SL conditions first (every tick) - this still runs even when paused
    CheckTPSLConditions();
    
@@ -3952,7 +4109,7 @@ void OnTick()
    DrawTPSLLines();
    
    // *** EA PAUSE CHECK ***
-   // If paused, only TP/SL/Hedge continues to work, no new orders
+   // If paused, only TP/SL/Hedge/Accumulate continues to work, no new orders
    if(g_eaIsPaused)
    {
       UpdateChartComment("PAUSED", "EA Paused - No new orders");
