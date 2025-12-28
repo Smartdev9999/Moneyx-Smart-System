@@ -665,14 +665,19 @@ int OnInit()
    CreateDashboard();
    g_peakBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    // Enable Chart Events (optional, helps Visual Tester responsiveness)
-    ChartSetInteger(0, CHART_EVENT_OBJECT_CREATE, 1);
-    ChartSetInteger(0, CHART_EVENT_OBJECT_DELETE, 1);
-    ChartSetInteger(0, CHART_EVENT_MOUSE_MOVE, 1);
-    ChartRedraw(0);
+   // *** TIMER สำหรับอัพเดท Dashboard อัตโนมัติ ***
+   // แม้ไม่มี tick (ตลาดไม่เคลื่อนไหว) Dashboard ก็จะอัพเดททุก 1 วินาที
+   EventSetTimer(1);  // เรียก OnTimer ทุก 1 วินาที
+   
+   // Enable Chart Events (optional, helps Visual Tester responsiveness)
+   // หมายเหตุ: ไม่ใช้ CHART_EVENT_OBJECT_CREATE/DELETE เพราะอาจทำให้ EA crash
+   // เมื่อมี objects จำนวนมากหรือเมื่อบันทึก settings
+   ChartSetInteger(0, CHART_EVENT_MOUSE_MOVE, 1);
+   ChartRedraw(0);
    
    Print("EA Started Successfully!");
    Print("Dashboard and buttons are ready (Visual Backtest supported)");
+   Print("Timer enabled: Dashboard auto-refresh every 1 second");
    return(INIT_SUCCEEDED);
 }
 
@@ -681,6 +686,9 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
+   // *** หยุด Timer ***
+   EventKillTimer();
+   
    // Remove Dashboard objects
    ObjectsDeleteAll(0, DashPrefix);
    
@@ -718,6 +726,26 @@ void OnDeinit(const int reason)
    
    // ไม่ใช้ Comment แล้ว เพราะมี Dashboard แทน
    Print("EA Stopped - Reason: ", reason);
+}
+
+//+------------------------------------------------------------------+
+//| Timer function - เรียกทุก 1 วินาที                                  |
+//| ใช้สำหรับอัพเดท Dashboard แม้ไม่มี tick (ตลาดไม่เคลื่อนไหว)           |
+//+------------------------------------------------------------------+
+void OnTimer()
+{
+   // อัพเดท Dashboard ทุก 1 วินาที
+   UpdateDashboard();
+   
+   // อัพเดท Profit History (เรียกไม่บ่อย เพราะใช้ resources)
+   static datetime lastHistoryUpdate = 0;
+   if(TimeCurrent() - lastHistoryUpdate >= 30)  // ทุก 30 วินาที
+   {
+      UpdateProfitHistory();
+      lastHistoryUpdate = TimeCurrent();
+   }
+   
+   ChartRedraw(0);
 }
 
 //+------------------------------------------------------------------+
