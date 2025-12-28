@@ -5,13 +5,13 @@ import StepCard from '@/components/StepCard';
 
 const MT5EAGuide = () => {
   const fullEACode = `//+------------------------------------------------------------------+
-//|                   ZigZag++ CDC Structure EA v4.0                   |
+//|                   ZigZag++ CDC Structure EA v5.0                   |
 //|           Based on DevLucem ZigZag++ with CDC Action Zone          |
-//|           + Grid Trading System (Loss & Profit Side)               |
+//|           + Grid Trading System + Auto Balance Scaling             |
 //+------------------------------------------------------------------+
 #property copyright "Trading Education"
 #property link      ""
-#property version   "4.00"
+#property version   "5.00"
 #property strict
 
 // *** Include CTrade ***
@@ -158,10 +158,20 @@ input bool     InpShowCDCLines = true;        // Show CDC Lines on Chart
 input string   InpTradeModeHeader = "=== TRADE MODE SETTINGS ===";  // ___
 input ENUM_TRADE_MODE InpTradeMode = TRADE_BUY_SELL;  // Trade Mode
 
+//--- [ AUTO BALANCE SCALING ] --------------------------------------
+input string   InpAutoScaleHeader = "=== AUTO BALANCE SCALING ===";  // ___
+input bool     InpUseAutoScale = false;      // Enable Auto Balance Scaling
+input double   InpBaseAccount = 1000.0;      // Base Account Size ($) - multiplier base
+// Auto Scale จะปรับขนาดอัตโนมัติสำหรับ:
+// - Trade Settings: Initial Lot, Grid Loss Lot, Grid Profit Lot
+// - Take Profit: TP Dollar, TP Points, Group TP
+// - Stop Loss: SL Dollar, SL Points
+// ตัวอย่าง: Base=1000$, Account=2000$ → ทุกค่าจะ x2
+
 //--- [ TRADING SETTINGS ] ------------------------------------------
 input string   InpTradingHeader = "=== TRADING SETTINGS ===";  // ___
 input ENUM_LOT_MODE InpLotMode = LOT_FIXED;  // Lot Mode
-input double   InpInitialLot   = 0.01;       // Initial Lot Size
+input double   InpInitialLot   = 0.01;       // Initial Lot Size (Base)
 input double   InpRiskPercent  = 1.0;        // Risk % of Balance (for Risk Mode)
 input double   InpRiskDollar   = 50.0;       // Fixed Dollar Risk (for Risk Mode)
 input int      InpMagicNumber  = 123456;     // Magic Number
@@ -528,6 +538,26 @@ int OnInit()
    }
    
    Print("Signal Strategy: ", EnumToString(InpSignalStrategy));
+   
+   // Auto Balance Scaling Status
+   if(InpUseAutoScale)
+   {
+      double scaleFactor = GetScaleFactor();
+      Print("=== AUTO BALANCE SCALING ENABLED ===");
+      Print("Base Account: $", InpBaseAccount);
+      Print("Current Balance: $", AccountInfoDouble(ACCOUNT_BALANCE));
+      Print("Scale Factor: ", DoubleToString(scaleFactor, 2), "x");
+      Print("Scaled Initial Lot: ", DoubleToString(ApplyScaleLot(InpInitialLot), 2));
+      Print("Scaled TP Dollar: $", DoubleToString(ApplyScaleDollar(InpTPDollarAmount), 2));
+      Print("Scaled SL Dollar: $", DoubleToString(ApplyScaleDollar(InpSLDollarAmount), 2));
+      Print("Scaled Grid Loss Lot: ", DoubleToString(ApplyScaleLot(InpGridLossAddLot), 2));
+      Print("Scaled Grid Profit Lot: ", DoubleToString(ApplyScaleLot(InpGridProfitAddLot), 2));
+   }
+   else
+   {
+      Print("Auto Balance Scaling: DISABLED (using fixed values)");
+   }
+   
    Print("EA Started Successfully!");
    return(INIT_SUCCEEDED);
 }
@@ -571,6 +601,73 @@ void OnDeinit(const int reason)
    
    Comment("");
    Print("EA Stopped - Reason: ", reason);
+}
+
+//+------------------------------------------------------------------+
+//| ================== AUTO BALANCE SCALING ========================= |
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//| Get Scale Factor based on Account Balance vs Base Account          |
+//| Scale Factor = Account Balance / Base Account Size                 |
+//| Example: Base=1000$, Balance=2000$ → Factor=2.0                   |
+//+------------------------------------------------------------------+
+double GetScaleFactor()
+{
+   if(!InpUseAutoScale || InpBaseAccount <= 0)
+      return 1.0;
+   
+   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+   if(balance <= 0)
+      return 1.0;
+   
+   double factor = balance / InpBaseAccount;
+   
+   // Minimum factor = 0.1 (to prevent extremely small lots)
+   // Maximum factor = 100 (to prevent extremely large lots)
+   factor = MathMax(0.1, MathMin(100.0, factor));
+   
+   return NormalizeDouble(factor, 2);
+}
+
+//+------------------------------------------------------------------+
+//| Apply Auto Scale to Lot Size                                       |
+//| Returns scaled lot size based on account balance                   |
+//+------------------------------------------------------------------+
+double ApplyScaleLot(double baseLot)
+{
+   double factor = GetScaleFactor();
+   double scaledLot = baseLot * factor;
+   
+   // Normalize to broker requirements
+   double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   double maxLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+   double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   
+   scaledLot = MathMax(minLot, MathMin(maxLot, scaledLot));
+   scaledLot = MathFloor(scaledLot / lotStep) * lotStep;
+   
+   return NormalizeDouble(scaledLot, 2);
+}
+
+//+------------------------------------------------------------------+
+//| Apply Auto Scale to Dollar Amount (TP/SL)                          |
+//| Returns scaled dollar amount based on account balance              |
+//+------------------------------------------------------------------+
+double ApplyScaleDollar(double baseDollar)
+{
+   double factor = GetScaleFactor();
+   return NormalizeDouble(baseDollar * factor, 2);
+}
+
+//+------------------------------------------------------------------+
+//| Apply Auto Scale to Points (TP/SL)                                 |
+//| Returns scaled points based on account balance                     |
+//+------------------------------------------------------------------+
+int ApplyScalePoints(int basePoints)
+{
+   double factor = GetScaleFactor();
+   return (int)MathRound(basePoints * factor);
 }
 
 //+------------------------------------------------------------------+
@@ -624,12 +721,13 @@ void ParseStringToIntArray(string inputStr, int &arr[])
 double GetGridLotSize(bool isLossSide, int gridLevel)
 {
    ENUM_GRID_LOT_MODE lotMode = isLossSide ? InpGridLossLotMode : InpGridProfitLotMode;
-   double calculatedLot = InpInitialLot;
+   double baseLot = InpInitialLot;
+   double calculatedLot = baseLot;
    
    // gridLevel = 0 means Initial Order (uses InitialLot only)
    if(gridLevel == 0)
    {
-      calculatedLot = InpInitialLot;
+      calculatedLot = baseLot;
    }
    else if(lotMode == GRID_LOT_CUSTOM)
    {
@@ -655,19 +753,13 @@ double GetGridLotSize(bool isLossSide, int gridLevel)
       
       // gridLevel = 1 = First Grid = InitialLot + AddLot*1
       // gridLevel = 2 = Second Grid = InitialLot + AddLot*2
-      calculatedLot = InpInitialLot + (addLot * gridLevel);
+      calculatedLot = baseLot + (addLot * gridLevel);
    }
    
-   // Normalize lot size to broker requirements
-   double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
-   double maxLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
-   double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   // Apply Auto Balance Scaling
+   calculatedLot = ApplyScaleLot(calculatedLot);
    
-   calculatedLot = MathMax(minLot, calculatedLot);
-   calculatedLot = MathMin(maxLot, calculatedLot);
-   calculatedLot = MathFloor(calculatedLot / lotStep) * lotStep;
-   
-   return NormalizeDouble(calculatedLot, 2);
+   return calculatedLot;
 }
 
 //+------------------------------------------------------------------+
@@ -2303,14 +2395,22 @@ double CalculateLotSize()
       double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
       double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
       double pipValue = tickValue * (10 * _Point / tickSize);
-      lot = riskAmount / (InpSLPoints * pipValue);
+      int scaledSLPoints = ApplyScalePoints(InpSLPoints);
+      lot = riskAmount / (scaledSLPoints * pipValue);
    }
    else if(InpLotMode == LOT_RISK_DOLLAR)
    {
       double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
       double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
       double pipValue = tickValue * (10 * _Point / tickSize);
-      lot = InpRiskDollar / (InpSLPoints * pipValue);
+      double scaledRiskDollar = ApplyScaleDollar(InpRiskDollar);
+      int scaledSLPoints = ApplyScalePoints(InpSLPoints);
+      lot = scaledRiskDollar / (scaledSLPoints * pipValue);
+   }
+   else
+   {
+      // Fixed Lot Mode - Apply Auto Scaling
+      lot = ApplyScaleLot(InpInitialLot);
    }
    
    // Normalize lot size
@@ -2403,10 +2503,12 @@ double CalculateTPPrice(ENUM_POSITION_TYPE posType, double avgPrice)
 {
    if(!InpUseTPPoints || avgPrice == 0) return 0;
    
+   int scaledTPPoints = ApplyScalePoints(InpTPPoints);
+   
    if(posType == POSITION_TYPE_BUY)
-      return avgPrice + InpTPPoints * _Point;
+      return avgPrice + scaledTPPoints * _Point;
    else
-      return avgPrice - InpTPPoints * _Point;
+      return avgPrice - scaledTPPoints * _Point;
 }
 
 //+------------------------------------------------------------------+
@@ -2416,10 +2518,12 @@ double CalculateSLPrice(ENUM_POSITION_TYPE posType, double avgPrice)
 {
    if(!InpUseSLPoints || avgPrice == 0) return 0;
    
+   int scaledSLPoints = ApplyScalePoints(InpSLPoints);
+   
    if(posType == POSITION_TYPE_BUY)
-      return avgPrice - InpSLPoints * _Point;
+      return avgPrice - scaledSLPoints * _Point;
    else
-      return avgPrice + InpSLPoints * _Point;
+      return avgPrice + scaledSLPoints * _Point;
 }
 
 //+------------------------------------------------------------------+
@@ -2811,18 +2915,23 @@ void CheckTPSLConditions()
    
    // ========== TAKE PROFIT LOGIC ==========
    
+   // Get scaled values for Auto Balance Scaling
+   double scaledTPDollar = ApplyScaleDollar(InpTPDollarAmount);
+   double scaledSLDollar = ApplyScaleDollar(InpSLDollarAmount);
+   double scaledGroupTP = ApplyScaleDollar(InpGroupTPAmount);
+   
    // 1. TP Fixed Dollar - Close each side when reaches target
    if(InpUseTPDollar)
    {
-      if(buyPL >= InpTPDollarAmount && buyCount > 0)
+      if(buyPL >= scaledTPDollar && buyCount > 0)
       {
-         Print("TP Dollar - BUY side reached $", buyPL);
+         Print("TP Dollar - BUY side reached $", buyPL, " (Target: $", scaledTPDollar, ")");
          double closed = ClosePositionsByType(POSITION_TYPE_BUY);
          if(InpUseGroupTP) AccumulatedProfit += closed;
       }
-      if(sellPL >= InpTPDollarAmount && sellCount > 0)
+      if(sellPL >= scaledTPDollar && sellCount > 0)
       {
-         Print("TP Dollar - SELL side reached $", sellPL);
+         Print("TP Dollar - SELL side reached $", sellPL, " (Target: $", scaledTPDollar, ")");
          double closed = ClosePositionsByType(POSITION_TYPE_SELL);
          if(InpUseGroupTP) AccumulatedProfit += closed;
       }
@@ -2871,13 +2980,13 @@ void CheckTPSLConditions()
       }
    }
    
-   // 4. Group TP (Accumulated Profit)
+   // 4. Group TP (Accumulated Profit) - Also scaled
    if(InpUseGroupTP)
    {
       double combinedProfit = AccumulatedProfit + totalPL;
-      if(combinedProfit >= InpGroupTPAmount)
+      if(combinedProfit >= scaledGroupTP)
       {
-         Print("Group TP Reached! Accumulated: $", AccumulatedProfit, " + Current: $", totalPL, " = $", combinedProfit);
+         Print("Group TP Reached! Accumulated: $", AccumulatedProfit, " + Current: $", totalPL, " = $", combinedProfit, " (Target: $", scaledGroupTP, ")");
          CloseAllPositions();
          AccumulatedProfit = 0;  // Reset after closing all
          return;
@@ -2890,20 +2999,20 @@ void CheckTPSLConditions()
    
    // Mode: SL_ACTION_CLOSE = Close positions | SL_ACTION_HEDGE = Open hedge to lock loss
    
-   // 1. SL Fixed Dollar
+   // 1. SL Fixed Dollar (scaled)
    if(InpUseSLDollar)
    {
-      if(buyPL <= -InpSLDollarAmount && buyCount > 0)
+      if(buyPL <= -scaledSLDollar && buyCount > 0)
       {
-         ExecuteSLAction(POSITION_TYPE_BUY, lotsBuy, "SL Dollar - BUY side hit $" + DoubleToString(-InpSLDollarAmount, 2));
+         ExecuteSLAction(POSITION_TYPE_BUY, lotsBuy, "SL Dollar - BUY side hit $" + DoubleToString(-scaledSLDollar, 2));
       }
-      if(sellPL <= -InpSLDollarAmount && sellCount > 0)
+      if(sellPL <= -scaledSLDollar && sellCount > 0)
       {
-         ExecuteSLAction(POSITION_TYPE_SELL, lotsSell, "SL Dollar - SELL side hit $" + DoubleToString(-InpSLDollarAmount, 2));
+         ExecuteSLAction(POSITION_TYPE_SELL, lotsSell, "SL Dollar - SELL side hit $" + DoubleToString(-scaledSLDollar, 2));
       }
    }
    
-   // 2. SL in Points
+   // 2. SL in Points (already scaled in CalculateSLPrice)
    if(InpUseSLPoints)
    {
       if(buyCount > 0 && avgBuy > 0)
@@ -5126,6 +5235,15 @@ void UpdateChartComment(string signal, string reason = "")
    if(InpUseGroupTP)
       text = text + "  Accumulated: $" + DoubleToString(AccumulatedProfit, 2) + nl;
    
+   // Auto Balance Scaling Info
+   if(InpUseAutoScale)
+   {
+      double factor = GetScaleFactor();
+      text = text + "---------------------------------" + nl;
+      text = text + "AUTO SCALING: ENABLED (" + DoubleToString(factor, 2) + "x)" + nl;
+      text = text + "  Base: $" + DoubleToString(InpBaseAccount, 0) + " | Bal: $" + DoubleToString(AccountInfoDouble(ACCOUNT_BALANCE), 0) + nl;
+   }
+   
    text = text + "---------------------------------" + nl;
    text = text + "SIGNAL: " + signal + nl;
    if(reason != "") text = text + "Reason: " + reason + nl;
@@ -5156,7 +5274,7 @@ void UpdateChartComment(string signal, string reason = "")
         <div className="max-w-4xl mx-auto text-center">
           <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-primary/10 border border-primary/30 mb-6">
             <FileCode className="w-4 h-4 text-primary" />
-            <span className="text-sm font-mono text-primary">MQL5 Expert Advisor v4.0 + Grid</span>
+            <span className="text-sm font-mono text-primary">MQL5 Expert Advisor v5.0 + Grid + Auto Scale</span>
           </div>
           
           <h1 className="text-3xl md:text-4xl font-bold text-foreground mb-4">
@@ -5164,7 +5282,7 @@ void UpdateChartComment(string signal, string reason = "")
           </h1>
           
           <p className="text-lg text-muted-foreground">
-            EA ที่ใช้ ZigZag++ (DevLucem) พร้อม CDC Trend Filter และ Grid Trading System
+            EA ที่ใช้ ZigZag++ (DevLucem) พร้อม CDC Trend Filter, Grid Trading System และ Auto Balance Scaling
           </p>
         </div>
       </section>
