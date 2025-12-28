@@ -14,11 +14,9 @@ const MT5EAGuide = () => {
 #property version   "5.10"
 #property strict
 
-// *** Logo Resource ***
+// *** Logo File ***
 // ใส่ไฟล์โลโก้ไว้ใน MQL5\\Images\\mpmLogo_500.bmp
-// ขนาดแนะนำ: 150x60 pixels (หรือปรับตามต้องการ)
-// ไฟล์ต้องเป็น .bmp (24-bit หรือ 32-bit) ขนาดตามที่กำหนด
-#resource "\\\\Images\\\\mpmLogo_500.bmp"
+// หมายเหตุ: ใช้วิธีโหลดจากไฟล์ตรง (ไม่ใช้ #resource) เพื่อให้คอมไพล์/Tester เสถียร
 
 // *** Include CTrade ***
 #include <Trade/Trade.mqh>
@@ -616,8 +614,9 @@ int OnInit()
    g_peakBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
     // Enable Chart Events for button clicks (required for Visual Backtest mode)
-    ChartSetInteger(0, CHART_EVENT_OBJECT_CLICK, true);
-    ChartSetInteger(0, CHART_EVENT_MOUSE_MOVE, true);
+    // NOTE: ChartSetInteger expects a long value (0/1), not bool.
+    ChartSetInteger(0, CHART_EVENT_OBJECT_CLICK, 1);
+    ChartSetInteger(0, CHART_EVENT_MOUSE_MOVE, 1);
     ChartRedraw(0);
    
    Print("EA Started Successfully!");
