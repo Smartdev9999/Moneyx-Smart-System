@@ -17,7 +17,8 @@ const MT5EAGuide = () => {
 // *** Logo Resource ***
 // ใส่ไฟล์โลโก้ไว้ใน MQL5\\Images\\mpmLogo_500.bmp
 // ขนาดแนะนำ: 150x60 pixels (หรือปรับตามต้องการ)
-#resource "\\\\Images\\\\mpmLogo_500.bmp"
+// ไฟล์ต้องเป็น .bmp (24-bit หรือ 32-bit) ขนาดตามที่กำหนด
+#resource "\\\\Images\\\\mpmLogo_500.bmp" as mpmLogo
 
 // *** Include CTrade ***
 #include <Trade/Trade.mqh>
@@ -688,16 +689,19 @@ void CreateDashboard()
    int valueW = 140;
    
    // ========== LOGO ==========
+   // ใช้ resource ที่ประกาศไว้ด้านบน
    string logoName = DashPrefix + "Logo";
    ObjectCreate(0, logoName, OBJ_BITMAP_LABEL, 0, 0, 0);
    ObjectSetInteger(0, logoName, OBJPROP_XDISTANCE, x + (w - InpLogoWidth) / 2);
    ObjectSetInteger(0, logoName, OBJPROP_YDISTANCE, y);
    ObjectSetInteger(0, logoName, OBJPROP_XSIZE, InpLogoWidth);
    ObjectSetInteger(0, logoName, OBJPROP_YSIZE, InpLogoHeight);
+   // ใช้ resource path ที่ถูกต้อง (:: นำหน้า resource name)
    ObjectSetString(0, logoName, OBJPROP_BMPFILE, "::Images\\\\mpmLogo_500.bmp");
    ObjectSetInteger(0, logoName, OBJPROP_CORNER, CORNER_LEFT_UPPER);
    ObjectSetInteger(0, logoName, OBJPROP_SELECTABLE, false);
    ObjectSetInteger(0, logoName, OBJPROP_BACK, false);
+   ObjectSetInteger(0, logoName, OBJPROP_HIDDEN, false);
    
    y += InpLogoHeight + 5;
    
@@ -842,9 +846,11 @@ void CreateDashButton(string name, int x, int y, int width, int height, string t
    ObjectSetInteger(0, name, OBJPROP_FONTSIZE, 10);
    ObjectSetString(0, name, OBJPROP_FONT, "Arial Bold");
    ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
-   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, true);   // ต้องเป็น true เพื่อให้กดได้ใน Tester
    ObjectSetInteger(0, name, OBJPROP_STATE, false);
-   ObjectSetInteger(0, name, OBJPROP_ZORDER, 100);  // High priority for click detection in Tester
+   ObjectSetInteger(0, name, OBJPROP_ZORDER, 1000);       // Z-order สูงมากเพื่อให้กดได้ใน Tester
+   ObjectSetInteger(0, name, OBJPROP_HIDDEN, false);      // ไม่ซ่อนใน object list
+   ObjectSetInteger(0, name, OBJPROP_BACK, false);        // อยู่หน้าสุด ไม่ใช่ background
 }
 
 //+------------------------------------------------------------------+
