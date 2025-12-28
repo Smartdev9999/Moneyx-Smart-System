@@ -18,7 +18,7 @@ const MT5EAGuide = () => {
 // ใส่ไฟล์โลโก้ไว้ใน MQL5\\Images\\mpmLogo_500.bmp
 // ขนาดแนะนำ: 150x60 pixels (หรือปรับตามต้องการ)
 // ไฟล์ต้องเป็น .bmp (24-bit หรือ 32-bit) ขนาดตามที่กำหนด
-#resource "\\\\Images\\\\mpmLogo_500.bmp" as mpmLogo
+#resource "\\\\Images\\\\mpmLogo_500.bmp"
 
 // *** Include CTrade ***
 #include <Trade/Trade.mqh>
