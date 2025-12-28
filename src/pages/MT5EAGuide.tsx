@@ -670,7 +670,16 @@ int OnInit()
    
    // *** TIMER สำหรับอัพเดท Dashboard อัตโนมัติ ***
    // แม้ไม่มี tick (ตลาดไม่เคลื่อนไหว) Dashboard ก็จะอัพเดททุก 1 วินาที
-   EventSetTimer(1);  // เรียก OnTimer ทุก 1 วินาที
+   // หมายเหตุ: ปิด Timer ใน Strategy Tester เพราะทำให้ Backtest ช้ามาก
+   if(!MQLInfoInteger(MQL_TESTER))
+   {
+      EventSetTimer(1);  // เรียก OnTimer ทุก 1 วินาที (เฉพาะ Live Trading)
+      Print("Timer enabled: Dashboard auto-refresh every 1 second");
+   }
+   else
+   {
+      Print("Strategy Tester detected: Timer disabled for faster backtest");
+   }
    
    // Enable Chart Events (optional, helps Visual Tester responsiveness)
    // หมายเหตุ: ไม่ใช้ CHART_EVENT_OBJECT_CREATE/DELETE เพราะอาจทำให้ EA crash
@@ -680,7 +689,6 @@ int OnInit()
    
    Print("EA Started Successfully!");
    Print("Dashboard and buttons are ready (Visual Backtest supported)");
-   Print("Timer enabled: Dashboard auto-refresh every 1 second");
    return(INIT_SUCCEEDED);
 }
 
