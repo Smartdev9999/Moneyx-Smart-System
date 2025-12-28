@@ -162,12 +162,15 @@ input ENUM_TRADE_MODE InpTradeMode = TRADE_BUY_SELL;  // Trade Mode
 input string   InpAutoScaleHeader = "=== AUTO BALANCE SCALING ===";  // ___
 input bool     InpUseAutoScale = false;      // Enable Auto Balance Scaling
 input double   InpBaseAccount = 1000.0;      // Base Account Size ($) - multiplier base
+input bool     InpUseFixedScale = false;     // Enable Fixed Scale Account (lock scale size)
+input double   InpFixedScaleAccount = 500.0; // Fixed Scale Account ($) - lock at this size
 // Auto Scale จะปรับขนาดอัตโนมัติสำหรับ:
 // - Trade Settings: Initial Lot, Grid Loss Lot, Grid Profit Lot
 // - Take Profit: TP Dollar, Group TP ($ only)
 // - Stop Loss: SL Dollar ($ only)
 // หมายเหตุ: TP/SL Points ไม่ปรับตาม Scale เพราะเป็นระยะทางคงที่
 // ตัวอย่าง: Base=1000$, Account=2000$ → ค่าที่เป็น $ และ Lot จะ x2
+// Fixed Scale: เปิดใช้งานเพื่อล็อคขนาดไว้ที่ค่าที่กำหนด ไม่ว่า Balance จะเป็นเท่าไหร่
 
 //--- [ TRADING SETTINGS ] ------------------------------------------
 input string   InpTradingHeader = "=== TRADING SETTINGS ===";  // ___
@@ -544,9 +547,23 @@ int OnInit()
    if(InpUseAutoScale)
    {
       double scaleFactor = GetScaleFactor();
+      double realBalance = AccountInfoDouble(ACCOUNT_BALANCE);
       Print("=== AUTO BALANCE SCALING ENABLED ===");
       Print("Base Account: $", InpBaseAccount);
-      Print("Current Balance: $", AccountInfoDouble(ACCOUNT_BALANCE));
+      Print("Current Balance: $", realBalance);
+      
+      // Fixed Scale Mode Status
+      if(InpUseFixedScale)
+      {
+         Print(">>> FIXED SCALE MODE: ON <<<");
+         Print("Fixed Scale Account: $", InpFixedScaleAccount);
+         Print("(Order size locked at $", InpFixedScaleAccount, " regardless of balance)");
+      }
+      else
+      {
+         Print("Fixed Scale Mode: OFF (dynamic scaling based on balance)");
+      }
+      
       Print("Scale Factor: ", DoubleToString(scaleFactor, 2), "x");
       Print("Scaled Initial Lot: ", DoubleToString(ApplyScaleLot(InpInitialLot), 2));
       Print("Scaled TP Dollar: $", DoubleToString(ApplyScaleDollar(InpTPDollarAmount), 2));
@@ -612,17 +629,33 @@ void OnDeinit(const int reason)
 //| Get Scale Factor based on Account Balance vs Base Account          |
 //| Scale Factor = Account Balance / Base Account Size                 |
 //| Example: Base=1000$, Balance=2000$ → Factor=2.0                   |
+//|                                                                    |
+//| Fixed Scale Mode:                                                  |
+//| - ถ้าเปิด InpUseFixedScale จะใช้ InpFixedScaleAccount แทน Balance  |
+//| - ทำให้ขนาดออเดอร์ถูกล็อคไว้ที่ค่าที่กำหนด ไม่เปลี่ยนตาม Balance     |
+//| - ตัวอย่าง: Base=1000$, FixedScale=500$ → Factor=0.5 (ล็อคไว้)     |
 //+------------------------------------------------------------------+
 double GetScaleFactor()
 {
    if(!InpUseAutoScale || InpBaseAccount <= 0)
       return 1.0;
    
-   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
-   if(balance <= 0)
-      return 1.0;
+   double accountSize;
    
-   double factor = balance / InpBaseAccount;
+   // Fixed Scale Mode: ใช้ค่าที่กำหนดแทน Balance จริง
+   if(InpUseFixedScale && InpFixedScaleAccount > 0)
+   {
+      accountSize = InpFixedScaleAccount;
+   }
+   else
+   {
+      // Auto Scale Mode: ใช้ Balance จริงของ Account
+      accountSize = AccountInfoDouble(ACCOUNT_BALANCE);
+      if(accountSize <= 0)
+         return 1.0;
+   }
+   
+   double factor = accountSize / InpBaseAccount;
    
    // Minimum factor = 0.1 (to prevent extremely small lots)
    // Maximum factor = 100 (to prevent extremely large lots)
@@ -5232,7 +5265,18 @@ void UpdateChartComment(string signal, string reason = "")
       double factor = GetScaleFactor();
       text = text + "---------------------------------" + nl;
       text = text + "AUTO SCALING: ENABLED (" + DoubleToString(factor, 2) + "x)" + nl;
-      text = text + "  Base: $" + DoubleToString(InpBaseAccount, 0) + " | Bal: $" + DoubleToString(AccountInfoDouble(ACCOUNT_BALANCE), 0) + nl;
+      text = text + "  Base: $" + DoubleToString(InpBaseAccount, 0) + nl;
+      text = text + "  Balance: $" + DoubleToString(AccountInfoDouble(ACCOUNT_BALANCE), 0) + nl;
+      
+      // Fixed Scale Mode Status
+      if(InpUseFixedScale)
+      {
+         text = text + "  FIXED SCALE: $" + DoubleToString(InpFixedScaleAccount, 0) + " (LOCKED)" + nl;
+      }
+      else
+      {
+         text = text + "  Mode: Dynamic (follows balance)" + nl;
+      }
    }
    
    text = text + "---------------------------------" + nl;
