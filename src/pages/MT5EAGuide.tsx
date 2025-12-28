@@ -687,15 +687,24 @@ void CreateDashboard()
    int valueW = 140;
    
    // ========== SYSTEM NAME HEADER (แทน Logo) ==========
-   // กรอบสีฟ้าพร้อมชื่อระบบ Moneyx Smart System
+   // กรอบสีส้มพร้อมชื่อระบบ Moneyx Smart System (ตาม Design)
    int headerH = 35;
-   CreateDashLabel(DashPrefix + "TitleFrame", x, y, w, headerH, C'70,130,180'); // กรอบสีฟ้า
-   CreateDashText(DashPrefix + "TitleText", x + (w / 2), y + 8, "Moneyx Smart System", clrWhite, 14, true);
-   ObjectSetInteger(0, DashPrefix + "TitleText", OBJPROP_ANCHOR, ANCHOR_UPPER);
+   CreateDashLabel(DashPrefix + "TitleFrame", x, y, w, headerH, C'205,133,63'); // กรอบสีส้ม
    
-   // จัดให้ข้อความอยู่กลาง (ใช้ ANCHOR_UPPER แล้วเลื่อน X ตาม text width โดยประมาณ)
-   // ปรับ X ให้ชิดกลางมากขึ้น
-   ObjectSetInteger(0, DashPrefix + "TitleText", OBJPROP_XDISTANCE, x + 50);
+   // สร้างข้อความและจัดให้อยู่กลาง
+   string titleName = DashPrefix + "TitleText";
+   ObjectCreate(0, titleName, OBJ_LABEL, 0, 0, 0);
+   ObjectSetInteger(0, titleName, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+   ObjectSetInteger(0, titleName, OBJPROP_XDISTANCE, x + (w / 2));
+   ObjectSetInteger(0, titleName, OBJPROP_YDISTANCE, y + 8);
+   ObjectSetInteger(0, titleName, OBJPROP_ANCHOR, ANCHOR_UPPER);  // จัด Anchor ให้อยู่กลางบน
+   ObjectSetString(0, titleName, OBJPROP_TEXT, "Moneyx Smart System");
+   ObjectSetString(0, titleName, OBJPROP_FONT, "Arial Bold");
+   ObjectSetInteger(0, titleName, OBJPROP_FONTSIZE, 14);
+   ObjectSetInteger(0, titleName, OBJPROP_COLOR, clrWhite);
+   ObjectSetInteger(0, titleName, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, titleName, OBJPROP_BACK, false);
+   ObjectSetInteger(0, titleName, OBJPROP_ZORDER, 600);
    
    y += headerH + 3;
    
