@@ -225,10 +225,6 @@ input int      InpTPPoints = 2000;           // TP Points (points)
 input bool     InpUseTPPercent = false;      // Use TP % of Balance
 input double   InpTPPercent = 5.0;           // TP Percent of Balance (%)
 
-// Group TP (Accumulated Profit)
-input bool     InpUseGroupTP = false;        // Use Group TP (Accumulated)
-input double   InpGroupTPAmount = 3000.0;    // Group TP Target ($)
-
 // Accumulate Close (สะสมกำไรเพื่อปิดรวบ)
 input bool     InpUseAccumulateClose = true;      // Use Accumulate Close
 input double   InpAccumulateTarget = 20000.0;     // Accumulate Close Target ($)
