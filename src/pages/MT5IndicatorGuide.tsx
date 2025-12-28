@@ -5,12 +5,13 @@ import StepCard from '@/components/StepCard';
 
 const MT5IndicatorGuide = () => {
   const fullIndicatorCode = `//+------------------------------------------------------------------+
-//|                   Moneyx Smart Indicator v1.0                    |
-//|           Combined Indicators: EMA, Bollinger, ZigZag, PA, CDC   |
+//|                   Moneyx Smart Indicator v2.0                    |
+//|         Combined: EMA, Bollinger, ZigZag, PA, CDC, SMC           |
+//|         + EA Integration via Global Variables                     |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
 #property link      ""
-#property version   "1.00"
+#property version   "2.00"
 #property indicator_chart_window
 #property indicator_buffers 15
 #property indicator_plots   12
@@ -44,6 +45,13 @@ enum ENUM_PA_PATTERN
    PA_NEUTRAL = 0    // No Pattern
 };
 
+// PA Display Mode
+enum ENUM_PA_MODE
+{
+   PA_MODE_ALL = 0,        // Show All PA Patterns
+   PA_MODE_EA_ONLY = 1     // Show Only EA Trade Signals (via Global Variables)
+};
+
 //+------------------------------------------------------------------+
 //| ===================== INPUT PARAMETERS ========================= |
 //+------------------------------------------------------------------+
@@ -55,6 +63,7 @@ input bool     InpShowBollinger = true;        // Show Bollinger Bands
 input bool     InpShowZigZag = true;           // Show ZigZag Indicator
 input bool     InpShowPA = true;               // Show Price Action Patterns
 input bool     InpShowCDC = true;              // Show CDC Action Zone
+input bool     InpShowSMC = true;              // Show SMC Order Blocks
 
 //--- [ EMA SETTINGS ] ----------------------------------------------
 input string   InpEMAHeader = "=== EMA SETTINGS ===";  // ___
@@ -123,6 +132,19 @@ input color    InpCDCBearColor = clrRed;       // CDC Bear Zone Color
 input int      InpCDCWidth = 3;                // CDC Line Width
 input bool     InpCDCShowHistogram = true;     // Show CDC Histogram
 
+//--- [ SMC ORDER BLOCK SETTINGS ] ----------------------------------
+input string   InpSMCHeader = "=== SMC ORDER BLOCKS ===";  // ___
+input int      InpSMCSwingLength = 50;         // Swing Detection Length (bars)
+input int      InpSMCInternalLength = 5;       // Internal Structure Length
+input int      InpSMCMaxOrderBlocks = 5;       // Max Order Blocks to Display
+input color    InpSMCBullOBColor = clrDodgerBlue;   // Bullish OB Color (Support)
+input color    InpSMCBearOBColor = clrCrimson;      // Bearish OB Color (Resistance)
+
+//--- [ PRICE ACTION / EA INTEGRATION SETTINGS ] --------------------
+input string   InpPAModeHeader = "=== PA / EA INTEGRATION ===";  // ___
+input ENUM_PA_MODE InpPAMode = PA_MODE_EA_ONLY;  // PA Display Mode
+input int      InpEAMagicNumber = 123456;      // EA Magic Number (for signal reading)
+
 //+------------------------------------------------------------------+
 //| ===================== INDICATOR BUFFERS ======================== |
 //+------------------------------------------------------------------+
@@ -160,6 +182,42 @@ double lastZigZagHigh = 0;
 double lastZigZagLow = 0;
 int lastZigZagHighBar = 0;
 int lastZigZagLowBar = 0;
+
+// SMC Order Block Structure
+struct OrderBlock
+{
+   double high;
+   double low;
+   datetime time;
+   int barIndex;
+   int bias;      // 1 = Bullish (support), -1 = Bearish (resistance)
+   bool mitigated;
+   string objName;
+};
+
+OrderBlock BullishOBs[20];
+OrderBlock BearishOBs[20];
+int BullishOBCount = 0;
+int BearishOBCount = 0;
+
+// SMC Variables
+double SMCSwingHigh = 0;
+double SMCSwingLow = 0;
+datetime SMCSwingHighTime = 0;
+datetime SMCSwingLowTime = 0;
+int SMCTrend = 0;  // 1 = Bullish, -1 = Bearish, 0 = Neutral
+
+// Object Prefixes
+string SMCPrefix = "INDI_SMC_";
+string PAPrefix = "INDI_PA_";
+
+// EA Signal Global Variable Names (for communication with EA)
+string GV_EA_BUY_SIGNAL = "MONEYX_EA_BUY_SIGNAL";
+string GV_EA_SELL_SIGNAL = "MONEYX_EA_SELL_SIGNAL";
+string GV_EA_BUY_PA = "MONEYX_EA_BUY_PA";
+string GV_EA_SELL_PA = "MONEYX_EA_SELL_PA";
+string GV_EA_BUY_TIME = "MONEYX_EA_BUY_TIME";
+string GV_EA_SELL_TIME = "MONEYX_EA_SELL_TIME";
 
 //+------------------------------------------------------------------+
 //| Custom indicator initialization function                          |
@@ -392,9 +450,10 @@ void OnDeinit(const int reason)
    if(handleCDCFast != INVALID_HANDLE) IndicatorRelease(handleCDCFast);
    if(handleCDCSlow != INVALID_HANDLE) IndicatorRelease(handleCDCSlow);
    
-   // Delete ZigZag labels
+   // Delete all indicator objects
    ObjectsDeleteAll(0, "ZZ_Label_");
-   ObjectsDeleteAll(0, "PA_Label_");
+   ObjectsDeleteAll(0, PAPrefix);
+   ObjectsDeleteAll(0, SMCPrefix);
 }
 
 //+------------------------------------------------------------------+
@@ -460,6 +519,18 @@ int OnCalculate(const int rates_total,
       {
          CDCHistBuffer[i] = CDCFastBuffer[i] - CDCSlowBuffer[i];
       }
+   }
+   
+   // ========== Calculate SMC Order Blocks ==========
+   if(InpShowSMC)
+   {
+      CalculateSMC(rates_total, prev_calculated, time, open, high, low, close);
+   }
+   
+   // ========== Check EA Trade Signals (via Global Variables) ==========
+   if(InpShowPA && InpPAMode == PA_MODE_EA_ONLY)
+   {
+      CheckEATradeSignals(time, open, high, low, close);
    }
    
    return(rates_total);
@@ -609,6 +680,8 @@ void DrawZigZagLabel(int bar, datetime time, double price, string pattern, bool 
 
 //+------------------------------------------------------------------+
 //| Calculate Price Action Patterns                                    |
+//| When PA_MODE_EA_ONLY: Only detect patterns, don't draw labels     |
+//| Labels are drawn via CheckEATradeSignals when EA sends signal     |
 //+------------------------------------------------------------------+
 void CalculatePriceAction(const int rates_total,
                           const int prev_calculated,
@@ -618,6 +691,13 @@ void CalculatePriceAction(const int rates_total,
                           const double &low[],
                           const double &close[])
 {
+   // If EA_ONLY mode, skip automatic PA label drawing
+   // Labels will be drawn by CheckEATradeSignals() when EA opens orders
+   if(InpPAMode == PA_MODE_EA_ONLY)
+   {
+      return;
+   }
+   
    int start = prev_calculated > 0 ? prev_calculated - 1 : 3;
    
    for(int i = MathMin(rates_total - 4, start); i >= 0; i--)
@@ -681,31 +761,63 @@ void CalculatePriceAction(const int rates_total,
          patternName = "Bear Hotdog";
       }
       
-      // Set buffer and draw label
+      // Set buffer and draw label (only in PA_MODE_ALL)
       if(pattern != PA_NEUTRAL)
       {
          PAPatternBuffer[i] = (pattern == PA_BULLISH) ? low[i] : high[i];
-         DrawPALabel(i, time[i], (pattern == PA_BULLISH) ? low[i] : high[i], patternName, pattern == PA_BULLISH);
+         DrawPALabel(time[i], (pattern == PA_BULLISH) ? low[i] : high[i], patternName, pattern == PA_BULLISH);
       }
    }
 }
 
 //+------------------------------------------------------------------+
-//| Draw Price Action Label                                            |
+//| Draw Price Action Label (Arrow + Text)                             |
 //+------------------------------------------------------------------+
-void DrawPALabel(int bar, datetime time, double price, string pattern, bool isBull)
+void DrawPALabel(datetime barTime, double price, string pattern, bool isBull)
 {
-   string objName = "PA_Label_" + IntegerToString(bar);
+   string uniqueId = IntegerToString((long)barTime);
    
-   if(ObjectFind(0, objName) >= 0)
-      ObjectDelete(0, objName);
+   // Get average candle range for dynamic offset
+   double avgRange = 0;
+   for(int i = 1; i <= 10; i++)
+   {
+      avgRange += iHigh(_Symbol, PERIOD_CURRENT, i) - iLow(_Symbol, PERIOD_CURRENT, i);
+   }
+   avgRange /= 10;
    
-   ObjectCreate(0, objName, OBJ_TEXT, 0, time, price);
-   ObjectSetString(0, objName, OBJPROP_TEXT, pattern);
-   ObjectSetInteger(0, objName, OBJPROP_COLOR, isBull ? InpPABullColor : InpPABearColor);
-   ObjectSetInteger(0, objName, OBJPROP_FONTSIZE, 8);
-   ObjectSetString(0, objName, OBJPROP_FONT, "Arial");
-   ObjectSetInteger(0, objName, OBJPROP_ANCHOR, isBull ? ANCHOR_UPPER : ANCHOR_LOWER);
+   // Dynamic offsets
+   double arrowOffset = avgRange * 0.3;
+   double labelOffset = avgRange * 0.8;
+   
+   // Create Arrow Object
+   string arrowName = PAPrefix + "Arrow_" + uniqueId;
+   
+   if(isBull)
+   {
+      double arrowPrice = price - arrowOffset;
+      ObjectCreate(0, arrowName, OBJ_ARROW_UP, 0, barTime, arrowPrice);
+      ObjectSetInteger(0, arrowName, OBJPROP_COLOR, InpPABullColor);
+   }
+   else
+   {
+      double arrowPrice = price + arrowOffset;
+      ObjectCreate(0, arrowName, OBJ_ARROW_DOWN, 0, barTime, arrowPrice);
+      ObjectSetInteger(0, arrowName, OBJPROP_COLOR, InpPABearColor);
+   }
+   ObjectSetInteger(0, arrowName, OBJPROP_WIDTH, 2);
+   ObjectSetInteger(0, arrowName, OBJPROP_SELECTABLE, false);
+   
+   // Create Text Label
+   string labelName = PAPrefix + "Label_" + uniqueId;
+   double labelPrice = isBull ? price - labelOffset : price + labelOffset;
+   
+   ObjectCreate(0, labelName, OBJ_TEXT, 0, barTime, labelPrice);
+   ObjectSetString(0, labelName, OBJPROP_TEXT, pattern);
+   ObjectSetInteger(0, labelName, OBJPROP_COLOR, isBull ? InpPABullColor : InpPABearColor);
+   ObjectSetInteger(0, labelName, OBJPROP_FONTSIZE, 8);
+   ObjectSetString(0, labelName, OBJPROP_FONT, "Arial Bold");
+   ObjectSetInteger(0, labelName, OBJPROP_ANCHOR, isBull ? ANCHOR_UPPER : ANCHOR_LOWER);
+   ObjectSetInteger(0, labelName, OBJPROP_SELECTABLE, false);
 }
 
 //+------------------------------------------------------------------+
@@ -850,6 +962,403 @@ bool IsBearishHotdog(int i, const double &open[], const double &high[], const do
    return engulfsBody && longBody;
 }
 
+//+------------------------------------------------------------------+
+//| ===================== SMC ORDER BLOCKS ========================= |
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//| Calculate SMC Order Blocks                                         |
+//+------------------------------------------------------------------+
+void CalculateSMC(const int rates_total,
+                  const int prev_calculated,
+                  const datetime &time[],
+                  const double &open[],
+                  const double &high[],
+                  const double &low[],
+                  const double &close[])
+{
+   int lookback = InpSMCInternalLength;
+   int barsNeeded = InpSMCSwingLength + 20;
+   
+   if(rates_total < barsNeeded) return;
+   
+   // Detect Swing High and Swing Low
+   for(int i = lookback; i < barsNeeded - lookback; i++)
+   {
+      // Check for Swing High
+      bool isSwingHigh = true;
+      for(int j = 1; j <= lookback; j++)
+      {
+         if(high[i] <= high[i-j] || high[i] <= high[i+j])
+         {
+            isSwingHigh = false;
+            break;
+         }
+      }
+      
+      if(isSwingHigh && high[i] > SMCSwingHigh)
+      {
+         SMCSwingHigh = high[i];
+         SMCSwingHighTime = time[i];
+      }
+      
+      // Check for Swing Low
+      bool isSwingLow = true;
+      for(int j = 1; j <= lookback; j++)
+      {
+         if(low[i] >= low[i-j] || low[i] >= low[i+j])
+         {
+            isSwingLow = false;
+            break;
+         }
+      }
+      
+      if(isSwingLow && (SMCSwingLow == 0 || low[i] < SMCSwingLow))
+      {
+         SMCSwingLow = low[i];
+         SMCSwingLowTime = time[i];
+      }
+   }
+   
+   // Determine trend based on structure
+   double currentClose = close[0];
+   if(currentClose > SMCSwingHigh && SMCSwingHigh > 0)
+   {
+      SMCTrend = 1;  // Bullish
+   }
+   else if(currentClose < SMCSwingLow && SMCSwingLow > 0)
+   {
+      SMCTrend = -1; // Bearish
+   }
+   
+   // Detect Order Blocks
+   DetectOrderBlocks(rates_total, time, open, high, low, close);
+   
+   // Draw Order Blocks on chart
+   DrawOrderBlocks();
+}
+
+//+------------------------------------------------------------------+
+//| Detect Order Blocks based on structure breaks                      |
+//+------------------------------------------------------------------+
+void DetectOrderBlocks(const int rates_total,
+                       const datetime &time[],
+                       const double &open[],
+                       const double &high[],
+                       const double &low[],
+                       const double &close[])
+{
+   int lookback = InpSMCInternalLength;
+   int scanLimit = MathMin(50, rates_total - lookback - 1);
+   
+   for(int i = lookback; i < scanLimit; i++)
+   {
+      // Check for Bullish Order Block
+      // Condition: Bearish candle followed by strong bullish move
+      if(close[i] < open[i])  // Bearish candle
+      {
+         bool strongBullishMove = false;
+         for(int j = i - 1; j >= 1; j--)
+         {
+            if(close[j] > high[i] + (high[i] - low[i]))
+            {
+               strongBullishMove = true;
+               break;
+            }
+            if(j < i - 3) break;
+         }
+         
+         if(strongBullishMove)
+         {
+            AddBullishOB(high[i], low[i], time[i], i);
+         }
+      }
+      
+      // Check for Bearish Order Block
+      // Condition: Bullish candle followed by strong bearish move
+      if(close[i] > open[i])  // Bullish candle
+      {
+         bool strongBearishMove = false;
+         for(int j = i - 1; j >= 1; j--)
+         {
+            if(close[j] < low[i] - (high[i] - low[i]))
+            {
+               strongBearishMove = true;
+               break;
+            }
+            if(j < i - 3) break;
+         }
+         
+         if(strongBearishMove)
+         {
+            AddBearishOB(high[i], low[i], time[i], i);
+         }
+      }
+   }
+   
+   // Check mitigation of existing Order Blocks
+   double currentLow = low[0];
+   double currentHigh = high[0];
+   double currentClose = close[0];
+   
+   for(int i = 0; i < BullishOBCount; i++)
+   {
+      if(!BullishOBs[i].mitigated)
+      {
+         // Bullish OB mitigated when price closes below
+         if(currentClose < BullishOBs[i].low)
+         {
+            BullishOBs[i].mitigated = true;
+            ObjectDelete(0, BullishOBs[i].objName);
+         }
+      }
+   }
+   
+   for(int i = 0; i < BearishOBCount; i++)
+   {
+      if(!BearishOBs[i].mitigated)
+      {
+         // Bearish OB mitigated when price closes above
+         if(currentClose > BearishOBs[i].high)
+         {
+            BearishOBs[i].mitigated = true;
+            ObjectDelete(0, BearishOBs[i].objName);
+         }
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Add Bullish Order Block                                            |
+//+------------------------------------------------------------------+
+void AddBullishOB(double high, double low, datetime time, int barIndex)
+{
+   // Check if already exists
+   for(int i = 0; i < BullishOBCount; i++)
+   {
+      if(BullishOBs[i].time == time) return;
+   }
+   
+   // FIFO rotation
+   if(BullishOBCount >= InpSMCMaxOrderBlocks)
+   {
+      ObjectDelete(0, BullishOBs[0].objName);
+      for(int k = 0; k < BullishOBCount - 1; k++)
+      {
+         BullishOBs[k] = BullishOBs[k + 1];
+      }
+      BullishOBCount--;
+   }
+   
+   BullishOBs[BullishOBCount].high = high;
+   BullishOBs[BullishOBCount].low = low;
+   BullishOBs[BullishOBCount].time = time;
+   BullishOBs[BullishOBCount].barIndex = barIndex;
+   BullishOBs[BullishOBCount].bias = 1;
+   BullishOBs[BullishOBCount].mitigated = false;
+   BullishOBs[BullishOBCount].objName = SMCPrefix + "BullOB_" + IntegerToString((long)time);
+   BullishOBCount++;
+}
+
+//+------------------------------------------------------------------+
+//| Add Bearish Order Block                                            |
+//+------------------------------------------------------------------+
+void AddBearishOB(double high, double low, datetime time, int barIndex)
+{
+   // Check if already exists
+   for(int i = 0; i < BearishOBCount; i++)
+   {
+      if(BearishOBs[i].time == time) return;
+   }
+   
+   // FIFO rotation
+   if(BearishOBCount >= InpSMCMaxOrderBlocks)
+   {
+      ObjectDelete(0, BearishOBs[0].objName);
+      for(int k = 0; k < BearishOBCount - 1; k++)
+      {
+         BearishOBs[k] = BearishOBs[k + 1];
+      }
+      BearishOBCount--;
+   }
+   
+   BearishOBs[BearishOBCount].high = high;
+   BearishOBs[BearishOBCount].low = low;
+   BearishOBs[BearishOBCount].time = time;
+   BearishOBs[BearishOBCount].barIndex = barIndex;
+   BearishOBs[BearishOBCount].bias = -1;
+   BearishOBs[BearishOBCount].mitigated = false;
+   BearishOBs[BearishOBCount].objName = SMCPrefix + "BearOB_" + IntegerToString((long)time);
+   BearishOBCount++;
+}
+
+//+------------------------------------------------------------------+
+//| Draw Order Blocks on Chart                                         |
+//+------------------------------------------------------------------+
+void DrawOrderBlocks()
+{
+   datetime endTime = TimeCurrent() + 86400 * 5;  // Extend 5 days forward
+   
+   // Draw Bullish Order Blocks (Support - Blue)
+   for(int i = 0; i < BullishOBCount; i++)
+   {
+      if(BullishOBs[i].mitigated) continue;
+      
+      string objName = BullishOBs[i].objName;
+      
+      if(ObjectFind(0, objName) < 0)
+      {
+         ObjectCreate(0, objName, OBJ_RECTANGLE, 0, 
+                     BullishOBs[i].time, BullishOBs[i].high,
+                     endTime, BullishOBs[i].low);
+      }
+      else
+      {
+         ObjectSetInteger(0, objName, OBJPROP_TIME, 1, endTime);
+      }
+      
+      ObjectSetInteger(0, objName, OBJPROP_COLOR, InpSMCBullOBColor);
+      ObjectSetInteger(0, objName, OBJPROP_FILL, true);
+      ObjectSetInteger(0, objName, OBJPROP_BACK, true);
+      ObjectSetInteger(0, objName, OBJPROP_SELECTABLE, false);
+   }
+   
+   // Draw Bearish Order Blocks (Resistance - Red)
+   for(int i = 0; i < BearishOBCount; i++)
+   {
+      if(BearishOBs[i].mitigated) continue;
+      
+      string objName = BearishOBs[i].objName;
+      
+      if(ObjectFind(0, objName) < 0)
+      {
+         ObjectCreate(0, objName, OBJ_RECTANGLE, 0,
+                     BearishOBs[i].time, BearishOBs[i].high,
+                     endTime, BearishOBs[i].low);
+      }
+      else
+      {
+         ObjectSetInteger(0, objName, OBJPROP_TIME, 1, endTime);
+      }
+      
+      ObjectSetInteger(0, objName, OBJPROP_COLOR, InpSMCBearOBColor);
+      ObjectSetInteger(0, objName, OBJPROP_FILL, true);
+      ObjectSetInteger(0, objName, OBJPROP_BACK, true);
+      ObjectSetInteger(0, objName, OBJPROP_SELECTABLE, false);
+   }
+}
+
+//+------------------------------------------------------------------+
+//| =================== EA INTEGRATION ============================= |
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//| Check EA Trade Signals via Global Variables                        |
+//| EA writes signals when it opens orders, Indicator reads them      |
+//+------------------------------------------------------------------+
+void CheckEATradeSignals(const datetime &time[],
+                         const double &open[],
+                         const double &high[],
+                         const double &low[],
+                         const double &close[])
+{
+   // Check for BUY signal from EA
+   if(GlobalVariableCheck(GV_EA_BUY_SIGNAL))
+   {
+      double buySignal = GlobalVariableGet(GV_EA_BUY_SIGNAL);
+      
+      if(buySignal == 1.0)
+      {
+         // Get PA pattern name from EA
+         string paPattern = "BUY";
+         if(GlobalVariableCheck(GV_EA_BUY_PA))
+         {
+            // Read pattern name (stored as encoded value)
+            double paCode = GlobalVariableGet(GV_EA_BUY_PA);
+            paPattern = DecodePattern((int)paCode);
+         }
+         
+         // Get signal time
+         datetime signalTime = TimeCurrent();
+         if(GlobalVariableCheck(GV_EA_BUY_TIME))
+         {
+            signalTime = (datetime)GlobalVariableGet(GV_EA_BUY_TIME);
+         }
+         
+         // Find the bar for this signal
+         int signalBar = iBarShift(_Symbol, PERIOD_CURRENT, signalTime, false);
+         if(signalBar >= 0 && signalBar < ArraySize(low))
+         {
+            DrawPALabel(time[signalBar], low[signalBar], paPattern, true);
+         }
+         
+         // Reset signal after drawing
+         GlobalVariableSet(GV_EA_BUY_SIGNAL, 0.0);
+      }
+   }
+   
+   // Check for SELL signal from EA
+   if(GlobalVariableCheck(GV_EA_SELL_SIGNAL))
+   {
+      double sellSignal = GlobalVariableGet(GV_EA_SELL_SIGNAL);
+      
+      if(sellSignal == 1.0)
+      {
+         // Get PA pattern name from EA
+         string paPattern = "SELL";
+         if(GlobalVariableCheck(GV_EA_SELL_PA))
+         {
+            double paCode = GlobalVariableGet(GV_EA_SELL_PA);
+            paPattern = DecodePattern((int)paCode);
+         }
+         
+         // Get signal time
+         datetime signalTime = TimeCurrent();
+         if(GlobalVariableCheck(GV_EA_SELL_TIME))
+         {
+            signalTime = (datetime)GlobalVariableGet(GV_EA_SELL_TIME);
+         }
+         
+         // Find the bar for this signal
+         int signalBar = iBarShift(_Symbol, PERIOD_CURRENT, signalTime, false);
+         if(signalBar >= 0 && signalBar < ArraySize(high))
+         {
+            DrawPALabel(time[signalBar], high[signalBar], paPattern, false);
+         }
+         
+         // Reset signal after drawing
+         GlobalVariableSet(GV_EA_SELL_SIGNAL, 0.0);
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Decode PA Pattern from numeric code                                |
+//+------------------------------------------------------------------+
+string DecodePattern(int code)
+{
+   switch(code)
+   {
+      case 1: return "Hammer";
+      case 2: return "Bull Engulf";
+      case 3: return "Tweezer Bot";
+      case 4: return "Morning Star";
+      case 5: return "Inside Bull";
+      case 6: return "Bull Hotdog";
+      case 7: return "Pullback Buy";
+      case 8: return "Outside Bull";
+      case 11: return "Shooting Star";
+      case 12: return "Bear Engulf";
+      case 13: return "Tweezer Top";
+      case 14: return "Evening Star";
+      case 15: return "Inside Bear";
+      case 16: return "Bear Hotdog";
+      case 17: return "Pullback Sell";
+      case 18: return "Outside Bear";
+      default: return "PA Signal";
+   }
+}
+
 //+------------------------------------------------------------------+`;
 
   const downloadIndicatorCode = () => {
@@ -895,8 +1404,8 @@ bool IsBearishHotdog(int i, const double &open[], const double &high[], const do
             Moneyx Smart Indicator
           </h1>
           <p className="text-xl text-slate-400 max-w-2xl mx-auto">
-            รวม Indicators 5 ตัวในตัวเดียว: EMA, Bollinger Band, ZigZag, Price Action และ CDC Action Zone
-            พร้อม Settings เลือกเปิด/ปิดแต่ละตัว
+            รวม Indicators 6 ตัวในตัวเดียว: EMA, Bollinger Band, ZigZag, Price Action, CDC Action Zone และ SMC Order Block
+            พร้อม Settings เลือกเปิด/ปิดแต่ละตัว + เชื่อมต่อ EA ผ่าน Global Variables
           </p>
         </div>
 
