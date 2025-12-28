@@ -4340,23 +4340,12 @@ void CheckOBTouch(double closePrice, double highPrice, double lowPrice)
    if(freezeBuySide)
    {
       g_smcBuyTouchingNow = false;
-      g_smcSellTouchingNow = false;
-      return;
-   }
-   }
-   else
-   {
-      // BUY side NOT frozen - can detect BUY OB touches
    }
    
    // If SELL side is frozen, don't detect new SELL OB touches  
    if(freezeSellSide)
    {
       g_smcSellTouchingNow = false;
-   }
-   else
-   {
-      // SELL side NOT frozen - can detect SELL OB touches
    }
 
    // DON'T reset touch flags every tick - let them persist for PA confirmation
