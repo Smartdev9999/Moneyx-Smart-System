@@ -349,6 +349,7 @@ input int      InpPauseAfterCustom = 300;     // Pause After a Custom News (Min.
 //--- [ DASHBOARD SETTINGS ] ----------------------------------------
 input string   InpDashboardHeader = "=== DASHBOARD SETTINGS ===";  // ___
 input bool     InpShowDashboard = true;        // Show Dashboard Panel
+input bool     InpOpenZigZagTFChart = false;   // (Optional) Open ZigZag TF chart for object visibility (may cause issues on some terminals)
 input int      InpDashboardX = 10;             // Dashboard X Position (pixels from left)
 input int      InpDashboardY = 30;             // Dashboard Y Position (pixels from top)
 input int      InpDashboardWidth = 280;        // Dashboard Width (pixels)
@@ -567,9 +568,11 @@ int OnInit()
    
    trade.SetExpertMagicNumber(InpMagicNumber);
    
-   // Open a chart for the selected ZigZag timeframe (so you can SEE the objects there)
+   // Open a chart for the selected ZigZag timeframe (optional)
+   // NOTE: บางเครื่อง/บางโบรกเกอร์มีปัญหากับการ ChartOpen/ChartClose ระหว่าง Re-init (โหลด .set)
+   // ทำให้ EA ถูกถอดออกจากชาร์ตได้ จึงปิดค่าเริ่มต้นไว้
    ZZTFChartId = 0;
-   if(InpZigZagTimeframe != PERIOD_CURRENT && InpZigZagTimeframe != Period())
+   if(InpOpenZigZagTFChart && InpZigZagTimeframe != PERIOD_CURRENT && InpZigZagTimeframe != Period())
    {
       ZZTFChartId = ChartOpen(_Symbol, InpZigZagTimeframe);
       if(ZZTFChartId > 0)
