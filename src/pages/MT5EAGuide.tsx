@@ -473,10 +473,6 @@ bool g_isHedgeLocked = false; // True when ANY hedge is active - stops ALL new o
 datetime LastGridBuyTime = 0;
 datetime LastGridSellTime = 0;
 
-// Group TP Accumulated Profit Tracking
-double AccumulatedProfit = 0.0;
-double LastClosedProfit = 0.0;
-
 // Accumulate Close Tracking (สะสมกำไรจาก order ที่ปิดไป)
 double g_accumulateClosedProfit = 0.0;    // กำไรสะสมจาก order ที่ปิดไปแล้ว
 int g_lastKnownPositionCount = 0;          // จำนวน position ล่าสุดเพื่อ detect การปิด
@@ -3541,7 +3537,6 @@ void CloseAllPositions()
    GridSellCount = 0;
    InitialBuyBarTime = 0;
    InitialSellBarTime = 0;
-   AccumulatedProfit = 0;
    
    // Reset hedge flags when all positions closed
    g_isHedgedBuy = false;
@@ -3622,7 +3617,6 @@ void CheckTPSLConditions()
    // Get scaled values for Auto Balance Scaling
    double scaledTPDollar = ApplyScaleDollar(InpTPDollarAmount);
    double scaledSLDollar = ApplyScaleDollar(InpSLDollarAmount);
-   double scaledGroupTP = ApplyScaleDollar(InpGroupTPAmount);
    
    // 1. TP Fixed Dollar - Close each side when reaches target
    if(InpUseTPDollar)
@@ -3630,14 +3624,12 @@ void CheckTPSLConditions()
       if(buyPL >= scaledTPDollar && buyCount > 0)
       {
          Print("TP Dollar - BUY side reached $", buyPL, " (Target: $", scaledTPDollar, ")");
-         double closed = ClosePositionsByType(POSITION_TYPE_BUY);
-         if(InpUseGroupTP) AccumulatedProfit += closed;
+         ClosePositionsByType(POSITION_TYPE_BUY);
       }
       if(sellPL >= scaledTPDollar && sellCount > 0)
       {
          Print("TP Dollar - SELL side reached $", sellPL, " (Target: $", scaledTPDollar, ")");
-         double closed = ClosePositionsByType(POSITION_TYPE_SELL);
-         if(InpUseGroupTP) AccumulatedProfit += closed;
+         ClosePositionsByType(POSITION_TYPE_SELL);
       }
    }
    
@@ -3650,8 +3642,7 @@ void CheckTPSLConditions()
          if(currentBid >= tpPrice)
          {
             Print("TP Points - BUY side hit TP at ", tpPrice);
-            double closed = ClosePositionsByType(POSITION_TYPE_BUY);
-            if(InpUseGroupTP) AccumulatedProfit += closed;
+            ClosePositionsByType(POSITION_TYPE_BUY);
          }
       }
       if(sellCount > 0 && avgSell > 0)
@@ -3660,8 +3651,7 @@ void CheckTPSLConditions()
          if(currentAsk <= tpPrice)
          {
             Print("TP Points - SELL side hit TP at ", tpPrice);
-            double closed = ClosePositionsByType(POSITION_TYPE_SELL);
-            if(InpUseGroupTP) AccumulatedProfit += closed;
+            ClosePositionsByType(POSITION_TYPE_SELL);
          }
       }
    }
@@ -3673,27 +3663,12 @@ void CheckTPSLConditions()
       if(buyPL >= tpAmount && buyCount > 0)
       {
          Print("TP Percent - BUY side reached ", InpTPPercent, "% ($", buyPL, ")");
-         double closed = ClosePositionsByType(POSITION_TYPE_BUY);
-         if(InpUseGroupTP) AccumulatedProfit += closed;
+         ClosePositionsByType(POSITION_TYPE_BUY);
       }
       if(sellPL >= tpAmount && sellCount > 0)
       {
          Print("TP Percent - SELL side reached ", InpTPPercent, "% ($", sellPL, ")");
-         double closed = ClosePositionsByType(POSITION_TYPE_SELL);
-         if(InpUseGroupTP) AccumulatedProfit += closed;
-      }
-   }
-   
-   // 4. Group TP (Accumulated Profit) - Also scaled
-   if(InpUseGroupTP)
-   {
-      double combinedProfit = AccumulatedProfit + totalPL;
-      if(combinedProfit >= scaledGroupTP)
-      {
-         Print("Group TP Reached! Accumulated: $", AccumulatedProfit, " + Current: $", totalPL, " = $", combinedProfit, " (Target: $", scaledGroupTP, ")");
-         CloseAllPositions();
-         AccumulatedProfit = 0;  // Reset after closing all
-         return;
+         ClosePositionsByType(POSITION_TYPE_SELL);
       }
    }
    
