@@ -686,23 +686,18 @@ void CreateDashboard()
    int labelW = 130;
    int valueW = 140;
    
-   // ========== LOGO ==========
-   // ใช้ไฟล์โลโก้ในโฟลเดอร์: MQL5\\Images\\mpmLogo_500.bmp
-   // (วิธีนี้เสถียรสุดทั้ง Live และ Strategy Tester)
-   string logoName = DashPrefix + "Logo";
-   ObjectCreate(0, logoName, OBJ_BITMAP_LABEL, 0, 0, 0);
-   ObjectSetInteger(0, logoName, OBJPROP_XDISTANCE, x + (w - InpLogoWidth) / 2);
-   ObjectSetInteger(0, logoName, OBJPROP_YDISTANCE, y);
-   ObjectSetInteger(0, logoName, OBJPROP_XSIZE, InpLogoWidth);
-   ObjectSetInteger(0, logoName, OBJPROP_YSIZE, InpLogoHeight);
-   ObjectSetString(0, logoName, OBJPROP_BMPFILE, "mpmLogo_500.bmp");
-   ObjectSetInteger(0, logoName, OBJPROP_CORNER, CORNER_LEFT_UPPER);
-   ObjectSetInteger(0, logoName, OBJPROP_SELECTABLE, false);
-   ObjectSetInteger(0, logoName, OBJPROP_BACK, false);   // ให้อยู่หน้าสุด (แต่ไม่รับคลิก)
-   ObjectSetInteger(0, logoName, OBJPROP_HIDDEN, false);
-   ObjectSetInteger(0, logoName, OBJPROP_ZORDER, 700);   // สูงกว่าพื้นหลัง แต่ต่ำกว่าปุ่ม
+   // ========== SYSTEM NAME HEADER (แทน Logo) ==========
+   // กรอบสีฟ้าพร้อมชื่อระบบ "Moneyx Smart System"
+   int headerH = 35;
+   CreateDashLabel(DashPrefix + "TitleFrame", x, y, w, headerH, C'70,130,180'); // กรอบสีฟ้า
+   CreateDashText(DashPrefix + "TitleText", x + (w / 2), y + 8, "Moneyx Smart System", clrWhite, 14, true);
+   ObjectSetInteger(0, DashPrefix + "TitleText", OBJPROP_ANCHOR, ANCHOR_UPPER);
    
-   y += InpLogoHeight + 5;
+   // จัดให้ข้อความอยู่กลาง (ใช้ ANCHOR_UPPER แล้วเลื่อน X ตาม text width โดยประมาณ)
+   // ปรับ X ให้ชิดกลางมากขึ้น
+   ObjectSetInteger(0, DashPrefix + "TitleText", OBJPROP_XDISTANCE, x + 50);
+   
+   y += headerH + 3;
    
    // ========== DETAIL SECTION ==========
    // Header Row: System Status with Pause Button
