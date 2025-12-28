@@ -144,6 +144,8 @@ input color    InpSMCBullOBColor = clrDodgerBlue;   // Bullish OB Color
 input color    InpSMCBearOBColor = clrCrimson;      // Bearish OB Color
 input bool     InpSMCRequireTouch = true;     // Require Price Touch OB (for signal)
 input ENUM_EMA_SIGNAL_BAR InpSMCSignalBar = EMA_LAST_BAR_CLOSED;  // SMC Signal Bar Index
+input bool     InpSMCConfluenceFilter = true;  // Confluence Filter (merge overlapping OBs)
+input double   InpSMCConfluencePercent = 50.0; // Confluence Overlap % (0-100)
 
 input string   InpCDCHeader    = "=== CDC ACTION ZONE SETTINGS ===";  // ___
 input bool     InpUseCDCFilter = true;        // Use CDC Action Zone Filter
@@ -4047,6 +4049,9 @@ void CalculateSMC()
    // Bearish OB: Last bullish candle before a strong bearish move
    DetectOrderBlocks(highArr, lowArr, openArr, closeArr, timeArr, barsNeeded);
    
+   // Apply Confluence Filter (merge overlapping OBs)
+   ApplyConfluenceFilter();
+   
    // Draw Order Blocks on chart
    DrawOrderBlocks();
    
@@ -4231,6 +4236,185 @@ void AddBearishOB(double high, double low, datetime time, int barIndex)
    BearishOBs[BearishOBCount].mitigated = false;
    BearishOBs[BearishOBCount].objName = SMCPrefix + "BearOB_" + IntegerToString((long)time);
    BearishOBCount++;
+}
+
+//+------------------------------------------------------------------+
+//| Apply Confluence Filter - Merge overlapping Order Blocks           |
+//| When enabled, OBs that overlap by >= InpSMCConfluencePercent       |
+//| will be merged into a single larger OB zone                         |
+//+------------------------------------------------------------------+
+void ApplyConfluenceFilter()
+{
+   if(!InpSMCConfluenceFilter) return;  // Skip if disabled
+   
+   // Apply to Bullish OBs
+   MergeBullishOBs();
+   
+   // Apply to Bearish OBs
+   MergeBearishOBs();
+}
+
+//+------------------------------------------------------------------+
+//| Calculate overlap percentage between two zones                      |
+//+------------------------------------------------------------------+
+double CalcOverlapPercent(double high1, double low1, double high2, double low2)
+{
+   // Find the overlap range
+   double overlapHigh = MathMin(high1, high2);
+   double overlapLow = MathMax(low1, low2);
+   
+   // If no overlap
+   if(overlapHigh <= overlapLow) return 0.0;
+   
+   double overlapSize = overlapHigh - overlapLow;
+   double size1 = high1 - low1;
+   double size2 = high2 - low2;
+   
+   // Use the smaller zone as reference for percentage
+   double smallerSize = MathMin(size1, size2);
+   if(smallerSize <= 0) return 0.0;
+   
+   return (overlapSize / smallerSize) * 100.0;
+}
+
+//+------------------------------------------------------------------+
+//| Merge overlapping Bullish Order Blocks                              |
+//+------------------------------------------------------------------+
+void MergeBullishOBs()
+{
+   if(BullishOBCount < 2) return;
+   
+   bool merged = true;
+   
+   // Keep merging until no more merges possible
+   while(merged)
+   {
+      merged = false;
+      
+      for(int i = 0; i < BullishOBCount - 1; i++)
+      {
+         if(BullishOBs[i].mitigated) continue;
+         
+         for(int j = i + 1; j < BullishOBCount; j++)
+         {
+            if(BullishOBs[j].mitigated) continue;
+            
+            // Check overlap percentage
+            double overlapPct = CalcOverlapPercent(
+               BullishOBs[i].high, BullishOBs[i].low,
+               BullishOBs[j].high, BullishOBs[j].low);
+            
+            if(overlapPct >= InpSMCConfluencePercent)
+            {
+               // Merge: expand zone i to include zone j
+               double newHigh = MathMax(BullishOBs[i].high, BullishOBs[j].high);
+               double newLow = MathMin(BullishOBs[i].low, BullishOBs[j].low);
+               
+               // Use the older (earlier) time
+               datetime newTime = (BullishOBs[i].time < BullishOBs[j].time) ? 
+                                   BullishOBs[i].time : BullishOBs[j].time;
+               
+               // Delete the object being merged
+               ObjectDelete(0, BullishOBs[j].objName);
+               
+               // Update zone i with merged values
+               BullishOBs[i].high = newHigh;
+               BullishOBs[i].low = newLow;
+               BullishOBs[i].time = newTime;
+               
+               // Need to update the chart object too
+               ObjectDelete(0, BullishOBs[i].objName);
+               BullishOBs[i].objName = SMCPrefix + "BullOB_" + IntegerToString((long)newTime);
+               
+               // Remove zone j from array
+               for(int k = j; k < BullishOBCount - 1; k++)
+               {
+                  BullishOBs[k] = BullishOBs[k + 1];
+               }
+               BullishOBCount--;
+               
+               Print(">>> SMC Confluence: Merged 2 Bullish OBs (", 
+                     DoubleToString(overlapPct, 1), "% overlap) -> New zone: ", 
+                     DoubleToString(newLow, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)), 
+                     " - ", DoubleToString(newHigh, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)));
+               
+               merged = true;
+               break;
+            }
+         }
+         if(merged) break;
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Merge overlapping Bearish Order Blocks                              |
+//+------------------------------------------------------------------+
+void MergeBearishOBs()
+{
+   if(BearishOBCount < 2) return;
+   
+   bool merged = true;
+   
+   // Keep merging until no more merges possible
+   while(merged)
+   {
+      merged = false;
+      
+      for(int i = 0; i < BearishOBCount - 1; i++)
+      {
+         if(BearishOBs[i].mitigated) continue;
+         
+         for(int j = i + 1; j < BearishOBCount; j++)
+         {
+            if(BearishOBs[j].mitigated) continue;
+            
+            // Check overlap percentage
+            double overlapPct = CalcOverlapPercent(
+               BearishOBs[i].high, BearishOBs[i].low,
+               BearishOBs[j].high, BearishOBs[j].low);
+            
+            if(overlapPct >= InpSMCConfluencePercent)
+            {
+               // Merge: expand zone i to include zone j
+               double newHigh = MathMax(BearishOBs[i].high, BearishOBs[j].high);
+               double newLow = MathMin(BearishOBs[i].low, BearishOBs[j].low);
+               
+               // Use the older (earlier) time
+               datetime newTime = (BearishOBs[i].time < BearishOBs[j].time) ? 
+                                   BearishOBs[i].time : BearishOBs[j].time;
+               
+               // Delete the object being merged
+               ObjectDelete(0, BearishOBs[j].objName);
+               
+               // Update zone i with merged values
+               BearishOBs[i].high = newHigh;
+               BearishOBs[i].low = newLow;
+               BearishOBs[i].time = newTime;
+               
+               // Need to update the chart object too
+               ObjectDelete(0, BearishOBs[i].objName);
+               BearishOBs[i].objName = SMCPrefix + "BearOB_" + IntegerToString((long)newTime);
+               
+               // Remove zone j from array
+               for(int k = j; k < BearishOBCount - 1; k++)
+               {
+                  BearishOBs[k] = BearishOBs[k + 1];
+               }
+               BearishOBCount--;
+               
+               Print(">>> SMC Confluence: Merged 2 Bearish OBs (", 
+                     DoubleToString(overlapPct, 1), "% overlap) -> New zone: ", 
+                     DoubleToString(newLow, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)), 
+                     " - ", DoubleToString(newHigh, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)));
+               
+               merged = true;
+               break;
+            }
+         }
+         if(merged) break;
+      }
+   }
 }
 
 //+------------------------------------------------------------------+
