@@ -613,9 +613,9 @@ int OnInit()
    CreateDashboard();
    g_peakBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    // Enable Chart Events for button clicks (required for Visual Backtest mode)
-    // NOTE: ChartSetInteger expects a long value (0/1), not bool.
-    ChartSetInteger(0, CHART_EVENT_OBJECT_CLICK, 1);
+    // Enable Chart Events (optional, helps Visual Tester responsiveness)
+    ChartSetInteger(0, CHART_EVENT_OBJECT_CREATE, 1);
+    ChartSetInteger(0, CHART_EVENT_OBJECT_DELETE, 1);
     ChartSetInteger(0, CHART_EVENT_MOUSE_MOVE, 1);
     ChartRedraw(0);
    
