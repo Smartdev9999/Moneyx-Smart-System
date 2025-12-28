@@ -315,6 +315,37 @@ input bool     InpTradeFriday = true;         // Friday
 input bool     InpTradeSaturday = false;      // Saturday
 input bool     InpTradeSunday = false;        // Sunday
 
+//--- [ NEWS STOP FILTER ] ------------------------------------------
+input string   InpNewsHeader = "=== NEWS STOP FILTER ===";  // ___
+input bool     InpEnableNewsFilter = false;   // Enable News Filter
+input bool     InpNewsUseChartCurrency = false;  // Current Chart Currencies to Filter News
+input string   InpNewsCurrencies = "USD";     // Select Currency to Filter News (e.g. USD;EUR;GBP)
+
+// Low Impact News Settings
+input string   InpNewsLowHeader = "----- Low Impact News -----";  // ___
+input bool     InpFilterLowNews = false;      // Filter Low Impact News
+input int      InpPauseBeforeLow = 60;        // Pause Before a Low News (Min.)
+input int      InpPauseAfterLow = 30;         // Pause After a Low News (Min.)
+
+// Medium Impact News Settings
+input string   InpNewsMedHeader = "----- Medium Impact News -----";  // ___
+input bool     InpFilterMedNews = false;      // Filter Medium Impact News
+input int      InpPauseBeforeMed = 60;        // Pause Before a Medium News (Min.)
+input int      InpPauseAfterMed = 30;         // Pause After a Medium News (Min.)
+
+// High Impact News Settings
+input string   InpNewsHighHeader = "----- High Impact News -----";  // ___
+input bool     InpFilterHighNews = true;      // Filter High Impact News
+input int      InpPauseBeforeHigh = 240;      // Pause Before a High News (Min.)
+input int      InpPauseAfterHigh = 240;       // Pause After a High News (Min.)
+
+// Custom News Settings (by keyword)
+input string   InpNewsCustomHeader = "----- Custom News -----";  // ___
+input bool     InpFilterCustomNews = true;    // Filter Custom News
+input string   InpCustomNewsKeywords = "PMI;Unemployment Claims;Non-Farm;President;Funds Rate;FOMC;Fed Chair Powell";  // Put News Title - Separate by semicolon(;)
+input int      InpPauseBeforeCustom = 300;    // Pause Before a Custom News (Min.)
+input int      InpPauseAfterCustom = 300;     // Pause After a Custom News (Min.)
+
 //--- [ DASHBOARD SETTINGS ] ----------------------------------------
 input string   InpDashboardHeader = "=== DASHBOARD SETTINGS ===";  // ___
 input bool     InpShowDashboard = true;        // Show Dashboard Panel
@@ -497,6 +528,25 @@ bool g_sellResetPhaseAboveEMA = false; // True when price has closed above EMA (
 // For ZigZag Strategy Reset
 bool g_buyResetWaitOppositeSignal = false;  // Wait for HH/LH before allowing BUY again
 bool g_sellResetWaitOppositeSignal = false; // Wait for LL/HL before allowing SELL again
+
+// *** NEWS FILTER VARIABLES ***
+// News Event Structure
+struct NewsEvent
+{
+   string   title;       // News title
+   string   country;     // Currency (e.g., USD, EUR)
+   datetime time;        // Event time
+   string   impact;      // "Low", "Medium", "High"
+   bool     isRelevant;  // Matches our filter criteria
+};
+
+NewsEvent g_newsEvents[];           // Array of loaded news events
+int g_newsEventCount = 0;           // Number of loaded events
+datetime g_lastNewsRefresh = 0;     // Last time we refreshed news data
+bool g_isNewsPaused = false;        // True when trading is paused due to news
+string g_nextNewsTitle = "";        // Title of upcoming/current news affecting us
+datetime g_nextNewsTime = 0;        // Time of upcoming/current news
+string g_newsStatus = "OK";         // Current news filter status for dashboard
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                     |
@@ -723,8 +773,8 @@ void CreateDashboard()
    
    y += rowH + 2;
    
-   // Detail Section Sidebar Label (เพิ่มความสูงสำหรับ Accumulate Close)
-   CreateDashLabel(DashPrefix + "DetailSide", x, y, 25, rowH * 13, InpDashHeaderColor);
+   // Detail Section Sidebar Label (เพิ่มความสูงสำหรับ Accumulate Close และ News Filter)
+   CreateDashLabel(DashPrefix + "DetailSide", x, y, 25, rowH * 14, InpDashHeaderColor);
    CreateDashText(DashPrefix + "DetailD", x + 7, y + 10, "D", clrWhite, 9, true);
    CreateDashText(DashPrefix + "DetailE", x + 7, y + 30, "E", clrWhite, 9, true);
    CreateDashText(DashPrefix + "DetailT", x + 7, y + 50, "T", clrWhite, 9, true);
@@ -737,7 +787,7 @@ void CreateDashboard()
    int detailW = w - 25;
    string detailLabels[] = {"Balance", "Equity", "Margin", "Margin Level", "Floating P/L", 
                             "Current Trend", "Fix Scaling", "Position Buy P/L", "Position Sell P/L", 
-                            "Current DD%", "Max DD%", "Accumulate Close"};
+                            "Current DD%", "Max DD%", "Accumulate Close", "News Filter"};
    
    for(int i = 0; i < ArraySize(detailLabels); i++)
    {
@@ -935,7 +985,7 @@ void UpdateDashboard()
    double totalPLForAccumulate = floatingPL + g_accumulateClosedProfit;
    int currentPosCount = buyCount + sellCount;
    
-   string detailValues[12];
+   string detailValues[13];
    detailValues[0] = DoubleToString(balance, 2) + "$";
    detailValues[1] = DoubleToString(equity, 2) + "$";
    detailValues[2] = DoubleToString(margin, 2) + "$";
@@ -950,8 +1000,10 @@ void UpdateDashboard()
    // Accumulate Close: ใช้ Locked Target ถ้ามี order ค้าง, ไม่งั้นแสดง Current Scaled
    double displayAccumulateTarget = (g_lockedAccumulateTarget > 0) ? g_lockedAccumulateTarget : ApplyScaleDollar(InpAccumulateTarget);
    detailValues[11] = (totalPLForAccumulate >= 0 ? "+" : "") + DoubleToString(totalPLForAccumulate, 0) + "$ (Tg: " + DoubleToString(displayAccumulateTarget, 0) + "$)";
+   // News Filter Status
+   detailValues[12] = InpEnableNewsFilter ? g_newsStatus : "OFF";
    
-   color valueColors[12];
+   color valueColors[13];
    valueColors[0] = clrWhite;
    valueColors[1] = clrWhite;
    valueColors[2] = clrWhite;
@@ -964,8 +1016,12 @@ void UpdateDashboard()
    valueColors[9] = (currentDD <= 10) ? clrLime : (currentDD <= 20) ? clrYellow : clrOrangeRed;
    valueColors[10] = (g_maxDrawdownPercent <= 15) ? clrLime : (g_maxDrawdownPercent <= 30) ? clrYellow : clrOrangeRed;
    valueColors[11] = (totalPLForAccumulate >= displayAccumulateTarget * 0.8) ? clrLime : (totalPLForAccumulate >= 0) ? clrYellow : clrOrangeRed;
+   // News Filter: Red if paused, Yellow if upcoming, Green if OK, Gray if OFF
+   valueColors[12] = (!InpEnableNewsFilter) ? clrGray : 
+                     (g_isNewsPaused) ? clrOrangeRed : 
+                     (StringFind(g_newsStatus, "Next:") >= 0) ? clrYellow : clrLime;
    
-   for(int i = 0; i < 12; i++)
+   for(int i = 0; i < 13; i++)
    {
       ObjectSetString(0, DashPrefix + "DetailVal" + IntegerToString(i), OBJPROP_TEXT, detailValues[i]);
       ObjectSetInteger(0, DashPrefix + "DetailVal" + IntegerToString(i), OBJPROP_COLOR, valueColors[i]);
@@ -4073,12 +4129,438 @@ void CheckGridProfitSide()
 }
 
 //+------------------------------------------------------------------+
+//| ================== NEWS FILTER FUNCTIONS ======================== |
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//| Get Chart Base Currency (e.g., EURUSD -> EUR)                      |
+//+------------------------------------------------------------------+
+string GetChartBaseCurrency()
+{
+   string symbol = _Symbol;
+   // Most pairs have 6 chars: EURUSD, GBPJPY, etc.
+   // Some have suffixes like EURUSDm, EURUSD.i, etc.
+   if(StringLen(symbol) >= 6)
+      return StringSubstr(symbol, 0, 3);
+   return "";
+}
+
+//+------------------------------------------------------------------+
+//| Get Chart Quote Currency (e.g., EURUSD -> USD)                     |
+//+------------------------------------------------------------------+
+string GetChartQuoteCurrency()
+{
+   string symbol = _Symbol;
+   if(StringLen(symbol) >= 6)
+      return StringSubstr(symbol, 3, 3);
+   return "";
+}
+
+//+------------------------------------------------------------------+
+//| Check if Currency is Relevant for News Filter                      |
+//+------------------------------------------------------------------+
+bool IsCurrencyRelevant(string newsCurrency)
+{
+   // If using chart currency filter
+   if(InpNewsUseChartCurrency)
+   {
+      string baseCurrency = GetChartBaseCurrency();
+      string quoteCurrency = GetChartQuoteCurrency();
+      
+      if(newsCurrency == baseCurrency || newsCurrency == quoteCurrency)
+         return true;
+      return false;
+   }
+   
+   // If using manual currency list
+   string currencies = InpNewsCurrencies;
+   if(StringLen(currencies) == 0)
+      return false;
+   
+   // Parse semicolon-separated list
+   string currencyList[];
+   int count = StringSplit(currencies, ';', currencyList);
+   
+   for(int i = 0; i < count; i++)
+   {
+      string curr = currencyList[i];
+      StringTrimLeft(curr);
+      StringTrimRight(curr);
+      if(curr == newsCurrency)
+         return true;
+   }
+   
+   return false;
+}
+
+//+------------------------------------------------------------------+
+//| Check if News Title Matches Custom Keywords                        |
+//+------------------------------------------------------------------+
+bool IsCustomNewsMatch(string newsTitle)
+{
+   if(!InpFilterCustomNews)
+      return false;
+   
+   string keywords = InpCustomNewsKeywords;
+   if(StringLen(keywords) == 0)
+      return false;
+   
+   // Parse semicolon-separated keywords
+   string keywordList[];
+   int count = StringSplit(keywords, ';', keywordList);
+   
+   // Convert news title to uppercase for case-insensitive matching
+   string upperTitle = newsTitle;
+   StringToUpper(upperTitle);
+   
+   for(int i = 0; i < count; i++)
+   {
+      string keyword = keywordList[i];
+      StringTrimLeft(keyword);
+      StringTrimRight(keyword);
+      StringToUpper(keyword);
+      
+      if(StringLen(keyword) > 0 && StringFind(upperTitle, keyword) >= 0)
+         return true;
+   }
+   
+   return false;
+}
+
+//+------------------------------------------------------------------+
+//| Parse News Time from ForexFactory format (MM-DD-YYYY, hh:mmap)     |
+//+------------------------------------------------------------------+
+datetime ParseNewsTime(string dateStr, string timeStr)
+{
+   // Clean CDATA whitespace
+   StringTrimLeft(dateStr);
+   StringTrimRight(dateStr);
+   StringTrimLeft(timeStr);
+   StringTrimRight(timeStr);
+   
+   // Parse date: MM-DD-YYYY
+   string dateParts[];
+   int datePartCount = StringSplit(dateStr, '-', dateParts);
+   if(datePartCount < 3) return 0;
+   
+   int month = (int)StringToInteger(dateParts[0]);
+   int day = (int)StringToInteger(dateParts[1]);
+   int year = (int)StringToInteger(dateParts[2]);
+   
+   // Parse time: hh:mmap (e.g., "3:00pm", "11:50pm")
+   int hour = 0;
+   int minute = 0;
+   
+   // Find am/pm
+   string lowerTime = timeStr;
+   StringToLower(lowerTime);
+   bool isPM = StringFind(lowerTime, "pm") >= 0;
+   bool isAM = StringFind(lowerTime, "am") >= 0;
+   
+   // Remove am/pm
+   StringReplace(lowerTime, "pm", "");
+   StringReplace(lowerTime, "am", "");
+   StringTrimRight(lowerTime);
+   
+   // Parse hour:minute
+   string timeParts[];
+   int timePartCount = StringSplit(lowerTime, ':', timeParts);
+   if(timePartCount >= 1)
+   {
+      hour = (int)StringToInteger(timeParts[0]);
+      if(timePartCount >= 2)
+         minute = (int)StringToInteger(timeParts[1]);
+   }
+   
+   // Convert to 24-hour format
+   if(isPM && hour < 12) hour += 12;
+   if(isAM && hour == 12) hour = 0;
+   
+   // Build datetime
+   MqlDateTime dt;
+   dt.year = year;
+   dt.mon = month;
+   dt.day = day;
+   dt.hour = hour;
+   dt.min = minute;
+   dt.sec = 0;
+   
+   return StructToTime(dt);
+}
+
+//+------------------------------------------------------------------+
+//| Extract text from XML element (between <tag> and </tag>)           |
+//+------------------------------------------------------------------+
+string ExtractXMLValue(string xml, string tag)
+{
+   string startTag = "<" + tag + ">";
+   string endTag = "</" + tag + ">";
+   
+   int startPos = StringFind(xml, startTag);
+   if(startPos < 0) return "";
+   startPos += StringLen(startTag);
+   
+   int endPos = StringFind(xml, endTag, startPos);
+   if(endPos < 0) return "";
+   
+   string value = StringSubstr(xml, startPos, endPos - startPos);
+   
+   // Remove CDATA wrapper if present
+   if(StringFind(value, "<![CDATA[") >= 0)
+   {
+      StringReplace(value, "<![CDATA[", "");
+      StringReplace(value, "]]>", "");
+   }
+   
+   StringTrimLeft(value);
+   StringTrimRight(value);
+   
+   return value;
+}
+
+//+------------------------------------------------------------------+
+//| Fetch and Parse News from ForexFactory XML                         |
+//+------------------------------------------------------------------+
+void RefreshNewsData()
+{
+   if(!InpEnableNewsFilter)
+      return;
+   
+   datetime currentTime = TimeCurrent();
+   
+   // Refresh every hour (3600 seconds)
+   if(g_lastNewsRefresh > 0 && (currentTime - g_lastNewsRefresh) < 3600)
+      return;
+   
+   g_lastNewsRefresh = currentTime;
+   Print("NEWS FILTER: Refreshing news data from ForexFactory...");
+   
+   // Get current week string for URL
+   MqlDateTime dt;
+   TimeToStruct(currentTime, dt);
+   
+   // Month names
+   string months[] = {"jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"};
+   
+   // ForexFactory week URL format: week=dec28.2025
+   string weekUrl = "https://nfs.faireconomy.media/ff_calendar_thisweek.xml";
+   
+   // Use WebRequest to fetch XML
+   char postData[], resultData[];
+   string headers = "";
+   string resultHeaders;
+   
+   int timeout = 5000;  // 5 seconds
+   
+   int result = WebRequest("GET", weekUrl, headers, timeout, postData, resultData, resultHeaders);
+   
+   if(result == -1)
+   {
+      int error = GetLastError();
+      Print("NEWS FILTER ERROR: WebRequest failed - Error ", error);
+      Print("NOTE: Please add 'https://nfs.faireconomy.media' to Tools -> Options -> Expert Advisors -> Allow WebRequest for listed URL");
+      return;
+   }
+   
+   // Convert to string
+   string xmlContent = CharArrayToString(resultData, 0, WHOLE_ARRAY, CP_UTF8);
+   
+   // Parse events
+   g_newsEventCount = 0;
+   ArrayResize(g_newsEvents, 50);  // Pre-allocate for 50 events
+   
+   int searchPos = 0;
+   int eventStart;
+   
+   while((eventStart = StringFind(xmlContent, "<event>", searchPos)) >= 0)
+   {
+      int eventEnd = StringFind(xmlContent, "</event>", eventStart);
+      if(eventEnd < 0) break;
+      
+      string eventXml = StringSubstr(xmlContent, eventStart, eventEnd - eventStart + 8);
+      
+      // Extract event data
+      string title = ExtractXMLValue(eventXml, "title");
+      string country = ExtractXMLValue(eventXml, "country");
+      string dateStr = ExtractXMLValue(eventXml, "date");
+      string timeStr = ExtractXMLValue(eventXml, "time");
+      string impact = ExtractXMLValue(eventXml, "impact");
+      
+      // Parse datetime
+      datetime eventTime = ParseNewsTime(dateStr, timeStr);
+      
+      // Check if this event is relevant
+      bool isRelevant = false;
+      
+      if(IsCurrencyRelevant(country))
+      {
+         // Check impact filters
+         if(InpFilterHighNews && impact == "High")
+            isRelevant = true;
+         else if(InpFilterMedNews && impact == "Medium")
+            isRelevant = true;
+         else if(InpFilterLowNews && impact == "Low")
+            isRelevant = true;
+         
+         // Check custom keywords
+         if(IsCustomNewsMatch(title))
+            isRelevant = true;
+      }
+      
+      // Store event if relevant or for display
+      if(g_newsEventCount < ArraySize(g_newsEvents))
+      {
+         g_newsEvents[g_newsEventCount].title = title;
+         g_newsEvents[g_newsEventCount].country = country;
+         g_newsEvents[g_newsEventCount].time = eventTime;
+         g_newsEvents[g_newsEventCount].impact = impact;
+         g_newsEvents[g_newsEventCount].isRelevant = isRelevant;
+         g_newsEventCount++;
+      }
+      
+      searchPos = eventEnd + 8;
+   }
+   
+   Print("NEWS FILTER: Loaded ", g_newsEventCount, " news events for this week");
+}
+
+//+------------------------------------------------------------------+
+//| Get Pause Duration for News Impact Level                           |
+//+------------------------------------------------------------------+
+void GetNewsPauseDuration(string impact, bool isCustomMatch, int &beforeMin, int &afterMin)
+{
+   beforeMin = 0;
+   afterMin = 0;
+   
+   // Custom news has its own timing
+   if(isCustomMatch && InpFilterCustomNews)
+   {
+      beforeMin = InpPauseBeforeCustom;
+      afterMin = InpPauseAfterCustom;
+      return;
+   }
+   
+   // Impact-based timing
+   if(impact == "High" && InpFilterHighNews)
+   {
+      beforeMin = InpPauseBeforeHigh;
+      afterMin = InpPauseAfterHigh;
+   }
+   else if(impact == "Medium" && InpFilterMedNews)
+   {
+      beforeMin = InpPauseBeforeMed;
+      afterMin = InpPauseAfterMed;
+   }
+   else if(impact == "Low" && InpFilterLowNews)
+   {
+      beforeMin = InpPauseBeforeLow;
+      afterMin = InpPauseAfterLow;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Check if Currently in News Pause Window                            |
+//+------------------------------------------------------------------+
+bool IsNewsTimePaused()
+{
+   if(!InpEnableNewsFilter)
+   {
+      g_isNewsPaused = false;
+      g_newsStatus = "OFF";
+      return false;
+   }
+   
+   datetime currentTime = TimeCurrent();
+   
+   g_isNewsPaused = false;
+   g_nextNewsTitle = "";
+   g_nextNewsTime = 0;
+   g_newsStatus = "OK";
+   
+   // Find the next/current relevant news
+   datetime closestNewsTime = 0;
+   string closestNewsTitle = "";
+   int closestBeforeMin = 0;
+   int closestAfterMin = 0;
+   
+   for(int i = 0; i < g_newsEventCount; i++)
+   {
+      if(!g_newsEvents[i].isRelevant)
+         continue;
+      
+      datetime newsTime = g_newsEvents[i].time;
+      string impact = g_newsEvents[i].impact;
+      bool isCustom = IsCustomNewsMatch(g_newsEvents[i].title);
+      
+      int beforeMin, afterMin;
+      GetNewsPauseDuration(impact, isCustom, beforeMin, afterMin);
+      
+      if(beforeMin == 0 && afterMin == 0)
+         continue;
+      
+      // Calculate pause window
+      datetime pauseStart = newsTime - beforeMin * 60;
+      datetime pauseEnd = newsTime + afterMin * 60;
+      
+      // Check if current time is within pause window
+      if(currentTime >= pauseStart && currentTime <= pauseEnd)
+      {
+         g_isNewsPaused = true;
+         g_nextNewsTitle = g_newsEvents[i].title;
+         g_nextNewsTime = newsTime;
+         
+         // Determine status text
+         if(currentTime < newsTime)
+         {
+            int minsLeft = (int)((newsTime - currentTime) / 60);
+            g_newsStatus = "PAUSE: " + g_newsEvents[i].country + " " + impact + " in " + IntegerToString(minsLeft) + "m";
+         }
+         else
+         {
+            int minsAfter = (int)((currentTime - newsTime) / 60);
+            g_newsStatus = "PAUSE: " + g_newsEvents[i].country + " " + impact + " +" + IntegerToString(minsAfter) + "m ago";
+         }
+         
+         Print("NEWS FILTER: Trading PAUSED - ", g_newsStatus, " | Event: ", g_nextNewsTitle);
+         return true;
+      }
+      
+      // Track closest upcoming news for dashboard display
+      if(newsTime > currentTime && (closestNewsTime == 0 || newsTime < closestNewsTime))
+      {
+         closestNewsTime = newsTime;
+         closestNewsTitle = g_newsEvents[i].title;
+         closestBeforeMin = beforeMin;
+         closestAfterMin = afterMin;
+      }
+   }
+   
+   // Show upcoming news if within 2 hours
+   if(closestNewsTime > 0 && (closestNewsTime - currentTime) <= 2 * 3600)
+   {
+      int minsToNews = (int)((closestNewsTime - currentTime) / 60);
+      g_newsStatus = "Next: " + IntegerToString(minsToNews) + "m";
+      g_nextNewsTitle = closestNewsTitle;
+      g_nextNewsTime = closestNewsTime;
+   }
+   else
+   {
+      g_newsStatus = "OK";
+   }
+   
+   return false;
+}
+
+//+------------------------------------------------------------------+
 //| Expert tick function                                               |
 //+------------------------------------------------------------------+
 void OnTick()
 {
    // Update Dashboard every tick
    UpdateDashboard();
+   
+   // *** NEWS FILTER - Refresh data hourly and check pause ***
+   RefreshNewsData();  // Called every tick, but only refreshes hourly
    
    // *** ACCUMULATE CLOSE SYSTEM - ทำงานทุก tick ไม่ว่าจะ Pause หรือไม่ ***
    TrackAccumulateProfit();
@@ -4087,7 +4569,7 @@ void OnTick()
       return;  // ปิด order แล้ว รอ tick ถัดไป
    }
    
-   // Check TP/SL conditions first (every tick) - this still runs even when paused
+   // Check TP/SL conditions first (every tick) - this still runs even when paused or news filtered
    CheckTPSLConditions();
    
    // Draw TP/SL lines (every tick for real-time update)
@@ -4100,6 +4582,17 @@ void OnTick()
       UpdateChartComment("PAUSED", "EA Paused - No new orders");
       return;
    }
+   
+   // *** NEWS FILTER PAUSE CHECK ***
+   // If news pause is active, skip new orders and grid - but TP/SL/Hedge still work
+   if(IsNewsTimePaused())
+   {
+      UpdateChartComment("NEWS_PAUSE", g_newsStatus);
+      // Continue to Grid check but exit before initial order logic
+      // Grid is also paused during news
+      return;
+   }
+   
    DrawTPSLLines();
    
    // *** HEDGE LOCK CHECK ***
