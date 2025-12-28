@@ -614,7 +614,14 @@ int OnInit()
    CreateDashboard();
    g_peakBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
+   // Enable Chart Events for button clicks (required for Visual Backtest mode)
+   ChartSetInteger(0, CHART_EVENT_OBJECT_CREATE, true);
+   ChartSetInteger(0, CHART_EVENT_OBJECT_DELETE, true);
+   ChartSetInteger(0, CHART_EVENT_MOUSE_MOVE, true);
+   ChartRedraw(0);
+   
    Print("EA Started Successfully!");
+   Print("Dashboard and buttons are ready (Visual Backtest supported)");
    return(INIT_SUCCEEDED);
 }
 
@@ -658,7 +665,7 @@ void OnDeinit(const int reason)
       ZZTFChartId = 0;
    }
    
-   Comment("");
+   // ไม่ใช้ Comment แล้ว เพราะมี Dashboard แทน
    Print("EA Stopped - Reason: ", reason);
 }
 
@@ -837,6 +844,7 @@ void CreateDashButton(string name, int x, int y, int width, int height, string t
    ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
    ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
    ObjectSetInteger(0, name, OBJPROP_STATE, false);
+   ObjectSetInteger(0, name, OBJPROP_ZORDER, 100);  // High priority for click detection in Tester
 }
 
 //+------------------------------------------------------------------+
@@ -1845,15 +1853,8 @@ void DrawCDCOnChart(double &fast[], double &slow[], datetime &time[], int size)
       ObjectSetInteger(0, lineName, OBJPROP_SELECTABLE, false);
    }
    
-   string labelName = CDCPrefix + "Status_Label";
-   ObjectCreate(0, labelName, OBJ_LABEL, 0, 0, 0);
-   ObjectSetInteger(0, labelName, OBJPROP_CORNER, CORNER_LEFT_UPPER);
-   ObjectSetInteger(0, labelName, OBJPROP_XDISTANCE, 10);
-   ObjectSetInteger(0, labelName, OBJPROP_YDISTANCE, 50);
-   ObjectSetString(0, labelName, OBJPROP_TEXT, "CDC (" + EnumToString(InpCDCTimeframe) + "): " + CDCTrend);
-   ObjectSetInteger(0, labelName, OBJPROP_COLOR, CDCZoneColor);
-   ObjectSetInteger(0, labelName, OBJPROP_FONTSIZE, 12);
-   ObjectSetString(0, labelName, OBJPROP_FONT, "Arial Bold");
+   // ไม่สร้าง CDC Status Label แยกแล้ว เพราะมี Dashboard แสดงข้อมูล Current Trend อยู่แล้ว
+   // ป้องกันไม่ให้ข้อความบัง Dashboard และ Logo
 }
 
 //+------------------------------------------------------------------+
