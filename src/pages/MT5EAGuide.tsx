@@ -698,9 +698,9 @@ void CreateDashboard()
    ObjectSetString(0, logoName, OBJPROP_BMPFILE, "mpmLogo_500.bmp");
    ObjectSetInteger(0, logoName, OBJPROP_CORNER, CORNER_LEFT_UPPER);
    ObjectSetInteger(0, logoName, OBJPROP_SELECTABLE, false);
-   ObjectSetInteger(0, logoName, OBJPROP_BACK, true);
+   ObjectSetInteger(0, logoName, OBJPROP_BACK, false);   // ให้อยู่หน้าสุด (แต่ไม่รับคลิก)
    ObjectSetInteger(0, logoName, OBJPROP_HIDDEN, false);
-   ObjectSetInteger(0, logoName, OBJPROP_ZORDER, 0);
+   ObjectSetInteger(0, logoName, OBJPROP_ZORDER, 700);   // สูงกว่าพื้นหลัง แต่ต่ำกว่าปุ่ม
    
    y += InpLogoHeight + 5;
    
@@ -810,9 +810,9 @@ void CreateDashLabel(string name, int x, int y, int width, int height, color bgC
    ObjectSetInteger(0, name, OBJPROP_BORDER_TYPE, BORDER_FLAT);
    ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
    ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
-   // ทำให้เป็น background เสมอ เพื่อไม่บังปุ่มใน Strategy Tester
-   ObjectSetInteger(0, name, OBJPROP_BACK, true);
-   ObjectSetInteger(0, name, OBJPROP_ZORDER, 0);
+   ObjectSetInteger(0, name, OBJPROP_BACK, false);      // ให้อยู่หน้ากว่า indicator panel
+   ObjectSetInteger(0, name, OBJPROP_ZORDER, 500);       // ต่ำกว่าปุ่ม (1000) เพื่อไม่บังคลิก
+   ObjectSetInteger(0, name, OBJPROP_HIDDEN, false);
 }
 
 //+------------------------------------------------------------------+
@@ -829,6 +829,9 @@ void CreateDashText(string name, int x, int y, string text, color textColor, int
    ObjectSetString(0, name, OBJPROP_FONT, bold ? "Arial Bold" : "Arial");
    ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
    ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, name, OBJPROP_BACK, false);
+   ObjectSetInteger(0, name, OBJPROP_ZORDER, 600);
+   ObjectSetInteger(0, name, OBJPROP_HIDDEN, false);
 }
 
 //+------------------------------------------------------------------+
