@@ -1092,9 +1092,12 @@ void CloseAllPositions(ENUM_POSITION_TYPE posType)
 
 //+------------------------------------------------------------------+
 //| Handle Chart Events (Button Clicks)                                |
+//| รองรับทั้ง Live Trading และ Backtest/Tester Mode                   |
 //+------------------------------------------------------------------+
 void OnChartEvent(const int id, const long &lparam, const double &dparam, const string &sparam)
 {
+   // *** OBJECT CLICK EVENTS ***
+   // ใช้งานได้ทั้ง Live และ Visual Backtest Mode
    if(id == CHARTEVENT_OBJECT_CLICK)
    {
       // Handle Dashboard Button Clicks
@@ -1104,29 +1107,35 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
          ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
          Print("EA ", g_eaIsPaused ? "PAUSED" : "RESUMED", " by user");
          UpdateDashboard();
+         ChartRedraw(0);  // Force chart update in tester
       }
       else if(sparam == DashPrefix + "BtnCloseBuy")
       {
          ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
          ShowConfirmDialog("CLOSE_BUY", "Close all BUY orders?");
+         ChartRedraw(0);
       }
       else if(sparam == DashPrefix + "BtnCloseSell")
       {
          ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
          ShowConfirmDialog("CLOSE_SELL", "Close all SELL orders?");
+         ChartRedraw(0);
       }
       else if(sparam == DashPrefix + "BtnCloseAll")
       {
          ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
          ShowConfirmDialog("CLOSE_ALL", "Close ALL orders?");
+         ChartRedraw(0);
       }
       else if(sparam == DashPrefix + "BtnConfirmYes")
       {
          ExecuteConfirmedAction();
+         ChartRedraw(0);
       }
       else if(sparam == DashPrefix + "BtnConfirmNo")
       {
          HideConfirmDialog();
+         ChartRedraw(0);
       }
    }
 }
@@ -5705,109 +5714,13 @@ bool IsWithinTradingHours()
 
 //+------------------------------------------------------------------+
 //| Update chart comment                                               |
+//| หมายเหตุ: ไม่ใช้ Comment() แล้ว เพราะมี Dashboard แสดงข้อมูลแทน      |
 //+------------------------------------------------------------------+
 void UpdateChartComment(string signal, string reason = "")
 {
-   string nl = "\\n";
-   string text = "";
-   
-   text = text + "=================================" + nl;
-   text = text + " ZigZag++ CDC EA v4.0 + Grid" + nl;
-   text = text + "=================================" + nl;
-   text = text + "Symbol: " + _Symbol + nl;
-   text = text + "Entry TF: " + EnumToString(Period()) + nl;
-   text = text + "Signal Strategy: " + EnumToString(InpSignalStrategy) + nl;
-   text = text + "Trade Mode: " + GetTradeModeString() + nl;
-   text = text + "Lot Mode: " + EnumToString(InpLotMode) + nl;
-   text = text + "---------------------------------" + nl;
-   
-   // Show status based on selected strategy
-   if(InpSignalStrategy == STRATEGY_ZIGZAG)
-   {
-      text = text + "ZIGZAG++ STATUS:" + nl;
-      text = text + "  TF: " + EnumToString(InpZigZagTimeframe) + nl;
-      text = text + "  Last Point: " + LastZZLabel + nl;
-      text = text + "  Total Points: " + IntegerToString(ZZPointCount) + nl;
-      
-      if(ZZPointCount >= 4)
-      {
-         text = text + "  Recent: ";
-         for(int i = 0; i < 4 && i < ZZPointCount; i++)
-         {
-            text = text + ZZPoints[i].label;
-            if(i < 3) text = text + " > ";
-         }
-         text = text + nl;
-      }
-   }
-   else if(InpSignalStrategy == STRATEGY_EMA_CHANNEL)
-   {
-      text = text + "EMA CHANNEL STATUS:" + nl;
-      text = text + "  TF: " + EnumToString(InpEMATimeframe) + nl;
-      text = text + "  EMA High (" + IntegerToString(InpEMAHighPeriod) + "): " + DoubleToString(EMAHigh, _Digits) + nl;
-      text = text + "  EMA Low (" + IntegerToString(InpEMALowPeriod) + "): " + DoubleToString(EMALow, _Digits) + nl;
-      string signalBarMode = (InpEMASignalBar == EMA_CURRENT_BAR) ? "Current Bar" : "Last Bar Closed";
-      text = text + "  Signal Mode: " + signalBarMode + nl;
-      text = text + "  Signal: " + EMASignal + nl;
-   }
-   
-   text = text + "---------------------------------" + nl;
-   text = text + "CDC FILTER (" + EnumToString(InpCDCTimeframe) + "):" + nl;
-   text = text + "  Zone: " + CDCTrend + nl;
-   
-   string zoneSymbol = "";
-   if(CDCTrend == "BULLISH") zoneSymbol = "[GREEN - BUY ONLY]";
-   else if(CDCTrend == "BEARISH") zoneSymbol = "[RED - SELL ONLY]";
-   else zoneSymbol = "[" + CDCTrend + "]";
-   text = text + "  Status: " + zoneSymbol + nl;
-   
-   text = text + "---------------------------------" + nl;
-   text = text + "GRID STATUS:" + nl;
-   text = text + "  BUY Positions: " + IntegerToString(CountPositions(POSITION_TYPE_BUY)) + nl;
-   text = text + "  SELL Positions: " + IntegerToString(CountPositions(POSITION_TYPE_SELL)) + nl;
-   text = text + "  Floating P/L: $" + DoubleToString(GetTotalFloatingPL(), 2) + nl;
-   
-   // Average Price Info
-   double avgBuy, lotsBuy, avgSell, lotsSell;
-   GetAveragePriceAndLots(POSITION_TYPE_BUY, avgBuy, lotsBuy);
-   GetAveragePriceAndLots(POSITION_TYPE_SELL, avgSell, lotsSell);
-   
-   if(avgBuy > 0)
-      text = text + "  AVG BUY: " + DoubleToString(avgBuy, _Digits) + nl;
-   if(avgSell > 0)
-      text = text + "  AVG SELL: " + DoubleToString(avgSell, _Digits) + nl;
-   
-   // Group TP Info
-   if(InpUseGroupTP)
-      text = text + "  Accumulated: $" + DoubleToString(AccumulatedProfit, 2) + nl;
-   
-   // Auto Balance Scaling Info
-   if(InpUseAutoScale)
-   {
-      double factor = GetScaleFactor();
-      text = text + "---------------------------------" + nl;
-      text = text + "AUTO SCALING: ENABLED (" + DoubleToString(factor, 2) + "x)" + nl;
-      text = text + "  Base: $" + DoubleToString(InpBaseAccount, 0) + nl;
-      text = text + "  Balance: $" + DoubleToString(AccountInfoDouble(ACCOUNT_BALANCE), 0) + nl;
-      
-      // Fixed Scale Mode Status
-      if(InpUseFixedScale)
-      {
-         text = text + "  FIXED SCALE: $" + DoubleToString(InpFixedScaleAccount, 0) + " (LOCKED)" + nl;
-      }
-      else
-      {
-         text = text + "  Mode: Dynamic (follows balance)" + nl;
-      }
-   }
-   
-   text = text + "---------------------------------" + nl;
-   text = text + "SIGNAL: " + signal + nl;
-   if(reason != "") text = text + "Reason: " + reason + nl;
-   text = text + "Total Orders: " + IntegerToString(CountOpenOrders()) + nl;
-   text = text + "=================================" + nl;
-   
-   Comment(text);
+   // Dashboard แสดงข้อมูลแล้ว ไม่ต้องใช้ Comment() ซ้อนกัน
+   // เก็บค่า signal และ reason ไว้ใช้ใน Dashboard
+   // ไม่เรียก Comment() เพื่อป้องกันข้อความซ้อนทับ Dashboard
 }
 //+------------------------------------------------------------------+`;
 
