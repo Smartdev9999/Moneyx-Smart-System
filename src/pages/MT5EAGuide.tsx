@@ -446,6 +446,28 @@ bool g_smcSellResetPhaseComplete = false;
 bool g_smcBuyTouchedOB = false;   // Price touched Bullish OB (support)
 bool g_smcSellTouchedOB = false;  // Price touched Bearish OB (resistance)
 
+// *** EA-INDICATOR COMMUNICATION VIA GLOBAL VARIABLES ***
+// These Global Variables are used to send trade signals to the indicator
+// so it can display PA labels only when EA actually opens an order
+string GV_EA_BUY_SIGNAL = "MONEYX_EA_BUY_SIGNAL";     // 1.0 = BUY triggered
+string GV_EA_SELL_SIGNAL = "MONEYX_EA_SELL_SIGNAL";   // 1.0 = SELL triggered
+string GV_EA_BUY_PA = "MONEYX_EA_BUY_PA";             // PA Pattern code (1=Hammer, 2=Engulf, etc.)
+string GV_EA_SELL_PA = "MONEYX_EA_SELL_PA";           // PA Pattern code
+string GV_EA_BUY_TIME = "MONEYX_EA_BUY_TIME";         // Signal bar time (datetime as double)
+string GV_EA_SELL_TIME = "MONEYX_EA_SELL_TIME";       // Signal bar time
+
+// SMC Settings Sync (EA writes, Indicator reads to match display)
+string GV_SMC_SWING_LENGTH = "MONEYX_SMC_SWING_LENGTH";
+string GV_SMC_INTERNAL_LENGTH = "MONEYX_SMC_INTERNAL_LENGTH";
+string GV_SMC_MAX_OB = "MONEYX_SMC_MAX_OB";
+string GV_SMC_BULL_OB_COLOR = "MONEYX_SMC_BULL_OB_COLOR";
+string GV_SMC_BEAR_OB_COLOR = "MONEYX_SMC_BEAR_OB_COLOR";
+string GV_SMC_ENABLED = "MONEYX_SMC_ENABLED";  // 1.0 = SMC strategy active
+
+// PA Pattern Encoding (for GV_EA_BUY_PA / GV_EA_SELL_PA)
+// 1=Hammer, 2=Engulf, 3=Tweezer, 4=MorningStar/EveningStar, 5=InsideCandle, 6=Hotdog
+// 7=ShootingStar, 8=OutsideCandle, 9=Pullback, 10=Unknown
+
 // Track if price is CURRENTLY touching an OB zone (this tick)
 // (Needed for reset logic: "move away" should mean "not touching now")
 bool g_smcBuyTouchingNow = false;
@@ -599,6 +621,21 @@ int OnInit()
       BullishOBCount = 0;
       BearishOBCount = 0;
       Print("Smart Money Concepts initialized - Swing Length: ", InpSMCSwingLength, " | Max OBs: ", InpSMCMaxOrderBlocks);
+      
+      // *** SYNC SMC SETTINGS TO INDICATOR VIA GLOBAL VARIABLES ***
+      // Indicator will read these values and match EA's SMC display settings
+      GlobalVariableSet(GV_SMC_ENABLED, 1.0);
+      GlobalVariableSet(GV_SMC_SWING_LENGTH, (double)InpSMCSwingLength);
+      GlobalVariableSet(GV_SMC_INTERNAL_LENGTH, (double)InpSMCInternalLength);
+      GlobalVariableSet(GV_SMC_MAX_OB, (double)InpSMCMaxOrderBlocks);
+      GlobalVariableSet(GV_SMC_BULL_OB_COLOR, (double)InpSMCBullOBColor);
+      GlobalVariableSet(GV_SMC_BEAR_OB_COLOR, (double)InpSMCBearOBColor);
+      Print(">>> SMC Settings synced to Indicator via Global Variables");
+   }
+   else
+   {
+      // SMC not active - tell indicator to use its own settings
+      GlobalVariableSet(GV_SMC_ENABLED, 0.0);
    }
    
    // Initialize Bollinger Bands indicator handle
@@ -2870,6 +2907,35 @@ string DetectBearishPA(int shift)
       return "BEAR_HOTDOG";
    
    return "NONE";
+}
+
+//+------------------------------------------------------------------+
+//| Encode PA Pattern name to numeric code for Global Variable         |
+//| Used to send PA info to Indicator when EA opens order              |
+//+------------------------------------------------------------------+
+int EncodePAPattern(int shift)
+{
+   // First check bullish patterns
+   if(IsHammer(shift)) return 1;
+   if(IsBullishEngulfing(shift)) return 2;
+   if(IsTweezerBottom(shift)) return 3;
+   if(IsMorningStar(shift)) return 4;
+   if(IsInsideCandleBullish(shift)) return 5;
+   if(IsBullishHotdog(shift)) return 6;
+   if(IsOutsideCandleBullish(shift)) return 8;
+   if(IsPullbackBuy(shift)) return 9;
+   
+   // Then check bearish patterns
+   if(IsShootingStar(shift)) return 7;
+   if(IsBearishEngulfing(shift)) return 2;  // Same code as bullish engulf
+   if(IsTweezerTop(shift)) return 3;        // Same code as tweezer bottom
+   if(IsEveningStar(shift)) return 4;       // Same code as morning star
+   if(IsInsideCandleBearish(shift)) return 5;
+   if(IsBearishHotdog(shift)) return 6;
+   if(IsOutsideCandleBearish(shift)) return 8;
+   if(IsPullbackSell(shift)) return 9;
+   
+   return 10;  // Unknown pattern
 }
 
 //+------------------------------------------------------------------+
@@ -6223,6 +6289,14 @@ bool ExecuteBuy()
       InitialBuyBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
       GridBuyCount = 1;
       
+      // *** SEND SIGNAL TO INDICATOR VIA GLOBAL VARIABLES ***
+      // Encode PA pattern: 1=Hammer, 2=Engulf, 3=Tweezer, 4=MorningStar, 5=InsideCandle, 6=Hotdog, 7=ShootingStar, 8=OutsideCandle, 9=Pullback
+      int paCode = EncodePAPattern(g_lastPABuyShift);
+      GlobalVariableSet(GV_EA_BUY_SIGNAL, 1.0);
+      GlobalVariableSet(GV_EA_BUY_PA, (double)paCode);
+      GlobalVariableSet(GV_EA_BUY_TIME, (double)iTime(_Symbol, PERIOD_CURRENT, g_lastPABuyShift));
+      Print(">>> Signal sent to Indicator: BUY | PA Code: ", paCode, " | Time: ", TimeToString(iTime(_Symbol, PERIOD_CURRENT, g_lastPABuyShift)));
+      
       // *** RESET SMC TOUCH FLAGS AFTER ORDER EXECUTION ***
       if(InpSignalStrategy == STRATEGY_SMC)
       {
@@ -6258,6 +6332,13 @@ bool ExecuteSell()
       Print("SELL Success! Ticket: ", trade.ResultOrder());
       InitialSellBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
       GridSellCount = 1;
+      
+      // *** SEND SIGNAL TO INDICATOR VIA GLOBAL VARIABLES ***
+      int paCode = EncodePAPattern(g_lastPASellShift);
+      GlobalVariableSet(GV_EA_SELL_SIGNAL, 1.0);
+      GlobalVariableSet(GV_EA_SELL_PA, (double)paCode);
+      GlobalVariableSet(GV_EA_SELL_TIME, (double)iTime(_Symbol, PERIOD_CURRENT, g_lastPASellShift));
+      Print(">>> Signal sent to Indicator: SELL | PA Code: ", paCode, " | Time: ", TimeToString(iTime(_Symbol, PERIOD_CURRENT, g_lastPASellShift)));
       
       // *** RESET SMC TOUCH FLAGS AFTER ORDER EXECUTION ***
       if(InpSignalStrategy == STRATEGY_SMC)

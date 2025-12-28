@@ -219,6 +219,22 @@ string GV_EA_SELL_PA = "MONEYX_EA_SELL_PA";
 string GV_EA_BUY_TIME = "MONEYX_EA_BUY_TIME";
 string GV_EA_SELL_TIME = "MONEYX_EA_SELL_TIME";
 
+// SMC Settings Sync Global Variables (EA writes, Indicator reads)
+string GV_SMC_ENABLED = "MONEYX_SMC_ENABLED";
+string GV_SMC_SWING_LENGTH = "MONEYX_SMC_SWING_LENGTH";
+string GV_SMC_INTERNAL_LENGTH = "MONEYX_SMC_INTERNAL_LENGTH";
+string GV_SMC_MAX_OB = "MONEYX_SMC_MAX_OB";
+string GV_SMC_BULL_OB_COLOR = "MONEYX_SMC_BULL_OB_COLOR";
+string GV_SMC_BEAR_OB_COLOR = "MONEYX_SMC_BEAR_OB_COLOR";
+
+// Synced SMC Settings (overwritten from EA if available)
+int SyncedSMCSwingLength = 0;
+int SyncedSMCInternalLength = 0;
+int SyncedSMCMaxOrderBlocks = 0;
+color SyncedSMCBullOBColor = clrDodgerBlue;
+color SyncedSMCBearOBColor = clrCrimson;
+bool SMCSyncedFromEA = false;
+
 //+------------------------------------------------------------------+
 //| Custom indicator initialization function                          |
 //+------------------------------------------------------------------+
@@ -433,6 +449,9 @@ int OnInit()
    ArraySetAsSeries(CDCFastBuffer, true);
    ArraySetAsSeries(CDCSlowBuffer, true);
    ArraySetAsSeries(CDCHistBuffer, true);
+   
+   // *** TRY TO SYNC SMC SETTINGS FROM EA VIA GLOBAL VARIABLES ***
+   SyncSMCSettingsFromEA();
    
    return(INIT_SUCCEEDED);
 }
@@ -967,6 +986,93 @@ bool IsBearishHotdog(int i, const double &open[], const double &high[], const do
 //+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
+//| Sync SMC Settings from EA via Global Variables                     |
+//| If EA is running with SMC strategy, use its settings               |
+//+------------------------------------------------------------------+
+void SyncSMCSettingsFromEA()
+{
+   SMCSyncedFromEA = false;
+   
+   // Check if EA has written SMC_ENABLED = 1.0
+   if(GlobalVariableCheck(GV_SMC_ENABLED))
+   {
+      double smcEnabled = GlobalVariableGet(GV_SMC_ENABLED);
+      if(smcEnabled == 1.0)
+      {
+         // EA is using SMC strategy - sync all settings
+         if(GlobalVariableCheck(GV_SMC_SWING_LENGTH))
+            SyncedSMCSwingLength = (int)GlobalVariableGet(GV_SMC_SWING_LENGTH);
+         else
+            SyncedSMCSwingLength = InpSMCSwingLength;
+         
+         if(GlobalVariableCheck(GV_SMC_INTERNAL_LENGTH))
+            SyncedSMCInternalLength = (int)GlobalVariableGet(GV_SMC_INTERNAL_LENGTH);
+         else
+            SyncedSMCInternalLength = InpSMCInternalLength;
+         
+         if(GlobalVariableCheck(GV_SMC_MAX_OB))
+            SyncedSMCMaxOrderBlocks = (int)GlobalVariableGet(GV_SMC_MAX_OB);
+         else
+            SyncedSMCMaxOrderBlocks = InpSMCMaxOrderBlocks;
+         
+         if(GlobalVariableCheck(GV_SMC_BULL_OB_COLOR))
+            SyncedSMCBullOBColor = (color)GlobalVariableGet(GV_SMC_BULL_OB_COLOR);
+         else
+            SyncedSMCBullOBColor = InpSMCBullOBColor;
+         
+         if(GlobalVariableCheck(GV_SMC_BEAR_OB_COLOR))
+            SyncedSMCBearOBColor = (color)GlobalVariableGet(GV_SMC_BEAR_OB_COLOR);
+         else
+            SyncedSMCBearOBColor = InpSMCBearOBColor;
+         
+         SMCSyncedFromEA = true;
+         Print(">>> SMC Settings SYNCED from EA: SwingLen=", SyncedSMCSwingLength, 
+               " | InternalLen=", SyncedSMCInternalLength, 
+               " | MaxOB=", SyncedSMCMaxOrderBlocks);
+      }
+   }
+   
+   // If not synced, use indicator's own input parameters
+   if(!SMCSyncedFromEA)
+   {
+      SyncedSMCSwingLength = InpSMCSwingLength;
+      SyncedSMCInternalLength = InpSMCInternalLength;
+      SyncedSMCMaxOrderBlocks = InpSMCMaxOrderBlocks;
+      SyncedSMCBullOBColor = InpSMCBullOBColor;
+      SyncedSMCBearOBColor = InpSMCBearOBColor;
+      Print(">>> SMC Settings using Indicator's own inputs (EA not synced)");
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Get SMC Swing Length (synced or local)                             |
+//+------------------------------------------------------------------+
+int GetSMCSwingLength()
+{
+   return SMCSyncedFromEA ? SyncedSMCSwingLength : InpSMCSwingLength;
+}
+
+int GetSMCInternalLength()
+{
+   return SMCSyncedFromEA ? SyncedSMCInternalLength : InpSMCInternalLength;
+}
+
+int GetSMCMaxOrderBlocks()
+{
+   return SMCSyncedFromEA ? SyncedSMCMaxOrderBlocks : InpSMCMaxOrderBlocks;
+}
+
+color GetSMCBullOBColor()
+{
+   return SMCSyncedFromEA ? SyncedSMCBullOBColor : InpSMCBullOBColor;
+}
+
+color GetSMCBearOBColor()
+{
+   return SMCSyncedFromEA ? SyncedSMCBearOBColor : InpSMCBearOBColor;
+}
+
+//+------------------------------------------------------------------+
 //| Calculate SMC Order Blocks                                         |
 //+------------------------------------------------------------------+
 void CalculateSMC(const int rates_total,
@@ -977,8 +1083,11 @@ void CalculateSMC(const int rates_total,
                   const double &low[],
                   const double &close[])
 {
-   int lookback = InpSMCInternalLength;
-   int barsNeeded = InpSMCSwingLength + 20;
+   // Re-sync from EA on each calculation (in case EA settings changed)
+   SyncSMCSettingsFromEA();
+   
+   int lookback = GetSMCInternalLength();
+   int barsNeeded = GetSMCSwingLength() + 20;
    
    if(rates_total < barsNeeded) return;
    
@@ -1048,7 +1157,7 @@ void DetectOrderBlocks(const int rates_total,
                        const double &low[],
                        const double &close[])
 {
-   int lookback = InpSMCInternalLength;
+   int lookback = GetSMCInternalLength();
    int scanLimit = MathMin(50, rates_total - lookback - 1);
    
    for(int i = lookback; i < scanLimit; i++)
@@ -1140,7 +1249,7 @@ void AddBullishOB(double high, double low, datetime time, int barIndex)
    }
    
    // FIFO rotation
-   if(BullishOBCount >= InpSMCMaxOrderBlocks)
+   if(BullishOBCount >= GetSMCMaxOrderBlocks())
    {
       ObjectDelete(0, BullishOBs[0].objName);
       for(int k = 0; k < BullishOBCount - 1; k++)
@@ -1172,7 +1281,7 @@ void AddBearishOB(double high, double low, datetime time, int barIndex)
    }
    
    // FIFO rotation
-   if(BearishOBCount >= InpSMCMaxOrderBlocks)
+   if(BearishOBCount >= GetSMCMaxOrderBlocks())
    {
       ObjectDelete(0, BearishOBs[0].objName);
       for(int k = 0; k < BearishOBCount - 1; k++)
@@ -1217,7 +1326,7 @@ void DrawOrderBlocks()
          ObjectSetInteger(0, objName, OBJPROP_TIME, 1, endTime);
       }
       
-      ObjectSetInteger(0, objName, OBJPROP_COLOR, InpSMCBullOBColor);
+      ObjectSetInteger(0, objName, OBJPROP_COLOR, GetSMCBullOBColor());
       ObjectSetInteger(0, objName, OBJPROP_FILL, true);
       ObjectSetInteger(0, objName, OBJPROP_BACK, true);
       ObjectSetInteger(0, objName, OBJPROP_SELECTABLE, false);
@@ -1242,7 +1351,7 @@ void DrawOrderBlocks()
          ObjectSetInteger(0, objName, OBJPROP_TIME, 1, endTime);
       }
       
-      ObjectSetInteger(0, objName, OBJPROP_COLOR, InpSMCBearOBColor);
+      ObjectSetInteger(0, objName, OBJPROP_COLOR, GetSMCBearOBColor());
       ObjectSetInteger(0, objName, OBJPROP_FILL, true);
       ObjectSetInteger(0, objName, OBJPROP_BACK, true);
       ObjectSetInteger(0, objName, OBJPROP_SELECTABLE, false);
