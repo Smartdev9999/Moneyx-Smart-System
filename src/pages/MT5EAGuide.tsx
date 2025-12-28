@@ -615,11 +615,10 @@ int OnInit()
    CreateDashboard();
    g_peakBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-   // Enable Chart Events for button clicks (required for Visual Backtest mode)
-   ChartSetInteger(0, CHART_EVENT_OBJECT_CREATE, true);
-   ChartSetInteger(0, CHART_EVENT_OBJECT_DELETE, true);
-   ChartSetInteger(0, CHART_EVENT_MOUSE_MOVE, true);
-   ChartRedraw(0);
+    // Enable Chart Events for button clicks (required for Visual Backtest mode)
+    ChartSetInteger(0, CHART_EVENT_OBJECT_CLICK, true);
+    ChartSetInteger(0, CHART_EVENT_MOUSE_MOVE, true);
+    ChartRedraw(0);
    
    Print("EA Started Successfully!");
    Print("Dashboard and buttons are ready (Visual Backtest supported)");
@@ -689,19 +688,20 @@ void CreateDashboard()
    int valueW = 140;
    
    // ========== LOGO ==========
-   // ใช้ resource ที่ประกาศไว้ด้านบน
+   // ใช้ไฟล์โลโก้ในโฟลเดอร์: MQL5\\Images\\mpmLogo_500.bmp
+   // (วิธีนี้เสถียรสุดทั้ง Live และ Strategy Tester)
    string logoName = DashPrefix + "Logo";
    ObjectCreate(0, logoName, OBJ_BITMAP_LABEL, 0, 0, 0);
    ObjectSetInteger(0, logoName, OBJPROP_XDISTANCE, x + (w - InpLogoWidth) / 2);
    ObjectSetInteger(0, logoName, OBJPROP_YDISTANCE, y);
    ObjectSetInteger(0, logoName, OBJPROP_XSIZE, InpLogoWidth);
    ObjectSetInteger(0, logoName, OBJPROP_YSIZE, InpLogoHeight);
-   // ใช้ resource path ที่ถูกต้อง (:: นำหน้า resource name)
-   ObjectSetString(0, logoName, OBJPROP_BMPFILE, "::Images\\\\mpmLogo_500.bmp");
+   ObjectSetString(0, logoName, OBJPROP_BMPFILE, "mpmLogo_500.bmp");
    ObjectSetInteger(0, logoName, OBJPROP_CORNER, CORNER_LEFT_UPPER);
    ObjectSetInteger(0, logoName, OBJPROP_SELECTABLE, false);
-   ObjectSetInteger(0, logoName, OBJPROP_BACK, false);
+   ObjectSetInteger(0, logoName, OBJPROP_BACK, true);
    ObjectSetInteger(0, logoName, OBJPROP_HIDDEN, false);
+   ObjectSetInteger(0, logoName, OBJPROP_ZORDER, 0);
    
    y += InpLogoHeight + 5;
    
@@ -811,7 +811,9 @@ void CreateDashLabel(string name, int x, int y, int width, int height, color bgC
    ObjectSetInteger(0, name, OBJPROP_BORDER_TYPE, BORDER_FLAT);
    ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
    ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
-   ObjectSetInteger(0, name, OBJPROP_BACK, false);
+   // ทำให้เป็น background เสมอ เพื่อไม่บังปุ่มใน Strategy Tester
+   ObjectSetInteger(0, name, OBJPROP_BACK, true);
+   ObjectSetInteger(0, name, OBJPROP_ZORDER, 0);
 }
 
 //+------------------------------------------------------------------+
