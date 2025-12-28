@@ -1000,8 +1000,28 @@ void UpdateDashboard()
    // Accumulate Close: ใช้ Locked Target ถ้ามี order ค้าง, ไม่งั้นแสดง Current Scaled
    double displayAccumulateTarget = (g_lockedAccumulateTarget > 0) ? g_lockedAccumulateTarget : ApplyScaleDollar(InpAccumulateTarget);
    detailValues[11] = (totalPLForAccumulate >= 0 ? "+" : "") + DoubleToString(totalPLForAccumulate, 0) + "$ (Tg: " + DoubleToString(displayAccumulateTarget, 0) + "$)";
-   // News Filter Status
-   detailValues[12] = InpEnableNewsFilter ? g_newsStatus : "OFF";
+   // News Filter Status: 3 states
+   // 1. "Disable" - when feature is off
+   // 2. "No important news" - when enabled and no news affecting
+   // 3. News title (from ForexFactory) - when paused due to news
+   string newsDisplayStatus;
+   if(!InpEnableNewsFilter)
+   {
+      newsDisplayStatus = "Disable";
+   }
+   else if(g_isNewsPaused && StringLen(g_nextNewsTitle) > 0)
+   {
+      // Show the news title causing the pause (truncate if too long)
+      string truncatedTitle = g_nextNewsTitle;
+      if(StringLen(truncatedTitle) > 25)
+         truncatedTitle = StringSubstr(truncatedTitle, 0, 22) + "...";
+      newsDisplayStatus = truncatedTitle;
+   }
+   else
+   {
+      newsDisplayStatus = "No important news";
+   }
+   detailValues[12] = newsDisplayStatus;
    
    color valueColors[13];
    valueColors[0] = clrWhite;
@@ -1016,10 +1036,8 @@ void UpdateDashboard()
    valueColors[9] = (currentDD <= 10) ? clrLime : (currentDD <= 20) ? clrYellow : clrOrangeRed;
    valueColors[10] = (g_maxDrawdownPercent <= 15) ? clrLime : (g_maxDrawdownPercent <= 30) ? clrYellow : clrOrangeRed;
    valueColors[11] = (totalPLForAccumulate >= displayAccumulateTarget * 0.8) ? clrLime : (totalPLForAccumulate >= 0) ? clrYellow : clrOrangeRed;
-   // News Filter: Red if paused, Yellow if upcoming, Green if OK, Gray if OFF
-   valueColors[12] = (!InpEnableNewsFilter) ? clrGray : 
-                     (g_isNewsPaused) ? clrOrangeRed : 
-                     (StringFind(g_newsStatus, "Next:") >= 0) ? clrYellow : clrLime;
+   // News Filter: Gray=Disable, Red=Paused with news title, Green=No important news
+   valueColors[12] = (!InpEnableNewsFilter) ? clrGray : (g_isNewsPaused) ? clrOrangeRed : clrLime;
    
    for(int i = 0; i < 13; i++)
    {
