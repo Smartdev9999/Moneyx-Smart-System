@@ -5,14 +5,19 @@ import StepCard from '@/components/StepCard';
 
 const MT5EAGuide = () => {
   const fullEACode = `//+------------------------------------------------------------------+
-//|                   ZigZag++ CDC Structure EA v5.0                   |
+//|                   ZigZag++ CDC Structure EA v5.1                   |
 //|           Based on DevLucem ZigZag++ with CDC Action Zone          |
-//|           + Grid Trading System + Auto Balance Scaling             |
+//|           + Grid Trading + Auto Scaling + Dashboard Panel          |
 //+------------------------------------------------------------------+
-#property copyright "Trading Education"
+#property copyright "MoneyX Trading"
 #property link      ""
-#property version   "5.00"
+#property version   "5.10"
 #property strict
+
+// *** Logo Resource ***
+// ใส่ไฟล์โลโก้ไว้ใน MQL5\\Images\\mpmLogo_500.bmp
+// ขนาดแนะนำ: 150x60 pixels (หรือปรับตามต้องการ)
+#resource "\\\\Images\\\\mpmLogo_500.bmp"
 
 // *** Include CTrade ***
 #include <Trade/Trade.mqh>
@@ -311,9 +316,38 @@ input bool     InpTradeFriday = true;         // Friday
 input bool     InpTradeSaturday = false;      // Saturday
 input bool     InpTradeSunday = false;        // Sunday
 
+//--- [ DASHBOARD SETTINGS ] ----------------------------------------
+input string   InpDashboardHeader = "=== DASHBOARD SETTINGS ===";  // ___
+input bool     InpShowDashboard = true;        // Show Dashboard Panel
+input int      InpDashboardX = 10;             // Dashboard X Position (pixels from left)
+input int      InpDashboardY = 30;             // Dashboard Y Position (pixels from top)
+input int      InpDashboardWidth = 280;        // Dashboard Width (pixels)
+input color    InpDashHeaderColor = clrForestGreen;  // Header Background Color
+input color    InpDashDetailColor = clrDarkSlateGray; // Detail Section Color
+input color    InpDashHistoryColor = clrDarkGreen;   // History Section Color
+input int      InpLogoWidth = 150;             // Logo Width (pixels)
+input int      InpLogoHeight = 60;             // Logo Height (pixels)
+
 //+------------------------------------------------------------------+
 //| ===================== GLOBAL VARIABLES ========================= |
 //+------------------------------------------------------------------+
+
+// Dashboard Control Variables
+bool g_eaIsPaused = false;           // EA Pause State (true = paused, false = running)
+bool g_showConfirmDialog = false;    // Confirmation dialog visible
+string g_confirmAction = "";         // Pending action: "CLOSE_BUY", "CLOSE_SELL", "CLOSE_ALL"
+string DashPrefix = "DASH_";         // Dashboard object prefix
+
+// Dashboard History Variables
+double g_profitDaily = 0.0;
+double g_profitWeekly = 0.0;
+double g_profitMonthly = 0.0;
+double g_profitAllTime = 0.0;
+double g_maxDrawdownPercent = 0.0;
+double g_peakBalance = 0.0;
+datetime g_lastDayCheck = 0;
+datetime g_lastWeekCheck = 0;
+datetime g_lastMonthCheck = 0;
 
 // ZigZag++ Structure (based on DevLucem ZigZag++)
 struct ZigZagPoint
@@ -576,6 +610,10 @@ int OnInit()
       Print("Auto Balance Scaling: DISABLED (using fixed values)");
    }
    
+   // Create Dashboard Panel
+   CreateDashboard();
+   g_peakBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+   
    Print("EA Started Successfully!");
    return(INIT_SUCCEEDED);
 }
@@ -585,6 +623,9 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
+   // Remove Dashboard objects
+   ObjectsDeleteAll(0, DashPrefix);
+   
    // Remove all chart objects (current chart)
    ObjectsDeleteAll(0, ZZPrefix);
    ObjectsDeleteAll(0, CDCPrefix);
@@ -619,6 +660,475 @@ void OnDeinit(const int reason)
    
    Comment("");
    Print("EA Stopped - Reason: ", reason);
+}
+
+//+------------------------------------------------------------------+
+//| ==================== DASHBOARD FUNCTIONS ======================== |
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//| Create Dashboard Panel on Chart                                    |
+//+------------------------------------------------------------------+
+void CreateDashboard()
+{
+   if(!InpShowDashboard) return;
+   
+   int x = InpDashboardX;
+   int y = InpDashboardY;
+   int w = InpDashboardWidth;
+   int rowH = 22;
+   int labelW = 130;
+   int valueW = 140;
+   
+   // ========== LOGO ==========
+   string logoName = DashPrefix + "Logo";
+   ObjectCreate(0, logoName, OBJ_BITMAP_LABEL, 0, 0, 0);
+   ObjectSetInteger(0, logoName, OBJPROP_XDISTANCE, x + (w - InpLogoWidth) / 2);
+   ObjectSetInteger(0, logoName, OBJPROP_YDISTANCE, y);
+   ObjectSetInteger(0, logoName, OBJPROP_XSIZE, InpLogoWidth);
+   ObjectSetInteger(0, logoName, OBJPROP_YSIZE, InpLogoHeight);
+   ObjectSetString(0, logoName, OBJPROP_BMPFILE, "::Images\\\\mpmLogo_500.bmp");
+   ObjectSetInteger(0, logoName, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+   ObjectSetInteger(0, logoName, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, logoName, OBJPROP_BACK, false);
+   
+   y += InpLogoHeight + 5;
+   
+   // ========== DETAIL SECTION ==========
+   // Header Row: System Status with Pause Button
+   CreateDashLabel(DashPrefix + "HeaderBg", x, y, w, rowH + 2, InpDashHeaderColor);
+   CreateDashText(DashPrefix + "HeaderLabel", x + 35, y + 3, "System Status", clrWhite, 10, true);
+   
+   // Status Text (Working/Paused)
+   CreateDashText(DashPrefix + "StatusText", x + 150, y + 3, "Working", clrLime, 10, true);
+   
+   // Pause/Start Button
+   CreateDashButton(DashPrefix + "BtnPause", x + w - 55, y + 2, 50, rowH - 2, "Pause", clrOrangeRed);
+   
+   y += rowH + 2;
+   
+   // Detail Section Sidebar Label
+   CreateDashLabel(DashPrefix + "DetailSide", x, y, 25, rowH * 12, InpDashHeaderColor);
+   CreateDashText(DashPrefix + "DetailD", x + 7, y + 10, "D", clrWhite, 9, true);
+   CreateDashText(DashPrefix + "DetailE", x + 7, y + 30, "E", clrWhite, 9, true);
+   CreateDashText(DashPrefix + "DetailT", x + 7, y + 50, "T", clrWhite, 9, true);
+   CreateDashText(DashPrefix + "DetailA", x + 7, y + 70, "A", clrWhite, 9, true);
+   CreateDashText(DashPrefix + "DetailI", x + 7, y + 90, "I", clrWhite, 9, true);
+   CreateDashText(DashPrefix + "DetailL", x + 7, y + 110, "L", clrWhite, 9, true);
+   
+   // Detail Rows
+   int detailX = x + 25;
+   int detailW = w - 25;
+   string detailLabels[] = {"Balance", "Equity", "Margin", "Margin Level", "Floating P/L", 
+                            "Current Trend", "Fix Scaling", "Position Buy P/L", "Position Sell P/L", 
+                            "Current DD%", "Max DD%"};
+   
+   for(int i = 0; i < ArraySize(detailLabels); i++)
+   {
+      color bgCol = (i % 2 == 0) ? InpDashDetailColor : C'50,60,70';
+      CreateDashLabel(DashPrefix + "DetailRow" + IntegerToString(i), detailX, y, detailW, rowH, bgCol);
+      CreateDashText(DashPrefix + "DetailLbl" + IntegerToString(i), detailX + 5, y + 3, detailLabels[i], clrWhite, 9, false);
+      CreateDashText(DashPrefix + "DetailVal" + IntegerToString(i), detailX + labelW, y + 3, "-", clrLime, 9, false);
+      y += rowH;
+   }
+   
+   y += 5;
+   
+   // ========== HISTORY SECTION ==========
+   CreateDashLabel(DashPrefix + "HistorySide", x, y, 25, rowH * 4, InpDashHistoryColor);
+   CreateDashText(DashPrefix + "HistH", x + 7, y + 5, "H", clrWhite, 9, true);
+   CreateDashText(DashPrefix + "HistI", x + 7, y + 20, "I", clrWhite, 9, true);
+   CreateDashText(DashPrefix + "HistS", x + 7, y + 35, "S", clrWhite, 9, true);
+   CreateDashText(DashPrefix + "HistT", x + 7, y + 50, "T", clrWhite, 9, true);
+   CreateDashText(DashPrefix + "HistO", x + 7, y + 65, "O", clrWhite, 9, true);
+   CreateDashText(DashPrefix + "HistR", x + 7, y + 80, "R", clrWhite, 9, true);
+   CreateDashText(DashPrefix + "HistY", x + 7, y + 95, "Y", clrWhite, 9, true);
+   
+   int histX = x + 25;
+   int histW = w - 25;
+   string histLabels[] = {"Profit Daily", "Profit Weekly", "Profit Monthly", "All Time Profit"};
+   
+   for(int i = 0; i < ArraySize(histLabels); i++)
+   {
+      color bgCol = (i % 2 == 0) ? InpDashHistoryColor : C'30,90,50';
+      CreateDashLabel(DashPrefix + "HistRow" + IntegerToString(i), histX, y, histW, rowH, bgCol);
+      CreateDashText(DashPrefix + "HistLbl" + IntegerToString(i), histX + 5, y + 3, histLabels[i], clrWhite, 9, false);
+      CreateDashText(DashPrefix + "HistVal" + IntegerToString(i), histX + labelW, y + 3, "0$", clrLime, 9, true);
+      y += rowH;
+   }
+   
+   y += 10;
+   
+   // ========== CONTROL BUTTONS ==========
+   int btnW = (w - 10) / 2;
+   int btnH = 30;
+   
+   // Close Buy / Close Sell
+   CreateDashButton(DashPrefix + "BtnCloseBuy", x, y, btnW, btnH, "Close Buy", clrForestGreen);
+   CreateDashButton(DashPrefix + "BtnCloseSell", x + btnW + 10, y, btnW, btnH, "Close Sell", clrOrangeRed);
+   
+   y += btnH + 5;
+   
+   // Close All
+   CreateDashButton(DashPrefix + "BtnCloseAll", x, y, w, btnH, "Close All", clrDodgerBlue);
+   
+   // ========== CONFIRMATION DIALOG (Hidden by default) ==========
+   int dialogY = InpDashboardY + InpLogoHeight + 100;
+   CreateDashLabel(DashPrefix + "ConfirmBg", x + 20, dialogY, w - 40, 80, clrDarkSlateGray);
+   CreateDashText(DashPrefix + "ConfirmText", x + 30, dialogY + 10, "Confirm Action?", clrWhite, 10, true);
+   CreateDashButton(DashPrefix + "BtnConfirmYes", x + 30, dialogY + 40, 80, 30, "YES", clrGreen);
+   CreateDashButton(DashPrefix + "BtnConfirmNo", x + 130, dialogY + 40, 80, 30, "NO", clrRed);
+   
+   // Hide confirmation dialog initially
+   HideConfirmDialog();
+   
+   ChartRedraw();
+   Print("Dashboard created successfully");
+}
+
+//+------------------------------------------------------------------+
+//| Create Dashboard Label/Rectangle                                   |
+//+------------------------------------------------------------------+
+void CreateDashLabel(string name, int x, int y, int width, int height, color bgColor)
+{
+   ObjectCreate(0, name, OBJ_RECTANGLE_LABEL, 0, 0, 0);
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
+   ObjectSetInteger(0, name, OBJPROP_XSIZE, width);
+   ObjectSetInteger(0, name, OBJPROP_YSIZE, height);
+   ObjectSetInteger(0, name, OBJPROP_BGCOLOR, bgColor);
+   ObjectSetInteger(0, name, OBJPROP_BORDER_TYPE, BORDER_FLAT);
+   ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, name, OBJPROP_BACK, false);
+}
+
+//+------------------------------------------------------------------+
+//| Create Dashboard Text Label                                        |
+//+------------------------------------------------------------------+
+void CreateDashText(string name, int x, int y, string text, color textColor, int fontSize, bool bold)
+{
+   ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
+   ObjectSetString(0, name, OBJPROP_TEXT, text);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, textColor);
+   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, fontSize);
+   ObjectSetString(0, name, OBJPROP_FONT, bold ? "Arial Bold" : "Arial");
+   ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+}
+
+//+------------------------------------------------------------------+
+//| Create Dashboard Button                                            |
+//+------------------------------------------------------------------+
+void CreateDashButton(string name, int x, int y, int width, int height, string text, color bgColor)
+{
+   ObjectCreate(0, name, OBJ_BUTTON, 0, 0, 0);
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
+   ObjectSetInteger(0, name, OBJPROP_XSIZE, width);
+   ObjectSetInteger(0, name, OBJPROP_YSIZE, height);
+   ObjectSetString(0, name, OBJPROP_TEXT, text);
+   ObjectSetInteger(0, name, OBJPROP_BGCOLOR, bgColor);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, clrWhite);
+   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, 10);
+   ObjectSetString(0, name, OBJPROP_FONT, "Arial Bold");
+   ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, name, OBJPROP_STATE, false);
+}
+
+//+------------------------------------------------------------------+
+//| Update Dashboard Values                                            |
+//+------------------------------------------------------------------+
+void UpdateDashboard()
+{
+   if(!InpShowDashboard) return;
+   
+   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+   double margin = AccountInfoDouble(ACCOUNT_MARGIN);
+   double marginLevel = (margin > 0) ? (equity / margin * 100.0) : 0;
+   double floatingPL = AccountInfoDouble(ACCOUNT_PROFIT);
+   
+   // Calculate Position P/L
+   double buyPL = 0, sellPL = 0;
+   double buyLots = 0, sellLots = 0;
+   int buyCount = 0, sellCount = 0;
+   
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(PositionSelectByTicket(ticket))
+      {
+         if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+         if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
+         
+         double posProfit = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+         double posLots = PositionGetDouble(POSITION_VOLUME);
+         
+         if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
+         {
+            buyPL += posProfit;
+            buyLots += posLots;
+            buyCount++;
+         }
+         else
+         {
+            sellPL += posProfit;
+            sellLots += posLots;
+            sellCount++;
+         }
+      }
+   }
+   
+   // Calculate Drawdown
+   if(equity > g_peakBalance) g_peakBalance = equity;
+   double currentDD = (g_peakBalance > 0) ? ((g_peakBalance - equity) / g_peakBalance * 100.0) : 0;
+   if(currentDD > g_maxDrawdownPercent) g_maxDrawdownPercent = currentDD;
+   
+   // Update History Profits
+   UpdateProfitHistory();
+   
+   // Scale Factor for display
+   double scaleFactor = GetScaleFactor();
+   string scaleDisplay = InpUseAutoScale ? 
+      (InpUseFixedScale ? DoubleToString(InpFixedScaleAccount, 0) + "$" : "Auto " + DoubleToString(scaleFactor, 2) + "x") 
+      : "OFF";
+   
+   // Get Current Trend from CDC
+   string trendDisplay = CDCTrend + " (" + EnumToString(InpCDCTimeframe) + ")";
+   
+   // Update Status
+   ObjectSetString(0, DashPrefix + "StatusText", OBJPROP_TEXT, g_eaIsPaused ? "PAUSED" : "Working");
+   ObjectSetInteger(0, DashPrefix + "StatusText", OBJPROP_COLOR, g_eaIsPaused ? clrOrangeRed : clrLime);
+   ObjectSetString(0, DashPrefix + "BtnPause", OBJPROP_TEXT, g_eaIsPaused ? "Start" : "Pause");
+   ObjectSetInteger(0, DashPrefix + "BtnPause", OBJPROP_BGCOLOR, g_eaIsPaused ? clrGreen : clrOrangeRed);
+   
+   // Update Detail Values
+   string detailValues[11];
+   detailValues[0] = DoubleToString(balance, 2) + "$";
+   detailValues[1] = DoubleToString(equity, 2) + "$";
+   detailValues[2] = DoubleToString(margin, 2) + "$";
+   detailValues[3] = DoubleToString(marginLevel, 0) + "%";
+   detailValues[4] = (floatingPL >= 0 ? "+" : "") + DoubleToString(floatingPL, 2) + "$";
+   detailValues[5] = trendDisplay;
+   detailValues[6] = scaleDisplay;
+   detailValues[7] = (buyPL >= 0 ? "+" : "") + DoubleToString(buyPL, 2) + "$ (" + DoubleToString(buyLots, 2) + "L," + IntegerToString(buyCount) + "ord)";
+   detailValues[8] = (sellPL >= 0 ? "+" : "") + DoubleToString(sellPL, 2) + "$ (" + DoubleToString(sellLots, 2) + "L," + IntegerToString(sellCount) + "ord)";
+   detailValues[9] = (floatingPL >= 0 ? "+" : "-") + DoubleToString(MathAbs(currentDD), 1) + "%";
+   detailValues[10] = DoubleToString(g_maxDrawdownPercent, 1) + "%";
+   
+   color valueColors[11];
+   valueColors[0] = clrWhite;
+   valueColors[1] = clrWhite;
+   valueColors[2] = clrWhite;
+   valueColors[3] = clrWhite;
+   valueColors[4] = (floatingPL >= 0) ? clrLime : clrOrangeRed;
+   valueColors[5] = (CDCTrend == "BULLISH") ? clrLime : (CDCTrend == "BEARISH") ? clrOrangeRed : clrYellow;
+   valueColors[6] = InpUseAutoScale ? clrAqua : clrGray;
+   valueColors[7] = (buyPL >= 0) ? clrLime : clrOrangeRed;
+   valueColors[8] = (sellPL >= 0) ? clrLime : clrOrangeRed;
+   valueColors[9] = (currentDD <= 10) ? clrLime : (currentDD <= 20) ? clrYellow : clrOrangeRed;
+   valueColors[10] = (g_maxDrawdownPercent <= 15) ? clrLime : (g_maxDrawdownPercent <= 30) ? clrYellow : clrOrangeRed;
+   
+   for(int i = 0; i < 11; i++)
+   {
+      ObjectSetString(0, DashPrefix + "DetailVal" + IntegerToString(i), OBJPROP_TEXT, detailValues[i]);
+      ObjectSetInteger(0, DashPrefix + "DetailVal" + IntegerToString(i), OBJPROP_COLOR, valueColors[i]);
+   }
+   
+   // Update History Values
+   string histValues[4];
+   histValues[0] = (g_profitDaily >= 0 ? "+" : "") + DoubleToString(g_profitDaily, 2) + "$";
+   histValues[1] = (g_profitWeekly >= 0 ? "+" : "") + DoubleToString(g_profitWeekly, 2) + "$";
+   histValues[2] = (g_profitMonthly >= 0 ? "+" : "") + DoubleToString(g_profitMonthly, 2) + "$";
+   histValues[3] = (g_profitAllTime >= 0 ? "+" : "") + DoubleToString(g_profitAllTime, 2) + "$";
+   
+   color histColors[4];
+   histColors[0] = (g_profitDaily >= 0) ? clrLime : clrOrangeRed;
+   histColors[1] = (g_profitWeekly >= 0) ? clrLime : clrOrangeRed;
+   histColors[2] = (g_profitMonthly >= 0) ? clrLime : clrOrangeRed;
+   histColors[3] = (g_profitAllTime >= 0) ? clrLime : clrOrangeRed;
+   
+   for(int i = 0; i < 4; i++)
+   {
+      ObjectSetString(0, DashPrefix + "HistVal" + IntegerToString(i), OBJPROP_TEXT, histValues[i]);
+      ObjectSetInteger(0, DashPrefix + "HistVal" + IntegerToString(i), OBJPROP_COLOR, histColors[i]);
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Update Profit History from Account History                         |
+//+------------------------------------------------------------------+
+void UpdateProfitHistory()
+{
+   datetime now = TimeCurrent();
+   MqlDateTime dt;
+   TimeToStruct(now, dt);
+   
+   // Calculate start times
+   datetime todayStart = now - (dt.hour * 3600 + dt.min * 60 + dt.sec);
+   datetime weekStart = todayStart - (dt.day_of_week * 86400);
+   datetime monthStart = StringToTime(IntegerToString(dt.year) + "." + IntegerToString(dt.mon) + ".01");
+   
+   g_profitDaily = 0;
+   g_profitWeekly = 0;
+   g_profitMonthly = 0;
+   g_profitAllTime = 0;
+   
+   // Select history for calculation
+   if(!HistorySelect(0, now)) return;
+   
+   int totalDeals = HistoryDealsTotal();
+   for(int i = 0; i < totalDeals; i++)
+   {
+      ulong dealTicket = HistoryDealGetTicket(i);
+      if(dealTicket == 0) continue;
+      
+      // Only count our EA's deals
+      if(HistoryDealGetInteger(dealTicket, DEAL_MAGIC) != InpMagicNumber) continue;
+      if(HistoryDealGetString(dealTicket, DEAL_SYMBOL) != _Symbol) continue;
+      
+      // Only count profit-related entries (not deposits/withdrawals)
+      ENUM_DEAL_ENTRY entry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
+      if(entry != DEAL_ENTRY_OUT && entry != DEAL_ENTRY_INOUT) continue;
+      
+      double profit = HistoryDealGetDouble(dealTicket, DEAL_PROFIT) + 
+                      HistoryDealGetDouble(dealTicket, DEAL_SWAP) + 
+                      HistoryDealGetDouble(dealTicket, DEAL_COMMISSION);
+      datetime dealTime = (datetime)HistoryDealGetInteger(dealTicket, DEAL_TIME);
+      
+      g_profitAllTime += profit;
+      
+      if(dealTime >= monthStart) g_profitMonthly += profit;
+      if(dealTime >= weekStart) g_profitWeekly += profit;
+      if(dealTime >= todayStart) g_profitDaily += profit;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Show Confirmation Dialog                                           |
+//+------------------------------------------------------------------+
+void ShowConfirmDialog(string action, string message)
+{
+   g_showConfirmDialog = true;
+   g_confirmAction = action;
+   
+   ObjectSetString(0, DashPrefix + "ConfirmText", OBJPROP_TEXT, message);
+   
+   ObjectSetInteger(0, DashPrefix + "ConfirmBg", OBJPROP_TIMEFRAMES, OBJ_ALL_PERIODS);
+   ObjectSetInteger(0, DashPrefix + "ConfirmText", OBJPROP_TIMEFRAMES, OBJ_ALL_PERIODS);
+   ObjectSetInteger(0, DashPrefix + "BtnConfirmYes", OBJPROP_TIMEFRAMES, OBJ_ALL_PERIODS);
+   ObjectSetInteger(0, DashPrefix + "BtnConfirmNo", OBJPROP_TIMEFRAMES, OBJ_ALL_PERIODS);
+   
+   ChartRedraw();
+}
+
+//+------------------------------------------------------------------+
+//| Hide Confirmation Dialog                                           |
+//+------------------------------------------------------------------+
+void HideConfirmDialog()
+{
+   g_showConfirmDialog = false;
+   g_confirmAction = "";
+   
+   ObjectSetInteger(0, DashPrefix + "ConfirmBg", OBJPROP_TIMEFRAMES, OBJ_NO_PERIODS);
+   ObjectSetInteger(0, DashPrefix + "ConfirmText", OBJPROP_TIMEFRAMES, OBJ_NO_PERIODS);
+   ObjectSetInteger(0, DashPrefix + "BtnConfirmYes", OBJPROP_TIMEFRAMES, OBJ_NO_PERIODS);
+   ObjectSetInteger(0, DashPrefix + "BtnConfirmNo", OBJPROP_TIMEFRAMES, OBJ_NO_PERIODS);
+   
+   // Reset button states
+   ObjectSetInteger(0, DashPrefix + "BtnConfirmYes", OBJPROP_STATE, false);
+   ObjectSetInteger(0, DashPrefix + "BtnConfirmNo", OBJPROP_STATE, false);
+   
+   ChartRedraw();
+}
+
+//+------------------------------------------------------------------+
+//| Execute Confirmed Action                                           |
+//+------------------------------------------------------------------+
+void ExecuteConfirmedAction()
+{
+   if(g_confirmAction == "CLOSE_BUY")
+   {
+      CloseAllPositions(POSITION_TYPE_BUY);
+      Print("All BUY positions closed by user request");
+   }
+   else if(g_confirmAction == "CLOSE_SELL")
+   {
+      CloseAllPositions(POSITION_TYPE_SELL);
+      Print("All SELL positions closed by user request");
+   }
+   else if(g_confirmAction == "CLOSE_ALL")
+   {
+      CloseAllPositions(POSITION_TYPE_BUY);
+      CloseAllPositions(POSITION_TYPE_SELL);
+      Print("All positions closed by user request");
+   }
+   
+   HideConfirmDialog();
+}
+
+//+------------------------------------------------------------------+
+//| Close All Positions of Specified Type                              |
+//+------------------------------------------------------------------+
+void CloseAllPositions(ENUM_POSITION_TYPE posType)
+{
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(PositionSelectByTicket(ticket))
+      {
+         if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+         if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
+         if(PositionGetInteger(POSITION_TYPE) != posType) continue;
+         
+         trade.PositionClose(ticket);
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Handle Chart Events (Button Clicks)                                |
+//+------------------------------------------------------------------+
+void OnChartEvent(const int id, const long &lparam, const double &dparam, const string &sparam)
+{
+   if(id == CHARTEVENT_OBJECT_CLICK)
+   {
+      // Handle Dashboard Button Clicks
+      if(sparam == DashPrefix + "BtnPause")
+      {
+         g_eaIsPaused = !g_eaIsPaused;
+         ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
+         Print("EA ", g_eaIsPaused ? "PAUSED" : "RESUMED", " by user");
+         UpdateDashboard();
+      }
+      else if(sparam == DashPrefix + "BtnCloseBuy")
+      {
+         ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
+         ShowConfirmDialog("CLOSE_BUY", "Close all BUY orders?");
+      }
+      else if(sparam == DashPrefix + "BtnCloseSell")
+      {
+         ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
+         ShowConfirmDialog("CLOSE_SELL", "Close all SELL orders?");
+      }
+      else if(sparam == DashPrefix + "BtnCloseAll")
+      {
+         ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
+         ShowConfirmDialog("CLOSE_ALL", "Close ALL orders?");
+      }
+      else if(sparam == DashPrefix + "BtnConfirmYes")
+      {
+         ExecuteConfirmedAction();
+      }
+      else if(sparam == DashPrefix + "BtnConfirmNo")
+      {
+         HideConfirmDialog();
+      }
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -3408,10 +3918,22 @@ void CheckGridProfitSide()
 //+------------------------------------------------------------------+
 void OnTick()
 {
-   // Check TP/SL conditions first (every tick) - this still runs even in hedge lock
+   // Update Dashboard every tick
+   UpdateDashboard();
+   
+   // Check TP/SL conditions first (every tick) - this still runs even when paused
    CheckTPSLConditions();
    
    // Draw TP/SL lines (every tick for real-time update)
+   DrawTPSLLines();
+   
+   // *** EA PAUSE CHECK ***
+   // If paused, only TP/SL/Hedge continues to work, no new orders
+   if(g_eaIsPaused)
+   {
+      UpdateChartComment("PAUSED", "EA Paused - No new orders");
+      return;
+   }
    DrawTPSLLines();
    
    // *** HEDGE LOCK CHECK ***
@@ -5889,7 +6411,7 @@ void UpdateChartComment(string signal, string reason = "")
       {/* Full Code */}
       <section className="container py-8">
         <div className="max-w-5xl mx-auto">
-          <h2 className="text-2xl font-bold text-foreground mb-6 text-center">โค้ด EA ฉบับเต็ม (v4.0 + Grid Trading)</h2>
+          <h2 className="text-2xl font-bold text-foreground mb-6 text-center">โค้ด EA ฉบับเต็ม (v5.1 + Dashboard Panel)</h2>
           <CodeBlock
             code={fullEACode}
             language="MQL5"
