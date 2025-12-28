@@ -477,6 +477,7 @@ datetime LastGridSellTime = 0;
 double g_accumulateClosedProfit = 0.0;    // กำไรสะสมจาก order ที่ปิดไปแล้ว
 int g_lastKnownPositionCount = 0;          // จำนวน position ล่าสุดเพื่อ detect การปิด
 double g_lastKnownFloatingPL = 0.0;        // Floating P/L ล่าสุด
+double g_lockedAccumulateTarget = 0.0;     // Locked Scaled Target (ล็อคไว้ตอนเริ่มมี order)
 
 // Price Action Confirmation Tracking
 string g_pendingSignal = "NONE";       // "BUY", "SELL", or "NONE"
@@ -946,9 +947,9 @@ void UpdateDashboard()
    detailValues[8] = (sellPL >= 0 ? "+" : "") + DoubleToString(sellPL, 2) + "$ (" + DoubleToString(sellLots, 2) + "L," + IntegerToString(sellCount) + "ord)";
    detailValues[9] = (floatingPL >= 0 ? "+" : "-") + DoubleToString(MathAbs(currentDD), 1) + "%";
    detailValues[10] = DoubleToString(g_maxDrawdownPercent, 1) + "%";
-   // Accumulate Close: แสดงกำไรสะสมปัจจุบันและ Scaled Target
-   double scaledAccumulateTarget = ApplyScaleDollar(InpAccumulateTarget);
-   detailValues[11] = (totalPLForAccumulate >= 0 ? "+" : "") + DoubleToString(totalPLForAccumulate, 0) + "$ (Tg: " + DoubleToString(scaledAccumulateTarget, 0) + "$)";
+   // Accumulate Close: ใช้ Locked Target ถ้ามี order ค้าง, ไม่งั้นแสดง Current Scaled
+   double displayAccumulateTarget = (g_lockedAccumulateTarget > 0) ? g_lockedAccumulateTarget : ApplyScaleDollar(InpAccumulateTarget);
+   detailValues[11] = (totalPLForAccumulate >= 0 ? "+" : "") + DoubleToString(totalPLForAccumulate, 0) + "$ (Tg: " + DoubleToString(displayAccumulateTarget, 0) + "$)";
    
    color valueColors[12];
    valueColors[0] = clrWhite;
@@ -962,7 +963,7 @@ void UpdateDashboard()
    valueColors[8] = (sellPL >= 0) ? clrLime : clrOrangeRed;
    valueColors[9] = (currentDD <= 10) ? clrLime : (currentDD <= 20) ? clrYellow : clrOrangeRed;
    valueColors[10] = (g_maxDrawdownPercent <= 15) ? clrLime : (g_maxDrawdownPercent <= 30) ? clrYellow : clrOrangeRed;
-   valueColors[11] = (totalPLForAccumulate >= scaledAccumulateTarget * 0.8) ? clrLime : (totalPLForAccumulate >= 0) ? clrYellow : clrOrangeRed;
+   valueColors[11] = (totalPLForAccumulate >= displayAccumulateTarget * 0.8) ? clrLime : (totalPLForAccumulate >= 0) ? clrYellow : clrOrangeRed;
    
    for(int i = 0; i < 12; i++)
    {
@@ -1152,7 +1153,7 @@ void TrackAccumulateProfit()
       }
    }
    
-   // ถ้าไม่มี position แล้ว → Reset Accumulate
+   // ถ้าไม่มี position แล้ว → Reset Accumulate และ Recalculate Target
    if(currentPosCount == 0)
    {
       if(g_accumulateClosedProfit != 0.0)
@@ -1163,7 +1164,16 @@ void TrackAccumulateProfit()
       g_accumulateClosedProfit = 0.0;
       g_lastKnownPositionCount = 0;
       g_lastKnownFloatingPL = 0.0;
+      g_lockedAccumulateTarget = 0.0;  // Reset locked target → จะ recalculate ตอนมี order ใหม่
       return;
+   }
+   
+   // ถ้าเป็น order แรก (จาก 0 → 1+) → ล็อค Scaled Target ไว้
+   if(g_lastKnownPositionCount == 0 && currentPosCount > 0)
+   {
+      g_lockedAccumulateTarget = ApplyScaleDollar(InpAccumulateTarget);
+      Print("ACCUMULATE CLOSE: Locked Target = ", DoubleToString(g_lockedAccumulateTarget, 2), 
+            "$ (based on current balance scale)");
    }
    
    // ตรวจสอบว่ามี position ถูกปิดไปหรือไม่ (จำนวนลดลง)
@@ -1233,8 +1243,8 @@ bool CheckAccumulateClose()
    // คำนวณ Total P/L = Floating + Accumulated Closed
    double totalPL = currentFloatingPL + g_accumulateClosedProfit;
    
-   // Apply Auto Balance Scaling to target
-   double scaledTarget = ApplyScaleDollar(InpAccumulateTarget);
+   // ใช้ Locked Target (ล็อคไว้ตอนเริ่มมี order) หรือ Calculate ใหม่ถ้ายังไม่มี
+   double scaledTarget = (g_lockedAccumulateTarget > 0) ? g_lockedAccumulateTarget : ApplyScaleDollar(InpAccumulateTarget);
    
    // ถ้าถึงเป้าหมาย → ปิดทั้งหมด
    if(totalPL >= scaledTarget)
@@ -1242,7 +1252,7 @@ bool CheckAccumulateClose()
       Print("=== ACCUMULATE CLOSE TARGET REACHED ===");
       Print("Accumulated Closed: ", DoubleToString(g_accumulateClosedProfit, 2), "$");
       Print("Current Floating: ", DoubleToString(currentFloatingPL, 2), "$");
-      Print("Total P/L: ", DoubleToString(totalPL, 2), "$ >= Scaled Target: ", DoubleToString(scaledTarget, 2), "$");
+      Print("Total P/L: ", DoubleToString(totalPL, 2), "$ >= Locked Target: ", DoubleToString(scaledTarget, 2), "$");
       Print("Closing ALL positions...");
       
       // ปิด order ทั้งหมด
