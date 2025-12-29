@@ -5500,7 +5500,8 @@ void CalculateSMC()
 }
 
 //+------------------------------------------------------------------+
-//| Detect Order Blocks based on structure breaks                      |
+//| Detect Order Blocks based on structure breaks (LuxAlgo Style)      |
+//| Key: Use candle BODY (Open/Close) for OB zone, not wicks           |
 //+------------------------------------------------------------------+
 void DetectOrderBlocks(double &highArr[], double &lowArr[], double &openArr[], 
                        double &closeArr[], datetime &timeArr[], int barsTotal)
@@ -5512,8 +5513,9 @@ void DetectOrderBlocks(double &highArr[], double &lowArr[], double &openArr[],
    
    for(int i = lookback; i < scanLimit; i++)
    {
-      // Check for Bullish Order Block
+      // Check for Bullish Order Block (Support Zone)
       // Condition: Bearish candle followed by strong bullish move that breaks structure
+      // LuxAlgo uses candle BODY for OB zone, not wicks
       if(closeArr[i] < openArr[i])  // Bearish candle
       {
          // Check if next candles made a strong bullish move
@@ -5530,11 +5532,14 @@ void DetectOrderBlocks(double &highArr[], double &lowArr[], double &openArr[],
          
          if(strongBullishMove && InpSMCShowBullishOB)
          {
-            AddBullishOB(highArr[i], lowArr[i], timeArr[i], i);
+            // LuxAlgo style: OB zone = candle BODY only
+            double obHigh = openArr[i];   // Top of bearish body (open)
+            double obLow = closeArr[i];   // Bottom of bearish body (close)
+            AddBullishOB(obHigh, obLow, timeArr[i], i);
          }
       }
       
-      // Check for Bearish Order Block
+      // Check for Bearish Order Block (Resistance Zone)
       // Condition: Bullish candle followed by strong bearish move that breaks structure
       if(closeArr[i] > openArr[i])  // Bullish candle
       {
@@ -5552,7 +5557,10 @@ void DetectOrderBlocks(double &highArr[], double &lowArr[], double &openArr[],
          
          if(strongBearishMove && InpSMCShowBearishOB)
          {
-            AddBearishOB(highArr[i], lowArr[i], timeArr[i], i);
+            // LuxAlgo style: OB zone = candle BODY only
+            double obHigh = closeArr[i];  // Top of bullish body (close)
+            double obLow = openArr[i];    // Bottom of bullish body (open)
+            AddBearishOB(obHigh, obLow, timeArr[i], i);
          }
       }
    }
