@@ -491,6 +491,65 @@ OrderBlockData BearishOBs[];
 int BullishOBCount = 0;
 int BearishOBCount = 0;
 
+// Prevent already-consumed / already-mitigated OBs from being re-created
+// We store OB formation times that have been removed, and skip re-adding them.
+datetime g_smcRemovedBullTimes[];
+datetime g_smcRemovedBearTimes[];
+datetime g_lastSMCClosedBarTime = 0; // last processed CLOSED candle time on InpSMCTimeframe
+
+bool IsSMCRemovedTime(datetime t, bool isBullish)
+{
+   if(t <= 0) return false;
+
+   if(isBullish)
+   {
+      for(int i = 0; i < ArraySize(g_smcRemovedBullTimes); i++)
+         if(g_smcRemovedBullTimes[i] == t) return true;
+   }
+   else
+   {
+      for(int i = 0; i < ArraySize(g_smcRemovedBearTimes); i++)
+         if(g_smcRemovedBearTimes[i] == t) return true;
+   }
+
+   return false;
+}
+
+void RememberSMCRemovedTime(datetime t, bool isBullish)
+{
+   if(t <= 0) return;
+   if(IsSMCRemovedTime(t, isBullish)) return;
+
+   // Keep list bounded to avoid unbounded growth
+   int maxKeep = 500;
+
+   if(isBullish)
+   {
+      int n = ArraySize(g_smcRemovedBullTimes);
+      if(n >= maxKeep)
+      {
+         // drop oldest
+         for(int k = 0; k < n - 1; k++) g_smcRemovedBullTimes[k] = g_smcRemovedBullTimes[k + 1];
+         ArrayResize(g_smcRemovedBullTimes, n - 1);
+         n = ArraySize(g_smcRemovedBullTimes);
+      }
+      ArrayResize(g_smcRemovedBullTimes, n + 1);
+      g_smcRemovedBullTimes[n] = t;
+   }
+   else
+   {
+      int n = ArraySize(g_smcRemovedBearTimes);
+      if(n >= maxKeep)
+      {
+         for(int k = 0; k < n - 1; k++) g_smcRemovedBearTimes[k] = g_smcRemovedBearTimes[k + 1];
+         ArrayResize(g_smcRemovedBearTimes, n - 1);
+         n = ArraySize(g_smcRemovedBearTimes);
+      }
+      ArrayResize(g_smcRemovedBearTimes, n + 1);
+      g_smcRemovedBearTimes[n] = t;
+   }
+}
+
 // SMC Touch State - Persist across ticks for PA confirmation
 bool g_smcBuyTouchedOBPersist = false;   // Persists until used or reset
 bool g_smcSellTouchedOBPersist = false;  // Persists until used or reset
@@ -5507,64 +5566,74 @@ void DetectOrderBlocks(double &highArr[], double &lowArr[], double &openArr[],
                        double &closeArr[], datetime &timeArr[], int barsTotal)
 {
    int lookback = InpSMCInternalLength;
-   
-   // Scan for new Order Blocks (limit to recent bars for performance)
-   int scanLimit = MathMin(50, barsTotal - lookback - 1);
-   
-   for(int i = lookback; i < scanLimit; i++)
+
+   // Only scan/create new OBs once per NEW CLOSED candle on SMC timeframe.
+   // This prevents old historical OBs from being re-detected every tick (and “coming back”).
+   datetime lastClosedSMCTime = iTime(_Symbol, InpSMCTimeframe, 1);
+   bool canScanNewOBs = (lastClosedSMCTime > 0 && lastClosedSMCTime != g_lastSMCClosedBarTime);
+   if(canScanNewOBs)
+      g_lastSMCClosedBarTime = lastClosedSMCTime;
+
+   if(canScanNewOBs)
    {
-      // Check for Bullish Order Block (Support Zone)
-      // Condition: Bearish candle followed by strong bullish move that breaks structure
-      // LuxAlgo uses candle BODY for OB zone, not wicks
-      if(closeArr[i] < openArr[i])  // Bearish candle
+      // Scan for new Order Blocks (limit to recent bars for performance)
+      int scanLimit = MathMin(50, barsTotal - lookback - 1);
+
+      for(int i = lookback; i < scanLimit; i++)
       {
-         // Check if next candles made a strong bullish move
-         bool strongBullishMove = false;
-         for(int j = i - 1; j >= 1; j--)
+         // Check for Bullish Order Block (Support Zone)
+         // Condition: Bearish candle followed by strong bullish move that breaks structure
+         // LuxAlgo uses candle BODY for OB zone, not wicks
+         if(closeArr[i] < openArr[i])  // Bearish candle
          {
-            if(closeArr[j] > highArr[i] + (highArr[i] - lowArr[i]))
+            // Check if next candles made a strong bullish move
+            bool strongBullishMove = false;
+            for(int j = i - 1; j >= 1; j--)
             {
-               strongBullishMove = true;
-               break;
+               if(closeArr[j] > highArr[i] + (highArr[i] - lowArr[i]))
+               {
+                  strongBullishMove = true;
+                  break;
+               }
+               if(j < i - 3) break;  // Only check 3 bars ahead
             }
-            if(j < i - 3) break;  // Only check 3 bars ahead
-         }
-         
-         if(strongBullishMove && InpSMCShowBullishOB)
-         {
-            // LuxAlgo style: OB zone = candle BODY only
-            double obHigh = openArr[i];   // Top of bearish body (open)
-            double obLow = closeArr[i];   // Bottom of bearish body (close)
-            AddBullishOB(obHigh, obLow, timeArr[i], i);
-         }
-      }
-      
-      // Check for Bearish Order Block (Resistance Zone)
-      // Condition: Bullish candle followed by strong bearish move that breaks structure
-      if(closeArr[i] > openArr[i])  // Bullish candle
-      {
-         // Check if next candles made a strong bearish move
-         bool strongBearishMove = false;
-         for(int j = i - 1; j >= 1; j--)
-         {
-            if(closeArr[j] < lowArr[i] - (highArr[i] - lowArr[i]))
+
+            if(strongBullishMove && InpSMCShowBullishOB)
             {
-               strongBearishMove = true;
-               break;
+               // LuxAlgo style: OB zone = candle BODY only
+               double obHigh = openArr[i];   // Top of bearish body (open)
+               double obLow = closeArr[i];   // Bottom of bearish body (close)
+               AddBullishOB(obHigh, obLow, timeArr[i], i);
             }
-            if(j < i - 3) break;  // Only check 3 bars ahead
          }
-         
-         if(strongBearishMove && InpSMCShowBearishOB)
+
+         // Check for Bearish Order Block (Resistance Zone)
+         // Condition: Bullish candle followed by strong bearish move that breaks structure
+         if(closeArr[i] > openArr[i])  // Bullish candle
          {
-            // LuxAlgo style: OB zone = candle BODY only
-            double obHigh = closeArr[i];  // Top of bullish body (close)
-            double obLow = openArr[i];    // Bottom of bullish body (open)
-            AddBearishOB(obHigh, obLow, timeArr[i], i);
+            // Check if next candles made a strong bearish move
+            bool strongBearishMove = false;
+            for(int j = i - 1; j >= 1; j--)
+            {
+               if(closeArr[j] < lowArr[i] - (highArr[i] - lowArr[i]))
+               {
+                  strongBearishMove = true;
+                  break;
+               }
+               if(j < i - 3) break;  // Only check 3 bars ahead
+            }
+
+            if(strongBearishMove && InpSMCShowBearishOB)
+            {
+               // LuxAlgo style: OB zone = candle BODY only
+               double obHigh = closeArr[i];  // Top of bullish body (close)
+               double obLow = openArr[i];    // Bottom of bullish body (open)
+               AddBearishOB(obHigh, obLow, timeArr[i], i);
+            }
          }
       }
    }
-   
+
    // =========================================================================
    // CHECK MITIGATION OF EXISTING ORDER BLOCKS (LuxAlgo Style)
    // =========================================================================
@@ -5603,6 +5672,9 @@ void DetectOrderBlocks(double &highArr[], double &lowArr[], double &openArr[],
          Print(">>> SMC Mitigation: Bullish OB BROKEN! Close=", 
                DoubleToString(confirmedClose, digits), " < Zone Low=", 
                DoubleToString(BullishOBs[i].low, digits), " | Removing from chart & array");
+
+         // Remember this OB so it will NOT be re-created by historical scans
+         RememberSMCRemovedTime(BullishOBs[i].time, true);
          
          // 1. Delete chart object immediately
          ObjectDelete(0, BullishOBs[i].objName);
@@ -5630,6 +5702,9 @@ void DetectOrderBlocks(double &highArr[], double &lowArr[], double &openArr[],
          Print(">>> SMC Mitigation: Bearish OB BROKEN! Close=", 
                DoubleToString(confirmedClose, digits), " > Zone High=", 
                DoubleToString(BearishOBs[i].high, digits), " | Removing from chart & array");
+
+         // Remember this OB so it will NOT be re-created by historical scans
+         RememberSMCRemovedTime(BearishOBs[i].time, false);
          
          // 1. Delete chart object immediately
          ObjectDelete(0, BearishOBs[i].objName);
@@ -5669,6 +5744,9 @@ void ConsumeSMCOrderBlock(string obName, bool isBullish)
       {
          if(BullishOBs[i].objName == obName)
          {
+            // Remember this OB time so it will NOT be re-created later
+            RememberSMCRemovedTime(BullishOBs[i].time, true);
+
             ObjectDelete(0, BullishOBs[i].objName);
             for(int j = i; j < BullishOBCount - 1; j++)
             {
@@ -5686,6 +5764,9 @@ void ConsumeSMCOrderBlock(string obName, bool isBullish)
       {
          if(BearishOBs[i].objName == obName)
          {
+            // Remember this OB time so it will NOT be re-created later
+            RememberSMCRemovedTime(BearishOBs[i].time, false);
+
             ObjectDelete(0, BearishOBs[i].objName);
             for(int j = i; j < BearishOBCount - 1; j++)
             {
@@ -5704,6 +5785,9 @@ void ConsumeSMCOrderBlock(string obName, bool isBullish)
 //+------------------------------------------------------------------+
 void AddBullishOB(double high, double low, datetime time, int barIndex)
 {
+   // Skip if this OB time was already removed (consumed/mitigated)
+   if(IsSMCRemovedTime(time, true)) return;
+
    // Check if this OB already exists
    for(int i = 0; i < BullishOBCount; i++)
    {
@@ -5743,6 +5827,9 @@ void AddBullishOB(double high, double low, datetime time, int barIndex)
 //+------------------------------------------------------------------+
 void AddBearishOB(double high, double low, datetime time, int barIndex)
 {
+   // Skip if this OB time was already removed (consumed/mitigated)
+   if(IsSMCRemovedTime(time, false)) return;
+
    // Check if this OB already exists
    for(int i = 0; i < BearishOBCount; i++)
    {
