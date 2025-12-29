@@ -132,13 +132,66 @@ input color    InpCDCBearColor = clrRed;       // CDC Bear Zone Color
 input int      InpCDCWidth = 3;                // CDC Line Width
 input bool     InpCDCShowHistogram = true;     // Show CDC Histogram
 
-//--- [ SMC ORDER BLOCK SETTINGS ] ----------------------------------
-input string   InpSMCHeader = "=== SMC ORDER BLOCKS ===";  // ___
-input int      InpSMCSwingLength = 50;         // Swing Detection Length (bars)
-input int      InpSMCInternalLength = 5;       // Internal Structure Length
-input int      InpSMCMaxOrderBlocks = 5;       // Max Order Blocks to Display
-input color    InpSMCBullOBColor = clrDodgerBlue;   // Bullish OB Color (Support)
-input color    InpSMCBearOBColor = clrCrimson;      // Bearish OB Color (Resistance)
+//--- [ SMC ORDER BLOCK SETTINGS (LuxAlgo Compatible) ] -------------
+input string   InpSMCHeader = "=== SMART MONEY CONCEPTS ===";  // ___
+input int      InpSMCHistoryBars = 2000;        // How many candles to calculate in history (0=All)
+input string   InpSMCModeHeader = "----- SMC Mode -----";  // ___
+input bool     InpSMCHistoricalMode = true;     // Historical Mode (false = Real Time)
+input bool     InpSMCColoredStyle = true;       // Colored Style
+
+//--- [ Internal Structure Settings ] -------------------------------
+input string   InpSMCInternalHeader = "----- Real Time Internal Structure -----";  // ___
+input bool     InpSMCShowInternalStructure = true;   // Show Internal Structure
+input int      InpSMCInternalLength = 5;             // Internal Structure Length
+input color    InpSMCInternalBullColor = C'8,153,129';    // Internal Bullish Color (rgb 8,153,129)
+input color    InpSMCInternalBearColor = C'242,54,69';    // Internal Bearish Color (rgb 242,54,69)
+
+//--- [ Swing Structure Settings ] ----------------------------------
+input string   InpSMCSwingHeader = "----- Real Time Swing Structure -----";  // ___
+input bool     InpSMCShowSwingStructure = true;      // Show Swing Structure
+input int      InpSMCSwingLength = 50;               // Swing Detection Length (bars)
+input color    InpSMCSwingBullColor = C'8,153,129';  // Swing Bullish Color
+input color    InpSMCSwingBearColor = C'242,54,69';  // Swing Bearish Color
+
+//--- [ Swing Points Settings ] -------------------------------------
+input string   InpSMCSwingPointsHeader = "----- Swing Points -----";  // ___
+input bool     InpSMCShowSwingPoints = true;         // Show Swings Points
+input bool     InpSMCShowStrongWeakHL = true;        // Show Strong/Weak High/Low
+
+//--- [ Order Blocks Settings ] -------------------------------------
+input string   InpSMCOBHeader = "----- Order Blocks -----";  // ___
+input bool     InpSMCShowInternalOB = true;          // Show Internal Order Blocks
+input int      InpSMCMaxInternalOB = 5;              // Internal Order Blocks (max count)
+input bool     InpSMCShowSwingOB = false;            // Show Swing Order Blocks
+input int      InpSMCMaxSwingOB = 5;                 // Swing Order Blocks (max count)
+
+// Order Block Filter
+enum ENUM_OB_FILTER
+{
+   OB_FILTER_NONE = 0,   // None
+   OB_FILTER_ATR = 1     // ATR
+};
+input ENUM_OB_FILTER InpSMCOBFilter = OB_FILTER_ATR;  // Order Block Filter
+
+// Order Block Colors
+input color    InpSMCInternalBullOBColor = C'91,156,246';   // Internal Bullish OB (rgb 91,156,246)
+input color    InpSMCInternalBearOBColor = C'247,124,128';  // Internal Bearish OB (rgb 247,124,128)
+input color    InpSMCSwingBullOBColor = C'24,72,204';       // Swing Bullish OB (rgb 24,72,204)
+input color    InpSMCSwingBearOBColor = C'178,40,51';       // Swing Bearish OB (rgb 178,40,51)
+
+//--- [ EQH/EQL Settings ] ------------------------------------------
+input string   InpSMCEQHeader = "----- EQH/EQL -----";  // ___
+input bool     InpSMCShowEQHL = true;                // Equal High/Low
+input int      InpSMCEQBarsConfirmation = 3;         // Bars Confirmation
+input double   InpSMCEQThreshold = 0.1;              // Threshold (ATR multiplier)
+
+//--- [ Fair Value Gaps Settings ] ----------------------------------
+input string   InpSMCFVGHeader = "----- Fair Value Gaps -----";  // ___
+input bool     InpSMCShowFVG = false;                // Fair Value Gaps
+input bool     InpSMCFVGAutoThreshold = true;        // Auto Threshold
+input color    InpSMCBullFVGColor = C'0,255,104';    // Bullish FVG (rgb 0,255,104)
+input color    InpSMCBearFVGColor = C'255,0,8';      // Bearish FVG (rgb 255,0,8)
+input int      InpSMCExtendFVG = 1;                  // Extend FVG (bars)
 
 //--- [ PRICE ACTION / EA INTEGRATION SETTINGS ] --------------------
 input string   InpPAModeHeader = "=== PA / EA INTEGRATION ===";  // ___
@@ -183,29 +236,80 @@ double lastZigZagLow = 0;
 int lastZigZagHighBar = 0;
 int lastZigZagLowBar = 0;
 
-// SMC Order Block Structure
+// SMC Order Block Structure (supports both Internal and Swing OBs)
 struct OrderBlock
 {
    double high;
    double low;
    datetime time;
    int barIndex;
-   int bias;      // 1 = Bullish (support), -1 = Bearish (resistance)
+   int bias;           // 1 = Bullish (support), -1 = Bearish (resistance)
    bool mitigated;
+   bool isSwingOB;     // true = Swing OB, false = Internal OB
    string objName;
 };
 
-OrderBlock BullishOBs[20];
-OrderBlock BearishOBs[20];
-int BullishOBCount = 0;
-int BearishOBCount = 0;
+// Separate arrays for Internal and Swing Order Blocks
+OrderBlock InternalBullOBs[20];
+OrderBlock InternalBearOBs[20];
+OrderBlock SwingBullOBs[20];
+OrderBlock SwingBearOBs[20];
+int InternalBullOBCount = 0;
+int InternalBearOBCount = 0;
+int SwingBullOBCount = 0;
+int SwingBearOBCount = 0;
 
-// SMC Variables
+// Legacy compatibility (map to Internal OBs)
+#define BullishOBs InternalBullOBs
+#define BearishOBs InternalBearOBs
+#define BullishOBCount InternalBullOBCount
+#define BearishOBCount InternalBearOBCount
+
+// SMC Swing Structure Points
+struct SwingPoint
+{
+   double price;
+   datetime time;
+   int barIndex;
+   bool isHigh;        // true = swing high, false = swing low
+   bool isStrong;      // true = strong (not broken), false = weak
+   bool isInternal;    // true = internal, false = swing
+   string objName;
+};
+
+SwingPoint InternalSwingPoints[100];
+SwingPoint SwingStructurePoints[100];
+int InternalSwingCount = 0;
+int SwingStructureCount = 0;
+
+// SMC Structure Variables
 double SMCSwingHigh = 0;
 double SMCSwingLow = 0;
 datetime SMCSwingHighTime = 0;
 datetime SMCSwingLowTime = 0;
+double SMCInternalHigh = 0;
+double SMCInternalLow = 0;
 int SMCTrend = 0;  // 1 = Bullish, -1 = Bearish, 0 = Neutral
+int SMCInternalTrend = 0;
+
+// BOS/CHoCH Structure
+struct StructureBreak
+{
+   datetime time;
+   double price;
+   bool isBOS;         // true = BOS, false = CHoCH
+   bool isBullish;     // true = bullish break, false = bearish break
+   bool isInternal;    // true = internal structure, false = swing structure
+   string label;
+   string objName;
+};
+
+StructureBreak StructureBreaks[50];
+int StructureBreakCount = 0;
+
+// ATR Handle for OB Filter
+int handleATR;
+double ATRBuffer[];
 
 // Object Prefixes
 string SMCPrefix = "INDI_SMC_";
@@ -223,16 +327,24 @@ string GV_EA_SELL_TIME = "MONEYX_EA_SELL_TIME";
 string GV_SMC_ENABLED = "MONEYX_SMC_ENABLED";
 string GV_SMC_SWING_LENGTH = "MONEYX_SMC_SWING_LENGTH";
 string GV_SMC_INTERNAL_LENGTH = "MONEYX_SMC_INTERNAL_LENGTH";
-string GV_SMC_MAX_OB = "MONEYX_SMC_MAX_OB";
-string GV_SMC_BULL_OB_COLOR = "MONEYX_SMC_BULL_OB_COLOR";
-string GV_SMC_BEAR_OB_COLOR = "MONEYX_SMC_BEAR_OB_COLOR";
+string GV_SMC_MAX_INTERNAL_OB = "MONEYX_SMC_MAX_INTERNAL_OB";
+string GV_SMC_MAX_SWING_OB = "MONEYX_SMC_MAX_SWING_OB";
+string GV_SMC_OB_FILTER = "MONEYX_SMC_OB_FILTER";
+string GV_SMC_INTERNAL_BULL_OB_COLOR = "MONEYX_SMC_INTERNAL_BULL_OB";
+string GV_SMC_INTERNAL_BEAR_OB_COLOR = "MONEYX_SMC_INTERNAL_BEAR_OB";
+string GV_SMC_SWING_BULL_OB_COLOR = "MONEYX_SMC_SWING_BULL_OB";
+string GV_SMC_SWING_BEAR_OB_COLOR = "MONEYX_SMC_SWING_BEAR_OB";
 
 // Synced SMC Settings (overwritten from EA if available)
 int SyncedSMCSwingLength = 0;
 int SyncedSMCInternalLength = 0;
-int SyncedSMCMaxOrderBlocks = 0;
-color SyncedSMCBullOBColor = clrDodgerBlue;
-color SyncedSMCBearOBColor = clrCrimson;
+int SyncedSMCMaxInternalOB = 0;
+int SyncedSMCMaxSwingOB = 0;
+int SyncedSMCOBFilter = 0;
+color SyncedInternalBullOBColor = C'91,156,246';
+color SyncedInternalBearOBColor = C'247,124,128';
+color SyncedSwingBullOBColor = C'24,72,204';
+color SyncedSwingBearOBColor = C'178,40,51';
 bool SMCSyncedFromEA = false;
 
 //+------------------------------------------------------------------+
@@ -1045,7 +1157,7 @@ void SyncSMCSettingsFromEA()
 }
 
 //+------------------------------------------------------------------+
-//| Get SMC Swing Length (synced or local)                             |
+//| Get SMC Settings (synced from EA or local input)                   |
 //+------------------------------------------------------------------+
 int GetSMCSwingLength()
 {
@@ -1057,19 +1169,75 @@ int GetSMCInternalLength()
    return SMCSyncedFromEA ? SyncedSMCInternalLength : InpSMCInternalLength;
 }
 
-int GetSMCMaxOrderBlocks()
+int GetSMCMaxInternalOB()
 {
-   return SMCSyncedFromEA ? SyncedSMCMaxOrderBlocks : InpSMCMaxOrderBlocks;
+   return SMCSyncedFromEA ? SyncedSMCMaxInternalOB : InpSMCMaxInternalOB;
 }
 
-color GetSMCBullOBColor()
+int GetSMCMaxSwingOB()
 {
-   return SMCSyncedFromEA ? SyncedSMCBullOBColor : InpSMCBullOBColor;
+   return SMCSyncedFromEA ? SyncedSMCMaxSwingOB : InpSMCMaxSwingOB;
 }
 
-color GetSMCBearOBColor()
+ENUM_OB_FILTER GetSMCOBFilter()
 {
-   return SMCSyncedFromEA ? SyncedSMCBearOBColor : InpSMCBearOBColor;
+   return SMCSyncedFromEA ? (ENUM_OB_FILTER)SyncedSMCOBFilter : InpSMCOBFilter;
+}
+
+color GetInternalBullOBColor()
+{
+   return SMCSyncedFromEA ? SyncedInternalBullOBColor : InpSMCInternalBullOBColor;
+}
+
+color GetInternalBearOBColor()
+{
+   return SMCSyncedFromEA ? SyncedInternalBearOBColor : InpSMCInternalBearOBColor;
+}
+
+color GetSwingBullOBColor()
+{
+   return SMCSyncedFromEA ? SyncedSwingBullOBColor : InpSMCSwingBullOBColor;
+}
+
+color GetSwingBearOBColor()
+{
+   return SMCSyncedFromEA ? SyncedSwingBearOBColor : InpSMCSwingBearOBColor;
+}
+
+// Legacy compatibility
+color GetSMCBullOBColor() { return GetInternalBullOBColor(); }
+color GetSMCBearOBColor() { return GetInternalBearOBColor(); }
+int GetSMCMaxOrderBlocks() { return GetSMCMaxInternalOB(); }
+
+//+------------------------------------------------------------------+
+//| Get ATR Value for OB Filter                                        |
+//+------------------------------------------------------------------+
+double GetATRValue(int shift = 0)
+{
+   if(handleATR == INVALID_HANDLE) return 0;
+   
+   double atr[];
+   ArraySetAsSeries(atr, true);
+   if(CopyBuffer(handleATR, 0, shift, 1, atr) <= 0) return 0;
+   
+   return atr[0];
+}
+
+//+------------------------------------------------------------------+
+//| Check if OB passes ATR filter                                      |
+//+------------------------------------------------------------------+
+bool PassesATRFilter(double obHigh, double obLow, int barIndex)
+{
+   if(GetSMCOBFilter() != OB_FILTER_ATR) return true;  // No filter
+   
+   double atr = GetATRValue(barIndex);
+   if(atr == 0) return true;
+   
+   double obSize = obHigh - obLow;
+   
+   // LuxAlgo ATR filter: OB size must be at least 0.1 * ATR
+   // and not larger than 2 * ATR
+   return (obSize >= atr * 0.1 && obSize <= atr * 2.0);
 }
 
 //+------------------------------------------------------------------+
@@ -1148,12 +1316,12 @@ void CalculateSMC(const int rates_total,
 }
 
 //+------------------------------------------------------------------+
-//| Detect Order Blocks (LuxAlgo Style)                                |
-//| Key differences from original:                                      |
-//| 1. Uses "Swing Length" for major structure (50 bars default)       |
-//| 2. Uses "Internal Length" for internal structure (5 bars default)  |
-//| 3. OB is defined by candle BODY (Open/Close), not wicks            |
-//| 4. Only creates OB when structure break (BOS/CHoCH) occurs         |
+//| Detect Order Blocks (LuxAlgo Style - Full Implementation)          |
+//| Key features:                                                        |
+//| 1. Separate Internal OB (5 bars) and Swing OB (50 bars)             |
+//| 2. ATR Filter to filter out noise                                   |
+//| 3. OB defined by candle BODY (Open/Close), not wicks                |
+//| 4. BOS/CHoCH structure break detection                              |
 //+------------------------------------------------------------------+
 void DetectOrderBlocks(const int rates_total,
                        const datetime &time[],
@@ -1165,16 +1333,55 @@ void DetectOrderBlocks(const int rates_total,
    int swingLen = GetSMCSwingLength();         // 50 default (major swing structure)
    int internalLen = GetSMCInternalLength();   // 5 default (internal swing)
    
-   // LuxAlgo scans more bars for proper swing detection
-   int scanLimit = MathMin(rates_total - swingLen - 10, 300);
+   // History limit based on settings
+   int historyLimit = InpSMCHistoryBars > 0 ? MathMin(InpSMCHistoryBars, rates_total - swingLen - 10) : rates_total - swingLen - 10;
+   int scanLimit = MathMin(historyLimit, 500);
    
    if(rates_total < swingLen + 10) return;
    
    // Clear old mitigated OBs
    CleanupOldOrderBlocks(time[0]);
    
-   // === LuxAlgo Style: Detect internal swing points for OB creation ===
-   // Scan for swing highs and lows using internalLen
+   // === Detect INTERNAL Order Blocks (using internalLen) ===
+   if(InpSMCShowInternalOB)
+   {
+      DetectInternalOrderBlocks(rates_total, time, open, high, low, close, internalLen, scanLimit);
+   }
+   
+   // === Detect SWING Order Blocks (using swingLen) ===
+   if(InpSMCShowSwingOB)
+   {
+      DetectSwingOrderBlocks(rates_total, time, open, high, low, close, swingLen, scanLimit);
+   }
+   
+   // === Mitigation Check for all OBs ===
+   CheckMitigation(close[0], low[0], high[0]);
+   
+   // === Detect BOS/CHoCH Structure Breaks ===
+   if(InpSMCShowInternalStructure || InpSMCShowSwingStructure)
+   {
+      DetectStructureBreaks(rates_total, time, high, low, close);
+   }
+   
+   // === Detect Swing Points ===
+   if(InpSMCShowSwingPoints)
+   {
+      DetectSwingPoints(rates_total, time, high, low, close);
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Detect Internal Order Blocks (short-term structure)                |
+//+------------------------------------------------------------------+
+void DetectInternalOrderBlocks(const int rates_total,
+                                const datetime &time[],
+                                const double &open[],
+                                const double &high[],
+                                const double &low[],
+                                const double &close[],
+                                int internalLen,
+                                int scanLimit)
+{
    for(int i = internalLen + 1; i < scanLimit; i++)
    {
       //--- Detect Internal Swing High
@@ -1201,93 +1408,343 @@ void DetectOrderBlocks(const int rates_total,
          }
       }
       
-      //--- Bullish Order Block Detection (Support Zone)
-      // Created at swing low - find the last BEARISH candle before swing low
-      // This is where "smart money" accumulated buy orders
+      //--- Bullish Internal OB (Support Zone) at swing low
       if(isSwingLow)
       {
-         // Look back from swing low to find the bearish candle that caused it
          for(int k = i; k <= i + 3 && k < rates_total - 1; k++)
          {
-            // Find bearish candle (close < open)
-            if(close[k] < open[k])
+            if(close[k] < open[k])  // Bearish candle
             {
-               // OB zone = candle body only (LuxAlgo style)
-               double obHigh = open[k];   // Top of bearish body
-               double obLow = close[k];   // Bottom of bearish body
+               double obHigh = open[k];
+               double obLow = close[k];
                
-               // Only add if not already mitigated (price came back and touched)
-               // and price has moved away from OB
-               bool priceMovedAway = (low[0] > obHigh * 0.999) || (close[0] > obHigh);
+               // ATR Filter
+               if(!PassesATRFilter(obHigh, obLow, k)) continue;
                
-               if(priceMovedAway)
+               // Price must have moved away
+               if(low[0] > obHigh * 0.999 || close[0] > obHigh)
                {
-                  AddBullishOB(obHigh, obLow, time[k], k);
+                  AddInternalBullOB(obHigh, obLow, time[k], k);
                }
                break;
             }
          }
       }
       
-      //--- Bearish Order Block Detection (Resistance Zone)
-      // Created at swing high - find the last BULLISH candle before swing high
-      // This is where "smart money" distributed sell orders
+      //--- Bearish Internal OB (Resistance Zone) at swing high
       if(isSwingHigh)
       {
-         // Look back from swing high to find the bullish candle that caused it
          for(int k = i; k <= i + 3 && k < rates_total - 1; k++)
          {
-            // Find bullish candle (close > open)
-            if(close[k] > open[k])
+            if(close[k] > open[k])  // Bullish candle
             {
-               // OB zone = candle body only (LuxAlgo style)
-               double obHigh = close[k];  // Top of bullish body
-               double obLow = open[k];    // Bottom of bullish body
+               double obHigh = close[k];
+               double obLow = open[k];
                
-               // Only add if price has moved away from OB
-               bool priceMovedAway = (high[0] < obLow * 1.001) || (close[0] < obLow);
+               // ATR Filter
+               if(!PassesATRFilter(obHigh, obLow, k)) continue;
                
-               if(priceMovedAway)
+               // Price must have moved away
+               if(high[0] < obLow * 1.001 || close[0] < obLow)
                {
-                  AddBearishOB(obHigh, obLow, time[k], k);
+                  AddInternalBearOB(obHigh, obLow, time[k], k);
                }
                break;
             }
          }
       }
    }
-   
-   // === Mitigation Check ===
-   // LuxAlgo: OB is mitigated when price CLOSES through the OB zone
-   double currentClose = close[0];
-   double currentLow = low[0];
-   double currentHigh = high[0];
-   
-   for(int i = 0; i < BullishOBCount; i++)
+}
+
+//+------------------------------------------------------------------+
+//| Detect Swing Order Blocks (major structure)                        |
+//+------------------------------------------------------------------+
+void DetectSwingOrderBlocks(const int rates_total,
+                             const datetime &time[],
+                             const double &open[],
+                             const double &high[],
+                             const double &low[],
+                             const double &close[],
+                             int swingLen,
+                             int scanLimit)
+{
+   for(int i = swingLen + 1; i < scanLimit; i++)
    {
-      if(!BullishOBs[i].mitigated)
+      //--- Detect Swing High (major)
+      bool isSwingHigh = true;
+      for(int j = 1; j <= swingLen; j++)
       {
-         // Bullish OB mitigated when price closes below OB low
-         if(currentClose < BullishOBs[i].low)
+         if(i + j >= rates_total || i - j < 0) { isSwingHigh = false; break; }
+         if(high[i] <= high[i - j] || high[i] <= high[i + j])
          {
-            BullishOBs[i].mitigated = true;
-            ObjectDelete(0, BullishOBs[i].objName);
+            isSwingHigh = false;
+            break;
+         }
+      }
+      
+      //--- Detect Swing Low (major)
+      bool isSwingLow = true;
+      for(int j = 1; j <= swingLen; j++)
+      {
+         if(i + j >= rates_total || i - j < 0) { isSwingLow = false; break; }
+         if(low[i] >= low[i - j] || low[i] >= low[i + j])
+         {
+            isSwingLow = false;
+            break;
+         }
+      }
+      
+      //--- Bullish Swing OB at major swing low
+      if(isSwingLow)
+      {
+         for(int k = i; k <= i + 5 && k < rates_total - 1; k++)
+         {
+            if(close[k] < open[k])
+            {
+               double obHigh = open[k];
+               double obLow = close[k];
+               
+               if(!PassesATRFilter(obHigh, obLow, k)) continue;
+               
+               if(low[0] > obHigh * 0.999 || close[0] > obHigh)
+               {
+                  AddSwingBullOB(obHigh, obLow, time[k], k);
+               }
+               break;
+            }
+         }
+      }
+      
+      //--- Bearish Swing OB at major swing high
+      if(isSwingHigh)
+      {
+         for(int k = i; k <= i + 5 && k < rates_total - 1; k++)
+         {
+            if(close[k] > open[k])
+            {
+               double obHigh = close[k];
+               double obLow = open[k];
+               
+               if(!PassesATRFilter(obHigh, obLow, k)) continue;
+               
+               if(high[0] < obLow * 1.001 || close[0] < obLow)
+               {
+                  AddSwingBearOB(obHigh, obLow, time[k], k);
+               }
+               break;
+            }
          }
       }
    }
-   
-   for(int i = 0; i < BearishOBCount; i++)
+}
+
+//+------------------------------------------------------------------+
+//| Check Mitigation of all Order Blocks                               |
+//+------------------------------------------------------------------+
+void CheckMitigation(double currentClose, double currentLow, double currentHigh)
+{
+   // Internal Bullish OBs
+   for(int i = 0; i < InternalBullOBCount; i++)
    {
-      if(!BearishOBs[i].mitigated)
+      if(!InternalBullOBs[i].mitigated && currentClose < InternalBullOBs[i].low)
       {
-         // Bearish OB mitigated when price closes above OB high
-         if(currentClose > BearishOBs[i].high)
-         {
-            BearishOBs[i].mitigated = true;
-            ObjectDelete(0, BearishOBs[i].objName);
-         }
+         InternalBullOBs[i].mitigated = true;
+         ObjectDelete(0, InternalBullOBs[i].objName);
       }
    }
+   
+   // Internal Bearish OBs
+   for(int i = 0; i < InternalBearOBCount; i++)
+   {
+      if(!InternalBearOBs[i].mitigated && currentClose > InternalBearOBs[i].high)
+      {
+         InternalBearOBs[i].mitigated = true;
+         ObjectDelete(0, InternalBearOBs[i].objName);
+      }
+   }
+   
+   // Swing Bullish OBs
+   for(int i = 0; i < SwingBullOBCount; i++)
+   {
+      if(!SwingBullOBs[i].mitigated && currentClose < SwingBullOBs[i].low)
+      {
+         SwingBullOBs[i].mitigated = true;
+         ObjectDelete(0, SwingBullOBs[i].objName);
+      }
+   }
+   
+   // Swing Bearish OBs
+   for(int i = 0; i < SwingBearOBCount; i++)
+   {
+      if(!SwingBearOBs[i].mitigated && currentClose > SwingBearOBs[i].high)
+      {
+         SwingBearOBs[i].mitigated = true;
+         ObjectDelete(0, SwingBearOBs[i].objName);
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Detect BOS/CHoCH Structure Breaks                                  |
+//+------------------------------------------------------------------+
+void DetectStructureBreaks(const int rates_total,
+                           const datetime &time[],
+                           const double &high[],
+                           const double &low[],
+                           const double &close[])
+{
+   // TODO: Implement BOS/CHoCH detection
+   // BOS = Break of Structure (trend continuation)
+   // CHoCH = Change of Character (trend reversal)
+}
+
+//+------------------------------------------------------------------+
+//| Detect Swing Points for visualization                              |
+//+------------------------------------------------------------------+
+void DetectSwingPoints(const int rates_total,
+                       const datetime &time[],
+                       const double &high[],
+                       const double &low[],
+                       const double &close[])
+{
+   // TODO: Implement swing point markers
+   // Strong = not yet broken
+   // Weak = already broken
+}
+
+//+------------------------------------------------------------------+
+//| Add Internal Bullish Order Block                                   |
+//+------------------------------------------------------------------+
+void AddInternalBullOB(double high, double low, datetime time, int barIndex)
+{
+   for(int i = 0; i < InternalBullOBCount; i++)
+   {
+      if(InternalBullOBs[i].time == time) return;
+   }
+   
+   if(InternalBullOBCount >= GetSMCMaxInternalOB())
+   {
+      ObjectDelete(0, InternalBullOBs[0].objName);
+      for(int k = 0; k < InternalBullOBCount - 1; k++)
+      {
+         InternalBullOBs[k] = InternalBullOBs[k + 1];
+      }
+      InternalBullOBCount--;
+   }
+   
+   InternalBullOBs[InternalBullOBCount].high = high;
+   InternalBullOBs[InternalBullOBCount].low = low;
+   InternalBullOBs[InternalBullOBCount].time = time;
+   InternalBullOBs[InternalBullOBCount].barIndex = barIndex;
+   InternalBullOBs[InternalBullOBCount].bias = 1;
+   InternalBullOBs[InternalBullOBCount].mitigated = false;
+   InternalBullOBs[InternalBullOBCount].isSwingOB = false;
+   InternalBullOBs[InternalBullOBCount].objName = SMCPrefix + "IntBullOB_" + IntegerToString((long)time);
+   InternalBullOBCount++;
+}
+
+//+------------------------------------------------------------------+
+//| Add Internal Bearish Order Block                                   |
+//+------------------------------------------------------------------+
+void AddInternalBearOB(double high, double low, datetime time, int barIndex)
+{
+   for(int i = 0; i < InternalBearOBCount; i++)
+   {
+      if(InternalBearOBs[i].time == time) return;
+   }
+   
+   if(InternalBearOBCount >= GetSMCMaxInternalOB())
+   {
+      ObjectDelete(0, InternalBearOBs[0].objName);
+      for(int k = 0; k < InternalBearOBCount - 1; k++)
+      {
+         InternalBearOBs[k] = InternalBearOBs[k + 1];
+      }
+      InternalBearOBCount--;
+   }
+   
+   InternalBearOBs[InternalBearOBCount].high = high;
+   InternalBearOBs[InternalBearOBCount].low = low;
+   InternalBearOBs[InternalBearOBCount].time = time;
+   InternalBearOBs[InternalBearOBCount].barIndex = barIndex;
+   InternalBearOBs[InternalBearOBCount].bias = -1;
+   InternalBearOBs[InternalBearOBCount].mitigated = false;
+   InternalBearOBs[InternalBearOBCount].isSwingOB = false;
+   InternalBearOBs[InternalBearOBCount].objName = SMCPrefix + "IntBearOB_" + IntegerToString((long)time);
+   InternalBearOBCount++;
+}
+
+//+------------------------------------------------------------------+
+//| Add Swing Bullish Order Block                                      |
+//+------------------------------------------------------------------+
+void AddSwingBullOB(double high, double low, datetime time, int barIndex)
+{
+   for(int i = 0; i < SwingBullOBCount; i++)
+   {
+      if(SwingBullOBs[i].time == time) return;
+   }
+   
+   if(SwingBullOBCount >= GetSMCMaxSwingOB())
+   {
+      ObjectDelete(0, SwingBullOBs[0].objName);
+      for(int k = 0; k < SwingBullOBCount - 1; k++)
+      {
+         SwingBullOBs[k] = SwingBullOBs[k + 1];
+      }
+      SwingBullOBCount--;
+   }
+   
+   SwingBullOBs[SwingBullOBCount].high = high;
+   SwingBullOBs[SwingBullOBCount].low = low;
+   SwingBullOBs[SwingBullOBCount].time = time;
+   SwingBullOBs[SwingBullOBCount].barIndex = barIndex;
+   SwingBullOBs[SwingBullOBCount].bias = 1;
+   SwingBullOBs[SwingBullOBCount].mitigated = false;
+   SwingBullOBs[SwingBullOBCount].isSwingOB = true;
+   SwingBullOBs[SwingBullOBCount].objName = SMCPrefix + "SwingBullOB_" + IntegerToString((long)time);
+   SwingBullOBCount++;
+}
+
+//+------------------------------------------------------------------+
+//| Add Swing Bearish Order Block                                      |
+//+------------------------------------------------------------------+
+void AddSwingBearOB(double high, double low, datetime time, int barIndex)
+{
+   for(int i = 0; i < SwingBearOBCount; i++)
+   {
+      if(SwingBearOBs[i].time == time) return;
+   }
+   
+   if(SwingBearOBCount >= GetSMCMaxSwingOB())
+   {
+      ObjectDelete(0, SwingBearOBs[0].objName);
+      for(int k = 0; k < SwingBearOBCount - 1; k++)
+      {
+         SwingBearOBs[k] = SwingBearOBs[k + 1];
+      }
+      SwingBearOBCount--;
+   }
+   
+   SwingBearOBs[SwingBearOBCount].high = high;
+   SwingBearOBs[SwingBearOBCount].low = low;
+   SwingBearOBs[SwingBearOBCount].time = time;
+   SwingBearOBs[SwingBearOBCount].barIndex = barIndex;
+   SwingBearOBs[SwingBearOBCount].bias = -1;
+   SwingBearOBs[SwingBearOBCount].mitigated = false;
+   SwingBearOBs[SwingBearOBCount].isSwingOB = true;
+   SwingBearOBs[SwingBearOBCount].objName = SMCPrefix + "SwingBearOB_" + IntegerToString((long)time);
+   SwingBearOBCount++;
+}
+
+// Legacy compatibility functions
+void AddBullishOB(double high, double low, datetime time, int barIndex)
+{
+   AddInternalBullOB(high, low, time, barIndex);
+}
+
+void AddBearishOB(double high, double low, datetime time, int barIndex)
+{
+   AddInternalBearOB(high, low, time, barIndex);
 }
 
 //+------------------------------------------------------------------+
@@ -1297,162 +1754,182 @@ void CleanupOldOrderBlocks(datetime currentTime)
 {
    int maxAge = 60 * 60 * 24 * 30;  // 30 days in seconds
    
-   // Cleanup old Bullish OBs
-   for(int i = BullishOBCount - 1; i >= 0; i--)
+   // Cleanup Internal Bullish OBs
+   for(int i = InternalBullOBCount - 1; i >= 0; i--)
    {
-      if(currentTime - BullishOBs[i].time > maxAge || BullishOBs[i].mitigated)
+      if(currentTime - InternalBullOBs[i].time > maxAge || InternalBullOBs[i].mitigated)
       {
-         ObjectDelete(0, BullishOBs[i].objName);
-         // Remove from array
-         for(int j = i; j < BullishOBCount - 1; j++)
+         ObjectDelete(0, InternalBullOBs[i].objName);
+         for(int j = i; j < InternalBullOBCount - 1; j++)
          {
-            BullishOBs[j] = BullishOBs[j + 1];
+            InternalBullOBs[j] = InternalBullOBs[j + 1];
          }
-         BullishOBCount--;
+         InternalBullOBCount--;
       }
    }
    
-   // Cleanup old Bearish OBs
-   for(int i = BearishOBCount - 1; i >= 0; i--)
+   // Cleanup Internal Bearish OBs
+   for(int i = InternalBearOBCount - 1; i >= 0; i--)
    {
-      if(currentTime - BearishOBs[i].time > maxAge || BearishOBs[i].mitigated)
+      if(currentTime - InternalBearOBs[i].time > maxAge || InternalBearOBs[i].mitigated)
       {
-         ObjectDelete(0, BearishOBs[i].objName);
-         // Remove from array
-         for(int j = i; j < BearishOBCount - 1; j++)
+         ObjectDelete(0, InternalBearOBs[i].objName);
+         for(int j = i; j < InternalBearOBCount - 1; j++)
          {
-            BearishOBs[j] = BearishOBs[j + 1];
+            InternalBearOBs[j] = InternalBearOBs[j + 1];
          }
-         BearishOBCount--;
+         InternalBearOBCount--;
       }
    }
-}
-
-//+------------------------------------------------------------------+
-//| Add Bullish Order Block                                            |
-//+------------------------------------------------------------------+
-void AddBullishOB(double high, double low, datetime time, int barIndex)
-{
-   // Check if already exists
-   for(int i = 0; i < BullishOBCount; i++)
-   {
-      if(BullishOBs[i].time == time) return;
-   }
    
-   // FIFO rotation
-   if(BullishOBCount >= GetSMCMaxOrderBlocks())
+   // Cleanup Swing Bullish OBs
+   for(int i = SwingBullOBCount - 1; i >= 0; i--)
    {
-      ObjectDelete(0, BullishOBs[0].objName);
-      for(int k = 0; k < BullishOBCount - 1; k++)
+      if(currentTime - SwingBullOBs[i].time > maxAge || SwingBullOBs[i].mitigated)
       {
-         BullishOBs[k] = BullishOBs[k + 1];
+         ObjectDelete(0, SwingBullOBs[i].objName);
+         for(int j = i; j < SwingBullOBCount - 1; j++)
+         {
+            SwingBullOBs[j] = SwingBullOBs[j + 1];
+         }
+         SwingBullOBCount--;
       }
-      BullishOBCount--;
    }
    
-   BullishOBs[BullishOBCount].high = high;
-   BullishOBs[BullishOBCount].low = low;
-   BullishOBs[BullishOBCount].time = time;
-   BullishOBs[BullishOBCount].barIndex = barIndex;
-   BullishOBs[BullishOBCount].bias = 1;
-   BullishOBs[BullishOBCount].mitigated = false;
-   BullishOBs[BullishOBCount].objName = SMCPrefix + "BullOB_" + IntegerToString((long)time);
-   BullishOBCount++;
-}
-
-//+------------------------------------------------------------------+
-//| Add Bearish Order Block                                            |
-//+------------------------------------------------------------------+
-void AddBearishOB(double high, double low, datetime time, int barIndex)
-{
-   // Check if already exists
-   for(int i = 0; i < BearishOBCount; i++)
+   // Cleanup Swing Bearish OBs
+   for(int i = SwingBearOBCount - 1; i >= 0; i--)
    {
-      if(BearishOBs[i].time == time) return;
-   }
-   
-   // FIFO rotation
-   if(BearishOBCount >= GetSMCMaxOrderBlocks())
-   {
-      ObjectDelete(0, BearishOBs[0].objName);
-      for(int k = 0; k < BearishOBCount - 1; k++)
+      if(currentTime - SwingBearOBs[i].time > maxAge || SwingBearOBs[i].mitigated)
       {
-         BearishOBs[k] = BearishOBs[k + 1];
+         ObjectDelete(0, SwingBearOBs[i].objName);
+         for(int j = i; j < SwingBearOBCount - 1; j++)
+         {
+            SwingBearOBs[j] = SwingBearOBs[j + 1];
+         }
+         SwingBearOBCount--;
       }
-      BearishOBCount--;
    }
-   
-   BearishOBs[BearishOBCount].high = high;
-   BearishOBs[BearishOBCount].low = low;
-   BearishOBs[BearishOBCount].time = time;
-   BearishOBs[BearishOBCount].barIndex = barIndex;
-   BearishOBs[BearishOBCount].bias = -1;
-   BearishOBs[BearishOBCount].mitigated = false;
-   BearishOBs[BearishOBCount].objName = SMCPrefix + "BearOB_" + IntegerToString((long)time);
-   BearishOBCount++;
 }
 
 //+------------------------------------------------------------------+
-//| Draw Order Blocks on Chart (LuxAlgo Style - No Border Lines)       |
+//| Draw Order Blocks on Chart (LuxAlgo Style - Separate Colors)       |
 //+------------------------------------------------------------------+
 void DrawOrderBlocks()
 {
    datetime endTime = TimeCurrent() + 86400 * 5;  // Extend 5 days forward
    
-   // Draw Bullish Order Blocks (Support - Blue)
-   for(int i = 0; i < BullishOBCount; i++)
+   // === Draw Internal Bullish Order Blocks ===
+   if(InpSMCShowInternalOB)
    {
-      if(BullishOBs[i].mitigated) continue;
-      
-      string objName = BullishOBs[i].objName;
-      
-      if(ObjectFind(0, objName) < 0)
+      for(int i = 0; i < InternalBullOBCount; i++)
       {
-         ObjectCreate(0, objName, OBJ_RECTANGLE, 0, 
-                     BullishOBs[i].time, BullishOBs[i].high,
-                     endTime, BullishOBs[i].low);
-      }
-      else
-      {
-         ObjectSetInteger(0, objName, OBJPROP_TIME, 1, endTime);
+         if(InternalBullOBs[i].mitigated) continue;
+         
+         string objName = InternalBullOBs[i].objName;
+         
+         if(ObjectFind(0, objName) < 0)
+         {
+            ObjectCreate(0, objName, OBJ_RECTANGLE, 0, 
+                        InternalBullOBs[i].time, InternalBullOBs[i].high,
+                        endTime, InternalBullOBs[i].low);
+         }
+         else
+         {
+            ObjectSetInteger(0, objName, OBJPROP_TIME, 1, endTime);
+         }
+         
+         ObjectSetInteger(0, objName, OBJPROP_COLOR, GetInternalBullOBColor());
+         ObjectSetInteger(0, objName, OBJPROP_STYLE, STYLE_SOLID);
+         ObjectSetInteger(0, objName, OBJPROP_FILL, true);
+         ObjectSetInteger(0, objName, OBJPROP_BACK, true);
+         ObjectSetInteger(0, objName, OBJPROP_SELECTABLE, false);
+         ObjectSetInteger(0, objName, OBJPROP_HIDDEN, true);
+         ObjectSetInteger(0, objName, OBJPROP_WIDTH, 0);
       }
       
-      // LuxAlgo style: filled rectangle with NO border
-      ObjectSetInteger(0, objName, OBJPROP_COLOR, GetSMCBullOBColor());
-      ObjectSetInteger(0, objName, OBJPROP_STYLE, STYLE_SOLID);
-      ObjectSetInteger(0, objName, OBJPROP_FILL, true);
-      ObjectSetInteger(0, objName, OBJPROP_BACK, true);
-      ObjectSetInteger(0, objName, OBJPROP_SELECTABLE, false);
-      ObjectSetInteger(0, objName, OBJPROP_HIDDEN, true);
-      ObjectSetInteger(0, objName, OBJPROP_WIDTH, 0);  // Width 0 = no border
+      // Internal Bearish OBs
+      for(int i = 0; i < InternalBearOBCount; i++)
+      {
+         if(InternalBearOBs[i].mitigated) continue;
+         
+         string objName = InternalBearOBs[i].objName;
+         
+         if(ObjectFind(0, objName) < 0)
+         {
+            ObjectCreate(0, objName, OBJ_RECTANGLE, 0,
+                        InternalBearOBs[i].time, InternalBearOBs[i].high,
+                        endTime, InternalBearOBs[i].low);
+         }
+         else
+         {
+            ObjectSetInteger(0, objName, OBJPROP_TIME, 1, endTime);
+         }
+         
+         ObjectSetInteger(0, objName, OBJPROP_COLOR, GetInternalBearOBColor());
+         ObjectSetInteger(0, objName, OBJPROP_STYLE, STYLE_SOLID);
+         ObjectSetInteger(0, objName, OBJPROP_FILL, true);
+         ObjectSetInteger(0, objName, OBJPROP_BACK, true);
+         ObjectSetInteger(0, objName, OBJPROP_SELECTABLE, false);
+         ObjectSetInteger(0, objName, OBJPROP_HIDDEN, true);
+         ObjectSetInteger(0, objName, OBJPROP_WIDTH, 0);
+      }
    }
    
-   // Draw Bearish Order Blocks (Resistance - Red)
-   for(int i = 0; i < BearishOBCount; i++)
+   // === Draw Swing Bullish Order Blocks ===
+   if(InpSMCShowSwingOB)
    {
-      if(BearishOBs[i].mitigated) continue;
-      
-      string objName = BearishOBs[i].objName;
-      
-      if(ObjectFind(0, objName) < 0)
+      for(int i = 0; i < SwingBullOBCount; i++)
       {
-         ObjectCreate(0, objName, OBJ_RECTANGLE, 0,
-                     BearishOBs[i].time, BearishOBs[i].high,
-                     endTime, BearishOBs[i].low);
-      }
-      else
-      {
-         ObjectSetInteger(0, objName, OBJPROP_TIME, 1, endTime);
+         if(SwingBullOBs[i].mitigated) continue;
+         
+         string objName = SwingBullOBs[i].objName;
+         
+         if(ObjectFind(0, objName) < 0)
+         {
+            ObjectCreate(0, objName, OBJ_RECTANGLE, 0, 
+                        SwingBullOBs[i].time, SwingBullOBs[i].high,
+                        endTime, SwingBullOBs[i].low);
+         }
+         else
+         {
+            ObjectSetInteger(0, objName, OBJPROP_TIME, 1, endTime);
+         }
+         
+         ObjectSetInteger(0, objName, OBJPROP_COLOR, GetSwingBullOBColor());
+         ObjectSetInteger(0, objName, OBJPROP_STYLE, STYLE_SOLID);
+         ObjectSetInteger(0, objName, OBJPROP_FILL, true);
+         ObjectSetInteger(0, objName, OBJPROP_BACK, true);
+         ObjectSetInteger(0, objName, OBJPROP_SELECTABLE, false);
+         ObjectSetInteger(0, objName, OBJPROP_HIDDEN, true);
+         ObjectSetInteger(0, objName, OBJPROP_WIDTH, 0);
       }
       
-      // LuxAlgo style: filled rectangle with NO border
-      ObjectSetInteger(0, objName, OBJPROP_COLOR, GetSMCBearOBColor());
-      ObjectSetInteger(0, objName, OBJPROP_STYLE, STYLE_SOLID);
-      ObjectSetInteger(0, objName, OBJPROP_FILL, true);
-      ObjectSetInteger(0, objName, OBJPROP_BACK, true);
-      ObjectSetInteger(0, objName, OBJPROP_SELECTABLE, false);
-      ObjectSetInteger(0, objName, OBJPROP_HIDDEN, true);
-      ObjectSetInteger(0, objName, OBJPROP_WIDTH, 0);  // Width 0 = no border
+      // Swing Bearish OBs
+      for(int i = 0; i < SwingBearOBCount; i++)
+      {
+         if(SwingBearOBs[i].mitigated) continue;
+         
+         string objName = SwingBearOBs[i].objName;
+         
+         if(ObjectFind(0, objName) < 0)
+         {
+            ObjectCreate(0, objName, OBJ_RECTANGLE, 0,
+                        SwingBearOBs[i].time, SwingBearOBs[i].high,
+                        endTime, SwingBearOBs[i].low);
+         }
+         else
+         {
+            ObjectSetInteger(0, objName, OBJPROP_TIME, 1, endTime);
+         }
+         
+         ObjectSetInteger(0, objName, OBJPROP_COLOR, GetSwingBearOBColor());
+         ObjectSetInteger(0, objName, OBJPROP_STYLE, STYLE_SOLID);
+         ObjectSetInteger(0, objName, OBJPROP_FILL, true);
+         ObjectSetInteger(0, objName, OBJPROP_BACK, true);
+         ObjectSetInteger(0, objName, OBJPROP_SELECTABLE, false);
+         ObjectSetInteger(0, objName, OBJPROP_HIDDEN, true);
+         ObjectSetInteger(0, objName, OBJPROP_WIDTH, 0);
+      }
    }
 }
 
