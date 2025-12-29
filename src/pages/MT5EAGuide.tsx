@@ -5565,115 +5565,96 @@ void DetectOrderBlocks(double &highArr[], double &lowArr[], double &openArr[],
       }
    }
    
-   // Check mitigation of existing Order Blocks
-   // IMPORTANT: Use CONFIRMED CLOSED candle (shift=1) for mitigation check
-   // LuxAlgo style: OB is mitigated ONLY when a CLOSED candle's close price
-   // fully penetrates through the OB zone. Current bar (shift=0) is still forming
-   // and should NOT be used for mitigation detection.
-   //
-   // Bullish OB (support) -> Mitigated when CLOSE < OB.low
-   // Bearish OB (resistance) -> Mitigated when CLOSE > OB.high
+   // =========================================================================
+   // CHECK MITIGATION OF EXISTING ORDER BLOCKS (LuxAlgo Style)
+   // =========================================================================
+   // CRITICAL: Mitigation must use InpSMCTimeframe candle that is CLOSED
+   // 
+   // Rules:
+   // 1. Use ONLY the LAST CLOSED candle (shift=1) from SMC Timeframe
+   // 2. Bullish OB (support) -> Mitigated when Close < OB.low (breaks through bottom)
+   // 3. Bearish OB (resistance) -> Mitigated when Close > OB.high (breaks through top)
+   // 4. Once mitigated: DELETE from chart + REMOVE from array immediately
+   // 5. Do NOT count wick-only touches as mitigation - CLOSE must break through
+   // =========================================================================
    
-   // Use shift=1 (last closed candle) for reliable mitigation detection
-   // Index 1 in arrays = last closed bar (since arrays are copied from shift 0)
-   int confirmedBar = 1;  // Last closed candle
-   if(barsTotal <= confirmedBar) return;  // Safety check
+   // Get fresh CLOSED candle from SMC Timeframe for mitigation check
+   // We use shift=1 which is the LAST FULLY CLOSED candle on SMC timeframe
+   double smcClose[];
+   ArraySetAsSeries(smcClose, true);
+   if(CopyClose(_Symbol, InpSMCTimeframe, 1, 1, smcClose) < 1) return;
    
-   double confirmedClose = closeArr[confirmedBar];
+   double confirmedClose = smcClose[0];  // Last closed candle's close price
+   int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
    
-   // Track how many OBs were mitigated this tick for cleanup
-   int mitigatedBullCount = 0;
-   int mitigatedBearCount = 0;
+   // Flag to track if any OB was mitigated (for immediate cleanup)
+   bool anyMitigated = false;
    
-   // Check Bullish OBs for mitigation
-   for(int i = 0; i < BullishOBCount; i++)
+   // Check Bullish OBs (Support Zones) for mitigation
+   for(int i = BullishOBCount - 1; i >= 0; i--)  // Iterate backwards for safe removal
    {
-      if(!BullishOBs[i].mitigated)
+      if(BullishOBs[i].mitigated) continue;
+      
+      // Bullish OB is mitigated ONLY when:
+      // CLOSED candle's CLOSE price is BELOW the OB LOW (completely breaks through bottom)
+      // Wick below does NOT count - must be CLOSE price
+      if(confirmedClose < BullishOBs[i].low)
       {
-         // Bullish OB (support zone) is mitigated only when:
-         // A CLOSED candle's close price is BELOW the OB low (completely penetrated)
-         // Just touching or dipping into the zone does NOT mitigate it
-         if(confirmedClose < BullishOBs[i].low)
+         Print(">>> SMC Mitigation: Bullish OB BROKEN! Close=", 
+               DoubleToString(confirmedClose, digits), " < Zone Low=", 
+               DoubleToString(BullishOBs[i].low, digits), " | Removing from chart & array");
+         
+         // 1. Delete chart object immediately
+         ObjectDelete(0, BullishOBs[i].objName);
+         
+         // 2. Remove from array by shifting elements (immediate removal, not just marking)
+         for(int j = i; j < BullishOBCount - 1; j++)
          {
-            BullishOBs[i].mitigated = true;
-            ObjectDelete(0, BullishOBs[i].objName);
-            mitigatedBullCount++;
-            Print(">>> Bullish OB Mitigated! Closed candle (shift=1) close=", 
-                  DoubleToString(confirmedClose, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)), 
-                  " < zone low=", DoubleToString(BullishOBs[i].low, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)));
+            BullishOBs[j] = BullishOBs[j + 1];
          }
+         BullishOBCount--;
+         anyMitigated = true;
       }
    }
    
-   // Check Bearish OBs for mitigation
-   for(int i = 0; i < BearishOBCount; i++)
+   // Check Bearish OBs (Resistance Zones) for mitigation
+   for(int i = BearishOBCount - 1; i >= 0; i--)  // Iterate backwards for safe removal
    {
-      if(!BearishOBs[i].mitigated)
+      if(BearishOBs[i].mitigated) continue;
+      
+      // Bearish OB is mitigated ONLY when:
+      // CLOSED candle's CLOSE price is ABOVE the OB HIGH (completely breaks through top)
+      // Wick above does NOT count - must be CLOSE price
+      if(confirmedClose > BearishOBs[i].high)
       {
-         // Bearish OB (resistance zone) is mitigated only when:
-         // A CLOSED candle's close price is ABOVE the OB high (completely penetrated)
-         // Just touching or spiking into the zone does NOT mitigate it
-         if(confirmedClose > BearishOBs[i].high)
+         Print(">>> SMC Mitigation: Bearish OB BROKEN! Close=", 
+               DoubleToString(confirmedClose, digits), " > Zone High=", 
+               DoubleToString(BearishOBs[i].high, digits), " | Removing from chart & array");
+         
+         // 1. Delete chart object immediately
+         ObjectDelete(0, BearishOBs[i].objName);
+         
+         // 2. Remove from array by shifting elements (immediate removal, not just marking)
+         for(int j = i; j < BearishOBCount - 1; j++)
          {
-            BearishOBs[i].mitigated = true;
-            ObjectDelete(0, BearishOBs[i].objName);
-            mitigatedBearCount++;
-            Print(">>> Bearish OB Mitigated! Closed candle (shift=1) close=", 
-                  DoubleToString(confirmedClose, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)), 
-                  " > zone high=", DoubleToString(BearishOBs[i].high, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)));
+            BearishOBs[j] = BearishOBs[j + 1];
          }
+         BearishOBCount--;
+         anyMitigated = true;
       }
    }
    
-   // Cleanup: Remove mitigated OBs from arrays (optional - keeps arrays clean)
-   // This prevents array from filling up with mitigated entries
-   CleanupMitigatedOBs();
+   // Force chart redraw if any OB was mitigated
+   if(anyMitigated)
+   {
+      ChartRedraw(0);
+      Print(">>> SMC: Chart refreshed after OB mitigation. Remaining: ", 
+            IntegerToString(BullishOBCount), " Bull, ", IntegerToString(BearishOBCount), " Bear OBs");
+   }
 }
 
-//+------------------------------------------------------------------+
-//| Remove mitigated Order Blocks from arrays                          |
-//| Keeps arrays clean and prevents buildup of inactive entries        |
-//+------------------------------------------------------------------+
-void CleanupMitigatedOBs()
-{
-   // Cleanup Bullish OBs - remove mitigated entries
-   int writeIdx = 0;
-   for(int readIdx = 0; readIdx < BullishOBCount; readIdx++)
-   {
-      if(!BullishOBs[readIdx].mitigated)
-      {
-         if(writeIdx != readIdx)
-         {
-            BullishOBs[writeIdx] = BullishOBs[readIdx];
-         }
-         writeIdx++;
-      }
-   }
-   if(writeIdx < BullishOBCount)
-   {
-      Print(">>> SMC Cleanup: Removed ", BullishOBCount - writeIdx, " mitigated Bullish OBs");
-      BullishOBCount = writeIdx;
-   }
-   
-   // Cleanup Bearish OBs - remove mitigated entries
-   writeIdx = 0;
-   for(int readIdx = 0; readIdx < BearishOBCount; readIdx++)
-   {
-      if(!BearishOBs[readIdx].mitigated)
-      {
-         if(writeIdx != readIdx)
-         {
-            BearishOBs[writeIdx] = BearishOBs[readIdx];
-         }
-         writeIdx++;
-      }
-   }
-   if(writeIdx < BearishOBCount)
-   {
-      Print(">>> SMC Cleanup: Removed ", BearishOBCount - writeIdx, " mitigated Bearish OBs");
-      BearishOBCount = writeIdx;
-   }
-}
+// CleanupMitigatedOBs() is no longer needed as mitigation now removes OBs immediately
+// Keeping empty function for backward compatibility if called elsewhere
 
 //+------------------------------------------------------------------+
 //| Add Bullish Order Block to array                                   |
