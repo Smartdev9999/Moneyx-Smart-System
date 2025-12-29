@@ -561,7 +561,29 @@ datetime g_smcSellTouchTime = 0;         // Time when sell touch detected (TimeC
 // Track which OB was USED to open the last initial order (for reset comparisons)
 string g_smcLastBuyOBUsed = "";
 string g_smcLastSellOBUsed = "";
-// SMC Swing Points
+
+// ========================================================================
+// SMC LUXALGO-STYLE SWING STRUCTURE TRACKING
+// ========================================================================
+// Internal Swing Tracking (short-term structure)
+double g_InternalSwingHigh = 0;
+double g_InternalSwingLow = 0;
+int g_InternalSwingHighBar = 0;
+int g_InternalSwingLowBar = 0;
+bool g_InternalSwingHighCrossed = false;
+bool g_InternalSwingLowCrossed = false;
+int g_InternalTrendBias = 0;  // 1 = Bullish, -1 = Bearish
+
+// Swing Structure Tracking (major swing - for swing OBs)
+double g_SwingHigh = 0;
+double g_SwingLow = 0;
+int g_SwingHighBar = 0;
+int g_SwingLowBar = 0;
+bool g_SwingHighCrossed = false;
+bool g_SwingLowCrossed = false;
+int g_SwingTrendBias = 0;  // 1 = Bullish, -1 = Bearish
+
+// Legacy SMC Swing Points (kept for compatibility)
 double SMCSwingHigh = 0;
 double SMCSwingLow = 0;
 datetime SMCSwingHighTime = 0;
@@ -679,10 +701,32 @@ int OnInit()
       ArrayResize(BearishOBs, InpSMCMaxOrderBlocks);
       BullishOBCount = 0;
       BearishOBCount = 0;
-      Print("Smart Money Concepts initialized - Swing Length: ", InpSMCSwingLength, " | Max OBs: ", InpSMCMaxOrderBlocks);
+      
+      // Reset LuxAlgo swing structure tracking
+      g_InternalSwingHigh = 0;
+      g_InternalSwingLow = 0;
+      g_InternalSwingHighBar = 0;
+      g_InternalSwingLowBar = 0;
+      g_InternalSwingHighCrossed = false;
+      g_InternalSwingLowCrossed = false;
+      g_InternalTrendBias = 0;
+      g_SwingHigh = 0;
+      g_SwingLow = 0;
+      g_SwingHighBar = 0;
+      g_SwingLowBar = 0;
+      g_SwingHighCrossed = false;
+      g_SwingLowCrossed = false;
+      g_SwingTrendBias = 0;
+      g_lastSMCClosedBarTime = 0;
+      
+      Print("=== SMC LuxAlgo Style Initialized ===");
+      Print("Swing Length (Major): ", InpSMCSwingLength);
+      Print("Internal Length: ", InpSMCInternalLength);
+      Print("Max Order Blocks: ", InpSMCMaxOrderBlocks);
+      Print("ATR Filter: Enabled (200-period, threshold 2x)");
+      Print("OB Detection: Structure Break (BOS/CHoCH) only");
       
       // *** SYNC SMC SETTINGS TO INDICATOR VIA GLOBAL VARIABLES ***
-      // Indicator will read these values and match EA's SMC display settings
       GlobalVariableSet(GV_SMC_ENABLED, 1.0);
       GlobalVariableSet(GV_SMC_SWING_LENGTH, (double)InpSMCSwingLength);
       GlobalVariableSet(GV_SMC_INTERNAL_LENGTH, (double)InpSMCInternalLength);
@@ -5466,19 +5510,20 @@ string AnalyzeBollingerSignal()
 }
 
 //+------------------------------------------------------------------+
-//| Calculate Smart Money Concepts (Order Blocks)                      |
-//| Based on swing structure detection and order block identification  |
+//| Calculate Smart Money Concepts (Order Blocks) - LuxAlgo Style      |
+//| Based on swing structure detection + BOS/CHoCH + ATR Filter         |
 //+------------------------------------------------------------------+
 void CalculateSMC()
 {
-   // Get price data
+   // Get price data - need more bars for ATR calculation and swing detection
    double highArr[], lowArr[], closeArr[], openArr[];
    ArraySetAsSeries(highArr, true);
    ArraySetAsSeries(lowArr, true);
    ArraySetAsSeries(closeArr, true);
    ArraySetAsSeries(openArr, true);
    
-   int barsNeeded = InpSMCSwingLength + 20;
+   // LuxAlgo needs: SwingLength + ATR(200) + buffer for pivot detection
+   int barsNeeded = MathMax(InpSMCSwingLength * 3, 300);
    if(CopyHigh(_Symbol, InpSMCTimeframe, 0, barsNeeded, highArr) < barsNeeded) return;
    if(CopyLow(_Symbol, InpSMCTimeframe, 0, barsNeeded, lowArr) < barsNeeded) return;
    if(CopyClose(_Symbol, InpSMCTimeframe, 0, barsNeeded, closeArr) < barsNeeded) return;
@@ -5488,13 +5533,10 @@ void CalculateSMC()
    ArraySetAsSeries(timeArr, true);
    if(CopyTime(_Symbol, InpSMCTimeframe, 0, barsNeeded, timeArr) < barsNeeded) return;
    
-   // Detect Swing High and Swing Low using lookback
+   // Update legacy SMCSwingHigh/Low for compatibility with other functions
    int lookback = InpSMCInternalLength;
-   
-   // Find current swing points
-   for(int i = lookback; i < barsNeeded - lookback; i++)
+   for(int i = lookback; i < MathMin(100, barsNeeded - lookback); i++)
    {
-      // Check for Swing High
       bool isSwingHigh = true;
       for(int j = 1; j <= lookback; j++)
       {
@@ -5504,14 +5546,12 @@ void CalculateSMC()
             break;
          }
       }
-      
       if(isSwingHigh && highArr[i] > SMCSwingHigh)
       {
          SMCSwingHigh = highArr[i];
          SMCSwingHighTime = timeArr[i];
       }
       
-      // Check for Swing Low
       bool isSwingLow = true;
       for(int j = 1; j <= lookback; j++)
       {
@@ -5521,7 +5561,6 @@ void CalculateSMC()
             break;
          }
       }
-      
       if(isSwingLow && (SMCSwingLow == 0 || lowArr[i] < SMCSwingLow))
       {
          SMCSwingLow = lowArr[i];
@@ -5532,17 +5571,17 @@ void CalculateSMC()
    // Determine trend based on structure
    double currentClose = closeArr[0];
    if(currentClose > SMCSwingHigh && SMCSwingHigh > 0)
-   {
-      SMCTrend = 1;  // Bullish - price broke above swing high
-   }
+      SMCTrend = 1;
    else if(currentClose < SMCSwingLow && SMCSwingLow > 0)
-   {
-      SMCTrend = -1; // Bearish - price broke below swing low
-   }
+      SMCTrend = -1;
    
-   // Detect Order Blocks
-   // Bullish OB: Last bearish candle before a strong bullish move
-   // Bearish OB: Last bullish candle before a strong bearish move
+   // ===============================================================
+   // LUXALGO-STYLE ORDER BLOCK DETECTION
+   // - Uses Pivot Points (pivothigh/pivotlow) for swing structure
+   // - Creates OBs ONLY on Structure Breaks (BOS/CHoCH)
+   // - OB origin = min/max body bar between swing and break point
+   // - ATR filter: bar range >= 2*ATR(200) for significance
+   // ===============================================================
    DetectOrderBlocks(highArr, lowArr, openArr, closeArr, timeArr, barsNeeded);
    
    // Apply Confluence Filter (merge overlapping OBs)
@@ -5559,16 +5598,117 @@ void CalculateSMC()
 }
 
 //+------------------------------------------------------------------+
-//| Detect Order Blocks based on structure breaks (LuxAlgo Style)      |
-//| Key: Use candle BODY (Open/Close) for OB zone, not wicks           |
+//| =================== LUXALGO HELPER FUNCTIONS =================== |
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//| Get ATR value for volatility measure                               |
+//+------------------------------------------------------------------+
+double GetATRValue(int barIndex, double &highArr[], double &lowArr[], double &closeArr[], int period = 200)
+{
+   int barsTotal = ArraySize(highArr);
+   if(barIndex + period >= barsTotal) return 0;
+   
+   double sum = 0;
+   for(int i = barIndex; i < barIndex + period && i < barsTotal - 1; i++)
+   {
+      double tr1 = highArr[i] - lowArr[i];
+      double tr2 = MathAbs(highArr[i] - closeArr[i + 1]);
+      double tr3 = MathAbs(lowArr[i] - closeArr[i + 1]);
+      sum += MathMax(tr1, MathMax(tr2, tr3));
+   }
+   
+   return sum / period;
+}
+
+//+------------------------------------------------------------------+
+//| Check if bar passes ATR filter (high volatility bar)               |
+//+------------------------------------------------------------------+
+bool PassesATRFilter(int barIndex, double barHigh, double barLow, 
+                     double &highArr[], double &lowArr[], double &closeArr[])
+{
+   double atr = GetATRValue(barIndex, highArr, lowArr, closeArr, 200);
+   if(atr == 0) return true;  // No filter if can't calculate
+   
+   double barRange = barHigh - barLow;
+   // LuxAlgo: bar range >= 2 * ATR(200) = significant
+   return barRange >= (2.0 * atr);
+}
+
+//+------------------------------------------------------------------+
+//| Find bar with minimum body low in range (for bullish OB origin)    |
+//| LuxAlgo: Search backwards from swing low to current to find        |
+//| the origin candle with minimum body low                            |
+//+------------------------------------------------------------------+
+int FindMinBodyBar(int startBar, int endBar, double &openArr[], double &closeArr[])
+{
+   int minBar = -1;
+   double minValue = DBL_MAX;
+   
+   int barsTotal = ArraySize(openArr);
+   int actualEnd = MathMax(endBar, 1);  // Don't include bar 0 (current forming bar)
+   
+   for(int i = startBar; i >= actualEnd && i >= 0; i--)
+   {
+      if(i >= barsTotal) continue;
+      double bodyLow = MathMin(openArr[i], closeArr[i]);
+      if(bodyLow < minValue)
+      {
+         minValue = bodyLow;
+         minBar = i;
+      }
+   }
+   
+   return minBar;
+}
+
+//+------------------------------------------------------------------+
+//| Find bar with maximum body high in range (for bearish OB origin)   |
+//| LuxAlgo: Search backwards from swing high to current to find       |
+//| the origin candle with maximum body high                           |
+//+------------------------------------------------------------------+
+int FindMaxBodyBar(int startBar, int endBar, double &openArr[], double &closeArr[])
+{
+   int maxBar = -1;
+   double maxValue = -DBL_MAX;
+   
+   int barsTotal = ArraySize(openArr);
+   int actualEnd = MathMax(endBar, 1);  // Don't include bar 0 (current forming bar)
+   
+   for(int i = startBar; i >= actualEnd && i >= 0; i--)
+   {
+      if(i >= barsTotal) continue;
+      double bodyHigh = MathMax(openArr[i], closeArr[i]);
+      if(bodyHigh > maxValue)
+      {
+         maxValue = bodyHigh;
+         maxBar = i;
+      }
+   }
+   
+   return maxBar;
+}
+
+//+------------------------------------------------------------------+
+//| Detect Order Blocks (LuxAlgo Style - Full Algorithm)               |
+//| ================================================================== |
+//| KEY ALGORITHM:                                                      |
+//| 1. Find swing highs/lows with pivothigh/pivotlow (InpSMCSwingLength)|
+//| 2. When Structure Break (BOS/CHoCH) occurs, look BACK to find       |
+//|    the ORIGIN candle (min/max body) between swing and break point  |
+//| 3. OB is defined by candle BODY (Open/Close), not wicks            |
+//| 4. ATR filter: bar range >= 2 * ATR(200) = significant             |
+//| ================================================================== |
+//| This prevents hundreds of tiny OBs - only creates OBs when         |
+//| structure actually breaks (price closes beyond swing point)        |
 //+------------------------------------------------------------------+
 void DetectOrderBlocks(double &highArr[], double &lowArr[], double &openArr[], 
                        double &closeArr[], datetime &timeArr[], int barsTotal)
 {
-   int lookback = InpSMCInternalLength;
-
-   // Only scan/create new OBs once per NEW CLOSED candle on SMC timeframe.
-   // This prevents old historical OBs from being re-detected every tick (and “coming back”).
+   int swingLen = InpSMCSwingLength;      // Major swing (50 default)
+   int internalLen = InpSMCInternalLength; // Internal swing (5 default)
+   
+   // Only scan/create new OBs once per NEW CLOSED candle on SMC timeframe
    datetime lastClosedSMCTime = iTime(_Symbol, InpSMCTimeframe, 1);
    bool canScanNewOBs = (lastClosedSMCTime > 0 && lastClosedSMCTime != g_lastSMCClosedBarTime);
    if(canScanNewOBs)
@@ -5576,150 +5716,220 @@ void DetectOrderBlocks(double &highArr[], double &lowArr[], double &openArr[],
 
    if(canScanNewOBs)
    {
-      // Scan for new Order Blocks (limit to recent bars for performance)
-      int scanLimit = MathMin(50, barsTotal - lookback - 1);
-
-      for(int i = lookback; i < scanLimit; i++)
+      // ===============================================================
+      // STEP 1: DETECT PIVOT HIGHS AND LOWS (Swing Structure)
+      // ===============================================================
+      int scanLimit = MathMin(200, barsTotal - swingLen - 1);
+      
+      // Find pivots and update swing tracking
+      for(int i = swingLen + 1; i < scanLimit - swingLen; i++)
       {
-         // Check for Bullish Order Block (Support Zone)
-         // Condition: Bearish candle followed by strong bullish move that breaks structure
-         // LuxAlgo uses candle BODY for OB zone, not wicks
-         if(closeArr[i] < openArr[i])  // Bearish candle
+         // --- Check for Internal Pivot High (shorter swing) ---
+         bool isInternalPivotHigh = true;
+         for(int j = 1; j <= internalLen; j++)
          {
-            // Check if next candles made a strong bullish move
-            bool strongBullishMove = false;
-            for(int j = i - 1; j >= 1; j--)
+            if(i + j >= barsTotal || i - j < 0) { isInternalPivotHigh = false; break; }
+            if(highArr[i] <= highArr[i - j] || highArr[i] <= highArr[i + j])
             {
-               if(closeArr[j] > highArr[i] + (highArr[i] - lowArr[i]))
-               {
-                  strongBullishMove = true;
-                  break;
-               }
-               if(j < i - 3) break;  // Only check 3 bars ahead
-            }
-
-            if(strongBullishMove && InpSMCShowBullishOB)
-            {
-               // LuxAlgo style: OB zone = candle BODY only
-               double obHigh = openArr[i];   // Top of bearish body (open)
-               double obLow = closeArr[i];   // Bottom of bearish body (close)
-               AddBullishOB(obHigh, obLow, timeArr[i], i);
+               isInternalPivotHigh = false;
+               break;
             }
          }
-
-         // Check for Bearish Order Block (Resistance Zone)
-         // Condition: Bullish candle followed by strong bearish move that breaks structure
-         if(closeArr[i] > openArr[i])  // Bullish candle
+         
+         // --- Check for Internal Pivot Low (shorter swing) ---
+         bool isInternalPivotLow = true;
+         for(int j = 1; j <= internalLen; j++)
          {
-            // Check if next candles made a strong bearish move
-            bool strongBearishMove = false;
-            for(int j = i - 1; j >= 1; j--)
+            if(i + j >= barsTotal || i - j < 0) { isInternalPivotLow = false; break; }
+            if(lowArr[i] >= lowArr[i - j] || lowArr[i] >= lowArr[i + j])
             {
-               if(closeArr[j] < lowArr[i] - (highArr[i] - lowArr[i]))
-               {
-                  strongBearishMove = true;
-                  break;
-               }
-               if(j < i - 3) break;  // Only check 3 bars ahead
+               isInternalPivotLow = false;
+               break;
             }
-
-            if(strongBearishMove && InpSMCShowBearishOB)
+         }
+         
+         // Update internal swing tracking
+         if(isInternalPivotLow && (g_InternalSwingLow == 0 || lowArr[i] < g_InternalSwingLow))
+         {
+            g_InternalSwingLow = lowArr[i];
+            g_InternalSwingLowBar = i;
+            g_InternalSwingLowCrossed = false;
+         }
+         
+         if(isInternalPivotHigh && highArr[i] > g_InternalSwingHigh)
+         {
+            g_InternalSwingHigh = highArr[i];
+            g_InternalSwingHighBar = i;
+            g_InternalSwingHighCrossed = false;
+         }
+         
+         // --- Check for Swing Pivot High (major swing) ---
+         bool isSwingPivotHigh = true;
+         for(int j = 1; j <= swingLen; j++)
+         {
+            if(i + j >= barsTotal || i - j < 0) { isSwingPivotHigh = false; break; }
+            if(highArr[i] <= highArr[i - j] || highArr[i] <= highArr[i + j])
             {
-               // LuxAlgo style: OB zone = candle BODY only
-               double obHigh = closeArr[i];  // Top of bullish body (close)
-               double obLow = openArr[i];    // Bottom of bullish body (open)
-               AddBearishOB(obHigh, obLow, timeArr[i], i);
+               isSwingPivotHigh = false;
+               break;
+            }
+         }
+         
+         // --- Check for Swing Pivot Low (major swing) ---
+         bool isSwingPivotLow = true;
+         for(int j = 1; j <= swingLen; j++)
+         {
+            if(i + j >= barsTotal || i - j < 0) { isSwingPivotLow = false; break; }
+            if(lowArr[i] >= lowArr[i - j] || lowArr[i] >= lowArr[i + j])
+            {
+               isSwingPivotLow = false;
+               break;
+            }
+         }
+         
+         // Update swing structure tracking
+         if(isSwingPivotLow && (g_SwingLow == 0 || lowArr[i] < g_SwingLow))
+         {
+            g_SwingLow = lowArr[i];
+            g_SwingLowBar = i;
+            g_SwingLowCrossed = false;
+         }
+         
+         if(isSwingPivotHigh && highArr[i] > g_SwingHigh)
+         {
+            g_SwingHigh = highArr[i];
+            g_SwingHighBar = i;
+            g_SwingHighCrossed = false;
+         }
+      }
+      
+      // ===============================================================
+      // STEP 2: CHECK FOR STRUCTURE BREAKS AND CREATE ORDER BLOCKS
+      // ===============================================================
+      double currentClose = closeArr[1];  // Use CLOSED candle (shift 1)
+      
+      // === BULLISH BREAK: Close crosses ABOVE swing high ===
+      // Creates a BULLISH Order Block (support zone)
+      if(g_InternalSwingHigh > 0 && !g_InternalSwingHighCrossed && currentClose > g_InternalSwingHigh)
+      {
+         g_InternalSwingHighCrossed = true;
+         
+         bool isCHoCH = (g_InternalTrendBias == -1);  // CHoCH if we were bearish
+         g_InternalTrendBias = 1;  // Now bullish
+         
+         Print(">>> SMC: ", (isCHoCH ? "CHoCH" : "BOS"), " BULLISH! Close=", 
+               DoubleToString(currentClose, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)), 
+               " broke above swing high=", DoubleToString(g_InternalSwingHigh, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)));
+         
+         // Find ORIGIN candle: bar with minimum body low between swing low and current
+         if(InpSMCShowBullishOB && g_InternalSwingLowBar > 0)
+         {
+            int obBar = FindMinBodyBar(g_InternalSwingLowBar, 1, openArr, closeArr);
+            if(obBar >= 0 && obBar < barsTotal)
+            {
+               double obHigh = MathMax(openArr[obBar], closeArr[obBar]);  // Body high
+               double obLow = MathMin(openArr[obBar], closeArr[obBar]);   // Body low
+               
+               // Apply ATR filter: only significant bars become OBs
+               if(PassesATRFilter(obBar, highArr[obBar], lowArr[obBar], highArr, lowArr, closeArr))
+               {
+                  AddBullishOB(obHigh, obLow, timeArr[obBar], obBar);
+                  Print(">>> SMC: Created Bullish OB at bar ", obBar, " | Zone: ", 
+                        DoubleToString(obLow, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)), " - ", 
+                        DoubleToString(obHigh, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)));
+               }
+            }
+         }
+      }
+      
+      // === BEARISH BREAK: Close crosses BELOW swing low ===
+      // Creates a BEARISH Order Block (resistance zone)
+      if(g_InternalSwingLow > 0 && !g_InternalSwingLowCrossed && currentClose < g_InternalSwingLow)
+      {
+         g_InternalSwingLowCrossed = true;
+         
+         bool isCHoCH = (g_InternalTrendBias == 1);  // CHoCH if we were bullish
+         g_InternalTrendBias = -1;  // Now bearish
+         
+         Print(">>> SMC: ", (isCHoCH ? "CHoCH" : "BOS"), " BEARISH! Close=", 
+               DoubleToString(currentClose, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)), 
+               " broke below swing low=", DoubleToString(g_InternalSwingLow, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)));
+         
+         // Find ORIGIN candle: bar with maximum body high between swing high and current
+         if(InpSMCShowBearishOB && g_InternalSwingHighBar > 0)
+         {
+            int obBar = FindMaxBodyBar(g_InternalSwingHighBar, 1, openArr, closeArr);
+            if(obBar >= 0 && obBar < barsTotal)
+            {
+               double obHigh = MathMax(openArr[obBar], closeArr[obBar]);  // Body high
+               double obLow = MathMin(openArr[obBar], closeArr[obBar]);   // Body low
+               
+               // Apply ATR filter: only significant bars become OBs
+               if(PassesATRFilter(obBar, highArr[obBar], lowArr[obBar], highArr, lowArr, closeArr))
+               {
+                  AddBearishOB(obHigh, obLow, timeArr[obBar], obBar);
+                  Print(">>> SMC: Created Bearish OB at bar ", obBar, " | Zone: ", 
+                        DoubleToString(obLow, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)), " - ", 
+                        DoubleToString(obHigh, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)));
+               }
             }
          }
       }
    }
 
    // =========================================================================
-   // CHECK MITIGATION OF EXISTING ORDER BLOCKS (LuxAlgo Style)
+   // STEP 3: CHECK MITIGATION OF EXISTING ORDER BLOCKS (LuxAlgo Style)
    // =========================================================================
-   // CRITICAL: Mitigation must use InpSMCTimeframe candle that is CLOSED
-   // 
-   // Rules:
-   // 1. Use ONLY the LAST CLOSED candle (shift=1) from SMC Timeframe
-   // 2. Bullish OB (support) -> Mitigated when Close < OB.low (breaks through bottom)
-   // 3. Bearish OB (resistance) -> Mitigated when Close > OB.high (breaks through top)
-   // 4. Once mitigated: DELETE from chart + REMOVE from array immediately
-   // 5. Do NOT count wick-only touches as mitigation - CLOSE must break through
-   // =========================================================================
-   
-   // Get fresh CLOSED candle from SMC Timeframe for mitigation check
-   // We use shift=1 which is the LAST FULLY CLOSED candle on SMC timeframe
    double smcClose[];
    ArraySetAsSeries(smcClose, true);
    if(CopyClose(_Symbol, InpSMCTimeframe, 1, 1, smcClose) < 1) return;
    
-   double confirmedClose = smcClose[0];  // Last closed candle's close price
+   double confirmedClose = smcClose[0];
    int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
-   
-   // Flag to track if any OB was mitigated (for immediate cleanup)
    bool anyMitigated = false;
    
    // Check Bullish OBs (Support Zones) for mitigation
-   for(int i = BullishOBCount - 1; i >= 0; i--)  // Iterate backwards for safe removal
+   for(int i = BullishOBCount - 1; i >= 0; i--)
    {
       if(BullishOBs[i].mitigated) continue;
       
-      // Bullish OB is mitigated ONLY when:
-      // CLOSED candle's CLOSE price is BELOW the OB LOW (completely breaks through bottom)
-      // Wick below does NOT count - must be CLOSE price
       if(confirmedClose < BullishOBs[i].low)
       {
          Print(">>> SMC Mitigation: Bullish OB BROKEN! Close=", 
                DoubleToString(confirmedClose, digits), " < Zone Low=", 
-               DoubleToString(BullishOBs[i].low, digits), " | Removing from chart & array");
+               DoubleToString(BullishOBs[i].low, digits), " | Removing");
 
-         // Remember this OB so it will NOT be re-created by historical scans
          RememberSMCRemovedTime(BullishOBs[i].time, true);
-         
-         // 1. Delete chart object immediately
          ObjectDelete(0, BullishOBs[i].objName);
          
-         // 2. Remove from array by shifting elements (immediate removal, not just marking)
          for(int j = i; j < BullishOBCount - 1; j++)
-         {
             BullishOBs[j] = BullishOBs[j + 1];
-         }
          BullishOBCount--;
          anyMitigated = true;
       }
    }
    
    // Check Bearish OBs (Resistance Zones) for mitigation
-   for(int i = BearishOBCount - 1; i >= 0; i--)  // Iterate backwards for safe removal
+   for(int i = BearishOBCount - 1; i >= 0; i--)
    {
       if(BearishOBs[i].mitigated) continue;
       
-      // Bearish OB is mitigated ONLY when:
-      // CLOSED candle's CLOSE price is ABOVE the OB HIGH (completely breaks through top)
-      // Wick above does NOT count - must be CLOSE price
       if(confirmedClose > BearishOBs[i].high)
       {
          Print(">>> SMC Mitigation: Bearish OB BROKEN! Close=", 
                DoubleToString(confirmedClose, digits), " > Zone High=", 
-               DoubleToString(BearishOBs[i].high, digits), " | Removing from chart & array");
+               DoubleToString(BearishOBs[i].high, digits), " | Removing");
 
-         // Remember this OB so it will NOT be re-created by historical scans
          RememberSMCRemovedTime(BearishOBs[i].time, false);
-         
-         // 1. Delete chart object immediately
          ObjectDelete(0, BearishOBs[i].objName);
          
-         // 2. Remove from array by shifting elements (immediate removal, not just marking)
          for(int j = i; j < BearishOBCount - 1; j++)
-         {
             BearishOBs[j] = BearishOBs[j + 1];
-         }
          BearishOBCount--;
          anyMitigated = true;
       }
    }
    
-   // Force chart redraw if any OB was mitigated
    if(anyMitigated)
    {
       ChartRedraw(0);
