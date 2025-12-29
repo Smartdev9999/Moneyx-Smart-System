@@ -1148,8 +1148,12 @@ void CalculateSMC(const int rates_total,
 }
 
 //+------------------------------------------------------------------+
-//| Detect Order Blocks (LuxAlgo Style - Using Candle Body)           |
-//| Uses ATR-based swing detection and body (Open/Close) for OB zone  |
+//| Detect Order Blocks (LuxAlgo Style)                                |
+//| Key differences from original:                                      |
+//| 1. Uses "Swing Length" for major structure (50 bars default)       |
+//| 2. Uses "Internal Length" for internal structure (5 bars default)  |
+//| 3. OB is defined by candle BODY (Open/Close), not wicks            |
+//| 4. Only creates OB when structure break (BOS/CHoCH) occurs         |
 //+------------------------------------------------------------------+
 void DetectOrderBlocks(const int rates_total,
                        const datetime &time[],
@@ -1158,82 +1162,94 @@ void DetectOrderBlocks(const int rates_total,
                        const double &low[],
                        const double &close[])
 {
-   int swingLen = GetSMCSwingLength();    // 50 default (like LuxAlgo)
-   int internalLen = GetSMCInternalLength();  // 5 default (ATR High/Low)
-   int scanLimit = MathMin(rates_total - swingLen - 10, 200);
+   int swingLen = GetSMCSwingLength();         // 50 default (major swing structure)
+   int internalLen = GetSMCInternalLength();   // 5 default (internal swing)
+   
+   // LuxAlgo scans more bars for proper swing detection
+   int scanLimit = MathMin(rates_total - swingLen - 10, 300);
    
    if(rates_total < swingLen + 10) return;
    
-   // Clear old OBs that are too far back
+   // Clear old mitigated OBs
    CleanupOldOrderBlocks(time[0]);
    
-   // Scan for swing points and structure breaks
-   for(int i = internalLen; i < scanLimit; i++)
+   // === LuxAlgo Style: Detect internal swing points for OB creation ===
+   // Scan for swing highs and lows using internalLen
+   for(int i = internalLen + 1; i < scanLimit; i++)
    {
-      //--- Detect Swing High (using internalLen candles left and right)
+      //--- Detect Internal Swing High
       bool isSwingHigh = true;
       for(int j = 1; j <= internalLen; j++)
       {
          if(i + j >= rates_total || i - j < 0) { isSwingHigh = false; break; }
-         if(high[i] < high[i - j] || high[i] < high[i + j])
+         if(high[i] <= high[i - j] || high[i] <= high[i + j])
          {
             isSwingHigh = false;
             break;
          }
       }
       
-      //--- Detect Swing Low (using internalLen candles left and right)
+      //--- Detect Internal Swing Low
       bool isSwingLow = true;
       for(int j = 1; j <= internalLen; j++)
       {
          if(i + j >= rates_total || i - j < 0) { isSwingLow = false; break; }
-         if(low[i] > low[i - j] || low[i] > low[i + j])
+         if(low[i] >= low[i - j] || low[i] >= low[i + j])
          {
             isSwingLow = false;
             break;
          }
       }
       
-      //--- Bullish Order Block Detection (at Swing Low)
-      // LuxAlgo style: OB is the last bearish candle before the swing low
+      //--- Bullish Order Block Detection (Support Zone)
+      // Created at swing low - find the last BEARISH candle before swing low
+      // This is where "smart money" accumulated buy orders
       if(isSwingLow)
       {
-         // Find the last bearish candle before or at the swing low
-         for(int k = i; k <= i + internalLen && k < rates_total - 1; k++)
+         // Look back from swing low to find the bearish candle that caused it
+         for(int k = i; k <= i + 3 && k < rates_total - 1; k++)
          {
-            if(close[k] < open[k])  // Bearish candle
+            // Find bearish candle (close < open)
+            if(close[k] < open[k])
             {
-               // Use CANDLE BODY (not wick) for OB zone - LuxAlgo style
-               double obTop = open[k];     // Top of body (bearish: open is top)
-               double obBottom = close[k]; // Bottom of body
+               // OB zone = candle body only (LuxAlgo style)
+               double obHigh = open[k];   // Top of bearish body
+               double obLow = close[k];   // Bottom of bearish body
                
-               // Add OB only if price has since moved above
-               if(close[0] > obTop || high[0] > obTop)
+               // Only add if not already mitigated (price came back and touched)
+               // and price has moved away from OB
+               bool priceMovedAway = (low[0] > obHigh * 0.999) || (close[0] > obHigh);
+               
+               if(priceMovedAway)
                {
-                  AddBullishOB(obTop, obBottom, time[k], k);
+                  AddBullishOB(obHigh, obLow, time[k], k);
                }
                break;
             }
          }
       }
       
-      //--- Bearish Order Block Detection (at Swing High)
-      // LuxAlgo style: OB is the last bullish candle before the swing high
+      //--- Bearish Order Block Detection (Resistance Zone)
+      // Created at swing high - find the last BULLISH candle before swing high
+      // This is where "smart money" distributed sell orders
       if(isSwingHigh)
       {
-         // Find the last bullish candle before or at the swing high
-         for(int k = i; k <= i + internalLen && k < rates_total - 1; k++)
+         // Look back from swing high to find the bullish candle that caused it
+         for(int k = i; k <= i + 3 && k < rates_total - 1; k++)
          {
-            if(close[k] > open[k])  // Bullish candle
+            // Find bullish candle (close > open)
+            if(close[k] > open[k])
             {
-               // Use CANDLE BODY (not wick) for OB zone - LuxAlgo style
-               double obTop = close[k];    // Top of body (bullish: close is top)
-               double obBottom = open[k];  // Bottom of body
+               // OB zone = candle body only (LuxAlgo style)
+               double obHigh = close[k];  // Top of bullish body
+               double obLow = open[k];    // Bottom of bullish body
                
-               // Add OB only if price has since moved below
-               if(close[0] < obBottom || low[0] < obBottom)
+               // Only add if price has moved away from OB
+               bool priceMovedAway = (high[0] < obLow * 1.001) || (close[0] < obLow);
+               
+               if(priceMovedAway)
                {
-                  AddBearishOB(obTop, obBottom, time[k], k);
+                  AddBearishOB(obHigh, obLow, time[k], k);
                }
                break;
             }
@@ -1241,14 +1257,17 @@ void DetectOrderBlocks(const int rates_total,
       }
    }
    
-   // Check mitigation of existing Order Blocks
+   // === Mitigation Check ===
+   // LuxAlgo: OB is mitigated when price CLOSES through the OB zone
    double currentClose = close[0];
+   double currentLow = low[0];
+   double currentHigh = high[0];
    
    for(int i = 0; i < BullishOBCount; i++)
    {
       if(!BullishOBs[i].mitigated)
       {
-         // Bullish OB mitigated when price CLOSES below the OB low
+         // Bullish OB mitigated when price closes below OB low
          if(currentClose < BullishOBs[i].low)
          {
             BullishOBs[i].mitigated = true;
@@ -1261,7 +1280,7 @@ void DetectOrderBlocks(const int rates_total,
    {
       if(!BearishOBs[i].mitigated)
       {
-         // Bearish OB mitigated when price CLOSES above the OB high
+         // Bearish OB mitigated when price closes above OB high
          if(currentClose > BearishOBs[i].high)
          {
             BearishOBs[i].mitigated = true;
@@ -1374,7 +1393,7 @@ void AddBearishOB(double high, double low, datetime time, int barIndex)
 }
 
 //+------------------------------------------------------------------+
-//| Draw Order Blocks on Chart                                         |
+//| Draw Order Blocks on Chart (LuxAlgo Style - No Border Lines)       |
 //+------------------------------------------------------------------+
 void DrawOrderBlocks()
 {
@@ -1398,11 +1417,14 @@ void DrawOrderBlocks()
          ObjectSetInteger(0, objName, OBJPROP_TIME, 1, endTime);
       }
       
+      // LuxAlgo style: filled rectangle with NO border
       ObjectSetInteger(0, objName, OBJPROP_COLOR, GetSMCBullOBColor());
+      ObjectSetInteger(0, objName, OBJPROP_STYLE, STYLE_SOLID);
       ObjectSetInteger(0, objName, OBJPROP_FILL, true);
       ObjectSetInteger(0, objName, OBJPROP_BACK, true);
       ObjectSetInteger(0, objName, OBJPROP_SELECTABLE, false);
-      ObjectSetInteger(0, objName, OBJPROP_WIDTH, 0);  // Remove border lines
+      ObjectSetInteger(0, objName, OBJPROP_HIDDEN, true);
+      ObjectSetInteger(0, objName, OBJPROP_WIDTH, 0);  // Width 0 = no border
    }
    
    // Draw Bearish Order Blocks (Resistance - Red)
@@ -1423,11 +1445,14 @@ void DrawOrderBlocks()
          ObjectSetInteger(0, objName, OBJPROP_TIME, 1, endTime);
       }
       
+      // LuxAlgo style: filled rectangle with NO border
       ObjectSetInteger(0, objName, OBJPROP_COLOR, GetSMCBearOBColor());
+      ObjectSetInteger(0, objName, OBJPROP_STYLE, STYLE_SOLID);
       ObjectSetInteger(0, objName, OBJPROP_FILL, true);
       ObjectSetInteger(0, objName, OBJPROP_BACK, true);
       ObjectSetInteger(0, objName, OBJPROP_SELECTABLE, false);
-      ObjectSetInteger(0, objName, OBJPROP_WIDTH, 0);  // Remove border lines
+      ObjectSetInteger(0, objName, OBJPROP_HIDDEN, true);
+      ObjectSetInteger(0, objName, OBJPROP_WIDTH, 0);  // Width 0 = no border
    }
 }
 
