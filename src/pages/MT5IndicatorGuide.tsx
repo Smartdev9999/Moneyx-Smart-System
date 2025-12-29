@@ -1148,7 +1148,8 @@ void CalculateSMC(const int rates_total,
 }
 
 //+------------------------------------------------------------------+
-//| Detect Order Blocks based on structure breaks                      |
+//| Detect Order Blocks (LuxAlgo Style - Using Candle Body)           |
+//| Uses ATR-based swing detection and body (Open/Close) for OB zone  |
 //+------------------------------------------------------------------+
 void DetectOrderBlocks(const int rates_total,
                        const datetime &time[],
@@ -1157,64 +1158,97 @@ void DetectOrderBlocks(const int rates_total,
                        const double &low[],
                        const double &close[])
 {
-   int lookback = GetSMCInternalLength();
-   int scanLimit = MathMin(50, rates_total - lookback - 1);
+   int swingLen = GetSMCSwingLength();    // 50 default (like LuxAlgo)
+   int internalLen = GetSMCInternalLength();  // 5 default (ATR High/Low)
+   int scanLimit = MathMin(rates_total - swingLen - 10, 200);
    
-   for(int i = lookback; i < scanLimit; i++)
+   if(rates_total < swingLen + 10) return;
+   
+   // Clear old OBs that are too far back
+   CleanupOldOrderBlocks(time[0]);
+   
+   // Scan for swing points and structure breaks
+   for(int i = internalLen; i < scanLimit; i++)
    {
-      // Check for Bullish Order Block
-      // Condition: Bearish candle followed by strong bullish move
-      if(close[i] < open[i])  // Bearish candle
+      //--- Detect Swing High (using internalLen candles left and right)
+      bool isSwingHigh = true;
+      for(int j = 1; j <= internalLen; j++)
       {
-         bool strongBullishMove = false;
-         for(int j = i - 1; j >= 1; j--)
+         if(i + j >= rates_total || i - j < 0) { isSwingHigh = false; break; }
+         if(high[i] < high[i - j] || high[i] < high[i + j])
          {
-            if(close[j] > high[i] + (high[i] - low[i]))
-            {
-               strongBullishMove = true;
-               break;
-            }
-            if(j < i - 3) break;
-         }
-         
-         if(strongBullishMove)
-         {
-            AddBullishOB(high[i], low[i], time[i], i);
+            isSwingHigh = false;
+            break;
          }
       }
       
-      // Check for Bearish Order Block
-      // Condition: Bullish candle followed by strong bearish move
-      if(close[i] > open[i])  // Bullish candle
+      //--- Detect Swing Low (using internalLen candles left and right)
+      bool isSwingLow = true;
+      for(int j = 1; j <= internalLen; j++)
       {
-         bool strongBearishMove = false;
-         for(int j = i - 1; j >= 1; j--)
+         if(i + j >= rates_total || i - j < 0) { isSwingLow = false; break; }
+         if(low[i] > low[i - j] || low[i] > low[i + j])
          {
-            if(close[j] < low[i] - (high[i] - low[i]))
+            isSwingLow = false;
+            break;
+         }
+      }
+      
+      //--- Bullish Order Block Detection (at Swing Low)
+      // LuxAlgo style: OB is the last bearish candle before the swing low
+      if(isSwingLow)
+      {
+         // Find the last bearish candle before or at the swing low
+         for(int k = i; k <= i + internalLen && k < rates_total - 1; k++)
+         {
+            if(close[k] < open[k])  // Bearish candle
             {
-               strongBearishMove = true;
+               // Use CANDLE BODY (not wick) for OB zone - LuxAlgo style
+               double obTop = open[k];     // Top of body (bearish: open is top)
+               double obBottom = close[k]; // Bottom of body
+               
+               // Add OB only if price has since moved above
+               if(close[0] > obTop || high[0] > obTop)
+               {
+                  AddBullishOB(obTop, obBottom, time[k], k);
+               }
                break;
             }
-            if(j < i - 3) break;
          }
-         
-         if(strongBearishMove)
+      }
+      
+      //--- Bearish Order Block Detection (at Swing High)
+      // LuxAlgo style: OB is the last bullish candle before the swing high
+      if(isSwingHigh)
+      {
+         // Find the last bullish candle before or at the swing high
+         for(int k = i; k <= i + internalLen && k < rates_total - 1; k++)
          {
-            AddBearishOB(high[i], low[i], time[i], i);
+            if(close[k] > open[k])  // Bullish candle
+            {
+               // Use CANDLE BODY (not wick) for OB zone - LuxAlgo style
+               double obTop = close[k];    // Top of body (bullish: close is top)
+               double obBottom = open[k];  // Bottom of body
+               
+               // Add OB only if price has since moved below
+               if(close[0] < obBottom || low[0] < obBottom)
+               {
+                  AddBearishOB(obTop, obBottom, time[k], k);
+               }
+               break;
+            }
          }
       }
    }
    
    // Check mitigation of existing Order Blocks
-   double currentLow = low[0];
-   double currentHigh = high[0];
    double currentClose = close[0];
    
    for(int i = 0; i < BullishOBCount; i++)
    {
       if(!BullishOBs[i].mitigated)
       {
-         // Bullish OB mitigated when price closes below
+         // Bullish OB mitigated when price CLOSES below the OB low
          if(currentClose < BullishOBs[i].low)
          {
             BullishOBs[i].mitigated = true;
@@ -1227,12 +1261,50 @@ void DetectOrderBlocks(const int rates_total,
    {
       if(!BearishOBs[i].mitigated)
       {
-         // Bearish OB mitigated when price closes above
+         // Bearish OB mitigated when price CLOSES above the OB high
          if(currentClose > BearishOBs[i].high)
          {
             BearishOBs[i].mitigated = true;
             ObjectDelete(0, BearishOBs[i].objName);
          }
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Cleanup old Order Blocks that are too far back                     |
+//+------------------------------------------------------------------+
+void CleanupOldOrderBlocks(datetime currentTime)
+{
+   int maxAge = 60 * 60 * 24 * 30;  // 30 days in seconds
+   
+   // Cleanup old Bullish OBs
+   for(int i = BullishOBCount - 1; i >= 0; i--)
+   {
+      if(currentTime - BullishOBs[i].time > maxAge || BullishOBs[i].mitigated)
+      {
+         ObjectDelete(0, BullishOBs[i].objName);
+         // Remove from array
+         for(int j = i; j < BullishOBCount - 1; j++)
+         {
+            BullishOBs[j] = BullishOBs[j + 1];
+         }
+         BullishOBCount--;
+      }
+   }
+   
+   // Cleanup old Bearish OBs
+   for(int i = BearishOBCount - 1; i >= 0; i--)
+   {
+      if(currentTime - BearishOBs[i].time > maxAge || BearishOBs[i].mitigated)
+      {
+         ObjectDelete(0, BearishOBs[i].objName);
+         // Remove from array
+         for(int j = i; j < BearishOBCount - 1; j++)
+         {
+            BearishOBs[j] = BearishOBs[j + 1];
+         }
+         BearishOBCount--;
       }
    }
 }
