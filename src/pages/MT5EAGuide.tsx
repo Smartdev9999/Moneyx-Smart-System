@@ -5654,7 +5654,50 @@ void DetectOrderBlocks(double &highArr[], double &lowArr[], double &openArr[],
 }
 
 // CleanupMitigatedOBs() is no longer needed as mitigation now removes OBs immediately
-// Keeping empty function for backward compatibility if called elsewhere
+//
+// NEW: Consume OB on entry
+// - ผู้ใช้ต้องการให้ “แถบสี/โซน” หายไปทันทีหลังจาก EA เปิดออเดอร์จาก OB นั้น (touch + PA confirm)
+// - ดังนั้นเราจะลบ rectangle object และเอา OB ออกจาก array ทันทีเมื่อ ExecuteBuy/ExecuteSell สำเร็จ
+
+void ConsumeSMCOrderBlock(string obName, bool isBullish)
+{
+   if(obName == "") return;
+
+   if(isBullish)
+   {
+      for(int i = 0; i < BullishOBCount; i++)
+      {
+         if(BullishOBs[i].objName == obName)
+         {
+            ObjectDelete(0, BullishOBs[i].objName);
+            for(int j = i; j < BullishOBCount - 1; j++)
+            {
+               BullishOBs[j] = BullishOBs[j + 1];
+            }
+            BullishOBCount--;
+            Print(">>> SMC: Consumed Bullish OB on entry | ", obName);
+            return;
+         }
+      }
+   }
+   else
+   {
+      for(int i = 0; i < BearishOBCount; i++)
+      {
+         if(BearishOBs[i].objName == obName)
+         {
+            ObjectDelete(0, BearishOBs[i].objName);
+            for(int j = i; j < BearishOBCount - 1; j++)
+            {
+               BearishOBs[j] = BearishOBs[j + 1];
+            }
+            BearishOBCount--;
+            Print(">>> SMC: Consumed Bearish OB on entry | ", obName);
+            return;
+         }
+      }
+   }
+}
 
 //+------------------------------------------------------------------+
 //| Add Bullish Order Block to array                                   |
@@ -6362,6 +6405,9 @@ bool ExecuteBuy()
          // Remember which OB was used to open this order (for reset comparisons)
          g_smcLastBuyOBUsed = g_smcBuyTouchedOBName;
 
+         // NEW: consume/remove the OB that triggered this entry (remove zone immediately)
+         ConsumeSMCOrderBlock(g_smcLastBuyOBUsed, true);
+
          g_smcBuyTouchedOBPersist = false;
          g_smcBuyTouchedOB = false;
          g_smcBuyTouchedOBName = "";
@@ -6404,6 +6450,9 @@ bool ExecuteSell()
       {
          // Remember which OB was used to open this order (for reset comparisons)
          g_smcLastSellOBUsed = g_smcSellTouchedOBName;
+
+         // NEW: consume/remove the OB that triggered this entry (remove zone immediately)
+         ConsumeSMCOrderBlock(g_smcLastSellOBUsed, false);
 
          g_smcSellTouchedOBPersist = false;
          g_smcSellTouchedOB = false;
