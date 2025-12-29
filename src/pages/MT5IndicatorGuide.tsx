@@ -547,10 +547,10 @@ int OnInit()
       }
    }
    
-   // Create ATR handle for SMC OB Filter
+   // Create ATR handle for SMC OB Filter (LuxAlgo uses ATR 200)
    if(InpShowSMC && InpSMCOBFilter == OB_FILTER_ATR)
    {
-      handleATR = iATR(_Symbol, PERIOD_CURRENT, 14);
+      handleATR = iATR(_Symbol, PERIOD_CURRENT, 200);  // ATR 200 like LuxAlgo
       if(handleATR == INVALID_HANDLE)
       {
          Print("Warning: Error creating ATR handle for SMC filter");
@@ -1248,7 +1248,7 @@ color GetSMCBearOBColor() { return GetInternalBearOBColor(); }
 int GetSMCMaxOrderBlocks() { return GetSMCMaxInternalOB(); }
 
 //+------------------------------------------------------------------+
-//| Get ATR Value for OB Filter                                        |
+//| Get ATR Value for OB Filter (LuxAlgo uses ATR 200)                 |
 //+------------------------------------------------------------------+
 double GetATRValue(int shift = 0)
 {
@@ -1262,20 +1262,50 @@ double GetATRValue(int shift = 0)
 }
 
 //+------------------------------------------------------------------+
-//| Check if OB passes ATR filter                                      |
+//| Get Volatility Measure (LuxAlgo style)                             |
+//| ATR mode uses ta.atr(200)                                          |
+//| Range mode uses cumulative mean range: ta.cum(ta.tr) / bar_index   |
 //+------------------------------------------------------------------+
-bool PassesATRFilter(double obHigh, double obLow, int barIndex)
+double GetVolatilityMeasure(int barIndex)
+{
+   if(GetSMCOBFilter() == OB_FILTER_ATR)
+   {
+      return GetATRValue(barIndex);
+   }
+   else
+   {
+      // Cumulative Mean Range - fallback to simple average
+      double sum = 0;
+      for(int i = barIndex; i < barIndex + 50 && i < Bars(_Symbol, PERIOD_CURRENT); i++)
+      {
+         sum += iHigh(_Symbol, PERIOD_CURRENT, i) - iLow(_Symbol, PERIOD_CURRENT, i);
+      }
+      return sum / 50.0;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Check if bar is high volatility (LuxAlgo: range >= 2 * ATR)        |
+//+------------------------------------------------------------------+
+bool IsHighVolatilityBar(int barIndex, double barHigh, double barLow)
+{
+   double volatility = GetVolatilityMeasure(barIndex);
+   if(volatility == 0) return false;
+   
+   double barRange = barHigh - barLow;
+   return barRange >= (2.0 * volatility);
+}
+
+//+------------------------------------------------------------------+
+//| Check if OB passes ATR filter (LuxAlgo style)                      |
+//| The OB must come from a high volatility bar for significance       |
+//+------------------------------------------------------------------+
+bool PassesATRFilter(double obHigh, double obLow, int barIndex, double barHigh, double barLow)
 {
    if(GetSMCOBFilter() != OB_FILTER_ATR) return true;  // No filter
    
-   double atr = GetATRValue(barIndex);
-   if(atr == 0) return true;
-   
-   double obSize = obHigh - obLow;
-   
-   // LuxAlgo ATR filter: OB size must be at least 0.1 * ATR
-   // and not larger than 2 * ATR
-   return (obSize >= atr * 0.1 && obSize <= atr * 2.0);
+   // LuxAlgo: Order block is valid if it came from a high volatility bar
+   return IsHighVolatilityBar(barIndex, barHigh, barLow);
 }
 
 //+------------------------------------------------------------------+
@@ -1355,11 +1385,12 @@ void CalculateSMC(const int rates_total,
 
 //+------------------------------------------------------------------+
 //| Detect Order Blocks (LuxAlgo Style - Full Implementation)          |
-//| Key features:                                                        |
-//| 1. Separate Internal OB (5 bars) and Swing OB (50 bars)             |
-//| 2. ATR Filter to filter out noise                                   |
-//| 3. OB defined by candle BODY (Open/Close), not wicks                |
-//| 4. BOS/CHoCH structure break detection                              |
+//| Key LuxAlgo Algorithm:                                               |
+//| 1. Find swing highs/lows with ta.pivothigh/ta.pivotlow              |
+//| 2. When Structure Break (BOS/CHoCH) occurs, look BACK to find       |
+//|    the candle that caused the extreme move                          |
+//| 3. OB is defined by candle BODY (Open/Close), not wicks             |
+//| 4. ATR filter: bar range >= 2 * ATR(200) = significant              |
 //+------------------------------------------------------------------+
 void DetectOrderBlocks(const int rates_total,
                        const datetime &time[],
@@ -1380,26 +1411,21 @@ void DetectOrderBlocks(const int rates_total,
    // Clear old mitigated OBs
    CleanupOldOrderBlocks(time[0]);
    
-   // === Detect INTERNAL Order Blocks (using internalLen) ===
-   if(InpSMCShowInternalOB)
+   // === Detect Structure and Order Blocks Together (LuxAlgo Style) ===
+   // LuxAlgo detects OBs when structure breaks occur
+   
+   if(InpSMCShowInternalOB || InpSMCShowInternalStructure)
    {
-      DetectInternalOrderBlocks(rates_total, time, open, high, low, close, internalLen, scanLimit);
+      DetectInternalStructureAndOB(rates_total, time, open, high, low, close, internalLen, scanLimit);
    }
    
-   // === Detect SWING Order Blocks (using swingLen) ===
-   if(InpSMCShowSwingOB)
+   if(InpSMCShowSwingOB || InpSMCShowSwingStructure)
    {
-      DetectSwingOrderBlocks(rates_total, time, open, high, low, close, swingLen, scanLimit);
+      DetectSwingStructureAndOB(rates_total, time, open, high, low, close, swingLen, scanLimit);
    }
    
    // === Mitigation Check for all OBs ===
    CheckMitigation(close[0], low[0], high[0]);
-   
-   // === Detect BOS/CHoCH Structure Breaks ===
-   if(InpSMCShowInternalStructure || InpSMCShowSwingStructure)
-   {
-      DetectStructureBreaks(rates_total, time, high, low, close);
-   }
    
    // === Detect Swing Points ===
    if(InpSMCShowSwingPoints)
@@ -1409,85 +1435,139 @@ void DetectOrderBlocks(const int rates_total,
 }
 
 //+------------------------------------------------------------------+
-//| Detect Internal Order Blocks (short-term structure)                |
+//| LuxAlgo-style Internal Structure and Order Block Detection         |
+//| Algorithm:                                                          |
+//| 1. Track internal swing highs/lows with pivothigh/pivotlow         |
+//| 2. When close breaks past swing point = Structure Break             |
+//| 3. On break, look back to find the origin candle (min/max body)    |
+//| 4. That candle becomes the Order Block                              |
 //+------------------------------------------------------------------+
-void DetectInternalOrderBlocks(const int rates_total,
-                                const datetime &time[],
-                                const double &open[],
-                                const double &high[],
-                                const double &low[],
-                                const double &close[],
-                                int internalLen,
-                                int scanLimit)
+
+// Storage for internal swing tracking (LuxAlgo style)
+double g_InternalSwingHigh = 0;
+double g_InternalSwingLow = 0;
+double g_InternalLastSwingHigh = 0;
+double g_InternalLastSwingLow = 0;
+int g_InternalSwingHighBar = 0;
+int g_InternalSwingLowBar = 0;
+bool g_InternalSwingHighCrossed = false;
+bool g_InternalSwingLowCrossed = false;
+int g_InternalTrendBias = 0;  // 1 = Bullish, -1 = Bearish
+
+void DetectInternalStructureAndOB(const int rates_total,
+                                   const datetime &time[],
+                                   const double &open[],
+                                   const double &high[],
+                                   const double &low[],
+                                   const double &close[],
+                                   int internalLen,
+                                   int scanLimit)
 {
-   for(int i = internalLen + 1; i < scanLimit; i++)
+   // Find pivot highs and lows (ta.pivothigh / ta.pivotlow equivalent)
+   for(int i = internalLen + 1; i < scanLimit - internalLen; i++)
    {
-      //--- Detect Internal Swing High
-      bool isSwingHigh = true;
+      // Check for Pivot High (swing high)
+      bool isPivotHigh = true;
       for(int j = 1; j <= internalLen; j++)
       {
-         if(i + j >= rates_total || i - j < 0) { isSwingHigh = false; break; }
+         if(i + j >= rates_total || i - j < 0) { isPivotHigh = false; break; }
          if(high[i] <= high[i - j] || high[i] <= high[i + j])
          {
-            isSwingHigh = false;
+            isPivotHigh = false;
             break;
          }
       }
       
-      //--- Detect Internal Swing Low
-      bool isSwingLow = true;
+      // Check for Pivot Low (swing low)
+      bool isPivotLow = true;
       for(int j = 1; j <= internalLen; j++)
       {
-         if(i + j >= rates_total || i - j < 0) { isSwingLow = false; break; }
+         if(i + j >= rates_total || i - j < 0) { isPivotLow = false; break; }
          if(low[i] >= low[i - j] || low[i] >= low[i + j])
          {
-            isSwingLow = false;
+            isPivotLow = false;
             break;
          }
       }
       
-      //--- Bullish Internal OB (Support Zone) at swing low
-      if(isSwingLow)
+      // Update swing tracking
+      if(isPivotLow)
       {
-         for(int k = i; k <= i + 3 && k < rates_total - 1; k++)
+         g_InternalLastSwingLow = g_InternalSwingLow;
+         g_InternalSwingLow = low[i];
+         g_InternalSwingLowBar = i;
+         g_InternalSwingLowCrossed = false;
+      }
+      
+      if(isPivotHigh)
+      {
+         g_InternalLastSwingHigh = g_InternalSwingHigh;
+         g_InternalSwingHigh = high[i];
+         g_InternalSwingHighBar = i;
+         g_InternalSwingHighCrossed = false;
+      }
+   }
+   
+   // Check for structure breaks and create OBs
+   // Bullish Break: close crosses above swing high
+   if(g_InternalSwingHigh > 0 && !g_InternalSwingHighCrossed && close[0] > g_InternalSwingHigh)
+   {
+      g_InternalSwingHighCrossed = true;
+      
+      bool isCHoCH = (g_InternalTrendBias == -1);  // CHoCH if we were bearish
+      g_InternalTrendBias = 1;  // Now bullish
+      
+      // Draw structure break line (BOS or CHoCH)
+      if(InpSMCShowInternalStructure)
+      {
+         DrawStructureBreak(g_InternalSwingHighBar, g_InternalSwingHigh, true, isCHoCH, true, time);
+      }
+      
+      // Create Bullish Order Block at the low of the move
+      // LuxAlgo: Find the bar with minimum body low between swing low and current
+      if(InpSMCShowInternalOB && g_InternalSwingLowBar > 0)
+      {
+         int obBar = FindMinBodyBar(g_InternalSwingLowBar, 0, open, close, high, low, false);
+         if(obBar >= 0)
          {
-            if(close[k] < open[k])  // Bearish candle
+            double obHigh = MathMax(open[obBar], close[obBar]);  // Body high
+            double obLow = MathMin(open[obBar], close[obBar]);   // Body low
+            
+            if(PassesATRFilter(obHigh, obLow, obBar, high[obBar], low[obBar]))
             {
-               double obHigh = open[k];
-               double obLow = close[k];
-               
-               // ATR Filter
-               if(!PassesATRFilter(obHigh, obLow, k)) continue;
-               
-               // Price must have moved away
-               if(low[0] > obHigh * 0.999 || close[0] > obHigh)
-               {
-                  AddInternalBullOB(obHigh, obLow, time[k], k);
-               }
-               break;
+               AddInternalBullOB(obHigh, obLow, time[obBar], obBar);
             }
          }
       }
+   }
+   
+   // Bearish Break: close crosses below swing low
+   if(g_InternalSwingLow > 0 && !g_InternalSwingLowCrossed && close[0] < g_InternalSwingLow)
+   {
+      g_InternalSwingLowCrossed = true;
       
-      //--- Bearish Internal OB (Resistance Zone) at swing high
-      if(isSwingHigh)
+      bool isCHoCH = (g_InternalTrendBias == 1);  // CHoCH if we were bullish
+      g_InternalTrendBias = -1;  // Now bearish
+      
+      // Draw structure break line
+      if(InpSMCShowInternalStructure)
       {
-         for(int k = i; k <= i + 3 && k < rates_total - 1; k++)
+         DrawStructureBreak(g_InternalSwingLowBar, g_InternalSwingLow, false, isCHoCH, true, time);
+      }
+      
+      // Create Bearish Order Block at the high of the move
+      // LuxAlgo: Find the bar with maximum body high between swing high and current
+      if(InpSMCShowInternalOB && g_InternalSwingHighBar > 0)
+      {
+         int obBar = FindMaxBodyBar(g_InternalSwingHighBar, 0, open, close, high, low, true);
+         if(obBar >= 0)
          {
-            if(close[k] > open[k])  // Bullish candle
+            double obHigh = MathMax(open[obBar], close[obBar]);  // Body high
+            double obLow = MathMin(open[obBar], close[obBar]);   // Body low
+            
+            if(PassesATRFilter(obHigh, obLow, obBar, high[obBar], low[obBar]))
             {
-               double obHigh = close[k];
-               double obLow = open[k];
-               
-               // ATR Filter
-               if(!PassesATRFilter(obHigh, obLow, k)) continue;
-               
-               // Price must have moved away
-               if(high[0] < obLow * 1.001 || close[0] < obLow)
-               {
-                  AddInternalBearOB(obHigh, obLow, time[k], k);
-               }
-               break;
+               AddInternalBearOB(obHigh, obLow, time[obBar], obBar);
             }
          }
       }
@@ -1495,81 +1575,208 @@ void DetectInternalOrderBlocks(const int rates_total,
 }
 
 //+------------------------------------------------------------------+
-//| Detect Swing Order Blocks (major structure)                        |
+//| Find bar with minimum body low in range (for bullish OB)           |
 //+------------------------------------------------------------------+
-void DetectSwingOrderBlocks(const int rates_total,
-                             const datetime &time[],
-                             const double &open[],
-                             const double &high[],
-                             const double &low[],
-                             const double &close[],
-                             int swingLen,
-                             int scanLimit)
+int FindMinBodyBar(int startBar, int endBar, const double &open[], const double &close[], 
+                   const double &high[], const double &low[], bool useHigh)
 {
-   for(int i = swingLen + 1; i < scanLimit; i++)
+   int minBar = -1;
+   double minValue = DBL_MAX;
+   
+   for(int i = startBar; i >= endBar; i--)
    {
-      //--- Detect Swing High (major)
-      bool isSwingHigh = true;
+      double bodyLow = MathMin(open[i], close[i]);
+      if(bodyLow < minValue)
+      {
+         minValue = bodyLow;
+         minBar = i;
+      }
+   }
+   
+   return minBar;
+}
+
+//+------------------------------------------------------------------+
+//| Find bar with maximum body high in range (for bearish OB)          |
+//+------------------------------------------------------------------+
+int FindMaxBodyBar(int startBar, int endBar, const double &open[], const double &close[],
+                   const double &high[], const double &low[], bool useHigh)
+{
+   int maxBar = -1;
+   double maxValue = -DBL_MAX;
+   
+   for(int i = startBar; i >= endBar; i--)
+   {
+      double bodyHigh = MathMax(open[i], close[i]);
+      if(bodyHigh > maxValue)
+      {
+         maxValue = bodyHigh;
+         maxBar = i;
+      }
+   }
+   
+   return maxBar;
+}
+
+//+------------------------------------------------------------------+
+//| Draw Structure Break (BOS/CHoCH) line and label                    |
+//+------------------------------------------------------------------+
+void DrawStructureBreak(int pivotBar, double pivotPrice, bool isBullish, bool isCHoCH, 
+                        bool isInternal, const datetime &time[])
+{
+   string tag = isCHoCH ? "CHoCH" : "BOS";
+   color lineColor = isBullish ? 
+      (isInternal ? InpSMCInternalBullColor : InpSMCSwingBullColor) :
+      (isInternal ? InpSMCInternalBearColor : InpSMCSwingBearColor);
+   
+   string objName = SMCPrefix + (isInternal ? "Int" : "Swing") + "_" + tag + "_" + IntegerToString((long)time[pivotBar]);
+   
+   // Draw horizontal line from pivot to current bar
+   ObjectCreate(0, objName + "_Line", OBJ_TREND, 0, time[pivotBar], pivotPrice, time[0], pivotPrice);
+   ObjectSetInteger(0, objName + "_Line", OBJPROP_COLOR, lineColor);
+   ObjectSetInteger(0, objName + "_Line", OBJPROP_STYLE, isInternal ? STYLE_DASH : STYLE_SOLID);
+   ObjectSetInteger(0, objName + "_Line", OBJPROP_WIDTH, 1);
+   ObjectSetInteger(0, objName + "_Line", OBJPROP_RAY_RIGHT, false);
+   ObjectSetInteger(0, objName + "_Line", OBJPROP_SELECTABLE, false);
+   
+   // Draw label at midpoint
+   int midBar = (pivotBar + 0) / 2;
+   ObjectCreate(0, objName + "_Label", OBJ_TEXT, 0, time[midBar], pivotPrice);
+   ObjectSetString(0, objName + "_Label", OBJPROP_TEXT, tag);
+   ObjectSetInteger(0, objName + "_Label", OBJPROP_COLOR, lineColor);
+   ObjectSetInteger(0, objName + "_Label", OBJPROP_FONTSIZE, 8);
+   ObjectSetInteger(0, objName + "_Label", OBJPROP_ANCHOR, isBullish ? ANCHOR_LOWER : ANCHOR_UPPER);
+   ObjectSetInteger(0, objName + "_Label", OBJPROP_SELECTABLE, false);
+}
+
+//+------------------------------------------------------------------+
+//| LuxAlgo-style Swing Structure and Order Block Detection            |
+//| Same algorithm as internal but with longer swing length            |
+//+------------------------------------------------------------------+
+
+// Storage for swing structure tracking (LuxAlgo style)
+double g_SwingHigh = 0;
+double g_SwingLow = 0;
+double g_LastSwingHigh = 0;
+double g_LastSwingLow = 0;
+int g_SwingHighBar = 0;
+int g_SwingLowBar = 0;
+bool g_SwingHighCrossed = false;
+bool g_SwingLowCrossed = false;
+int g_SwingTrendBias = 0;  // 1 = Bullish, -1 = Bearish
+
+void DetectSwingStructureAndOB(const int rates_total,
+                                const datetime &time[],
+                                const double &open[],
+                                const double &high[],
+                                const double &low[],
+                                const double &close[],
+                                int swingLen,
+                                int scanLimit)
+{
+   // Find pivot highs and lows with longer swing length
+   for(int i = swingLen + 1; i < scanLimit - swingLen; i++)
+   {
+      // Check for Pivot High (swing high)
+      bool isPivotHigh = true;
       for(int j = 1; j <= swingLen; j++)
       {
-         if(i + j >= rates_total || i - j < 0) { isSwingHigh = false; break; }
+         if(i + j >= rates_total || i - j < 0) { isPivotHigh = false; break; }
          if(high[i] <= high[i - j] || high[i] <= high[i + j])
          {
-            isSwingHigh = false;
+            isPivotHigh = false;
             break;
          }
       }
       
-      //--- Detect Swing Low (major)
-      bool isSwingLow = true;
+      // Check for Pivot Low (swing low)
+      bool isPivotLow = true;
       for(int j = 1; j <= swingLen; j++)
       {
-         if(i + j >= rates_total || i - j < 0) { isSwingLow = false; break; }
+         if(i + j >= rates_total || i - j < 0) { isPivotLow = false; break; }
          if(low[i] >= low[i - j] || low[i] >= low[i + j])
          {
-            isSwingLow = false;
+            isPivotLow = false;
             break;
          }
       }
       
-      //--- Bullish Swing OB at major swing low
-      if(isSwingLow)
+      // Update swing tracking
+      if(isPivotLow)
       {
-         for(int k = i; k <= i + 5 && k < rates_total - 1; k++)
+         g_LastSwingLow = g_SwingLow;
+         g_SwingLow = low[i];
+         g_SwingLowBar = i;
+         g_SwingLowCrossed = false;
+      }
+      
+      if(isPivotHigh)
+      {
+         g_LastSwingHigh = g_SwingHigh;
+         g_SwingHigh = high[i];
+         g_SwingHighBar = i;
+         g_SwingHighCrossed = false;
+      }
+   }
+   
+   // Check for structure breaks and create OBs
+   // Bullish Break: close crosses above swing high
+   if(g_SwingHigh > 0 && !g_SwingHighCrossed && close[0] > g_SwingHigh)
+   {
+      g_SwingHighCrossed = true;
+      
+      bool isCHoCH = (g_SwingTrendBias == -1);
+      g_SwingTrendBias = 1;
+      
+      // Draw structure break line
+      if(InpSMCShowSwingStructure)
+      {
+         DrawStructureBreak(g_SwingHighBar, g_SwingHigh, true, isCHoCH, false, time);
+      }
+      
+      // Create Bullish Order Block
+      if(InpSMCShowSwingOB && g_SwingLowBar > 0)
+      {
+         int obBar = FindMinBodyBar(g_SwingLowBar, 0, open, close, high, low, false);
+         if(obBar >= 0)
          {
-            if(close[k] < open[k])
+            double obHigh = MathMax(open[obBar], close[obBar]);
+            double obLow = MathMin(open[obBar], close[obBar]);
+            
+            if(PassesATRFilter(obHigh, obLow, obBar, high[obBar], low[obBar]))
             {
-               double obHigh = open[k];
-               double obLow = close[k];
-               
-               if(!PassesATRFilter(obHigh, obLow, k)) continue;
-               
-               if(low[0] > obHigh * 0.999 || close[0] > obHigh)
-               {
-                  AddSwingBullOB(obHigh, obLow, time[k], k);
-               }
-               break;
+               AddSwingBullOB(obHigh, obLow, time[obBar], obBar);
             }
          }
       }
+   }
+   
+   // Bearish Break: close crosses below swing low
+   if(g_SwingLow > 0 && !g_SwingLowCrossed && close[0] < g_SwingLow)
+   {
+      g_SwingLowCrossed = true;
       
-      //--- Bearish Swing OB at major swing high
-      if(isSwingHigh)
+      bool isCHoCH = (g_SwingTrendBias == 1);
+      g_SwingTrendBias = -1;
+      
+      // Draw structure break line
+      if(InpSMCShowSwingStructure)
       {
-         for(int k = i; k <= i + 5 && k < rates_total - 1; k++)
+         DrawStructureBreak(g_SwingLowBar, g_SwingLow, false, isCHoCH, false, time);
+      }
+      
+      // Create Bearish Order Block
+      if(InpSMCShowSwingOB && g_SwingHighBar > 0)
+      {
+         int obBar = FindMaxBodyBar(g_SwingHighBar, 0, open, close, high, low, true);
+         if(obBar >= 0)
          {
-            if(close[k] > open[k])
+            double obHigh = MathMax(open[obBar], close[obBar]);
+            double obLow = MathMin(open[obBar], close[obBar]);
+            
+            if(PassesATRFilter(obHigh, obLow, obBar, high[obBar], low[obBar]))
             {
-               double obHigh = close[k];
-               double obLow = open[k];
-               
-               if(!PassesATRFilter(obHigh, obLow, k)) continue;
-               
-               if(high[0] < obLow * 1.001 || close[0] < obLow)
-               {
-                  AddSwingBearOB(obHigh, obLow, time[k], k);
-               }
-               break;
+               AddSwingBearOB(obHigh, obLow, time[obBar], obBar);
             }
          }
       }
@@ -1624,6 +1831,8 @@ void CheckMitigation(double currentClose, double currentLow, double currentHigh)
 
 //+------------------------------------------------------------------+
 //| Detect BOS/CHoCH Structure Breaks                                  |
+//| Note: This is now handled in DetectInternalStructureAndOB and      |
+//| DetectSwingStructureAndOB functions using LuxAlgo algorithm        |
 //+------------------------------------------------------------------+
 void DetectStructureBreaks(const int rates_total,
                            const datetime &time[],
@@ -1631,9 +1840,8 @@ void DetectStructureBreaks(const int rates_total,
                            const double &low[],
                            const double &close[])
 {
-   // TODO: Implement BOS/CHoCH detection
-   // BOS = Break of Structure (trend continuation)
-   // CHoCH = Change of Character (trend reversal)
+   // Structure breaks are now detected inline when pivots break
+   // See DetectInternalStructureAndOB and DetectSwingStructureAndOB
 }
 
 //+------------------------------------------------------------------+
