@@ -5623,16 +5623,23 @@ double GetATRValue(int barIndex, double &highArr[], double &lowArr[], double &cl
 
 //+------------------------------------------------------------------+
 //| Check if bar passes ATR filter (high volatility bar)               |
+//| NOTE: Currently DISABLED by default - too strict for most cases    |
+//| Set InpSMCUseATRFilter = true to enable                            |
 //+------------------------------------------------------------------+
 bool PassesATRFilter(int barIndex, double barHigh, double barLow, 
                      double &highArr[], double &lowArr[], double &closeArr[])
 {
-   double atr = GetATRValue(barIndex, highArr, lowArr, closeArr, 200);
-   if(atr == 0) return true;  // No filter if can't calculate
+   // ATR Filter is currently disabled - always pass
+   // This was causing no OBs to appear because threshold was too strict
+   // TODO: Add input parameter InpSMCUseATRFilter to enable/disable
+   return true;
    
+   /* Original LuxAlgo ATR Filter (disabled for now):
+   double atr = GetATRValue(barIndex, highArr, lowArr, closeArr, 200);
+   if(atr == 0) return true;
    double barRange = barHigh - barLow;
-   // LuxAlgo: bar range >= 2 * ATR(200) = significant
    return barRange >= (2.0 * atr);
+   */
 }
 
 //+------------------------------------------------------------------+
@@ -5705,7 +5712,6 @@ int FindMaxBodyBar(int startBar, int endBar, double &openArr[], double &closeArr
 void DetectOrderBlocks(double &highArr[], double &lowArr[], double &openArr[], 
                        double &closeArr[], datetime &timeArr[], int barsTotal)
 {
-   int swingLen = InpSMCSwingLength;      // Major swing (50 default)
    int internalLen = InpSMCInternalLength; // Internal swing (5 default)
    
    // Only scan/create new OBs once per NEW CLOSED candle on SMC timeframe
@@ -5717,90 +5723,78 @@ void DetectOrderBlocks(double &highArr[], double &lowArr[], double &openArr[],
    if(canScanNewOBs)
    {
       // ===============================================================
-      // STEP 1: DETECT PIVOT HIGHS AND LOWS (Swing Structure)
+      // STEP 1: FIND MOST RECENT PIVOT HIGH AND LOW
+      // LuxAlgo style: Find the NEAREST (most recent) confirmed pivot
+      // Not the highest/lowest of all time, but the last swing point
       // ===============================================================
-      int scanLimit = MathMin(200, barsTotal - swingLen - 1);
+      int scanLimit = MathMin(100, barsTotal - internalLen - 5);
       
-      // Find pivots and update swing tracking
-      for(int i = swingLen + 1; i < scanLimit - swingLen; i++)
+      // Reset to find FRESH pivots each scan (most recent ones)
+      double recentPivotHigh = 0;
+      double recentPivotLow = 0;
+      int recentPivotHighBar = 0;
+      int recentPivotLowBar = 0;
+      
+      // Scan from recent bars backwards to find first confirmed pivot
+      for(int i = internalLen + 1; i < scanLimit; i++)
       {
-         // --- Check for Internal Pivot High (shorter swing) ---
-         bool isInternalPivotHigh = true;
-         for(int j = 1; j <= internalLen; j++)
+         // --- Check for Pivot High ---
+         if(recentPivotHighBar == 0)  // Only find first (most recent) one
          {
-            if(i + j >= barsTotal || i - j < 0) { isInternalPivotHigh = false; break; }
-            if(highArr[i] <= highArr[i - j] || highArr[i] <= highArr[i + j])
+            bool isPivotHigh = true;
+            for(int j = 1; j <= internalLen; j++)
             {
-               isInternalPivotHigh = false;
-               break;
+               if(i + j >= barsTotal || i - j < 0) { isPivotHigh = false; break; }
+               if(highArr[i] <= highArr[i - j] || highArr[i] <= highArr[i + j])
+               {
+                  isPivotHigh = false;
+                  break;
+               }
+            }
+            if(isPivotHigh)
+            {
+               recentPivotHigh = highArr[i];
+               recentPivotHighBar = i;
             }
          }
          
-         // --- Check for Internal Pivot Low (shorter swing) ---
-         bool isInternalPivotLow = true;
-         for(int j = 1; j <= internalLen; j++)
+         // --- Check for Pivot Low ---
+         if(recentPivotLowBar == 0)  // Only find first (most recent) one
          {
-            if(i + j >= barsTotal || i - j < 0) { isInternalPivotLow = false; break; }
-            if(lowArr[i] >= lowArr[i - j] || lowArr[i] >= lowArr[i + j])
+            bool isPivotLow = true;
+            for(int j = 1; j <= internalLen; j++)
             {
-               isInternalPivotLow = false;
-               break;
+               if(i + j >= barsTotal || i - j < 0) { isPivotLow = false; break; }
+               if(lowArr[i] >= lowArr[i - j] || lowArr[i] >= lowArr[i + j])
+               {
+                  isPivotLow = false;
+                  break;
+               }
+            }
+            if(isPivotLow)
+            {
+               recentPivotLow = lowArr[i];
+               recentPivotLowBar = i;
             }
          }
          
-         // Update internal swing tracking
-         if(isInternalPivotLow && (g_InternalSwingLow == 0 || lowArr[i] < g_InternalSwingLow))
-         {
-            g_InternalSwingLow = lowArr[i];
-            g_InternalSwingLowBar = i;
-            g_InternalSwingLowCrossed = false;
-         }
-         
-         if(isInternalPivotHigh && highArr[i] > g_InternalSwingHigh)
-         {
-            g_InternalSwingHigh = highArr[i];
-            g_InternalSwingHighBar = i;
-            g_InternalSwingHighCrossed = false;
-         }
-         
-         // --- Check for Swing Pivot High (major swing) ---
-         bool isSwingPivotHigh = true;
-         for(int j = 1; j <= swingLen; j++)
-         {
-            if(i + j >= barsTotal || i - j < 0) { isSwingPivotHigh = false; break; }
-            if(highArr[i] <= highArr[i - j] || highArr[i] <= highArr[i + j])
-            {
-               isSwingPivotHigh = false;
-               break;
-            }
-         }
-         
-         // --- Check for Swing Pivot Low (major swing) ---
-         bool isSwingPivotLow = true;
-         for(int j = 1; j <= swingLen; j++)
-         {
-            if(i + j >= barsTotal || i - j < 0) { isSwingPivotLow = false; break; }
-            if(lowArr[i] >= lowArr[i - j] || lowArr[i] >= lowArr[i + j])
-            {
-               isSwingPivotLow = false;
-               break;
-            }
-         }
-         
-         // Update swing structure tracking
-         if(isSwingPivotLow && (g_SwingLow == 0 || lowArr[i] < g_SwingLow))
-         {
-            g_SwingLow = lowArr[i];
-            g_SwingLowBar = i;
-            g_SwingLowCrossed = false;
-         }
-         
-         if(isSwingPivotHigh && highArr[i] > g_SwingHigh)
-         {
-            g_SwingHigh = highArr[i];
-            g_SwingHighBar = i;
-            g_SwingHighCrossed = false;
-         }
+         // Stop once we found both
+         if(recentPivotHighBar > 0 && recentPivotLowBar > 0) break;
+      }
+      
+      // Update global swing tracking with most recent pivots
+      if(recentPivotHigh > 0 && recentPivotHighBar != g_InternalSwingHighBar)
+      {
+         g_InternalSwingHigh = recentPivotHigh;
+         g_InternalSwingHighBar = recentPivotHighBar;
+         g_InternalSwingHighCrossed = false;  // Reset for new pivot
+      }
+      
+      if(recentPivotLow > 0 && recentPivotLowBar != g_InternalSwingLowBar)
+      {
+         g_InternalSwingLow = recentPivotLow;
+         g_InternalSwingLowBar = recentPivotLowBar;
+         g_InternalSwingLowCrossed = false;  // Reset for new pivot
       }
       
       // ===============================================================
@@ -5840,6 +5834,9 @@ void DetectOrderBlocks(double &highArr[], double &lowArr[], double &openArr[],
                }
             }
          }
+         // Reset swing high after break so we can detect new breaks
+         g_InternalSwingHigh = 0;
+         g_InternalSwingHighBar = 0;
       }
       
       // === BEARISH BREAK: Close crosses BELOW swing low ===
@@ -5871,6 +5868,61 @@ void DetectOrderBlocks(double &highArr[], double &lowArr[], double &openArr[],
                   Print(">>> SMC: Created Bearish OB at bar ", obBar, " | Zone: ", 
                         DoubleToString(obLow, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)), " - ", 
                         DoubleToString(obHigh, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)));
+               }
+            }
+         }
+         
+         // Reset swing low after break so we can detect new breaks
+         g_InternalSwingLow = 0;
+         g_InternalSwingLowBar = 0;
+      }
+      
+      // ===============================================================
+      // FALLBACK: If no structure breaks detected recently, use simple detection
+      // This ensures OBs still appear when market hasn't broken structure yet
+      // ===============================================================
+      if(BullishOBCount == 0 && BearishOBCount == 0)
+      {
+         // Simple OB detection: Look for strong moves (original logic as fallback)
+         for(int i = internalLen; i < MathMin(30, barsTotal - internalLen - 1); i++)
+         {
+            // Bullish OB: Bearish candle before strong up move
+            if(closeArr[i] < openArr[i])  // Bearish candle
+            {
+               bool strongUp = false;
+               for(int j = i - 1; j >= 1 && j > i - 4; j--)
+               {
+                  if(closeArr[j] > highArr[i] + (highArr[i] - lowArr[i]) * 0.5)
+                  {
+                     strongUp = true;
+                     break;
+                  }
+               }
+               if(strongUp && InpSMCShowBullishOB)
+               {
+                  double obHigh = openArr[i];
+                  double obLow = closeArr[i];
+                  AddBullishOB(obHigh, obLow, timeArr[i], i);
+               }
+            }
+            
+            // Bearish OB: Bullish candle before strong down move
+            if(closeArr[i] > openArr[i])  // Bullish candle
+            {
+               bool strongDown = false;
+               for(int j = i - 1; j >= 1 && j > i - 4; j--)
+               {
+                  if(closeArr[j] < lowArr[i] - (highArr[i] - lowArr[i]) * 0.5)
+                  {
+                     strongDown = true;
+                     break;
+                  }
+               }
+               if(strongDown && InpSMCShowBearishOB)
+               {
+                  double obHigh = closeArr[i];
+                  double obLow = openArr[i];
+                  AddBearishOB(obHigh, obLow, timeArr[i], i);
                }
             }
          }
