@@ -547,6 +547,17 @@ int OnInit()
       }
    }
    
+   // Create ATR handle for SMC OB Filter
+   if(InpShowSMC && InpSMCOBFilter == OB_FILTER_ATR)
+   {
+      handleATR = iATR(_Symbol, PERIOD_CURRENT, 14);
+      if(handleATR == INVALID_HANDLE)
+      {
+         Print("Warning: Error creating ATR handle for SMC filter");
+         // Don't fail - ATR is optional filter
+      }
+   }
+   
    // Initialize arrays
    ArraySetAsSeries(EMA1Buffer, true);
    ArraySetAsSeries(EMA2Buffer, true);
@@ -561,6 +572,7 @@ int OnInit()
    ArraySetAsSeries(CDCFastBuffer, true);
    ArraySetAsSeries(CDCSlowBuffer, true);
    ArraySetAsSeries(CDCHistBuffer, true);
+   ArraySetAsSeries(ATRBuffer, true);
    
    // *** TRY TO SYNC SMC SETTINGS FROM EA VIA GLOBAL VARIABLES ***
    SyncSMCSettingsFromEA();
@@ -580,6 +592,7 @@ void OnDeinit(const int reason)
    if(handleBB != INVALID_HANDLE) IndicatorRelease(handleBB);
    if(handleCDCFast != INVALID_HANDLE) IndicatorRelease(handleCDCFast);
    if(handleCDCSlow != INVALID_HANDLE) IndicatorRelease(handleCDCSlow);
+   if(handleATR != INVALID_HANDLE) IndicatorRelease(handleATR);
    
    // Delete all indicator objects
    ObjectsDeleteAll(0, "ZZ_Label_");
@@ -1122,25 +1135,46 @@ void SyncSMCSettingsFromEA()
          else
             SyncedSMCInternalLength = InpSMCInternalLength;
          
-         if(GlobalVariableCheck(GV_SMC_MAX_OB))
-            SyncedSMCMaxOrderBlocks = (int)GlobalVariableGet(GV_SMC_MAX_OB);
+         if(GlobalVariableCheck(GV_SMC_MAX_INTERNAL_OB))
+            SyncedSMCMaxInternalOB = (int)GlobalVariableGet(GV_SMC_MAX_INTERNAL_OB);
          else
-            SyncedSMCMaxOrderBlocks = InpSMCMaxOrderBlocks;
+            SyncedSMCMaxInternalOB = InpSMCMaxInternalOB;
          
-         if(GlobalVariableCheck(GV_SMC_BULL_OB_COLOR))
-            SyncedSMCBullOBColor = (color)GlobalVariableGet(GV_SMC_BULL_OB_COLOR);
+         if(GlobalVariableCheck(GV_SMC_MAX_SWING_OB))
+            SyncedSMCMaxSwingOB = (int)GlobalVariableGet(GV_SMC_MAX_SWING_OB);
          else
-            SyncedSMCBullOBColor = InpSMCBullOBColor;
+            SyncedSMCMaxSwingOB = InpSMCMaxSwingOB;
          
-         if(GlobalVariableCheck(GV_SMC_BEAR_OB_COLOR))
-            SyncedSMCBearOBColor = (color)GlobalVariableGet(GV_SMC_BEAR_OB_COLOR);
+         if(GlobalVariableCheck(GV_SMC_OB_FILTER))
+            SyncedSMCOBFilter = (int)GlobalVariableGet(GV_SMC_OB_FILTER);
          else
-            SyncedSMCBearOBColor = InpSMCBearOBColor;
+            SyncedSMCOBFilter = (int)InpSMCOBFilter;
+         
+         if(GlobalVariableCheck(GV_SMC_INTERNAL_BULL_OB_COLOR))
+            SyncedInternalBullOBColor = (color)GlobalVariableGet(GV_SMC_INTERNAL_BULL_OB_COLOR);
+         else
+            SyncedInternalBullOBColor = InpSMCInternalBullOBColor;
+         
+         if(GlobalVariableCheck(GV_SMC_INTERNAL_BEAR_OB_COLOR))
+            SyncedInternalBearOBColor = (color)GlobalVariableGet(GV_SMC_INTERNAL_BEAR_OB_COLOR);
+         else
+            SyncedInternalBearOBColor = InpSMCInternalBearOBColor;
+         
+         if(GlobalVariableCheck(GV_SMC_SWING_BULL_OB_COLOR))
+            SyncedSwingBullOBColor = (color)GlobalVariableGet(GV_SMC_SWING_BULL_OB_COLOR);
+         else
+            SyncedSwingBullOBColor = InpSMCSwingBullOBColor;
+         
+         if(GlobalVariableCheck(GV_SMC_SWING_BEAR_OB_COLOR))
+            SyncedSwingBearOBColor = (color)GlobalVariableGet(GV_SMC_SWING_BEAR_OB_COLOR);
+         else
+            SyncedSwingBearOBColor = InpSMCSwingBearOBColor;
          
          SMCSyncedFromEA = true;
-         Print(">>> SMC Settings SYNCED from EA: SwingLen=", SyncedSMCSwingLength, 
-               " | InternalLen=", SyncedSMCInternalLength, 
-               " | MaxOB=", SyncedSMCMaxOrderBlocks);
+         Print(">>> SMC Settings SYNCED from EA: SwingLen=", IntegerToString(SyncedSMCSwingLength), 
+               " | InternalLen=", IntegerToString(SyncedSMCInternalLength), 
+               " | MaxInternalOB=", IntegerToString(SyncedSMCMaxInternalOB),
+               " | MaxSwingOB=", IntegerToString(SyncedSMCMaxSwingOB));
       }
    }
    
@@ -1149,9 +1183,13 @@ void SyncSMCSettingsFromEA()
    {
       SyncedSMCSwingLength = InpSMCSwingLength;
       SyncedSMCInternalLength = InpSMCInternalLength;
-      SyncedSMCMaxOrderBlocks = InpSMCMaxOrderBlocks;
-      SyncedSMCBullOBColor = InpSMCBullOBColor;
-      SyncedSMCBearOBColor = InpSMCBearOBColor;
+      SyncedSMCMaxInternalOB = InpSMCMaxInternalOB;
+      SyncedSMCMaxSwingOB = InpSMCMaxSwingOB;
+      SyncedSMCOBFilter = (int)InpSMCOBFilter;
+      SyncedInternalBullOBColor = InpSMCInternalBullOBColor;
+      SyncedInternalBearOBColor = InpSMCInternalBearOBColor;
+      SyncedSwingBullOBColor = InpSMCSwingBullOBColor;
+      SyncedSwingBearOBColor = InpSMCSwingBearOBColor;
       Print(">>> SMC Settings using Indicator's own inputs (EA not synced)");
    }
 }
