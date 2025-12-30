@@ -5815,25 +5815,45 @@ void DetectOrderBlocks(double &highArr[], double &lowArr[], double &openArr[],
                DoubleToString(currentClose, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)), 
                " broke above swing high=", DoubleToString(g_InternalSwingHigh, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)));
          
-         // Find ORIGIN candle: bar with minimum body low between swing low and current
-         if(InpSMCShowBullishOB && g_InternalSwingLowBar > 0)
-         {
-            int obBar = FindMinBodyBar(g_InternalSwingLowBar, 1, openArr, closeArr);
-            if(obBar >= 0 && obBar < barsTotal)
-            {
-               double obHigh = MathMax(openArr[obBar], closeArr[obBar]);  // Body high
-               double obLow = MathMin(openArr[obBar], closeArr[obBar]);   // Body low
-               
-               // Apply ATR filter: only significant bars become OBs
-               if(PassesATRFilter(obBar, highArr[obBar], lowArr[obBar], highArr, lowArr, closeArr))
-               {
-                  AddBullishOB(obHigh, obLow, timeArr[obBar], obBar);
-                  Print(">>> SMC: Created Bullish OB at bar ", obBar, " | Zone: ", 
-                        DoubleToString(obLow, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)), " - ", 
-                        DoubleToString(obHigh, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)));
-               }
-            }
-         }
+          // Find ORIGIN candle: bar with minimum body low between swing low and current
+          if(InpSMCShowBullishOB && g_InternalSwingLowBar > 0)
+          {
+             int obBar = FindMinBodyBar(g_InternalSwingLowBar, 1, openArr, closeArr);
+             if(obBar >= 0 && obBar < barsTotal)
+             {
+                // Use FULL CANDLE (High/Low) for zone boundaries - LuxAlgo style
+                // This creates visually significant zones instead of thin body-only lines
+                double obHigh = highArr[obBar];  // Full candle high
+                double obLow = lowArr[obBar];    // Full candle low
+                
+                // Ensure minimum zone height (at least 50% of average candle size)
+                double zoneHeight = obHigh - obLow;
+                double avgCandleSize = 0;
+                for(int k = 1; k <= 20 && k < barsTotal; k++)
+                {
+                   avgCandleSize += highArr[k] - lowArr[k];
+                }
+                avgCandleSize /= 20.0;
+                
+                // If zone is too thin, expand it using body and wicks
+                if(zoneHeight < avgCandleSize * 0.3)
+                {
+                   double bodyHigh = MathMax(openArr[obBar], closeArr[obBar]);
+                   double bodyLow = MathMin(openArr[obBar], closeArr[obBar]);
+                   obHigh = MathMax(highArr[obBar], bodyHigh + avgCandleSize * 0.3);
+                   obLow = MathMin(lowArr[obBar], bodyLow - avgCandleSize * 0.15);
+                }
+                
+                // Apply ATR filter: only significant bars become OBs
+                if(PassesATRFilter(obBar, highArr[obBar], lowArr[obBar], highArr, lowArr, closeArr))
+                {
+                   AddBullishOB(obHigh, obLow, timeArr[obBar], obBar);
+                   Print(">>> SMC: Created Bullish OB at bar ", obBar, " | Zone: ", 
+                         DoubleToString(obLow, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)), " - ", 
+                         DoubleToString(obHigh, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)));
+                }
+             }
+          }
          // Reset swing high after break so we can detect new breaks
          g_InternalSwingHigh = 0;
          g_InternalSwingHighBar = 0;
@@ -5852,25 +5872,45 @@ void DetectOrderBlocks(double &highArr[], double &lowArr[], double &openArr[],
                DoubleToString(currentClose, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)), 
                " broke below swing low=", DoubleToString(g_InternalSwingLow, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)));
          
-         // Find ORIGIN candle: bar with maximum body high between swing high and current
-         if(InpSMCShowBearishOB && g_InternalSwingHighBar > 0)
-         {
-            int obBar = FindMaxBodyBar(g_InternalSwingHighBar, 1, openArr, closeArr);
-            if(obBar >= 0 && obBar < barsTotal)
-            {
-               double obHigh = MathMax(openArr[obBar], closeArr[obBar]);  // Body high
-               double obLow = MathMin(openArr[obBar], closeArr[obBar]);   // Body low
-               
-               // Apply ATR filter: only significant bars become OBs
-               if(PassesATRFilter(obBar, highArr[obBar], lowArr[obBar], highArr, lowArr, closeArr))
-               {
-                  AddBearishOB(obHigh, obLow, timeArr[obBar], obBar);
-                  Print(">>> SMC: Created Bearish OB at bar ", obBar, " | Zone: ", 
-                        DoubleToString(obLow, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)), " - ", 
-                        DoubleToString(obHigh, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)));
-               }
-            }
-         }
+          // Find ORIGIN candle: bar with maximum body high between swing high and current
+          if(InpSMCShowBearishOB && g_InternalSwingHighBar > 0)
+          {
+             int obBar = FindMaxBodyBar(g_InternalSwingHighBar, 1, openArr, closeArr);
+             if(obBar >= 0 && obBar < barsTotal)
+             {
+                // Use FULL CANDLE (High/Low) for zone boundaries - LuxAlgo style
+                // This creates visually significant zones instead of thin body-only lines
+                double obHigh = highArr[obBar];  // Full candle high
+                double obLow = lowArr[obBar];    // Full candle low
+                
+                // Ensure minimum zone height (at least 50% of average candle size)
+                double zoneHeight = obHigh - obLow;
+                double avgCandleSize = 0;
+                for(int k = 1; k <= 20 && k < barsTotal; k++)
+                {
+                   avgCandleSize += highArr[k] - lowArr[k];
+                }
+                avgCandleSize /= 20.0;
+                
+                // If zone is too thin, expand it using body and wicks
+                if(zoneHeight < avgCandleSize * 0.3)
+                {
+                   double bodyHigh = MathMax(openArr[obBar], closeArr[obBar]);
+                   double bodyLow = MathMin(openArr[obBar], closeArr[obBar]);
+                   obHigh = MathMax(highArr[obBar], bodyHigh + avgCandleSize * 0.15);
+                   obLow = MathMin(lowArr[obBar], bodyLow - avgCandleSize * 0.3);
+                }
+                
+                // Apply ATR filter: only significant bars become OBs
+                if(PassesATRFilter(obBar, highArr[obBar], lowArr[obBar], highArr, lowArr, closeArr))
+                {
+                   AddBearishOB(obHigh, obLow, timeArr[obBar], obBar);
+                   Print(">>> SMC: Created Bearish OB at bar ", obBar, " | Zone: ", 
+                         DoubleToString(obLow, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)), " - ", 
+                         DoubleToString(obHigh, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)));
+                }
+             }
+          }
          
          // Reset swing low after break so we can detect new breaks
          g_InternalSwingLow = 0;
@@ -5899,11 +5939,12 @@ void DetectOrderBlocks(double &highArr[], double &lowArr[], double &openArr[],
                   }
                }
                if(strongUp && InpSMCShowBullishOB)
-               {
-                  double obHigh = openArr[i];
-                  double obLow = closeArr[i];
-                  AddBullishOB(obHigh, obLow, timeArr[i], i);
-               }
+                {
+                   // Use full candle for fallback OBs too
+                   double obHigh = highArr[i];
+                   double obLow = lowArr[i];
+                   AddBullishOB(obHigh, obLow, timeArr[i], i);
+                }
             }
             
             // Bearish OB: Bullish candle before strong down move
@@ -5919,11 +5960,12 @@ void DetectOrderBlocks(double &highArr[], double &lowArr[], double &openArr[],
                   }
                }
                if(strongDown && InpSMCShowBearishOB)
-               {
-                  double obHigh = closeArr[i];
-                  double obLow = openArr[i];
-                  AddBearishOB(obHigh, obLow, timeArr[i], i);
-               }
+                {
+                   // Use full candle for fallback OBs too
+                   double obHigh = highArr[i];
+                   double obLow = lowArr[i];
+                   AddBearishOB(obHigh, obLow, timeArr[i], i);
+                }
             }
          }
       }
