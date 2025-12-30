@@ -5603,6 +5603,7 @@ void CalculateSMC()
 
 //+------------------------------------------------------------------+
 //| Get ATR value for volatility measure                               |
+//| LuxAlgo uses ATR(200) as volatility baseline                       |
 //+------------------------------------------------------------------+
 double GetATRValue(int barIndex, double &highArr[], double &lowArr[], double &closeArr[], int period = 200)
 {
@@ -5622,92 +5623,91 @@ double GetATRValue(int barIndex, double &highArr[], double &lowArr[], double &cl
 }
 
 //+------------------------------------------------------------------+
-//| Check if bar passes ATR filter (high volatility bar)               |
-//| NOTE: Currently DISABLED by default - too strict for most cases    |
-//| Set InpSMCUseATRFilter = true to enable                            |
+//| Get Cumulative Mean Range (alternative to ATR for low data)        |
+//| LuxAlgo: cmean_range = ta.cum(high - low) / n                      |
 //+------------------------------------------------------------------+
-bool PassesATRFilter(int barIndex, double barHigh, double barLow, 
-                     double &highArr[], double &lowArr[], double &closeArr[])
+double GetCumulativeMeanRange(double &highArr[], double &lowArr[], int barsTotal)
 {
-   // ATR Filter is currently disabled - always pass
-   // This was causing no OBs to appear because threshold was too strict
-   // TODO: Add input parameter InpSMCUseATRFilter to enable/disable
-   return true;
+   if(barsTotal <= 0) return 0;
    
-   /* Original LuxAlgo ATR Filter (disabled for now):
-   double atr = GetATRValue(barIndex, highArr, lowArr, closeArr, 200);
-   if(atr == 0) return true;
-   double barRange = barHigh - barLow;
-   return barRange >= (2.0 * atr);
-   */
+   double cumRange = 0;
+   for(int i = 0; i < barsTotal; i++)
+   {
+      cumRange += highArr[i] - lowArr[i];
+   }
+   return cumRange / barsTotal;
 }
 
 //+------------------------------------------------------------------+
-//| Find bar with minimum body low in range (for bullish OB origin)    |
-//| LuxAlgo: Search backwards from swing low to current to find        |
-//| the origin candle with minimum body low                            |
+//| LuxAlgo OB Coordinate Function (ob_coord)                          |
+//| ================================================================== |
+//| KEY ALGORITHM from LuxAlgo:                                        |
+//| - Search from bar 1 to (n - loc) where loc = swing point bar       |
+//| - Filter: only bars with range < 2 * threshold (ATR or CMR)        |
+//| - For Bullish OB (use_max=false): find MINIMUM low[i]              |
+//| - For Bearish OB (use_max=true): find MAXIMUM high[i]              |
+//| - OB zone = high[idx] to low[idx] of the found candle              |
 //+------------------------------------------------------------------+
-int FindMinBodyBar(int startBar, int endBar, double &openArr[], double &closeArr[])
+int FindOBOriginBar(bool useMax, int pivotBar, double &highArr[], double &lowArr[], 
+                    double &closeArr[], int barsTotal)
 {
-   int minBar = -1;
-   double minValue = DBL_MAX;
+   int idx = -1;
+   double minVal = DBL_MAX;
+   double maxVal = -DBL_MAX;
    
-   int barsTotal = ArraySize(openArr);
-   int actualEnd = MathMax(endBar, 1);  // Don't include bar 0 (current forming bar)
+   // Calculate threshold (LuxAlgo uses ATR or Cumulative Mean Range)
+   double atr = GetATRValue(0, highArr, lowArr, closeArr, 200);
+   double cmr = GetCumulativeMeanRange(highArr, lowArr, MathMin(barsTotal, 500));
+   double obThreshold = (atr > 0) ? atr : cmr;
    
-   for(int i = startBar; i >= actualEnd && i >= 0; i--)
+   // Search from bar 1 to (pivotBar - 1)
+   // LuxAlgo: for i = 1 to (n - loc) - 1
+   int searchEnd = MathMax(pivotBar - 1, 1);
+   
+   for(int i = 1; i < searchEnd && i < barsTotal; i++)
    {
-      if(i >= barsTotal) continue;
-      double bodyLow = MathMin(openArr[i], closeArr[i]);
-      if(bodyLow < minValue)
+      double barRange = highArr[i] - lowArr[i];
+      
+      // LuxAlgo filter: (high[i] - low[i]) < ob_threshold * 2
+      // Only consider bars with range LESS than 2x threshold (not volatile bars)
+      if(barRange < obThreshold * 2.0)
       {
-         minValue = bodyLow;
-         minBar = i;
+         if(useMax)  // Bearish OB: find bar with MAXIMUM high
+         {
+            if(highArr[i] > maxVal)
+            {
+               maxVal = highArr[i];
+               minVal = lowArr[i];  // Store corresponding low
+               idx = i;
+            }
+         }
+         else  // Bullish OB: find bar with MINIMUM low
+         {
+            if(lowArr[i] < minVal)
+            {
+               minVal = lowArr[i];
+               maxVal = highArr[i];  // Store corresponding high
+               idx = i;
+            }
+         }
       }
    }
    
-   return minBar;
-}
-
-//+------------------------------------------------------------------+
-//| Find bar with maximum body high in range (for bearish OB origin)   |
-//| LuxAlgo: Search backwards from swing high to current to find       |
-//| the origin candle with maximum body high                           |
-//+------------------------------------------------------------------+
-int FindMaxBodyBar(int startBar, int endBar, double &openArr[], double &closeArr[])
-{
-   int maxBar = -1;
-   double maxValue = -DBL_MAX;
-   
-   int barsTotal = ArraySize(openArr);
-   int actualEnd = MathMax(endBar, 1);  // Don't include bar 0 (current forming bar)
-   
-   for(int i = startBar; i >= actualEnd && i >= 0; i--)
-   {
-      if(i >= barsTotal) continue;
-      double bodyHigh = MathMax(openArr[i], closeArr[i]);
-      if(bodyHigh > maxValue)
-      {
-         maxValue = bodyHigh;
-         maxBar = i;
-      }
-   }
-   
-   return maxBar;
+   return idx;
 }
 
 //+------------------------------------------------------------------+
 //| Detect Order Blocks (LuxAlgo Style - Full Algorithm)               |
 //| ================================================================== |
-//| KEY ALGORITHM:                                                      |
-//| 1. Find swing highs/lows with pivothigh/pivotlow (InpSMCSwingLength)|
-//| 2. When Structure Break (BOS/CHoCH) occurs, look BACK to find       |
-//|    the ORIGIN candle (min/max body) between swing and break point  |
-//| 3. OB is defined by candle BODY (Open/Close), not wicks            |
-//| 4. ATR filter: bar range >= 2 * ATR(200) = significant             |
-//| ================================================================== |
-//| This prevents hundreds of tiny OBs - only creates OBs when         |
-//| structure actually breaks (price closes beyond swing point)        |
+//| KEY ALGORITHM (matching LuxAlgo ob_coord function):                 |
+//| 1. Find swing highs/lows using pivot detection                      |
+//| 2. When close crosses swing point → Structure Break (BOS/CHoCH)    |
+//| 3. Call ob_coord to find origin candle:                            |
+//|    - Search from bar 1 to pivot bar                                 |
+//|    - Filter: bar range < 2 * ATR (non-volatile bars only)           |
+//|    - Bullish OB (crossover): find min low[i]                        |
+//|    - Bearish OB (crossunder): find max high[i]                      |
+//| 4. OB zone = high[idx] to low[idx] of origin candle                 |
 //+------------------------------------------------------------------+
 void DetectOrderBlocks(double &highArr[], double &lowArr[], double &openArr[], 
                        double &closeArr[], datetime &timeArr[], int barsTotal)
@@ -5724,22 +5724,20 @@ void DetectOrderBlocks(double &highArr[], double &lowArr[], double &openArr[],
    {
       // ===============================================================
       // STEP 1: FIND MOST RECENT PIVOT HIGH AND LOW
-      // LuxAlgo style: Find the NEAREST (most recent) confirmed pivot
-      // Not the highest/lowest of all time, but the last swing point
+      // LuxAlgo style: swings(len) returns pivot highs and lows
       // ===============================================================
       int scanLimit = MathMin(100, barsTotal - internalLen - 5);
       
-      // Reset to find FRESH pivots each scan (most recent ones)
+      // Find MOST RECENT confirmed pivots
       double recentPivotHigh = 0;
       double recentPivotLow = 0;
       int recentPivotHighBar = 0;
       int recentPivotLowBar = 0;
       
-      // Scan from recent bars backwards to find first confirmed pivot
       for(int i = internalLen + 1; i < scanLimit; i++)
       {
          // --- Check for Pivot High ---
-         if(recentPivotHighBar == 0)  // Only find first (most recent) one
+         if(recentPivotHighBar == 0)
          {
             bool isPivotHigh = true;
             for(int j = 1; j <= internalLen; j++)
@@ -5759,7 +5757,7 @@ void DetectOrderBlocks(double &highArr[], double &lowArr[], double &openArr[],
          }
          
          // --- Check for Pivot Low ---
-         if(recentPivotLowBar == 0)  // Only find first (most recent) one
+         if(recentPivotLowBar == 0)
          {
             bool isPivotLow = true;
             for(int j = 1; j <= internalLen; j++)
@@ -5778,156 +5776,139 @@ void DetectOrderBlocks(double &highArr[], double &lowArr[], double &openArr[],
             }
          }
          
-         // Stop once we found both
          if(recentPivotHighBar > 0 && recentPivotLowBar > 0) break;
       }
       
-      // Update global swing tracking with most recent pivots
+      // Update global swing tracking
       if(recentPivotHigh > 0 && recentPivotHighBar != g_InternalSwingHighBar)
       {
          g_InternalSwingHigh = recentPivotHigh;
          g_InternalSwingHighBar = recentPivotHighBar;
-         g_InternalSwingHighCrossed = false;  // Reset for new pivot
+         g_InternalSwingHighCrossed = false;
       }
       
       if(recentPivotLow > 0 && recentPivotLowBar != g_InternalSwingLowBar)
       {
          g_InternalSwingLow = recentPivotLow;
          g_InternalSwingLowBar = recentPivotLowBar;
-         g_InternalSwingLowCrossed = false;  // Reset for new pivot
+         g_InternalSwingLowCrossed = false;
       }
       
       // ===============================================================
       // STEP 2: CHECK FOR STRUCTURE BREAKS AND CREATE ORDER BLOCKS
+      // LuxAlgo: ta.crossover(close, itop_y) → Bullish BOS/CHoCH
+      // LuxAlgo: ta.crossunder(close, ibtm_y) → Bearish BOS/CHoCH
       // ===============================================================
       double currentClose = closeArr[1];  // Use CLOSED candle (shift 1)
       
       // === BULLISH BREAK: Close crosses ABOVE swing high ===
-      // Creates a BULLISH Order Block (support zone)
+      // LuxAlgo: ob_coord(false, itop_x, ...) → Find min low for bullish OB
       if(g_InternalSwingHigh > 0 && !g_InternalSwingHighCrossed && currentClose > g_InternalSwingHigh)
       {
          g_InternalSwingHighCrossed = true;
          
-         bool isCHoCH = (g_InternalTrendBias == -1);  // CHoCH if we were bearish
-         g_InternalTrendBias = 1;  // Now bullish
+         bool isCHoCH = (g_InternalTrendBias == -1);
+         g_InternalTrendBias = 1;
          
-         Print(">>> SMC: ", (isCHoCH ? "CHoCH" : "BOS"), " BULLISH! Close=", 
+         Print(">>> SMC LuxAlgo: ", (isCHoCH ? "CHoCH" : "BOS"), " BULLISH! Close=", 
                DoubleToString(currentClose, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)), 
-               " broke above swing high=", DoubleToString(g_InternalSwingHigh, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)));
+               " > Swing High=", DoubleToString(g_InternalSwingHigh, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)));
          
-          // Find ORIGIN candle: bar with minimum body low between swing low and current
-          if(InpSMCShowBullishOB && g_InternalSwingLowBar > 0)
-          {
-             int obBar = FindMinBodyBar(g_InternalSwingLowBar, 1, openArr, closeArr);
-             if(obBar >= 0 && obBar < barsTotal)
-             {
-                // Use FULL CANDLE (High/Low) for zone boundaries - LuxAlgo style
-                // This creates visually significant zones instead of thin body-only lines
-                double obHigh = highArr[obBar];  // Full candle high
-                double obLow = lowArr[obBar];    // Full candle low
-                
-                // Ensure minimum zone height (at least 50% of average candle size)
-                double zoneHeight = obHigh - obLow;
-                double avgCandleSize = 0;
-                for(int k = 1; k <= 20 && k < barsTotal; k++)
-                {
-                   avgCandleSize += highArr[k] - lowArr[k];
-                }
-                avgCandleSize /= 20.0;
-                
-                // If zone is too thin, expand it using body and wicks
-                if(zoneHeight < avgCandleSize * 0.3)
-                {
-                   double bodyHigh = MathMax(openArr[obBar], closeArr[obBar]);
-                   double bodyLow = MathMin(openArr[obBar], closeArr[obBar]);
-                   obHigh = MathMax(highArr[obBar], bodyHigh + avgCandleSize * 0.3);
-                   obLow = MathMin(lowArr[obBar], bodyLow - avgCandleSize * 0.15);
-                }
-                
-                // Apply ATR filter: only significant bars become OBs
-                if(PassesATRFilter(obBar, highArr[obBar], lowArr[obBar], highArr, lowArr, closeArr))
-                {
-                   AddBullishOB(obHigh, obLow, timeArr[obBar], obBar);
-                   Print(">>> SMC: Created Bullish OB at bar ", obBar, " | Zone: ", 
-                         DoubleToString(obLow, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)), " - ", 
-                         DoubleToString(obHigh, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)));
-                }
-             }
-          }
-         // Reset swing high after break so we can detect new breaks
+         // LuxAlgo ob_coord: use_max=false → find MINIMUM low
+         if(InpSMCShowBullishOB && g_InternalSwingHighBar > 0)
+         {
+            int obBar = FindOBOriginBar(false, g_InternalSwingHighBar, highArr, lowArr, closeArr, barsTotal);
+            if(obBar >= 0 && obBar < barsTotal)
+            {
+               // LuxAlgo: OB zone = high[idx] to low[idx]
+               double obHigh = highArr[obBar];
+               double obLow = lowArr[obBar];
+               
+               // Ensure minimum zone height (30% of avg candle for visibility)
+               double zoneHeight = obHigh - obLow;
+               double avgCandleSize = 0;
+               for(int k = 1; k <= 20 && k < barsTotal; k++)
+                  avgCandleSize += highArr[k] - lowArr[k];
+               avgCandleSize /= 20.0;
+               
+               if(zoneHeight < avgCandleSize * 0.3)
+               {
+                  double mid = (obHigh + obLow) / 2.0;
+                  obHigh = mid + avgCandleSize * 0.15;
+                  obLow = mid - avgCandleSize * 0.15;
+               }
+               
+               AddBullishOB(obHigh, obLow, timeArr[obBar], obBar);
+               Print(">>> SMC LuxAlgo: Created Bullish OB at bar ", obBar, " | Zone: ", 
+                     DoubleToString(obLow, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)), " - ", 
+                     DoubleToString(obHigh, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)));
+            }
+         }
+         
+         // Reset for next detection cycle
          g_InternalSwingHigh = 0;
          g_InternalSwingHighBar = 0;
       }
       
       // === BEARISH BREAK: Close crosses BELOW swing low ===
-      // Creates a BEARISH Order Block (resistance zone)
+      // LuxAlgo: ob_coord(true, ibtm_x, ...) → Find max high for bearish OB
       if(g_InternalSwingLow > 0 && !g_InternalSwingLowCrossed && currentClose < g_InternalSwingLow)
       {
          g_InternalSwingLowCrossed = true;
          
-         bool isCHoCH = (g_InternalTrendBias == 1);  // CHoCH if we were bullish
-         g_InternalTrendBias = -1;  // Now bearish
+         bool isCHoCH = (g_InternalTrendBias == 1);
+         g_InternalTrendBias = -1;
          
-         Print(">>> SMC: ", (isCHoCH ? "CHoCH" : "BOS"), " BEARISH! Close=", 
+         Print(">>> SMC LuxAlgo: ", (isCHoCH ? "CHoCH" : "BOS"), " BEARISH! Close=", 
                DoubleToString(currentClose, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)), 
-               " broke below swing low=", DoubleToString(g_InternalSwingLow, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)));
+               " < Swing Low=", DoubleToString(g_InternalSwingLow, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)));
          
-          // Find ORIGIN candle: bar with maximum body high between swing high and current
-          if(InpSMCShowBearishOB && g_InternalSwingHighBar > 0)
-          {
-             int obBar = FindMaxBodyBar(g_InternalSwingHighBar, 1, openArr, closeArr);
-             if(obBar >= 0 && obBar < barsTotal)
-             {
-                // Use FULL CANDLE (High/Low) for zone boundaries - LuxAlgo style
-                // This creates visually significant zones instead of thin body-only lines
-                double obHigh = highArr[obBar];  // Full candle high
-                double obLow = lowArr[obBar];    // Full candle low
-                
-                // Ensure minimum zone height (at least 50% of average candle size)
-                double zoneHeight = obHigh - obLow;
-                double avgCandleSize = 0;
-                for(int k = 1; k <= 20 && k < barsTotal; k++)
-                {
-                   avgCandleSize += highArr[k] - lowArr[k];
-                }
-                avgCandleSize /= 20.0;
-                
-                // If zone is too thin, expand it using body and wicks
-                if(zoneHeight < avgCandleSize * 0.3)
-                {
-                   double bodyHigh = MathMax(openArr[obBar], closeArr[obBar]);
-                   double bodyLow = MathMin(openArr[obBar], closeArr[obBar]);
-                   obHigh = MathMax(highArr[obBar], bodyHigh + avgCandleSize * 0.15);
-                   obLow = MathMin(lowArr[obBar], bodyLow - avgCandleSize * 0.3);
-                }
-                
-                // Apply ATR filter: only significant bars become OBs
-                if(PassesATRFilter(obBar, highArr[obBar], lowArr[obBar], highArr, lowArr, closeArr))
-                {
-                   AddBearishOB(obHigh, obLow, timeArr[obBar], obBar);
-                   Print(">>> SMC: Created Bearish OB at bar ", obBar, " | Zone: ", 
-                         DoubleToString(obLow, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)), " - ", 
-                         DoubleToString(obHigh, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)));
-                }
-             }
-          }
+         // LuxAlgo ob_coord: use_max=true → find MAXIMUM high
+         if(InpSMCShowBearishOB && g_InternalSwingLowBar > 0)
+         {
+            int obBar = FindOBOriginBar(true, g_InternalSwingLowBar, highArr, lowArr, closeArr, barsTotal);
+            if(obBar >= 0 && obBar < barsTotal)
+            {
+               // LuxAlgo: OB zone = high[idx] to low[idx]
+               double obHigh = highArr[obBar];
+               double obLow = lowArr[obBar];
+               
+               // Ensure minimum zone height (30% of avg candle for visibility)
+               double zoneHeight = obHigh - obLow;
+               double avgCandleSize = 0;
+               for(int k = 1; k <= 20 && k < barsTotal; k++)
+                  avgCandleSize += highArr[k] - lowArr[k];
+               avgCandleSize /= 20.0;
+               
+               if(zoneHeight < avgCandleSize * 0.3)
+               {
+                  double mid = (obHigh + obLow) / 2.0;
+                  obHigh = mid + avgCandleSize * 0.15;
+                  obLow = mid - avgCandleSize * 0.15;
+               }
+               
+               AddBearishOB(obHigh, obLow, timeArr[obBar], obBar);
+               Print(">>> SMC LuxAlgo: Created Bearish OB at bar ", obBar, " | Zone: ", 
+                     DoubleToString(obLow, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)), " - ", 
+                     DoubleToString(obHigh, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)));
+            }
+         }
          
-         // Reset swing low after break so we can detect new breaks
+         // Reset for next detection cycle
          g_InternalSwingLow = 0;
          g_InternalSwingLowBar = 0;
       }
       
       // ===============================================================
-      // FALLBACK: If no structure breaks detected recently, use simple detection
-      // This ensures OBs still appear when market hasn't broken structure yet
+      // FALLBACK: Simple OB detection when no structure breaks yet
+      // Ensures some OBs appear even before BOS/CHoCH
       // ===============================================================
       if(BullishOBCount == 0 && BearishOBCount == 0)
       {
-         // Simple OB detection: Look for strong moves (original logic as fallback)
          for(int i = internalLen; i < MathMin(30, barsTotal - internalLen - 1); i++)
          {
-            // Bullish OB: Bearish candle before strong up move
-            if(closeArr[i] < openArr[i])  // Bearish candle
+            // Bullish OB: Bearish candle followed by strong up move
+            if(closeArr[i] < openArr[i])
             {
                bool strongUp = false;
                for(int j = i - 1; j >= 1 && j > i - 4; j--)
@@ -5939,16 +5920,13 @@ void DetectOrderBlocks(double &highArr[], double &lowArr[], double &openArr[],
                   }
                }
                if(strongUp && InpSMCShowBullishOB)
-                {
-                   // Use full candle for fallback OBs too
-                   double obHigh = highArr[i];
-                   double obLow = lowArr[i];
-                   AddBullishOB(obHigh, obLow, timeArr[i], i);
-                }
+               {
+                  AddBullishOB(highArr[i], lowArr[i], timeArr[i], i);
+               }
             }
             
-            // Bearish OB: Bullish candle before strong down move
-            if(closeArr[i] > openArr[i])  // Bullish candle
+            // Bearish OB: Bullish candle followed by strong down move
+            if(closeArr[i] > openArr[i])
             {
                bool strongDown = false;
                for(int j = i - 1; j >= 1 && j > i - 4; j--)
@@ -5960,12 +5938,9 @@ void DetectOrderBlocks(double &highArr[], double &lowArr[], double &openArr[],
                   }
                }
                if(strongDown && InpSMCShowBearishOB)
-                {
-                   // Use full candle for fallback OBs too
-                   double obHigh = highArr[i];
-                   double obLow = lowArr[i];
-                   AddBearishOB(obHigh, obLow, timeArr[i], i);
-                }
+               {
+                  AddBearishOB(highArr[i], lowArr[i], timeArr[i], i);
+               }
             }
          }
       }
