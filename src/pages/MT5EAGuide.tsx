@@ -5639,58 +5639,68 @@ double GetCumulativeMeanRange(double &highArr[], double &lowArr[], int barsTotal
 }
 
 //+------------------------------------------------------------------+
-//| LuxAlgo OB Coordinate Function (ob_coord)                          |
+//| LuxAlgo OB Coordinate Function (ob_coord) - EXACT IMPLEMENTATION   |
 //| ================================================================== |
-//| KEY ALGORITHM from LuxAlgo:                                        |
-//| - Search from bar 1 to (n - loc) where loc = swing point bar       |
-//| - Filter: only bars with range < 2 * threshold (ATR or CMR)        |
-//| - For Bullish OB (use_max=false): find MINIMUM low[i]              |
-//| - For Bearish OB (use_max=true): find MAXIMUM high[i]              |
-//| - OB zone = high[idx] to low[idx] of the found candle              |
+//| FROM LUXALGO Pine Script:                                          |
+//| ob_coord(use_max, loc, n)=>                                        |
+//|   idx = 1                                                          |
+//|   ob_threshold = ob_filter == 'Atr' ? ta.atr(200) : cmean_range    |
+//|   for i = 1 to n - loc - 1                                         |
+//|     if (high[i] - low[i]) < ob_threshold * 2                       |
+//|       if use_max → max(high[i]) else → min(low[i])                 |
+//| Returns: [top, btm] where top = high[idx], btm = low[idx]          |
 //+------------------------------------------------------------------+
-int FindOBOriginBar(bool useMax, int pivotBar, double &highArr[], double &lowArr[], 
+int FindOBOriginBar(bool useMax, int pivotBar, int breakBar, double &highArr[], double &lowArr[], 
                     double &closeArr[], int barsTotal)
 {
-   int idx = -1;
+   int idx = 1;  // LuxAlgo default: idx = 1
    double minVal = DBL_MAX;
    double maxVal = -DBL_MAX;
    
-   // Calculate threshold (LuxAlgo uses ATR or Cumulative Mean Range)
+   // Calculate threshold (LuxAlgo: ATR(200) or Cumulative Mean Range)
    double atr = GetATRValue(0, highArr, lowArr, closeArr, 200);
    double cmr = GetCumulativeMeanRange(highArr, lowArr, MathMin(barsTotal, 500));
    double obThreshold = (atr > 0) ? atr : cmr;
    
-   // Search from bar 1 to (pivotBar - 1)
    // LuxAlgo: for i = 1 to (n - loc) - 1
-   int searchEnd = MathMax(pivotBar - 1, 1);
+   // n = breakBar (current bar when break happened)
+   // loc = pivotBar (swing point location)
+   // Search range: from bar 1 (most recent closed) to bar BETWEEN pivot and break
+   int searchEnd = pivotBar;  // Search up to pivot bar
+   if(searchEnd <= 1) searchEnd = 2;
    
    for(int i = 1; i < searchEnd && i < barsTotal; i++)
    {
       double barRange = highArr[i] - lowArr[i];
       
       // LuxAlgo filter: (high[i] - low[i]) < ob_threshold * 2
-      // Only consider bars with range LESS than 2x threshold (not volatile bars)
+      // This filters out volatile/impulse candles - only small body candles qualify
       if(barRange < obThreshold * 2.0)
       {
-         if(useMax)  // Bearish OB: find bar with MAXIMUM high
+         if(useMax)  // Bearish OB: find bar with MAXIMUM high (resistance zone)
          {
             if(highArr[i] > maxVal)
             {
                maxVal = highArr[i];
-               minVal = lowArr[i];  // Store corresponding low
                idx = i;
             }
          }
-         else  // Bullish OB: find bar with MINIMUM low
+         else  // Bullish OB: find bar with MINIMUM low (support zone)
          {
             if(lowArr[i] < minVal)
             {
                minVal = lowArr[i];
-               maxVal = highArr[i];  // Store corresponding high
                idx = i;
             }
          }
       }
+   }
+   
+   // If no valid bar found with ATR filter, return the last bar before pivot
+   if((useMax && maxVal == -DBL_MAX) || (!useMax && minVal == DBL_MAX))
+   {
+      idx = MathMin(pivotBar - 1, barsTotal - 1);
+      if(idx < 1) idx = 1;
    }
    
    return idx;
@@ -5817,7 +5827,8 @@ void DetectOrderBlocks(double &highArr[], double &lowArr[], double &openArr[],
          // LuxAlgo ob_coord: use_max=false → find MINIMUM low
          if(InpSMCShowBullishOB && g_InternalSwingHighBar > 0)
          {
-            int obBar = FindOBOriginBar(false, g_InternalSwingHighBar, highArr, lowArr, closeArr, barsTotal);
+            // breakBar = 1 (closed candle that made the break)
+            int obBar = FindOBOriginBar(false, g_InternalSwingHighBar, 1, highArr, lowArr, closeArr, barsTotal);
             if(obBar >= 0 && obBar < barsTotal)
             {
                // LuxAlgo: OB zone = high[idx] to low[idx]
@@ -5866,7 +5877,8 @@ void DetectOrderBlocks(double &highArr[], double &lowArr[], double &openArr[],
          // LuxAlgo ob_coord: use_max=true → find MAXIMUM high
          if(InpSMCShowBearishOB && g_InternalSwingLowBar > 0)
          {
-            int obBar = FindOBOriginBar(true, g_InternalSwingLowBar, highArr, lowArr, closeArr, barsTotal);
+            // breakBar = 1 (closed candle that made the break)
+            int obBar = FindOBOriginBar(true, g_InternalSwingLowBar, 1, highArr, lowArr, closeArr, barsTotal);
             if(obBar >= 0 && obBar < barsTotal)
             {
                // LuxAlgo: OB zone = high[idx] to low[idx]
