@@ -4635,12 +4635,20 @@ string ExtractXMLValue(string xml, string tag)
    
    string value = StringSubstr(xml, startPos, endPos - startPos);
    
-   // Remove CDATA wrapper if present
+   // Remove CDATA wrapper - support multiple formats
+   // Format 1: <![CDATA[value]]> (standard XML CDATA)
    if(StringFind(value, "<![CDATA[") >= 0)
    {
       StringReplace(value, "<![CDATA[", "");
       StringReplace(value, "]]>", "");
    }
+   // Format 2: <!--[CDATA[value]]--> (HTML escaped comment style)
+   if(StringFind(value, "<!--[CDATA[") >= 0)
+   {
+      StringReplace(value, "<!--[CDATA[", "");
+      StringReplace(value, "]]-->", "");
+   }
+   // Format 3: Sometimes just the content with extra whitespace
    
    StringTrimLeft(value);
    StringTrimRight(value);
@@ -4818,8 +4826,38 @@ void RefreshNewsData()
       return;
    }
    
-   // Convert to string
-   string xmlContent = CharArrayToString(resultData, 0, WHOLE_ARRAY, CP_UTF8);
+   // *** DEBUG: Log response info ***
+   int responseSize = ArraySize(resultData);
+   Print("NEWS FILTER DEBUG: HTTP Result = ", result, ", Response size = ", responseSize, " bytes");
+   Print("NEWS FILTER DEBUG: Response Headers = ", resultHeaders);
+   
+   // Convert to string - try default encoding first (windows-1252 compatible)
+   string xmlContent = CharArrayToString(resultData, 0, WHOLE_ARRAY, CP_ACP);
+   
+   // *** DEBUG: Log first part of content ***
+   Print("NEWS FILTER DEBUG: First 500 chars of response:");
+   Print(StringSubstr(xmlContent, 0, 500));
+   
+   // *** VALIDATION: Check if response is valid XML ***
+   if(responseSize < 100)
+   {
+      Print("NEWS FILTER WARNING: Response too short (", responseSize, " bytes) - may be error page");
+      return;
+   }
+   
+   // Check if we got actual XML content
+   if(StringFind(xmlContent, "<weeklyevents>") < 0 && StringFind(xmlContent, "<event>") < 0)
+   {
+      Print("NEWS FILTER WARNING: Response does not contain expected XML tags!");
+      Print("NEWS FILTER DEBUG: Looking for <weeklyevents> or <event>...");
+      // Try to find any XML-like content
+      int xmlStart = StringFind(xmlContent, "<?xml");
+      if(xmlStart >= 0)
+         Print("NEWS FILTER DEBUG: Found <?xml at position ", xmlStart);
+      else
+         Print("NEWS FILTER DEBUG: No <?xml header found - response may not be XML");
+      return;
+   }
    
    // Parse events
    g_newsEventCount = 0;
@@ -4827,6 +4865,16 @@ void RefreshNewsData()
    
    int searchPos = 0;
    int eventStart;
+   
+   // *** DEBUG: Count how many <event> tags exist ***
+   int eventTagCount = 0;
+   int countPos = 0;
+   while((countPos = StringFind(xmlContent, "<event>", countPos)) >= 0)
+   {
+      eventTagCount++;
+      countPos += 7;
+   }
+   Print("NEWS FILTER DEBUG: Found ", eventTagCount, " <event> tags in response");
    
    while((eventStart = StringFind(xmlContent, "<event>", searchPos)) >= 0)
    {
@@ -4841,6 +4889,16 @@ void RefreshNewsData()
       string dateStr = ExtractXMLValue(eventXml, "date");
       string timeStr = ExtractXMLValue(eventXml, "time");
       string impact = ExtractXMLValue(eventXml, "impact");
+      
+      // *** DEBUG: Log first 5 events parsed ***
+      if(g_newsEventCount < 5)
+      {
+         Print("NEWS FILTER DEBUG: Event #", g_newsEventCount + 1);
+         Print("  Title: ", title);
+         Print("  Country: ", country);
+         Print("  Date: ", dateStr, " Time: ", timeStr);
+         Print("  Impact: ", impact);
+      }
       
       // Parse datetime
       datetime eventTime = ParseNewsTime(dateStr, timeStr);
