@@ -653,7 +653,7 @@ datetime g_nextNewsTime = 0;        // Time of upcoming/current news
 string g_newsStatus = "OK";         // Current news filter status for dashboard
 
 // *** WEBREQUEST CONFIGURATION CHECK ***
-bool g_webRequestConfigured = false;      // WebRequest configured correctly
+bool g_webRequestConfigured = true;       // Assume configured until proven otherwise (only 4060/4024 errors change this)
 datetime g_lastWebRequestCheck = 0;       // Last check time
 datetime g_lastWebRequestAlert = 0;       // Last alert time (prevent spam)
 int g_webRequestCheckInterval = 3600;     // Check interval (1 hour = 3600 seconds)
@@ -836,48 +836,57 @@ int OnInit()
    Print("EA Started Successfully!");
    Print("Dashboard and buttons are ready (Visual Backtest supported)");
    
-   // *** NEWS FILTER - Check WebRequest configuration at startup ***
-   if(InpEnableNewsFilter)
-   {
-      // Reset news variables to force immediate refresh when EA reinitializes
-      // (เมื่อเปลี่ยน Settings แล้วกด OK จะทำให้ข้อมูลข่าวโหลดใหม่ทันที)
-      g_lastNewsRefresh = 0;        // Force immediate refresh
-      g_newsEventCount = 0;         // Clear old events
-      g_isNewsPaused = false;       // Reset pause state
-      g_nextNewsTitle = "";
-      g_nextNewsTime = 0;
-      g_newsStatus = "";
-      ArrayResize(g_newsEvents, 0); // Clear news array
-      
-      g_lastWebRequestCheck = TimeCurrent();
-      if(!CheckWebRequestConfiguration())
-      {
-         // WebRequest not configured - show alert
-         ShowWebRequestSetupAlert();
-         g_lastWebRequestAlert = TimeCurrent();
-      }
-      else
-      {
-         // WebRequest configured - load news immediately
-         Print("NEWS FILTER: Loading news data on initialization...");
-         RefreshNewsData();
-         
-         // Log summary of loaded news
-         int relevantCount = 0;
-         for(int i = 0; i < g_newsEventCount; i++)
-         {
-            if(g_newsEvents[i].isRelevant)
-               relevantCount++;
-         }
-         Print("NEWS FILTER: Loaded ", g_newsEventCount, " total events, ", relevantCount, " relevant to your filters");
-         
-         // If no news loaded, warn user
-         if(g_newsEventCount == 0)
-         {
-            Print("WARNING: No news events loaded! Check internet connection or ForexFactory availability.");
-         }
-      }
-   }
+   // *** NEWS FILTER - Initialize and load news at startup ***
+    if(InpEnableNewsFilter)
+    {
+       // Reset news variables to force immediate refresh when EA reinitializes
+       // (เมื่อเปลี่ยน Settings แล้วกด OK จะทำให้ข้อมูลข่าวโหลดใหม่ทันที)
+       g_lastNewsRefresh = 0;        // Force immediate refresh
+       g_newsEventCount = 0;         // Clear old events
+       g_isNewsPaused = false;       // Reset pause state
+       g_nextNewsTitle = "";
+       g_nextNewsTime = 0;
+       g_newsStatus = "";
+       ArrayResize(g_newsEvents, 0); // Clear news array
+       
+       // Assume configured initially - only 4060/4024 errors will change this
+       g_webRequestConfigured = true;
+       g_lastWebRequestCheck = TimeCurrent();
+       
+       // Check configuration (this will set g_webRequestConfigured = false only for real config errors)
+       bool configCheckResult = CheckWebRequestConfiguration();
+       
+       // *** ALWAYS try to load news regardless of check result ***
+       // Network errors in check shouldn't prevent loading attempt
+       Print("NEWS FILTER: Loading news data on initialization...");
+       RefreshNewsData();
+       
+       // Log summary of loaded news
+       int relevantCount = 0;
+       for(int i = 0; i < g_newsEventCount; i++)
+       {
+          if(g_newsEvents[i].isRelevant)
+             relevantCount++;
+       }
+       Print("NEWS FILTER: Loaded ", g_newsEventCount, " total events, ", relevantCount, " relevant to your filters");
+       
+       // If no news loaded, show debug info
+       if(g_newsEventCount == 0)
+       {
+          Print("NEWS FILTER WARNING: No news events loaded!");
+          if(g_webRequestConfigured)
+             Print("  -> WebRequest is configured, but no events parsed (check response format)");
+          else
+             Print("  -> WebRequest configuration error (4060 or 4024)");
+       }
+       
+       // Only show setup alert if it's a REAL configuration error (not network error)
+       if(!g_webRequestConfigured)
+       {
+          ShowWebRequestSetupAlert();
+          g_lastWebRequestAlert = TimeCurrent();
+       }
+    }
    
    return(INIT_SUCCEEDED);
 }
@@ -1288,11 +1297,14 @@ void UpdateDashboard()
       }
       
       if(g_newsEventCount == 0)
-      {
-         // No news loaded at all - may be an issue
-         newsDisplayStatus = "⚠ No news loaded!";
-         newsStatusColor = clrYellow;
-      }
+       {
+          // No news loaded at all - show debug info
+          // Static blink effect for visibility
+          static bool noNewsBlink = false;
+          noNewsBlink = !noNewsBlink;
+          newsDisplayStatus = noNewsBlink ? "⚠ 0 events (Check Experts tab)" : "⚠ Retry: Reload EA";
+          newsStatusColor = clrYellow;
+       }
       else if(relevantCount == 0)
       {
          newsDisplayStatus = "OK (No relevant news)";
@@ -4675,7 +4687,7 @@ bool CheckWebRequestConfiguration()
    char postData[], resultData[];
    string headers = "";
    string resultHeaders;
-   int timeout = 3000;  // 3 seconds for quick test
+   int timeout = 5000;  // 5 seconds for quick test
    
    // Reset error before test
    ResetLastError();
@@ -4703,19 +4715,21 @@ bool CheckWebRequestConfiguration()
          return false;
       }
       else
-      {
-         Print("NEWS FILTER ERROR [", error, "]: WebRequest failed - possibly network issue");
-         // Network errors shouldn't trigger the setup alert repeatedly
-         // Only config errors should
-         if(error == 5203 || error == 5200 || error == 5201)
-         {
-            Print("NEWS FILTER: Network error detected, WebRequest may still be configured correctly");
-            // Don't change g_webRequestConfigured status for network errors
-            return g_webRequestConfigured;
-         }
-         g_webRequestConfigured = false;
-         return false;
-      }
+       {
+          Print("NEWS FILTER ERROR [", error, "]: WebRequest failed - possibly network issue");
+          // Network errors shouldn't trigger the setup alert
+          // Only true configuration errors (4060, 4024) should mark as not configured
+          // For network errors, assume configured and let RefreshNewsData try anyway
+          if(error == 5203 || error == 5200 || error == 5201)
+          {
+             Print("NEWS FILTER: Network error detected - WebRequest is configured, will retry in RefreshNewsData");
+             g_webRequestConfigured = true;  // Assume configured for network errors
+             return true;  // Let RefreshNewsData handle the actual fetch with retry
+          }
+          // Other unknown errors - don't change configuration status
+          Print("NEWS FILTER: Unknown error - will retry later");
+          return g_webRequestConfigured;
+       }
    }
    
    // Success!
@@ -4771,18 +4785,10 @@ void RefreshNewsData()
    if(!InpEnableNewsFilter)
       return;
    
-   // *** CHECK WEBREQUEST CONFIGURATION FIRST ***
-   // If not configured, don't try to fetch (will just fail anyway)
-   if(!g_webRequestConfigured)
-   {
-      // Try to check configuration again (in case user fixed it)
-      if(!CheckWebRequestConfiguration())
-      {
-         // Still not configured - skip fetching
-         Print("NEWS FILTER: Skipping refresh - WebRequest not configured");
-         return;
-      }
-   }
+   // *** ALWAYS TRY TO FETCH NEWS ***
+   // Don't skip based on g_webRequestConfigured - always attempt to load
+   // Only true config errors (4060, 4024) will stop us
+   Print("NEWS FILTER: Attempting to refresh news data...");
    
    datetime currentTime = TimeCurrent();
    
@@ -4808,9 +4814,19 @@ void RefreshNewsData()
    string headers = "";
    string resultHeaders;
    
-   int timeout = 5000;  // 5 seconds
+   int timeout = 10000;  // 10 seconds for reliable fetch
    
    int result = WebRequest("GET", weekUrl, headers, timeout, postData, resultData, resultHeaders);
+   
+   // *** RETRY MECHANISM: If first attempt fails, try once more ***
+   if(result == -1)
+   {
+      int firstError = GetLastError();
+      Print("NEWS FILTER: First attempt failed (error ", firstError, "), retrying after 1 second...");
+      Sleep(1000);  // Wait 1 second before retry
+      ResetLastError();
+      result = WebRequest("GET", weekUrl, headers, timeout, postData, resultData, resultHeaders);
+   }
    
    if(result == -1)
    {
