@@ -5249,6 +5249,32 @@ void GetNewsPauseDuration(string impact, bool isCustomMatch, int &beforeMin, int
 }
 
 //+------------------------------------------------------------------+
+//| Check whether an event is relevant using CURRENT filter settings   |
+//| (Do NOT rely on cached event.isRelevant because users can toggle   |
+//| filters at runtime / after cached load)                             |
+//+------------------------------------------------------------------+
+bool IsEventRelevantNow(const NewsEvent &ev)
+{
+   if(!IsCurrencyRelevant(ev.country))
+      return false;
+
+   // Custom keyword match is independent from impact filters
+   if(InpFilterCustomNews && IsCustomNewsMatch(ev.title))
+      return true;
+
+   if(InpFilterHighNews && ev.impact == "High")
+      return true;
+
+   if(InpFilterMedNews && ev.impact == "Medium")
+      return true;
+
+   if(InpFilterLowNews && ev.impact == "Low")
+      return true;
+
+   return false;
+}
+
+//+------------------------------------------------------------------+
 //| Check if Currently in News Pause Window                            |
 //+------------------------------------------------------------------+
 bool IsNewsTimePaused()
@@ -5281,9 +5307,11 @@ bool IsNewsTimePaused()
    
    for(int i = 0; i < g_newsEventCount; i++)
    {
-      if(!g_newsEvents[i].isRelevant)
+      // IMPORTANT: recompute relevance using CURRENT filter settings
+      // (cached isRelevant can be stale after user toggles filters)
+      if(!IsEventRelevantNow(g_newsEvents[i]))
          continue;
-      
+
       datetime newsTime = g_newsEvents[i].time;
       string impact = g_newsEvents[i].impact;
       bool isCustom = IsCustomNewsMatch(g_newsEvents[i].title);
