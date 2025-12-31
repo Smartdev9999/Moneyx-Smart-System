@@ -5216,35 +5216,55 @@ void LoadNewsCacheFromFile()
 
 //+------------------------------------------------------------------+
 //| Get Pause Duration for News Impact Level                           |
+//| NOTE: If news matches BOTH Custom and Impact filters, use the      |
+//| one with LARGER pause window (longer before+after total)           |
 //+------------------------------------------------------------------+
 void GetNewsPauseDuration(string impact, bool isCustomMatch, int &beforeMin, int &afterMin)
 {
    beforeMin = 0;
    afterMin = 0;
    
-   // Custom news has its own timing
+   int customBefore = 0, customAfter = 0;
+   int impactBefore = 0, impactAfter = 0;
+   
+   // Check Custom news timing
    if(isCustomMatch && InpFilterCustomNews)
    {
-      beforeMin = InpPauseBeforeCustom;
-      afterMin = InpPauseAfterCustom;
-      return;
+      customBefore = InpPauseBeforeCustom;
+      customAfter = InpPauseAfterCustom;
    }
    
-   // Impact-based timing
+   // Check Impact-based timing
    if(impact == "High" && InpFilterHighNews)
    {
-      beforeMin = InpPauseBeforeHigh;
-      afterMin = InpPauseAfterHigh;
+      impactBefore = InpPauseBeforeHigh;
+      impactAfter = InpPauseAfterHigh;
    }
    else if(impact == "Medium" && InpFilterMedNews)
    {
-      beforeMin = InpPauseBeforeMed;
-      afterMin = InpPauseAfterMed;
+      impactBefore = InpPauseBeforeMed;
+      impactAfter = InpPauseAfterMed;
    }
    else if(impact == "Low" && InpFilterLowNews)
    {
-      beforeMin = InpPauseBeforeLow;
-      afterMin = InpPauseAfterLow;
+      impactBefore = InpPauseBeforeLow;
+      impactAfter = InpPauseAfterLow;
+   }
+   
+   // *** CHOOSE THE LARGER PAUSE WINDOW ***
+   // Compare total pause duration (before + after) and use the larger one
+   int customTotal = customBefore + customAfter;
+   int impactTotal = impactBefore + impactAfter;
+   
+   if(customTotal >= impactTotal && customTotal > 0)
+   {
+      beforeMin = customBefore;
+      afterMin = customAfter;
+   }
+   else if(impactTotal > 0)
+   {
+      beforeMin = impactBefore;
+      afterMin = impactAfter;
    }
 }
 
