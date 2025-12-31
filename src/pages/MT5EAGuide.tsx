@@ -657,6 +657,7 @@ bool g_webRequestConfigured = true;       // Assume configured until proven othe
 datetime g_lastWebRequestCheck = 0;       // Last check time
 datetime g_lastWebRequestAlert = 0;       // Last alert time (prevent spam)
 int g_webRequestCheckInterval = 3600;     // Check interval (1 hour = 3600 seconds)
+bool g_forceNewsRefresh = false;          // Force refresh flag - bypasses hourly check on first call
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                     |
@@ -853,13 +854,27 @@ int OnInit()
        g_webRequestConfigured = true;
        g_lastWebRequestCheck = TimeCurrent();
        
+       // *** SET FORCE REFRESH FLAG ***
+       // This bypasses the hourly check for the first call
+       g_forceNewsRefresh = true;
+       
+       // Log OnInit state for debugging
+       Print("========== NEWS FILTER INITIALIZATION ==========");
+       Print("InpEnableNewsFilter = ", InpEnableNewsFilter);
+       Print("g_lastNewsRefresh BEFORE = ", g_lastNewsRefresh);
+       Print("g_forceNewsRefresh = ", g_forceNewsRefresh);
+       
        // Check configuration (this will set g_webRequestConfigured = false only for real config errors)
        bool configCheckResult = CheckWebRequestConfiguration();
+       Print("CheckWebRequestConfiguration result = ", configCheckResult);
+       Print("g_webRequestConfigured = ", g_webRequestConfigured);
        
        // *** ALWAYS try to load news regardless of check result ***
        // Network errors in check shouldn't prevent loading attempt
-       Print("NEWS FILTER: Loading news data on initialization...");
+       Print("NEWS FILTER: Calling RefreshNewsData()...");
        RefreshNewsData();
+       Print("NEWS FILTER: After RefreshNewsData - g_newsEventCount = ", g_newsEventCount);
+       Print("========== NEWS FILTER INIT COMPLETE ==========");
        
        // Log summary of loaded news
        int relevantCount = 0;
@@ -4780,21 +4795,21 @@ void ShowWebRequestSetupAlert()
 //+------------------------------------------------------------------+
 //| Fetch and Parse News from ForexFactory XML                         |
 //+------------------------------------------------------------------+
+
 void RefreshNewsData()
 {
    if(!InpEnableNewsFilter)
       return;
    
-   // *** ALWAYS TRY TO FETCH NEWS ***
-   // Don't skip based on g_webRequestConfigured - always attempt to load
-   // Only true config errors (4060, 4024) will stop us
-   Print("NEWS FILTER: Attempting to refresh news data...");
-   
    datetime currentTime = TimeCurrent();
    
-   // Refresh every hour (3600 seconds)
-   if(g_lastNewsRefresh > 0 && (currentTime - g_lastNewsRefresh) < 3600)
-      return;
+   // *** CHECK HOURLY LIMIT FIRST - before any logging ***
+   // Use g_forceNewsRefresh to bypass on first call from OnInit
+   if(!g_forceNewsRefresh && g_lastNewsRefresh > 0 && (currentTime - g_lastNewsRefresh) < 3600)
+      return;  // Already refreshed within last hour - exit silently
+   
+   // Reset force flag after use
+   g_forceNewsRefresh = false;
    
    g_lastNewsRefresh = currentTime;
    Print("NEWS FILTER: Refreshing news data from ForexFactory...");
