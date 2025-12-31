@@ -652,6 +652,12 @@ string g_nextNewsTitle = "";        // Title of upcoming/current news affecting 
 datetime g_nextNewsTime = 0;        // Time of upcoming/current news
 string g_newsStatus = "OK";         // Current news filter status for dashboard
 
+// *** WEBREQUEST CONFIGURATION CHECK ***
+bool g_webRequestConfigured = false;      // WebRequest configured correctly
+datetime g_lastWebRequestCheck = 0;       // Last check time
+datetime g_lastWebRequestAlert = 0;       // Last alert time (prevent spam)
+int g_webRequestCheckInterval = 3600;     // Check interval (1 hour = 3600 seconds)
+
 //+------------------------------------------------------------------+
 //| Expert initialization function                                     |
 //+------------------------------------------------------------------+
@@ -829,6 +835,19 @@ int OnInit()
    
    Print("EA Started Successfully!");
    Print("Dashboard and buttons are ready (Visual Backtest supported)");
+   
+   // *** NEWS FILTER - Check WebRequest configuration at startup ***
+   if(InpEnableNewsFilter)
+   {
+      g_lastWebRequestCheck = TimeCurrent();
+      if(!CheckWebRequestConfiguration())
+      {
+         // WebRequest not configured - show alert
+         ShowWebRequestSetupAlert();
+         g_lastWebRequestAlert = TimeCurrent();
+      }
+   }
+   
    return(INIT_SUCCEEDED);
 }
 
@@ -894,6 +913,24 @@ void OnTimer()
    {
       UpdateProfitHistory();
       lastHistoryUpdate = TimeCurrent();
+   }
+   
+   // *** NEWS FILTER - Re-check WebRequest configuration every hour ***
+   if(InpEnableNewsFilter && !g_webRequestConfigured)
+   {
+      datetime now = TimeCurrent();
+      // เช็คทุก 1 ชั่วโมง (3600 วินาที)
+      if((now - g_lastWebRequestAlert) >= g_webRequestCheckInterval)
+      {
+         // ลองเช็คอีกครั้ง
+         g_lastWebRequestCheck = now;
+         if(!CheckWebRequestConfiguration())
+         {
+            // ยังไม่ได้ตั้งค่า - แจ้งเตือนอีกครั้ง
+            ShowWebRequestSetupAlert();
+            g_lastWebRequestAlert = now;
+         }
+      }
    }
    
    ChartRedraw(0);
@@ -1179,14 +1216,26 @@ void UpdateDashboard()
    // Accumulate Close: ใช้ Locked Target ถ้ามี order ค้าง, ไม่งั้นแสดง Current Scaled
    double displayAccumulateTarget = (g_lockedAccumulateTarget > 0) ? g_lockedAccumulateTarget : ApplyScaleDollar(InpAccumulateTarget);
    detailValues[11] = (totalPLForAccumulate >= 0 ? "+" : "") + DoubleToString(totalPLForAccumulate, 0) + "$ (Tg: " + DoubleToString(displayAccumulateTarget, 0) + "$)";
-   // News Filter Status: 3 states
+   // News Filter Status: 4 states now
    // 1. "Disable" - when feature is off
-   // 2. "No important news" - when enabled and no news affecting
-   // 3. News title (from ForexFactory) - when paused due to news
+   // 2. "WebRequest: NOT CONFIGURED!" - when WebRequest not set up (blinking red)
+   // 3. "No important news" - when enabled and no news affecting
+   // 4. News title (from ForexFactory) - when paused due to news
    string newsDisplayStatus;
+   color newsStatusColor;
+   
    if(!InpEnableNewsFilter)
    {
       newsDisplayStatus = "Disable";
+      newsStatusColor = clrGray;
+   }
+   else if(!g_webRequestConfigured)
+   {
+      // WebRequest not configured - show warning with blinking effect
+      static bool blinkState = false;
+      blinkState = !blinkState;
+      newsDisplayStatus = blinkState ? "⚠ WebRequest: NOT CONFIGURED!" : "⚠ Click OK on popup to see instructions";
+      newsStatusColor = clrOrangeRed;
    }
    else if(g_isNewsPaused && StringLen(g_nextNewsTitle) > 0)
    {
@@ -1195,10 +1244,12 @@ void UpdateDashboard()
       if(StringLen(truncatedTitle) > 25)
          truncatedTitle = StringSubstr(truncatedTitle, 0, 22) + "...";
       newsDisplayStatus = truncatedTitle;
+      newsStatusColor = clrOrangeRed;
    }
    else
    {
       newsDisplayStatus = "No important news";
+      newsStatusColor = clrLime;
    }
    detailValues[12] = newsDisplayStatus;
    
@@ -1215,8 +1266,8 @@ void UpdateDashboard()
    valueColors[9] = (currentDD <= 10) ? clrLime : (currentDD <= 20) ? clrYellow : clrOrangeRed;
    valueColors[10] = (g_maxDrawdownPercent <= 15) ? clrLime : (g_maxDrawdownPercent <= 30) ? clrYellow : clrOrangeRed;
    valueColors[11] = (totalPLForAccumulate >= displayAccumulateTarget * 0.8) ? clrLime : (totalPLForAccumulate >= 0) ? clrYellow : clrOrangeRed;
-   // News Filter: Gray=Disable, Red=Paused with news title, Green=No important news
-   valueColors[12] = (!InpEnableNewsFilter) ? clrGray : (g_isNewsPaused) ? clrOrangeRed : clrLime;
+   // News Filter: use the color determined above
+   valueColors[12] = newsStatusColor;
    
    for(int i = 0; i < 13; i++)
    {
@@ -4545,12 +4596,132 @@ string ExtractXMLValue(string xml, string tag)
 }
 
 //+------------------------------------------------------------------+
+//| Check if WebRequest is properly configured for News Filter         |
+//| Tests by making a small request to the news URL                    |
+//| Returns true if WebRequest works, false otherwise                  |
+//+------------------------------------------------------------------+
+bool CheckWebRequestConfiguration()
+{
+   if(!InpEnableNewsFilter)
+   {
+      g_webRequestConfigured = true;  // Not needed, so "configured"
+      return true;
+   }
+   
+   Print("NEWS FILTER: Checking WebRequest configuration...");
+   
+   string testUrl = "https://nfs.faireconomy.media/ff_calendar_thisweek.xml";
+   char postData[], resultData[];
+   string headers = "";
+   string resultHeaders;
+   int timeout = 3000;  // 3 seconds for quick test
+   
+   // Reset error before test
+   ResetLastError();
+   
+   int result = WebRequest("GET", testUrl, headers, timeout, postData, resultData, resultHeaders);
+   
+   if(result == -1)
+   {
+      int error = GetLastError();
+      
+      // Error 4060 = WebRequest not enabled in settings
+      // Error 4024 = URL not in allowed list
+      // Error 5203 = Connection failed / network error
+      
+      if(error == 4060)
+      {
+         Print("NEWS FILTER ERROR [4060]: WebRequest is NOT enabled in MT5 settings!");
+         g_webRequestConfigured = false;
+         return false;
+      }
+      else if(error == 4024)
+      {
+         Print("NEWS FILTER ERROR [4024]: URL is NOT in the allowed WebRequest list!");
+         g_webRequestConfigured = false;
+         return false;
+      }
+      else
+      {
+         Print("NEWS FILTER ERROR [", error, "]: WebRequest failed - possibly network issue");
+         // Network errors shouldn't trigger the setup alert repeatedly
+         // Only config errors should
+         if(error == 5203 || error == 5200 || error == 5201)
+         {
+            Print("NEWS FILTER: Network error detected, WebRequest may still be configured correctly");
+            // Don't change g_webRequestConfigured status for network errors
+            return g_webRequestConfigured;
+         }
+         g_webRequestConfigured = false;
+         return false;
+      }
+   }
+   
+   // Success!
+   g_webRequestConfigured = true;
+   Print("NEWS FILTER: WebRequest is properly configured! ✓");
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| Show WebRequest Setup Alert with Instructions                      |
+//| Displays a MessageBox with step-by-step instructions               |
+//+------------------------------------------------------------------+
+void ShowWebRequestSetupAlert()
+{
+   string alertTitle = "NEWS FILTER: WebRequest Configuration Required!";
+   
+   string alertMessage = 
+      "⚠️ News Filter cannot fetch data because WebRequest is not configured.\\n\\n"
+      "กรุณาตั้งค่า WebRequest ตามขั้นตอนนี้:\\n\\n"
+      "=== STEP-BY-STEP GUIDE ===\\n\\n"
+      "1. เปิด MT5 ไปที่ Tools → Options\\n"
+      "   (หรือกด Ctrl+O เพื่อเปิด Options โดยตรง)\\n\\n"
+      "2. ไปที่แท็บ 'Expert Advisors'\\n\\n"
+      "3. ติ๊กเปิด ☑ 'Allow WebRequest for listed URL:'\\n\\n"
+      "4. คลิกปุ่ม 'Add new URL' และเพิ่ม:\\n"
+      "   https://nfs.faireconomy.media\\n\\n"
+      "5. คลิก OK แล้ว RESTART EA\\n"
+      "   (ถอด EA ออกจากชาร์ตแล้วใส่ใหม่)\\n\\n"
+      "=========================\\n\\n"
+      "📌 URL ที่ต้องเพิ่ม: https://nfs.faireconomy.media\\n\\n"
+      "หมายเหตุ: ระบบจะแจ้งเตือนซ้ำทุก 1 ชั่วโมงจนกว่าจะตั้งค่าเสร็จ";
+   
+   // Show MessageBox with OK button
+   // MB_OK | MB_ICONWARNING = 0x30
+   MessageBox(alertMessage, alertTitle, 0x30);
+   
+   // Also print to journal for reference
+   Print("========================================");
+   Print("NEWS FILTER: WebRequest NOT CONFIGURED!");
+   Print("URL Required: https://nfs.faireconomy.media");
+   Print("Go to: Tools -> Options -> Expert Advisors");
+   Print("Enable: Allow WebRequest for listed URL");
+   Print("Add URL: https://nfs.faireconomy.media");
+   Print("Then RESTART the EA");
+   Print("========================================");
+}
+
+//+------------------------------------------------------------------+
 //| Fetch and Parse News from ForexFactory XML                         |
 //+------------------------------------------------------------------+
 void RefreshNewsData()
 {
    if(!InpEnableNewsFilter)
       return;
+   
+   // *** CHECK WEBREQUEST CONFIGURATION FIRST ***
+   // If not configured, don't try to fetch (will just fail anyway)
+   if(!g_webRequestConfigured)
+   {
+      // Try to check configuration again (in case user fixed it)
+      if(!CheckWebRequestConfiguration())
+      {
+         // Still not configured - skip fetching
+         Print("NEWS FILTER: Skipping refresh - WebRequest not configured");
+         return;
+      }
+   }
    
    datetime currentTime = TimeCurrent();
    
@@ -4584,7 +4755,13 @@ void RefreshNewsData()
    {
       int error = GetLastError();
       Print("NEWS FILTER ERROR: WebRequest failed - Error ", error);
-      Print("NOTE: Please add 'https://nfs.faireconomy.media' to Tools -> Options -> Expert Advisors -> Allow WebRequest for listed URL");
+      
+      // If error indicates configuration issue, mark as not configured
+      if(error == 4060 || error == 4024)
+      {
+         g_webRequestConfigured = false;
+         // Alert will be shown by OnTimer on next hourly check
+      }
       return;
    }
    
