@@ -5305,6 +5305,13 @@ bool IsNewsTimePaused()
    int closestBeforeMin = 0;
    int closestAfterMin = 0;
    
+   // *** PRIORITY LOGIC: Find news with EARLIEST resume time (pauseEnd) ***
+   datetime earliestPauseEnd = 0;
+   string earliestNewsTitle = "";
+   datetime earliestNewsTime = 0;
+   string earliestCountry = "";
+   string earliestImpact = "";
+   
    for(int i = 0; i < g_newsEventCount; i++)
    {
       // IMPORTANT: recompute relevance using CURRENT filter settings
@@ -5329,34 +5336,50 @@ bool IsNewsTimePaused()
       // Check if current time is within pause window
       if(currentTime >= pauseStart && currentTime <= pauseEnd)
       {
-         foundPause = true;
-         g_nextNewsTitle = g_newsEvents[i].title;
-         g_nextNewsTime = newsTime;
-         g_newsPauseEndTime = pauseEnd;  // Store pause end time for countdown display
-         pauseKey = g_newsEvents[i].title + "|" + IntegerToString((long)newsTime);
-         
-         // Determine status text
-         if(currentTime < newsTime)
+         // *** Choose the news with EARLIEST pauseEnd (resume soonest) ***
+         if(!foundPause || pauseEnd < earliestPauseEnd)
          {
-            int minsLeft = (int)((newsTime - currentTime) / 60);
-            g_newsStatus = "PAUSE: " + g_newsEvents[i].country + " " + impact + " in " + IntegerToString(minsLeft) + "m";
+            foundPause = true;
+            earliestPauseEnd = pauseEnd;
+            earliestNewsTitle = g_newsEvents[i].title;
+            earliestNewsTime = newsTime;
+            earliestCountry = g_newsEvents[i].country;
+            earliestImpact = impact;
          }
-         else
-         {
-            int minsAfter = (int)((currentTime - newsTime) / 60);
-            g_newsStatus = "PAUSE: " + g_newsEvents[i].country + " " + impact + " +" + IntegerToString(minsAfter) + "m ago";
-         }
-         
-         break;  // Found pause, no need to continue
       }
       
-      // Track closest upcoming news for dashboard display
+      // Track closest upcoming news for dashboard display (not yet paused)
       if(newsTime > currentTime && (closestNewsTime == 0 || newsTime < closestNewsTime))
       {
-         closestNewsTime = newsTime;
-         closestNewsTitle = g_newsEvents[i].title;
-         closestBeforeMin = beforeMin;
-         closestAfterMin = afterMin;
+         datetime futureStart = newsTime - beforeMin * 60;
+         if(currentTime < futureStart)  // Not yet in pause window
+         {
+            closestNewsTime = newsTime;
+            closestNewsTitle = g_newsEvents[i].title;
+            closestBeforeMin = beforeMin;
+            closestAfterMin = afterMin;
+         }
+      }
+   }
+   
+   // *** Set the selected pause info ***
+   if(foundPause)
+   {
+      g_nextNewsTitle = earliestNewsTitle;
+      g_nextNewsTime = earliestNewsTime;
+      g_newsPauseEndTime = earliestPauseEnd;
+      pauseKey = earliestNewsTitle + "|" + IntegerToString((long)earliestNewsTime);
+      
+      // Determine status text
+      if(currentTime < earliestNewsTime)
+      {
+         int minsLeft = (int)((earliestNewsTime - currentTime) / 60);
+         g_newsStatus = "PAUSE: " + earliestCountry + " " + earliestImpact + " in " + IntegerToString(minsLeft) + "m";
+      }
+      else
+      {
+         int minsAfter = (int)((currentTime - earliestNewsTime) / 60);
+         g_newsStatus = "PAUSE: " + earliestCountry + " " + earliestImpact + " +" + IntegerToString(minsAfter) + "m ago";
       }
    }
    
