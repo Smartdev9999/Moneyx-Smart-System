@@ -2389,22 +2389,31 @@ void CalculateCDC()
    CDCFast = fast[0];
    CDCSlow = slow[0];
    
-   // Simple CDC: Fast above Slow = BULLISH, Fast below Slow = BEARISH
-   if(CDCFast > CDCSlow)
+   // CDC Trend Detection: Based on EMA CROSSOVER (not just position)
+   // BULLISH = Fast EMA crosses ABOVE Slow EMA (and stays above)
+   // BEARISH = Fast EMA crosses BELOW Slow EMA (and stays below)
+   // NO NEUTRAL state - always maintain last known trend direction
+   
+   double fastPrev = fast[1];  // Previous bar Fast EMA
+   double slowPrev = slow[1];  // Previous bar Slow EMA
+   
+   // Check for crossover on current or previous bars
+   bool crossUp = (fastPrev <= slowPrev && CDCFast > CDCSlow);   // Cross UP
+   bool crossDown = (fastPrev >= slowPrev && CDCFast < CDCSlow); // Cross DOWN
+   
+   if(crossUp || CDCFast > CDCSlow)
    {
+      // Fast crossed above Slow or is currently above = BULLISH
       CDCTrend = "BULLISH";
       CDCZoneColor = clrLime;
    }
-   else if(CDCFast < CDCSlow)
+   else if(crossDown || CDCFast < CDCSlow)
    {
+      // Fast crossed below Slow or is currently below = BEARISH
       CDCTrend = "BEARISH";
       CDCZoneColor = clrRed;
    }
-   else
-   {
-      CDCTrend = "NEUTRAL";
-      CDCZoneColor = clrWhite;
-   }
+   // Note: No NEUTRAL state - if Fast == Slow exactly, keep previous trend
    
    if(InpShowCDCLines)
    {
