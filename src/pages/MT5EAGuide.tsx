@@ -7184,6 +7184,38 @@ void AddBullishOB(double high, double low, datetime time, int barIndex, int obTy
       if(BullishOBs[i].time == time) return;  // Already exists
    }
    
+   // *** CHECK OVERLAP: If new OB overlaps with existing OBs, delete OLD ones ***
+   if(InpSMCConfluenceFilter)
+   {
+      for(int i = BullishOBCount - 1; i >= 0; i--)  // Loop backward for safe removal
+      {
+         if(BullishOBs[i].mitigated) continue;
+         
+         double overlapPct = CalcOverlapPercent(high, low, BullishOBs[i].high, BullishOBs[i].low);
+         
+         if(overlapPct >= InpSMCConfluencePercent)
+         {
+            // New OB overlaps with existing OB - DELETE the OLD one (keep new)
+            Print(">>> SMC Overlap: NEW OB overlaps with OLD OB (", 
+                  DoubleToString(overlapPct, 1), "%) - Deleting OLD: ", 
+                  BullishOBs[i].objName, " | Keeping NEW at time: ", TimeToString(time));
+            
+            // Delete old OB from chart
+            ObjectDelete(0, BullishOBs[i].objName);
+            
+            // Remember this time to prevent re-detection
+            RememberSMCRemovedTime(BullishOBs[i].time, true);
+            
+            // Remove from array
+            for(int k = i; k < BullishOBCount - 1; k++)
+            {
+               BullishOBs[k] = BullishOBs[k + 1];
+            }
+            BullishOBCount--;
+         }
+      }
+   }
+   
    // FIFO (Circular Buffer): If array is full, remove the OLDEST OB (index 0)
    // This ensures OBs keep updating even when max limit is reached
    int maxBullOBs = InpSMCMaxInternalOB + InpSMCMaxSwingOB;
@@ -7228,6 +7260,38 @@ void AddBearishOB(double high, double low, datetime time, int barIndex, int obTy
    for(int i = 0; i < BearishOBCount; i++)
    {
       if(BearishOBs[i].time == time) return;  // Already exists
+   }
+   
+   // *** CHECK OVERLAP: If new OB overlaps with existing OBs, delete OLD ones ***
+   if(InpSMCConfluenceFilter)
+   {
+      for(int i = BearishOBCount - 1; i >= 0; i--)  // Loop backward for safe removal
+      {
+         if(BearishOBs[i].mitigated) continue;
+         
+         double overlapPct = CalcOverlapPercent(high, low, BearishOBs[i].high, BearishOBs[i].low);
+         
+         if(overlapPct >= InpSMCConfluencePercent)
+         {
+            // New OB overlaps with existing OB - DELETE the OLD one (keep new)
+            Print(">>> SMC Overlap: NEW OB overlaps with OLD OB (", 
+                  DoubleToString(overlapPct, 1), "%) - Deleting OLD: ", 
+                  BearishOBs[i].objName, " | Keeping NEW at time: ", TimeToString(time));
+            
+            // Delete old OB from chart
+            ObjectDelete(0, BearishOBs[i].objName);
+            
+            // Remember this time to prevent re-detection
+            RememberSMCRemovedTime(BearishOBs[i].time, false);
+            
+            // Remove from array
+            for(int k = i; k < BearishOBCount - 1; k++)
+            {
+               BearishOBs[k] = BearishOBs[k + 1];
+            }
+            BearishOBCount--;
+         }
+      }
    }
    
    // FIFO (Circular Buffer): If array is full, remove the OLDEST OB (index 0)
