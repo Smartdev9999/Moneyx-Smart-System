@@ -4741,7 +4741,7 @@ bool CheckWebRequestConfiguration()
    
    Print("NEWS FILTER: Checking WebRequest configuration...");
    
-   string testUrl = "https://cdn-nfs.faireconomy.media/ff_calendar_thisweek.json";
+   string testUrl = "https://nfs.faireconomy.media/ff_calendar_thisweek.json";
    char postData[], resultData[];
    string headers = "";
    string resultHeaders;
@@ -4813,11 +4813,11 @@ void ShowWebRequestSetupAlert()
       "2. ไปที่แท็บ 'Expert Advisors'\\n\\n"
       "3. ติ๊กเปิด ☑ 'Allow WebRequest for listed URL:'\\n\\n"
       "4. คลิกปุ่ม 'Add new URL' และเพิ่ม:\\n"
-      "   https://cdn-nfs.faireconomy.media\\n\\n"
+      "   https://nfs.faireconomy.media\\n\\n"
       "5. คลิก OK แล้ว RESTART EA\\n"
       "   (ถอด EA ออกจากชาร์ตแล้วใส่ใหม่)\\n\\n"
       "=========================\\n\\n"
-      "📌 URL ที่ต้องเพิ่ม: https://cdn-nfs.faireconomy.media\\n\\n"
+      "📌 URL ที่ต้องเพิ่ม: https://nfs.faireconomy.media\\n\\n"
       "หมายเหตุ: ระบบจะแจ้งเตือนซ้ำทุก 1 ชั่วโมงจนกว่าจะตั้งค่าเสร็จ";
    
    // Show MessageBox with OK button
@@ -4827,10 +4827,10 @@ void ShowWebRequestSetupAlert()
    // Also print to journal for reference
    Print("========================================");
    Print("NEWS FILTER: WebRequest NOT CONFIGURED!");
-   Print("URL Required: https://cdn-nfs.faireconomy.media");
+   Print("URL Required: https://nfs.faireconomy.media");
    Print("Go to: Tools -> Options -> Expert Advisors");
    Print("Enable: Allow WebRequest for listed URL");
-   Print("Add URL: https://cdn-nfs.faireconomy.media");
+   Print("Add URL: https://nfs.faireconomy.media");
    Print("Then RESTART the EA");
    Print("========================================");
 }
@@ -4864,8 +4864,8 @@ void RefreshNewsData()
    // Month names
    string months[] = {"jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"};
    
-   // ForexFactory JSON API URL (CDN version - more reliable than XML)
-   string weekUrl = "https://cdn-nfs.faireconomy.media/ff_calendar_thisweek.json";
+   // ForexFactory JSON API URL
+   string weekUrl = "https://nfs.faireconomy.media/ff_calendar_thisweek.json";
    
    // Use WebRequest to fetch JSON
    char postData[], resultData[];
