@@ -4646,41 +4646,84 @@ datetime ParseNewsTime(string dateStr, string timeStr)
 }
 
 //+------------------------------------------------------------------+
-//| Extract text from XML element (between <tag> and </tag>)           |
+//| Extract text from JSON element (format: "key":"value")             |
+//| สำหรับ ForexFactory JSON API                                        |
 //+------------------------------------------------------------------+
-string ExtractXMLValue(string xml, string tag)
+string ExtractJSONValue(string json, string key)
 {
-   string startTag = "<" + tag + ">";
-   string endTag = "</" + tag + ">";
-   
-   int startPos = StringFind(xml, startTag);
+   // Search for "key":"value" pattern
+   string searchKey = "\\"" + key + "\\":\\"";
+   int startPos = StringFind(json, searchKey);
    if(startPos < 0) return "";
-   startPos += StringLen(startTag);
    
-   int endPos = StringFind(xml, endTag, startPos);
+   startPos += StringLen(searchKey);
+   
+   // Find closing quote
+   int endPos = StringFind(json, "\\"", startPos);
    if(endPos < 0) return "";
    
-   string value = StringSubstr(xml, startPos, endPos - startPos);
+   string value = StringSubstr(json, startPos, endPos - startPos);
    
-   // Remove CDATA wrapper - support multiple formats
-   // Format 1: <![CDATA[value]]> (standard XML CDATA)
-   if(StringFind(value, "<![CDATA[") >= 0)
-   {
-      StringReplace(value, "<![CDATA[", "");
-      StringReplace(value, "]]>", "");
-   }
-   // Format 2: <!--[CDATA[value]]--> (HTML escaped comment style)
-   if(StringFind(value, "<!--[CDATA[") >= 0)
-   {
-      StringReplace(value, "<!--[CDATA[", "");
-      StringReplace(value, "]]-->", "");
-   }
-   // Format 3: Sometimes just the content with extra whitespace
+   // Unescape JSON special characters
+   StringReplace(value, "\\\\/", "/");
+   StringReplace(value, "\\\\\\"", "\\"");
+   StringReplace(value, "\\\\n", "\\n");
    
    StringTrimLeft(value);
    StringTrimRight(value);
    
    return value;
+}
+
+//+------------------------------------------------------------------+
+//| Parse ISO 8601 DateTime (format: 2025-12-30T14:00:00-05:00)        |
+//| Converts to MT5 server time                                        |
+//+------------------------------------------------------------------+
+datetime ParseISODateTime(string isoDate)
+{
+   // Format: "2025-12-30T14:00:00-05:00"
+   if(StringLen(isoDate) < 19) return 0;
+   
+   // Extract date parts
+   int year = (int)StringToInteger(StringSubstr(isoDate, 0, 4));
+   int month = (int)StringToInteger(StringSubstr(isoDate, 5, 2));
+   int day = (int)StringToInteger(StringSubstr(isoDate, 8, 2));
+   int hour = (int)StringToInteger(StringSubstr(isoDate, 11, 2));
+   int minute = (int)StringToInteger(StringSubstr(isoDate, 14, 2));
+   int second = (int)StringToInteger(StringSubstr(isoDate, 17, 2));
+   
+   // Create datetime
+   MqlDateTime dt;
+   dt.year = year;
+   dt.mon = month;
+   dt.day = day;
+   dt.hour = hour;
+   dt.min = minute;
+   dt.sec = second;
+   
+   datetime eventTime = StructToTime(dt);
+   
+   // Handle timezone offset (e.g., -05:00)
+   if(StringLen(isoDate) >= 25)
+   {
+      string tzSign = StringSubstr(isoDate, 19, 1);
+      int tzHour = (int)StringToInteger(StringSubstr(isoDate, 20, 2));
+      int tzMin = (int)StringToInteger(StringSubstr(isoDate, 23, 2));
+      int tzOffset = (tzHour * 3600) + (tzMin * 60);
+      
+      // Convert from event timezone to UTC
+      if(tzSign == "-")
+         eventTime += tzOffset;  // Add offset if negative
+      else if(tzSign == "+")
+         eventTime -= tzOffset;  // Subtract offset if positive
+      
+      // Now eventTime is in UTC, convert to server time
+      // Note: MT5 TimeCurrent() is usually server time
+      // We'll use TimeGMTOffset() to adjust if needed
+      eventTime += TimeGMTOffset();
+   }
+   
+   return eventTime;
 }
 
 //+------------------------------------------------------------------+
@@ -4698,7 +4741,7 @@ bool CheckWebRequestConfiguration()
    
    Print("NEWS FILTER: Checking WebRequest configuration...");
    
-   string testUrl = "https://nfs.faireconomy.media/ff_calendar_thisweek.xml";
+   string testUrl = "https://cdn-nfs.faireconomy.media/ff_calendar_thisweek.json";
    char postData[], resultData[];
    string headers = "";
    string resultHeaders;
@@ -4770,11 +4813,11 @@ void ShowWebRequestSetupAlert()
       "2. ไปที่แท็บ 'Expert Advisors'\\n\\n"
       "3. ติ๊กเปิด ☑ 'Allow WebRequest for listed URL:'\\n\\n"
       "4. คลิกปุ่ม 'Add new URL' และเพิ่ม:\\n"
-      "   https://nfs.faireconomy.media\\n\\n"
+      "   https://cdn-nfs.faireconomy.media\\n\\n"
       "5. คลิก OK แล้ว RESTART EA\\n"
       "   (ถอด EA ออกจากชาร์ตแล้วใส่ใหม่)\\n\\n"
       "=========================\\n\\n"
-      "📌 URL ที่ต้องเพิ่ม: https://nfs.faireconomy.media\\n\\n"
+      "📌 URL ที่ต้องเพิ่ม: https://cdn-nfs.faireconomy.media\\n\\n"
       "หมายเหตุ: ระบบจะแจ้งเตือนซ้ำทุก 1 ชั่วโมงจนกว่าจะตั้งค่าเสร็จ";
    
    // Show MessageBox with OK button
@@ -4784,10 +4827,10 @@ void ShowWebRequestSetupAlert()
    // Also print to journal for reference
    Print("========================================");
    Print("NEWS FILTER: WebRequest NOT CONFIGURED!");
-   Print("URL Required: https://nfs.faireconomy.media");
+   Print("URL Required: https://cdn-nfs.faireconomy.media");
    Print("Go to: Tools -> Options -> Expert Advisors");
    Print("Enable: Allow WebRequest for listed URL");
-   Print("Add URL: https://nfs.faireconomy.media");
+   Print("Add URL: https://cdn-nfs.faireconomy.media");
    Print("Then RESTART the EA");
    Print("========================================");
 }
@@ -4821,15 +4864,17 @@ void RefreshNewsData()
    // Month names
    string months[] = {"jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"};
    
-   // ForexFactory week URL format: week=dec28.2025
-   string weekUrl = "https://nfs.faireconomy.media/ff_calendar_thisweek.xml";
+   // ForexFactory JSON API URL (CDN version - more reliable than XML)
+   string weekUrl = "https://cdn-nfs.faireconomy.media/ff_calendar_thisweek.json";
    
-   // Use WebRequest to fetch XML
+   // Use WebRequest to fetch JSON
    char postData[], resultData[];
    string headers = "";
    string resultHeaders;
    
    int timeout = 10000;  // 10 seconds for reliable fetch
+   
+   Print("NEWS FILTER: Fetching from ", weekUrl);
    
    int result = WebRequest("GET", weekUrl, headers, timeout, postData, resultData, resultHeaders);
    
@@ -4860,79 +4905,101 @@ void RefreshNewsData()
    // *** DEBUG: Log response info ***
    int responseSize = ArraySize(resultData);
    Print("NEWS FILTER DEBUG: HTTP Result = ", result, ", Response size = ", responseSize, " bytes");
-   Print("NEWS FILTER DEBUG: Response Headers = ", resultHeaders);
    
-   // Convert to string - try default encoding first (windows-1252 compatible)
-   string xmlContent = CharArrayToString(resultData, 0, WHOLE_ARRAY, CP_ACP);
+   // Convert to string - UTF-8 encoding for JSON
+   string jsonContent = CharArrayToString(resultData, 0, WHOLE_ARRAY, CP_UTF8);
    
    // *** DEBUG: Log first part of content ***
-   Print("NEWS FILTER DEBUG: First 500 chars of response:");
-   Print(StringSubstr(xmlContent, 0, 500));
+   Print("NEWS FILTER DEBUG: First 300 chars of response:");
+   Print(StringSubstr(jsonContent, 0, 300));
    
-   // *** VALIDATION: Check if response is valid XML ***
-   if(responseSize < 100)
+   // *** VALIDATION: Check if response is valid JSON array ***
+   if(responseSize < 10)
    {
       Print("NEWS FILTER WARNING: Response too short (", responseSize, " bytes) - may be error page");
       return;
    }
    
-   // Check if we got actual XML content
-   if(StringFind(xmlContent, "<weeklyevents>") < 0 && StringFind(xmlContent, "<event>") < 0)
+   // Check if we got actual JSON array content (starts with [)
+   string trimmedContent = jsonContent;
+   StringTrimLeft(trimmedContent);
+   if(StringSubstr(trimmedContent, 0, 1) != "[")
    {
-      Print("NEWS FILTER WARNING: Response does not contain expected XML tags!");
-      Print("NEWS FILTER DEBUG: Looking for <weeklyevents> or <event>...");
-      // Try to find any XML-like content
-      int xmlStart = StringFind(xmlContent, "<?xml");
-      if(xmlStart >= 0)
-         Print("NEWS FILTER DEBUG: Found <?xml at position ", xmlStart);
-      else
-         Print("NEWS FILTER DEBUG: No <?xml header found - response may not be XML");
+      Print("NEWS FILTER WARNING: Response is not a JSON array!");
+      Print("NEWS FILTER DEBUG: Response starts with: ", StringSubstr(trimmedContent, 0, 50));
       return;
    }
    
-   // Parse events
+   // Parse JSON events
    g_newsEventCount = 0;
-   ArrayResize(g_newsEvents, 50);  // Pre-allocate for 50 events
+   ArrayResize(g_newsEvents, 100);  // Pre-allocate for 100 events
    
+   // Split by },{ to get individual event objects
    int searchPos = 0;
-   int eventStart;
+   int eventCount = 0;
    
-   // *** DEBUG: Count how many <event> tags exist ***
-   int eventTagCount = 0;
-   int countPos = 0;
-   while((countPos = StringFind(xmlContent, "<event>", countPos)) >= 0)
+   // Find first { 
+   int firstBrace = StringFind(jsonContent, "{", 0);
+   if(firstBrace < 0)
    {
-      eventTagCount++;
-      countPos += 7;
+      Print("NEWS FILTER WARNING: No JSON objects found in response!");
+      return;
    }
-   Print("NEWS FILTER DEBUG: Found ", eventTagCount, " <event> tags in response");
    
-   while((eventStart = StringFind(xmlContent, "<event>", searchPos)) >= 0)
+   searchPos = firstBrace;
+   
+   while(searchPos < StringLen(jsonContent))
    {
-      int eventEnd = StringFind(xmlContent, "</event>", eventStart);
-      if(eventEnd < 0) break;
+      // Find end of current object
+      int braceDepth = 0;
+      int objStart = searchPos;
+      int objEnd = -1;
       
-      string eventXml = StringSubstr(xmlContent, eventStart, eventEnd - eventStart + 8);
-      
-      // Extract event data
-      string title = ExtractXMLValue(eventXml, "title");
-      string country = ExtractXMLValue(eventXml, "country");
-      string dateStr = ExtractXMLValue(eventXml, "date");
-      string timeStr = ExtractXMLValue(eventXml, "time");
-      string impact = ExtractXMLValue(eventXml, "impact");
-      
-      // *** DEBUG: Log first 5 events parsed ***
-      if(g_newsEventCount < 5)
+      for(int i = searchPos; i < StringLen(jsonContent); i++)
       {
-         Print("NEWS FILTER DEBUG: Event #", g_newsEventCount + 1);
-         Print("  Title: ", title);
-         Print("  Country: ", country);
-         Print("  Date: ", dateStr, " Time: ", timeStr);
-         Print("  Impact: ", impact);
+         string c = StringSubstr(jsonContent, i, 1);
+         if(c == "{") braceDepth++;
+         else if(c == "}")
+         {
+            braceDepth--;
+            if(braceDepth == 0)
+            {
+               objEnd = i;
+               break;
+            }
+         }
       }
       
-      // Parse datetime
-      datetime eventTime = ParseNewsTime(dateStr, timeStr);
+      if(objEnd < 0) break;
+      
+      string eventJson = StringSubstr(jsonContent, objStart, objEnd - objStart + 1);
+      
+      // Extract event data from JSON
+      string title = ExtractJSONValue(eventJson, "title");
+      string country = ExtractJSONValue(eventJson, "country");
+      string dateStr = ExtractJSONValue(eventJson, "date");  // ISO 8601 format
+      string impact = ExtractJSONValue(eventJson, "impact");
+      
+      // *** DEBUG: Log first 5 events parsed ***
+      if(eventCount < 5)
+      {
+         Print("NEWS FILTER DEBUG: Event #", eventCount + 1);
+         Print("  Title: ", title);
+         Print("  Country: ", country);
+         Print("  Date: ", dateStr);
+         Print("  Impact: ", impact);
+      }
+      eventCount++;
+      
+      // Parse ISO 8601 datetime
+      datetime eventTime = ParseISODateTime(dateStr);
+      
+      // Skip holidays (impact == "Holiday")
+      if(impact == "Holiday")
+      {
+         searchPos = objEnd + 1;
+         continue;
+      }
       
       // Check if this event is relevant
       bool isRelevant = false;
@@ -4963,10 +5030,10 @@ void RefreshNewsData()
          g_newsEventCount++;
       }
       
-      searchPos = eventEnd + 8;
+      searchPos = objEnd + 1;
    }
    
-   Print("NEWS FILTER: Loaded ", g_newsEventCount, " news events for this week");
+   Print("NEWS FILTER: Parsed ", eventCount, " total events, stored ", g_newsEventCount, " events");
 }
 
 //+------------------------------------------------------------------+
