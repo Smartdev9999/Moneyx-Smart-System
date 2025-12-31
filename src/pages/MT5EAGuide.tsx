@@ -2341,14 +2341,13 @@ void DrawZigZagOnChart()
 //+------------------------------------------------------------------+
 //| Calculate CDC Action Zone Values                                   |
 //+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| Calculate CDC Action Zone Values                                   |
+//+------------------------------------------------------------------+
 void CalculateCDC()
 {
-   if(!InpUseCDCFilter)
-   {
-      CDCTrend = "NEUTRAL";
-      CDCZoneColor = clrWhite;
-      return;
-   }
+   // Always calculate CDC values and draw lines for trend visualization
+   // The InpUseCDCFilter only controls whether CDC gates trade execution
    
    double closeArr[], highArr[], lowArr[], openArr[];
    datetime timeArr[];
@@ -2389,32 +2388,33 @@ void CalculateCDC()
    CDCFast = fast[0];
    CDCSlow = slow[0];
    
-   // CDC Trend Detection: Based on EMA CROSSOVER (not just position)
-   // BULLISH = Fast EMA crosses ABOVE Slow EMA (and stays above)
-   // BEARISH = Fast EMA crosses BELOW Slow EMA (and stays below)
-   // NO NEUTRAL state - always maintain last known trend direction
+   // CDC Trend Detection: Based on EMA CROSSOVER
+   double fastPrev = fast[1];
+   double slowPrev = slow[1];
    
-   double fastPrev = fast[1];  // Previous bar Fast EMA
-   double slowPrev = slow[1];  // Previous bar Slow EMA
-   
-   // Check for crossover on current or previous bars
-   bool crossUp = (fastPrev <= slowPrev && CDCFast > CDCSlow);   // Cross UP
-   bool crossDown = (fastPrev >= slowPrev && CDCFast < CDCSlow); // Cross DOWN
+   bool crossUp = (fastPrev <= slowPrev && CDCFast > CDCSlow);
+   bool crossDown = (fastPrev >= slowPrev && CDCFast < CDCSlow);
    
    if(crossUp || CDCFast > CDCSlow)
    {
-      // Fast crossed above Slow or is currently above = BULLISH
       CDCTrend = "BULLISH";
       CDCZoneColor = clrLime;
    }
    else if(crossDown || CDCFast < CDCSlow)
    {
-      // Fast crossed below Slow or is currently below = BEARISH
       CDCTrend = "BEARISH";
       CDCZoneColor = clrRed;
    }
-   // Note: No NEUTRAL state - if Fast == Slow exactly, keep previous trend
    
+   // If CDC Filter is disabled, set trend to neutral for trade gating only
+   // But still show visual on chart
+   if(!InpUseCDCFilter)
+   {
+      // Keep CDCTrend calculated but it won't gate trades
+      // Trade filter check will skip CDC when InpUseCDCFilter = false
+   }
+   
+   // Always draw CDC lines when InpShowCDCLines is enabled
    if(InpShowCDCLines)
    {
       DrawCDCOnChart(fast, slow, timeArr, barsNeeded);
