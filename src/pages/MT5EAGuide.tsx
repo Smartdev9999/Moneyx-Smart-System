@@ -4713,7 +4713,7 @@ string ExtractJSONValue(string json, string key)
 
 //+------------------------------------------------------------------+
 //| Parse ISO 8601 DateTime (format: 2025-12-30T14:00:00-05:00)        |
-//| Converts to MT5 server time                                        |
+//| Converts to MT5 server time correctly using server GMT offset      |
 //+------------------------------------------------------------------+
 datetime ParseISODateTime(string isoDate)
 {
@@ -4728,7 +4728,7 @@ datetime ParseISODateTime(string isoDate)
    int minute = (int)StringToInteger(StringSubstr(isoDate, 14, 2));
    int second = (int)StringToInteger(StringSubstr(isoDate, 17, 2));
    
-   // Create datetime
+   // Create datetime (this is in the event's local timezone)
    MqlDateTime dt;
    dt.year = year;
    dt.mon = month;
@@ -4739,24 +4739,40 @@ datetime ParseISODateTime(string isoDate)
    
    datetime eventTime = StructToTime(dt);
    
-   // Handle timezone offset (e.g., -05:00)
+   // Handle timezone offset (e.g., -05:00 means Eastern Time)
+   // We need to convert to UTC first, then to MT5 server time
    if(StringLen(isoDate) >= 25)
    {
       string tzSign = StringSubstr(isoDate, 19, 1);
       int tzHour = (int)StringToInteger(StringSubstr(isoDate, 20, 2));
       int tzMin = (int)StringToInteger(StringSubstr(isoDate, 23, 2));
-      int tzOffset = (tzHour * 3600) + (tzMin * 60);
+      int tzOffsetSeconds = (tzHour * 3600) + (tzMin * 60);
       
-      // Convert from event timezone to UTC
+      // Convert from event timezone to UTC:
+      // If event is at -05:00 (EST), we ADD 5 hours to get UTC
+      // If event is at +02:00 (EET), we SUBTRACT 2 hours to get UTC
       if(tzSign == "-")
-         eventTime += tzOffset;  // Add offset if negative
+         eventTime += tzOffsetSeconds;
       else if(tzSign == "+")
-         eventTime -= tzOffset;  // Subtract offset if positive
+         eventTime -= tzOffsetSeconds;
       
-      // Now eventTime is in UTC, convert to server time
-      // Note: MT5 TimeCurrent() is usually server time
-      // We'll use TimeGMTOffset() to adjust if needed
-      eventTime += TimeGMTOffset();
+      // Now eventTime is in UTC
+      // Calculate MT5 server offset from UTC: ServerTime - GMT
+      // TimeGMT() returns current UTC time, TimeCurrent() returns server time
+      int serverGMTOffset = (int)(TimeCurrent() - TimeGMT());
+      
+      // Convert UTC to server time
+      eventTime += serverGMTOffset;
+      
+      // Debug: Print timezone conversion details (only first time per init)
+      static bool debugPrinted = false;
+      if(!debugPrinted)
+      {
+         Print("NEWS FILTER TZ DEBUG: Server GMT offset = ", serverGMTOffset / 3600, " hours (", serverGMTOffset, " sec)");
+         Print("NEWS FILTER TZ DEBUG: TimeGMT() = ", TimeToString(TimeGMT(), TIME_DATE|TIME_SECONDS));
+         Print("NEWS FILTER TZ DEBUG: TimeCurrent() = ", TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS));
+         debugPrinted = true;
+      }
    }
    
    return eventTime;
