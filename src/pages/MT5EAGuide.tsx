@@ -139,13 +139,29 @@ input ENUM_EMA_SIGNAL_BAR InpBBSignalBar = EMA_LAST_BAR_CLOSED;  // BB Signal Ba
 //--- [ SMART MONEY CONCEPTS SETTINGS ] -----------------------------
 input string   InpSMCHeader = "=== SMART MONEY CONCEPTS (ORDER BLOCK) ===";  // ___
 input ENUM_TIMEFRAMES InpSMCTimeframe = PERIOD_CURRENT;  // SMC Timeframe
-input int      InpSMCSwingLength = 50;        // Swing Detection Length (bars)
+
+// Internal Structure Settings (Short-term OBs)
 input int      InpSMCInternalLength = 5;      // Internal Structure Length
-input int      InpSMCMaxOrderBlocks = 5;      // Max Order Blocks to Display
+input bool     InpSMCShowInternalOB = true;   // Show Internal Order Blocks
+input int      InpSMCMaxInternalOB = 5;       // Max Internal Order Blocks
+input color    InpSMCInternalBullColor = C'91,156,246';   // Internal Bullish OB Color
+input color    InpSMCInternalBearColor = C'247,124,128';  // Internal Bearish OB Color
+
+// Swing Structure Settings (Major OBs)
+input int      InpSMCSwingLength = 50;        // Swing Detection Length (bars)
+input bool     InpSMCShowSwingOB = true;      // Show Swing Order Blocks
+input int      InpSMCMaxSwingOB = 5;          // Max Swing Order Blocks
+input color    InpSMCSwingBullColor = C'24,72,204';       // Swing Bullish OB Color (darker)
+input color    InpSMCSwingBearColor = C'178,40,51';       // Swing Bearish OB Color (darker)
+
+// Historical Scan
+input int      InpSMCHistoryBars = 500;       // Historical Bars to Scan (0=Disable)
+
+// Legacy compatibility (mapped to internal + swing)
 input bool     InpSMCShowBullishOB = true;    // Show Bullish Order Blocks
 input bool     InpSMCShowBearishOB = true;    // Show Bearish Order Blocks
-input color    InpSMCBullOBColor = clrDodgerBlue;   // Bullish OB Color
-input color    InpSMCBearOBColor = clrCrimson;      // Bearish OB Color
+input color    InpSMCBullOBColor = clrDodgerBlue;   // Default Bullish OB Color
+input color    InpSMCBearOBColor = clrCrimson;      // Default Bearish OB Color
 input bool     InpSMCRequireTouch = true;     // Require Price Touch OB (for signal)
 input ENUM_EMA_SIGNAL_BAR InpSMCSignalBar = EMA_LAST_BAR_CLOSED;  // SMC Signal Bar Index
 input bool     InpSMCConfluenceFilter = true;  // Confluence Filter (merge overlapping OBs)
@@ -485,17 +501,28 @@ struct OrderBlockData
    string   objName;        // Chart object name
 };
 
-// Order Block Arrays
+// Order Block Arrays - Unified (used for current detection)
 OrderBlockData BullishOBs[];
 OrderBlockData BearishOBs[];
 int BullishOBCount = 0;
 int BearishOBCount = 0;
+
+// Separate arrays for Internal vs Swing Order Blocks (LuxAlgo style)
+OrderBlockData InternalBullOBs[];
+OrderBlockData InternalBearOBs[];
+OrderBlockData SwingBullOBs[];
+OrderBlockData SwingBearOBs[];
+int InternalBullOBCount = 0;
+int InternalBearOBCount = 0;
+int SwingBullOBCount = 0;
+int SwingBearOBCount = 0;
 
 // Prevent already-consumed / already-mitigated OBs from being re-created
 // We store OB formation times that have been removed, and skip re-adding them.
 datetime g_smcRemovedBullTimes[];
 datetime g_smcRemovedBearTimes[];
 datetime g_lastSMCClosedBarTime = 0; // last processed CLOSED candle time on InpSMCTimeframe
+bool g_historicalScanDone = false;  // Flag to ensure historical scan runs once per init
 
 bool IsSMCRemovedTime(datetime t, bool isBullish)
 {
@@ -720,10 +747,22 @@ int OnInit()
    // Initialize SMC Order Block arrays
    if(InpSignalStrategy == STRATEGY_SMC)
    {
-      ArrayResize(BullishOBs, InpSMCMaxOrderBlocks);
-      ArrayResize(BearishOBs, InpSMCMaxOrderBlocks);
+      // Calculate total max OBs for unified arrays
+      int totalMaxOBs = InpSMCMaxInternalOB + InpSMCMaxSwingOB;
+      ArrayResize(BullishOBs, totalMaxOBs);
+      ArrayResize(BearishOBs, totalMaxOBs);
       BullishOBCount = 0;
       BearishOBCount = 0;
+      
+      // Initialize separate Internal/Swing arrays
+      ArrayResize(InternalBullOBs, InpSMCMaxInternalOB);
+      ArrayResize(InternalBearOBs, InpSMCMaxInternalOB);
+      ArrayResize(SwingBullOBs, InpSMCMaxSwingOB);
+      ArrayResize(SwingBearOBs, InpSMCMaxSwingOB);
+      InternalBullOBCount = 0;
+      InternalBearOBCount = 0;
+      SwingBullOBCount = 0;
+      SwingBearOBCount = 0;
       
       // Reset LuxAlgo swing structure tracking
       g_InternalSwingHigh = 0;
@@ -741,19 +780,28 @@ int OnInit()
       g_SwingLowCrossed = false;
       g_SwingTrendBias = 0;
       g_lastSMCClosedBarTime = 0;
+      g_historicalScanDone = false;  // Reset for historical scan
       
       Print("=== SMC LuxAlgo Style Initialized ===");
-      Print("Swing Length (Major): ", InpSMCSwingLength);
-      Print("Internal Length: ", InpSMCInternalLength);
-      Print("Max Order Blocks: ", InpSMCMaxOrderBlocks);
+      Print("Internal Length: ", InpSMCInternalLength, " | Max Internal OBs: ", InpSMCMaxInternalOB);
+      Print("Swing Length: ", InpSMCSwingLength, " | Max Swing OBs: ", InpSMCMaxSwingOB);
+      Print("Historical Bars to Scan: ", InpSMCHistoryBars);
       Print("ATR Filter: Enabled (200-period, threshold 2x)");
       Print("OB Detection: Structure Break (BOS/CHoCH) only");
+      
+      // *** HISTORICAL SCAN - Load existing non-mitigated OBs ***
+      if(InpSMCHistoryBars > 0)
+      {
+         Print(">>> Starting Historical Order Block Scan...");
+         ScanHistoricalOrderBlocks();
+         g_historicalScanDone = true;
+      }
       
       // *** SYNC SMC SETTINGS TO INDICATOR VIA GLOBAL VARIABLES ***
       GlobalVariableSet(GV_SMC_ENABLED, 1.0);
       GlobalVariableSet(GV_SMC_SWING_LENGTH, (double)InpSMCSwingLength);
       GlobalVariableSet(GV_SMC_INTERNAL_LENGTH, (double)InpSMCInternalLength);
-      GlobalVariableSet(GV_SMC_MAX_OB, (double)InpSMCMaxOrderBlocks);
+      GlobalVariableSet(GV_SMC_MAX_OB, (double)(InpSMCMaxInternalOB + InpSMCMaxSwingOB));
       GlobalVariableSet(GV_SMC_BULL_OB_COLOR, (double)InpSMCBullOBColor);
       GlobalVariableSet(GV_SMC_BEAR_OB_COLOR, (double)InpSMCBearOBColor);
       Print(">>> SMC Settings synced to Indicator via Global Variables");
@@ -6292,6 +6340,361 @@ void CalculateSMC()
 }
 
 //+------------------------------------------------------------------+
+//| ============= HISTORICAL ORDER BLOCK SCAN (LuxAlgo) ============= |
+//+------------------------------------------------------------------+
+// Scans historical bars to find Order Blocks that are still valid
+// (not yet mitigated by price closing through them)
+// Called on EA Init to load existing OBs before real-time detection
+//+------------------------------------------------------------------+
+
+void ScanHistoricalOrderBlocks()
+{
+   if(InpSMCHistoryBars <= 0) return;
+   
+   Print("=== HISTORICAL ORDER BLOCK SCAN ===");
+   
+   // Load historical data
+   double highArr[], lowArr[], openArr[], closeArr[];
+   datetime timeArr[];
+   
+   int barCount = MathMin(InpSMCHistoryBars, Bars(_Symbol, InpSMCTimeframe) - 50);
+   if(barCount < 50)
+   {
+      Print("Historical Scan: Not enough bars (", barCount, ") - skipping");
+      return;
+   }
+   
+   ArraySetAsSeries(highArr, true);
+   ArraySetAsSeries(lowArr, true);
+   ArraySetAsSeries(openArr, true);
+   ArraySetAsSeries(closeArr, true);
+   ArraySetAsSeries(timeArr, true);
+   
+   if(CopyHigh(_Symbol, InpSMCTimeframe, 0, barCount, highArr) < barCount) return;
+   if(CopyLow(_Symbol, InpSMCTimeframe, 0, barCount, lowArr) < barCount) return;
+   if(CopyOpen(_Symbol, InpSMCTimeframe, 0, barCount, openArr) < barCount) return;
+   if(CopyClose(_Symbol, InpSMCTimeframe, 0, barCount, closeArr) < barCount) return;
+   if(CopyTime(_Symbol, InpSMCTimeframe, 0, barCount, timeArr) < barCount) return;
+   
+   Print("Historical Scan: Loaded ", barCount, " bars from ", EnumToString(InpSMCTimeframe));
+   
+   // Structure tracking for historical scan
+   double intSwingHigh = 0, intSwingLow = 0;
+   int intSwingHighBar = 0, intSwingLowBar = 0;
+   bool intHighCrossed = false, intLowCrossed = false;
+   int intTrendBias = 0;
+   
+   double swingHigh = 0, swingLow = 0;
+   int swingHighBar = 0, swingLowBar = 0;
+   bool swingHighCrossed = false, swingLowCrossed = false;
+   int swingTrendBias = 0;
+   
+   // Temp storage for potential OBs (store newest first)
+   OrderBlockData tempBullOBs[];
+   OrderBlockData tempBearOBs[];
+   ArrayResize(tempBullOBs, 0);
+   ArrayResize(tempBearOBs, 0);
+   
+   int internalLen = InpSMCInternalLength;
+   int swingLen = InpSMCSwingLength;
+   int totalBullFound = 0, totalBearFound = 0;
+   int mitigatedBull = 0, mitigatedBear = 0;
+   
+   // Calculate ATR for OB filtering
+   double atr = GetATRValue(0, highArr, lowArr, closeArr, 200);
+   double obThreshold = (atr > 0) ? atr : 0.001;
+   
+   // ===============================================================
+   // PASS 1: Scan from OLDEST to NEWEST to find structure breaks
+   // and create OB candidates
+   // ===============================================================
+   
+   for(int i = barCount - swingLen - 10; i >= internalLen + 2; i--)
+   {
+      // === INTERNAL STRUCTURE DETECTION (using internalLen) ===
+      // Find pivot high
+      bool isInternalPivotHigh = true;
+      for(int j = 1; j <= internalLen; j++)
+      {
+         if(i + j >= barCount || i - j < 0) { isInternalPivotHigh = false; break; }
+         if(highArr[i] <= highArr[i - j] || highArr[i] <= highArr[i + j])
+         {
+            isInternalPivotHigh = false;
+            break;
+         }
+      }
+      
+      if(isInternalPivotHigh && (intSwingHighBar == 0 || highArr[i] != intSwingHigh))
+      {
+         intSwingHigh = highArr[i];
+         intSwingHighBar = i;
+         intHighCrossed = false;
+      }
+      
+      // Find pivot low
+      bool isInternalPivotLow = true;
+      for(int j = 1; j <= internalLen; j++)
+      {
+         if(i + j >= barCount || i - j < 0) { isInternalPivotLow = false; break; }
+         if(lowArr[i] >= lowArr[i - j] || lowArr[i] >= lowArr[i + j])
+         {
+            isInternalPivotLow = false;
+            break;
+         }
+      }
+      
+      if(isInternalPivotLow && (intSwingLowBar == 0 || lowArr[i] != intSwingLow))
+      {
+         intSwingLow = lowArr[i];
+         intSwingLowBar = i;
+         intLowCrossed = false;
+      }
+      
+      // Check for BULLISH structure break (close > swing high)
+      if(intSwingHigh > 0 && !intHighCrossed && i > 0)
+      {
+         if(closeArr[i - 1] > intSwingHigh)
+         {
+            intHighCrossed = true;
+            intTrendBias = 1;
+            
+            // Find OB origin bar (min low between break and pivot)
+            int obBar = FindHistoricalOBOriginBar(false, intSwingHighBar, i - 1, highArr, lowArr, closeArr, barCount, obThreshold);
+            
+            if(obBar >= 0 && obBar < barCount && InpSMCShowInternalOB)
+            {
+               // Create temp Bullish OB
+               OrderBlockData ob;
+               ob.high = highArr[obBar];
+               ob.low = lowArr[obBar];
+               ob.time = timeArr[obBar];
+               ob.barIndex = obBar;
+               ob.bias = 1;
+               ob.mitigated = false;
+               ob.objName = SMCPrefix + "HistBullOB_" + IntegerToString((long)ob.time);
+               
+               // Check if already in blacklist
+               if(!IsSMCRemovedTime(ob.time, true))
+               {
+                  int n = ArraySize(tempBullOBs);
+                  ArrayResize(tempBullOBs, n + 1);
+                  tempBullOBs[n] = ob;
+                  totalBullFound++;
+               }
+            }
+            
+            intSwingHigh = 0;
+            intSwingHighBar = 0;
+         }
+      }
+      
+      // Check for BEARISH structure break (close < swing low)
+      if(intSwingLow > 0 && !intLowCrossed && i > 0)
+      {
+         if(closeArr[i - 1] < intSwingLow)
+         {
+            intLowCrossed = true;
+            intTrendBias = -1;
+            
+            // Find OB origin bar (max high between break and pivot)
+            int obBar = FindHistoricalOBOriginBar(true, intSwingLowBar, i - 1, highArr, lowArr, closeArr, barCount, obThreshold);
+            
+            if(obBar >= 0 && obBar < barCount && InpSMCShowInternalOB)
+            {
+               // Create temp Bearish OB
+               OrderBlockData ob;
+               ob.high = highArr[obBar];
+               ob.low = lowArr[obBar];
+               ob.time = timeArr[obBar];
+               ob.barIndex = obBar;
+               ob.bias = -1;
+               ob.mitigated = false;
+               ob.objName = SMCPrefix + "HistBearOB_" + IntegerToString((long)ob.time);
+               
+               // Check if already in blacklist
+               if(!IsSMCRemovedTime(ob.time, false))
+               {
+                  int n = ArraySize(tempBearOBs);
+                  ArrayResize(tempBearOBs, n + 1);
+                  tempBearOBs[n] = ob;
+                  totalBearFound++;
+               }
+            }
+            
+            intSwingLow = 0;
+            intSwingLowBar = 0;
+         }
+      }
+   }
+   
+   Print("Historical Scan: Found ", totalBullFound, " Bullish OB candidates, ", totalBearFound, " Bearish OB candidates");
+   
+   // ===============================================================
+   // PASS 2: Check mitigation - remove OBs where price closed through
+   // ===============================================================
+   
+   // Check Bullish OBs for mitigation
+   for(int i = ArraySize(tempBullOBs) - 1; i >= 0; i--)
+   {
+      int obBarIndex = tempBullOBs[i].barIndex;
+      bool isMitigated = false;
+      
+      // Check all bars AFTER the OB formation
+      for(int b = obBarIndex - 1; b >= 1; b--)
+      {
+         if(closeArr[b] < tempBullOBs[i].low)
+         {
+            isMitigated = true;
+            break;
+         }
+      }
+      
+      if(isMitigated)
+      {
+         tempBullOBs[i].mitigated = true;
+         mitigatedBull++;
+      }
+   }
+   
+   // Check Bearish OBs for mitigation
+   for(int i = ArraySize(tempBearOBs) - 1; i >= 0; i--)
+   {
+      int obBarIndex = tempBearOBs[i].barIndex;
+      bool isMitigated = false;
+      
+      // Check all bars AFTER the OB formation
+      for(int b = obBarIndex - 1; b >= 1; b--)
+      {
+         if(closeArr[b] > tempBearOBs[i].high)
+         {
+            isMitigated = true;
+            break;
+         }
+      }
+      
+      if(isMitigated)
+      {
+         tempBearOBs[i].mitigated = true;
+         mitigatedBear++;
+      }
+   }
+   
+   Print("Historical Scan: Mitigated ", mitigatedBull, " Bullish, ", mitigatedBear, " Bearish OBs");
+   
+   // ===============================================================
+   // PASS 3: Add non-mitigated OBs to main arrays (newest first)
+   // ===============================================================
+   
+   int addedBull = 0, addedBear = 0;
+   int maxInternalOBs = InpSMCMaxInternalOB;
+   int maxSwingOBs = InpSMCMaxSwingOB;
+   int totalMaxOBs = maxInternalOBs + maxSwingOBs;
+   
+   // Sort by bar index (smaller = newer) and add newest first
+   // Add Bullish OBs
+   for(int i = 0; i < ArraySize(tempBullOBs) && addedBull < totalMaxOBs; i++)
+   {
+      if(!tempBullOBs[i].mitigated)
+      {
+         // Add to unified array
+         if(BullishOBCount < totalMaxOBs)
+         {
+            BullishOBs[BullishOBCount] = tempBullOBs[i];
+            BullishOBs[BullishOBCount].objName = SMCPrefix + "BullOB_" + IntegerToString(BullishOBCount);
+            BullishOBCount++;
+            addedBull++;
+         }
+      }
+   }
+   
+   // Add Bearish OBs
+   for(int i = 0; i < ArraySize(tempBearOBs) && addedBear < totalMaxOBs; i++)
+   {
+      if(!tempBearOBs[i].mitigated)
+      {
+         // Add to unified array
+         if(BearishOBCount < totalMaxOBs)
+         {
+            BearishOBs[BearishOBCount] = tempBearOBs[i];
+            BearishOBs[BearishOBCount].objName = SMCPrefix + "BearOB_" + IntegerToString(BearishOBCount);
+            BearishOBCount++;
+            addedBear++;
+         }
+      }
+   }
+   
+   Print("=== HISTORICAL SCAN COMPLETE ===");
+   Print("Loaded ", addedBull, " valid Bullish OBs");
+   Print("Loaded ", addedBear, " valid Bearish OBs");
+   Print("Total OBs: ", BullishOBCount + BearishOBCount);
+   
+   // Draw the loaded OBs
+   DrawOrderBlocks();
+   ChartRedraw(0);
+}
+
+//+------------------------------------------------------------------+
+//| Find OB Origin Bar for Historical Scan                             |
+//| Similar to FindOBOriginBar but works with historical indices       |
+//+------------------------------------------------------------------+
+int FindHistoricalOBOriginBar(bool useMax, int pivotBar, int breakBar, 
+                               double &highArr[], double &lowArr[], double &closeArr[], 
+                               int barsTotal, double obThreshold)
+{
+   int idx = pivotBar - 1;
+   double minVal = DBL_MAX;
+   double maxVal = -DBL_MAX;
+   
+   if(idx < 0) idx = 0;
+   if(idx >= barsTotal) idx = barsTotal - 1;
+   
+   // Search from break bar to pivot bar
+   int searchStart = breakBar + 1;
+   int searchEnd = pivotBar;
+   
+   if(searchStart > searchEnd)
+   {
+      int temp = searchStart;
+      searchStart = searchEnd;
+      searchEnd = temp;
+   }
+   
+   for(int i = searchStart; i < searchEnd && i < barsTotal; i++)
+   {
+      double barRange = highArr[i] - lowArr[i];
+      
+      // ATR filter: only small/medium bars qualify
+      if(barRange < obThreshold * 2.0)
+      {
+         if(useMax)  // Bearish OB: find bar with MAXIMUM high
+         {
+            if(highArr[i] > maxVal)
+            {
+               maxVal = highArr[i];
+               idx = i;
+            }
+         }
+         else  // Bullish OB: find bar with MINIMUM low
+         {
+            if(lowArr[i] < minVal)
+            {
+               minVal = lowArr[i];
+               idx = i;
+            }
+         }
+      }
+   }
+   
+   // If no valid bar found with filter, use the bar closest to pivot
+   if((useMax && maxVal == -DBL_MAX) || (!useMax && minVal == DBL_MAX))
+   {
+      idx = MathMax(0, pivotBar - 1);
+   }
+   
+   return idx;
+}
+
+//+------------------------------------------------------------------+
 //| =================== LUXALGO HELPER FUNCTIONS =================== |
 //+------------------------------------------------------------------+
 
@@ -6781,7 +7184,8 @@ void AddBullishOB(double high, double low, datetime time, int barIndex)
    
    // FIFO (Circular Buffer): If array is full, remove the OLDEST OB (index 0)
    // This ensures OBs keep updating even when max limit is reached
-   if(BullishOBCount >= InpSMCMaxOrderBlocks)
+   int maxBullOBs = InpSMCMaxInternalOB + InpSMCMaxSwingOB;
+   if(BullishOBCount >= maxBullOBs)
    {
       // Delete the oldest OB object from chart
       ObjectDelete(0, BullishOBs[0].objName);
@@ -6823,7 +7227,8 @@ void AddBearishOB(double high, double low, datetime time, int barIndex)
    
    // FIFO (Circular Buffer): If array is full, remove the OLDEST OB (index 0)
    // This ensures OBs keep updating even when max limit is reached
-   if(BearishOBCount >= InpSMCMaxOrderBlocks)
+   int maxBearOBs = InpSMCMaxInternalOB + InpSMCMaxSwingOB;
+   if(BearishOBCount >= maxBearOBs)
    {
       // Delete the oldest OB object from chart
       ObjectDelete(0, BearishOBs[0].objName);
