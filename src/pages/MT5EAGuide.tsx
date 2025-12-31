@@ -646,11 +646,20 @@ struct NewsEvent
 
 NewsEvent g_newsEvents[];           // Array of loaded news events
 int g_newsEventCount = 0;           // Number of loaded events
-datetime g_lastNewsRefresh = 0;     // Last time we refreshed news data
+datetime g_lastNewsRefresh = 0;     // Last time we SUCCESSFULLY refreshed news data
 bool g_isNewsPaused = false;        // True when trading is paused due to news
 string g_nextNewsTitle = "";        // Title of upcoming/current news affecting us
 datetime g_nextNewsTime = 0;        // Time of upcoming/current news
 string g_newsStatus = "OK";         // Current news filter status for dashboard
+
+// *** LAST-KNOWN-GOOD CACHE SYSTEM ***
+// Keeps last successful data even if new refresh fails
+datetime g_lastGoodNewsTime = 0;    // Time of last successful news load
+bool g_usingCachedNews = false;     // True if current data is from cache (refresh failed)
+
+// *** PERSISTENT FILE CACHE ***
+string g_newsCacheFile = "MoneyxNewsCache.txt";  // Cache file in MQL5/Files/
+datetime g_lastFileCacheSave = 0;   // Last time we saved to file
 
 // *** WEBREQUEST CONFIGURATION CHECK ***
 bool g_webRequestConfigured = true;       // Assume configured until proven otherwise (only 4060/4024 errors change this)
@@ -658,6 +667,10 @@ datetime g_lastWebRequestCheck = 0;       // Last check time
 datetime g_lastWebRequestAlert = 0;       // Last alert time (prevent spam)
 int g_webRequestCheckInterval = 3600;     // Check interval (1 hour = 3600 seconds)
 bool g_forceNewsRefresh = false;          // Force refresh flag - bypasses hourly check on first call
+
+// *** LOG SPAM PREVENTION ***
+bool g_lastPausedState = false;           // Track last pause state to print only on change
+string g_lastPauseKey = "";               // Track which news caused pause
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                     |
@@ -840,15 +853,17 @@ int OnInit()
    // *** NEWS FILTER - Initialize and load news at startup ***
     if(InpEnableNewsFilter)
     {
-       // Reset news variables to force immediate refresh when EA reinitializes
-       // (เมื่อเปลี่ยน Settings แล้วกด OK จะทำให้ข้อมูลข่าวโหลดใหม่ทันที)
-       g_lastNewsRefresh = 0;        // Force immediate refresh
-       g_newsEventCount = 0;         // Clear old events
+       // *** IMPORTANT: Do NOT clear g_newsEvents here ***
+       // Keep any existing cache so we have fallback if refresh fails
+       
+       // Reset only status variables, not data
        g_isNewsPaused = false;       // Reset pause state
        g_nextNewsTitle = "";
        g_nextNewsTime = 0;
        g_newsStatus = "";
-       ArrayResize(g_newsEvents, 0); // Clear news array
+       g_usingCachedNews = false;
+       g_lastPausedState = false;    // Reset log spam prevention
+       g_lastPauseKey = "";
        
        // Assume configured initially - only 4060/4024 errors will change this
        g_webRequestConfigured = true;
@@ -861,19 +876,24 @@ int OnInit()
        // Log OnInit state for debugging
        Print("========== NEWS FILTER INITIALIZATION ==========");
        Print("InpEnableNewsFilter = ", InpEnableNewsFilter);
-       Print("g_lastNewsRefresh BEFORE = ", g_lastNewsRefresh);
+       Print("Existing g_newsEventCount = ", g_newsEventCount, " (preserved from cache)");
        Print("g_forceNewsRefresh = ", g_forceNewsRefresh);
+       
+       // *** LOAD FILE CACHE FIRST (if any) ***
+       // This provides immediate data even before WebRequest
+       LoadNewsCacheFromFile();
+       Print("After file cache load: g_newsEventCount = ", g_newsEventCount);
        
        // Check configuration (this will set g_webRequestConfigured = false only for real config errors)
        bool configCheckResult = CheckWebRequestConfiguration();
        Print("CheckWebRequestConfiguration result = ", configCheckResult);
        Print("g_webRequestConfigured = ", g_webRequestConfigured);
        
-       // *** ALWAYS try to load news regardless of check result ***
-       // Network errors in check shouldn't prevent loading attempt
+       // *** Try to refresh news data (will use cache as fallback if fails) ***
        Print("NEWS FILTER: Calling RefreshNewsData()...");
        RefreshNewsData();
        Print("NEWS FILTER: After RefreshNewsData - g_newsEventCount = ", g_newsEventCount);
+       Print("g_usingCachedNews = ", g_usingCachedNews);
        Print("========== NEWS FILTER INIT COMPLETE ==========");
        
        // Log summary of loaded news
@@ -883,7 +903,9 @@ int OnInit()
           if(g_newsEvents[i].isRelevant)
              relevantCount++;
        }
-       Print("NEWS FILTER: Loaded ", g_newsEventCount, " total events, ", relevantCount, " relevant to your filters");
+       Print("NEWS FILTER: ", g_newsEventCount, " total events, ", relevantCount, " relevant to your filters");
+       if(g_usingCachedNews)
+          Print("NEWS FILTER: Using CACHED data (last successful load: ", TimeToString(g_lastGoodNewsTime), ")");
        
        // If no news loaded, show debug info
        if(g_newsEventCount == 0)
@@ -1320,6 +1342,20 @@ void UpdateDashboard()
           newsDisplayStatus = noNewsBlink ? "⚠ 0 events (Check Experts tab)" : "⚠ Retry: Reload EA";
           newsStatusColor = clrYellow;
        }
+      else if(g_usingCachedNews)
+      {
+         // Using cached data - show with indicator
+         if(relevantCount == 0)
+         {
+            newsDisplayStatus = "OK (cached, no relevant)";
+            newsStatusColor = clrAqua;  // Cyan to indicate cached
+         }
+         else
+         {
+            newsDisplayStatus = "OK (cached " + IntegerToString(relevantCount) + ")";
+            newsStatusColor = clrAqua;  // Cyan to indicate cached
+         }
+      }
       else if(relevantCount == 0)
       {
          newsDisplayStatus = "OK (No relevant news)";
@@ -4848,13 +4884,14 @@ void RefreshNewsData()
    
    // *** CHECK HOURLY LIMIT FIRST - before any logging ***
    // Use g_forceNewsRefresh to bypass on first call from OnInit
+   // IMPORTANT: Only set g_lastNewsRefresh AFTER successful load
    if(!g_forceNewsRefresh && g_lastNewsRefresh > 0 && (currentTime - g_lastNewsRefresh) < 3600)
       return;  // Already refreshed within last hour - exit silently
    
    // Reset force flag after use
    g_forceNewsRefresh = false;
    
-   g_lastNewsRefresh = currentTime;
+   // *** DO NOT set g_lastNewsRefresh here - only on SUCCESS ***
    Print("NEWS FILTER: Refreshing news data from ForexFactory...");
    
    // Get current week string for URL
@@ -4864,12 +4901,12 @@ void RefreshNewsData()
    // Month names
    string months[] = {"jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"};
    
-   // ForexFactory JSON API URL
-   string weekUrl = "https://nfs.faireconomy.media/ff_calendar_thisweek.json";
+   // ForexFactory JSON API URL with cache-busting timestamp
+   string weekUrl = "https://nfs.faireconomy.media/ff_calendar_thisweek.json?ts=" + IntegerToString((long)currentTime);
    
-   // Use WebRequest to fetch JSON
+   // Use WebRequest to fetch JSON with proper headers
    char postData[], resultData[];
-   string headers = "";
+   string headers = "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)\\r\\nAccept: application/json\\r\\nConnection: close";
    string resultHeaders;
    
    int timeout = 10000;  // 10 seconds for reliable fetch
@@ -4897,8 +4934,15 @@ void RefreshNewsData()
       if(error == 4060 || error == 4024)
       {
          g_webRequestConfigured = false;
-         // Alert will be shown by OnTimer on next hourly check
       }
+      
+      // *** KEEP EXISTING CACHE - do not clear ***
+      if(g_newsEventCount > 0)
+      {
+         g_usingCachedNews = true;
+         Print("NEWS FILTER: Using cached data (", g_newsEventCount, " events from ", TimeToString(g_lastGoodNewsTime), ")");
+      }
+      // *** DO NOT set g_lastNewsRefresh - allow retry on next tick ***
       return;
    }
    
@@ -4917,6 +4961,12 @@ void RefreshNewsData()
    if(responseSize < 10)
    {
       Print("NEWS FILTER WARNING: Response too short (", responseSize, " bytes) - may be error page");
+      // Keep existing cache
+      if(g_newsEventCount > 0)
+      {
+         g_usingCachedNews = true;
+         Print("NEWS FILTER: Keeping cached data (", g_newsEventCount, " events)");
+      }
       return;
    }
    
@@ -4927,12 +4977,21 @@ void RefreshNewsData()
    {
       Print("NEWS FILTER WARNING: Response is not a JSON array!");
       Print("NEWS FILTER DEBUG: Response starts with: ", StringSubstr(trimmedContent, 0, 50));
+      Print("NEWS FILTER DEBUG: Response headers: ", resultHeaders);
+      // Keep existing cache
+      if(g_newsEventCount > 0)
+      {
+         g_usingCachedNews = true;
+         Print("NEWS FILTER: Keeping cached data (", g_newsEventCount, " events)");
+      }
       return;
    }
    
-   // Parse JSON events
-   g_newsEventCount = 0;
-   ArrayResize(g_newsEvents, 100);  // Pre-allocate for 100 events
+   // *** USE TEMPORARY VARIABLES FOR PARSING ***
+   // Only update global data if parsing succeeds
+   NewsEvent tmpEvents[];
+   int tmpEventCount = 0;
+   ArrayResize(tmpEvents, 100);  // Pre-allocate for 100 events
    
    // Split by },{ to get individual event objects
    int searchPos = 0;
@@ -4943,6 +5002,11 @@ void RefreshNewsData()
    if(firstBrace < 0)
    {
       Print("NEWS FILTER WARNING: No JSON objects found in response!");
+      if(g_newsEventCount > 0)
+      {
+         g_usingCachedNews = true;
+         Print("NEWS FILTER: Keeping cached data (", g_newsEventCount, " events)");
+      }
       return;
    }
    
@@ -5019,21 +5083,142 @@ void RefreshNewsData()
             isRelevant = true;
       }
       
-      // Store event if relevant or for display
-      if(g_newsEventCount < ArraySize(g_newsEvents))
+      // Store event in TEMPORARY array
+      if(tmpEventCount < ArraySize(tmpEvents))
       {
-         g_newsEvents[g_newsEventCount].title = title;
-         g_newsEvents[g_newsEventCount].country = country;
-         g_newsEvents[g_newsEventCount].time = eventTime;
-         g_newsEvents[g_newsEventCount].impact = impact;
-         g_newsEvents[g_newsEventCount].isRelevant = isRelevant;
-         g_newsEventCount++;
+         tmpEvents[tmpEventCount].title = title;
+         tmpEvents[tmpEventCount].country = country;
+         tmpEvents[tmpEventCount].time = eventTime;
+         tmpEvents[tmpEventCount].impact = impact;
+         tmpEvents[tmpEventCount].isRelevant = isRelevant;
+         tmpEventCount++;
       }
       
       searchPos = objEnd + 1;
    }
    
-   Print("NEWS FILTER: Parsed ", eventCount, " total events, stored ", g_newsEventCount, " events");
+   Print("NEWS FILTER: Parsed ", eventCount, " total events, stored ", tmpEventCount, " events");
+   
+   // *** SUCCESS - Now update global data ***
+   if(tmpEventCount > 0)
+   {
+      // Copy temporary data to global arrays
+      ArrayResize(g_newsEvents, tmpEventCount);
+      for(int i = 0; i < tmpEventCount; i++)
+      {
+         g_newsEvents[i] = tmpEvents[i];
+      }
+      g_newsEventCount = tmpEventCount;
+      
+      // Mark as fresh data
+      g_lastNewsRefresh = currentTime;
+      g_lastGoodNewsTime = currentTime;
+      g_usingCachedNews = false;
+      
+      Print("NEWS FILTER: Successfully loaded ", g_newsEventCount, " events (FRESH DATA)");
+      
+      // Save to file cache for persistence
+      SaveNewsCacheToFile();
+   }
+   else
+   {
+      // Parsing returned 0 events - keep existing cache
+      Print("NEWS FILTER WARNING: Parsed 0 events from response!");
+      if(g_newsEventCount > 0)
+      {
+         g_usingCachedNews = true;
+         Print("NEWS FILTER: Keeping cached data (", g_newsEventCount, " events)");
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Save News Cache to File for Persistence                            |
+//+------------------------------------------------------------------+
+void SaveNewsCacheToFile()
+{
+   if(g_newsEventCount == 0)
+      return;
+   
+   int handle = FileOpen(g_newsCacheFile, FILE_WRITE | FILE_TXT | FILE_ANSI);
+   if(handle == INVALID_HANDLE)
+   {
+      Print("NEWS FILTER: Cannot save cache file - ", GetLastError());
+      return;
+   }
+   
+   // Write header with timestamp
+   FileWriteString(handle, "# MoneyX News Cache - " + TimeToString(TimeCurrent()) + "\\n");
+   FileWriteString(handle, "# Count: " + IntegerToString(g_newsEventCount) + "\\n");
+   
+   // Write events as simple delimited format
+   for(int i = 0; i < g_newsEventCount; i++)
+   {
+      string line = g_newsEvents[i].title + "|" + 
+                    g_newsEvents[i].country + "|" +
+                    IntegerToString((long)g_newsEvents[i].time) + "|" +
+                    g_newsEvents[i].impact + "|" +
+                    (g_newsEvents[i].isRelevant ? "1" : "0") + "\\n";
+      FileWriteString(handle, line);
+   }
+   
+   FileClose(handle);
+   g_lastFileCacheSave = TimeCurrent();
+   Print("NEWS FILTER: Saved ", g_newsEventCount, " events to cache file");
+}
+
+//+------------------------------------------------------------------+
+//| Load News Cache from File                                          |
+//+------------------------------------------------------------------+
+void LoadNewsCacheFromFile()
+{
+   if(!FileIsExist(g_newsCacheFile))
+   {
+      Print("NEWS FILTER: No cache file found (first run)");
+      return;
+   }
+   
+   int handle = FileOpen(g_newsCacheFile, FILE_READ | FILE_TXT | FILE_ANSI);
+   if(handle == INVALID_HANDLE)
+   {
+      Print("NEWS FILTER: Cannot read cache file - ", GetLastError());
+      return;
+   }
+   
+   // Clear and prepare array
+   ArrayResize(g_newsEvents, 100);
+   g_newsEventCount = 0;
+   
+   while(!FileIsEnding(handle))
+   {
+      string line = FileReadString(handle);
+      
+      // Skip comment lines
+      if(StringSubstr(line, 0, 1) == "#")
+         continue;
+      
+      // Parse delimited line: title|country|time|impact|isRelevant
+      string parts[];
+      int partCount = StringSplit(line, '|', parts);
+      
+      if(partCount >= 5 && g_newsEventCount < ArraySize(g_newsEvents))
+      {
+         g_newsEvents[g_newsEventCount].title = parts[0];
+         g_newsEvents[g_newsEventCount].country = parts[1];
+         g_newsEvents[g_newsEventCount].time = (datetime)StringToInteger(parts[2]);
+         g_newsEvents[g_newsEventCount].impact = parts[3];
+         g_newsEvents[g_newsEventCount].isRelevant = (parts[4] == "1");
+         g_newsEventCount++;
+      }
+   }
+   
+   FileClose(handle);
+   
+   if(g_newsEventCount > 0)
+   {
+      g_usingCachedNews = true;
+      Print("NEWS FILTER: Loaded ", g_newsEventCount, " events from cache file");
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -5079,15 +5264,21 @@ bool IsNewsTimePaused()
    {
       g_isNewsPaused = false;
       g_newsStatus = "OFF";
+      // Reset log spam prevention when disabled
+      if(g_lastPausedState)
+      {
+         g_lastPausedState = false;
+         g_lastPauseKey = "";
+      }
       return false;
    }
    
    datetime currentTime = TimeCurrent();
    
-   g_isNewsPaused = false;
+   bool foundPause = false;
+   string pauseKey = "";
    g_nextNewsTitle = "";
    g_nextNewsTime = 0;
-   g_newsStatus = "OK";
    
    // Find the next/current relevant news
    datetime closestNewsTime = 0;
@@ -5117,9 +5308,10 @@ bool IsNewsTimePaused()
       // Check if current time is within pause window
       if(currentTime >= pauseStart && currentTime <= pauseEnd)
       {
-         g_isNewsPaused = true;
+         foundPause = true;
          g_nextNewsTitle = g_newsEvents[i].title;
          g_nextNewsTime = newsTime;
+         pauseKey = g_newsEvents[i].title + "|" + IntegerToString((long)newsTime);
          
          // Determine status text
          if(currentTime < newsTime)
@@ -5133,8 +5325,7 @@ bool IsNewsTimePaused()
             g_newsStatus = "PAUSE: " + g_newsEvents[i].country + " " + impact + " +" + IntegerToString(minsAfter) + "m ago";
          }
          
-         Print("NEWS FILTER: Trading PAUSED - ", g_newsStatus, " | Event: ", g_nextNewsTitle);
-         return true;
+         break;  // Found pause, no need to continue
       }
       
       // Track closest upcoming news for dashboard display
@@ -5147,17 +5338,58 @@ bool IsNewsTimePaused()
       }
    }
    
-   // Show upcoming news if within 2 hours
-   if(closestNewsTime > 0 && (closestNewsTime - currentTime) <= 2 * 3600)
+   // *** LOG SPAM PREVENTION - Only print when status CHANGES ***
+   if(foundPause)
    {
-      int minsToNews = (int)((closestNewsTime - currentTime) / 60);
-      g_newsStatus = "Next: " + IntegerToString(minsToNews) + "m";
-      g_nextNewsTitle = closestNewsTitle;
-      g_nextNewsTime = closestNewsTime;
+      g_isNewsPaused = true;
+      
+      // Only print if this is a NEW pause or different news event
+      if(!g_lastPausedState || g_lastPauseKey != pauseKey)
+      {
+         Print("NEWS FILTER: Trading PAUSED - ", g_newsStatus, " | Event: ", g_nextNewsTitle);
+         g_lastPausedState = true;
+         g_lastPauseKey = pauseKey;
+      }
+      return true;
    }
    else
    {
-      g_newsStatus = "OK";
+      g_isNewsPaused = false;
+      
+      // Only print RESUME message if we were previously paused
+      if(g_lastPausedState)
+      {
+         Print("NEWS FILTER: Trading RESUMED - News pause window ended");
+         g_lastPausedState = false;
+         g_lastPauseKey = "";
+      }
+      
+      // Show upcoming news if within 2 hours
+      if(closestNewsTime > 0 && (closestNewsTime - currentTime) <= 2 * 3600)
+      {
+         int minsToNews = (int)((closestNewsTime - currentTime) / 60);
+         g_newsStatus = "Next: " + IntegerToString(minsToNews) + "m";
+         g_nextNewsTitle = closestNewsTitle;
+         g_nextNewsTime = closestNewsTime;
+      }
+      else
+      {
+         // Show cache status if using cached data
+         if(g_usingCachedNews && g_newsEventCount > 0)
+         {
+            int relevantCount = 0;
+            for(int i = 0; i < g_newsEventCount; i++)
+            {
+               if(g_newsEvents[i].isRelevant)
+                  relevantCount++;
+            }
+            g_newsStatus = "OK (cached " + IntegerToString(relevantCount) + ")";
+         }
+         else
+         {
+            g_newsStatus = "OK";
+         }
+      }
    }
    
    return false;
