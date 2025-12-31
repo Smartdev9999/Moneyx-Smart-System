@@ -7325,7 +7325,8 @@ void MergeBullishOBs()
             if(overlapPct >= InpSMCConfluencePercent)
             {
                // Determine which is older (to be removed) and which is newer (to keep)
-               int olderIdx, newerIdx;
+               int olderIdx = 0;
+               int newerIdx = 0;
                if(BullishOBs[i].time < BullishOBs[j].time)
                {
                   olderIdx = i;  // i is older -> remove
@@ -7396,7 +7397,8 @@ void MergeBearishOBs()
             if(overlapPct >= InpSMCConfluencePercent)
             {
                // Determine which is older (to be removed) and which is newer (to keep)
-               int olderIdx, newerIdx;
+               int olderIdx = 0;
+               int newerIdx = 0;
                if(BearishOBs[i].time < BearishOBs[j].time)
                {
                   olderIdx = i;  // i is older -> remove
