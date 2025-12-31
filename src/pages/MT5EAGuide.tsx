@@ -7295,26 +7295,24 @@ double CalcOverlapPercent(double high1, double low1, double high2, double low2)
 
 //+------------------------------------------------------------------+
 //| Merge overlapping Bullish Order Blocks                              |
-//| When overlapping: KEEP NEWER OB (front), REMOVE OLDER OB (back)     |
 //+------------------------------------------------------------------+
 void MergeBullishOBs()
 {
    if(BullishOBCount < 2) return;
    
-   bool removed = true;
+   bool merged = true;
    
-   // Keep checking until no more overlaps
-   while(removed)
+   // Keep merging until no more merges possible
+   while(merged)
    {
-      removed = false;
+      merged = false;
       
-      for(int i = 0; i < BullishOBCount; i++)
+      for(int i = 0; i < BullishOBCount - 1; i++)
       {
          if(BullishOBs[i].mitigated) continue;
          
-         for(int j = 0; j < BullishOBCount; j++)
+         for(int j = i + 1; j < BullishOBCount; j++)
          {
-            if(i == j) continue;
             if(BullishOBs[j].mitigated) continue;
             
             // Check overlap percentage
@@ -7324,67 +7322,67 @@ void MergeBullishOBs()
             
             if(overlapPct >= InpSMCConfluencePercent)
             {
-               // Determine which is older (to be removed) and which is newer (to keep)
-               int olderIdx = 0;
-               int newerIdx = 0;
-               if(BullishOBs[i].time < BullishOBs[j].time)
-               {
-                  olderIdx = i;  // i is older -> remove
-                  newerIdx = j;  // j is newer -> keep
-               }
-               else
-               {
-                  olderIdx = j;  // j is older -> remove
-                  newerIdx = i;  // i is newer -> keep
-               }
+               // Merge: expand zone i to include zone j
+               double newHigh = MathMax(BullishOBs[i].high, BullishOBs[j].high);
+               double newLow = MathMin(BullishOBs[i].low, BullishOBs[j].low);
                
-               string msgBull = ">>> SMC Confluence: Overlap " + DoubleToString(overlapPct, 1) + "% - Keep NEW Bull OB, Remove OLD";
-               Print(msgBull);
+               // Use the older (earlier) time
+               datetime newTime = (BullishOBs[i].time < BullishOBs[j].time) ? 
+                                   BullishOBs[i].time : BullishOBs[j].time;
                
-               // Delete the older OB from chart
-               ObjectDelete(0, BullishOBs[olderIdx].objName);
+               // Delete the object being merged
+               ObjectDelete(0, BullishOBs[j].objName);
                
-               // Add older OB to blacklist to prevent re-detection
-               AddSMCRemovedTime(BullishOBs[olderIdx].time, true);
+               // Update zone i with merged values
+               BullishOBs[i].high = newHigh;
+               BullishOBs[i].low = newLow;
+               BullishOBs[i].time = newTime;
                
-               // Remove older OB from array
-               for(int k = olderIdx; k < BullishOBCount - 1; k++)
+               // Need to update the chart object too
+               ObjectDelete(0, BullishOBs[i].objName);
+               BullishOBs[i].objName = SMCPrefix + "BullOB_" + IntegerToString((long)newTime);
+               
+               // Remove zone j from array
+               for(int k = j; k < BullishOBCount - 1; k++)
                {
                   BullishOBs[k] = BullishOBs[k + 1];
                }
                BullishOBCount--;
                
-               removed = true;
+               Print(">>> SMC Confluence: Merged 2 Bullish OBs (", 
+                     DoubleToString(overlapPct, 1), "% overlap) -> New zone: ", 
+                     DoubleToString(newLow, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)), 
+                     " - ", DoubleToString(newHigh, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)));
+               
+               merged = true;
                break;
             }
          }
-         if(removed) break;
+         if(merged) break;
       }
    }
 }
 
 //+------------------------------------------------------------------+
 //| Merge overlapping Bearish Order Blocks                              |
-//| When overlapping: KEEP NEWER OB (front), REMOVE OLDER OB (back)     |
 //+------------------------------------------------------------------+
 void MergeBearishOBs()
 {
    if(BearishOBCount < 2) return;
    
-   bool removed = true;
+   bool merged = true;
    
-   // Keep checking until no more overlaps
-   while(removed)
+   // Keep merging until no more merges possible
+   while(merged)
    {
-      removed = false;
+      merged = false;
       
-      for(int i = 0; i < BearishOBCount; i++)
+      for(int i = 0; i < BearishOBCount - 1; i++)
       {
          if(BearishOBs[i].mitigated) continue;
          
-         for(int j = 0; j < BearishOBCount; j++)
+         for(int j = i + 1; j < BearishOBCount; j++)
          {
-            if(i == j) continue;
             if(BearishOBs[j].mitigated) continue;
             
             // Check overlap percentage
@@ -7394,41 +7392,43 @@ void MergeBearishOBs()
             
             if(overlapPct >= InpSMCConfluencePercent)
             {
-               // Determine which is older (to be removed) and which is newer (to keep)
-               int olderIdx = 0;
-               int newerIdx = 0;
-               if(BearishOBs[i].time < BearishOBs[j].time)
-               {
-                  olderIdx = i;  // i is older -> remove
-                  newerIdx = j;  // j is newer -> keep
-               }
-               else
-               {
-                  olderIdx = j;  // j is older -> remove
-                  newerIdx = i;  // i is newer -> keep
-               }
+               // Merge: expand zone i to include zone j
+               double newHigh = MathMax(BearishOBs[i].high, BearishOBs[j].high);
+               double newLow = MathMin(BearishOBs[i].low, BearishOBs[j].low);
                
-               string msgBear = ">>> SMC Confluence: Overlap " + DoubleToString(overlapPct, 1) + "% - Keep NEW Bear OB, Remove OLD";
-               Print(msgBear);
+               // Use the older (earlier) time
+               datetime newTime = (BearishOBs[i].time < BearishOBs[j].time) ? 
+                                   BearishOBs[i].time : BearishOBs[j].time;
                
-               // Delete the older OB from chart
-               ObjectDelete(0, BearishOBs[olderIdx].objName);
+               // Delete the object being merged
+               ObjectDelete(0, BearishOBs[j].objName);
                
-               // Add older OB to blacklist to prevent re-detection
-               AddSMCRemovedTime(BearishOBs[olderIdx].time, false);
+               // Update zone i with merged values
+               BearishOBs[i].high = newHigh;
+               BearishOBs[i].low = newLow;
+               BearishOBs[i].time = newTime;
                
-               // Remove older OB from array
-               for(int k = olderIdx; k < BearishOBCount - 1; k++)
+               // Need to update the chart object too
+               ObjectDelete(0, BearishOBs[i].objName);
+               BearishOBs[i].objName = SMCPrefix + "BearOB_" + IntegerToString((long)newTime);
+               
+               // Remove zone j from array
+               for(int k = j; k < BearishOBCount - 1; k++)
                {
                   BearishOBs[k] = BearishOBs[k + 1];
                }
                BearishOBCount--;
                
-               removed = true;
+               Print(">>> SMC Confluence: Merged 2 Bearish OBs (", 
+                     DoubleToString(overlapPct, 1), "% overlap) -> New zone: ", 
+                     DoubleToString(newLow, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)), 
+                     " - ", DoubleToString(newHigh, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)));
+               
+               merged = true;
                break;
             }
          }
-         if(removed) break;
+         if(merged) break;
       }
    }
 }
