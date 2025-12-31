@@ -839,12 +839,43 @@ int OnInit()
    // *** NEWS FILTER - Check WebRequest configuration at startup ***
    if(InpEnableNewsFilter)
    {
+      // Reset news variables to force immediate refresh when EA reinitializes
+      // (เมื่อเปลี่ยน Settings แล้วกด OK จะทำให้ข้อมูลข่าวโหลดใหม่ทันที)
+      g_lastNewsRefresh = 0;        // Force immediate refresh
+      g_newsEventCount = 0;         // Clear old events
+      g_isNewsPaused = false;       // Reset pause state
+      g_nextNewsTitle = "";
+      g_nextNewsTime = 0;
+      g_newsStatus = "";
+      ArrayResize(g_newsEvents, 0); // Clear news array
+      
       g_lastWebRequestCheck = TimeCurrent();
       if(!CheckWebRequestConfiguration())
       {
          // WebRequest not configured - show alert
          ShowWebRequestSetupAlert();
          g_lastWebRequestAlert = TimeCurrent();
+      }
+      else
+      {
+         // WebRequest configured - load news immediately
+         Print("NEWS FILTER: Loading news data on initialization...");
+         RefreshNewsData();
+         
+         // Log summary of loaded news
+         int relevantCount = 0;
+         for(int i = 0; i < g_newsEventCount; i++)
+         {
+            if(g_newsEvents[i].isRelevant)
+               relevantCount++;
+         }
+         Print("NEWS FILTER: Loaded ", g_newsEventCount, " total events, ", relevantCount, " relevant to your filters");
+         
+         // If no news loaded, warn user
+         if(g_newsEventCount == 0)
+         {
+            Print("WARNING: No news events loaded! Check internet connection or ForexFactory availability.");
+         }
       }
    }
    
@@ -1248,8 +1279,30 @@ void UpdateDashboard()
    }
    else
    {
-      newsDisplayStatus = "No important news";
-      newsStatusColor = clrLime;
+      // Count relevant news events being tracked
+      int relevantCount = 0;
+      for(int i = 0; i < g_newsEventCount; i++)
+      {
+         if(g_newsEvents[i].isRelevant)
+            relevantCount++;
+      }
+      
+      if(g_newsEventCount == 0)
+      {
+         // No news loaded at all - may be an issue
+         newsDisplayStatus = "⚠ No news loaded!";
+         newsStatusColor = clrYellow;
+      }
+      else if(relevantCount == 0)
+      {
+         newsDisplayStatus = "OK (No relevant news)";
+         newsStatusColor = clrLime;
+      }
+      else
+      {
+         newsDisplayStatus = "OK (" + IntegerToString(relevantCount) + " tracked)";
+         newsStatusColor = clrLime;
+      }
    }
    detailValues[12] = newsDisplayStatus;
    
