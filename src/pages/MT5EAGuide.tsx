@@ -672,6 +672,9 @@ bool g_forceNewsRefresh = false;          // Force refresh flag - bypasses hourl
 bool g_lastPausedState = false;           // Track last pause state to print only on change
 string g_lastPauseKey = "";               // Track which news caused pause
 
+// *** NEWS PAUSE COUNTDOWN ***
+datetime g_newsPauseEndTime = 0;          // Time when current news pause will end (for countdown display)
+
 //+------------------------------------------------------------------+
 //| Expert initialization function                                     |
 //+------------------------------------------------------------------+
@@ -1293,11 +1296,11 @@ void UpdateDashboard()
    // Accumulate Close: ใช้ Locked Target ถ้ามี order ค้าง, ไม่งั้นแสดง Current Scaled
    double displayAccumulateTarget = (g_lockedAccumulateTarget > 0) ? g_lockedAccumulateTarget : ApplyScaleDollar(InpAccumulateTarget);
    detailValues[11] = (totalPLForAccumulate >= 0 ? "+" : "") + DoubleToString(totalPLForAccumulate, 0) + "$ (Tg: " + DoubleToString(displayAccumulateTarget, 0) + "$)";
-   // News Filter Status: 4 states now
+   // News Filter Status: 4 states
    // 1. "Disable" - when feature is off
    // 2. "WebRequest: NOT CONFIGURED!" - when WebRequest not set up (blinking red)
-   // 3. "No important news" - when enabled and no news affecting
-   // 4. News title (from ForexFactory) - when paused due to news
+   // 3. "No Important news" - when enabled and no news affecting (simple green message)
+   // 4. News title + Countdown - when paused due to news (shows remaining time until resume)
    string newsDisplayStatus;
    color newsStatusColor;
    
@@ -1316,56 +1319,30 @@ void UpdateDashboard()
    }
    else if(g_isNewsPaused && StringLen(g_nextNewsTitle) > 0)
    {
-      // Show the news title causing the pause (truncate if too long)
+      // Show the news title causing the pause + countdown timer
+      // Countdown format: HH:MM:SS showing time until trading resumes
       string truncatedTitle = g_nextNewsTitle;
-      if(StringLen(truncatedTitle) > 25)
-         truncatedTitle = StringSubstr(truncatedTitle, 0, 22) + "...";
-      newsDisplayStatus = truncatedTitle;
+      if(StringLen(truncatedTitle) > 18)
+         truncatedTitle = StringSubstr(truncatedTitle, 0, 15) + "...";
+      
+      // Calculate time remaining until pause ends
+      string countdownStr = GetNewsCountdownString();
+      newsDisplayStatus = truncatedTitle + " " + countdownStr;
       newsStatusColor = clrOrangeRed;
+   }
+   else if(g_newsEventCount == 0)
+   {
+      // No news loaded at all - show debug info
+      static bool noNewsBlink = false;
+      noNewsBlink = !noNewsBlink;
+      newsDisplayStatus = noNewsBlink ? "⚠ 0 events (Check Experts tab)" : "⚠ Retry: Reload EA";
+      newsStatusColor = clrYellow;
    }
    else
    {
-      // Count relevant news events being tracked
-      int relevantCount = 0;
-      for(int i = 0; i < g_newsEventCount; i++)
-      {
-         if(g_newsEvents[i].isRelevant)
-            relevantCount++;
-      }
-      
-      if(g_newsEventCount == 0)
-       {
-          // No news loaded at all - show debug info
-          // Static blink effect for visibility
-          static bool noNewsBlink = false;
-          noNewsBlink = !noNewsBlink;
-          newsDisplayStatus = noNewsBlink ? "⚠ 0 events (Check Experts tab)" : "⚠ Retry: Reload EA";
-          newsStatusColor = clrYellow;
-       }
-      else if(g_usingCachedNews)
-      {
-         // Using cached data - show with indicator
-         if(relevantCount == 0)
-         {
-            newsDisplayStatus = "OK (cached, no relevant)";
-            newsStatusColor = clrAqua;  // Cyan to indicate cached
-         }
-         else
-         {
-            newsDisplayStatus = "OK (cached " + IntegerToString(relevantCount) + ")";
-            newsStatusColor = clrAqua;  // Cyan to indicate cached
-         }
-      }
-      else if(relevantCount == 0)
-      {
-         newsDisplayStatus = "OK (No relevant news)";
-         newsStatusColor = clrLime;
-      }
-      else
-      {
-         newsDisplayStatus = "OK (" + IntegerToString(relevantCount) + " tracked)";
-         newsStatusColor = clrLime;
-      }
+      // Normal operation - no important news affecting trading
+      newsDisplayStatus = "No Important news";
+      newsStatusColor = clrLime;
    }
    detailValues[12] = newsDisplayStatus;
    
@@ -5327,6 +5304,7 @@ bool IsNewsTimePaused()
          foundPause = true;
          g_nextNewsTitle = g_newsEvents[i].title;
          g_nextNewsTime = newsTime;
+         g_newsPauseEndTime = pauseEnd;  // Store pause end time for countdown display
          pauseKey = g_newsEvents[i].title + "|" + IntegerToString((long)newsTime);
          
          // Determine status text
@@ -5371,6 +5349,7 @@ bool IsNewsTimePaused()
    else
    {
       g_isNewsPaused = false;
+      g_newsPauseEndTime = 0;  // Clear pause end time when not paused
       
       // Only print RESUME message if we were previously paused
       if(g_lastPausedState)
@@ -5380,35 +5359,45 @@ bool IsNewsTimePaused()
          g_lastPauseKey = "";
       }
       
-      // Show upcoming news if within 2 hours
+      // Show upcoming news if within 2 hours (optional - keep tracking but don't show in dashboard)
       if(closestNewsTime > 0 && (closestNewsTime - currentTime) <= 2 * 3600)
       {
-         int minsToNews = (int)((closestNewsTime - currentTime) / 60);
-         g_newsStatus = "Next: " + IntegerToString(minsToNews) + "m";
          g_nextNewsTitle = closestNewsTitle;
          g_nextNewsTime = closestNewsTime;
       }
-      else
-      {
-         // Show cache status if using cached data
-         if(g_usingCachedNews && g_newsEventCount > 0)
-         {
-            int relevantCount = 0;
-            for(int i = 0; i < g_newsEventCount; i++)
-            {
-               if(g_newsEvents[i].isRelevant)
-                  relevantCount++;
-            }
-            g_newsStatus = "OK (cached " + IntegerToString(relevantCount) + ")";
-         }
-         else
-         {
-            g_newsStatus = "OK";
-         }
-      }
+      
+      // Always show "No Important news" when not paused
+      g_newsStatus = "No Important news";
    }
    
    return false;
+}
+
+//+------------------------------------------------------------------+
+//| Get Countdown String for News Pause (HH:MM:SS until resume)        |
+//+------------------------------------------------------------------+
+string GetNewsCountdownString()
+{
+   if(!g_isNewsPaused || g_newsPauseEndTime == 0)
+      return "";
+   
+   datetime currentTime = TimeCurrent();
+   
+   if(currentTime >= g_newsPauseEndTime)
+      return "00:00:00";
+   
+   int remainingSeconds = (int)(g_newsPauseEndTime - currentTime);
+   
+   int hours = remainingSeconds / 3600;
+   int minutes = (remainingSeconds % 3600) / 60;
+   int seconds = remainingSeconds % 60;
+   
+   // Format: HH:MM:SS
+   string hh = (hours < 10 ? "0" : "") + IntegerToString(hours);
+   string mm = (minutes < 10 ? "0" : "") + IntegerToString(minutes);
+   string ss = (seconds < 10 ? "0" : "") + IntegerToString(seconds);
+   
+   return hh + ":" + mm + ":" + ss;
 }
 
 //+------------------------------------------------------------------+
