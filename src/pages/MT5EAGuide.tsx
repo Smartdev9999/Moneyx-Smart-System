@@ -7338,10 +7338,8 @@ void MergeBullishOBs()
                   newerIdx = i;  // i is newer -> keep
                }
                
-               Print(">>> SMC Confluence: Overlap detected (", 
-                     DoubleToString(overlapPct, 1), "%) - Keeping NEWER Bullish OB at ",
-                     TimeToString(BullishOBs[newerIdx].time), ", Removing OLDER at ",
-                     TimeToString(BullishOBs[olderIdx].time));
+               string msgBull = ">>> SMC Confluence: Overlap " + DoubleToString(overlapPct, 1) + "% - Keep NEW Bull OB, Remove OLD";
+               Print(msgBull);
                
                // Delete the older OB from chart
                ObjectDelete(0, BullishOBs[olderIdx].objName);
@@ -7410,10 +7408,8 @@ void MergeBearishOBs()
                   newerIdx = i;  // i is newer -> keep
                }
                
-               Print(">>> SMC Confluence: Overlap detected (", 
-                     DoubleToString(overlapPct, 1), "%) - Keeping NEWER Bearish OB at ",
-                     TimeToString(BearishOBs[newerIdx].time), ", Removing OLDER at ",
-                     TimeToString(BearishOBs[olderIdx].time));
+               string msgBear = ">>> SMC Confluence: Overlap " + DoubleToString(overlapPct, 1) + "% - Keep NEW Bear OB, Remove OLD";
+               Print(msgBear);
                
                // Delete the older OB from chart
                ObjectDelete(0, BearishOBs[olderIdx].objName);
