@@ -14,16 +14,255 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      account_history: {
+        Row: {
+          balance: number | null
+          drawdown: number | null
+          equity: number | null
+          id: string
+          margin_level: number | null
+          mt5_account_id: string
+          profit_loss: number | null
+          recorded_at: string
+        }
+        Insert: {
+          balance?: number | null
+          drawdown?: number | null
+          equity?: number | null
+          id?: string
+          margin_level?: number | null
+          mt5_account_id: string
+          profit_loss?: number | null
+          recorded_at?: string
+        }
+        Update: {
+          balance?: number | null
+          drawdown?: number | null
+          equity?: number | null
+          id?: string
+          margin_level?: number | null
+          mt5_account_id?: string
+          profit_loss?: number | null
+          recorded_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "account_history_mt5_account_id_fkey"
+            columns: ["mt5_account_id"]
+            isOneToOne: false
+            referencedRelation: "mt5_accounts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      customers: {
+        Row: {
+          broker: string | null
+          created_at: string
+          customer_id: string
+          email: string
+          id: string
+          name: string
+          notes: string | null
+          phone: string | null
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          broker?: string | null
+          created_at?: string
+          customer_id: string
+          email: string
+          id?: string
+          name: string
+          notes?: string | null
+          phone?: string | null
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          broker?: string | null
+          created_at?: string
+          customer_id?: string
+          email?: string
+          id?: string
+          name?: string
+          notes?: string | null
+          phone?: string | null
+          status?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      mt5_accounts: {
+        Row: {
+          account_number: string
+          balance: number | null
+          created_at: string
+          customer_id: string
+          drawdown: number | null
+          equity: number | null
+          expiry_date: string | null
+          id: string
+          is_lifetime: boolean
+          last_sync: string | null
+          margin_level: number | null
+          package_type: string
+          profit_loss: number | null
+          start_date: string
+          status: string
+          trading_system_id: string | null
+          updated_at: string
+        }
+        Insert: {
+          account_number: string
+          balance?: number | null
+          created_at?: string
+          customer_id: string
+          drawdown?: number | null
+          equity?: number | null
+          expiry_date?: string | null
+          id?: string
+          is_lifetime?: boolean
+          last_sync?: string | null
+          margin_level?: number | null
+          package_type: string
+          profit_loss?: number | null
+          start_date?: string
+          status?: string
+          trading_system_id?: string | null
+          updated_at?: string
+        }
+        Update: {
+          account_number?: string
+          balance?: number | null
+          created_at?: string
+          customer_id?: string
+          drawdown?: number | null
+          equity?: number | null
+          expiry_date?: string | null
+          id?: string
+          is_lifetime?: boolean
+          last_sync?: string | null
+          margin_level?: number | null
+          package_type?: string
+          profit_loss?: number | null
+          start_date?: string
+          status?: string
+          trading_system_id?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "mt5_accounts_customer_id_fkey"
+            columns: ["customer_id"]
+            isOneToOne: false
+            referencedRelation: "customers"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "mt5_accounts_trading_system_id_fkey"
+            columns: ["trading_system_id"]
+            isOneToOne: false
+            referencedRelation: "trading_systems"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      profiles: {
+        Row: {
+          avatar_url: string | null
+          created_at: string
+          email: string | null
+          full_name: string | null
+          id: string
+          updated_at: string
+        }
+        Insert: {
+          avatar_url?: string | null
+          created_at?: string
+          email?: string | null
+          full_name?: string | null
+          id: string
+          updated_at?: string
+        }
+        Update: {
+          avatar_url?: string | null
+          created_at?: string
+          email?: string | null
+          full_name?: string | null
+          id?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      trading_systems: {
+        Row: {
+          created_at: string
+          description: string | null
+          id: string
+          is_active: boolean
+          name: string
+          updated_at: string
+          version: string | null
+        }
+        Insert: {
+          created_at?: string
+          description?: string | null
+          id?: string
+          is_active?: boolean
+          name: string
+          updated_at?: string
+          version?: string | null
+        }
+        Update: {
+          created_at?: string
+          description?: string | null
+          id?: string
+          is_active?: boolean
+          name?: string
+          updated_at?: string
+          version?: string | null
+        }
+        Relationships: []
+      }
+      user_roles: {
+        Row: {
+          created_at: string
+          id: string
+          role: Database["public"]["Enums"]["app_role"]
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          role?: Database["public"]["Enums"]["app_role"]
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          role?: Database["public"]["Enums"]["app_role"]
+          user_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      has_role: {
+        Args: {
+          _role: Database["public"]["Enums"]["app_role"]
+          _user_id: string
+        }
+        Returns: boolean
+      }
+      is_admin: { Args: { _user_id: string }; Returns: boolean }
     }
     Enums: {
-      [_ in never]: never
+      app_role: "super_admin" | "admin" | "user"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -150,6 +389,8 @@ export type CompositeTypes<
 
 export const Constants = {
   public: {
-    Enums: {},
+    Enums: {
+      app_role: ["super_admin", "admin", "user"],
+    },
   },
 } as const
