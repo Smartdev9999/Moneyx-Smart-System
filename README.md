@@ -1,4 +1,6 @@
-# Welcome to your Lovable project
+# Moneyx Smart System
+
+ระบบเทรดอัจฉริยะสำหรับ MT5 - Smart Trading System for MetaTrader 5
 
 ## Project info
 
