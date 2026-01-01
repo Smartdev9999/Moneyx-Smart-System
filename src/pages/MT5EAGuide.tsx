@@ -5,8 +5,8 @@ import StepCard from '@/components/StepCard';
 
 const MT5EAGuide = () => {
   const fullEACode = `//+------------------------------------------------------------------+
-//|                   ZigZag++ CDC Structure EA v5.1                   |
-//|           Based on DevLucem ZigZag++ with CDC Action Zone          |
+//|                   Moneyx Smart Gold System v5.1                    |
+//|           Smart Money Trading System with CDC Action Zone          |
 //|           + Grid Trading + Auto Scaling + Dashboard Panel          |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
@@ -709,7 +709,7 @@ datetime g_newsPauseEndTime = 0;          // Time when current news pause will e
 int OnInit()
 {
    Print("===========================================");
-   Print("ZigZag++ CDC Structure EA v4.0 + Grid");
+   Print("Moneyx Smart Gold System v5.1");
    Print("Symbol: ", _Symbol);
    Print("Entry TF: ", EnumToString(Period()));
    Print("ZigZag TF: ", EnumToString(InpZigZagTimeframe));
@@ -8754,7 +8754,7 @@ void UpdateChartComment(string signal, string reason = "")
                   <li><span className="font-mono text-primary">1.</span> เปิด MetaTrader 5</li>
                   <li><span className="font-mono text-primary">2.</span> กด <kbd className="px-2 py-0.5 rounded bg-secondary text-foreground">File</kbd> → <kbd className="px-2 py-0.5 rounded bg-secondary text-foreground">Open Data Folder</kbd></li>
                   <li><span className="font-mono text-primary">3.</span> ไปที่โฟลเดอร์ <code className="text-primary">MQL5 → Experts</code></li>
-                  <li><span className="font-mono text-primary">4.</span> สร้างไฟล์ใหม่ชื่อ <code className="text-primary">ZigZag_CDC_Structure_EA.mq5</code></li>
+                  <li><span className="font-mono text-primary">4.</span> สร้างไฟล์ใหม่ชื่อ <code className="text-primary">Moneyx_Smart_Gold_EA.mq5</code></li>
                   <li><span className="font-mono text-primary">5.</span> วางโค้ดด้านล่างลงไป แล้วบันทึก</li>
                   <li><span className="font-mono text-primary">6.</span> กลับไป MT5 กด <kbd className="px-2 py-0.5 rounded bg-secondary text-foreground">F7</kbd> เพื่อ Compile</li>
                   <li><span className="font-mono text-primary">7.</span> ลาก EA ไปวางบน Chart</li>
@@ -8780,7 +8780,7 @@ void UpdateChartComment(string signal, string reason = "")
           <CodeBlock
             code={fullEACode}
             language="MQL5"
-            filename="ZigZag_CDC_Structure_EA.mq5"
+            filename="Moneyx_Smart_Gold_EA.mq5"
           />
         </div>
       </section>
