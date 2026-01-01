@@ -212,7 +212,7 @@ const Index = () => {
               </div>
               <div className="flex-1">
                 <h3 className="text-xl font-bold text-foreground mb-2">
-                  MT5 Expert Advisor (EA)
+                  Moneyx Smart Gold System (MT5 EA)
                 </h3>
                 <p className="text-muted-foreground">
                   โค้ด EA ฉบับเต็มสำหรับ MetaTrader 5 พร้อม Dashboard และ Grid Trading
