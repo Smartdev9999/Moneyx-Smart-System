@@ -94,6 +94,17 @@ enum ENUM_SL_ACTION_MODE
    SL_ACTION_HEDGE = 1      // Hedge Positions (Lock Loss)
 };
 
+// License Status Enumeration
+enum ENUM_LICENSE_STATUS
+{
+   LICENSE_VALID,           // License Valid
+   LICENSE_EXPIRING_SOON,   // License Expiring Soon (within 7 days)
+   LICENSE_EXPIRED,         // License Expired
+   LICENSE_NOT_FOUND,       // Account Not Registered
+   LICENSE_SUSPENDED,       // License Suspended
+   LICENSE_ERROR            // Connection Error
+};
+
 //+------------------------------------------------------------------+
 //| ===================== INPUT PARAMETERS ========================= |
 //+------------------------------------------------------------------+
@@ -375,9 +386,33 @@ input color    InpDashHistoryColor = clrDarkGreen;   // History Section Color
 input int      InpLogoWidth = 150;             // Logo Width (pixels)
 input int      InpLogoHeight = 60;             // Logo Height (pixels)
 
+//--- [ LICENSE SETTINGS ] ------------------------------------------
+input string   InpLicenseHeader = "=== LICENSE SETTINGS ===";  // ___
+input string   InpLicenseServer = "https://lkbhomsulgycxawwlnfh.supabase.co";  // License Server URL
+input int      InpLicenseCheckMinutes = 60;    // License Check Interval (minutes)
+input int      InpDataSyncMinutes = 5;         // Account Data Sync Interval (minutes)
+
 //+------------------------------------------------------------------+
 //| ===================== GLOBAL VARIABLES ========================= |
 //+------------------------------------------------------------------+
+
+// License Verification Variables
+bool              g_isLicenseValid = false;
+bool              g_isTesterMode = false;
+ENUM_LICENSE_STATUS g_licenseStatus = LICENSE_ERROR;
+string            g_customerName = "";
+string            g_packageType = "";
+string            g_tradingSystem = "";
+datetime          g_expiryDate = 0;
+int               g_daysRemaining = 0;
+bool              g_isLifetime = false;
+string            g_lastLicenseError = "";
+datetime          g_lastLicenseCheck = 0;
+datetime          g_lastDataSync = 0;
+datetime          g_lastExpiryPopup = 0;
+string            g_licenseServerUrl = "";
+int               g_licenseCheckInterval = 60;
+int               g_dataSyncInterval = 5;
 
 // Dashboard Control Variables
 bool g_eaIsPaused = false;           // EA Pause State (true = paused, false = running)
@@ -704,10 +739,416 @@ string g_lastPauseKey = "";               // Track which news caused pause
 datetime g_newsPauseEndTime = 0;          // Time when current news pause will end (for countdown display)
 
 //+------------------------------------------------------------------+
+//| Check if running in tester mode                                    |
+//+------------------------------------------------------------------+
+bool IsTesterMode()
+{
+   return (MQLInfoInteger(MQL_TESTER) || 
+           MQLInfoInteger(MQL_OPTIMIZATION) ||
+           MQLInfoInteger(MQL_VISUAL_MODE) ||
+           MQLInfoInteger(MQL_FRAME_MODE));
+}
+
+//+------------------------------------------------------------------+
+//| Initialize License System                                          |
+//+------------------------------------------------------------------+
+bool InitLicense(string baseUrl, int checkIntervalMinutes = 60, int syncIntervalMinutes = 5)
+{
+   g_licenseServerUrl = baseUrl;
+   g_licenseCheckInterval = checkIntervalMinutes;
+   g_dataSyncInterval = syncIntervalMinutes;
+   g_lastLicenseCheck = 0;
+   g_lastDataSync = 0;
+   g_lastExpiryPopup = 0;
+   
+   if(StringLen(g_licenseServerUrl) == 0)
+   {
+      g_lastLicenseError = "License server URL is empty";
+      g_licenseStatus = LICENSE_ERROR;
+      return false;
+   }
+   
+   g_licenseStatus = VerifyLicense();
+   g_lastLicenseCheck = TimeCurrent();
+   
+   g_isLicenseValid = (g_licenseStatus == LICENSE_VALID || g_licenseStatus == LICENSE_EXPIRING_SOON);
+   
+   if(g_isLicenseValid)
+   {
+      SyncAccountData();
+      g_lastDataSync = TimeCurrent();
+   }
+   
+   return g_isLicenseValid;
+}
+
+//+------------------------------------------------------------------+
+//| Verify License with Server                                         |
+//+------------------------------------------------------------------+
+ENUM_LICENSE_STATUS VerifyLicense()
+{
+   string url = g_licenseServerUrl + "/functions/v1/verify-license";
+   
+   long accountNumber = AccountInfoInteger(ACCOUNT_LOGIN);
+   string jsonRequest = "{\\"account_number\\":\\"" + IntegerToString(accountNumber) + "\\"}";
+   
+   string response = "";
+   int httpCode = SendLicenseRequest(url, jsonRequest, response);
+   
+   if(httpCode != 200)
+   {
+      g_lastLicenseError = "HTTP Error: " + IntegerToString(httpCode);
+      return LICENSE_ERROR;
+   }
+   
+   return ParseVerifyResponse(response);
+}
+
+//+------------------------------------------------------------------+
+//| Parse Verify License Response                                      |
+//+------------------------------------------------------------------+
+ENUM_LICENSE_STATUS ParseVerifyResponse(string response)
+{
+   bool valid = JsonGetBool(response, "valid");
+   
+   if(!valid)
+   {
+      string message = JsonGetString(response, "message");
+      g_lastLicenseError = message;
+      
+      if(StringFind(message, "not found") >= 0 || StringFind(message, "Not found") >= 0)
+         return LICENSE_NOT_FOUND;
+      if(StringFind(message, "suspended") >= 0 || StringFind(message, "inactive") >= 0)
+         return LICENSE_SUSPENDED;
+      if(StringFind(message, "expired") >= 0 || StringFind(message, "Expired") >= 0)
+         return LICENSE_EXPIRED;
+      
+      return LICENSE_ERROR;
+   }
+   
+   g_customerName = JsonGetString(response, "customer_name");
+   g_packageType = JsonGetString(response, "package_type");
+   g_tradingSystem = JsonGetString(response, "trading_system");
+   g_daysRemaining = JsonGetInt(response, "days_remaining");
+   g_isLifetime = JsonGetBool(response, "is_lifetime");
+   
+   string expiryStr = JsonGetString(response, "expiry_date");
+   if(StringLen(expiryStr) > 0 && expiryStr != "null")
+   {
+      g_expiryDate = StringToTime(StringSubstr(expiryStr, 0, 10));
+   }
+   
+   if(!g_isLifetime && g_daysRemaining <= 7 && g_daysRemaining > 0)
+   {
+      return LICENSE_EXPIRING_SOON;
+   }
+   
+   return LICENSE_VALID;
+}
+
+//+------------------------------------------------------------------+
+//| Sync Account Data to Server                                        |
+//+------------------------------------------------------------------+
+bool SyncAccountData()
+{
+   string url = g_licenseServerUrl + "/functions/v1/sync-account-data";
+   
+   long accountNumber = AccountInfoInteger(ACCOUNT_LOGIN);
+   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+   double marginLevel = AccountInfoDouble(ACCOUNT_MARGIN_LEVEL);
+   double profit = AccountInfoDouble(ACCOUNT_PROFIT);
+   
+   double drawdown = 0;
+   if(balance > 0)
+   {
+      drawdown = ((balance - equity) / balance) * 100;
+      if(drawdown < 0) drawdown = 0;
+   }
+   
+   string json = "{";
+   json += "\\"account_number\\":\\"" + IntegerToString(accountNumber) + "\\",";
+   json += "\\"balance\\":" + DoubleToString(balance, 2) + ",";
+   json += "\\"equity\\":" + DoubleToString(equity, 2) + ",";
+   json += "\\"margin_level\\":" + DoubleToString(marginLevel, 2) + ",";
+   json += "\\"drawdown\\":" + DoubleToString(drawdown, 2) + ",";
+   json += "\\"profit_loss\\":" + DoubleToString(profit, 2);
+   json += "}";
+   
+   string response = "";
+   int httpCode = SendLicenseRequest(url, json, response);
+   
+   if(httpCode != 200)
+   {
+      g_lastLicenseError = "Sync HTTP Error: " + IntegerToString(httpCode);
+      return false;
+   }
+   
+   return JsonGetBool(response, "success");
+}
+
+//+------------------------------------------------------------------+
+//| OnTick License Handler                                             |
+//+------------------------------------------------------------------+
+bool OnTickLicense()
+{
+   datetime currentTime = TimeCurrent();
+   
+   if(currentTime - g_lastLicenseCheck >= g_licenseCheckInterval * 60)
+   {
+      ENUM_LICENSE_STATUS newStatus = VerifyLicense();
+      g_lastLicenseCheck = currentTime;
+      
+      if(newStatus != g_licenseStatus)
+      {
+         g_licenseStatus = newStatus;
+         g_isLicenseValid = (newStatus == LICENSE_VALID || newStatus == LICENSE_EXPIRING_SOON);
+         
+         if(!g_isLicenseValid)
+         {
+            ShowLicensePopup(g_licenseStatus);
+         }
+      }
+      
+      if(g_licenseStatus == LICENSE_EXPIRING_SOON)
+      {
+         datetime today = currentTime - (currentTime % 86400);
+         if(g_lastExpiryPopup < today)
+         {
+            ShowLicensePopup(g_licenseStatus);
+            g_lastExpiryPopup = currentTime;
+         }
+      }
+   }
+   
+   if(g_isLicenseValid && (currentTime - g_lastDataSync >= g_dataSyncInterval * 60))
+   {
+      SyncAccountData();
+      g_lastDataSync = currentTime;
+   }
+   
+   return g_isLicenseValid;
+}
+
+//+------------------------------------------------------------------+
+//| Show License Status Popup                                          |
+//+------------------------------------------------------------------+
+void ShowLicensePopup(ENUM_LICENSE_STATUS status)
+{
+   string title = "Moneyx Smart Gold EA - License";
+   string message = "";
+   uint flags = MB_OK;
+   
+   switch(status)
+   {
+      case LICENSE_VALID:
+         message = "License Verified Successfully!\\n\\n";
+         message += "Customer: " + g_customerName + "\\n";
+         message += "Package: " + g_packageType + "\\n";
+         message += "System: " + g_tradingSystem + "\\n\\n";
+         if(g_isLifetime)
+            message += "License Type: LIFETIME\\n";
+         else
+            message += "Expires: " + TimeToString(g_expiryDate, TIME_DATE) + "\\n";
+         message += "\\nHappy Trading!";
+         flags = MB_OK | MB_ICONINFORMATION;
+         break;
+         
+      case LICENSE_EXPIRING_SOON:
+         message = "License Expiring Soon!\\n\\n";
+         message += "Customer: " + g_customerName + "\\n";
+         message += "Days Remaining: " + IntegerToString(g_daysRemaining) + " days\\n";
+         message += "Expires: " + TimeToString(g_expiryDate, TIME_DATE) + "\\n\\n";
+         message += "Please renew your license to continue using.\\n";
+         message += "Contact: support@moneyx-smart.com";
+         flags = MB_OK | MB_ICONWARNING;
+         break;
+         
+      case LICENSE_EXPIRED:
+         message = "License Expired!\\n\\n";
+         message += "Your license has expired.\\n";
+         message += "Trading is disabled.\\n\\n";
+         message += "Please renew your license to continue.\\n";
+         message += "Contact: support@moneyx-smart.com";
+         flags = MB_OK | MB_ICONERROR;
+         break;
+         
+      case LICENSE_NOT_FOUND:
+         message = "Account Not Registered!\\n\\n";
+         message += "Account: " + IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN)) + "\\n\\n";
+         message += "This account is not registered in our system.\\n";
+         message += "Please purchase a license to use this EA.\\n\\n";
+         message += "Contact: support@moneyx-smart.com";
+         flags = MB_OK | MB_ICONERROR;
+         break;
+         
+      case LICENSE_SUSPENDED:
+         message = "License Suspended!\\n\\n";
+         message += "Your license has been suspended.\\n";
+         message += "Trading is disabled.\\n\\n";
+         message += "Please contact support for assistance.\\n";
+         message += "Contact: support@moneyx-smart.com";
+         flags = MB_OK | MB_ICONERROR;
+         break;
+         
+      case LICENSE_ERROR:
+         message = "License Verification Error!\\n\\n";
+         message += "Could not verify license.\\n";
+         message += "Error: " + g_lastLicenseError + "\\n\\n";
+         message += "Please check:\\n";
+         message += "1. Internet connection\\n";
+         message += "2. WebRequest allowed for:\\n";
+         message += "   " + g_licenseServerUrl + "\\n\\n";
+         message += "EA will retry on next check.";
+         flags = MB_OK | MB_ICONWARNING;
+         break;
+   }
+   
+   MessageBox(message, title, flags);
+}
+
+//+------------------------------------------------------------------+
+//| Send HTTP POST Request                                             |
+//+------------------------------------------------------------------+
+int SendLicenseRequest(string url, string jsonData, string &response)
+{
+   char postData[];
+   char result[];
+   string headers = "Content-Type: application/json\\r\\n";
+   string resultHeaders;
+   
+   StringToCharArray(jsonData, postData, 0, StringLen(jsonData));
+   ArrayResize(postData, StringLen(jsonData));
+   
+   int timeout = 10000;
+   int httpCode = WebRequest("POST", url, headers, timeout, postData, result, resultHeaders);
+   
+   if(httpCode == -1)
+   {
+      int errorCode = GetLastError();
+      g_lastLicenseError = "WebRequest failed. Error: " + IntegerToString(errorCode);
+      
+      if(errorCode == 4014)
+      {
+         g_lastLicenseError = "WebRequest not allowed. Add URL to allowed list:\\n" + 
+                       "Tools -> Options -> Expert Advisors -> Allow WebRequest for listed URL\\n" +
+                       "Add: " + g_licenseServerUrl;
+      }
+      
+      return -1;
+   }
+   
+   response = CharArrayToString(result, 0, WHOLE_ARRAY, CP_UTF8);
+   
+   return httpCode;
+}
+
+//+------------------------------------------------------------------+
+//| JSON Helper - Get String Value                                     |
+//+------------------------------------------------------------------+
+string JsonGetString(string json, string key)
+{
+   string searchKey = "\\"" + key + "\\":";
+   int keyPos = StringFind(json, searchKey);
+   
+   if(keyPos < 0)
+      return "";
+   
+   int valueStart = keyPos + StringLen(searchKey);
+   
+   while(valueStart < StringLen(json) && (StringGetCharacter(json, valueStart) == ' ' || 
+                                           StringGetCharacter(json, valueStart) == '\\t'))
+   {
+      valueStart++;
+   }
+   
+   if(StringSubstr(json, valueStart, 4) == "null")
+      return "";
+   
+   if(StringGetCharacter(json, valueStart) == '"')
+   {
+      valueStart++;
+      int valueEnd = StringFind(json, "\\"", valueStart);
+      if(valueEnd < 0)
+         return "";
+      return StringSubstr(json, valueStart, valueEnd - valueStart);
+   }
+   
+   int valueEnd = valueStart;
+   while(valueEnd < StringLen(json))
+   {
+      ushort ch = StringGetCharacter(json, valueEnd);
+      if(ch == ',' || ch == '}' || ch == ']')
+         break;
+      valueEnd++;
+   }
+   
+   return StringSubstr(json, valueStart, valueEnd - valueStart);
+}
+
+//+------------------------------------------------------------------+
+//| JSON Helper - Get Integer Value                                    |
+//+------------------------------------------------------------------+
+int JsonGetInt(string json, string key)
+{
+   string value = JsonGetString(json, key);
+   if(StringLen(value) == 0)
+      return 0;
+   return (int)StringToInteger(value);
+}
+
+//+------------------------------------------------------------------+
+//| JSON Helper - Get Boolean Value                                    |
+//+------------------------------------------------------------------+
+bool JsonGetBool(string json, string key)
+{
+   string value = JsonGetString(json, key);
+   return (value == "true" || value == "1");
+}
+
+//+------------------------------------------------------------------+
 //| Expert initialization function                                     |
 //+------------------------------------------------------------------+
 int OnInit()
 {
+   // *** CHECK TESTER MODE - BYPASS LICENSE FOR BACKTEST ***
+   g_isTesterMode = IsTesterMode();
+   
+   if(g_isTesterMode)
+   {
+      Print("╔══════════════════════════════════════════════════════════════╗");
+      Print("║         MONEYX SMART GOLD EA - TESTER MODE                   ║");
+      Print("║         License check skipped for backtesting                ║");
+      Print("╚══════════════════════════════════════════════════════════════╝");
+      g_isLicenseValid = true;
+      g_licenseStatus = LICENSE_VALID;
+   }
+   else
+   {
+      // *** LIVE TRADING MODE - VERIFY LICENSE ***
+      Print("╔══════════════════════════════════════════════════════════════╗");
+      Print("║         MONEYX SMART GOLD EA - LIVE TRADING MODE             ║");
+      Print("║         Verifying license...                                  ║");
+      Print("╚══════════════════════════════════════════════════════════════╝");
+      
+      if(!InitLicense(InpLicenseServer, InpLicenseCheckMinutes, InpDataSyncMinutes))
+      {
+         Print("License initialization failed: ", g_lastLicenseError);
+      }
+      
+      ShowLicensePopup(g_licenseStatus);
+      
+      if(g_isLicenseValid)
+      {
+         Print("License Valid - Customer: ", g_customerName);
+         Print("Package: ", g_packageType, " | System: ", g_tradingSystem);
+         if(g_isLifetime)
+            Print("License Type: LIFETIME");
+         else
+            Print("Expiry: ", TimeToString(g_expiryDate, TIME_DATE), " (", g_daysRemaining, " days remaining)");
+      }
+   }
+   
    Print("===========================================");
    Print("Moneyx Smart Gold System v5.1");
    Print("Symbol: ", _Symbol);
@@ -5534,6 +5975,16 @@ string GetNewsCountdownString()
 //+------------------------------------------------------------------+
 void OnTick()
 {
+   // *** LICENSE CHECK - SKIP IN TESTER MODE ***
+   if(!g_isTesterMode)
+   {
+      if(!OnTickLicense())
+      {
+         UpdateChartComment("LICENSE", "License Invalid - Trading Disabled");
+         return;
+      }
+   }
+   
    // Update Dashboard every tick
    UpdateDashboard();
    
