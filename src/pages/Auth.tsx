@@ -105,6 +105,7 @@ const Auth = () => {
     setIsLoading(false);
     
     if (!error) {
+      // Auto-confirm is enabled, redirect to login
       setShowEmailConfirmation(true);
     }
   };
@@ -117,7 +118,7 @@ const Auth = () => {
     );
   }
 
-  // Show email confirmation message
+  // Show signup success message
   if (showEmailConfirmation) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background p-4">
@@ -129,15 +130,16 @@ const Auth = () => {
             <div className="mx-auto w-16 h-16 rounded-2xl bg-green-500/20 flex items-center justify-center mb-4">
               <Mail className="w-8 h-8 text-green-500" />
             </div>
-            <CardTitle className="text-2xl font-bold">ยืนยันอีเมลของคุณ</CardTitle>
+            <CardTitle className="text-2xl font-bold">สมัครสมาชิกสำเร็จ!</CardTitle>
             <CardDescription className="text-base mt-2">
-              เราได้ส่งลิงก์ยืนยันไปยัง <span className="font-medium text-foreground">{signupEmail}</span>
+              บัญชีของคุณ <span className="font-medium text-foreground">{signupEmail}</span> ถูกสร้างแล้ว
             </CardDescription>
           </CardHeader>
           <CardContent className="text-center space-y-4">
-            <div className="p-4 rounded-lg bg-muted/50 border border-border">
-              <p className="text-sm text-muted-foreground">
-                กรุณาตรวจสอบอีเมลของคุณและคลิกลิงก์ยืนยันเพื่อเปิดใช้งานบัญชี หลังจากยืนยันแล้ว Super Admin จะกำหนด Role ให้คุณ
+            <div className="p-4 rounded-lg bg-amber-500/10 border border-amber-500/30">
+              <p className="text-sm text-amber-400 font-medium">⏳ รอการกำหนด Role</p>
+              <p className="text-sm text-muted-foreground mt-1">
+                กรุณารอ Super Admin กำหนด Role ให้คุณก่อนใช้งานระบบ
               </p>
             </div>
             <Button 
@@ -145,7 +147,7 @@ const Auth = () => {
               className="w-full"
               onClick={() => setShowEmailConfirmation(false)}
             >
-              กลับไปหน้าเข้าสู่ระบบ
+              ไปหน้าเข้าสู่ระบบ
             </Button>
           </CardContent>
         </Card>
@@ -236,9 +238,9 @@ const Auth = () => {
           <TabsContent value="signup">
             <form onSubmit={handleSignup}>
               <CardContent className="space-y-4 pt-4">
-                <div className="p-3 rounded-lg bg-blue-500/10 border border-blue-500/30 text-sm">
-                  <p className="text-blue-400 font-medium">📧 ต้องยืนยันอีเมล</p>
-                  <p className="text-muted-foreground mt-1">หลังสมัครจะมีอีเมลยืนยัน และ Super Admin จะกำหนด Role ให้</p>
+                <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-sm">
+                  <p className="text-amber-400 font-medium">⏳ รอการอนุมัติ</p>
+                  <p className="text-muted-foreground mt-1">หลังสมัครสำเร็จ Super Admin จะกำหนด Role ให้คุณ</p>
                 </div>
                 
                 <div className="space-y-2">
