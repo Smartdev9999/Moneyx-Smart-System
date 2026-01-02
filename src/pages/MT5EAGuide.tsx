@@ -5932,20 +5932,31 @@ void RefreshNewsData()
    int searchPos = arrayStart + 1;
    int eventCount = 0;
    
-   // Find first { in the data array
-   int firstBrace = StringFind(jsonContent, "{", searchPos);
-   if(firstBrace < 0)
-   {
-      Print("NEWS FILTER WARNING: No JSON objects found in data array!");
-      if(g_newsEventCount > 0)
-      {
-         g_usingCachedNews = true;
-         Print("NEWS FILTER: Keeping cached data (", g_newsEventCount, " events)");
-      }
-      return;
-   }
-   
-   searchPos = firstBrace;
+    // Find first { in the data array
+    int firstBrace = StringFind(jsonContent, "{", searchPos);
+    if(firstBrace < 0)
+    {
+       // *** EMPTY DATA ARRAY IS A VALID RESPONSE - NOT AN ERROR ***
+       // API returned success:true with data:[] meaning no news matching filters
+       // This is a successful refresh - mark as complete to prevent per-tick spam
+       Print("NEWS FILTER: No news events for current filters (empty data array)");
+       g_lastNewsRefresh = currentTime;  // CRITICAL: Mark refresh as successful!
+       
+       if(g_newsEventCount > 0)
+       {
+          g_usingCachedNews = true;
+          Print("NEWS FILTER: Keeping cached data (", g_newsEventCount, " events) - Next refresh in 1 hour");
+       }
+       else
+       {
+          // No cache either - this is fine, just means no relevant news
+          g_usingCachedNews = false;
+          Print("NEWS FILTER: No relevant news and no cache - Next refresh in 1 hour");
+       }
+       return;
+    }
+    
+    searchPos = firstBrace;
    
    while(searchPos < StringLen(jsonContent))
    {
