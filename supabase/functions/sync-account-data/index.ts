@@ -3,8 +3,15 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-api-key',
 };
+
+const EA_API_SECRET = Deno.env.get('EA_API_SECRET');
+
+function validateApiKey(req: Request): boolean {
+  const apiKey = req.headers.get('x-api-key');
+  return apiKey === EA_API_SECRET;
+}
 
 interface SyncRequest {
   account_number: string;
@@ -27,6 +34,15 @@ serve(async (req) => {
   }
 
   try {
+    // Validate API key
+    if (!validateApiKey(req)) {
+      console.log('[sync-account-data] Invalid or missing API key');
+      return new Response(
+        JSON.stringify({ success: false, message: 'Unauthorized' } as SyncResponse),
+        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     

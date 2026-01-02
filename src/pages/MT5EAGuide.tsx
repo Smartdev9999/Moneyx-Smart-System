@@ -392,6 +392,9 @@ input string   InpLicenseServer = "https://lkbhomsulgycxawwlnfh.supabase.co";  /
 input int      InpLicenseCheckMinutes = 60;    // License Check Interval (minutes)
 input int      InpDataSyncMinutes = 5;         // Account Data Sync Interval (minutes)
 
+// ====== HARDCODED API SECRET - DO NOT MODIFY ======
+const string EA_API_SECRET = "moneyx-ea-secret-2024-secure-key-v1";
+
 //+------------------------------------------------------------------+
 //| ===================== GLOBAL VARIABLES ========================= |
 //+------------------------------------------------------------------+
@@ -1014,7 +1017,8 @@ int SendLicenseRequest(string url, string jsonData, string &response)
 {
    char postData[];
    char result[];
-   string headers = "Content-Type: application/json\\r\\n";
+   // เพิ่ม x-api-key header สำหรับ authentication
+   string headers = "Content-Type: application/json\\r\\nx-api-key: " + EA_API_SECRET + "\\r\\n";
    string resultHeaders;
    
    StringToCharArray(jsonData, postData, 0, StringLen(jsonData));
