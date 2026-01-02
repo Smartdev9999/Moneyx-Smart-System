@@ -26,7 +26,7 @@ const signupSchema = z.object({
 
 const Auth = () => {
   const navigate = useNavigate();
-  const { signIn, signUp, user, loading } = useAuth();
+  const { signIn, signUp, user, loading, role, isAdmin } = useAuth();
   const [isLoading, setIsLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -42,10 +42,15 @@ const Auth = () => {
   const [signupConfirmPassword, setSignupConfirmPassword] = useState('');
 
   useEffect(() => {
-    if (user && !loading) {
-      navigate('/admin');
+    if (user && !loading && role) {
+      // Redirect based on role
+      if (isAdmin) {
+        navigate('/admin');
+      } else if (role === 'developer') {
+        navigate('/developer');
+      }
     }
-  }, [user, loading, navigate]);
+  }, [user, loading, role, isAdmin, navigate]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -64,12 +69,9 @@ const Auth = () => {
     }
     
     setIsLoading(true);
-    const { error } = await signIn(loginEmail, loginPassword);
+    await signIn(loginEmail, loginPassword);
     setIsLoading(false);
-    
-    if (!error) {
-      navigate('/admin');
-    }
+    // Navigation will be handled by useEffect when role is loaded
   };
 
   const handleSignup = async (e: React.FormEvent) => {
@@ -95,12 +97,9 @@ const Auth = () => {
     }
     
     setIsLoading(true);
-    const { error } = await signUp(signupEmail, signupPassword, signupFullName);
+    await signUp(signupEmail, signupPassword, signupFullName);
     setIsLoading(false);
-    
-    if (!error) {
-      navigate('/admin');
-    }
+    // Navigation will be handled by useEffect when role is loaded
   };
 
   if (loading) {
