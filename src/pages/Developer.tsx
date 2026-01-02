@@ -459,11 +459,44 @@ enum ENUM_BB_MA_TYPE
 
             {/* Code Template for Selected System */}
             {selectedSystem && (
-              <MQL5CodeTemplate
-                systemName={selectedSystem.name}
-                version={selectedSystem.version || '1.0'}
-                description={selectedSystem.description || undefined}
-              />
+              selectedSystem.name === 'Moneyx Smart Gold System' ? (
+                <Card>
+                  <CardHeader>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="p-3 rounded-xl bg-primary/20">
+                          <FileCode className="w-6 h-6 text-primary" />
+                        </div>
+                        <div>
+                          <CardTitle>{selectedSystem.name}</CardTitle>
+                          <CardDescription>{selectedSystem.description}</CardDescription>
+                        </div>
+                      </div>
+                      <Badge variant="outline" className="bg-cyan-500/20 text-cyan-400 border-cyan-500">
+                        v{selectedSystem.version}
+                      </Badge>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <p className="text-sm text-muted-foreground">
+                      ระบบนี้มี Code เต็มมากกว่า 9,600 บรรทัด รวมถึง License Manager, Data Sync, WebRequest API, Account Metrics และ Trading Logic ทั้งหมด
+                    </p>
+                    <Button 
+                      onClick={() => navigate('/mt5-ea-guide')}
+                      className="w-full"
+                    >
+                      <Code2 className="w-4 h-4 mr-2" />
+                      ดู/แก้ไข Code เต็ม (9,600+ บรรทัด)
+                    </Button>
+                  </CardContent>
+                </Card>
+              ) : (
+                <MQL5CodeTemplate
+                  systemName={selectedSystem.name}
+                  version={selectedSystem.version || '1.0'}
+                  description={selectedSystem.description || undefined}
+                />
+              )
             )}
             
             {!selectedSystem && systems.length > 0 && (
