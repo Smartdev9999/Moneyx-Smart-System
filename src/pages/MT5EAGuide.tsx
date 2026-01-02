@@ -5487,27 +5487,57 @@ datetime ParseNewsTime(string dateStr, string timeStr)
 //+------------------------------------------------------------------+
 string ExtractJSONValue(string json, string key)
 {
-   // Search for "key":"value" pattern
-   string searchKey = "\\"" + key + "\\":\\"";
+   // Supports both:
+   // 1) "key":"value" (string)
+   // 2) "key":123 / true / false / null (primitive)
+
+   string searchKey = "\"" + key + "\":";
    int startPos = StringFind(json, searchKey);
    if(startPos < 0) return "";
-   
+
    startPos += StringLen(searchKey);
-   
-   // Find closing quote
-   int endPos = StringFind(json, "\\"", startPos);
-   if(endPos < 0) return "";
-   
-   string value = StringSubstr(json, startPos, endPos - startPos);
-   
-   // Unescape JSON special characters
-   StringReplace(value, "\\\\/", "/");
-   StringReplace(value, "\\\\\\"", "\\"");
-   StringReplace(value, "\\\\n", "\\n");
-   
+
+   // Skip whitespace
+   while(startPos < StringLen(json) && StringSubstr(json, startPos, 1) == " ")
+      startPos++;
+
+   if(startPos >= StringLen(json)) return "";
+
+   string firstChar = StringSubstr(json, startPos, 1);
+   string value = "";
+
+   // Quoted string
+   if(firstChar == "\"")
+   {
+      startPos++;
+      int endPos = StringFind(json, "\"", startPos);
+      if(endPos < 0) return "";
+
+      value = StringSubstr(json, startPos, endPos - startPos);
+
+      // Unescape JSON special characters
+      StringReplace(value, "\\/", "/");
+      StringReplace(value, "\\\"", "\"");
+      StringReplace(value, "\\n", "\n");
+   }
+   else
+   {
+      // Primitive value: read until comma or closing brace/bracket
+      int endPos = startPos;
+      while(endPos < StringLen(json))
+      {
+         string c = StringSubstr(json, endPos, 1);
+         if(c == "," || c == "}" || c == "]")
+            break;
+         endPos++;
+      }
+
+      value = StringSubstr(json, startPos, endPos - startPos);
+   }
+
    StringTrimLeft(value);
    StringTrimRight(value);
-   
+
    return value;
 }
 
@@ -6032,12 +6062,18 @@ void RefreshNewsData()
    }
    else
    {
-      // Parsing returned 0 events - keep existing cache
-      Print("NEWS FILTER WARNING: Parsed 0 events from response!");
+      // API returned 0 events - keep existing cache but DO NOT spam refresh
+      Print("NEWS FILTER: API returned 0 events (no relevant news for current filters)");
+      g_lastNewsRefresh = currentTime;  // Mark refresh as successful to prevent per-tick spam
       if(g_newsEventCount > 0)
       {
          g_usingCachedNews = true;
          Print("NEWS FILTER: Keeping cached data (", g_newsEventCount, " events)");
+      }
+      else
+      {
+         // No cache either - this is still a valid state
+         g_usingCachedNews = false;
       }
    }
 }
