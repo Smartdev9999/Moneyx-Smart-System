@@ -20,6 +20,7 @@ import {
 } from '@/components/ui/dialog';
 import CodeBlock from '@/components/CodeBlock';
 import MQL5CodeTemplate from '@/components/MQL5CodeTemplate';
+import EconomicCalendar from '@/components/EconomicCalendar';
 import { 
   LogOut,
   Code2,
@@ -34,7 +35,8 @@ import {
   Pencil,
   Trash2,
   Settings,
-  Link as LinkIcon
+  Link as LinkIcon,
+  Newspaper
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 
@@ -350,7 +352,7 @@ enum ENUM_BB_MA_TYPE
       {/* Main Content */}
       <main className="container py-8">
         <Tabs defaultValue="ea" className="space-y-6">
-          <TabsList className="grid w-full max-w-md grid-cols-2">
+          <TabsList className="grid w-full max-w-lg grid-cols-3">
             <TabsTrigger value="ea" className="gap-2">
               <FileCode className="w-4 h-4" />
               Expert Advisors
@@ -358,6 +360,10 @@ enum ENUM_BB_MA_TYPE
             <TabsTrigger value="indicators" className="gap-2">
               <TrendingUp className="w-4 h-4" />
               Indicators
+            </TabsTrigger>
+            <TabsTrigger value="news" className="gap-2">
+              <Newspaper className="w-4 h-4" />
+              News
             </TabsTrigger>
           </TabsList>
 
@@ -546,6 +552,11 @@ enum ENUM_BB_MA_TYPE
                 </div>
               </CardContent>
             </Card>
+          </TabsContent>
+
+          {/* News Tab */}
+          <TabsContent value="news" className="space-y-6">
+            <EconomicCalendar />
           </TabsContent>
         </Tabs>
       </main>
