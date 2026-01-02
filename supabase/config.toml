@@ -5,3 +5,6 @@ verify_jwt = false
 
 [functions.sync-account-data]
 verify_jwt = false
+
+[functions.economic-news]
+verify_jwt = false

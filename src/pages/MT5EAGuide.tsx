@@ -5788,7 +5788,23 @@ void RefreshNewsData()
          g_usingCachedNews = true;
          Print("NEWS FILTER: Using cached data (", g_newsEventCount, " events from ", TimeToString(g_lastGoodNewsTime), ")");
       }
-      // *** DO NOT set g_lastNewsRefresh - allow retry on next tick ***
+      // *** SET RETRY DELAY - wait 5 minutes before retrying on WebRequest failure ***
+      g_lastNewsRefresh = currentTime - 3300;  // Will allow retry in 5 minutes (3600-3300=300 sec)
+      return;
+   }
+   
+   // *** CHECK HTTP STATUS CODE ***
+   // result contains HTTP status code (200=OK, 401=Unauthorized, etc.)
+   if(result != 200)
+   {
+      Print("NEWS FILTER ERROR: HTTP ", result, " - Server returned error");
+      if(g_newsEventCount > 0)
+      {
+         g_usingCachedNews = true;
+         Print("NEWS FILTER: Using cached data (", g_newsEventCount, " events)");
+      }
+      // *** SET RETRY DELAY - wait 5 minutes before retrying on HTTP error ***
+      g_lastNewsRefresh = currentTime - 3300;  // Will allow retry in 5 minutes
       return;
    }
    
