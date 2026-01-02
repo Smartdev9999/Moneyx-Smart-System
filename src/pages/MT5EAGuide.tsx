@@ -912,10 +912,10 @@ bool SyncAccountDataWithEvent(ENUM_SYNC_EVENT eventType)
    
    // Determine EA status based on current state
    string eaStatus = "working";
-   if(g_licenseStatus == "SUSPENDED") eaStatus = "suspended";
-   else if(g_licenseStatus == "EXPIRED") eaStatus = "expired";
-   else if(g_licenseStatus == "INVALID") eaStatus = "invalid";
-   else if(g_isPaused) eaStatus = "paused";
+   if(g_licenseStatus == LICENSE_SUSPENDED) eaStatus = "suspended";
+   else if(g_licenseStatus == LICENSE_EXPIRED) eaStatus = "expired";
+   else if(g_licenseStatus == LICENSE_NOT_FOUND || g_licenseStatus == LICENSE_ERROR) eaStatus = "invalid";
+   else if(!g_isLicenseValid) eaStatus = "paused";
    
    string json = "{";
    json += "\\"account_number\\":\\"" + IntegerToString(accountNumber) + "\\",";
