@@ -373,6 +373,16 @@ const Admin = () => {
                 <BarChart3 className="w-6 h-6" />
                 <span>ระบบเทรด</span>
               </Button>
+              {isSuperAdmin && (
+                <Button 
+                  variant="outline" 
+                  className="h-24 flex flex-col gap-2 col-span-2 border-yellow-500/30 hover:border-yellow-500"
+                  onClick={() => navigate('/admin/users')}
+                >
+                  <Settings className="w-6 h-6 text-yellow-500" />
+                  <span>จัดการผู้ใช้ / Role</span>
+                </Button>
+              )}
             </CardContent>
           </Card>
 
