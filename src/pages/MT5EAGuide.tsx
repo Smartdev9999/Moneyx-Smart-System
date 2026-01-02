@@ -5491,7 +5491,8 @@ string ExtractJSONValue(string json, string key)
    // 1) "key":"value" (string)
    // 2) "key":123 / true / false / null (primitive)
 
-   string searchKey = "\"" + key + "\":";
+   string quote = "\\"";
+   string searchKey = quote + key + quote + ":";
    int startPos = StringFind(json, searchKey);
    if(startPos < 0) return "";
 
@@ -5507,18 +5508,18 @@ string ExtractJSONValue(string json, string key)
    string value = "";
 
    // Quoted string
-   if(firstChar == "\"")
+   if(firstChar == quote)
    {
       startPos++;
-      int endPos = StringFind(json, "\"", startPos);
+      int endPos = StringFind(json, quote, startPos);
       if(endPos < 0) return "";
 
       value = StringSubstr(json, startPos, endPos - startPos);
 
       // Unescape JSON special characters
-      StringReplace(value, "\\/", "/");
-      StringReplace(value, "\\\"", "\"");
-      StringReplace(value, "\\n", "\n");
+      StringReplace(value, "\\\\/", "/");
+      StringReplace(value, "\\\\\\"", "\\"");
+      StringReplace(value, "\\\\n", "\\n");
    }
    else
    {
