@@ -144,7 +144,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       
       toast({
         title: "สมัครสมาชิกสำเร็จ",
-        description: "คุณคือ Super Admin คนแรกของระบบ!",
+        description: "กรุณาตรวจสอบอีเมลเพื่อยืนยันบัญชี",
       });
       
       return { error: null };

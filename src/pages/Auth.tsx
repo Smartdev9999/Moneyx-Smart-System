@@ -30,6 +30,7 @@ const Auth = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [showEmailConfirmation, setShowEmailConfirmation] = useState(false);
   
   // Login form state
   const [loginEmail, setLoginEmail] = useState('');
@@ -42,12 +43,15 @@ const Auth = () => {
   const [signupConfirmPassword, setSignupConfirmPassword] = useState('');
 
   useEffect(() => {
-    if (user && !loading && role) {
+    if (user && !loading) {
       // Redirect based on role
       if (isAdmin) {
         navigate('/admin');
       } else if (role === 'developer') {
         navigate('/developer');
+      } else if (role === 'user' || !role) {
+        // Users without role or with 'user' role - stay on page or redirect to pending page
+        // For now, show a message that they need to wait for role assignment
       }
     }
   }, [user, loading, role, isAdmin, navigate]);
@@ -97,15 +101,54 @@ const Auth = () => {
     }
     
     setIsLoading(true);
-    await signUp(signupEmail, signupPassword, signupFullName);
+    const { error } = await signUp(signupEmail, signupPassword, signupFullName);
     setIsLoading(false);
-    // Navigation will be handled by useEffect when role is loaded
+    
+    if (!error) {
+      setShowEmailConfirmation(true);
+    }
   };
 
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
         <Loader2 className="w-8 h-8 animate-spin text-primary" />
+      </div>
+    );
+  }
+
+  // Show email confirmation message
+  if (showEmailConfirmation) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background p-4">
+        <div className="absolute inset-0 bg-gradient-to-b from-primary/5 via-transparent to-transparent" />
+        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[400px] bg-primary/10 rounded-full blur-[120px]" />
+        
+        <Card className="w-full max-w-md relative z-10 border-border/50 bg-card/80 backdrop-blur-sm">
+          <CardHeader className="text-center">
+            <div className="mx-auto w-16 h-16 rounded-2xl bg-green-500/20 flex items-center justify-center mb-4">
+              <Mail className="w-8 h-8 text-green-500" />
+            </div>
+            <CardTitle className="text-2xl font-bold">ยืนยันอีเมลของคุณ</CardTitle>
+            <CardDescription className="text-base mt-2">
+              เราได้ส่งลิงก์ยืนยันไปยัง <span className="font-medium text-foreground">{signupEmail}</span>
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="text-center space-y-4">
+            <div className="p-4 rounded-lg bg-muted/50 border border-border">
+              <p className="text-sm text-muted-foreground">
+                กรุณาตรวจสอบอีเมลของคุณและคลิกลิงก์ยืนยันเพื่อเปิดใช้งานบัญชี หลังจากยืนยันแล้ว Super Admin จะกำหนด Role ให้คุณ
+              </p>
+            </div>
+            <Button 
+              variant="outline" 
+              className="w-full"
+              onClick={() => setShowEmailConfirmation(false)}
+            >
+              กลับไปหน้าเข้าสู่ระบบ
+            </Button>
+          </CardContent>
+        </Card>
       </div>
     );
   }
@@ -193,9 +236,9 @@ const Auth = () => {
           <TabsContent value="signup">
             <form onSubmit={handleSignup}>
               <CardContent className="space-y-4 pt-4">
-                <div className="p-3 rounded-lg bg-primary/10 border border-primary/30 text-sm">
-                  <p className="text-primary font-medium">🎉 คุณจะเป็น Super Admin!</p>
-                  <p className="text-muted-foreground mt-1">บัญชีแรกที่สมัครจะได้รับสิทธิ์ Super Admin โดยอัตโนมัติ</p>
+                <div className="p-3 rounded-lg bg-blue-500/10 border border-blue-500/30 text-sm">
+                  <p className="text-blue-400 font-medium">📧 ต้องยืนยันอีเมล</p>
+                  <p className="text-muted-foreground mt-1">หลังสมัครจะมีอีเมลยืนยัน และ Super Admin จะกำหนด Role ให้</p>
                 </div>
                 
                 <div className="space-y-2">
