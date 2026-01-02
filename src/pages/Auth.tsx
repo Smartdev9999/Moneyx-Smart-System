@@ -43,16 +43,18 @@ const Auth = () => {
   const [signupConfirmPassword, setSignupConfirmPassword] = useState('');
 
   useEffect(() => {
-    if (user && !loading) {
-      // Redirect based on role
-      if (isAdmin) {
-        navigate('/admin');
-      } else if (role === 'developer') {
-        navigate('/developer');
-      } else if (role === 'user' || !role) {
-        // Users without role or with 'user' role - stay on page or redirect to pending page
-        // For now, show a message that they need to wait for role assignment
-      }
+    // Wait for both auth loading and role to be determined
+    if (user && !loading && role !== undefined) {
+      // Add small delay to ensure role is fully loaded
+      const timer = setTimeout(() => {
+        if (isAdmin) {
+          navigate('/admin');
+        } else if (role === 'developer') {
+          navigate('/developer');
+        }
+        // Users without role or with 'user' role - stay on page
+      }, 100);
+      return () => clearTimeout(timer);
     }
   }, [user, loading, role, isAdmin, navigate]);
 
