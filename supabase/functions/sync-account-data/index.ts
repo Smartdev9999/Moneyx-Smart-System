@@ -13,6 +13,26 @@ function validateApiKey(req: Request): boolean {
   return apiKey === EA_API_SECRET;
 }
 
+interface TradeHistoryItem {
+  deal_ticket: number;
+  order_ticket?: number;
+  symbol: string;
+  deal_type: string; // 'buy', 'sell', 'balance', 'credit'
+  entry_type: string; // 'in', 'out', 'inout'
+  volume: number;
+  open_price: number;
+  close_price?: number;
+  sl?: number;
+  tp?: number;
+  profit: number;
+  swap: number;
+  commission: number;
+  comment?: string;
+  open_time?: string;
+  close_time?: string;
+  magic_number?: number;
+}
+
 interface SyncRequest {
   account_number: string;
   balance: number;
@@ -20,11 +40,21 @@ interface SyncRequest {
   margin_level: number;
   drawdown: number;
   profit_loss: number;
-  // New fields for real-time trading data
+  // Real-time trading data
   open_orders?: number;
   floating_pl?: number;
   total_profit?: number;
-  // Event type for tracking what triggered the sync
+  // Portfolio stats
+  initial_balance?: number;
+  total_deposit?: number;
+  total_withdrawal?: number;
+  max_drawdown?: number;
+  win_trades?: number;
+  loss_trades?: number;
+  total_trades?: number;
+  // Trade history (sent on order close events)
+  trade_history?: TradeHistoryItem[];
+  // Event type for tracking
   event_type?: 'scheduled' | 'order_open' | 'order_close';
 }
 
@@ -90,7 +120,7 @@ serve(async (req) => {
       );
     }
 
-    // Update the MT5 account with latest data (including new fields)
+    // Build update data for MT5 account
     const updateData: Record<string, any> = {
       balance: syncData.balance,
       equity: syncData.equity,
@@ -100,7 +130,7 @@ serve(async (req) => {
       last_sync: new Date().toISOString(),
     };
 
-    // Add optional new fields if provided
+    // Add optional real-time fields
     if (syncData.open_orders !== undefined) {
       updateData.open_orders = syncData.open_orders;
     }
@@ -109,6 +139,29 @@ serve(async (req) => {
     }
     if (syncData.total_profit !== undefined) {
       updateData.total_profit = syncData.total_profit;
+    }
+
+    // Add portfolio stats
+    if (syncData.initial_balance !== undefined) {
+      updateData.initial_balance = syncData.initial_balance;
+    }
+    if (syncData.total_deposit !== undefined) {
+      updateData.total_deposit = syncData.total_deposit;
+    }
+    if (syncData.total_withdrawal !== undefined) {
+      updateData.total_withdrawal = syncData.total_withdrawal;
+    }
+    if (syncData.max_drawdown !== undefined) {
+      updateData.max_drawdown = syncData.max_drawdown;
+    }
+    if (syncData.win_trades !== undefined) {
+      updateData.win_trades = syncData.win_trades;
+    }
+    if (syncData.loss_trades !== undefined) {
+      updateData.loss_trades = syncData.loss_trades;
+    }
+    if (syncData.total_trades !== undefined) {
+      updateData.total_trades = syncData.total_trades;
     }
 
     const { error: updateError } = await supabase
@@ -138,13 +191,54 @@ serve(async (req) => {
 
     if (historyError) {
       console.error('[sync-account-data] History insert error:', historyError);
-      // Don't fail the request if history insert fails
+    }
+
+    // Insert trade history if provided (typically on order_close events)
+    if (syncData.trade_history && syncData.trade_history.length > 0) {
+      console.log(`[sync-account-data] Processing ${syncData.trade_history.length} trade history records`);
+      
+      const tradeRecords = syncData.trade_history.map((trade) => ({
+        mt5_account_id: account.id,
+        deal_ticket: trade.deal_ticket,
+        order_ticket: trade.order_ticket,
+        symbol: trade.symbol,
+        deal_type: trade.deal_type,
+        entry_type: trade.entry_type,
+        volume: trade.volume,
+        open_price: trade.open_price,
+        close_price: trade.close_price,
+        sl: trade.sl,
+        tp: trade.tp,
+        profit: trade.profit,
+        swap: trade.swap,
+        commission: trade.commission,
+        comment: trade.comment,
+        open_time: trade.open_time,
+        close_time: trade.close_time,
+        magic_number: trade.magic_number,
+      }));
+
+      const { error: tradeHistoryError } = await supabase
+        .from('trade_history')
+        .upsert(tradeRecords, { 
+          onConflict: 'mt5_account_id,deal_ticket',
+          ignoreDuplicates: true 
+        });
+
+      if (tradeHistoryError) {
+        console.error('[sync-account-data] Trade history insert error:', tradeHistoryError);
+      } else {
+        console.log(`[sync-account-data] Successfully inserted/updated ${tradeRecords.length} trade history records`);
+      }
     }
 
     console.log(`[sync-account-data] Successfully synced data for account ${syncData.account_number}`);
     console.log(`[sync-account-data] Balance: ${syncData.balance}, Equity: ${syncData.equity}, P/L: ${syncData.profit_loss}`);
     if (syncData.open_orders !== undefined) {
       console.log(`[sync-account-data] Open Orders: ${syncData.open_orders}, Floating P/L: ${syncData.floating_pl}, Total Profit: ${syncData.total_profit}`);
+    }
+    if (syncData.total_trades !== undefined) {
+      console.log(`[sync-account-data] Portfolio Stats - Total Trades: ${syncData.total_trades}, Win: ${syncData.win_trades}, Loss: ${syncData.loss_trades}`);
     }
 
     return new Response(

@@ -155,17 +155,24 @@ export type Database = {
           expiry_date: string | null
           floating_pl: number | null
           id: string
+          initial_balance: number | null
           is_lifetime: boolean
           last_sync: string | null
+          loss_trades: number | null
           margin_level: number | null
+          max_drawdown: number | null
           open_orders: number | null
           package_type: string
           profit_loss: number | null
           start_date: string
           status: string
+          total_deposit: number | null
           total_profit: number | null
+          total_trades: number | null
+          total_withdrawal: number | null
           trading_system_id: string | null
           updated_at: string
+          win_trades: number | null
         }
         Insert: {
           account_number: string
@@ -177,17 +184,24 @@ export type Database = {
           expiry_date?: string | null
           floating_pl?: number | null
           id?: string
+          initial_balance?: number | null
           is_lifetime?: boolean
           last_sync?: string | null
+          loss_trades?: number | null
           margin_level?: number | null
+          max_drawdown?: number | null
           open_orders?: number | null
           package_type: string
           profit_loss?: number | null
           start_date?: string
           status?: string
+          total_deposit?: number | null
           total_profit?: number | null
+          total_trades?: number | null
+          total_withdrawal?: number | null
           trading_system_id?: string | null
           updated_at?: string
+          win_trades?: number | null
         }
         Update: {
           account_number?: string
@@ -199,17 +213,24 @@ export type Database = {
           expiry_date?: string | null
           floating_pl?: number | null
           id?: string
+          initial_balance?: number | null
           is_lifetime?: boolean
           last_sync?: string | null
+          loss_trades?: number | null
           margin_level?: number | null
+          max_drawdown?: number | null
           open_orders?: number | null
           package_type?: string
           profit_loss?: number | null
           start_date?: string
           status?: string
+          total_deposit?: number | null
           total_profit?: number | null
+          total_trades?: number | null
+          total_withdrawal?: number | null
           trading_system_id?: string | null
           updated_at?: string
+          win_trades?: number | null
         }
         Relationships: [
           {
@@ -254,6 +275,83 @@ export type Database = {
           updated_at?: string
         }
         Relationships: []
+      }
+      trade_history: {
+        Row: {
+          close_price: number | null
+          close_time: string | null
+          comment: string | null
+          commission: number | null
+          created_at: string
+          deal_ticket: number
+          deal_type: string
+          entry_type: string
+          id: string
+          magic_number: number | null
+          mt5_account_id: string
+          open_price: number | null
+          open_time: string | null
+          order_ticket: number | null
+          profit: number | null
+          sl: number | null
+          swap: number | null
+          symbol: string
+          tp: number | null
+          volume: number | null
+        }
+        Insert: {
+          close_price?: number | null
+          close_time?: string | null
+          comment?: string | null
+          commission?: number | null
+          created_at?: string
+          deal_ticket: number
+          deal_type: string
+          entry_type: string
+          id?: string
+          magic_number?: number | null
+          mt5_account_id: string
+          open_price?: number | null
+          open_time?: string | null
+          order_ticket?: number | null
+          profit?: number | null
+          sl?: number | null
+          swap?: number | null
+          symbol: string
+          tp?: number | null
+          volume?: number | null
+        }
+        Update: {
+          close_price?: number | null
+          close_time?: string | null
+          comment?: string | null
+          commission?: number | null
+          created_at?: string
+          deal_ticket?: number
+          deal_type?: string
+          entry_type?: string
+          id?: string
+          magic_number?: number | null
+          mt5_account_id?: string
+          open_price?: number | null
+          open_time?: string | null
+          order_ticket?: number | null
+          profit?: number | null
+          sl?: number | null
+          swap?: number | null
+          symbol?: string
+          tp?: number | null
+          volume?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "trade_history_mt5_account_id_fkey"
+            columns: ["mt5_account_id"]
+            isOneToOne: false
+            referencedRelation: "mt5_accounts"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       trading_systems: {
         Row: {
