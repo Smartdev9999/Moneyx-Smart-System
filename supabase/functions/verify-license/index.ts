@@ -24,6 +24,7 @@ interface VerifyResponse {
   days_remaining?: number;
   is_lifetime?: boolean;
   trading_system?: string;
+  package_type?: string;
   message?: string;
 }
 
@@ -102,6 +103,18 @@ serve(async (req) => {
       );
     }
 
+    // Check if MT5 account is suspended
+    if (account.status === 'suspended') {
+      console.log(`[verify-license] Account ${account_number} is suspended`);
+      return new Response(
+        JSON.stringify({ 
+          valid: false, 
+          message: 'This MT5 account has been suspended. Please contact Moneyx Support.' 
+        } as VerifyResponse),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
     // Check if account is lifetime
     if (account.is_lifetime) {
       console.log(`[verify-license] Account ${account_number} has lifetime license`);
@@ -111,6 +124,7 @@ serve(async (req) => {
           customer_name: account.customer?.name,
           is_lifetime: true,
           trading_system: account.trading_system?.name,
+          package_type: account.package_type,
           message: 'Lifetime license active'
         } as VerifyResponse),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -173,6 +187,7 @@ serve(async (req) => {
         days_remaining: daysRemaining,
         is_lifetime: false,
         trading_system: account.trading_system?.name,
+        package_type: account.package_type,
         message: daysRemaining <= 5 
           ? `License expiring in ${daysRemaining} days. Please renew soon.`
           : 'License active'
