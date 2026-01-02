@@ -515,9 +515,19 @@ const AccountPortfolio = () => {
                         </TableCell>
                         <TableCell className="font-medium">{trade.symbol}</TableCell>
                         <TableCell>
-                          <Badge variant={trade.deal_type === 'buy' ? 'default' : 'secondary'}>
-                            {trade.deal_type.toUpperCase()}
-                          </Badge>
+                          {(() => {
+                            // For closed positions (entry_type='out'), the original position is opposite of deal_type
+                            // e.g., sell deal with entry_type='out' means closing a BUY position
+                            const originalPositionType = trade.entry_type === 'out' 
+                              ? (trade.deal_type === 'sell' ? 'BUY' : 'SELL')
+                              : trade.deal_type.toUpperCase();
+                            const isBuy = originalPositionType === 'BUY';
+                            return (
+                              <Badge variant={isBuy ? 'default' : 'secondary'}>
+                                {originalPositionType}
+                              </Badge>
+                            );
+                          })()}
                         </TableCell>
                         <TableCell className="text-right">{Number(trade.volume).toFixed(2)}</TableCell>
                         <TableCell className="text-right">{Number(trade.open_price).toFixed(2)}</TableCell>
