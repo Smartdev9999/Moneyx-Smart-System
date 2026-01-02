@@ -408,8 +408,18 @@ string BuildSyncJsonWithEvent(ENUM_SYNC_EVENT eventType)
    // Count open orders
    int openOrders = PositionsTotal();
    
-   // Calculate total profit from trade history
-   double totalProfit = CalculateTotalProfit();
+   // Calculate portfolio statistics
+   double totalProfit = 0;
+   double totalDeposit = 0;
+   double totalWithdrawal = 0;
+   double initialBalance = 0;
+   double maxDrawdown = 0;
+   int winTrades = 0;
+   int lossTrades = 0;
+   int totalTrades = 0;
+   
+   CalculatePortfolioStats(totalProfit, totalDeposit, totalWithdrawal, initialBalance, 
+                           maxDrawdown, winTrades, lossTrades, totalTrades);
    
    // Event type string
    string eventTypeStr = "scheduled";
@@ -426,47 +436,199 @@ string BuildSyncJsonWithEvent(ENUM_SYNC_EVENT eventType)
    json += "\"open_orders\":" + IntegerToString(openOrders) + ",";
    json += "\"floating_pl\":" + DoubleToString(floatingProfit, 2) + ",";
    json += "\"total_profit\":" + DoubleToString(totalProfit, 2) + ",";
+   // Portfolio stats
+   json += "\"initial_balance\":" + DoubleToString(initialBalance, 2) + ",";
+   json += "\"total_deposit\":" + DoubleToString(totalDeposit, 2) + ",";
+   json += "\"total_withdrawal\":" + DoubleToString(totalWithdrawal, 2) + ",";
+   json += "\"max_drawdown\":" + DoubleToString(maxDrawdown, 2) + ",";
+   json += "\"win_trades\":" + IntegerToString(winTrades) + ",";
+   json += "\"loss_trades\":" + IntegerToString(lossTrades) + ",";
+   json += "\"total_trades\":" + IntegerToString(totalTrades) + ",";
    json += "\"event_type\":\"" + eventTypeStr + "\"";
+   
+   // Include trade history on order close events
+   if(eventType == SYNC_ORDER_CLOSE)
+   {
+      string tradeHistoryJson = BuildTradeHistoryJson();
+      if(StringLen(tradeHistoryJson) > 2)  // Not empty array "[]"
+      {
+         json += ",\"trade_history\":" + tradeHistoryJson;
+      }
+   }
+   
    json += "}";
    
    return json;
 }
 
 //+------------------------------------------------------------------+
-//| Calculate Total Profit from Trade History                          |
+//| Calculate Portfolio Statistics from Trade History                  |
 //+------------------------------------------------------------------+
-double CalculateTotalProfit()
+void CalculatePortfolioStats(double &totalProfit, double &totalDeposit, double &totalWithdrawal,
+                             double &initialBalance, double &maxDrawdown, 
+                             int &winTrades, int &lossTrades, int &totalTrades)
 {
-   double totalProfit = 0;
+   totalProfit = 0;
+   totalDeposit = 0;
+   totalWithdrawal = 0;
+   initialBalance = 0;
+   maxDrawdown = 0;
+   winTrades = 0;
+   lossTrades = 0;
+   totalTrades = 0;
    
    // Select history for all time
    if(!HistorySelect(0, TimeCurrent()))
    {
-      Print("[Trade History] Failed to select history");
-      return 0;
+      Print("[Portfolio Stats] Failed to select history");
+      return;
    }
    
    int totalDeals = HistoryDealsTotal();
+   double peakBalance = 0;
+   double runningBalance = 0;
+   bool firstDeposit = true;
    
    for(int i = 0; i < totalDeals; i++)
    {
       ulong dealTicket = HistoryDealGetTicket(i);
       if(dealTicket > 0)
       {
-         // Only count closed deals (exit or in-out)
+         ENUM_DEAL_TYPE dealType = (ENUM_DEAL_TYPE)HistoryDealGetInteger(dealTicket, DEAL_TYPE);
          ENUM_DEAL_ENTRY dealEntry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
-         if(dealEntry == DEAL_ENTRY_OUT || dealEntry == DEAL_ENTRY_INOUT)
+         double dealProfit = HistoryDealGetDouble(dealTicket, DEAL_PROFIT);
+         double dealSwap = HistoryDealGetDouble(dealTicket, DEAL_SWAP);
+         double dealCommission = HistoryDealGetDouble(dealTicket, DEAL_COMMISSION);
+         
+         // Track deposits and withdrawals
+         if(dealType == DEAL_TYPE_BALANCE)
          {
-            double dealProfit = HistoryDealGetDouble(dealTicket, DEAL_PROFIT);
-            double dealSwap = HistoryDealGetDouble(dealTicket, DEAL_SWAP);
-            double dealCommission = HistoryDealGetDouble(dealTicket, DEAL_COMMISSION);
+            if(dealProfit > 0)
+            {
+               totalDeposit += dealProfit;
+               if(firstDeposit)
+               {
+                  initialBalance = dealProfit;
+                  firstDeposit = false;
+               }
+            }
+            else
+            {
+               totalWithdrawal += MathAbs(dealProfit);
+            }
+            runningBalance += dealProfit;
+         }
+         // Count closed trades (exit or in-out)
+         else if(dealEntry == DEAL_ENTRY_OUT || dealEntry == DEAL_ENTRY_INOUT)
+         {
+            double netProfit = dealProfit + dealSwap + dealCommission;
+            totalProfit += netProfit;
+            runningBalance += netProfit;
+            totalTrades++;
             
-            totalProfit += dealProfit + dealSwap + dealCommission;
+            if(netProfit >= 0)
+               winTrades++;
+            else
+               lossTrades++;
+         }
+         
+         // Track max drawdown
+         if(runningBalance > peakBalance)
+            peakBalance = runningBalance;
+         
+         if(peakBalance > 0)
+         {
+            double currentDD = ((peakBalance - runningBalance) / peakBalance) * 100;
+            if(currentDD > maxDrawdown)
+               maxDrawdown = currentDD;
          }
       }
    }
+}
+
+//+------------------------------------------------------------------+
+//| Build Trade History JSON Array                                     |
+//+------------------------------------------------------------------+
+string BuildTradeHistoryJson()
+{
+   string json = "[";
+   bool first = true;
    
-   return totalProfit;
+   // Select history for all time
+   if(!HistorySelect(0, TimeCurrent()))
+   {
+      Print("[Trade History] Failed to select history");
+      return "[]";
+   }
+   
+   int totalDeals = HistoryDealsTotal();
+   
+   // Only send last 100 deals to avoid huge payloads
+   int startIdx = MathMax(0, totalDeals - 100);
+   
+   for(int i = startIdx; i < totalDeals; i++)
+   {
+      ulong dealTicket = HistoryDealGetTicket(i);
+      if(dealTicket > 0)
+      {
+         ENUM_DEAL_TYPE dealType = (ENUM_DEAL_TYPE)HistoryDealGetInteger(dealTicket, DEAL_TYPE);
+         ENUM_DEAL_ENTRY dealEntry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
+         
+         // Skip if not a trade or balance operation
+         if(dealType != DEAL_TYPE_BUY && dealType != DEAL_TYPE_SELL && dealType != DEAL_TYPE_BALANCE)
+            continue;
+         
+         string symbol = HistoryDealGetString(dealTicket, DEAL_SYMBOL);
+         ulong orderTicket = HistoryDealGetInteger(dealTicket, DEAL_ORDER);
+         double volume = HistoryDealGetDouble(dealTicket, DEAL_VOLUME);
+         double price = HistoryDealGetDouble(dealTicket, DEAL_PRICE);
+         double profit = HistoryDealGetDouble(dealTicket, DEAL_PROFIT);
+         double swap = HistoryDealGetDouble(dealTicket, DEAL_SWAP);
+         double commission = HistoryDealGetDouble(dealTicket, DEAL_COMMISSION);
+         double sl = HistoryDealGetDouble(dealTicket, DEAL_SL);
+         double tp = HistoryDealGetDouble(dealTicket, DEAL_TP);
+         string comment = HistoryDealGetString(dealTicket, DEAL_COMMENT);
+         long magic = HistoryDealGetInteger(dealTicket, DEAL_MAGIC);
+         datetime dealTime = (datetime)HistoryDealGetInteger(dealTicket, DEAL_TIME);
+         
+         // Determine deal type string
+         string dealTypeStr = "unknown";
+         if(dealType == DEAL_TYPE_BUY) dealTypeStr = "buy";
+         else if(dealType == DEAL_TYPE_SELL) dealTypeStr = "sell";
+         else if(dealType == DEAL_TYPE_BALANCE) dealTypeStr = "balance";
+         
+         // Determine entry type string
+         string entryTypeStr = "unknown";
+         if(dealEntry == DEAL_ENTRY_IN) entryTypeStr = "in";
+         else if(dealEntry == DEAL_ENTRY_OUT) entryTypeStr = "out";
+         else if(dealEntry == DEAL_ENTRY_INOUT) entryTypeStr = "inout";
+         
+         // Build JSON object
+         if(!first) json += ",";
+         first = false;
+         
+         json += "{";
+         json += "\"deal_ticket\":" + IntegerToString(dealTicket) + ",";
+         json += "\"order_ticket\":" + IntegerToString(orderTicket) + ",";
+         json += "\"symbol\":\"" + symbol + "\",";
+         json += "\"deal_type\":\"" + dealTypeStr + "\",";
+         json += "\"entry_type\":\"" + entryTypeStr + "\",";
+         json += "\"volume\":" + DoubleToString(volume, 2) + ",";
+         json += "\"open_price\":" + DoubleToString(price, 5) + ",";
+         json += "\"profit\":" + DoubleToString(profit, 2) + ",";
+         json += "\"swap\":" + DoubleToString(swap, 2) + ",";
+         json += "\"commission\":" + DoubleToString(commission, 2) + ",";
+         json += "\"sl\":" + DoubleToString(sl, 5) + ",";
+         json += "\"tp\":" + DoubleToString(tp, 5) + ",";
+         json += "\"comment\":\"" + comment + "\",";
+         json += "\"magic_number\":" + IntegerToString(magic) + ",";
+         json += "\"close_time\":\"" + TimeToString(dealTime, TIME_DATE|TIME_SECONDS) + "\"";
+         json += "}";
+      }
+   }
+   
+   json += "]";
+   return json;
 }
 
 //+------------------------------------------------------------------+

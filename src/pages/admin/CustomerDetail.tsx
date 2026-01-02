@@ -733,6 +733,13 @@ const CustomerDetail = () => {
                     
                     {/* Action Buttons */}
                     <div className="flex flex-wrap gap-2 pt-3 border-t border-border">
+                      <Button 
+                        variant="default" 
+                        size="sm" 
+                        onClick={() => navigate(`/admin/accounts/${account.id}/portfolio`)}
+                      >
+                        <Activity className="w-3 h-3 mr-1" /> ดู Portfolio
+                      </Button>
                       <Button variant="outline" size="sm" onClick={() => handleEditAccount(account)}>
                         <Edit className="w-3 h-3 mr-1" /> แก้ไข
                       </Button>
