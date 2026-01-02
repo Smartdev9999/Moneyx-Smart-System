@@ -20,6 +20,12 @@ interface SyncRequest {
   margin_level: number;
   drawdown: number;
   profit_loss: number;
+  // New fields for real-time trading data
+  open_orders?: number;
+  floating_pl?: number;
+  total_profit?: number;
+  // Event type for tracking what triggered the sync
+  event_type?: 'scheduled' | 'order_open' | 'order_close';
 }
 
 interface SyncResponse {
@@ -50,7 +56,8 @@ serve(async (req) => {
 
     const syncData: SyncRequest = await req.json();
 
-    console.log(`[sync-account-data] Syncing data for MT5 account: ${syncData.account_number}`);
+    const eventType = syncData.event_type || 'scheduled';
+    console.log(`[sync-account-data] Syncing data for MT5 account: ${syncData.account_number} (event: ${eventType})`);
 
     if (!syncData.account_number) {
       console.log('[sync-account-data] No account number provided');
@@ -83,17 +90,30 @@ serve(async (req) => {
       );
     }
 
-    // Update the MT5 account with latest data
+    // Update the MT5 account with latest data (including new fields)
+    const updateData: Record<string, any> = {
+      balance: syncData.balance,
+      equity: syncData.equity,
+      margin_level: syncData.margin_level,
+      drawdown: syncData.drawdown,
+      profit_loss: syncData.profit_loss,
+      last_sync: new Date().toISOString(),
+    };
+
+    // Add optional new fields if provided
+    if (syncData.open_orders !== undefined) {
+      updateData.open_orders = syncData.open_orders;
+    }
+    if (syncData.floating_pl !== undefined) {
+      updateData.floating_pl = syncData.floating_pl;
+    }
+    if (syncData.total_profit !== undefined) {
+      updateData.total_profit = syncData.total_profit;
+    }
+
     const { error: updateError } = await supabase
       .from('mt5_accounts')
-      .update({
-        balance: syncData.balance,
-        equity: syncData.equity,
-        margin_level: syncData.margin_level,
-        drawdown: syncData.drawdown,
-        profit_loss: syncData.profit_loss,
-        last_sync: new Date().toISOString(),
-      })
+      .update(updateData)
       .eq('id', account.id);
 
     if (updateError) {
@@ -123,6 +143,9 @@ serve(async (req) => {
 
     console.log(`[sync-account-data] Successfully synced data for account ${syncData.account_number}`);
     console.log(`[sync-account-data] Balance: ${syncData.balance}, Equity: ${syncData.equity}, P/L: ${syncData.profit_loss}`);
+    if (syncData.open_orders !== undefined) {
+      console.log(`[sync-account-data] Open Orders: ${syncData.open_orders}, Floating P/L: ${syncData.floating_pl}, Total Profit: ${syncData.total_profit}`);
+    }
 
     return new Response(
       JSON.stringify({ success: true, message: 'Data synced successfully' } as SyncResponse),

@@ -55,6 +55,56 @@ export type Database = {
           },
         ]
       }
+      account_summary: {
+        Row: {
+          avg_balance: number | null
+          avg_drawdown: number | null
+          avg_equity: number | null
+          created_at: string | null
+          id: string
+          max_balance: number | null
+          min_balance: number | null
+          mt5_account_id: string
+          summary_date: string
+          sync_count: number | null
+          total_profit: number | null
+        }
+        Insert: {
+          avg_balance?: number | null
+          avg_drawdown?: number | null
+          avg_equity?: number | null
+          created_at?: string | null
+          id?: string
+          max_balance?: number | null
+          min_balance?: number | null
+          mt5_account_id: string
+          summary_date: string
+          sync_count?: number | null
+          total_profit?: number | null
+        }
+        Update: {
+          avg_balance?: number | null
+          avg_drawdown?: number | null
+          avg_equity?: number | null
+          created_at?: string | null
+          id?: string
+          max_balance?: number | null
+          min_balance?: number | null
+          mt5_account_id?: string
+          summary_date?: string
+          sync_count?: number | null
+          total_profit?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "account_summary_mt5_account_id_fkey"
+            columns: ["mt5_account_id"]
+            isOneToOne: false
+            referencedRelation: "mt5_accounts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       customers: {
         Row: {
           broker: string | null
@@ -103,14 +153,17 @@ export type Database = {
           drawdown: number | null
           equity: number | null
           expiry_date: string | null
+          floating_pl: number | null
           id: string
           is_lifetime: boolean
           last_sync: string | null
           margin_level: number | null
+          open_orders: number | null
           package_type: string
           profit_loss: number | null
           start_date: string
           status: string
+          total_profit: number | null
           trading_system_id: string | null
           updated_at: string
         }
@@ -122,14 +175,17 @@ export type Database = {
           drawdown?: number | null
           equity?: number | null
           expiry_date?: string | null
+          floating_pl?: number | null
           id?: string
           is_lifetime?: boolean
           last_sync?: string | null
           margin_level?: number | null
+          open_orders?: number | null
           package_type: string
           profit_loss?: number | null
           start_date?: string
           status?: string
+          total_profit?: number | null
           trading_system_id?: string | null
           updated_at?: string
         }
@@ -141,14 +197,17 @@ export type Database = {
           drawdown?: number | null
           equity?: number | null
           expiry_date?: string | null
+          floating_pl?: number | null
           id?: string
           is_lifetime?: boolean
           last_sync?: string | null
           margin_level?: number | null
+          open_orders?: number | null
           package_type?: string
           profit_loss?: number | null
           start_date?: string
           status?: string
+          total_profit?: number | null
           trading_system_id?: string | null
           updated_at?: string
         }
@@ -252,6 +311,7 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      cleanup_old_history: { Args: never; Returns: undefined }
       has_role: {
         Args: {
           _role: Database["public"]["Enums"]["app_role"]
