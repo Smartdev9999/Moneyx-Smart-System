@@ -151,6 +151,7 @@ export type Database = {
           created_at: string
           customer_id: string
           drawdown: number | null
+          ea_status: string | null
           equity: number | null
           expiry_date: string | null
           floating_pl: number | null
@@ -180,6 +181,7 @@ export type Database = {
           created_at?: string
           customer_id: string
           drawdown?: number | null
+          ea_status?: string | null
           equity?: number | null
           expiry_date?: string | null
           floating_pl?: number | null
@@ -209,6 +211,7 @@ export type Database = {
           created_at?: string
           customer_id?: string
           drawdown?: number | null
+          ea_status?: string | null
           equity?: number | null
           expiry_date?: string | null
           floating_pl?: number | null

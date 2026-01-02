@@ -56,6 +56,8 @@ interface SyncRequest {
   trade_history?: TradeHistoryItem[];
   // Event type for tracking
   event_type?: 'scheduled' | 'order_open' | 'order_close';
+  // EA status for dashboard display
+  ea_status?: 'working' | 'paused' | 'suspended' | 'expired' | 'invalid' | 'offline';
 }
 
 interface SyncResponse {
@@ -162,6 +164,11 @@ serve(async (req) => {
     }
     if (syncData.total_trades !== undefined) {
       updateData.total_trades = syncData.total_trades;
+    }
+
+    // EA status for dashboard display
+    if (syncData.ea_status !== undefined) {
+      updateData.ea_status = syncData.ea_status;
     }
 
     const { error: updateError } = await supabase

@@ -59,7 +59,9 @@ import {
   CalendarPlus,
   Trash2,
   Activity,
-  DollarSign
+  DollarSign,
+  Wifi,
+  WifiOff
 } from 'lucide-react';
 
 interface Customer {
@@ -91,6 +93,7 @@ interface MT5Account {
   last_sync: string | null;
   trading_system: { name: string; id: string } | null;
   days_remaining: number | null;
+  ea_status: string | null;
 }
 
 interface TradingSystem {
@@ -172,6 +175,7 @@ const CustomerDetail = () => {
         open_orders: a.open_orders || 0,
         floating_pl: a.floating_pl || 0,
         total_profit: a.total_profit || 0,
+        ea_status: a.ea_status || 'offline',
         days_remaining: a.is_lifetime ? null : 
           a.expiry_date ? Math.ceil((new Date(a.expiry_date).getTime() - now.getTime()) / (1000 * 60 * 60 * 24)) : null,
       })) || [];
@@ -460,6 +464,67 @@ const CustomerDetail = () => {
     return <Badge variant="outline">{account.status}</Badge>;
   };
 
+  // Check if EA is offline (no sync in last 10 minutes)
+  const isEAOffline = (lastSync: string | null): boolean => {
+    if (!lastSync) return true;
+    const lastSyncTime = new Date(lastSync).getTime();
+    const now = new Date().getTime();
+    const tenMinutes = 10 * 60 * 1000;
+    return (now - lastSyncTime) > tenMinutes;
+  };
+
+  const getEAStatusBadge = (account: MT5Account) => {
+    // Check for offline first (no sync in 10 minutes)
+    if (isEAOffline(account.last_sync)) {
+      return (
+        <Badge variant="outline" className="text-gray-400 border-gray-500 bg-gray-900/20">
+          <WifiOff className="w-3 h-3 mr-1" /> Offline
+        </Badge>
+      );
+    }
+
+    // Show EA status from database
+    const status = account.ea_status || 'offline';
+    switch (status) {
+      case 'working':
+        return (
+          <Badge variant="outline" className="text-lime-400 border-lime-500 bg-lime-900/20">
+            <Wifi className="w-3 h-3 mr-1" /> Working
+          </Badge>
+        );
+      case 'paused':
+        return (
+          <Badge variant="outline" className="text-orange-400 border-orange-500 bg-orange-900/20">
+            <Pause className="w-3 h-3 mr-1" /> Paused
+          </Badge>
+        );
+      case 'suspended':
+        return (
+          <Badge variant="outline" className="text-red-400 border-red-500 bg-red-900/20">
+            <XCircle className="w-3 h-3 mr-1" /> Suspended
+          </Badge>
+        );
+      case 'expired':
+        return (
+          <Badge variant="outline" className="text-red-400 border-red-500 bg-red-900/20">
+            <Clock className="w-3 h-3 mr-1" /> Expired
+          </Badge>
+        );
+      case 'invalid':
+        return (
+          <Badge variant="outline" className="text-red-400 border-red-500 bg-red-900/20">
+            <XCircle className="w-3 h-3 mr-1" /> Invalid
+          </Badge>
+        );
+      default:
+        return (
+          <Badge variant="outline" className="text-gray-400 border-gray-500 bg-gray-900/20">
+            <WifiOff className="w-3 h-3 mr-1" /> Offline
+          </Badge>
+        );
+    }
+  };
+
   const totalBalance = accounts.reduce((sum, a) => sum + Number(a.balance || 0), 0);
   const totalEquity = accounts.reduce((sum, a) => sum + Number(a.equity || 0), 0);
   const totalPL = accounts.reduce((sum, a) => sum + Number(a.profit_loss || 0), 0);
@@ -726,6 +791,10 @@ const CustomerDetail = () => {
                         <div className="text-right">
                           <p className="text-xs text-muted-foreground">Orders</p>
                           <p className="font-medium">{account.open_orders}</p>
+                        </div>
+                        <div className="flex flex-col items-end gap-1">
+                          <span className="text-xs text-muted-foreground">EA Status</span>
+                          {getEAStatusBadge(account)}
                         </div>
                         {getStatusBadge(account)}
                       </div>

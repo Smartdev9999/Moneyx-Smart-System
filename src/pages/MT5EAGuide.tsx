@@ -910,6 +910,13 @@ bool SyncAccountDataWithEvent(ENUM_SYNC_EVENT eventType)
    if(eventType == SYNC_ORDER_OPEN) eventTypeStr = "order_open";
    else if(eventType == SYNC_ORDER_CLOSE) eventTypeStr = "order_close";
    
+   // Determine EA status based on current state
+   string eaStatus = "working";
+   if(g_licenseStatus == "SUSPENDED") eaStatus = "suspended";
+   else if(g_licenseStatus == "EXPIRED") eaStatus = "expired";
+   else if(g_licenseStatus == "INVALID") eaStatus = "invalid";
+   else if(g_isPaused) eaStatus = "paused";
+   
    string json = "{";
    json += "\\"account_number\\":\\"" + IntegerToString(accountNumber) + "\\",";
    json += "\\"balance\\":" + DoubleToString(balance, 2) + ",";
@@ -928,7 +935,8 @@ bool SyncAccountDataWithEvent(ENUM_SYNC_EVENT eventType)
    json += "\\"win_trades\\":" + IntegerToString(winTrades) + ",";
    json += "\\"loss_trades\\":" + IntegerToString(lossTrades) + ",";
    json += "\\"total_trades\\":" + IntegerToString(totalTrades) + ",";
-   json += "\\"event_type\\":\\"" + eventTypeStr + "\\"";
+   json += "\\"event_type\\":\\"" + eventTypeStr + "\\",";
+   json += "\\"ea_status\\":\\"" + eaStatus + "\\"";
    
    // Include trade history on all sync events (scheduled + order close)
    // This ensures historical data is synced on EA startup and periodically

@@ -33,7 +33,11 @@ import {
   Calendar,
   Clock,
   Target,
-  Percent
+  Percent,
+  Wifi,
+  WifiOff,
+  Pause,
+  XCircle
 } from 'lucide-react';
 
 interface MT5Account {
@@ -56,6 +60,7 @@ interface MT5Account {
   margin_level: number;
   drawdown: number;
   last_sync: string | null;
+  ea_status: string | null;
   trading_system: { name: string } | null;
   customer: { name: string; customer_id: string } | null;
 }
@@ -184,6 +189,67 @@ const AccountPortfolio = () => {
   const getROI = () => {
     if (!account || !account.initial_balance || account.initial_balance === 0) return 0;
     return (getNetProfit() / account.initial_balance) * 100;
+  };
+
+  // Check if EA is offline (no sync in last 10 minutes)
+  const isEAOffline = (): boolean => {
+    if (!account?.last_sync) return true;
+    const lastSyncTime = new Date(account.last_sync).getTime();
+    const now = new Date().getTime();
+    const tenMinutes = 10 * 60 * 1000;
+    return (now - lastSyncTime) > tenMinutes;
+  };
+
+  const getEAStatusBadge = () => {
+    // Check for offline first (no sync in 10 minutes)
+    if (isEAOffline()) {
+      return (
+        <Badge variant="outline" className="text-gray-400 border-gray-500 bg-gray-900/20">
+          <WifiOff className="w-3 h-3 mr-1" /> Offline
+        </Badge>
+      );
+    }
+
+    // Show EA status from database
+    const status = account?.ea_status || 'offline';
+    switch (status) {
+      case 'working':
+        return (
+          <Badge variant="outline" className="text-lime-400 border-lime-500 bg-lime-900/20">
+            <Wifi className="w-3 h-3 mr-1" /> Working
+          </Badge>
+        );
+      case 'paused':
+        return (
+          <Badge variant="outline" className="text-orange-400 border-orange-500 bg-orange-900/20">
+            <Pause className="w-3 h-3 mr-1" /> Paused
+          </Badge>
+        );
+      case 'suspended':
+        return (
+          <Badge variant="outline" className="text-red-400 border-red-500 bg-red-900/20">
+            <XCircle className="w-3 h-3 mr-1" /> Suspended
+          </Badge>
+        );
+      case 'expired':
+        return (
+          <Badge variant="outline" className="text-red-400 border-red-500 bg-red-900/20">
+            <Clock className="w-3 h-3 mr-1" /> Expired
+          </Badge>
+        );
+      case 'invalid':
+        return (
+          <Badge variant="outline" className="text-red-400 border-red-500 bg-red-900/20">
+            <XCircle className="w-3 h-3 mr-1" /> Invalid
+          </Badge>
+        );
+      default:
+        return (
+          <Badge variant="outline" className="text-gray-400 border-gray-500 bg-gray-900/20">
+            <WifiOff className="w-3 h-3 mr-1" /> Offline
+          </Badge>
+        );
+    }
   };
 
   if (authLoading) {
@@ -353,6 +419,10 @@ const AccountPortfolio = () => {
             </CardHeader>
             <CardContent>
               <div className="space-y-3">
+                <div className="flex justify-between items-center">
+                  <span className="text-muted-foreground">EA Status</span>
+                  {getEAStatusBadge()}
+                </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Trading System</span>
                   <span className="font-medium">{account?.trading_system?.name || '-'}</span>
