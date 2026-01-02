@@ -8957,11 +8957,11 @@ void UpdateChartComment(string signal, string reason = "")
       <header className="sticky top-0 z-50 border-b border-border bg-background/95 backdrop-blur">
         <div className="container py-4 flex items-center justify-between">
           <Link 
-            to="/trading-bot-guide" 
+            to="/developer" 
             className="inline-flex items-center gap-2 text-muted-foreground hover:text-foreground transition-colors"
           >
             <ArrowLeft className="w-4 h-4" />
-            กลับหน้า Trading Bot Guide
+            กลับหน้า Developer Dashboard
           </Link>
         </div>
       </header>
