@@ -5,9 +5,10 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2024, Moneyx Smart System"
 #property link      "https://moneyx-smart.com"
-#property version   "1.00"
+#property version   "5.2"
 #property description "Moneyx Smart Gold EA with License Verification"
 #property description "Free to backtest - License required for live trading"
+#property description "v5.2: Real-time sync on order events + Trade History"
 
 //+------------------------------------------------------------------+
 //| Input Parameters                                                   |
@@ -39,6 +40,16 @@ enum ENUM_LICENSE_STATUS
 };
 
 //+------------------------------------------------------------------+
+//| Sync Event Type Enumeration                                        |
+//+------------------------------------------------------------------+
+enum ENUM_SYNC_EVENT
+{
+   SYNC_SCHEDULED,          // Scheduled sync (05:00, 23:00)
+   SYNC_ORDER_OPEN,         // Order opened
+   SYNC_ORDER_CLOSE         // Order closed
+};
+
+//+------------------------------------------------------------------+
 //| Global Variables                                                   |
 //+------------------------------------------------------------------+
 // License Variables
@@ -62,6 +73,10 @@ int               g_dataSyncInterval = 5;
 // Trading Variables
 int               g_magicNumber = 0;
 
+// Order tracking for event-driven sync
+int               g_lastOrderCount = 0;
+bool              g_pendingSyncOnOrderEvent = false;
+
 //+------------------------------------------------------------------+
 //| Expert initialization function                                     |
 //+------------------------------------------------------------------+
@@ -76,7 +91,7 @@ int OnInit()
    {
       // Backtest/Optimization Mode - ข้าม License Check
       Print("╔══════════════════════════════════════════════════════════════╗");
-      Print("║         MONEYX SMART GOLD EA - TESTER MODE                   ║");
+      Print("║         MONEYX SMART GOLD EA v5.2 - TESTER MODE              ║");
       Print("║         License check skipped for backtesting                ║");
       Print("╚══════════════════════════════════════════════════════════════╝");
       g_isLicenseValid = true;
@@ -86,7 +101,8 @@ int OnInit()
    
    // Live Trading Mode - ต้องตรวจ License
    Print("╔══════════════════════════════════════════════════════════════╗");
-   Print("║         MONEYX SMART GOLD EA - LIVE TRADING MODE             ║");
+   Print("║         MONEYX SMART GOLD EA v5.2 - LIVE TRADING MODE        ║");
+   Print("║         Real-time sync enabled                               ║");
    Print("║         Verifying license...                                  ║");
    Print("╚══════════════════════════════════════════════════════════════╝");
    
@@ -112,6 +128,9 @@ int OnInit()
          Print("Expiry: ", TimeToString(g_expiryDate, TIME_DATE), " (", g_daysRemaining, " days remaining)");
    }
    
+   // Initialize order count for event tracking
+   g_lastOrderCount = PositionsTotal();
+   
    return INIT_SUCCEEDED;
 }
 
@@ -121,7 +140,7 @@ int OnInit()
 void OnDeinit(const int reason)
 {
    // Cleanup
-   Print("Moneyx Smart Gold EA deinitialized. Reason: ", reason);
+   Print("Moneyx Smart Gold EA v5.2 deinitialized. Reason: ", reason);
 }
 
 //+------------------------------------------------------------------+
@@ -159,13 +178,40 @@ void OnTick()
 }
 
 //+------------------------------------------------------------------+
-//| Trade transaction function                                         |
+//| Trade transaction function - REAL-TIME SYNC ON ORDER EVENTS        |
 //+------------------------------------------------------------------+
 void OnTradeTransaction(const MqlTradeTransaction& trans,
                         const MqlTradeRequest& request,
                         const MqlTradeResult& result)
 {
-   // Handle trade transactions here
+   // Skip if in tester mode
+   if(g_isTesterMode) return;
+   
+   // Skip if license is not valid
+   if(!g_isLicenseValid) return;
+   
+   // Check for deal events (order opened or closed)
+   if(trans.type == TRADE_TRANSACTION_DEAL_ADD)
+   {
+      // Get deal info
+      if(HistoryDealSelect(trans.deal))
+      {
+         ENUM_DEAL_ENTRY dealEntry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(trans.deal, DEAL_ENTRY);
+         
+         if(dealEntry == DEAL_ENTRY_IN)
+         {
+            // Order opened - sync immediately
+            Print("[Real-time Sync] Order opened - syncing data...");
+            SyncAccountDataWithEvent(SYNC_ORDER_OPEN);
+         }
+         else if(dealEntry == DEAL_ENTRY_OUT || dealEntry == DEAL_ENTRY_INOUT)
+         {
+            // Order closed - sync immediately
+            Print("[Real-time Sync] Order closed - syncing data...");
+            SyncAccountDataWithEvent(SYNC_ORDER_CLOSE);
+         }
+      }
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -224,7 +270,7 @@ bool InitLicense(string baseUrl, int checkIntervalMinutes = 60, int syncInterval
    // Sync ข้อมูลบัญชีครั้งแรก (ถ้า License valid)
    if(g_isLicenseValid)
    {
-      SyncAccountData();
+      SyncAccountDataWithEvent(SYNC_SCHEDULED);
       g_lastDataSync = TimeCurrent();
    }
    
@@ -304,14 +350,14 @@ ENUM_LICENSE_STATUS ParseVerifyResponse(string response)
 }
 
 //+------------------------------------------------------------------+
-//| Sync Account Data to Server                                        |
+//| Sync Account Data with Event Type                                  |
 //+------------------------------------------------------------------+
-bool SyncAccountData()
+bool SyncAccountDataWithEvent(ENUM_SYNC_EVENT eventType)
 {
    string url = g_licenseServerUrl + "/functions/v1/sync-account-data";
    
-   // สร้าง JSON request
-   string jsonRequest = BuildSyncJson();
+   // สร้าง JSON request พร้อม event type
+   string jsonRequest = BuildSyncJsonWithEvent(eventType);
    
    // ส่ง request
    string response = "";
@@ -329,20 +375,27 @@ bool SyncAccountData()
    {
       g_lastError = JsonGetString(response, "error");
    }
+   else
+   {
+      string eventName = "scheduled";
+      if(eventType == SYNC_ORDER_OPEN) eventName = "order_open";
+      else if(eventType == SYNC_ORDER_CLOSE) eventName = "order_close";
+      Print("[Sync] Data synced successfully (event: ", eventName, ")");
+   }
    
    return success;
 }
 
 //+------------------------------------------------------------------+
-//| Build Sync JSON Payload                                            |
+//| Build Sync JSON Payload with Event Type and Trade History          |
 //+------------------------------------------------------------------+
-string BuildSyncJson()
+string BuildSyncJsonWithEvent(ENUM_SYNC_EVENT eventType)
 {
    long accountNumber = AccountInfoInteger(ACCOUNT_LOGIN);
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
    double equity = AccountInfoDouble(ACCOUNT_EQUITY);
    double marginLevel = AccountInfoDouble(ACCOUNT_MARGIN_LEVEL);
-   double profit = AccountInfoDouble(ACCOUNT_PROFIT);
+   double floatingProfit = AccountInfoDouble(ACCOUNT_PROFIT);
    
    // คำนวณ Drawdown
    double drawdown = 0;
@@ -352,16 +405,84 @@ string BuildSyncJson()
       if(drawdown < 0) drawdown = 0;
    }
    
+   // Count open orders
+   int openOrders = PositionsTotal();
+   
+   // Calculate total profit from trade history
+   double totalProfit = CalculateTotalProfit();
+   
+   // Event type string
+   string eventTypeStr = "scheduled";
+   if(eventType == SYNC_ORDER_OPEN) eventTypeStr = "order_open";
+   else if(eventType == SYNC_ORDER_CLOSE) eventTypeStr = "order_close";
+   
    string json = "{";
    json += "\"account_number\":\"" + IntegerToString(accountNumber) + "\",";
    json += "\"balance\":" + DoubleToString(balance, 2) + ",";
    json += "\"equity\":" + DoubleToString(equity, 2) + ",";
    json += "\"margin_level\":" + DoubleToString(marginLevel, 2) + ",";
    json += "\"drawdown\":" + DoubleToString(drawdown, 2) + ",";
-   json += "\"profit_loss\":" + DoubleToString(profit, 2);
+   json += "\"profit_loss\":" + DoubleToString(floatingProfit, 2) + ",";
+   json += "\"open_orders\":" + IntegerToString(openOrders) + ",";
+   json += "\"floating_pl\":" + DoubleToString(floatingProfit, 2) + ",";
+   json += "\"total_profit\":" + DoubleToString(totalProfit, 2) + ",";
+   json += "\"event_type\":\"" + eventTypeStr + "\"";
    json += "}";
    
    return json;
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Total Profit from Trade History                          |
+//+------------------------------------------------------------------+
+double CalculateTotalProfit()
+{
+   double totalProfit = 0;
+   
+   // Select history for all time
+   if(!HistorySelect(0, TimeCurrent()))
+   {
+      Print("[Trade History] Failed to select history");
+      return 0;
+   }
+   
+   int totalDeals = HistoryDealsTotal();
+   
+   for(int i = 0; i < totalDeals; i++)
+   {
+      ulong dealTicket = HistoryDealGetTicket(i);
+      if(dealTicket > 0)
+      {
+         // Only count closed deals (exit or in-out)
+         ENUM_DEAL_ENTRY dealEntry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
+         if(dealEntry == DEAL_ENTRY_OUT || dealEntry == DEAL_ENTRY_INOUT)
+         {
+            double dealProfit = HistoryDealGetDouble(dealTicket, DEAL_PROFIT);
+            double dealSwap = HistoryDealGetDouble(dealTicket, DEAL_SWAP);
+            double dealCommission = HistoryDealGetDouble(dealTicket, DEAL_COMMISSION);
+            
+            totalProfit += dealProfit + dealSwap + dealCommission;
+         }
+      }
+   }
+   
+   return totalProfit;
+}
+
+//+------------------------------------------------------------------+
+//| Legacy Sync Account Data (for compatibility)                       |
+//+------------------------------------------------------------------+
+bool SyncAccountData()
+{
+   return SyncAccountDataWithEvent(SYNC_SCHEDULED);
+}
+
+//+------------------------------------------------------------------+
+//| Build Sync JSON Payload (legacy)                                   |
+//+------------------------------------------------------------------+
+string BuildSyncJson()
+{
+   return BuildSyncJsonWithEvent(SYNC_SCHEDULED);
 }
 
 //+------------------------------------------------------------------+
@@ -370,6 +491,8 @@ string BuildSyncJson()
 bool OnTickLicense()
 {
    datetime currentTime = TimeCurrent();
+   MqlDateTime dt;
+   TimeToStruct(currentTime, dt);
    
    // ตรวจสอบ License ตาม interval
    if(currentTime - g_lastLicenseCheck >= g_licenseCheckInterval * 60)
@@ -402,11 +525,33 @@ bool OnTickLicense()
       }
    }
    
-   // Sync ข้อมูลบัญชี ตาม interval (ถ้า license valid)
-   if(g_isLicenseValid && (currentTime - g_lastDataSync >= g_dataSyncInterval * 60))
+   // Scheduled sync at 05:00 AM and 23:00 PM
+   if(g_isLicenseValid)
    {
-      SyncAccountData();
-      g_lastDataSync = currentTime;
+      bool shouldSync = false;
+      
+      // Check if it's 05:00 or 23:00
+      if((dt.hour == 5 || dt.hour == 23) && dt.min == 0)
+      {
+         // Only sync once per scheduled time (check if last sync was more than 30 minutes ago)
+         if(currentTime - g_lastDataSync >= 1800)
+         {
+            shouldSync = true;
+            Print("[Scheduled Sync] Time: ", dt.hour, ":00 - syncing data...");
+         }
+      }
+      
+      // Also sync based on interval (fallback)
+      if(!shouldSync && (currentTime - g_lastDataSync >= g_dataSyncInterval * 60))
+      {
+         shouldSync = true;
+      }
+      
+      if(shouldSync)
+      {
+         SyncAccountDataWithEvent(SYNC_SCHEDULED);
+         g_lastDataSync = currentTime;
+      }
    }
    
    return g_isLicenseValid;
@@ -417,7 +562,7 @@ bool OnTickLicense()
 //+------------------------------------------------------------------+
 void ShowLicensePopup(ENUM_LICENSE_STATUS status)
 {
-   string title = "Moneyx Smart Gold EA - License";
+   string title = "Moneyx Smart Gold EA v5.2 - License";
    string message = "";
    uint flags = MB_OK;
    
@@ -432,7 +577,7 @@ void ShowLicensePopup(ENUM_LICENSE_STATUS status)
             message += "License Type: LIFETIME\n";
          else
             message += "Expires: " + TimeToString(g_expiryDate, TIME_DATE) + "\n";
-         message += "\nHappy Trading! 🚀";
+         message += "\nReal-time sync enabled! 🚀";
          flags = MB_OK | MB_ICONINFORMATION;
          break;
          
