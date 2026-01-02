@@ -5593,7 +5593,8 @@ bool CheckWebRequestConfiguration()
    
    Print("NEWS FILTER: Checking WebRequest configuration...");
    
-   string testUrl = "https://nfs.faireconomy.media/ff_calendar_thisweek.json";
+   // *** USE MONEYX API ENDPOINT INSTEAD OF EXTERNAL SOURCE ***
+   string testUrl = InpLicenseServer + "/functions/v1/economic-news?limit=1";
    char postData[], resultData[];
    string headers = "";
    string resultHeaders;
@@ -5665,12 +5666,13 @@ void ShowWebRequestSetupAlert()
       "2. ไปที่แท็บ 'Expert Advisors'\\n\\n"
       "3. ติ๊กเปิด ☑ 'Allow WebRequest for listed URL:'\\n\\n"
       "4. คลิกปุ่ม 'Add new URL' และเพิ่ม:\\n"
-      "   https://nfs.faireconomy.media\\n\\n"
+      "   " + InpLicenseServer + "\\n\\n"
       "5. คลิก OK แล้ว RESTART EA\\n"
       "   (ถอด EA ออกจากชาร์ตแล้วใส่ใหม่)\\n\\n"
       "=========================\\n\\n"
-      "📌 URL ที่ต้องเพิ่ม: https://nfs.faireconomy.media\\n\\n"
-      "หมายเหตุ: ระบบจะแจ้งเตือนซ้ำทุก 1 ชั่วโมงจนกว่าจะตั้งค่าเสร็จ";
+      "📌 URL ที่ต้องเพิ่ม: " + InpLicenseServer + "\\n\\n"
+      "หมายเหตุ: ใช้ URL เดียวกับ License Server\\n"
+      "ระบบจะแจ้งเตือนซ้ำทุก 1 ชั่วโมงจนกว่าจะตั้งค่าเสร็จ";
    
    // Show MessageBox with OK button
    // MB_OK | MB_ICONWARNING = 0x30
@@ -5679,10 +5681,10 @@ void ShowWebRequestSetupAlert()
    // Also print to journal for reference
    Print("========================================");
    Print("NEWS FILTER: WebRequest NOT CONFIGURED!");
-   Print("URL Required: https://nfs.faireconomy.media");
+   Print("URL Required: ", InpLicenseServer);
    Print("Go to: Tools -> Options -> Expert Advisors");
    Print("Enable: Allow WebRequest for listed URL");
-   Print("Add URL: https://nfs.faireconomy.media");
+   Print("Add URL: ", InpLicenseServer);
    Print("Then RESTART the EA");
    Print("========================================");
 }
@@ -5708,28 +5710,56 @@ void RefreshNewsData()
    g_forceNewsRefresh = false;
    
    // *** DO NOT set g_lastNewsRefresh here - only on SUCCESS ***
-   Print("NEWS FILTER: Refreshing news data from ForexFactory...");
+   Print("NEWS FILTER: Refreshing news data from MoneyX API...");
    
    // Get current week string for URL
    MqlDateTime dt;
    TimeToStruct(currentTime, dt);
    
-   // Month names
-   string months[] = {"jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"};
+   // *** USE MONEYX API ENDPOINT INSTEAD OF EXTERNAL SOURCE ***
+   // Build URL with filters based on user settings
+   string currencies = "";
+   if(InpNewsUseChartCurrency)
+   {
+      // Get chart symbol currencies (e.g., XAUUSD -> XAU,USD)
+      string sym = Symbol();
+      if(StringLen(sym) >= 6)
+      {
+         currencies = StringSubstr(sym, 0, 3) + "," + StringSubstr(sym, 3, 3);
+      }
+   }
+   else
+   {
+      // Use user-defined currencies (convert ; to , for API)
+      currencies = InpNewsCurrencies;
+      StringReplace(currencies, ";", ",");
+   }
    
-   // ForexFactory JSON API URL with cache-busting timestamp
-   string weekUrl = "https://nfs.faireconomy.media/ff_calendar_thisweek.json?ts=" + IntegerToString((long)currentTime);
+   // Build impact filter string
+   string impacts = "";
+   if(InpFilterHighNews) impacts += "High,";
+   if(InpFilterMedNews) impacts += "Medium,";
+   if(InpFilterLowNews) impacts += "Low,";
+   if(StringLen(impacts) > 0)
+      impacts = StringSubstr(impacts, 0, StringLen(impacts) - 1);  // Remove trailing comma
+   
+   // Construct API URL with cache-busting timestamp
+   string apiUrl = InpLicenseServer + "/functions/v1/economic-news?ts=" + IntegerToString((long)currentTime);
+   if(StringLen(currencies) > 0)
+      apiUrl += "&currency=" + currencies;
+   if(StringLen(impacts) > 0)
+      apiUrl += "&impact=" + impacts;
    
    // Use WebRequest to fetch JSON with proper headers
    char postData[], resultData[];
-   string headers = "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64)\\r\\nAccept: application/json\\r\\nConnection: close";
+   string headers = "User-Agent: MoneyX-EA/5.1\\r\\nAccept: application/json\\r\\nConnection: close";
    string resultHeaders;
    
    int timeout = 10000;  // 10 seconds for reliable fetch
    
-   Print("NEWS FILTER: Fetching from ", weekUrl);
+   Print("NEWS FILTER: Fetching from ", apiUrl);
    
-   int result = WebRequest("GET", weekUrl, headers, timeout, postData, resultData, resultHeaders);
+   int result = WebRequest("GET", apiUrl, headers, timeout, postData, resultData, resultHeaders);
    
    // *** RETRY MECHANISM: If first attempt fails, try once more ***
    if(result == -1)
@@ -5738,7 +5768,7 @@ void RefreshNewsData()
       Print("NEWS FILTER: First attempt failed (error ", firstError, "), retrying after 1 second...");
       Sleep(1000);  // Wait 1 second before retry
       ResetLastError();
-      result = WebRequest("GET", weekUrl, headers, timeout, postData, resultData, resultHeaders);
+      result = WebRequest("GET", apiUrl, headers, timeout, postData, resultData, resultHeaders);
    }
    
    if(result == -1)
@@ -5786,15 +5816,32 @@ void RefreshNewsData()
       return;
    }
    
-   // Check if we got actual JSON array content (starts with [)
+   // Check if we got valid JSON response
    string trimmedContent = jsonContent;
    StringTrimLeft(trimmedContent);
-   if(StringSubstr(trimmedContent, 0, 1) != "[")
+   
+   // *** MoneyX API returns { success: true, count: X, data: [...] } format ***
+   // Check if we got a valid response object
+   if(StringSubstr(trimmedContent, 0, 1) != "{")
    {
-      Print("NEWS FILTER WARNING: Response is not a JSON array!");
+      Print("NEWS FILTER WARNING: Response is not a JSON object!");
       Print("NEWS FILTER DEBUG: Response starts with: ", StringSubstr(trimmedContent, 0, 50));
       Print("NEWS FILTER DEBUG: Response headers: ", resultHeaders);
       // Keep existing cache
+      if(g_newsEventCount > 0)
+      {
+         g_usingCachedNews = true;
+         Print("NEWS FILTER: Keeping cached data (", g_newsEventCount, " events)");
+      }
+      return;
+   }
+   
+   // Check for success field
+   string successValue = ExtractJSONValue(jsonContent, "success");
+   if(successValue != "true")
+   {
+      string errorMsg = ExtractJSONValue(jsonContent, "error");
+      Print("NEWS FILTER ERROR: API returned error: ", errorMsg);
       if(g_newsEventCount > 0)
       {
          g_usingCachedNews = true;
@@ -5809,15 +5856,40 @@ void RefreshNewsData()
    int tmpEventCount = 0;
    ArrayResize(tmpEvents, 100);  // Pre-allocate for 100 events
    
-   // Split by },{ to get individual event objects
-   int searchPos = 0;
+   // Find the data array
+   int dataStart = StringFind(jsonContent, "\\"data\\":", 0);
+   if(dataStart < 0)
+   {
+      Print("NEWS FILTER WARNING: No data array found in response!");
+      if(g_newsEventCount > 0)
+      {
+         g_usingCachedNews = true;
+         Print("NEWS FILTER: Keeping cached data (", g_newsEventCount, " events)");
+      }
+      return;
+   }
+   
+   // Find the start of the array [
+   int arrayStart = StringFind(jsonContent, "[", dataStart);
+   if(arrayStart < 0)
+   {
+      Print("NEWS FILTER WARNING: Data array not found!");
+      if(g_newsEventCount > 0)
+      {
+         g_usingCachedNews = true;
+         Print("NEWS FILTER: Keeping cached data (", g_newsEventCount, " events)");
+      }
+      return;
+   }
+   
+   int searchPos = arrayStart + 1;
    int eventCount = 0;
    
-   // Find first { 
-   int firstBrace = StringFind(jsonContent, "{", 0);
+   // Find first { in the data array
+   int firstBrace = StringFind(jsonContent, "{", searchPos);
    if(firstBrace < 0)
    {
-      Print("NEWS FILTER WARNING: No JSON objects found in response!");
+      Print("NEWS FILTER WARNING: No JSON objects found in data array!");
       if(g_newsEventCount > 0)
       {
          g_usingCachedNews = true;
@@ -5848,16 +5920,22 @@ void RefreshNewsData()
                break;
             }
          }
+         // Stop at end of array
+         else if(c == "]" && braceDepth == 0)
+         {
+            break;
+         }
       }
       
       if(objEnd < 0) break;
       
       string eventJson = StringSubstr(jsonContent, objStart, objEnd - objStart + 1);
       
-      // Extract event data from JSON
+      // *** Extract event data from MoneyX API format ***
+      // API returns: title, currency, timestamp (Unix), impact, forecast, previous
       string title = ExtractJSONValue(eventJson, "title");
-      string country = ExtractJSONValue(eventJson, "country");
-      string dateStr = ExtractJSONValue(eventJson, "date");  // ISO 8601 format
+      string currency = ExtractJSONValue(eventJson, "currency");  // API uses 'currency' not 'country'
+      string timestampStr = ExtractJSONValue(eventJson, "timestamp");  // Unix timestamp
       string impact = ExtractJSONValue(eventJson, "impact");
       
       // *** DEBUG: Log first 5 events parsed ***
@@ -5865,14 +5943,14 @@ void RefreshNewsData()
       {
          Print("NEWS FILTER DEBUG: Event #", eventCount + 1);
          Print("  Title: ", title);
-         Print("  Country: ", country);
-         Print("  Date: ", dateStr);
+         Print("  Currency: ", currency);
+         Print("  Timestamp: ", timestampStr);
          Print("  Impact: ", impact);
       }
       eventCount++;
       
-      // Parse ISO 8601 datetime
-      datetime eventTime = ParseISODateTime(dateStr);
+      // *** Parse Unix timestamp (convert to datetime) ***
+      datetime eventTime = (datetime)StringToInteger(timestampStr);
       
       // Skip holidays (impact == "Holiday")
       if(impact == "Holiday")
@@ -5884,7 +5962,7 @@ void RefreshNewsData()
       // Check if this event is relevant
       bool isRelevant = false;
       
-      if(IsCurrencyRelevant(country))
+      if(IsCurrencyRelevant(currency))
       {
          // Check impact filters
          if(InpFilterHighNews && impact == "High")
@@ -5903,7 +5981,7 @@ void RefreshNewsData()
       if(tmpEventCount < ArraySize(tmpEvents))
       {
          tmpEvents[tmpEventCount].title = title;
-         tmpEvents[tmpEventCount].country = country;
+         tmpEvents[tmpEventCount].country = currency;  // Store currency as country
          tmpEvents[tmpEventCount].time = eventTime;
          tmpEvents[tmpEventCount].impact = impact;
          tmpEvents[tmpEventCount].isRelevant = isRelevant;
