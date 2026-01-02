@@ -122,10 +122,12 @@ const AccountPortfolio = () => {
   const fetchTradeHistory = async () => {
     setIsLoading(true);
     try {
+      // Only fetch closed positions (entry_type = 'out') which have actual profit/loss
       let query = supabase
         .from('trade_history')
         .select('*')
         .eq('mt5_account_id', id)
+        .eq('entry_type', 'out')  // Only closed positions
         .order('close_time', { ascending: false, nullsFirst: false });
 
       // Apply time filter

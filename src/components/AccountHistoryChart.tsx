@@ -61,72 +61,132 @@ const AccountHistoryChart = ({ accountIds }: AccountHistoryChartProps) => {
           break;
       }
 
-      // Fetch detailed history
-      let query = supabase
+      // Fetch current balance from mt5_accounts
+      const { data: accountData } = await supabase
+        .from('mt5_accounts')
+        .select('balance, equity, initial_balance')
+        .in('id', accountIds)
+        .single();
+
+      const currentBalance = Number(accountData?.balance || 0);
+      const currentEquity = Number(accountData?.equity || 0);
+
+      // Fetch trade history (closed positions only) to calculate historical balance
+      let tradeQuery = supabase
+        .from('trade_history')
+        .select('close_time, profit, commission, swap')
+        .in('mt5_account_id', accountIds)
+        .eq('entry_type', 'out')  // Only closed positions
+        .not('close_time', 'is', null)
+        .order('close_time', { ascending: true });
+
+      const { data: tradeData, error: tradeError } = await tradeQuery;
+
+      if (tradeError) throw tradeError;
+
+      // Also fetch account_history for recent synced data
+      let historyQuery = supabase
         .from('account_history')
         .select('recorded_at, balance, equity, profit_loss')
         .in('mt5_account_id', accountIds)
         .order('recorded_at', { ascending: true });
 
       if (startDate) {
-        query = query.gte('recorded_at', startDate.toISOString());
+        historyQuery = historyQuery.gte('recorded_at', startDate.toISOString());
       }
 
-      const { data: historyData, error: historyError } = await query;
+      const { data: historyData } = await historyQuery;
 
-      if (historyError) throw historyError;
-
-      // Also fetch summary data for older periods
-      let summaryQuery = supabase
-        .from('account_summary')
-        .select('summary_date, avg_balance, avg_equity, total_profit')
-        .in('mt5_account_id', accountIds)
-        .order('summary_date', { ascending: true });
-
-      if (startDate) {
-        summaryQuery = summaryQuery.gte('summary_date', startDate.toISOString().split('T')[0]);
-      }
-
-      const { data: summaryData } = await summaryQuery;
-
-      // Combine and aggregate data by date
+      // Build chart data from trade history (calculate balance backwards)
       const dataMap = new Map<string, { balance: number; equity: number; profit_loss: number; count: number }>();
 
-      // Add summary data first (older data)
-      summaryData?.forEach((item) => {
-        const dateKey = item.summary_date;
-        if (!dataMap.has(dateKey)) {
-          dataMap.set(dateKey, { balance: 0, equity: 0, profit_loss: 0, count: 0 });
-        }
-        const existing = dataMap.get(dateKey)!;
-        existing.balance += Number(item.avg_balance || 0);
-        existing.equity += Number(item.avg_equity || 0);
-        existing.profit_loss += Number(item.total_profit || 0);
-        existing.count += 1;
-      });
+      if (tradeData && tradeData.length > 0) {
+        // Calculate cumulative P/L from trades to build historical balance
+        let cumulativeProfit = 0;
+        const tradesByDate = new Map<string, number>();
 
-      // Add detailed history (recent data)
+        // Sum profits by date
+        tradeData.forEach((trade) => {
+          if (!trade.close_time) return;
+          const dateKey = new Date(trade.close_time).toISOString().split('T')[0];
+          const totalProfit = Number(trade.profit || 0) + Number(trade.commission || 0) + Number(trade.swap || 0);
+          
+          if (!tradesByDate.has(dateKey)) {
+            tradesByDate.set(dateKey, 0);
+          }
+          tradesByDate.set(dateKey, tradesByDate.get(dateKey)! + totalProfit);
+        });
+
+        // Calculate total profit from all trades
+        const totalAllProfit = Array.from(tradesByDate.values()).reduce((sum, p) => sum + p, 0);
+
+        // Starting balance = current balance - total profit
+        const startingBalance = currentBalance - totalAllProfit;
+
+        // Build running balance day by day
+        let runningBalance = startingBalance;
+        const sortedDates = Array.from(tradesByDate.keys()).sort();
+
+        sortedDates.forEach((dateKey) => {
+          const dailyProfit = tradesByDate.get(dateKey) || 0;
+          runningBalance += dailyProfit;
+          cumulativeProfit += dailyProfit;
+
+          dataMap.set(dateKey, {
+            balance: runningBalance,
+            equity: runningBalance, // Approximate equity as balance when position is closed
+            profit_loss: cumulativeProfit,
+            count: 1,
+          });
+        });
+
+        // Add today's data if we have current account data
+        const todayKey = new Date().toISOString().split('T')[0];
+        if (!dataMap.has(todayKey) && accountData) {
+          dataMap.set(todayKey, {
+            balance: currentBalance,
+            equity: currentEquity,
+            profit_loss: cumulativeProfit,
+            count: 1,
+          });
+        }
+      }
+
+      // Merge with account_history data (for more granular/recent data)
       historyData?.forEach((item) => {
         const dateKey = new Date(item.recorded_at).toISOString().split('T')[0];
-        if (!dataMap.has(dateKey)) {
-          dataMap.set(dateKey, { balance: 0, equity: 0, profit_loss: 0, count: 0 });
+        // Prefer account_history if it has higher values (more recent sync)
+        const existing = dataMap.get(dateKey);
+        if (!existing || Number(item.balance || 0) > existing.balance) {
+          dataMap.set(dateKey, {
+            balance: Number(item.balance || 0),
+            equity: Number(item.equity || 0),
+            profit_loss: Number(item.profit_loss || 0),
+            count: 1,
+          });
         }
-        const existing = dataMap.get(dateKey)!;
-        existing.balance += Number(item.balance || 0);
-        existing.equity += Number(item.equity || 0);
-        existing.profit_loss += Number(item.profit_loss || 0);
-        existing.count += 1;
       });
 
+      // Filter by timeframe
+      let filteredEntries = Array.from(dataMap.entries());
+      if (startDate) {
+        const startMs = startDate.getTime();
+        filteredEntries = filteredEntries.filter(([dateKey]) => {
+          return new Date(dateKey).getTime() >= startMs;
+        });
+      }
+
       // Convert to array and format
-      const chartData: ChartDataPoint[] = Array.from(dataMap.entries())
-        .map(([date, values]) => ({
-          date: new Date(date).toLocaleDateString('th-TH', { day: '2-digit', month: 'short' }),
-          balance: values.count > 0 ? values.balance / values.count : 0,
-          equity: values.count > 0 ? values.equity / values.count : 0,
-          profit_loss: values.count > 0 ? values.profit_loss / values.count : 0,
+      const chartData: ChartDataPoint[] = filteredEntries
+        .map(([dateKey, values]) => ({
+          date: new Date(dateKey).toLocaleDateString('th-TH', { day: '2-digit', month: 'short' }),
+          rawDate: dateKey, // Keep for sorting
+          balance: values.balance,
+          equity: values.equity,
+          profit_loss: values.profit_loss,
         }))
-        .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+        .sort((a, b) => new Date(a.rawDate).getTime() - new Date(b.rawDate).getTime())
+        .map(({ rawDate, ...rest }) => rest); // Remove rawDate from final output
 
       setData(chartData);
     } catch (error) {
