@@ -14,6 +14,8 @@ import Customers from "./pages/admin/Customers";
 import NewCustomer from "./pages/admin/NewCustomer";
 import CustomerDetail from "./pages/admin/CustomerDetail";
 import AccountPortfolio from "./pages/admin/AccountPortfolio";
+import Accounts from "./pages/admin/Accounts";
+import TradingSystems from "./pages/admin/TradingSystems";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -35,7 +37,9 @@ const App = () => (
             <Route path="/admin/customers" element={<Customers />} />
             <Route path="/admin/customers/new" element={<NewCustomer />} />
             <Route path="/admin/customers/:id" element={<CustomerDetail />} />
+            <Route path="/admin/accounts" element={<Accounts />} />
             <Route path="/admin/accounts/:id/portfolio" element={<AccountPortfolio />} />
+            <Route path="/admin/systems" element={<TradingSystems />} />
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
           </Routes>

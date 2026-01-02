@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
+import TotalAccountHistoryChart from '@/components/TotalAccountHistoryChart';
 import { 
   Users, 
   CreditCard, 
@@ -324,6 +325,9 @@ const Admin = () => {
             </CardContent>
           </Card>
         </div>
+
+        {/* Total Account History Chart */}
+        <TotalAccountHistoryChart />
 
         {/* Quick Actions & Expiring Alerts */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
