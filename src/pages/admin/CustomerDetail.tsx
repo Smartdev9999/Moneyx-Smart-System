@@ -200,7 +200,8 @@ const CustomerDetail = () => {
   };
 
   const calculateExpiryDate = (packageType: string, fromDate?: Date): string => {
-    const date = fromDate || new Date();
+    // Clone the date to avoid mutating the original
+    const date = fromDate ? new Date(fromDate.getTime()) : new Date();
     switch (packageType) {
       case '1month':
         date.setMonth(date.getMonth() + 1);
