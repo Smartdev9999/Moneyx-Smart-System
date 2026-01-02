@@ -930,14 +930,12 @@ bool SyncAccountDataWithEvent(ENUM_SYNC_EVENT eventType)
    json += "\\"total_trades\\":" + IntegerToString(totalTrades) + ",";
    json += "\\"event_type\\":\\"" + eventTypeStr + "\\"";
    
-   // Include trade history on order close events
-   if(eventType == SYNC_ORDER_CLOSE)
+   // Include trade history on all sync events (scheduled + order close)
+   // This ensures historical data is synced on EA startup and periodically
+   string tradeHistoryJson = BuildTradeHistoryJson();
+   if(StringLen(tradeHistoryJson) > 2)  // Not empty array "[]"
    {
-      string tradeHistoryJson = BuildTradeHistoryJson();
-      if(StringLen(tradeHistoryJson) > 2)  // Not empty array "[]"
-      {
-         json += ",\\"trade_history\\":" + tradeHistoryJson;
-      }
+      json += ",\\"trade_history\\":" + tradeHistoryJson;
    }
    
    json += "}";
