@@ -1764,9 +1764,40 @@ void UpdateDashboard()
    // Get Current Trend from CDC
    string trendDisplay = CDCTrend + " (" + EnumToString(InpCDCTimeframe) + ")";
    
-   // Update Status
-   ObjectSetString(0, DashPrefix + "StatusText", OBJPROP_TEXT, g_eaIsPaused ? "PAUSED" : "Working");
-   ObjectSetInteger(0, DashPrefix + "StatusText", OBJPROP_COLOR, g_eaIsPaused ? clrOrangeRed : clrLime);
+   // Update Status - Priority: License Status > EA Pause Status
+   string statusText = "Working";
+   color statusColor = clrLime;
+   
+   // Check license status first (higher priority than pause status)
+   if(g_licenseStatus == LICENSE_SUSPENDED)
+   {
+      statusText = "SUSPENDED";
+      statusColor = clrRed;
+   }
+   else if(g_licenseStatus == LICENSE_EXPIRED)
+   {
+      statusText = "EXPIRED";
+      statusColor = clrRed;
+   }
+   else if(g_licenseStatus == LICENSE_NOT_FOUND)
+   {
+      statusText = "INVALID";
+      statusColor = clrRed;
+   }
+   else if(g_licenseStatus == LICENSE_ERROR)
+   {
+      statusText = "ERROR";
+      statusColor = clrOrangeRed;
+   }
+   else if(g_eaIsPaused)
+   {
+      statusText = "PAUSED";
+      statusColor = clrOrangeRed;
+   }
+   // else: Working (default)
+   
+   ObjectSetString(0, DashPrefix + "StatusText", OBJPROP_TEXT, statusText);
+   ObjectSetInteger(0, DashPrefix + "StatusText", OBJPROP_COLOR, statusColor);
    ObjectSetString(0, DashPrefix + "BtnPause", OBJPROP_TEXT, g_eaIsPaused ? "Start" : "Pause");
    ObjectSetInteger(0, DashPrefix + "BtnPause", OBJPROP_BGCOLOR, g_eaIsPaused ? clrGreen : clrOrangeRed);
    
