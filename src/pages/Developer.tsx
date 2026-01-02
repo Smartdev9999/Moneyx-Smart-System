@@ -438,17 +438,6 @@ enum ENUM_BB_MA_TYPE
                           >
                             <Pencil className="w-4 h-4" />
                           </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleDelete(system);
-                            }}
-                            disabled={!!system.accounts_count && system.accounts_count > 0}
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </Button>
                         </div>
                       </div>
                     ))}
