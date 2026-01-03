@@ -31,10 +31,11 @@ input int      InpPauseAfterHigh = 60;
 input int      InpPauseBeforeMedium = 30;
 input int      InpPauseAfterMedium = 30;
 
-input group "=== AI Analysis Settings ==="
+input group "=== AI Market Bias Settings ==="
 input bool     InpEnableAIAnalysis = true;
 input string   InpAIPairs = "EURUSD,GBPUSD,XAUUSD,USDJPY,AUDUSD";
 input ENUM_TIMEFRAMES InpAITimeframe = PERIOD_H1;
+input int      InpBiasThreshold = 70;  // Minimum probability to trade (%)
 
 //+------------------------------------------------------------------+
 //| CONFIGURATION CONSTANTS                                           |
@@ -74,15 +75,19 @@ struct SNewsEvent
    int       impactLevel;
 };
 
-struct SAISignal
+struct SMarketBias
 {
    string    symbol;
-   string    trend;
-   string    signal;
-   int       confidence;
-   double    entryPrice;
-   double    stopLoss;
-   double    takeProfit;
+   int       bullishProb;      // 0-100
+   int       bearishProb;      // 0-100
+   int       sidewaysProb;     // 0-100
+   string    dominantBias;     // bullish, bearish, sideways
+   bool      thresholdMet;     // >= threshold%
+   string    marketStructure;
+   string    trendH4;
+   string    trendDaily;
+   string    patterns;
+   string    recommendation;   // "Only LONG", "Only SHORT", "No Trade"
    string    reasoning;
    datetime  lastUpdate;
 };
@@ -110,14 +115,15 @@ string       g_currentNewsTitle = "";
 datetime     g_currentPauseEnd = 0;
 bool         g_isTradingPaused = false;
 
-// AI Analysis
-SAISignal    g_aiSignals[];
-int          g_aiSignalCount = 0;
-datetime     g_lastAIAnalysis = 0;
+// AI Market Bias Analysis
+SMarketBias  g_marketBias[];
+int          g_biasCount = 0;
+datetime     g_lastBiasAnalysis = 0;
 datetime     g_lastCandleTime[];
 string       g_aiPairs[];
 int          g_aiPairCount = 0;
-string       g_marketSentiment = "neutral";
+string       g_overallBias = "sideways";
+int          g_tradablePairs = 0;
 
 // Data Sync
 datetime g_lastDataSync = 0;
@@ -566,7 +572,7 @@ string GetNewsStatusString()
 }
 
 //+------------------------------------------------------------------+
-//| AI MARKET ANALYSIS                                                |
+//| AI MARKET BIAS ANALYSIS                                           |
 //+------------------------------------------------------------------+
 void InitAIAnalysis()
 {
@@ -581,19 +587,23 @@ void InitAIAnalysis()
    
    ArrayResize(g_aiPairs, g_aiPairCount);
    ArrayResize(g_lastCandleTime, g_aiPairCount);
-   ArrayResize(g_aiSignals, g_aiPairCount);
+   ArrayResize(g_marketBias, g_aiPairCount);
    
    for(int i = 0; i < g_aiPairCount; i++)
    {
       g_aiPairs[i] = pairArray[i];
       g_lastCandleTime[i] = 0;
-      g_aiSignals[i].symbol = pairArray[i];
-      g_aiSignals[i].signal = "hold";
-      g_aiSignals[i].confidence = 0;
+      g_marketBias[i].symbol = pairArray[i];
+      g_marketBias[i].dominantBias = "sideways";
+      g_marketBias[i].bullishProb = 33;
+      g_marketBias[i].bearishProb = 33;
+      g_marketBias[i].sidewaysProb = 34;
+      g_marketBias[i].thresholdMet = false;
+      g_marketBias[i].recommendation = "No Trade";
    }
    
-   g_aiSignalCount = g_aiPairCount;
-   Print("[AI Analysis] Initialized for ", g_aiPairCount, " pairs: ", InpAIPairs);
+   g_biasCount = g_aiPairCount;
+   Print("[AI Bias] Initialized for ", g_aiPairCount, " pairs: ", InpAIPairs, " | Threshold: ", InpBiasThreshold, "%");
 }
 
 bool IsNewCandle(string symbol, int index)
@@ -708,48 +718,53 @@ string BuildAIRequestJson()
       json += "}";
    }
    
-   json += "]}";
+   json += "],\"threshold\":" + IntegerToString(InpBiasThreshold) + "}";
    return json;
 }
 
-bool ParseAISignal(string json, int index)
+bool ParseMarketBias(string json, int index)
 {
    // Extract symbol
    string symbol = ExtractJsonString(json, "symbol");
    if(symbol != g_aiPairs[index]) return false;
    
-   g_aiSignals[index].symbol = symbol;
-   g_aiSignals[index].trend = ExtractJsonString(json, "trend");
-   g_aiSignals[index].signal = ExtractJsonString(json, "signal");
-   g_aiSignals[index].confidence = ExtractJsonInt(json, "confidence");
-   g_aiSignals[index].entryPrice = ExtractJsonDouble(json, "entry_price");
-   g_aiSignals[index].stopLoss = ExtractJsonDouble(json, "stop_loss");
-   g_aiSignals[index].takeProfit = ExtractJsonDouble(json, "take_profit");
-   g_aiSignals[index].reasoning = ExtractJsonString(json, "reasoning");
-   g_aiSignals[index].lastUpdate = TimeCurrent();
+   g_marketBias[index].symbol = symbol;
+   g_marketBias[index].bullishProb = ExtractJsonInt(json, "bullish_probability");
+   g_marketBias[index].bearishProb = ExtractJsonInt(json, "bearish_probability");
+   g_marketBias[index].sidewaysProb = ExtractJsonInt(json, "sideways_probability");
+   g_marketBias[index].dominantBias = ExtractJsonString(json, "dominant_bias");
+   g_marketBias[index].thresholdMet = (StringFind(json, "\"threshold_met\":true") >= 0);
+   g_marketBias[index].marketStructure = ExtractJsonString(json, "market_structure");
+   g_marketBias[index].trendH4 = ExtractJsonString(json, "trend_h4");
+   g_marketBias[index].trendDaily = ExtractJsonString(json, "trend_daily");
+   g_marketBias[index].patterns = ExtractJsonString(json, "patterns");
+   g_marketBias[index].recommendation = ExtractJsonString(json, "recommendation");
+   g_marketBias[index].reasoning = ExtractJsonString(json, "reasoning");
+   g_marketBias[index].lastUpdate = TimeCurrent();
    
    return true;
 }
 
-bool ParseAIResponse(string response)
+bool ParseBiasResponse(string response)
 {
    if(StringFind(response, "\"success\":true") < 0)
    {
-      Print("[AI Analysis] Request failed: ", response);
+      Print("[AI Bias] Request failed: ", response);
       return false;
    }
    
-   // Extract market sentiment
-   g_marketSentiment = ExtractJsonString(response, "market_sentiment");
+   // Extract overall bias and tradable pairs
+   g_overallBias = ExtractJsonString(response, "overall_bias");
+   g_tradablePairs = ExtractJsonInt(response, "tradable_pairs");
    
-   // Parse each signal from analysis array
+   // Parse each bias from analysis array
    int analysisStart = StringFind(response, "\"analysis\":[");
    if(analysisStart < 0) return false;
    
    int searchPos = analysisStart;
-   int signalIndex = 0;
+   int biasIndex = 0;
    
-   while(signalIndex < g_aiPairCount)
+   while(biasIndex < g_aiPairCount)
    {
       int objStart = StringFind(response, "{\"symbol\":", searchPos);
       if(objStart < 0) break;
@@ -757,26 +772,26 @@ bool ParseAIResponse(string response)
       int objEnd = StringFind(response, "}", objStart);
       if(objEnd < 0) break;
       
-      string signalJson = StringSubstr(response, objStart, objEnd - objStart + 1);
+      string biasJson = StringSubstr(response, objStart, objEnd - objStart + 1);
       
       // Find matching pair index
       for(int i = 0; i < g_aiPairCount; i++)
       {
-         if(StringFind(signalJson, "\"" + g_aiPairs[i] + "\"") >= 0)
+         if(StringFind(biasJson, "\"" + g_aiPairs[i] + "\"") >= 0)
          {
-            ParseAISignal(signalJson, i);
+            ParseMarketBias(biasJson, i);
             break;
          }
       }
       
       searchPos = objEnd;
-      signalIndex++;
+      biasIndex++;
    }
    
    return true;
 }
 
-bool RequestAIAnalysis()
+bool RequestMarketBias()
 {
    if(IsTestMode()) return true;
    if(!InpEnableAIAnalysis) return true;
@@ -799,29 +814,29 @@ bool RequestAIAnalysis()
    {
       int error = GetLastError();
       if(error == 4060 || error == 4024)
-         Print("[AI Analysis] ERROR: Add ", LICENSE_BASE_URL, " to allowed URLs");
+         Print("[AI Bias] ERROR: Add ", LICENSE_BASE_URL, " to allowed URLs");
       return false;
    }
    
    if(res != 200)
    {
-      Print("[AI Analysis] HTTP Error: ", res);
+      Print("[AI Bias] HTTP Error: ", res);
       return false;
    }
    
    string response = CharArrayToString(result, 0, WHOLE_ARRAY, CP_UTF8);
-   bool success = ParseAIResponse(response);
+   bool success = ParseBiasResponse(response);
    
    if(success)
    {
-      g_lastAIAnalysis = TimeCurrent();
-      Print("[AI Analysis] Updated signals for ", g_aiPairCount, " pairs. Sentiment: ", g_marketSentiment);
+      g_lastBiasAnalysis = TimeCurrent();
+      Print("[AI Bias] Updated bias for ", g_aiPairCount, " pairs. Overall: ", g_overallBias, " | Tradable: ", g_tradablePairs);
    }
    
    return success;
 }
 
-void CheckAIAnalysis()
+void CheckMarketBias()
 {
    if(!InpEnableAIAnalysis) return;
    if(IsTestMode()) return;
@@ -830,34 +845,61 @@ void CheckAIAnalysis()
    // Only analyze on new candle
    if(CheckAnyNewCandle())
    {
-      Print("[AI Analysis] New candle detected, requesting analysis...");
-      RequestAIAnalysis();
+      Print("[AI Bias] New candle detected, requesting market bias...");
+      RequestMarketBias();
    }
 }
 
-SAISignal GetAISignal(string symbol)
+SMarketBias GetMarketBias(string symbol)
 {
-   SAISignal emptySignal;
-   emptySignal.signal = "hold";
-   emptySignal.confidence = 0;
+   SMarketBias emptyBias;
+   emptyBias.symbol = symbol;
+   emptyBias.dominantBias = "sideways";
+   emptyBias.bullishProb = 33;
+   emptyBias.bearishProb = 33;
+   emptyBias.sidewaysProb = 34;
+   emptyBias.thresholdMet = false;
+   emptyBias.recommendation = "No Trade";
    
-   for(int i = 0; i < g_aiSignalCount; i++)
+   for(int i = 0; i < g_biasCount; i++)
    {
-      if(g_aiSignals[i].symbol == symbol)
-         return g_aiSignals[i];
+      if(g_marketBias[i].symbol == symbol)
+         return g_marketBias[i];
    }
    
-   return emptySignal;
+   return emptyBias;
 }
 
-string GetAIStatusString()
+// Check if we can trade in a specific direction based on AI bias
+bool CanTradeDirection(string symbol, string direction)
+{
+   SMarketBias bias = GetMarketBias(symbol);
+   
+   if(!bias.thresholdMet) return false;
+   
+   if(direction == "buy" || direction == "long")
+      return (bias.dominantBias == "bullish");
+   
+   if(direction == "sell" || direction == "short")
+      return (bias.dominantBias == "bearish");
+   
+   return false;
+}
+
+string GetBiasStatusString()
 {
    if(!InpEnableAIAnalysis) return "Disabled";
    
-   if(g_lastAIAnalysis == 0) return "Waiting for first analysis...";
+   if(g_lastBiasAnalysis == 0) return "Waiting for first analysis...";
    
-   int elapsed = (int)(TimeCurrent() - g_lastAIAnalysis);
+   int elapsed = (int)(TimeCurrent() - g_lastBiasAnalysis);
    int mins = elapsed / 60;
+   
+   string status = StringFormat("Overall: %s | Tradable: %d/%d | Updated: %d min ago",
+      g_overallBias, g_tradablePairs, g_aiPairCount, mins);
+   
+   return status;
+}
    
    string status = "Sentiment: " + g_marketSentiment + " | Updated: " + IntegerToString(mins) + "m ago";
    return status;
@@ -1104,7 +1146,7 @@ int OnInit()
    
    Print("[Money Printing Machine] EA initialized successfully!");
    Print("[Money Printing Machine] Account: ", AccountInfoInteger(ACCOUNT_LOGIN));
-   Print("[Money Printing Machine] AI Analysis: ", InpEnableAIAnalysis ? "Enabled" : "Disabled");
+   Print("[Money Printing Machine] AI Bias Analysis: ", InpEnableAIAnalysis ? "Enabled" : "Disabled", " | Threshold: ", InpBiasThreshold, "%");
    
    SyncAccountData("init");
    
@@ -1125,7 +1167,7 @@ void OnTick()
    }
    
    CheckScheduledSync();
-   CheckAIAnalysis();
+   CheckMarketBias();
    
    bool canTrade = CheckNewsFilter();
    
@@ -1144,9 +1186,20 @@ void OnTick()
    }
    
    // === YOUR ENTRY LOGIC HERE ===
-   // You can use AI signals like this:
-   // SAISignal signal = GetAISignal("XAUUSD");
-   // if(signal.signal == "buy" && signal.confidence >= 70) { ... }
+   // Use AI Market Bias to filter direction:
+   // SMarketBias bias = GetMarketBias(_Symbol);
+   // if(bias.thresholdMet && bias.dominantBias == "bullish")
+   // {
+   //    // Only look for BUY setups with SMC + Price Action
+   // }
+   // else if(bias.thresholdMet && bias.dominantBias == "bearish")
+   // {
+   //    // Only look for SELL setups with SMC + Price Action
+   // }
+   // else
+   // {
+   //    // No trade today - probability below threshold
+   // }
    
 }
 
