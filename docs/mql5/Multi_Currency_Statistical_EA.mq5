@@ -1,117 +1,224 @@
 //+------------------------------------------------------------------+
 //|                                Multi_Currency_Statistical_EA.mq5 |
-//|                                      Multi Currency Statistical v1.0 |
+//|                        Statistical Arbitrage (Pairs Trading) v2.0 |
+//|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "1.0"
+#property version   "2.0"
 #property strict
+#property description "Statistical Arbitrage / Pairs Trading Expert Advisor"
+#property description "Market-Neutral Mean Reversion Strategy"
 
 #include <Trade/Trade.mqh>
 
 //+------------------------------------------------------------------+
-//| INPUT PARAMETERS                                                    |
+//| PAIR STRUCTURE                                                     |
+//+------------------------------------------------------------------+
+struct PairInfo
+{
+   string         symbolA;           // Symbol A (Base)
+   string         symbolB;           // Symbol B (Hedge)
+   bool           enabled;           // Pair On/Off
+   double         correlation;       // Current Correlation
+   double         hedgeRatio;        // Beta (Hedge Ratio)
+   double         spreadMean;        // Spread Mean
+   double         spreadStdDev;      // Spread Std Deviation
+   double         currentSpread;     // Current Spread Value
+   double         zScore;            // Current Z-Score
+   double         lotA;              // Lot for Symbol A
+   double         lotB;              // Lot for Symbol B (Adjusted)
+   ulong          ticketA;           // Position Ticket A
+   ulong          ticketB;           // Position Ticket B
+   int            direction;         // 1=Long Spread, -1=Short Spread, 0=None
+   double         entrySpread;       // Entry Spread Value
+   datetime       entryTime;         // Entry Time
+   double         pairProfit;        // Current Pair Profit
+};
+
+//+------------------------------------------------------------------+
+//| INPUT PARAMETERS                                                   |
 //+------------------------------------------------------------------+
 input group "=== Trading Settings ==="
-input double   InpLotSize = 0.01;              // Lot Size
-input int      InpMagicNumber = 123456;        // Magic Number
-input int      InpSlippage = 30;               // Slippage (points)
-
-input group "=== Symbol Settings ==="
-input string   InpSymbol1 = "EURUSD";          // Symbol 1
-input string   InpSymbol2 = "GBPUSD";          // Symbol 2
-input string   InpSymbol3 = "USDJPY";          // Symbol 3
-input string   InpSymbol4 = "XAUUSD";          // Symbol 4
-input string   InpSymbol5 = "USDCHF";          // Symbol 5
-input bool     InpEnableSymbol1 = true;        // Enable Symbol 1
-input bool     InpEnableSymbol2 = true;        // Enable Symbol 2
-input bool     InpEnableSymbol3 = true;        // Enable Symbol 3
-input bool     InpEnableSymbol4 = true;        // Enable Symbol 4
-input bool     InpEnableSymbol5 = false;       // Enable Symbol 5
+input double   InpBaseLot = 0.01;               // Base Lot Size (Symbol A)
+input double   InpMaxLot = 1.0;                 // Maximum Lot Size
+input int      InpMagicNumber = 888888;         // Magic Number
+input int      InpSlippage = 30;                // Slippage (points)
+input ENUM_TIMEFRAMES InpTimeframe = PERIOD_H1; // Trading Timeframe
 
 input group "=== Statistical Settings ==="
-input int      InpStatPeriod = 20;             // Statistical Period
-input double   InpZScoreThreshold = 2.0;       // Z-Score Entry Threshold
-input double   InpZScoreExit = 0.5;            // Z-Score Exit Threshold
-input int      InpCorrelationPeriod = 50;      // Correlation Period
-input double   InpMinCorrelation = 0.7;        // Minimum Correlation
+input int      InpLookbackPeriod = 100;         // Lookback Period (bars)
+input double   InpEntryZScore = 2.0;            // Entry Z-Score Threshold
+input double   InpExitZScore = 0.5;             // Exit Z-Score Threshold
+input double   InpMinCorrelation = 0.70;        // Minimum Correlation
+input int      InpCorrelationPeriod = 50;       // Correlation Calculation Period
+input bool     InpUseLogReturns = true;         // Use Log Returns (Recommended)
+
+input group "=== Lot Sizing (Dollar-Neutral) ==="
+input bool     InpUseDollarNeutral = true;      // Use Dollar-Neutral Sizing
+input double   InpMaxMarginPercent = 50.0;      // Max Margin Usage (%)
 
 input group "=== Risk Management ==="
-input double   InpMaxDrawdown = 20.0;          // Max Drawdown (%)
-input double   InpRiskPercent = 2.0;           // Risk Per Trade (%)
-input double   InpTakeProfit = 500;            // Take Profit (points)
-input double   InpStopLoss = 300;              // Stop Loss (points)
+input double   InpMaxDrawdown = 20.0;           // Max Drawdown (%)
+input int      InpMaxHoldingBars = 0;           // Max Holding Time (0=Disabled)
+input double   InpEmergencyCloseDD = 30.0;      // Emergency Close Drawdown (%)
+
+input group "=== Pair 1-5 Configuration ==="
+input bool     InpEnablePair1 = true;           // Enable Pair 1
+input string   InpPair1_SymbolA = "XAUUSD";     // Pair 1: Symbol A
+input string   InpPair1_SymbolB = "XAUEUR";     // Pair 1: Symbol B
+
+input bool     InpEnablePair2 = true;           // Enable Pair 2
+input string   InpPair2_SymbolA = "EURUSD";     // Pair 2: Symbol A
+input string   InpPair2_SymbolB = "GBPUSD";     // Pair 2: Symbol B
+
+input bool     InpEnablePair3 = true;           // Enable Pair 3
+input string   InpPair3_SymbolA = "AUDUSD";     // Pair 3: Symbol A
+input string   InpPair3_SymbolB = "NZDUSD";     // Pair 3: Symbol B
+
+input bool     InpEnablePair4 = true;           // Enable Pair 4
+input string   InpPair4_SymbolA = "GBPUSD";     // Pair 4: Symbol A
+input string   InpPair4_SymbolB = "USDJPY";     // Pair 4: Symbol B
+
+input bool     InpEnablePair5 = true;           // Enable Pair 5
+input string   InpPair5_SymbolA = "EURUSD";     // Pair 5: Symbol A
+input string   InpPair5_SymbolB = "USDCHF";     // Pair 5: Symbol B
+
+input group "=== Pair 6-10 Configuration ==="
+input bool     InpEnablePair6 = false;          // Enable Pair 6
+input string   InpPair6_SymbolA = "EURUSD";     // Pair 6: Symbol A
+input string   InpPair6_SymbolB = "USDJPY";     // Pair 6: Symbol B
+
+input bool     InpEnablePair7 = false;          // Enable Pair 7
+input string   InpPair7_SymbolA = "GBPUSD";     // Pair 7: Symbol A
+input string   InpPair7_SymbolB = "NZDUSD";     // Pair 7: Symbol B
+
+input bool     InpEnablePair8 = false;          // Enable Pair 8
+input string   InpPair8_SymbolA = "AUDUSD";     // Pair 8: Symbol A
+input string   InpPair8_SymbolB = "EURUSD";     // Pair 8: Symbol B
+
+input bool     InpEnablePair9 = false;          // Enable Pair 9
+input string   InpPair9_SymbolA = "USDCAD";     // Pair 9: Symbol A
+input string   InpPair9_SymbolB = "USDCHF";     // Pair 9: Symbol B
+
+input bool     InpEnablePair10 = false;         // Enable Pair 10
+input string   InpPair10_SymbolA = "EURJPY";    // Pair 10: Symbol A
+input string   InpPair10_SymbolB = "GBPJPY";    // Pair 10: Symbol B
+
+input group "=== Pair 11-15 Configuration ==="
+input bool     InpEnablePair11 = false;         // Enable Pair 11
+input string   InpPair11_SymbolA = "EURGBP";    // Pair 11: Symbol A
+input string   InpPair11_SymbolB = "EURCHF";    // Pair 11: Symbol B
+
+input bool     InpEnablePair12 = false;         // Enable Pair 12
+input string   InpPair12_SymbolA = "NZDUSD";    // Pair 12: Symbol A
+input string   InpPair12_SymbolB = "USDCAD";    // Pair 12: Symbol B
+
+input bool     InpEnablePair13 = false;         // Enable Pair 13
+input string   InpPair13_SymbolA = "AUDJPY";    // Pair 13: Symbol A
+input string   InpPair13_SymbolB = "NZDJPY";    // Pair 13: Symbol B
+
+input bool     InpEnablePair14 = false;         // Enable Pair 14
+input string   InpPair14_SymbolA = "GBPAUD";    // Pair 14: Symbol A
+input string   InpPair14_SymbolB = "GBPNZD";    // Pair 14: Symbol B
+
+input bool     InpEnablePair15 = false;         // Enable Pair 15
+input string   InpPair15_SymbolA = "EURAUD";    // Pair 15: Symbol A
+input string   InpPair15_SymbolB = "EURNZD";    // Pair 15: Symbol B
+
+input group "=== Pair 16-20 Configuration ==="
+input bool     InpEnablePair16 = false;         // Enable Pair 16
+input string   InpPair16_SymbolA = "CHFJPY";    // Pair 16: Symbol A
+input string   InpPair16_SymbolB = "CADJPY";    // Pair 16: Symbol B
+
+input bool     InpEnablePair17 = false;         // Enable Pair 17
+input string   InpPair17_SymbolA = "AUDCAD";    // Pair 17: Symbol A
+input string   InpPair17_SymbolB = "AUDNZD";    // Pair 17: Symbol B
+
+input bool     InpEnablePair18 = false;         // Enable Pair 18
+input string   InpPair18_SymbolA = "GBPCAD";    // Pair 18: Symbol A
+input string   InpPair18_SymbolB = "GBPCHF";    // Pair 18: Symbol B
+
+input bool     InpEnablePair19 = false;         // Enable Pair 19
+input string   InpPair19_SymbolA = "EURCAD";    // Pair 19: Symbol A
+input string   InpPair19_SymbolB = "EURCHF";    // Pair 19: Symbol B
+
+input bool     InpEnablePair20 = false;         // Enable Pair 20
+input string   InpPair20_SymbolA = "CADCHF";    // Pair 20: Symbol A
+input string   InpPair20_SymbolB = "CADJPY";    // Pair 20: Symbol B
 
 input group "=== License Settings ==="
-input string   InpLicenseKey = "";             // License Key
-input string   InpAccountNumber = "";          // Account Number
+input string   InpLicenseKey = "";              // License Key
+input string   InpAccountNumber = "";           // Account Number
 
 input group "=== News Filter ==="
-input bool     InpEnableNewsFilter = true;     // Enable News Filter
-input int      InpNewsBeforeMinutes = 30;      // Minutes Before News
-input int      InpNewsAfterMinutes = 30;       // Minutes After News
+input bool     InpEnableNewsFilter = true;      // Enable News Filter
+input int      InpNewsBeforeMinutes = 30;       // Minutes Before News
+input int      InpNewsAfterMinutes = 30;        // Minutes After News
 
 //+------------------------------------------------------------------+
 //| GLOBAL VARIABLES                                                   |
 //+------------------------------------------------------------------+
+#define MAX_PAIRS 20
+
 CTrade g_trade;
 bool g_isLicenseValid = false;
 bool g_isNewsPaused = false;
+bool g_isPaused = false;
 datetime g_lastCandleTime = 0;
 
-// Statistical arrays
-double g_priceHistory1[];
-double g_priceHistory2[];
-double g_priceHistory3[];
-double g_priceHistory4[];
-double g_priceHistory5[];
+// Pairs Data
+PairInfo g_pairs[MAX_PAIRS];
+int g_activePairs = 0;
 
-// Symbol info
-string g_symbols[5];
-bool g_symbolEnabled[5];
+// Price/Return History Arrays (for each pair's symbols)
+double g_pricesA[MAX_PAIRS][];
+double g_pricesB[MAX_PAIRS][];
+double g_returnsA[MAX_PAIRS][];
+double g_returnsB[MAX_PAIRS][];
+double g_spreadHistory[MAX_PAIRS][];
+
+// Account Statistics
+double g_initialBalance = 0;
+double g_maxEquity = 0;
+double g_dailyProfit = 0;
+double g_weeklyProfit = 0;
+double g_monthlyProfit = 0;
+datetime g_dayStart = 0;
+datetime g_weekStart = 0;
+datetime g_monthStart = 0;
 
 //+------------------------------------------------------------------+
-//| Expert initialization function                                      |
+//| Expert initialization function                                     |
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   Print("=== Multi Currency Statistical EA v1.0 Initializing ===");
+   Print("=== Statistical Arbitrage EA v2.0 Initializing ===");
    
    // Initialize trade object
    g_trade.SetExpertMagicNumber(InpMagicNumber);
    g_trade.SetDeviationInPoints(InpSlippage);
    
-   // Setup symbols
-   g_symbols[0] = InpSymbol1;
-   g_symbols[1] = InpSymbol2;
-   g_symbols[2] = InpSymbol3;
-   g_symbols[3] = InpSymbol4;
-   g_symbols[4] = InpSymbol5;
-   
-   g_symbolEnabled[0] = InpEnableSymbol1;
-   g_symbolEnabled[1] = InpEnableSymbol2;
-   g_symbolEnabled[2] = InpEnableSymbol3;
-   g_symbolEnabled[3] = InpEnableSymbol4;
-   g_symbolEnabled[4] = InpEnableSymbol5;
-   
-   // Validate symbols
-   for(int i = 0; i < 5; i++)
+   // Initialize pairs
+   if(!InitializePairs())
    {
-      if(g_symbolEnabled[i])
-      {
-         if(!SymbolSelect(g_symbols[i], true))
-         {
-            PrintFormat("Warning: Symbol %s not available", g_symbols[i]);
-            g_symbolEnabled[i] = false;
-         }
-      }
+      Print("Failed to initialize trading pairs!");
+      return(INIT_FAILED);
    }
    
-   // Initialize arrays
-   ArrayResize(g_priceHistory1, InpStatPeriod);
-   ArrayResize(g_priceHistory2, InpStatPeriod);
-   ArrayResize(g_priceHistory3, InpStatPeriod);
-   ArrayResize(g_priceHistory4, InpStatPeriod);
-   ArrayResize(g_priceHistory5, InpStatPeriod);
+   // Initialize price arrays
+   for(int i = 0; i < MAX_PAIRS; i++)
+   {
+      ArrayResize(g_pricesA[i], InpLookbackPeriod);
+      ArrayResize(g_pricesB[i], InpLookbackPeriod);
+      ArrayResize(g_returnsA[i], InpLookbackPeriod - 1);
+      ArrayResize(g_returnsB[i], InpLookbackPeriod - 1);
+      ArrayResize(g_spreadHistory[i], InpLookbackPeriod);
+      ArrayInitialize(g_pricesA[i], 0);
+      ArrayInitialize(g_pricesB[i], 0);
+      ArrayInitialize(g_returnsA[i], 0);
+      ArrayInitialize(g_returnsB[i], 0);
+      ArrayInitialize(g_spreadHistory[i], 0);
+   }
    
    // License verification
    g_isLicenseValid = VerifyLicense();
@@ -121,8 +228,93 @@ int OnInit()
       return(INIT_FAILED);
    }
    
-   Print("=== Multi Currency Statistical EA Initialized Successfully ===");
+   // Initialize account stats
+   g_initialBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+   g_maxEquity = AccountInfoDouble(ACCOUNT_EQUITY);
+   g_dayStart = TimeCurrent();
+   g_weekStart = TimeCurrent();
+   g_monthStart = TimeCurrent();
+   
+   // Set timer for dashboard updates
+   EventSetTimer(1);
+   
+   PrintFormat("=== Statistical Arbitrage EA Initialized - %d Active Pairs ===", g_activePairs);
    return(INIT_SUCCEEDED);
+}
+
+//+------------------------------------------------------------------+
+//| Initialize Trading Pairs                                           |
+//+------------------------------------------------------------------+
+bool InitializePairs()
+{
+   g_activePairs = 0;
+   
+   // Setup all 20 pairs
+   SetupPair(0, InpEnablePair1, InpPair1_SymbolA, InpPair1_SymbolB);
+   SetupPair(1, InpEnablePair2, InpPair2_SymbolA, InpPair2_SymbolB);
+   SetupPair(2, InpEnablePair3, InpPair3_SymbolA, InpPair3_SymbolB);
+   SetupPair(3, InpEnablePair4, InpPair4_SymbolA, InpPair4_SymbolB);
+   SetupPair(4, InpEnablePair5, InpPair5_SymbolA, InpPair5_SymbolB);
+   SetupPair(5, InpEnablePair6, InpPair6_SymbolA, InpPair6_SymbolB);
+   SetupPair(6, InpEnablePair7, InpPair7_SymbolA, InpPair7_SymbolB);
+   SetupPair(7, InpEnablePair8, InpPair8_SymbolA, InpPair8_SymbolB);
+   SetupPair(8, InpEnablePair9, InpPair9_SymbolA, InpPair9_SymbolB);
+   SetupPair(9, InpEnablePair10, InpPair10_SymbolA, InpPair10_SymbolB);
+   SetupPair(10, InpEnablePair11, InpPair11_SymbolA, InpPair11_SymbolB);
+   SetupPair(11, InpEnablePair12, InpPair12_SymbolA, InpPair12_SymbolB);
+   SetupPair(12, InpEnablePair13, InpPair13_SymbolA, InpPair13_SymbolB);
+   SetupPair(13, InpEnablePair14, InpPair14_SymbolA, InpPair14_SymbolB);
+   SetupPair(14, InpEnablePair15, InpPair15_SymbolA, InpPair15_SymbolB);
+   SetupPair(15, InpEnablePair16, InpPair16_SymbolA, InpPair16_SymbolB);
+   SetupPair(16, InpEnablePair17, InpPair17_SymbolA, InpPair17_SymbolB);
+   SetupPair(17, InpEnablePair18, InpPair18_SymbolA, InpPair18_SymbolB);
+   SetupPair(18, InpEnablePair19, InpPair19_SymbolA, InpPair19_SymbolB);
+   SetupPair(19, InpEnablePair20, InpPair20_SymbolA, InpPair20_SymbolB);
+   
+   return (g_activePairs > 0);
+}
+
+//+------------------------------------------------------------------+
+//| Setup Individual Pair                                              |
+//+------------------------------------------------------------------+
+void SetupPair(int index, bool enabled, string symbolA, string symbolB)
+{
+   g_pairs[index].enabled = false;
+   g_pairs[index].symbolA = symbolA;
+   g_pairs[index].symbolB = symbolB;
+   g_pairs[index].correlation = 0;
+   g_pairs[index].hedgeRatio = 1.0;
+   g_pairs[index].spreadMean = 0;
+   g_pairs[index].spreadStdDev = 0;
+   g_pairs[index].currentSpread = 0;
+   g_pairs[index].zScore = 0;
+   g_pairs[index].lotA = InpBaseLot;
+   g_pairs[index].lotB = InpBaseLot;
+   g_pairs[index].ticketA = 0;
+   g_pairs[index].ticketB = 0;
+   g_pairs[index].direction = 0;
+   g_pairs[index].entrySpread = 0;
+   g_pairs[index].entryTime = 0;
+   g_pairs[index].pairProfit = 0;
+   
+   if(!enabled) return;
+   
+   // Validate symbols
+   if(!SymbolSelect(symbolA, true))
+   {
+      PrintFormat("Warning: Symbol %s not available", symbolA);
+      return;
+   }
+   
+   if(!SymbolSelect(symbolB, true))
+   {
+      PrintFormat("Warning: Symbol %s not available", symbolB);
+      return;
+   }
+   
+   g_pairs[index].enabled = true;
+   g_activePairs++;
+   PrintFormat("Pair %d initialized: %s - %s", index + 1, symbolA, symbolB);
 }
 
 //+------------------------------------------------------------------+
@@ -130,7 +322,8 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
-   Print("=== Multi Currency Statistical EA Deinitialized ===");
+   EventKillTimer();
+   Print("=== Statistical Arbitrage EA Deinitialized ===");
 }
 
 //+------------------------------------------------------------------+
@@ -139,35 +332,40 @@ void OnDeinit(const int reason)
 void OnTick()
 {
    if(!g_isLicenseValid) return;
+   if(g_isPaused) return;
    
    // Check news filter
-   if(InpEnableNewsFilter)
+   if(InpEnableNewsFilter && IsNewsPaused())
    {
-      if(IsNewsPaused())
-      {
-         g_isNewsPaused = true;
-         return;
-      }
-      g_isNewsPaused = false;
+      g_isNewsPaused = true;
+      return;
    }
+   g_isNewsPaused = false;
    
    // Check for new candle
-   datetime currentTime = iTime(_Symbol, PERIOD_H1, 0);
+   datetime currentTime = iTime(_Symbol, InpTimeframe, 0);
    if(currentTime == g_lastCandleTime) return;
    g_lastCandleTime = currentTime;
    
-   // Update price histories
-   UpdatePriceHistories();
-   
-   // Analyze correlations and statistical signals
-   AnalyzeStatisticalSignals();
-   
-   // Manage existing positions
-   ManagePositions();
+   // Main trading logic
+   UpdateAllPairData();
+   AnalyzeAllPairs();
+   ManageAllPositions();
+   CheckRiskLimits();
 }
 
 //+------------------------------------------------------------------+
-//| Verify License                                                      |
+//| Timer function - Dashboard Updates                                 |
+//+------------------------------------------------------------------+
+void OnTimer()
+{
+   UpdatePairProfits();
+   UpdateAccountStats();
+   // Dashboard display will be added in Phase 6
+}
+
+//+------------------------------------------------------------------+
+//| Verify License                                                     |
 //+------------------------------------------------------------------+
 bool VerifyLicense()
 {
@@ -192,275 +390,680 @@ bool IsNewsPaused()
 }
 
 //+------------------------------------------------------------------+
-//| Update price histories for all symbols                             |
+//| ================ STATISTICAL ENGINE ================               |
 //+------------------------------------------------------------------+
-void UpdatePriceHistories()
+
+//+------------------------------------------------------------------+
+//| Update All Pair Data (Prices, Returns, Statistics)                 |
+//+------------------------------------------------------------------+
+void UpdateAllPairData()
 {
-   for(int i = 0; i < 5; i++)
+   for(int i = 0; i < MAX_PAIRS; i++)
    {
-      if(!g_symbolEnabled[i]) continue;
+      if(!g_pairs[i].enabled) continue;
       
-      double prices[];
-      ArrayResize(prices, InpStatPeriod);
+      // Update prices
+      UpdatePriceHistory(i);
       
-      for(int j = 0; j < InpStatPeriod; j++)
+      // Calculate log returns
+      CalculateLogReturns(i);
+      
+      // Calculate correlation
+      g_pairs[i].correlation = CalculatePearsonCorrelation(i);
+      
+      // Calculate hedge ratio (beta)
+      g_pairs[i].hedgeRatio = CalculateHedgeRatio(i);
+      
+      // Update spread history and calculate current spread
+      UpdateSpreadHistory(i);
+      
+      // Calculate Z-Score
+      g_pairs[i].zScore = CalculateSpreadZScore(i);
+      
+      // Calculate dollar-neutral lots
+      if(InpUseDollarNeutral)
       {
-         prices[j] = iClose(g_symbols[i], PERIOD_H1, j);
-      }
-      
-      switch(i)
-      {
-         case 0: ArrayCopy(g_priceHistory1, prices); break;
-         case 1: ArrayCopy(g_priceHistory2, prices); break;
-         case 2: ArrayCopy(g_priceHistory3, prices); break;
-         case 3: ArrayCopy(g_priceHistory4, prices); break;
-         case 4: ArrayCopy(g_priceHistory5, prices); break;
+         CalculateDollarNeutralLots(i);
       }
    }
 }
 
 //+------------------------------------------------------------------+
-//| Analyze statistical signals across currency pairs                  |
+//| Update Price History for a Pair                                    |
 //+------------------------------------------------------------------+
-void AnalyzeStatisticalSignals()
+void UpdatePriceHistory(int pairIndex)
 {
-   for(int i = 0; i < 5; i++)
+   string symbolA = g_pairs[pairIndex].symbolA;
+   string symbolB = g_pairs[pairIndex].symbolB;
+   
+   for(int i = 0; i < InpLookbackPeriod; i++)
    {
-      if(!g_symbolEnabled[i]) continue;
+      g_pricesA[pairIndex][i] = iClose(symbolA, InpTimeframe, i);
+      g_pricesB[pairIndex][i] = iClose(symbolB, InpTimeframe, i);
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Log Returns                                              |
+//| Formula: Return(t) = ln(Price(t) / Price(t-1))                    |
+//+------------------------------------------------------------------+
+void CalculateLogReturns(int pairIndex)
+{
+   int returnCount = InpLookbackPeriod - 1;
+   
+   for(int i = 0; i < returnCount; i++)
+   {
+      double priceA_t = g_pricesA[pairIndex][i];
+      double priceA_t1 = g_pricesA[pairIndex][i + 1];
+      double priceB_t = g_pricesB[pairIndex][i];
+      double priceB_t1 = g_pricesB[pairIndex][i + 1];
       
-      double zScore = CalculateZScore(i);
-      
-      // Check for entry signals
-      if(MathAbs(zScore) >= InpZScoreThreshold)
+      if(priceA_t1 > 0 && priceB_t1 > 0)
       {
-         if(zScore > 0)
+         if(InpUseLogReturns)
          {
-            // Overbought - potential sell
-            if(!HasPosition(g_symbols[i], POSITION_TYPE_SELL))
-            {
-               OpenSell(g_symbols[i]);
-            }
+            // Log returns (recommended for statistical stability)
+            g_returnsA[pairIndex][i] = MathLog(priceA_t / priceA_t1);
+            g_returnsB[pairIndex][i] = MathLog(priceB_t / priceB_t1);
          }
          else
          {
-            // Oversold - potential buy
-            if(!HasPosition(g_symbols[i], POSITION_TYPE_BUY))
-            {
-               OpenBuy(g_symbols[i]);
-            }
+            // Simple returns
+            g_returnsA[pairIndex][i] = (priceA_t - priceA_t1) / priceA_t1;
+            g_returnsB[pairIndex][i] = (priceB_t - priceB_t1) / priceB_t1;
          }
       }
    }
 }
 
 //+------------------------------------------------------------------+
-//| Calculate Z-Score for a symbol                                     |
+//| Calculate Pearson Correlation                                      |
+//| Formula: ρ = Cov(ReturnA, ReturnB) / (σA × σB)                    |
 //+------------------------------------------------------------------+
-double CalculateZScore(int symbolIndex)
+double CalculatePearsonCorrelation(int pairIndex)
 {
-   double prices[];
-   
-   switch(symbolIndex)
-   {
-      case 0: ArrayCopy(prices, g_priceHistory1); break;
-      case 1: ArrayCopy(prices, g_priceHistory2); break;
-      case 2: ArrayCopy(prices, g_priceHistory3); break;
-      case 3: ArrayCopy(prices, g_priceHistory4); break;
-      case 4: ArrayCopy(prices, g_priceHistory5); break;
-      default: return 0;
-   }
-   
-   if(ArraySize(prices) == 0) return 0;
-   
-   // Calculate mean
-   double sum = 0;
-   int count = ArraySize(prices);
-   for(int i = 0; i < count; i++)
-   {
-      sum += prices[i];
-   }
-   double mean = sum / count;
-   
-   // Calculate standard deviation
-   double sumSqDiff = 0;
-   for(int i = 0; i < count; i++)
-   {
-      sumSqDiff += MathPow(prices[i] - mean, 2);
-   }
-   double stdDev = MathSqrt(sumSqDiff / count);
-   
-   if(stdDev == 0) return 0;
-   
-   // Calculate Z-Score for current price
-   double currentPrice = prices[0];
-   double zScore = (currentPrice - mean) / stdDev;
-   
-   return zScore;
-}
-
-//+------------------------------------------------------------------+
-//| Calculate correlation between two price series                     |
-//+------------------------------------------------------------------+
-double CalculateCorrelation(double &prices1[], double &prices2[])
-{
-   int n = MathMin(ArraySize(prices1), ArraySize(prices2));
+   int n = MathMin(ArraySize(g_returnsA[pairIndex]), InpCorrelationPeriod);
    if(n < 2) return 0;
    
-   double sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0, sumY2 = 0;
+   double sumA = 0, sumB = 0;
+   double sumA2 = 0, sumB2 = 0;
+   double sumAB = 0;
    
    for(int i = 0; i < n; i++)
    {
-      sumX += prices1[i];
-      sumY += prices2[i];
-      sumXY += prices1[i] * prices2[i];
-      sumX2 += prices1[i] * prices1[i];
-      sumY2 += prices2[i] * prices2[i];
+      double retA = g_returnsA[pairIndex][i];
+      double retB = g_returnsB[pairIndex][i];
+      
+      sumA += retA;
+      sumB += retB;
+      sumA2 += retA * retA;
+      sumB2 += retB * retB;
+      sumAB += retA * retB;
    }
    
-   double numerator = n * sumXY - sumX * sumY;
-   double denominator = MathSqrt((n * sumX2 - sumX * sumX) * (n * sumY2 - sumY * sumY));
+   double meanA = sumA / n;
+   double meanB = sumB / n;
    
-   if(denominator == 0) return 0;
+   // Covariance
+   double covariance = (sumAB / n) - (meanA * meanB);
    
-   return numerator / denominator;
+   // Standard Deviations
+   double varA = (sumA2 / n) - (meanA * meanA);
+   double varB = (sumB2 / n) - (meanB * meanB);
+   
+   if(varA <= 0 || varB <= 0) return 0;
+   
+   double stdDevA = MathSqrt(varA);
+   double stdDevB = MathSqrt(varB);
+   
+   if(stdDevA == 0 || stdDevB == 0) return 0;
+   
+   // Pearson Correlation
+   double correlation = covariance / (stdDevA * stdDevB);
+   
+   return correlation;
 }
 
 //+------------------------------------------------------------------+
-//| Check if position exists for symbol                                |
+//| Calculate Hedge Ratio (Beta) - OLS Regression                      |
+//| Formula: β = Cov(ReturnA, ReturnB) / Var(ReturnB)                 |
+//| Alternative: β = ρ × (σA / σB)                                     |
 //+------------------------------------------------------------------+
-bool HasPosition(string symbol, ENUM_POSITION_TYPE posType)
+double CalculateHedgeRatio(int pairIndex)
 {
-   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   int n = MathMin(ArraySize(g_returnsA[pairIndex]), InpCorrelationPeriod);
+   if(n < 2) return 1.0;
+   
+   double sumA = 0, sumB = 0;
+   double sumA2 = 0, sumB2 = 0;
+   double sumAB = 0;
+   
+   for(int i = 0; i < n; i++)
    {
-      if(PositionSelectByTicket(PositionGetTicket(i)))
+      double retA = g_returnsA[pairIndex][i];
+      double retB = g_returnsB[pairIndex][i];
+      
+      sumA += retA;
+      sumB += retB;
+      sumA2 += retA * retA;
+      sumB2 += retB * retB;
+      sumAB += retA * retB;
+   }
+   
+   double meanA = sumA / n;
+   double meanB = sumB / n;
+   
+   // Covariance(A, B)
+   double covariance = (sumAB / n) - (meanA * meanB);
+   
+   // Variance(B)
+   double varianceB = (sumB2 / n) - (meanB * meanB);
+   
+   if(varianceB == 0) return 1.0;
+   
+   // Hedge Ratio (Beta) = Cov(A,B) / Var(B)
+   double hedgeRatio = covariance / varianceB;
+   
+   // Ensure positive hedge ratio for pairs trading
+   return MathAbs(hedgeRatio);
+}
+
+//+------------------------------------------------------------------+
+//| Update Spread History                                              |
+//| Formula: Spread(t) = ln(PriceA) − β × ln(PriceB)                  |
+//+------------------------------------------------------------------+
+void UpdateSpreadHistory(int pairIndex)
+{
+   double beta = g_pairs[pairIndex].hedgeRatio;
+   
+   // Calculate spread for each bar
+   for(int i = 0; i < InpLookbackPeriod; i++)
+   {
+      double priceA = g_pricesA[pairIndex][i];
+      double priceB = g_pricesB[pairIndex][i];
+      
+      if(priceA > 0 && priceB > 0)
       {
-         if(PositionGetString(POSITION_SYMBOL) == symbol &&
-            PositionGetInteger(POSITION_MAGIC) == InpMagicNumber &&
-            PositionGetInteger(POSITION_TYPE) == posType)
-         {
-            return true;
-         }
-      }
-   }
-   return false;
-}
-
-//+------------------------------------------------------------------+
-//| Open Buy Position                                                  |
-//+------------------------------------------------------------------+
-bool OpenBuy(string symbol)
-{
-   double ask = SymbolInfoDouble(symbol, SYMBOL_ASK);
-   double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
-   
-   double sl = ask - InpStopLoss * point;
-   double tp = ask + InpTakeProfit * point;
-   
-   if(g_trade.Buy(InpLotSize, symbol, ask, sl, tp, "Multi Currency Statistical"))
-   {
-      PrintFormat("BUY opened on %s at %.5f", symbol, ask);
-      return true;
-   }
-   
-   PrintFormat("Failed to open BUY on %s: %d", symbol, GetLastError());
-   return false;
-}
-
-//+------------------------------------------------------------------+
-//| Open Sell Position                                                 |
-//+------------------------------------------------------------------+
-bool OpenSell(string symbol)
-{
-   double bid = SymbolInfoDouble(symbol, SYMBOL_BID);
-   double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
-   
-   double sl = bid + InpStopLoss * point;
-   double tp = bid - InpTakeProfit * point;
-   
-   if(g_trade.Sell(InpLotSize, symbol, bid, sl, tp, "Multi Currency Statistical"))
-   {
-      PrintFormat("SELL opened on %s at %.5f", symbol, bid);
-      return true;
-   }
-   
-   PrintFormat("Failed to open SELL on %s: %d", symbol, GetLastError());
-   return false;
-}
-
-//+------------------------------------------------------------------+
-//| Manage existing positions                                          |
-//+------------------------------------------------------------------+
-void ManagePositions()
-{
-   for(int i = PositionsTotal() - 1; i >= 0; i--)
-   {
-      if(PositionSelectByTicket(PositionGetTicket(i)))
-      {
-         if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
-         
-         string symbol = PositionGetString(POSITION_SYMBOL);
-         
-         // Find symbol index
-         int symbolIndex = -1;
-         for(int j = 0; j < 5; j++)
-         {
-            if(g_symbols[j] == symbol)
-            {
-               symbolIndex = j;
-               break;
-            }
-         }
-         
-         if(symbolIndex == -1) continue;
-         
-         // Check exit conditions based on Z-Score
-         double zScore = CalculateZScore(symbolIndex);
-         ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
-         
-         bool shouldClose = false;
-         
-         if(posType == POSITION_TYPE_BUY && zScore >= -InpZScoreExit)
-         {
-            shouldClose = true; // Z-Score returned to normal
-         }
-         else if(posType == POSITION_TYPE_SELL && zScore <= InpZScoreExit)
-         {
-            shouldClose = true; // Z-Score returned to normal
-         }
-         
-         if(shouldClose)
-         {
-            g_trade.PositionClose(PositionGetTicket(i));
-            PrintFormat("Position closed on %s - Z-Score normalized", symbol);
-         }
+         // Log-price spread (recommended)
+         g_spreadHistory[pairIndex][i] = MathLog(priceA) - beta * MathLog(priceB);
       }
    }
    
-   // Check drawdown limit
-   CheckDrawdownLimit();
+   // Current spread
+   g_pairs[pairIndex].currentSpread = g_spreadHistory[pairIndex][0];
+   
+   // Calculate spread mean and std dev
+   CalculateSpreadMeanStdDev(pairIndex);
 }
 
 //+------------------------------------------------------------------+
-//| Check drawdown limit                                               |
+//| Calculate Spread Mean and Standard Deviation                       |
 //+------------------------------------------------------------------+
-void CheckDrawdownLimit()
+void CalculateSpreadMeanStdDev(int pairIndex)
+{
+   int n = InpLookbackPeriod;
+   double sum = 0;
+   
+   // Calculate mean
+   for(int i = 0; i < n; i++)
+   {
+      sum += g_spreadHistory[pairIndex][i];
+   }
+   double mean = sum / n;
+   g_pairs[pairIndex].spreadMean = mean;
+   
+   // Calculate standard deviation
+   double sumSqDiff = 0;
+   for(int i = 0; i < n; i++)
+   {
+      double diff = g_spreadHistory[pairIndex][i] - mean;
+      sumSqDiff += diff * diff;
+   }
+   g_pairs[pairIndex].spreadStdDev = MathSqrt(sumSqDiff / n);
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Z-Score for Spread                                       |
+//| Formula: Z = (Spread − Mean) / StdDev                             |
+//+------------------------------------------------------------------+
+double CalculateSpreadZScore(int pairIndex)
+{
+   double currentSpread = g_pairs[pairIndex].currentSpread;
+   double mean = g_pairs[pairIndex].spreadMean;
+   double stdDev = g_pairs[pairIndex].spreadStdDev;
+   
+   if(stdDev == 0) return 0;
+   
+   return (currentSpread - mean) / stdDev;
+}
+
+//+------------------------------------------------------------------+
+//| ================ LOT SIZING ENGINE ================                |
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//| Get Pip Value for Symbol                                           |
+//| Formula: PipValue = (Point / Price) × ContractSize                |
+//+------------------------------------------------------------------+
+double GetPipValue(string symbol)
+{
+   double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+   double price = SymbolInfoDouble(symbol, SYMBOL_BID);
+   double contractSize = SymbolInfoDouble(symbol, SYMBOL_TRADE_CONTRACT_SIZE);
+   double tickValue = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE);
+   double tickSize = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
+   
+   if(tickSize == 0) return 0;
+   
+   // Pip value per 1 lot
+   double pipValue = (tickValue / tickSize) * point;
+   
+   return pipValue;
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Dollar-Neutral Lot Sizes                                 |
+//| Formula: LotB = LotA × β × (PipValueA / PipValueB)                |
+//+------------------------------------------------------------------+
+void CalculateDollarNeutralLots(int pairIndex)
+{
+   double baseLot = InpBaseLot;
+   double hedgeRatio = g_pairs[pairIndex].hedgeRatio;
+   
+   string symbolA = g_pairs[pairIndex].symbolA;
+   string symbolB = g_pairs[pairIndex].symbolB;
+   
+   double pipValueA = GetPipValue(symbolA);
+   double pipValueB = GetPipValue(symbolB);
+   
+   if(pipValueB == 0)
+   {
+      g_pairs[pairIndex].lotA = baseLot;
+      g_pairs[pairIndex].lotB = baseLot;
+      return;
+   }
+   
+   // LotA = Base Lot
+   g_pairs[pairIndex].lotA = baseLot;
+   
+   // LotB = LotA × β × (PipValueA / PipValueB)
+   double lotB = baseLot * hedgeRatio * (pipValueA / pipValueB);
+   
+   // Normalize lot size
+   double minLotB = SymbolInfoDouble(symbolB, SYMBOL_VOLUME_MIN);
+   double maxLotB = SymbolInfoDouble(symbolB, SYMBOL_VOLUME_MAX);
+   double stepLotB = SymbolInfoDouble(symbolB, SYMBOL_VOLUME_STEP);
+   
+   lotB = MathMax(minLotB, MathMin(maxLotB, lotB));
+   lotB = MathFloor(lotB / stepLotB) * stepLotB;
+   
+   // Apply max lot constraint
+   lotB = MathMin(lotB, InpMaxLot);
+   
+   g_pairs[pairIndex].lotB = lotB;
+}
+
+//+------------------------------------------------------------------+
+//| ================ SIGNAL ENGINE ================                    |
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//| Analyze All Pairs for Trading Signals                              |
+//+------------------------------------------------------------------+
+void AnalyzeAllPairs()
+{
+   for(int i = 0; i < MAX_PAIRS; i++)
+   {
+      if(!g_pairs[i].enabled) continue;
+      
+      // Skip if already has position
+      if(g_pairs[i].direction != 0) continue;
+      
+      // Check correlation threshold
+      if(MathAbs(g_pairs[i].correlation) < InpMinCorrelation)
+      {
+         // Correlation too low - skip trading
+         continue;
+      }
+      
+      double zScore = g_pairs[i].zScore;
+      
+      // Entry Conditions
+      if(zScore > InpEntryZScore)
+      {
+         // Short Spread: Z > +EntryThreshold
+         // Sell SymbolA, Buy SymbolB
+         OpenPairTrade(i, -1);
+      }
+      else if(zScore < -InpEntryZScore)
+      {
+         // Long Spread: Z < -EntryThreshold
+         // Buy SymbolA, Sell SymbolB
+         OpenPairTrade(i, 1);
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| ================ EXECUTION ENGINE ================                 |
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//| Open Pair Trade (Atomic Execution)                                 |
+//| direction: 1 = Long Spread, -1 = Short Spread                     |
+//+------------------------------------------------------------------+
+bool OpenPairTrade(int pairIndex, int direction)
+{
+   if(g_pairs[pairIndex].direction != 0) return false;
+   
+   string symbolA = g_pairs[pairIndex].symbolA;
+   string symbolB = g_pairs[pairIndex].symbolB;
+   double lotA = g_pairs[pairIndex].lotA;
+   double lotB = g_pairs[pairIndex].lotB;
+   
+   string comment = StringFormat("StatArb_%d", pairIndex + 1);
+   
+   ulong ticketA = 0;
+   ulong ticketB = 0;
+   
+   if(direction == 1)  // Long Spread: Buy A, Sell B
+   {
+      // Open Buy on Symbol A
+      double askA = SymbolInfoDouble(symbolA, SYMBOL_ASK);
+      if(g_trade.Buy(lotA, symbolA, askA, 0, 0, comment))
+      {
+         ticketA = g_trade.ResultOrder();
+      }
+      else
+      {
+         PrintFormat("Failed to open BUY on %s: %d", symbolA, GetLastError());
+         return false;
+      }
+      
+      // Open Sell on Symbol B
+      double bidB = SymbolInfoDouble(symbolB, SYMBOL_BID);
+      if(g_trade.Sell(lotB, symbolB, bidB, 0, 0, comment))
+      {
+         ticketB = g_trade.ResultOrder();
+      }
+      else
+      {
+         // Rollback - close first leg
+         PrintFormat("Failed to open SELL on %s: %d - Rolling back", symbolB, GetLastError());
+         g_trade.PositionClose(ticketA);
+         return false;
+      }
+   }
+   else if(direction == -1)  // Short Spread: Sell A, Buy B
+   {
+      // Open Sell on Symbol A
+      double bidA = SymbolInfoDouble(symbolA, SYMBOL_BID);
+      if(g_trade.Sell(lotA, symbolA, bidA, 0, 0, comment))
+      {
+         ticketA = g_trade.ResultOrder();
+      }
+      else
+      {
+         PrintFormat("Failed to open SELL on %s: %d", symbolA, GetLastError());
+         return false;
+      }
+      
+      // Open Buy on Symbol B
+      double askB = SymbolInfoDouble(symbolB, SYMBOL_ASK);
+      if(g_trade.Buy(lotB, symbolB, askB, 0, 0, comment))
+      {
+         ticketB = g_trade.ResultOrder();
+      }
+      else
+      {
+         // Rollback - close first leg
+         PrintFormat("Failed to open BUY on %s: %d - Rolling back", symbolB, GetLastError());
+         g_trade.PositionClose(ticketA);
+         return false;
+      }
+   }
+   
+   // Record trade info
+   g_pairs[pairIndex].ticketA = ticketA;
+   g_pairs[pairIndex].ticketB = ticketB;
+   g_pairs[pairIndex].direction = direction;
+   g_pairs[pairIndex].entrySpread = g_pairs[pairIndex].currentSpread;
+   g_pairs[pairIndex].entryTime = TimeCurrent();
+   
+   PrintFormat("Pair %d OPENED: %s %s | %s %s | Z=%.2f | β=%.4f",
+      pairIndex + 1,
+      direction == 1 ? "BUY" : "SELL", symbolA,
+      direction == 1 ? "SELL" : "BUY", symbolB,
+      g_pairs[pairIndex].zScore,
+      g_pairs[pairIndex].hedgeRatio);
+   
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| Close Pair Trade (Synchronized Closing)                            |
+//+------------------------------------------------------------------+
+bool ClosePairTrade(int pairIndex)
+{
+   if(g_pairs[pairIndex].direction == 0) return false;
+   
+   bool closedA = false;
+   bool closedB = false;
+   
+   // Close position A
+   if(g_pairs[pairIndex].ticketA > 0)
+   {
+      if(PositionSelectByTicket(g_pairs[pairIndex].ticketA))
+      {
+         closedA = g_trade.PositionClose(g_pairs[pairIndex].ticketA);
+      }
+      else
+      {
+         closedA = true; // Already closed
+      }
+   }
+   
+   // Close position B
+   if(g_pairs[pairIndex].ticketB > 0)
+   {
+      if(PositionSelectByTicket(g_pairs[pairIndex].ticketB))
+      {
+         closedB = g_trade.PositionClose(g_pairs[pairIndex].ticketB);
+      }
+      else
+      {
+         closedB = true; // Already closed
+      }
+   }
+   
+   if(closedA && closedB)
+   {
+      PrintFormat("Pair %d CLOSED: %s-%s | Exit Z=%.2f",
+         pairIndex + 1,
+         g_pairs[pairIndex].symbolA,
+         g_pairs[pairIndex].symbolB,
+         g_pairs[pairIndex].zScore);
+      
+      // Reset pair state
+      g_pairs[pairIndex].ticketA = 0;
+      g_pairs[pairIndex].ticketB = 0;
+      g_pairs[pairIndex].direction = 0;
+      g_pairs[pairIndex].entrySpread = 0;
+      g_pairs[pairIndex].entryTime = 0;
+      g_pairs[pairIndex].pairProfit = 0;
+      
+      return true;
+   }
+   
+   return false;
+}
+
+//+------------------------------------------------------------------+
+//| ================ POSITION MANAGEMENT ================              |
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//| Manage All Open Positions                                          |
+//+------------------------------------------------------------------+
+void ManageAllPositions()
+{
+   for(int i = 0; i < MAX_PAIRS; i++)
+   {
+      if(!g_pairs[i].enabled) continue;
+      if(g_pairs[i].direction == 0) continue;
+      
+      // Exit Condition 1: Z-Score returned to normal
+      double zScore = g_pairs[i].zScore;
+      if(MathAbs(zScore) <= InpExitZScore)
+      {
+         ClosePairTrade(i);
+         continue;
+      }
+      
+      // Exit Condition 2: Correlation dropped below threshold
+      if(MathAbs(g_pairs[i].correlation) < InpMinCorrelation * 0.8)
+      {
+         PrintFormat("Pair %d: Correlation dropped (%.2f) - Closing", i + 1, g_pairs[i].correlation);
+         ClosePairTrade(i);
+         continue;
+      }
+      
+      // Exit Condition 3: Max holding time
+      if(InpMaxHoldingBars > 0)
+      {
+         int barsHeld = iBarShift(_Symbol, InpTimeframe, g_pairs[i].entryTime);
+         if(barsHeld >= InpMaxHoldingBars)
+         {
+            PrintFormat("Pair %d: Max holding time reached - Closing", i + 1);
+            ClosePairTrade(i);
+            continue;
+         }
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Update Pair Profits                                                |
+//+------------------------------------------------------------------+
+void UpdatePairProfits()
+{
+   for(int i = 0; i < MAX_PAIRS; i++)
+   {
+      if(!g_pairs[i].enabled) continue;
+      if(g_pairs[i].direction == 0)
+      {
+         g_pairs[i].pairProfit = 0;
+         continue;
+      }
+      
+      double profitA = 0;
+      double profitB = 0;
+      
+      // Get profit from position A
+      if(g_pairs[i].ticketA > 0 && PositionSelectByTicket(g_pairs[i].ticketA))
+      {
+         profitA = PositionGetDouble(POSITION_PROFIT) + 
+                   PositionGetDouble(POSITION_SWAP);
+      }
+      
+      // Get profit from position B
+      if(g_pairs[i].ticketB > 0 && PositionSelectByTicket(g_pairs[i].ticketB))
+      {
+         profitB = PositionGetDouble(POSITION_PROFIT) + 
+                   PositionGetDouble(POSITION_SWAP);
+      }
+      
+      g_pairs[i].pairProfit = profitA + profitB;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Update Account Statistics                                          |
+//+------------------------------------------------------------------+
+void UpdateAccountStats()
+{
+   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+   if(equity > g_maxEquity) g_maxEquity = equity;
+   
+   // Reset daily/weekly/monthly profits at period boundaries
+   MqlDateTime dt;
+   TimeToStruct(TimeCurrent(), dt);
+   
+   // Check for new day
+   MqlDateTime dtStart;
+   TimeToStruct(g_dayStart, dtStart);
+   if(dt.day != dtStart.day)
+   {
+      g_dailyProfit = 0;
+      g_dayStart = TimeCurrent();
+   }
+   
+   // Check for new week
+   TimeToStruct(g_weekStart, dtStart);
+   if(dt.day_of_week < dtStart.day_of_week || dt.day - dtStart.day >= 7)
+   {
+      g_weeklyProfit = 0;
+      g_weekStart = TimeCurrent();
+   }
+   
+   // Check for new month
+   TimeToStruct(g_monthStart, dtStart);
+   if(dt.mon != dtStart.mon)
+   {
+      g_monthlyProfit = 0;
+      g_monthStart = TimeCurrent();
+   }
+}
+
+//+------------------------------------------------------------------+
+//| ================ RISK MANAGEMENT ================                  |
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//| Check Risk Limits                                                  |
+//+------------------------------------------------------------------+
+void CheckRiskLimits()
 {
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
    double equity = AccountInfoDouble(ACCOUNT_EQUITY);
    
    if(balance <= 0) return;
    
-   double drawdown = ((balance - equity) / balance) * 100;
+   double drawdown = ((g_maxEquity - equity) / g_maxEquity) * 100;
    
+   // Emergency close at high drawdown
+   if(drawdown >= InpEmergencyCloseDD)
+   {
+      PrintFormat("EMERGENCY: Drawdown %.2f%% exceeded limit - Closing ALL", drawdown);
+      CloseAllPairTrades();
+      g_isPaused = true;
+      return;
+   }
+   
+   // Normal max drawdown check
    if(drawdown >= InpMaxDrawdown)
    {
-      PrintFormat("Max drawdown reached: %.2f%% - Closing all positions", drawdown);
-      CloseAllPositions();
+      PrintFormat("Max drawdown reached: %.2f%% - Pausing new trades", drawdown);
+      // Don't close positions, just stop new trades
    }
 }
 
 //+------------------------------------------------------------------+
-//| Close all positions                                                |
+//| Close All Pair Trades                                              |
+//+------------------------------------------------------------------+
+void CloseAllPairTrades()
+{
+   for(int i = 0; i < MAX_PAIRS; i++)
+   {
+      if(g_pairs[i].direction != 0)
+      {
+         ClosePairTrade(i);
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Close All Positions by Magic Number                                |
 //+------------------------------------------------------------------+
 void CloseAllPositions()
 {
@@ -474,14 +1077,6 @@ void CloseAllPositions()
          }
       }
    }
-}
-
-//+------------------------------------------------------------------+
-//| Timer function                                                     |
-//+------------------------------------------------------------------+
-void OnTimer()
-{
-   // Periodic data sync
 }
 
 //+------------------------------------------------------------------+
