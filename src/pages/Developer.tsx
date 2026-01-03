@@ -92,6 +92,7 @@ const Developer = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [selectedSystem, setSelectedSystem] = useState<TradingSystem | null>(null);
+  const [statisticalEACode, setStatisticalEACode] = useState<string>('');
   
   // AI Dashboard state
   const [aiDashboardData, setAiDashboardData] = useState<AIDashboardData | null>(null);
@@ -162,6 +163,23 @@ const Developer = () => {
       setIsLoading(false);
     }
   };
+
+  // Fetch Multi Currency Statistical EA Code
+  const fetchStatisticalEACode = async () => {
+    try {
+      const response = await fetch('/docs/mql5/Multi_Currency_Statistical_EA.mq5');
+      if (response.ok) {
+        const code = await response.text();
+        setStatisticalEACode(code);
+      }
+    } catch (error) {
+      console.error('Error fetching Statistical EA code:', error);
+    }
+  };
+
+  useEffect(() => {
+    fetchStatisticalEACode();
+  }, []);
 
   // Fetch AI Dashboard Data
   const fetchAIDashboardData = useCallback(async () => {
@@ -665,6 +683,79 @@ enum ENUM_BB_MA_TYPE
                       <Code2 className="w-4 h-4 mr-2" />
                       ดู/แก้ไข Code เต็ม (9,600+ บรรทัด)
                     </Button>
+                  </CardContent>
+                </Card>
+              ) : selectedSystem.name.includes('Multi Currency Statistical') || selectedSystem.name.includes('Statistical') ? (
+                <Card>
+                  <CardHeader>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="p-3 rounded-xl bg-primary/20">
+                          <FileCode className="w-6 h-6 text-primary" />
+                        </div>
+                        <div>
+                          <CardTitle>{selectedSystem.name}</CardTitle>
+                          <CardDescription>Trading System</CardDescription>
+                        </div>
+                      </div>
+                      <Badge variant="outline" className="bg-cyan-500/20 text-cyan-400 border-cyan-500">
+                        v{selectedSystem.version}
+                      </Badge>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="flex flex-wrap gap-2 mb-4">
+                      <Badge variant="outline">License Manager</Badge>
+                      <Badge variant="outline">News Filter</Badge>
+                      <Badge variant="outline">Data Sync</Badge>
+                      <Badge variant="outline">Trade History</Badge>
+                    </div>
+                    
+                    <div className="relative">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-sm font-medium text-muted-foreground">Multi_Currency_Statistical_EA.mq5</span>
+                        <div className="flex items-center gap-2">
+                          <Badge variant="secondary">mql5</Badge>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleCopy(statisticalEACode, 'statistical-ea')}
+                            disabled={!statisticalEACode}
+                          >
+                            {copiedId === 'statistical-ea' ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                          </Button>
+                        </div>
+                      </div>
+                      
+                      {statisticalEACode ? (
+                        <CodeBlock 
+                          language="mql5" 
+                          code={statisticalEACode.slice(0, 3000) + '\n\n// ... (แสดงเพียง 3,000 ตัวอักษรแรก - กด Copy เพื่อคัดลอกทั้งหมด ' + statisticalEACode.length.toLocaleString() + ' ตัวอักษร)'} 
+                          filename="Multi_Currency_Statistical_EA.mq5" 
+                        />
+                      ) : (
+                        <div className="flex items-center justify-center py-8">
+                          <RefreshCw className="w-6 h-6 animate-spin text-muted-foreground" />
+                        </div>
+                      )}
+                    </div>
+                    
+                    <div className="flex gap-2">
+                      <Button 
+                        onClick={() => handleCopy(statisticalEACode, 'statistical-ea-full')}
+                        className="flex-1"
+                        disabled={!statisticalEACode}
+                      >
+                        <Copy className="w-4 h-4 mr-2" />
+                        Copy Full Code ({statisticalEACode ? (statisticalEACode.length / 1000).toFixed(1) + 'K chars' : '...'})
+                      </Button>
+                      <Button 
+                        variant="outline"
+                        onClick={fetchStatisticalEACode}
+                      >
+                        <RefreshCw className="w-4 h-4" />
+                      </Button>
+                    </div>
                   </CardContent>
                 </Card>
               ) : (
