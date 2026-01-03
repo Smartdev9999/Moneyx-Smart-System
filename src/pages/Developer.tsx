@@ -684,7 +684,7 @@ enum ENUM_BB_MA_TYPE
                   </div>
                   <div className="flex items-center gap-2">
                     <div className="flex items-center gap-1 bg-muted rounded-lg p-1">
-                      {['H1', 'H4'].map((tf) => (
+                      {['H1', 'H4', 'D1'].map((tf) => (
                         <Button
                           key={tf}
                           variant={selectedTimeframe === tf ? 'default' : 'ghost'}
