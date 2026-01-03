@@ -27,23 +27,35 @@ serve(async (req) => {
       : {};
     
     const symbols = requestData.symbols || ['XAUUSD', 'EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD'];
-    const timeframe = requestData.timeframe || 'H1';
+    const rawTimeframe = requestData.timeframe || 'H1';
     const candleLimit = requestData.candle_limit || 100;
+
+    // Normalize timeframe: EA sends PERIOD_H1, dashboard expects H1
+    // Support both formats when querying
+    const timeframesToQuery = [
+      rawTimeframe,
+      rawTimeframe.startsWith('PERIOD_') ? rawTimeframe.replace('PERIOD_', '') : `PERIOD_${rawTimeframe}`,
+    ];
+    const timeframe = rawTimeframe; // For response
 
     console.log('[AI Dashboard] Fetching data for symbols:', symbols.join(', '));
 
-    // Fetch latest analysis for all symbols
+    // Fetch latest analysis for all symbols (try both timeframe formats)
+    console.log('[AI Dashboard] Querying with timeframes:', timeframesToQuery.join(', '));
+    
     const { data: analysisData, error: analysisError } = await supabase
       .from('ai_analysis_cache')
       .select('*')
       .in('symbol', symbols)
-      .eq('timeframe', timeframe)
+      .in('timeframe', timeframesToQuery)
       .order('created_at', { ascending: false });
 
     if (analysisError) {
       console.error('[AI Dashboard] Error fetching analysis:', analysisError);
       throw analysisError;
     }
+    
+    console.log('[AI Dashboard] Found', (analysisData || []).length, 'analysis records');
 
     // Get unique latest analysis per symbol
     const latestAnalysis: Record<string, any> = {};
@@ -53,7 +65,7 @@ serve(async (req) => {
       }
     }
 
-    // Fetch candle history for each symbol
+    // Fetch candle history for each symbol (try both timeframe formats)
     const candleDataBySymbol: Record<string, any[]> = {};
     
     for (const symbol of symbols) {
@@ -61,7 +73,7 @@ serve(async (req) => {
         .from('ai_candle_history')
         .select('*')
         .eq('symbol', symbol)
-        .eq('timeframe', timeframe)
+        .in('timeframe', timeframesToQuery)
         .order('candle_time', { ascending: false })
         .limit(candleLimit);
 
@@ -73,7 +85,7 @@ serve(async (req) => {
       }
     }
 
-    // Fetch indicator history for each symbol
+    // Fetch indicator history for each symbol (try both timeframe formats)
     const indicatorDataBySymbol: Record<string, any[]> = {};
     
     for (const symbol of symbols) {
@@ -81,7 +93,7 @@ serve(async (req) => {
         .from('ai_indicator_history')
         .select('*')
         .eq('symbol', symbol)
-        .eq('timeframe', timeframe)
+        .in('timeframe', timeframesToQuery)
         .order('candle_time', { ascending: false })
         .limit(candleLimit);
 
