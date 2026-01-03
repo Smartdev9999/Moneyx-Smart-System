@@ -36,7 +36,12 @@ import {
   Trash2,
   Settings,
   Link as LinkIcon,
-  Newspaper
+  Newspaper,
+  Brain,
+  Sparkles,
+  Activity,
+  Radio,
+  Zap
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 
@@ -352,7 +357,7 @@ enum ENUM_BB_MA_TYPE
       {/* Main Content */}
       <main className="container py-8">
         <Tabs defaultValue="ea" className="space-y-6">
-          <TabsList className="grid w-full max-w-lg grid-cols-3">
+          <TabsList className="grid w-full max-w-2xl grid-cols-4">
             <TabsTrigger value="ea" className="gap-2">
               <FileCode className="w-4 h-4" />
               Expert Advisors
@@ -360,6 +365,10 @@ enum ENUM_BB_MA_TYPE
             <TabsTrigger value="indicators" className="gap-2">
               <TrendingUp className="w-4 h-4" />
               Indicators
+            </TabsTrigger>
+            <TabsTrigger value="ai" className="gap-2">
+              <Brain className="w-4 h-4" />
+              AI Analysis
             </TabsTrigger>
             <TabsTrigger value="news" className="gap-2">
               <Newspaper className="w-4 h-4" />
@@ -549,6 +558,190 @@ enum ENUM_BB_MA_TYPE
                   >
                     {copiedId === 'indicator' ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
                   </Button>
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* AI Analysis Tab */}
+          <TabsContent value="ai" className="space-y-6">
+            {/* AI Overview */}
+            <Card className="border-primary/30 bg-gradient-to-br from-primary/5 to-background">
+              <CardHeader>
+                <div className="flex items-center gap-3">
+                  <div className="p-3 rounded-xl bg-primary/20">
+                    <Brain className="w-6 h-6 text-primary" />
+                  </div>
+                  <div>
+                    <CardTitle className="flex items-center gap-2">
+                      AI-Powered Trading Analysis
+                      <Badge variant="outline" className="bg-cyan-500/20 text-cyan-400 border-cyan-500">
+                        Coming Soon
+                      </Badge>
+                    </CardTitle>
+                    <CardDescription>
+                      ระบบ AI วิเคราะห์ตลาดและสร้าง Signal แบบ Real-time
+                    </CardDescription>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <p className="text-sm text-muted-foreground mb-4">
+                  ฟีเจอร์ AI Analysis จะช่วยให้คุณสามารถวิเคราะห์ตลาดแบบอัตโนมัติ รับสัญญาณเทรดแบบ Real-time และเชื่อมต่อกับ EA ได้โดยตรง
+                </p>
+              </CardContent>
+            </Card>
+
+            {/* Feature Cards */}
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+              {/* Market Analysis */}
+              <Card className="relative overflow-hidden">
+                <div className="absolute top-0 right-0 w-24 h-24 bg-gradient-to-br from-blue-500/20 to-transparent rounded-bl-full" />
+                <CardHeader>
+                  <div className="p-2 w-fit rounded-lg bg-blue-500/20">
+                    <Sparkles className="w-5 h-5 text-blue-400" />
+                  </div>
+                  <CardTitle className="text-lg">AI Market Analysis</CardTitle>
+                  <CardDescription>
+                    วิเคราะห์แนวโน้มตลาดด้วย AI แบบ Real-time
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <ul className="space-y-2 text-sm text-muted-foreground">
+                    <li className="flex items-center gap-2">
+                      <div className="w-1.5 h-1.5 rounded-full bg-blue-400" />
+                      วิเคราะห์ Price Action Pattern
+                    </li>
+                    <li className="flex items-center gap-2">
+                      <div className="w-1.5 h-1.5 rounded-full bg-blue-400" />
+                      ประเมิน Market Sentiment
+                    </li>
+                    <li className="flex items-center gap-2">
+                      <div className="w-1.5 h-1.5 rounded-full bg-blue-400" />
+                      คาดการณ์ทิศทางราคา
+                    </li>
+                  </ul>
+                  <Button variant="outline" className="w-full mt-4" disabled>
+                    <Zap className="w-4 h-4 mr-2" />
+                    เร็วๆ นี้
+                  </Button>
+                </CardContent>
+              </Card>
+
+              {/* Real-time Signal */}
+              <Card className="relative overflow-hidden">
+                <div className="absolute top-0 right-0 w-24 h-24 bg-gradient-to-br from-green-500/20 to-transparent rounded-bl-full" />
+                <CardHeader>
+                  <div className="p-2 w-fit rounded-lg bg-green-500/20">
+                    <Radio className="w-5 h-5 text-green-400" />
+                  </div>
+                  <CardTitle className="text-lg">Real-time Signal</CardTitle>
+                  <CardDescription>
+                    รับสัญญาณเทรดแบบ Real-time จาก AI
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <ul className="space-y-2 text-sm text-muted-foreground">
+                    <li className="flex items-center gap-2">
+                      <div className="w-1.5 h-1.5 rounded-full bg-green-400" />
+                      Buy/Sell Signal แบบ Real-time
+                    </li>
+                    <li className="flex items-center gap-2">
+                      <div className="w-1.5 h-1.5 rounded-full bg-green-400" />
+                      แจ้งเตือนผ่าน Telegram/Line
+                    </li>
+                    <li className="flex items-center gap-2">
+                      <div className="w-1.5 h-1.5 rounded-full bg-green-400" />
+                      Entry, TP, SL อัตโนมัติ
+                    </li>
+                  </ul>
+                  <Button variant="outline" className="w-full mt-4" disabled>
+                    <Zap className="w-4 h-4 mr-2" />
+                    เร็วๆ นี้
+                  </Button>
+                </CardContent>
+              </Card>
+
+              {/* EA Integration */}
+              <Card className="relative overflow-hidden">
+                <div className="absolute top-0 right-0 w-24 h-24 bg-gradient-to-br from-purple-500/20 to-transparent rounded-bl-full" />
+                <CardHeader>
+                  <div className="p-2 w-fit rounded-lg bg-purple-500/20">
+                    <Activity className="w-5 h-5 text-purple-400" />
+                  </div>
+                  <CardTitle className="text-lg">EA Integration</CardTitle>
+                  <CardDescription>
+                    เชื่อมต่อ AI กับ EA ใน MT5 โดยตรง
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <ul className="space-y-2 text-sm text-muted-foreground">
+                    <li className="flex items-center gap-2">
+                      <div className="w-1.5 h-1.5 rounded-full bg-purple-400" />
+                      API สำหรับ EA เรียกใช้ AI
+                    </li>
+                    <li className="flex items-center gap-2">
+                      <div className="w-1.5 h-1.5 rounded-full bg-purple-400" />
+                      ส่ง Signal ตรงไปยัง EA
+                    </li>
+                    <li className="flex items-center gap-2">
+                      <div className="w-1.5 h-1.5 rounded-full bg-purple-400" />
+                      Auto-Trading ตาม AI
+                    </li>
+                  </ul>
+                  <Button variant="outline" className="w-full mt-4" disabled>
+                    <Zap className="w-4 h-4 mr-2" />
+                    เร็วๆ นี้
+                  </Button>
+                </CardContent>
+              </Card>
+            </div>
+
+            {/* Roadmap */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Sparkles className="w-5 h-5" />
+                  Development Roadmap
+                </CardTitle>
+                <CardDescription>
+                  แผนพัฒนาฟีเจอร์ AI ในอนาคต
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="space-y-4">
+                  <div className="flex items-center gap-4">
+                    <div className="flex-shrink-0 w-10 h-10 rounded-full bg-yellow-500/20 flex items-center justify-center">
+                      <span className="text-sm font-bold text-yellow-400">1</span>
+                    </div>
+                    <div className="flex-1">
+                      <p className="font-medium">Phase 1: AI Market Analysis API</p>
+                      <p className="text-sm text-muted-foreground">สร้าง Edge Function สำหรับวิเคราะห์ตลาดด้วย Lovable AI</p>
+                    </div>
+                    <Badge variant="outline" className="bg-yellow-500/20 text-yellow-400">Planning</Badge>
+                  </div>
+                  
+                  <div className="flex items-center gap-4">
+                    <div className="flex-shrink-0 w-10 h-10 rounded-full bg-muted flex items-center justify-center">
+                      <span className="text-sm font-bold text-muted-foreground">2</span>
+                    </div>
+                    <div className="flex-1">
+                      <p className="font-medium">Phase 2: Real-time Signal Generator</p>
+                      <p className="text-sm text-muted-foreground">สร้างระบบ Signal แบบ Real-time พร้อมแจ้งเตือน</p>
+                    </div>
+                    <Badge variant="secondary">Upcoming</Badge>
+                  </div>
+                  
+                  <div className="flex items-center gap-4">
+                    <div className="flex-shrink-0 w-10 h-10 rounded-full bg-muted flex items-center justify-center">
+                      <span className="text-sm font-bold text-muted-foreground">3</span>
+                    </div>
+                    <div className="flex-1">
+                      <p className="font-medium">Phase 3: EA AI Integration</p>
+                      <p className="text-sm text-muted-foreground">เชื่อมต่อ MQL5 EA กับ AI API สำหรับ Auto-Trading</p>
+                    </div>
+                    <Badge variant="secondary">Upcoming</Badge>
+                  </div>
                 </div>
               </CardContent>
             </Card>
