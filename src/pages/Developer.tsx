@@ -96,6 +96,7 @@ const Developer = () => {
   const [aiLoading, setAiLoading] = useState(false);
   const [expandedPair, setExpandedPair] = useState<string | null>(null);
   const [selectedTimeframe, setSelectedTimeframe] = useState('H1');
+  const [activeTab, setActiveTab] = useState('ea');
   
   // Dialog states
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -161,6 +162,8 @@ const Developer = () => {
 
   // Fetch AI Dashboard Data
   const fetchAIDashboardData = useCallback(async () => {
+    if (activeTab !== 'ai') return; // Only fetch when on AI tab
+    
     setAiLoading(true);
     try {
       const { data, error } = await supabase.functions.invoke('get-ai-dashboard-data', {
@@ -176,25 +179,30 @@ const Developer = () => {
       }
     } catch (error) {
       console.error('Error fetching AI dashboard data:', error);
-      toast({
-        title: "Error",
-        description: "Failed to load AI dashboard data",
-        variant: "destructive",
-      });
+      // Only show toast if we're on the AI tab
+      if (activeTab === 'ai') {
+        toast({
+          title: "Error",
+          description: "Failed to load AI dashboard data",
+          variant: "destructive",
+        });
+      }
     } finally {
       setAiLoading(false);
     }
-  }, [selectedTimeframe, toast]);
+  }, [selectedTimeframe, toast, activeTab]);
 
-  // Fetch AI data when tab is opened or timeframe changes
+  // Fetch AI data when AI tab is opened or timeframe changes
   useEffect(() => {
-    if (user && isDeveloper) {
+    if (user && isDeveloper && activeTab === 'ai') {
       fetchAIDashboardData();
     }
-  }, [user, isDeveloper, fetchAIDashboardData]);
+  }, [user, isDeveloper, activeTab, fetchAIDashboardData]);
 
   // Real-time subscription for AI analysis updates
   useEffect(() => {
+    if (activeTab !== 'ai') return; // Only subscribe when on AI tab
+    
     const channel = supabase
       .channel('ai-analysis-updates')
       .on(
@@ -213,7 +221,7 @@ const Developer = () => {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [fetchAIDashboardData])
+  }, [fetchAIDashboardData, activeTab]);
 
   const handleSignOut = async () => {
     await signOut();
@@ -445,7 +453,7 @@ enum ENUM_BB_MA_TYPE
 
       {/* Main Content */}
       <main className="container py-8">
-        <Tabs defaultValue="ea" className="space-y-6">
+        <Tabs defaultValue="ea" value={activeTab} onValueChange={setActiveTab} className="space-y-6">
           <TabsList className="grid w-full max-w-2xl grid-cols-4">
             <TabsTrigger value="ea" className="gap-2">
               <FileCode className="w-4 h-4" />
