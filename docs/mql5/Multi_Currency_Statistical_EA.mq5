@@ -1195,30 +1195,39 @@ void CloseAllPositions()
 //+------------------------------------------------------------------+
 //| ================ DASHBOARD PANEL ================                  |
 //+------------------------------------------------------------------+
-
-// Dashboard Constants
+//| DASHBOARD PANEL CONSTANTS                                          |
+//+------------------------------------------------------------------+
 #define PANEL_X          10
 #define PANEL_Y          30
-#define PANEL_WIDTH      680
-#define PANEL_HEIGHT     520
-#define HEADER_HEIGHT    30
-#define ROW_HEIGHT       20
-#define COL_WIDTH        60
-#define PAIR_COL_WIDTH   100
+#define PANEL_WIDTH      775
+#define PANEL_HEIGHT     550
+#define HEADER_HEIGHT    25
+#define ROW_HEIGHT       18
+#define SUMMARY_ROW_H    20
 
 // Dashboard Colors
-color COLOR_BG          = C'25,25,35';
-color COLOR_HEADER      = C'40,40,55';
-color COLOR_BORDER      = C'60,60,80';
+color COLOR_BG          = C'20,22,28';
+color COLOR_HEADER      = C'30,32,40';
+color COLOR_BORDER      = C'45,48,60';
 color COLOR_TEXT        = clrWhite;
+color COLOR_LABEL       = C'170,175,185';
 color COLOR_PROFIT      = clrLime;
 color COLOR_LOSS        = clrRed;
 color COLOR_ON          = clrLime;
 color COLOR_OFF         = clrGray;
 color COLOR_GOLD        = C'255,215,0';
+color COLOR_ACTIVE      = C'0,180,255';
+
+// Global tracking for lot statistics
+double g_dailyLot = 0;
+double g_weeklyLot = 0;
+double g_monthlyLot = 0;
+double g_allTimeLot = 0;
+double g_allTimeProfit = 0;
+double g_maxDrawdownPercent = 0;
 
 //+------------------------------------------------------------------+
-//| Create Dashboard Panel                                             |
+//| Create Dashboard Panel (New Design)                                |
 //+------------------------------------------------------------------+
 void CreateDashboard()
 {
@@ -1230,135 +1239,181 @@ void CreateDashboard()
    // Main Background
    CreateRectangle(prefix + "BG", PANEL_X, PANEL_Y, PANEL_WIDTH, PANEL_HEIGHT, COLOR_BG, COLOR_BORDER);
    
-   // Header - Logo
-   CreateLabel(prefix + "LOGO", PANEL_X + 10, PANEL_Y + 8, "MoneyX Statistical Arbitrage", COLOR_GOLD, 12, "Arial Bold");
-   CreateLabel(prefix + "VER", PANEL_X + PANEL_WIDTH - 60, PANEL_Y + 10, "v2.0", COLOR_TEXT, 9, "Arial");
+   // ===== HEADER BAR =====
+   int headerY = PANEL_Y + 5;
+   CreateLabel(prefix + "LOGO", PANEL_X + 10, headerY, "MoneyX Statistical Arbitrage", COLOR_GOLD, 11, "Arial Bold");
+   CreateLabel(prefix + "VER", PANEL_X + PANEL_WIDTH - 50, headerY, "v2.0", COLOR_TEXT, 9, "Arial");
    
-   // Section: Trading Pairs Table
+   // ===== PAIRS TABLE SECTION =====
    int tableY = PANEL_Y + HEADER_HEIGHT + 5;
    
-   // Table Headers
-   int headerY = tableY;
-   CreateLabel(prefix + "H_PAIR", PANEL_X + 10, headerY, "Trading Pair", COLOR_GOLD, 9, "Arial Bold");
-   CreateLabel(prefix + "H_CORR", PANEL_X + 120, headerY, "Corr%", COLOR_TEXT, 8, "Arial");
-   CreateLabel(prefix + "H_ZSCORE", PANEL_X + 170, headerY, "Z-Score", COLOR_TEXT, 8, "Arial");
-   CreateLabel(prefix + "H_STATUS", PANEL_X + 230, headerY, "Status", COLOR_TEXT, 8, "Arial");
-   CreateLabel(prefix + "H_LOTA", PANEL_X + 290, headerY, "LotA", COLOR_TEXT, 8, "Arial");
-   CreateLabel(prefix + "H_LOTB", PANEL_X + 340, headerY, "LotB", COLOR_TEXT, 8, "Arial");
-   CreateLabel(prefix + "H_PL", PANEL_X + 390, headerY, "P/L", COLOR_TEXT, 8, "Arial");
+   // ----- LEFT COLUMN: Main Order Buy (Header) -----
+   int leftX = PANEL_X + 5;
+   CreateLabel(prefix + "H_BUY", leftX + 120, tableY, "Main Order Buy", COLOR_GOLD, 9, "Arial Bold");
    
-   // Second column headers
-   CreateLabel(prefix + "H_PAIR2", PANEL_X + 450, headerY, "Trading Pair", COLOR_GOLD, 9, "Arial Bold");
-   CreateLabel(prefix + "H_CORR2", PANEL_X + 550, headerY, "Corr%", COLOR_TEXT, 8, "Arial");
-   CreateLabel(prefix + "H_STATUS2", PANEL_X + 600, headerY, "Status", COLOR_TEXT, 8, "Arial");
-   CreateLabel(prefix + "H_PL2", PANEL_X + 650, headerY, "P/L", COLOR_TEXT, 8, "Arial");
+   int colHeaderY = tableY + 18;
+   CreateLabel(prefix + "HL_PAIR", leftX, colHeaderY, "Trading Pair", COLOR_GOLD, 8, "Arial Bold");
+   CreateLabel(prefix + "HL_C", leftX + 110, colHeaderY, "C-%", COLOR_LABEL, 7, "Arial");
+   CreateLabel(prefix + "HL_MAX", leftX + 145, colHeaderY, "Max", COLOR_LABEL, 7, "Arial");
+   CreateLabel(prefix + "HL_ORD", leftX + 175, colHeaderY, "Order", COLOR_LABEL, 7, "Arial");
+   CreateLabel(prefix + "HL_LOT", leftX + 210, colHeaderY, "Lot", COLOR_LABEL, 7, "Arial");
+   CreateLabel(prefix + "HL_PROF", leftX + 245, colHeaderY, "Profit", COLOR_LABEL, 7, "Arial");
+   CreateLabel(prefix + "HL_CLOSE", leftX + 290, colHeaderY, "Close", COLOR_LABEL, 7, "Arial");
+   CreateLabel(prefix + "HL_TGT", leftX + 330, colHeaderY, "Target", COLOR_LABEL, 7, "Arial");
+   CreateLabel(prefix + "HL_TPL", leftX + 370, colHeaderY, "Total P/L", COLOR_LABEL, 7, "Arial");
    
-   // Separator line
-   CreateLine(prefix + "SEP1", PANEL_X + 5, tableY + ROW_HEIGHT, PANEL_X + PANEL_WIDTH - 5, tableY + ROW_HEIGHT, COLOR_BORDER);
+   // Separator line under left header
+   CreateLine(prefix + "SEP_L1", leftX, colHeaderY + 14, leftX + 375, colHeaderY + 14, COLOR_BORDER);
    
-   // Trading Pair Rows (10 pairs each column)
-   int rowY = tableY + ROW_HEIGHT + 5;
+   // ----- RIGHT COLUMN: Main Order Sell (Header) -----
+   int rightX = PANEL_X + 400;
+   CreateLabel(prefix + "H_SELL", rightX + 100, tableY, "Main Order Sell", COLOR_GOLD, 9, "Arial Bold");
+   
+   CreateLabel(prefix + "HR_PAIR", rightX, colHeaderY, "Trading Pair", COLOR_GOLD, 8, "Arial Bold");
+   CreateLabel(prefix + "HR_C", rightX + 110, colHeaderY, "C-%", COLOR_LABEL, 7, "Arial");
+   CreateLabel(prefix + "HR_MAX", rightX + 145, colHeaderY, "Max", COLOR_LABEL, 7, "Arial");
+   CreateLabel(prefix + "HR_ORD", rightX + 175, colHeaderY, "Order", COLOR_LABEL, 7, "Arial");
+   CreateLabel(prefix + "HR_LOT", rightX + 210, colHeaderY, "Lot", COLOR_LABEL, 7, "Arial");
+   CreateLabel(prefix + "HR_PROF", rightX + 245, colHeaderY, "Profit", COLOR_LABEL, 7, "Arial");
+   CreateLabel(prefix + "HR_CLOSE", rightX + 290, colHeaderY, "Close", COLOR_LABEL, 7, "Arial");
+   CreateLabel(prefix + "HR_TGT", rightX + 330, colHeaderY, "Target", COLOR_LABEL, 7, "Arial");
+   
+   // Separator line under right header
+   CreateLine(prefix + "SEP_R1", rightX, colHeaderY + 14, rightX + 365, colHeaderY + 14, COLOR_BORDER);
+   
+   // ===== PAIR ROWS (20 Pairs: 10 Left, 10 Right) =====
+   int rowStartY = colHeaderY + 18;
+   
+   // Left Column (Pairs 0-9)
    for(int i = 0; i < 10; i++)
    {
-      CreatePairRow(prefix, i, PANEL_X + 10, rowY + i * ROW_HEIGHT);
+      CreatePairRowLeft(prefix, i, leftX, rowStartY + i * ROW_HEIGHT);
    }
+   
+   // Right Column (Pairs 10-19)
    for(int i = 10; i < 20; i++)
    {
-      CreatePairRow2(prefix, i, PANEL_X + 450, rowY + (i - 10) * ROW_HEIGHT);
+      CreatePairRowRight(prefix, i, rightX, rowStartY + (i - 10) * ROW_HEIGHT);
    }
    
-   // Account Summary Section
-   int summaryY = rowY + 10 * ROW_HEIGHT + 15;
-   CreateLine(prefix + "SEP2", PANEL_X + 5, summaryY - 5, PANEL_X + PANEL_WIDTH - 5, summaryY - 5, COLOR_BORDER);
+   // ===== ACCOUNT SUMMARY SECTION =====
+   int summaryY = rowStartY + 10 * ROW_HEIGHT + 10;
    
-   // Row 1: Balance, Total Lot, Daily Lot, Profit Daily
-   CreateLabel(prefix + "L_BAL", PANEL_X + 10, summaryY, "Balance:", COLOR_TEXT, 8, "Arial");
-   CreateLabel(prefix + "V_BAL", PANEL_X + 70, summaryY, "0.00", COLOR_PROFIT, 9, "Arial Bold");
+   // Separator line above summary
+   CreateLine(prefix + "SEP_SUM", PANEL_X + 5, summaryY - 5, PANEL_X + PANEL_WIDTH - 5, summaryY - 5, COLOR_BORDER);
    
-   CreateLabel(prefix + "L_TLOT", PANEL_X + 170, summaryY, "Total Lot:", COLOR_TEXT, 8, "Arial");
-   CreateLabel(prefix + "V_TLOT", PANEL_X + 230, summaryY, "0.00", COLOR_TEXT, 9, "Arial");
+   // --- Summary Row 1 ---
+   int r1Y = summaryY;
+   CreateLabel(prefix + "L_BAL", PANEL_X + 10, r1Y, "Balance:", COLOR_LABEL, 8, "Arial");
+   CreateLabel(prefix + "V_BAL", PANEL_X + 70, r1Y, "0.00", COLOR_PROFIT, 9, "Arial Bold");
    
-   CreateLabel(prefix + "L_DLOT", PANEL_X + 320, summaryY, "Daily Lot:", COLOR_TEXT, 8, "Arial");
-   CreateLabel(prefix + "V_DLOT", PANEL_X + 380, summaryY, "0.00", COLOR_TEXT, 9, "Arial");
+   CreateLabel(prefix + "L_TLOT", PANEL_X + 170, r1Y, "Total Current Lot:", COLOR_LABEL, 8, "Arial");
+   CreateLabel(prefix + "V_TLOT", PANEL_X + 275, r1Y, "0.00", COLOR_TEXT, 9, "Arial");
    
-   CreateLabel(prefix + "L_DP", PANEL_X + 470, summaryY, "Daily P/L:", COLOR_TEXT, 8, "Arial");
-   CreateLabel(prefix + "V_DP", PANEL_X + 530, summaryY, "0.00", COLOR_PROFIT, 9, "Arial Bold");
+   CreateLabel(prefix + "L_DLOT", PANEL_X + 340, r1Y, "Daily Lot:", COLOR_LABEL, 8, "Arial");
+   CreateLabel(prefix + "V_DLOT", PANEL_X + 400, r1Y, "0.00", COLOR_TEXT, 9, "Arial");
    
-   // Row 2: Equity, Total Orders, Weekly Lot, Profit Weekly
-   int row2Y = summaryY + ROW_HEIGHT;
-   CreateLabel(prefix + "L_EQ", PANEL_X + 10, row2Y, "Equity:", COLOR_TEXT, 8, "Arial");
-   CreateLabel(prefix + "V_EQ", PANEL_X + 70, row2Y, "0.00", COLOR_PROFIT, 9, "Arial Bold");
+   CreateLabel(prefix + "L_DP", PANEL_X + 500, r1Y, "Daily P/L:", COLOR_LABEL, 8, "Arial");
+   CreateLabel(prefix + "V_DP", PANEL_X + 560, r1Y, "0.00", COLOR_PROFIT, 9, "Arial Bold");
    
-   CreateLabel(prefix + "L_TORD", PANEL_X + 170, row2Y, "Orders:", COLOR_TEXT, 8, "Arial");
-   CreateLabel(prefix + "V_TORD", PANEL_X + 230, row2Y, "0", COLOR_TEXT, 9, "Arial");
+   CreateLabel(prefix + "L_DP_TGT", PANEL_X + 640, r1Y, "50Lot ($50)", COLOR_LABEL, 7, "Arial");
    
-   CreateLabel(prefix + "L_WLOT", PANEL_X + 320, row2Y, "Weekly Lot:", COLOR_TEXT, 8, "Arial");
-   CreateLabel(prefix + "V_WLOT", PANEL_X + 380, row2Y, "0.00", COLOR_TEXT, 9, "Arial");
+   // --- Summary Row 2 ---
+   int r2Y = summaryY + SUMMARY_ROW_H;
+   CreateLabel(prefix + "L_EQ", PANEL_X + 10, r2Y, "Equity:", COLOR_LABEL, 8, "Arial");
+   CreateLabel(prefix + "V_EQ", PANEL_X + 70, r2Y, "0.00", COLOR_PROFIT, 9, "Arial Bold");
    
-   CreateLabel(prefix + "L_WP", PANEL_X + 470, row2Y, "Weekly P/L:", COLOR_TEXT, 8, "Arial");
-   CreateLabel(prefix + "V_WP", PANEL_X + 530, row2Y, "0.00", COLOR_PROFIT, 9, "Arial Bold");
+   CreateLabel(prefix + "L_TORD", PANEL_X + 170, r2Y, "Total Current Order:", COLOR_LABEL, 8, "Arial");
+   CreateLabel(prefix + "V_TORD", PANEL_X + 290, r2Y, "0", COLOR_TEXT, 9, "Arial");
    
-   // Row 3: Margin, DD%, Monthly Lot, Profit Monthly
-   int row3Y = row2Y + ROW_HEIGHT;
-   CreateLabel(prefix + "L_MG", PANEL_X + 10, row3Y, "Margin:", COLOR_TEXT, 8, "Arial");
-   CreateLabel(prefix + "V_MG", PANEL_X + 70, row3Y, "0.00", COLOR_TEXT, 9, "Arial");
+   CreateLabel(prefix + "L_WLOT", PANEL_X + 340, r2Y, "Weekly Lot:", COLOR_LABEL, 8, "Arial");
+   CreateLabel(prefix + "V_WLOT", PANEL_X + 410, r2Y, "0.00", COLOR_TEXT, 9, "Arial");
    
-   CreateLabel(prefix + "L_DD", PANEL_X + 170, row3Y, "DD%:", COLOR_TEXT, 8, "Arial");
-   CreateLabel(prefix + "V_DD", PANEL_X + 230, row3Y, "0.00%", COLOR_LOSS, 9, "Arial Bold");
+   CreateLabel(prefix + "L_WP", PANEL_X + 500, r2Y, "Weekly P/L:", COLOR_LABEL, 8, "Arial");
+   CreateLabel(prefix + "V_WP", PANEL_X + 570, r2Y, "0.00", COLOR_PROFIT, 9, "Arial Bold");
    
-   CreateLabel(prefix + "L_MLOT", PANEL_X + 320, row3Y, "Monthly Lot:", COLOR_TEXT, 8, "Arial");
-   CreateLabel(prefix + "V_MLOT", PANEL_X + 380, row3Y, "0.00", COLOR_TEXT, 9, "Arial");
+   CreateLabel(prefix + "L_WP_TGT", PANEL_X + 640, r2Y, "100Lot ($1000)", COLOR_LABEL, 7, "Arial");
    
-   CreateLabel(prefix + "L_MP", PANEL_X + 470, row3Y, "Monthly P/L:", COLOR_TEXT, 8, "Arial");
-   CreateLabel(prefix + "V_MP", PANEL_X + 530, row3Y, "0.00", COLOR_PROFIT, 9, "Arial Bold");
+   // --- Summary Row 3 ---
+   int r3Y = summaryY + 2 * SUMMARY_ROW_H;
+   CreateLabel(prefix + "L_MG", PANEL_X + 10, r3Y, "Margin:", COLOR_LABEL, 8, "Arial");
+   CreateLabel(prefix + "V_MG", PANEL_X + 70, r3Y, "0.00", COLOR_TEXT, 9, "Arial");
    
-   // Row 4: Total P/L, Max DD%
-   int row4Y = row3Y + ROW_HEIGHT;
-   CreateLabel(prefix + "L_TPL", PANEL_X + 10, row4Y, "Total P/L:", COLOR_TEXT, 8, "Arial");
-   CreateLabel(prefix + "V_TPL", PANEL_X + 70, row4Y, "0.00", COLOR_PROFIT, 10, "Arial Bold");
+   CreateLabel(prefix + "L_DD", PANEL_X + 170, r3Y, "Current DD%:", COLOR_LABEL, 8, "Arial");
+   CreateLabel(prefix + "V_DD", PANEL_X + 260, r3Y, "0.00%", COLOR_LOSS, 9, "Arial Bold");
    
-   CreateLabel(prefix + "L_MDD", PANEL_X + 170, row4Y, "Max DD%:", COLOR_TEXT, 8, "Arial");
-   CreateLabel(prefix + "V_MDD", PANEL_X + 230, row4Y, "0.00%", COLOR_LOSS, 9, "Arial Bold");
+   CreateLabel(prefix + "L_MLOT", PANEL_X + 340, r3Y, "Monthly Lot:", COLOR_LABEL, 8, "Arial");
+   CreateLabel(prefix + "V_MLOT", PANEL_X + 420, r3Y, "0.00", COLOR_TEXT, 9, "Arial");
    
-   CreateLabel(prefix + "L_PAIRS", PANEL_X + 320, row4Y, "Active Pairs:", COLOR_TEXT, 8, "Arial");
-   CreateLabel(prefix + "V_PAIRS", PANEL_X + 390, row4Y, IntegerToString(g_activePairs), COLOR_GOLD, 9, "Arial Bold");
+   CreateLabel(prefix + "L_MP", PANEL_X + 500, r3Y, "Monthly P/L:", COLOR_LABEL, 8, "Arial");
+   CreateLabel(prefix + "V_MP", PANEL_X + 580, r3Y, "0.00", COLOR_PROFIT, 9, "Arial Bold");
    
-   // License Status
-   CreateLabel(prefix + "L_LIC", PANEL_X + 470, row4Y, "License:", COLOR_TEXT, 8, "Arial");
-   CreateLabel(prefix + "V_LIC", PANEL_X + 530, row4Y, g_isLicenseValid ? "VALID" : "INVALID", g_isLicenseValid ? COLOR_ON : COLOR_LOSS, 9, "Arial Bold");
+   CreateLabel(prefix + "L_MP_TGT", PANEL_X + 640, r3Y, "500Lot ($5000)", COLOR_LABEL, 7, "Arial");
+   
+   // --- Summary Row 4 ---
+   int r4Y = summaryY + 3 * SUMMARY_ROW_H;
+   CreateLabel(prefix + "L_TPL", PANEL_X + 10, r4Y, "Total Current P/L:", COLOR_LABEL, 8, "Arial");
+   CreateLabel(prefix + "V_TPL", PANEL_X + 120, r4Y, "0.00", COLOR_PROFIT, 10, "Arial Bold");
+   
+   CreateLabel(prefix + "L_MDD", PANEL_X + 200, r4Y, "Max DD%:", COLOR_LABEL, 8, "Arial");
+   CreateLabel(prefix + "V_MDD", PANEL_X + 260, r4Y, "0.00%", COLOR_LOSS, 9, "Arial Bold");
+   
+   CreateLabel(prefix + "L_ALOT", PANEL_X + 340, r4Y, "All Time Lot:", COLOR_LABEL, 8, "Arial");
+   CreateLabel(prefix + "V_ALOT", PANEL_X + 420, r4Y, "0.00", COLOR_TEXT, 9, "Arial");
+   
+   CreateLabel(prefix + "L_AP", PANEL_X + 500, r4Y, "All Time Profit:", COLOR_LABEL, 8, "Arial");
+   CreateLabel(prefix + "V_AP", PANEL_X + 595, r4Y, "0.00", COLOR_PROFIT, 9, "Arial Bold");
+   
+   CreateLabel(prefix + "L_AP_TGT", PANEL_X + 640, r4Y, "5000Lot ($5000)", COLOR_LABEL, 7, "Arial");
+   
+   // --- Summary Row 5: Active Pairs & License ---
+   int r5Y = summaryY + 4 * SUMMARY_ROW_H + 5;
+   CreateLabel(prefix + "L_PAIRS", PANEL_X + 340, r5Y, "Active Pairs:", COLOR_LABEL, 8, "Arial");
+   CreateLabel(prefix + "V_PAIRS", PANEL_X + 420, r5Y, IntegerToString(g_activePairs), COLOR_GOLD, 9, "Arial Bold");
+   
+   CreateLabel(prefix + "L_LIC", PANEL_X + 500, r5Y, "License:", COLOR_LABEL, 8, "Arial");
+   CreateLabel(prefix + "V_LIC", PANEL_X + 560, r5Y, g_isLicenseValid ? "VALID" : "INVALID", g_isLicenseValid ? COLOR_ON : COLOR_LOSS, 9, "Arial Bold");
    
    ChartRedraw();
 }
 
 //+------------------------------------------------------------------+
-//| Create Pair Row (Column 1)                                         |
+//| Create Pair Row - Left Column (Buy Side)                           |
 //+------------------------------------------------------------------+
-void CreatePairRow(string prefix, int idx, int x, int y)
+void CreatePairRowLeft(string prefix, int idx, int x, int y)
 {
    string pairName = g_pairs[idx].symbolA + "-" + g_pairs[idx].symbolB;
    string idxStr = IntegerToString(idx);
    
    CreateLabel(prefix + "P" + idxStr + "_NAME", x, y, pairName, COLOR_TEXT, 8, "Arial");
-   CreateLabel(prefix + "P" + idxStr + "_CORR", x + 110, y, "0%", COLOR_TEXT, 8, "Arial");
-   CreateLabel(prefix + "P" + idxStr + "_Z", x + 160, y, "0.00", COLOR_TEXT, 8, "Arial");
-   CreateLabel(prefix + "P" + idxStr + "_ST", x + 220, y, g_pairs[idx].enabled ? "On" : "Off", g_pairs[idx].enabled ? COLOR_ON : COLOR_OFF, 8, "Arial Bold");
-   CreateLabel(prefix + "P" + idxStr + "_LA", x + 280, y, "0.00", COLOR_TEXT, 8, "Arial");
-   CreateLabel(prefix + "P" + idxStr + "_LB", x + 330, y, "0.00", COLOR_TEXT, 8, "Arial");
-   CreateLabel(prefix + "P" + idxStr + "_PL", x + 380, y, "0.00", COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_C", x + 110, y, "0%", COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_MAX", x + 145, y, IntegerToString(InpLookbackPeriod), COLOR_LABEL, 8, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_ORD", x + 180, y, "0", COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_LOT", x + 213, y, "0.00", COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_PROF", x + 248, y, "0", COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_CLOSE", x + 295, y, "0", COLOR_LABEL, 8, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_TGT", x + 338, y, IntegerToString((int)(InpExitZScore * 10)), COLOR_LABEL, 8, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_TPL", x + 375, y, "0", COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_ST", x + 420, y, g_pairs[idx].enabled ? "On" : "Off", g_pairs[idx].enabled ? COLOR_ON : COLOR_OFF, 8, "Arial Bold");
 }
 
 //+------------------------------------------------------------------+
-//| Create Pair Row (Column 2)                                         |
+//| Create Pair Row - Right Column (Sell Side)                         |
 //+------------------------------------------------------------------+
-void CreatePairRow2(string prefix, int idx, int x, int y)
+void CreatePairRowRight(string prefix, int idx, int x, int y)
 {
    string pairName = g_pairs[idx].symbolA + "-" + g_pairs[idx].symbolB;
    string idxStr = IntegerToString(idx);
    
    CreateLabel(prefix + "P" + idxStr + "_NAME", x, y, pairName, COLOR_TEXT, 8, "Arial");
-   CreateLabel(prefix + "P" + idxStr + "_CORR", x + 100, y, "0%", COLOR_TEXT, 8, "Arial");
-   CreateLabel(prefix + "P" + idxStr + "_ST", x + 150, y, g_pairs[idx].enabled ? "On" : "Off", g_pairs[idx].enabled ? COLOR_ON : COLOR_OFF, 8, "Arial Bold");
-   CreateLabel(prefix + "P" + idxStr + "_PL", x + 200, y, "0.00", COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_C", x + 110, y, "0%", COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_MAX", x + 145, y, IntegerToString(InpLookbackPeriod), COLOR_LABEL, 8, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_ORD", x + 180, y, "0", COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_LOT", x + 213, y, "0.00", COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_PROF", x + 248, y, "0", COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_CLOSE", x + 295, y, "0", COLOR_LABEL, 8, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_TGT", x + 338, y, IntegerToString((int)(InpExitZScore * 10)), COLOR_LABEL, 8, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_ST", x + 370, y, g_pairs[idx].enabled ? "On" : "Off", g_pairs[idx].enabled ? COLOR_ON : COLOR_OFF, 8, "Arial Bold");
 }
 
 //+------------------------------------------------------------------+
@@ -1374,9 +1429,8 @@ void UpdateDashboard()
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
    double equity = AccountInfoDouble(ACCOUNT_EQUITY);
    double margin = AccountInfoDouble(ACCOUNT_MARGIN);
-   double freeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
    
-   // Calculate total P/L and lots
+   // Calculate total P/L and lots from open pairs
    double totalPL = 0;
    double totalLot = 0;
    int totalOrders = 0;
@@ -1391,7 +1445,10 @@ void UpdateDashboard()
       }
    }
    
-   // Calculate drawdown
+   // Update max equity for drawdown calculation
+   if(equity > g_maxEquity) g_maxEquity = equity;
+   
+   // Calculate current drawdown %
    double ddPercent = 0;
    if(g_maxEquity > 0)
    {
@@ -1399,55 +1456,73 @@ void UpdateDashboard()
       if(ddPercent < 0) ddPercent = 0;
    }
    
-   // Update Account Labels
-   UpdateLabel(prefix + "V_BAL", DoubleToString(balance, 2), balance >= 0 ? COLOR_PROFIT : COLOR_LOSS);
+   // Track max drawdown
+   if(ddPercent > g_maxDrawdownPercent) g_maxDrawdownPercent = ddPercent;
+   
+   // ===== Update Account Labels =====
+   UpdateLabel(prefix + "V_BAL", DoubleToString(balance, 2), balance >= g_initialBalance ? COLOR_PROFIT : COLOR_LOSS);
    UpdateLabel(prefix + "V_EQ", DoubleToString(equity, 2), equity >= balance ? COLOR_PROFIT : COLOR_LOSS);
    UpdateLabel(prefix + "V_MG", DoubleToString(margin, 2), COLOR_TEXT);
+   
    UpdateLabel(prefix + "V_TLOT", DoubleToString(totalLot, 2), COLOR_TEXT);
    UpdateLabel(prefix + "V_TORD", IntegerToString(totalOrders), COLOR_TEXT);
-   UpdateLabel(prefix + "V_DD", DoubleToString(ddPercent, 2) + "%", ddPercent > InpMaxDrawdown ? COLOR_LOSS : COLOR_TEXT);
+   
+   UpdateLabel(prefix + "V_DD", DoubleToString(ddPercent, 2) + "%", ddPercent > 10 ? COLOR_LOSS : COLOR_TEXT);
+   UpdateLabel(prefix + "V_MDD", DoubleToString(g_maxDrawdownPercent, 2) + "%", g_maxDrawdownPercent > InpMaxDrawdown ? COLOR_LOSS : COLOR_TEXT);
+   
    UpdateLabel(prefix + "V_TPL", DoubleToString(totalPL, 2), totalPL >= 0 ? COLOR_PROFIT : COLOR_LOSS);
    
-   // Update Profit Labels
+   // ===== Update Lot Statistics =====
+   UpdateLabel(prefix + "V_DLOT", DoubleToString(g_dailyLot, 2), COLOR_TEXT);
+   UpdateLabel(prefix + "V_WLOT", DoubleToString(g_weeklyLot, 2), COLOR_TEXT);
+   UpdateLabel(prefix + "V_MLOT", DoubleToString(g_monthlyLot, 2), COLOR_TEXT);
+   UpdateLabel(prefix + "V_ALOT", DoubleToString(g_allTimeLot, 2), COLOR_TEXT);
+   
+   // ===== Update Profit Labels =====
    UpdateLabel(prefix + "V_DP", DoubleToString(g_dailyProfit, 2), g_dailyProfit >= 0 ? COLOR_PROFIT : COLOR_LOSS);
    UpdateLabel(prefix + "V_WP", DoubleToString(g_weeklyProfit, 2), g_weeklyProfit >= 0 ? COLOR_PROFIT : COLOR_LOSS);
    UpdateLabel(prefix + "V_MP", DoubleToString(g_monthlyProfit, 2), g_monthlyProfit >= 0 ? COLOR_PROFIT : COLOR_LOSS);
+   UpdateLabel(prefix + "V_AP", DoubleToString(g_allTimeProfit, 2), g_allTimeProfit >= 0 ? COLOR_PROFIT : COLOR_LOSS);
    
-   // Update Each Pair
+   // ===== Update Each Pair Row =====
    for(int i = 0; i < MAX_PAIRS; i++)
    {
       string idxStr = IntegerToString(i);
       
-      // Correlation
+      // Correlation %
       double corr = g_pairs[i].correlation * 100;
-      UpdateLabel(prefix + "P" + idxStr + "_CORR", DoubleToString(corr, 0) + "%", 
-         MathAbs(corr) >= InpMinCorrelation * 100 ? COLOR_PROFIT : COLOR_LOSS);
+      color corrColor = MathAbs(corr) >= InpMinCorrelation * 100 ? COLOR_PROFIT : (corr < 0 ? COLOR_LOSS : COLOR_TEXT);
+      UpdateLabel(prefix + "P" + idxStr + "_C", DoubleToString(corr, 0) + "%", corrColor);
       
-      // Z-Score (only for column 1 pairs)
-      if(i < 10)
-      {
-         double z = g_pairs[i].zScore;
-         color zColor = COLOR_TEXT;
-         if(z > InpEntryZScore) zColor = COLOR_LOSS;
-         else if(z < -InpEntryZScore) zColor = COLOR_PROFIT;
-         UpdateLabel(prefix + "P" + idxStr + "_Z", DoubleToString(z, 2), zColor);
-         
-         // Lots
-         UpdateLabel(prefix + "P" + idxStr + "_LA", DoubleToString(g_pairs[i].lotA, 2), COLOR_TEXT);
-         UpdateLabel(prefix + "P" + idxStr + "_LB", DoubleToString(g_pairs[i].lotB, 2), COLOR_TEXT);
-      }
+      // Order count (1 if position open, 0 otherwise)
+      int orderCount = (g_pairs[i].direction != 0) ? 1 : 0;
+      UpdateLabel(prefix + "P" + idxStr + "_ORD", IntegerToString(orderCount), orderCount > 0 ? COLOR_ACTIVE : COLOR_TEXT);
+      
+      // Lot
+      double pairLot = g_pairs[i].lotA + g_pairs[i].lotB;
+      UpdateLabel(prefix + "P" + idxStr + "_LOT", DoubleToString(pairLot, 2), pairLot > 0 ? COLOR_TEXT : COLOR_LABEL);
+      
+      // Profit
+      double profit = g_pairs[i].pairProfit;
+      UpdateLabel(prefix + "P" + idxStr + "_PROF", DoubleToString(profit, 0), profit >= 0 ? COLOR_PROFIT : COLOR_LOSS);
+      
+      // Total P/L for this pair
+      UpdateLabel(prefix + "P" + idxStr + "_TPL", DoubleToString(profit, 0), profit >= 0 ? COLOR_PROFIT : COLOR_LOSS);
       
       // Status
       string status = g_pairs[i].enabled ? "On" : "Off";
-      if(g_pairs[i].direction == 1) status = "LONG";
-      else if(g_pairs[i].direction == -1) status = "SHORT";
       color stColor = g_pairs[i].enabled ? COLOR_ON : COLOR_OFF;
-      if(g_pairs[i].direction != 0) stColor = COLOR_GOLD;
+      if(g_pairs[i].direction == 1)
+      {
+         status = "LONG";
+         stColor = COLOR_PROFIT;
+      }
+      else if(g_pairs[i].direction == -1)
+      {
+         status = "SHORT";
+         stColor = COLOR_LOSS;
+      }
       UpdateLabel(prefix + "P" + idxStr + "_ST", status, stColor);
-      
-      // P/L
-      double pl = g_pairs[i].pairProfit;
-      UpdateLabel(prefix + "P" + idxStr + "_PL", DoubleToString(pl, 2), pl >= 0 ? COLOR_PROFIT : COLOR_LOSS);
    }
    
    ChartRedraw();
@@ -1501,19 +1576,10 @@ void UpdateLabel(string name, string text, color clr)
 }
 
 //+------------------------------------------------------------------+
-//| Helper: Create Line                                                |
+//| Helper: Create Line (using rectangle)                              |
 //+------------------------------------------------------------------+
 void CreateLine(string name, int x1, int y1, int x2, int y2, color clr)
 {
-   ObjectCreate(0, name, OBJ_TREND, 0, 0, 0, 0, 0);
-   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x1);
-   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y1);
-   ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
-   ObjectSetInteger(0, name, OBJPROP_WIDTH, 1);
-   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
-   
-   // Use rectangle as line instead
-   ObjectDelete(0, name);
    ObjectCreate(0, name, OBJ_RECTANGLE_LABEL, 0, 0, 0);
    ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x1);
    ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y1);
