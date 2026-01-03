@@ -69,7 +69,47 @@ serve(async (req) => {
       );
     }
 
-    const requestData: AnalysisRequest = await req.json();
+    // Read raw body and clean MQL5 malformed data
+    let rawBody = await req.text();
+    console.log('[AI Bias] Received raw body length:', rawBody.length);
+    
+    // Clean control characters and null bytes from MQL5 WebRequest
+    rawBody = rawBody.replace(/[\x00-\x1F\x7F]/g, (char) => {
+      // Keep tabs, newlines, carriage returns
+      if (char === '\t' || char === '\n' || char === '\r') return char;
+      return '';
+    });
+    
+    // Fix common MQL5 JSON issues
+    // 1. Remove trailing commas before ] or }
+    rawBody = rawBody.replace(/,\s*([\]}])/g, '$1');
+    // 2. Fix unescaped quotes in string values (basic attempt)
+    // 3. Ensure proper number formatting (NaN, Infinity)
+    rawBody = rawBody.replace(/:\s*NaN/g, ': 0');
+    rawBody = rawBody.replace(/:\s*Infinity/g, ': 999999');
+    rawBody = rawBody.replace(/:\s*-Infinity/g, ': -999999');
+    
+    let requestData: AnalysisRequest;
+    try {
+      requestData = JSON.parse(rawBody);
+    } catch (parseErr) {
+      console.error('[AI Bias] Initial JSON parse failed:', parseErr);
+      console.log('[AI Bias] Raw body sample (first 1000 chars):', rawBody.substring(0, 1000));
+      console.log('[AI Bias] Raw body sample (last 1000 chars):', rawBody.substring(rawBody.length - 1000));
+      
+      // Try to find and fix the problematic area
+      const errorMatch = String(parseErr).match(/position (\d+)/);
+      if (errorMatch) {
+        const pos = parseInt(errorMatch[1]);
+        console.log('[AI Bias] Error context around position', pos, ':', rawBody.substring(Math.max(0, pos - 50), pos + 50));
+      }
+      
+      return new Response(
+        JSON.stringify({ success: false, error: 'Invalid JSON from EA: ' + String(parseErr) }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+    
     const threshold = requestData.threshold || 70;
     console.log('[AI Bias] Received request for', requestData.pairs?.length || 0, 'pairs, threshold:', threshold);
 
