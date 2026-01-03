@@ -84,7 +84,8 @@ enum ENUM_GRID_LOT_MODE
 enum ENUM_GRID_GAP_TYPE
 {
    GAP_FIXED_POINTS = 0,    // Fixed Points
-   GAP_CUSTOM_DISTANCE = 1  // Custom Distance
+   GAP_CUSTOM_DISTANCE = 1, // Custom Distance
+   GAP_ATR_BASED = 2        // ATR-Based Dynamic
 };
 
 // Stop Loss Action Mode
@@ -231,6 +232,10 @@ input double   InpGridLossAddLot = 0.4;      // Add Lot per Level (0 = Same as I
 input ENUM_GRID_GAP_TYPE InpGridLossGapType = GAP_FIXED_POINTS;  // Grid Gap Type
 input int      InpGridLossPoints = 50;       // Grid Points (points)
 input string   InpGridLossCustomDist = "100;200;300;400;500";  // Custom Grid Distance (separate by semicolon ;)
+// ATR-Based Grid Loss Settings
+input ENUM_TIMEFRAMES InpGridLossATRTimeframe = PERIOD_H1;  // ATR Timeframe (for ATR-Based)
+input int      InpGridLossATRPeriod = 14;    // ATR Period (for ATR-Based)
+input double   InpGridLossATRMultiplier = 1.5;  // ATR Multiplier (for ATR-Based)
 input bool     InpGridLossOnlySignal = false;  // Grid Trade Only in Signal
 input bool     InpGridLossNewCandle = true;    // Grid Trade Only New Candle
 input bool     InpGridLossDontOpenSameCandle = true;  // Don't Open in Same Initial Candle
@@ -245,6 +250,10 @@ input double   InpGridProfitAddLot = 0.4;    // Add Lot per Level (0 = Same as I
 input ENUM_GRID_GAP_TYPE InpGridProfitGapType = GAP_CUSTOM_DISTANCE;  // Grid Gap Type
 input int      InpGridProfitPoints = 100;    // Grid Points (points)
 input string   InpGridProfitCustomDist = "100;200;500";  // Custom Grid Distance (separate by semicolon ;)
+// ATR-Based Grid Profit Settings
+input ENUM_TIMEFRAMES InpGridProfitATRTimeframe = PERIOD_H1;  // ATR Timeframe (for ATR-Based)
+input int      InpGridProfitATRPeriod = 14;   // ATR Period (for ATR-Based)
+input double   InpGridProfitATRMultiplier = 1.0;  // ATR Multiplier (for ATR-Based)
 input bool     InpGridProfitOnlySignal = false;  // Grid Trade Only in Signal
 input bool     InpGridProfitNewCandle = true;    // Grid Trade Only New Candle
 input bool     InpGridProfitDontOpenSameCandle = true;  // Don't Open in Same Initial Candle
@@ -495,6 +504,12 @@ string BBSignal = "NONE";  // "BUY", "SELL", "NONE"
 datetime LastBBSignalTime = 0;
 string BBPrefix = "BB_";
 int BBHandle = INVALID_HANDLE;  // Bollinger Bands indicator handle
+
+// ATR-Based Grid Variables
+int g_atrGridLossHandle = INVALID_HANDLE;    // ATR handle for Grid Loss
+int g_atrGridProfitHandle = INVALID_HANDLE;  // ATR handle for Grid Profit
+double g_lastATRGridLossValue = 0;           // Last ATR value for Grid Loss
+double g_lastATRGridProfitValue = 0;         // Last ATR value for Grid Profit
 
 // Bollinger Bands Signal Reset
 bool g_bbBuyResetPhaseBelowBand = false;   // Price has touched/closed above upper band
@@ -1575,6 +1590,39 @@ int OnInit()
       }
    }
    
+   // Initialize ATR-Based Grid handles
+   if(InpGridLossGapType == GAP_ATR_BASED)
+   {
+      g_atrGridLossHandle = iATR(_Symbol, InpGridLossATRTimeframe, InpGridLossATRPeriod);
+      if(g_atrGridLossHandle == INVALID_HANDLE)
+      {
+         Print("ERROR: Failed to create ATR indicator handle for Grid Loss!");
+         Print("       Grid Loss will use Fixed Points as fallback.");
+      }
+      else
+      {
+         Print("ATR Grid Loss initialized - TF: ", EnumToString(InpGridLossATRTimeframe), 
+               " | Period: ", InpGridLossATRPeriod, 
+               " | Multiplier: ", InpGridLossATRMultiplier);
+      }
+   }
+   
+   if(InpGridProfitGapType == GAP_ATR_BASED)
+   {
+      g_atrGridProfitHandle = iATR(_Symbol, InpGridProfitATRTimeframe, InpGridProfitATRPeriod);
+      if(g_atrGridProfitHandle == INVALID_HANDLE)
+      {
+         Print("ERROR: Failed to create ATR indicator handle for Grid Profit!");
+         Print("       Grid Profit will use Fixed Points as fallback.");
+      }
+      else
+      {
+         Print("ATR Grid Profit initialized - TF: ", EnumToString(InpGridProfitATRTimeframe), 
+               " | Period: ", InpGridProfitATRPeriod, 
+               " | Multiplier: ", InpGridProfitATRMultiplier);
+      }
+   }
+   
    Print("Signal Strategy: ", EnumToString(InpSignalStrategy));
    
    // Auto Balance Scaling Status
@@ -1741,6 +1789,18 @@ void OnDeinit(const int reason)
       ChartIndicatorDelete(0, 0, ChartIndicatorName(0, 0, ChartIndicatorsTotal(0, 0) - 1));
       IndicatorRelease(BBHandle);
       BBHandle = INVALID_HANDLE;
+   }
+   
+   // Release ATR Grid indicator handles
+   if(g_atrGridLossHandle != INVALID_HANDLE)
+   {
+      IndicatorRelease(g_atrGridLossHandle);
+      g_atrGridLossHandle = INVALID_HANDLE;
+   }
+   if(g_atrGridProfitHandle != INVALID_HANDLE)
+   {
+      IndicatorRelease(g_atrGridProfitHandle);
+      g_atrGridProfitHandle = INVALID_HANDLE;
    }
    
    // Clear SMC arrays
@@ -2699,6 +2759,34 @@ double GetGridLotSize(bool isLossSide, int gridLevel)
 }
 
 //+------------------------------------------------------------------+
+//| Get ATR Value for Grid                                             |
+//+------------------------------------------------------------------+
+double GetATRGridValue(bool isLossSide)
+{
+   int handle = isLossSide ? g_atrGridLossHandle : g_atrGridProfitHandle;
+   
+   if(handle == INVALID_HANDLE)
+      return 0;
+   
+   double atrBuffer[];
+   ArraySetAsSeries(atrBuffer, true);
+   
+   if(CopyBuffer(handle, 0, 0, 1, atrBuffer) < 1)
+   {
+      Print("[ATR Grid] Warning: Failed to get ATR value for ", (isLossSide ? "Loss" : "Profit"), " side");
+      return 0;
+   }
+   
+   // Store last ATR value
+   if(isLossSide)
+      g_lastATRGridLossValue = atrBuffer[0];
+   else
+      g_lastATRGridProfitValue = atrBuffer[0];
+   
+   return atrBuffer[0];
+}
+
+//+------------------------------------------------------------------+
 //| Get Grid Distance for level                                        |
 //+------------------------------------------------------------------+
 int GetGridDistance(bool isLossSide, int gridLevel)
@@ -2707,8 +2795,44 @@ int GetGridDistance(bool isLossSide, int gridLevel)
    int fixedPoints = isLossSide ? InpGridLossPoints : InpGridProfitPoints;
    string customDist = isLossSide ? InpGridLossCustomDist : InpGridProfitCustomDist;
    
+   // Fixed Points
    if(gapType == GAP_FIXED_POINTS)
       return fixedPoints;
+   
+   // ATR-Based Dynamic
+   if(gapType == GAP_ATR_BASED)
+   {
+      double atrValue = GetATRGridValue(isLossSide);
+      if(atrValue == 0)
+         return fixedPoints;  // Fallback to fixed if ATR fails
+      
+      double multiplier = isLossSide ? InpGridLossATRMultiplier : InpGridProfitATRMultiplier;
+      double dynamicStep = atrValue * multiplier;
+      
+      // Convert to points
+      int dynamicPoints = (int)(dynamicStep / _Point);
+      
+      // Log for debugging (only first time or when changes)
+      static int lastLoggedLoss = 0;
+      static int lastLoggedProfit = 0;
+      
+      if(isLossSide && dynamicPoints != lastLoggedLoss)
+      {
+         Print("[ATR Grid Loss] ATR: ", DoubleToString(atrValue, 5), 
+               " x ", DoubleToString(multiplier, 1), 
+               " = ", dynamicPoints, " points (", DoubleToString(dynamicStep * 10000, 1), " pips)");
+         lastLoggedLoss = dynamicPoints;
+      }
+      else if(!isLossSide && dynamicPoints != lastLoggedProfit)
+      {
+         Print("[ATR Grid Profit] ATR: ", DoubleToString(atrValue, 5), 
+               " x ", DoubleToString(multiplier, 1), 
+               " = ", dynamicPoints, " points (", DoubleToString(dynamicStep * 10000, 1), " pips)");
+         lastLoggedProfit = dynamicPoints;
+      }
+      
+      return dynamicPoints;
+   }
    
    // Custom Distance
    int distances[];
