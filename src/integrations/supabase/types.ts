@@ -186,6 +186,90 @@ export type Database = {
         }
         Relationships: []
       }
+      ai_candle_history: {
+        Row: {
+          candle_time: string
+          close_price: number
+          high_price: number
+          id: string
+          low_price: number
+          open_price: number
+          recorded_at: string | null
+          symbol: string
+          timeframe: string
+          volume: number | null
+        }
+        Insert: {
+          candle_time: string
+          close_price: number
+          high_price: number
+          id?: string
+          low_price: number
+          open_price: number
+          recorded_at?: string | null
+          symbol: string
+          timeframe: string
+          volume?: number | null
+        }
+        Update: {
+          candle_time?: string
+          close_price?: number
+          high_price?: number
+          id?: string
+          low_price?: number
+          open_price?: number
+          recorded_at?: string | null
+          symbol?: string
+          timeframe?: string
+          volume?: number | null
+        }
+        Relationships: []
+      }
+      ai_indicator_history: {
+        Row: {
+          atr: number | null
+          candle_time: string
+          created_at: string | null
+          ema20: number | null
+          ema50: number | null
+          id: string
+          macd_histogram: number | null
+          macd_main: number | null
+          macd_signal: number | null
+          rsi: number | null
+          symbol: string
+          timeframe: string
+        }
+        Insert: {
+          atr?: number | null
+          candle_time: string
+          created_at?: string | null
+          ema20?: number | null
+          ema50?: number | null
+          id?: string
+          macd_histogram?: number | null
+          macd_main?: number | null
+          macd_signal?: number | null
+          rsi?: number | null
+          symbol: string
+          timeframe: string
+        }
+        Update: {
+          atr?: number | null
+          candle_time?: string
+          created_at?: string | null
+          ema20?: number | null
+          ema50?: number | null
+          id?: string
+          macd_histogram?: number | null
+          macd_main?: number | null
+          macd_signal?: number | null
+          rsi?: number | null
+          symbol?: string
+          timeframe?: string
+        }
+        Relationships: []
+      }
       customers: {
         Row: {
           broker: string | null
@@ -493,6 +577,7 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      cleanup_old_candle_data: { Args: never; Returns: undefined }
       cleanup_old_history: { Args: never; Returns: undefined }
       has_role: {
         Args: {

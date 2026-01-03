@@ -11,3 +11,6 @@ verify_jwt = false
 
 [functions.ai-market-analysis]
 verify_jwt = false
+
+[functions.get-ai-dashboard-data]
+verify_jwt = false

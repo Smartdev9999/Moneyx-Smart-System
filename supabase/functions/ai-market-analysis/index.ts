@@ -33,7 +33,7 @@ interface PairData {
 
 interface AnalysisRequest {
   pairs: PairData[];
-  threshold?: number; // Minimum probability to allow trading (default 70)
+  threshold?: number;
 }
 
 interface MarketBiasResult {
@@ -41,25 +41,23 @@ interface MarketBiasResult {
   bullish_probability: number;
   bearish_probability: number;
   sideways_probability: number;
-  dominant_bias: string; // bullish, bearish, sideways
+  dominant_bias: string;
   threshold_met: boolean;
   market_structure: string;
   trend_h4: string;
   trend_daily: string;
   key_levels: { support: number[]; resistance: number[] };
   patterns: string;
-  recommendation: string; // "Only LONG", "Only SHORT", "No Trade"
+  recommendation: string;
   reasoning: string;
 }
 
 serve(async (req) => {
-  // Handle CORS
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
-    // Verify API key
     const apiKey = req.headers.get('x-api-key');
     const expectedKey = Deno.env.get('EA_API_SECRET');
     
@@ -82,12 +80,64 @@ serve(async (req) => {
       );
     }
 
-    // Create Supabase client for caching
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabase = createClient(supabaseUrl, supabaseKey);
 
-    // Check cache for each pair
+    // ============= PHASE 2: Store Candle & Indicator Data =============
+    console.log('[AI Bias] Storing candle and indicator data...');
+    
+    for (const pair of requestData.pairs) {
+      // Store candles to ai_candle_history
+      if (pair.candles && pair.candles.length > 0) {
+        const candleRows = pair.candles.map(c => ({
+          symbol: pair.symbol,
+          timeframe: pair.timeframe,
+          candle_time: c.time,
+          open_price: c.open,
+          high_price: c.high,
+          low_price: c.low,
+          close_price: c.close,
+          volume: c.volume || 0,
+        }));
+
+        const { error: candleError } = await supabase
+          .from('ai_candle_history')
+          .upsert(candleRows, { onConflict: 'symbol,timeframe,candle_time' });
+
+        if (candleError) {
+          console.error('[AI Bias] Error storing candles:', candleError);
+        } else {
+          console.log(`[AI Bias] Stored ${candleRows.length} candles for ${pair.symbol}`);
+        }
+      }
+
+      // Store indicators to ai_indicator_history (latest candle only)
+      if (pair.indicators && pair.candle_time) {
+        const indicatorRow = {
+          symbol: pair.symbol,
+          timeframe: pair.timeframe,
+          candle_time: pair.candle_time,
+          rsi: pair.indicators.rsi || null,
+          macd_main: pair.indicators.macd?.main || null,
+          macd_signal: pair.indicators.macd?.signal || null,
+          macd_histogram: pair.indicators.macd?.histogram || null,
+          ema20: pair.indicators.ema?.ema20 || null,
+          ema50: pair.indicators.ema?.ema50 || null,
+          atr: pair.indicators.atr || null,
+        };
+
+        const { error: indicatorError } = await supabase
+          .from('ai_indicator_history')
+          .upsert(indicatorRow, { onConflict: 'symbol,timeframe,candle_time' });
+
+        if (indicatorError) {
+          console.error('[AI Bias] Error storing indicators:', indicatorError);
+        }
+      }
+    }
+
+    // ============= Check cache for each pair =============
     const cachedResults: MarketBiasResult[] = [];
     const pairsToAnalyze: PairData[] = [];
 
@@ -125,7 +175,6 @@ serve(async (req) => {
 
     let newResults: MarketBiasResult[] = [];
 
-    // Only call AI if we have pairs to analyze
     if (pairsToAnalyze.length > 0) {
       console.log(`[AI Bias] Analyzing ${pairsToAnalyze.length} pairs with AI`);
       
@@ -134,9 +183,8 @@ serve(async (req) => {
         throw new Error('LOVABLE_API_KEY is not configured');
       }
 
-      // Build comprehensive prompt for market bias analysis
       const pairsPrompt = pairsToAnalyze.map(pair => {
-        const lastCandles = pair.candles.slice(-20); // Last 20 candles for better structure analysis
+        const lastCandles = pair.candles.slice(-20);
         const candlesSummary = lastCandles.map(c => 
           `${c.time.substring(11, 16)}:O${c.open.toFixed(5)}H${c.high.toFixed(5)}L${c.low.toFixed(5)}C${c.close.toFixed(5)}`
         ).join('|');
@@ -227,7 +275,6 @@ RULES:
       
       console.log('[AI Bias] Raw AI response:', content.substring(0, 500));
 
-      // Parse AI response - handle markdown code blocks
       let cleanContent = content.trim();
       if (cleanContent.startsWith('```json')) {
         cleanContent = cleanContent.slice(7);
@@ -262,7 +309,6 @@ RULES:
         console.log('[AI Bias] Parsed', newResults.length, 'results');
       } catch (parseError) {
         console.error('[AI Bias] Failed to parse AI response:', parseError);
-        // Return default results for failed parse
         newResults = pairsToAnalyze.map(pair => ({
           symbol: pair.symbol,
           bullish_probability: 33,
@@ -302,11 +348,10 @@ RULES:
               key_levels: result.key_levels,
               patterns: result.patterns,
               reasoning: result.reasoning,
-              // Legacy fields for backwards compatibility
               signal: result.dominant_bias === 'bullish' ? 'buy' : result.dominant_bias === 'bearish' ? 'sell' : 'hold',
               confidence: Math.max(result.bullish_probability, result.bearish_probability),
               trend: result.dominant_bias,
-              expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(), // 1 hour
+              expires_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
             }, {
               onConflict: 'symbol,timeframe,candle_time',
             });
@@ -318,10 +363,8 @@ RULES:
       }
     }
 
-    // Combine cached and new results
     const allResults = [...cachedResults, ...newResults];
     
-    // Calculate overall market bias
     const avgBullish = allResults.reduce((sum, r) => sum + r.bullish_probability, 0) / allResults.length;
     const avgBearish = allResults.reduce((sum, r) => sum + r.bearish_probability, 0) / allResults.length;
     let overallBias = 'sideways';
