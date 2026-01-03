@@ -31,6 +31,11 @@ input int      InpPauseAfterHigh = 60;
 input int      InpPauseBeforeMedium = 30;
 input int      InpPauseAfterMedium = 30;
 
+input group "=== AI Analysis Settings ==="
+input bool     InpEnableAIAnalysis = true;
+input string   InpAIPairs = "EURUSD,GBPUSD,XAUUSD,USDJPY,AUDUSD";
+input ENUM_TIMEFRAMES InpAITimeframe = PERIOD_H1;
+
 //+------------------------------------------------------------------+
 //| CONFIGURATION CONSTANTS                                           |
 //+------------------------------------------------------------------+
@@ -43,6 +48,7 @@ input int      InpPauseAfterMedium = 30;
 #define SYNC_DAILY_HOUR_1   5
 #define SYNC_DAILY_HOUR_2   23
 #define TRADE_HISTORY_COUNT 100
+#define AI_CANDLE_COUNT     50
 
 //+------------------------------------------------------------------+
 //| ENUMERATIONS                                                      |
@@ -68,6 +74,19 @@ struct SNewsEvent
    int       impactLevel;
 };
 
+struct SAISignal
+{
+   string    symbol;
+   string    trend;
+   string    signal;
+   int       confidence;
+   double    entryPrice;
+   double    stopLoss;
+   double    takeProfit;
+   string    reasoning;
+   datetime  lastUpdate;
+};
+
 //+------------------------------------------------------------------+
 //| GLOBAL VARIABLES                                                  |
 //+------------------------------------------------------------------+
@@ -90,6 +109,15 @@ bool         g_forceNewsRefresh = true;
 string       g_currentNewsTitle = "";
 datetime     g_currentPauseEnd = 0;
 bool         g_isTradingPaused = false;
+
+// AI Analysis
+SAISignal    g_aiSignals[];
+int          g_aiSignalCount = 0;
+datetime     g_lastAIAnalysis = 0;
+datetime     g_lastCandleTime[];
+string       g_aiPairs[];
+int          g_aiPairCount = 0;
+string       g_marketSentiment = "neutral";
 
 // Data Sync
 datetime g_lastDataSync = 0;
@@ -538,6 +566,304 @@ string GetNewsStatusString()
 }
 
 //+------------------------------------------------------------------+
+//| AI MARKET ANALYSIS                                                |
+//+------------------------------------------------------------------+
+void InitAIAnalysis()
+{
+   if(!InpEnableAIAnalysis) return;
+   
+   // Parse pairs string
+   string pairs = InpAIPairs;
+   StringReplace(pairs, " ", "");
+   
+   string pairArray[];
+   g_aiPairCount = StringSplit(pairs, ',', pairArray);
+   
+   ArrayResize(g_aiPairs, g_aiPairCount);
+   ArrayResize(g_lastCandleTime, g_aiPairCount);
+   ArrayResize(g_aiSignals, g_aiPairCount);
+   
+   for(int i = 0; i < g_aiPairCount; i++)
+   {
+      g_aiPairs[i] = pairArray[i];
+      g_lastCandleTime[i] = 0;
+      g_aiSignals[i].symbol = pairArray[i];
+      g_aiSignals[i].signal = "hold";
+      g_aiSignals[i].confidence = 0;
+   }
+   
+   g_aiSignalCount = g_aiPairCount;
+   Print("[AI Analysis] Initialized for ", g_aiPairCount, " pairs: ", InpAIPairs);
+}
+
+bool IsNewCandle(string symbol, int index)
+{
+   datetime currentCandleTime = iTime(symbol, InpAITimeframe, 0);
+   if(currentCandleTime > g_lastCandleTime[index])
+   {
+      g_lastCandleTime[index] = currentCandleTime;
+      return true;
+   }
+   return false;
+}
+
+bool CheckAnyNewCandle()
+{
+   for(int i = 0; i < g_aiPairCount; i++)
+   {
+      if(IsNewCandle(g_aiPairs[i], i))
+         return true;
+   }
+   return false;
+}
+
+string BuildCandleJson(string symbol, int count)
+{
+   string json = "[";
+   
+   for(int i = count - 1; i >= 0; i--)
+   {
+      datetime time = iTime(symbol, InpAITimeframe, i);
+      double open = iOpen(symbol, InpAITimeframe, i);
+      double high = iHigh(symbol, InpAITimeframe, i);
+      double low = iLow(symbol, InpAITimeframe, i);
+      double close = iClose(symbol, InpAITimeframe, i);
+      long volume = iVolume(symbol, InpAITimeframe, i);
+      
+      if(i < count - 1) json += ",";
+      
+      json += "{";
+      json += "\"time\":\"" + TimeToString(time, TIME_DATE|TIME_SECONDS) + "\",";
+      json += "\"open\":" + DoubleToString(open, 5) + ",";
+      json += "\"high\":" + DoubleToString(high, 5) + ",";
+      json += "\"low\":" + DoubleToString(low, 5) + ",";
+      json += "\"close\":" + DoubleToString(close, 5) + ",";
+      json += "\"volume\":" + IntegerToString(volume);
+      json += "}";
+   }
+   
+   json += "]";
+   return json;
+}
+
+string BuildIndicatorsJson(string symbol)
+{
+   // Calculate indicators
+   int rsiHandle = iRSI(symbol, InpAITimeframe, 14, PRICE_CLOSE);
+   int macdHandle = iMACD(symbol, InpAITimeframe, 12, 26, 9, PRICE_CLOSE);
+   int ema20Handle = iMA(symbol, InpAITimeframe, 20, 0, MODE_EMA, PRICE_CLOSE);
+   int ema50Handle = iMA(symbol, InpAITimeframe, 50, 0, MODE_EMA, PRICE_CLOSE);
+   int atrHandle = iATR(symbol, InpAITimeframe, 14);
+   
+   double rsiBuffer[], macdMainBuffer[], macdSignalBuffer[], ema20Buffer[], ema50Buffer[], atrBuffer[];
+   
+   CopyBuffer(rsiHandle, 0, 0, 1, rsiBuffer);
+   CopyBuffer(macdHandle, 0, 0, 1, macdMainBuffer);
+   CopyBuffer(macdHandle, 1, 0, 1, macdSignalBuffer);
+   CopyBuffer(ema20Handle, 0, 0, 1, ema20Buffer);
+   CopyBuffer(ema50Handle, 0, 0, 1, ema50Buffer);
+   CopyBuffer(atrHandle, 0, 0, 1, atrBuffer);
+   
+   // Release handles
+   IndicatorRelease(rsiHandle);
+   IndicatorRelease(macdHandle);
+   IndicatorRelease(ema20Handle);
+   IndicatorRelease(ema50Handle);
+   IndicatorRelease(atrHandle);
+   
+   string json = "{";
+   json += "\"rsi\":" + (ArraySize(rsiBuffer) > 0 ? DoubleToString(rsiBuffer[0], 2) : "0") + ",";
+   json += "\"macd\":{";
+   json += "\"main\":" + (ArraySize(macdMainBuffer) > 0 ? DoubleToString(macdMainBuffer[0], 6) : "0") + ",";
+   json += "\"signal\":" + (ArraySize(macdSignalBuffer) > 0 ? DoubleToString(macdSignalBuffer[0], 6) : "0") + ",";
+   json += "\"histogram\":" + (ArraySize(macdMainBuffer) > 0 && ArraySize(macdSignalBuffer) > 0 ? DoubleToString(macdMainBuffer[0] - macdSignalBuffer[0], 6) : "0");
+   json += "},";
+   json += "\"ema\":{";
+   json += "\"ema20\":" + (ArraySize(ema20Buffer) > 0 ? DoubleToString(ema20Buffer[0], 5) : "0") + ",";
+   json += "\"ema50\":" + (ArraySize(ema50Buffer) > 0 ? DoubleToString(ema50Buffer[0], 5) : "0");
+   json += "},";
+   json += "\"atr\":" + (ArraySize(atrBuffer) > 0 ? DoubleToString(atrBuffer[0], 5) : "0");
+   json += "}";
+   
+   return json;
+}
+
+string BuildAIRequestJson()
+{
+   string json = "{\"pairs\":[";
+   
+   for(int i = 0; i < g_aiPairCount; i++)
+   {
+      if(i > 0) json += ",";
+      
+      string symbol = g_aiPairs[i];
+      datetime candleTime = iTime(symbol, InpAITimeframe, 0);
+      
+      json += "{";
+      json += "\"symbol\":\"" + symbol + "\",";
+      json += "\"timeframe\":\"" + EnumToString(InpAITimeframe) + "\",";
+      json += "\"candle_time\":\"" + TimeToString(candleTime, TIME_DATE|TIME_SECONDS) + "\",";
+      json += "\"candles\":" + BuildCandleJson(symbol, AI_CANDLE_COUNT) + ",";
+      json += "\"indicators\":" + BuildIndicatorsJson(symbol);
+      json += "}";
+   }
+   
+   json += "]}";
+   return json;
+}
+
+bool ParseAISignal(string json, int index)
+{
+   // Extract symbol
+   string symbol = ExtractJsonString(json, "symbol");
+   if(symbol != g_aiPairs[index]) return false;
+   
+   g_aiSignals[index].symbol = symbol;
+   g_aiSignals[index].trend = ExtractJsonString(json, "trend");
+   g_aiSignals[index].signal = ExtractJsonString(json, "signal");
+   g_aiSignals[index].confidence = ExtractJsonInt(json, "confidence");
+   g_aiSignals[index].entryPrice = ExtractJsonDouble(json, "entry_price");
+   g_aiSignals[index].stopLoss = ExtractJsonDouble(json, "stop_loss");
+   g_aiSignals[index].takeProfit = ExtractJsonDouble(json, "take_profit");
+   g_aiSignals[index].reasoning = ExtractJsonString(json, "reasoning");
+   g_aiSignals[index].lastUpdate = TimeCurrent();
+   
+   return true;
+}
+
+bool ParseAIResponse(string response)
+{
+   if(StringFind(response, "\"success\":true") < 0)
+   {
+      Print("[AI Analysis] Request failed: ", response);
+      return false;
+   }
+   
+   // Extract market sentiment
+   g_marketSentiment = ExtractJsonString(response, "market_sentiment");
+   
+   // Parse each signal from analysis array
+   int analysisStart = StringFind(response, "\"analysis\":[");
+   if(analysisStart < 0) return false;
+   
+   int searchPos = analysisStart;
+   int signalIndex = 0;
+   
+   while(signalIndex < g_aiPairCount)
+   {
+      int objStart = StringFind(response, "{\"symbol\":", searchPos);
+      if(objStart < 0) break;
+      
+      int objEnd = StringFind(response, "}", objStart);
+      if(objEnd < 0) break;
+      
+      string signalJson = StringSubstr(response, objStart, objEnd - objStart + 1);
+      
+      // Find matching pair index
+      for(int i = 0; i < g_aiPairCount; i++)
+      {
+         if(StringFind(signalJson, "\"" + g_aiPairs[i] + "\"") >= 0)
+         {
+            ParseAISignal(signalJson, i);
+            break;
+         }
+      }
+      
+      searchPos = objEnd;
+      signalIndex++;
+   }
+   
+   return true;
+}
+
+bool RequestAIAnalysis()
+{
+   if(IsTestMode()) return true;
+   if(!InpEnableAIAnalysis) return true;
+   
+   string url = LICENSE_BASE_URL + "/functions/v1/ai-market-analysis";
+   string json = BuildAIRequestJson();
+   
+   char post[];
+   char result[];
+   string resultHeaders;
+   string headers = "Content-Type: application/json\r\nx-api-key: " + EA_API_SECRET + "\r\n";
+   
+   StringToCharArray(json, post, 0, StringLen(json), CP_UTF8);
+   ArrayResize(post, ArraySize(post) - 1);
+   
+   ResetLastError();
+   int res = WebRequest("POST", url, headers, 30000, post, result, resultHeaders);
+   
+   if(res == -1)
+   {
+      int error = GetLastError();
+      if(error == 4060 || error == 4024)
+         Print("[AI Analysis] ERROR: Add ", LICENSE_BASE_URL, " to allowed URLs");
+      return false;
+   }
+   
+   if(res != 200)
+   {
+      Print("[AI Analysis] HTTP Error: ", res);
+      return false;
+   }
+   
+   string response = CharArrayToString(result, 0, WHOLE_ARRAY, CP_UTF8);
+   bool success = ParseAIResponse(response);
+   
+   if(success)
+   {
+      g_lastAIAnalysis = TimeCurrent();
+      Print("[AI Analysis] Updated signals for ", g_aiPairCount, " pairs. Sentiment: ", g_marketSentiment);
+   }
+   
+   return success;
+}
+
+void CheckAIAnalysis()
+{
+   if(!InpEnableAIAnalysis) return;
+   if(IsTestMode()) return;
+   if(!g_isLicenseValid) return;
+   
+   // Only analyze on new candle
+   if(CheckAnyNewCandle())
+   {
+      Print("[AI Analysis] New candle detected, requesting analysis...");
+      RequestAIAnalysis();
+   }
+}
+
+SAISignal GetAISignal(string symbol)
+{
+   SAISignal emptySignal;
+   emptySignal.signal = "hold";
+   emptySignal.confidence = 0;
+   
+   for(int i = 0; i < g_aiSignalCount; i++)
+   {
+      if(g_aiSignals[i].symbol == symbol)
+         return g_aiSignals[i];
+   }
+   
+   return emptySignal;
+}
+
+string GetAIStatusString()
+{
+   if(!InpEnableAIAnalysis) return "Disabled";
+   
+   if(g_lastAIAnalysis == 0) return "Waiting for first analysis...";
+   
+   int elapsed = (int)(TimeCurrent() - g_lastAIAnalysis);
+   int mins = elapsed / 60;
+   
+   string status = "Sentiment: " + g_marketSentiment + " | Updated: " + IntegerToString(mins) + "m ago";
+   return status;
+}
+
+//+------------------------------------------------------------------+
 //| DATA SYNC                                                         |
 //+------------------------------------------------------------------+
 string GetEntryTypeString(long entryType)
@@ -771,12 +1097,14 @@ int OnInit()
    }
    
    InitNewsFilter();
+   InitAIAnalysis();
    
    trade.SetExpertMagicNumber(InpMagicNumber);
    trade.SetDeviationInPoints(InpSlippage);
    
    Print("[Money Printing Machine] EA initialized successfully!");
    Print("[Money Printing Machine] Account: ", AccountInfoInteger(ACCOUNT_LOGIN));
+   Print("[Money Printing Machine] AI Analysis: ", InpEnableAIAnalysis ? "Enabled" : "Disabled");
    
    SyncAccountData("init");
    
@@ -797,6 +1125,7 @@ void OnTick()
    }
    
    CheckScheduledSync();
+   CheckAIAnalysis();
    
    bool canTrade = CheckNewsFilter();
    
@@ -815,6 +1144,9 @@ void OnTick()
    }
    
    // === YOUR ENTRY LOGIC HERE ===
+   // You can use AI signals like this:
+   // SAISignal signal = GetAISignal("XAUUSD");
+   // if(signal.signal == "buy" && signal.confidence >= 70) { ... }
    
 }
 

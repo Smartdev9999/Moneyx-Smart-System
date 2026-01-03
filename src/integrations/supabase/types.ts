@@ -105,6 +105,57 @@ export type Database = {
           },
         ]
       }
+      ai_analysis_cache: {
+        Row: {
+          analysis_data: Json
+          candle_time: string
+          confidence: number | null
+          created_at: string
+          entry_price: number | null
+          expires_at: string
+          id: string
+          reasoning: string | null
+          signal: string | null
+          stop_loss: number | null
+          symbol: string
+          take_profit: number | null
+          timeframe: string
+          trend: string | null
+        }
+        Insert: {
+          analysis_data: Json
+          candle_time: string
+          confidence?: number | null
+          created_at?: string
+          entry_price?: number | null
+          expires_at?: string
+          id?: string
+          reasoning?: string | null
+          signal?: string | null
+          stop_loss?: number | null
+          symbol: string
+          take_profit?: number | null
+          timeframe: string
+          trend?: string | null
+        }
+        Update: {
+          analysis_data?: Json
+          candle_time?: string
+          confidence?: number | null
+          created_at?: string
+          entry_price?: number | null
+          expires_at?: string
+          id?: string
+          reasoning?: string | null
+          signal?: string | null
+          stop_loss?: number | null
+          symbol?: string
+          take_profit?: number | null
+          timeframe?: string
+          trend?: string | null
+        }
+        Relationships: []
+      }
       customers: {
         Row: {
           broker: string | null
