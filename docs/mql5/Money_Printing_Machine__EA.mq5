@@ -16,6 +16,15 @@ input double   InpLotSize = 0.01;
 input int      InpMagicNumber = 123456;
 input int      InpSlippage = 10;
 
+input group "=== ATR-Based Grid Settings ==="
+input bool     InpEnableATRGrid = true;              // Enable ATR-Based Grid
+input ENUM_TIMEFRAMES InpATRTimeframe = PERIOD_H1;   // ATR Timeframe
+input int      InpATRPeriod = 14;                    // ATR Period
+input double   InpATRMultiplierLoss = 1.5;           // ATR Multiplier for Grid Loss (step distance)
+input double   InpATRMultiplierProfit = 1.0;         // ATR Multiplier for Grid Profit (TP distance)
+input int      InpMaxGridLevels = 5;                 // Max Grid Levels
+input double   InpGridLotMultiplier = 1.0;           // Lot Multiplier per Grid Level (1.0 = same, 1.5 = martingale)
+
 input group "=== Time Filter ==="
 input bool     InpUseTimeFilter = false;
 input int      InpStartHour = 8;
@@ -130,6 +139,12 @@ int          g_tradablePairs = 0;
 datetime g_lastDataSync = 0;
 int      g_lastSyncHour = -1;
 string   g_eaStatus = "working";
+
+// ATR-Based Grid Variables
+int      g_atrHandle = INVALID_HANDLE;
+double   g_currentATR = 0;
+double   g_dynamicGridStep = 0;
+double   g_dynamicTPStep = 0;
 
 //+------------------------------------------------------------------+
 //| HELPER FUNCTIONS                                                  |
@@ -1154,6 +1169,351 @@ void CheckScheduledSync()
 }
 
 //+------------------------------------------------------------------+
+//| ATR-BASED DYNAMIC GRID SYSTEM                                     |
+//+------------------------------------------------------------------+
+bool InitATRGrid()
+{
+   if(!InpEnableATRGrid)
+   {
+      Print("[ATR Grid] ATR Grid is DISABLED");
+      return true;
+   }
+   
+   // Create ATR indicator handle
+   g_atrHandle = iATR(_Symbol, InpATRTimeframe, InpATRPeriod);
+   
+   if(g_atrHandle == INVALID_HANDLE)
+   {
+      Print("[ATR Grid] ERROR: Failed to create ATR indicator handle");
+      return false;
+   }
+   
+   Print("[ATR Grid] Initialized | Timeframe: ", EnumToString(InpATRTimeframe), 
+         " | Period: ", InpATRPeriod,
+         " | Loss Multiplier: ", InpATRMultiplierLoss,
+         " | Profit Multiplier: ", InpATRMultiplierProfit,
+         " | Max Levels: ", InpMaxGridLevels);
+   
+   return true;
+}
+
+void DeinitATRGrid()
+{
+   if(g_atrHandle != INVALID_HANDLE)
+   {
+      IndicatorRelease(g_atrHandle);
+      g_atrHandle = INVALID_HANDLE;
+   }
+}
+
+double GetCurrentATR()
+{
+   if(g_atrHandle == INVALID_HANDLE) return 0;
+   
+   double atrBuffer[];
+   ArraySetAsSeries(atrBuffer, true);
+   
+   if(CopyBuffer(g_atrHandle, 0, 0, 1, atrBuffer) < 1)
+   {
+      Print("[ATR Grid] WARNING: Failed to get ATR value");
+      return 0;
+   }
+   
+   return atrBuffer[0];
+}
+
+double CalculateDynamicGridStep(double atrMultiplier)
+{
+   g_currentATR = GetCurrentATR();
+   if(g_currentATR == 0) return 0;
+   
+   double step = g_currentATR * atrMultiplier;
+   return step;
+}
+
+// Get the price of the last order in the grid (for a specific direction)
+double GetLastGridOrderPrice(ENUM_POSITION_TYPE posType)
+{
+   double lastPrice = 0;
+   datetime lastTime = 0;
+   
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      
+      if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != posType) continue;
+      
+      datetime openTime = (datetime)PositionGetInteger(POSITION_TIME);
+      if(openTime > lastTime)
+      {
+         lastTime = openTime;
+         lastPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+      }
+   }
+   
+   return lastPrice;
+}
+
+// Get current grid level count for a direction
+int GetGridLevelCount(ENUM_POSITION_TYPE posType)
+{
+   int count = 0;
+   
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      
+      if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != posType) continue;
+      
+      count++;
+   }
+   
+   return count;
+}
+
+// Calculate lot size for current grid level
+double CalculateGridLotSize(int gridLevel)
+{
+   double lot = InpLotSize;
+   
+   if(InpGridLotMultiplier > 1.0 && gridLevel > 1)
+   {
+      lot = InpLotSize * MathPow(InpGridLotMultiplier, gridLevel - 1);
+   }
+   
+   // Normalize lot size
+   double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   double maxLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+   double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   
+   lot = MathFloor(lot / lotStep) * lotStep;
+   lot = MathMax(minLot, MathMin(maxLot, lot));
+   
+   return lot;
+}
+
+// Check and execute ATR-based grid for BUY direction
+bool CheckBuyGrid()
+{
+   if(!InpEnableATRGrid) return false;
+   
+   int currentLevel = GetGridLevelCount(POSITION_TYPE_BUY);
+   
+   // Check max levels
+   if(currentLevel >= InpMaxGridLevels) return false;
+   
+   // Get dynamic step using ATR
+   g_dynamicGridStep = CalculateDynamicGridStep(InpATRMultiplierLoss);
+   if(g_dynamicGridStep == 0) return false;
+   
+   double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   
+   // First order - no previous order to compare
+   if(currentLevel == 0)
+   {
+      // First entry should come from trading strategy, not grid
+      return false;
+   }
+   
+   // Get last order price
+   double lastOrderPrice = GetLastGridOrderPrice(POSITION_TYPE_BUY);
+   if(lastOrderPrice == 0) return false;
+   
+   // For BUY Grid: If Current_Price <= Last_Order_Price - Dynamic_Step → Open Buy
+   if(currentPrice <= lastOrderPrice - g_dynamicGridStep)
+   {
+      double lotSize = CalculateGridLotSize(currentLevel + 1);
+      string comment = StringFormat("Grid BUY L%d ATR:%.1f", currentLevel + 1, g_currentATR * 10000);
+      
+      Print("[ATR Grid] BUY Signal | Level: ", currentLevel + 1,
+            " | Price: ", currentPrice,
+            " | Last: ", lastOrderPrice,
+            " | Step: ", g_dynamicGridStep,
+            " | ATR: ", g_currentATR);
+      
+      if(trade.Buy(lotSize, _Symbol, 0, 0, 0, comment))
+      {
+         Print("[ATR Grid] BUY order opened successfully at level ", currentLevel + 1);
+         return true;
+      }
+      else
+      {
+         Print("[ATR Grid] ERROR: Failed to open BUY order. Error: ", GetLastError());
+      }
+   }
+   
+   return false;
+}
+
+// Check and execute ATR-based grid for SELL direction
+bool CheckSellGrid()
+{
+   if(!InpEnableATRGrid) return false;
+   
+   int currentLevel = GetGridLevelCount(POSITION_TYPE_SELL);
+   
+   // Check max levels
+   if(currentLevel >= InpMaxGridLevels) return false;
+   
+   // Get dynamic step using ATR
+   g_dynamicGridStep = CalculateDynamicGridStep(InpATRMultiplierLoss);
+   if(g_dynamicGridStep == 0) return false;
+   
+   double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   
+   // First order - no previous order to compare
+   if(currentLevel == 0)
+   {
+      // First entry should come from trading strategy, not grid
+      return false;
+   }
+   
+   // Get last order price
+   double lastOrderPrice = GetLastGridOrderPrice(POSITION_TYPE_SELL);
+   if(lastOrderPrice == 0) return false;
+   
+   // For SELL Grid: If Current_Price >= Last_Order_Price + Dynamic_Step → Open Sell
+   if(currentPrice >= lastOrderPrice + g_dynamicGridStep)
+   {
+      double lotSize = CalculateGridLotSize(currentLevel + 1);
+      string comment = StringFormat("Grid SELL L%d ATR:%.1f", currentLevel + 1, g_currentATR * 10000);
+      
+      Print("[ATR Grid] SELL Signal | Level: ", currentLevel + 1,
+            " | Price: ", currentPrice,
+            " | Last: ", lastOrderPrice,
+            " | Step: ", g_dynamicGridStep,
+            " | ATR: ", g_currentATR);
+      
+      if(trade.Sell(lotSize, _Symbol, 0, 0, 0, comment))
+      {
+         Print("[ATR Grid] SELL order opened successfully at level ", currentLevel + 1);
+         return true;
+      }
+      else
+      {
+         Print("[ATR Grid] ERROR: Failed to open SELL order. Error: ", GetLastError());
+      }
+   }
+   
+   return false;
+}
+
+// Calculate grid take profit based on ATR
+double CalculateGridTakeProfit(ENUM_POSITION_TYPE posType)
+{
+   g_dynamicTPStep = CalculateDynamicGridStep(InpATRMultiplierProfit);
+   if(g_dynamicTPStep == 0) return 0;
+   
+   // Calculate average entry price for all positions
+   double totalLots = 0;
+   double weightedPrice = 0;
+   
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      
+      if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != posType) continue;
+      
+      double lot = PositionGetDouble(POSITION_VOLUME);
+      double price = PositionGetDouble(POSITION_PRICE_OPEN);
+      
+      totalLots += lot;
+      weightedPrice += lot * price;
+   }
+   
+   if(totalLots == 0) return 0;
+   
+   double avgPrice = weightedPrice / totalLots;
+   
+   // Calculate TP based on average price and ATR
+   if(posType == POSITION_TYPE_BUY)
+      return avgPrice + g_dynamicTPStep;
+   else
+      return avgPrice - g_dynamicTPStep;
+}
+
+// Close all grid positions when TP is hit
+bool CheckGridTakeProfit()
+{
+   if(!InpEnableATRGrid) return false;
+   
+   // Check BUY grid TP
+   int buyCount = GetGridLevelCount(POSITION_TYPE_BUY);
+   if(buyCount > 0)
+   {
+      double buyTP = CalculateGridTakeProfit(POSITION_TYPE_BUY);
+      double currentBid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+      
+      if(buyTP > 0 && currentBid >= buyTP)
+      {
+         Print("[ATR Grid] BUY Grid TP Hit! Closing all BUY positions. TP: ", buyTP, " | Current: ", currentBid);
+         CloseAllGridPositions(POSITION_TYPE_BUY);
+         return true;
+      }
+   }
+   
+   // Check SELL grid TP
+   int sellCount = GetGridLevelCount(POSITION_TYPE_SELL);
+   if(sellCount > 0)
+   {
+      double sellTP = CalculateGridTakeProfit(POSITION_TYPE_SELL);
+      double currentAsk = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+      
+      if(sellTP > 0 && currentAsk <= sellTP)
+      {
+         Print("[ATR Grid] SELL Grid TP Hit! Closing all SELL positions. TP: ", sellTP, " | Current: ", currentAsk);
+         CloseAllGridPositions(POSITION_TYPE_SELL);
+         return true;
+      }
+   }
+   
+   return false;
+}
+
+// Close all positions for a specific direction
+void CloseAllGridPositions(ENUM_POSITION_TYPE posType)
+{
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      
+      if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != posType) continue;
+      
+      if(!trade.PositionClose(ticket))
+      {
+         Print("[ATR Grid] WARNING: Failed to close position ", ticket, " Error: ", GetLastError());
+      }
+   }
+}
+
+// Get grid status string for display
+string GetGridStatusString()
+{
+   if(!InpEnableATRGrid) return "Disabled";
+   
+   int buyLevels = GetGridLevelCount(POSITION_TYPE_BUY);
+   int sellLevels = GetGridLevelCount(POSITION_TYPE_SELL);
+   double atr = GetCurrentATR();
+   double stepLoss = atr * InpATRMultiplierLoss;
+   double stepProfit = atr * InpATRMultiplierProfit;
+   
+   return StringFormat("ATR: %.1f pips | Step: %.1f | TP Step: %.1f | BUY L%d | SELL L%d",
+      atr * 10000, stepLoss * 10000, stepProfit * 10000, buyLevels, sellLevels);
+}
+
+//+------------------------------------------------------------------+
 //| CUSTOM FUNCTIONS                                                  |
 //+------------------------------------------------------------------+
 bool IsTradeTime()
@@ -1168,6 +1528,9 @@ void ManagePositions()
    // === YOUR POSITION MANAGEMENT LOGIC HERE ===
    // This runs even during news pause
    // Handle: TP/SL adjustments, trailing stops, partial closes, etc.
+   
+   // ATR-Based Grid TP Check (always runs)
+   CheckGridTakeProfit();
 }
 
 //+------------------------------------------------------------------+
@@ -1183,6 +1546,7 @@ int OnInit()
    
    InitNewsFilter();
    InitAIAnalysis();
+   InitATRGrid();  // Initialize ATR-Based Grid System
    
    trade.SetExpertMagicNumber(InpMagicNumber);
    trade.SetDeviationInPoints(InpSlippage);
@@ -1190,6 +1554,7 @@ int OnInit()
    Print("[Money Printing Machine] EA initialized successfully!");
    Print("[Money Printing Machine] Account: ", AccountInfoInteger(ACCOUNT_LOGIN));
    Print("[Money Printing Machine] AI Bias Analysis: ", InpEnableAIAnalysis ? "Enabled" : "Disabled", " | Threshold: ", InpBiasThreshold, "%");
+   Print("[Money Printing Machine] ATR Grid: ", InpEnableATRGrid ? "Enabled" : "Disabled", " | ", GetGridStatusString());
    
    SyncAccountData("init");
    
@@ -1198,6 +1563,7 @@ int OnInit()
 
 void OnDeinit(const int reason)
 {
+   DeinitATRGrid();  // Release ATR indicator handle
    Print("[Money Printing Machine] EA deinitialized. Reason: ", reason);
 }
 
@@ -1212,6 +1578,9 @@ void OnTick()
    CheckScheduledSync();
    CheckMarketBias();
    
+   // ATR Grid TP Management - Always runs (even during news pause)
+   ManagePositions();
+   
    bool canTrade = CheckNewsFilter();
    
    if(InpUseTimeFilter && !IsTradeTime())
@@ -1224,26 +1593,40 @@ void OnTick()
    
    if(!canTrade)
    {
-      ManagePositions();
       return;
    }
    
-   // === YOUR ENTRY LOGIC HERE ===
-   // Use AI Market Bias to filter direction:
-   // SMarketBias bias = GetMarketBias(_Symbol);
-   // if(bias.thresholdMet && bias.dominantBias == "bullish")
-   // {
-   //    // Only look for BUY setups with SMC + Price Action
-   // }
-   // else if(bias.thresholdMet && bias.dominantBias == "bearish")
-   // {
-   //    // Only look for SELL setups with SMC + Price Action
-   // }
-   // else
-   // {
-   //    // No trade today - probability below threshold
-   // }
+   // === ATR-BASED GRID TRADING WITH AI BIAS FILTER ===
+   SMarketBias bias = GetMarketBias(_Symbol);
    
+   if(InpEnableAIAnalysis && !bias.thresholdMet)
+   {
+      // AI probability below threshold - no trading
+      return;
+   }
+   
+   // Execute Grid based on AI Bias direction
+   if(!InpEnableAIAnalysis || bias.dominantBias == "bullish")
+   {
+      // Look for BUY grid opportunities
+      CheckBuyGrid();
+   }
+   
+   if(!InpEnableAIAnalysis || bias.dominantBias == "bearish")
+   {
+      // Look for SELL grid opportunities
+      CheckSellGrid();
+   }
+   
+   // === YOUR ADDITIONAL ENTRY LOGIC HERE ===
+   // The ATR Grid system handles grid orders
+   // You can add initial entry logic (Level 1) here
+   // Example for initial entry:
+   // if(bias.thresholdMet && bias.dominantBias == "bullish" && GetGridLevelCount(POSITION_TYPE_BUY) == 0)
+   // {
+   //    // Open first BUY based on your SMC/Price Action strategy
+   //    trade.Buy(InpLotSize, _Symbol, 0, 0, 0, "Initial BUY L1");
+   // }
 }
 
 void OnTradeTransaction(const MqlTradeTransaction& trans,
