@@ -99,6 +99,7 @@ const Developer = () => {
   const [expandedPair, setExpandedPair] = useState<string | null>(null);
   const [selectedTimeframe, setSelectedTimeframe] = useState('H1');
   const [activeTab, setActiveTab] = useState('ea');
+  const [htfAnalyzing, setHtfAnalyzing] = useState<Record<string, boolean>>({});
   
   // Dialog states
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -193,6 +194,79 @@ const Developer = () => {
       setAiLoading(false);
     }
   }, [selectedTimeframe, toast, activeTab]);
+
+  // Trigger HTF Analysis for a specific symbol
+  const triggerHTFAnalysis = async (symbol: string, timeframe: 'H4' | 'D1') => {
+    const key = `${symbol}_${timeframe}`;
+    setHtfAnalyzing(prev => ({ ...prev, [key]: true }));
+    
+    try {
+      const { data, error } = await supabase.functions.invoke('analyze-higher-timeframe', {
+        body: { 
+          symbol,
+          timeframe,
+          force_refresh: true
+        }
+      });
+
+      if (error) throw error;
+      
+      if (data?.success) {
+        toast({
+          title: "Analysis Complete",
+          description: `${symbol} ${timeframe} analysis: ${data.analysis?.dominant_bias || 'N/A'} (${data.analysis?.bullish_probability || 0}% bullish)`,
+        });
+        // Refresh dashboard data
+        fetchAIDashboardData();
+      } else {
+        throw new Error(data?.error || 'Analysis failed');
+      }
+    } catch (error: any) {
+      console.error('HTF Analysis error:', error);
+      toast({
+        title: "Analysis Failed",
+        description: error.message || "Failed to analyze higher timeframe",
+        variant: "destructive",
+      });
+    } finally {
+      setHtfAnalyzing(prev => ({ ...prev, [key]: false }));
+    }
+  };
+
+  // Trigger HTF Analysis for ALL symbols
+  const triggerAllHTFAnalysis = async (timeframe: 'H4' | 'D1') => {
+    const symbols = ['XAUUSD', 'EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD'];
+    
+    toast({
+      title: "Starting Analysis",
+      description: `Analyzing all ${symbols.length} pairs on ${timeframe}...`,
+    });
+
+    let successCount = 0;
+    for (const symbol of symbols) {
+      const key = `${symbol}_${timeframe}`;
+      setHtfAnalyzing(prev => ({ ...prev, [key]: true }));
+      
+      try {
+        const { data, error } = await supabase.functions.invoke('analyze-higher-timeframe', {
+          body: { symbol, timeframe, force_refresh: true }
+        });
+        
+        if (!error && data?.success) successCount++;
+      } catch (e) {
+        console.error(`Failed to analyze ${symbol}:`, e);
+      } finally {
+        setHtfAnalyzing(prev => ({ ...prev, [key]: false }));
+      }
+    }
+
+    toast({
+      title: "Analysis Complete",
+      description: `Successfully analyzed ${successCount}/${symbols.length} pairs on ${timeframe}`,
+    });
+    
+    fetchAIDashboardData();
+  };
 
   // Fetch AI data when AI tab is opened or timeframe changes
   useEffect(() => {
@@ -697,6 +771,18 @@ enum ENUM_BB_MA_TYPE
                         </Button>
                       ))}
                     </div>
+                    {(selectedTimeframe === 'H4' || selectedTimeframe === 'D1') && (
+                      <Button
+                        variant="default"
+                        size="sm"
+                        onClick={() => triggerAllHTFAnalysis(selectedTimeframe as 'H4' | 'D1')}
+                        disabled={Object.values(htfAnalyzing).some(v => v)}
+                        className="bg-purple-600 hover:bg-purple-700"
+                      >
+                        <Sparkles className={`w-4 h-4 mr-2 ${Object.values(htfAnalyzing).some(v => v) ? 'animate-spin' : ''}`} />
+                        Run AI Analysis
+                      </Button>
+                    )}
                     <Button 
                       variant="outline" 
                       size="sm"
