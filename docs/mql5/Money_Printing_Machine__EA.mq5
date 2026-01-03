@@ -838,8 +838,8 @@ bool RequestMarketBias()
    string resultHeaders;
    string headers = "Content-Type: application/json\r\nx-api-key: " + EA_API_SECRET + "\r\n";
    
-   StringToCharArray(json, post, 0, StringLen(json), CP_UTF8);
-   ArrayResize(post, ArraySize(post) - 1);
+    StringToCharArray(json, post, 0, -1, CP_UTF8); // include null terminator
+    ArrayResize(post, ArraySize(post) - 1);        // remove null terminator for WebRequest
    
    Print("[AI Bias] Sending request to server...");
    

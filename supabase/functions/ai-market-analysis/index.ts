@@ -96,6 +96,21 @@ serve(async (req) => {
       console.log('[AI Bias] Trimming invalid trailing chars from position', lastValidEnd + 1);
       rawBody = rawBody.substring(0, lastValidEnd + 1);
     }
+
+    // 6. Balance braces/brackets (common when EA drops the last closing brace due to StringToCharArray usage)
+    const openBraces = (rawBody.match(/\{/g) || []).length;
+    const closeBraces = (rawBody.match(/\}/g) || []).length;
+    const openBrackets = (rawBody.match(/\[/g) || []).length;
+    const closeBrackets = (rawBody.match(/\]/g) || []).length;
+
+    const missingBrackets = Math.max(0, openBrackets - closeBrackets);
+    const missingBraces = Math.max(0, openBraces - closeBraces);
+
+    if (missingBrackets || missingBraces) {
+      console.log('[AI Bias] Detected unbalanced JSON. missingBrackets=', missingBrackets, 'missingBraces=', missingBraces);
+      // Close in reverse order: arrays first, then objects
+      rawBody += ']'.repeat(missingBrackets) + '}'.repeat(missingBraces);
+    }
     
     console.log('[AI Bias] Cleaned body length:', rawBody.length);
     console.log('[AI Bias] Body ends with:', JSON.stringify(rawBody.substring(rawBody.length - 50)));
