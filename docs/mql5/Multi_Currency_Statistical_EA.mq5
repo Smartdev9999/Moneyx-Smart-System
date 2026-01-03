@@ -165,8 +165,8 @@ input string   InpPair20_SymbolA = "CADCHF";    // Pair 20: Symbol A
 input string   InpPair20_SymbolB = "CADJPY";    // Pair 20: Symbol B
 
 input group "=== License Settings ==="
-input string   InpLicenseKey = "";              // License Key
-input string   InpAccountNumber = "";           // Account Number
+input string   InpApiUrl = "https://lkbhomsulgycxawwlnfh.supabase.co/functions/v1";  // API URL
+input string   InpApiKey = "moneyx-ea-secret-2024-secure-key-v1";  // API Key
 
 input group "=== News Filter ==="
 input bool     InpEnableNewsFilter = true;      // Enable News Filter
@@ -370,19 +370,115 @@ void OnTimer()
 }
 
 //+------------------------------------------------------------------+
-//| Verify License                                                     |
+//| Verify License via WebRequest                                      |
 //+------------------------------------------------------------------+
 bool VerifyLicense()
 {
-   if(InpLicenseKey == "" || InpAccountNumber == "")
+   // Bypass license check in Strategy Tester
+   if(MQLInfoInteger(MQL_TESTER) || MQLInfoInteger(MQL_OPTIMIZATION) || MQLInfoInteger(MQL_VISUAL_MODE))
    {
-      Print("License Key and Account Number required");
+      Print("Strategy Tester Mode - License check bypassed");
+      return true;
+   }
+   
+   string accountNumber = IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN));
+   if(accountNumber == "" || accountNumber == "0")
+   {
+      Print("Account Number not available");
       return false;
    }
    
-   // TODO: Implement license verification via WebRequest
-   Print("License verification - Placeholder");
-   return true;
+   string url = InpApiUrl + "/verify-license";
+   string headers = "Content-Type: application/json\r\nx-api-key: " + InpApiKey;
+   string postData = "{\"account_number\":\"" + accountNumber + "\"}";
+   
+   char post[];
+   char result[];
+   string resultHeaders;
+   
+   // Convert string to char array
+   int postLen = StringToCharArray(postData, post, 0, -1, CP_UTF8);
+   ArrayResize(post, postLen - 1);  // Remove null terminator
+   
+   ResetLastError();
+   int timeout = 10000;
+   int res = WebRequest("POST", url, headers, timeout, post, result, resultHeaders);
+   
+   if(res == -1)
+   {
+      int error = GetLastError();
+      if(error == 4014)
+      {
+         Print("ERROR: Add URL to MT5 allowed list: ", InpApiUrl);
+         Print("Go to: Tools -> Options -> Expert Advisors -> Allow WebRequest for listed URL");
+         MessageBox("Please add this URL to MT5 allowed list:\n\n" + InpApiUrl + "\n\nGo to: Tools -> Options -> Expert Advisors", "WebRequest Error", MB_ICONERROR);
+      }
+      else
+      {
+         PrintFormat("WebRequest failed. Error: %d", error);
+      }
+      return false;
+   }
+   
+   string response = CharArrayToString(result, 0, WHOLE_ARRAY, CP_UTF8);
+   PrintFormat("[License] Response: %s", response);
+   
+   // Parse response
+   if(StringFind(response, "\"valid\":true") >= 0)
+   {
+      // Extract customer name
+      int nameStart = StringFind(response, "\"customer_name\":\"");
+      if(nameStart >= 0)
+      {
+         nameStart += 17;
+         int nameEnd = StringFind(response, "\"", nameStart);
+         string customerName = StringSubstr(response, nameStart, nameEnd - nameStart);
+         PrintFormat("[License] Welcome, %s! License valid.", customerName);
+      }
+      
+      // Check if lifetime
+      if(StringFind(response, "\"is_lifetime\":true") >= 0)
+      {
+         Print("[License] Lifetime license active");
+      }
+      else
+      {
+         // Extract days remaining
+         int daysStart = StringFind(response, "\"days_remaining\":");
+         if(daysStart >= 0)
+         {
+            daysStart += 17;
+            int daysEnd = StringFind(response, ",", daysStart);
+            if(daysEnd < 0) daysEnd = StringFind(response, "}", daysStart);
+            string daysStr = StringSubstr(response, daysStart, daysEnd - daysStart);
+            int daysRemaining = (int)StringToInteger(daysStr);
+            PrintFormat("[License] Days remaining: %d", daysRemaining);
+            
+            if(daysRemaining <= 5)
+            {
+               MessageBox("Your license expires in " + IntegerToString(daysRemaining) + " days.\nPlease contact Moneyx Support to renew.", "License Expiring Soon", MB_ICONWARNING);
+            }
+         }
+      }
+      return true;
+   }
+   
+   // License invalid - extract message
+   int msgStart = StringFind(response, "\"message\":\"");
+   if(msgStart >= 0)
+   {
+      msgStart += 11;
+      int msgEnd = StringFind(response, "\"", msgStart);
+      string message = StringSubstr(response, msgStart, msgEnd - msgStart);
+      Print("[License] ", message);
+      MessageBox(message, "License Error", MB_ICONERROR);
+   }
+   else
+   {
+      Print("[License] Verification failed");
+   }
+   
+   return false;
 }
 
 //+------------------------------------------------------------------+
