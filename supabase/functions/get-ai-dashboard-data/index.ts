@@ -209,10 +209,10 @@ serve(async (req) => {
       : [rawTimeframe, rawTimeframe.startsWith('PERIOD_') ? rawTimeframe.replace('PERIOD_', '') : `PERIOD_${rawTimeframe}`];
 
     // Fetch latest analysis for all symbols
-    const analysisTimeframesToQuery = [
-      rawTimeframe,
-      rawTimeframe.startsWith('PERIOD_') ? rawTimeframe.replace('PERIOD_', '') : `PERIOD_${rawTimeframe}`,
-    ];
+    // For H4/D1, also try to get H1 analysis as fallback
+    const analysisTimeframesToQuery = isHigherTimeframe 
+      ? ['H1', 'PERIOD_H1', rawTimeframe, rawTimeframe.startsWith('PERIOD_') ? rawTimeframe.replace('PERIOD_', '') : `PERIOD_${rawTimeframe}`]
+      : [rawTimeframe, rawTimeframe.startsWith('PERIOD_') ? rawTimeframe.replace('PERIOD_', '') : `PERIOD_${rawTimeframe}`];
     
     const { data: analysisData, error: analysisError } = await supabase
       .from('ai_analysis_cache')
@@ -229,10 +229,24 @@ serve(async (req) => {
     console.log('[AI Dashboard] Found', (analysisData || []).length, 'analysis records');
 
     // Get unique latest analysis per symbol
+    // For higher timeframes, prefer the requested TF but fallback to H1
     const latestAnalysis: Record<string, any> = {};
+    const analysisFromH1: Record<string, boolean> = {};
+    
     for (const analysis of analysisData || []) {
+      const isH1Analysis = analysis.timeframe === 'H1' || analysis.timeframe === 'PERIOD_H1';
+      
       if (!latestAnalysis[analysis.symbol]) {
         latestAnalysis[analysis.symbol] = analysis;
+        analysisFromH1[analysis.symbol] = isH1Analysis && isHigherTimeframe;
+      } else if (isHigherTimeframe) {
+        // For higher timeframes, prefer non-H1 analysis if available
+        const currentIsH1 = latestAnalysis[analysis.symbol].timeframe === 'H1' || 
+                           latestAnalysis[analysis.symbol].timeframe === 'PERIOD_H1';
+        if (currentIsH1 && !isH1Analysis) {
+          latestAnalysis[analysis.symbol] = analysis;
+          analysisFromH1[analysis.symbol] = false;
+        }
       }
     }
 
@@ -317,11 +331,13 @@ serve(async (req) => {
       const candles = candleDataBySymbol[symbol] || [];
       const indicators = indicatorDataBySymbol[symbol] || [];
       const isAggregated = isAggregatedBySymbol[symbol] || false;
+      const isAnalysisFromH1 = analysisFromH1[symbol] || false;
 
       return {
         symbol,
         timeframe: normalizedTimeframe,
         is_aggregated: isAggregated,
+        analysis_from_h1: isAnalysisFromH1,
         analysis: analysis ? {
           bullish_probability: analysis.bullish_probability,
           bearish_probability: analysis.bearish_probability,
