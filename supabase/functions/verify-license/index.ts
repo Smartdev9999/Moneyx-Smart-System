@@ -49,7 +49,26 @@ serve(async (req) => {
     
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    const { account_number }: VerifyRequest = await req.json();
+    // Handle raw body that might have encoding issues from MQL5
+    let account_number: string = '';
+    try {
+      const rawBody = await req.text();
+      console.log('[verify-license] Raw body received:', rawBody);
+      
+      // Try to parse as JSON first
+      try {
+        const parsed = JSON.parse(rawBody);
+        account_number = parsed.account_number || '';
+      } catch {
+        // If JSON parse fails, try to extract account_number manually
+        const match = rawBody.match(/account_number["\s:]+["']?(\d+)/i);
+        if (match) {
+          account_number = match[1];
+        }
+      }
+    } catch (e) {
+      console.error('[verify-license] Failed to read body:', e);
+    }
 
     console.log(`[verify-license] Checking license for MT5 account: ${account_number}`);
 
