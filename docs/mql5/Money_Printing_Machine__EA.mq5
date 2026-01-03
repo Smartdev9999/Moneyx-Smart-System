@@ -900,10 +900,6 @@ string GetBiasStatusString()
    
    return status;
 }
-   
-   string status = "Sentiment: " + g_marketSentiment + " | Updated: " + IntegerToString(mins) + "m ago";
-   return status;
-}
 
 //+------------------------------------------------------------------+
 //| DATA SYNC                                                         |
