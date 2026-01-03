@@ -45,6 +45,8 @@ interface AIAnalysisCardProps {
   indicators: IndicatorData[];
   isExpanded?: boolean;
   onToggleExpand?: () => void;
+  isAggregated?: boolean;
+  analysisFromH1?: boolean;
 }
 
 const AIAnalysisCard = ({ 
@@ -54,7 +56,9 @@ const AIAnalysisCard = ({
   candles, 
   indicators,
   isExpanded = false,
-  onToggleExpand
+  onToggleExpand,
+  isAggregated = false,
+  analysisFromH1 = false
 }: AIAnalysisCardProps) => {
   
   const getBiasIcon = (bias: string) => {
@@ -91,8 +95,18 @@ const AIAnalysisCard = ({
           <CardTitle className="text-lg flex items-center gap-2">
             {symbol}
             <Badge variant="outline" className="text-xs">{timeframe}</Badge>
+            {isAggregated && (
+              <Badge variant="outline" className="text-xs bg-blue-500/10 text-blue-400 border-blue-500/30">
+                Aggregated
+              </Badge>
+            )}
           </CardTitle>
           <div className="flex items-center gap-2">
+            {hasAnalysis && analysisFromH1 && (
+              <Badge variant="outline" className="text-xs bg-orange-500/10 text-orange-400 border-orange-500/30">
+                H1 Analysis
+              </Badge>
+            )}
             {hasAnalysis && getRecommendationBadge(analysis.recommendation)}
             {onToggleExpand && (
               <button 

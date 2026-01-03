@@ -69,6 +69,8 @@ interface AIDashboardData {
     candles: any[];
     indicators: any[];
     has_data: boolean;
+    is_aggregated?: boolean;
+    analysis_from_h1?: boolean;
   }[];
   summary: {
     total_pairs: number;
@@ -802,6 +804,8 @@ enum ENUM_BB_MA_TYPE
                     onToggleExpand={() => setExpandedPair(
                       expandedPair === pair.symbol ? null : pair.symbol
                     )}
+                    isAggregated={pair.is_aggregated}
+                    analysisFromH1={pair.analysis_from_h1}
                   />
                 ))}
               </div>
