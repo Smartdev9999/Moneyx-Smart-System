@@ -108,51 +108,81 @@ export type Database = {
       ai_analysis_cache: {
         Row: {
           analysis_data: Json
+          bearish_probability: number | null
+          bullish_probability: number | null
           candle_time: string
           confidence: number | null
           created_at: string
+          dominant_bias: string | null
           entry_price: number | null
           expires_at: string
           id: string
+          key_levels: Json | null
+          market_structure: string | null
+          patterns: string | null
           reasoning: string | null
+          sideways_probability: number | null
           signal: string | null
           stop_loss: number | null
           symbol: string
           take_profit: number | null
+          threshold_met: boolean | null
           timeframe: string
           trend: string | null
+          trend_daily: string | null
+          trend_h4: string | null
         }
         Insert: {
           analysis_data: Json
+          bearish_probability?: number | null
+          bullish_probability?: number | null
           candle_time: string
           confidence?: number | null
           created_at?: string
+          dominant_bias?: string | null
           entry_price?: number | null
           expires_at?: string
           id?: string
+          key_levels?: Json | null
+          market_structure?: string | null
+          patterns?: string | null
           reasoning?: string | null
+          sideways_probability?: number | null
           signal?: string | null
           stop_loss?: number | null
           symbol: string
           take_profit?: number | null
+          threshold_met?: boolean | null
           timeframe: string
           trend?: string | null
+          trend_daily?: string | null
+          trend_h4?: string | null
         }
         Update: {
           analysis_data?: Json
+          bearish_probability?: number | null
+          bullish_probability?: number | null
           candle_time?: string
           confidence?: number | null
           created_at?: string
+          dominant_bias?: string | null
           entry_price?: number | null
           expires_at?: string
           id?: string
+          key_levels?: Json | null
+          market_structure?: string | null
+          patterns?: string | null
           reasoning?: string | null
+          sideways_probability?: number | null
           signal?: string | null
           stop_loss?: number | null
           symbol?: string
           take_profit?: number | null
+          threshold_met?: boolean | null
           timeframe?: string
           trend?: string | null
+          trend_daily?: string | null
+          trend_h4?: string | null
         }
         Relationships: []
       }

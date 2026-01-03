@@ -574,18 +574,30 @@ enum ENUM_BB_MA_TYPE
                   </div>
                   <div>
                     <CardTitle className="flex items-center gap-2">
-                      AI-Powered Trading Analysis
+                      AI Market Bias Analysis
                       <Badge variant="outline" className="bg-green-500/20 text-green-400 border-green-500">
                         Active
                       </Badge>
                     </CardTitle>
                     <CardDescription>
-                      ระบบ AI วิเคราะห์ตลาดและสร้าง Signal แบบ Real-time ด้วย Lovable AI
+                      ระบบ AI วิเคราะห์ Market Bias เพื่อระบุทิศทางที่ได้เปรียบ (ไม่ใช่ Signal)
                     </CardDescription>
                   </div>
                 </div>
               </CardHeader>
               <CardContent className="space-y-4">
+                <div className="p-4 rounded-lg bg-yellow-500/10 border border-yellow-500/30">
+                  <h4 className="font-medium mb-2 flex items-center gap-2 text-yellow-400">
+                    <Sparkles className="w-4 h-4" />
+                    แนวคิดหลัก: AI เป็น Strategic Advisor
+                  </h4>
+                  <p className="text-sm text-muted-foreground">
+                    AI จะวิเคราะห์ว่าวันนี้มีโอกาสขึ้นกี่%, ลงกี่%, Sideways กี่% → ถ้าทิศทางใดมี &gt;70% EA จะเทรดเฉพาะฝั่งนั้น
+                    <br />
+                    <strong className="text-foreground">SMC + Price Action ยังเป็นตัวหา Entry ที่แม่นยำ</strong> - AI แค่บอกว่าควรเล่นฝั่งไหน
+                  </p>
+                </div>
+
                 <div className="grid gap-4 md:grid-cols-2">
                   <div className="p-4 rounded-lg bg-muted/50 border">
                     <h4 className="font-medium mb-2 flex items-center gap-2">
@@ -594,21 +606,21 @@ enum ENUM_BB_MA_TYPE
                     </h4>
                     <ul className="text-sm text-muted-foreground space-y-1">
                       <li>• <strong>Pairs:</strong> EURUSD, GBPUSD, XAUUSD, USDJPY, AUDUSD</li>
-                      <li>• <strong>Timeframe:</strong> H1 / H4</li>
-                      <li>• <strong>Trigger:</strong> เมื่อ Candle ปิดใหม่</li>
-                      <li>• <strong>Model:</strong> gemini-2.5-flash-lite (ประหยัดที่สุด)</li>
+                      <li>• <strong>Analysis TF:</strong> H1 / H4</li>
+                      <li>• <strong>Threshold:</strong> 70% (ตั้งค่าได้)</li>
+                      <li>• <strong>Model:</strong> gemini-2.5-flash-lite</li>
                     </ul>
                   </div>
                   <div className="p-4 rounded-lg bg-muted/50 border">
                     <h4 className="font-medium mb-2 flex items-center gap-2">
-                      <Zap className="w-4 h-4 text-yellow-400" />
-                      Credit Usage (ประมาณ)
+                      <Brain className="w-4 h-4 text-purple-400" />
+                      Analysis Factors
                     </h4>
                     <ul className="text-sm text-muted-foreground space-y-1">
-                      <li>• H1: ~24 requests/day (5 pairs รวม)</li>
-                      <li>• H4: ~6 requests/day (5 pairs รวม)</li>
-                      <li>• Cache: 1 ชั่วโมง (ลด requests ซ้ำ)</li>
-                      <li>• ประมาณ: 180-720 requests/เดือน</li>
+                      <li>• <strong>Market Structure:</strong> HH/HL/LH/LL patterns</li>
+                      <li>• <strong>Multi-TF Trend:</strong> H4 + Daily alignment</li>
+                      <li>• <strong>Key Levels:</strong> Support/Resistance</li>
+                      <li>• <strong>Patterns:</strong> Chart patterns recognition</li>
                     </ul>
                   </div>
                 </div>
@@ -624,34 +636,41 @@ enum ENUM_BB_MA_TYPE
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <div className="grid gap-4 md:grid-cols-4">
+                <div className="grid gap-4 md:grid-cols-5">
                   <div className="text-center p-4 rounded-lg bg-blue-500/10 border border-blue-500/30">
                     <div className="w-10 h-10 mx-auto mb-2 rounded-full bg-blue-500/20 flex items-center justify-center">
                       <span className="font-bold text-blue-400">1</span>
                     </div>
-                    <p className="text-sm font-medium">New Candle Close</p>
+                    <p className="text-sm font-medium">New Candle</p>
                     <p className="text-xs text-muted-foreground mt-1">EA ตรวจจับ candle ใหม่</p>
                   </div>
                   <div className="text-center p-4 rounded-lg bg-green-500/10 border border-green-500/30">
                     <div className="w-10 h-10 mx-auto mb-2 rounded-full bg-green-500/20 flex items-center justify-center">
                       <span className="font-bold text-green-400">2</span>
                     </div>
-                    <p className="text-sm font-medium">Collect Data</p>
-                    <p className="text-xs text-muted-foreground mt-1">รวม OHLC + Indicators</p>
+                    <p className="text-sm font-medium">AI Analysis</p>
+                    <p className="text-xs text-muted-foreground mt-1">วิเคราะห์ Market Bias</p>
                   </div>
                   <div className="text-center p-4 rounded-lg bg-purple-500/10 border border-purple-500/30">
                     <div className="w-10 h-10 mx-auto mb-2 rounded-full bg-purple-500/20 flex items-center justify-center">
                       <span className="font-bold text-purple-400">3</span>
                     </div>
-                    <p className="text-sm font-medium">AI Analysis</p>
-                    <p className="text-xs text-muted-foreground mt-1">Lovable AI วิเคราะห์</p>
+                    <p className="text-sm font-medium">Probability</p>
+                    <p className="text-xs text-muted-foreground mt-1">คำนวณ % แต่ละทิศทาง</p>
                   </div>
                   <div className="text-center p-4 rounded-lg bg-yellow-500/10 border border-yellow-500/30">
                     <div className="w-10 h-10 mx-auto mb-2 rounded-full bg-yellow-500/20 flex items-center justify-center">
                       <span className="font-bold text-yellow-400">4</span>
                     </div>
-                    <p className="text-sm font-medium">Signal to EA</p>
-                    <p className="text-xs text-muted-foreground mt-1">ส่ง Entry/TP/SL</p>
+                    <p className="text-sm font-medium">Check Threshold</p>
+                    <p className="text-xs text-muted-foreground mt-1">&gt;=70% = เทรดได้</p>
+                  </div>
+                  <div className="text-center p-4 rounded-lg bg-cyan-500/10 border border-cyan-500/30">
+                    <div className="w-10 h-10 mx-auto mb-2 rounded-full bg-cyan-500/20 flex items-center justify-center">
+                      <span className="font-bold text-cyan-400">5</span>
+                    </div>
+                    <p className="text-sm font-medium">SMC Entry</p>
+                    <p className="text-xs text-muted-foreground mt-1">เข้า Order ฝั่งที่ได้เปรียบ</p>
                   </div>
                 </div>
               </CardContent>
@@ -665,41 +684,54 @@ enum ENUM_BB_MA_TYPE
                   API Response Format
                 </CardTitle>
                 <CardDescription>
-                  รูปแบบ JSON ที่ AI จะส่งกลับมายัง EA
+                  รูปแบบ JSON ที่ AI จะส่งกลับ - Market Bias Probabilities
                 </CardDescription>
               </CardHeader>
               <CardContent>
                 <CodeBlock 
                   language="json" 
-                  filename="ai-analysis-response.json"
+                  filename="ai-market-bias-response.json"
                   code={`{
   "success": true,
   "timestamp": "2026-01-03T12:00:00Z",
   "analysis": [
     {
       "symbol": "XAUUSD",
-      "trend": "bullish",
-      "signal": "buy",
-      "confidence": 75,
-      "entry_price": 2650.50,
-      "stop_loss": 2640.00,
-      "take_profit": 2680.00,
-      "reasoning": "EMA crossover bullish, RSI not overbought, MACD positive"
+      "bullish_probability": 72,
+      "bearish_probability": 18,
+      "sideways_probability": 10,
+      "dominant_bias": "bullish",
+      "threshold_met": true,
+      "market_structure": "HH-HL forming, bullish structure intact",
+      "trend_h4": "bullish",
+      "trend_daily": "bullish",
+      "key_levels": {"support": [2640.00, 2620.00], "resistance": [2680.00, 2700.00]},
+      "patterns": "Bull flag breakout pending",
+      "recommendation": "Only LONG",
+      "reasoning": "Strong bullish structure, price above EMAs, RSI healthy"
     },
     {
       "symbol": "EURUSD",
-      "trend": "bearish",
-      "signal": "sell",
-      "confidence": 60,
-      "entry_price": 1.0855,
-      "stop_loss": 1.0880,
-      "take_profit": 1.0800,
-      "reasoning": "Below EMA50, RSI declining, bearish momentum"
+      "bullish_probability": 35,
+      "bearish_probability": 40,
+      "sideways_probability": 25,
+      "dominant_bias": "bearish",
+      "threshold_met": false,
+      "market_structure": "Ranging between levels",
+      "trend_h4": "bearish",
+      "trend_daily": "neutral",
+      "key_levels": {"support": [1.0800], "resistance": [1.0900]},
+      "patterns": "No clear pattern",
+      "recommendation": "No Trade",
+      "reasoning": "No dominant direction, probability below 70%"
     }
   ],
-  "market_sentiment": "cautiously_bullish",
-  "cached_count": 2,
-  "analyzed_count": 3
+  "overall_bias": "bullish",
+  "avg_bullish": 54,
+  "avg_bearish": 29,
+  "tradable_pairs": 3,
+  "total_pairs": 5,
+  "threshold": 70
 }`} 
                 />
               </CardContent>
@@ -713,42 +745,69 @@ enum ENUM_BB_MA_TYPE
                   การใช้งานใน EA
                 </CardTitle>
                 <CardDescription>
-                  ตัวอย่างโค้ดสำหรับใช้ AI Signal ใน EA
+                  ตัวอย่างโค้ดสำหรับใช้ Market Bias กรองทิศทางเทรด
                 </CardDescription>
               </CardHeader>
               <CardContent>
                 <CodeBlock 
                   language="mql5" 
-                  filename="ea-ai-usage.mq5"
-                  code={`// ใน OnTick() หลังจาก CheckAIAnalysis()
+                  filename="ea-market-bias-usage.mq5"
+                  code={`// ใน OnTick() - ใช้ AI Bias กรองทิศทางก่อน SMC Entry
 void OnTick()
 {
    // ... license, news checks ...
    
-   // Get AI signal for current symbol
-   SAISignal signal = GetAISignal(_Symbol);
+   // Check market bias for current symbol
+   SMarketBias bias = GetMarketBias(_Symbol);
    
-   // Check if signal is valid and has high confidence
-   if(signal.signal == "buy" && signal.confidence >= 70)
+   // Display bias status
+   Comment("=== AI Market Bias ===\\n",
+           "Bullish: ", bias.bullishProb, "%\\n",
+           "Bearish: ", bias.bearishProb, "%\\n",
+           "Sideways: ", bias.sidewaysProb, "%\\n",
+           "Dominant: ", bias.dominantBias, "\\n",
+           "Can Trade: ", (bias.thresholdMet ? "YES" : "NO"), "\\n",
+           "Recommendation: ", bias.recommendation);
+   
+   // Only trade if threshold is met
+   if(!bias.thresholdMet)
    {
-      // Execute buy order with AI-suggested levels
-      double lots = InpLotSize;
-      double sl = signal.stopLoss;
-      double tp = signal.takeProfit;
-      
-      trade.Buy(lots, _Symbol, 0, sl, tp, "AI Signal Buy");
-      Print("[AI Trade] BUY ", _Symbol, " Confidence: ", signal.confidence);
-   }
-   else if(signal.signal == "sell" && signal.confidence >= 70)
-   {
-      trade.Sell(lots, _Symbol, 0, sl, tp, "AI Signal Sell");
-      Print("[AI Trade] SELL ", _Symbol, " Confidence: ", signal.confidence);
+      // No clear direction - skip trading today
+      return;
    }
    
-   // Show AI status in comment
-   string status = GetAIStatusString();
-   Comment("AI Status: ", status, "\\n",
-           "Signal: ", signal.signal, " (", signal.confidence, "%)");
+   // SMC + Price Action finds entry, but only in allowed direction
+   if(bias.dominantBias == "bullish")
+   {
+      // Only look for BUY setups
+      if(SMC_FindBuySetup() && PA_ConfirmBuy())
+      {
+         trade.Buy(InpLotSize, _Symbol, 0, SL, TP, "AI Bias + SMC Buy");
+      }
+      // Ignore any SELL signals today
+   }
+   else if(bias.dominantBias == "bearish")
+   {
+      // Only look for SELL setups
+      if(SMC_FindSellSetup() && PA_ConfirmSell())
+      {
+         trade.Sell(InpLotSize, _Symbol, 0, SL, TP, "AI Bias + SMC Sell");
+      }
+      // Ignore any BUY signals today
+   }
+}
+
+// Helper function to check if direction is allowed
+bool CanTradeDirection(string symbol, string direction)
+{
+   SMarketBias bias = GetMarketBias(symbol);
+   
+   if(!bias.thresholdMet) return false;
+   
+   if(direction == "buy") return (bias.dominantBias == "bullish");
+   if(direction == "sell") return (bias.dominantBias == "bearish");
+   
+   return false;
 }`} 
                 />
               </CardContent>
@@ -771,7 +830,7 @@ void OnTick()
                   <Badge variant="outline">Content-Type: application/json</Badge>
                 </div>
                 <p className="text-sm text-muted-foreground">
-                  Edge Function นี้จะ cache ผลลัพธ์ไว้ 1 ชั่วโมง ถ้า candle_time เดิมจะ return cached result โดยไม่เรียก AI ใหม่
+                  Cache 1 ชั่วโมง | ส่ง threshold ใน request body เพื่อกำหนด % ขั้นต่ำ (default: 70)
                 </p>
               </CardContent>
             </Card>
