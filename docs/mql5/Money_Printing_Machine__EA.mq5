@@ -577,7 +577,13 @@ string GetNewsStatusString()
 //+------------------------------------------------------------------+
 void InitAIAnalysis()
 {
-   if(!InpEnableAIAnalysis) return;
+   Print("[AI Bias] InitAIAnalysis() called. InpEnableAIAnalysis=", InpEnableAIAnalysis);
+   
+   if(!InpEnableAIAnalysis) 
+   {
+      Print("[AI Bias] AI Analysis is DISABLED - skipping initialization");
+      return;
+   }
    
    // Parse pairs string
    string pairs = InpAIPairs;
@@ -585,6 +591,8 @@ void InitAIAnalysis()
    
    string pairArray[];
    g_aiPairCount = StringSplit(pairs, ',', pairArray);
+   
+   Print("[AI Bias] Parsed ", g_aiPairCount, " pairs from: ", InpAIPairs);
    
    ArrayResize(g_aiPairs, g_aiPairCount);
    ArrayResize(g_lastCandleTime, g_aiPairCount);
@@ -601,16 +609,22 @@ void InitAIAnalysis()
       g_marketBias[i].sidewaysProb = 34;
       g_marketBias[i].thresholdMet = false;
       g_marketBias[i].recommendation = "No Trade";
-    }
+   }
    
    g_biasCount = g_aiPairCount;
-   Print("[AI Bias] Initialized for ", g_aiPairCount, " pairs: ", InpAIPairs, " | Threshold: ", InpBiasThreshold, "%");
-   Print("[AI Bias] Sending ", InpAICandleHistory, " candles of historical data per pair...");
+   Print("[AI Bias] Initialized for ", g_aiPairCount, " pairs | Threshold: ", InpBiasThreshold, "% | Candles: ", InpAICandleHistory);
    
    // Send initial historical data on startup
+   Print("[AI Bias] Checking conditions: IsTestMode=", IsTestMode(), " g_isLicenseValid=", g_isLicenseValid);
+   
    if(!IsTestMode() && g_isLicenseValid)
    {
+      Print("[AI Bias] Sending initial historical data NOW...");
       RequestMarketBias();
+   }
+   else
+   {
+      Print("[AI Bias] Skipped initial request - TestMode or License invalid");
    }
 }
 
