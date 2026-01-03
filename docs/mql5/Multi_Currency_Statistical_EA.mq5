@@ -12,7 +12,25 @@
 #include <Trade/Trade.mqh>
 
 //+------------------------------------------------------------------+
-//| PAIR STRUCTURE                                                     |
+//| CONSTANTS                                                          |
+//+------------------------------------------------------------------+
+#define MAX_PAIRS 20
+#define MAX_LOOKBACK 200
+
+//+------------------------------------------------------------------+
+//| PAIR DATA STRUCTURE (with embedded arrays)                         |
+//+------------------------------------------------------------------+
+struct PairData
+{
+   double         pricesA[MAX_LOOKBACK];
+   double         pricesB[MAX_LOOKBACK];
+   double         returnsA[MAX_LOOKBACK];
+   double         returnsB[MAX_LOOKBACK];
+   double         spreadHistory[MAX_LOOKBACK];
+};
+
+//+------------------------------------------------------------------+
+//| PAIR INFO STRUCTURE                                                |
 //+------------------------------------------------------------------+
 struct PairInfo
 {
@@ -158,8 +176,6 @@ input int      InpNewsAfterMinutes = 30;        // Minutes After News
 //+------------------------------------------------------------------+
 //| GLOBAL VARIABLES                                                   |
 //+------------------------------------------------------------------+
-#define MAX_PAIRS 20
-
 CTrade g_trade;
 bool g_isLicenseValid = false;
 bool g_isNewsPaused = false;
@@ -168,14 +184,8 @@ datetime g_lastCandleTime = 0;
 
 // Pairs Data
 PairInfo g_pairs[MAX_PAIRS];
+PairData g_pairData[MAX_PAIRS];
 int g_activePairs = 0;
-
-// Price/Return History Arrays (for each pair's symbols)
-double g_pricesA[MAX_PAIRS][];
-double g_pricesB[MAX_PAIRS][];
-double g_returnsA[MAX_PAIRS][];
-double g_returnsB[MAX_PAIRS][];
-double g_spreadHistory[MAX_PAIRS][];
 
 // Account Statistics
 double g_initialBalance = 0;
@@ -198,26 +208,21 @@ int OnInit()
    g_trade.SetExpertMagicNumber(InpMagicNumber);
    g_trade.SetDeviationInPoints(InpSlippage);
    
+   // Initialize price arrays
+   for(int i = 0; i < MAX_PAIRS; i++)
+   {
+      ArrayInitialize(g_pairData[i].pricesA, 0);
+      ArrayInitialize(g_pairData[i].pricesB, 0);
+      ArrayInitialize(g_pairData[i].returnsA, 0);
+      ArrayInitialize(g_pairData[i].returnsB, 0);
+      ArrayInitialize(g_pairData[i].spreadHistory, 0);
+   }
+   
    // Initialize pairs
    if(!InitializePairs())
    {
       Print("Failed to initialize trading pairs!");
       return(INIT_FAILED);
-   }
-   
-   // Initialize price arrays
-   for(int i = 0; i < MAX_PAIRS; i++)
-   {
-      ArrayResize(g_pricesA[i], InpLookbackPeriod);
-      ArrayResize(g_pricesB[i], InpLookbackPeriod);
-      ArrayResize(g_returnsA[i], InpLookbackPeriod - 1);
-      ArrayResize(g_returnsB[i], InpLookbackPeriod - 1);
-      ArrayResize(g_spreadHistory[i], InpLookbackPeriod);
-      ArrayInitialize(g_pricesA[i], 0);
-      ArrayInitialize(g_pricesB[i], 0);
-      ArrayInitialize(g_returnsA[i], 0);
-      ArrayInitialize(g_returnsB[i], 0);
-      ArrayInitialize(g_spreadHistory[i], 0);
    }
    
    // License verification
@@ -436,10 +441,11 @@ void UpdatePriceHistory(int pairIndex)
    string symbolA = g_pairs[pairIndex].symbolA;
    string symbolB = g_pairs[pairIndex].symbolB;
    
-   for(int i = 0; i < InpLookbackPeriod; i++)
+   int period = MathMin(InpLookbackPeriod, MAX_LOOKBACK);
+   for(int i = 0; i < period; i++)
    {
-      g_pricesA[pairIndex][i] = iClose(symbolA, InpTimeframe, i);
-      g_pricesB[pairIndex][i] = iClose(symbolB, InpTimeframe, i);
+      g_pairData[pairIndex].pricesA[i] = iClose(symbolA, InpTimeframe, i);
+      g_pairData[pairIndex].pricesB[i] = iClose(symbolB, InpTimeframe, i);
    }
 }
 
@@ -449,28 +455,28 @@ void UpdatePriceHistory(int pairIndex)
 //+------------------------------------------------------------------+
 void CalculateLogReturns(int pairIndex)
 {
-   int returnCount = InpLookbackPeriod - 1;
+   int returnCount = MathMin(InpLookbackPeriod - 1, MAX_LOOKBACK - 1);
    
    for(int i = 0; i < returnCount; i++)
    {
-      double priceA_t = g_pricesA[pairIndex][i];
-      double priceA_t1 = g_pricesA[pairIndex][i + 1];
-      double priceB_t = g_pricesB[pairIndex][i];
-      double priceB_t1 = g_pricesB[pairIndex][i + 1];
+      double priceA_t = g_pairData[pairIndex].pricesA[i];
+      double priceA_t1 = g_pairData[pairIndex].pricesA[i + 1];
+      double priceB_t = g_pairData[pairIndex].pricesB[i];
+      double priceB_t1 = g_pairData[pairIndex].pricesB[i + 1];
       
       if(priceA_t1 > 0 && priceB_t1 > 0)
       {
          if(InpUseLogReturns)
          {
             // Log returns (recommended for statistical stability)
-            g_returnsA[pairIndex][i] = MathLog(priceA_t / priceA_t1);
-            g_returnsB[pairIndex][i] = MathLog(priceB_t / priceB_t1);
+            g_pairData[pairIndex].returnsA[i] = MathLog(priceA_t / priceA_t1);
+            g_pairData[pairIndex].returnsB[i] = MathLog(priceB_t / priceB_t1);
          }
          else
          {
             // Simple returns
-            g_returnsA[pairIndex][i] = (priceA_t - priceA_t1) / priceA_t1;
-            g_returnsB[pairIndex][i] = (priceB_t - priceB_t1) / priceB_t1;
+            g_pairData[pairIndex].returnsA[i] = (priceA_t - priceA_t1) / priceA_t1;
+            g_pairData[pairIndex].returnsB[i] = (priceB_t - priceB_t1) / priceB_t1;
          }
       }
    }
@@ -482,7 +488,7 @@ void CalculateLogReturns(int pairIndex)
 //+------------------------------------------------------------------+
 double CalculatePearsonCorrelation(int pairIndex)
 {
-   int n = MathMin(ArraySize(g_returnsA[pairIndex]), InpCorrelationPeriod);
+   int n = MathMin(InpCorrelationPeriod, MAX_LOOKBACK - 1);
    if(n < 2) return 0;
    
    double sumA = 0, sumB = 0;
@@ -491,8 +497,8 @@ double CalculatePearsonCorrelation(int pairIndex)
    
    for(int i = 0; i < n; i++)
    {
-      double retA = g_returnsA[pairIndex][i];
-      double retB = g_returnsB[pairIndex][i];
+      double retA = g_pairData[pairIndex].returnsA[i];
+      double retB = g_pairData[pairIndex].returnsB[i];
       
       sumA += retA;
       sumB += retB;
@@ -531,7 +537,7 @@ double CalculatePearsonCorrelation(int pairIndex)
 //+------------------------------------------------------------------+
 double CalculateHedgeRatio(int pairIndex)
 {
-   int n = MathMin(ArraySize(g_returnsA[pairIndex]), InpCorrelationPeriod);
+   int n = MathMin(InpCorrelationPeriod, MAX_LOOKBACK - 1);
    if(n < 2) return 1.0;
    
    double sumA = 0, sumB = 0;
@@ -540,8 +546,8 @@ double CalculateHedgeRatio(int pairIndex)
    
    for(int i = 0; i < n; i++)
    {
-      double retA = g_returnsA[pairIndex][i];
-      double retB = g_returnsB[pairIndex][i];
+      double retA = g_pairData[pairIndex].returnsA[i];
+      double retB = g_pairData[pairIndex].returnsB[i];
       
       sumA += retA;
       sumB += retB;
@@ -575,22 +581,23 @@ double CalculateHedgeRatio(int pairIndex)
 void UpdateSpreadHistory(int pairIndex)
 {
    double beta = g_pairs[pairIndex].hedgeRatio;
+   int period = MathMin(InpLookbackPeriod, MAX_LOOKBACK);
    
    // Calculate spread for each bar
-   for(int i = 0; i < InpLookbackPeriod; i++)
+   for(int i = 0; i < period; i++)
    {
-      double priceA = g_pricesA[pairIndex][i];
-      double priceB = g_pricesB[pairIndex][i];
+      double priceA = g_pairData[pairIndex].pricesA[i];
+      double priceB = g_pairData[pairIndex].pricesB[i];
       
       if(priceA > 0 && priceB > 0)
       {
          // Log-price spread (recommended)
-         g_spreadHistory[pairIndex][i] = MathLog(priceA) - beta * MathLog(priceB);
+         g_pairData[pairIndex].spreadHistory[i] = MathLog(priceA) - beta * MathLog(priceB);
       }
    }
    
    // Current spread
-   g_pairs[pairIndex].currentSpread = g_spreadHistory[pairIndex][0];
+   g_pairs[pairIndex].currentSpread = g_pairData[pairIndex].spreadHistory[0];
    
    // Calculate spread mean and std dev
    CalculateSpreadMeanStdDev(pairIndex);
@@ -601,13 +608,13 @@ void UpdateSpreadHistory(int pairIndex)
 //+------------------------------------------------------------------+
 void CalculateSpreadMeanStdDev(int pairIndex)
 {
-   int n = InpLookbackPeriod;
+   int n = MathMin(InpLookbackPeriod, MAX_LOOKBACK);
    double sum = 0;
    
    // Calculate mean
    for(int i = 0; i < n; i++)
    {
-      sum += g_spreadHistory[pairIndex][i];
+      sum += g_pairData[pairIndex].spreadHistory[i];
    }
    double mean = sum / n;
    g_pairs[pairIndex].spreadMean = mean;
@@ -616,7 +623,7 @@ void CalculateSpreadMeanStdDev(int pairIndex)
    double sumSqDiff = 0;
    for(int i = 0; i < n; i++)
    {
-      double diff = g_spreadHistory[pairIndex][i] - mean;
+      double diff = g_pairData[pairIndex].spreadHistory[i] - mean;
       sumSqDiff += diff * diff;
    }
    g_pairs[pairIndex].spreadStdDev = MathSqrt(sumSqDiff / n);
