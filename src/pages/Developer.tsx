@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
+import { Progress } from '@/components/ui/progress';
 import {
   Dialog,
   DialogContent,
@@ -21,10 +22,12 @@ import {
 import CodeBlock from '@/components/CodeBlock';
 import MQL5CodeTemplate from '@/components/MQL5CodeTemplate';
 import EconomicCalendar from '@/components/EconomicCalendar';
+import AIAnalysisCard from '@/components/AIAnalysisCard';
 import { 
   LogOut,
   Code2,
   TrendingUp,
+  TrendingDown,
   FileCode,
   RefreshCw,
   Download,
@@ -41,7 +44,10 @@ import {
   Sparkles,
   Activity,
   Radio,
-  Zap
+  Zap,
+  BarChart3,
+  Eye,
+  Minus
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 
@@ -55,6 +61,27 @@ interface TradingSystem {
   accounts_count?: number;
 }
 
+interface AIDashboardData {
+  pairs: {
+    symbol: string;
+    timeframe: string;
+    analysis: any;
+    candles: any[];
+    indicators: any[];
+    has_data: boolean;
+  }[];
+  summary: {
+    total_pairs: number;
+    pairs_with_analysis: number;
+    pairs_with_data: number;
+    tradable_pairs: number;
+    overall_bias: string;
+    avg_bullish: number;
+    avg_bearish: number;
+    avg_sideways: number;
+  };
+}
+
 const Developer = () => {
   const navigate = useNavigate();
   const { user, loading, signOut, role } = useAuth();
@@ -63,6 +90,12 @@ const Developer = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [selectedSystem, setSelectedSystem] = useState<TradingSystem | null>(null);
+  
+  // AI Dashboard state
+  const [aiDashboardData, setAiDashboardData] = useState<AIDashboardData | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [expandedPair, setExpandedPair] = useState<string | null>(null);
+  const [selectedTimeframe, setSelectedTimeframe] = useState('H1');
   
   // Dialog states
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -125,6 +158,62 @@ const Developer = () => {
       setIsLoading(false);
     }
   };
+
+  // Fetch AI Dashboard Data
+  const fetchAIDashboardData = useCallback(async () => {
+    setAiLoading(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('get-ai-dashboard-data', {
+        body: { 
+          timeframe: selectedTimeframe,
+          candle_limit: 100
+        }
+      });
+
+      if (error) throw error;
+      if (data?.success) {
+        setAiDashboardData(data);
+      }
+    } catch (error) {
+      console.error('Error fetching AI dashboard data:', error);
+      toast({
+        title: "Error",
+        description: "Failed to load AI dashboard data",
+        variant: "destructive",
+      });
+    } finally {
+      setAiLoading(false);
+    }
+  }, [selectedTimeframe, toast]);
+
+  // Fetch AI data when tab is opened or timeframe changes
+  useEffect(() => {
+    if (user && isDeveloper) {
+      fetchAIDashboardData();
+    }
+  }, [user, isDeveloper, fetchAIDashboardData]);
+
+  // Real-time subscription for AI analysis updates
+  useEffect(() => {
+    const channel = supabase
+      .channel('ai-analysis-updates')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'ai_analysis_cache'
+        },
+        () => {
+          fetchAIDashboardData();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [fetchAIDashboardData])
 
   const handleSignOut = async () => {
     await signOut();
@@ -565,275 +654,230 @@ enum ENUM_BB_MA_TYPE
 
           {/* AI Analysis Tab */}
           <TabsContent value="ai" className="space-y-6">
-            {/* AI Overview */}
+            {/* Live Dashboard Header */}
             <Card className="border-primary/30 bg-gradient-to-br from-primary/5 to-background">
               <CardHeader>
-                <div className="flex items-center gap-3">
-                  <div className="p-3 rounded-xl bg-primary/20">
-                    <Brain className="w-6 h-6 text-primary" />
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="p-3 rounded-xl bg-primary/20">
+                      <Brain className="w-6 h-6 text-primary" />
+                    </div>
+                    <div>
+                      <CardTitle className="flex items-center gap-2">
+                        AI Market Bias Dashboard
+                        <Badge variant="outline" className="bg-green-500/20 text-green-400 border-green-500">
+                          Live
+                        </Badge>
+                      </CardTitle>
+                      <CardDescription>
+                        ดูชาร์ทและผลวิเคราะห์ AI แบบ Real-time สำหรับแต่ละ Currency Pair
+                      </CardDescription>
+                    </div>
                   </div>
-                  <div>
-                    <CardTitle className="flex items-center gap-2">
-                      AI Market Bias Analysis
-                      <Badge variant="outline" className="bg-green-500/20 text-green-400 border-green-500">
-                        Active
-                      </Badge>
-                    </CardTitle>
-                    <CardDescription>
-                      ระบบ AI วิเคราะห์ Market Bias เพื่อระบุทิศทางที่ได้เปรียบ (ไม่ใช่ Signal)
-                    </CardDescription>
+                  <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1 bg-muted rounded-lg p-1">
+                      {['H1', 'H4'].map((tf) => (
+                        <Button
+                          key={tf}
+                          variant={selectedTimeframe === tf ? 'default' : 'ghost'}
+                          size="sm"
+                          onClick={() => setSelectedTimeframe(tf)}
+                        >
+                          {tf}
+                        </Button>
+                      ))}
+                    </div>
+                    <Button 
+                      variant="outline" 
+                      size="sm"
+                      onClick={fetchAIDashboardData}
+                      disabled={aiLoading}
+                    >
+                      <RefreshCw className={`w-4 h-4 mr-2 ${aiLoading ? 'animate-spin' : ''}`} />
+                      Refresh
+                    </Button>
                   </div>
                 </div>
               </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="p-4 rounded-lg bg-yellow-500/10 border border-yellow-500/30">
-                  <h4 className="font-medium mb-2 flex items-center gap-2 text-yellow-400">
-                    <Sparkles className="w-4 h-4" />
-                    แนวคิดหลัก: AI เป็น Strategic Advisor
-                  </h4>
-                  <p className="text-sm text-muted-foreground">
-                    AI จะวิเคราะห์ว่าวันนี้มีโอกาสขึ้นกี่%, ลงกี่%, Sideways กี่% → ถ้าทิศทางใดมี &gt;70% EA จะเทรดเฉพาะฝั่งนั้น
-                    <br />
-                    <strong className="text-foreground">SMC + Price Action ยังเป็นตัวหา Entry ที่แม่นยำ</strong> - AI แค่บอกว่าควรเล่นฝั่งไหน
+
+              {/* Overall Summary */}
+              {aiDashboardData?.summary && (
+                <CardContent>
+                  <div className="grid gap-4 md:grid-cols-5">
+                    <div className="p-4 rounded-lg bg-muted/50 text-center">
+                      <p className="text-2xl font-bold">{aiDashboardData.summary.total_pairs}</p>
+                      <p className="text-xs text-muted-foreground">Total Pairs</p>
+                    </div>
+                    <div className="p-4 rounded-lg bg-muted/50 text-center">
+                      <p className="text-2xl font-bold">{aiDashboardData.summary.pairs_with_data}</p>
+                      <p className="text-xs text-muted-foreground">With Chart Data</p>
+                    </div>
+                    <div className="p-4 rounded-lg bg-muted/50 text-center">
+                      <p className="text-2xl font-bold">{aiDashboardData.summary.pairs_with_analysis}</p>
+                      <p className="text-xs text-muted-foreground">With Analysis</p>
+                    </div>
+                    <div className="p-4 rounded-lg bg-green-500/20 text-center">
+                      <p className="text-2xl font-bold text-green-400">{aiDashboardData.summary.tradable_pairs}</p>
+                      <p className="text-xs text-muted-foreground">Tradable</p>
+                    </div>
+                    <div className={`p-4 rounded-lg text-center ${
+                      aiDashboardData.summary.overall_bias === 'bullish' ? 'bg-green-500/20' :
+                      aiDashboardData.summary.overall_bias === 'bearish' ? 'bg-red-500/20' : 'bg-yellow-500/20'
+                    }`}>
+                      <div className="flex items-center justify-center gap-2 text-2xl font-bold">
+                        {aiDashboardData.summary.overall_bias === 'bullish' ? (
+                          <TrendingUp className="w-6 h-6 text-green-400" />
+                        ) : aiDashboardData.summary.overall_bias === 'bearish' ? (
+                          <TrendingDown className="w-6 h-6 text-red-400" />
+                        ) : (
+                          <Minus className="w-6 h-6 text-yellow-400" />
+                        )}
+                        <span className="capitalize">{aiDashboardData.summary.overall_bias}</span>
+                      </div>
+                      <p className="text-xs text-muted-foreground">Overall Bias</p>
+                    </div>
+                  </div>
+
+                  {/* Average Probabilities */}
+                  <div className="mt-4 p-4 rounded-lg bg-muted/30 space-y-2">
+                    <p className="text-sm font-medium mb-2">Average Market Probability</p>
+                    <div className="flex items-center gap-2">
+                      <TrendingUp className="w-4 h-4 text-green-400" />
+                      <span className="text-sm w-16">Bullish</span>
+                      <Progress value={aiDashboardData.summary.avg_bullish} className="flex-1 h-2" />
+                      <span className="text-sm font-medium w-10 text-right">{aiDashboardData.summary.avg_bullish}%</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <TrendingDown className="w-4 h-4 text-red-400" />
+                      <span className="text-sm w-16">Bearish</span>
+                      <Progress value={aiDashboardData.summary.avg_bearish} className="flex-1 h-2 [&>div]:bg-red-500" />
+                      <span className="text-sm font-medium w-10 text-right">{aiDashboardData.summary.avg_bearish}%</span>
+                    </div>
+                  </div>
+                </CardContent>
+              )}
+            </Card>
+
+            {/* Loading State */}
+            {aiLoading && !aiDashboardData && (
+              <div className="flex items-center justify-center py-12">
+                <RefreshCw className="w-8 h-8 animate-spin text-primary" />
+                <span className="ml-3 text-muted-foreground">Loading AI Dashboard...</span>
+              </div>
+            )}
+
+            {/* No Data State */}
+            {!aiLoading && aiDashboardData && aiDashboardData.pairs.every(p => !p.has_data) && (
+              <Card>
+                <CardContent className="py-12 text-center">
+                  <BarChart3 className="w-16 h-16 mx-auto mb-4 text-muted-foreground/50" />
+                  <h3 className="text-lg font-medium mb-2">No Chart Data Available Yet</h3>
+                  <p className="text-sm text-muted-foreground max-w-md mx-auto">
+                    EA ยังไม่ได้ส่งข้อมูล Candle มา เมื่อ EA ทำงานและเรียก AI Analysis ข้อมูลจะปรากฏที่นี่อัตโนมัติ
                   </p>
-                </div>
+                </CardContent>
+              </Card>
+            )}
 
-                <div className="grid gap-4 md:grid-cols-2">
-                  <div className="p-4 rounded-lg bg-muted/50 border">
-                    <h4 className="font-medium mb-2 flex items-center gap-2">
-                      <Activity className="w-4 h-4 text-primary" />
-                      System Configuration
-                    </h4>
-                    <ul className="text-sm text-muted-foreground space-y-1">
-                      <li>• <strong>Pairs:</strong> EURUSD, GBPUSD, XAUUSD, USDJPY, AUDUSD</li>
-                      <li>• <strong>Analysis TF:</strong> H1 / H4</li>
-                      <li>• <strong>Threshold:</strong> 70% (ตั้งค่าได้)</li>
-                      <li>• <strong>Model:</strong> gemini-2.5-flash-lite</li>
-                    </ul>
-                  </div>
-                  <div className="p-4 rounded-lg bg-muted/50 border">
-                    <h4 className="font-medium mb-2 flex items-center gap-2">
-                      <Brain className="w-4 h-4 text-purple-400" />
-                      Analysis Factors
-                    </h4>
-                    <ul className="text-sm text-muted-foreground space-y-1">
-                      <li>• <strong>Market Structure:</strong> HH/HL/LH/LL patterns</li>
-                      <li>• <strong>Multi-TF Trend:</strong> H4 + Daily alignment</li>
-                      <li>• <strong>Key Levels:</strong> Support/Resistance</li>
-                      <li>• <strong>Patterns:</strong> Chart patterns recognition</li>
-                    </ul>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
+            {/* Pair Cards Grid */}
+            {aiDashboardData && (
+              <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+                {aiDashboardData.pairs.map((pair) => (
+                  <AIAnalysisCard
+                    key={pair.symbol}
+                    symbol={pair.symbol}
+                    timeframe={pair.timeframe}
+                    analysis={pair.analysis}
+                    candles={pair.candles}
+                    indicators={pair.indicators}
+                    isExpanded={expandedPair === pair.symbol}
+                    onToggleExpand={() => setExpandedPair(
+                      expandedPair === pair.symbol ? null : pair.symbol
+                    )}
+                  />
+                ))}
+              </div>
+            )}
 
-            {/* How It Works */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Sparkles className="w-5 h-5" />
-                  วิธีการทำงาน
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="grid gap-4 md:grid-cols-5">
-                  <div className="text-center p-4 rounded-lg bg-blue-500/10 border border-blue-500/30">
-                    <div className="w-10 h-10 mx-auto mb-2 rounded-full bg-blue-500/20 flex items-center justify-center">
-                      <span className="font-bold text-blue-400">1</span>
+            {/* How It Works - Collapsed by default */}
+            <details className="group">
+              <summary className="flex items-center gap-2 cursor-pointer text-sm text-muted-foreground hover:text-foreground">
+                <Eye className="w-4 h-4" />
+                <span>วิธีการทำงานของ AI Analysis</span>
+              </summary>
+              <Card className="mt-4">
+                <CardContent className="pt-6">
+                  <div className="grid gap-4 md:grid-cols-5">
+                    <div className="text-center p-4 rounded-lg bg-blue-500/10 border border-blue-500/30">
+                      <div className="w-10 h-10 mx-auto mb-2 rounded-full bg-blue-500/20 flex items-center justify-center">
+                        <span className="font-bold text-blue-400">1</span>
+                      </div>
+                      <p className="text-sm font-medium">New Candle</p>
+                      <p className="text-xs text-muted-foreground mt-1">EA ตรวจจับ candle ใหม่</p>
                     </div>
-                    <p className="text-sm font-medium">New Candle</p>
-                    <p className="text-xs text-muted-foreground mt-1">EA ตรวจจับ candle ใหม่</p>
-                  </div>
-                  <div className="text-center p-4 rounded-lg bg-green-500/10 border border-green-500/30">
-                    <div className="w-10 h-10 mx-auto mb-2 rounded-full bg-green-500/20 flex items-center justify-center">
-                      <span className="font-bold text-green-400">2</span>
+                    <div className="text-center p-4 rounded-lg bg-green-500/10 border border-green-500/30">
+                      <div className="w-10 h-10 mx-auto mb-2 rounded-full bg-green-500/20 flex items-center justify-center">
+                        <span className="font-bold text-green-400">2</span>
+                      </div>
+                      <p className="text-sm font-medium">Send Data</p>
+                      <p className="text-xs text-muted-foreground mt-1">ส่ง Candles + Indicators</p>
                     </div>
-                    <p className="text-sm font-medium">AI Analysis</p>
-                    <p className="text-xs text-muted-foreground mt-1">วิเคราะห์ Market Bias</p>
-                  </div>
-                  <div className="text-center p-4 rounded-lg bg-purple-500/10 border border-purple-500/30">
-                    <div className="w-10 h-10 mx-auto mb-2 rounded-full bg-purple-500/20 flex items-center justify-center">
-                      <span className="font-bold text-purple-400">3</span>
+                    <div className="text-center p-4 rounded-lg bg-purple-500/10 border border-purple-500/30">
+                      <div className="w-10 h-10 mx-auto mb-2 rounded-full bg-purple-500/20 flex items-center justify-center">
+                        <span className="font-bold text-purple-400">3</span>
+                      </div>
+                      <p className="text-sm font-medium">AI Analysis</p>
+                      <p className="text-xs text-muted-foreground mt-1">วิเคราะห์ Market Bias</p>
                     </div>
-                    <p className="text-sm font-medium">Probability</p>
-                    <p className="text-xs text-muted-foreground mt-1">คำนวณ % แต่ละทิศทาง</p>
-                  </div>
-                  <div className="text-center p-4 rounded-lg bg-yellow-500/10 border border-yellow-500/30">
-                    <div className="w-10 h-10 mx-auto mb-2 rounded-full bg-yellow-500/20 flex items-center justify-center">
-                      <span className="font-bold text-yellow-400">4</span>
+                    <div className="text-center p-4 rounded-lg bg-yellow-500/10 border border-yellow-500/30">
+                      <div className="w-10 h-10 mx-auto mb-2 rounded-full bg-yellow-500/20 flex items-center justify-center">
+                        <span className="font-bold text-yellow-400">4</span>
+                      </div>
+                      <p className="text-sm font-medium">Store & Cache</p>
+                      <p className="text-xs text-muted-foreground mt-1">บันทึก + แสดงผล Dashboard</p>
                     </div>
-                    <p className="text-sm font-medium">Check Threshold</p>
-                    <p className="text-xs text-muted-foreground mt-1">&gt;=70% = เทรดได้</p>
-                  </div>
-                  <div className="text-center p-4 rounded-lg bg-cyan-500/10 border border-cyan-500/30">
-                    <div className="w-10 h-10 mx-auto mb-2 rounded-full bg-cyan-500/20 flex items-center justify-center">
-                      <span className="font-bold text-cyan-400">5</span>
+                    <div className="text-center p-4 rounded-lg bg-cyan-500/10 border border-cyan-500/30">
+                      <div className="w-10 h-10 mx-auto mb-2 rounded-full bg-cyan-500/20 flex items-center justify-center">
+                        <span className="font-bold text-cyan-400">5</span>
+                      </div>
+                      <p className="text-sm font-medium">EA Trades</p>
+                      <p className="text-xs text-muted-foreground mt-1">เข้า Order ฝั่งที่ได้เปรียบ</p>
                     </div>
-                    <p className="text-sm font-medium">SMC Entry</p>
-                    <p className="text-xs text-muted-foreground mt-1">เข้า Order ฝั่งที่ได้เปรียบ</p>
                   </div>
-                </div>
-              </CardContent>
-            </Card>
+                </CardContent>
+              </Card>
+            </details>
 
-            {/* API Response Format */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Code2 className="w-5 h-5" />
-                  API Response Format
-                </CardTitle>
-                <CardDescription>
-                  รูปแบบ JSON ที่ AI จะส่งกลับ - Market Bias Probabilities
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <CodeBlock 
-                  language="json" 
-                  filename="ai-market-bias-response.json"
-                  code={`{
-  "success": true,
-  "timestamp": "2026-01-03T12:00:00Z",
-  "analysis": [
-    {
-      "symbol": "XAUUSD",
-      "bullish_probability": 72,
-      "bearish_probability": 18,
-      "sideways_probability": 10,
-      "dominant_bias": "bullish",
-      "threshold_met": true,
-      "market_structure": "HH-HL forming, bullish structure intact",
-      "trend_h4": "bullish",
-      "trend_daily": "bullish",
-      "key_levels": {"support": [2640.00, 2620.00], "resistance": [2680.00, 2700.00]},
-      "patterns": "Bull flag breakout pending",
-      "recommendation": "Only LONG",
-      "reasoning": "Strong bullish structure, price above EMAs, RSI healthy"
-    },
-    {
-      "symbol": "EURUSD",
-      "bullish_probability": 35,
-      "bearish_probability": 40,
-      "sideways_probability": 25,
-      "dominant_bias": "bearish",
-      "threshold_met": false,
-      "market_structure": "Ranging between levels",
-      "trend_h4": "bearish",
-      "trend_daily": "neutral",
-      "key_levels": {"support": [1.0800], "resistance": [1.0900]},
-      "patterns": "No clear pattern",
-      "recommendation": "No Trade",
-      "reasoning": "No dominant direction, probability below 70%"
-    }
-  ],
-  "overall_bias": "bullish",
-  "avg_bullish": 54,
-  "avg_bearish": 29,
-  "tradable_pairs": 3,
-  "total_pairs": 5,
-  "threshold": 70
-}`} 
-                />
-              </CardContent>
-            </Card>
-
-            {/* EA Usage Example */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <FileCode className="w-5 h-5" />
-                  การใช้งานใน EA
-                </CardTitle>
-                <CardDescription>
-                  ตัวอย่างโค้ดสำหรับใช้ Market Bias กรองทิศทางเทรด
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <CodeBlock 
-                  language="mql5" 
-                  filename="ea-market-bias-usage.mq5"
-                  code={`// ใน OnTick() - ใช้ AI Bias กรองทิศทางก่อน SMC Entry
-void OnTick()
-{
-   // ... license, news checks ...
-   
-   // Check market bias for current symbol
-   SMarketBias bias = GetMarketBias(_Symbol);
-   
-   // Display bias status
-   Comment("=== AI Market Bias ===\\n",
-           "Bullish: ", bias.bullishProb, "%\\n",
-           "Bearish: ", bias.bearishProb, "%\\n",
-           "Sideways: ", bias.sidewaysProb, "%\\n",
-           "Dominant: ", bias.dominantBias, "\\n",
-           "Can Trade: ", (bias.thresholdMet ? "YES" : "NO"), "\\n",
-           "Recommendation: ", bias.recommendation);
-   
-   // Only trade if threshold is met
-   if(!bias.thresholdMet)
-   {
-      // No clear direction - skip trading today
-      return;
-   }
-   
-   // SMC + Price Action finds entry, but only in allowed direction
-   if(bias.dominantBias == "bullish")
-   {
-      // Only look for BUY setups
-      if(SMC_FindBuySetup() && PA_ConfirmBuy())
-      {
-         trade.Buy(InpLotSize, _Symbol, 0, SL, TP, "AI Bias + SMC Buy");
-      }
-      // Ignore any SELL signals today
-   }
-   else if(bias.dominantBias == "bearish")
-   {
-      // Only look for SELL setups
-      if(SMC_FindSellSetup() && PA_ConfirmSell())
-      {
-         trade.Sell(InpLotSize, _Symbol, 0, SL, TP, "AI Bias + SMC Sell");
-      }
-      // Ignore any BUY signals today
-   }
-}
-
-// Helper function to check if direction is allowed
-bool CanTradeDirection(string symbol, string direction)
-{
-   SMarketBias bias = GetMarketBias(symbol);
-   
-   if(!bias.thresholdMet) return false;
-   
-   if(direction == "buy") return (bias.dominantBias == "bullish");
-   if(direction == "sell") return (bias.dominantBias == "bearish");
-   
-   return false;
-}`} 
-                />
-              </CardContent>
-            </Card>
-
-            {/* Edge Function Link */}
-            <Card>
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Radio className="w-5 h-5" />
-                  Edge Function Endpoint
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="p-4 rounded-lg bg-muted font-mono text-sm break-all">
-                  POST https://lkbhomsulgycxawwlnfh.supabase.co/functions/v1/ai-market-analysis
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <Badge variant="outline">x-api-key: EA_API_SECRET</Badge>
-                  <Badge variant="outline">Content-Type: application/json</Badge>
-                </div>
-                <p className="text-sm text-muted-foreground">
-                  Cache 1 ชั่วโมง | ส่ง threshold ใน request body เพื่อกำหนด % ขั้นต่ำ (default: 70)
-                </p>
-              </CardContent>
-            </Card>
+            {/* Technical Details - Collapsed */}
+            <details className="group">
+              <summary className="flex items-center gap-2 cursor-pointer text-sm text-muted-foreground hover:text-foreground">
+                <Code2 className="w-4 h-4" />
+                <span>API & Technical Details</span>
+              </summary>
+              <div className="mt-4 space-y-4">
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-base flex items-center gap-2">
+                      <Radio className="w-4 h-4" />
+                      Edge Function Endpoints
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    <div className="p-3 rounded-lg bg-muted font-mono text-xs break-all">
+                      POST /functions/v1/ai-market-analysis (EA → AI Analysis)
+                    </div>
+                    <div className="p-3 rounded-lg bg-muted font-mono text-xs break-all">
+                      POST /functions/v1/get-ai-dashboard-data (Dashboard Data)
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Badge variant="outline">x-api-key: EA_API_SECRET</Badge>
+                      <Badge variant="outline">Cache: 1 hour</Badge>
+                      <Badge variant="outline">Threshold: 70% default</Badge>
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+            </details>
           </TabsContent>
 
           {/* News Tab */}
