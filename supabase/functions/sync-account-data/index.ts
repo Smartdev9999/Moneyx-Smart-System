@@ -86,7 +86,50 @@ serve(async (req) => {
     
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    const syncData: SyncRequest = await req.json();
+    // Handle raw body that might have encoding issues from MQL5
+    let syncData: SyncRequest;
+    try {
+      const rawBody = await req.text();
+      console.log('[sync-account-data] Raw body length:', rawBody.length);
+      
+      // Clean the raw body - remove null bytes and fix encoding issues
+      let cleanBody = rawBody
+        .replace(/\x00/g, '')  // Remove null bytes
+        .replace(/[\x00-\x1F\x7F]/g, (c) => c === '\n' || c === '\r' || c === '\t' ? c : '')  // Remove control chars except newlines/tabs
+        .trim();
+      
+      // Try to parse as JSON
+      try {
+        syncData = JSON.parse(cleanBody);
+      } catch (parseError) {
+        console.error('[sync-account-data] JSON parse error, trying to fix:', parseError);
+        
+        // Try to extract account_number manually for basic sync
+        const accountMatch = cleanBody.match(/account_number["\s:]+["']?(\d+)/i);
+        const balanceMatch = cleanBody.match(/balance["\s:]+([0-9.]+)/i);
+        const equityMatch = cleanBody.match(/equity["\s:]+([0-9.]+)/i);
+        
+        if (accountMatch) {
+          syncData = {
+            account_number: accountMatch[1],
+            balance: balanceMatch ? parseFloat(balanceMatch[1]) : 0,
+            equity: equityMatch ? parseFloat(equityMatch[1]) : 0,
+            margin_level: 0,
+            drawdown: 0,
+            profit_loss: 0,
+          };
+          console.log('[sync-account-data] Recovered basic data from malformed JSON');
+        } else {
+          throw new Error('Could not extract account_number from malformed JSON');
+        }
+      }
+    } catch (e) {
+      console.error('[sync-account-data] Failed to read/parse body:', e);
+      return new Response(
+        JSON.stringify({ success: false, message: 'Invalid request body' } as SyncResponse),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
 
     const eventType = syncData.event_type || 'scheduled';
     console.log(`[sync-account-data] Syncing data for MT5 account: ${syncData.account_number} (event: ${eventType})`);
