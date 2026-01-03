@@ -243,6 +243,12 @@ int OnInit()
    // Set timer for dashboard updates
    EventSetTimer(1);
    
+   // Create dashboard panel
+   if(!MQLInfoInteger(MQL_TESTER) || MQLInfoInteger(MQL_VISUAL_MODE))
+   {
+      CreateDashboard();
+   }
+   
    PrintFormat("=== Statistical Arbitrage EA Initialized - %d Active Pairs ===", g_activePairs);
    return(INIT_SUCCEEDED);
 }
@@ -328,6 +334,8 @@ void SetupPair(int index, bool enabled, string symbolA, string symbolB)
 void OnDeinit(const int reason)
 {
    EventKillTimer();
+   ObjectsDeleteAll(0, "STAT_");
+   ChartRedraw();
    Print("=== Statistical Arbitrage EA Deinitialized ===");
 }
 
@@ -366,7 +374,7 @@ void OnTimer()
 {
    UpdatePairProfits();
    UpdateAccountStats();
-   // Dashboard display will be added in Phase 6
+   UpdateDashboard();
 }
 
 //+------------------------------------------------------------------+
@@ -1183,3 +1191,336 @@ void CloseAllPositions()
 }
 
 //+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//| ================ DASHBOARD PANEL ================                  |
+//+------------------------------------------------------------------+
+
+// Dashboard Constants
+#define PANEL_X          10
+#define PANEL_Y          30
+#define PANEL_WIDTH      680
+#define PANEL_HEIGHT     520
+#define HEADER_HEIGHT    30
+#define ROW_HEIGHT       20
+#define COL_WIDTH        60
+#define PAIR_COL_WIDTH   100
+
+// Dashboard Colors
+color COLOR_BG          = C'25,25,35';
+color COLOR_HEADER      = C'40,40,55';
+color COLOR_BORDER      = C'60,60,80';
+color COLOR_TEXT        = clrWhite;
+color COLOR_PROFIT      = clrLime;
+color COLOR_LOSS        = clrRed;
+color COLOR_ON          = clrLime;
+color COLOR_OFF         = clrGray;
+color COLOR_GOLD        = C'255,215,0';
+
+//+------------------------------------------------------------------+
+//| Create Dashboard Panel                                             |
+//+------------------------------------------------------------------+
+void CreateDashboard()
+{
+   string prefix = "STAT_";
+   
+   // Delete old objects
+   ObjectsDeleteAll(0, prefix);
+   
+   // Main Background
+   CreateRectangle(prefix + "BG", PANEL_X, PANEL_Y, PANEL_WIDTH, PANEL_HEIGHT, COLOR_BG, COLOR_BORDER);
+   
+   // Header - Logo
+   CreateLabel(prefix + "LOGO", PANEL_X + 10, PANEL_Y + 8, "MoneyX Statistical Arbitrage", COLOR_GOLD, 12, "Arial Bold");
+   CreateLabel(prefix + "VER", PANEL_X + PANEL_WIDTH - 60, PANEL_Y + 10, "v2.0", COLOR_TEXT, 9, "Arial");
+   
+   // Section: Trading Pairs Table
+   int tableY = PANEL_Y + HEADER_HEIGHT + 5;
+   
+   // Table Headers
+   int headerY = tableY;
+   CreateLabel(prefix + "H_PAIR", PANEL_X + 10, headerY, "Trading Pair", COLOR_GOLD, 9, "Arial Bold");
+   CreateLabel(prefix + "H_CORR", PANEL_X + 120, headerY, "Corr%", COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "H_ZSCORE", PANEL_X + 170, headerY, "Z-Score", COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "H_STATUS", PANEL_X + 230, headerY, "Status", COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "H_LOTA", PANEL_X + 290, headerY, "LotA", COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "H_LOTB", PANEL_X + 340, headerY, "LotB", COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "H_PL", PANEL_X + 390, headerY, "P/L", COLOR_TEXT, 8, "Arial");
+   
+   // Second column headers
+   CreateLabel(prefix + "H_PAIR2", PANEL_X + 450, headerY, "Trading Pair", COLOR_GOLD, 9, "Arial Bold");
+   CreateLabel(prefix + "H_CORR2", PANEL_X + 550, headerY, "Corr%", COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "H_STATUS2", PANEL_X + 600, headerY, "Status", COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "H_PL2", PANEL_X + 650, headerY, "P/L", COLOR_TEXT, 8, "Arial");
+   
+   // Separator line
+   CreateLine(prefix + "SEP1", PANEL_X + 5, tableY + ROW_HEIGHT, PANEL_X + PANEL_WIDTH - 5, tableY + ROW_HEIGHT, COLOR_BORDER);
+   
+   // Trading Pair Rows (10 pairs each column)
+   int rowY = tableY + ROW_HEIGHT + 5;
+   for(int i = 0; i < 10; i++)
+   {
+      CreatePairRow(prefix, i, PANEL_X + 10, rowY + i * ROW_HEIGHT);
+   }
+   for(int i = 10; i < 20; i++)
+   {
+      CreatePairRow2(prefix, i, PANEL_X + 450, rowY + (i - 10) * ROW_HEIGHT);
+   }
+   
+   // Account Summary Section
+   int summaryY = rowY + 10 * ROW_HEIGHT + 15;
+   CreateLine(prefix + "SEP2", PANEL_X + 5, summaryY - 5, PANEL_X + PANEL_WIDTH - 5, summaryY - 5, COLOR_BORDER);
+   
+   // Row 1: Balance, Total Lot, Daily Lot, Profit Daily
+   CreateLabel(prefix + "L_BAL", PANEL_X + 10, summaryY, "Balance:", COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "V_BAL", PANEL_X + 70, summaryY, "0.00", COLOR_PROFIT, 9, "Arial Bold");
+   
+   CreateLabel(prefix + "L_TLOT", PANEL_X + 170, summaryY, "Total Lot:", COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "V_TLOT", PANEL_X + 230, summaryY, "0.00", COLOR_TEXT, 9, "Arial");
+   
+   CreateLabel(prefix + "L_DLOT", PANEL_X + 320, summaryY, "Daily Lot:", COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "V_DLOT", PANEL_X + 380, summaryY, "0.00", COLOR_TEXT, 9, "Arial");
+   
+   CreateLabel(prefix + "L_DP", PANEL_X + 470, summaryY, "Daily P/L:", COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "V_DP", PANEL_X + 530, summaryY, "0.00", COLOR_PROFIT, 9, "Arial Bold");
+   
+   // Row 2: Equity, Total Orders, Weekly Lot, Profit Weekly
+   int row2Y = summaryY + ROW_HEIGHT;
+   CreateLabel(prefix + "L_EQ", PANEL_X + 10, row2Y, "Equity:", COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "V_EQ", PANEL_X + 70, row2Y, "0.00", COLOR_PROFIT, 9, "Arial Bold");
+   
+   CreateLabel(prefix + "L_TORD", PANEL_X + 170, row2Y, "Orders:", COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "V_TORD", PANEL_X + 230, row2Y, "0", COLOR_TEXT, 9, "Arial");
+   
+   CreateLabel(prefix + "L_WLOT", PANEL_X + 320, row2Y, "Weekly Lot:", COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "V_WLOT", PANEL_X + 380, row2Y, "0.00", COLOR_TEXT, 9, "Arial");
+   
+   CreateLabel(prefix + "L_WP", PANEL_X + 470, row2Y, "Weekly P/L:", COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "V_WP", PANEL_X + 530, row2Y, "0.00", COLOR_PROFIT, 9, "Arial Bold");
+   
+   // Row 3: Margin, DD%, Monthly Lot, Profit Monthly
+   int row3Y = row2Y + ROW_HEIGHT;
+   CreateLabel(prefix + "L_MG", PANEL_X + 10, row3Y, "Margin:", COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "V_MG", PANEL_X + 70, row3Y, "0.00", COLOR_TEXT, 9, "Arial");
+   
+   CreateLabel(prefix + "L_DD", PANEL_X + 170, row3Y, "DD%:", COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "V_DD", PANEL_X + 230, row3Y, "0.00%", COLOR_LOSS, 9, "Arial Bold");
+   
+   CreateLabel(prefix + "L_MLOT", PANEL_X + 320, row3Y, "Monthly Lot:", COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "V_MLOT", PANEL_X + 380, row3Y, "0.00", COLOR_TEXT, 9, "Arial");
+   
+   CreateLabel(prefix + "L_MP", PANEL_X + 470, row3Y, "Monthly P/L:", COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "V_MP", PANEL_X + 530, row3Y, "0.00", COLOR_PROFIT, 9, "Arial Bold");
+   
+   // Row 4: Total P/L, Max DD%
+   int row4Y = row3Y + ROW_HEIGHT;
+   CreateLabel(prefix + "L_TPL", PANEL_X + 10, row4Y, "Total P/L:", COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "V_TPL", PANEL_X + 70, row4Y, "0.00", COLOR_PROFIT, 10, "Arial Bold");
+   
+   CreateLabel(prefix + "L_MDD", PANEL_X + 170, row4Y, "Max DD%:", COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "V_MDD", PANEL_X + 230, row4Y, "0.00%", COLOR_LOSS, 9, "Arial Bold");
+   
+   CreateLabel(prefix + "L_PAIRS", PANEL_X + 320, row4Y, "Active Pairs:", COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "V_PAIRS", PANEL_X + 390, row4Y, IntegerToString(g_activePairs), COLOR_GOLD, 9, "Arial Bold");
+   
+   // License Status
+   CreateLabel(prefix + "L_LIC", PANEL_X + 470, row4Y, "License:", COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "V_LIC", PANEL_X + 530, row4Y, g_isLicenseValid ? "VALID" : "INVALID", g_isLicenseValid ? COLOR_ON : COLOR_LOSS, 9, "Arial Bold");
+   
+   ChartRedraw();
+}
+
+//+------------------------------------------------------------------+
+//| Create Pair Row (Column 1)                                         |
+//+------------------------------------------------------------------+
+void CreatePairRow(string prefix, int idx, int x, int y)
+{
+   string pairName = g_pairs[idx].symbolA + "-" + g_pairs[idx].symbolB;
+   string idxStr = IntegerToString(idx);
+   
+   CreateLabel(prefix + "P" + idxStr + "_NAME", x, y, pairName, COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_CORR", x + 110, y, "0%", COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_Z", x + 160, y, "0.00", COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_ST", x + 220, y, g_pairs[idx].enabled ? "On" : "Off", g_pairs[idx].enabled ? COLOR_ON : COLOR_OFF, 8, "Arial Bold");
+   CreateLabel(prefix + "P" + idxStr + "_LA", x + 280, y, "0.00", COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_LB", x + 330, y, "0.00", COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_PL", x + 380, y, "0.00", COLOR_TEXT, 8, "Arial");
+}
+
+//+------------------------------------------------------------------+
+//| Create Pair Row (Column 2)                                         |
+//+------------------------------------------------------------------+
+void CreatePairRow2(string prefix, int idx, int x, int y)
+{
+   string pairName = g_pairs[idx].symbolA + "-" + g_pairs[idx].symbolB;
+   string idxStr = IntegerToString(idx);
+   
+   CreateLabel(prefix + "P" + idxStr + "_NAME", x, y, pairName, COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_CORR", x + 100, y, "0%", COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_ST", x + 150, y, g_pairs[idx].enabled ? "On" : "Off", g_pairs[idx].enabled ? COLOR_ON : COLOR_OFF, 8, "Arial Bold");
+   CreateLabel(prefix + "P" + idxStr + "_PL", x + 200, y, "0.00", COLOR_TEXT, 8, "Arial");
+}
+
+//+------------------------------------------------------------------+
+//| Update Dashboard Values                                            |
+//+------------------------------------------------------------------+
+void UpdateDashboard()
+{
+   if(MQLInfoInteger(MQL_TESTER) && !MQLInfoInteger(MQL_VISUAL_MODE)) return;
+   
+   string prefix = "STAT_";
+   
+   // Update Account Info
+   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+   double margin = AccountInfoDouble(ACCOUNT_MARGIN);
+   double freeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
+   
+   // Calculate total P/L and lots
+   double totalPL = 0;
+   double totalLot = 0;
+   int totalOrders = 0;
+   
+   for(int i = 0; i < MAX_PAIRS; i++)
+   {
+      if(g_pairs[i].direction != 0)
+      {
+         totalPL += g_pairs[i].pairProfit;
+         totalLot += g_pairs[i].lotA + g_pairs[i].lotB;
+         totalOrders += 2;
+      }
+   }
+   
+   // Calculate drawdown
+   double ddPercent = 0;
+   if(g_maxEquity > 0)
+   {
+      ddPercent = ((g_maxEquity - equity) / g_maxEquity) * 100;
+      if(ddPercent < 0) ddPercent = 0;
+   }
+   
+   // Update Account Labels
+   UpdateLabel(prefix + "V_BAL", DoubleToString(balance, 2), balance >= 0 ? COLOR_PROFIT : COLOR_LOSS);
+   UpdateLabel(prefix + "V_EQ", DoubleToString(equity, 2), equity >= balance ? COLOR_PROFIT : COLOR_LOSS);
+   UpdateLabel(prefix + "V_MG", DoubleToString(margin, 2), COLOR_TEXT);
+   UpdateLabel(prefix + "V_TLOT", DoubleToString(totalLot, 2), COLOR_TEXT);
+   UpdateLabel(prefix + "V_TORD", IntegerToString(totalOrders), COLOR_TEXT);
+   UpdateLabel(prefix + "V_DD", DoubleToString(ddPercent, 2) + "%", ddPercent > InpMaxDrawdown ? COLOR_LOSS : COLOR_TEXT);
+   UpdateLabel(prefix + "V_TPL", DoubleToString(totalPL, 2), totalPL >= 0 ? COLOR_PROFIT : COLOR_LOSS);
+   
+   // Update Profit Labels
+   UpdateLabel(prefix + "V_DP", DoubleToString(g_dailyProfit, 2), g_dailyProfit >= 0 ? COLOR_PROFIT : COLOR_LOSS);
+   UpdateLabel(prefix + "V_WP", DoubleToString(g_weeklyProfit, 2), g_weeklyProfit >= 0 ? COLOR_PROFIT : COLOR_LOSS);
+   UpdateLabel(prefix + "V_MP", DoubleToString(g_monthlyProfit, 2), g_monthlyProfit >= 0 ? COLOR_PROFIT : COLOR_LOSS);
+   
+   // Update Each Pair
+   for(int i = 0; i < MAX_PAIRS; i++)
+   {
+      string idxStr = IntegerToString(i);
+      
+      // Correlation
+      double corr = g_pairs[i].correlation * 100;
+      UpdateLabel(prefix + "P" + idxStr + "_CORR", DoubleToString(corr, 0) + "%", 
+         MathAbs(corr) >= InpMinCorrelation * 100 ? COLOR_PROFIT : COLOR_LOSS);
+      
+      // Z-Score (only for column 1 pairs)
+      if(i < 10)
+      {
+         double z = g_pairs[i].zScore;
+         color zColor = COLOR_TEXT;
+         if(z > InpEntryZScore) zColor = COLOR_LOSS;
+         else if(z < -InpEntryZScore) zColor = COLOR_PROFIT;
+         UpdateLabel(prefix + "P" + idxStr + "_Z", DoubleToString(z, 2), zColor);
+         
+         // Lots
+         UpdateLabel(prefix + "P" + idxStr + "_LA", DoubleToString(g_pairs[i].lotA, 2), COLOR_TEXT);
+         UpdateLabel(prefix + "P" + idxStr + "_LB", DoubleToString(g_pairs[i].lotB, 2), COLOR_TEXT);
+      }
+      
+      // Status
+      string status = g_pairs[i].enabled ? "On" : "Off";
+      if(g_pairs[i].direction == 1) status = "LONG";
+      else if(g_pairs[i].direction == -1) status = "SHORT";
+      color stColor = g_pairs[i].enabled ? COLOR_ON : COLOR_OFF;
+      if(g_pairs[i].direction != 0) stColor = COLOR_GOLD;
+      UpdateLabel(prefix + "P" + idxStr + "_ST", status, stColor);
+      
+      // P/L
+      double pl = g_pairs[i].pairProfit;
+      UpdateLabel(prefix + "P" + idxStr + "_PL", DoubleToString(pl, 2), pl >= 0 ? COLOR_PROFIT : COLOR_LOSS);
+   }
+   
+   ChartRedraw();
+}
+
+//+------------------------------------------------------------------+
+//| Helper: Create Rectangle                                           |
+//+------------------------------------------------------------------+
+void CreateRectangle(string name, int x, int y, int width, int height, color bgColor, color borderColor)
+{
+   ObjectCreate(0, name, OBJ_RECTANGLE_LABEL, 0, 0, 0);
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
+   ObjectSetInteger(0, name, OBJPROP_XSIZE, width);
+   ObjectSetInteger(0, name, OBJPROP_YSIZE, height);
+   ObjectSetInteger(0, name, OBJPROP_BGCOLOR, bgColor);
+   ObjectSetInteger(0, name, OBJPROP_BORDER_COLOR, borderColor);
+   ObjectSetInteger(0, name, OBJPROP_BORDER_TYPE, BORDER_FLAT);
+   ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+   ObjectSetInteger(0, name, OBJPROP_BACK, false);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+}
+
+//+------------------------------------------------------------------+
+//| Helper: Create Label                                               |
+//+------------------------------------------------------------------+
+void CreateLabel(string name, int x, int y, string text, color clr, int fontSize, string font)
+{
+   ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
+   ObjectSetString(0, name, OBJPROP_TEXT, text);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
+   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, fontSize);
+   ObjectSetString(0, name, OBJPROP_FONT, font);
+   ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+   ObjectSetInteger(0, name, OBJPROP_ANCHOR, ANCHOR_LEFT_UPPER);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+}
+
+//+------------------------------------------------------------------+
+//| Helper: Update Label                                               |
+//+------------------------------------------------------------------+
+void UpdateLabel(string name, string text, color clr)
+{
+   if(ObjectFind(0, name) >= 0)
+   {
+      ObjectSetString(0, name, OBJPROP_TEXT, text);
+      ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Helper: Create Line                                                |
+//+------------------------------------------------------------------+
+void CreateLine(string name, int x1, int y1, int x2, int y2, color clr)
+{
+   ObjectCreate(0, name, OBJ_TREND, 0, 0, 0, 0, 0);
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x1);
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y1);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
+   ObjectSetInteger(0, name, OBJPROP_WIDTH, 1);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+   
+   // Use rectangle as line instead
+   ObjectDelete(0, name);
+   ObjectCreate(0, name, OBJ_RECTANGLE_LABEL, 0, 0, 0);
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x1);
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y1);
+   ObjectSetInteger(0, name, OBJPROP_XSIZE, x2 - x1);
+   ObjectSetInteger(0, name, OBJPROP_YSIZE, 1);
+   ObjectSetInteger(0, name, OBJPROP_BGCOLOR, clr);
+   ObjectSetInteger(0, name, OBJPROP_BORDER_TYPE, BORDER_FLAT);
+   ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+}
