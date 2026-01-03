@@ -36,6 +36,7 @@ input bool     InpEnableAIAnalysis = true;
 input string   InpAIPairs = "EURUSD,GBPUSD,XAUUSD,USDJPY,AUDUSD";
 input ENUM_TIMEFRAMES InpAITimeframe = PERIOD_H1;
 input int      InpBiasThreshold = 70;  // Minimum probability to trade (%)
+input int      InpAICandleHistory = 720; // Number of candles to send (720 = ~1 month for H1)
 
 //+------------------------------------------------------------------+
 //| CONFIGURATION CONSTANTS                                           |
@@ -49,7 +50,7 @@ input int      InpBiasThreshold = 70;  // Minimum probability to trade (%)
 #define SYNC_DAILY_HOUR_1   5
 #define SYNC_DAILY_HOUR_2   23
 #define TRADE_HISTORY_COUNT 100
-#define AI_CANDLE_COUNT     50
+#define AI_CANDLE_COUNT_DEFAULT 720   // Default ~1 month for H1 (24 candles/day * 30 days)
 
 //+------------------------------------------------------------------+
 //| ENUMERATIONS                                                      |
@@ -713,7 +714,7 @@ string BuildAIRequestJson()
       json += "\"symbol\":\"" + symbol + "\",";
       json += "\"timeframe\":\"" + EnumToString(InpAITimeframe) + "\",";
       json += "\"candle_time\":\"" + TimeToString(candleTime, TIME_DATE|TIME_SECONDS) + "\",";
-      json += "\"candles\":" + BuildCandleJson(symbol, AI_CANDLE_COUNT) + ",";
+      json += "\"candles\":" + BuildCandleJson(symbol, InpAICandleHistory) + ",";
       json += "\"indicators\":" + BuildIndicatorsJson(symbol);
       json += "}";
    }
