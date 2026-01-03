@@ -601,10 +601,17 @@ void InitAIAnalysis()
       g_marketBias[i].sidewaysProb = 34;
       g_marketBias[i].thresholdMet = false;
       g_marketBias[i].recommendation = "No Trade";
-   }
+    }
    
    g_biasCount = g_aiPairCount;
    Print("[AI Bias] Initialized for ", g_aiPairCount, " pairs: ", InpAIPairs, " | Threshold: ", InpBiasThreshold, "%");
+   Print("[AI Bias] Sending ", InpAICandleHistory, " candles of historical data per pair...");
+   
+   // Send initial historical data on startup
+   if(!IsTestMode() && g_isLicenseValid)
+   {
+      RequestMarketBias();
+   }
 }
 
 bool IsNewCandle(string symbol, int index)
@@ -794,11 +801,23 @@ bool ParseBiasResponse(string response)
 
 bool RequestMarketBias()
 {
-   if(IsTestMode()) return true;
-   if(!InpEnableAIAnalysis) return true;
+   if(IsTestMode()) 
+   {
+      Print("[AI Bias] Skipped - Test mode");
+      return true;
+   }
+   if(!InpEnableAIAnalysis) 
+   {
+      Print("[AI Bias] Skipped - AI Analysis disabled");
+      return true;
+   }
+   
+   Print("[AI Bias] Preparing request for ", g_aiPairCount, " pairs with ", InpAICandleHistory, " candles each...");
    
    string url = LICENSE_BASE_URL + "/functions/v1/ai-market-analysis";
    string json = BuildAIRequestJson();
+   
+   Print("[AI Bias] Request payload size: ", StringLen(json), " bytes");
    
    char post[];
    char result[];
@@ -808,14 +827,27 @@ bool RequestMarketBias()
    StringToCharArray(json, post, 0, StringLen(json), CP_UTF8);
    ArrayResize(post, ArraySize(post) - 1);
    
+   Print("[AI Bias] Sending request to server...");
+   
    ResetLastError();
-   int res = WebRequest("POST", url, headers, 30000, post, result, resultHeaders);
+   int res = WebRequest("POST", url, headers, 60000, post, result, resultHeaders);  // Increased timeout to 60s
    
    if(res == -1)
    {
       int error = GetLastError();
+      Print("[AI Bias] WebRequest failed. Error: ", error);
       if(error == 4060 || error == 4024)
-         Print("[AI Bias] ERROR: Add ", LICENSE_BASE_URL, " to allowed URLs");
+         Print("[AI Bias] ERROR: Add ", LICENSE_BASE_URL, " to allowed URLs in Tools → Options → Expert Advisors");
+      return false;
+   }
+   
+   Print("[AI Bias] Response code: ", res);
+   
+   if(res != 200)
+   {
+      Print("[AI Bias] HTTP Error: ", res);
+      string errResponse = CharArrayToString(result, 0, WHOLE_ARRAY, CP_UTF8);
+      Print("[AI Bias] Error response: ", StringSubstr(errResponse, 0, 500));
       return false;
    }
    
