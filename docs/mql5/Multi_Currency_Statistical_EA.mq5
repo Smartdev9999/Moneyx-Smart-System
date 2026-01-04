@@ -219,7 +219,7 @@ input double   InpMaxMarginPercent = 50.0;      // Max Margin Usage (%)
 input group "=== Risk Management ==="
 input double   InpMaxDrawdown = 20.0;           // Max Drawdown (%)
 input int      InpMaxHoldingBars = 0;           // Max Holding Time (0=Disabled)
-input double   InpEmergencyCloseDD = 30.0;      // Emergency Close Drawdown (%)
+input double   InpEmergencyCloseDD = 30.0;      // Emergency Close Drawdown (% , 0=Disable)
 input bool     InpAutoResumeAfterDD = true;     // Auto Resume After DD Recovery
 input double   InpResumeEquityPercent = 95.0;   // Resume When Equity Recovers to % of Peak
 
@@ -2734,12 +2734,22 @@ void CheckRiskLimits()
    double equity = AccountInfoDouble(ACCOUNT_EQUITY);
    
    if(balance <= 0) return;
+
+   // Safety: avoid divide-by-zero / uninitialized peaks
+   if(g_maxEquity <= 0)
+   {
+      g_maxEquity = equity;
+      g_peakEquityBeforeDD = equity;
+      return;
+   }
    
    double drawdown = ((g_maxEquity - equity) / g_maxEquity) * 100;
+   if(drawdown < 0) drawdown = 0;
    
    if(drawdown > g_maxDrawdownPercent) g_maxDrawdownPercent = drawdown;
    
-   if(drawdown >= InpEmergencyCloseDD)
+   // 0 = disabled (prevents "DD 0.00%" instant-close loops)
+   if(InpEmergencyCloseDD > 0 && drawdown >= InpEmergencyCloseDD)
    {
       PrintFormat("EMERGENCY: Drawdown %.2f%% exceeded limit - Closing ALL and PAUSING", drawdown);
       CloseAllBuySides();
