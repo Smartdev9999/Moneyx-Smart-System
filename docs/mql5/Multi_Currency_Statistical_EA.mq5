@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                Multi_Currency_Statistical_EA.mq5 |
-//|                      Statistical Arbitrage (Pairs Trading) v3.2.1 |
+//|                      Statistical Arbitrage (Pairs Trading) v3.2.2 |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "3.21"
+#property version   "3.22"
 #property strict
 #property description "Statistical Arbitrage / Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
-#property description "v3.2.1: Price Direct Correlation (like myfxbook)"
+#property description "v3.2.2: Dollar Value Beta for Cross-Rate Pairs"
 
 #include <Trade/Trade.mqh>
 
@@ -1249,32 +1249,111 @@ double CalculateHedgeRatio(int pairIndex)
 }
 
 //+------------------------------------------------------------------+
-//| Calculate Price-Based Beta (for Price Direct method)              |
+//| Get Dollar Value per 1 Standard Lot for a symbol (v3.2.2)         |
+//| Normalizes prices to USD value for accurate Beta calculation      |
+//| XXXUSD pairs: value = price * contract_size (already in USD)      |
+//| USDXXX pairs: value = contract_size (base is USD)                 |
+//| Cross pairs: value = price * contract_size * XXXUSD rate          |
+//+------------------------------------------------------------------+
+double GetDollarValuePerLot(string symbol, double price)
+{
+   double contractSize = SymbolInfoDouble(symbol, SYMBOL_TRADE_CONTRACT_SIZE);
+   if(contractSize == 0) contractSize = 100000; // Default to standard lot
+   
+   string base = StringSubstr(symbol, 0, 3);   // First 3 chars (e.g., "GBP")
+   string quote = StringSubstr(symbol, 3, 3);  // Last 3 chars (e.g., "USD")
+   
+   // Case 1: Quote currency is USD (e.g., GBPUSD, EURUSD)
+   // Dollar value = price * contract_size
+   if(quote == "USD")
+   {
+      return price * contractSize;  // e.g., 1.26 * 100000 = 126,000 USD
+   }
+   
+   // Case 2: Base currency is USD (e.g., USDJPY, USDCHF)  
+   // Dollar value = contract_size (1 lot = 100,000 USD)
+   if(base == "USD")
+   {
+      return contractSize;  // e.g., 100000 USD
+   }
+   
+   // Case 3: Cross pair (e.g., GBPJPY, EURJPY, EURGBP)
+   // Need to convert base currency to USD using XXXUSD rate
+   string baseUsdPair = base + "USD";
+   double baseUsdRate = 0;
+   
+   if(SymbolSelect(baseUsdPair, true))
+   {
+      baseUsdRate = SymbolInfoDouble(baseUsdPair, SYMBOL_BID);
+   }
+   
+   if(baseUsdRate > 0)
+   {
+      return baseUsdRate * contractSize;  // e.g., GBPUSD(1.26) * 100000 = 126,000 USD
+   }
+   
+   // Fallback: Try USDXXX pair and invert
+   string usdBasePair = "USD" + base;
+   double usdBaseRate = 0;
+   
+   if(SymbolSelect(usdBasePair, true))
+   {
+      usdBaseRate = SymbolInfoDouble(usdBasePair, SYMBOL_BID);
+   }
+   
+   if(usdBaseRate > 0)
+   {
+      return (1.0 / usdBaseRate) * contractSize;
+   }
+   
+   // Last fallback: use price as-is (may be inaccurate for some exotic pairs)
+   return price * contractSize;
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Price-Based Beta with Dollar Value Normalization        |
+//| v3.2.2: Uses Dollar Value to handle Cross-Rate Pairs correctly   |
 //+------------------------------------------------------------------+
 double CalculatePriceBasedBeta(int pairIndex)
 {
    int n = MathMin(InpCorrBars, MAX_LOOKBACK);
    if(n < 10) return 1.0;
    
+   string symbolA = g_pairs[pairIndex].symbolA;
+   string symbolB = g_pairs[pairIndex].symbolB;
+   
    double sumA = 0, sumB = 0;
    double sumA2 = 0;
    double sumAB = 0;
+   
+   // For debug: store first and last dollar values
+   double firstDollarA = 0, firstDollarB = 0;
    
    for(int i = 0; i < n; i++)
    {
       double priceA = g_pairData[pairIndex].pricesA[i];
       double priceB = g_pairData[pairIndex].pricesB[i];
       
-      sumA += priceA;
-      sumB += priceB;
-      sumA2 += priceA * priceA;
-      sumAB += priceA * priceB;
+      // Convert to Dollar Value for normalization (v3.2.2)
+      double dollarA = GetDollarValuePerLot(symbolA, priceA);
+      double dollarB = GetDollarValuePerLot(symbolB, priceB);
+      
+      if(i == 0)
+      {
+         firstDollarA = dollarA;
+         firstDollarB = dollarB;
+      }
+      
+      sumA += dollarA;
+      sumB += dollarB;
+      sumA2 += dollarA * dollarA;
+      sumAB += dollarA * dollarB;
    }
    
    double meanA = sumA / n;
    double meanB = sumB / n;
    
-   // Beta = Cov(A,B) / Var(A)
+   // Beta = Cov(A,B) / Var(A) using Dollar Values
    double covariance = (sumAB / n) - (meanA * meanB);
    double varianceA = (sumA2 / n) - (meanA * meanA);
    
@@ -1286,10 +1365,12 @@ double CalculatePriceBasedBeta(int pairIndex)
    if(beta < 0.1) beta = 0.1;
    if(beta > 10.0) beta = 10.0;
    
-   if(InpDebugMode && pairIndex == 0)
+   if(InpDebugMode && pairIndex < 3)
    {
-      PrintFormat("Pair 1 [PRICE] Beta: cov=%.10f, varA=%.10f, beta=%.4f", 
-                  covariance, varianceA, beta);
+      PrintFormat("Pair %d [DOLLAR_VALUE] %s: $%.0f/lot, %s: $%.0f/lot", 
+                  pairIndex + 1, symbolA, firstDollarA, symbolB, firstDollarB);
+      PrintFormat("Pair %d [DOLLAR_VALUE] Beta: cov=%.4f, varA=%.4f, beta=%.4f", 
+                  pairIndex + 1, covariance, varianceA, beta);
    }
    
    return beta;
