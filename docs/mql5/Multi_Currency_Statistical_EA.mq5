@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                Multi_Currency_Statistical_EA.mq5 |
-//|                      Statistical Arbitrage (Pairs Trading) v3.2.3 |
+//|                      Statistical Arbitrage (Pairs Trading) v3.2.4 |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "3.23"
+#property version   "3.24"
 #property strict
 #property description "Statistical Arbitrage / Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
-#property description "v3.2.3: Status syncs with Settings, Start All/Stop All buttons"
+#property description "v3.2.4: Backtest dashboard fix, Order count reset, Auto-Ready after close"
 
 #include <Trade/Trade.mqh>
 
@@ -588,6 +588,34 @@ void OnTick()
 {
    if(!g_isLicenseValid) return;
    if(g_isPaused) return;
+   
+   // === v3.2.4: Force dashboard update in Backtest Mode ===
+   bool isTester = MQLInfoInteger(MQL_TESTER);
+   if(isTester)
+   {
+      static datetime lastDashboardUpdate = 0;
+      if(TimeCurrent() - lastDashboardUpdate >= 5)  // Every 5 seconds in backtest
+      {
+         UpdatePairProfits();
+         UpdateDashboard();
+         lastDashboardUpdate = TimeCurrent();
+         
+         // Debug print for backtest
+         if(InpDebugMode)
+         {
+            for(int i = 0; i < MAX_PAIRS; i++)
+            {
+               if(g_pairs[i].enabled && g_pairs[i].dataValid)
+               {
+                  PrintFormat("[BT-DBG] Pair %d | Corr: %.2f%% | Z: %.2f | Buy: %d (Ord:%d) | Sell: %d (Ord:%d)",
+                     i+1, g_pairs[i].correlation * 100, g_pairs[i].zScore,
+                     g_pairs[i].directionBuy, g_pairs[i].orderCountBuy,
+                     g_pairs[i].directionSell, g_pairs[i].orderCountSell);
+               }
+            }
+         }
+      }
+   }
    
    // Check news filter
    if(InpEnableNewsFilter && IsNewsPaused())
@@ -1902,12 +1930,15 @@ bool CloseBuySide(int pairIndex)
       g_monthlyLot += g_pairs[pairIndex].lotBuyA + g_pairs[pairIndex].lotBuyB;
       g_allTimeLot += g_pairs[pairIndex].lotBuyA + g_pairs[pairIndex].lotBuyB;
       
-      // Reset Buy side state (back to Off, not Ready)
+      // v3.2.4: Reset Buy side state (back to Ready for auto-resume)
       g_pairs[pairIndex].ticketBuyA = 0;
       g_pairs[pairIndex].ticketBuyB = 0;
-      g_pairs[pairIndex].directionBuy = 0;
+      g_pairs[pairIndex].directionBuy = -1;  // Ready (auto-resume)
       g_pairs[pairIndex].profitBuy = 0;
       g_pairs[pairIndex].entryTimeBuy = 0;
+      g_pairs[pairIndex].orderCountBuy = 0;  // v3.2.4: Reset order count
+      g_pairs[pairIndex].lotBuyA = 0;        // v3.2.4: Reset lot
+      g_pairs[pairIndex].lotBuyB = 0;
       
       return true;
    }
@@ -1973,12 +2004,15 @@ bool CloseSellSide(int pairIndex)
       g_monthlyLot += g_pairs[pairIndex].lotSellA + g_pairs[pairIndex].lotSellB;
       g_allTimeLot += g_pairs[pairIndex].lotSellA + g_pairs[pairIndex].lotSellB;
       
-      // Reset Sell side state (back to Off, not Ready)
+      // v3.2.4: Reset Sell side state (back to Ready for auto-resume)
       g_pairs[pairIndex].ticketSellA = 0;
       g_pairs[pairIndex].ticketSellB = 0;
-      g_pairs[pairIndex].directionSell = 0;
+      g_pairs[pairIndex].directionSell = -1;  // Ready (auto-resume)
       g_pairs[pairIndex].profitSell = 0;
       g_pairs[pairIndex].entryTimeSell = 0;
+      g_pairs[pairIndex].orderCountSell = 0;  // v3.2.4: Reset order count
+      g_pairs[pairIndex].lotSellA = 0;        // v3.2.4: Reset lot
+      g_pairs[pairIndex].lotSellB = 0;
       
       return true;
    }
