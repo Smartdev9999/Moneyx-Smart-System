@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                Multi_Currency_Statistical_EA.mq5 |
-//|                      Statistical Arbitrage (Pairs Trading) v3.2.2 |
+//|                      Statistical Arbitrage (Pairs Trading) v3.2.3 |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "3.22"
+#property version   "3.23"
 #property strict
 #property description "Statistical Arbitrage / Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
-#property description "v3.2.2: Dollar Value Beta for Cross-Rate Pairs"
+#property description "v3.2.3: Status syncs with Settings, Start All/Stop All buttons"
 
 #include <Trade/Trade.mqh>
 
@@ -512,7 +512,8 @@ void SetupPair(int index, bool enabled, string symbolA, string symbolB)
    g_pairs[index].zScore = 0;
    
    // Buy Side initialization - directionBuy = -1 means Ready to trade
-   g_pairs[index].directionBuy = 0;
+   // v3.2.3: Set direction based on enabled status from Settings
+   g_pairs[index].directionBuy = enabled ? -1 : 0;  // -1=Ready when enabled, 0=Off when disabled
    g_pairs[index].ticketBuyA = 0;
    g_pairs[index].ticketBuyB = 0;
    g_pairs[index].lotBuyA = InpBaseLot;
@@ -524,7 +525,8 @@ void SetupPair(int index, bool enabled, string symbolA, string symbolB)
    g_pairs[index].entryTimeBuy = 0;
    
    // Sell Side initialization - directionSell = -1 means Ready to trade
-   g_pairs[index].directionSell = 0;
+   // v3.2.3: Set direction based on enabled status from Settings
+   g_pairs[index].directionSell = enabled ? -1 : 0;  // -1=Ready when enabled, 0=Off when disabled
    g_pairs[index].ticketSellA = 0;
    g_pairs[index].ticketSellB = 0;
    g_pairs[index].lotSellA = InpBaseLot;
@@ -663,12 +665,24 @@ void OnChartEvent(const int id,
          CloseAllBuySides();
          Print("Manual close ALL Buy Sides");
       }
-      // Handle Close All Sell button
-      else if(StringFind(sparam, "_CLOSE_ALL_SELL") >= 0)
-      {
-         CloseAllSellSides();
-         Print("Manual close ALL Sell Sides");
-      }
+       // Handle Close All Sell button
+       else if(StringFind(sparam, "_CLOSE_ALL_SELL") >= 0)
+       {
+          CloseAllSellSides();
+          Print("Manual close ALL Sell Sides");
+       }
+       // v3.2.3: Handle Start All button
+       else if(StringFind(sparam, "_START_ALL") >= 0)
+       {
+          StartAllPairs();
+          Print("Start All Pairs triggered");
+       }
+       // v3.2.3: Handle Stop All button
+       else if(StringFind(sparam, "_STOP_ALL") >= 0)
+       {
+          StopAllPairs();
+          Print("Stop All Pairs triggered");
+       }
       // Handle Status Buy Toggle clicks
       else if(StringFind(sparam, "_ST_BUY_") >= 0)
       {
@@ -744,6 +758,76 @@ void OnChartEvent(const int id,
          PrintFormat("Total Target updated to: %.2f", g_totalTarget);
       }
    }
+}
+
+//+------------------------------------------------------------------+
+//| Start All Pairs (v3.2.3)                                           |
+//+------------------------------------------------------------------+
+void StartAllPairs()
+{
+   int count = 0;
+   for(int i = 0; i < MAX_PAIRS; i++)
+   {
+      if(g_pairs[i].enabled && g_pairs[i].dataValid)
+      {
+         // Only start pairs that are Off (0), not Active (1)
+         if(g_pairs[i].directionBuy == 0)
+         {
+            g_pairs[i].directionBuy = -1;
+            count++;
+         }
+         if(g_pairs[i].directionSell == 0)
+         {
+            g_pairs[i].directionSell = -1;
+            count++;
+         }
+      }
+   }
+   PrintFormat("Start All: %d sides enabled (Ready)", count);
+   UpdateDashboard();
+   ChartRedraw();
+}
+
+//+------------------------------------------------------------------+
+//| Stop All Pairs (v3.2.3)                                            |
+//+------------------------------------------------------------------+
+void StopAllPairs()
+{
+   int stopped = 0;
+   int skipped = 0;
+   for(int i = 0; i < MAX_PAIRS; i++)
+   {
+      if(g_pairs[i].enabled)
+      {
+         // Only stop pairs that are Ready (-1), not Active (1)
+         if(g_pairs[i].directionBuy == -1)
+         {
+            g_pairs[i].directionBuy = 0;
+            stopped++;
+         }
+         else if(g_pairs[i].directionBuy == 1)
+         {
+            skipped++;
+         }
+         
+         if(g_pairs[i].directionSell == -1)
+         {
+            g_pairs[i].directionSell = 0;
+            stopped++;
+         }
+         else if(g_pairs[i].directionSell == 1)
+         {
+            skipped++;
+         }
+      }
+   }
+   PrintFormat("Stop All: %d sides stopped, %d skipped (Active trades)", stopped, skipped);
+   if(skipped > 0)
+   {
+      Print("Note: Close active trades first before stopping those sides");
+   }
+   UpdateDashboard();
+   ChartRedraw();
 }
 
 //+------------------------------------------------------------------+
@@ -2440,8 +2524,12 @@ void CreateAccountSummary(string prefix, int y)
    CreateLabel(prefix + "V_AP", box4X + 210, y + 38, "0.00", COLOR_PROFIT, 9, "Arial Bold");
    
    // Close All Buttons
-   CreateButton(prefix + "_CLOSE_ALL_BUY", box4X + 10, y + 54, 125, 16, "Close All Buy", COLOR_HEADER_BUY, clrWhite);
-   CreateButton(prefix + "_CLOSE_ALL_SELL", box4X + 145, y + 54, 130, 16, "Close All Sell", COLOR_HEADER_SELL, clrWhite);
+   CreateButton(prefix + "_CLOSE_ALL_BUY", box4X + 10, y + 54, 60, 16, "Close Buy", COLOR_HEADER_BUY, clrWhite);
+   CreateButton(prefix + "_CLOSE_ALL_SELL", box4X + 75, y + 54, 65, 16, "Close Sell", COLOR_HEADER_SELL, clrWhite);
+   
+   // v3.2.3: Start All / Stop All Buttons
+   CreateButton(prefix + "_START_ALL", box4X + 145, y + 54, 60, 16, "Start All", COLOR_ON, clrWhite);
+   CreateButton(prefix + "_STOP_ALL", box4X + 210, y + 54, 60, 16, "Stop All", COLOR_OFF, clrWhite);
 }
 
 //+------------------------------------------------------------------+
