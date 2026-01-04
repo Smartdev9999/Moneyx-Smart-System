@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                Multi_Currency_Statistical_EA.mq5 |
-//|                      Statistical Arbitrage (Pairs Trading) v3.2.9 |
+//|                 Statistical Arbitrage (Pairs Trading) v3.2.9 HF1 |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "3.29"
+#property version   "3.291"
 #property strict
 #property description "Statistical Arbitrage / Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
-#property description "v3.2.9: Profit Exit Fix + Averaging Guard + Dashboard Closed P/L"
+#property description "v3.2.9 HF1: Debug Log for Total vs Per-Pair Target + Dashboard Header Fix"
 
 #include <Trade/Trade.mqh>
 
@@ -3099,7 +3099,7 @@ double GetAveragingProfit(int pairIndex, string side)
 //+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
-//| Check Per-Pair Targets                                             |
+//| Check Per-Pair Targets (v3.2.9 - Added Debug Log)                  |
 //+------------------------------------------------------------------+
 void CheckPairTargets()
 {
@@ -3112,7 +3112,7 @@ void CheckPairTargets()
          g_pairs[i].directionBuy == 1 && 
          g_pairs[i].profitBuy >= g_pairs[i].targetBuy)
       {
-         PrintFormat("Pair %d Buy Side TARGET REACHED: %.2f >= %.2f",
+         PrintFormat(">>> PER-PAIR TARGET: Pair %d Buy Side TARGET REACHED: %.2f >= %.2f <<<",
             i + 1, g_pairs[i].profitBuy, g_pairs[i].targetBuy);
          CloseBuySide(i);
       }
@@ -3122,7 +3122,7 @@ void CheckPairTargets()
          g_pairs[i].directionSell == 1 && 
          g_pairs[i].profitSell >= g_pairs[i].targetSell)
       {
-         PrintFormat("Pair %d Sell Side TARGET REACHED: %.2f >= %.2f",
+         PrintFormat(">>> PER-PAIR TARGET: Pair %d Sell Side TARGET REACHED: %.2f >= %.2f <<<",
             i + 1, g_pairs[i].profitSell, g_pairs[i].targetSell);
          CloseSellSide(i);
       }
@@ -3130,22 +3130,42 @@ void CheckPairTargets()
 }
 
 //+------------------------------------------------------------------+
-//| Check Total Portfolio Target                                       |
+//| Check Total Portfolio Target (v3.2.9 - Added Debug Log)            |
 //+------------------------------------------------------------------+
 void CheckTotalTarget()
 {
    // v3.2.8: If Total Target <= 0, disable this feature
    if(g_totalTarget <= 0) return;
    
+   // v3.2.9: Debug log before checking total target
+   if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
+   {
+      if(g_totalCurrentProfit >= g_totalTarget * 0.9)  // Log when approaching target
+      {
+         PrintFormat("DEBUG TOTAL TARGET CHECK: TotalProfit=%.2f, TotalTarget=%.2f", 
+                     g_totalCurrentProfit, g_totalTarget);
+      }
+   }
+   
    if(g_totalCurrentProfit >= g_totalTarget)
    {
-      PrintFormat("TOTAL TARGET REACHED: %.2f >= %.2f - Closing ALL positions!",
+      PrintFormat(">>> TOTAL TARGET REACHED: %.2f >= %.2f - Closing ALL positions! <<<",
          g_totalCurrentProfit, g_totalTarget);
       
       for(int i = 0; i < MAX_PAIRS; i++)
       {
-         CloseBuySide(i);
-         CloseSellSide(i);
+         if(g_pairs[i].directionBuy == 1)
+         {
+            PrintFormat(">>> TOTAL TARGET: Closing Pair %d BUY (Profit: %.2f)", 
+                        i + 1, g_pairs[i].profitBuy);
+            CloseBuySide(i);
+         }
+         if(g_pairs[i].directionSell == 1)
+         {
+            PrintFormat(">>> TOTAL TARGET: Closing Pair %d SELL (Profit: %.2f)", 
+                        i + 1, g_pairs[i].profitSell);
+            CloseSellSide(i);
+         }
       }
    }
 }
@@ -3252,15 +3272,15 @@ void CreateDashboard()
                "Multi-Currency Statistical EA v3.2.9 - MoneyX Trading", 
                COLOR_GOLD, 10, "Arial Bold");
    
-   // v3.2.9: Increased header height to prevent overlap
+   // v3.2.9 Hotfix: Increased header height and spacing to prevent overlap
    int buyWidth = 395;
    int centerWidth = 390;
    int sellWidth = 395;
-   int headerHeight = 28;  // Main header height
-   int colHeaderHeight = 18;  // Dedicated space for column headers with background
+   int headerHeight = 30;  // Main header height (increased)
+   int colHeaderHeight = 20;  // Dedicated space for column headers with background (increased)
    int headerY = PANEL_Y + titleHeight;  // Shifted down by title
-   int colHeaderY = headerY + headerHeight + 2;  // Column headers BELOW main headers
-   int rowStartY = colHeaderY + colHeaderHeight + 2;
+   int colHeaderY = headerY + headerHeight + 4;  // Column headers BELOW main headers with more gap
+   int rowStartY = colHeaderY + colHeaderHeight + 4;  // Data rows start after column headers
    
    int buyStartX = PANEL_X + 10;
    int centerX = buyStartX + buyWidth + 5;
