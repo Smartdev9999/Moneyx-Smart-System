@@ -1311,13 +1311,14 @@ double GetDollarValuePerLot(string symbol, double price)
 }
 
 //+------------------------------------------------------------------+
-//| Calculate Price-Based Beta with Dollar Value Normalization        |
-//| v3.2.2: Uses Dollar Value to handle Cross-Rate Pairs correctly   |
+//| Calculate Price-Based Beta using Percentage Change                 |
+//| v3.2.2 Revised: Uses % change for proper scale normalization      |
+//| Note: Correlation still uses Price Direct (myfxbook style)        |
 //+------------------------------------------------------------------+
 double CalculatePriceBasedBeta(int pairIndex)
 {
    int n = MathMin(InpCorrBars, MAX_LOOKBACK);
-   if(n < 10) return 1.0;
+   if(n < 11) return 1.0;  // Need at least 11 bars for 10 changes
    
    string symbolA = g_pairs[pairIndex].symbolA;
    string symbolB = g_pairs[pairIndex].symbolB;
@@ -1325,51 +1326,52 @@ double CalculatePriceBasedBeta(int pairIndex)
    double sumA = 0, sumB = 0;
    double sumA2 = 0;
    double sumAB = 0;
+   int count = 0;
    
-   // For debug: store first and last dollar values
-   double firstDollarA = 0, firstDollarB = 0;
-   
-   for(int i = 0; i < n; i++)
+   // Calculate Beta from Percentage Changes (scale-independent)
+   for(int i = 0; i < n - 1; i++)
    {
-      double priceA = g_pairData[pairIndex].pricesA[i];
-      double priceB = g_pairData[pairIndex].pricesB[i];
+      double priceA_t = g_pairData[pairIndex].pricesA[i];
+      double priceA_t1 = g_pairData[pairIndex].pricesA[i + 1];
+      double priceB_t = g_pairData[pairIndex].pricesB[i];
+      double priceB_t1 = g_pairData[pairIndex].pricesB[i + 1];
       
-      // Convert to Dollar Value for normalization (v3.2.2)
-      double dollarA = GetDollarValuePerLot(symbolA, priceA);
-      double dollarB = GetDollarValuePerLot(symbolB, priceB);
+      if(priceA_t1 <= 0 || priceB_t1 <= 0) continue;
       
-      if(i == 0)
-      {
-         firstDollarA = dollarA;
-         firstDollarB = dollarB;
-      }
+      // Percentage change = (price_t - price_t1) / price_t1
+      double pctA = (priceA_t - priceA_t1) / priceA_t1;
+      double pctB = (priceB_t - priceB_t1) / priceB_t1;
       
-      sumA += dollarA;
-      sumB += dollarB;
-      sumA2 += dollarA * dollarA;
-      sumAB += dollarA * dollarB;
+      sumA += pctA;
+      sumB += pctB;
+      sumA2 += pctA * pctA;
+      sumAB += pctA * pctB;
+      count++;
    }
    
-   double meanA = sumA / n;
-   double meanB = sumB / n;
+   if(count < 10) return 1.0;
    
-   // Beta = Cov(A,B) / Var(A) using Dollar Values
-   double covariance = (sumAB / n) - (meanA * meanB);
-   double varianceA = (sumA2 / n) - (meanA * meanA);
+   double meanA = sumA / count;
+   double meanB = sumB / count;
+   
+   // Beta = Cov(A,B) / Var(A) from percentage changes
+   double covariance = (sumAB / count) - (meanA * meanB);
+   double varianceA = (sumA2 / count) - (meanA * meanA);
    
    if(varianceA <= 0) return 1.0;
    
+   // For negative correlation, we still want positive beta for hedge ratio
    double beta = MathAbs(covariance / varianceA);
    
    // Clamp beta to reasonable range (0.1 to 10.0)
    if(beta < 0.1) beta = 0.1;
    if(beta > 10.0) beta = 10.0;
    
-   if(InpDebugMode && pairIndex < 3)
+   if(InpDebugMode && pairIndex < 5)
    {
-      PrintFormat("Pair %d [DOLLAR_VALUE] %s: $%.0f/lot, %s: $%.0f/lot", 
-                  pairIndex + 1, symbolA, firstDollarA, symbolB, firstDollarB);
-      PrintFormat("Pair %d [DOLLAR_VALUE] Beta: cov=%.4f, varA=%.4f, beta=%.4f", 
+      PrintFormat("Pair %d [PCT_BETA] %s-%s: meanPctA=%.6f%%, meanPctB=%.6f%%", 
+                  pairIndex + 1, symbolA, symbolB, meanA * 100, meanB * 100);
+      PrintFormat("Pair %d [PCT_BETA] Cov=%.10f, VarA=%.10f, Beta=%.4f", 
                   pairIndex + 1, covariance, varianceA, beta);
    }
    
