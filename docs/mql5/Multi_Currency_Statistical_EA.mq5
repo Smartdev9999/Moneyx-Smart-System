@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                Multi_Currency_Statistical_EA.mq5 |
-//|                      Statistical Arbitrage (Pairs Trading) v3.2.4 |
+//|                      Statistical Arbitrage (Pairs Trading) v3.2.5 |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "3.24"
+#property version   "3.25"
 #property strict
 #property description "Statistical Arbitrage / Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
-#property description "v3.2.4: Backtest dashboard fix, Order count reset, Auto-Ready after close"
+#property description "v3.2.5: Fast Backtest Mode - Optimized for Strategy Tester performance"
 
 #include <Trade/Trade.mqh>
 
@@ -137,6 +137,13 @@ input color    InpColorProfit = C'0,150,0';         // Profit Color
 input color    InpColorLoss = C'200,0,0';           // Loss Color
 input color    InpColorOn = C'0,255,0';             // Status On Color
 input color    InpColorOff = C'128,128,128';        // Status Off Color
+
+input group "=== Fast Backtest Settings (v3.2.5) ==="
+input bool     InpFastBacktest = true;              // Enable Fast Backtest Mode
+input bool     InpDisableDashboardInTester = false; // Disable Dashboard in Tester (Fastest)
+input int      InpBacktestUiUpdateSec = 30;         // Dashboard Update Interval in Tester (sec)
+input bool     InpDisableDebugInTester = true;      // Disable Debug Print in Tester
+input int      InpBacktestLogInterval = 60;         // Summary Log Interval in Tester (sec, 0=off)
 
 input group "=== Lot Sizing (Dollar-Neutral) ==="
 input bool     InpUseDollarNeutral = true;      // Use Dollar-Neutral Sizing
@@ -345,16 +352,42 @@ int PANEL_HEIGHT;
 int ROW_HEIGHT;
 int FONT_SIZE;
 
+// v3.2.5: Fast Backtest Mode Variables
+bool g_isTesterMode = false;
+bool g_dashboardEnabled = true;
+datetime g_lastTesterDashboardUpdate = 0;
+datetime g_lastTesterLogTime = 0;
+
 //+------------------------------------------------------------------+
 //| Expert initialization function                                     |
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   Print("===== Statistical Arbitrage EA v3.2.1 =====");
+   // v3.2.5: Detect tester mode early
+   g_isTesterMode = MQLInfoInteger(MQL_TESTER) || MQLInfoInteger(MQL_OPTIMIZATION);
+   bool isVisualMode = MQLInfoInteger(MQL_VISUAL_MODE);
+   
+   // v3.2.5: Determine if dashboard should be enabled
+   g_dashboardEnabled = !g_isTesterMode || (isVisualMode && !InpDisableDashboardInTester);
+   
+   Print("===== Statistical Arbitrage EA v3.2.5 =====");
    Print("Correlation Method: ", EnumToString(InpCorrMethod));
    Print("Correlation Timeframe: ", EnumToString(InpCorrTimeframe));
    Print("Correlation Bars: ", InpCorrBars);
-   Print("Debug Mode: ", InpDebugMode ? "ON" : "OFF");
+   
+   // v3.2.5: Show backtest mode info
+   if(g_isTesterMode)
+   {
+      Print("=== STRATEGY TESTER MODE ===");
+      Print("Fast Backtest: ", InpFastBacktest ? "ON" : "OFF");
+      Print("Dashboard: ", g_dashboardEnabled ? "ENABLED" : "DISABLED (for speed)");
+      Print("UI Update Interval: ", InpBacktestUiUpdateSec, " sec");
+      Print("Debug in Tester: ", InpDisableDebugInTester ? "OFF" : "ON");
+   }
+   else
+   {
+      Print("Debug Mode: ", InpDebugMode ? "ON" : "OFF");
+   }
    Print("=========================================");
    
    // Initialize dashboard settings from inputs
@@ -416,36 +449,51 @@ int OnInit()
    g_weekStart = TimeCurrent();
    g_monthStart = TimeCurrent();
    
-   // Set timer for dashboard updates
-   EventSetTimer(1);
+   // v3.2.5: Set timer based on mode
+   if(g_isTesterMode && InpFastBacktest)
+   {
+      // In fast backtest mode, use longer timer or no timer
+      if(g_dashboardEnabled)
+      {
+         EventSetTimer(InpBacktestUiUpdateSec);  // Slower updates in tester
+      }
+      // else: no timer needed if dashboard disabled
+   }
+   else
+   {
+      EventSetTimer(1);  // Normal 1-second timer for live trading
+   }
    
    // Force initial data update before dashboard
    UpdateAllPairData();
    
-   // Print pair status summary
-   Print("===== Pair Status Summary =====");
-   for(int i = 0; i < MAX_PAIRS; i++)
+   // Print pair status summary (brief in tester mode)
+   if(!g_isTesterMode || !InpFastBacktest)
    {
-      if(g_pairs[i].enabled)
+      Print("===== Pair Status Summary =====");
+      for(int i = 0; i < MAX_PAIRS; i++)
       {
-         PrintFormat("Pair %02d: %s - %s | Data: %s | Corr: %.2f%%", 
-                     i + 1, 
-                     g_pairs[i].symbolA, 
-                     g_pairs[i].symbolB,
-                     g_pairs[i].dataValid ? "OK" : "N/A",
-                     g_pairs[i].correlation * 100);
+         if(g_pairs[i].enabled)
+         {
+            PrintFormat("Pair %02d: %s - %s | Data: %s | Corr: %.2f%%", 
+                        i + 1, 
+                        g_pairs[i].symbolA, 
+                        g_pairs[i].symbolB,
+                        g_pairs[i].dataValid ? "OK" : "N/A",
+                        g_pairs[i].correlation * 100);
+         }
       }
+      Print("================================");
    }
    PrintFormat("Total Enabled Pairs: %d", g_activePairs);
-   Print("================================");
    
-   // Create dashboard panel
-   if(!MQLInfoInteger(MQL_TESTER) || MQLInfoInteger(MQL_VISUAL_MODE))
+   // v3.2.5: Create dashboard based on mode
+   if(g_dashboardEnabled)
    {
       CreateDashboard();
    }
    
-   PrintFormat("=== Statistical Arbitrage EA v3.1 Initialized - %d Active Pairs ===", g_activePairs);
+   PrintFormat("=== Statistical Arbitrage EA v3.2.5 Initialized - %d Active Pairs ===", g_activePairs);
    return(INIT_SUCCEEDED);
 }
 
@@ -589,30 +637,39 @@ void OnTick()
    if(!g_isLicenseValid) return;
    if(g_isPaused) return;
    
-   // === v3.2.4: Force dashboard update in Backtest Mode ===
-   bool isTester = MQLInfoInteger(MQL_TESTER);
-   if(isTester)
+   // === v3.2.5: Optimized Backtest Mode Updates ===
+   if(g_isTesterMode && InpFastBacktest)
    {
-      static datetime lastDashboardUpdate = 0;
-      if(TimeCurrent() - lastDashboardUpdate >= 5)  // Every 5 seconds in backtest
+      datetime now = TimeCurrent();
+      
+      // Dashboard update with configurable interval
+      if(g_dashboardEnabled && (now - g_lastTesterDashboardUpdate >= InpBacktestUiUpdateSec))
       {
          UpdatePairProfits();
          UpdateDashboard();
-         lastDashboardUpdate = TimeCurrent();
-         
-         // Debug print for backtest
-         if(InpDebugMode)
+         g_lastTesterDashboardUpdate = now;
+      }
+      
+      // Summary log with configurable interval (less frequent than dashboard)
+      if(InpBacktestLogInterval > 0 && !InpDisableDebugInTester && InpDebugMode)
+      {
+         if(now - g_lastTesterLogTime >= InpBacktestLogInterval)
          {
+            // Print summary only (not per-pair details)
+            int activeBuys = 0, activeSells = 0;
+            double totalProfit = 0;
             for(int i = 0; i < MAX_PAIRS; i++)
             {
                if(g_pairs[i].enabled && g_pairs[i].dataValid)
                {
-                  PrintFormat("[BT-DBG] Pair %d | Corr: %.2f%% | Z: %.2f | Buy: %d (Ord:%d) | Sell: %d (Ord:%d)",
-                     i+1, g_pairs[i].correlation * 100, g_pairs[i].zScore,
-                     g_pairs[i].directionBuy, g_pairs[i].orderCountBuy,
-                     g_pairs[i].directionSell, g_pairs[i].orderCountSell);
+                  if(g_pairs[i].directionBuy == 1) activeBuys++;
+                  if(g_pairs[i].directionSell == 1) activeSells++;
+                  totalProfit += g_pairs[i].totalPairProfit;
                }
             }
+            PrintFormat("[BT-SUM] Time: %s | Active: Buy=%d Sell=%d | Profit: %.2f",
+               TimeToString(now, TIME_DATE|TIME_MINUTES), activeBuys, activeSells, totalProfit);
+            g_lastTesterLogTime = now;
          }
       }
    }
@@ -631,7 +688,12 @@ void OnTick()
    {
       g_lastCorrUpdate = corrTime;
       UpdateAllPairData();  // Recalculate correlation on new candle
-      PrintFormat("Correlation updated on new %s candle", EnumToString(InpCorrTimeframe));
+      
+      // v3.2.5: Only print correlation update in non-fast mode
+      if(!g_isTesterMode || !InpFastBacktest)
+      {
+         PrintFormat("Correlation updated on new %s candle", EnumToString(InpCorrTimeframe));
+      }
    }
    
    // Check for new trading candle
@@ -652,9 +714,17 @@ void OnTick()
 //+------------------------------------------------------------------+
 void OnTimer()
 {
+   // v3.2.5: Skip if dashboard disabled in tester
+   if(g_isTesterMode && !g_dashboardEnabled) return;
+   
    UpdatePairProfits();
    UpdateAccountStats();
-   UpdateDashboard();
+   
+   // v3.2.5: Skip ChartRedraw in fast backtest mode (done less frequently)
+   if(g_dashboardEnabled)
+   {
+      UpdateDashboard();
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -812,8 +882,13 @@ void StartAllPairs()
       }
    }
    PrintFormat("Start All: %d sides enabled (Ready)", count);
-   UpdateDashboard();
-   ChartRedraw();
+   
+   // v3.2.5: Only redraw if dashboard enabled
+   if(g_dashboardEnabled)
+   {
+      UpdateDashboard();
+      ChartRedraw();
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -854,8 +929,13 @@ void StopAllPairs()
    {
       Print("Note: Close active trades first before stopping those sides");
    }
-   UpdateDashboard();
-   ChartRedraw();
+   
+   // v3.2.5: Only redraw if dashboard enabled
+   if(g_dashboardEnabled)
+   {
+      UpdateDashboard();
+      ChartRedraw();
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -872,16 +952,22 @@ void ToggleBuySideStatus(int pairIndex)
    {
       // Enable - Ready to trade
       g_pairs[pairIndex].directionBuy = -1;
-      ObjectSetString(0, btnName, OBJPROP_TEXT, "On");
-      ObjectSetInteger(0, btnName, OBJPROP_BGCOLOR, COLOR_ON);
+      if(g_dashboardEnabled)
+      {
+         ObjectSetString(0, btnName, OBJPROP_TEXT, "On");
+         ObjectSetInteger(0, btnName, OBJPROP_BGCOLOR, COLOR_ON);
+      }
       PrintFormat("Pair %d Buy Side ENABLED (Ready)", pairIndex + 1);
    }
    else if(g_pairs[pairIndex].directionBuy == -1)
    {
       // Disable
       g_pairs[pairIndex].directionBuy = 0;
-      ObjectSetString(0, btnName, OBJPROP_TEXT, "Off");
-      ObjectSetInteger(0, btnName, OBJPROP_BGCOLOR, COLOR_OFF);
+      if(g_dashboardEnabled)
+      {
+         ObjectSetString(0, btnName, OBJPROP_TEXT, "Off");
+         ObjectSetInteger(0, btnName, OBJPROP_BGCOLOR, COLOR_OFF);
+      }
       PrintFormat("Pair %d Buy Side DISABLED", pairIndex + 1);
    }
    // If directionBuy == 1 (Active trade), show message
@@ -890,7 +976,7 @@ void ToggleBuySideStatus(int pairIndex)
       Print("Cannot toggle: Active trade on Pair ", pairIndex + 1, " Buy Side. Close trade first.");
    }
    
-   ChartRedraw();
+   if(g_dashboardEnabled) ChartRedraw();
 }
 
 //+------------------------------------------------------------------+
@@ -906,16 +992,22 @@ void ToggleSellSideStatus(int pairIndex)
    {
       // Enable - Ready to trade
       g_pairs[pairIndex].directionSell = -1;
-      ObjectSetString(0, btnName, OBJPROP_TEXT, "On");
-      ObjectSetInteger(0, btnName, OBJPROP_BGCOLOR, COLOR_ON);
+      if(g_dashboardEnabled)
+      {
+         ObjectSetString(0, btnName, OBJPROP_TEXT, "On");
+         ObjectSetInteger(0, btnName, OBJPROP_BGCOLOR, COLOR_ON);
+      }
       PrintFormat("Pair %d Sell Side ENABLED (Ready)", pairIndex + 1);
    }
    else if(g_pairs[pairIndex].directionSell == -1)
    {
       // Disable
       g_pairs[pairIndex].directionSell = 0;
-      ObjectSetString(0, btnName, OBJPROP_TEXT, "Off");
-      ObjectSetInteger(0, btnName, OBJPROP_BGCOLOR, COLOR_OFF);
+      if(g_dashboardEnabled)
+      {
+         ObjectSetString(0, btnName, OBJPROP_TEXT, "Off");
+         ObjectSetInteger(0, btnName, OBJPROP_BGCOLOR, COLOR_OFF);
+      }
       PrintFormat("Pair %d Sell Side DISABLED", pairIndex + 1);
    }
    else if(g_pairs[pairIndex].directionSell == 1)
@@ -923,7 +1015,7 @@ void ToggleSellSideStatus(int pairIndex)
       Print("Cannot toggle: Active trade on Pair ", pairIndex + 1, " Sell Side. Close trade first.");
    }
    
-   ChartRedraw();
+   if(g_dashboardEnabled) ChartRedraw();
 }
 
 //+------------------------------------------------------------------+
