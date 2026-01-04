@@ -1,20 +1,21 @@
 //+------------------------------------------------------------------+
 //|                                Multi_Currency_Statistical_EA.mq5 |
-//|                        Statistical Arbitrage (Pairs Trading) v3.0 |
+//|                        Statistical Arbitrage (Pairs Trading) v3.1 |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "3.0"
+#property version   "3.1"
 #property strict
 #property description "Statistical Arbitrage / Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
+#property description "v3.1: 30 Pairs, Dashboard Settings, Status Toggle"
 
 #include <Trade/Trade.mqh>
 
 //+------------------------------------------------------------------+
 //| CONSTANTS                                                          |
 //+------------------------------------------------------------------+
-#define MAX_PAIRS 20
+#define MAX_PAIRS 30
 #define MAX_LOOKBACK 200
 
 //+------------------------------------------------------------------+
@@ -30,7 +31,7 @@ struct PairData
 };
 
 //+------------------------------------------------------------------+
-//| PAIR INFO STRUCTURE (v3.0 - Separated Buy/Sell Sides)             |
+//| PAIR INFO STRUCTURE (v3.1 - Separated Buy/Sell Sides)             |
 //+------------------------------------------------------------------+
 struct PairInfo
 {
@@ -49,7 +50,7 @@ struct PairInfo
    double         zScore;            // Current Z-Score
    
    // === BUY SIDE (Main Order Buy) ===
-   int            directionBuy;      // 0=Off, 1=Active
+   int            directionBuy;      // 0=Off, -1=Ready, 1=Active
    ulong          ticketBuyA;        // Symbol A ticket for Buy side
    ulong          ticketBuyB;        // Symbol B ticket for Buy side
    double         lotBuyA;           // Lot for Symbol A (Buy side)
@@ -61,7 +62,7 @@ struct PairInfo
    datetime       entryTimeBuy;      // Entry time Buy side
    
    // === SELL SIDE (Main Order Sell) ===
-   int            directionSell;     // 0=Off, 1=Active
+   int            directionSell;     // 0=Off, -1=Ready, 1=Active
    ulong          ticketSellA;       // Symbol A ticket for Sell side
    ulong          ticketSellB;       // Symbol B ticket for Sell side
    double         lotSellA;          // Lot for Symbol A (Sell side)
@@ -86,6 +87,11 @@ input int      InpMagicNumber = 888888;         // Magic Number
 input int      InpSlippage = 30;                // Slippage (points)
 input ENUM_TIMEFRAMES InpTimeframe = PERIOD_H1; // Trading Timeframe
 
+input group "=== Correlation Calculation Settings ==="
+input ENUM_TIMEFRAMES InpCorrTimeframe = PERIOD_H1;   // Correlation Timeframe
+input int      InpCorrBars = 100;                      // Correlation Bars Count
+input bool     InpAutoDownloadData = true;             // Auto Download History Data
+
 input group "=== Statistical Settings ==="
 input int      InpLookbackPeriod = 100;         // Lookback Period (bars)
 input double   InpEntryZScore = 2.0;            // Entry Z-Score Threshold
@@ -100,6 +106,26 @@ input int      InpDefaultMaxOrderBuy = 5;       // Default Max Order (Buy Side)
 input int      InpDefaultMaxOrderSell = 5;      // Default Max Order (Sell Side)
 input double   InpDefaultTargetBuy = 10.0;      // Default Target (Buy Side) $
 input double   InpDefaultTargetSell = 10.0;     // Default Target (Sell Side) $
+
+input group "=== Dashboard Settings ==="
+input int      InpPanelX = 10;                  // Dashboard X Position
+input int      InpPanelY = 30;                  // Dashboard Y Position
+input int      InpPanelWidth = 1200;            // Dashboard Width
+input int      InpPanelHeight = 820;            // Dashboard Height (for 30 pairs)
+input int      InpRowHeight = 18;               // Row Height per Pair
+input int      InpFontSize = 8;                 // Font Size
+
+input group "=== Dashboard Colors ==="
+input color    InpColorBgDark = C'20,60,80';        // Background Color (Dark)
+input color    InpColorRowOdd = C'255,235,180';     // Row Color (Odd)
+input color    InpColorRowEven = C'255,245,200';    // Row Color (Even)
+input color    InpColorHeaderMain = C'50,50,80';    // Header Main Color
+input color    InpColorHeaderBuy = C'0,100,150';    // Header Buy Color
+input color    InpColorHeaderSell = C'150,60,60';   // Header Sell Color
+input color    InpColorProfit = C'0,150,0';         // Profit Color
+input color    InpColorLoss = C'200,0,0';           // Loss Color
+input color    InpColorOn = C'0,255,0';             // Status On Color
+input color    InpColorOff = C'128,128,128';        // Status Off Color
 
 input group "=== Lot Sizing (Dollar-Neutral) ==="
 input bool     InpUseDollarNeutral = true;      // Use Dollar-Neutral Sizing
@@ -194,6 +220,48 @@ input bool     InpEnablePair20 = false;         // Enable Pair 20
 input string   InpPair20_SymbolA = "CADCHF";    // Pair 20: Symbol A
 input string   InpPair20_SymbolB = "CADJPY";    // Pair 20: Symbol B
 
+input group "=== Pair 21-25 Configuration ==="
+input bool     InpEnablePair21 = false;         // Enable Pair 21
+input string   InpPair21_SymbolA = "AUDCHF";    // Pair 21: Symbol A
+input string   InpPair21_SymbolB = "NZDCHF";    // Pair 21: Symbol B
+
+input bool     InpEnablePair22 = false;         // Enable Pair 22
+input string   InpPair22_SymbolA = "GBPJPY";    // Pair 22: Symbol A
+input string   InpPair22_SymbolB = "EURJPY";    // Pair 22: Symbol B
+
+input bool     InpEnablePair23 = false;         // Enable Pair 23
+input string   InpPair23_SymbolA = "NZDCAD";    // Pair 23: Symbol A
+input string   InpPair23_SymbolB = "AUDCAD";    // Pair 23: Symbol B
+
+input bool     InpEnablePair24 = false;         // Enable Pair 24
+input string   InpPair24_SymbolA = "EURNZD";    // Pair 24: Symbol A
+input string   InpPair24_SymbolB = "GBPNZD";    // Pair 24: Symbol B
+
+input bool     InpEnablePair25 = false;         // Enable Pair 25
+input string   InpPair25_SymbolA = "NZDJPY";    // Pair 25: Symbol A
+input string   InpPair25_SymbolB = "CADJPY";    // Pair 25: Symbol B
+
+input group "=== Pair 26-30 Configuration ==="
+input bool     InpEnablePair26 = false;         // Enable Pair 26
+input string   InpPair26_SymbolA = "AUDSGD";    // Pair 26: Symbol A
+input string   InpPair26_SymbolB = "NZDSGD";    // Pair 26: Symbol B
+
+input bool     InpEnablePair27 = false;         // Enable Pair 27
+input string   InpPair27_SymbolA = "USDSGD";    // Pair 27: Symbol A
+input string   InpPair27_SymbolB = "USDCNH";    // Pair 27: Symbol B
+
+input bool     InpEnablePair28 = false;         // Enable Pair 28
+input string   InpPair28_SymbolA = "EURPLN";    // Pair 28: Symbol A
+input string   InpPair28_SymbolB = "USDPLN";    // Pair 28: Symbol B
+
+input bool     InpEnablePair29 = false;         // Enable Pair 29
+input string   InpPair29_SymbolA = "USDZAR";    // Pair 29: Symbol A
+input string   InpPair29_SymbolB = "EURZAR";    // Pair 29: Symbol B
+
+input bool     InpEnablePair30 = false;         // Enable Pair 30
+input string   InpPair30_SymbolA = "USDMXN";    // Pair 30: Symbol A
+input string   InpPair30_SymbolB = "EURMXN";    // Pair 30: Symbol B
+
 input group "=== License Settings ==="
 input string   InpApiUrl = "https://lkbhomsulgycxawwlnfh.supabase.co/functions/v1";  // API URL
 input string   InpApiKey = "moneyx-ea-secret-2024-secure-key-v1";  // API Key
@@ -211,6 +279,7 @@ bool g_isLicenseValid = false;
 bool g_isNewsPaused = false;
 bool g_isPaused = false;
 datetime g_lastCandleTime = 0;
+datetime g_lastCorrUpdate = 0;
 
 // Pairs Data
 PairInfo g_pairs[MAX_PAIRS];
@@ -239,41 +308,58 @@ double g_allTimeLot = 0;
 double g_allTimeProfit = 0;
 double g_maxDrawdownPercent = 0;
 
-//+------------------------------------------------------------------+
-//| DASHBOARD PANEL CONSTANTS                                          |
-//+------------------------------------------------------------------+
-#define PANEL_X          10
-#define PANEL_Y          30
-#define PANEL_WIDTH      1200
-#define PANEL_HEIGHT     620
-#define HEADER_HEIGHT    30
-#define ROW_HEIGHT       20
-#define SUMMARY_ROW_H    22
+// Dashboard Colors (from inputs)
+color COLOR_BG_DARK;
+color COLOR_BG_ROW_ODD;
+color COLOR_BG_ROW_EVEN;
+color COLOR_HEADER_MAIN;
+color COLOR_HEADER_BUY;
+color COLOR_HEADER_SELL;
+color COLOR_HEADER_TXT = clrWhite;
+color COLOR_TEXT = C'40,40,40';
+color COLOR_TEXT_WHITE = clrWhite;
+color COLOR_PROFIT;
+color COLOR_LOSS;
+color COLOR_ON;
+color COLOR_OFF;
+color COLOR_GOLD = C'255,180,0';
+color COLOR_ACTIVE = C'0,150,255';
+color COLOR_BORDER = C'100,100,100';
 
-// Dashboard Colors - v3.0 Theme
-color COLOR_BG_DARK     = C'20,60,80';
-color COLOR_BG_ROW_ODD  = C'255,235,180';
-color COLOR_BG_ROW_EVEN = C'255,245,200';
-color COLOR_HEADER_MAIN = C'50,50,80';
-color COLOR_HEADER_BUY  = C'0,100,150';
-color COLOR_HEADER_SELL = C'150,60,60';
-color COLOR_HEADER_TXT  = clrWhite;
-color COLOR_TEXT        = C'40,40,40';
-color COLOR_TEXT_WHITE  = clrWhite;
-color COLOR_PROFIT      = C'0,150,0';
-color COLOR_LOSS        = C'200,0,0';
-color COLOR_ON          = clrLime;
-color COLOR_OFF         = clrGray;
-color COLOR_GOLD        = C'255,180,0';
-color COLOR_ACTIVE      = C'0,150,255';
-color COLOR_BORDER      = C'100,100,100';
+// Dashboard Dimensions (from inputs)
+int PANEL_X;
+int PANEL_Y;
+int PANEL_WIDTH;
+int PANEL_HEIGHT;
+int ROW_HEIGHT;
+int FONT_SIZE;
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                     |
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   Print("=== Statistical Arbitrage EA v3.0 Initializing ===");
+   Print("=== Statistical Arbitrage EA v3.1 Initializing ===");
+   
+   // Initialize dashboard settings from inputs
+   PANEL_X = InpPanelX;
+   PANEL_Y = InpPanelY;
+   PANEL_WIDTH = InpPanelWidth;
+   PANEL_HEIGHT = InpPanelHeight;
+   ROW_HEIGHT = InpRowHeight;
+   FONT_SIZE = InpFontSize;
+   
+   // Initialize colors from inputs
+   COLOR_BG_DARK = InpColorBgDark;
+   COLOR_BG_ROW_ODD = InpColorRowOdd;
+   COLOR_BG_ROW_EVEN = InpColorRowEven;
+   COLOR_HEADER_MAIN = InpColorHeaderMain;
+   COLOR_HEADER_BUY = InpColorHeaderBuy;
+   COLOR_HEADER_SELL = InpColorHeaderSell;
+   COLOR_PROFIT = InpColorProfit;
+   COLOR_LOSS = InpColorLoss;
+   COLOR_ON = InpColorOn;
+   COLOR_OFF = InpColorOff;
    
    // Initialize trade object
    g_trade.SetExpertMagicNumber(InpMagicNumber);
@@ -323,18 +409,18 @@ int OnInit()
       CreateDashboard();
    }
    
-   PrintFormat("=== Statistical Arbitrage EA v3.0 Initialized - %d Active Pairs ===", g_activePairs);
+   PrintFormat("=== Statistical Arbitrage EA v3.1 Initialized - %d Active Pairs ===", g_activePairs);
    return(INIT_SUCCEEDED);
 }
 
 //+------------------------------------------------------------------+
-//| Initialize Trading Pairs                                           |
+//| Initialize Trading Pairs (30 pairs)                                |
 //+------------------------------------------------------------------+
 bool InitializePairs()
 {
    g_activePairs = 0;
    
-   // Setup all 20 pairs
+   // Setup all 30 pairs
    SetupPair(0, InpEnablePair1, InpPair1_SymbolA, InpPair1_SymbolB);
    SetupPair(1, InpEnablePair2, InpPair2_SymbolA, InpPair2_SymbolB);
    SetupPair(2, InpEnablePair3, InpPair3_SymbolA, InpPair3_SymbolB);
@@ -355,12 +441,22 @@ bool InitializePairs()
    SetupPair(17, InpEnablePair18, InpPair18_SymbolA, InpPair18_SymbolB);
    SetupPair(18, InpEnablePair19, InpPair19_SymbolA, InpPair19_SymbolB);
    SetupPair(19, InpEnablePair20, InpPair20_SymbolA, InpPair20_SymbolB);
+   SetupPair(20, InpEnablePair21, InpPair21_SymbolA, InpPair21_SymbolB);
+   SetupPair(21, InpEnablePair22, InpPair22_SymbolA, InpPair22_SymbolB);
+   SetupPair(22, InpEnablePair23, InpPair23_SymbolA, InpPair23_SymbolB);
+   SetupPair(23, InpEnablePair24, InpPair24_SymbolA, InpPair24_SymbolB);
+   SetupPair(24, InpEnablePair25, InpPair25_SymbolA, InpPair25_SymbolB);
+   SetupPair(25, InpEnablePair26, InpPair26_SymbolA, InpPair26_SymbolB);
+   SetupPair(26, InpEnablePair27, InpPair27_SymbolA, InpPair27_SymbolB);
+   SetupPair(27, InpEnablePair28, InpPair28_SymbolA, InpPair28_SymbolB);
+   SetupPair(28, InpEnablePair29, InpPair29_SymbolA, InpPair29_SymbolB);
+   SetupPair(29, InpEnablePair30, InpPair30_SymbolA, InpPair30_SymbolB);
    
    return (g_activePairs > 0);
 }
 
 //+------------------------------------------------------------------+
-//| Setup Individual Pair (v3.0 - with Buy/Sell defaults)             |
+//| Setup Individual Pair (v3.1 - with Buy/Sell defaults)             |
 //+------------------------------------------------------------------+
 void SetupPair(int index, bool enabled, string symbolA, string symbolB)
 {
@@ -378,7 +474,7 @@ void SetupPair(int index, bool enabled, string symbolA, string symbolB)
    g_pairs[index].currentSpread = 0;
    g_pairs[index].zScore = 0;
    
-   // Buy Side initialization
+   // Buy Side initialization - directionBuy = -1 means Ready to trade
    g_pairs[index].directionBuy = 0;
    g_pairs[index].ticketBuyA = 0;
    g_pairs[index].ticketBuyB = 0;
@@ -390,7 +486,7 @@ void SetupPair(int index, bool enabled, string symbolA, string symbolB)
    g_pairs[index].targetBuy = InpDefaultTargetBuy;
    g_pairs[index].entryTimeBuy = 0;
    
-   // Sell Side initialization
+   // Sell Side initialization - directionSell = -1 means Ready to trade
    g_pairs[index].directionSell = 0;
    g_pairs[index].ticketSellA = 0;
    g_pairs[index].ticketSellB = 0;
@@ -433,7 +529,7 @@ void OnDeinit(const int reason)
    EventKillTimer();
    ObjectsDeleteAll(0, "STAT_");
    ChartRedraw();
-   Print("=== Statistical Arbitrage EA v3.0 Deinitialized ===");
+   Print("=== Statistical Arbitrage EA v3.1 Deinitialized ===");
 }
 
 //+------------------------------------------------------------------+
@@ -452,13 +548,21 @@ void OnTick()
    }
    g_isNewsPaused = false;
    
-   // Check for new candle
+   // Check for new correlation timeframe candle (real-time update)
+   datetime corrTime = iTime(_Symbol, InpCorrTimeframe, 0);
+   if(corrTime != g_lastCorrUpdate)
+   {
+      g_lastCorrUpdate = corrTime;
+      UpdateAllPairData();  // Recalculate correlation on new candle
+      PrintFormat("Correlation updated on new %s candle", EnumToString(InpCorrTimeframe));
+   }
+   
+   // Check for new trading candle
    datetime currentTime = iTime(_Symbol, InpTimeframe, 0);
    if(currentTime == g_lastCandleTime) return;
    g_lastCandleTime = currentTime;
    
    // Main trading logic
-   UpdateAllPairData();
    AnalyzeAllPairs();
    ManageAllPositions();
    CheckPairTargets();
@@ -477,7 +581,7 @@ void OnTimer()
 }
 
 //+------------------------------------------------------------------+
-//| Chart Event Handler - Interactive Dashboard (v3.0)                 |
+//| Chart Event Handler - Interactive Dashboard (v3.1)                 |
 //+------------------------------------------------------------------+
 void OnChartEvent(const int id,
                   const long &lparam,
@@ -517,6 +621,24 @@ void OnChartEvent(const int id,
       {
          CloseAllSellSides();
          Print("Manual close ALL Sell Sides");
+      }
+      // Handle Status Buy Toggle clicks
+      else if(StringFind(sparam, "_ST_BUY_") >= 0)
+      {
+         int pairIndex = ExtractPairIndex(sparam, "_ST_BUY_");
+         if(pairIndex >= 0 && pairIndex < MAX_PAIRS && g_pairs[pairIndex].enabled)
+         {
+            ToggleBuySideStatus(pairIndex);
+         }
+      }
+      // Handle Status Sell Toggle clicks
+      else if(StringFind(sparam, "_ST_SELL_") >= 0)
+      {
+         int pairIndex = ExtractPairIndex(sparam, "_ST_SELL_");
+         if(pairIndex >= 0 && pairIndex < MAX_PAIRS && g_pairs[pairIndex].enabled)
+         {
+            ToggleSellSideStatus(pairIndex);
+         }
       }
    }
    
@@ -575,6 +697,74 @@ void OnChartEvent(const int id,
          PrintFormat("Total Target updated to: %.2f", g_totalTarget);
       }
    }
+}
+
+//+------------------------------------------------------------------+
+//| Toggle Buy Side Status (v3.1)                                      |
+//+------------------------------------------------------------------+
+void ToggleBuySideStatus(int pairIndex)
+{
+   string prefix = "STAT_";
+   string btnName = prefix + "_ST_BUY_" + IntegerToString(pairIndex);
+   
+   // Toggle: 0 (Off) -> -1 (Ready) -> 0 (Off)
+   // If active trade (1), cannot toggle off
+   if(g_pairs[pairIndex].directionBuy == 0)
+   {
+      // Enable - Ready to trade
+      g_pairs[pairIndex].directionBuy = -1;
+      ObjectSetString(0, btnName, OBJPROP_TEXT, "On");
+      ObjectSetInteger(0, btnName, OBJPROP_BGCOLOR, COLOR_ON);
+      PrintFormat("Pair %d Buy Side ENABLED (Ready)", pairIndex + 1);
+   }
+   else if(g_pairs[pairIndex].directionBuy == -1)
+   {
+      // Disable
+      g_pairs[pairIndex].directionBuy = 0;
+      ObjectSetString(0, btnName, OBJPROP_TEXT, "Off");
+      ObjectSetInteger(0, btnName, OBJPROP_BGCOLOR, COLOR_OFF);
+      PrintFormat("Pair %d Buy Side DISABLED", pairIndex + 1);
+   }
+   // If directionBuy == 1 (Active trade), show message
+   else if(g_pairs[pairIndex].directionBuy == 1)
+   {
+      Print("Cannot toggle: Active trade on Pair ", pairIndex + 1, " Buy Side. Close trade first.");
+   }
+   
+   ChartRedraw();
+}
+
+//+------------------------------------------------------------------+
+//| Toggle Sell Side Status (v3.1)                                     |
+//+------------------------------------------------------------------+
+void ToggleSellSideStatus(int pairIndex)
+{
+   string prefix = "STAT_";
+   string btnName = prefix + "_ST_SELL_" + IntegerToString(pairIndex);
+   
+   // Toggle: 0 (Off) -> -1 (Ready) -> 0 (Off)
+   if(g_pairs[pairIndex].directionSell == 0)
+   {
+      // Enable - Ready to trade
+      g_pairs[pairIndex].directionSell = -1;
+      ObjectSetString(0, btnName, OBJPROP_TEXT, "On");
+      ObjectSetInteger(0, btnName, OBJPROP_BGCOLOR, COLOR_ON);
+      PrintFormat("Pair %d Sell Side ENABLED (Ready)", pairIndex + 1);
+   }
+   else if(g_pairs[pairIndex].directionSell == -1)
+   {
+      // Disable
+      g_pairs[pairIndex].directionSell = 0;
+      ObjectSetString(0, btnName, OBJPROP_TEXT, "Off");
+      ObjectSetInteger(0, btnName, OBJPROP_BGCOLOR, COLOR_OFF);
+      PrintFormat("Pair %d Sell Side DISABLED", pairIndex + 1);
+   }
+   else if(g_pairs[pairIndex].directionSell == 1)
+   {
+      Print("Cannot toggle: Active trade on Pair ", pairIndex + 1, " Sell Side. Close trade first.");
+   }
+   
+   ChartRedraw();
 }
 
 //+------------------------------------------------------------------+
@@ -660,6 +850,26 @@ bool IsNewsPaused()
 //+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
+//| Download History Data (v3.1 - ensures data availability)           |
+//+------------------------------------------------------------------+
+bool DownloadHistoryData(string symbol, ENUM_TIMEFRAMES tf, int bars)
+{
+   MqlRates rates[];
+   ArraySetAsSeries(rates, true);
+   
+   // Request data from server
+   int copied = CopyRates(symbol, tf, 0, bars + 10, rates);
+   
+   if(copied < bars)
+   {
+      PrintFormat("Warning: Only %d bars available for %s on %s (requested %d)", 
+                  copied, symbol, EnumToString(tf), bars);
+      return false;
+   }
+   return true;
+}
+
+//+------------------------------------------------------------------+
 //| Update All Pair Data (Prices, Returns, Statistics)                 |
 //+------------------------------------------------------------------+
 void UpdateAllPairData()
@@ -668,7 +878,14 @@ void UpdateAllPairData()
    {
       if(!g_pairs[i].enabled) continue;
       
-      // Update prices
+      // Download history data first (v3.1)
+      if(InpAutoDownloadData)
+      {
+         DownloadHistoryData(g_pairs[i].symbolA, InpCorrTimeframe, InpCorrBars);
+         DownloadHistoryData(g_pairs[i].symbolB, InpCorrTimeframe, InpCorrBars);
+      }
+      
+      // Update prices using correlation timeframe
       UpdatePriceHistory(i);
       
       // Calculate log returns
@@ -712,18 +929,18 @@ void DetectCorrelationType(int pairIndex)
 }
 
 //+------------------------------------------------------------------+
-//| Update Price History for a Pair                                    |
+//| Update Price History for a Pair (v3.1 - uses InpCorrTimeframe)     |
 //+------------------------------------------------------------------+
 void UpdatePriceHistory(int pairIndex)
 {
    string symbolA = g_pairs[pairIndex].symbolA;
    string symbolB = g_pairs[pairIndex].symbolB;
    
-   int period = MathMin(InpLookbackPeriod, MAX_LOOKBACK);
+   int period = MathMin(InpCorrBars, MAX_LOOKBACK);
    for(int i = 0; i < period; i++)
    {
-      g_pairData[pairIndex].pricesA[i] = iClose(symbolA, InpTimeframe, i);
-      g_pairData[pairIndex].pricesB[i] = iClose(symbolB, InpTimeframe, i);
+      g_pairData[pairIndex].pricesA[i] = iClose(symbolA, InpCorrTimeframe, i);
+      g_pairData[pairIndex].pricesB[i] = iClose(symbolB, InpCorrTimeframe, i);
    }
 }
 
@@ -732,7 +949,7 @@ void UpdatePriceHistory(int pairIndex)
 //+------------------------------------------------------------------+
 void CalculateLogReturns(int pairIndex)
 {
-   int returnCount = MathMin(InpLookbackPeriod - 1, MAX_LOOKBACK - 1);
+   int returnCount = MathMin(InpCorrBars - 1, MAX_LOOKBACK - 1);
    
    for(int i = 0; i < returnCount; i++)
    {
@@ -839,7 +1056,7 @@ double CalculateHedgeRatio(int pairIndex)
 void UpdateSpreadHistory(int pairIndex)
 {
    double beta = g_pairs[pairIndex].hedgeRatio;
-   int period = MathMin(InpLookbackPeriod, MAX_LOOKBACK);
+   int period = MathMin(InpCorrBars, MAX_LOOKBACK);
    
    for(int i = 0; i < period; i++)
    {
@@ -861,7 +1078,7 @@ void UpdateSpreadHistory(int pairIndex)
 //+------------------------------------------------------------------+
 void CalculateSpreadMeanStdDev(int pairIndex)
 {
-   int n = MathMin(InpLookbackPeriod, MAX_LOOKBACK);
+   int n = MathMin(InpCorrBars, MAX_LOOKBACK);
    double sum = 0;
    
    for(int i = 0; i < n; i++)
@@ -959,12 +1176,12 @@ void CalculateDollarNeutralLots(int pairIndex)
 }
 
 //+------------------------------------------------------------------+
-//| ================ SIGNAL ENGINE (v3.0) ================             |
+//| ================ SIGNAL ENGINE (v3.1) ================             |
 //+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
-//| Analyze All Pairs for Trading Signals (v3.0)                       |
-//| Separate Buy/Sell Side Analysis                                    |
+//| Analyze All Pairs for Trading Signals (v3.1)                       |
+//| Separate Buy/Sell Side Analysis - Check directionBuy/Sell == -1   |
 //+------------------------------------------------------------------+
 void AnalyzeAllPairs()
 {
@@ -979,22 +1196,28 @@ void AnalyzeAllPairs()
       double zScore = g_pairs[i].zScore;
       
       // === BUY SIDE ENTRY ===
-      // Condition: Z-Score < -EntryThreshold (Spread undervalued)
-      if(g_pairs[i].directionBuy == 0 && g_pairs[i].orderCountBuy < g_pairs[i].maxOrderBuy)
+      // Condition: directionBuy == -1 (Ready) AND Z-Score < -EntryThreshold
+      if(g_pairs[i].directionBuy == -1 && g_pairs[i].orderCountBuy < g_pairs[i].maxOrderBuy)
       {
          if(zScore < -InpEntryZScore)
          {
-            OpenBuySideTrade(i);
+            if(OpenBuySideTrade(i))
+            {
+               g_pairs[i].directionBuy = 1;  // Active trade
+            }
          }
       }
       
       // === SELL SIDE ENTRY ===
-      // Condition: Z-Score > +EntryThreshold (Spread overvalued)
-      if(g_pairs[i].directionSell == 0 && g_pairs[i].orderCountSell < g_pairs[i].maxOrderSell)
+      // Condition: directionSell == -1 (Ready) AND Z-Score > +EntryThreshold
+      if(g_pairs[i].directionSell == -1 && g_pairs[i].orderCountSell < g_pairs[i].maxOrderSell)
       {
          if(zScore > InpEntryZScore)
          {
-            OpenSellSideTrade(i);
+            if(OpenSellSideTrade(i))
+            {
+               g_pairs[i].directionSell = 1;  // Active trade
+            }
          }
       }
    }
@@ -1011,8 +1234,6 @@ void AnalyzeAllPairs()
 //+------------------------------------------------------------------+
 bool OpenBuySideTrade(int pairIndex)
 {
-   if(g_pairs[pairIndex].directionBuy != 0) return false;
-   
    string symbolA = g_pairs[pairIndex].symbolA;
    string symbolB = g_pairs[pairIndex].symbolB;
    double lotA = g_pairs[pairIndex].lotBuyA;
@@ -1069,7 +1290,6 @@ bool OpenBuySideTrade(int pairIndex)
    // Record trade info
    g_pairs[pairIndex].ticketBuyA = ticketA;
    g_pairs[pairIndex].ticketBuyB = ticketB;
-   g_pairs[pairIndex].directionBuy = 1;
    g_pairs[pairIndex].orderCountBuy++;
    g_pairs[pairIndex].entryTimeBuy = TimeCurrent();
    
@@ -1089,8 +1309,6 @@ bool OpenBuySideTrade(int pairIndex)
 //+------------------------------------------------------------------+
 bool OpenSellSideTrade(int pairIndex)
 {
-   if(g_pairs[pairIndex].directionSell != 0) return false;
-   
    string symbolA = g_pairs[pairIndex].symbolA;
    string symbolB = g_pairs[pairIndex].symbolB;
    double lotA = g_pairs[pairIndex].lotSellA;
@@ -1147,7 +1365,6 @@ bool OpenSellSideTrade(int pairIndex)
    // Record trade info
    g_pairs[pairIndex].ticketSellA = ticketA;
    g_pairs[pairIndex].ticketSellB = ticketB;
-   g_pairs[pairIndex].directionSell = 1;
    g_pairs[pairIndex].orderCountSell++;
    g_pairs[pairIndex].entryTimeSell = TimeCurrent();
    
@@ -1182,6 +1399,10 @@ bool CloseBuySide(int pairIndex)
          closedA = true;
       }
    }
+   else
+   {
+      closedA = true;
+   }
    
    // Close position B
    if(g_pairs[pairIndex].ticketBuyB > 0)
@@ -1194,6 +1415,10 @@ bool CloseBuySide(int pairIndex)
       {
          closedB = true;
       }
+   }
+   else
+   {
+      closedB = true;
    }
    
    if(closedA && closedB)
@@ -1210,7 +1435,7 @@ bool CloseBuySide(int pairIndex)
       g_monthlyLot += g_pairs[pairIndex].lotBuyA + g_pairs[pairIndex].lotBuyB;
       g_allTimeLot += g_pairs[pairIndex].lotBuyA + g_pairs[pairIndex].lotBuyB;
       
-      // Reset Buy side state
+      // Reset Buy side state (back to Off, not Ready)
       g_pairs[pairIndex].ticketBuyA = 0;
       g_pairs[pairIndex].ticketBuyB = 0;
       g_pairs[pairIndex].directionBuy = 0;
@@ -1245,6 +1470,10 @@ bool CloseSellSide(int pairIndex)
          closedA = true;
       }
    }
+   else
+   {
+      closedA = true;
+   }
    
    // Close position B
    if(g_pairs[pairIndex].ticketSellB > 0)
@@ -1257,6 +1486,10 @@ bool CloseSellSide(int pairIndex)
       {
          closedB = true;
       }
+   }
+   else
+   {
+      closedB = true;
    }
    
    if(closedA && closedB)
@@ -1273,7 +1506,7 @@ bool CloseSellSide(int pairIndex)
       g_monthlyLot += g_pairs[pairIndex].lotSellA + g_pairs[pairIndex].lotSellB;
       g_allTimeLot += g_pairs[pairIndex].lotSellA + g_pairs[pairIndex].lotSellB;
       
-      // Reset Sell side state
+      // Reset Sell side state (back to Off, not Ready)
       g_pairs[pairIndex].ticketSellA = 0;
       g_pairs[pairIndex].ticketSellB = 0;
       g_pairs[pairIndex].directionSell = 0;
@@ -1330,7 +1563,7 @@ void ManageAllPositions()
       double zScore = g_pairs[i].zScore;
       
       // === Manage Buy Side ===
-      if(g_pairs[i].directionBuy != 0)
+      if(g_pairs[i].directionBuy == 1)  // Only active trades
       {
          // Exit: Z-Score returned to normal (>= -ExitThreshold)
          if(zScore >= -InpExitZScore)
@@ -1356,7 +1589,7 @@ void ManageAllPositions()
       }
       
       // === Manage Sell Side ===
-      if(g_pairs[i].directionSell != 0)
+      if(g_pairs[i].directionSell == 1)  // Only active trades
       {
          // Exit: Z-Score returned to normal (<= +ExitThreshold)
          if(zScore <= InpExitZScore)
@@ -1395,7 +1628,7 @@ void UpdatePairProfits()
       if(!g_pairs[i].enabled) continue;
       
       // === Update Buy Side Profit ===
-      if(g_pairs[i].directionBuy != 0)
+      if(g_pairs[i].directionBuy == 1)
       {
          double profitA = 0, profitB = 0;
          
@@ -1416,7 +1649,7 @@ void UpdatePairProfits()
       }
       
       // === Update Sell Side Profit ===
-      if(g_pairs[i].directionSell != 0)
+      if(g_pairs[i].directionSell == 1)
       {
          double profitA = 0, profitB = 0;
          
@@ -1456,7 +1689,7 @@ void CheckPairTargets()
       if(!g_pairs[i].enabled) continue;
       
       // Check Buy Side Target
-      if(g_pairs[i].directionBuy != 0 && g_pairs[i].profitBuy >= g_pairs[i].targetBuy)
+      if(g_pairs[i].directionBuy == 1 && g_pairs[i].profitBuy >= g_pairs[i].targetBuy)
       {
          PrintFormat("Pair %d Buy Side TARGET REACHED: %.2f >= %.2f",
             i + 1, g_pairs[i].profitBuy, g_pairs[i].targetBuy);
@@ -1464,7 +1697,7 @@ void CheckPairTargets()
       }
       
       // Check Sell Side Target
-      if(g_pairs[i].directionSell != 0 && g_pairs[i].profitSell >= g_pairs[i].targetSell)
+      if(g_pairs[i].directionSell == 1 && g_pairs[i].profitSell >= g_pairs[i].targetSell)
       {
          PrintFormat("Pair %d Sell Side TARGET REACHED: %.2f >= %.2f",
             i + 1, g_pairs[i].profitSell, g_pairs[i].targetSell);
@@ -1557,11 +1790,11 @@ void CheckRiskLimits()
 }
 
 //+------------------------------------------------------------------+
-//| ================ DASHBOARD PANEL (v3.0) ================           |
+//| ================ DASHBOARD PANEL (v3.1) ================           |
 //+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
-//| Create Dashboard Panel (New 3-Part Layout)                         |
+//| Create Dashboard Panel (New 3-Part Layout for 30 pairs)            |
 //+------------------------------------------------------------------+
 void CreateDashboard()
 {
@@ -1575,7 +1808,7 @@ void CreateDashboard()
    int headerY = PANEL_Y + 5;
    CreateRectangle(prefix + "HDR_BG", PANEL_X + 5, headerY, PANEL_WIDTH - 10, 25, COLOR_HEADER_MAIN, COLOR_BORDER);
    CreateLabel(prefix + "LOGO", PANEL_X + 15, headerY + 5, "MoneyX Statistical Arbitrage EA", COLOR_GOLD, 11, "Arial Bold");
-   CreateLabel(prefix + "VER", PANEL_X + PANEL_WIDTH - 60, headerY + 5, "v3.0", COLOR_TEXT_WHITE, 9, "Arial");
+   CreateLabel(prefix + "VER", PANEL_X + PANEL_WIDTH - 60, headerY + 5, "v3.1", COLOR_TEXT_WHITE, 9, "Arial");
    
    // ===== COLUMN HEADERS =====
    int colY = PANEL_Y + 35;
@@ -1627,7 +1860,7 @@ void CreateDashboard()
    CreateLabel(prefix + "SH_S_PROF", sellStartX + 345, subY, "Profit", COLOR_TEXT_WHITE, 7, "Arial");
    CreateLabel(prefix + "SH_S_X", sellStartX + 380, subY, "X", COLOR_TEXT_WHITE, 7, "Arial");
    
-   // ===== PAIR ROWS (20 Pairs) =====
+   // ===== PAIR ROWS (30 Pairs) =====
    int rowStartY = subY + 18;
    
    for(int i = 0; i < MAX_PAIRS; i++)
@@ -1652,7 +1885,7 @@ void CreateDashboard()
 }
 
 //+------------------------------------------------------------------+
-//| Create Pair Row (v3.0 - 3-Part Layout)                             |
+//| Create Pair Row (v3.1 - 3-Part Layout with Toggle Buttons)         |
 //+------------------------------------------------------------------+
 void CreatePairRow(string prefix, int idx, int buyX, int centerX, int sellX, int y)
 {
@@ -1664,13 +1897,13 @@ void CreatePairRow(string prefix, int idx, int buyX, int centerX, int sellX, int
    CreateButton(prefix + "_CLOSE_BUY_" + idxStr, buyX + 5, y + 2, 16, 14, "X", clrRed, clrWhite);
    
    // Profit
-   CreateLabel(prefix + "P" + idxStr + "_B_PROF", buyX + 28, y + 3, "0", COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_B_PROF", buyX + 28, y + 3, "0", COLOR_TEXT, FONT_SIZE, "Arial");
    
    // Lot
-   CreateLabel(prefix + "P" + idxStr + "_B_LOT", buyX + 75, y + 3, "0.00", COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_B_LOT", buyX + 75, y + 3, "0.00", COLOR_TEXT, FONT_SIZE, "Arial");
    
    // Order count
-   CreateLabel(prefix + "P" + idxStr + "_B_ORD", buyX + 128, y + 3, "0", COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_B_ORD", buyX + 128, y + 3, "0", COLOR_TEXT, FONT_SIZE, "Arial");
    
    // Max orders (editable)
    CreateEditField(prefix + "_MAX_BUY_" + idxStr, buyX + 160, y + 2, 30, 14, IntegerToString(InpDefaultMaxOrderBuy));
@@ -1678,40 +1911,44 @@ void CreatePairRow(string prefix, int idx, int buyX, int centerX, int sellX, int
    // Target (editable)
    CreateEditField(prefix + "_TGT_BUY_" + idxStr, buyX + 200, y + 2, 45, 14, DoubleToString(InpDefaultTargetBuy, 0));
    
-   // Status
-   CreateLabel(prefix + "P" + idxStr + "_B_ST", buyX + 260, y + 3, g_pairs[idx].enabled ? "Off" : "-", COLOR_OFF, 8, "Arial Bold");
+   // Status (Toggle Button - v3.1)
+   string buyStatusText = g_pairs[idx].enabled ? "Off" : "-";
+   color buyStatusColor = COLOR_OFF;
+   CreateButton(prefix + "_ST_BUY_" + idxStr, buyX + 255, y + 2, 40, 14, buyStatusText, buyStatusColor, clrWhite);
    
    // Z-Score
-   CreateLabel(prefix + "P" + idxStr + "_B_Z", buyX + 310, y + 3, "0.00", COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_B_Z", buyX + 310, y + 3, "0.00", COLOR_TEXT, FONT_SIZE, "Arial");
    
    // P/L (this side)
-   CreateLabel(prefix + "P" + idxStr + "_B_PL", buyX + 360, y + 3, "0", COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_B_PL", buyX + 360, y + 3, "0", COLOR_TEXT, FONT_SIZE, "Arial");
    
    // === CENTER DATA (Pair Info) ===
    // Pair name
-   CreateLabel(prefix + "P" + idxStr + "_NAME", centerX + 10, y + 3, pairName, COLOR_TEXT, 8, "Arial Bold");
+   CreateLabel(prefix + "P" + idxStr + "_NAME", centerX + 10, y + 3, pairName, COLOR_TEXT, FONT_SIZE, "Arial Bold");
    
    // Correlation %
-   CreateLabel(prefix + "P" + idxStr + "_CORR", centerX + 140, y + 3, "0%", COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_CORR", centerX + 140, y + 3, "0%", COLOR_TEXT, FONT_SIZE, "Arial");
    
    // Correlation Type
-   CreateLabel(prefix + "P" + idxStr + "_TYPE", centerX + 195, y + 3, "Pos", COLOR_PROFIT, 8, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_TYPE", centerX + 195, y + 3, "Pos", COLOR_PROFIT, FONT_SIZE, "Arial");
    
    // Beta/Hedge Ratio
-   CreateLabel(prefix + "P" + idxStr + "_BETA", centerX + 250, y + 3, "1.00", COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_BETA", centerX + 250, y + 3, "1.00", COLOR_TEXT, FONT_SIZE, "Arial");
    
    // Total P/L (both sides)
    CreateLabel(prefix + "P" + idxStr + "_TPL", centerX + 310, y + 3, "0", COLOR_TEXT, 9, "Arial Bold");
    
    // === SELL SIDE DATA ===
    // P/L
-   CreateLabel(prefix + "P" + idxStr + "_S_PL", sellX + 5, y + 3, "0", COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_S_PL", sellX + 5, y + 3, "0", COLOR_TEXT, FONT_SIZE, "Arial");
    
    // Z-Score
-   CreateLabel(prefix + "P" + idxStr + "_S_Z", sellX + 50, y + 3, "0.00", COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_S_Z", sellX + 50, y + 3, "0.00", COLOR_TEXT, FONT_SIZE, "Arial");
    
-   // Status
-   CreateLabel(prefix + "P" + idxStr + "_S_ST", sellX + 105, y + 3, g_pairs[idx].enabled ? "Off" : "-", COLOR_OFF, 8, "Arial Bold");
+   // Status (Toggle Button - v3.1)
+   string sellStatusText = g_pairs[idx].enabled ? "Off" : "-";
+   color sellStatusColor = COLOR_OFF;
+   CreateButton(prefix + "_ST_SELL_" + idxStr, sellX + 100, y + 2, 40, 14, sellStatusText, sellStatusColor, clrWhite);
    
    // Target (editable)
    CreateEditField(prefix + "_TGT_SELL_" + idxStr, sellX + 150, y + 2, 45, 14, DoubleToString(InpDefaultTargetSell, 0));
@@ -1720,13 +1957,13 @@ void CreatePairRow(string prefix, int idx, int buyX, int centerX, int sellX, int
    CreateEditField(prefix + "_MAX_SELL_" + idxStr, sellX + 205, y + 2, 30, 14, IntegerToString(InpDefaultMaxOrderSell));
    
    // Order count
-   CreateLabel(prefix + "P" + idxStr + "_S_ORD", sellX + 262, y + 3, "0", COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_S_ORD", sellX + 262, y + 3, "0", COLOR_TEXT, FONT_SIZE, "Arial");
    
    // Lot
-   CreateLabel(prefix + "P" + idxStr + "_S_LOT", sellX + 305, y + 3, "0.00", COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_S_LOT", sellX + 305, y + 3, "0.00", COLOR_TEXT, FONT_SIZE, "Arial");
    
    // Profit
-   CreateLabel(prefix + "P" + idxStr + "_S_PROF", sellX + 345, y + 3, "0", COLOR_TEXT, 8, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_S_PROF", sellX + 345, y + 3, "0", COLOR_TEXT, FONT_SIZE, "Arial");
    
    // Close button
    CreateButton(prefix + "_CLOSE_SELL_" + idxStr, sellX + 375, y + 2, 16, 14, "X", clrRed, clrWhite);
@@ -1825,7 +2062,7 @@ void CreateAccountSummary(string prefix, int y)
 }
 
 //+------------------------------------------------------------------+
-//| Update Dashboard Values (v3.0)                                     |
+//| Update Dashboard Values (v3.1)                                     |
 //+------------------------------------------------------------------+
 void UpdateDashboard()
 {
@@ -1844,12 +2081,12 @@ void UpdateDashboard()
    
    for(int i = 0; i < MAX_PAIRS; i++)
    {
-      if(g_pairs[i].directionBuy != 0)
+      if(g_pairs[i].directionBuy == 1)
       {
          totalLot += g_pairs[i].lotBuyA + g_pairs[i].lotBuyB;
          totalOrders += 2;
       }
-      if(g_pairs[i].directionSell != 0)
+      if(g_pairs[i].directionSell == 1)
       {
          totalLot += g_pairs[i].lotSellA + g_pairs[i].lotSellB;
          totalOrders += 2;
@@ -1920,7 +2157,7 @@ void UpdateDashboard()
                   g_pairs[i].profitBuy >= 0 ? COLOR_PROFIT : COLOR_LOSS);
       
       // Lot
-      double buyLot = g_pairs[i].directionBuy != 0 ? g_pairs[i].lotBuyA + g_pairs[i].lotBuyB : 0;
+      double buyLot = g_pairs[i].directionBuy == 1 ? g_pairs[i].lotBuyA + g_pairs[i].lotBuyB : 0;
       UpdateLabel(prefix + "P" + idxStr + "_B_LOT", DoubleToString(buyLot, 2), COLOR_TEXT);
       
       // Order count
@@ -1936,20 +2173,30 @@ void UpdateDashboard()
       UpdateLabel(prefix + "P" + idxStr + "_B_PL", DoubleToString(g_pairs[i].profitBuy, 0),
                   g_pairs[i].profitBuy >= 0 ? COLOR_PROFIT : COLOR_LOSS);
       
-      // Status
-      string buyStatus = "Off";
-      color buyStColor = COLOR_OFF;
-      if(!g_pairs[i].enabled)
+      // Status Button Update (v3.1)
+      string buyBtnName = prefix + "_ST_BUY_" + idxStr;
+      if(ObjectFind(0, buyBtnName) >= 0)
       {
-         buyStatus = "-";
-         buyStColor = COLOR_OFF;
+         string buyStatus = "Off";
+         color buyBgColor = COLOR_OFF;
+         if(!g_pairs[i].enabled)
+         {
+            buyStatus = "-";
+            buyBgColor = COLOR_OFF;
+         }
+         else if(g_pairs[i].directionBuy == 1)
+         {
+            buyStatus = "LONG";
+            buyBgColor = COLOR_PROFIT;
+         }
+         else if(g_pairs[i].directionBuy == -1)
+         {
+            buyStatus = "On";
+            buyBgColor = COLOR_ON;
+         }
+         ObjectSetString(0, buyBtnName, OBJPROP_TEXT, buyStatus);
+         ObjectSetInteger(0, buyBtnName, OBJPROP_BGCOLOR, buyBgColor);
       }
-      else if(g_pairs[i].directionBuy != 0)
-      {
-         buyStatus = "LONG";
-         buyStColor = COLOR_PROFIT;
-      }
-      UpdateLabel(prefix + "P" + idxStr + "_B_ST", buyStatus, buyStColor);
       
       // === Sell Side Data ===
       // Profit
@@ -1957,7 +2204,7 @@ void UpdateDashboard()
                   g_pairs[i].profitSell >= 0 ? COLOR_PROFIT : COLOR_LOSS);
       
       // Lot
-      double sellLot = g_pairs[i].directionSell != 0 ? g_pairs[i].lotSellA + g_pairs[i].lotSellB : 0;
+      double sellLot = g_pairs[i].directionSell == 1 ? g_pairs[i].lotSellA + g_pairs[i].lotSellB : 0;
       UpdateLabel(prefix + "P" + idxStr + "_S_LOT", DoubleToString(sellLot, 2), COLOR_TEXT);
       
       // Order count
@@ -1971,20 +2218,30 @@ void UpdateDashboard()
       UpdateLabel(prefix + "P" + idxStr + "_S_PL", DoubleToString(g_pairs[i].profitSell, 0),
                   g_pairs[i].profitSell >= 0 ? COLOR_PROFIT : COLOR_LOSS);
       
-      // Status
-      string sellStatus = "Off";
-      color sellStColor = COLOR_OFF;
-      if(!g_pairs[i].enabled)
+      // Status Button Update (v3.1)
+      string sellBtnName = prefix + "_ST_SELL_" + idxStr;
+      if(ObjectFind(0, sellBtnName) >= 0)
       {
-         sellStatus = "-";
-         sellStColor = COLOR_OFF;
+         string sellStatus = "Off";
+         color sellBgColor = COLOR_OFF;
+         if(!g_pairs[i].enabled)
+         {
+            sellStatus = "-";
+            sellBgColor = COLOR_OFF;
+         }
+         else if(g_pairs[i].directionSell == 1)
+         {
+            sellStatus = "SHORT";
+            sellBgColor = COLOR_LOSS;
+         }
+         else if(g_pairs[i].directionSell == -1)
+         {
+            sellStatus = "On";
+            sellBgColor = COLOR_ON;
+         }
+         ObjectSetString(0, sellBtnName, OBJPROP_TEXT, sellStatus);
+         ObjectSetInteger(0, sellBtnName, OBJPROP_BGCOLOR, sellBgColor);
       }
-      else if(g_pairs[i].directionSell != 0)
-      {
-         sellStatus = "SHORT";
-         sellStColor = COLOR_LOSS;
-      }
-      UpdateLabel(prefix + "P" + idxStr + "_S_ST", sellStatus, sellStColor);
    }
    
    ChartRedraw();
