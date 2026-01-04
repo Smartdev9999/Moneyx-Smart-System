@@ -1949,8 +1949,20 @@ void CheckAtrAveraging(int pairIndex, bool isBuySide)
 {
    string symbolA = g_pairs[pairIndex].symbolA;
    
-   // Calculate ATR
-   double atr = iATR(symbolA, InpAtrTimeframe, InpAtrPeriod, 0);
+   // Calculate ATR using handle + CopyBuffer (MQL5 standard)
+   int atrHandle = iATR(symbolA, InpAtrTimeframe, InpAtrPeriod);
+   if(atrHandle == INVALID_HANDLE) return;
+   
+   double atrBuffer[];
+   ArraySetAsSeries(atrBuffer, true);
+   if(CopyBuffer(atrHandle, 0, 0, 1, atrBuffer) <= 0)
+   {
+      IndicatorRelease(atrHandle);
+      return;
+   }
+   
+   double atr = atrBuffer[0];
+   IndicatorRelease(atrHandle);
    if(atr <= 0) return;
    
    double gridStep = atr * InpAtrMultiplier;
@@ -2829,7 +2841,7 @@ void CreatePairRow(int pairIndex, int rowY, int buyX, int centerX, int sellX)
    CreateLabel(prefix + "_AVG_BUY_" + idx, buyX + 365, rowY + 2, "0", COLOR_TEXT, FONT_SIZE, "Arial");
    
    // === Center (Pair Info) ===
-   string pairName = (pairIndex + 1) + ". " + g_pairs[pairIndex].symbolA + "/" + g_pairs[pairIndex].symbolB;
+   string pairName = IntegerToString(pairIndex + 1) + ". " + g_pairs[pairIndex].symbolA + "/" + g_pairs[pairIndex].symbolB;
    CreateLabel(prefix + "_PAIR_" + idx, centerX + 10, rowY + 2, pairName, COLOR_TEXT, FONT_SIZE, "Arial");
    CreateLabel(prefix + "_CORR_" + idx, centerX + 145, rowY + 2, "0.00", COLOR_TEXT, FONT_SIZE, "Arial");
    CreateLabel(prefix + "_TYPE_" + idx, centerX + 195, rowY + 2, "+", COLOR_TEXT, FONT_SIZE, "Arial");

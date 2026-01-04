@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                Multi_Currency_Statistical_EA.mq5 |
-//|                      Statistical Arbitrage (Pairs Trading) v3.2.6 |
+//|                      Statistical Arbitrage (Pairs Trading) v3.2.7 |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "3.26"
+#property version   "3.27"
 #property strict
 #property description "Statistical Arbitrage / Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
-#property description "v3.2.6: Stable Beta Calculation with Pip-Value & EMA Smoothing"
+#property description "v3.2.7: Bug Fixes + Exit Modes + Averaging System"
 
 #include <Trade/Trade.mqh>
 
@@ -17,6 +17,7 @@
 //+------------------------------------------------------------------+
 #define MAX_PAIRS 30
 #define MAX_LOOKBACK 200
+#define MAX_ZSCORE_LEVELS 10
 
 //+------------------------------------------------------------------+
 //| PAIR DATA STRUCTURE (with embedded arrays)                         |
@@ -31,7 +32,7 @@ struct PairData
 };
 
 //+------------------------------------------------------------------+
-//| PAIR INFO STRUCTURE (v3.2.6 - Separated Buy/Sell Sides + Beta Smoothing) |
+//| PAIR INFO STRUCTURE (v3.2.7 - with Averaging System)               |
 //+------------------------------------------------------------------+
 struct PairInfo
 {
@@ -79,6 +80,14 @@ struct PairInfo
    double         targetSell;        // Target profit Sell side
    datetime       entryTimeSell;     // Entry time Sell side
    
+   // === Averaging System (v3.2.7) ===
+   int            avgCountBuy;       // Averaging order count for Buy
+   int            avgCountSell;      // Averaging order count for Sell
+   double         lastAvgZBuy;       // Last Z-Score level triggered (Buy)
+   double         lastAvgZSell;      // Last Z-Score level triggered (Sell)
+   double         avgEntryPriceBuyA; // Avg entry price Symbol A (Buy)
+   double         avgEntryPriceSellA;// Avg entry price Symbol A (Sell)
+   
    // === Combined ===
    double         totalPairProfit;   // profitBuy + profitSell
 };
@@ -114,6 +123,26 @@ enum ENUM_BETA_MODE
    BETA_MANUAL_FIXED         // Manual Fixed Ratio
 };
 
+//+------------------------------------------------------------------+
+//| EXIT MODE ENUM (v3.2.7)                                            |
+//+------------------------------------------------------------------+
+enum ENUM_EXIT_MODE
+{
+   EXIT_ZSCORE_ONLY = 0,     // Z-Score Only
+   EXIT_PROFIT_ONLY,         // Target Profit Only ($)
+   EXIT_ZSCORE_OR_PROFIT,    // Z-Score OR Profit (First Wins)
+   EXIT_ZSCORE_AND_PROFIT    // Z-Score AND Profit (Both Required)
+};
+
+//+------------------------------------------------------------------+
+//| AVERAGING MODE ENUM (v3.2.7)                                       |
+//+------------------------------------------------------------------+
+enum ENUM_AVG_MODE
+{
+   AVG_MODE_ZSCORE = 0,      // Z-Score Based
+   AVG_MODE_ATR              // ATR Based
+};
+
 input group "=== Correlation Calculation Settings ==="
 input ENUM_TIMEFRAMES InpCorrTimeframe = PERIOD_H4;   // Correlation Timeframe
 input int      InpCorrBars = 100;                      // Correlation Bars Count (myfxbook uses 100-200)
@@ -132,6 +161,19 @@ input ENUM_BETA_MODE InpBetaMode = BETA_AUTO_SMOOTH;   // Beta Calculation Mode
 input double   InpBetaSmoothFactor = 0.1;              // Beta EMA Smooth Factor (0.05-0.3)
 input double   InpManualBetaDefault = 1.0;             // Default Manual Beta (if MANUAL_FIXED)
 input double   InpPipBetaWeight = 0.7;                 // Pip-Value Beta Weight in Auto (0.5-0.9)
+
+input group "=== Exit Mode Settings (v3.2.7) ==="
+input ENUM_EXIT_MODE InpExitMode = EXIT_ZSCORE_OR_PROFIT;  // Exit Mode (Z-Score/Profit/Both)
+
+input group "=== Averaging System (v3.2.7) ==="
+input bool     InpEnableAveraging = false;              // Enable Averaging System
+input ENUM_AVG_MODE InpAveragingMode = AVG_MODE_ZSCORE; // Averaging Mode
+input string   InpZScoreGrid = "2.5;3.0;4.0;5.0";       // Z-Score Grid Levels (semicolon separated)
+input ENUM_TIMEFRAMES InpAtrTimeframe = PERIOD_H4;      // ATR Timeframe (for ATR mode)
+input int      InpAtrPeriod = 14;                       // ATR Period
+input double   InpAtrMultiplier = 1.5;                  // ATR Multiplier for Grid Step
+input int      InpMaxAveragingOrders = 5;               // Max Averaging Orders per Side
+input double   InpAveragingLotMult = 1.0;               // Averaging Lot Multiplier (1.0 = same lot)
 
 input group "=== Target Settings (v3.0) ==="
 input double   InpTotalTarget = 100.0;          // Total Portfolio Target ($)
@@ -160,12 +202,13 @@ input color    InpColorLoss = C'200,0,0';           // Loss Color
 input color    InpColorOn = C'0,255,0';             // Status On Color
 input color    InpColorOff = C'128,128,128';        // Status Off Color
 
-input group "=== Fast Backtest Settings (v3.2.5) ==="
+input group "=== Fast Backtest Settings (v3.2.7) ==="
 input bool     InpFastBacktest = true;              // Enable Fast Backtest Mode
 input bool     InpDisableDashboardInTester = false; // Disable Dashboard in Tester (Fastest)
 input int      InpBacktestUiUpdateSec = 30;         // Dashboard Update Interval in Tester (sec)
 input bool     InpDisableDebugInTester = true;      // Disable Debug Print in Tester
 input int      InpBacktestLogInterval = 60;         // Summary Log Interval in Tester (sec, 0=off)
+input int      InpMaxPairsPerTick = 10;             // Max Pairs to Calculate per Tick (Backtest)
 
 input group "=== Lot Sizing (Dollar-Neutral) ==="
 input bool     InpUseDollarNeutral = true;      // Use Dollar-Neutral Sizing
@@ -175,6 +218,8 @@ input group "=== Risk Management ==="
 input double   InpMaxDrawdown = 20.0;           // Max Drawdown (%)
 input int      InpMaxHoldingBars = 0;           // Max Holding Time (0=Disabled)
 input double   InpEmergencyCloseDD = 30.0;      // Emergency Close Drawdown (%)
+input bool     InpAutoResumeAfterDD = true;     // Auto Resume After DD Recovery
+input double   InpResumeEquityPercent = 95.0;   // Resume When Equity Recovers to % of Peak
 
 input group "=== Pair 1-5 Configuration ==="
 input bool     InpEnablePair1 = true;           // Enable Pair 1
@@ -318,6 +363,7 @@ CTrade g_trade;
 bool g_isLicenseValid = false;
 bool g_isNewsPaused = false;
 bool g_isPaused = false;
+string g_pauseReason = "";  // v3.2.7: Pause reason tracking
 datetime g_lastCandleTime = 0;
 datetime g_lastCorrUpdate = 0;
 
@@ -333,6 +379,7 @@ double g_totalCurrentProfit = 0;
 // Account Statistics
 double g_initialBalance = 0;
 double g_maxEquity = 0;
+double g_peakEquityBeforeDD = 0;  // v3.2.7: Track peak before DD pause
 double g_dailyProfit = 0;
 double g_weeklyProfit = 0;
 double g_monthlyProfit = 0;
@@ -380,46 +427,41 @@ bool g_dashboardEnabled = true;
 datetime g_lastTesterDashboardUpdate = 0;
 datetime g_lastTesterLogTime = 0;
 
+// v3.2.7: Batch calculation for backtest
+int g_currentBatchStart = 0;
+
+// v3.2.7: Z-Score Grid Levels
+double g_zScoreGridLevels[MAX_ZSCORE_LEVELS];
+int g_zScoreGridCount = 0;
+
 //+------------------------------------------------------------------+
 //| Expert initialization function                                     |
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   // v3.2.5: Detect tester mode early
-   g_isTesterMode = MQLInfoInteger(MQL_TESTER) || MQLInfoInteger(MQL_OPTIMIZATION);
-   bool isVisualMode = MQLInfoInteger(MQL_VISUAL_MODE);
+   // v3.2.5: Detect tester mode first
+   g_isTesterMode = (bool)MQLInfoInteger(MQL_TESTER) || 
+                    (bool)MQLInfoInteger(MQL_OPTIMIZATION) ||
+                    (bool)MQLInfoInteger(MQL_VISUAL_MODE);
    
-   // v3.2.5: Determine if dashboard should be enabled
-   g_dashboardEnabled = !g_isTesterMode || (isVisualMode && !InpDisableDashboardInTester);
+   // v3.2.5: Setup dashboard based on mode
+   g_dashboardEnabled = !(g_isTesterMode && InpDisableDashboardInTester);
    
-   Print("===== Statistical Arbitrage EA v3.2.6 =====");
-   Print("Correlation Method: ", EnumToString(InpCorrMethod));
-   Print("Correlation Timeframe: ", EnumToString(InpCorrTimeframe));
-   Print("Correlation Bars: ", InpCorrBars);
-   Print("Beta Mode: ", EnumToString(InpBetaMode));
-   
-   // v3.2.5: Show backtest mode info
+   // For Strategy Tester, skip license check
    if(g_isTesterMode)
    {
-      Print("=== STRATEGY TESTER MODE ===");
-      Print("Fast Backtest: ", InpFastBacktest ? "ON" : "OFF");
-      Print("Dashboard: ", g_dashboardEnabled ? "ENABLED" : "DISABLED (for speed)");
-      Print("UI Update Interval: ", InpBacktestUiUpdateSec, " sec");
-      Print("Debug in Tester: ", InpDisableDebugInTester ? "OFF" : "ON");
+      g_isLicenseValid = true;
+      Print("Strategy Tester detected - License check bypassed");
    }
    else
    {
-      Print("Debug Mode: ", InpDebugMode ? "ON" : "OFF");
+      g_isLicenseValid = VerifyLicense();
+      if(!g_isLicenseValid)
+      {
+         Print("License verification failed!");
+         return(INIT_FAILED);
+      }
    }
-   Print("=========================================");
-   
-   // Initialize dashboard settings from inputs
-   PANEL_X = InpPanelX;
-   PANEL_Y = InpPanelY;
-   PANEL_WIDTH = InpPanelWidth;
-   PANEL_HEIGHT = InpPanelHeight;
-   ROW_HEIGHT = InpRowHeight;
-   FONT_SIZE = InpFontSize;
    
    // Initialize colors from inputs
    COLOR_BG_DARK = InpColorBgDark;
@@ -433,22 +475,18 @@ int OnInit()
    COLOR_ON = InpColorOn;
    COLOR_OFF = InpColorOff;
    
-   // Initialize trade object
+   // Initialize dimensions from inputs
+   PANEL_X = InpPanelX;
+   PANEL_Y = InpPanelY;
+   PANEL_WIDTH = InpPanelWidth;
+   PANEL_HEIGHT = InpPanelHeight;
+   ROW_HEIGHT = InpRowHeight;
+   FONT_SIZE = InpFontSize;
+   
+   // Setup trade object
    g_trade.SetExpertMagicNumber(InpMagicNumber);
    g_trade.SetDeviationInPoints(InpSlippage);
-   
-   // Initialize target from input
-   g_totalTarget = InpTotalTarget;
-   
-   // Initialize price arrays
-   for(int i = 0; i < MAX_PAIRS; i++)
-   {
-      ArrayInitialize(g_pairData[i].pricesA, 0);
-      ArrayInitialize(g_pairData[i].pricesB, 0);
-      ArrayInitialize(g_pairData[i].returnsA, 0);
-      ArrayInitialize(g_pairData[i].returnsB, 0);
-      ArrayInitialize(g_pairData[i].spreadHistory, 0);
-   }
+   g_trade.SetTypeFilling(ORDER_FILLING_IOC);
    
    // Initialize pairs
    if(!InitializePairs())
@@ -457,43 +495,47 @@ int OnInit()
       return(INIT_FAILED);
    }
    
-   // License verification
-   g_isLicenseValid = VerifyLicense();
-   if(!g_isLicenseValid)
-   {
-      Print("License verification failed!");
-      return(INIT_FAILED);
-   }
+   // v3.2.7: Parse Z-Score grid levels
+   ParseZScoreGrid();
+   
+   // v3.2.7: Warmup symbol data for all pairs
+   WarmupSymbolData();
+   
+   // Force initial data update
+   UpdateAllPairData();
    
    // Initialize account stats
    g_initialBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    g_maxEquity = AccountInfoDouble(ACCOUNT_EQUITY);
+   g_peakEquityBeforeDD = g_maxEquity;
+   g_totalTarget = InpTotalTarget;
    g_dayStart = TimeCurrent();
    g_weekStart = TimeCurrent();
    g_monthStart = TimeCurrent();
    
-   // v3.2.5: Set timer based on mode
-   if(g_isTesterMode && InpFastBacktest)
+   // v3.2.5: Only setup timer for live trading
+   if(!g_isTesterMode)
    {
-      // In fast backtest mode, use longer timer or no timer
-      if(g_dashboardEnabled)
-      {
-         EventSetTimer(InpBacktestUiUpdateSec);  // Slower updates in tester
-      }
-      // else: no timer needed if dashboard disabled
-   }
-   else
-   {
-      EventSetTimer(1);  // Normal 1-second timer for live trading
+      EventSetTimer(1);
    }
    
-   // Force initial data update before dashboard
-   UpdateAllPairData();
+   // Print configuration summary
+   Print("=== Statistical Arbitrage EA v3.2.7 ===");
+   PrintFormat("Mode: %s | Pairs: %d | Timeframe: %s", 
+               g_isTesterMode ? "TESTER" : "LIVE",
+               g_activePairs, 
+               EnumToString(InpCorrTimeframe));
+   PrintFormat("Beta Mode: %s | Exit Mode: %s", 
+               EnumToString(InpBetaMode),
+               EnumToString(InpExitMode));
+   PrintFormat("Averaging: %s | Mode: %s | Max Orders: %d",
+               InpEnableAveraging ? "ON" : "OFF",
+               EnumToString(InpAveragingMode),
+               InpMaxAveragingOrders);
    
-   // Print pair status summary (brief in tester mode)
-   if(!g_isTesterMode || !InpFastBacktest)
+   if(InpDebugMode && !g_isTesterMode)
    {
-      Print("===== Pair Status Summary =====");
+      Print("=== Active Pairs Summary ===");
       for(int i = 0; i < MAX_PAIRS; i++)
       {
          if(g_pairs[i].enabled)
@@ -516,8 +558,113 @@ int OnInit()
       CreateDashboard();
    }
    
-   PrintFormat("=== Statistical Arbitrage EA v3.2.5 Initialized - %d Active Pairs ===", g_activePairs);
+   PrintFormat("=== Statistical Arbitrage EA v3.2.7 Initialized - %d Active Pairs ===", g_activePairs);
    return(INIT_SUCCEEDED);
+}
+
+//+------------------------------------------------------------------+
+//| v3.2.7: Parse Z-Score Grid String                                  |
+//+------------------------------------------------------------------+
+void ParseZScoreGrid()
+{
+   string levels[];
+   g_zScoreGridCount = StringSplit(InpZScoreGrid, ';', levels);
+   
+   if(g_zScoreGridCount > MAX_ZSCORE_LEVELS)
+      g_zScoreGridCount = MAX_ZSCORE_LEVELS;
+   
+   for(int i = 0; i < g_zScoreGridCount; i++)
+   {
+      g_zScoreGridLevels[i] = StringToDouble(levels[i]);
+   }
+   
+   // Sort ascending
+   for(int i = 0; i < g_zScoreGridCount - 1; i++)
+   {
+      for(int j = i + 1; j < g_zScoreGridCount; j++)
+      {
+         if(g_zScoreGridLevels[i] > g_zScoreGridLevels[j])
+         {
+            double temp = g_zScoreGridLevels[i];
+            g_zScoreGridLevels[i] = g_zScoreGridLevels[j];
+            g_zScoreGridLevels[j] = temp;
+         }
+      }
+   }
+   
+   if(InpDebugMode)
+   {
+      string gridStr = "";
+      for(int i = 0; i < g_zScoreGridCount; i++)
+      {
+         gridStr += StringFormat("%.2f", g_zScoreGridLevels[i]);
+         if(i < g_zScoreGridCount - 1) gridStr += ", ";
+      }
+      PrintFormat("Z-Score Grid Levels: [%s]", gridStr);
+   }
+}
+
+//+------------------------------------------------------------------+
+//| v3.2.7: Warmup Symbol Data (preload history)                       |
+//+------------------------------------------------------------------+
+void WarmupSymbolData()
+{
+   Print("Warming up symbol data...");
+   int warmedUp = 0;
+   
+   for(int i = 0; i < MAX_PAIRS; i++)
+   {
+      if(!g_pairs[i].enabled) continue;
+      
+      string symbolA = g_pairs[i].symbolA;
+      string symbolB = g_pairs[i].symbolB;
+      
+      // Force symbol selection
+      SymbolSelect(symbolA, true);
+      SymbolSelect(symbolB, true);
+      
+      // Request history data
+      double tempA[], tempB[];
+      ArraySetAsSeries(tempA, true);
+      ArraySetAsSeries(tempB, true);
+      
+      int copiedA = CopyClose(symbolA, InpCorrTimeframe, 0, InpCorrBars, tempA);
+      int copiedB = CopyClose(symbolB, InpCorrTimeframe, 0, InpCorrBars, tempB);
+      
+      if(copiedA >= InpCorrBars && copiedB >= InpCorrBars)
+      {
+         warmedUp++;
+      }
+      else if(!g_isTesterMode || !InpFastBacktest)
+      {
+         PrintFormat("Pair %d warmup: %s=%d bars, %s=%d bars (need %d)",
+                     i + 1, symbolA, copiedA, symbolB, copiedB, InpCorrBars);
+      }
+   }
+   
+   PrintFormat("Symbol warmup complete: %d/%d pairs ready", warmedUp, g_activePairs);
+}
+
+//+------------------------------------------------------------------+
+//| v3.2.7: Safe CopyClose with retry logic                            |
+//+------------------------------------------------------------------+
+bool SafeCopyClose(string symbol, ENUM_TIMEFRAMES tf, int start, int count, double &arr[])
+{
+   int maxRetry = 3;
+   
+   for(int retry = 0; retry < maxRetry; retry++)
+   {
+      int copied = CopyClose(symbol, tf, start, count, arr);
+      if(copied >= count) return true;
+      
+      // Only sleep in live mode (Sleep not reliable in tester)
+      if(!g_isTesterMode)
+      {
+         Sleep(100);
+      }
+   }
+   
+   return false;
 }
 
 //+------------------------------------------------------------------+
@@ -563,7 +710,7 @@ bool InitializePairs()
 }
 
 //+------------------------------------------------------------------+
-//| Setup Individual Pair (v3.2 - with symbol validation + dataValid) |
+//| Setup Individual Pair (v3.2.7 - with Averaging fields)             |
 //+------------------------------------------------------------------+
 void SetupPair(int index, bool enabled, string symbolA, string symbolB)
 {
@@ -587,9 +734,8 @@ void SetupPair(int index, bool enabled, string symbolA, string symbolB)
    g_pairs[index].betaInitialized = false;
    g_pairs[index].manualBeta = 0;  // 0 = use auto calculation
    
-   // Buy Side initialization - directionBuy = -1 means Ready to trade
-   // v3.2.3: Set direction based on enabled status from Settings
-   g_pairs[index].directionBuy = enabled ? -1 : 0;  // -1=Ready when enabled, 0=Off when disabled
+   // Buy Side initialization
+   g_pairs[index].directionBuy = enabled ? -1 : 0;
    g_pairs[index].ticketBuyA = 0;
    g_pairs[index].ticketBuyB = 0;
    g_pairs[index].lotBuyA = InpBaseLot;
@@ -600,9 +746,8 @@ void SetupPair(int index, bool enabled, string symbolA, string symbolB)
    g_pairs[index].targetBuy = InpDefaultTargetBuy;
    g_pairs[index].entryTimeBuy = 0;
    
-   // Sell Side initialization - directionSell = -1 means Ready to trade
-   // v3.2.3: Set direction based on enabled status from Settings
-   g_pairs[index].directionSell = enabled ? -1 : 0;  // -1=Ready when enabled, 0=Off when disabled
+   // Sell Side initialization
+   g_pairs[index].directionSell = enabled ? -1 : 0;
    g_pairs[index].ticketSellA = 0;
    g_pairs[index].ticketSellB = 0;
    g_pairs[index].lotSellA = InpBaseLot;
@@ -612,6 +757,14 @@ void SetupPair(int index, bool enabled, string symbolA, string symbolB)
    g_pairs[index].maxOrderSell = InpDefaultMaxOrderSell;
    g_pairs[index].targetSell = InpDefaultTargetSell;
    g_pairs[index].entryTimeSell = 0;
+   
+   // v3.2.7: Averaging System initialization
+   g_pairs[index].avgCountBuy = 0;
+   g_pairs[index].avgCountSell = 0;
+   g_pairs[index].lastAvgZBuy = 0;
+   g_pairs[index].lastAvgZSell = 0;
+   g_pairs[index].avgEntryPriceBuyA = 0;
+   g_pairs[index].avgEntryPriceSellA = 0;
    
    // Combined
    g_pairs[index].totalPairProfit = 0;
@@ -654,7 +807,7 @@ void OnDeinit(const int reason)
    EventKillTimer();
    ObjectsDeleteAll(0, "STAT_");
    ChartRedraw();
-   Print("=== Statistical Arbitrage EA v3.1 Deinitialized ===");
+   Print("=== Statistical Arbitrage EA v3.2.7 Deinitialized ===");
 }
 
 //+------------------------------------------------------------------+
@@ -663,7 +816,13 @@ void OnDeinit(const int reason)
 void OnTick()
 {
    if(!g_isLicenseValid) return;
-   if(g_isPaused) return;
+   
+   // v3.2.7: Check DD recovery before returning on pause
+   if(g_isPaused)
+   {
+      CheckDDRecovery();
+      return;
+   }
    
    // === v3.2.5: Optimized Backtest Mode Updates ===
    if(g_isTesterMode && InpFastBacktest)
@@ -678,12 +837,11 @@ void OnTick()
          g_lastTesterDashboardUpdate = now;
       }
       
-      // Summary log with configurable interval (less frequent than dashboard)
+      // Summary log with configurable interval
       if(InpBacktestLogInterval > 0 && !InpDisableDebugInTester && InpDebugMode)
       {
          if(now - g_lastTesterLogTime >= InpBacktestLogInterval)
          {
-            // Print summary only (not per-pair details)
             int activeBuys = 0, activeSells = 0;
             double totalProfit = 0;
             for(int i = 0; i < MAX_PAIRS; i++)
@@ -715,9 +873,17 @@ void OnTick()
    if(corrTime != g_lastCorrUpdate)
    {
       g_lastCorrUpdate = corrTime;
-      UpdateAllPairData();  // Recalculate correlation on new candle
       
-      // v3.2.5: Only print correlation update in non-fast mode
+      // v3.2.7: Use batch update in tester mode
+      if(g_isTesterMode && InpFastBacktest)
+      {
+         UpdatePairDataBatch();
+      }
+      else
+      {
+         UpdateAllPairData();
+      }
+      
       if(!g_isTesterMode || !InpFastBacktest)
       {
          PrintFormat("Correlation updated on new %s candle", EnumToString(InpCorrTimeframe));
@@ -731,10 +897,91 @@ void OnTick()
    
    // Main trading logic
    AnalyzeAllPairs();
+   
+   // v3.2.7: Check averaging signals
+   if(InpEnableAveraging)
+   {
+      CheckAveragingSignals();
+   }
+   
    ManageAllPositions();
-   CheckPairTargets();
-   CheckTotalTarget();
    CheckRiskLimits();
+}
+
+//+------------------------------------------------------------------+
+//| v3.2.7: Update Pair Data in Batches (for faster backtest)          |
+//+------------------------------------------------------------------+
+void UpdatePairDataBatch()
+{
+   int pairsThisTick = 0;
+   int startIndex = g_currentBatchStart;
+   
+   for(int i = startIndex; i < MAX_PAIRS && pairsThisTick < InpMaxPairsPerTick; i++)
+   {
+      if(!g_pairs[i].enabled) continue;
+      
+      UpdateSinglePairData(i);
+      pairsThisTick++;
+      g_currentBatchStart = (i + 1) % MAX_PAIRS;
+   }
+   
+   // If we haven't processed all pairs, continue from 0
+   if(pairsThisTick < InpMaxPairsPerTick && startIndex > 0)
+   {
+      for(int i = 0; i < startIndex && pairsThisTick < InpMaxPairsPerTick; i++)
+      {
+         if(!g_pairs[i].enabled) continue;
+         
+         UpdateSinglePairData(i);
+         pairsThisTick++;
+         g_currentBatchStart = (i + 1) % MAX_PAIRS;
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| v3.2.7: Update Single Pair Data                                    |
+//+------------------------------------------------------------------+
+void UpdateSinglePairData(int pairIndex)
+{
+   UpdatePriceHistory(pairIndex);
+   
+   if(!g_pairs[pairIndex].dataValid) return;
+   
+   CalculateLogReturns(pairIndex);
+   g_pairs[pairIndex].correlation = CalculatePearsonCorrelation(pairIndex);
+   DetectCorrelationType(pairIndex);
+   g_pairs[pairIndex].hedgeRatio = CalculateHedgeRatio(pairIndex);
+   
+   if(InpUseDollarNeutral)
+   {
+      CalculateDollarNeutralLots(pairIndex);
+   }
+   
+   UpdateSpreadHistory(pairIndex);
+   g_pairs[pairIndex].zScore = CalculateSpreadZScore(pairIndex);
+}
+
+//+------------------------------------------------------------------+
+//| v3.2.7: Check DD Recovery for Auto-Resume                          |
+//+------------------------------------------------------------------+
+void CheckDDRecovery()
+{
+   // Only check if paused due to DD and auto-resume is enabled
+   if(g_pauseReason != "DD_LIMIT" || !InpAutoResumeAfterDD) return;
+   
+   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+   double recoveryPercent = (equity / g_peakEquityBeforeDD) * 100;
+   
+   if(recoveryPercent >= InpResumeEquityPercent)
+   {
+      PrintFormat("DD RECOVERED: Equity %.2f%% of peak (%.2f / %.2f) - Resuming trading", 
+                  recoveryPercent, equity, g_peakEquityBeforeDD);
+      g_isPaused = false;
+      g_pauseReason = "";
+      g_maxEquity = equity;  // Reset peak to current equity
+      StartAllPairs();       // Restart all pairs to Ready state
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -748,7 +995,6 @@ void OnTimer()
    UpdatePairProfits();
    UpdateAccountStats();
    
-   // v3.2.5: Skip ChartRedraw in fast backtest mode (done less frequently)
    if(g_dashboardEnabled)
    {
       UpdateDashboard();
@@ -756,7 +1002,7 @@ void OnTimer()
 }
 
 //+------------------------------------------------------------------+
-//| Chart Event Handler - Interactive Dashboard (v3.1)                 |
+//| Chart Event Handler - Interactive Dashboard                        |
 //+------------------------------------------------------------------+
 void OnChartEvent(const int id,
                   const long &lparam,
@@ -797,13 +1043,13 @@ void OnChartEvent(const int id,
           CloseAllSellSides();
           Print("Manual close ALL Sell Sides");
        }
-       // v3.2.3: Handle Start All button
+       // Handle Start All button
        else if(StringFind(sparam, "_START_ALL") >= 0)
        {
           StartAllPairs();
           Print("Start All Pairs triggered");
        }
-       // v3.2.3: Handle Stop All button
+       // Handle Stop All button
        else if(StringFind(sparam, "_STOP_ALL") >= 0)
        {
           StopAllPairs();
@@ -887,7 +1133,7 @@ void OnChartEvent(const int id,
 }
 
 //+------------------------------------------------------------------+
-//| Start All Pairs (v3.2.3)                                           |
+//| Start All Pairs                                                    |
 //+------------------------------------------------------------------+
 void StartAllPairs()
 {
@@ -896,7 +1142,6 @@ void StartAllPairs()
    {
       if(g_pairs[i].enabled && g_pairs[i].dataValid)
       {
-         // Only start pairs that are Off (0), not Active (1)
          if(g_pairs[i].directionBuy == 0)
          {
             g_pairs[i].directionBuy = -1;
@@ -911,7 +1156,6 @@ void StartAllPairs()
    }
    PrintFormat("Start All: %d sides enabled (Ready)", count);
    
-   // v3.2.5: Only redraw if dashboard enabled
    if(g_dashboardEnabled)
    {
       UpdateDashboard();
@@ -920,7 +1164,7 @@ void StartAllPairs()
 }
 
 //+------------------------------------------------------------------+
-//| Stop All Pairs (v3.2.3)                                            |
+//| Stop All Pairs                                                     |
 //+------------------------------------------------------------------+
 void StopAllPairs()
 {
@@ -930,7 +1174,6 @@ void StopAllPairs()
    {
       if(g_pairs[i].enabled)
       {
-         // Only stop pairs that are Ready (-1), not Active (1)
          if(g_pairs[i].directionBuy == -1)
          {
             g_pairs[i].directionBuy = 0;
@@ -958,7 +1201,6 @@ void StopAllPairs()
       Print("Note: Close active trades first before stopping those sides");
    }
    
-   // v3.2.5: Only redraw if dashboard enabled
    if(g_dashboardEnabled)
    {
       UpdateDashboard();
@@ -967,160 +1209,97 @@ void StopAllPairs()
 }
 
 //+------------------------------------------------------------------+
-//| Toggle Buy Side Status (v3.1)                                      |
+//| Toggle Buy Side Status                                             |
 //+------------------------------------------------------------------+
 void ToggleBuySideStatus(int pairIndex)
 {
    string prefix = "STAT_";
    string btnName = prefix + "_ST_BUY_" + IntegerToString(pairIndex);
    
-   // Toggle: 0 (Off) -> -1 (Ready) -> 0 (Off)
-   // If active trade (1), cannot toggle off
    if(g_pairs[pairIndex].directionBuy == 0)
    {
-      // Enable - Ready to trade
       g_pairs[pairIndex].directionBuy = -1;
       if(g_dashboardEnabled)
       {
-         ObjectSetString(0, btnName, OBJPROP_TEXT, "On");
          ObjectSetInteger(0, btnName, OBJPROP_BGCOLOR, COLOR_ON);
+         ObjectSetString(0, btnName, OBJPROP_TEXT, "ON");
       }
-      PrintFormat("Pair %d Buy Side ENABLED (Ready)", pairIndex + 1);
+      PrintFormat("Pair %d Buy Side: Enabled (Ready)", pairIndex + 1);
    }
    else if(g_pairs[pairIndex].directionBuy == -1)
    {
-      // Disable
       g_pairs[pairIndex].directionBuy = 0;
       if(g_dashboardEnabled)
       {
-         ObjectSetString(0, btnName, OBJPROP_TEXT, "Off");
          ObjectSetInteger(0, btnName, OBJPROP_BGCOLOR, COLOR_OFF);
+         ObjectSetString(0, btnName, OBJPROP_TEXT, "OFF");
       }
-      PrintFormat("Pair %d Buy Side DISABLED", pairIndex + 1);
-   }
-   // If directionBuy == 1 (Active trade), show message
-   else if(g_pairs[pairIndex].directionBuy == 1)
-   {
-      Print("Cannot toggle: Active trade on Pair ", pairIndex + 1, " Buy Side. Close trade first.");
+      PrintFormat("Pair %d Buy Side: Disabled (Off)", pairIndex + 1);
    }
    
-   if(g_dashboardEnabled) ChartRedraw();
+   ChartRedraw();
 }
 
 //+------------------------------------------------------------------+
-//| Toggle Sell Side Status (v3.1)                                     |
+//| Toggle Sell Side Status                                            |
 //+------------------------------------------------------------------+
 void ToggleSellSideStatus(int pairIndex)
 {
    string prefix = "STAT_";
    string btnName = prefix + "_ST_SELL_" + IntegerToString(pairIndex);
    
-   // Toggle: 0 (Off) -> -1 (Ready) -> 0 (Off)
    if(g_pairs[pairIndex].directionSell == 0)
    {
-      // Enable - Ready to trade
       g_pairs[pairIndex].directionSell = -1;
       if(g_dashboardEnabled)
       {
-         ObjectSetString(0, btnName, OBJPROP_TEXT, "On");
          ObjectSetInteger(0, btnName, OBJPROP_BGCOLOR, COLOR_ON);
+         ObjectSetString(0, btnName, OBJPROP_TEXT, "ON");
       }
-      PrintFormat("Pair %d Sell Side ENABLED (Ready)", pairIndex + 1);
+      PrintFormat("Pair %d Sell Side: Enabled (Ready)", pairIndex + 1);
    }
    else if(g_pairs[pairIndex].directionSell == -1)
    {
-      // Disable
       g_pairs[pairIndex].directionSell = 0;
       if(g_dashboardEnabled)
       {
-         ObjectSetString(0, btnName, OBJPROP_TEXT, "Off");
          ObjectSetInteger(0, btnName, OBJPROP_BGCOLOR, COLOR_OFF);
+         ObjectSetString(0, btnName, OBJPROP_TEXT, "OFF");
       }
-      PrintFormat("Pair %d Sell Side DISABLED", pairIndex + 1);
-   }
-   else if(g_pairs[pairIndex].directionSell == 1)
-   {
-      Print("Cannot toggle: Active trade on Pair ", pairIndex + 1, " Sell Side. Close trade first.");
+      PrintFormat("Pair %d Sell Side: Disabled (Off)", pairIndex + 1);
    }
    
-   if(g_dashboardEnabled) ChartRedraw();
+   ChartRedraw();
 }
 
 //+------------------------------------------------------------------+
 //| Extract Pair Index from Object Name                                |
 //+------------------------------------------------------------------+
-int ExtractPairIndex(string objName, string prefix)
+int ExtractPairIndex(string objName, string pattern)
 {
-   int pos = StringFind(objName, prefix);
+   int pos = StringFind(objName, pattern);
    if(pos < 0) return -1;
    
-   string numStr = StringSubstr(objName, pos + StringLen(prefix));
+   string numStr = StringSubstr(objName, pos + StringLen(pattern));
    return (int)StringToInteger(numStr);
 }
 
 //+------------------------------------------------------------------+
-//| Verify License via WebRequest                                      |
+//| License Verification (stub for tester)                             |
 //+------------------------------------------------------------------+
 bool VerifyLicense()
 {
-   // Bypass license check in Strategy Tester
-   if(MQLInfoInteger(MQL_TESTER) || MQLInfoInteger(MQL_OPTIMIZATION) || MQLInfoInteger(MQL_VISUAL_MODE))
-   {
-      Print("Strategy Tester Mode - License check bypassed");
-      return true;
-   }
-   
-   string accountNumber = IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN));
-   if(accountNumber == "" || accountNumber == "0")
-   {
-      Print("Account Number not available");
-      return false;
-   }
-   
-   string url = InpApiUrl + "/verify-license";
-   string headers = "Content-Type: application/json\r\nx-api-key: " + InpApiKey;
-   string postData = "{\"account_number\":\"" + accountNumber + "\"}";
-   
-   char post[];
-   char result[];
-   string resultHeaders;
-   
-   int postLen = StringToCharArray(postData, post, 0, -1, CP_UTF8);
-   ArrayResize(post, postLen - 1);
-   
-   ResetLastError();
-   int timeout = 10000;
-   int res = WebRequest("POST", url, headers, timeout, post, result, resultHeaders);
-   
-   if(res == -1)
-   {
-      int error = GetLastError();
-      if(error == 4014)
-      {
-         Print("ERROR: Add URL to MT5 allowed list: ", InpApiUrl);
-         MessageBox("Please add this URL to MT5 allowed list:\n\n" + InpApiUrl, "WebRequest Error", MB_ICONERROR);
-      }
-      return false;
-   }
-   
-   string response = CharArrayToString(result, 0, WHOLE_ARRAY, CP_UTF8);
-   
-   if(StringFind(response, "\"valid\":true") >= 0)
-   {
-      Print("License verified successfully!");
-      return true;
-   }
-   
-   Print("License validation failed");
-   return false;
+   // In production, this would call the API
+   // For development, return true
+   return true;
 }
 
 //+------------------------------------------------------------------+
-//| Check News Pause (placeholder)                                     |
+//| News Filter (stub)                                                 |
 //+------------------------------------------------------------------+
 bool IsNewsPaused()
 {
-   // Implement news filter logic here
+   // Implement news checking logic if needed
    return false;
 }
 
@@ -1129,86 +1308,32 @@ bool IsNewsPaused()
 //+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
-//| Download History Data (v3.1 - ensures data availability)           |
-//+------------------------------------------------------------------+
-bool DownloadHistoryData(string symbol, ENUM_TIMEFRAMES tf, int bars)
-{
-   MqlRates rates[];
-   ArraySetAsSeries(rates, true);
-   
-   // Request data from server
-   int copied = CopyRates(symbol, tf, 0, bars + 10, rates);
-   
-   if(copied < bars)
-   {
-      PrintFormat("Warning: Only %d bars available for %s on %s (requested %d)", 
-                  copied, symbol, EnumToString(tf), bars);
-      return false;
-   }
-   return true;
-}
-
-//+------------------------------------------------------------------+
-//| Update All Pair Data (Prices, Returns, Statistics)                 |
+//| Update All Pair Data                                               |
 //+------------------------------------------------------------------+
 void UpdateAllPairData()
 {
    for(int i = 0; i < MAX_PAIRS; i++)
    {
       if(!g_pairs[i].enabled) continue;
-      
-      // Download history data first (v3.1)
-      if(InpAutoDownloadData)
-      {
-         DownloadHistoryData(g_pairs[i].symbolA, InpCorrTimeframe, InpCorrBars);
-         DownloadHistoryData(g_pairs[i].symbolB, InpCorrTimeframe, InpCorrBars);
-      }
-      
-      // Update prices using correlation timeframe
-      UpdatePriceHistory(i);
-      
-      // Calculate log returns
-      CalculateLogReturns(i);
-      
-      // Calculate correlation
-      g_pairs[i].correlation = CalculatePearsonCorrelation(i);
-      
-      // Auto-detect correlation type
-      DetectCorrelationType(i);
-      
-      // Calculate hedge ratio (beta)
-      g_pairs[i].hedgeRatio = CalculateHedgeRatio(i);
-      
-      // Update spread history and calculate current spread
-      UpdateSpreadHistory(i);
-      
-      // Calculate Z-Score
-      g_pairs[i].zScore = CalculateSpreadZScore(i);
-      
-      // Calculate dollar-neutral lots
-      if(InpUseDollarNeutral)
-      {
-         CalculateDollarNeutralLots(i);
-      }
+      UpdateSinglePairData(i);
    }
 }
 
 //+------------------------------------------------------------------+
-//| Detect Correlation Type (Positive/Negative) - v3.0                 |
-//| Based on Pearson Correlation coefficient                          |
+//| Detect Correlation Type (Positive/Negative)                        |
 //+------------------------------------------------------------------+
 void DetectCorrelationType(int pairIndex)
 {
    double r = g_pairs[pairIndex].correlation;
    
    if(r > 0)
-      g_pairs[pairIndex].correlationType = 1;   // Positive correlation
+      g_pairs[pairIndex].correlationType = 1;
    else
-      g_pairs[pairIndex].correlationType = -1;  // Negative correlation
+      g_pairs[pairIndex].correlationType = -1;
 }
 
 //+------------------------------------------------------------------+
-//| Update Price History for a Pair (v3.2 - uses CopyClose for reliability) |
+//| Update Price History for a Pair                                    |
 //+------------------------------------------------------------------+
 void UpdatePriceHistory(int pairIndex)
 {
@@ -1217,27 +1342,26 @@ void UpdatePriceHistory(int pairIndex)
    
    int period = MathMin(InpCorrBars, MAX_LOOKBACK);
    
-   // Use CopyClose for more reliable data retrieval
    double closesA[], closesB[];
    ArraySetAsSeries(closesA, true);
    ArraySetAsSeries(closesB, true);
    
-   int copiedA = CopyClose(symbolA, InpCorrTimeframe, 0, period, closesA);
-   int copiedB = CopyClose(symbolB, InpCorrTimeframe, 0, period, closesB);
+   // v3.2.7: Use SafeCopyClose with retry
+   bool gotA = SafeCopyClose(symbolA, InpCorrTimeframe, 0, period, closesA);
+   bool gotB = SafeCopyClose(symbolB, InpCorrTimeframe, 0, period, closesB);
    
-   // Check if data is available
-   if(copiedA < period || copiedB < period)
+   if(!gotA || !gotB)
    {
-      if(InpDebugMode)
+      if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
       {
-         PrintFormat("Pair %d: Data incomplete - %s: %d bars, %s: %d bars (need %d)",
-                     pairIndex + 1, symbolA, copiedA, symbolB, copiedB, period);
+         PrintFormat("Pair %d: Data incomplete - %s: %s, %s: %s",
+                     pairIndex + 1, symbolA, gotA ? "OK" : "FAIL", symbolB, gotB ? "OK" : "FAIL");
       }
       g_pairs[pairIndex].dataValid = false;
       return;
    }
    
-   // Check if data has valid values (not all zeros)
+   // Check valid values
    bool hasValidDataA = false;
    bool hasValidDataB = false;
    for(int i = 0; i < period && (!hasValidDataA || !hasValidDataB); i++)
@@ -1248,38 +1372,24 @@ void UpdatePriceHistory(int pairIndex)
    
    if(!hasValidDataA || !hasValidDataB)
    {
-      if(InpDebugMode)
-      {
-         PrintFormat("Pair %d: Data has zero values - %s valid: %s, %s valid: %s",
-                     pairIndex + 1, symbolA, hasValidDataA ? "Yes" : "No", 
-                     symbolB, hasValidDataB ? "Yes" : "No");
-      }
       g_pairs[pairIndex].dataValid = false;
       return;
    }
    
    g_pairs[pairIndex].dataValid = true;
    
-   // Copy to price arrays
    for(int i = 0; i < period; i++)
    {
       g_pairData[pairIndex].pricesA[i] = closesA[i];
       g_pairData[pairIndex].pricesB[i] = closesB[i];
    }
-   
-   if(InpDebugMode && pairIndex == 0)
-   {
-      PrintFormat("Pair 1 Price Data: A[0]=%.5f, A[1]=%.5f, B[0]=%.5f, B[1]=%.5f",
-                  closesA[0], closesA[1], closesB[0], closesB[1]);
-   }
 }
 
 //+------------------------------------------------------------------+
-//| Calculate Returns (Percentage or Log based on method)              |
+//| Calculate Returns                                                  |
 //+------------------------------------------------------------------+
 void CalculateLogReturns(int pairIndex)
 {
-   // Skip calculation if using Price Direct method
    if(InpCorrMethod == CORR_PRICE_DIRECT) return;
    
    int returnCount = MathMin(InpCorrBars - 1, MAX_LOOKBACK - 1);
@@ -1309,18 +1419,12 @@ void CalculateLogReturns(int pairIndex)
 }
 
 //+------------------------------------------------------------------+
-//| Calculate Pearson Correlation (v3.2.1 - with method selection)    |
-//| Formula: r = Σ[(xi - x̄)(yi - ȳ)] / √[Σ(xi - x̄)² × Σ(yi - ȳ)²]  |
+//| Calculate Pearson Correlation                                      |
 //+------------------------------------------------------------------+
 double CalculatePearsonCorrelation(int pairIndex)
 {
-   // Check if data is valid
-   if(!g_pairs[pairIndex].dataValid)
-   {
-      return 0;
-   }
+   if(!g_pairs[pairIndex].dataValid) return 0;
    
-   // Choose calculation method based on input
    switch(InpCorrMethod)
    {
       case CORR_PRICE_DIRECT:
@@ -1336,8 +1440,7 @@ double CalculatePearsonCorrelation(int pairIndex)
 }
 
 //+------------------------------------------------------------------+
-//| Calculate Price Direct Correlation (like myfxbook)                 |
-//| Uses raw price values, not returns                                 |
+//| Calculate Price Direct Correlation                                 |
 //+------------------------------------------------------------------+
 double CalculatePriceCorrelation(int pairIndex)
 {
@@ -1348,7 +1451,6 @@ double CalculatePriceCorrelation(int pairIndex)
    double sumA2 = 0, sumB2 = 0;
    double sumAB = 0;
    
-   // Use prices directly (not returns) - like myfxbook
    for(int i = 0; i < n; i++)
    {
       double priceA = g_pairData[pairIndex].pricesA[i];
@@ -1368,42 +1470,21 @@ double CalculatePriceCorrelation(int pairIndex)
    double varA = (sumA2 / n) - (meanA * meanA);
    double varB = (sumB2 / n) - (meanB * meanB);
    
-   // Debug output for first pair
-   if(InpDebugMode && pairIndex == 0)
-   {
-      PrintFormat("Pair 1 [PRICE_DIRECT] n=%d, meanA=%.5f, meanB=%.5f", n, meanA, meanB);
-      PrintFormat("Pair 1 [PRICE_DIRECT] cov=%.10f, varA=%.10f, varB=%.10f", covariance, varA, varB);
-   }
-   
    if(varA <= 0 || varB <= 0) return 0;
    
    double stdDevA = MathSqrt(varA);
    double stdDevB = MathSqrt(varB);
    
-   double correlation = covariance / (stdDevA * stdDevB);
-   
-   if(InpDebugMode && pairIndex == 0)
-   {
-      PrintFormat("Pair 1 [PRICE_DIRECT] Correlation r = %.4f (%.2f%%)", correlation, correlation * 100);
-   }
-   
-   return correlation;
+   return covariance / (stdDevA * stdDevB);
 }
 
 //+------------------------------------------------------------------+
-//| Calculate Return-Based Correlation (Percentage or Log Returns)     |
+//| Calculate Return-Based Correlation                                 |
 //+------------------------------------------------------------------+
 double CalculateReturnCorrelation(int pairIndex)
 {
    int n = MathMin(InpCorrBars - 1, MAX_LOOKBACK - 1);
-   if(n < 10)  // Need at least 10 data points for reliable correlation
-   {
-      if(InpDebugMode)
-      {
-         PrintFormat("Pair %d: Not enough data for correlation (n=%d, need 10)", pairIndex + 1, n);
-      }
-      return 0;
-   }
+   if(n < 10) return 0;
    
    double sumA = 0, sumB = 0;
    double sumA2 = 0, sumB2 = 0;
@@ -1428,46 +1509,21 @@ double CalculateReturnCorrelation(int pairIndex)
    double varA = (sumA2 / n) - (meanA * meanA);
    double varB = (sumB2 / n) - (meanB * meanB);
    
-   // Debug output for first pair
-   if(InpDebugMode && pairIndex == 0)
-   {
-      PrintFormat("Pair 1 [RETURNS] n=%d, sumA=%.8f, sumB=%.8f", n, sumA, sumB);
-      PrintFormat("Pair 1 [RETURNS] meanA=%.8f, meanB=%.8f, cov=%.10f", meanA, meanB, covariance);
-      PrintFormat("Pair 1 [RETURNS] varA=%.10f, varB=%.10f", varA, varB);
-   }
-   
-   if(varA <= 0 || varB <= 0) 
-   {
-      if(InpDebugMode)
-      {
-         PrintFormat("Pair %d: Variance is zero or negative (varA=%.10f, varB=%.10f)", 
-                     pairIndex + 1, varA, varB);
-      }
-      return 0;
-   }
+   if(varA <= 0 || varB <= 0) return 0;
    
    double stdDevA = MathSqrt(varA);
    double stdDevB = MathSqrt(varB);
    
    if(stdDevA == 0 || stdDevB == 0) return 0;
    
-   double correlation = covariance / (stdDevA * stdDevB);
-   
-   if(InpDebugMode && pairIndex == 0)
-   {
-      PrintFormat("Pair 1 [RETURNS] Corr Result: r = %.4f (%.2f%%)", correlation, correlation * 100);
-   }
-   
-   return correlation;
+   return covariance / (stdDevA * stdDevB);
 }
 
 //+------------------------------------------------------------------+
-//| Calculate Hedge Ratio (Beta) v3.2.6 - Stable Beta System           |
-//| Supports multiple modes: Auto+EMA, PipValue, Percentage, Manual    |
+//| Calculate Hedge Ratio (Beta) v3.2.6                                |
 //+------------------------------------------------------------------+
 double CalculateHedgeRatio(int pairIndex)
 {
-   // Check if data is valid
    if(!g_pairs[pairIndex].dataValid) return 1.0;
    
    double rawBeta = 1.0;
@@ -1477,43 +1533,26 @@ double CalculateHedgeRatio(int pairIndex)
    switch(InpBetaMode)
    {
       case BETA_MANUAL_FIXED:
-         // Use manual beta if set per-pair, otherwise use default
          rawBeta = (g_pairs[pairIndex].manualBeta > 0) 
                    ? g_pairs[pairIndex].manualBeta 
                    : InpManualBetaDefault;
-         // Clamp to range
          rawBeta = MathMax(0.1, MathMin(10.0, rawBeta));
-         if(InpDebugMode && pairIndex < 3)
-         {
-            PrintFormat("Pair %d [BETA MANUAL] = %.4f", pairIndex + 1, rawBeta);
-         }
-         return rawBeta;  // No smoothing for manual
+         return rawBeta;
          
       case BETA_PIP_VALUE_ONLY:
-         // Use Pip Value based beta (most stable)
          rawBeta = CalculatePipValueBeta(pairIndex);
-         if(InpDebugMode && pairIndex < 3)
-         {
-            PrintFormat("Pair %d [BETA PIP_VALUE] = %.4f", pairIndex + 1, rawBeta);
-         }
-         return rawBeta;  // Already stable, no smoothing needed
+         return rawBeta;
          
       case BETA_PERCENTAGE_RAW:
-         // Current unstable method (kept for comparison/research)
          if(InpCorrMethod == CORR_PRICE_DIRECT)
             rawBeta = CalculatePriceBasedBeta(pairIndex);
          else
             rawBeta = CalculateReturnBasedBeta(pairIndex);
-         if(InpDebugMode && pairIndex < 3)
-         {
-            PrintFormat("Pair %d [BETA PCT_RAW] = %.4f (volatile)", pairIndex + 1, rawBeta);
-         }
-         return rawBeta;  // Raw = unstable, no smoothing
+         return rawBeta;
          
       case BETA_AUTO_SMOOTH:
       default:
       {
-         // Hybrid: Weighted average of Pip Value (stable) + Percentage (responsive), then EMA smoothed
          pipBeta = CalculatePipValueBeta(pairIndex);
          
          if(InpCorrMethod == CORR_PRICE_DIRECT)
@@ -1521,18 +1560,10 @@ double CalculateHedgeRatio(int pairIndex)
          else
             pctBeta = CalculateReturnBasedBeta(pairIndex);
          
-         // Weighted average: default 70% pip-based, 30% pct-based
          double pipWeight = MathMax(0.5, MathMin(0.9, InpPipBetaWeight));
          rawBeta = pipBeta * pipWeight + pctBeta * (1.0 - pipWeight);
          
-         // Apply EMA smoothing
          double smoothBeta = ApplyBetaSmoothing(pairIndex, rawBeta);
-         
-         if(InpDebugMode && pairIndex < 3)
-         {
-            PrintFormat("Pair %d [BETA AUTO] Pip=%.4f, Pct=%.4f, Raw=%.4f, Smooth=%.4f", 
-                        pairIndex + 1, pipBeta, pctBeta, rawBeta, smoothBeta);
-         }
          
          return smoothBeta;
       }
@@ -1540,48 +1571,30 @@ double CalculateHedgeRatio(int pairIndex)
 }
 
 //+------------------------------------------------------------------+
-//| Calculate Pip-Value Based Beta (v3.2.6) - Most Stable              |
-//| Beta = PipValueA / PipValueB (for dollar-neutral hedging)         |
+//| Calculate Pip-Value Based Beta                                     |
 //+------------------------------------------------------------------+
 double CalculatePipValueBeta(int pairIndex)
 {
    string symbolA = g_pairs[pairIndex].symbolA;
    string symbolB = g_pairs[pairIndex].symbolB;
    
-   // Get pip value in account currency for each symbol
    double pipValueA = GetPipValue(symbolA);
    double pipValueB = GetPipValue(symbolB);
    
-   if(pipValueB <= 0 || pipValueA <= 0)
-   {
-      if(InpDebugMode && pairIndex < 3)
-      {
-         PrintFormat("Pair %d [PIP_BETA] Warning: PipValueA=%.6f, PipValueB=%.6f - using 1.0",
-                     pairIndex + 1, pipValueA, pipValueB);
-      }
-      return 1.0;
-   }
+   if(pipValueB <= 0 || pipValueA <= 0) return 1.0;
    
-   // Beta = pipValueA / pipValueB
-   // This ensures: lotA * pipValueA = lotB * pipValueB (dollar neutral)
    double beta = pipValueA / pipValueB;
    
-   // Clamp to reasonable range
    beta = MathMax(0.1, MathMin(10.0, beta));
    
    return beta;
 }
 
 //+------------------------------------------------------------------+
-//| Apply EMA Smoothing to Beta (v3.2.6)                               |
-//| Reduces volatility by applying exponential moving average         |
+//| Apply Beta EMA Smoothing                                           |
 //+------------------------------------------------------------------+
 double ApplyBetaSmoothing(int pairIndex, double newBeta)
 {
-   // Clamp smooth factor to valid range (0.05 to 0.5)
-   double alpha = MathMax(0.05, MathMin(0.5, InpBetaSmoothFactor));
-   
-   // First time initialization
    if(!g_pairs[pairIndex].betaInitialized)
    {
       g_pairs[pairIndex].prevBeta = newBeta;
@@ -1589,109 +1602,36 @@ double ApplyBetaSmoothing(int pairIndex, double newBeta)
       return newBeta;
    }
    
-   // EMA formula: smoothBeta = prevBeta * (1-alpha) + newBeta * alpha
-   double smoothBeta = g_pairs[pairIndex].prevBeta * (1.0 - alpha) + newBeta * alpha;
+   double alpha = MathMax(0.05, MathMin(0.3, InpBetaSmoothFactor));
+   double smoothBeta = alpha * newBeta + (1.0 - alpha) * g_pairs[pairIndex].prevBeta;
    
-   // Clamp result
-   smoothBeta = MathMax(0.1, MathMin(10.0, smoothBeta));
-   
-   // Store for next iteration
    g_pairs[pairIndex].prevBeta = smoothBeta;
    
    return smoothBeta;
 }
 
 //+------------------------------------------------------------------+
-//| Get Dollar Value per 1 Standard Lot for a symbol (v3.2.2)         |
-//| Normalizes prices to USD value for accurate Beta calculation      |
-//| XXXUSD pairs: value = price * contract_size (already in USD)      |
-//| USDXXX pairs: value = contract_size (base is USD)                 |
-//| Cross pairs: value = price * contract_size * XXXUSD rate          |
-//+------------------------------------------------------------------+
-double GetDollarValuePerLot(string symbol, double price)
-{
-   double contractSize = SymbolInfoDouble(symbol, SYMBOL_TRADE_CONTRACT_SIZE);
-   if(contractSize == 0) contractSize = 100000; // Default to standard lot
-   
-   string base = StringSubstr(symbol, 0, 3);   // First 3 chars (e.g., "GBP")
-   string quote = StringSubstr(symbol, 3, 3);  // Last 3 chars (e.g., "USD")
-   
-   // Case 1: Quote currency is USD (e.g., GBPUSD, EURUSD)
-   // Dollar value = price * contract_size
-   if(quote == "USD")
-   {
-      return price * contractSize;  // e.g., 1.26 * 100000 = 126,000 USD
-   }
-   
-   // Case 2: Base currency is USD (e.g., USDJPY, USDCHF)  
-   // Dollar value = contract_size (1 lot = 100,000 USD)
-   if(base == "USD")
-   {
-      return contractSize;  // e.g., 100000 USD
-   }
-   
-   // Case 3: Cross pair (e.g., GBPJPY, EURJPY, EURGBP)
-   // Need to convert base currency to USD using XXXUSD rate
-   string baseUsdPair = base + "USD";
-   double baseUsdRate = 0;
-   
-   if(SymbolSelect(baseUsdPair, true))
-   {
-      baseUsdRate = SymbolInfoDouble(baseUsdPair, SYMBOL_BID);
-   }
-   
-   if(baseUsdRate > 0)
-   {
-      return baseUsdRate * contractSize;  // e.g., GBPUSD(1.26) * 100000 = 126,000 USD
-   }
-   
-   // Fallback: Try USDXXX pair and invert
-   string usdBasePair = "USD" + base;
-   double usdBaseRate = 0;
-   
-   if(SymbolSelect(usdBasePair, true))
-   {
-      usdBaseRate = SymbolInfoDouble(usdBasePair, SYMBOL_BID);
-   }
-   
-   if(usdBaseRate > 0)
-   {
-      return (1.0 / usdBaseRate) * contractSize;
-   }
-   
-   // Last fallback: use price as-is (may be inaccurate for some exotic pairs)
-   return price * contractSize;
-}
-
-//+------------------------------------------------------------------+
-//| Calculate Price-Based Beta using Percentage Change                 |
-//| v3.2.2 Revised: Uses % change for proper scale normalization      |
-//| Note: Correlation still uses Price Direct (myfxbook style)        |
+//| Calculate Price-Based Beta                                         |
 //+------------------------------------------------------------------+
 double CalculatePriceBasedBeta(int pairIndex)
 {
    int n = MathMin(InpCorrBars, MAX_LOOKBACK);
-   if(n < 11) return 1.0;  // Need at least 11 bars for 10 changes
-   
-   string symbolA = g_pairs[pairIndex].symbolA;
-   string symbolB = g_pairs[pairIndex].symbolB;
+   if(n < 10) return 1.0;
    
    double sumA = 0, sumB = 0;
    double sumA2 = 0;
    double sumAB = 0;
    int count = 0;
    
-   // Calculate Beta from Percentage Changes (scale-independent)
-   for(int i = 0; i < n - 1; i++)
+   for(int i = 1; i < n; i++)
    {
       double priceA_t = g_pairData[pairIndex].pricesA[i];
-      double priceA_t1 = g_pairData[pairIndex].pricesA[i + 1];
+      double priceA_t1 = g_pairData[pairIndex].pricesA[i - 1];
       double priceB_t = g_pairData[pairIndex].pricesB[i];
-      double priceB_t1 = g_pairData[pairIndex].pricesB[i + 1];
+      double priceB_t1 = g_pairData[pairIndex].pricesB[i - 1];
       
       if(priceA_t1 <= 0 || priceB_t1 <= 0) continue;
       
-      // Percentage change = (price_t - price_t1) / price_t1
       double pctA = (priceA_t - priceA_t1) / priceA_t1;
       double pctB = (priceB_t - priceB_t1) / priceB_t1;
       
@@ -1707,23 +1647,20 @@ double CalculatePriceBasedBeta(int pairIndex)
    double meanA = sumA / count;
    double meanB = sumB / count;
    
-   // Beta = Cov(A,B) / Var(A) from percentage changes
    double covariance = (sumAB / count) - (meanA * meanB);
    double varianceA = (sumA2 / count) - (meanA * meanA);
    
    if(varianceA <= 0) return 1.0;
    
-   // For negative correlation, we still want positive beta for hedge ratio
    double beta = MathAbs(covariance / varianceA);
    
-   // Clamp beta to reasonable range (0.1 to 10.0)
    beta = MathMax(0.1, MathMin(10.0, beta));
    
    return beta;
 }
 
 //+------------------------------------------------------------------+
-//| Calculate Return-Based Beta (for Percentage/Log Returns method)   |
+//| Calculate Return-Based Beta                                        |
 //+------------------------------------------------------------------+
 double CalculateReturnBasedBeta(int pairIndex)
 {
@@ -1748,23 +1685,13 @@ double CalculateReturnBasedBeta(int pairIndex)
    double meanA = sumA / n;
    double meanB = sumB / n;
    
-   // Beta = Cov(A,B) / Var(A) - using variance of Symbol A (not B!)
    double covariance = (sumAB / n) - (meanA * meanB);
    double varianceA = (sumA2 / n) - (meanA * meanA);
    
-   if(varianceA <= 0) 
-   {
-      if(InpDebugMode)
-      {
-         PrintFormat("Pair %d: varianceA is zero or negative (%.10f), using beta=1.0", 
-                     pairIndex + 1, varianceA);
-      }
-      return 1.0;
-   }
+   if(varianceA <= 0) return 1.0;
    
    double beta = MathAbs(covariance / varianceA);
    
-   // Clamp beta to reasonable range (0.1 to 10.0)
    beta = MathMax(0.1, MathMin(10.0, beta));
    
    return beta;
@@ -1850,7 +1777,7 @@ double GetPipValue(string symbol)
 }
 
 //+------------------------------------------------------------------+
-//| Calculate Dollar-Neutral Lot Sizes (v3.0)                          |
+//| Calculate Dollar-Neutral Lot Sizes                                 |
 //+------------------------------------------------------------------+
 void CalculateDollarNeutralLots(int pairIndex)
 {
@@ -1865,7 +1792,6 @@ void CalculateDollarNeutralLots(int pairIndex)
    
    if(pipValueB == 0)
    {
-      // Set same lots for both sides
       g_pairs[pairIndex].lotBuyA = baseLot;
       g_pairs[pairIndex].lotBuyB = baseLot;
       g_pairs[pairIndex].lotSellA = baseLot;
@@ -1873,13 +1799,9 @@ void CalculateDollarNeutralLots(int pairIndex)
       return;
    }
    
-   // LotA = Base Lot
    double lotA = baseLot;
-   
-   // LotB = LotA × β × (PipValueA / PipValueB)
    double lotB = baseLot * hedgeRatio * (pipValueA / pipValueB);
    
-   // Normalize lot size
    double minLotB = SymbolInfoDouble(symbolB, SYMBOL_VOLUME_MIN);
    double maxLotB = SymbolInfoDouble(symbolB, SYMBOL_VOLUME_MAX);
    double stepLotB = SymbolInfoDouble(symbolB, SYMBOL_VOLUME_STEP);
@@ -1888,7 +1810,6 @@ void CalculateDollarNeutralLots(int pairIndex)
    lotB = MathFloor(lotB / stepLotB) * stepLotB;
    lotB = MathMin(lotB, InpMaxLot);
    
-   // Set for both Buy and Sell sides
    g_pairs[pairIndex].lotBuyA = lotA;
    g_pairs[pairIndex].lotBuyB = lotB;
    g_pairs[pairIndex].lotSellA = lotA;
@@ -1896,12 +1817,11 @@ void CalculateDollarNeutralLots(int pairIndex)
 }
 
 //+------------------------------------------------------------------+
-//| ================ SIGNAL ENGINE (v3.1) ================             |
+//| ================ SIGNAL ENGINE ================                    |
 //+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
-//| Analyze All Pairs for Trading Signals (v3.1)                       |
-//| Separate Buy/Sell Side Analysis - Check directionBuy/Sell == -1   |
+//| Analyze All Pairs for Trading Signals                              |
 //+------------------------------------------------------------------+
 void AnalyzeAllPairs()
 {
@@ -1909,34 +1829,39 @@ void AnalyzeAllPairs()
    {
       if(!g_pairs[i].enabled) continue;
       
-      // Check correlation threshold
       if(MathAbs(g_pairs[i].correlation) < InpMinCorrelation)
          continue;
       
       double zScore = g_pairs[i].zScore;
       
       // === BUY SIDE ENTRY ===
-      // Condition: directionBuy == -1 (Ready) AND Z-Score < -EntryThreshold
       if(g_pairs[i].directionBuy == -1 && g_pairs[i].orderCountBuy < g_pairs[i].maxOrderBuy)
       {
          if(zScore < -InpEntryZScore)
          {
             if(OpenBuySideTrade(i))
             {
-               g_pairs[i].directionBuy = 1;  // Active trade
+               g_pairs[i].directionBuy = 1;
+               // v3.2.7: Record entry price for ATR averaging
+               g_pairs[i].avgEntryPriceBuyA = SymbolInfoDouble(g_pairs[i].symbolA, SYMBOL_ASK);
+               g_pairs[i].avgCountBuy = 0;
+               g_pairs[i].lastAvgZBuy = MathAbs(zScore);
             }
          }
       }
       
       // === SELL SIDE ENTRY ===
-      // Condition: directionSell == -1 (Ready) AND Z-Score > +EntryThreshold
       if(g_pairs[i].directionSell == -1 && g_pairs[i].orderCountSell < g_pairs[i].maxOrderSell)
       {
          if(zScore > InpEntryZScore)
          {
             if(OpenSellSideTrade(i))
             {
-               g_pairs[i].directionSell = 1;  // Active trade
+               g_pairs[i].directionSell = 1;
+               // v3.2.7: Record entry price for ATR averaging
+               g_pairs[i].avgEntryPriceSellA = SymbolInfoDouble(g_pairs[i].symbolA, SYMBOL_BID);
+               g_pairs[i].avgCountSell = 0;
+               g_pairs[i].lastAvgZSell = MathAbs(zScore);
             }
          }
       }
@@ -1944,13 +1869,242 @@ void AnalyzeAllPairs()
 }
 
 //+------------------------------------------------------------------+
-//| ================ EXECUTION ENGINE (v3.0) ================          |
+//| v3.2.7: Check Averaging Signals                                    |
+//+------------------------------------------------------------------+
+void CheckAveragingSignals()
+{
+   for(int i = 0; i < MAX_PAIRS; i++)
+   {
+      if(!g_pairs[i].enabled) continue;
+      
+      // === Buy Side Averaging ===
+      if(g_pairs[i].directionBuy == 1 && g_pairs[i].avgCountBuy < InpMaxAveragingOrders)
+      {
+         if(InpAveragingMode == AVG_MODE_ZSCORE)
+            CheckZScoreAveraging(i, true);
+         else
+            CheckAtrAveraging(i, true);
+      }
+      
+      // === Sell Side Averaging ===
+      if(g_pairs[i].directionSell == 1 && g_pairs[i].avgCountSell < InpMaxAveragingOrders)
+      {
+         if(InpAveragingMode == AVG_MODE_ZSCORE)
+            CheckZScoreAveraging(i, false);
+         else
+            CheckAtrAveraging(i, false);
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| v3.2.7: Check Z-Score Based Averaging                              |
+//+------------------------------------------------------------------+
+void CheckZScoreAveraging(int pairIndex, bool isBuySide)
+{
+   double zScore = g_pairs[pairIndex].zScore;
+   double absZ = MathAbs(zScore);
+   double lastTriggered = isBuySide ? g_pairs[pairIndex].lastAvgZBuy : g_pairs[pairIndex].lastAvgZSell;
+   
+   for(int lvl = 0; lvl < g_zScoreGridCount; lvl++)
+   {
+      double level = g_zScoreGridLevels[lvl];
+      
+      // Check if this level is higher than last triggered and Z-Score has reached it
+      if(level > lastTriggered && absZ >= level)
+      {
+         // For Buy side, Z should be negative (going more negative)
+         // For Sell side, Z should be positive (going more positive)
+         bool validDirection = (isBuySide && zScore < 0) || (!isBuySide && zScore > 0);
+         
+         if(validDirection)
+         {
+            if(OpenAveragingOrder(pairIndex, isBuySide))
+            {
+               if(isBuySide)
+               {
+                  g_pairs[pairIndex].lastAvgZBuy = level;
+                  g_pairs[pairIndex].avgCountBuy++;
+               }
+               else
+               {
+                  g_pairs[pairIndex].lastAvgZSell = level;
+                  g_pairs[pairIndex].avgCountSell++;
+               }
+               PrintFormat("Pair %d %s AVG ORDER at Z=%.2f (Level %.2f) [%d/%d]", 
+                  pairIndex + 1, isBuySide ? "BUY" : "SELL", zScore, level,
+                  isBuySide ? g_pairs[pairIndex].avgCountBuy : g_pairs[pairIndex].avgCountSell,
+                  InpMaxAveragingOrders);
+            }
+            break;  // Only one order per tick
+         }
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| v3.2.7: Check ATR Based Averaging                                  |
+//+------------------------------------------------------------------+
+void CheckAtrAveraging(int pairIndex, bool isBuySide)
+{
+   string symbolA = g_pairs[pairIndex].symbolA;
+   
+   // Calculate ATR using handle + CopyBuffer (MQL5 standard)
+   int atrHandle = iATR(symbolA, InpAtrTimeframe, InpAtrPeriod);
+   if(atrHandle == INVALID_HANDLE) return;
+   
+   double atrBuffer[];
+   ArraySetAsSeries(atrBuffer, true);
+   if(CopyBuffer(atrHandle, 0, 0, 1, atrBuffer) <= 0)
+   {
+      IndicatorRelease(atrHandle);
+      return;
+   }
+   
+   double atr = atrBuffer[0];
+   IndicatorRelease(atrHandle);
+   if(atr <= 0) return;
+   
+   double gridStep = atr * InpAtrMultiplier;
+   
+   double currentPrice = isBuySide 
+      ? SymbolInfoDouble(symbolA, SYMBOL_ASK) 
+      : SymbolInfoDouble(symbolA, SYMBOL_BID);
+   double entryPrice = isBuySide 
+      ? g_pairs[pairIndex].avgEntryPriceBuyA 
+      : g_pairs[pairIndex].avgEntryPriceSellA;
+   
+   if(entryPrice == 0) return;
+   
+   double distance = MathAbs(currentPrice - entryPrice);
+   int currentOrders = isBuySide ? g_pairs[pairIndex].avgCountBuy : g_pairs[pairIndex].avgCountSell;
+   
+   // Check if price has moved enough for next averaging order
+   int expectedOrders = (int)MathFloor(distance / gridStep);
+   
+   if(expectedOrders > currentOrders && currentOrders < InpMaxAveragingOrders)
+   {
+      // For Buy side: price should have moved down (against us)
+      // For Sell side: price should have moved up (against us)
+      bool validDirection = (isBuySide && currentPrice < entryPrice) || 
+                            (!isBuySide && currentPrice > entryPrice);
+      
+      if(validDirection)
+      {
+         if(OpenAveragingOrder(pairIndex, isBuySide))
+         {
+            if(isBuySide)
+               g_pairs[pairIndex].avgCountBuy++;
+            else
+               g_pairs[pairIndex].avgCountSell++;
+            
+            PrintFormat("Pair %d %s ATR AVG ORDER: Distance=%.5f, GridStep=%.5f [%d/%d]", 
+               pairIndex + 1, isBuySide ? "BUY" : "SELL", distance, gridStep,
+               isBuySide ? g_pairs[pairIndex].avgCountBuy : g_pairs[pairIndex].avgCountSell,
+               InpMaxAveragingOrders);
+         }
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| v3.2.7: Open Averaging Order                                       |
+//+------------------------------------------------------------------+
+bool OpenAveragingOrder(int pairIndex, bool isBuySide)
+{
+   string symbolA = g_pairs[pairIndex].symbolA;
+   string symbolB = g_pairs[pairIndex].symbolB;
+   int corrType = g_pairs[pairIndex].correlationType;
+   
+   double lotA = (isBuySide ? g_pairs[pairIndex].lotBuyA : g_pairs[pairIndex].lotSellA) * InpAveragingLotMult;
+   double lotB = (isBuySide ? g_pairs[pairIndex].lotBuyB : g_pairs[pairIndex].lotSellB) * InpAveragingLotMult;
+   
+   // Normalize lots
+   double minLotA = SymbolInfoDouble(symbolA, SYMBOL_VOLUME_MIN);
+   double minLotB = SymbolInfoDouble(symbolB, SYMBOL_VOLUME_MIN);
+   double stepA = SymbolInfoDouble(symbolA, SYMBOL_VOLUME_STEP);
+   double stepB = SymbolInfoDouble(symbolB, SYMBOL_VOLUME_STEP);
+   
+   lotA = MathMax(minLotA, MathFloor(lotA / stepA) * stepA);
+   lotB = MathMax(minLotB, MathFloor(lotB / stepB) * stepB);
+   
+   string comment = StringFormat("StatArb_AVG_%s_%d", isBuySide ? "BUY" : "SELL", pairIndex + 1);
+   
+   ulong ticketA = 0;
+   ulong ticketB = 0;
+   
+   if(isBuySide)
+   {
+      // Buy Side: Buy A, Sell/Buy B based on correlation
+      double askA = SymbolInfoDouble(symbolA, SYMBOL_ASK);
+      if(g_trade.Buy(lotA, symbolA, askA, 0, 0, comment))
+      {
+         ticketA = g_trade.ResultOrder();
+      }
+      else return false;
+      
+      if(corrType == 1)  // Positive: Sell B
+      {
+         double bidB = SymbolInfoDouble(symbolB, SYMBOL_BID);
+         if(!g_trade.Sell(lotB, symbolB, bidB, 0, 0, comment))
+         {
+            g_trade.PositionClose(ticketA);
+            return false;
+         }
+      }
+      else  // Negative: Buy B
+      {
+         double askB = SymbolInfoDouble(symbolB, SYMBOL_ASK);
+         if(!g_trade.Buy(lotB, symbolB, askB, 0, 0, comment))
+         {
+            g_trade.PositionClose(ticketA);
+            return false;
+         }
+      }
+      
+      g_pairs[pairIndex].orderCountBuy++;
+   }
+   else
+   {
+      // Sell Side: Sell A, Buy/Sell B based on correlation
+      double bidA = SymbolInfoDouble(symbolA, SYMBOL_BID);
+      if(g_trade.Sell(lotA, symbolA, bidA, 0, 0, comment))
+      {
+         ticketA = g_trade.ResultOrder();
+      }
+      else return false;
+      
+      if(corrType == 1)  // Positive: Buy B
+      {
+         double askB = SymbolInfoDouble(symbolB, SYMBOL_ASK);
+         if(!g_trade.Buy(lotB, symbolB, askB, 0, 0, comment))
+         {
+            g_trade.PositionClose(ticketA);
+            return false;
+         }
+      }
+      else  // Negative: Sell B
+      {
+         double bidB = SymbolInfoDouble(symbolB, SYMBOL_BID);
+         if(!g_trade.Sell(lotB, symbolB, bidB, 0, 0, comment))
+         {
+            g_trade.PositionClose(ticketA);
+            return false;
+         }
+      }
+      
+      g_pairs[pairIndex].orderCountSell++;
+   }
+   
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| ================ EXECUTION ENGINE ================                 |
 //+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
 //| Open Buy Side Trade                                                |
-//| Positive Correlation: SymbolA=BUY, SymbolB=SELL                   |
-//| Negative Correlation: SymbolA=BUY, SymbolB=BUY                    |
 //+------------------------------------------------------------------+
 bool OpenBuySideTrade(int pairIndex)
 {
@@ -1965,7 +2119,6 @@ bool OpenBuySideTrade(int pairIndex)
    ulong ticketA = 0;
    ulong ticketB = 0;
    
-   // Open Buy on Symbol A
    double askA = SymbolInfoDouble(symbolA, SYMBOL_ASK);
    if(g_trade.Buy(lotA, symbolA, askA, 0, 0, comment))
    {
@@ -1977,8 +2130,7 @@ bool OpenBuySideTrade(int pairIndex)
       return false;
    }
    
-   // Open position on Symbol B based on correlation type
-   if(corrType == 1)  // Positive correlation: Sell B
+   if(corrType == 1)
    {
       double bidB = SymbolInfoDouble(symbolB, SYMBOL_BID);
       if(g_trade.Sell(lotB, symbolB, bidB, 0, 0, comment))
@@ -1992,7 +2144,7 @@ bool OpenBuySideTrade(int pairIndex)
          return false;
       }
    }
-   else  // Negative correlation: Buy B
+   else
    {
       double askB = SymbolInfoDouble(symbolB, SYMBOL_ASK);
       if(g_trade.Buy(lotB, symbolB, askB, 0, 0, comment))
@@ -2007,7 +2159,6 @@ bool OpenBuySideTrade(int pairIndex)
       }
    }
    
-   // Record trade info
    g_pairs[pairIndex].ticketBuyA = ticketA;
    g_pairs[pairIndex].ticketBuyB = ticketB;
    g_pairs[pairIndex].orderCountBuy++;
@@ -2024,8 +2175,6 @@ bool OpenBuySideTrade(int pairIndex)
 
 //+------------------------------------------------------------------+
 //| Open Sell Side Trade                                               |
-//| Positive Correlation: SymbolA=SELL, SymbolB=BUY                   |
-//| Negative Correlation: SymbolA=SELL, SymbolB=SELL                  |
 //+------------------------------------------------------------------+
 bool OpenSellSideTrade(int pairIndex)
 {
@@ -2040,7 +2189,6 @@ bool OpenSellSideTrade(int pairIndex)
    ulong ticketA = 0;
    ulong ticketB = 0;
    
-   // Open Sell on Symbol A
    double bidA = SymbolInfoDouble(symbolA, SYMBOL_BID);
    if(g_trade.Sell(lotA, symbolA, bidA, 0, 0, comment))
    {
@@ -2052,8 +2200,7 @@ bool OpenSellSideTrade(int pairIndex)
       return false;
    }
    
-   // Open position on Symbol B based on correlation type
-   if(corrType == 1)  // Positive correlation: Buy B
+   if(corrType == 1)
    {
       double askB = SymbolInfoDouble(symbolB, SYMBOL_ASK);
       if(g_trade.Buy(lotB, symbolB, askB, 0, 0, comment))
@@ -2067,7 +2214,7 @@ bool OpenSellSideTrade(int pairIndex)
          return false;
       }
    }
-   else  // Negative correlation: Sell B
+   else
    {
       double bidB = SymbolInfoDouble(symbolB, SYMBOL_BID);
       if(g_trade.Sell(lotB, symbolB, bidB, 0, 0, comment))
@@ -2082,7 +2229,6 @@ bool OpenSellSideTrade(int pairIndex)
       }
    }
    
-   // Record trade info
    g_pairs[pairIndex].ticketSellA = ticketA;
    g_pairs[pairIndex].ticketSellB = ticketB;
    g_pairs[pairIndex].orderCountSell++;
@@ -2107,45 +2253,33 @@ bool CloseBuySide(int pairIndex)
    bool closedA = false;
    bool closedB = false;
    
-   // Close position A
    if(g_pairs[pairIndex].ticketBuyA > 0)
    {
       if(PositionSelectByTicket(g_pairs[pairIndex].ticketBuyA))
       {
          closedA = g_trade.PositionClose(g_pairs[pairIndex].ticketBuyA);
       }
-      else
-      {
-         closedA = true;
-      }
+      else closedA = true;
    }
-   else
-   {
-      closedA = true;
-   }
+   else closedA = true;
    
-   // Close position B
    if(g_pairs[pairIndex].ticketBuyB > 0)
    {
       if(PositionSelectByTicket(g_pairs[pairIndex].ticketBuyB))
       {
          closedB = g_trade.PositionClose(g_pairs[pairIndex].ticketBuyB);
       }
-      else
-      {
-         closedB = true;
-      }
+      else closedB = true;
    }
-   else
-   {
-      closedB = true;
-   }
+   else closedB = true;
+   
+   // v3.2.7: Also close averaging orders (by comment)
+   CloseAveragingOrders(pairIndex, true);
    
    if(closedA && closedB)
    {
       PrintFormat("Pair %d BUY SIDE CLOSED | Profit: %.2f", pairIndex + 1, g_pairs[pairIndex].profitBuy);
       
-      // Update statistics before reset
       g_dailyProfit += g_pairs[pairIndex].profitBuy;
       g_weeklyProfit += g_pairs[pairIndex].profitBuy;
       g_monthlyProfit += g_pairs[pairIndex].profitBuy;
@@ -2155,15 +2289,17 @@ bool CloseBuySide(int pairIndex)
       g_monthlyLot += g_pairs[pairIndex].lotBuyA + g_pairs[pairIndex].lotBuyB;
       g_allTimeLot += g_pairs[pairIndex].lotBuyA + g_pairs[pairIndex].lotBuyB;
       
-      // v3.2.4: Reset Buy side state (back to Ready for auto-resume)
       g_pairs[pairIndex].ticketBuyA = 0;
       g_pairs[pairIndex].ticketBuyB = 0;
-      g_pairs[pairIndex].directionBuy = -1;  // Ready (auto-resume)
+      g_pairs[pairIndex].directionBuy = -1;
       g_pairs[pairIndex].profitBuy = 0;
       g_pairs[pairIndex].entryTimeBuy = 0;
-      g_pairs[pairIndex].orderCountBuy = 0;  // v3.2.4: Reset order count
-      g_pairs[pairIndex].lotBuyA = 0;        // v3.2.4: Reset lot
+      g_pairs[pairIndex].orderCountBuy = 0;
+      g_pairs[pairIndex].lotBuyA = 0;
       g_pairs[pairIndex].lotBuyB = 0;
+      g_pairs[pairIndex].avgCountBuy = 0;
+      g_pairs[pairIndex].lastAvgZBuy = 0;
+      g_pairs[pairIndex].avgEntryPriceBuyA = 0;
       
       return true;
    }
@@ -2181,45 +2317,33 @@ bool CloseSellSide(int pairIndex)
    bool closedA = false;
    bool closedB = false;
    
-   // Close position A
    if(g_pairs[pairIndex].ticketSellA > 0)
    {
       if(PositionSelectByTicket(g_pairs[pairIndex].ticketSellA))
       {
          closedA = g_trade.PositionClose(g_pairs[pairIndex].ticketSellA);
       }
-      else
-      {
-         closedA = true;
-      }
+      else closedA = true;
    }
-   else
-   {
-      closedA = true;
-   }
+   else closedA = true;
    
-   // Close position B
    if(g_pairs[pairIndex].ticketSellB > 0)
    {
       if(PositionSelectByTicket(g_pairs[pairIndex].ticketSellB))
       {
          closedB = g_trade.PositionClose(g_pairs[pairIndex].ticketSellB);
       }
-      else
-      {
-         closedB = true;
-      }
+      else closedB = true;
    }
-   else
-   {
-      closedB = true;
-   }
+   else closedB = true;
+   
+   // v3.2.7: Also close averaging orders
+   CloseAveragingOrders(pairIndex, false);
    
    if(closedA && closedB)
    {
       PrintFormat("Pair %d SELL SIDE CLOSED | Profit: %.2f", pairIndex + 1, g_pairs[pairIndex].profitSell);
       
-      // Update statistics before reset
       g_dailyProfit += g_pairs[pairIndex].profitSell;
       g_weeklyProfit += g_pairs[pairIndex].profitSell;
       g_monthlyProfit += g_pairs[pairIndex].profitSell;
@@ -2229,20 +2353,42 @@ bool CloseSellSide(int pairIndex)
       g_monthlyLot += g_pairs[pairIndex].lotSellA + g_pairs[pairIndex].lotSellB;
       g_allTimeLot += g_pairs[pairIndex].lotSellA + g_pairs[pairIndex].lotSellB;
       
-      // v3.2.4: Reset Sell side state (back to Ready for auto-resume)
       g_pairs[pairIndex].ticketSellA = 0;
       g_pairs[pairIndex].ticketSellB = 0;
-      g_pairs[pairIndex].directionSell = -1;  // Ready (auto-resume)
+      g_pairs[pairIndex].directionSell = -1;
       g_pairs[pairIndex].profitSell = 0;
       g_pairs[pairIndex].entryTimeSell = 0;
-      g_pairs[pairIndex].orderCountSell = 0;  // v3.2.4: Reset order count
-      g_pairs[pairIndex].lotSellA = 0;        // v3.2.4: Reset lot
+      g_pairs[pairIndex].orderCountSell = 0;
+      g_pairs[pairIndex].lotSellA = 0;
       g_pairs[pairIndex].lotSellB = 0;
+      g_pairs[pairIndex].avgCountSell = 0;
+      g_pairs[pairIndex].lastAvgZSell = 0;
+      g_pairs[pairIndex].avgEntryPriceSellA = 0;
       
       return true;
    }
    
    return false;
+}
+
+//+------------------------------------------------------------------+
+//| v3.2.7: Close Averaging Orders by Comment                          |
+//+------------------------------------------------------------------+
+void CloseAveragingOrders(int pairIndex, bool isBuySide)
+{
+   string pattern = StringFormat("StatArb_AVG_%s_%d", isBuySide ? "BUY" : "SELL", pairIndex + 1);
+   
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      
+      string comment = PositionGetString(POSITION_COMMENT);
+      if(StringFind(comment, pattern) >= 0)
+      {
+         g_trade.PositionClose(ticket);
+      }
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -2274,11 +2420,11 @@ void CloseAllSellSides()
 }
 
 //+------------------------------------------------------------------+
-//| ================ POSITION MANAGEMENT ================              |
+//| ================ POSITION MANAGEMENT v3.2.7 ================       |
 //+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
-//| Manage All Open Positions (v3.0)                                   |
+//| Manage All Open Positions (v3.2.7 - with Exit Mode)                |
 //+------------------------------------------------------------------+
 void ManageAllPositions()
 {
@@ -2289,10 +2435,11 @@ void ManageAllPositions()
       double zScore = g_pairs[i].zScore;
       
       // === Manage Buy Side ===
-      if(g_pairs[i].directionBuy == 1)  // Only active trades
+      if(g_pairs[i].directionBuy == 1)
       {
-         // Exit: Z-Score returned to normal (>= -ExitThreshold)
-         if(zScore >= -InpExitZScore)
+         bool shouldClose = CheckExitConditions(i, true, zScore);
+         
+         if(shouldClose)
          {
             CloseBuySide(i);
          }
@@ -2315,10 +2462,11 @@ void ManageAllPositions()
       }
       
       // === Manage Sell Side ===
-      if(g_pairs[i].directionSell == 1)  // Only active trades
+      if(g_pairs[i].directionSell == 1)
       {
-         // Exit: Z-Score returned to normal (<= +ExitThreshold)
-         if(zScore <= InpExitZScore)
+         bool shouldClose = CheckExitConditions(i, false, zScore);
+         
+         if(shouldClose)
          {
             CloseSellSide(i);
          }
@@ -2343,7 +2491,60 @@ void ManageAllPositions()
 }
 
 //+------------------------------------------------------------------+
-//| Update Pair Profits (v3.0)                                         |
+//| v3.2.7: Check Exit Conditions based on Exit Mode                   |
+//+------------------------------------------------------------------+
+bool CheckExitConditions(int pairIndex, bool isBuySide, double zScore)
+{
+   // Z-Score Exit condition
+   // Buy: entered at Z < -Entry, exit when Z >= -ExitZScore (back toward 0)
+   // Sell: entered at Z > +Entry, exit when Z <= +ExitZScore (back toward 0)
+   bool zScoreExit = isBuySide 
+      ? (zScore >= -InpExitZScore) 
+      : (zScore <= InpExitZScore);
+   
+   // Profit Target Exit condition
+   double profit = isBuySide ? g_pairs[pairIndex].profitBuy : g_pairs[pairIndex].profitSell;
+   double target = isBuySide ? g_pairs[pairIndex].targetBuy : g_pairs[pairIndex].targetSell;
+   bool profitExit = (profit >= target);
+   
+   bool shouldClose = false;
+   string reason = "";
+   
+   switch(InpExitMode)
+   {
+      case EXIT_ZSCORE_ONLY:
+         shouldClose = zScoreExit;
+         reason = "Z-Score";
+         break;
+         
+      case EXIT_PROFIT_ONLY:
+         shouldClose = profitExit;
+         reason = "Profit Target";
+         break;
+         
+      case EXIT_ZSCORE_OR_PROFIT:
+         shouldClose = zScoreExit || profitExit;
+         reason = zScoreExit ? (profitExit ? "Z+Profit" : "Z-Score") : "Profit Target";
+         break;
+         
+      case EXIT_ZSCORE_AND_PROFIT:
+         shouldClose = zScoreExit && profitExit;
+         reason = "Z+Profit Both";
+         break;
+   }
+   
+   if(shouldClose)
+   {
+      PrintFormat("Pair %d %s CLOSE [%s]: Z=%.2f, Profit=%.2f/%.2f", 
+         pairIndex + 1, isBuySide ? "BUY" : "SELL", reason, 
+         zScore, profit, target);
+   }
+   
+   return shouldClose;
+}
+
+//+------------------------------------------------------------------+
+//| Update Pair Profits                                                |
 //+------------------------------------------------------------------+
 void UpdatePairProfits()
 {
@@ -2367,6 +2568,9 @@ void UpdatePairProfits()
             profitB = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
          }
          
+         // v3.2.7: Add averaging orders profit
+         profitA += GetAveragingProfit(i, true);
+         
          g_pairs[i].profitBuy = profitA + profitB;
       }
       else
@@ -2388,6 +2592,9 @@ void UpdatePairProfits()
             profitB = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
          }
          
+         // v3.2.7: Add averaging orders profit
+         profitA += GetAveragingProfit(i, false);
+         
          g_pairs[i].profitSell = profitA + profitB;
       }
       else
@@ -2395,41 +2602,32 @@ void UpdatePairProfits()
          g_pairs[i].profitSell = 0;
       }
       
-      // Combined profit for this pair
       g_pairs[i].totalPairProfit = g_pairs[i].profitBuy + g_pairs[i].profitSell;
       g_totalCurrentProfit += g_pairs[i].totalPairProfit;
    }
 }
 
 //+------------------------------------------------------------------+
-//| ================ TARGET SYSTEM (v3.0) ================             |
+//| v3.2.7: Get Profit from Averaging Orders                           |
 //+------------------------------------------------------------------+
-
-//+------------------------------------------------------------------+
-//| Check Per-Pair Targets                                             |
-//+------------------------------------------------------------------+
-void CheckPairTargets()
+double GetAveragingProfit(int pairIndex, bool isBuySide)
 {
-   for(int i = 0; i < MAX_PAIRS; i++)
+   string pattern = StringFormat("StatArb_AVG_%s_%d", isBuySide ? "BUY" : "SELL", pairIndex + 1);
+   double totalProfit = 0;
+   
+   for(int i = 0; i < PositionsTotal(); i++)
    {
-      if(!g_pairs[i].enabled) continue;
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
       
-      // Check Buy Side Target
-      if(g_pairs[i].directionBuy == 1 && g_pairs[i].profitBuy >= g_pairs[i].targetBuy)
+      string comment = PositionGetString(POSITION_COMMENT);
+      if(StringFind(comment, pattern) >= 0)
       {
-         PrintFormat("Pair %d Buy Side TARGET REACHED: %.2f >= %.2f",
-            i + 1, g_pairs[i].profitBuy, g_pairs[i].targetBuy);
-         CloseBuySide(i);
-      }
-      
-      // Check Sell Side Target
-      if(g_pairs[i].directionSell == 1 && g_pairs[i].profitSell >= g_pairs[i].targetSell)
-      {
-         PrintFormat("Pair %d Sell Side TARGET REACHED: %.2f >= %.2f",
-            i + 1, g_pairs[i].profitSell, g_pairs[i].targetSell);
-         CloseSellSide(i);
+         totalProfit += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
       }
    }
+   
+   return totalProfit;
 }
 
 //+------------------------------------------------------------------+
@@ -2488,11 +2686,11 @@ void UpdateAccountStats()
 }
 
 //+------------------------------------------------------------------+
-//| ================ RISK MANAGEMENT ================                  |
+//| ================ RISK MANAGEMENT v3.2.7 ================           |
 //+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
-//| Check Risk Limits                                                  |
+//| Check Risk Limits (v3.2.7 - with pause reason)                     |
 //+------------------------------------------------------------------+
 void CheckRiskLimits()
 {
@@ -2507,20 +2705,29 @@ void CheckRiskLimits()
    
    if(drawdown >= InpEmergencyCloseDD)
    {
-      PrintFormat("EMERGENCY: Drawdown %.2f%% exceeded limit - Closing ALL", drawdown);
+      PrintFormat("EMERGENCY: Drawdown %.2f%% exceeded limit - Closing ALL and PAUSING", drawdown);
       CloseAllBuySides();
       CloseAllSellSides();
+      
+      g_peakEquityBeforeDD = g_maxEquity;  // Save peak for recovery check
       g_isPaused = true;
+      g_pauseReason = "DD_LIMIT";
+      
+      if(InpAutoResumeAfterDD)
+      {
+         PrintFormat("Auto-resume enabled: Will resume when equity recovers to %.1f%% of peak (%.2f)",
+                     InpResumeEquityPercent, g_peakEquityBeforeDD * InpResumeEquityPercent / 100);
+      }
       return;
    }
 }
 
 //+------------------------------------------------------------------+
-//| ================ DASHBOARD PANEL (v3.1) ================           |
+//| ================ DASHBOARD PANEL v3.2.7 ================           |
 //+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
-//| Create Dashboard Panel (New 3-Part Layout for 30 pairs)            |
+//| Create Dashboard Panel                                             |
 //+------------------------------------------------------------------+
 void CreateDashboard()
 {
@@ -2534,22 +2741,28 @@ void CreateDashboard()
    int headerY = PANEL_Y + 5;
    CreateRectangle(prefix + "HDR_BG", PANEL_X + 5, headerY, PANEL_WIDTH - 10, 25, COLOR_HEADER_MAIN, COLOR_BORDER);
    CreateLabel(prefix + "LOGO", PANEL_X + 15, headerY + 5, "MoneyX Statistical Arbitrage EA", COLOR_GOLD, 11, "Arial Bold");
-   CreateLabel(prefix + "VER", PANEL_X + PANEL_WIDTH - 60, headerY + 5, "v3.1", COLOR_TEXT_WHITE, 9, "Arial");
+   CreateLabel(prefix + "VER", PANEL_X + PANEL_WIDTH - 80, headerY + 5, "v3.2.7", COLOR_TEXT_WHITE, 9, "Arial");
+   
+   // v3.2.7: Show Exit Mode and Avg status
+   string modeStr = StringFormat("Exit:%s | Avg:%s", 
+      (InpExitMode == EXIT_ZSCORE_ONLY ? "Z" : (InpExitMode == EXIT_PROFIT_ONLY ? "$" : (InpExitMode == EXIT_ZSCORE_OR_PROFIT ? "Z|$" : "Z&$"))),
+      InpEnableAveraging ? "ON" : "OFF");
+   CreateLabel(prefix + "MODE", PANEL_X + 400, headerY + 5, modeStr, COLOR_TEXT_WHITE, 8, "Arial");
    
    // ===== COLUMN HEADERS =====
    int colY = PANEL_Y + 35;
    
-   // Buy Side Header (Left)
+   // Buy Side Header
    int buyStartX = PANEL_X + 5;
    CreateRectangle(prefix + "HDR_BUY", buyStartX, colY, 395, 22, COLOR_HEADER_BUY, COLOR_BORDER);
    CreateLabel(prefix + "H_BUY", buyStartX + 150, colY + 4, "MAIN ORDER BUY", COLOR_TEXT_WHITE, 10, "Arial Bold");
    
-   // Center Header (Pairs)
+   // Center Header
    int centerX = PANEL_X + 405;
    CreateRectangle(prefix + "HDR_CENTER", centerX, colY, 390, 22, COLOR_HEADER_MAIN, COLOR_BORDER);
    CreateLabel(prefix + "H_CENTER", centerX + 130, colY + 4, "TRADING PAIRS", COLOR_GOLD, 10, "Arial Bold");
    
-   // Sell Side Header (Right)
+   // Sell Side Header
    int sellStartX = PANEL_X + 800;
    CreateRectangle(prefix + "HDR_SELL", sellStartX, colY, 395, 22, COLOR_HEADER_SELL, COLOR_BORDER);
    CreateLabel(prefix + "H_SELL", sellStartX + 140, colY + 4, "MAIN ORDER SELL", COLOR_TEXT_WHITE, 10, "Arial Bold");
@@ -2566,7 +2779,7 @@ void CreateDashboard()
    CreateLabel(prefix + "SH_B_TGT", buyStartX + 210, subY, "Target", COLOR_TEXT_WHITE, 7, "Arial");
    CreateLabel(prefix + "SH_B_ST", buyStartX + 260, subY, "Status", COLOR_TEXT_WHITE, 7, "Arial");
    CreateLabel(prefix + "SH_B_Z", buyStartX + 310, subY, "Z-Score", COLOR_TEXT_WHITE, 7, "Arial");
-   CreateLabel(prefix + "SH_B_TPL", buyStartX + 360, subY, "P/L", COLOR_TEXT_WHITE, 7, "Arial");
+   CreateLabel(prefix + "SH_B_AVG", buyStartX + 360, subY, "Avg", COLOR_TEXT_WHITE, 7, "Arial");
    
    // Center Sub-headers
    CreateLabel(prefix + "SH_C_PAIR", centerX + 10, subY, "Pair", COLOR_TEXT_WHITE, 7, "Arial");
@@ -2576,8 +2789,8 @@ void CreateDashboard()
    CreateLabel(prefix + "SH_C_TPL", centerX + 310, subY, "Total P/L", COLOR_TEXT_WHITE, 7, "Arial");
    
    // Sell Sub-headers
-   CreateLabel(prefix + "SH_S_TPL", sellStartX + 5, subY, "P/L", COLOR_TEXT_WHITE, 7, "Arial");
-   CreateLabel(prefix + "SH_S_Z", sellStartX + 50, subY, "Z-Score", COLOR_TEXT_WHITE, 7, "Arial");
+   CreateLabel(prefix + "SH_S_AVG", sellStartX + 5, subY, "Avg", COLOR_TEXT_WHITE, 7, "Arial");
+   CreateLabel(prefix + "SH_S_Z", sellStartX + 40, subY, "Z-Score", COLOR_TEXT_WHITE, 7, "Arial");
    CreateLabel(prefix + "SH_S_ST", sellStartX + 105, subY, "Status", COLOR_TEXT_WHITE, 7, "Arial");
    CreateLabel(prefix + "SH_S_TGT", sellStartX + 155, subY, "Target", COLOR_TEXT_WHITE, 7, "Arial");
    CreateLabel(prefix + "SH_S_MAX", sellStartX + 210, subY, "Max", COLOR_TEXT_WHITE, 7, "Arial");
@@ -2586,7 +2799,7 @@ void CreateDashboard()
    CreateLabel(prefix + "SH_S_PROF", sellStartX + 345, subY, "Profit", COLOR_TEXT_WHITE, 7, "Arial");
    CreateLabel(prefix + "SH_S_X", sellStartX + 380, subY, "X", COLOR_TEXT_WHITE, 7, "Arial");
    
-   // ===== PAIR ROWS (30 Pairs) =====
+   // ===== PAIR ROWS =====
    int rowStartY = subY + 18;
    
    for(int i = 0; i < MAX_PAIRS; i++)
@@ -2594,413 +2807,191 @@ void CreateDashboard()
       int rowY = rowStartY + i * ROW_HEIGHT;
       color rowBg = (i % 2 == 0) ? COLOR_BG_ROW_EVEN : COLOR_BG_ROW_ODD;
       
-      // Row backgrounds
       CreateRectangle(prefix + "ROW_B_" + IntegerToString(i), buyStartX, rowY, 395, ROW_HEIGHT - 1, rowBg, rowBg);
       CreateRectangle(prefix + "ROW_C_" + IntegerToString(i), centerX, rowY, 390, ROW_HEIGHT - 1, rowBg, rowBg);
       CreateRectangle(prefix + "ROW_S_" + IntegerToString(i), sellStartX, rowY, 395, ROW_HEIGHT - 1, rowBg, rowBg);
       
-      // Create pair row content
-      CreatePairRow(prefix, i, buyStartX, centerX, sellStartX, rowY);
+      CreatePairRow(i, rowY, buyStartX, centerX, sellStartX);
    }
    
-   // ===== ACCOUNT SUMMARY SECTION =====
-   int summaryY = rowStartY + MAX_PAIRS * ROW_HEIGHT + 5;
-   CreateAccountSummary(prefix, summaryY);
+   // ===== ACCOUNT SUMMARY =====
+   int summaryY = rowStartY + MAX_PAIRS * ROW_HEIGHT + 10;
+   CreateAccountSummary(summaryY);
    
    ChartRedraw();
 }
 
 //+------------------------------------------------------------------+
-//| Create Pair Row (v3.1 - 3-Part Layout with Toggle Buttons)         |
+//| Create Pair Row                                                    |
 //+------------------------------------------------------------------+
-void CreatePairRow(string prefix, int idx, int buyX, int centerX, int sellX, int y)
+void CreatePairRow(int pairIndex, int rowY, int buyX, int centerX, int sellX)
 {
-   string idxStr = IntegerToString(idx);
-   string pairName = g_pairs[idx].symbolA + "-" + g_pairs[idx].symbolB;
+   string prefix = "STAT_";
+   string idx = IntegerToString(pairIndex);
    
-   // === BUY SIDE DATA ===
-   // Close button
-   CreateButton(prefix + "_CLOSE_BUY_" + idxStr, buyX + 5, y + 2, 16, 14, "X", clrRed, clrWhite);
+   // === Buy Side ===
+   CreateButton(prefix + "_CLOSE_BUY_" + idx, buyX + 2, rowY + 1, 18, ROW_HEIGHT - 3, "X", COLOR_LOSS, clrWhite);
+   CreateLabel(prefix + "_PROF_BUY_" + idx, buyX + 25, rowY + 2, "0.00", COLOR_TEXT, FONT_SIZE, "Arial");
+   CreateLabel(prefix + "_LOT_BUY_" + idx, buyX + 75, rowY + 2, "0.00", COLOR_TEXT, FONT_SIZE, "Arial");
+   CreateLabel(prefix + "_ORD_BUY_" + idx, buyX + 125, rowY + 2, "0", COLOR_TEXT, FONT_SIZE, "Arial");
+   CreateEditField(prefix + "_MAX_BUY_" + idx, buyX + 160, rowY + 1, 35, ROW_HEIGHT - 3, IntegerToString(InpDefaultMaxOrderBuy));
+   CreateEditField(prefix + "_TGT_BUY_" + idx, buyX + 200, rowY + 1, 50, ROW_HEIGHT - 3, DoubleToString(InpDefaultTargetBuy, 1));
+   CreateButton(prefix + "_ST_BUY_" + idx, buyX + 255, rowY + 1, 45, ROW_HEIGHT - 3, "OFF", COLOR_OFF, clrWhite);
+   CreateLabel(prefix + "_Z_BUY_" + idx, buyX + 310, rowY + 2, "0.00", COLOR_TEXT, FONT_SIZE, "Arial");
+   CreateLabel(prefix + "_AVG_BUY_" + idx, buyX + 365, rowY + 2, "0", COLOR_TEXT, FONT_SIZE, "Arial");
    
-   // Profit
-   CreateLabel(prefix + "P" + idxStr + "_B_PROF", buyX + 28, y + 3, "0", COLOR_TEXT, FONT_SIZE, "Arial");
+   // === Center (Pair Info) ===
+   string pairName = IntegerToString(pairIndex + 1) + ". " + g_pairs[pairIndex].symbolA + "/" + g_pairs[pairIndex].symbolB;
+   CreateLabel(prefix + "_PAIR_" + idx, centerX + 10, rowY + 2, pairName, COLOR_TEXT, FONT_SIZE, "Arial");
+   CreateLabel(prefix + "_CORR_" + idx, centerX + 145, rowY + 2, "0.00", COLOR_TEXT, FONT_SIZE, "Arial");
+   CreateLabel(prefix + "_TYPE_" + idx, centerX + 195, rowY + 2, "+", COLOR_TEXT, FONT_SIZE, "Arial");
+   CreateLabel(prefix + "_BETA_" + idx, centerX + 250, rowY + 2, "1.00", COLOR_TEXT, FONT_SIZE, "Arial");
+   CreateLabel(prefix + "_TPL_" + idx, centerX + 310, rowY + 2, "0.00", COLOR_TEXT, FONT_SIZE, "Arial");
    
-   // Lot
-   CreateLabel(prefix + "P" + idxStr + "_B_LOT", buyX + 75, y + 3, "0.00", COLOR_TEXT, FONT_SIZE, "Arial");
-   
-   // Order count
-   CreateLabel(prefix + "P" + idxStr + "_B_ORD", buyX + 128, y + 3, "0", COLOR_TEXT, FONT_SIZE, "Arial");
-   
-   // Max orders (editable)
-   CreateEditField(prefix + "_MAX_BUY_" + idxStr, buyX + 160, y + 2, 30, 14, IntegerToString(InpDefaultMaxOrderBuy));
-   
-   // Target (editable)
-   CreateEditField(prefix + "_TGT_BUY_" + idxStr, buyX + 200, y + 2, 45, 14, DoubleToString(InpDefaultTargetBuy, 0));
-   
-   // Status (Toggle Button - v3.1)
-   string buyStatusText = g_pairs[idx].enabled ? "Off" : "-";
-   color buyStatusColor = COLOR_OFF;
-   CreateButton(prefix + "_ST_BUY_" + idxStr, buyX + 255, y + 2, 40, 14, buyStatusText, buyStatusColor, clrWhite);
-   
-   // Z-Score
-   CreateLabel(prefix + "P" + idxStr + "_B_Z", buyX + 310, y + 3, "0.00", COLOR_TEXT, FONT_SIZE, "Arial");
-   
-   // P/L (this side)
-   CreateLabel(prefix + "P" + idxStr + "_B_PL", buyX + 360, y + 3, "0", COLOR_TEXT, FONT_SIZE, "Arial");
-   
-   // === CENTER DATA (Pair Info) ===
-   // Pair name
-   CreateLabel(prefix + "P" + idxStr + "_NAME", centerX + 10, y + 3, pairName, COLOR_TEXT, FONT_SIZE, "Arial Bold");
-   
-   // Correlation %
-   CreateLabel(prefix + "P" + idxStr + "_CORR", centerX + 140, y + 3, "0%", COLOR_TEXT, FONT_SIZE, "Arial");
-   
-   // Correlation Type
-   CreateLabel(prefix + "P" + idxStr + "_TYPE", centerX + 195, y + 3, "Pos", COLOR_PROFIT, FONT_SIZE, "Arial");
-   
-   // Beta/Hedge Ratio
-   CreateLabel(prefix + "P" + idxStr + "_BETA", centerX + 250, y + 3, "1.00", COLOR_TEXT, FONT_SIZE, "Arial");
-   
-   // Total P/L (both sides)
-   CreateLabel(prefix + "P" + idxStr + "_TPL", centerX + 310, y + 3, "0", COLOR_TEXT, 9, "Arial Bold");
-   
-   // === SELL SIDE DATA ===
-   // P/L
-   CreateLabel(prefix + "P" + idxStr + "_S_PL", sellX + 5, y + 3, "0", COLOR_TEXT, FONT_SIZE, "Arial");
-   
-   // Z-Score
-   CreateLabel(prefix + "P" + idxStr + "_S_Z", sellX + 50, y + 3, "0.00", COLOR_TEXT, FONT_SIZE, "Arial");
-   
-   // Status (Toggle Button - v3.1)
-   string sellStatusText = g_pairs[idx].enabled ? "Off" : "-";
-   color sellStatusColor = COLOR_OFF;
-   CreateButton(prefix + "_ST_SELL_" + idxStr, sellX + 100, y + 2, 40, 14, sellStatusText, sellStatusColor, clrWhite);
-   
-   // Target (editable)
-   CreateEditField(prefix + "_TGT_SELL_" + idxStr, sellX + 150, y + 2, 45, 14, DoubleToString(InpDefaultTargetSell, 0));
-   
-   // Max orders (editable)
-   CreateEditField(prefix + "_MAX_SELL_" + idxStr, sellX + 205, y + 2, 30, 14, IntegerToString(InpDefaultMaxOrderSell));
-   
-   // Order count
-   CreateLabel(prefix + "P" + idxStr + "_S_ORD", sellX + 262, y + 3, "0", COLOR_TEXT, FONT_SIZE, "Arial");
-   
-   // Lot
-   CreateLabel(prefix + "P" + idxStr + "_S_LOT", sellX + 305, y + 3, "0.00", COLOR_TEXT, FONT_SIZE, "Arial");
-   
-   // Profit
-   CreateLabel(prefix + "P" + idxStr + "_S_PROF", sellX + 345, y + 3, "0", COLOR_TEXT, FONT_SIZE, "Arial");
-   
-   // Close button
-   CreateButton(prefix + "_CLOSE_SELL_" + idxStr, sellX + 375, y + 2, 16, 14, "X", clrRed, clrWhite);
+   // === Sell Side ===
+   CreateLabel(prefix + "_AVG_SELL_" + idx, sellX + 5, rowY + 2, "0", COLOR_TEXT, FONT_SIZE, "Arial");
+   CreateLabel(prefix + "_Z_SELL_" + idx, sellX + 45, rowY + 2, "0.00", COLOR_TEXT, FONT_SIZE, "Arial");
+   CreateButton(prefix + "_ST_SELL_" + idx, sellX + 100, rowY + 1, 45, ROW_HEIGHT - 3, "OFF", COLOR_OFF, clrWhite);
+   CreateEditField(prefix + "_TGT_SELL_" + idx, sellX + 150, rowY + 1, 50, ROW_HEIGHT - 3, DoubleToString(InpDefaultTargetSell, 1));
+   CreateEditField(prefix + "_MAX_SELL_" + idx, sellX + 205, rowY + 1, 35, ROW_HEIGHT - 3, IntegerToString(InpDefaultMaxOrderSell));
+   CreateLabel(prefix + "_ORD_SELL_" + idx, sellX + 255, rowY + 2, "0", COLOR_TEXT, FONT_SIZE, "Arial");
+   CreateLabel(prefix + "_LOT_SELL_" + idx, sellX + 305, rowY + 2, "0.00", COLOR_TEXT, FONT_SIZE, "Arial");
+   CreateLabel(prefix + "_PROF_SELL_" + idx, sellX + 345, rowY + 2, "0.00", COLOR_TEXT, FONT_SIZE, "Arial");
+   CreateButton(prefix + "_CLOSE_SELL_" + idx, sellX + 377, rowY + 1, 18, ROW_HEIGHT - 3, "X", COLOR_LOSS, clrWhite);
 }
 
 //+------------------------------------------------------------------+
-//| Create Account Summary Section (v3.0 - 4-Box Layout)               |
+//| Create Account Summary                                             |
 //+------------------------------------------------------------------+
-void CreateAccountSummary(string prefix, int y)
+void CreateAccountSummary(int y)
 {
+   string prefix = "STAT_";
    int boxWidth = 290;
-   int boxHeight = 75;
-   int gap = 8;
-   int startX = PANEL_X + 10;
+   int boxHeight = 80;
    
-   // === BOX 1: DETAIL ===
-   int box1X = startX;
-   CreateRectangle(prefix + "BOX1_BG", box1X, y, boxWidth, boxHeight, C'30,35,45', COLOR_BORDER);
-   CreateLabel(prefix + "BOX1_HDR", box1X + 10, y + 5, "DETAIL", COLOR_GOLD, 9, "Arial Bold");
+   // Box 1: Account Info
+   CreateRectangle(prefix + "SUM_BOX1", PANEL_X + 5, y, boxWidth, boxHeight, COLOR_BG_DARK, COLOR_BORDER);
+   CreateLabel(prefix + "SUM_T1", PANEL_X + 10, y + 5, "ACCOUNT INFO", COLOR_GOLD, 9, "Arial Bold");
+   CreateLabel(prefix + "SUM_BAL_L", PANEL_X + 10, y + 22, "Balance:", COLOR_TEXT_WHITE, 8, "Arial");
+   CreateLabel(prefix + "SUM_BAL_V", PANEL_X + 80, y + 22, "0.00", COLOR_TEXT_WHITE, 8, "Arial");
+   CreateLabel(prefix + "SUM_EQ_L", PANEL_X + 10, y + 38, "Equity:", COLOR_TEXT_WHITE, 8, "Arial");
+   CreateLabel(prefix + "SUM_EQ_V", PANEL_X + 80, y + 38, "0.00", COLOR_TEXT_WHITE, 8, "Arial");
+   CreateLabel(prefix + "SUM_DD_L", PANEL_X + 10, y + 54, "Max DD%:", COLOR_TEXT_WHITE, 8, "Arial");
+   CreateLabel(prefix + "SUM_DD_V", PANEL_X + 80, y + 54, "0.00%", COLOR_LOSS, 8, "Arial");
    
-   CreateLabel(prefix + "L_BAL", box1X + 10, y + 22, "Balance:", COLOR_TEXT_WHITE, 8, "Arial");
-   CreateLabel(prefix + "V_BAL", box1X + 80, y + 22, "0.00", COLOR_PROFIT, 9, "Arial Bold");
+   // v3.2.7: Show pause status
+   CreateLabel(prefix + "SUM_PAUSE_L", PANEL_X + 150, y + 22, "Status:", COLOR_TEXT_WHITE, 8, "Arial");
+   CreateLabel(prefix + "SUM_PAUSE_V", PANEL_X + 200, y + 22, "RUNNING", COLOR_ON, 8, "Arial Bold");
    
-   CreateLabel(prefix + "L_EQ", box1X + 10, y + 38, "Equity:", COLOR_TEXT_WHITE, 8, "Arial");
-   CreateLabel(prefix + "V_EQ", box1X + 80, y + 38, "0.00", COLOR_PROFIT, 9, "Arial Bold");
+   // Box 2: Daily/Weekly/Monthly Profit
+   CreateRectangle(prefix + "SUM_BOX2", PANEL_X + 305, y, boxWidth, boxHeight, COLOR_BG_DARK, COLOR_BORDER);
+   CreateLabel(prefix + "SUM_T2", PANEL_X + 310, y + 5, "PROFIT HISTORY", COLOR_GOLD, 9, "Arial Bold");
+   CreateLabel(prefix + "SUM_DP_L", PANEL_X + 310, y + 22, "Daily:", COLOR_TEXT_WHITE, 8, "Arial");
+   CreateLabel(prefix + "SUM_DP_V", PANEL_X + 380, y + 22, "0.00", COLOR_TEXT_WHITE, 8, "Arial");
+   CreateLabel(prefix + "SUM_WP_L", PANEL_X + 310, y + 38, "Weekly:", COLOR_TEXT_WHITE, 8, "Arial");
+   CreateLabel(prefix + "SUM_WP_V", PANEL_X + 380, y + 38, "0.00", COLOR_TEXT_WHITE, 8, "Arial");
+   CreateLabel(prefix + "SUM_MP_L", PANEL_X + 310, y + 54, "Monthly:", COLOR_TEXT_WHITE, 8, "Arial");
+   CreateLabel(prefix + "SUM_MP_V", PANEL_X + 380, y + 54, "0.00", COLOR_TEXT_WHITE, 8, "Arial");
    
-   CreateLabel(prefix + "L_MG", box1X + 10, y + 54, "Margin:", COLOR_TEXT_WHITE, 8, "Arial");
-   CreateLabel(prefix + "V_MG", box1X + 80, y + 54, "0.00", COLOR_TEXT_WHITE, 9, "Arial");
+   // Box 3: Current Profit / Target
+   CreateRectangle(prefix + "SUM_BOX3", PANEL_X + 605, y, boxWidth, boxHeight, COLOR_BG_DARK, COLOR_BORDER);
+   CreateLabel(prefix + "SUM_T3", PANEL_X + 610, y + 5, "TARGET SYSTEM", COLOR_GOLD, 9, "Arial Bold");
+   CreateLabel(prefix + "SUM_CP_L", PANEL_X + 610, y + 22, "Current P/L:", COLOR_TEXT_WHITE, 8, "Arial");
+   CreateLabel(prefix + "SUM_CP_V", PANEL_X + 700, y + 22, "0.00", COLOR_TEXT_WHITE, 8, "Arial");
+   CreateLabel(prefix + "SUM_TGT_L", PANEL_X + 610, y + 38, "Target:", COLOR_TEXT_WHITE, 8, "Arial");
+   CreateEditField(prefix + "_TOTAL_TARGET", PANEL_X + 700, y + 36, 80, 16, DoubleToString(g_totalTarget, 2));
    
-   CreateLabel(prefix + "L_TPL", box1X + 155, y + 22, "Current P/L:", COLOR_TEXT_WHITE, 8, "Arial");
-   CreateLabel(prefix + "V_TPL", box1X + 230, y + 22, "0.00", COLOR_PROFIT, 10, "Arial Bold");
-   
-   CreateLabel(prefix + "L_TTG", box1X + 155, y + 40, "Total Target:", COLOR_TEXT_WHITE, 8, "Arial");
-   CreateEditField(prefix + "_TOTAL_TARGET", box1X + 230, y + 38, 50, 16, DoubleToString(g_totalTarget, 0));
-   
-   // === BOX 2: STATUS ===
-   int box2X = startX + boxWidth + gap;
-   CreateRectangle(prefix + "BOX2_BG", box2X, y, boxWidth, boxHeight, C'30,35,45', COLOR_BORDER);
-   CreateLabel(prefix + "BOX2_HDR", box2X + 10, y + 5, "STATUS", COLOR_GOLD, 9, "Arial Bold");
-   
-   CreateLabel(prefix + "L_TLOT", box2X + 10, y + 22, "Total Lot:", COLOR_TEXT_WHITE, 8, "Arial");
-   CreateLabel(prefix + "V_TLOT", box2X + 80, y + 22, "0.00", COLOR_TEXT_WHITE, 9, "Arial");
-   
-   CreateLabel(prefix + "L_TORD", box2X + 10, y + 38, "Total Order:", COLOR_TEXT_WHITE, 8, "Arial");
-   CreateLabel(prefix + "V_TORD", box2X + 85, y + 38, "0", COLOR_TEXT_WHITE, 9, "Arial");
-   
-   CreateLabel(prefix + "L_DD", box2X + 155, y + 22, "DD%:", COLOR_TEXT_WHITE, 8, "Arial");
-   CreateLabel(prefix + "V_DD", box2X + 195, y + 22, "0.00%", COLOR_LOSS, 9, "Arial Bold");
-   
-   CreateLabel(prefix + "L_MDD", box2X + 155, y + 38, "Max DD%:", COLOR_TEXT_WHITE, 8, "Arial");
-   CreateLabel(prefix + "V_MDD", box2X + 215, y + 38, "0.00%", COLOR_LOSS, 9, "Arial Bold");
-   
-   CreateLabel(prefix + "L_PAIRS", box2X + 10, y + 54, "Active Pairs:", COLOR_TEXT_WHITE, 8, "Arial");
-   CreateLabel(prefix + "V_PAIRS", box2X + 90, y + 54, IntegerToString(g_activePairs), COLOR_GOLD, 9, "Arial Bold");
-   
-   CreateLabel(prefix + "L_LIC", box2X + 155, y + 54, "License:", COLOR_TEXT_WHITE, 8, "Arial");
-   CreateLabel(prefix + "V_LIC", box2X + 210, y + 54, g_isLicenseValid ? "VALID" : "INVALID", g_isLicenseValid ? COLOR_ON : COLOR_LOSS, 9, "Arial Bold");
-   
-   // === BOX 3: HISTORY LOT ===
-   int box3X = startX + 2 * (boxWidth + gap);
-   CreateRectangle(prefix + "BOX3_BG", box3X, y, boxWidth, boxHeight, C'30,35,45', COLOR_BORDER);
-   CreateLabel(prefix + "BOX3_HDR", box3X + 10, y + 5, "HISTORY LOT", COLOR_GOLD, 9, "Arial Bold");
-   
-   CreateLabel(prefix + "L_DLOT", box3X + 10, y + 22, "Daily:", COLOR_TEXT_WHITE, 8, "Arial");
-   CreateLabel(prefix + "V_DLOT", box3X + 60, y + 22, "0.00", COLOR_TEXT_WHITE, 9, "Arial");
-   
-   CreateLabel(prefix + "L_WLOT", box3X + 10, y + 38, "Weekly:", COLOR_TEXT_WHITE, 8, "Arial");
-   CreateLabel(prefix + "V_WLOT", box3X + 60, y + 38, "0.00", COLOR_TEXT_WHITE, 9, "Arial");
-   
-   CreateLabel(prefix + "L_MLOT", box3X + 155, y + 22, "Monthly:", COLOR_TEXT_WHITE, 8, "Arial");
-   CreateLabel(prefix + "V_MLOT", box3X + 210, y + 22, "0.00", COLOR_TEXT_WHITE, 9, "Arial");
-   
-   CreateLabel(prefix + "L_ALOT", box3X + 155, y + 38, "All Time:", COLOR_TEXT_WHITE, 8, "Arial");
-   CreateLabel(prefix + "V_ALOT", box3X + 210, y + 38, "0.00", COLOR_TEXT_WHITE, 9, "Arial");
-   
-   // === BOX 4: HISTORY PROFIT ===
-   int box4X = startX + 3 * (boxWidth + gap);
-   CreateRectangle(prefix + "BOX4_BG", box4X, y, boxWidth, boxHeight, C'30,35,45', COLOR_BORDER);
-   CreateLabel(prefix + "BOX4_HDR", box4X + 10, y + 5, "HISTORY PROFIT", COLOR_GOLD, 9, "Arial Bold");
-   
-   CreateLabel(prefix + "L_DP", box4X + 10, y + 22, "Daily:", COLOR_TEXT_WHITE, 8, "Arial");
-   CreateLabel(prefix + "V_DP", box4X + 55, y + 22, "0.00", COLOR_PROFIT, 9, "Arial Bold");
-   
-   CreateLabel(prefix + "L_WP", box4X + 10, y + 38, "Weekly:", COLOR_TEXT_WHITE, 8, "Arial");
-   CreateLabel(prefix + "V_WP", box4X + 60, y + 38, "0.00", COLOR_PROFIT, 9, "Arial Bold");
-   
-   CreateLabel(prefix + "L_MP", box4X + 155, y + 22, "Monthly:", COLOR_TEXT_WHITE, 8, "Arial");
-   CreateLabel(prefix + "V_MP", box4X + 210, y + 22, "0.00", COLOR_PROFIT, 9, "Arial Bold");
-   
-   CreateLabel(prefix + "L_AP", box4X + 155, y + 38, "All Time:", COLOR_TEXT_WHITE, 8, "Arial");
-   CreateLabel(prefix + "V_AP", box4X + 210, y + 38, "0.00", COLOR_PROFIT, 9, "Arial Bold");
-   
-   // Close All Buttons
-   CreateButton(prefix + "_CLOSE_ALL_BUY", box4X + 10, y + 54, 60, 16, "Close Buy", COLOR_HEADER_BUY, clrWhite);
-   CreateButton(prefix + "_CLOSE_ALL_SELL", box4X + 75, y + 54, 65, 16, "Close Sell", COLOR_HEADER_SELL, clrWhite);
-   
-   // v3.2.3: Start All / Stop All Buttons
-   CreateButton(prefix + "_START_ALL", box4X + 145, y + 54, 60, 16, "Start All", COLOR_ON, clrWhite);
-   CreateButton(prefix + "_STOP_ALL", box4X + 210, y + 54, 60, 16, "Stop All", COLOR_OFF, clrWhite);
+   // Box 4: Control Buttons
+   CreateRectangle(prefix + "SUM_BOX4", PANEL_X + 905, y, boxWidth, boxHeight, COLOR_BG_DARK, COLOR_BORDER);
+   CreateLabel(prefix + "SUM_T4", PANEL_X + 910, y + 5, "CONTROLS", COLOR_GOLD, 9, "Arial Bold");
+   CreateButton(prefix + "_START_ALL", PANEL_X + 910, y + 25, 80, 20, "Start All", C'0,120,0', clrWhite);
+   CreateButton(prefix + "_STOP_ALL", PANEL_X + 1000, y + 25, 80, 20, "Stop All", C'120,60,0', clrWhite);
+   CreateButton(prefix + "_CLOSE_ALL_BUY", PANEL_X + 910, y + 50, 80, 20, "Close Buy", COLOR_HEADER_BUY, clrWhite);
+   CreateButton(prefix + "_CLOSE_ALL_SELL", PANEL_X + 1000, y + 50, 80, 20, "Close Sell", COLOR_HEADER_SELL, clrWhite);
 }
 
 //+------------------------------------------------------------------+
-//| Update Dashboard Values (v3.1)                                     |
+//| Update Dashboard                                                   |
 //+------------------------------------------------------------------+
 void UpdateDashboard()
 {
-   if(MQLInfoInteger(MQL_TESTER) && !MQLInfoInteger(MQL_VISUAL_MODE)) return;
-   
    string prefix = "STAT_";
    
-   // Update Account Info
-   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
-   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
-   double margin = AccountInfoDouble(ACCOUNT_MARGIN);
-   
-   // Calculate totals
-   double totalLot = 0;
-   int totalOrders = 0;
-   
    for(int i = 0; i < MAX_PAIRS; i++)
    {
-      if(g_pairs[i].directionBuy == 1)
-      {
-         totalLot += g_pairs[i].lotBuyA + g_pairs[i].lotBuyB;
-         totalOrders += 2;
-      }
-      if(g_pairs[i].directionSell == 1)
-      {
-         totalLot += g_pairs[i].lotSellA + g_pairs[i].lotSellB;
-         totalOrders += 2;
-      }
-   }
-   
-   // Update max equity
-   if(equity > g_maxEquity) g_maxEquity = equity;
-   
-   // Calculate drawdown
-   double ddPercent = 0;
-   if(g_maxEquity > 0)
-   {
-      ddPercent = ((g_maxEquity - equity) / g_maxEquity) * 100;
-      if(ddPercent < 0) ddPercent = 0;
-   }
-   if(ddPercent > g_maxDrawdownPercent) g_maxDrawdownPercent = ddPercent;
-   
-   // ===== Update Account Labels =====
-   UpdateLabel(prefix + "V_BAL", DoubleToString(balance, 2), balance >= g_initialBalance ? COLOR_PROFIT : COLOR_LOSS);
-   UpdateLabel(prefix + "V_EQ", DoubleToString(equity, 2), equity >= balance ? COLOR_PROFIT : COLOR_LOSS);
-   UpdateLabel(prefix + "V_MG", DoubleToString(margin, 2), COLOR_TEXT_WHITE);
-   UpdateLabel(prefix + "V_TPL", DoubleToString(g_totalCurrentProfit, 2), g_totalCurrentProfit >= 0 ? COLOR_PROFIT : COLOR_LOSS);
-   
-   UpdateLabel(prefix + "V_TLOT", DoubleToString(totalLot, 2), COLOR_TEXT_WHITE);
-   UpdateLabel(prefix + "V_TORD", IntegerToString(totalOrders), COLOR_TEXT_WHITE);
-   UpdateLabel(prefix + "V_DD", DoubleToString(ddPercent, 2) + "%", ddPercent > 10 ? COLOR_LOSS : COLOR_TEXT_WHITE);
-   UpdateLabel(prefix + "V_MDD", DoubleToString(g_maxDrawdownPercent, 2) + "%", g_maxDrawdownPercent > InpMaxDrawdown ? COLOR_LOSS : COLOR_TEXT_WHITE);
-   
-   // Lot Statistics
-   UpdateLabel(prefix + "V_DLOT", DoubleToString(g_dailyLot, 2), COLOR_TEXT_WHITE);
-   UpdateLabel(prefix + "V_WLOT", DoubleToString(g_weeklyLot, 2), COLOR_TEXT_WHITE);
-   UpdateLabel(prefix + "V_MLOT", DoubleToString(g_monthlyLot, 2), COLOR_TEXT_WHITE);
-   UpdateLabel(prefix + "V_ALOT", DoubleToString(g_allTimeLot, 2), COLOR_TEXT_WHITE);
-   
-   // Profit Statistics
-   UpdateLabel(prefix + "V_DP", DoubleToString(g_dailyProfit, 2), g_dailyProfit >= 0 ? COLOR_PROFIT : COLOR_LOSS);
-   UpdateLabel(prefix + "V_WP", DoubleToString(g_weeklyProfit, 2), g_weeklyProfit >= 0 ? COLOR_PROFIT : COLOR_LOSS);
-   UpdateLabel(prefix + "V_MP", DoubleToString(g_monthlyProfit, 2), g_monthlyProfit >= 0 ? COLOR_PROFIT : COLOR_LOSS);
-   UpdateLabel(prefix + "V_AP", DoubleToString(g_allTimeProfit, 2), g_allTimeProfit >= 0 ? COLOR_PROFIT : COLOR_LOSS);
-   
-   // ===== Update Each Pair Row =====
-   for(int i = 0; i < MAX_PAIRS; i++)
-   {
-      string idxStr = IntegerToString(i);
+      string idx = IntegerToString(i);
       
-      // === Center Data ===
-      // Handle disabled or invalid data pairs
       if(!g_pairs[i].enabled)
       {
-         UpdateLabel(prefix + "P" + idxStr + "_CORR", "-", COLOR_OFF);
-         UpdateLabel(prefix + "P" + idxStr + "_TYPE", "-", COLOR_OFF);
-         UpdateLabel(prefix + "P" + idxStr + "_BETA", "-", COLOR_OFF);
-      }
-      else if(!g_pairs[i].dataValid)
-      {
-         // Show N/A when data is not available
-         UpdateLabel(prefix + "P" + idxStr + "_CORR", "N/A", COLOR_GOLD);
-         UpdateLabel(prefix + "P" + idxStr + "_TYPE", "N/A", COLOR_GOLD);
-         UpdateLabel(prefix + "P" + idxStr + "_BETA", "N/A", COLOR_GOLD);
-      }
-      else
-      {
-         // Normal display with valid data
-         // Correlation %
-         double corr = g_pairs[i].correlation * 100;
-         color corrColor = MathAbs(corr) >= InpMinCorrelation * 100 ? COLOR_PROFIT : COLOR_TEXT;
-         UpdateLabel(prefix + "P" + idxStr + "_CORR", DoubleToString(corr, 0) + "%", corrColor);
-         
-         // Correlation Type
-         string corrType = g_pairs[i].correlationType == 1 ? "Pos" : "Neg";
-         color typeColor = g_pairs[i].correlationType == 1 ? COLOR_PROFIT : COLOR_LOSS;
-         UpdateLabel(prefix + "P" + idxStr + "_TYPE", corrType, typeColor);
-         
-         // Beta
-         UpdateLabel(prefix + "P" + idxStr + "_BETA", DoubleToString(g_pairs[i].hedgeRatio, 2), COLOR_TEXT);
+         UpdateLabel(prefix + "_CORR_" + idx, "N/A");
+         continue;
       }
       
-      // Total P/L
-      double totalPL = g_pairs[i].totalPairProfit;
-      UpdateLabel(prefix + "P" + idxStr + "_TPL", DoubleToString(totalPL, 0), totalPL >= 0 ? COLOR_PROFIT : COLOR_LOSS);
-      
-      // === Buy Side Data ===
-      // Profit
-      UpdateLabel(prefix + "P" + idxStr + "_B_PROF", DoubleToString(g_pairs[i].profitBuy, 0), 
+      // Buy Side
+      UpdateLabel(prefix + "_PROF_BUY_" + idx, DoubleToString(g_pairs[i].profitBuy, 2), 
                   g_pairs[i].profitBuy >= 0 ? COLOR_PROFIT : COLOR_LOSS);
+      UpdateLabel(prefix + "_LOT_BUY_" + idx, DoubleToString(g_pairs[i].lotBuyA + g_pairs[i].lotBuyB, 2));
+      UpdateLabel(prefix + "_ORD_BUY_" + idx, IntegerToString(g_pairs[i].orderCountBuy));
+      UpdateLabel(prefix + "_Z_BUY_" + idx, DoubleToString(g_pairs[i].zScore, 2));
+      UpdateLabel(prefix + "_AVG_BUY_" + idx, IntegerToString(g_pairs[i].avgCountBuy));
       
-      // Lot
-      double buyLot = g_pairs[i].directionBuy == 1 ? g_pairs[i].lotBuyA + g_pairs[i].lotBuyB : 0;
-      UpdateLabel(prefix + "P" + idxStr + "_B_LOT", DoubleToString(buyLot, 2), COLOR_TEXT);
+      // Status buttons
+      string buyStatus = (g_pairs[i].directionBuy == 0) ? "OFF" : 
+                         (g_pairs[i].directionBuy == -1) ? "ON" : "ACTIVE";
+      color buyColor = (g_pairs[i].directionBuy == 0) ? COLOR_OFF : 
+                       (g_pairs[i].directionBuy == -1) ? COLOR_ON : COLOR_ACTIVE;
+      ObjectSetString(0, prefix + "_ST_BUY_" + idx, OBJPROP_TEXT, buyStatus);
+      ObjectSetInteger(0, prefix + "_ST_BUY_" + idx, OBJPROP_BGCOLOR, buyColor);
       
-      // Order count
-      UpdateLabel(prefix + "P" + idxStr + "_B_ORD", IntegerToString(g_pairs[i].orderCountBuy), 
-                  g_pairs[i].orderCountBuy > 0 ? COLOR_ACTIVE : COLOR_TEXT);
+      // Center
+      string corrStr = g_pairs[i].dataValid ? DoubleToString(g_pairs[i].correlation * 100, 1) + "%" : "N/A";
+      UpdateLabel(prefix + "_CORR_" + idx, corrStr);
+      UpdateLabel(prefix + "_TYPE_" + idx, g_pairs[i].correlationType == 1 ? "+" : "-");
+      UpdateLabel(prefix + "_BETA_" + idx, DoubleToString(g_pairs[i].hedgeRatio, 2));
+      UpdateLabel(prefix + "_TPL_" + idx, DoubleToString(g_pairs[i].totalPairProfit, 2),
+                  g_pairs[i].totalPairProfit >= 0 ? COLOR_PROFIT : COLOR_LOSS);
       
-      // Z-Score (same for both sides)
-      double zScore = g_pairs[i].zScore;
-      color zColor = MathAbs(zScore) > InpEntryZScore ? (zScore > 0 ? COLOR_LOSS : COLOR_PROFIT) : COLOR_TEXT;
-      UpdateLabel(prefix + "P" + idxStr + "_B_Z", DoubleToString(zScore, 2), zColor);
-      
-      // P/L
-      UpdateLabel(prefix + "P" + idxStr + "_B_PL", DoubleToString(g_pairs[i].profitBuy, 0),
-                  g_pairs[i].profitBuy >= 0 ? COLOR_PROFIT : COLOR_LOSS);
-      
-      // Status Button Update (v3.1)
-      string buyBtnName = prefix + "_ST_BUY_" + idxStr;
-      if(ObjectFind(0, buyBtnName) >= 0)
-      {
-         string buyStatus = "Off";
-         color buyBgColor = COLOR_OFF;
-         if(!g_pairs[i].enabled)
-         {
-            buyStatus = "-";
-            buyBgColor = COLOR_OFF;
-         }
-         else if(g_pairs[i].directionBuy == 1)
-         {
-            buyStatus = "LONG";
-            buyBgColor = COLOR_PROFIT;
-         }
-         else if(g_pairs[i].directionBuy == -1)
-         {
-            buyStatus = "On";
-            buyBgColor = COLOR_ON;
-         }
-         ObjectSetString(0, buyBtnName, OBJPROP_TEXT, buyStatus);
-         ObjectSetInteger(0, buyBtnName, OBJPROP_BGCOLOR, buyBgColor);
-      }
-      
-      // === Sell Side Data ===
-      // Profit
-      UpdateLabel(prefix + "P" + idxStr + "_S_PROF", DoubleToString(g_pairs[i].profitSell, 0),
+      // Sell Side
+      UpdateLabel(prefix + "_AVG_SELL_" + idx, IntegerToString(g_pairs[i].avgCountSell));
+      UpdateLabel(prefix + "_Z_SELL_" + idx, DoubleToString(g_pairs[i].zScore, 2));
+      UpdateLabel(prefix + "_ORD_SELL_" + idx, IntegerToString(g_pairs[i].orderCountSell));
+      UpdateLabel(prefix + "_LOT_SELL_" + idx, DoubleToString(g_pairs[i].lotSellA + g_pairs[i].lotSellB, 2));
+      UpdateLabel(prefix + "_PROF_SELL_" + idx, DoubleToString(g_pairs[i].profitSell, 2),
                   g_pairs[i].profitSell >= 0 ? COLOR_PROFIT : COLOR_LOSS);
       
-      // Lot
-      double sellLot = g_pairs[i].directionSell == 1 ? g_pairs[i].lotSellA + g_pairs[i].lotSellB : 0;
-      UpdateLabel(prefix + "P" + idxStr + "_S_LOT", DoubleToString(sellLot, 2), COLOR_TEXT);
-      
-      // Order count
-      UpdateLabel(prefix + "P" + idxStr + "_S_ORD", IntegerToString(g_pairs[i].orderCountSell),
-                  g_pairs[i].orderCountSell > 0 ? COLOR_ACTIVE : COLOR_TEXT);
-      
-      // Z-Score
-      UpdateLabel(prefix + "P" + idxStr + "_S_Z", DoubleToString(zScore, 2), zColor);
-      
-      // P/L
-      UpdateLabel(prefix + "P" + idxStr + "_S_PL", DoubleToString(g_pairs[i].profitSell, 0),
-                  g_pairs[i].profitSell >= 0 ? COLOR_PROFIT : COLOR_LOSS);
-      
-      // Status Button Update (v3.1)
-      string sellBtnName = prefix + "_ST_SELL_" + idxStr;
-      if(ObjectFind(0, sellBtnName) >= 0)
-      {
-         string sellStatus = "Off";
-         color sellBgColor = COLOR_OFF;
-         if(!g_pairs[i].enabled)
-         {
-            sellStatus = "-";
-            sellBgColor = COLOR_OFF;
-         }
-         else if(g_pairs[i].directionSell == 1)
-         {
-            sellStatus = "SHORT";
-            sellBgColor = COLOR_LOSS;
-         }
-         else if(g_pairs[i].directionSell == -1)
-         {
-            sellStatus = "On";
-            sellBgColor = COLOR_ON;
-         }
-         ObjectSetString(0, sellBtnName, OBJPROP_TEXT, sellStatus);
-         ObjectSetInteger(0, sellBtnName, OBJPROP_BGCOLOR, sellBgColor);
-      }
+      string sellStatus = (g_pairs[i].directionSell == 0) ? "OFF" : 
+                          (g_pairs[i].directionSell == -1) ? "ON" : "ACTIVE";
+      color sellColor = (g_pairs[i].directionSell == 0) ? COLOR_OFF : 
+                        (g_pairs[i].directionSell == -1) ? COLOR_ON : COLOR_ACTIVE;
+      ObjectSetString(0, prefix + "_ST_SELL_" + idx, OBJPROP_TEXT, sellStatus);
+      ObjectSetInteger(0, prefix + "_ST_SELL_" + idx, OBJPROP_BGCOLOR, sellColor);
    }
    
-   ChartRedraw();
+   // Account Summary
+   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+   
+   UpdateLabel(prefix + "SUM_BAL_V", DoubleToString(balance, 2));
+   UpdateLabel(prefix + "SUM_EQ_V", DoubleToString(equity, 2));
+   UpdateLabel(prefix + "SUM_DD_V", DoubleToString(g_maxDrawdownPercent, 2) + "%", COLOR_LOSS);
+   
+   // v3.2.7: Pause status
+   string pauseStatus = g_isPaused ? ("PAUSED:" + g_pauseReason) : "RUNNING";
+   color pauseColor = g_isPaused ? COLOR_LOSS : COLOR_ON;
+   UpdateLabel(prefix + "SUM_PAUSE_V", pauseStatus, pauseColor);
+   
+   UpdateLabel(prefix + "SUM_DP_V", DoubleToString(g_dailyProfit, 2), g_dailyProfit >= 0 ? COLOR_PROFIT : COLOR_LOSS);
+   UpdateLabel(prefix + "SUM_WP_V", DoubleToString(g_weeklyProfit, 2), g_weeklyProfit >= 0 ? COLOR_PROFIT : COLOR_LOSS);
+   UpdateLabel(prefix + "SUM_MP_V", DoubleToString(g_monthlyProfit, 2), g_monthlyProfit >= 0 ? COLOR_PROFIT : COLOR_LOSS);
+   
+   UpdateLabel(prefix + "SUM_CP_V", DoubleToString(g_totalCurrentProfit, 2), 
+               g_totalCurrentProfit >= 0 ? COLOR_PROFIT : COLOR_LOSS);
+   
+   if(!g_isTesterMode) ChartRedraw();
 }
 
 //+------------------------------------------------------------------+
-//| ================ HELPER FUNCTIONS ================                 |
-//+------------------------------------------------------------------+
-
-//+------------------------------------------------------------------+
-//| Create Rectangle                                                   |
+//| Helper: Create Rectangle                                           |
 //+------------------------------------------------------------------+
 void CreateRectangle(string name, int x, int y, int width, int height, color bgColor, color borderColor)
 {
@@ -3018,36 +3009,33 @@ void CreateRectangle(string name, int x, int y, int width, int height, color bgC
 }
 
 //+------------------------------------------------------------------+
-//| Create Label                                                       |
+//| Helper: Create Label                                               |
 //+------------------------------------------------------------------+
-void CreateLabel(string name, int x, int y, string text, color clr, int fontSize, string font)
+void CreateLabel(string name, int x, int y, string text, color textColor, int fontSize, string font)
 {
    ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
    ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
    ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
    ObjectSetString(0, name, OBJPROP_TEXT, text);
-   ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, textColor);
    ObjectSetInteger(0, name, OBJPROP_FONTSIZE, fontSize);
    ObjectSetString(0, name, OBJPROP_FONT, font);
    ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
-   ObjectSetInteger(0, name, OBJPROP_ANCHOR, ANCHOR_LEFT_UPPER);
    ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
 }
 
 //+------------------------------------------------------------------+
-//| Update Label                                                       |
+//| Helper: Update Label                                               |
 //+------------------------------------------------------------------+
-void UpdateLabel(string name, string text, color clr)
+void UpdateLabel(string name, string text, color textColor = CLR_NONE)
 {
-   if(ObjectFind(0, name) >= 0)
-   {
-      ObjectSetString(0, name, OBJPROP_TEXT, text);
-      ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
-   }
+   ObjectSetString(0, name, OBJPROP_TEXT, text);
+   if(textColor != CLR_NONE)
+      ObjectSetInteger(0, name, OBJPROP_COLOR, textColor);
 }
 
 //+------------------------------------------------------------------+
-//| Create Button (Clickable)                                          |
+//| Helper: Create Button                                              |
 //+------------------------------------------------------------------+
 void CreateButton(string name, int x, int y, int width, int height, string text, color bgColor, color textColor)
 {
@@ -3059,31 +3047,26 @@ void CreateButton(string name, int x, int y, int width, int height, string text,
    ObjectSetString(0, name, OBJPROP_TEXT, text);
    ObjectSetInteger(0, name, OBJPROP_BGCOLOR, bgColor);
    ObjectSetInteger(0, name, OBJPROP_COLOR, textColor);
-   ObjectSetInteger(0, name, OBJPROP_BORDER_COLOR, bgColor);
    ObjectSetInteger(0, name, OBJPROP_FONTSIZE, 7);
-   ObjectSetString(0, name, OBJPROP_FONT, "Arial Bold");
    ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
-   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, name, OBJPROP_BORDER_COLOR, COLOR_BORDER);
 }
 
 //+------------------------------------------------------------------+
-//| Create Editable Field                                              |
+//| Helper: Create Edit Field                                          |
 //+------------------------------------------------------------------+
-void CreateEditField(string name, int x, int y, int width, int height, string defaultValue)
+void CreateEditField(string name, int x, int y, int width, int height, string text)
 {
    ObjectCreate(0, name, OBJ_EDIT, 0, 0, 0);
    ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
    ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
    ObjectSetInteger(0, name, OBJPROP_XSIZE, width);
    ObjectSetInteger(0, name, OBJPROP_YSIZE, height);
-   ObjectSetString(0, name, OBJPROP_TEXT, defaultValue);
-   ObjectSetInteger(0, name, OBJPROP_BGCOLOR, C'40,45,55');
-   ObjectSetInteger(0, name, OBJPROP_COLOR, clrWhite);
-   ObjectSetInteger(0, name, OBJPROP_BORDER_COLOR, COLOR_BORDER);
-   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, 8);
-   ObjectSetString(0, name, OBJPROP_FONT, "Arial");
+   ObjectSetString(0, name, OBJPROP_TEXT, text);
+   ObjectSetInteger(0, name, OBJPROP_BGCOLOR, clrWhite);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, COLOR_TEXT);
+   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, 7);
    ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
    ObjectSetInteger(0, name, OBJPROP_ALIGN, ALIGN_CENTER);
-   ObjectSetInteger(0, name, OBJPROP_READONLY, false);
 }
 //+------------------------------------------------------------------+
