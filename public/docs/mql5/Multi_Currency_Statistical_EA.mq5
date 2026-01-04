@@ -3256,8 +3256,8 @@ void CreateDashboard()
    int buyWidth = 395;
    int centerWidth = 390;
    int sellWidth = 395;
-   int headerHeight = 35;  // Increased from 25 to 35
-   int colHeaderHeight = 16;  // Dedicated space for column headers
+   int headerHeight = 28;  // Main header height
+   int colHeaderHeight = 18;  // Dedicated space for column headers with background
    int headerY = PANEL_Y + titleHeight;  // Shifted down by title
    int colHeaderY = headerY + headerHeight + 2;  // Column headers BELOW main headers
    int rowStartY = colHeaderY + colHeaderHeight + 2;
@@ -3269,45 +3269,52 @@ void CreateDashboard()
    // ===== MAIN SECTION HEADERS =====
    // Buy Header - text centered vertically
    CreateRectangle(prefix + "HDR_BUY", buyStartX, headerY + 3, buyWidth, headerHeight, COLOR_HEADER_BUY, COLOR_HEADER_BUY);
-   CreateLabel(prefix + "HDR_BUY_TXT", buyStartX + 165, headerY + 12, "BUY DATA", COLOR_HEADER_TXT, 10, "Arial Bold");
+   CreateLabel(prefix + "HDR_BUY_TXT", buyStartX + 165, headerY + 8, "BUY DATA", COLOR_HEADER_TXT, 10, "Arial Bold");
    
    // Center Header  
    CreateRectangle(prefix + "HDR_CENTER", centerX, headerY + 3, centerWidth, headerHeight, COLOR_HEADER_MAIN, COLOR_HEADER_MAIN);
-   CreateLabel(prefix + "HDR_CENTER_TXT", centerX + 145, headerY + 12, "TRADING PAIRS", COLOR_HEADER_TXT, 10, "Arial Bold");
+   CreateLabel(prefix + "HDR_CENTER_TXT", centerX + 145, headerY + 8, "TRADING PAIRS", COLOR_HEADER_TXT, 10, "Arial Bold");
    
    // Sell Header
    CreateRectangle(prefix + "HDR_SELL", sellStartX, headerY + 3, sellWidth, headerHeight, COLOR_HEADER_SELL, COLOR_HEADER_SELL);
-   CreateLabel(prefix + "HDR_SELL_TXT", sellStartX + 165, headerY + 12, "SELL DATA", COLOR_HEADER_TXT, 10, "Arial Bold");
+   CreateLabel(prefix + "HDR_SELL_TXT", sellStartX + 165, headerY + 8, "SELL DATA", COLOR_HEADER_TXT, 10, "Arial Bold");
    
-   // ===== COLUMN HEADERS (v3.2.9: Separate row below main headers) =====
+   // ===== COLUMN HEADER BACKGROUNDS (v3.2.9: Separate row with background) =====
+   CreateRectangle(prefix + "COLHDR_BUY_BG", buyStartX, colHeaderY - 1, buyWidth, colHeaderHeight, C'10,60,100', C'10,60,100');
+   CreateRectangle(prefix + "COLHDR_CENTER_BG", centerX, colHeaderY - 1, centerWidth, colHeaderHeight, C'40,45,60', C'40,45,60');
+   CreateRectangle(prefix + "COLHDR_SELL_BG", sellStartX, colHeaderY - 1, sellWidth, colHeaderHeight, C'100,40,40', C'100,40,40');
+   
+   // ===== COLUMN HEADERS (v3.2.9: Labels on top of backgrounds) =====
+   int colLabelY = colHeaderY + 2;  // Center text vertically in column header row
+   
    // Buy columns: X | Closed | Lot | Ord | Max | Target | Status | Z | P/L
-   CreateLabel(prefix + "COL_B_X", buyStartX + 5, colHeaderY, "X", COLOR_HEADER_TXT, 7, "Arial");
-   CreateLabel(prefix + "COL_B_PF", buyStartX + 25, colHeaderY, "Closed", COLOR_HEADER_TXT, 7, "Arial");  // v3.2.9: Changed to Closed
-   CreateLabel(prefix + "COL_B_LT", buyStartX + 75, colHeaderY, "Lot", COLOR_HEADER_TXT, 7, "Arial");
-   CreateLabel(prefix + "COL_B_OR", buyStartX + 128, colHeaderY, "Ord", COLOR_HEADER_TXT, 7, "Arial");
-   CreateLabel(prefix + "COL_B_MX", buyStartX + 165, colHeaderY, "Max", COLOR_HEADER_TXT, 7, "Arial");
-   CreateLabel(prefix + "COL_B_TG", buyStartX + 205, colHeaderY, "Target", COLOR_HEADER_TXT, 7, "Arial");
-   CreateLabel(prefix + "COL_B_ST", buyStartX + 260, colHeaderY, "Status", COLOR_HEADER_TXT, 7, "Arial");
-   CreateLabel(prefix + "COL_B_Z", buyStartX + 310, colHeaderY, "Z", COLOR_HEADER_TXT, 7, "Arial");
-   CreateLabel(prefix + "COL_B_PL", buyStartX + 358, colHeaderY, "P/L", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_B_X", buyStartX + 5, colLabelY, "X", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_B_PF", buyStartX + 25, colLabelY, "Closed", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_B_LT", buyStartX + 75, colLabelY, "Lot", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_B_OR", buyStartX + 128, colLabelY, "Ord", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_B_MX", buyStartX + 165, colLabelY, "Max", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_B_TG", buyStartX + 205, colLabelY, "Target", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_B_ST", buyStartX + 260, colLabelY, "Status", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_B_Z", buyStartX + 310, colLabelY, "Z", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_B_PL", buyStartX + 358, colLabelY, "P/L", COLOR_HEADER_TXT, 7, "Arial");
    
    // Center columns: Pair | C-% | Type | Beta | Total P/L
-   CreateLabel(prefix + "COL_C_PR", centerX + 10, colHeaderY, "Pair", COLOR_HEADER_TXT, 7, "Arial");
-   CreateLabel(prefix + "COL_C_CR", centerX + 140, colHeaderY, "C-%", COLOR_HEADER_TXT, 7, "Arial");
-   CreateLabel(prefix + "COL_C_TY", centerX + 195, colHeaderY, "Type", COLOR_HEADER_TXT, 7, "Arial");
-   CreateLabel(prefix + "COL_C_BT", centerX + 250, colHeaderY, "Beta", COLOR_HEADER_TXT, 7, "Arial");
-   CreateLabel(prefix + "COL_C_TP", centerX + 310, colHeaderY, "Tot P/L", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_C_PR", centerX + 10, colLabelY, "Pair", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_C_CR", centerX + 140, colLabelY, "C-%", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_C_TY", centerX + 195, colLabelY, "Type", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_C_BT", centerX + 250, colLabelY, "Beta", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_C_TP", centerX + 310, colLabelY, "Tot P/L", COLOR_HEADER_TXT, 7, "Arial");
    
    // Sell columns: P/L | Z | Status | Target | Max | Ord | Lot | Closed | X
-   CreateLabel(prefix + "COL_S_PL", sellStartX + 5, colHeaderY, "P/L", COLOR_HEADER_TXT, 7, "Arial");
-   CreateLabel(prefix + "COL_S_Z", sellStartX + 50, colHeaderY, "Z", COLOR_HEADER_TXT, 7, "Arial");
-   CreateLabel(prefix + "COL_S_ST", sellStartX + 105, colHeaderY, "Status", COLOR_HEADER_TXT, 7, "Arial");
-   CreateLabel(prefix + "COL_S_TG", sellStartX + 155, colHeaderY, "Target", COLOR_HEADER_TXT, 7, "Arial");
-   CreateLabel(prefix + "COL_S_MX", sellStartX + 210, colHeaderY, "Max", COLOR_HEADER_TXT, 7, "Arial");
-   CreateLabel(prefix + "COL_S_OR", sellStartX + 262, colHeaderY, "Ord", COLOR_HEADER_TXT, 7, "Arial");
-   CreateLabel(prefix + "COL_S_LT", sellStartX + 305, colHeaderY, "Lot", COLOR_HEADER_TXT, 7, "Arial");
-   CreateLabel(prefix + "COL_S_PF", sellStartX + 340, colHeaderY, "Closed", COLOR_HEADER_TXT, 7, "Arial");  // v3.2.9: Changed to Closed
-   CreateLabel(prefix + "COL_S_X", sellStartX + 378, colHeaderY, "X", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_S_PL", sellStartX + 5, colLabelY, "P/L", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_S_Z", sellStartX + 50, colLabelY, "Z", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_S_ST", sellStartX + 105, colLabelY, "Status", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_S_TG", sellStartX + 155, colLabelY, "Target", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_S_MX", sellStartX + 210, colLabelY, "Max", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_S_OR", sellStartX + 262, colLabelY, "Ord", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_S_LT", sellStartX + 305, colLabelY, "Lot", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_S_PF", sellStartX + 340, colLabelY, "Closed", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_S_X", sellStartX + 378, colLabelY, "X", COLOR_HEADER_TXT, 7, "Arial");
    
    // ===== PAIR ROWS =====
    for(int i = 0; i < MAX_PAIRS; i++)
