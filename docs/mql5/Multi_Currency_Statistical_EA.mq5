@@ -1512,6 +1512,7 @@ double CalculateHedgeRatio(int pairIndex)
          
       case BETA_AUTO_SMOOTH:
       default:
+      {
          // Hybrid: Weighted average of Pip Value (stable) + Percentage (responsive), then EMA smoothed
          pipBeta = CalculatePipValueBeta(pairIndex);
          
@@ -1534,6 +1535,7 @@ double CalculateHedgeRatio(int pairIndex)
          }
          
          return smoothBeta;
+      }
    }
 }
 
