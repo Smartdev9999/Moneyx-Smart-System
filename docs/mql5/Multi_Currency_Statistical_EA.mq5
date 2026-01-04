@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                Multi_Currency_Statistical_EA.mq5 |
-//|                        Statistical Arbitrage (Pairs Trading) v3.1 |
+//|                        Statistical Arbitrage (Pairs Trading) v3.2 |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "3.1"
+#property version   "3.2"
 #property strict
 #property description "Statistical Arbitrage / Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
-#property description "v3.1: 30 Pairs, Dashboard Settings, Status Toggle"
+#property description "v3.2: Fixed Correlation & Beta Calculation, Data Validation"
 
 #include <Trade/Trade.mqh>
 
@@ -31,7 +31,7 @@ struct PairData
 };
 
 //+------------------------------------------------------------------+
-//| PAIR INFO STRUCTURE (v3.1 - Separated Buy/Sell Sides)             |
+//| PAIR INFO STRUCTURE (v3.2 - Separated Buy/Sell Sides + dataValid) |
 //+------------------------------------------------------------------+
 struct PairInfo
 {
@@ -39,6 +39,7 @@ struct PairInfo
    string         symbolA;           // Symbol A (Base)
    string         symbolB;           // Symbol B (Hedge)
    bool           enabled;           // Pair On/Off
+   bool           dataValid;         // Data available and valid for calculation
    
    // === Statistical Data ===
    double         correlation;       // Current Correlation
@@ -97,8 +98,8 @@ input int      InpLookbackPeriod = 100;         // Lookback Period (bars)
 input double   InpEntryZScore = 2.0;            // Entry Z-Score Threshold
 input double   InpExitZScore = 0.5;             // Exit Z-Score Threshold
 input double   InpMinCorrelation = 0.70;        // Minimum Correlation
-input int      InpCorrelationPeriod = 50;       // Correlation Calculation Period
 input bool     InpUseLogReturns = true;         // Use Log Returns (Recommended)
+input bool     InpDebugMode = false;            // Enable Debug Logs
 
 input group "=== Target Settings (v3.0) ==="
 input double   InpTotalTarget = 100.0;          // Total Portfolio Target ($)
@@ -339,7 +340,11 @@ int FONT_SIZE;
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   Print("=== Statistical Arbitrage EA v3.1 Initializing ===");
+   Print("===== Statistical Arbitrage EA v3.2 =====");
+   Print("Correlation Timeframe: ", EnumToString(InpCorrTimeframe));
+   Print("Correlation Bars: ", InpCorrBars);
+   Print("Debug Mode: ", InpDebugMode ? "ON" : "OFF");
+   Print("=========================================");
    
    // Initialize dashboard settings from inputs
    PANEL_X = InpPanelX;
@@ -403,6 +408,26 @@ int OnInit()
    // Set timer for dashboard updates
    EventSetTimer(1);
    
+   // Force initial data update before dashboard
+   UpdateAllPairData();
+   
+   // Print pair status summary
+   Print("===== Pair Status Summary =====");
+   for(int i = 0; i < MAX_PAIRS; i++)
+   {
+      if(g_pairs[i].enabled)
+      {
+         PrintFormat("Pair %02d: %s - %s | Data: %s | Corr: %.2f%%", 
+                     i + 1, 
+                     g_pairs[i].symbolA, 
+                     g_pairs[i].symbolB,
+                     g_pairs[i].dataValid ? "OK" : "N/A",
+                     g_pairs[i].correlation * 100);
+      }
+   }
+   PrintFormat("Total Enabled Pairs: %d", g_activePairs);
+   Print("================================");
+   
    // Create dashboard panel
    if(!MQLInfoInteger(MQL_TESTER) || MQLInfoInteger(MQL_VISUAL_MODE))
    {
@@ -456,12 +481,13 @@ bool InitializePairs()
 }
 
 //+------------------------------------------------------------------+
-//| Setup Individual Pair (v3.1 - with Buy/Sell defaults)             |
+//| Setup Individual Pair (v3.2 - with symbol validation + dataValid) |
 //+------------------------------------------------------------------+
 void SetupPair(int index, bool enabled, string symbolA, string symbolB)
 {
    // Basic info
    g_pairs[index].enabled = false;
+   g_pairs[index].dataValid = false;
    g_pairs[index].symbolA = symbolA;
    g_pairs[index].symbolB = symbolB;
    
@@ -503,22 +529,32 @@ void SetupPair(int index, bool enabled, string symbolA, string symbolB)
    
    if(!enabled) return;
    
-   // Validate symbols
+   // Validate symbols exist in broker
    if(!SymbolSelect(symbolA, true))
    {
-      PrintFormat("Warning: Symbol %s not available", symbolA);
+      PrintFormat("Pair %d DISABLED: Symbol %s not found in broker", index + 1, symbolA);
       return;
    }
    
    if(!SymbolSelect(symbolB, true))
    {
-      PrintFormat("Warning: Symbol %s not available", symbolB);
+      PrintFormat("Pair %d DISABLED: Symbol %s not found in broker", index + 1, symbolB);
       return;
+   }
+   
+   // Check if symbols have valid tick data
+   datetime timeA = (datetime)SymbolInfoInteger(symbolA, SYMBOL_TIME);
+   datetime timeB = (datetime)SymbolInfoInteger(symbolB, SYMBOL_TIME);
+   
+   if(timeA == 0 || timeB == 0)
+   {
+      PrintFormat("Pair %d WARNING: No tick data for %s or %s - will retry on data update", 
+                  index + 1, symbolA, symbolB);
    }
    
    g_pairs[index].enabled = true;
    g_activePairs++;
-   PrintFormat("Pair %d initialized: %s - %s", index + 1, symbolA, symbolB);
+   PrintFormat("Pair %d initialized: %s - %s [ENABLED]", index + 1, symbolA, symbolB);
 }
 
 //+------------------------------------------------------------------+
@@ -929,7 +965,7 @@ void DetectCorrelationType(int pairIndex)
 }
 
 //+------------------------------------------------------------------+
-//| Update Price History for a Pair (v3.1 - uses InpCorrTimeframe)     |
+//| Update Price History for a Pair (v3.2 - uses CopyClose for reliability) |
 //+------------------------------------------------------------------+
 void UpdatePriceHistory(int pairIndex)
 {
@@ -937,10 +973,61 @@ void UpdatePriceHistory(int pairIndex)
    string symbolB = g_pairs[pairIndex].symbolB;
    
    int period = MathMin(InpCorrBars, MAX_LOOKBACK);
+   
+   // Use CopyClose for more reliable data retrieval
+   double closesA[], closesB[];
+   ArraySetAsSeries(closesA, true);
+   ArraySetAsSeries(closesB, true);
+   
+   int copiedA = CopyClose(symbolA, InpCorrTimeframe, 0, period, closesA);
+   int copiedB = CopyClose(symbolB, InpCorrTimeframe, 0, period, closesB);
+   
+   // Check if data is available
+   if(copiedA < period || copiedB < period)
+   {
+      if(InpDebugMode)
+      {
+         PrintFormat("Pair %d: Data incomplete - %s: %d bars, %s: %d bars (need %d)",
+                     pairIndex + 1, symbolA, copiedA, symbolB, copiedB, period);
+      }
+      g_pairs[pairIndex].dataValid = false;
+      return;
+   }
+   
+   // Check if data has valid values (not all zeros)
+   bool hasValidDataA = false;
+   bool hasValidDataB = false;
+   for(int i = 0; i < period && (!hasValidDataA || !hasValidDataB); i++)
+   {
+      if(closesA[i] > 0) hasValidDataA = true;
+      if(closesB[i] > 0) hasValidDataB = true;
+   }
+   
+   if(!hasValidDataA || !hasValidDataB)
+   {
+      if(InpDebugMode)
+      {
+         PrintFormat("Pair %d: Data has zero values - %s valid: %s, %s valid: %s",
+                     pairIndex + 1, symbolA, hasValidDataA ? "Yes" : "No", 
+                     symbolB, hasValidDataB ? "Yes" : "No");
+      }
+      g_pairs[pairIndex].dataValid = false;
+      return;
+   }
+   
+   g_pairs[pairIndex].dataValid = true;
+   
+   // Copy to price arrays
    for(int i = 0; i < period; i++)
    {
-      g_pairData[pairIndex].pricesA[i] = iClose(symbolA, InpCorrTimeframe, i);
-      g_pairData[pairIndex].pricesB[i] = iClose(symbolB, InpCorrTimeframe, i);
+      g_pairData[pairIndex].pricesA[i] = closesA[i];
+      g_pairData[pairIndex].pricesB[i] = closesB[i];
+   }
+   
+   if(InpDebugMode && pairIndex == 0)
+   {
+      PrintFormat("Pair 1 Price Data: A[0]=%.5f, A[1]=%.5f, B[0]=%.5f, B[1]=%.5f",
+                  closesA[0], closesA[1], closesB[0], closesB[1]);
    }
 }
 
@@ -975,13 +1062,26 @@ void CalculateLogReturns(int pairIndex)
 }
 
 //+------------------------------------------------------------------+
-//| Calculate Pearson Correlation                                      |
-//| Formula: ρ = Cov(ReturnA, ReturnB) / (σA × σB)                    |
+//| Calculate Pearson Correlation (v3.2 - with validation)            |
+//| Formula: r = Σ[(xi - x̄)(yi - ȳ)] / √[Σ(xi - x̄)² × Σ(yi - ȳ)²]  |
 //+------------------------------------------------------------------+
 double CalculatePearsonCorrelation(int pairIndex)
 {
-   int n = MathMin(InpCorrelationPeriod, MAX_LOOKBACK - 1);
-   if(n < 2) return 0;
+   // Check if data is valid
+   if(!g_pairs[pairIndex].dataValid)
+   {
+      return 0;
+   }
+   
+   int n = MathMin(InpCorrBars - 1, MAX_LOOKBACK - 1);
+   if(n < 10)  // Need at least 10 data points for reliable correlation
+   {
+      if(InpDebugMode)
+      {
+         PrintFormat("Pair %d: Not enough data for correlation (n=%d, need 10)", pairIndex + 1, n);
+      }
+      return 0;
+   }
    
    double sumA = 0, sumB = 0;
    double sumA2 = 0, sumB2 = 0;
@@ -1006,26 +1106,53 @@ double CalculatePearsonCorrelation(int pairIndex)
    double varA = (sumA2 / n) - (meanA * meanA);
    double varB = (sumB2 / n) - (meanB * meanB);
    
-   if(varA <= 0 || varB <= 0) return 0;
+   // Debug output for first pair
+   if(InpDebugMode && pairIndex == 0)
+   {
+      PrintFormat("Pair 1 Corr Debug: n=%d, sumA=%.8f, sumB=%.8f", n, sumA, sumB);
+      PrintFormat("Pair 1 Corr Debug: meanA=%.8f, meanB=%.8f, cov=%.10f", meanA, meanB, covariance);
+      PrintFormat("Pair 1 Corr Debug: varA=%.10f, varB=%.10f", varA, varB);
+   }
+   
+   if(varA <= 0 || varB <= 0) 
+   {
+      if(InpDebugMode)
+      {
+         PrintFormat("Pair %d: Variance is zero or negative (varA=%.10f, varB=%.10f)", 
+                     pairIndex + 1, varA, varB);
+      }
+      return 0;
+   }
    
    double stdDevA = MathSqrt(varA);
    double stdDevB = MathSqrt(varB);
    
    if(stdDevA == 0 || stdDevB == 0) return 0;
    
-   return covariance / (stdDevA * stdDevB);
+   double correlation = covariance / (stdDevA * stdDevB);
+   
+   if(InpDebugMode && pairIndex == 0)
+   {
+      PrintFormat("Pair 1 Corr Result: r = %.4f (%.2f%%)", correlation, correlation * 100);
+   }
+   
+   return correlation;
 }
 
 //+------------------------------------------------------------------+
-//| Calculate Hedge Ratio (Beta)                                       |
+//| Calculate Hedge Ratio (Beta) v3.2                                  |
+//| Formula: β = Cov(A,B) / Var(A)  (OLS Regression: B = β × A)        |
 //+------------------------------------------------------------------+
 double CalculateHedgeRatio(int pairIndex)
 {
-   int n = MathMin(InpCorrelationPeriod, MAX_LOOKBACK - 1);
-   if(n < 2) return 1.0;
+   // Check if data is valid
+   if(!g_pairs[pairIndex].dataValid) return 1.0;
+   
+   int n = MathMin(InpCorrBars - 1, MAX_LOOKBACK - 1);
+   if(n < 10) return 1.0;
    
    double sumA = 0, sumB = 0;
-   double sumA2 = 0, sumB2 = 0;
+   double sumA2 = 0;
    double sumAB = 0;
    
    for(int i = 0; i < n; i++)
@@ -1036,18 +1163,39 @@ double CalculateHedgeRatio(int pairIndex)
       sumA += retA;
       sumB += retB;
       sumA2 += retA * retA;
-      sumB2 += retB * retB;
       sumAB += retA * retB;
    }
    
    double meanA = sumA / n;
    double meanB = sumB / n;
+   
+   // Beta = Cov(A,B) / Var(A) - using variance of Symbol A (not B!)
    double covariance = (sumAB / n) - (meanA * meanB);
-   double varianceB = (sumB2 / n) - (meanB * meanB);
+   double varianceA = (sumA2 / n) - (meanA * meanA);
    
-   if(varianceB == 0) return 1.0;
+   if(varianceA <= 0) 
+   {
+      if(InpDebugMode)
+      {
+         PrintFormat("Pair %d: varianceA is zero or negative (%.10f), using beta=1.0", 
+                     pairIndex + 1, varianceA);
+      }
+      return 1.0;
+   }
    
-   return MathAbs(covariance / varianceB);
+   double beta = MathAbs(covariance / varianceA);
+   
+   // Clamp beta to reasonable range (0.1 to 10.0)
+   if(beta < 0.1) beta = 0.1;
+   if(beta > 10.0) beta = 10.0;
+   
+   if(InpDebugMode && pairIndex == 0)
+   {
+      PrintFormat("Pair 1 Beta Debug: cov=%.10f, varA=%.10f, beta=%.4f", 
+                  covariance, varianceA, beta);
+   }
+   
+   return beta;
 }
 
 //+------------------------------------------------------------------+
@@ -2134,18 +2282,36 @@ void UpdateDashboard()
       string idxStr = IntegerToString(i);
       
       // === Center Data ===
-      // Correlation %
-      double corr = g_pairs[i].correlation * 100;
-      color corrColor = MathAbs(corr) >= InpMinCorrelation * 100 ? COLOR_PROFIT : COLOR_TEXT;
-      UpdateLabel(prefix + "P" + idxStr + "_CORR", DoubleToString(corr, 0) + "%", corrColor);
-      
-      // Correlation Type
-      string corrType = g_pairs[i].correlationType == 1 ? "Pos" : "Neg";
-      color typeColor = g_pairs[i].correlationType == 1 ? COLOR_PROFIT : COLOR_LOSS;
-      UpdateLabel(prefix + "P" + idxStr + "_TYPE", corrType, typeColor);
-      
-      // Beta
-      UpdateLabel(prefix + "P" + idxStr + "_BETA", DoubleToString(g_pairs[i].hedgeRatio, 2), COLOR_TEXT);
+      // Handle disabled or invalid data pairs
+      if(!g_pairs[i].enabled)
+      {
+         UpdateLabel(prefix + "P" + idxStr + "_CORR", "-", COLOR_OFF);
+         UpdateLabel(prefix + "P" + idxStr + "_TYPE", "-", COLOR_OFF);
+         UpdateLabel(prefix + "P" + idxStr + "_BETA", "-", COLOR_OFF);
+      }
+      else if(!g_pairs[i].dataValid)
+      {
+         // Show N/A when data is not available
+         UpdateLabel(prefix + "P" + idxStr + "_CORR", "N/A", COLOR_GOLD);
+         UpdateLabel(prefix + "P" + idxStr + "_TYPE", "N/A", COLOR_GOLD);
+         UpdateLabel(prefix + "P" + idxStr + "_BETA", "N/A", COLOR_GOLD);
+      }
+      else
+      {
+         // Normal display with valid data
+         // Correlation %
+         double corr = g_pairs[i].correlation * 100;
+         color corrColor = MathAbs(corr) >= InpMinCorrelation * 100 ? COLOR_PROFIT : COLOR_TEXT;
+         UpdateLabel(prefix + "P" + idxStr + "_CORR", DoubleToString(corr, 0) + "%", corrColor);
+         
+         // Correlation Type
+         string corrType = g_pairs[i].correlationType == 1 ? "Pos" : "Neg";
+         color typeColor = g_pairs[i].correlationType == 1 ? COLOR_PROFIT : COLOR_LOSS;
+         UpdateLabel(prefix + "P" + idxStr + "_TYPE", corrType, typeColor);
+         
+         // Beta
+         UpdateLabel(prefix + "P" + idxStr + "_BETA", DoubleToString(g_pairs[i].hedgeRatio, 2), COLOR_TEXT);
+      }
       
       // Total P/L
       double totalPL = g_pairs[i].totalPairProfit;
