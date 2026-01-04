@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                Multi_Currency_Statistical_EA.mq5 |
-//|                        Statistical Arbitrage (Pairs Trading) v3.2 |
+//|                      Statistical Arbitrage (Pairs Trading) v3.2.1 |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "3.2"
+#property version   "3.21"
 #property strict
 #property description "Statistical Arbitrage / Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
-#property description "v3.2: Fixed Correlation & Beta Calculation, Data Validation"
+#property description "v3.2.1: Price Direct Correlation (like myfxbook)"
 
 #include <Trade/Trade.mqh>
 
@@ -88,9 +88,20 @@ input int      InpMagicNumber = 888888;         // Magic Number
 input int      InpSlippage = 30;                // Slippage (points)
 input ENUM_TIMEFRAMES InpTimeframe = PERIOD_H1; // Trading Timeframe
 
+//+------------------------------------------------------------------+
+//| CORRELATION METHOD ENUM (v3.2.1)                                   |
+//+------------------------------------------------------------------+
+enum ENUM_CORR_METHOD
+{
+   CORR_PRICE_DIRECT = 0,    // Price Direct (like myfxbook)
+   CORR_PERCENTAGE_CHANGE,   // Percentage Change
+   CORR_LOG_RETURNS          // Log Returns
+};
+
 input group "=== Correlation Calculation Settings ==="
-input ENUM_TIMEFRAMES InpCorrTimeframe = PERIOD_H1;   // Correlation Timeframe
-input int      InpCorrBars = 100;                      // Correlation Bars Count
+input ENUM_TIMEFRAMES InpCorrTimeframe = PERIOD_H4;   // Correlation Timeframe
+input int      InpCorrBars = 100;                      // Correlation Bars Count (myfxbook uses 100-200)
+input ENUM_CORR_METHOD InpCorrMethod = CORR_PRICE_DIRECT;  // Correlation Method
 input bool     InpAutoDownloadData = true;             // Auto Download History Data
 
 input group "=== Statistical Settings ==="
@@ -98,7 +109,6 @@ input int      InpLookbackPeriod = 100;         // Lookback Period (bars)
 input double   InpEntryZScore = 2.0;            // Entry Z-Score Threshold
 input double   InpExitZScore = 0.5;             // Exit Z-Score Threshold
 input double   InpMinCorrelation = 0.70;        // Minimum Correlation
-input bool     InpUseLogReturns = true;         // Use Log Returns (Recommended)
 input bool     InpDebugMode = false;            // Enable Debug Logs
 
 input group "=== Target Settings (v3.0) ==="
@@ -340,7 +350,8 @@ int FONT_SIZE;
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   Print("===== Statistical Arbitrage EA v3.2 =====");
+   Print("===== Statistical Arbitrage EA v3.2.1 =====");
+   Print("Correlation Method: ", EnumToString(InpCorrMethod));
    Print("Correlation Timeframe: ", EnumToString(InpCorrTimeframe));
    Print("Correlation Bars: ", InpCorrBars);
    Print("Debug Mode: ", InpDebugMode ? "ON" : "OFF");
@@ -1032,11 +1043,15 @@ void UpdatePriceHistory(int pairIndex)
 }
 
 //+------------------------------------------------------------------+
-//| Calculate Log Returns                                              |
+//| Calculate Returns (Percentage or Log based on method)              |
 //+------------------------------------------------------------------+
 void CalculateLogReturns(int pairIndex)
 {
+   // Skip calculation if using Price Direct method
+   if(InpCorrMethod == CORR_PRICE_DIRECT) return;
+   
    int returnCount = MathMin(InpCorrBars - 1, MAX_LOOKBACK - 1);
+   bool useLog = (InpCorrMethod == CORR_LOG_RETURNS);
    
    for(int i = 0; i < returnCount; i++)
    {
@@ -1047,7 +1062,7 @@ void CalculateLogReturns(int pairIndex)
       
       if(priceA_t1 > 0 && priceB_t1 > 0)
       {
-         if(InpUseLogReturns)
+         if(useLog)
          {
             g_pairData[pairIndex].returnsA[i] = MathLog(priceA_t / priceA_t1);
             g_pairData[pairIndex].returnsB[i] = MathLog(priceB_t / priceB_t1);
@@ -1062,7 +1077,7 @@ void CalculateLogReturns(int pairIndex)
 }
 
 //+------------------------------------------------------------------+
-//| Calculate Pearson Correlation (v3.2 - with validation)            |
+//| Calculate Pearson Correlation (v3.2.1 - with method selection)    |
 //| Formula: r = Σ[(xi - x̄)(yi - ȳ)] / √[Σ(xi - x̄)² × Σ(yi - ȳ)²]  |
 //+------------------------------------------------------------------+
 double CalculatePearsonCorrelation(int pairIndex)
@@ -1073,6 +1088,81 @@ double CalculatePearsonCorrelation(int pairIndex)
       return 0;
    }
    
+   // Choose calculation method based on input
+   switch(InpCorrMethod)
+   {
+      case CORR_PRICE_DIRECT:
+         return CalculatePriceCorrelation(pairIndex);
+         
+      case CORR_PERCENTAGE_CHANGE:
+      case CORR_LOG_RETURNS:
+         return CalculateReturnCorrelation(pairIndex);
+         
+      default:
+         return CalculatePriceCorrelation(pairIndex);
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Price Direct Correlation (like myfxbook)                 |
+//| Uses raw price values, not returns                                 |
+//+------------------------------------------------------------------+
+double CalculatePriceCorrelation(int pairIndex)
+{
+   int n = MathMin(InpCorrBars, MAX_LOOKBACK);
+   if(n < 10) return 0;
+   
+   double sumA = 0, sumB = 0;
+   double sumA2 = 0, sumB2 = 0;
+   double sumAB = 0;
+   
+   // Use prices directly (not returns) - like myfxbook
+   for(int i = 0; i < n; i++)
+   {
+      double priceA = g_pairData[pairIndex].pricesA[i];
+      double priceB = g_pairData[pairIndex].pricesB[i];
+      
+      sumA += priceA;
+      sumB += priceB;
+      sumA2 += priceA * priceA;
+      sumB2 += priceB * priceB;
+      sumAB += priceA * priceB;
+   }
+   
+   double meanA = sumA / n;
+   double meanB = sumB / n;
+   
+   double covariance = (sumAB / n) - (meanA * meanB);
+   double varA = (sumA2 / n) - (meanA * meanA);
+   double varB = (sumB2 / n) - (meanB * meanB);
+   
+   // Debug output for first pair
+   if(InpDebugMode && pairIndex == 0)
+   {
+      PrintFormat("Pair 1 [PRICE_DIRECT] n=%d, meanA=%.5f, meanB=%.5f", n, meanA, meanB);
+      PrintFormat("Pair 1 [PRICE_DIRECT] cov=%.10f, varA=%.10f, varB=%.10f", covariance, varA, varB);
+   }
+   
+   if(varA <= 0 || varB <= 0) return 0;
+   
+   double stdDevA = MathSqrt(varA);
+   double stdDevB = MathSqrt(varB);
+   
+   double correlation = covariance / (stdDevA * stdDevB);
+   
+   if(InpDebugMode && pairIndex == 0)
+   {
+      PrintFormat("Pair 1 [PRICE_DIRECT] Correlation r = %.4f (%.2f%%)", correlation, correlation * 100);
+   }
+   
+   return correlation;
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Return-Based Correlation (Percentage or Log Returns)     |
+//+------------------------------------------------------------------+
+double CalculateReturnCorrelation(int pairIndex)
+{
    int n = MathMin(InpCorrBars - 1, MAX_LOOKBACK - 1);
    if(n < 10)  // Need at least 10 data points for reliable correlation
    {
@@ -1109,9 +1199,9 @@ double CalculatePearsonCorrelation(int pairIndex)
    // Debug output for first pair
    if(InpDebugMode && pairIndex == 0)
    {
-      PrintFormat("Pair 1 Corr Debug: n=%d, sumA=%.8f, sumB=%.8f", n, sumA, sumB);
-      PrintFormat("Pair 1 Corr Debug: meanA=%.8f, meanB=%.8f, cov=%.10f", meanA, meanB, covariance);
-      PrintFormat("Pair 1 Corr Debug: varA=%.10f, varB=%.10f", varA, varB);
+      PrintFormat("Pair 1 [RETURNS] n=%d, sumA=%.8f, sumB=%.8f", n, sumA, sumB);
+      PrintFormat("Pair 1 [RETURNS] meanA=%.8f, meanB=%.8f, cov=%.10f", meanA, meanB, covariance);
+      PrintFormat("Pair 1 [RETURNS] varA=%.10f, varB=%.10f", varA, varB);
    }
    
    if(varA <= 0 || varB <= 0) 
@@ -1133,14 +1223,14 @@ double CalculatePearsonCorrelation(int pairIndex)
    
    if(InpDebugMode && pairIndex == 0)
    {
-      PrintFormat("Pair 1 Corr Result: r = %.4f (%.2f%%)", correlation, correlation * 100);
+      PrintFormat("Pair 1 [RETURNS] Corr Result: r = %.4f (%.2f%%)", correlation, correlation * 100);
    }
    
    return correlation;
 }
 
 //+------------------------------------------------------------------+
-//| Calculate Hedge Ratio (Beta) v3.2                                  |
+//| Calculate Hedge Ratio (Beta) v3.2.1                                |
 //| Formula: β = Cov(A,B) / Var(A)  (OLS Regression: B = β × A)        |
 //+------------------------------------------------------------------+
 double CalculateHedgeRatio(int pairIndex)
@@ -1148,6 +1238,68 @@ double CalculateHedgeRatio(int pairIndex)
    // Check if data is valid
    if(!g_pairs[pairIndex].dataValid) return 1.0;
    
+   if(InpCorrMethod == CORR_PRICE_DIRECT)
+   {
+      return CalculatePriceBasedBeta(pairIndex);
+   }
+   else
+   {
+      return CalculateReturnBasedBeta(pairIndex);
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Price-Based Beta (for Price Direct method)              |
+//+------------------------------------------------------------------+
+double CalculatePriceBasedBeta(int pairIndex)
+{
+   int n = MathMin(InpCorrBars, MAX_LOOKBACK);
+   if(n < 10) return 1.0;
+   
+   double sumA = 0, sumB = 0;
+   double sumA2 = 0;
+   double sumAB = 0;
+   
+   for(int i = 0; i < n; i++)
+   {
+      double priceA = g_pairData[pairIndex].pricesA[i];
+      double priceB = g_pairData[pairIndex].pricesB[i];
+      
+      sumA += priceA;
+      sumB += priceB;
+      sumA2 += priceA * priceA;
+      sumAB += priceA * priceB;
+   }
+   
+   double meanA = sumA / n;
+   double meanB = sumB / n;
+   
+   // Beta = Cov(A,B) / Var(A)
+   double covariance = (sumAB / n) - (meanA * meanB);
+   double varianceA = (sumA2 / n) - (meanA * meanA);
+   
+   if(varianceA <= 0) return 1.0;
+   
+   double beta = MathAbs(covariance / varianceA);
+   
+   // Clamp beta to reasonable range (0.1 to 10.0)
+   if(beta < 0.1) beta = 0.1;
+   if(beta > 10.0) beta = 10.0;
+   
+   if(InpDebugMode && pairIndex == 0)
+   {
+      PrintFormat("Pair 1 [PRICE] Beta: cov=%.10f, varA=%.10f, beta=%.4f", 
+                  covariance, varianceA, beta);
+   }
+   
+   return beta;
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Return-Based Beta (for Percentage/Log Returns method)   |
+//+------------------------------------------------------------------+
+double CalculateReturnBasedBeta(int pairIndex)
+{
    int n = MathMin(InpCorrBars - 1, MAX_LOOKBACK - 1);
    if(n < 10) return 1.0;
    
@@ -1191,7 +1343,7 @@ double CalculateHedgeRatio(int pairIndex)
    
    if(InpDebugMode && pairIndex == 0)
    {
-      PrintFormat("Pair 1 Beta Debug: cov=%.10f, varA=%.10f, beta=%.4f", 
+      PrintFormat("Pair 1 [RETURNS] Beta: cov=%.10f, varA=%.10f, beta=%.4f", 
                   covariance, varianceA, beta);
    }
    
