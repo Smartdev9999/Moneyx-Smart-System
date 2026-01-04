@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                Multi_Currency_Statistical_EA.mq5 |
-//|                      Statistical Arbitrage (Pairs Trading) v3.2.8 |
+//|                      Statistical Arbitrage (Pairs Trading) v3.2.9 |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "3.28"
+#property version   "3.29"
 #property strict
 #property description "Statistical Arbitrage / Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
-#property description "v3.2.8: Bug Fixes + Z-Grid Fix + Ultra Fast Backtest"
+#property description "v3.2.9: Profit Exit Fix + Averaging Guard + Dashboard Closed P/L"
 
 #include <Trade/Trade.mqh>
 
@@ -87,6 +87,14 @@ struct PairInfo
    double         lastAvgPriceSell;  // Last averaging price for Sell side
    double         entryZScoreBuy;    // Entry Z-Score for Buy (for Z-Score grid)
    double         entryZScoreSell;   // Entry Z-Score for Sell (for Z-Score grid)
+   
+   // === v3.2.9: Same-Tick Protection ===
+   bool           justOpenedMainBuy;  // Prevent averaging in same tick as main order
+   bool           justOpenedMainSell; // Prevent averaging in same tick as main order
+   
+   // === v3.2.9: Closed P/L Tracking ===
+   double         closedProfitBuy;   // Accumulated closed profit for Buy side
+   double         closedProfitSell;  // Accumulated closed profit for Sell side
    
    // === Combined ===
    double         totalPairProfit;   // profitBuy + profitSell
@@ -576,7 +584,7 @@ int OnInit()
       CreateDashboard();
    }
    
-   PrintFormat("=== Statistical Arbitrage EA v3.2.8 Initialized - %d Active Pairs ===", g_activePairs);
+   PrintFormat("=== Statistical Arbitrage EA v3.2.9 Initialized - %d Active Pairs ===", g_activePairs);
    return(INIT_SUCCEEDED);
 }
 
@@ -776,6 +784,14 @@ void SetupPair(int index, bool enabled, string symbolA, string symbolB)
    g_pairs[index].entryZScoreBuy = 0;
    g_pairs[index].entryZScoreSell = 0;
    
+   // v3.2.9: Same-Tick Protection initialization
+   g_pairs[index].justOpenedMainBuy = false;
+   g_pairs[index].justOpenedMainSell = false;
+   
+   // v3.2.9: Closed P/L initialization
+   g_pairs[index].closedProfitBuy = 0;
+   g_pairs[index].closedProfitSell = 0;
+   
    // Combined
    g_pairs[index].totalPairProfit = 0;
    
@@ -824,7 +840,7 @@ void OnDeinit(const int reason)
    }
    
    ChartRedraw();
-   Print("=== Statistical Arbitrage EA v3.2.8 Deinitialized ===");
+   Print("=== Statistical Arbitrage EA v3.2.9 Deinitialized ===");
 }
 
 //+------------------------------------------------------------------+
@@ -833,6 +849,13 @@ void OnDeinit(const int reason)
 void OnTick()
 {
    if(!g_isLicenseValid) return;
+   
+   // v3.2.9: Reset "just opened" flags at start of each tick
+   for(int i = 0; i < MAX_PAIRS; i++)
+   {
+      g_pairs[i].justOpenedMainBuy = false;
+      g_pairs[i].justOpenedMainSell = false;
+   }
    
    // v3.2.7: Check Auto-Resume before pause check
    if(g_isPaused)
@@ -2154,6 +2177,8 @@ void AnalyzeAllPairs()
                // v3.2.7: Store entry Z-Score for averaging
                g_pairs[i].entryZScoreBuy = zScore;
                g_pairs[i].lastAvgPriceBuy = SymbolInfoDouble(g_pairs[i].symbolA, SYMBOL_ASK);
+               // v3.2.9: Set flag to prevent averaging in same tick
+               g_pairs[i].justOpenedMainBuy = true;
             }
          }
       }
@@ -2170,6 +2195,8 @@ void AnalyzeAllPairs()
                // v3.2.7: Store entry Z-Score for averaging
                g_pairs[i].entryZScoreSell = zScore;
                g_pairs[i].lastAvgPriceSell = SymbolInfoDouble(g_pairs[i].symbolA, SYMBOL_BID);
+               // v3.2.9: Set flag to prevent averaging in same tick
+               g_pairs[i].justOpenedMainSell = true;
             }
          }
       }
@@ -2207,6 +2234,10 @@ void CheckAllAveraging()
 void CheckZScoreAveraging(int pairIndex)
 {
    if(g_zScoreGridCount == 0) return;
+   
+   // v3.2.9: Skip if main order was just opened in this tick
+   if(g_pairs[pairIndex].justOpenedMainBuy || g_pairs[pairIndex].justOpenedMainSell)
+      return;
    
    double zScore = g_pairs[pairIndex].zScore;
    
@@ -2270,6 +2301,10 @@ void CheckZScoreAveraging(int pairIndex)
 //+------------------------------------------------------------------+
 void CheckATRAveraging(int pairIndex)
 {
+   // v3.2.9: Skip if main order was just opened in this tick
+   if(g_pairs[pairIndex].justOpenedMainBuy || g_pairs[pairIndex].justOpenedMainSell)
+      return;
+   
    string symbolA = g_pairs[pairIndex].symbolA;
    
    // Get ATR value
@@ -2666,6 +2701,9 @@ bool CloseBuySide(int pairIndex)
    {
       PrintFormat("Pair %d BUY SIDE CLOSED | Profit: %.2f", pairIndex + 1, g_pairs[pairIndex].profitBuy);
       
+      // v3.2.9: Accumulate closed P/L before reset
+      g_pairs[pairIndex].closedProfitBuy += g_pairs[pairIndex].profitBuy;
+      
       // Update statistics before reset
       g_dailyProfit += g_pairs[pairIndex].profitBuy;
       g_weeklyProfit += g_pairs[pairIndex].profitBuy;
@@ -2746,6 +2784,9 @@ bool CloseSellSide(int pairIndex)
    if(closedA && closedB)
    {
       PrintFormat("Pair %d SELL SIDE CLOSED | Profit: %.2f", pairIndex + 1, g_pairs[pairIndex].profitSell);
+      
+      // v3.2.9: Accumulate closed P/L before reset
+      g_pairs[pairIndex].closedProfitSell += g_pairs[pairIndex].profitSell;
       
       // Update statistics before reset
       g_dailyProfit += g_pairs[pairIndex].profitSell;
@@ -2830,10 +2871,13 @@ void CloseAllSellSides()
 //+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
-//| Manage All Open Positions (v3.2.7 - Exit Mode Selection)           |
+//| Manage All Open Positions (v3.2.9 - Force Profit Update)           |
 //+------------------------------------------------------------------+
 void ManageAllPositions()
 {
+   // v3.2.9: Force profit update before checking exit conditions
+   UpdatePairProfits();
+   
    for(int i = 0; i < MAX_PAIRS; i++)
    {
       if(!g_pairs[i].enabled) continue;
@@ -2897,7 +2941,7 @@ void ManageAllPositions()
 }
 
 //+------------------------------------------------------------------+
-//| Check Exit Condition based on Exit Mode (v3.2.7)                   |
+//| Check Exit Condition based on Exit Mode (v3.2.9 - Fixed)           |
 //+------------------------------------------------------------------+
 bool CheckExitCondition(int pairIndex, bool isBuySide)
 {
@@ -2924,13 +2968,24 @@ bool CheckExitCondition(int pairIndex, bool isBuySide)
       zScoreExit = (zScore <= InpExitZScore);   // Sell entered at Z>+2, exit at Z<=+0.5
    }
    
-   // Profit exit condition
-   bool profitExit = (profit >= target);
+   // v3.2.9: Profit exit condition - ONLY trigger if target > 0
+   bool profitExit = (target > 0 && profit >= target);
    
    // Check Require Positive Profit for Z-Score exit
    if(InpRequirePositiveProfit && zScoreExit && !profitExit && profit < 0)
    {
       zScoreExit = false;  // Don't close at loss on Z-Score
+   }
+   
+   // v3.2.9: Debug logging for profit target issues
+   if(InpDebugMode && InpExitMode == EXIT_PROFIT_ONLY && target > 0)
+   {
+      if(profit >= target * 0.9)  // Log when close to target
+      {
+         PrintFormat("DEBUG Pair %d %s: Profit=%.2f, Target=%.2f, profitExit=%s",
+            pairIndex + 1, isBuySide ? "BUY" : "SELL",
+            profit, target, profitExit ? "TRUE" : "FALSE");
+      }
    }
    
    // Determine exit based on mode
@@ -3180,7 +3235,7 @@ void CheckRiskLimits()
 //+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
-//| Create Dashboard (v3.1 - 3-Part Layout)                            |
+//| Create Dashboard (v3.2.9 - Fixed Headers + Closed P/L)             |
 //+------------------------------------------------------------------+
 void CreateDashboard()
 {
@@ -3190,50 +3245,51 @@ void CreateDashboard()
    // Main background
    CreateRectangle(prefix + "BG_MAIN", PANEL_X, PANEL_Y, PANEL_WIDTH, PANEL_HEIGHT, COLOR_BG_DARK, COLOR_BG_DARK);
    
-   // v3.2.8: Add EA Title Row
+   // v3.2.9: Add EA Title Row
    int titleHeight = 22;
    CreateRectangle(prefix + "TITLE_BG", PANEL_X, PANEL_Y, PANEL_WIDTH, titleHeight, C'20,40,60', C'20,40,60');
    CreateLabel(prefix + "TITLE_NAME", PANEL_X + 10, PANEL_Y + 4, 
-               "Multi-Currency Statistical EA v3.2.8 - MoneyX Trading", 
+               "Multi-Currency Statistical EA v3.2.9 - MoneyX Trading", 
                COLOR_GOLD, 10, "Arial Bold");
    
-   // Calculate section widths (3-part layout)
+   // v3.2.9: Increased header height to prevent overlap
    int buyWidth = 395;
    int centerWidth = 390;
    int sellWidth = 395;
-   int headerHeight = 25;
+   int headerHeight = 35;  // Increased from 25 to 35
+   int colHeaderHeight = 16;  // Dedicated space for column headers
    int headerY = PANEL_Y + titleHeight;  // Shifted down by title
-   int colHeaderY = headerY + headerHeight - 8;  // Column headers position
-   int rowStartY = headerY + headerHeight + 5;
+   int colHeaderY = headerY + headerHeight + 2;  // Column headers BELOW main headers
+   int rowStartY = colHeaderY + colHeaderHeight + 2;
    
    int buyStartX = PANEL_X + 10;
    int centerX = buyStartX + buyWidth + 5;
    int sellStartX = centerX + centerWidth + 5;
    
-   // ===== HEADERS =====
-   // Buy Header
+   // ===== MAIN SECTION HEADERS =====
+   // Buy Header - text centered vertically
    CreateRectangle(prefix + "HDR_BUY", buyStartX, headerY + 3, buyWidth, headerHeight, COLOR_HEADER_BUY, COLOR_HEADER_BUY);
-   CreateLabel(prefix + "HDR_BUY_TXT", buyStartX + 160, headerY + 7, "BUY DATA", COLOR_HEADER_TXT, 10, "Arial Bold");
+   CreateLabel(prefix + "HDR_BUY_TXT", buyStartX + 165, headerY + 12, "BUY DATA", COLOR_HEADER_TXT, 10, "Arial Bold");
    
    // Center Header  
    CreateRectangle(prefix + "HDR_CENTER", centerX, headerY + 3, centerWidth, headerHeight, COLOR_HEADER_MAIN, COLOR_HEADER_MAIN);
-   CreateLabel(prefix + "HDR_CENTER_TXT", centerX + 140, headerY + 7, "TRADING PAIRS", COLOR_HEADER_TXT, 10, "Arial Bold");
+   CreateLabel(prefix + "HDR_CENTER_TXT", centerX + 145, headerY + 12, "TRADING PAIRS", COLOR_HEADER_TXT, 10, "Arial Bold");
    
    // Sell Header
    CreateRectangle(prefix + "HDR_SELL", sellStartX, headerY + 3, sellWidth, headerHeight, COLOR_HEADER_SELL, COLOR_HEADER_SELL);
-   CreateLabel(prefix + "HDR_SELL_TXT", sellStartX + 160, headerY + 7, "SELL DATA", COLOR_HEADER_TXT, 10, "Arial Bold");
+   CreateLabel(prefix + "HDR_SELL_TXT", sellStartX + 165, headerY + 12, "SELL DATA", COLOR_HEADER_TXT, 10, "Arial Bold");
    
-   // Column headers (v3.2.8: Separate row below main headers)
-   // Buy columns: Close | Profit | Lot | Order | Max | Target | Status | Z | P/L
+   // ===== COLUMN HEADERS (v3.2.9: Separate row below main headers) =====
+   // Buy columns: X | Closed | Lot | Ord | Max | Target | Status | Z | P/L
    CreateLabel(prefix + "COL_B_X", buyStartX + 5, colHeaderY, "X", COLOR_HEADER_TXT, 7, "Arial");
-   CreateLabel(prefix + "COL_B_PF", buyStartX + 28, colHeaderY, "Profit", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_B_PF", buyStartX + 25, colHeaderY, "Closed", COLOR_HEADER_TXT, 7, "Arial");  // v3.2.9: Changed to Closed
    CreateLabel(prefix + "COL_B_LT", buyStartX + 75, colHeaderY, "Lot", COLOR_HEADER_TXT, 7, "Arial");
    CreateLabel(prefix + "COL_B_OR", buyStartX + 128, colHeaderY, "Ord", COLOR_HEADER_TXT, 7, "Arial");
    CreateLabel(prefix + "COL_B_MX", buyStartX + 165, colHeaderY, "Max", COLOR_HEADER_TXT, 7, "Arial");
    CreateLabel(prefix + "COL_B_TG", buyStartX + 205, colHeaderY, "Target", COLOR_HEADER_TXT, 7, "Arial");
    CreateLabel(prefix + "COL_B_ST", buyStartX + 260, colHeaderY, "Status", COLOR_HEADER_TXT, 7, "Arial");
    CreateLabel(prefix + "COL_B_Z", buyStartX + 310, colHeaderY, "Z", COLOR_HEADER_TXT, 7, "Arial");
-   CreateLabel(prefix + "COL_B_PL", buyStartX + 360, colHeaderY, "P/L", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_B_PL", buyStartX + 358, colHeaderY, "P/L", COLOR_HEADER_TXT, 7, "Arial");
    
    // Center columns: Pair | C-% | Type | Beta | Total P/L
    CreateLabel(prefix + "COL_C_PR", centerX + 10, colHeaderY, "Pair", COLOR_HEADER_TXT, 7, "Arial");
@@ -3242,7 +3298,7 @@ void CreateDashboard()
    CreateLabel(prefix + "COL_C_BT", centerX + 250, colHeaderY, "Beta", COLOR_HEADER_TXT, 7, "Arial");
    CreateLabel(prefix + "COL_C_TP", centerX + 310, colHeaderY, "Tot P/L", COLOR_HEADER_TXT, 7, "Arial");
    
-   // Sell columns: P/L | Z | Status | Target | Max | Order | Lot | Profit | X
+   // Sell columns: P/L | Z | Status | Target | Max | Ord | Lot | Closed | X
    CreateLabel(prefix + "COL_S_PL", sellStartX + 5, colHeaderY, "P/L", COLOR_HEADER_TXT, 7, "Arial");
    CreateLabel(prefix + "COL_S_Z", sellStartX + 50, colHeaderY, "Z", COLOR_HEADER_TXT, 7, "Arial");
    CreateLabel(prefix + "COL_S_ST", sellStartX + 105, colHeaderY, "Status", COLOR_HEADER_TXT, 7, "Arial");
@@ -3250,7 +3306,7 @@ void CreateDashboard()
    CreateLabel(prefix + "COL_S_MX", sellStartX + 210, colHeaderY, "Max", COLOR_HEADER_TXT, 7, "Arial");
    CreateLabel(prefix + "COL_S_OR", sellStartX + 262, colHeaderY, "Ord", COLOR_HEADER_TXT, 7, "Arial");
    CreateLabel(prefix + "COL_S_LT", sellStartX + 305, colHeaderY, "Lot", COLOR_HEADER_TXT, 7, "Arial");
-   CreateLabel(prefix + "COL_S_PF", sellStartX + 345, colHeaderY, "Profit", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_S_PF", sellStartX + 340, colHeaderY, "Closed", COLOR_HEADER_TXT, 7, "Arial");  // v3.2.9: Changed to Closed
    CreateLabel(prefix + "COL_S_X", sellStartX + 378, colHeaderY, "X", COLOR_HEADER_TXT, 7, "Arial");
    
    // ===== PAIR ROWS =====
@@ -3276,7 +3332,7 @@ void CreateDashboard()
 }
 
 //+------------------------------------------------------------------+
-//| Create Pair Row (v3.1)                                             |
+//| Create Pair Row (v3.2.9 - Closed P/L Column)                       |
 //+------------------------------------------------------------------+
 void CreatePairRow(string prefix, int idx, int buyX, int centerX, int sellX, int y)
 {
@@ -3284,8 +3340,9 @@ void CreatePairRow(string prefix, int idx, int buyX, int centerX, int sellX, int
    string pairName = g_pairs[idx].symbolA + "-" + g_pairs[idx].symbolB;
    
    // === BUY SIDE DATA ===
+   // v3.2.9: X | Closed | Lot | Ord | Max | Target | Status | Z | P/L
    CreateButton(prefix + "_CLOSE_BUY_" + idxStr, buyX + 5, y + 2, 16, 14, "X", clrRed, clrWhite);
-   CreateLabel(prefix + "P" + idxStr + "_B_PROF", buyX + 28, y + 3, "0", COLOR_TEXT, FONT_SIZE, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_B_CLOSED", buyX + 25, y + 3, "0", COLOR_TEXT, FONT_SIZE, "Arial");  // v3.2.9: Closed P/L
    CreateLabel(prefix + "P" + idxStr + "_B_LOT", buyX + 75, y + 3, "0.00", COLOR_TEXT, FONT_SIZE, "Arial");
    CreateLabel(prefix + "P" + idxStr + "_B_ORD", buyX + 128, y + 3, "0", COLOR_TEXT, FONT_SIZE, "Arial");
    CreateEditField(prefix + "_MAX_BUY_" + idxStr, buyX + 160, y + 2, 30, 14, IntegerToString(InpDefaultMaxOrderBuy));
@@ -3295,7 +3352,7 @@ void CreatePairRow(string prefix, int idx, int buyX, int centerX, int sellX, int
    color buyStatusColor = COLOR_OFF;
    CreateButton(prefix + "_ST_BUY_" + idxStr, buyX + 255, y + 2, 40, 14, buyStatusText, buyStatusColor, clrWhite);
    CreateLabel(prefix + "P" + idxStr + "_B_Z", buyX + 310, y + 3, "0.00", COLOR_TEXT, FONT_SIZE, "Arial");
-   CreateLabel(prefix + "P" + idxStr + "_B_PL", buyX + 360, y + 3, "0", COLOR_TEXT, FONT_SIZE, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_B_PL", buyX + 358, y + 3, "0", COLOR_TEXT, FONT_SIZE, "Arial");  // Current P/L
    
    // === CENTER DATA ===
    CreateLabel(prefix + "P" + idxStr + "_NAME", centerX + 10, y + 3, pairName, COLOR_TEXT, FONT_SIZE, "Arial Bold");
@@ -3305,7 +3362,8 @@ void CreatePairRow(string prefix, int idx, int buyX, int centerX, int sellX, int
    CreateLabel(prefix + "P" + idxStr + "_TPL", centerX + 310, y + 3, "0", COLOR_TEXT, 9, "Arial Bold");
    
    // === SELL SIDE DATA ===
-   CreateLabel(prefix + "P" + idxStr + "_S_PL", sellX + 5, y + 3, "0", COLOR_TEXT, FONT_SIZE, "Arial");
+   // v3.2.9: P/L | Z | Status | Target | Max | Ord | Lot | Closed | X
+   CreateLabel(prefix + "P" + idxStr + "_S_PL", sellX + 5, y + 3, "0", COLOR_TEXT, FONT_SIZE, "Arial");  // Current P/L
    CreateLabel(prefix + "P" + idxStr + "_S_Z", sellX + 50, y + 3, "0.00", COLOR_TEXT, FONT_SIZE, "Arial");
    
    string sellStatusText = g_pairs[idx].enabled ? "Off" : "-";
@@ -3315,7 +3373,7 @@ void CreatePairRow(string prefix, int idx, int buyX, int centerX, int sellX, int
    CreateEditField(prefix + "_MAX_SELL_" + idxStr, sellX + 205, y + 2, 30, 14, IntegerToString(InpDefaultMaxOrderSell));
    CreateLabel(prefix + "P" + idxStr + "_S_ORD", sellX + 262, y + 3, "0", COLOR_TEXT, FONT_SIZE, "Arial");
    CreateLabel(prefix + "P" + idxStr + "_S_LOT", sellX + 305, y + 3, "0.00", COLOR_TEXT, FONT_SIZE, "Arial");
-   CreateLabel(prefix + "P" + idxStr + "_S_PROF", sellX + 345, y + 3, "0", COLOR_TEXT, FONT_SIZE, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_S_CLOSED", sellX + 340, y + 3, "0", COLOR_TEXT, FONT_SIZE, "Arial");  // v3.2.9: Closed P/L
    CreateButton(prefix + "_CLOSE_SELL_" + idxStr, sellX + 375, y + 2, 16, 14, "X", clrRed, clrWhite);
 }
 
@@ -3528,8 +3586,9 @@ void UpdateDashboard()
       UpdateLabel(prefix + "P" + idxStr + "_TPL", DoubleToString(totalPL, 0), totalPL >= 0 ? COLOR_PROFIT : COLOR_LOSS);
       
       // === Buy Side Data ===
-      UpdateLabel(prefix + "P" + idxStr + "_B_PROF", DoubleToString(g_pairs[i].profitBuy, 0), 
-                  g_pairs[i].profitBuy >= 0 ? COLOR_PROFIT : COLOR_LOSS);
+      // v3.2.9: First column is Closed P/L
+      UpdateLabel(prefix + "P" + idxStr + "_B_CLOSED", DoubleToString(g_pairs[i].closedProfitBuy, 0), 
+                  g_pairs[i].closedProfitBuy >= 0 ? COLOR_PROFIT : COLOR_LOSS);
       
       double buyLot = g_pairs[i].directionBuy == 1 ? g_pairs[i].lotBuyA + g_pairs[i].lotBuyB : 0;
       UpdateLabel(prefix + "P" + idxStr + "_B_LOT", DoubleToString(buyLot, 2), COLOR_TEXT);
@@ -3543,6 +3602,7 @@ void UpdateDashboard()
       color zColor = MathAbs(zScore) > InpEntryZScore ? (zScore > 0 ? COLOR_LOSS : COLOR_PROFIT) : COLOR_TEXT;
       UpdateLabel(prefix + "P" + idxStr + "_B_Z", DoubleToString(zScore, 2), zColor);
       
+      // v3.2.9: P/L column shows current/floating P/L
       UpdateLabel(prefix + "P" + idxStr + "_B_PL", DoubleToString(g_pairs[i].profitBuy, 0),
                   g_pairs[i].profitBuy >= 0 ? COLOR_PROFIT : COLOR_LOSS);
       
@@ -3572,7 +3632,8 @@ void UpdateDashboard()
       }
       
       // === Sell Side Data ===
-      UpdateLabel(prefix + "P" + idxStr + "_S_PROF", DoubleToString(g_pairs[i].profitSell, 0),
+      // v3.2.9: P/L column shows current/floating P/L
+      UpdateLabel(prefix + "P" + idxStr + "_S_PL", DoubleToString(g_pairs[i].profitSell, 0),
                   g_pairs[i].profitSell >= 0 ? COLOR_PROFIT : COLOR_LOSS);
       
       double sellLot = g_pairs[i].directionSell == 1 ? g_pairs[i].lotSellA + g_pairs[i].lotSellB : 0;
@@ -3585,8 +3646,9 @@ void UpdateDashboard()
       
       UpdateLabel(prefix + "P" + idxStr + "_S_Z", DoubleToString(zScore, 2), zColor);
       
-      UpdateLabel(prefix + "P" + idxStr + "_S_PL", DoubleToString(g_pairs[i].profitSell, 0),
-                  g_pairs[i].profitSell >= 0 ? COLOR_PROFIT : COLOR_LOSS);
+      // v3.2.9: Last column is Closed P/L
+      UpdateLabel(prefix + "P" + idxStr + "_S_CLOSED", DoubleToString(g_pairs[i].closedProfitSell, 0),
+                  g_pairs[i].closedProfitSell >= 0 ? COLOR_PROFIT : COLOR_LOSS);
       
       // Sell Status Button Update
       string sellBtnName = prefix + "_ST_SELL_" + idxStr;
