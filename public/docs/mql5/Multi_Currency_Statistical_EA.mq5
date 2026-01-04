@@ -164,6 +164,8 @@ input double   InpPipBetaWeight = 0.7;                 // Pip-Value Beta Weight 
 
 input group "=== Exit Mode Settings (v3.2.7) ==="
 input ENUM_EXIT_MODE InpExitMode = EXIT_ZSCORE_OR_PROFIT;  // Exit Mode (Z-Score/Profit/Both)
+input int      InpMinHoldingBars = 3;                      // Minimum Holding Bars Before Exit (0=disable)
+input bool     InpRequirePositiveProfit = true;            // Require Positive Profit for Z-Score Exit
 
 input group "=== Averaging System (v3.2.7) ==="
 input bool     InpEnableAveraging = false;              // Enable Averaging System
@@ -2495,6 +2497,17 @@ void ManageAllPositions()
 //+------------------------------------------------------------------+
 bool CheckExitConditions(int pairIndex, bool isBuySide, double zScore)
 {
+   // v3.2.8: Minimum holding time check - prevent immediate close after entry
+   datetime entryTime = isBuySide ? g_pairs[pairIndex].entryTimeBuy : g_pairs[pairIndex].entryTimeSell;
+   if(InpMinHoldingBars > 0 && entryTime > 0)
+   {
+      int barsHeld = iBarShift(_Symbol, InpTimeframe, entryTime);
+      if(barsHeld < InpMinHoldingBars)
+      {
+         return false;  // Not enough time held, don't check exit conditions yet
+      }
+   }
+   
    // Z-Score Exit condition
    // Buy: entered at Z < -Entry, exit when Z >= -ExitZScore (back toward 0)
    // Sell: entered at Z > +Entry, exit when Z <= +ExitZScore (back toward 0)
@@ -2507,14 +2520,26 @@ bool CheckExitConditions(int pairIndex, bool isBuySide, double zScore)
    double target = isBuySide ? g_pairs[pairIndex].targetBuy : g_pairs[pairIndex].targetSell;
    bool profitExit = (profit >= target);
    
+   // v3.2.8: Check if profit is positive (for Z-Score exit modes)
+   bool hasPositiveProfit = (profit > 0);
+   
    bool shouldClose = false;
    string reason = "";
    
    switch(InpExitMode)
    {
       case EXIT_ZSCORE_ONLY:
-         shouldClose = zScoreExit;
-         reason = "Z-Score";
+         // v3.2.8: If InpRequirePositiveProfit is true, also require profit > 0
+         if(InpRequirePositiveProfit)
+         {
+            shouldClose = zScoreExit && hasPositiveProfit;
+            reason = "Z-Score+Profit>0";
+         }
+         else
+         {
+            shouldClose = zScoreExit;
+            reason = "Z-Score";
+         }
          break;
          
       case EXIT_PROFIT_ONLY:
@@ -2523,8 +2548,18 @@ bool CheckExitConditions(int pairIndex, bool isBuySide, double zScore)
          break;
          
       case EXIT_ZSCORE_OR_PROFIT:
-         shouldClose = zScoreExit || profitExit;
-         reason = zScoreExit ? (profitExit ? "Z+Profit" : "Z-Score") : "Profit Target";
+         // v3.2.8: For Z-Score exit in OR mode, also check positive profit if enabled
+         if(InpRequirePositiveProfit)
+         {
+            bool zScoreWithProfit = zScoreExit && hasPositiveProfit;
+            shouldClose = zScoreWithProfit || profitExit;
+            reason = zScoreWithProfit ? (profitExit ? "Z+Profit" : "Z+Profit>0") : "Profit Target";
+         }
+         else
+         {
+            shouldClose = zScoreExit || profitExit;
+            reason = zScoreExit ? (profitExit ? "Z+Profit" : "Z-Score") : "Profit Target";
+         }
          break;
          
       case EXIT_ZSCORE_AND_PROFIT:
@@ -2535,9 +2570,10 @@ bool CheckExitConditions(int pairIndex, bool isBuySide, double zScore)
    
    if(shouldClose)
    {
-      PrintFormat("Pair %d %s CLOSE [%s]: Z=%.2f, Profit=%.2f/%.2f", 
+      PrintFormat("Pair %d %s CLOSE [%s]: Z=%.2f, Profit=%.2f/%.2f, BarsHeld=%d", 
          pairIndex + 1, isBuySide ? "BUY" : "SELL", reason, 
-         zScore, profit, target);
+         zScore, profit, target,
+         iBarShift(_Symbol, InpTimeframe, entryTime));
    }
    
    return shouldClose;
