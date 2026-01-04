@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                Multi_Currency_Statistical_EA.mq5 |
-//|                 Statistical Arbitrage (Pairs Trading) v3.2.9 HF1 |
+//|                 Statistical Arbitrage (Pairs Trading) v3.2.9 HF2 |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "3.291"
+#property version   "3.292"
 #property strict
 #property description "Statistical Arbitrage / Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
-#property description "v3.2.9 HF1: Debug Log for Total vs Per-Pair Target + Dashboard Header Fix"
+#property description "v3.2.9 HF2: Correlation Drop Mode Selection"
 
 #include <Trade/Trade.mqh>
 
@@ -171,10 +171,21 @@ input double   InpBetaSmoothFactor = 0.1;              // Beta EMA Smooth Factor
 input double   InpManualBetaDefault = 1.0;             // Default Manual Beta (if MANUAL_FIXED)
 input double   InpPipBetaWeight = 0.7;                 // Pip-Value Beta Weight in Auto (0.5-0.9)
 
+//+------------------------------------------------------------------+
+//| CORRELATION DROP MODE ENUM (v3.2.9 HF2)                            |
+//+------------------------------------------------------------------+
+enum ENUM_CORR_DROP_MODE
+{
+   CORR_DROP_CLOSE_ALL = 0,        // Close Both Sides
+   CORR_DROP_CLOSE_PROFIT_ONLY,    // Close Only Profitable Side
+   CORR_DROP_IGNORE                // Ignore (Don't Close)
+};
+
 input group "=== Exit Settings (v3.2.7) ==="
 input ENUM_EXIT_MODE InpExitMode = EXIT_ZSCORE_OR_PROFIT;  // Exit Mode
 input bool     InpRequirePositiveProfit = true;            // Require Positive Profit for Z-Score Exit
 input int      InpMinHoldingBars = 0;                      // Minimum Holding Bars Before Exit
+input ENUM_CORR_DROP_MODE InpCorrDropMode = CORR_DROP_CLOSE_PROFIT_ONLY;  // Correlation Drop Behavior
 
 input group "=== Averaging System (v3.2.7) ==="
 input ENUM_AVERAGING_MODE InpAveragingMode = AVG_MODE_DISABLED;  // Averaging Mode
@@ -2893,11 +2904,30 @@ void ManageAllPositions()
          {
             CloseBuySide(i);
          }
-         // Exit: Correlation dropped
+         // Exit: Correlation dropped (v3.2.9 HF2: Check Mode)
          else if(MathAbs(g_pairs[i].correlation) < InpMinCorrelation * 0.8)
          {
-            PrintFormat("Pair %d Buy Side: Correlation dropped - Closing", i + 1);
-            CloseBuySide(i);
+            if(InpCorrDropMode == CORR_DROP_CLOSE_ALL)
+            {
+               PrintFormat("Pair %d Buy Side: Correlation dropped (Mode=ALL) - Closing", i + 1);
+               CloseBuySide(i);
+            }
+            else if(InpCorrDropMode == CORR_DROP_CLOSE_PROFIT_ONLY && g_pairs[i].profitBuy > 0)
+            {
+               PrintFormat("Pair %d Buy Side: Correlation dropped (Profit=%.2f > 0) - Closing", i + 1, g_pairs[i].profitBuy);
+               CloseBuySide(i);
+            }
+            else if(InpCorrDropMode == CORR_DROP_IGNORE)
+            {
+               if(InpDebugMode)
+                  PrintFormat("DEBUG Pair %d Buy Side: Correlation dropped but IGNORED (Mode=IGNORE)", i + 1);
+            }
+            else
+            {
+               // PROFIT_ONLY mode but profit <= 0
+               if(InpDebugMode)
+                  PrintFormat("DEBUG Pair %d Buy Side: Correlation dropped but SKIPPED (Profit=%.2f <= 0)", i + 1, g_pairs[i].profitBuy);
+            }
          }
          // Exit: Max holding time
          else if(InpMaxHoldingBars > 0)
@@ -2920,11 +2950,30 @@ void ManageAllPositions()
          {
             CloseSellSide(i);
          }
-         // Exit: Correlation dropped
+         // Exit: Correlation dropped (v3.2.9 HF2: Check Mode)
          else if(MathAbs(g_pairs[i].correlation) < InpMinCorrelation * 0.8)
          {
-            PrintFormat("Pair %d Sell Side: Correlation dropped - Closing", i + 1);
-            CloseSellSide(i);
+            if(InpCorrDropMode == CORR_DROP_CLOSE_ALL)
+            {
+               PrintFormat("Pair %d Sell Side: Correlation dropped (Mode=ALL) - Closing", i + 1);
+               CloseSellSide(i);
+            }
+            else if(InpCorrDropMode == CORR_DROP_CLOSE_PROFIT_ONLY && g_pairs[i].profitSell > 0)
+            {
+               PrintFormat("Pair %d Sell Side: Correlation dropped (Profit=%.2f > 0) - Closing", i + 1, g_pairs[i].profitSell);
+               CloseSellSide(i);
+            }
+            else if(InpCorrDropMode == CORR_DROP_IGNORE)
+            {
+               if(InpDebugMode)
+                  PrintFormat("DEBUG Pair %d Sell Side: Correlation dropped but IGNORED (Mode=IGNORE)", i + 1);
+            }
+            else
+            {
+               // PROFIT_ONLY mode but profit <= 0
+               if(InpDebugMode)
+                  PrintFormat("DEBUG Pair %d Sell Side: Correlation dropped but SKIPPED (Profit=%.2f <= 0)", i + 1, g_pairs[i].profitSell);
+            }
          }
          // Exit: Max holding time
          else if(InpMaxHoldingBars > 0)
