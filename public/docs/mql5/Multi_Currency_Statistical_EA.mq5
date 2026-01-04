@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                Multi_Currency_Statistical_EA.mq5 |
-//|                      Statistical Arbitrage (Pairs Trading) v3.2.5 |
+//|                      Statistical Arbitrage (Pairs Trading) v3.2.6 |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "3.25"
+#property version   "3.26"
 #property strict
 #property description "Statistical Arbitrage / Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
-#property description "v3.2.5: Fast Backtest Mode - Optimized for Strategy Tester performance"
+#property description "v3.2.6: Stable Beta Calculation with Pip-Value & EMA Smoothing"
 
 #include <Trade/Trade.mqh>
 
@@ -31,7 +31,7 @@ struct PairData
 };
 
 //+------------------------------------------------------------------+
-//| PAIR INFO STRUCTURE (v3.2 - Separated Buy/Sell Sides + dataValid) |
+//| PAIR INFO STRUCTURE (v3.2.6 - Separated Buy/Sell Sides + Beta Smoothing) |
 //+------------------------------------------------------------------+
 struct PairInfo
 {
@@ -49,6 +49,11 @@ struct PairInfo
    double         spreadStdDev;      // Spread Std Deviation
    double         currentSpread;     // Current Spread Value
    double         zScore;            // Current Z-Score
+   
+   // === Beta Smoothing (v3.2.6) ===
+   double         prevBeta;          // Previous Beta (for EMA smoothing)
+   bool           betaInitialized;   // True after first Beta calculation
+   double         manualBeta;        // Manual Beta Override (0 = use auto)
    
    // === BUY SIDE (Main Order Buy) ===
    int            directionBuy;      // 0=Off, -1=Ready, 1=Active
@@ -98,6 +103,17 @@ enum ENUM_CORR_METHOD
    CORR_LOG_RETURNS          // Log Returns
 };
 
+//+------------------------------------------------------------------+
+//| BETA CALCULATION MODE ENUM (v3.2.6)                                |
+//+------------------------------------------------------------------+
+enum ENUM_BETA_MODE
+{
+   BETA_AUTO_SMOOTH = 0,     // Auto + EMA Smoothing (Recommended)
+   BETA_PIP_VALUE_ONLY,      // Pip Value Ratio Only (Most Stable)
+   BETA_PERCENTAGE_RAW,      // Percentage Change (Volatile - Current)
+   BETA_MANUAL_FIXED         // Manual Fixed Ratio
+};
+
 input group "=== Correlation Calculation Settings ==="
 input ENUM_TIMEFRAMES InpCorrTimeframe = PERIOD_H4;   // Correlation Timeframe
 input int      InpCorrBars = 100;                      // Correlation Bars Count (myfxbook uses 100-200)
@@ -110,6 +126,12 @@ input double   InpEntryZScore = 2.0;            // Entry Z-Score Threshold
 input double   InpExitZScore = 0.5;             // Exit Z-Score Threshold
 input double   InpMinCorrelation = 0.70;        // Minimum Correlation
 input bool     InpDebugMode = false;            // Enable Debug Logs
+
+input group "=== Beta Calculation Settings (v3.2.6) ==="
+input ENUM_BETA_MODE InpBetaMode = BETA_AUTO_SMOOTH;   // Beta Calculation Mode
+input double   InpBetaSmoothFactor = 0.1;              // Beta EMA Smooth Factor (0.05-0.3)
+input double   InpManualBetaDefault = 1.0;             // Default Manual Beta (if MANUAL_FIXED)
+input double   InpPipBetaWeight = 0.7;                 // Pip-Value Beta Weight in Auto (0.5-0.9)
 
 input group "=== Target Settings (v3.0) ==="
 input double   InpTotalTarget = 100.0;          // Total Portfolio Target ($)
@@ -370,10 +392,11 @@ int OnInit()
    // v3.2.5: Determine if dashboard should be enabled
    g_dashboardEnabled = !g_isTesterMode || (isVisualMode && !InpDisableDashboardInTester);
    
-   Print("===== Statistical Arbitrage EA v3.2.5 =====");
+   Print("===== Statistical Arbitrage EA v3.2.6 =====");
    Print("Correlation Method: ", EnumToString(InpCorrMethod));
    Print("Correlation Timeframe: ", EnumToString(InpCorrTimeframe));
    Print("Correlation Bars: ", InpCorrBars);
+   Print("Beta Mode: ", EnumToString(InpBetaMode));
    
    // v3.2.5: Show backtest mode info
    if(g_isTesterMode)
@@ -558,6 +581,11 @@ void SetupPair(int index, bool enabled, string symbolA, string symbolB)
    g_pairs[index].spreadStdDev = 0;
    g_pairs[index].currentSpread = 0;
    g_pairs[index].zScore = 0;
+   
+   // v3.2.6: Beta Smoothing initialization
+   g_pairs[index].prevBeta = 1.0;
+   g_pairs[index].betaInitialized = false;
+   g_pairs[index].manualBeta = 0;  // 0 = use auto calculation
    
    // Buy Side initialization - directionBuy = -1 means Ready to trade
    // v3.2.3: Set direction based on enabled status from Settings
@@ -1434,22 +1462,141 @@ double CalculateReturnCorrelation(int pairIndex)
 }
 
 //+------------------------------------------------------------------+
-//| Calculate Hedge Ratio (Beta) v3.2.1                                |
-//| Formula: β = Cov(A,B) / Var(A)  (OLS Regression: B = β × A)        |
+//| Calculate Hedge Ratio (Beta) v3.2.6 - Stable Beta System           |
+//| Supports multiple modes: Auto+EMA, PipValue, Percentage, Manual    |
 //+------------------------------------------------------------------+
 double CalculateHedgeRatio(int pairIndex)
 {
    // Check if data is valid
    if(!g_pairs[pairIndex].dataValid) return 1.0;
    
-   if(InpCorrMethod == CORR_PRICE_DIRECT)
+   double rawBeta = 1.0;
+   double pipBeta = 0;
+   double pctBeta = 0;
+   
+   switch(InpBetaMode)
    {
-      return CalculatePriceBasedBeta(pairIndex);
+      case BETA_MANUAL_FIXED:
+         // Use manual beta if set per-pair, otherwise use default
+         rawBeta = (g_pairs[pairIndex].manualBeta > 0) 
+                   ? g_pairs[pairIndex].manualBeta 
+                   : InpManualBetaDefault;
+         // Clamp to range
+         rawBeta = MathMax(0.1, MathMin(10.0, rawBeta));
+         if(InpDebugMode && pairIndex < 3)
+         {
+            PrintFormat("Pair %d [BETA MANUAL] = %.4f", pairIndex + 1, rawBeta);
+         }
+         return rawBeta;  // No smoothing for manual
+         
+      case BETA_PIP_VALUE_ONLY:
+         // Use Pip Value based beta (most stable)
+         rawBeta = CalculatePipValueBeta(pairIndex);
+         if(InpDebugMode && pairIndex < 3)
+         {
+            PrintFormat("Pair %d [BETA PIP_VALUE] = %.4f", pairIndex + 1, rawBeta);
+         }
+         return rawBeta;  // Already stable, no smoothing needed
+         
+      case BETA_PERCENTAGE_RAW:
+         // Current unstable method (kept for comparison/research)
+         if(InpCorrMethod == CORR_PRICE_DIRECT)
+            rawBeta = CalculatePriceBasedBeta(pairIndex);
+         else
+            rawBeta = CalculateReturnBasedBeta(pairIndex);
+         if(InpDebugMode && pairIndex < 3)
+         {
+            PrintFormat("Pair %d [BETA PCT_RAW] = %.4f (volatile)", pairIndex + 1, rawBeta);
+         }
+         return rawBeta;  // Raw = unstable, no smoothing
+         
+      case BETA_AUTO_SMOOTH:
+      default:
+         // Hybrid: Weighted average of Pip Value (stable) + Percentage (responsive), then EMA smoothed
+         pipBeta = CalculatePipValueBeta(pairIndex);
+         
+         if(InpCorrMethod == CORR_PRICE_DIRECT)
+            pctBeta = CalculatePriceBasedBeta(pairIndex);
+         else
+            pctBeta = CalculateReturnBasedBeta(pairIndex);
+         
+         // Weighted average: default 70% pip-based, 30% pct-based
+         double pipWeight = MathMax(0.5, MathMin(0.9, InpPipBetaWeight));
+         rawBeta = pipBeta * pipWeight + pctBeta * (1.0 - pipWeight);
+         
+         // Apply EMA smoothing
+         double smoothBeta = ApplyBetaSmoothing(pairIndex, rawBeta);
+         
+         if(InpDebugMode && pairIndex < 3)
+         {
+            PrintFormat("Pair %d [BETA AUTO] Pip=%.4f, Pct=%.4f, Raw=%.4f, Smooth=%.4f", 
+                        pairIndex + 1, pipBeta, pctBeta, rawBeta, smoothBeta);
+         }
+         
+         return smoothBeta;
    }
-   else
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Pip-Value Based Beta (v3.2.6) - Most Stable              |
+//| Beta = PipValueA / PipValueB (for dollar-neutral hedging)         |
+//+------------------------------------------------------------------+
+double CalculatePipValueBeta(int pairIndex)
+{
+   string symbolA = g_pairs[pairIndex].symbolA;
+   string symbolB = g_pairs[pairIndex].symbolB;
+   
+   // Get pip value in account currency for each symbol
+   double pipValueA = GetPipValue(symbolA);
+   double pipValueB = GetPipValue(symbolB);
+   
+   if(pipValueB <= 0 || pipValueA <= 0)
    {
-      return CalculateReturnBasedBeta(pairIndex);
+      if(InpDebugMode && pairIndex < 3)
+      {
+         PrintFormat("Pair %d [PIP_BETA] Warning: PipValueA=%.6f, PipValueB=%.6f - using 1.0",
+                     pairIndex + 1, pipValueA, pipValueB);
+      }
+      return 1.0;
    }
+   
+   // Beta = pipValueA / pipValueB
+   // This ensures: lotA * pipValueA = lotB * pipValueB (dollar neutral)
+   double beta = pipValueA / pipValueB;
+   
+   // Clamp to reasonable range
+   beta = MathMax(0.1, MathMin(10.0, beta));
+   
+   return beta;
+}
+
+//+------------------------------------------------------------------+
+//| Apply EMA Smoothing to Beta (v3.2.6)                               |
+//| Reduces volatility by applying exponential moving average         |
+//+------------------------------------------------------------------+
+double ApplyBetaSmoothing(int pairIndex, double newBeta)
+{
+   // Clamp smooth factor to valid range (0.05 to 0.5)
+   double alpha = MathMax(0.05, MathMin(0.5, InpBetaSmoothFactor));
+   
+   // First time initialization
+   if(!g_pairs[pairIndex].betaInitialized)
+   {
+      g_pairs[pairIndex].prevBeta = newBeta;
+      g_pairs[pairIndex].betaInitialized = true;
+      return newBeta;
+   }
+   
+   // EMA formula: smoothBeta = prevBeta * (1-alpha) + newBeta * alpha
+   double smoothBeta = g_pairs[pairIndex].prevBeta * (1.0 - alpha) + newBeta * alpha;
+   
+   // Clamp result
+   smoothBeta = MathMax(0.1, MathMin(10.0, smoothBeta));
+   
+   // Store for next iteration
+   g_pairs[pairIndex].prevBeta = smoothBeta;
+   
+   return smoothBeta;
 }
 
 //+------------------------------------------------------------------+
@@ -1568,16 +1715,7 @@ double CalculatePriceBasedBeta(int pairIndex)
    double beta = MathAbs(covariance / varianceA);
    
    // Clamp beta to reasonable range (0.1 to 10.0)
-   if(beta < 0.1) beta = 0.1;
-   if(beta > 10.0) beta = 10.0;
-   
-   if(InpDebugMode && pairIndex < 5)
-   {
-      PrintFormat("Pair %d [PCT_BETA] %s-%s: meanPctA=%.6f%%, meanPctB=%.6f%%", 
-                  pairIndex + 1, symbolA, symbolB, meanA * 100, meanB * 100);
-      PrintFormat("Pair %d [PCT_BETA] Cov=%.10f, VarA=%.10f, Beta=%.4f", 
-                  pairIndex + 1, covariance, varianceA, beta);
-   }
+   beta = MathMax(0.1, MathMin(10.0, beta));
    
    return beta;
 }
@@ -1625,14 +1763,7 @@ double CalculateReturnBasedBeta(int pairIndex)
    double beta = MathAbs(covariance / varianceA);
    
    // Clamp beta to reasonable range (0.1 to 10.0)
-   if(beta < 0.1) beta = 0.1;
-   if(beta > 10.0) beta = 10.0;
-   
-   if(InpDebugMode && pairIndex == 0)
-   {
-      PrintFormat("Pair 1 [RETURNS] Beta: cov=%.10f, varA=%.10f, beta=%.4f", 
-                  covariance, varianceA, beta);
-   }
+   beta = MathMax(0.1, MathMin(10.0, beta));
    
    return beta;
 }
