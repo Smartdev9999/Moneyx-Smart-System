@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -21,7 +21,7 @@ import {
 import { useToast } from '@/hooks/use-toast';
 import { format, parseISO, isToday, isTomorrow, addDays, startOfDay } from 'date-fns';
 import { th } from 'date-fns/locale';
-
+import { supabase } from '@/integrations/supabase/client';
 interface NewsEvent {
   title: string;
   country: string;
@@ -113,6 +113,8 @@ const EconomicCalendar = ({ initialData }: EconomicCalendarProps) => {
   const [selectedCountries, setSelectedCountries] = useState<string[]>([]);
   const [selectedImpact, setSelectedImpact] = useState<string[]>(['High', 'Medium', 'Low', 'Holiday']);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<string | null>(null);
+  const [dataSource, setDataSource] = useState<string>('local');
 
   const countries = useMemo(() => {
     const uniqueCountries = [...new Set(newsData.map(n => n.country))];
@@ -155,15 +157,61 @@ const EconomicCalendar = ({ initialData }: EconomicCalendarProps) => {
     return groups;
   }, [filteredNews]);
 
-  const handleRefresh = async () => {
+  // Fetch news from edge function
+  const fetchNewsFromAPI = async (forceRefresh = false) => {
     setIsLoading(true);
-    // In production, this would fetch from the edge function
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    toast({
-      title: "รีเฟรชข้อมูลสำเร็จ",
-      description: `โหลด ${newsData.length} ข่าวเรียบร้อย`,
-    });
-    setIsLoading(false);
+    try {
+      const refreshParam = forceRefresh ? '&refresh=true' : '';
+      const response = await supabase.functions.invoke('economic-news', {
+        body: null,
+        method: 'GET',
+      });
+      
+      // Use fetch directly for GET with query params
+      const apiUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/economic-news?format=raw${refreshParam}`;
+      const res = await fetch(apiUrl, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+      
+      const data = await res.json();
+      
+      if (data.success && data.data && data.data.length > 0) {
+        setNewsData(data.data);
+        setLastUpdated(data.last_updated);
+        setDataSource(data.source || 'api');
+        toast({
+          title: "โหลดข้อมูลสำเร็จ",
+          description: `${data.count} ข่าว จาก ${data.source === 'forex_factory' ? 'Forex Factory' : data.source}`,
+        });
+      } else if (data.data && data.data.length === 0) {
+        toast({
+          title: "ไม่พบข่าวในช่วงเวลานี้",
+          description: "ลองเปลี่ยนตัวกรองหรือรอการอัพเดทครั้งถัดไป",
+          variant: "destructive",
+        });
+      }
+    } catch (error) {
+      console.error('Error fetching news:', error);
+      toast({
+        title: "เกิดข้อผิดพลาด",
+        description: "ไม่สามารถโหลดข้อมูลข่าวได้ กรุณาลองใหม่",
+        variant: "destructive",
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Auto-fetch on mount
+  useEffect(() => {
+    fetchNewsFromAPI();
+  }, []);
+
+  const handleRefresh = async () => {
+    await fetchNewsFromAPI(true);
   };
 
   const handleCopyJSON = async () => {
@@ -305,9 +353,19 @@ const EconomicCalendar = ({ initialData }: EconomicCalendarProps) => {
           <div className="p-3 rounded-lg bg-background/50 font-mono text-sm">
             GET https://lkbhomsulgycxawwlnfh.supabase.co/functions/v1/economic-news
           </div>
-          <p className="text-xs text-muted-foreground mt-2">
-            * ระบบ EA สามารถเรียก API นี้เพื่อรับข้อมูลข่าวในรูปแบบ JSON พร้อมใช้งานกับ News Filter
-          </p>
+          <div className="flex items-center gap-4 mt-3 text-xs text-muted-foreground">
+            <span>* ระบบอัพเดทอัตโนมัติทุก 1 ชั่วโมง จาก Forex Factory</span>
+            {lastUpdated && (
+              <span className="text-primary">
+                อัพเดทล่าสุด: {format(new Date(lastUpdated), 'HH:mm dd/MM/yyyy', { locale: th })}
+              </span>
+            )}
+            {dataSource && dataSource !== 'local' && (
+              <Badge variant="outline" className="text-xs">
+                {dataSource === 'forex_factory' ? 'Forex Factory' : dataSource === 'cache' ? 'Cache' : dataSource}
+              </Badge>
+            )}
+          </div>
         </CardContent>
       </Card>
 
