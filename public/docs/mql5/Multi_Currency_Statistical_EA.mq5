@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                Multi_Currency_Statistical_EA.mq5 |
-//|                 Statistical Arbitrage (Pairs Trading) v3.3.4     |
+//|                 Statistical Arbitrage (Pairs Trading) v3.3.5     |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "3.34"
+#property version   "3.35"
 #property strict
 #property description "Statistical Arbitrage / Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
-#property description "v3.3.4: Enhanced Lot Calculation & Validation"
+#property description "v3.3.5: Robust Lot Calculation & Race Condition Fix"
 
 #include <Trade/Trade.mqh>
 
@@ -610,6 +610,29 @@ int OnInit()
    // v3.3.0: Force initial Z-Score data update (may use different TF)
    UpdateZScoreData();
    
+   // v3.3.5: Force lot recalculation after data is loaded with delay for symbol info
+   Sleep(100);  // Wait 100ms for symbol data to be available
+   
+   for(int i = 0; i < MAX_PAIRS; i++)
+   {
+      if(g_pairs[i].enabled)
+      {
+         CalculateDollarNeutralLots(i);
+         
+         // Verify calculation succeeded - if lots are too small, use InpBaseLot
+         double minReasonableLot = InpBaseLot * 0.1;
+         if(g_pairs[i].lotBuyA < minReasonableLot)
+         {
+            PrintFormat("WARNING Pair %d: Initial lot calculation failed (lotA=%.4f) - using InpBaseLot %.2f", 
+                        i + 1, g_pairs[i].lotBuyA, InpBaseLot);
+            g_pairs[i].lotBuyA = NormalizeLot(g_pairs[i].symbolA, InpBaseLot);
+            g_pairs[i].lotBuyB = NormalizeLot(g_pairs[i].symbolB, InpBaseLot);
+            g_pairs[i].lotSellA = g_pairs[i].lotBuyA;
+            g_pairs[i].lotSellB = g_pairs[i].lotBuyB;
+         }
+      }
+   }
+   
    // v3.2.5: Only set timer in non-fast-backtest mode
    if(!g_isTesterMode || !InpFastBacktest)
    {
@@ -647,7 +670,7 @@ int OnInit()
       CreateDashboard();
    }
    
-   PrintFormat("=== Statistical Arbitrage EA v3.3.0 Initialized - %d Active Pairs ===", g_activePairs);
+   PrintFormat("=== Statistical Arbitrage EA v3.3.5 Initialized - %d Active Pairs ===", g_activePairs);
    return(INIT_SUCCEEDED);
 }
 
@@ -1750,7 +1773,7 @@ double CalculatePriceBasedBeta(int pairIndex)
 //+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
-//| Normalize Lot Size for Symbol (v3.3.3)                             |
+//| Normalize Lot Size for Symbol (v3.3.5)                             |
 //+------------------------------------------------------------------+
 double NormalizeLot(string symbol, double lot)
 {
@@ -1758,13 +1781,32 @@ double NormalizeLot(string symbol, double lot)
    double maxLot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
    double stepLot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
    
+   // v3.3.5: Validate symbol info is available with warning
+   if(minLot == 0 || maxLot == 0)
+   {
+      minLot = 0.01;
+      maxLot = 100.0;
+      PrintFormat("WARNING: %s volume info not available, using defaults (min:%.2f max:%.2f)", 
+                  symbol, minLot, maxLot);
+   }
+   
    if(stepLot == 0) stepLot = 0.01;  // Fallback
+   
+   double originalLot = lot;
    
    // Normalize to step
    lot = MathFloor(lot / stepLot) * stepLot;
    
    // Clamp to min/max
-   if(lot < minLot) lot = minLot;
+   if(lot < minLot)
+   {
+      // v3.3.5: Log when forced to use minimum (only if original was larger)
+      if(InpDebugMode && originalLot > minLot)
+      {
+         PrintFormat("WARNING: %s lot %.4f -> %.2f (forced to minLot)", symbol, originalLot, minLot);
+      }
+      lot = minLot;
+   }
    if(lot > maxLot) lot = maxLot;
    
    // Also apply user-defined max
@@ -1777,7 +1819,7 @@ double NormalizeLot(string symbol, double lot)
 }
 
 //+------------------------------------------------------------------+
-//| Get Pip Value for Symbol                                           |
+//| Get Pip Value for Symbol (v3.3.5 - Robust)                         |
 //+------------------------------------------------------------------+
 double GetPipValue(string symbol)
 {
@@ -1785,7 +1827,27 @@ double GetPipValue(string symbol)
    double tickValue = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE);
    double tickSize = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
    
-   if(tickSize == 0) return 0;
+   // v3.3.5: Return fallback value instead of 0 to prevent division issues
+   if(tickSize == 0 || point == 0)
+   {
+      // Try alternative calculation
+      double contractSize = SymbolInfoDouble(symbol, SYMBOL_TRADE_CONTRACT_SIZE);
+      if(contractSize > 0)
+      {
+         // Approximate pip value for common pairs
+         if(InpDebugMode)
+         {
+            PrintFormat("WARNING: %s tick info not available, using estimate from contract size", symbol);
+         }
+         return contractSize * 0.0001;  // Rough estimate
+      }
+      // Return 1.0 instead of 0 to prevent division by zero
+      if(InpDebugMode)
+      {
+         PrintFormat("WARNING: %s pip value unavailable, returning fallback 1.0", symbol);
+      }
+      return 1.0;
+   }
    
    return (tickValue / tickSize) * point;
 }
@@ -2184,17 +2246,52 @@ void OpenAveragingSell(int pairIndex)
 //+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
-//| Open Buy Side Trade (v3.3.3 - with Lot Normalization)              |
+//| Open Buy Side Trade (v3.3.5 - with Lot Validation)                 |
 //+------------------------------------------------------------------+
 bool OpenBuySideTrade(int pairIndex)
 {
    string symbolA = g_pairs[pairIndex].symbolA;
    string symbolB = g_pairs[pairIndex].symbolB;
    
-   // v3.3.3: Normalize lots for each symbol's volume step
+   // v3.3.5: Normalize lots for each symbol's volume step
    double lotA = NormalizeLot(symbolA, g_pairs[pairIndex].lotBuyA);
    double lotB = NormalizeLot(symbolB, g_pairs[pairIndex].lotBuyB);
    int corrType = g_pairs[pairIndex].correlationType;
+   
+   // v3.3.5: Validate lots are reasonable before trading
+   double minReasonableLot = InpBaseLot * 0.1;  // At least 10% of Base Lot
+   
+   if(lotA < minReasonableLot || lotB < minReasonableLot)
+   {
+      // Re-calculate lots because current values are too small
+      PrintFormat("WARNING Pair %d BUY: Lots too small (A:%.2f B:%.2f, Base:%.2f) - Recalculating...", 
+                  pairIndex + 1, lotA, lotB, InpBaseLot);
+      
+      // Force recalculation
+      CalculateDollarNeutralLots(pairIndex);
+      
+      lotA = NormalizeLot(symbolA, g_pairs[pairIndex].lotBuyA);
+      lotB = NormalizeLot(symbolB, g_pairs[pairIndex].lotBuyB);
+      
+      // If still too small after recalculation, use InpBaseLot directly
+      if(lotA < minReasonableLot)
+      {
+         PrintFormat("CRITICAL Pair %d: lotA still too small after recalc - using InpBaseLot %.2f", pairIndex + 1, InpBaseLot);
+         lotA = NormalizeLot(symbolA, InpBaseLot);
+         g_pairs[pairIndex].lotBuyA = lotA;
+      }
+      if(lotB < minReasonableLot)
+      {
+         PrintFormat("CRITICAL Pair %d: lotB still too small after recalc - using InpBaseLot %.2f", pairIndex + 1, InpBaseLot);
+         lotB = NormalizeLot(symbolB, InpBaseLot);
+         g_pairs[pairIndex].lotBuyB = lotB;
+      }
+   }
+   
+   // v3.3.5: Always log lot details for main orders
+   PrintFormat("Pair %d OPENING BUY: lotA=%.2f lotB=%.2f (stored: A=%.2f B=%.2f, Base=%.2f)", 
+               pairIndex + 1, lotA, lotB, 
+               g_pairs[pairIndex].lotBuyA, g_pairs[pairIndex].lotBuyB, InpBaseLot);
    
    string comment = StringFormat("StatArb_BUY_%d", pairIndex + 1);
    
@@ -2259,17 +2356,52 @@ bool OpenBuySideTrade(int pairIndex)
 }
 
 //+------------------------------------------------------------------+
-//| Open Sell Side Trade (v3.3.3 - with Lot Normalization)             |
+//| Open Sell Side Trade (v3.3.5 - with Lot Validation)                |
 //+------------------------------------------------------------------+
 bool OpenSellSideTrade(int pairIndex)
 {
    string symbolA = g_pairs[pairIndex].symbolA;
    string symbolB = g_pairs[pairIndex].symbolB;
    
-   // v3.3.3: Normalize lots for each symbol's volume step
+   // v3.3.5: Normalize lots for each symbol's volume step
    double lotA = NormalizeLot(symbolA, g_pairs[pairIndex].lotSellA);
    double lotB = NormalizeLot(symbolB, g_pairs[pairIndex].lotSellB);
    int corrType = g_pairs[pairIndex].correlationType;
+   
+   // v3.3.5: Validate lots are reasonable before trading
+   double minReasonableLot = InpBaseLot * 0.1;  // At least 10% of Base Lot
+   
+   if(lotA < minReasonableLot || lotB < minReasonableLot)
+   {
+      // Re-calculate lots because current values are too small
+      PrintFormat("WARNING Pair %d SELL: Lots too small (A:%.2f B:%.2f, Base:%.2f) - Recalculating...", 
+                  pairIndex + 1, lotA, lotB, InpBaseLot);
+      
+      // Force recalculation
+      CalculateDollarNeutralLots(pairIndex);
+      
+      lotA = NormalizeLot(symbolA, g_pairs[pairIndex].lotSellA);
+      lotB = NormalizeLot(symbolB, g_pairs[pairIndex].lotSellB);
+      
+      // If still too small after recalculation, use InpBaseLot directly
+      if(lotA < minReasonableLot)
+      {
+         PrintFormat("CRITICAL Pair %d: lotA still too small after recalc - using InpBaseLot %.2f", pairIndex + 1, InpBaseLot);
+         lotA = NormalizeLot(symbolA, InpBaseLot);
+         g_pairs[pairIndex].lotSellA = lotA;
+      }
+      if(lotB < minReasonableLot)
+      {
+         PrintFormat("CRITICAL Pair %d: lotB still too small after recalc - using InpBaseLot %.2f", pairIndex + 1, InpBaseLot);
+         lotB = NormalizeLot(symbolB, InpBaseLot);
+         g_pairs[pairIndex].lotSellB = lotB;
+      }
+   }
+   
+   // v3.3.5: Always log lot details for main orders
+   PrintFormat("Pair %d OPENING SELL: lotA=%.2f lotB=%.2f (stored: A=%.2f B=%.2f, Base=%.2f)", 
+               pairIndex + 1, lotA, lotB, 
+               g_pairs[pairIndex].lotSellA, g_pairs[pairIndex].lotSellB, InpBaseLot);
    
    string comment = StringFormat("StatArb_SELL_%d", pairIndex + 1);
    
