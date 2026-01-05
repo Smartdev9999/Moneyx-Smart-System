@@ -43,15 +43,6 @@ enum ENUM_BB_MA_TYPE
    BB_MA_WMA = 3     // WMA
 };
 
-// EMA Channel MA Type
-enum ENUM_EMA_MA_TYPE
-{
-   EMA_MA_SMA = 0,    // Simple (SMA) - MT5 Default
-   EMA_MA_EMA = 1,    // Exponential (EMA)
-   EMA_MA_SMMA = 2,   // Smoothed (SMMA)
-   EMA_MA_WMA = 3     // Linear Weighted (WMA)
-};
-
 // ZigZag Signal Mode
 enum ENUM_ZIGZAG_SIGNAL_MODE
 {
@@ -151,7 +142,6 @@ input string   InpEMAHeader = "=== EMA CHANNEL SETTINGS ===";  // ___
 input ENUM_TIMEFRAMES InpEMATimeframe = PERIOD_CURRENT;  // EMA Channel Timeframe
 input int      InpEMAHighPeriod = 20;         // EMA High Period
 input int      InpEMALowPeriod = 20;          // EMA Low Period
-input ENUM_EMA_MA_TYPE InpEMAMethod = EMA_MA_SMA;  // EMA MA Method (SMA = MT5 Default)
 input color    InpEMAHighColor = clrDodgerBlue;  // EMA High Line Color
 input color    InpEMALowColor = clrOrangeRed;    // EMA Low Line Color
 input bool     InpShowEMALines = true;        // Show EMA Lines on Chart
@@ -696,9 +686,6 @@ long ZZTFChartId = 0;
 
 // ZigZag tracking for confirmed points
 datetime LastConfirmedZZTime = 0;
-
-// Force initial indicator draw on first tick after OnInit
-bool g_forceInitialDraw = false;
 
 // Grid Tracking
 datetime InitialBuyBarTime = 0;
@@ -1674,7 +1661,6 @@ int OnInit()
    // Create Dashboard Panel
    CreateDashboard();
    g_peakBalance = AccountInfoDouble(ACCOUNT_BALANCE);
-   g_forceInitialDraw = true;  // Force indicators to draw immediately on first tick
    
    // *** TIMER สำหรับอัพเดท Dashboard อัตโนมัติ ***
    // แม้ไม่มี tick (ตลาดไม่เคลื่อนไหว) Dashboard ก็จะอัพเดททุก 1 วินาที
@@ -3260,10 +3246,7 @@ void CalculateCDC()
    ArraySetAsSeries(openArr, true);
    ArraySetAsSeries(timeArr, true);
    
-   // Calculate bars for full chart visibility
-   int visibleBars = (int)ChartGetInteger(0, CHART_VISIBLE_BARS);
-   int warmupBars = InpCDCSlowPeriod * 3;
-   int barsNeeded = MathMax(500, visibleBars + warmupBars);
+   int barsNeeded = InpCDCSlowPeriod * 3 + 50;
    
    if(CopyClose(_Symbol, InpCDCTimeframe, 0, barsNeeded, closeArr) < barsNeeded) return;
    if(CopyHigh(_Symbol, InpCDCTimeframe, 0, barsNeeded, highArr) < barsNeeded) return;
@@ -3350,157 +3333,34 @@ void CalculateEMA(double &src[], double &result[], int period, int size)
 }
 
 //+------------------------------------------------------------------+
-//| Calculate SMA Array                                                |
+//| Draw CDC Lines on Chart                                            |
 //+------------------------------------------------------------------+
-void CalculateSMA(double &src[], double &result[], int period, int size)
-{
-   if(size < period) return;
-   
-   // Calculate first SMA value
-   double sum = 0;
-   for(int i = size - period; i < size; i++)
-   {
-      sum += src[i];
-   }
-   result[size - 1] = sum / period;
-   
-   // Calculate remaining values using sliding window
-   for(int i = size - 2; i >= 0; i--)
-   {
-      sum = 0;
-      int start = i;
-      int end = i + period;
-      if(end > size) end = size;
-      for(int j = start; j < end; j++)
-      {
-         sum += src[j];
-      }
-      result[i] = sum / period;
-   }
-}
-
-//+------------------------------------------------------------------+
-//| Calculate SMMA (Smoothed Moving Average) Array                     |
-//+------------------------------------------------------------------+
-void CalculateSMMA(double &src[], double &result[], int period, int size)
-{
-   if(size < period) return;
-   
-   // First SMMA = SMA
-   double sum = 0;
-   for(int i = size - period; i < size; i++)
-   {
-      sum += src[i];
-   }
-   result[size - 1] = sum / period;
-   
-   // SMMA formula: SMMA = (Previous SMMA * (N-1) + Current Price) / N
-   for(int i = size - 2; i >= 0; i--)
-   {
-      result[i] = (result[i + 1] * (period - 1) + src[i]) / period;
-   }
-}
-
-//+------------------------------------------------------------------+
-//| Calculate LWMA (Linear Weighted Moving Average) Array              |
-//+------------------------------------------------------------------+
-void CalculateLWMA(double &src[], double &result[], int period, int size)
-{
-   if(size < period) return;
-   
-   // Weight sum = 1+2+3+...+period = period*(period+1)/2
-   double weightSum = period * (period + 1) / 2.0;
-   
-   for(int i = size - period; i >= 0; i--)
-   {
-      double weighted = 0;
-      for(int j = 0; j < period; j++)
-      {
-         // Weight increases: oldest=1, newest=period
-         weighted += src[i + j] * (period - j);
-      }
-      result[i] = weighted / weightSum;
-   }
-   
-   // Fill remaining values at the end with first valid calculation
-   for(int i = size - period + 1; i < size; i++)
-   {
-      result[i] = result[size - period];
-   }
-}
-
-//+------------------------------------------------------------------+
-//| Convert EMA MA Type to MQL5 ENUM_MA_METHOD                         |
-//+------------------------------------------------------------------+
-ENUM_MA_METHOD ConvertEMAMAType(ENUM_EMA_MA_TYPE emaType)
-{
-   switch(emaType)
-   {
-      case EMA_MA_SMA:  return MODE_SMA;
-      case EMA_MA_EMA:  return MODE_EMA;
-      case EMA_MA_SMMA: return MODE_SMMA;
-      case EMA_MA_WMA:  return MODE_LWMA;
-      default:          return MODE_SMA;
-   }
-}
-
-//+------------------------------------------------------------------+
-//| Find CDC bar index for a given chart time                          |
-//+------------------------------------------------------------------+
-int FindCDCBarForTime(datetime &cdcTime[], int size, datetime targetTime)
-{
-   for(int i = 0; i < size - 1; i++)
-   {
-      // CDC is series (newest first), so cdcTime[i] > cdcTime[i+1]
-      if(targetTime <= cdcTime[i] && targetTime > cdcTime[i + 1])
-         return i;
-   }
-   // If target is older than all CDC data
-   if(size > 0 && targetTime <= cdcTime[size - 1])
-      return size - 1;
-   return -1;
-}
-
-//+------------------------------------------------------------------+
-//| Draw CDC Lines on Chart - Interpolate to Chart Timeframe           |
-//+------------------------------------------------------------------+
-void DrawCDCOnChart(double &fast[], double &slow[], datetime &cdcTime[], int cdcSize)
+void DrawCDCOnChart(double &fast[], double &slow[], datetime &time[], int size)
 {
    ObjectsDeleteAll(0, CDCPrefix);
    
-   // Get chart timeframe data for proper drawing
-   datetime chartTime[];
-   ArraySetAsSeries(chartTime, true);
-   int chartBars = (int)MathMin(500, iBars(_Symbol, PERIOD_CURRENT));
-   if(CopyTime(_Symbol, PERIOD_CURRENT, 0, chartBars, chartTime) < chartBars) return;
+   int maxBars = MathMin(100, size - 1);
    
-   // Draw CDC Fast line - interpolate CDC values to chart timeframe
-   for(int i = 0; i < chartBars - 1; i++)
+   for(int i = 0; i < maxBars; i++)
    {
-      // Find corresponding CDC bar for each chart bar
-      int cdcIdx1 = FindCDCBarForTime(cdcTime, cdcSize, chartTime[i + 1]);
-      int cdcIdx2 = FindCDCBarForTime(cdcTime, cdcSize, chartTime[i]);
-      
-      if(cdcIdx1 < 0 || cdcIdx2 < 0) continue;
-      
       string lineName = CDCPrefix + "Fast_" + IntegerToString(i);
-      ObjectCreate(0, lineName, OBJ_TREND, 0, chartTime[i + 1], fast[cdcIdx1], chartTime[i], fast[cdcIdx2]);
+      datetime t1 = time[i + 1];
+      datetime t2 = time[i];
+      
+      ObjectCreate(0, lineName, OBJ_TREND, 0, t1, fast[i + 1], t2, fast[i]);
       ObjectSetInteger(0, lineName, OBJPROP_COLOR, clrOrangeRed);
       ObjectSetInteger(0, lineName, OBJPROP_WIDTH, 2);
       ObjectSetInteger(0, lineName, OBJPROP_RAY_RIGHT, false);
       ObjectSetInteger(0, lineName, OBJPROP_SELECTABLE, false);
    }
    
-   // Draw CDC Slow line - interpolate CDC values to chart timeframe
-   for(int i = 0; i < chartBars - 1; i++)
+   for(int i = 0; i < maxBars; i++)
    {
-      int cdcIdx1 = FindCDCBarForTime(cdcTime, cdcSize, chartTime[i + 1]);
-      int cdcIdx2 = FindCDCBarForTime(cdcTime, cdcSize, chartTime[i]);
-      
-      if(cdcIdx1 < 0 || cdcIdx2 < 0) continue;
-      
       string lineName = CDCPrefix + "Slow_" + IntegerToString(i);
-      ObjectCreate(0, lineName, OBJ_TREND, 0, chartTime[i + 1], slow[cdcIdx1], chartTime[i], slow[cdcIdx2]);
+      datetime t1 = time[i + 1];
+      datetime t2 = time[i];
+      
+      ObjectCreate(0, lineName, OBJ_TREND, 0, t1, slow[i + 1], t2, slow[i]);
       ObjectSetInteger(0, lineName, OBJPROP_COLOR, clrDodgerBlue);
       ObjectSetInteger(0, lineName, OBJPROP_WIDTH, 3);
       ObjectSetInteger(0, lineName, OBJPROP_RAY_RIGHT, false);
@@ -3526,47 +3386,22 @@ void CalculateEMAChannel()
    ArraySetAsSeries(closeArr, true);
    ArraySetAsSeries(timeArr, true);
    
-   // Calculate bars for full chart visibility (extended from ~110 to 500+)
-   int visibleBars = (int)ChartGetInteger(0, CHART_VISIBLE_BARS);
-   int warmupBars = MathMax(InpEMAHighPeriod, InpEMALowPeriod) * 3;
-   int barsNeeded = MathMax(500, visibleBars + warmupBars);
+   int barsNeeded = MathMax(InpEMAHighPeriod, InpEMALowPeriod) * 3 + 50;
    
    if(CopyHigh(_Symbol, InpEMATimeframe, 0, barsNeeded, highArr) < barsNeeded) return;
    if(CopyLow(_Symbol, InpEMATimeframe, 0, barsNeeded, lowArr) < barsNeeded) return;
    if(CopyClose(_Symbol, InpEMATimeframe, 0, barsNeeded, closeArr) < barsNeeded) return;
    if(CopyTime(_Symbol, InpEMATimeframe, 0, barsNeeded, timeArr) < barsNeeded) return;
    
-   // Calculate MA of High prices using selected method
+   // Calculate EMA of High prices
    double emaHighArr[];
    ArrayResize(emaHighArr, barsNeeded);
+   CalculateEMA(highArr, emaHighArr, InpEMAHighPeriod, barsNeeded);
    
-   // Calculate MA of Low prices using selected method
+   // Calculate EMA of Low prices
    double emaLowArr[];
    ArrayResize(emaLowArr, barsNeeded);
-   
-   // Apply selected MA method
-   ENUM_MA_METHOD maMethod = ConvertEMAMAType(InpEMAMethod);
-   
-   if(maMethod == MODE_SMA)
-   {
-      CalculateSMA(highArr, emaHighArr, InpEMAHighPeriod, barsNeeded);
-      CalculateSMA(lowArr, emaLowArr, InpEMALowPeriod, barsNeeded);
-   }
-   else if(maMethod == MODE_EMA)
-   {
-      CalculateEMA(highArr, emaHighArr, InpEMAHighPeriod, barsNeeded);
-      CalculateEMA(lowArr, emaLowArr, InpEMALowPeriod, barsNeeded);
-   }
-   else if(maMethod == MODE_SMMA)
-   {
-      CalculateSMMA(highArr, emaHighArr, InpEMAHighPeriod, barsNeeded);
-      CalculateSMMA(lowArr, emaLowArr, InpEMALowPeriod, barsNeeded);
-   }
-   else if(maMethod == MODE_LWMA)
-   {
-      CalculateLWMA(highArr, emaHighArr, InpEMAHighPeriod, barsNeeded);
-      CalculateLWMA(lowArr, emaLowArr, InpEMALowPeriod, barsNeeded);
-   }
+   CalculateEMA(lowArr, emaLowArr, InpEMALowPeriod, barsNeeded);
    
    // Determine signal bar index based on setting
    int signalBar = (InpEMASignalBar == EMA_CURRENT_BAR) ? 0 : 1;
@@ -3681,101 +3516,64 @@ void DrawEMAChannelOnChart(double &emaHigh[], double &emaLow[], datetime &time[]
 //+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
-//| Get Signal Timeframe based on selected strategy                    |
-//| Trading logic will use this timeframe instead of PERIOD_CURRENT    |
-//+------------------------------------------------------------------+
-ENUM_TIMEFRAMES GetSignalTimeframe()
-{
-   ENUM_TIMEFRAMES tf = PERIOD_CURRENT;
-   
-   switch(InpSignalStrategy)
-   {
-      case STRATEGY_ZIGZAG:
-         tf = InpZigZagTimeframe;
-         break;
-      case STRATEGY_EMA_CHANNEL:
-         tf = InpEMATimeframe;
-         break;
-      case STRATEGY_BOLLINGER:
-         tf = InpBBTimeframe;
-         break;
-      case STRATEGY_SMC:
-         tf = InpSMCTimeframe;
-         break;
-   }
-   
-   // If PERIOD_CURRENT, return actual chart period
-   if(tf == PERIOD_CURRENT)
-      tf = Period();
-      
-   return tf;
-}
-
-//+------------------------------------------------------------------+
-//| Check if candle is Bullish (uses Signal Timeframe)                 |
+//| Check if candle is Bullish                                         |
 //+------------------------------------------------------------------+
 bool IsBullishCandle(int shift)
 {
-   ENUM_TIMEFRAMES tf = GetSignalTimeframe();
-   double open = iOpen(_Symbol, tf, shift);
-   double close = iClose(_Symbol, tf, shift);
+   double open = iOpen(_Symbol, PERIOD_CURRENT, shift);
+   double close = iClose(_Symbol, PERIOD_CURRENT, shift);
    return close > open;
 }
 
 //+------------------------------------------------------------------+
-//| Check if candle is Bearish (uses Signal Timeframe)                 |
+//| Check if candle is Bearish                                         |
 //+------------------------------------------------------------------+
 bool IsBearishCandle(int shift)
 {
-   ENUM_TIMEFRAMES tf = GetSignalTimeframe();
-   double open = iOpen(_Symbol, tf, shift);
-   double close = iClose(_Symbol, tf, shift);
+   double open = iOpen(_Symbol, PERIOD_CURRENT, shift);
+   double close = iClose(_Symbol, PERIOD_CURRENT, shift);
    return close < open;
 }
 
 //+------------------------------------------------------------------+
-//| Get candle body size (uses Signal Timeframe)                       |
+//| Get candle body size                                               |
 //+------------------------------------------------------------------+
 double GetCandleBody(int shift)
 {
-   ENUM_TIMEFRAMES tf = GetSignalTimeframe();
-   double open = iOpen(_Symbol, tf, shift);
-   double close = iClose(_Symbol, tf, shift);
+   double open = iOpen(_Symbol, PERIOD_CURRENT, shift);
+   double close = iClose(_Symbol, PERIOD_CURRENT, shift);
    return MathAbs(close - open);
 }
 
 //+------------------------------------------------------------------+
-//| Get candle range (high - low) (uses Signal Timeframe)              |
+//| Get candle range (high - low)                                      |
 //+------------------------------------------------------------------+
 double GetCandleRange(int shift)
 {
-   ENUM_TIMEFRAMES tf = GetSignalTimeframe();
-   double high = iHigh(_Symbol, tf, shift);
-   double low = iLow(_Symbol, tf, shift);
+   double high = iHigh(_Symbol, PERIOD_CURRENT, shift);
+   double low = iLow(_Symbol, PERIOD_CURRENT, shift);
    return high - low;
 }
 
 //+------------------------------------------------------------------+
-//| Get upper tail size (uses Signal Timeframe)                        |
+//| Get upper tail size                                                |
 //+------------------------------------------------------------------+
 double GetUpperTail(int shift)
 {
-   ENUM_TIMEFRAMES tf = GetSignalTimeframe();
-   double high = iHigh(_Symbol, tf, shift);
-   double open = iOpen(_Symbol, tf, shift);
-   double close = iClose(_Symbol, tf, shift);
+   double high = iHigh(_Symbol, PERIOD_CURRENT, shift);
+   double open = iOpen(_Symbol, PERIOD_CURRENT, shift);
+   double close = iClose(_Symbol, PERIOD_CURRENT, shift);
    return high - MathMax(open, close);
 }
 
 //+------------------------------------------------------------------+
-//| Get lower tail size (uses Signal Timeframe)                        |
+//| Get lower tail size                                                |
 //+------------------------------------------------------------------+
 double GetLowerTail(int shift)
 {
-   ENUM_TIMEFRAMES tf = GetSignalTimeframe();
-   double low = iLow(_Symbol, tf, shift);
-   double open = iOpen(_Symbol, tf, shift);
-   double close = iClose(_Symbol, tf, shift);
+   double low = iLow(_Symbol, PERIOD_CURRENT, shift);
+   double open = iOpen(_Symbol, PERIOD_CURRENT, shift);
+   double close = iClose(_Symbol, PERIOD_CURRENT, shift);
    return MathMin(open, close) - low;
 }
 
@@ -6900,34 +6698,8 @@ void OnTick()
    CheckGridLossSide();
    CheckGridProfitSide();
    
-   // *** FORCE INITIAL INDICATOR DRAW ***
-   // Draw indicators immediately after OnInit without waiting for new bar
-   if(g_forceInitialDraw)
-   {
-      g_forceInitialDraw = false;
-      
-      // Calculate CDC first (always needed for trend visualization)
-      CalculateCDC();
-      
-      // Calculate based on selected Signal Strategy
-      if(InpSignalStrategy == STRATEGY_ZIGZAG)
-         CalculateZigZagPP();
-      else if(InpSignalStrategy == STRATEGY_EMA_CHANNEL)
-         CalculateEMAChannel();
-      else if(InpSignalStrategy == STRATEGY_BOLLINGER)
-         CalculateBollingerBands();
-      else if(InpSignalStrategy == STRATEGY_SMC)
-         CalculateSMC();
-      
-      ChartRedraw(0);  // Force immediate chart update
-      Print("Initial indicator draw completed");
-   }
-   
-   // Use Signal Timeframe for bar check - independent of chart timeframe
-   ENUM_TIMEFRAMES signalTF = GetSignalTimeframe();
-   
    static datetime lastBarTime = 0;
-   datetime currentBarTime = iTime(_Symbol, signalTF, 0);
+   datetime currentBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
    
    if(lastBarTime == currentBarTime)
       return;
