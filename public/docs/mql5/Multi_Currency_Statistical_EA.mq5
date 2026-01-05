@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                Multi_Currency_Statistical_EA.mq5 |
-//|                 Statistical Arbitrage (Pairs Trading) v3.3.3     |
+//|                 Statistical Arbitrage (Pairs Trading) v3.3.4     |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "3.33"
+#property version   "3.34"
 #property strict
 #property description "Statistical Arbitrage / Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
-#property description "v3.3.3: Lot Normalization & Averaging Rollback System"
+#property description "v3.3.4: Enhanced Lot Calculation & Validation"
 
 #include <Trade/Trade.mqh>
 
@@ -129,8 +129,8 @@ enum ENUM_AVERAGING_MODE
 //| INPUT PARAMETERS                                                   |
 //+------------------------------------------------------------------+
 input group "=== Trading Settings ==="
-input double   InpBaseLot = 0.01;               // Base Lot Size (Symbol A)
-input double   InpMaxLot = 1.0;                 // Maximum Lot Size
+input double   InpBaseLot = 0.1;                // Base Lot Size (Symbol A)
+input double   InpMaxLot = 10.0;                // Maximum Lot Size
 input int      InpMagicNumber = 888888;         // Magic Number
 input int      InpSlippage = 30;                // Slippage (points)
 input ENUM_TIMEFRAMES InpTimeframe = PERIOD_H1; // Trading Timeframe
@@ -1791,7 +1791,7 @@ double GetPipValue(string symbol)
 }
 
 //+------------------------------------------------------------------+
-//| Calculate Dollar-Neutral Lot Sizes (v3.0)                          |
+//| Calculate Dollar-Neutral Lot Sizes (v3.3.4)                        |
 //+------------------------------------------------------------------+
 void CalculateDollarNeutralLots(int pairIndex)
 {
@@ -1804,36 +1804,48 @@ void CalculateDollarNeutralLots(int pairIndex)
    double pipValueA = GetPipValue(symbolA);
    double pipValueB = GetPipValue(symbolB);
    
-   if(pipValueB == 0)
+   // v3.3.4: Enhanced validation with warning logs
+   if(pipValueA == 0 || pipValueB == 0)
    {
-      // Set same lots for both sides
-      g_pairs[pairIndex].lotBuyA = baseLot;
-      g_pairs[pairIndex].lotBuyB = baseLot;
-      g_pairs[pairIndex].lotSellA = baseLot;
-      g_pairs[pairIndex].lotSellB = baseLot;
+      PrintFormat("WARNING Pair %d: Pip values invalid (A:%.5f B:%.5f) - Using normalized base lot %.2f for both",
+                  pairIndex + 1, pipValueA, pipValueB, baseLot);
+      
+      // Normalize base lot for each symbol
+      g_pairs[pairIndex].lotBuyA = NormalizeLot(symbolA, baseLot);
+      g_pairs[pairIndex].lotBuyB = NormalizeLot(symbolB, baseLot);
+      g_pairs[pairIndex].lotSellA = NormalizeLot(symbolA, baseLot);
+      g_pairs[pairIndex].lotSellB = NormalizeLot(symbolB, baseLot);
       return;
    }
    
-   // LotA = Base Lot
-   double lotA = baseLot;
+   // LotA = Base Lot (normalized)
+   double lotA = NormalizeLot(symbolA, baseLot);
    
    // LotB = LotA × β × (PipValueA / PipValueB)
-   double lotB = baseLot * hedgeRatio * (pipValueA / pipValueB);
+   double rawLotB = baseLot * hedgeRatio * (pipValueA / pipValueB);
+   double lotB = NormalizeLot(symbolB, rawLotB);
    
-   // Normalize lot size
+   // v3.3.4: Ensure lotB is not too small
    double minLotB = SymbolInfoDouble(symbolB, SYMBOL_VOLUME_MIN);
-   double maxLotB = SymbolInfoDouble(symbolB, SYMBOL_VOLUME_MAX);
-   double stepLotB = SymbolInfoDouble(symbolB, SYMBOL_VOLUME_STEP);
-   
-   lotB = MathMax(minLotB, MathMin(maxLotB, lotB));
-   lotB = MathFloor(lotB / stepLotB) * stepLotB;
-   lotB = MathMin(lotB, InpMaxLot);
+   if(lotB < minLotB)
+   {
+      PrintFormat("WARNING Pair %d: Calculated lotB (%.4f) below minimum (%.2f) - Using minimum",
+                  pairIndex + 1, rawLotB, minLotB);
+      lotB = minLotB;
+   }
    
    // Set for both Buy and Sell sides
    g_pairs[pairIndex].lotBuyA = lotA;
    g_pairs[pairIndex].lotBuyB = lotB;
    g_pairs[pairIndex].lotSellA = lotA;
    g_pairs[pairIndex].lotSellB = lotB;
+   
+   // v3.3.4: Debug log for lot calculation
+   if(InpDebugMode)
+   {
+      PrintFormat("Pair %d Lots: A=%.2f B=%.2f (BaseLot=%.2f, Beta=%.4f, PipA=%.5f, PipB=%.5f)", 
+                  pairIndex + 1, lotA, lotB, baseLot, hedgeRatio, pipValueA, pipValueB);
+   }
 }
 
 //+------------------------------------------------------------------+
