@@ -3445,34 +3445,62 @@ ENUM_MA_METHOD ConvertEMAMAType(ENUM_EMA_MA_TYPE emaType)
 }
 
 //+------------------------------------------------------------------+
-//| Draw CDC Lines on Chart                                            |
+//| Find CDC bar index for a given chart time                          |
 //+------------------------------------------------------------------+
-void DrawCDCOnChart(double &fast[], double &slow[], datetime &time[], int size)
+int FindCDCBarForTime(datetime &cdcTime[], int size, datetime targetTime)
+{
+   for(int i = 0; i < size - 1; i++)
+   {
+      // CDC is series (newest first), so cdcTime[i] > cdcTime[i+1]
+      if(targetTime <= cdcTime[i] && targetTime > cdcTime[i + 1])
+         return i;
+   }
+   // If target is older than all CDC data
+   if(size > 0 && targetTime <= cdcTime[size - 1])
+      return size - 1;
+   return -1;
+}
+
+//+------------------------------------------------------------------+
+//| Draw CDC Lines on Chart - Interpolate to Chart Timeframe           |
+//+------------------------------------------------------------------+
+void DrawCDCOnChart(double &fast[], double &slow[], datetime &cdcTime[], int cdcSize)
 {
    ObjectsDeleteAll(0, CDCPrefix);
    
-   int maxBars = MathMin(500, size - 1);
+   // Get chart timeframe data for proper drawing
+   datetime chartTime[];
+   ArraySetAsSeries(chartTime, true);
+   int chartBars = (int)MathMin(500, iBars(_Symbol, PERIOD_CURRENT));
+   if(CopyTime(_Symbol, PERIOD_CURRENT, 0, chartBars, chartTime) < chartBars) return;
    
-   for(int i = 0; i < maxBars; i++)
+   // Draw CDC Fast line - interpolate CDC values to chart timeframe
+   for(int i = 0; i < chartBars - 1; i++)
    {
-      string lineName = CDCPrefix + "Fast_" + IntegerToString(i);
-      datetime t1 = time[i + 1];
-      datetime t2 = time[i];
+      // Find corresponding CDC bar for each chart bar
+      int cdcIdx1 = FindCDCBarForTime(cdcTime, cdcSize, chartTime[i + 1]);
+      int cdcIdx2 = FindCDCBarForTime(cdcTime, cdcSize, chartTime[i]);
       
-      ObjectCreate(0, lineName, OBJ_TREND, 0, t1, fast[i + 1], t2, fast[i]);
+      if(cdcIdx1 < 0 || cdcIdx2 < 0) continue;
+      
+      string lineName = CDCPrefix + "Fast_" + IntegerToString(i);
+      ObjectCreate(0, lineName, OBJ_TREND, 0, chartTime[i + 1], fast[cdcIdx1], chartTime[i], fast[cdcIdx2]);
       ObjectSetInteger(0, lineName, OBJPROP_COLOR, clrOrangeRed);
       ObjectSetInteger(0, lineName, OBJPROP_WIDTH, 2);
       ObjectSetInteger(0, lineName, OBJPROP_RAY_RIGHT, false);
       ObjectSetInteger(0, lineName, OBJPROP_SELECTABLE, false);
    }
    
-   for(int i = 0; i < maxBars; i++)
+   // Draw CDC Slow line - interpolate CDC values to chart timeframe
+   for(int i = 0; i < chartBars - 1; i++)
    {
-      string lineName = CDCPrefix + "Slow_" + IntegerToString(i);
-      datetime t1 = time[i + 1];
-      datetime t2 = time[i];
+      int cdcIdx1 = FindCDCBarForTime(cdcTime, cdcSize, chartTime[i + 1]);
+      int cdcIdx2 = FindCDCBarForTime(cdcTime, cdcSize, chartTime[i]);
       
-      ObjectCreate(0, lineName, OBJ_TREND, 0, t1, slow[i + 1], t2, slow[i]);
+      if(cdcIdx1 < 0 || cdcIdx2 < 0) continue;
+      
+      string lineName = CDCPrefix + "Slow_" + IntegerToString(i);
+      ObjectCreate(0, lineName, OBJ_TREND, 0, chartTime[i + 1], slow[cdcIdx1], chartTime[i], slow[cdcIdx2]);
       ObjectSetInteger(0, lineName, OBJPROP_COLOR, clrDodgerBlue);
       ObjectSetInteger(0, lineName, OBJPROP_WIDTH, 3);
       ObjectSetInteger(0, lineName, OBJPROP_RAY_RIGHT, false);
@@ -3653,64 +3681,101 @@ void DrawEMAChannelOnChart(double &emaHigh[], double &emaLow[], datetime &time[]
 //+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
-//| Check if candle is Bullish                                         |
+//| Get Signal Timeframe based on selected strategy                    |
+//| Trading logic will use this timeframe instead of PERIOD_CURRENT    |
+//+------------------------------------------------------------------+
+ENUM_TIMEFRAMES GetSignalTimeframe()
+{
+   ENUM_TIMEFRAMES tf = PERIOD_CURRENT;
+   
+   switch(InpSignalStrategy)
+   {
+      case STRATEGY_ZIGZAG:
+         tf = InpZigZagTimeframe;
+         break;
+      case STRATEGY_EMA_CHANNEL:
+         tf = InpEMATimeframe;
+         break;
+      case STRATEGY_BOLLINGER:
+         tf = InpBBTimeframe;
+         break;
+      case STRATEGY_SMC:
+         tf = InpSMCTimeframe;
+         break;
+   }
+   
+   // If PERIOD_CURRENT, return actual chart period
+   if(tf == PERIOD_CURRENT)
+      tf = Period();
+      
+   return tf;
+}
+
+//+------------------------------------------------------------------+
+//| Check if candle is Bullish (uses Signal Timeframe)                 |
 //+------------------------------------------------------------------+
 bool IsBullishCandle(int shift)
 {
-   double open = iOpen(_Symbol, PERIOD_CURRENT, shift);
-   double close = iClose(_Symbol, PERIOD_CURRENT, shift);
+   ENUM_TIMEFRAMES tf = GetSignalTimeframe();
+   double open = iOpen(_Symbol, tf, shift);
+   double close = iClose(_Symbol, tf, shift);
    return close > open;
 }
 
 //+------------------------------------------------------------------+
-//| Check if candle is Bearish                                         |
+//| Check if candle is Bearish (uses Signal Timeframe)                 |
 //+------------------------------------------------------------------+
 bool IsBearishCandle(int shift)
 {
-   double open = iOpen(_Symbol, PERIOD_CURRENT, shift);
-   double close = iClose(_Symbol, PERIOD_CURRENT, shift);
+   ENUM_TIMEFRAMES tf = GetSignalTimeframe();
+   double open = iOpen(_Symbol, tf, shift);
+   double close = iClose(_Symbol, tf, shift);
    return close < open;
 }
 
 //+------------------------------------------------------------------+
-//| Get candle body size                                               |
+//| Get candle body size (uses Signal Timeframe)                       |
 //+------------------------------------------------------------------+
 double GetCandleBody(int shift)
 {
-   double open = iOpen(_Symbol, PERIOD_CURRENT, shift);
-   double close = iClose(_Symbol, PERIOD_CURRENT, shift);
+   ENUM_TIMEFRAMES tf = GetSignalTimeframe();
+   double open = iOpen(_Symbol, tf, shift);
+   double close = iClose(_Symbol, tf, shift);
    return MathAbs(close - open);
 }
 
 //+------------------------------------------------------------------+
-//| Get candle range (high - low)                                      |
+//| Get candle range (high - low) (uses Signal Timeframe)              |
 //+------------------------------------------------------------------+
 double GetCandleRange(int shift)
 {
-   double high = iHigh(_Symbol, PERIOD_CURRENT, shift);
-   double low = iLow(_Symbol, PERIOD_CURRENT, shift);
+   ENUM_TIMEFRAMES tf = GetSignalTimeframe();
+   double high = iHigh(_Symbol, tf, shift);
+   double low = iLow(_Symbol, tf, shift);
    return high - low;
 }
 
 //+------------------------------------------------------------------+
-//| Get upper tail size                                                |
+//| Get upper tail size (uses Signal Timeframe)                        |
 //+------------------------------------------------------------------+
 double GetUpperTail(int shift)
 {
-   double high = iHigh(_Symbol, PERIOD_CURRENT, shift);
-   double open = iOpen(_Symbol, PERIOD_CURRENT, shift);
-   double close = iClose(_Symbol, PERIOD_CURRENT, shift);
+   ENUM_TIMEFRAMES tf = GetSignalTimeframe();
+   double high = iHigh(_Symbol, tf, shift);
+   double open = iOpen(_Symbol, tf, shift);
+   double close = iClose(_Symbol, tf, shift);
    return high - MathMax(open, close);
 }
 
 //+------------------------------------------------------------------+
-//| Get lower tail size                                                |
+//| Get lower tail size (uses Signal Timeframe)                        |
 //+------------------------------------------------------------------+
 double GetLowerTail(int shift)
 {
-   double low = iLow(_Symbol, PERIOD_CURRENT, shift);
-   double open = iOpen(_Symbol, PERIOD_CURRENT, shift);
-   double close = iClose(_Symbol, PERIOD_CURRENT, shift);
+   ENUM_TIMEFRAMES tf = GetSignalTimeframe();
+   double low = iLow(_Symbol, tf, shift);
+   double open = iOpen(_Symbol, tf, shift);
+   double close = iClose(_Symbol, tf, shift);
    return MathMin(open, close) - low;
 }
 
@@ -6858,8 +6923,11 @@ void OnTick()
       Print("Initial indicator draw completed");
    }
    
+   // Use Signal Timeframe for bar check - independent of chart timeframe
+   ENUM_TIMEFRAMES signalTF = GetSignalTimeframe();
+   
    static datetime lastBarTime = 0;
-   datetime currentBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
+   datetime currentBarTime = iTime(_Symbol, signalTF, 0);
    
    if(lastBarTime == currentBarTime)
       return;
