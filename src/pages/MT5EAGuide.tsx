@@ -3490,21 +3490,24 @@ void DrawEMAChannelOnChart(double &emaHigh[], double &emaLow[], datetime &time[]
       ObjectSetInteger(0, lineName, OBJPROP_BACK, true);  // Draw in background for smoother appearance
    }
    
-   // Draw status label
-   string labelName = EMAPrefix + "Status_Label";
-   ObjectCreate(0, labelName, OBJ_LABEL, 0, 0, 0);
-   ObjectSetInteger(0, labelName, OBJPROP_CORNER, CORNER_LEFT_UPPER);
-   ObjectSetInteger(0, labelName, OBJPROP_XDISTANCE, 10);
-   ObjectSetInteger(0, labelName, OBJPROP_YDISTANCE, 70);
-   
-   string signalBarText = (InpEMASignalBar == EMA_CURRENT_BAR) ? "Current" : "LastClosed";
-   string statusText = "EMA Channel (" + EnumToString(InpEMATimeframe) + ") [" + signalBarText + "]";
-   statusText += " | H: " + DoubleToString(EMAHigh, _Digits) + " L: " + DoubleToString(EMALow, _Digits);
-   
-   ObjectSetString(0, labelName, OBJPROP_TEXT, statusText);
-   ObjectSetInteger(0, labelName, OBJPROP_COLOR, clrWhite);
-   ObjectSetInteger(0, labelName, OBJPROP_FONTSIZE, 10);
-   ObjectSetString(0, labelName, OBJPROP_FONT, "Arial");
+   // Draw status label ONLY if Dashboard is disabled (v5.1 fix: prevent overlap)
+   if(!InpShowDashboard)
+   {
+      string labelName = EMAPrefix + "Status_Label";
+      ObjectCreate(0, labelName, OBJ_LABEL, 0, 0, 0);
+      ObjectSetInteger(0, labelName, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+      ObjectSetInteger(0, labelName, OBJPROP_XDISTANCE, 10);
+      ObjectSetInteger(0, labelName, OBJPROP_YDISTANCE, 70);
+      
+      string signalBarText = (InpEMASignalBar == EMA_CURRENT_BAR) ? "Current" : "LastClosed";
+      string statusText = "EMA Channel (" + EnumToString(InpEMATimeframe) + ") [" + signalBarText + "]";
+      statusText += " | H: " + DoubleToString(EMAHigh, _Digits) + " L: " + DoubleToString(EMALow, _Digits);
+      
+      ObjectSetString(0, labelName, OBJPROP_TEXT, statusText);
+      ObjectSetInteger(0, labelName, OBJPROP_COLOR, clrWhite);
+      ObjectSetInteger(0, labelName, OBJPROP_FONTSIZE, 10);
+      ObjectSetString(0, labelName, OBJPROP_FONT, "Arial");
+   }
 }
 
 
