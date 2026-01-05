@@ -43,6 +43,15 @@ enum ENUM_BB_MA_TYPE
    BB_MA_WMA = 3     // WMA
 };
 
+// EMA Channel MA Type (v5.1)
+enum ENUM_EMA_MA_TYPE
+{
+   EMA_MA_SMA = 0,   // Simple (SMA)
+   EMA_MA_EMA = 1,   // Exponential (EMA)
+   EMA_MA_SMMA = 2,  // Smoothed (SMMA)
+   EMA_MA_WMA = 3    // Weighted (WMA)
+};
+
 // ZigZag Signal Mode
 enum ENUM_ZIGZAG_SIGNAL_MODE
 {
@@ -142,6 +151,7 @@ input string   InpEMAHeader = "=== EMA CHANNEL SETTINGS ===";  // ___
 input ENUM_TIMEFRAMES InpEMATimeframe = PERIOD_CURRENT;  // EMA Channel Timeframe
 input int      InpEMAHighPeriod = 20;         // EMA High Period
 input int      InpEMALowPeriod = 20;          // EMA Low Period
+input ENUM_EMA_MA_TYPE InpEMAMethod = EMA_MA_SMA;  // MA Method (v5.1)
 input color    InpEMAHighColor = clrDodgerBlue;  // EMA High Line Color
 input color    InpEMALowColor = clrOrangeRed;    // EMA Low Line Color
 input bool     InpShowEMALines = true;        // Show EMA Lines on Chart
@@ -495,6 +505,11 @@ double EMAHigh = 0;
 double EMALow = 0;
 string EMASignal = "NONE";  // "BUY", "SELL", "NONE"
 datetime LastEMASignalTime = 0;
+
+// *** Force Initial Draw Flag (v5.1) ***
+// Ensures indicators are drawn immediately after license load
+// without waiting for bar close
+bool g_forceInitialDraw = true;
 
 // Bollinger Bands Variables
 double BBUpper = 0;
@@ -3311,7 +3326,7 @@ void CalculateCDC()
 }
 
 //+------------------------------------------------------------------+
-//| Calculate EMA Array                                                |
+//| Calculate EMA Array (Exponential Moving Average)                   |
 //+------------------------------------------------------------------+
 void CalculateEMA(double &src[], double &result[], int period, int size)
 {
@@ -3329,6 +3344,94 @@ void CalculateEMA(double &src[], double &result[], int period, int size)
    for(int i = size - 2; i >= 0; i--)
    {
       result[i] = (src[i] - result[i + 1]) * multiplier + result[i + 1];
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Calculate MA Array with selectable method (v5.1)                   |
+//| Supports: SMA, EMA, SMMA, WMA                                      |
+//+------------------------------------------------------------------+
+void CalculateMA(double &src[], double &result[], int period, int size, ENUM_EMA_MA_TYPE method)
+{
+   if(size < period) return;
+   
+   switch(method)
+   {
+      case EMA_MA_SMA:  // Simple Moving Average
+      {
+         for(int i = 0; i < size; i++)
+         {
+            if(i < size - period)
+            {
+               double sum = 0;
+               for(int j = 0; j < period; j++)
+                  sum += src[i + j];
+               result[i] = sum / period;
+            }
+            else
+            {
+               // Not enough data, use available
+               double sum = 0;
+               int cnt = size - i;
+               for(int j = 0; j < cnt; j++)
+                  sum += src[i + j];
+               result[i] = sum / cnt;
+            }
+         }
+         break;
+      }
+      
+      case EMA_MA_EMA:  // Exponential Moving Average
+      {
+         double multiplier = 2.0 / (period + 1);
+         
+         double sum = 0;
+         for(int i = size - period; i < size; i++)
+            sum += src[i];
+         result[size - 1] = sum / period;
+         
+         for(int i = size - 2; i >= 0; i--)
+            result[i] = (src[i] - result[i + 1]) * multiplier + result[i + 1];
+         break;
+      }
+      
+      case EMA_MA_SMMA:  // Smoothed Moving Average (RMA)
+      {
+         double sum = 0;
+         for(int i = size - period; i < size; i++)
+            sum += src[i];
+         result[size - 1] = sum / period;
+         
+         for(int i = size - 2; i >= 0; i--)
+            result[i] = (result[i + 1] * (period - 1) + src[i]) / period;
+         break;
+      }
+      
+      case EMA_MA_WMA:  // Weighted Moving Average
+      {
+         double weightSum = period * (period + 1) / 2.0;
+         
+         for(int i = 0; i < size; i++)
+         {
+            if(i <= size - period)
+            {
+               double wSum = 0;
+               for(int j = 0; j < period; j++)
+                  wSum += src[i + j] * (period - j);
+               result[i] = wSum / weightSum;
+            }
+            else
+            {
+               // Not enough data, fallback to simple
+               int cnt = size - i;
+               double sum = 0;
+               for(int j = 0; j < cnt; j++)
+                  sum += src[i + j];
+               result[i] = sum / cnt;
+            }
+         }
+         break;
+      }
    }
 }
 
@@ -3386,22 +3489,22 @@ void CalculateEMAChannel()
    ArraySetAsSeries(closeArr, true);
    ArraySetAsSeries(timeArr, true);
    
-   int barsNeeded = MathMax(InpEMAHighPeriod, InpEMALowPeriod) * 3 + 50;
+   int barsNeeded = MathMax(InpEMAHighPeriod, InpEMALowPeriod) * 3 + 500;
    
    if(CopyHigh(_Symbol, InpEMATimeframe, 0, barsNeeded, highArr) < barsNeeded) return;
    if(CopyLow(_Symbol, InpEMATimeframe, 0, barsNeeded, lowArr) < barsNeeded) return;
    if(CopyClose(_Symbol, InpEMATimeframe, 0, barsNeeded, closeArr) < barsNeeded) return;
    if(CopyTime(_Symbol, InpEMATimeframe, 0, barsNeeded, timeArr) < barsNeeded) return;
    
-   // Calculate EMA of High prices
+   // Calculate MA of High prices using selected method (v5.1)
    double emaHighArr[];
    ArrayResize(emaHighArr, barsNeeded);
-   CalculateEMA(highArr, emaHighArr, InpEMAHighPeriod, barsNeeded);
+   CalculateMA(highArr, emaHighArr, InpEMAHighPeriod, barsNeeded, InpEMAMethod);
    
-   // Calculate EMA of Low prices
+   // Calculate MA of Low prices using selected method (v5.1)
    double emaLowArr[];
    ArrayResize(emaLowArr, barsNeeded);
-   CalculateEMA(lowArr, emaLowArr, InpEMALowPeriod, barsNeeded);
+   CalculateMA(lowArr, emaLowArr, InpEMALowPeriod, barsNeeded, InpEMAMethod);
    
    // Determine signal bar index based on setting
    int signalBar = (InpEMASignalBar == EMA_CURRENT_BAR) ? 0 : 1;
@@ -3499,8 +3602,19 @@ void DrawEMAChannelOnChart(double &emaHigh[], double &emaLow[], datetime &time[]
       ObjectSetInteger(0, labelName, OBJPROP_XDISTANCE, 10);
       ObjectSetInteger(0, labelName, OBJPROP_YDISTANCE, 70);
       
+      // v5.1: Show MA Method in status label
+      string maMethodStr;
+      switch(InpEMAMethod)
+      {
+         case EMA_MA_SMA:  maMethodStr = "SMA"; break;
+         case EMA_MA_EMA:  maMethodStr = "EMA"; break;
+         case EMA_MA_SMMA: maMethodStr = "SMMA"; break;
+         case EMA_MA_WMA:  maMethodStr = "WMA"; break;
+         default:          maMethodStr = "SMA"; break;
+      }
+      
       string signalBarText = (InpEMASignalBar == EMA_CURRENT_BAR) ? "Current" : "LastClosed";
-      string statusText = "EMA Channel (" + EnumToString(InpEMATimeframe) + ") [" + signalBarText + "]";
+      string statusText = maMethodStr + " Channel (" + EnumToString(InpEMATimeframe) + ") [" + signalBarText + "]";
       statusText += " | H: " + DoubleToString(EMAHigh, _Digits) + " L: " + DoubleToString(EMALow, _Digits);
       
       ObjectSetString(0, labelName, OBJPROP_TEXT, statusText);
@@ -3516,64 +3630,86 @@ void DrawEMAChannelOnChart(double &emaHigh[], double &emaLow[], datetime &time[]
 //+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
-//| Check if candle is Bullish                                         |
+//| Get Signal Timeframe based on selected strategy (v5.1)             |
+//| Ensures all calculations use the configured strategy timeframe    |
+//+------------------------------------------------------------------+
+ENUM_TIMEFRAMES GetSignalTimeframe()
+{
+   switch(InpSignalStrategy)
+   {
+      case STRATEGY_ZIGZAG:      return InpZigZagTimeframe;
+      case STRATEGY_EMA_CHANNEL: return InpEMATimeframe;
+      case STRATEGY_BOLLINGER:   return InpBBTimeframe;
+      case STRATEGY_SMC:         return InpSMCTimeframe;
+      default:                   return PERIOD_CURRENT;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Check if candle is Bullish (uses Signal Timeframe)                 |
 //+------------------------------------------------------------------+
 bool IsBullishCandle(int shift)
 {
-   double open = iOpen(_Symbol, PERIOD_CURRENT, shift);
-   double close = iClose(_Symbol, PERIOD_CURRENT, shift);
+   ENUM_TIMEFRAMES tf = GetSignalTimeframe();
+   double open = iOpen(_Symbol, tf, shift);
+   double close = iClose(_Symbol, tf, shift);
    return close > open;
 }
 
 //+------------------------------------------------------------------+
-//| Check if candle is Bearish                                         |
+//| Check if candle is Bearish (uses Signal Timeframe)                 |
 //+------------------------------------------------------------------+
 bool IsBearishCandle(int shift)
 {
-   double open = iOpen(_Symbol, PERIOD_CURRENT, shift);
-   double close = iClose(_Symbol, PERIOD_CURRENT, shift);
+   ENUM_TIMEFRAMES tf = GetSignalTimeframe();
+   double open = iOpen(_Symbol, tf, shift);
+   double close = iClose(_Symbol, tf, shift);
    return close < open;
 }
 
 //+------------------------------------------------------------------+
-//| Get candle body size                                               |
+//| Get candle body size (uses Signal Timeframe)                       |
 //+------------------------------------------------------------------+
 double GetCandleBody(int shift)
 {
-   double open = iOpen(_Symbol, PERIOD_CURRENT, shift);
-   double close = iClose(_Symbol, PERIOD_CURRENT, shift);
+   ENUM_TIMEFRAMES tf = GetSignalTimeframe();
+   double open = iOpen(_Symbol, tf, shift);
+   double close = iClose(_Symbol, tf, shift);
    return MathAbs(close - open);
 }
 
 //+------------------------------------------------------------------+
-//| Get candle range (high - low)                                      |
+//| Get candle range (high - low) (uses Signal Timeframe)              |
 //+------------------------------------------------------------------+
 double GetCandleRange(int shift)
 {
-   double high = iHigh(_Symbol, PERIOD_CURRENT, shift);
-   double low = iLow(_Symbol, PERIOD_CURRENT, shift);
+   ENUM_TIMEFRAMES tf = GetSignalTimeframe();
+   double high = iHigh(_Symbol, tf, shift);
+   double low = iLow(_Symbol, tf, shift);
    return high - low;
 }
 
 //+------------------------------------------------------------------+
-//| Get upper tail size                                                |
+//| Get upper tail size (uses Signal Timeframe)                        |
 //+------------------------------------------------------------------+
 double GetUpperTail(int shift)
 {
-   double high = iHigh(_Symbol, PERIOD_CURRENT, shift);
-   double open = iOpen(_Symbol, PERIOD_CURRENT, shift);
-   double close = iClose(_Symbol, PERIOD_CURRENT, shift);
+   ENUM_TIMEFRAMES tf = GetSignalTimeframe();
+   double high = iHigh(_Symbol, tf, shift);
+   double open = iOpen(_Symbol, tf, shift);
+   double close = iClose(_Symbol, tf, shift);
    return high - MathMax(open, close);
 }
 
 //+------------------------------------------------------------------+
-//| Get lower tail size                                                |
+//| Get lower tail size (uses Signal Timeframe)                        |
 //+------------------------------------------------------------------+
 double GetLowerTail(int shift)
 {
-   double low = iLow(_Symbol, PERIOD_CURRENT, shift);
-   double open = iOpen(_Symbol, PERIOD_CURRENT, shift);
-   double close = iClose(_Symbol, PERIOD_CURRENT, shift);
+   ENUM_TIMEFRAMES tf = GetSignalTimeframe();
+   double low = iLow(_Symbol, tf, shift);
+   double open = iOpen(_Symbol, tf, shift);
+   double close = iClose(_Symbol, tf, shift);
    return MathMin(open, close) - low;
 }
 
@@ -6698,13 +6834,26 @@ void OnTick()
    CheckGridLossSide();
    CheckGridProfitSide();
    
+   // *** v5.1: Use Signal Timeframe for bar close check ***
+   ENUM_TIMEFRAMES signalTF = GetSignalTimeframe();
    static datetime lastBarTime = 0;
-   datetime currentBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
+   datetime currentBarTime = iTime(_Symbol, signalTF, 0);
    
-   if(lastBarTime == currentBarTime)
+   // *** v5.1: Force Initial Draw - Bypass bar close check on first valid tick ***
+   // This ensures indicators are drawn immediately after license load
+   bool isFirstDraw = g_forceInitialDraw;
+   
+   if(lastBarTime == currentBarTime && !isFirstDraw)
       return;
       
    lastBarTime = currentBarTime;
+   
+   // Reset force draw flag after first execution
+   if(isFirstDraw)
+   {
+      g_forceInitialDraw = false;
+      Print("*** v5.1: Force Initial Draw - Drawing all indicators immediately ***");
+   }
    
    // *** IMPORTANT: Calculate Indicators FIRST before PA confirmation ***
    // This ensures that SMC OB touch, CDC trend, etc. are already determined
