@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                Multi_Currency_Statistical_EA.mq5 |
-//|                 Statistical Arbitrage (Pairs Trading) v3.3.1     |
+//|                 Statistical Arbitrage (Pairs Trading) v3.3.2     |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "3.31"
+#property version   "3.32"
 #property strict
 #property description "Statistical Arbitrage / Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
-#property description "v3.3.1: Simplified ATR for Tester Mode (Fix Grid Orders)"
+#property description "v3.3.2: Orphan Detection & Position Sync System"
 
 #include <Trade/Trade.mqh>
 
@@ -1004,6 +1004,10 @@ void OnTick()
    // Main trading logic
    AnalyzeAllPairs();
    CheckAllAveraging();
+   
+   // v3.3.2: Check for orphan positions before management
+   CheckOrphanPositions();
+   
    ManageAllPositions();
    CheckPairTargets();
    CheckTotalTarget();
@@ -2437,23 +2441,224 @@ bool CloseSellSide(int pairIndex)
 }
 
 //+------------------------------------------------------------------+
-//| Close Averaging Positions (v3.2.7)                                 |
+//| Close Averaging Positions (v3.3.2 - with retry & symbol check)     |
 //+------------------------------------------------------------------+
 void CloseAveragingPositions(int pairIndex, string side)
 {
+   string symbolA = g_pairs[pairIndex].symbolA;
+   string symbolB = g_pairs[pairIndex].symbolB;
    string comment = StringFormat("StatArb_AVG_%s_%d", side, pairIndex + 1);
    
-   // Close all positions with matching comment
-   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   int closeAttempts = 0;
+   int maxAttempts = 10;  // Prevent infinite loop
+   
+   // Keep trying to close until all are closed
+   while(closeAttempts < maxAttempts)
    {
-      if(PositionSelectByTicket(PositionGetTicket(i)))
+      bool foundAny = false;
+      
+      for(int i = PositionsTotal() - 1; i >= 0; i--)
       {
-         if(StringFind(PositionGetString(POSITION_COMMENT), comment) >= 0)
+         ulong ticket = PositionGetTicket(i);
+         if(!PositionSelectByTicket(ticket)) continue;
+         
+         string posSymbol = PositionGetString(POSITION_SYMBOL);
+         string posComment = PositionGetString(POSITION_COMMENT);
+         
+         // Match symbol AND comment for accuracy
+         if((posSymbol == symbolA || posSymbol == symbolB) &&
+            StringFind(posComment, comment) >= 0)
          {
-            g_trade.PositionClose(PositionGetTicket(i));
+            if(g_trade.PositionClose(ticket))
+            {
+               PrintFormat("Closed AVG position %d on %s", ticket, posSymbol);
+            }
+            foundAny = true;
+         }
+      }
+      
+      if(!foundAny) break;  // No more positions to close
+      closeAttempts++;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Check for Orphan Positions (v3.3.2)                                |
+//+------------------------------------------------------------------+
+void CheckOrphanPositions()
+{
+   for(int i = 0; i < MAX_PAIRS; i++)
+   {
+      if(!g_pairs[i].enabled) continue;
+      
+      // === Check Buy Side ===
+      if(g_pairs[i].directionBuy == 1)
+      {
+         bool posAExists = VerifyPositionExists(g_pairs[i].ticketBuyA);
+         bool posBExists = VerifyPositionExists(g_pairs[i].ticketBuyB);
+         
+         // If one side is gone but the other exists - Orphan detected!
+         if((g_pairs[i].ticketBuyA > 0 && !posAExists) || 
+            (g_pairs[i].ticketBuyB > 0 && !posBExists))
+         {
+            PrintFormat("ORPHAN DETECTED Pair %d BUY: A=%s B=%s - Force closing remaining",
+                        i + 1, posAExists ? "OK" : "GONE", posBExists ? "OK" : "GONE");
+            ForceCloseBuySide(i);
+         }
+      }
+      
+      // === Check Sell Side ===
+      if(g_pairs[i].directionSell == 1)
+      {
+         bool posAExists = VerifyPositionExists(g_pairs[i].ticketSellA);
+         bool posBExists = VerifyPositionExists(g_pairs[i].ticketSellB);
+         
+         if((g_pairs[i].ticketSellA > 0 && !posAExists) || 
+            (g_pairs[i].ticketSellB > 0 && !posBExists))
+         {
+            PrintFormat("ORPHAN DETECTED Pair %d SELL: A=%s B=%s - Force closing remaining",
+                        i + 1, posAExists ? "OK" : "GONE", posBExists ? "OK" : "GONE");
+            ForceCloseSellSide(i);
          }
       }
    }
+}
+
+//+------------------------------------------------------------------+
+//| Verify Position Exists (v3.3.2)                                    |
+//+------------------------------------------------------------------+
+bool VerifyPositionExists(ulong ticket)
+{
+   if(ticket == 0) return true;  // No ticket = no position expected
+   return PositionSelectByTicket(ticket);
+}
+
+//+------------------------------------------------------------------+
+//| Force Close Buy Side (v3.3.2 - Close ALL related positions)        |
+//+------------------------------------------------------------------+
+void ForceCloseBuySide(int pairIndex)
+{
+   string symbolA = g_pairs[pairIndex].symbolA;
+   string symbolB = g_pairs[pairIndex].symbolB;
+   string mainComment = StringFormat("StatArb_BUY_%d", pairIndex + 1);
+   string avgComment = StringFormat("StatArb_AVG_BUY_%d", pairIndex + 1);
+   
+   // Close ALL positions on both symbols with matching comments
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(!PositionSelectByTicket(ticket)) continue;
+      
+      string posSymbol = PositionGetString(POSITION_SYMBOL);
+      string posComment = PositionGetString(POSITION_COMMENT);
+      
+      // Close if symbol matches AND comment matches
+      if((posSymbol == symbolA || posSymbol == symbolB) &&
+         (StringFind(posComment, mainComment) >= 0 || StringFind(posComment, avgComment) >= 0))
+      {
+         g_trade.PositionClose(ticket);
+         PrintFormat("Force closed ticket %d (%s)", ticket, posSymbol);
+      }
+   }
+   
+   // v3.2.9: Accumulate closed P/L before reset
+   g_pairs[pairIndex].closedProfitBuy += g_pairs[pairIndex].profitBuy;
+   
+   // Update statistics before reset
+   g_dailyProfit += g_pairs[pairIndex].profitBuy;
+   g_weeklyProfit += g_pairs[pairIndex].profitBuy;
+   g_monthlyProfit += g_pairs[pairIndex].profitBuy;
+   g_allTimeProfit += g_pairs[pairIndex].profitBuy;
+   g_dailyLot += g_pairs[pairIndex].lotBuyA + g_pairs[pairIndex].lotBuyB;
+   g_weeklyLot += g_pairs[pairIndex].lotBuyA + g_pairs[pairIndex].lotBuyB;
+   g_monthlyLot += g_pairs[pairIndex].lotBuyA + g_pairs[pairIndex].lotBuyB;
+   g_allTimeLot += g_pairs[pairIndex].lotBuyA + g_pairs[pairIndex].lotBuyB;
+   
+   // v3.3.0: Count closed orders (1 main + averaging orders)
+   int closedOrdersCount = 1 + g_pairs[pairIndex].avgOrderCountBuy;
+   g_dailyClosedOrders += closedOrdersCount;
+   g_weeklyClosedOrders += closedOrdersCount;
+   g_monthlyClosedOrders += closedOrdersCount;
+   g_allTimeClosedOrders += closedOrdersCount;
+   
+   // Reset state
+   g_pairs[pairIndex].ticketBuyA = 0;
+   g_pairs[pairIndex].ticketBuyB = 0;
+   g_pairs[pairIndex].directionBuy = -1;  // Ready
+   g_pairs[pairIndex].profitBuy = 0;
+   g_pairs[pairIndex].entryTimeBuy = 0;
+   g_pairs[pairIndex].orderCountBuy = 0;
+   g_pairs[pairIndex].lotBuyA = 0;
+   g_pairs[pairIndex].lotBuyB = 0;
+   g_pairs[pairIndex].avgOrderCountBuy = 0;
+   g_pairs[pairIndex].lastAvgPriceBuy = 0;
+   g_pairs[pairIndex].entryZScoreBuy = 0;
+   
+   PrintFormat("Pair %d BUY SIDE FORCE CLOSED (Orphan Recovery)", pairIndex + 1);
+}
+
+//+------------------------------------------------------------------+
+//| Force Close Sell Side (v3.3.2 - Close ALL related positions)       |
+//+------------------------------------------------------------------+
+void ForceCloseSellSide(int pairIndex)
+{
+   string symbolA = g_pairs[pairIndex].symbolA;
+   string symbolB = g_pairs[pairIndex].symbolB;
+   string mainComment = StringFormat("StatArb_SELL_%d", pairIndex + 1);
+   string avgComment = StringFormat("StatArb_AVG_SELL_%d", pairIndex + 1);
+   
+   // Close ALL positions on both symbols with matching comments
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(!PositionSelectByTicket(ticket)) continue;
+      
+      string posSymbol = PositionGetString(POSITION_SYMBOL);
+      string posComment = PositionGetString(POSITION_COMMENT);
+      
+      // Close if symbol matches AND comment matches
+      if((posSymbol == symbolA || posSymbol == symbolB) &&
+         (StringFind(posComment, mainComment) >= 0 || StringFind(posComment, avgComment) >= 0))
+      {
+         g_trade.PositionClose(ticket);
+         PrintFormat("Force closed ticket %d (%s)", ticket, posSymbol);
+      }
+   }
+   
+   // v3.2.9: Accumulate closed P/L before reset
+   g_pairs[pairIndex].closedProfitSell += g_pairs[pairIndex].profitSell;
+   
+   // Update statistics before reset
+   g_dailyProfit += g_pairs[pairIndex].profitSell;
+   g_weeklyProfit += g_pairs[pairIndex].profitSell;
+   g_monthlyProfit += g_pairs[pairIndex].profitSell;
+   g_allTimeProfit += g_pairs[pairIndex].profitSell;
+   g_dailyLot += g_pairs[pairIndex].lotSellA + g_pairs[pairIndex].lotSellB;
+   g_weeklyLot += g_pairs[pairIndex].lotSellA + g_pairs[pairIndex].lotSellB;
+   g_monthlyLot += g_pairs[pairIndex].lotSellA + g_pairs[pairIndex].lotSellB;
+   g_allTimeLot += g_pairs[pairIndex].lotSellA + g_pairs[pairIndex].lotSellB;
+   
+   // v3.3.0: Count closed orders (1 main + averaging orders)
+   int closedOrdersCount = 1 + g_pairs[pairIndex].avgOrderCountSell;
+   g_dailyClosedOrders += closedOrdersCount;
+   g_weeklyClosedOrders += closedOrdersCount;
+   g_monthlyClosedOrders += closedOrdersCount;
+   g_allTimeClosedOrders += closedOrdersCount;
+   
+   // Reset state
+   g_pairs[pairIndex].ticketSellA = 0;
+   g_pairs[pairIndex].ticketSellB = 0;
+   g_pairs[pairIndex].directionSell = -1;  // Ready
+   g_pairs[pairIndex].profitSell = 0;
+   g_pairs[pairIndex].entryTimeSell = 0;
+   g_pairs[pairIndex].orderCountSell = 0;
+   g_pairs[pairIndex].lotSellA = 0;
+   g_pairs[pairIndex].lotSellB = 0;
+   g_pairs[pairIndex].avgOrderCountSell = 0;
+   g_pairs[pairIndex].lastAvgPriceSell = 0;
+   g_pairs[pairIndex].entryZScoreSell = 0;
+   
+   PrintFormat("Pair %d SELL SIDE FORCE CLOSED (Orphan Recovery)", pairIndex + 1);
 }
 
 //+------------------------------------------------------------------+
