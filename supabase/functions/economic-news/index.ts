@@ -49,180 +49,146 @@ const IMPACT_TO_LEVEL: Record<string, number> = {
   'High': 3,
 };
 
-// Parse impact from Forex Factory format
-function parseImpact(impactClass: string): 'Low' | 'Medium' | 'High' | 'Holiday' {
-  if (impactClass.includes('high') || impactClass.includes('red')) return 'High';
-  if (impactClass.includes('medium') || impactClass.includes('orange')) return 'Medium';
-  if (impactClass.includes('holiday') || impactClass.includes('gray')) return 'Holiday';
+// Extract CDATA content or tag content from XML
+function extractCDATA(xml: string, tagName: string): string {
+  // Try CDATA first
+  const cdataRegex = new RegExp(`<${tagName}>\\s*<!\\[CDATA\\[\\s*([\\s\\S]*?)\\s*\\]\\]>\\s*</${tagName}>`, 'i');
+  const cdataMatch = xml.match(cdataRegex);
+  if (cdataMatch) {
+    return cdataMatch[1].trim();
+  }
+  
+  // Try regular tag content
+  const tagRegex = new RegExp(`<${tagName}>([^<]*)</${tagName}>`, 'i');
+  const tagMatch = xml.match(tagRegex);
+  if (tagMatch) {
+    return tagMatch[1].trim();
+  }
+  
+  // Check for empty/self-closing tag
+  const emptyRegex = new RegExp(`<${tagName}\\s*/>`, 'i');
+  if (emptyRegex.test(xml)) {
+    return '';
+  }
+  
+  return '';
+}
+
+// Normalize impact string
+function normalizeImpact(impact: string): 'Low' | 'Medium' | 'High' | 'Holiday' {
+  const normalized = impact.toLowerCase().trim();
+  if (normalized === 'high' || normalized === 'red') return 'High';
+  if (normalized === 'medium' || normalized === 'orange') return 'Medium';
+  if (normalized === 'holiday') return 'Holiday';
   return 'Low';
 }
 
-// Fetch news from Forex Factory calendar
-async function fetchForexFactoryNews(): Promise<NewsEvent[]> {
-  const news: NewsEvent[] = [];
-  
+// Parse Forex Factory XML date format: MM-DD-YYYY + 12hr time
+function parseForexFactoryXMLDate(dateStr: string, timeStr: string): Date {
   try {
-    // Forex Factory Calendar URL (weekly view)
-    const today = new Date();
-    const weekStart = new Date(today);
-    weekStart.setDate(today.getDate() - today.getDay()); // Start of week (Sunday)
-    
-    // We'll fetch 2 weeks of data
-    const urls = [];
-    for (let week = 0; week < 2; week++) {
-      const weekDate = new Date(weekStart);
-      weekDate.setDate(weekStart.getDate() + (week * 7));
-      const monthStr = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'][weekDate.getMonth()];
-      const dayStr = weekDate.getDate();
-      const yearStr = weekDate.getFullYear();
-      urls.push(`https://www.forexfactory.com/calendar?week=${monthStr}${dayStr}.${yearStr}`);
+    // dateStr: "01-05-2026" (MM-DD-YYYY)
+    const dateParts = dateStr.trim().split('-');
+    if (dateParts.length !== 3) {
+      console.warn(`Invalid date format: ${dateStr}`);
+      return new Date();
     }
     
-    console.log('Fetching from Forex Factory...');
+    const month = parseInt(dateParts[0], 10) - 1; // JS months are 0-indexed
+    const day = parseInt(dateParts[1], 10);
+    const year = parseInt(dateParts[2], 10);
     
-    for (const url of urls) {
-      try {
-        const response = await fetch(url, {
-          headers: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-            'Accept-Language': 'en-US,en;q=0.5',
-          },
-        });
-        
-        if (!response.ok) {
-          console.error(`Failed to fetch ${url}: ${response.status}`);
-          continue;
-        }
-        
-        const html = await response.text();
-        
-        // Parse the HTML to extract news events
-        const eventRegex = /<tr[^>]*class="[^"]*calendar__row[^"]*"[^>]*>([\s\S]*?)<\/tr>/gi;
-        const titleRegex = /<span[^>]*class="[^"]*calendar__event-title[^"]*"[^>]*>([^<]+)<\/span>/i;
-        const currencyRegex = /<td[^>]*class="[^"]*calendar__currency[^"]*"[^>]*>([^<]+)<\/td>/i;
-        const impactRegex = /<td[^>]*class="[^"]*calendar__impact[^"]*"[^>]*>[\s\S]*?<span[^>]*class="([^"]+)"[^>]*>/i;
-        const forecastRegex = /<td[^>]*class="[^"]*calendar__forecast[^"]*"[^>]*>([^<]*)<\/td>/i;
-        const previousRegex = /<td[^>]*class="[^"]*calendar__previous[^"]*"[^>]*>([^<]*)<\/td>/i;
-        const dateRegex = /<td[^>]*class="[^"]*calendar__date[^"]*"[^>]*>[\s\S]*?<span[^>]*>([^<]+)<\/span>/i;
-        const timeRegex = /<td[^>]*class="[^"]*calendar__time[^"]*"[^>]*>([^<]+)<\/td>/i;
-        
-        let match;
-        let currentDate = '';
-        
-        while ((match = eventRegex.exec(html)) !== null) {
-          const row = match[1];
-          
-          // Extract date (if present in this row)
-          const dateMatch = row.match(dateRegex);
-          if (dateMatch) {
-            currentDate = dateMatch[1].trim();
-          }
-          
-          // Extract title
-          const titleMatch = row.match(titleRegex);
-          if (!titleMatch) continue;
-          
-          const title = titleMatch[1].trim();
-          
-          // Extract currency
-          const currencyMatch = row.match(currencyRegex);
-          const currency = currencyMatch ? currencyMatch[1].trim() : 'USD';
-          
-          // Extract impact
-          const impactMatch = row.match(impactRegex);
-          const impact = impactMatch ? parseImpact(impactMatch[1]) : 'Low';
-          
-          // Extract forecast
-          const forecastMatch = row.match(forecastRegex);
-          const forecast = forecastMatch ? forecastMatch[1].trim() : '';
-          
-          // Extract previous
-          const previousMatch = row.match(previousRegex);
-          const previous = previousMatch ? previousMatch[1].trim() : '';
-          
-          // Extract time
-          const timeMatch = row.match(timeRegex);
-          const timeStr = timeMatch ? timeMatch[1].trim() : '00:00';
-          
-          // Build date string
-          if (currentDate) {
-            try {
-              const eventDate = parseForexFactoryDate(currentDate, timeStr, today.getFullYear());
-              if (eventDate) {
-                news.push({
-                  title,
-                  country: currency,
-                  date: eventDate.toISOString(),
-                  impact,
-                  forecast,
-                  previous,
-                });
-              }
-            } catch (e) {
-              console.error('Error parsing date:', e);
-            }
-          }
-        }
-      } catch (fetchError) {
-        console.error(`Error fetching ${url}:`, fetchError);
-      }
-    }
-    
-    console.log(`Parsed ${news.length} events from Forex Factory`);
-    
-  } catch (error) {
-    console.error('Error fetching Forex Factory:', error);
-  }
-  
-  return news;
-}
-
-// Parse Forex Factory date format (e.g., "Mon Jan 6")
-function parseForexFactoryDate(dateStr: string, timeStr: string, year: number): Date | null {
-  try {
-    const months: Record<string, number> = {
-      'Jan': 0, 'Feb': 1, 'Mar': 2, 'Apr': 3, 'May': 4, 'Jun': 5,
-      'Jul': 6, 'Aug': 7, 'Sep': 8, 'Oct': 9, 'Nov': 10, 'Dec': 11
-    };
-    
-    // Parse date like "Mon Jan 6" or "Jan 6"
-    const parts = dateStr.split(/\s+/).filter(p => p.length > 0);
-    let month = -1;
-    let day = 0;
-    
-    for (const part of parts) {
-      if (months[part] !== undefined) {
-        month = months[part];
-      } else if (/^\d+$/.test(part)) {
-        day = parseInt(part, 10);
-      }
-    }
-    
-    if (month === -1 || day === 0) return null;
-    
-    // Parse time like "8:30am" or "10:00pm" or "All Day"
+    // Parse time: "3:00pm", "12:30am", etc
     let hours = 0;
     let minutes = 0;
     
-    if (timeStr && timeStr !== 'All Day' && timeStr !== 'Tentative') {
-      const timeMatch = timeStr.match(/(\d{1,2}):(\d{2})(am|pm)?/i);
+    if (timeStr && timeStr.trim()) {
+      const timeMatch = timeStr.trim().match(/(\d{1,2}):(\d{2})(am|pm)?/i);
       if (timeMatch) {
         hours = parseInt(timeMatch[1], 10);
         minutes = parseInt(timeMatch[2], 10);
-        if (timeMatch[3]?.toLowerCase() === 'pm' && hours < 12) hours += 12;
-        if (timeMatch[3]?.toLowerCase() === 'am' && hours === 12) hours = 0;
+        const period = timeMatch[3]?.toLowerCase();
+        if (period === 'pm' && hours < 12) hours += 12;
+        if (period === 'am' && hours === 12) hours = 0;
       }
     }
     
-    // Create date in EST timezone (Forex Factory uses EST)
-    const date = new Date(Date.UTC(year, month, day, hours + 5, minutes)); // EST = UTC-5
+    // Forex Factory XML uses Eastern Time (ET)
+    // Check if we're in DST (EDT = UTC-4) or standard (EST = UTC-5)
+    // Simplified: use UTC-5 (EST) as default
+    const etOffsetHours = 5; // EST = UTC-5
     
-    return date;
+    // Create UTC date by adding the offset
+    const utcDate = new Date(Date.UTC(year, month, day, hours + etOffsetHours, minutes));
+    
+    return utcDate;
   } catch (e) {
-    console.error('Date parse error:', e);
-    return null;
+    console.error('Error parsing date:', dateStr, timeStr, e);
+    return new Date();
   }
+}
+
+// Fetch and parse Forex Factory XML feed
+async function fetchForexFactoryXML(): Promise<NewsEvent[]> {
+  const news: NewsEvent[] = [];
+  
+  try {
+    console.log('Fetching Forex Factory XML feed...');
+    
+    const response = await fetch('https://www.forexfactory.com/calendar.xml', {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/xml, text/xml, */*',
+        'Accept-Language': 'en-US,en;q=0.5',
+      },
+    });
+    
+    if (!response.ok) {
+      console.error(`Failed to fetch XML: ${response.status} ${response.statusText}`);
+      return [];
+    }
+    
+    const xmlText = await response.text();
+    console.log(`Received XML (${xmlText.length} bytes)`);
+    
+    // Parse each <event> block
+    const eventRegex = /<event>([\s\S]*?)<\/event>/gi;
+    let match;
+    
+    while ((match = eventRegex.exec(xmlText)) !== null) {
+      const eventXml = match[1];
+      
+      const title = extractCDATA(eventXml, 'title');
+      const country = extractCDATA(eventXml, 'country');
+      const dateStr = extractCDATA(eventXml, 'date');
+      const timeStr = extractCDATA(eventXml, 'time');
+      const impactStr = extractCDATA(eventXml, 'impact');
+      const forecast = extractCDATA(eventXml, 'forecast');
+      const previous = extractCDATA(eventXml, 'previous');
+      
+      if (!title || !country || !dateStr) {
+        continue;
+      }
+      
+      const eventDate = parseForexFactoryXMLDate(dateStr, timeStr);
+      const impact = normalizeImpact(impactStr);
+      
+      news.push({
+        title,
+        country,
+        date: eventDate.toISOString(),
+        impact,
+        forecast,
+        previous,
+      });
+    }
+    
+    console.log(`Parsed ${news.length} events from Forex Factory XML`);
+    
+  } catch (error) {
+    console.error('Error fetching Forex Factory XML:', error);
+  }
+  
+  return news;
 }
 
 // Convert to EA-friendly format
@@ -244,10 +210,14 @@ function convertToEAFormat(news: NewsEvent[]): EANewsFormat[] {
 
 // Get news from database cache
 async function getNewsFromCache(supabase: SupabaseClient): Promise<NewsEvent[]> {
+  // Get news from today onwards
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  
   const { data, error } = await supabase
     .from('economic_news_cache')
     .select('*')
-    .gte('event_date', new Date().toISOString())
+    .gte('event_date', today.toISOString())
     .order('event_date', { ascending: true });
     
   if (error) {
@@ -268,43 +238,55 @@ async function getNewsFromCache(supabase: SupabaseClient): Promise<NewsEvent[]> 
 }
 
 // Update news cache in database
-async function updateNewsCache(supabase: SupabaseClient, news: NewsEvent[]): Promise<void> {
+async function updateNewsCache(supabase: SupabaseClient, news: NewsEvent[], source: string): Promise<void> {
   if (news.length === 0) {
     console.log('No news to cache');
     return;
   }
   
   // Delete old events (before today)
+  const today = new Date();
+  today.setDate(today.getDate() - 1);
+  
   const { error: deleteError } = await supabase
     .from('economic_news_cache')
     .delete()
-    .lt('event_date', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString());
+    .lt('event_date', today.toISOString());
     
   if (deleteError) {
     console.error('Error deleting old cache:', deleteError);
   }
   
-  // Upsert new events
+  // Prepare records for upsert
   const records = news.map(item => ({
     title: item.title,
     country: item.country,
     event_date: item.date,
     impact: item.impact,
-    forecast: item.forecast,
-    previous: item.previous,
-    source: 'forex_factory',
+    forecast: item.forecast || null,
+    previous: item.previous || null,
+    source: source,
     updated_at: new Date().toISOString(),
   }));
   
-  const { error: upsertError } = await supabase
-    .from('economic_news_cache')
-    .upsert(records as any, { onConflict: 'title,country,event_date' });
-    
-  if (upsertError) {
-    console.error('Error upserting cache:', upsertError);
-  } else {
-    console.log(`Cached ${records.length} news events`);
+  // Upsert in batches of 100
+  const batchSize = 100;
+  let totalUpserted = 0;
+  
+  for (let i = 0; i < records.length; i += batchSize) {
+    const batch = records.slice(i, i + batchSize);
+    const { error: upsertError } = await supabase
+      .from('economic_news_cache')
+      .upsert(batch as any, { onConflict: 'title,country,event_date' });
+      
+    if (upsertError) {
+      console.error(`Error upserting batch ${i / batchSize}:`, upsertError);
+    } else {
+      totalUpserted += batch.length;
+    }
   }
+  
+  console.log(`Cached ${totalUpserted}/${records.length} news events`);
   
   // Update metadata
   await supabase
@@ -312,7 +294,7 @@ async function updateNewsCache(supabase: SupabaseClient, news: NewsEvent[]): Pro
     .upsert({
       id: 'main',
       last_updated: new Date().toISOString(),
-      last_source: 'forex_factory',
+      last_source: source,
       event_count: news.length,
       error_message: null,
     } as any);
@@ -355,7 +337,7 @@ Deno.serve(async (req) => {
     const format = url.searchParams.get('format') || 'ea';
     const currency = url.searchParams.get('currency');
     const impact = url.searchParams.get('impact');
-    const days = parseInt(url.searchParams.get('days') || '7');
+    const days = parseInt(url.searchParams.get('days') || '14');
     const refresh = url.searchParams.get('refresh') === 'true';
 
     // Initialize Supabase client with service role for cache management
@@ -370,17 +352,19 @@ Deno.serve(async (req) => {
     const needsRefresh = refresh || await shouldRefreshCache(supabase);
     
     if (needsRefresh) {
-      console.log('Refreshing news cache from Forex Factory...');
-      const freshNews = await fetchForexFactoryNews();
+      console.log('Refreshing news cache from Forex Factory XML feed...');
+      const freshNews = await fetchForexFactoryXML();
       
       if (freshNews.length > 0) {
-        await updateNewsCache(supabase, freshNews);
+        await updateNewsCache(supabase, freshNews, 'forex_factory_xml');
         newsData = freshNews;
-        source = 'forex_factory';
+        source = 'forex_factory_xml';
       } else {
         // Fallback to cache if fetch failed
+        console.log('XML fetch returned 0 events, falling back to cache...');
         newsData = await getNewsFromCache(supabase);
         if (newsData.length === 0) {
+          console.log('Cache is empty, using fallback data...');
           newsData = FALLBACK_NEWS;
           source = 'fallback';
         }
@@ -389,8 +373,16 @@ Deno.serve(async (req) => {
       // Use cached data
       newsData = await getNewsFromCache(supabase);
       if (newsData.length === 0) {
-        newsData = FALLBACK_NEWS;
-        source = 'fallback';
+        console.log('Cache is empty, attempting XML fetch...');
+        const freshNews = await fetchForexFactoryXML();
+        if (freshNews.length > 0) {
+          await updateNewsCache(supabase, freshNews, 'forex_factory_xml');
+          newsData = freshNews;
+          source = 'forex_factory_xml';
+        } else {
+          newsData = FALLBACK_NEWS;
+          source = 'fallback';
+        }
       }
     }
 
@@ -414,7 +406,7 @@ Deno.serve(async (req) => {
     const endDate = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
     filteredNews = filteredNews.filter(n => {
       const newsDate = new Date(n.date);
-      return newsDate >= now && newsDate <= endDate;
+      return newsDate >= new Date(now.getTime() - 24 * 60 * 60 * 1000) && newsDate <= endDate;
     });
 
     // Sort by date
@@ -431,18 +423,19 @@ Deno.serve(async (req) => {
     // Get last updated time
     const { data: metadata } = await supabase
       .from('economic_news_metadata')
-      .select('last_updated')
+      .select('last_updated, last_source, event_count')
       .eq('id', 'main')
       .single();
 
-    const metaInfo = metadata as { last_updated: string } | null;
+    const metaInfo = metadata as { last_updated: string; last_source: string; event_count: number } | null;
 
     const response = {
       success: true,
       count: responseData.length,
+      total_in_cache: metaInfo?.event_count || newsData.length,
       source,
       last_updated: metaInfo?.last_updated || new Date().toISOString(),
-      next_update: new Date(Date.now() + 60 * 60 * 1000).toISOString(), // Next hour
+      next_update: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
       data: responseData,
     };
 
@@ -454,7 +447,7 @@ Deno.serve(async (req) => {
         headers: {
           ...corsHeaders,
           'Content-Type': 'application/json',
-          'Cache-Control': 'public, max-age=300', // Cache for 5 minutes
+          'Cache-Control': 'public, max-age=300',
         },
       }
     );

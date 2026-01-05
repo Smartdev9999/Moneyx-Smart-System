@@ -3,25 +3,44 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Textarea } from '@/components/ui/textarea';
 import { 
   Calendar, 
   Clock, 
   Globe, 
   AlertTriangle, 
-  TrendingUp, 
-  TrendingDown,
+  TrendingUp,
   RefreshCw,
   Search,
   Filter,
   Copy,
   Check,
-  ExternalLink
+  ExternalLink,
+  Upload,
+  FileJson,
+  FileCode,
+  Database
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
-import { format, parseISO, isToday, isTomorrow, addDays, startOfDay } from 'date-fns';
+import { format, parseISO, isToday, isTomorrow } from 'date-fns';
 import { th } from 'date-fns/locale';
 import { supabase } from '@/integrations/supabase/client';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+  DialogFooter,
+} from '@/components/ui/dialog';
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from '@/components/ui/tabs';
+
 interface NewsEvent {
   title: string;
   country: string;
@@ -54,67 +73,21 @@ const IMPACT_COLORS: Record<string, { bg: string; text: string; border: string }
   Holiday: { bg: 'bg-blue-500/20', text: 'text-blue-400', border: 'border-blue-500/50' },
 };
 
-// Sample data from Forex Factory
-const SAMPLE_NEWS_DATA: NewsEvent[] = [
-  {"title":"BOJ Summary of Opinions","country":"JPY","date":"2025-12-28T18:50:00-05:00","impact":"Low","forecast":"","previous":""},
-  {"title":"Pending Home Sales m/m","country":"USD","date":"2025-12-29T10:00:00-05:00","impact":"Medium","forecast":"1.0%","previous":"1.9%"},
-  {"title":"Natural Gas Storage","country":"USD","date":"2025-12-29T12:00:00-05:00","impact":"Low","forecast":"-169B","previous":"-167B"},
-  {"title":"Crude Oil Inventories","country":"USD","date":"2025-12-29T17:00:00-05:00","impact":"Low","forecast":"-2.0M","previous":"-1.3M"},
-  {"title":"KOF Economic Barometer","country":"CHF","date":"2025-12-30T03:00:00-05:00","impact":"Low","forecast":"101.5","previous":"101.7"},
-  {"title":"Spanish Flash CPI y/y","country":"EUR","date":"2025-12-30T03:00:00-05:00","impact":"Low","forecast":"2.8%","previous":"3.0%"},
-  {"title":"HPI m/m","country":"USD","date":"2025-12-30T09:00:00-05:00","impact":"Low","forecast":"0.1%","previous":"0.0%"},
-  {"title":"S&P/CS Composite-20 HPI y/y","country":"USD","date":"2025-12-30T09:00:00-05:00","impact":"Low","forecast":"1.1%","previous":"1.4%"},
-  {"title":"Chicago PMI","country":"USD","date":"2025-12-30T09:45:00-05:00","impact":"Low","forecast":"39.8","previous":"36.3"},
-  {"title":"FOMC Meeting Minutes","country":"USD","date":"2025-12-30T14:00:00-05:00","impact":"High","forecast":"","previous":""},
-  {"title":"API Weekly Statistical Bulletin","country":"USD","date":"2025-12-30T16:30:00-05:00","impact":"Low","forecast":"","previous":""},
-  {"title":"Bank Holiday","country":"JPY","date":"2025-12-30T19:00:00-05:00","impact":"Holiday","forecast":"","previous":""},
-  {"title":"Manufacturing PMI","country":"CNY","date":"2025-12-30T20:30:00-05:00","impact":"Medium","forecast":"49.2","previous":"49.2"},
-  {"title":"Non-Manufacturing PMI","country":"CNY","date":"2025-12-30T20:30:00-05:00","impact":"Low","forecast":"49.6","previous":"49.5"},
-  {"title":"RatingDog Manufacturing PMI","country":"CNY","date":"2025-12-30T20:45:00-05:00","impact":"Low","forecast":"49.8","previous":"49.9"},
-  {"title":"German Bank Holiday","country":"EUR","date":"2025-12-31T02:02:00-05:00","impact":"Holiday","forecast":"","previous":""},
-  {"title":"Unemployment Claims","country":"USD","date":"2025-12-31T08:30:00-05:00","impact":"High","forecast":"219K","previous":"214K"},
-  {"title":"Crude Oil Inventories","country":"USD","date":"2025-12-31T10:30:00-05:00","impact":"Low","forecast":"0.5M","previous":"0.4M"},
-  {"title":"Natural Gas Storage","country":"USD","date":"2025-12-31T12:00:00-05:00","impact":"Low","forecast":"-51B","previous":"-166B"},
-  {"title":"Bank Holiday","country":"NZD","date":"2025-12-31T15:00:00-05:00","impact":"Holiday","forecast":"","previous":""},
-  {"title":"Bank Holiday","country":"AUD","date":"2025-12-31T16:00:00-05:00","impact":"Holiday","forecast":"","previous":""},
-  {"title":"Bank Holiday","country":"JPY","date":"2025-12-31T19:00:00-05:00","impact":"Holiday","forecast":"","previous":""},
-  {"title":"Bank Holiday","country":"CNY","date":"2025-12-31T19:01:00-05:00","impact":"Holiday","forecast":"","previous":""},
-  {"title":"Bank Holiday","country":"CHF","date":"2026-01-01T01:00:00-05:00","impact":"Holiday","forecast":"","previous":""},
-  {"title":"French Bank Holiday","country":"EUR","date":"2026-01-01T02:01:00-05:00","impact":"Holiday","forecast":"","previous":""},
-  {"title":"German Bank Holiday","country":"EUR","date":"2026-01-01T02:02:00-05:00","impact":"Holiday","forecast":"","previous":""},
-  {"title":"Italian Bank Holiday","country":"EUR","date":"2026-01-01T02:03:00-05:00","impact":"Holiday","forecast":"","previous":""},
-  {"title":"Bank Holiday","country":"GBP","date":"2026-01-01T03:00:00-05:00","impact":"Holiday","forecast":"","previous":""},
-  {"title":"Bank Holiday","country":"CAD","date":"2026-01-01T08:00:00-05:00","impact":"Holiday","forecast":"","previous":""},
-  {"title":"Bank Holiday","country":"USD","date":"2026-01-01T08:00:00-05:00","impact":"Holiday","forecast":"","previous":""},
-  {"title":"Bank Holiday","country":"NZD","date":"2026-01-01T15:00:00-05:00","impact":"Holiday","forecast":"","previous":""},
-  {"title":"Bank Holiday","country":"JPY","date":"2026-01-01T19:00:00-05:00","impact":"Holiday","forecast":"","previous":""},
-  {"title":"Bank Holiday","country":"CNY","date":"2026-01-01T19:01:00-05:00","impact":"Holiday","forecast":"","previous":""},
-  {"title":"Bank Holiday","country":"CHF","date":"2026-01-02T01:00:00-05:00","impact":"Holiday","forecast":"","previous":""},
-  {"title":"Nationwide HPI m/m","country":"GBP","date":"2026-01-02T02:00:00-05:00","impact":"Low","forecast":"0.1%","previous":"0.3%"},
-  {"title":"Spanish Manufacturing PMI","country":"EUR","date":"2026-01-02T03:15:00-05:00","impact":"Low","forecast":"51.2","previous":"51.5"},
-  {"title":"Italian Manufacturing PMI","country":"EUR","date":"2026-01-02T03:45:00-05:00","impact":"Low","forecast":"50.0","previous":"50.6"},
-  {"title":"French Final Manufacturing PMI","country":"EUR","date":"2026-01-02T03:50:00-05:00","impact":"Low","forecast":"50.6","previous":"50.6"},
-  {"title":"German Final Manufacturing PMI","country":"EUR","date":"2026-01-02T03:55:00-05:00","impact":"Low","forecast":"47.7","previous":"47.7"},
-  {"title":"Final Manufacturing PMI","country":"EUR","date":"2026-01-02T04:00:00-05:00","impact":"Low","forecast":"49.2","previous":"49.2"},
-  {"title":"M3 Money Supply y/y","country":"EUR","date":"2026-01-02T04:00:00-05:00","impact":"Low","forecast":"2.7%","previous":"2.8%"},
-  {"title":"Private Loans y/y","country":"EUR","date":"2026-01-02T04:00:00-05:00","impact":"Low","forecast":"2.8%","previous":"2.8%"},
-  {"title":"Final Manufacturing PMI","country":"GBP","date":"2026-01-02T04:30:00-05:00","impact":"Low","forecast":"51.2","previous":"51.2"},
-  {"title":"Manufacturing PMI","country":"CAD","date":"2026-01-02T09:30:00-05:00","impact":"Low","forecast":"","previous":"48.4"},
-  {"title":"Final Manufacturing PMI","country":"USD","date":"2026-01-02T09:45:00-05:00","impact":"Low","forecast":"51.8","previous":"51.8"},
-  {"title":"FOMC Member Paulson Speaks","country":"USD","date":"2026-01-03T10:15:00-05:00","impact":"Low","forecast":"","previous":""},
-  {"title":"FOMC Member Paulson Speaks","country":"USD","date":"2026-01-03T14:30:00-05:00","impact":"Low","forecast":"","previous":""}
-];
-
 const EconomicCalendar = ({ initialData }: EconomicCalendarProps) => {
   const { toast } = useToast();
-  const [newsData, setNewsData] = useState<NewsEvent[]>(initialData || SAMPLE_NEWS_DATA);
+  const [newsData, setNewsData] = useState<NewsEvent[]>(initialData || []);
   const [isLoading, setIsLoading] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCountries, setSelectedCountries] = useState<string[]>([]);
   const [selectedImpact, setSelectedImpact] = useState<string[]>(['High', 'Medium', 'Low', 'Holiday']);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<string | null>(null);
-  const [dataSource, setDataSource] = useState<string>('local');
+  const [dataSource, setDataSource] = useState<string>('loading');
+  const [totalInCache, setTotalInCache] = useState<number>(0);
+  const [importDialogOpen, setImportDialogOpen] = useState(false);
+  const [importData, setImportData] = useState('');
+  const [importFormat, setImportFormat] = useState<'json' | 'xml'>('xml');
 
   const countries = useMemo(() => {
     const uniqueCountries = [...new Set(newsData.map(n => n.country))];
@@ -147,7 +120,6 @@ const EconomicCalendar = ({ initialData }: EconomicCalendarProps) => {
       groups[dateKey].push(news);
     });
     
-    // Sort each group by time
     Object.keys(groups).forEach(key => {
       groups[key].sort((a, b) => 
         new Date(a.date).getTime() - new Date(b.date).getTime()
@@ -162,13 +134,8 @@ const EconomicCalendar = ({ initialData }: EconomicCalendarProps) => {
     setIsLoading(true);
     try {
       const refreshParam = forceRefresh ? '&refresh=true' : '';
-      const response = await supabase.functions.invoke('economic-news', {
-        body: null,
-        method: 'GET',
-      });
+      const apiUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/economic-news?format=raw&days=14${refreshParam}`;
       
-      // Use fetch directly for GET with query params
-      const apiUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/economic-news?format=raw${refreshParam}`;
       const res = await fetch(apiUrl, {
         method: 'GET',
         headers: {
@@ -182,14 +149,16 @@ const EconomicCalendar = ({ initialData }: EconomicCalendarProps) => {
         setNewsData(data.data);
         setLastUpdated(data.last_updated);
         setDataSource(data.source || 'api');
+        setTotalInCache(data.total_in_cache || data.count);
         toast({
           title: "โหลดข้อมูลสำเร็จ",
-          description: `${data.count} ข่าว จาก ${data.source === 'forex_factory' ? 'Forex Factory' : data.source}`,
+          description: `${data.count} ข่าว จาก ${getSourceLabel(data.source)}`,
         });
       } else if (data.data && data.data.length === 0) {
+        setDataSource(data.source || 'empty');
         toast({
           title: "ไม่พบข่าวในช่วงเวลานี้",
-          description: "ลองเปลี่ยนตัวกรองหรือรอการอัพเดทครั้งถัดไป",
+          description: "ลองใช้ปุ่ม Import เพื่อเพิ่มข่าวด้วยตนเอง",
           variant: "destructive",
         });
       }
@@ -205,6 +174,17 @@ const EconomicCalendar = ({ initialData }: EconomicCalendarProps) => {
     }
   };
 
+  const getSourceLabel = (source: string) => {
+    switch (source) {
+      case 'forex_factory_xml': return 'Forex Factory (XML)';
+      case 'forex_factory': return 'Forex Factory';
+      case 'manual_import': return 'Manual Import';
+      case 'cache': return 'Cache';
+      case 'fallback': return 'Fallback Data';
+      default: return source;
+    }
+  };
+
   // Auto-fetch on mount
   useEffect(() => {
     fetchNewsFromAPI();
@@ -212,6 +192,62 @@ const EconomicCalendar = ({ initialData }: EconomicCalendarProps) => {
 
   const handleRefresh = async () => {
     await fetchNewsFromAPI(true);
+  };
+
+  const handleImport = async () => {
+    if (!importData.trim()) {
+      toast({
+        title: "ไม่มีข้อมูล",
+        description: "กรุณาวาง XML หรือ JSON data",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setIsImporting(true);
+    try {
+      const apiUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/import-economic-news`;
+      
+      const res = await fetch(apiUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          format: importFormat,
+          data: importData,
+          clearExisting: false,
+        }),
+      });
+      
+      const result = await res.json();
+      
+      if (result.success) {
+        toast({
+          title: "Import สำเร็จ",
+          description: `นำเข้า ${result.total_imported} ข่าวเรียบร้อย`,
+        });
+        setImportDialogOpen(false);
+        setImportData('');
+        // Refresh to show new data
+        await fetchNewsFromAPI();
+      } else {
+        toast({
+          title: "Import ล้มเหลว",
+          description: result.error || "เกิดข้อผิดพลาดในการนำเข้าข้อมูล",
+          variant: "destructive",
+        });
+      }
+    } catch (error) {
+      console.error('Import error:', error);
+      toast({
+        title: "เกิดข้อผิดพลาด",
+        description: "ไม่สามารถนำเข้าข้อมูลได้",
+        variant: "destructive",
+      });
+    } finally {
+      setIsImporting(false);
+    }
   };
 
   const handleCopyJSON = async () => {
@@ -226,7 +262,7 @@ const EconomicCalendar = ({ initialData }: EconomicCalendarProps) => {
   };
 
   const handleCopyAPIEndpoint = async () => {
-    const endpoint = `${window.location.origin}/api/news`;
+    const endpoint = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/economic-news`;
     await navigator.clipboard.writeText(endpoint);
     setCopiedId('api');
     toast({
@@ -238,7 +274,6 @@ const EconomicCalendar = ({ initialData }: EconomicCalendarProps) => {
 
   const formatDateHeader = (dateStr: string) => {
     const date = parseISO(dateStr + 'T00:00:00');
-    const now = new Date();
     
     if (isToday(date)) return 'วันนี้';
     if (isTomorrow(date)) return 'พรุ่งนี้';
@@ -314,12 +349,12 @@ const EconomicCalendar = ({ initialData }: EconomicCalendarProps) => {
         <Card className="bg-card/50">
           <CardContent className="p-4">
             <div className="flex items-center gap-3">
-              <div className="p-2 rounded-lg bg-blue-500/20">
-                <Globe className="w-5 h-5 text-blue-400" />
+              <div className="p-2 rounded-lg bg-green-500/20">
+                <Database className="w-5 h-5 text-green-400" />
               </div>
               <div>
-                <p className="text-2xl font-bold">{countries.length}</p>
-                <p className="text-xs text-muted-foreground">สกุลเงิน</p>
+                <p className="text-2xl font-bold">{totalInCache}</p>
+                <p className="text-xs text-muted-foreground">ใน Cache</p>
               </div>
             </div>
           </CardContent>
@@ -329,7 +364,7 @@ const EconomicCalendar = ({ initialData }: EconomicCalendarProps) => {
       {/* API Integration Card */}
       <Card className="border-primary/30 bg-primary/5">
         <CardHeader className="pb-3">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between flex-wrap gap-3">
             <div className="flex items-center gap-3">
               <div className="p-2 rounded-lg bg-primary/20">
                 <ExternalLink className="w-5 h-5 text-primary" />
@@ -339,30 +374,109 @@ const EconomicCalendar = ({ initialData }: EconomicCalendarProps) => {
                 <CardDescription>ใช้ API นี้เชื่อมต่อกับ News Filter ใน EA</CardDescription>
               </div>
             </div>
-            <Button 
-              variant="outline" 
-              size="sm"
-              onClick={handleCopyAPIEndpoint}
-            >
-              {copiedId === 'api' ? <Check className="w-4 h-4 mr-2" /> : <Copy className="w-4 h-4 mr-2" />}
-              คัดลอก URL
-            </Button>
+            <div className="flex gap-2">
+              <Dialog open={importDialogOpen} onOpenChange={setImportDialogOpen}>
+                <DialogTrigger asChild>
+                  <Button variant="outline" size="sm">
+                    <Upload className="w-4 h-4 mr-2" />
+                    Import Data
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="max-w-2xl">
+                  <DialogHeader>
+                    <DialogTitle>Import Economic News</DialogTitle>
+                    <DialogDescription>
+                      วาง XML หรือ JSON data จาก Forex Factory
+                    </DialogDescription>
+                  </DialogHeader>
+                  
+                  <Tabs value={importFormat} onValueChange={(v) => setImportFormat(v as 'json' | 'xml')}>
+                    <TabsList className="grid w-full grid-cols-2">
+                      <TabsTrigger value="xml" className="flex items-center gap-2">
+                        <FileCode className="w-4 h-4" />
+                        XML
+                      </TabsTrigger>
+                      <TabsTrigger value="json" className="flex items-center gap-2">
+                        <FileJson className="w-4 h-4" />
+                        JSON
+                      </TabsTrigger>
+                    </TabsList>
+                    
+                    <TabsContent value="xml" className="space-y-4">
+                      <div className="p-3 rounded-lg bg-muted text-sm">
+                        <p className="font-medium mb-1">XML Source:</p>
+                        <code className="text-primary">https://www.forexfactory.com/calendar.xml</code>
+                      </div>
+                      <Textarea
+                        placeholder="วาง XML data ที่นี่... (เริ่มด้วย <weeklyevents>)"
+                        value={importData}
+                        onChange={(e) => setImportData(e.target.value)}
+                        className="min-h-[300px] font-mono text-xs"
+                      />
+                    </TabsContent>
+                    
+                    <TabsContent value="json" className="space-y-4">
+                      <div className="p-3 rounded-lg bg-muted text-sm">
+                        <p className="font-medium mb-1">JSON Format:</p>
+                        <code className="text-primary text-xs">
+                          {'[{"title":"...", "country":"USD", "date":"...", "impact":"High", ...}]'}
+                        </code>
+                      </div>
+                      <Textarea
+                        placeholder='วาง JSON array ที่นี่... (เริ่มด้วย [{"title":...}])'
+                        value={importData}
+                        onChange={(e) => setImportData(e.target.value)}
+                        className="min-h-[300px] font-mono text-xs"
+                      />
+                    </TabsContent>
+                  </Tabs>
+                  
+                  <DialogFooter>
+                    <Button variant="outline" onClick={() => setImportDialogOpen(false)}>
+                      ยกเลิก
+                    </Button>
+                    <Button onClick={handleImport} disabled={isImporting}>
+                      {isImporting ? (
+                        <>
+                          <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                          กำลังนำเข้า...
+                        </>
+                      ) : (
+                        <>
+                          <Upload className="w-4 h-4 mr-2" />
+                          Import
+                        </>
+                      )}
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+              
+              <Button 
+                variant="outline" 
+                size="sm"
+                onClick={handleCopyAPIEndpoint}
+              >
+                {copiedId === 'api' ? <Check className="w-4 h-4 mr-2" /> : <Copy className="w-4 h-4 mr-2" />}
+                คัดลอก URL
+              </Button>
+            </div>
           </div>
         </CardHeader>
         <CardContent>
-          <div className="p-3 rounded-lg bg-background/50 font-mono text-sm">
-            GET https://lkbhomsulgycxawwlnfh.supabase.co/functions/v1/economic-news
+          <div className="p-3 rounded-lg bg-background/50 font-mono text-sm overflow-x-auto">
+            GET {import.meta.env.VITE_SUPABASE_URL}/functions/v1/economic-news
           </div>
-          <div className="flex items-center gap-4 mt-3 text-xs text-muted-foreground">
-            <span>* ระบบอัพเดทอัตโนมัติทุก 1 ชั่วโมง จาก Forex Factory</span>
+          <div className="flex items-center gap-4 mt-3 text-xs text-muted-foreground flex-wrap">
+            <span>* ระบบอัพเดทอัตโนมัติทุก 1 ชั่วโมง จาก Forex Factory XML Feed</span>
             {lastUpdated && (
               <span className="text-primary">
                 อัพเดทล่าสุด: {format(new Date(lastUpdated), 'HH:mm dd/MM/yyyy', { locale: th })}
               </span>
             )}
-            {dataSource && dataSource !== 'local' && (
+            {dataSource && dataSource !== 'loading' && (
               <Badge variant="outline" className="text-xs">
-                {dataSource === 'forex_factory' ? 'Forex Factory' : dataSource === 'cache' ? 'Cache' : dataSource}
+                {getSourceLabel(dataSource)}
               </Badge>
             )}
           </div>
@@ -527,6 +641,7 @@ const EconomicCalendar = ({ initialData }: EconomicCalendarProps) => {
             <CardContent className="py-8 text-center text-muted-foreground">
               <Calendar className="w-12 h-12 mx-auto mb-2 opacity-50" />
               <p>ไม่พบข่าวที่ตรงกับเงื่อนไข</p>
+              <p className="text-sm mt-2">ลองใช้ปุ่ม "Import Data" เพื่อเพิ่มข่าวด้วยตนเอง</p>
             </CardContent>
           </Card>
         )}
