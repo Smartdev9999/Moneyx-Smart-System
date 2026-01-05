@@ -17,3 +17,6 @@ verify_jwt = false
 
 [functions.analyze-higher-timeframe]
 verify_jwt = false
+
+[functions.refresh-economic-news]
+verify_jwt = false
