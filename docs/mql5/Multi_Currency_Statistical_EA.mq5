@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                Multi_Currency_Statistical_EA.mq5 |
-//|                 Statistical Arbitrage (Pairs Trading) v3.3.0     |
+//|                 Statistical Arbitrage (Pairs Trading) v3.3.1     |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "3.30"
+#property version   "3.31"
 #property strict
 #property description "Statistical Arbitrage / Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
-#property description "v3.3.0: Separate Z-Score TF, Skip ATR in Tester, Closed Orders Count"
+#property description "v3.3.1: Simplified ATR for Tester Mode (Fix Grid Orders)"
 
 #include <Trade/Trade.mqh>
 
@@ -241,7 +241,7 @@ input int      InpMaxPairsPerTick = 5;              // Max Pairs to Process per 
 input bool     InpUltraFastMode = false;            // Ultra Fast Mode (Skip some calculations)
 input int      InpStatCalcInterval = 10;            // Stat Calculation Interval (ticks, 0=every tick)
 input bool     InpSkipCorrUpdateInTester = false;   // Skip Correlation Updates in Tester
-input bool     InpSkipATRInTester = true;           // Skip ATR Indicator in Tester (v3.3.0)
+input bool     InpSkipATRInTester = false;          // Skip ATR Indicator in Tester (use Simplified ATR)
 
 input group "=== Lot Sizing (Dollar-Neutral) ==="
 input bool     InpUseDollarNeutral = true;      // Use Dollar-Neutral Sizing
@@ -1910,11 +1910,7 @@ void CheckAveragingForSide(int pairIndex, string side)
    }
    else if(InpAveragingMode == AVG_MODE_ATR)
    {
-      // v3.3.0: Skip ATR averaging in tester if InpSkipATRInTester
-      if(g_isTesterMode && InpSkipATRInTester)
-      {
-         return;  // Skip ATR averaging entirely in tester
-      }
+      // v3.3.1: CheckATRAveraging now handles tester mode internally
       CheckATRAveraging(pairIndex, side);
    }
 }
@@ -1955,20 +1951,59 @@ void CheckZScoreAveraging(int pairIndex, string side)
 }
 
 //+------------------------------------------------------------------+
-//| ATR Based Averaging (v3.2.7)                                       |
+//| Simplified ATR Calculation (v3.3.1 - No Indicator Handle)          |
+//+------------------------------------------------------------------+
+double CalculateSimplifiedATR(string symbol, ENUM_TIMEFRAMES tf, int period)
+{
+   double sum = 0;
+   int validBars = 0;
+   
+   for(int i = 0; i < period; i++)
+   {
+      double high = iHigh(symbol, tf, i);
+      double low = iLow(symbol, tf, i);
+      double prevClose = iClose(symbol, tf, i + 1);
+      
+      if(high == 0 || low == 0 || prevClose == 0) continue;
+      
+      double tr1 = high - low;
+      double tr2 = MathAbs(high - prevClose);
+      double tr3 = MathAbs(low - prevClose);
+      
+      sum += MathMax(tr1, MathMax(tr2, tr3));
+      validBars++;
+   }
+   
+   if(validBars == 0) return 0;
+   return sum / validBars;
+}
+
+//+------------------------------------------------------------------+
+//| ATR Based Averaging (v3.3.1)                                       |
 //+------------------------------------------------------------------+
 void CheckATRAveraging(int pairIndex, string side)
 {
-   if(g_atrHandle == INVALID_HANDLE) return;
+   double atr = 0;
    
-   double atrBuffer[];
-   ArraySetAsSeries(atrBuffer, true);
+   // v3.3.1: Use simplified ATR in tester mode for speed
+   if(g_isTesterMode && InpSkipATRInTester)
+   {
+      atr = CalculateSimplifiedATR(g_pairs[pairIndex].symbolA, InpAtrTimeframe, InpAtrPeriod);
+   }
+   else
+   {
+      if(g_atrHandle == INVALID_HANDLE) return;
+      
+      double atrBuffer[];
+      ArraySetAsSeries(atrBuffer, true);
+      
+      if(CopyBuffer(g_atrHandle, 0, 0, 1, atrBuffer) < 1) return;
+      atr = atrBuffer[0];
+   }
    
-   if(CopyBuffer(g_atrHandle, 0, 0, 1, atrBuffer) < 1) return;
+   if(atr <= 0) return;
    
-   double atr = atrBuffer[0];
    double gridDistance = atr * InpAtrMultiplier;
-   
    double currentPrice = SymbolInfoDouble(g_pairs[pairIndex].symbolA, SYMBOL_BID);
    
    if(side == "BUY")
