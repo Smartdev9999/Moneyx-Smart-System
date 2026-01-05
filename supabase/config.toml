@@ -9,6 +9,9 @@ verify_jwt = false
 [functions.economic-news]
 verify_jwt = false
 
+[functions.import-economic-news]
+verify_jwt = false
+
 [functions.ai-market-analysis]
 verify_jwt = false
 
