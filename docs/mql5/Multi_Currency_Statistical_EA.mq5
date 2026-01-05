@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                Multi_Currency_Statistical_EA.mq5 |
-//|                 Statistical Arbitrage (Pairs Trading) v3.3.2     |
+//|                 Statistical Arbitrage (Pairs Trading) v3.3.3     |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "3.32"
+#property version   "3.33"
 #property strict
 #property description "Statistical Arbitrage / Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
-#property description "v3.3.2: Orphan Detection & Position Sync System"
+#property description "v3.3.3: Lot Normalization & Averaging Rollback System"
 
 #include <Trade/Trade.mqh>
 
@@ -1750,6 +1750,33 @@ double CalculatePriceBasedBeta(int pairIndex)
 //+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
+//| Normalize Lot Size for Symbol (v3.3.3)                             |
+//+------------------------------------------------------------------+
+double NormalizeLot(string symbol, double lot)
+{
+   double minLot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
+   double maxLot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
+   double stepLot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
+   
+   if(stepLot == 0) stepLot = 0.01;  // Fallback
+   
+   // Normalize to step
+   lot = MathFloor(lot / stepLot) * stepLot;
+   
+   // Clamp to min/max
+   if(lot < minLot) lot = minLot;
+   if(lot > maxLot) lot = maxLot;
+   
+   // Also apply user-defined max
+   if(lot > InpMaxLot) lot = InpMaxLot;
+   
+   // Round to avoid floating point issues
+   lot = NormalizeDouble(lot, 2);
+   
+   return lot;
+}
+
+//+------------------------------------------------------------------+
 //| Get Pip Value for Symbol                                           |
 //+------------------------------------------------------------------+
 double GetPipValue(string symbol)
@@ -2035,77 +2062,109 @@ void CheckATRAveraging(int pairIndex, string side)
 }
 
 //+------------------------------------------------------------------+
-//| Open Averaging Buy Position (v3.2.7)                               |
+//| Open Averaging Buy Position (v3.3.3 - with Normalization & Rollback)|
 //+------------------------------------------------------------------+
 void OpenAveragingBuy(int pairIndex)
 {
    string symbolA = g_pairs[pairIndex].symbolA;
    string symbolB = g_pairs[pairIndex].symbolB;
    
-   double lotA = g_pairs[pairIndex].lotBuyA * InpAveragingLotMult;
-   double lotB = g_pairs[pairIndex].lotBuyB * InpAveragingLotMult;
+   // v3.3.3: Normalize lots for each symbol's volume step
+   double lotA = NormalizeLot(symbolA, g_pairs[pairIndex].lotBuyA * InpAveragingLotMult);
+   double lotB = NormalizeLot(symbolB, g_pairs[pairIndex].lotBuyB * InpAveragingLotMult);
    int corrType = g_pairs[pairIndex].correlationType;
    
    string comment = StringFormat("StatArb_AVG_BUY_%d", pairIndex + 1);
    
    // Open Buy on Symbol A
    double askA = SymbolInfoDouble(symbolA, SYMBOL_ASK);
-   if(!g_trade.Buy(lotA, symbolA, askA, 0, 0, comment)) return;
+   if(!g_trade.Buy(lotA, symbolA, askA, 0, 0, comment))
+   {
+      PrintFormat("AVG BUY %s failed: %d", symbolA, GetLastError());
+      return;
+   }
+   ulong ticketA = g_trade.ResultOrder();
    
    // Open position on Symbol B based on correlation type
+   bool successB = false;
    if(corrType == 1)  // Positive correlation: Sell B
    {
       double bidB = SymbolInfoDouble(symbolB, SYMBOL_BID);
-      g_trade.Sell(lotB, symbolB, bidB, 0, 0, comment);
+      successB = g_trade.Sell(lotB, symbolB, bidB, 0, 0, comment);
    }
    else  // Negative correlation: Buy B
    {
       double askB = SymbolInfoDouble(symbolB, SYMBOL_ASK);
-      g_trade.Buy(lotB, symbolB, askB, 0, 0, comment);
+      successB = g_trade.Buy(lotB, symbolB, askB, 0, 0, comment);
+   }
+   
+   // v3.3.3: Rollback if Symbol B fails
+   if(!successB)
+   {
+      PrintFormat("AVG BUY %s failed: %d - ROLLING BACK %s", symbolB, GetLastError(), symbolA);
+      g_trade.PositionClose(ticketA);
+      return;
    }
    
    g_pairs[pairIndex].avgOrderCountBuy++;
    g_pairs[pairIndex].orderCountBuy++;
    
-   PrintFormat("Pair %d AVG BUY #%d opened at Z=%.2f", 
-               pairIndex + 1, g_pairs[pairIndex].avgOrderCountBuy, g_pairs[pairIndex].zScore);
+   PrintFormat("Pair %d AVG BUY #%d opened at Z=%.2f (A:%.2f B:%.2f)", 
+               pairIndex + 1, g_pairs[pairIndex].avgOrderCountBuy, 
+               g_pairs[pairIndex].zScore, lotA, lotB);
 }
 
 //+------------------------------------------------------------------+
-//| Open Averaging Sell Position (v3.2.7)                              |
+//| Open Averaging Sell Position (v3.3.3 - with Normalization & Rollback)|
 //+------------------------------------------------------------------+
 void OpenAveragingSell(int pairIndex)
 {
    string symbolA = g_pairs[pairIndex].symbolA;
    string symbolB = g_pairs[pairIndex].symbolB;
    
-   double lotA = g_pairs[pairIndex].lotSellA * InpAveragingLotMult;
-   double lotB = g_pairs[pairIndex].lotSellB * InpAveragingLotMult;
+   // v3.3.3: Normalize lots for each symbol's volume step
+   double lotA = NormalizeLot(symbolA, g_pairs[pairIndex].lotSellA * InpAveragingLotMult);
+   double lotB = NormalizeLot(symbolB, g_pairs[pairIndex].lotSellB * InpAveragingLotMult);
    int corrType = g_pairs[pairIndex].correlationType;
    
    string comment = StringFormat("StatArb_AVG_SELL_%d", pairIndex + 1);
    
    // Open Sell on Symbol A
    double bidA = SymbolInfoDouble(symbolA, SYMBOL_BID);
-   if(!g_trade.Sell(lotA, symbolA, bidA, 0, 0, comment)) return;
+   if(!g_trade.Sell(lotA, symbolA, bidA, 0, 0, comment))
+   {
+      PrintFormat("AVG SELL %s failed: %d", symbolA, GetLastError());
+      return;
+   }
+   ulong ticketA = g_trade.ResultOrder();
    
    // Open position on Symbol B based on correlation type
+   bool successB = false;
    if(corrType == 1)  // Positive correlation: Buy B
    {
       double askB = SymbolInfoDouble(symbolB, SYMBOL_ASK);
-      g_trade.Buy(lotB, symbolB, askB, 0, 0, comment);
+      successB = g_trade.Buy(lotB, symbolB, askB, 0, 0, comment);
    }
    else  // Negative correlation: Sell B
    {
       double bidB = SymbolInfoDouble(symbolB, SYMBOL_BID);
-      g_trade.Sell(lotB, symbolB, bidB, 0, 0, comment);
+      successB = g_trade.Sell(lotB, symbolB, bidB, 0, 0, comment);
+   }
+   
+   // v3.3.3: Rollback if Symbol B fails
+   if(!successB)
+   {
+      PrintFormat("AVG SELL %s failed: %d - ROLLING BACK %s", symbolB, GetLastError(), symbolA);
+      g_trade.PositionClose(ticketA);
+      return;
    }
    
    g_pairs[pairIndex].avgOrderCountSell++;
    g_pairs[pairIndex].orderCountSell++;
    
-   PrintFormat("Pair %d AVG SELL #%d opened at Z=%.2f", 
-               pairIndex + 1, g_pairs[pairIndex].avgOrderCountSell, g_pairs[pairIndex].zScore);
+   PrintFormat("Pair %d AVG SELL #%d opened at Z=%.2f (A:%.2f B:%.2f)", 
+               pairIndex + 1, g_pairs[pairIndex].avgOrderCountSell, 
+               g_pairs[pairIndex].zScore, lotA, lotB);
 }
 
 //+------------------------------------------------------------------+
@@ -2113,14 +2172,16 @@ void OpenAveragingSell(int pairIndex)
 //+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
-//| Open Buy Side Trade                                                |
+//| Open Buy Side Trade (v3.3.3 - with Lot Normalization)              |
 //+------------------------------------------------------------------+
 bool OpenBuySideTrade(int pairIndex)
 {
    string symbolA = g_pairs[pairIndex].symbolA;
    string symbolB = g_pairs[pairIndex].symbolB;
-   double lotA = g_pairs[pairIndex].lotBuyA;
-   double lotB = g_pairs[pairIndex].lotBuyB;
+   
+   // v3.3.3: Normalize lots for each symbol's volume step
+   double lotA = NormalizeLot(symbolA, g_pairs[pairIndex].lotBuyA);
+   double lotB = NormalizeLot(symbolB, g_pairs[pairIndex].lotBuyB);
    int corrType = g_pairs[pairIndex].correlationType;
    
    string comment = StringFormat("StatArb_BUY_%d", pairIndex + 1);
@@ -2186,14 +2247,16 @@ bool OpenBuySideTrade(int pairIndex)
 }
 
 //+------------------------------------------------------------------+
-//| Open Sell Side Trade                                               |
+//| Open Sell Side Trade (v3.3.3 - with Lot Normalization)             |
 //+------------------------------------------------------------------+
 bool OpenSellSideTrade(int pairIndex)
 {
    string symbolA = g_pairs[pairIndex].symbolA;
    string symbolB = g_pairs[pairIndex].symbolB;
-   double lotA = g_pairs[pairIndex].lotSellA;
-   double lotB = g_pairs[pairIndex].lotSellB;
+   
+   // v3.3.3: Normalize lots for each symbol's volume step
+   double lotA = NormalizeLot(symbolA, g_pairs[pairIndex].lotSellA);
+   double lotB = NormalizeLot(symbolB, g_pairs[pairIndex].lotSellB);
    int corrType = g_pairs[pairIndex].correlationType;
    
    string comment = StringFormat("StatArb_SELL_%d", pairIndex + 1);
