@@ -1,11 +1,11 @@
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { createClient, SupabaseClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-api-key',
 };
 
-// News data structure for EA compatibility
+// News data structure
 interface NewsEvent {
   title: string;
   country: string;
@@ -15,13 +15,28 @@ interface NewsEvent {
   previous: string;
 }
 
+// Database cache structure
+interface NewsCacheRow {
+  id: string;
+  title: string;
+  country: string;
+  event_date: string;
+  impact: string;
+  forecast: string | null;
+  previous: string | null;
+  actual: string | null;
+  source: string;
+  created_at: string;
+  updated_at: string;
+}
+
 // Simplified format for EA consumption
 interface EANewsFormat {
   title: string;
   currency: string;
-  timestamp: number;          // Unix timestamp (seconds)
-  timestamp_gmt: string;      // ISO 8601 GMT format
-  impact_level: number;       // 0=Holiday, 1=Low, 2=Medium, 3=High
+  timestamp: number;
+  timestamp_gmt: string;
+  impact_level: number;
   impact: string;
   forecast: string;
   previous: string;
@@ -34,56 +49,181 @@ const IMPACT_TO_LEVEL: Record<string, number> = {
   'High': 3,
 };
 
-// Sample cached news data (in production, this would come from Forex Factory API or database)
-const CACHED_NEWS: NewsEvent[] = [
-  {"title":"BOJ Summary of Opinions","country":"JPY","date":"2025-12-28T18:50:00-05:00","impact":"Low","forecast":"","previous":""},
-  {"title":"Pending Home Sales m/m","country":"USD","date":"2025-12-29T10:00:00-05:00","impact":"Medium","forecast":"1.0%","previous":"1.9%"},
-  {"title":"Natural Gas Storage","country":"USD","date":"2025-12-29T12:00:00-05:00","impact":"Low","forecast":"-169B","previous":"-167B"},
-  {"title":"Crude Oil Inventories","country":"USD","date":"2025-12-29T17:00:00-05:00","impact":"Low","forecast":"-2.0M","previous":"-1.3M"},
-  {"title":"KOF Economic Barometer","country":"CHF","date":"2025-12-30T03:00:00-05:00","impact":"Low","forecast":"101.5","previous":"101.7"},
-  {"title":"Spanish Flash CPI y/y","country":"EUR","date":"2025-12-30T03:00:00-05:00","impact":"Low","forecast":"2.8%","previous":"3.0%"},
-  {"title":"HPI m/m","country":"USD","date":"2025-12-30T09:00:00-05:00","impact":"Low","forecast":"0.1%","previous":"0.0%"},
-  {"title":"S&P/CS Composite-20 HPI y/y","country":"USD","date":"2025-12-30T09:00:00-05:00","impact":"Low","forecast":"1.1%","previous":"1.4%"},
-  {"title":"Chicago PMI","country":"USD","date":"2025-12-30T09:45:00-05:00","impact":"Low","forecast":"39.8","previous":"36.3"},
-  {"title":"FOMC Meeting Minutes","country":"USD","date":"2025-12-30T14:00:00-05:00","impact":"High","forecast":"","previous":""},
-  {"title":"API Weekly Statistical Bulletin","country":"USD","date":"2025-12-30T16:30:00-05:00","impact":"Low","forecast":"","previous":""},
-  {"title":"Bank Holiday","country":"JPY","date":"2025-12-30T19:00:00-05:00","impact":"Holiday","forecast":"","previous":""},
-  {"title":"Manufacturing PMI","country":"CNY","date":"2025-12-30T20:30:00-05:00","impact":"Medium","forecast":"49.2","previous":"49.2"},
-  {"title":"Non-Manufacturing PMI","country":"CNY","date":"2025-12-30T20:30:00-05:00","impact":"Low","forecast":"49.6","previous":"49.5"},
-  {"title":"RatingDog Manufacturing PMI","country":"CNY","date":"2025-12-30T20:45:00-05:00","impact":"Low","forecast":"49.8","previous":"49.9"},
-  {"title":"German Bank Holiday","country":"EUR","date":"2025-12-31T02:02:00-05:00","impact":"Holiday","forecast":"","previous":""},
-  {"title":"Unemployment Claims","country":"USD","date":"2025-12-31T08:30:00-05:00","impact":"High","forecast":"219K","previous":"214K"},
-  {"title":"Crude Oil Inventories","country":"USD","date":"2025-12-31T10:30:00-05:00","impact":"Low","forecast":"0.5M","previous":"0.4M"},
-  {"title":"Natural Gas Storage","country":"USD","date":"2025-12-31T12:00:00-05:00","impact":"Low","forecast":"-51B","previous":"-166B"},
-  {"title":"Bank Holiday","country":"NZD","date":"2025-12-31T15:00:00-05:00","impact":"Holiday","forecast":"","previous":""},
-  {"title":"Bank Holiday","country":"AUD","date":"2025-12-31T16:00:00-05:00","impact":"Holiday","forecast":"","previous":""},
-  {"title":"Bank Holiday","country":"JPY","date":"2025-12-31T19:00:00-05:00","impact":"Holiday","forecast":"","previous":""},
-  {"title":"Bank Holiday","country":"CNY","date":"2025-12-31T19:01:00-05:00","impact":"Holiday","forecast":"","previous":""},
-  {"title":"Bank Holiday","country":"CHF","date":"2026-01-01T01:00:00-05:00","impact":"Holiday","forecast":"","previous":""},
-  {"title":"French Bank Holiday","country":"EUR","date":"2026-01-01T02:01:00-05:00","impact":"Holiday","forecast":"","previous":""},
-  {"title":"German Bank Holiday","country":"EUR","date":"2026-01-01T02:02:00-05:00","impact":"Holiday","forecast":"","previous":""},
-  {"title":"Italian Bank Holiday","country":"EUR","date":"2026-01-01T02:03:00-05:00","impact":"Holiday","forecast":"","previous":""},
-  {"title":"Bank Holiday","country":"GBP","date":"2026-01-01T03:00:00-05:00","impact":"Holiday","forecast":"","previous":""},
-  {"title":"Bank Holiday","country":"CAD","date":"2026-01-01T08:00:00-05:00","impact":"Holiday","forecast":"","previous":""},
-  {"title":"Bank Holiday","country":"USD","date":"2026-01-01T08:00:00-05:00","impact":"Holiday","forecast":"","previous":""},
-  {"title":"Bank Holiday","country":"NZD","date":"2026-01-01T15:00:00-05:00","impact":"Holiday","forecast":"","previous":""},
-  {"title":"Bank Holiday","country":"JPY","date":"2026-01-01T19:00:00-05:00","impact":"Holiday","forecast":"","previous":""},
-  {"title":"Bank Holiday","country":"CNY","date":"2026-01-01T19:01:00-05:00","impact":"Holiday","forecast":"","previous":""},
-  {"title":"Bank Holiday","country":"CHF","date":"2026-01-02T01:00:00-05:00","impact":"Holiday","forecast":"","previous":""},
-  {"title":"Nationwide HPI m/m","country":"GBP","date":"2026-01-02T02:00:00-05:00","impact":"Low","forecast":"0.1%","previous":"0.3%"},
-  {"title":"Spanish Manufacturing PMI","country":"EUR","date":"2026-01-02T03:15:00-05:00","impact":"Low","forecast":"51.2","previous":"51.5"},
-  {"title":"Italian Manufacturing PMI","country":"EUR","date":"2026-01-02T03:45:00-05:00","impact":"Low","forecast":"50.0","previous":"50.6"},
-  {"title":"French Final Manufacturing PMI","country":"EUR","date":"2026-01-02T03:50:00-05:00","impact":"Low","forecast":"50.6","previous":"50.6"},
-  {"title":"German Final Manufacturing PMI","country":"EUR","date":"2026-01-02T03:55:00-05:00","impact":"Low","forecast":"47.7","previous":"47.7"},
-  {"title":"Final Manufacturing PMI","country":"EUR","date":"2026-01-02T04:00:00-05:00","impact":"Low","forecast":"49.2","previous":"49.2"},
-  {"title":"M3 Money Supply y/y","country":"EUR","date":"2026-01-02T04:00:00-05:00","impact":"Low","forecast":"2.7%","previous":"2.8%"},
-  {"title":"Private Loans y/y","country":"EUR","date":"2026-01-02T04:00:00-05:00","impact":"Low","forecast":"2.8%","previous":"2.8%"},
-  {"title":"Final Manufacturing PMI","country":"GBP","date":"2026-01-02T04:30:00-05:00","impact":"Low","forecast":"51.2","previous":"51.2"},
-  {"title":"Manufacturing PMI","country":"CAD","date":"2026-01-02T09:30:00-05:00","impact":"Low","forecast":"","previous":"48.4"},
-  {"title":"Final Manufacturing PMI","country":"USD","date":"2026-01-02T09:45:00-05:00","impact":"Low","forecast":"51.8","previous":"51.8"},
-  {"title":"FOMC Member Paulson Speaks","country":"USD","date":"2026-01-03T10:15:00-05:00","impact":"Low","forecast":"","previous":""},
-  {"title":"FOMC Member Paulson Speaks","country":"USD","date":"2026-01-03T14:30:00-05:00","impact":"Low","forecast":"","previous":""}
-];
+// Parse impact from Forex Factory format
+function parseImpact(impactClass: string): 'Low' | 'Medium' | 'High' | 'Holiday' {
+  if (impactClass.includes('high') || impactClass.includes('red')) return 'High';
+  if (impactClass.includes('medium') || impactClass.includes('orange')) return 'Medium';
+  if (impactClass.includes('holiday') || impactClass.includes('gray')) return 'Holiday';
+  return 'Low';
+}
+
+// Fetch news from Forex Factory calendar
+async function fetchForexFactoryNews(): Promise<NewsEvent[]> {
+  const news: NewsEvent[] = [];
+  
+  try {
+    // Forex Factory Calendar URL (weekly view)
+    const today = new Date();
+    const weekStart = new Date(today);
+    weekStart.setDate(today.getDate() - today.getDay()); // Start of week (Sunday)
+    
+    // We'll fetch 2 weeks of data
+    const urls = [];
+    for (let week = 0; week < 2; week++) {
+      const weekDate = new Date(weekStart);
+      weekDate.setDate(weekStart.getDate() + (week * 7));
+      const monthStr = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'][weekDate.getMonth()];
+      const dayStr = weekDate.getDate();
+      const yearStr = weekDate.getFullYear();
+      urls.push(`https://www.forexfactory.com/calendar?week=${monthStr}${dayStr}.${yearStr}`);
+    }
+    
+    console.log('Fetching from Forex Factory...');
+    
+    for (const url of urls) {
+      try {
+        const response = await fetch(url, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+          },
+        });
+        
+        if (!response.ok) {
+          console.error(`Failed to fetch ${url}: ${response.status}`);
+          continue;
+        }
+        
+        const html = await response.text();
+        
+        // Parse the HTML to extract news events
+        const eventRegex = /<tr[^>]*class="[^"]*calendar__row[^"]*"[^>]*>([\s\S]*?)<\/tr>/gi;
+        const titleRegex = /<span[^>]*class="[^"]*calendar__event-title[^"]*"[^>]*>([^<]+)<\/span>/i;
+        const currencyRegex = /<td[^>]*class="[^"]*calendar__currency[^"]*"[^>]*>([^<]+)<\/td>/i;
+        const impactRegex = /<td[^>]*class="[^"]*calendar__impact[^"]*"[^>]*>[\s\S]*?<span[^>]*class="([^"]+)"[^>]*>/i;
+        const forecastRegex = /<td[^>]*class="[^"]*calendar__forecast[^"]*"[^>]*>([^<]*)<\/td>/i;
+        const previousRegex = /<td[^>]*class="[^"]*calendar__previous[^"]*"[^>]*>([^<]*)<\/td>/i;
+        const dateRegex = /<td[^>]*class="[^"]*calendar__date[^"]*"[^>]*>[\s\S]*?<span[^>]*>([^<]+)<\/span>/i;
+        const timeRegex = /<td[^>]*class="[^"]*calendar__time[^"]*"[^>]*>([^<]+)<\/td>/i;
+        
+        let match;
+        let currentDate = '';
+        
+        while ((match = eventRegex.exec(html)) !== null) {
+          const row = match[1];
+          
+          // Extract date (if present in this row)
+          const dateMatch = row.match(dateRegex);
+          if (dateMatch) {
+            currentDate = dateMatch[1].trim();
+          }
+          
+          // Extract title
+          const titleMatch = row.match(titleRegex);
+          if (!titleMatch) continue;
+          
+          const title = titleMatch[1].trim();
+          
+          // Extract currency
+          const currencyMatch = row.match(currencyRegex);
+          const currency = currencyMatch ? currencyMatch[1].trim() : 'USD';
+          
+          // Extract impact
+          const impactMatch = row.match(impactRegex);
+          const impact = impactMatch ? parseImpact(impactMatch[1]) : 'Low';
+          
+          // Extract forecast
+          const forecastMatch = row.match(forecastRegex);
+          const forecast = forecastMatch ? forecastMatch[1].trim() : '';
+          
+          // Extract previous
+          const previousMatch = row.match(previousRegex);
+          const previous = previousMatch ? previousMatch[1].trim() : '';
+          
+          // Extract time
+          const timeMatch = row.match(timeRegex);
+          const timeStr = timeMatch ? timeMatch[1].trim() : '00:00';
+          
+          // Build date string
+          if (currentDate) {
+            try {
+              const eventDate = parseForexFactoryDate(currentDate, timeStr, today.getFullYear());
+              if (eventDate) {
+                news.push({
+                  title,
+                  country: currency,
+                  date: eventDate.toISOString(),
+                  impact,
+                  forecast,
+                  previous,
+                });
+              }
+            } catch (e) {
+              console.error('Error parsing date:', e);
+            }
+          }
+        }
+      } catch (fetchError) {
+        console.error(`Error fetching ${url}:`, fetchError);
+      }
+    }
+    
+    console.log(`Parsed ${news.length} events from Forex Factory`);
+    
+  } catch (error) {
+    console.error('Error fetching Forex Factory:', error);
+  }
+  
+  return news;
+}
+
+// Parse Forex Factory date format (e.g., "Mon Jan 6")
+function parseForexFactoryDate(dateStr: string, timeStr: string, year: number): Date | null {
+  try {
+    const months: Record<string, number> = {
+      'Jan': 0, 'Feb': 1, 'Mar': 2, 'Apr': 3, 'May': 4, 'Jun': 5,
+      'Jul': 6, 'Aug': 7, 'Sep': 8, 'Oct': 9, 'Nov': 10, 'Dec': 11
+    };
+    
+    // Parse date like "Mon Jan 6" or "Jan 6"
+    const parts = dateStr.split(/\s+/).filter(p => p.length > 0);
+    let month = -1;
+    let day = 0;
+    
+    for (const part of parts) {
+      if (months[part] !== undefined) {
+        month = months[part];
+      } else if (/^\d+$/.test(part)) {
+        day = parseInt(part, 10);
+      }
+    }
+    
+    if (month === -1 || day === 0) return null;
+    
+    // Parse time like "8:30am" or "10:00pm" or "All Day"
+    let hours = 0;
+    let minutes = 0;
+    
+    if (timeStr && timeStr !== 'All Day' && timeStr !== 'Tentative') {
+      const timeMatch = timeStr.match(/(\d{1,2}):(\d{2})(am|pm)?/i);
+      if (timeMatch) {
+        hours = parseInt(timeMatch[1], 10);
+        minutes = parseInt(timeMatch[2], 10);
+        if (timeMatch[3]?.toLowerCase() === 'pm' && hours < 12) hours += 12;
+        if (timeMatch[3]?.toLowerCase() === 'am' && hours === 12) hours = 0;
+      }
+    }
+    
+    // Create date in EST timezone (Forex Factory uses EST)
+    const date = new Date(Date.UTC(year, month, day, hours + 5, minutes)); // EST = UTC-5
+    
+    return date;
+  } catch (e) {
+    console.error('Date parse error:', e);
+    return null;
+  }
+}
 
 // Convert to EA-friendly format
 function convertToEAFormat(news: NewsEvent[]): EANewsFormat[] {
@@ -102,6 +242,108 @@ function convertToEAFormat(news: NewsEvent[]): EANewsFormat[] {
   });
 }
 
+// Get news from database cache
+async function getNewsFromCache(supabase: SupabaseClient): Promise<NewsEvent[]> {
+  const { data, error } = await supabase
+    .from('economic_news_cache')
+    .select('*')
+    .gte('event_date', new Date().toISOString())
+    .order('event_date', { ascending: true });
+    
+  if (error) {
+    console.error('Error fetching from cache:', error);
+    return [];
+  }
+  
+  const rows = data as NewsCacheRow[] | null;
+  
+  return (rows || []).map(item => ({
+    title: item.title,
+    country: item.country,
+    date: item.event_date,
+    impact: item.impact as 'Low' | 'Medium' | 'High' | 'Holiday',
+    forecast: item.forecast || '',
+    previous: item.previous || '',
+  }));
+}
+
+// Update news cache in database
+async function updateNewsCache(supabase: SupabaseClient, news: NewsEvent[]): Promise<void> {
+  if (news.length === 0) {
+    console.log('No news to cache');
+    return;
+  }
+  
+  // Delete old events (before today)
+  const { error: deleteError } = await supabase
+    .from('economic_news_cache')
+    .delete()
+    .lt('event_date', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString());
+    
+  if (deleteError) {
+    console.error('Error deleting old cache:', deleteError);
+  }
+  
+  // Upsert new events
+  const records = news.map(item => ({
+    title: item.title,
+    country: item.country,
+    event_date: item.date,
+    impact: item.impact,
+    forecast: item.forecast,
+    previous: item.previous,
+    source: 'forex_factory',
+    updated_at: new Date().toISOString(),
+  }));
+  
+  const { error: upsertError } = await supabase
+    .from('economic_news_cache')
+    .upsert(records as any, { onConflict: 'title,country,event_date' });
+    
+  if (upsertError) {
+    console.error('Error upserting cache:', upsertError);
+  } else {
+    console.log(`Cached ${records.length} news events`);
+  }
+  
+  // Update metadata
+  await supabase
+    .from('economic_news_metadata')
+    .upsert({
+      id: 'main',
+      last_updated: new Date().toISOString(),
+      last_source: 'forex_factory',
+      event_count: news.length,
+      error_message: null,
+    } as any);
+}
+
+// Check if cache needs refresh (older than 1 hour)
+async function shouldRefreshCache(supabase: SupabaseClient): Promise<boolean> {
+  const { data } = await supabase
+    .from('economic_news_metadata')
+    .select('last_updated')
+    .eq('id', 'main')
+    .single();
+    
+  if (!data) return true;
+  
+  const metaData = data as { last_updated: string };
+  const lastUpdated = new Date(metaData.last_updated);
+  const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+  
+  return lastUpdated < oneHourAgo;
+}
+
+// Fallback static news data
+const FALLBACK_NEWS: NewsEvent[] = [
+  { title: "NFP (Non-Farm Payrolls)", country: "USD", date: new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString(), impact: "High", forecast: "", previous: "" },
+  { title: "ECB Interest Rate Decision", country: "EUR", date: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString(), impact: "High", forecast: "", previous: "" },
+  { title: "CPI y/y", country: "USD", date: new Date(Date.now() + 1 * 24 * 60 * 60 * 1000).toISOString(), impact: "High", forecast: "", previous: "" },
+  { title: "Manufacturing PMI", country: "EUR", date: new Date(Date.now() + 4 * 60 * 60 * 1000).toISOString(), impact: "Medium", forecast: "", previous: "" },
+  { title: "Retail Sales m/m", country: "USD", date: new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString(), impact: "Medium", forecast: "", previous: "" },
+];
+
 Deno.serve(async (req) => {
   // Handle CORS preflight
   if (req.method === 'OPTIONS') {
@@ -110,12 +352,50 @@ Deno.serve(async (req) => {
 
   try {
     const url = new URL(req.url);
-    const format = url.searchParams.get('format') || 'ea'; // 'ea' or 'raw'
-    const currency = url.searchParams.get('currency'); // Filter by currency
-    const impact = url.searchParams.get('impact'); // Filter by impact level
-    const days = parseInt(url.searchParams.get('days') || '7'); // Days from now
+    const format = url.searchParams.get('format') || 'ea';
+    const currency = url.searchParams.get('currency');
+    const impact = url.searchParams.get('impact');
+    const days = parseInt(url.searchParams.get('days') || '7');
+    const refresh = url.searchParams.get('refresh') === 'true';
 
-    let filteredNews = [...CACHED_NEWS];
+    // Initialize Supabase client with service role for cache management
+    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+    const supabase = createClient(supabaseUrl, supabaseServiceKey);
+
+    let newsData: NewsEvent[] = [];
+    let source = 'cache';
+
+    // Check if we should refresh the cache
+    const needsRefresh = refresh || await shouldRefreshCache(supabase);
+    
+    if (needsRefresh) {
+      console.log('Refreshing news cache from Forex Factory...');
+      const freshNews = await fetchForexFactoryNews();
+      
+      if (freshNews.length > 0) {
+        await updateNewsCache(supabase, freshNews);
+        newsData = freshNews;
+        source = 'forex_factory';
+      } else {
+        // Fallback to cache if fetch failed
+        newsData = await getNewsFromCache(supabase);
+        if (newsData.length === 0) {
+          newsData = FALLBACK_NEWS;
+          source = 'fallback';
+        }
+      }
+    } else {
+      // Use cached data
+      newsData = await getNewsFromCache(supabase);
+      if (newsData.length === 0) {
+        newsData = FALLBACK_NEWS;
+        source = 'fallback';
+      }
+    }
+
+    // Apply filters
+    let filteredNews = [...newsData];
 
     // Filter by currency
     if (currency) {
@@ -129,7 +409,7 @@ Deno.serve(async (req) => {
       filteredNews = filteredNews.filter(n => impacts.includes(n.impact));
     }
 
-    // Filter by date range (next N days)
+    // Filter by date range
     const now = new Date();
     const endDate = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
     filteredNews = filteredNews.filter(n => {
@@ -140,7 +420,7 @@ Deno.serve(async (req) => {
     // Sort by date
     filteredNews.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
-    // Response format
+    // Format response
     let responseData: NewsEvent[] | EANewsFormat[];
     if (format === 'raw') {
       responseData = filteredNews;
@@ -148,14 +428,25 @@ Deno.serve(async (req) => {
       responseData = convertToEAFormat(filteredNews);
     }
 
+    // Get last updated time
+    const { data: metadata } = await supabase
+      .from('economic_news_metadata')
+      .select('last_updated')
+      .eq('id', 'main')
+      .single();
+
+    const metaInfo = metadata as { last_updated: string } | null;
+
     const response = {
       success: true,
       count: responseData.length,
-      last_updated: new Date().toISOString(),
+      source,
+      last_updated: metaInfo?.last_updated || new Date().toISOString(),
+      next_update: new Date(Date.now() + 60 * 60 * 1000).toISOString(), // Next hour
       data: responseData,
     };
 
-    console.log(`Returning ${responseData.length} news events (format: ${format}, currency: ${currency || 'all'}, impact: ${impact || 'all'})`);
+    console.log(`Returning ${responseData.length} news events (format: ${format}, source: ${source})`);
 
     return new Response(
       JSON.stringify(response),

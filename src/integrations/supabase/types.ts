@@ -309,6 +309,72 @@ export type Database = {
         }
         Relationships: []
       }
+      economic_news_cache: {
+        Row: {
+          actual: string | null
+          country: string
+          created_at: string
+          event_date: string
+          forecast: string | null
+          id: string
+          impact: string
+          previous: string | null
+          source: string | null
+          title: string
+          updated_at: string
+        }
+        Insert: {
+          actual?: string | null
+          country: string
+          created_at?: string
+          event_date: string
+          forecast?: string | null
+          id?: string
+          impact: string
+          previous?: string | null
+          source?: string | null
+          title: string
+          updated_at?: string
+        }
+        Update: {
+          actual?: string | null
+          country?: string
+          created_at?: string
+          event_date?: string
+          forecast?: string | null
+          id?: string
+          impact?: string
+          previous?: string | null
+          source?: string | null
+          title?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      economic_news_metadata: {
+        Row: {
+          error_message: string | null
+          event_count: number | null
+          id: string
+          last_source: string | null
+          last_updated: string
+        }
+        Insert: {
+          error_message?: string | null
+          event_count?: number | null
+          id?: string
+          last_source?: string | null
+          last_updated?: string
+        }
+        Update: {
+          error_message?: string | null
+          event_count?: number | null
+          id?: string
+          last_source?: string | null
+          last_updated?: string
+        }
+        Relationships: []
+      }
       mt5_accounts: {
         Row: {
           account_number: string
