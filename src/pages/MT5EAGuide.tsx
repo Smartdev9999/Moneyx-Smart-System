@@ -11,7 +11,7 @@ const MT5EAGuide = () => {
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
 #property link      ""
-#property version   "5.20"
+#property version   "5.21"
 #property strict
 
 // *** Logo File ***
@@ -6030,12 +6030,20 @@ void RefreshNewsData()
    }
    
    // Build impact filter string
+   // *** v5.21: If Custom Keywords are active, fetch ALL impact levels for proper matching ***
    string impacts = "";
-   if(InpFilterHighNews) impacts += "High,";
-   if(InpFilterMedNews) impacts += "Medium,";
-   if(InpFilterLowNews) impacts += "Low,";
-   if(StringLen(impacts) > 0)
-      impacts = StringSubstr(impacts, 0, StringLen(impacts) - 1);  // Remove trailing comma
+   bool hasCustomKeywords = InpFilterCustomNews && StringLen(InpCustomNewsKeywords) > 0;
+   
+   if(!hasCustomKeywords)
+   {
+      // No Custom Keywords - use normal impact filter
+      if(InpFilterHighNews) impacts += "High,";
+      if(InpFilterMedNews) impacts += "Medium,";
+      if(InpFilterLowNews) impacts += "Low,";
+      if(StringLen(impacts) > 0)
+         impacts = StringSubstr(impacts, 0, StringLen(impacts) - 1);  // Remove trailing comma
+   }
+   // else: impacts = "" → API will return ALL impact levels for custom keyword matching
    
    // Construct API URL with cache-busting timestamp
    string apiUrl = InpLicenseServer + "/functions/v1/economic-news?ts=" + IntegerToString((long)currentTime);
@@ -6043,6 +6051,12 @@ void RefreshNewsData()
       apiUrl += "&currency=" + currencies;
    if(StringLen(impacts) > 0)
       apiUrl += "&impact=" + impacts;
+   
+   // *** Debug log for Custom Keywords mode ***
+   if(hasCustomKeywords)
+      Print("NEWS FILTER: Custom Keywords active [\\"", InpCustomNewsKeywords, "\\"] - fetching ALL impact levels");
+   else
+      Print("NEWS FILTER: Impact filter = ", (StringLen(impacts) > 0 ? impacts : "ALL"));
    
    // Use WebRequest to fetch JSON with proper headers
    char postData[], resultData[];
