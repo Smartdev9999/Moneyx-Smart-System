@@ -127,68 +127,90 @@ function parseForexFactoryXMLDate(dateStr: string, timeStr: string): Date {
   }
 }
 
-// Fetch and parse Forex Factory XML feed
-async function fetchForexFactoryXML(): Promise<NewsEvent[]> {
+// XML feed sources (Fair Economy Media mirrors Forex Factory data)
+const XML_SOURCES = [
+  'https://nfs.faireconomy.media/ff_calendar_thisweek.xml',
+  'https://cdn-nfs.faireconomy.media/ff_calendar_thisweek.xml',
+];
+
+// Fetch and parse economic news XML feed
+async function fetchForexFactoryXML(): Promise<{ news: NewsEvent[]; source: string }> {
   const news: NewsEvent[] = [];
   
-  try {
-    console.log('Fetching Forex Factory XML feed...');
-    
-    const response = await fetch('https://www.forexfactory.com/calendar.xml', {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'application/xml, text/xml, */*',
-        'Accept-Language': 'en-US,en;q=0.5',
-      },
-    });
-    
-    if (!response.ok) {
-      console.error(`Failed to fetch XML: ${response.status} ${response.statusText}`);
-      return [];
-    }
-    
-    const xmlText = await response.text();
-    console.log(`Received XML (${xmlText.length} bytes)`);
-    
-    // Parse each <event> block
-    const eventRegex = /<event>([\s\S]*?)<\/event>/gi;
-    let match;
-    
-    while ((match = eventRegex.exec(xmlText)) !== null) {
-      const eventXml = match[1];
+  for (const xmlUrl of XML_SOURCES) {
+    try {
+      console.log(`Trying XML source: ${xmlUrl}`);
       
-      const title = extractCDATA(eventXml, 'title');
-      const country = extractCDATA(eventXml, 'country');
-      const dateStr = extractCDATA(eventXml, 'date');
-      const timeStr = extractCDATA(eventXml, 'time');
-      const impactStr = extractCDATA(eventXml, 'impact');
-      const forecast = extractCDATA(eventXml, 'forecast');
-      const previous = extractCDATA(eventXml, 'previous');
+      const response = await fetch(xmlUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'application/xml, text/xml, */*',
+          'Accept-Language': 'en-US,en;q=0.5',
+        },
+      });
       
-      if (!title || !country || !dateStr) {
+      console.log(`Response status: ${response.status} ${response.statusText}`);
+      
+      if (!response.ok) {
+        console.warn(`Failed to fetch from ${xmlUrl}: ${response.status}`);
         continue;
       }
       
-      const eventDate = parseForexFactoryXMLDate(dateStr, timeStr);
-      const impact = normalizeImpact(impactStr);
+      const xmlText = await response.text();
+      console.log(`Received XML (${xmlText.length} bytes)`);
       
-      news.push({
-        title,
-        country,
-        date: eventDate.toISOString(),
-        impact,
-        forecast,
-        previous,
-      });
+      // Debug: Log first 500 chars
+      if (xmlText.length < 100) {
+        console.warn(`XML content too short: ${xmlText}`);
+        continue;
+      }
+      
+      // Parse each <event> block
+      const eventRegex = /<event>([\s\S]*?)<\/event>/gi;
+      let match;
+      
+      while ((match = eventRegex.exec(xmlText)) !== null) {
+        const eventXml = match[1];
+        
+        const title = extractCDATA(eventXml, 'title');
+        const country = extractCDATA(eventXml, 'country');
+        const dateStr = extractCDATA(eventXml, 'date');
+        const timeStr = extractCDATA(eventXml, 'time');
+        const impactStr = extractCDATA(eventXml, 'impact');
+        const forecast = extractCDATA(eventXml, 'forecast');
+        const previous = extractCDATA(eventXml, 'previous');
+        
+        if (!title || !country || !dateStr) {
+          continue;
+        }
+        
+        const eventDate = parseForexFactoryXMLDate(dateStr, timeStr);
+        const impact = normalizeImpact(impactStr);
+        
+        news.push({
+          title,
+          country,
+          date: eventDate.toISOString(),
+          impact,
+          forecast,
+          previous,
+        });
+      }
+      
+      console.log(`Parsed ${news.length} events from ${xmlUrl}`);
+      
+      if (news.length > 0) {
+        const sourceName = xmlUrl.includes('cdn-') ? 'faireconomy_cdn' : 'faireconomy_xml';
+        return { news, source: sourceName };
+      }
+      
+    } catch (error) {
+      console.error(`Error fetching from ${xmlUrl}:`, error);
     }
-    
-    console.log(`Parsed ${news.length} events from Forex Factory XML`);
-    
-  } catch (error) {
-    console.error('Error fetching Forex Factory XML:', error);
   }
   
-  return news;
+  console.log('All XML sources failed, returning empty array');
+  return { news: [], source: 'none' };
 }
 
 // Convert to EA-friendly format
@@ -352,13 +374,13 @@ Deno.serve(async (req) => {
     const needsRefresh = refresh || await shouldRefreshCache(supabase);
     
     if (needsRefresh) {
-      console.log('Refreshing news cache from Forex Factory XML feed...');
-      const freshNews = await fetchForexFactoryXML();
+      console.log('Refreshing news cache from Fair Economy Media XML feed...');
+      const { news: freshNews, source: fetchSource } = await fetchForexFactoryXML();
       
       if (freshNews.length > 0) {
-        await updateNewsCache(supabase, freshNews, 'forex_factory_xml');
+        await updateNewsCache(supabase, freshNews, fetchSource);
         newsData = freshNews;
-        source = 'forex_factory_xml';
+        source = fetchSource;
       } else {
         // Fallback to cache if fetch failed
         console.log('XML fetch returned 0 events, falling back to cache...');
@@ -367,6 +389,8 @@ Deno.serve(async (req) => {
           console.log('Cache is empty, using fallback data...');
           newsData = FALLBACK_NEWS;
           source = 'fallback';
+        } else {
+          source = 'cache';
         }
       }
     } else {
@@ -374,11 +398,11 @@ Deno.serve(async (req) => {
       newsData = await getNewsFromCache(supabase);
       if (newsData.length === 0) {
         console.log('Cache is empty, attempting XML fetch...');
-        const freshNews = await fetchForexFactoryXML();
+        const { news: freshNews, source: fetchSource } = await fetchForexFactoryXML();
         if (freshNews.length > 0) {
-          await updateNewsCache(supabase, freshNews, 'forex_factory_xml');
+          await updateNewsCache(supabase, freshNews, fetchSource);
           newsData = freshNews;
-          source = 'forex_factory_xml';
+          source = fetchSource;
         } else {
           newsData = FALLBACK_NEWS;
           source = 'fallback';
