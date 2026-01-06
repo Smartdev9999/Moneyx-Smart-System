@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                Multi_Currency_Statistical_EA.mq5 |
-//|                 Statistical Arbitrage (Pairs Trading) v3.3.7     |
+//|                 Statistical Arbitrage (Pairs Trading) v3.3.8     |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "3.37"
+#property version   "3.38"
 #property strict
 #property description "Statistical Arbitrage / Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
-#property description "v3.3.7: Lot Progression Mode (Multiplier/Additive)"
+#property description "v3.3.8: ATR Ratio Beta Mode for xxx/USD pairs"
 
 #include <Trade/Trade.mqh>
 
@@ -152,13 +152,14 @@ enum ENUM_CORR_METHOD
 };
 
 //+------------------------------------------------------------------+
-//| BETA CALCULATION MODE ENUM (v3.2.6)                                |
+//| BETA CALCULATION MODE ENUM (v3.3.8 - Added ATR Ratio)              |
 //+------------------------------------------------------------------+
 enum ENUM_BETA_MODE
 {
    BETA_AUTO_SMOOTH = 0,     // Auto + EMA Smoothing (Recommended)
+   BETA_ATR_RATIO,           // ATR Ratio (Best for xxx/USD pairs)
    BETA_PIP_VALUE_ONLY,      // Pip Value Ratio Only (Most Stable)
-   BETA_PERCENTAGE_RAW,      // Percentage Change (Volatile - Current)
+   BETA_PERCENTAGE_RAW,      // Percentage Change (Volatile)
    BETA_MANUAL_FIXED         // Manual Fixed Ratio
 };
 
@@ -1621,7 +1622,7 @@ double CalculateReturnCorrelation(int pairIndex)
 }
 
 //+------------------------------------------------------------------+
-//| Calculate Hedge Ratio (Beta) - v3.2.6                              |
+//| Calculate Hedge Ratio (Beta) - v3.3.8 (Added ATR Ratio Mode)       |
 //+------------------------------------------------------------------+
 void CalculateHedgeRatio(int pairIndex)
 {
@@ -1644,6 +1645,14 @@ void CalculateHedgeRatio(int pairIndex)
       return;
    }
    
+   // v3.3.8: ATR Ratio Mode (Best for xxx/USD pairs)
+   if(InpBetaMode == BETA_ATR_RATIO)
+   {
+      double atrBeta = CalculateATRBasedBeta(pairIndex);
+      g_pairs[pairIndex].hedgeRatio = atrBeta;
+      return;
+   }
+   
    // Percentage Raw Mode
    if(InpBetaMode == BETA_PERCENTAGE_RAW)
    {
@@ -1653,11 +1662,12 @@ void CalculateHedgeRatio(int pairIndex)
    }
    
    // Auto + EMA Smoothing Mode (Recommended)
-   double pipBeta = CalculatePipValueBeta(pairIndex);
+   // v3.3.8: Use ATR Ratio instead of Pip Value for better accuracy on xxx/USD pairs
+   double atrBeta = CalculateATRBasedBeta(pairIndex);
    double pctBeta = CalculatePriceBasedBeta(pairIndex);
    
-   // Weighted combination
-   double rawBeta = (pipBeta * InpPipBetaWeight) + (pctBeta * (1.0 - InpPipBetaWeight));
+   // Weighted combination using ATR instead of Pip Value
+   double rawBeta = (atrBeta * InpPipBetaWeight) + (pctBeta * (1.0 - InpPipBetaWeight));
    
    // Apply EMA smoothing
    double smoothedBeta;
@@ -1673,6 +1683,85 @@ void CalculateHedgeRatio(int pairIndex)
    
    g_pairs[pairIndex].prevBeta = smoothedBeta;
    g_pairs[pairIndex].hedgeRatio = smoothedBeta;
+}
+
+//+------------------------------------------------------------------+
+//| Calculate ATR-Based Beta (v3.3.8) - Best for xxx/USD pairs         |
+//| Measures relative volatility: ATR(A)/ATR(B) normalized to pips    |
+//+------------------------------------------------------------------+
+double CalculateATRBasedBeta(int pairIndex)
+{
+   string symbolA = g_pairs[pairIndex].symbolA;
+   string symbolB = g_pairs[pairIndex].symbolB;
+   
+   // Get symbol point sizes for pip conversion
+   double pointA = SymbolInfoDouble(symbolA, SYMBOL_POINT);
+   double pointB = SymbolInfoDouble(symbolB, SYMBOL_POINT);
+   
+   if(pointA <= 0 || pointB <= 0) return 1.0;
+   
+   // Determine pip multiplier (5-digit vs 4-digit brokers)
+   int digitsA = (int)SymbolInfoInteger(symbolA, SYMBOL_DIGITS);
+   int digitsB = (int)SymbolInfoInteger(symbolB, SYMBOL_DIGITS);
+   double pipMultA = (digitsA == 5 || digitsA == 3) ? 10.0 : 1.0;
+   double pipMultB = (digitsB == 5 || digitsB == 3) ? 10.0 : 1.0;
+   
+   // Calculate ATR using simplified method (for speed in tester)
+   double atrA = 0, atrB = 0;
+   int atrPeriod = 14;
+   
+   // Use CopyClose for reliability instead of iATR handles
+   double highsA[], lowsA[], closesA[];
+   double highsB[], lowsB[], closesB[];
+   
+   ArraySetAsSeries(highsA, true);
+   ArraySetAsSeries(lowsA, true);
+   ArraySetAsSeries(closesA, true);
+   ArraySetAsSeries(highsB, true);
+   ArraySetAsSeries(lowsB, true);
+   ArraySetAsSeries(closesB, true);
+   
+   int copiedA = CopyHigh(symbolA, InpCorrTimeframe, 0, atrPeriod + 1, highsA);
+   int copiedAL = CopyLow(symbolA, InpCorrTimeframe, 0, atrPeriod + 1, lowsA);
+   int copiedAC = CopyClose(symbolA, InpCorrTimeframe, 0, atrPeriod + 1, closesA);
+   
+   int copiedB = CopyHigh(symbolB, InpCorrTimeframe, 0, atrPeriod + 1, highsB);
+   int copiedBL = CopyLow(symbolB, InpCorrTimeframe, 0, atrPeriod + 1, lowsB);
+   int copiedBC = CopyClose(symbolB, InpCorrTimeframe, 0, atrPeriod + 1, closesB);
+   
+   if(copiedA < atrPeriod || copiedB < atrPeriod) return 1.0;
+   
+   // Calculate True Range sum for ATR
+   double sumTRA = 0, sumTRB = 0;
+   for(int i = 0; i < atrPeriod; i++)
+   {
+      double tr_hl_A = highsA[i] - lowsA[i];
+      double tr_hc_A = MathAbs(highsA[i] - closesA[i + 1]);
+      double tr_lc_A = MathAbs(lowsA[i] - closesA[i + 1]);
+      sumTRA += MathMax(tr_hl_A, MathMax(tr_hc_A, tr_lc_A));
+      
+      double tr_hl_B = highsB[i] - lowsB[i];
+      double tr_hc_B = MathAbs(highsB[i] - closesB[i + 1]);
+      double tr_lc_B = MathAbs(lowsB[i] - closesB[i + 1]);
+      sumTRB += MathMax(tr_hl_B, MathMax(tr_hc_B, tr_lc_B));
+   }
+   
+   atrA = sumTRA / atrPeriod;
+   atrB = sumTRB / atrPeriod;
+   
+   if(atrB <= 0) return 1.0;
+   
+   // Convert ATR to pips
+   double atrPipsA = atrA / (pointA * pipMultA);
+   double atrPipsB = atrB / (pointB * pipMultB);
+   
+   if(atrPipsB <= 0) return 1.0;
+   
+   // Beta = How many pips A moves per pip of B
+   double beta = atrPipsA / atrPipsB;
+   
+   // Clamp to reasonable range
+   return MathMax(0.1, MathMin(10.0, beta));
 }
 
 //+------------------------------------------------------------------+
