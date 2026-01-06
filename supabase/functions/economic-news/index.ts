@@ -112,13 +112,11 @@ function parseForexFactoryXMLDate(dateStr: string, timeStr: string): Date {
       }
     }
     
-    // Forex Factory XML uses Eastern Time (ET)
-    // Check if we're in DST (EDT = UTC-4) or standard (EST = UTC-5)
-    // Simplified: use UTC-5 (EST) as default
-    const etOffsetHours = 5; // EST = UTC-5
+    // Fair Economy Media XML provides times in UTC directly
+    // (verified by comparing with Forex Factory website in Bangkok timezone)
+    const utcDate = new Date(Date.UTC(year, month, day, hours, minutes));
     
-    // Create UTC date by adding the offset
-    const utcDate = new Date(Date.UTC(year, month, day, hours + etOffsetHours, minutes));
+    console.log(`Date parsing: ${dateStr} ${timeStr} -> ${utcDate.toISOString()}`);
     
     return utcDate;
   } catch (e) {
