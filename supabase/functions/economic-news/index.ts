@@ -359,17 +359,33 @@ Deno.serve(async (req) => {
     const impact = url.searchParams.get('impact');
     const days = parseInt(url.searchParams.get('days') || '14');
     const refresh = url.searchParams.get('refresh') === 'true';
+    const clearCache = url.searchParams.get('clear') === 'true';
 
     // Initialize Supabase client with service role for cache management
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
+    // Handle clear cache request - delete all records first
+    if (clearCache) {
+      console.log('Clearing all economic news cache...');
+      const { error: clearError, count } = await supabase
+        .from('economic_news_cache')
+        .delete()
+        .neq('id', '00000000-0000-0000-0000-000000000000'); // Delete all
+      
+      if (clearError) {
+        console.error('Error clearing cache:', clearError);
+      } else {
+        console.log(`Cleared cache (deleted records)`);
+      }
+    }
+
     let newsData: NewsEvent[] = [];
     let source = 'cache';
 
     // Check if we should refresh the cache
-    const needsRefresh = refresh || await shouldRefreshCache(supabase);
+    const needsRefresh = refresh || clearCache || await shouldRefreshCache(supabase);
     
     if (needsRefresh) {
       console.log('Refreshing news cache from Fair Economy Media XML feed...');
