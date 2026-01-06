@@ -156,6 +156,16 @@ enum ENUM_BETA_MODE
    BETA_MANUAL_FIXED         // Manual Fixed Ratio
 };
 
+//+------------------------------------------------------------------+
+//| LOT CALCULATION MODE ENUM (v3.3.6)                                 |
+//+------------------------------------------------------------------+
+enum ENUM_LOT_CALC_MODE
+{
+   LOT_REGRESSION_BETA = 0,  // Regression Beta Only (LotB = LotA × β)
+   LOT_DOLLAR_NEUTRAL,       // Dollar-Neutral (LotB = LotA × PipA/PipB)
+   LOT_COMBINED              // Combined (LotB = LotA × β × PipA/PipB)
+};
+
 input group "=== Correlation Calculation Settings ==="
 input ENUM_TIMEFRAMES InpCorrTimeframe = PERIOD_H4;   // Correlation Timeframe
 input int      InpCorrBars = 100;                      // Correlation Bars Count (myfxbook uses 100-200)
@@ -173,11 +183,12 @@ input group "=== Z-Score Timeframe Settings (v3.3.0) ==="
 input ENUM_TIMEFRAMES InpZScoreTimeframe = PERIOD_CURRENT;  // Z-Score Timeframe (CURRENT = use Correlation TF)
 input int      InpZScoreBars = 0;                            // Z-Score Bars (0 = use Correlation Bars)
 
-input group "=== Beta Calculation Settings (v3.2.6) ==="
+input group "=== Beta Calculation Settings (v3.3.6) ==="
 input ENUM_BETA_MODE InpBetaMode = BETA_AUTO_SMOOTH;   // Beta Calculation Mode
 input double   InpBetaSmoothFactor = 0.1;              // Beta EMA Smooth Factor (0.05-0.3)
 input double   InpManualBetaDefault = 1.0;             // Default Manual Beta (if MANUAL_FIXED)
 input double   InpPipBetaWeight = 0.7;                 // Pip-Value Beta Weight in Auto (0.5-0.9)
+input ENUM_LOT_CALC_MODE InpLotCalcMode = LOT_REGRESSION_BETA;  // Lot Calculation Mode (v3.3.6)
 
 //+------------------------------------------------------------------+
 //| CORRELATION DROP MODE ENUM (v3.2.9 HF2)                            |
@@ -1712,7 +1723,8 @@ double GetNotionalValuePerLot(string symbol)
 }
 
 //+------------------------------------------------------------------+
-//| Calculate Price-Based Beta using Percentage Change                 |
+//| Calculate Price-Based Beta using Percentage Change (v3.3.6 Fixed)  |
+//| Formula: β = Cov(A,B) / Var(B) where B is the independent variable |
 //+------------------------------------------------------------------+
 double CalculatePriceBasedBeta(int pairIndex)
 {
@@ -1723,7 +1735,7 @@ double CalculatePriceBasedBeta(int pairIndex)
    string symbolB = g_pairs[pairIndex].symbolB;
    
    double sumA = 0, sumB = 0;
-   double sumA2 = 0;
+   double sumB2 = 0;    // v3.3.6: Changed from sumA2 to sumB2 for Var(B)
    double sumAB = 0;
    int count = 0;
    
@@ -1743,7 +1755,7 @@ double CalculatePriceBasedBeta(int pairIndex)
       
       sumA += pctA;
       sumB += pctB;
-      sumA2 += pctA * pctA;
+      sumB2 += pctB * pctB;  // v3.3.6: Var(B) not Var(A)
       sumAB += pctA * pctB;
       count++;
    }
@@ -1753,14 +1765,15 @@ double CalculatePriceBasedBeta(int pairIndex)
    double meanA = sumA / count;
    double meanB = sumB / count;
    
-   // Beta = Cov(A,B) / Var(A) from percentage changes
+   // v3.3.6 Fixed: β = Cov(A,B) / Var(B) - correct Linear Regression formula
+   // A = α + β × B + ε → β tells how much A moves per unit of B
    double covariance = (sumAB / count) - (meanA * meanB);
-   double varianceA = (sumA2 / count) - (meanA * meanA);
+   double varianceB = (sumB2 / count) - (meanB * meanB);  // v3.3.6: Use Var(B)
    
-   if(varianceA <= 0) return 1.0;
+   if(varianceB <= 0) return 1.0;
    
    // For negative correlation, we still want positive beta for hedge ratio
-   double beta = MathAbs(covariance / varianceA);
+   double beta = MathAbs(covariance / varianceB);  // v3.3.6: Divide by Var(B)
    
    // Clamp beta to reasonable range (0.1 to 10.0)
    beta = MathMax(0.1, MathMin(10.0, beta));
@@ -1853,7 +1866,8 @@ double GetPipValue(string symbol)
 }
 
 //+------------------------------------------------------------------+
-//| Calculate Dollar-Neutral Lot Sizes (v3.3.4)                        |
+//| Calculate Dollar-Neutral Lot Sizes (v3.3.6 - Fixed)                |
+//| Supports 3 modes: Regression Beta, Dollar-Neutral, Combined        |
 //+------------------------------------------------------------------+
 void CalculateDollarNeutralLots(int pairIndex)
 {
@@ -1866,25 +1880,40 @@ void CalculateDollarNeutralLots(int pairIndex)
    double pipValueA = GetPipValue(symbolA);
    double pipValueB = GetPipValue(symbolB);
    
-   // v3.3.4: Enhanced validation with warning logs
-   if(pipValueA == 0 || pipValueB == 0)
-   {
-      PrintFormat("WARNING Pair %d: Pip values invalid (A:%.5f B:%.5f) - Using normalized base lot %.2f for both",
-                  pairIndex + 1, pipValueA, pipValueB, baseLot);
-      
-      // Normalize base lot for each symbol
-      g_pairs[pairIndex].lotBuyA = NormalizeLot(symbolA, baseLot);
-      g_pairs[pairIndex].lotBuyB = NormalizeLot(symbolB, baseLot);
-      g_pairs[pairIndex].lotSellA = NormalizeLot(symbolA, baseLot);
-      g_pairs[pairIndex].lotSellB = NormalizeLot(symbolB, baseLot);
-      return;
-   }
-   
    // LotA = Base Lot (normalized)
    double lotA = NormalizeLot(symbolA, baseLot);
+   double rawLotB = 0;
    
-   // LotB = LotA × β × (PipValueA / PipValueB)
-   double rawLotB = baseLot * hedgeRatio * (pipValueA / pipValueB);
+   // v3.3.6: Calculate LotB based on selected mode
+   switch(InpLotCalcMode)
+   {
+      case LOT_REGRESSION_BETA:
+         // LotB = LotA × β (Pure Regression - no pip value correction)
+         // β from Linear Regression already accounts for relative movement
+         rawLotB = baseLot * hedgeRatio;
+         break;
+         
+      case LOT_DOLLAR_NEUTRAL:
+         // LotB = LotA × (PipValueA / PipValueB) (Ignore Beta, pure dollar-neutral)
+         if(pipValueB > 0 && pipValueA > 0)
+            rawLotB = baseLot * (pipValueA / pipValueB);
+         else
+            rawLotB = baseLot;
+         break;
+         
+      case LOT_COMBINED:
+         // LotB = LotA × β × (PipValueA / PipValueB) (Legacy behavior)
+         if(pipValueB > 0 && pipValueA > 0)
+            rawLotB = baseLot * hedgeRatio * (pipValueA / pipValueB);
+         else
+            rawLotB = baseLot * hedgeRatio;
+         break;
+         
+      default:
+         rawLotB = baseLot * hedgeRatio;
+         break;
+   }
+   
    double lotB = NormalizeLot(symbolB, rawLotB);
    
    // v3.3.4: Ensure lotB is not too small
@@ -1902,11 +1931,13 @@ void CalculateDollarNeutralLots(int pairIndex)
    g_pairs[pairIndex].lotSellA = lotA;
    g_pairs[pairIndex].lotSellB = lotB;
    
-   // v3.3.4: Debug log for lot calculation
+   // v3.3.6: Enhanced debug log with mode info
    if(InpDebugMode)
    {
-      PrintFormat("Pair %d Lots: A=%.2f B=%.2f (BaseLot=%.2f, Beta=%.4f, PipA=%.5f, PipB=%.5f)", 
-                  pairIndex + 1, lotA, lotB, baseLot, hedgeRatio, pipValueA, pipValueB);
+      string modeStr = (InpLotCalcMode == LOT_REGRESSION_BETA) ? "RegBeta" : 
+                       (InpLotCalcMode == LOT_DOLLAR_NEUTRAL) ? "DollarNeutral" : "Combined";
+      PrintFormat("Pair %d Lots [%s]: A=%.2f B=%.2f (BaseLot=%.2f, Beta=%.4f, PipA=%.5f, PipB=%.5f)", 
+                  pairIndex + 1, modeStr, lotA, lotB, baseLot, hedgeRatio, pipValueA, pipValueB);
    }
 }
 
