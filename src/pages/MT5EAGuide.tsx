@@ -6755,13 +6755,6 @@ void OnTick()
    // TP/SL/Hedge/Accumulate still work above this point
    if(InpUseTimeFilter && !IsWithinTradingHours())
    {
-      if(InpDebugMode)
-      {
-         MqlDateTime dt;
-         TimeToStruct(TimeCurrent(), dt);
-         PrintFormat("TIME FILTER: Blocked at %02d:%02d (Server Time) | Sessions: %s, %s, %s", 
-                     dt.hour, dt.min, InpSession1, InpSession2, InpSession3);
-      }
       UpdateChartComment("WAIT", "Outside trading hours");
       return;
    }
