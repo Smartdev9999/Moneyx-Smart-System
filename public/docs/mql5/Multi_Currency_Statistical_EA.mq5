@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                Multi_Currency_Statistical_EA.mq5 |
-//|                 Statistical Arbitrage (Pairs Trading) v3.3.5     |
+//|                 Statistical Arbitrage (Pairs Trading) v3.3.7     |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "3.35"
+#property version   "3.37"
 #property strict
 #property description "Statistical Arbitrage / Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
-#property description "v3.3.5: Robust Lot Calculation & Race Condition Fix"
+#property description "v3.3.7: Lot Progression Mode (Multiplier/Additive)"
 
 #include <Trade/Trade.mqh>
 
@@ -92,6 +92,12 @@ struct PairInfo
    double         entryZScoreBuy;    // Entry Z-Score for Buy (for Z-Score grid)
    double         entryZScoreSell;   // Entry Z-Score for Sell (for Z-Score grid)
    
+   // === v3.3.7: Last Averaging Lot (for compound calculation) ===
+   double         lastAvgLotBuyA;    // Last averaging lot for Buy A
+   double         lastAvgLotBuyB;    // Last averaging lot for Buy B
+   double         lastAvgLotSellA;   // Last averaging lot for Sell A
+   double         lastAvgLotSellB;   // Last averaging lot for Sell B
+   
    // === v3.2.9: Same-Tick Protection ===
    bool           justOpenedMainBuy;  // Prevent averaging in same tick as main order
    bool           justOpenedMainSell; // Prevent averaging in same tick as main order
@@ -166,6 +172,16 @@ enum ENUM_LOT_CALC_MODE
    LOT_COMBINED              // Combined (LotB = LotA × β × PipA/PipB)
 };
 
+//+------------------------------------------------------------------+
+//| LOT PROGRESSION MODE ENUM (v3.3.7)                                 |
+//+------------------------------------------------------------------+
+enum ENUM_LOT_PROGRESSION_MODE
+{
+   LOT_PROG_FIXED = 0,       // Fixed Lot (Same as Main)
+   LOT_PROG_MULTIPLIER,      // Multiplier (×1.2 compound)
+   LOT_PROG_ADDITIVE         // Additive (+0.2 each)
+};
+
 input group "=== Correlation Calculation Settings ==="
 input ENUM_TIMEFRAMES InpCorrTimeframe = PERIOD_H4;   // Correlation Timeframe
 input int      InpCorrBars = 100;                      // Correlation Bars Count (myfxbook uses 100-200)
@@ -206,14 +222,16 @@ input bool     InpRequirePositiveProfit = true;            // Require Positive P
 input int      InpMinHoldingBars = 0;                      // Minimum Holding Bars Before Exit
 input ENUM_CORR_DROP_MODE InpCorrDropMode = CORR_DROP_CLOSE_PROFIT_ONLY;  // Correlation Drop Behavior
 
-input group "=== Averaging System (v3.3.0 - Simplified) ==="
+input group "=== Averaging System (v3.3.7 - Lot Progression) ==="
 input ENUM_AVERAGING_MODE InpAveragingMode = AVG_MODE_DISABLED;  // Averaging Mode
 input string   InpZScoreGrid = "2.5;3.0;4.0;5.0";                // Z-Score Grid Levels (semicolon separated)
 input ENUM_TIMEFRAMES InpAtrTimeframe = PERIOD_H1;               // ATR Timeframe
 input int      InpAtrPeriod = 14;                                // ATR Period
 input double   InpAtrMultiplier = 1.5;                           // ATR Multiplier for Grid
-// v3.3.0: Removed InpMaxAveragingOrders - use InpDefaultMaxOrderBuy/Sell instead
-input double   InpAveragingLotMult = 1.0;                        // Averaging Lot Multiplier (1.0 = same)
+// v3.3.7: Lot Progression Mode
+input ENUM_LOT_PROGRESSION_MODE InpLotProgressionMode = LOT_PROG_MULTIPLIER;  // Lot Progression Mode
+input double   InpAveragingLotMult = 1.2;                        // Multiplier (for Multiplier mode)
+input double   InpAveragingLotAdd = 0.2;                         // Add Lot (for Additive mode)
 
 input group "=== Target Settings (v3.3.0) ==="
 input double   InpTotalTarget = 100.0;          // Total Portfolio Target ($)
@@ -2167,16 +2185,60 @@ void CheckATRAveraging(int pairIndex, string side)
 }
 
 //+------------------------------------------------------------------+
-//| Open Averaging Buy Position (v3.3.3 - with Normalization & Rollback)|
+//| Calculate Progressive Lot (v3.3.7)                                 |
+//+------------------------------------------------------------------+
+double CalculateProgressiveLot(double baseLot, double lastLot, int avgCount)
+{
+   double resultLot = baseLot;
+   
+   switch(InpLotProgressionMode)
+   {
+      case LOT_PROG_FIXED:
+         // Use same lot as Main Order
+         resultLot = baseLot;
+         break;
+         
+      case LOT_PROG_MULTIPLIER:
+         // Compound: lastLot × Multiplier
+         // avgCount 0 (first avg order) → baseLot × Mult
+         // avgCount 1+ → lastLot × Mult
+         if(avgCount == 0 || lastLot <= 0)
+            resultLot = baseLot * InpAveragingLotMult;
+         else
+            resultLot = lastLot * InpAveragingLotMult;
+         break;
+         
+      case LOT_PROG_ADDITIVE:
+         // Additive: baseLot + (avgCount+1) × AddValue
+         // Order 1 = baseLot + 0.2
+         // Order 2 = baseLot + 0.4
+         resultLot = baseLot + (InpAveragingLotAdd * (avgCount + 1));
+         break;
+   }
+   
+   return resultLot;
+}
+
+//+------------------------------------------------------------------+
+//| Open Averaging Buy Position (v3.3.7 - with Lot Progression)        |
 //+------------------------------------------------------------------+
 void OpenAveragingBuy(int pairIndex)
 {
    string symbolA = g_pairs[pairIndex].symbolA;
    string symbolB = g_pairs[pairIndex].symbolB;
    
-   // v3.3.3: Normalize lots for each symbol's volume step
-   double lotA = NormalizeLot(symbolA, g_pairs[pairIndex].lotBuyA * InpAveragingLotMult);
-   double lotB = NormalizeLot(symbolB, g_pairs[pairIndex].lotBuyB * InpAveragingLotMult);
+   // v3.3.7: Calculate progressive lot
+   double baseLotA = g_pairs[pairIndex].lotBuyA;
+   double baseLotB = g_pairs[pairIndex].lotBuyB;
+   double lastLotA = g_pairs[pairIndex].lastAvgLotBuyA;
+   double lastLotB = g_pairs[pairIndex].lastAvgLotBuyB;
+   int avgCount = g_pairs[pairIndex].avgOrderCountBuy;
+   
+   double rawLotA = CalculateProgressiveLot(baseLotA, lastLotA, avgCount);
+   double rawLotB = CalculateProgressiveLot(baseLotB, lastLotB, avgCount);
+   
+   double lotA = NormalizeLot(symbolA, rawLotA);
+   double lotB = NormalizeLot(symbolB, rawLotB);
    int corrType = g_pairs[pairIndex].correlationType;
    
    string comment = StringFormat("StatArb_AVG_BUY_%d", pairIndex + 1);
@@ -2211,25 +2273,38 @@ void OpenAveragingBuy(int pairIndex)
       return;
    }
    
+   // v3.3.7: Save last lot for compound calculation
+   g_pairs[pairIndex].lastAvgLotBuyA = lotA;
+   g_pairs[pairIndex].lastAvgLotBuyB = lotB;
    g_pairs[pairIndex].avgOrderCountBuy++;
    g_pairs[pairIndex].orderCountBuy++;
    
-   PrintFormat("Pair %d AVG BUY #%d opened at Z=%.2f (A:%.2f B:%.2f)", 
+   PrintFormat("Pair %d AVG BUY #%d opened at Z=%.2f (A:%.2f B:%.2f, Mode:%s)", 
                pairIndex + 1, g_pairs[pairIndex].avgOrderCountBuy, 
-               g_pairs[pairIndex].zScore, lotA, lotB);
+               g_pairs[pairIndex].zScore, lotA, lotB,
+               InpLotProgressionMode == LOT_PROG_MULTIPLIER ? "Mult" : (InpLotProgressionMode == LOT_PROG_ADDITIVE ? "Add" : "Fix"));
 }
 
 //+------------------------------------------------------------------+
-//| Open Averaging Sell Position (v3.3.3 - with Normalization & Rollback)|
+//| Open Averaging Sell Position (v3.3.7 - with Lot Progression)       |
 //+------------------------------------------------------------------+
 void OpenAveragingSell(int pairIndex)
 {
    string symbolA = g_pairs[pairIndex].symbolA;
    string symbolB = g_pairs[pairIndex].symbolB;
    
-   // v3.3.3: Normalize lots for each symbol's volume step
-   double lotA = NormalizeLot(symbolA, g_pairs[pairIndex].lotSellA * InpAveragingLotMult);
-   double lotB = NormalizeLot(symbolB, g_pairs[pairIndex].lotSellB * InpAveragingLotMult);
+   // v3.3.7: Calculate progressive lot
+   double baseLotA = g_pairs[pairIndex].lotSellA;
+   double baseLotB = g_pairs[pairIndex].lotSellB;
+   double lastLotA = g_pairs[pairIndex].lastAvgLotSellA;
+   double lastLotB = g_pairs[pairIndex].lastAvgLotSellB;
+   int avgCount = g_pairs[pairIndex].avgOrderCountSell;
+   
+   double rawLotA = CalculateProgressiveLot(baseLotA, lastLotA, avgCount);
+   double rawLotB = CalculateProgressiveLot(baseLotB, lastLotB, avgCount);
+   
+   double lotA = NormalizeLot(symbolA, rawLotA);
+   double lotB = NormalizeLot(symbolB, rawLotB);
    int corrType = g_pairs[pairIndex].correlationType;
    
    string comment = StringFormat("StatArb_AVG_SELL_%d", pairIndex + 1);
@@ -2264,12 +2339,16 @@ void OpenAveragingSell(int pairIndex)
       return;
    }
    
+   // v3.3.7: Save last lot for compound calculation
+   g_pairs[pairIndex].lastAvgLotSellA = lotA;
+   g_pairs[pairIndex].lastAvgLotSellB = lotB;
    g_pairs[pairIndex].avgOrderCountSell++;
    g_pairs[pairIndex].orderCountSell++;
    
-   PrintFormat("Pair %d AVG SELL #%d opened at Z=%.2f (A:%.2f B:%.2f)", 
+   PrintFormat("Pair %d AVG SELL #%d opened at Z=%.2f (A:%.2f B:%.2f, Mode:%s)", 
                pairIndex + 1, g_pairs[pairIndex].avgOrderCountSell, 
-               g_pairs[pairIndex].zScore, lotA, lotB);
+               g_pairs[pairIndex].zScore, lotA, lotB,
+               InpLotProgressionMode == LOT_PROG_MULTIPLIER ? "Mult" : (InpLotProgressionMode == LOT_PROG_ADDITIVE ? "Add" : "Fix"));
 }
 
 //+------------------------------------------------------------------+
@@ -2576,10 +2655,12 @@ bool CloseBuySide(int pairIndex)
       g_pairs[pairIndex].orderCountBuy = 0;
       g_pairs[pairIndex].lotBuyA = 0;
       g_pairs[pairIndex].lotBuyB = 0;
-      // v3.2.7: Reset averaging
+      // v3.3.7: Reset averaging (including lot trackers)
       g_pairs[pairIndex].avgOrderCountBuy = 0;
       g_pairs[pairIndex].lastAvgPriceBuy = 0;
       g_pairs[pairIndex].entryZScoreBuy = 0;
+      g_pairs[pairIndex].lastAvgLotBuyA = 0;
+      g_pairs[pairIndex].lastAvgLotBuyB = 0;
       
       return true;
    }
@@ -2667,10 +2748,12 @@ bool CloseSellSide(int pairIndex)
       g_pairs[pairIndex].orderCountSell = 0;
       g_pairs[pairIndex].lotSellA = 0;
       g_pairs[pairIndex].lotSellB = 0;
-      // v3.2.7: Reset averaging
+      // v3.3.7: Reset averaging (including lot trackers)
       g_pairs[pairIndex].avgOrderCountSell = 0;
       g_pairs[pairIndex].lastAvgPriceSell = 0;
       g_pairs[pairIndex].entryZScoreSell = 0;
+      g_pairs[pairIndex].lastAvgLotSellA = 0;
+      g_pairs[pairIndex].lastAvgLotSellB = 0;
       
       return true;
    }
@@ -2831,6 +2914,8 @@ void ForceCloseBuySide(int pairIndex)
    g_pairs[pairIndex].avgOrderCountBuy = 0;
    g_pairs[pairIndex].lastAvgPriceBuy = 0;
    g_pairs[pairIndex].entryZScoreBuy = 0;
+   g_pairs[pairIndex].lastAvgLotBuyA = 0;
+   g_pairs[pairIndex].lastAvgLotBuyB = 0;
    
    PrintFormat("Pair %d BUY SIDE FORCE CLOSED (Orphan Recovery)", pairIndex + 1);
 }
@@ -2895,6 +2980,8 @@ void ForceCloseSellSide(int pairIndex)
    g_pairs[pairIndex].avgOrderCountSell = 0;
    g_pairs[pairIndex].lastAvgPriceSell = 0;
    g_pairs[pairIndex].entryZScoreSell = 0;
+   g_pairs[pairIndex].lastAvgLotSellA = 0;
+   g_pairs[pairIndex].lastAvgLotSellB = 0;
    
    PrintFormat("Pair %d SELL SIDE FORCE CLOSED (Orphan Recovery)", pairIndex + 1);
 }
