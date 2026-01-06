@@ -130,11 +130,16 @@ const EconomicCalendar = ({ initialData }: EconomicCalendarProps) => {
   }, [filteredNews]);
 
   // Fetch news from edge function
-  const fetchNewsFromAPI = async (forceRefresh = false) => {
+  const fetchNewsFromAPI = async (forceRefresh = false, clearFirst = false) => {
     setIsLoading(true);
     try {
-      const refreshParam = forceRefresh ? '&refresh=true' : '';
-      const apiUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/economic-news?format=raw&days=14${refreshParam}`;
+      let params = 'format=raw&days=14';
+      if (clearFirst) {
+        params += '&clear=true';
+      } else if (forceRefresh) {
+        params += '&refresh=true';
+      }
+      const apiUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/economic-news?${params}`;
       
       const res = await fetch(apiUrl, {
         method: 'GET',
@@ -150,11 +155,13 @@ const EconomicCalendar = ({ initialData }: EconomicCalendarProps) => {
         setLastUpdated(data.last_updated);
         setDataSource(data.source || 'api');
         setTotalInCache(data.total_in_cache || data.count);
+        const action = clearFirst ? 'ล้างข้อมูลเก่าและโหลดใหม่' : 'โหลดข้อมูล';
         toast({
-          title: "โหลดข้อมูลสำเร็จ",
+          title: `${action}สำเร็จ`,
           description: `${data.count} ข่าว จาก ${getSourceLabel(data.source)}`,
         });
       } else if (data.data && data.data.length === 0) {
+        setNewsData([]);
         setDataSource(data.source || 'empty');
         toast({
           title: "ไม่พบข่าวในช่วงเวลานี้",
@@ -192,6 +199,10 @@ const EconomicCalendar = ({ initialData }: EconomicCalendarProps) => {
 
   const handleRefresh = async () => {
     await fetchNewsFromAPI(true);
+  };
+
+  const handleClearAndRefresh = async () => {
+    await fetchNewsFromAPI(false, true);
   };
 
   const handleImport = async () => {
@@ -508,6 +519,15 @@ const EconomicCalendar = ({ initialData }: EconomicCalendarProps) => {
               >
                 <RefreshCw className={`w-4 h-4 mr-2 ${isLoading ? 'animate-spin' : ''}`} />
                 รีเฟรช
+              </Button>
+              <Button 
+                variant="destructive" 
+                size="sm" 
+                onClick={handleClearAndRefresh}
+                disabled={isLoading}
+              >
+                <RefreshCw className={`w-4 h-4 mr-2 ${isLoading ? 'animate-spin' : ''}`} />
+                ล้าง & ดึงใหม่
               </Button>
             </div>
           </div>
