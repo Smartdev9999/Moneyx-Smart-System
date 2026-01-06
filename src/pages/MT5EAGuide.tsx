@@ -11,7 +11,7 @@ const MT5EAGuide = () => {
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
 #property link      ""
-#property version   "5.10"
+#property version   "5.20"
 #property strict
 
 // *** Logo File ***
@@ -6751,7 +6751,20 @@ void OnTick()
       return;
    }
    
-   DrawTPSLLines();
+   // *** TIME FILTER CHECK - Block ALL new orders (Initial + Grid) ***
+   // TP/SL/Hedge/Accumulate still work above this point
+   if(InpUseTimeFilter && !IsWithinTradingHours())
+   {
+      if(InpDebugMode)
+      {
+         MqlDateTime dt;
+         TimeToStruct(TimeCurrent(), dt);
+         PrintFormat("TIME FILTER: Blocked at %02d:%02d (Server Time) | Sessions: %s, %s, %s", 
+                     dt.hour, dt.min, InpSession1, InpSession2, InpSession3);
+      }
+      UpdateChartComment("WAIT", "Outside trading hours");
+      return;
+   }
    
    // *** HEDGE LOCK CHECK ***
    // If hedge is active, stop ALL trading activities (no Grid, no new signals)
@@ -6892,11 +6905,7 @@ void OnTick()
       HandlePendingSignal();
    }
    
-   if(InpUseTimeFilter && !IsWithinTradingHours())
-   {
-      UpdateChartComment("WAIT", "Outside trading hours");
-      return;
-   }
+   // Time Filter check moved earlier (before Grid) - no duplicate check needed here
    
    // Check if we have enough data based on strategy
    if(InpSignalStrategy == STRATEGY_ZIGZAG && ZZPointCount < 4)
