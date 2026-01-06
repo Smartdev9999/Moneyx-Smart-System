@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                Multi_Currency_Statistical_EA.mq5 |
-//|                 Statistical Arbitrage (Pairs Trading) v3.3.8     |
+//|                 Statistical Arbitrage (Pairs Trading) v3.4.0     |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "3.38"
+#property version   "3.40"
 #property strict
 #property description "Statistical Arbitrage / Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
-#property description "v3.3.8: ATR Ratio Beta Mode for xxx/USD pairs"
+#property description "v3.4.0: RSI on Spread Momentum Filter (Zone-Based)"
 
 #include <Trade/Trade.mqh>
 
@@ -92,12 +92,6 @@ struct PairInfo
    double         entryZScoreBuy;    // Entry Z-Score for Buy (for Z-Score grid)
    double         entryZScoreSell;   // Entry Z-Score for Sell (for Z-Score grid)
    
-   // === v3.3.7: Last Averaging Lot (for compound calculation) ===
-   double         lastAvgLotBuyA;    // Last averaging lot for Buy A
-   double         lastAvgLotBuyB;    // Last averaging lot for Buy B
-   double         lastAvgLotSellA;   // Last averaging lot for Sell A
-   double         lastAvgLotSellB;   // Last averaging lot for Sell B
-   
    // === v3.2.9: Same-Tick Protection ===
    bool           justOpenedMainBuy;  // Prevent averaging in same tick as main order
    bool           justOpenedMainSell; // Prevent averaging in same tick as main order
@@ -105,6 +99,9 @@ struct PairInfo
    // === v3.2.9: Closed P/L Tracking ===
    double         closedProfitBuy;   // Accumulated closed profit for Buy side
    double         closedProfitSell;  // Accumulated closed profit for Sell side
+   
+   // === v3.4.0: RSI on Spread ===
+   double         rsiSpread;         // Current RSI of Spread (0-100)
    
    // === Combined ===
    double         totalPairProfit;   // profitBuy + profitSell
@@ -152,35 +149,14 @@ enum ENUM_CORR_METHOD
 };
 
 //+------------------------------------------------------------------+
-//| BETA CALCULATION MODE ENUM (v3.3.8 - Added ATR Ratio)              |
+//| BETA CALCULATION MODE ENUM (v3.2.6)                                |
 //+------------------------------------------------------------------+
 enum ENUM_BETA_MODE
 {
    BETA_AUTO_SMOOTH = 0,     // Auto + EMA Smoothing (Recommended)
-   BETA_ATR_RATIO,           // ATR Ratio (Best for xxx/USD pairs)
    BETA_PIP_VALUE_ONLY,      // Pip Value Ratio Only (Most Stable)
-   BETA_PERCENTAGE_RAW,      // Percentage Change (Volatile)
+   BETA_PERCENTAGE_RAW,      // Percentage Change (Volatile - Current)
    BETA_MANUAL_FIXED         // Manual Fixed Ratio
-};
-
-//+------------------------------------------------------------------+
-//| LOT CALCULATION MODE ENUM (v3.3.6)                                 |
-//+------------------------------------------------------------------+
-enum ENUM_LOT_CALC_MODE
-{
-   LOT_REGRESSION_BETA = 0,  // Regression Beta Only (LotB = LotA × β)
-   LOT_DOLLAR_NEUTRAL,       // Dollar-Neutral (LotB = LotA × PipA/PipB)
-   LOT_COMBINED              // Combined (LotB = LotA × β × PipA/PipB)
-};
-
-//+------------------------------------------------------------------+
-//| LOT PROGRESSION MODE ENUM (v3.3.7)                                 |
-//+------------------------------------------------------------------+
-enum ENUM_LOT_PROGRESSION_MODE
-{
-   LOT_PROG_FIXED = 0,       // Fixed Lot (Same as Main)
-   LOT_PROG_MULTIPLIER,      // Multiplier (×1.2 compound)
-   LOT_PROG_ADDITIVE         // Additive (+0.2 each)
 };
 
 input group "=== Correlation Calculation Settings ==="
@@ -196,16 +172,21 @@ input double   InpExitZScore = 0.5;             // Exit Z-Score Threshold
 input double   InpMinCorrelation = 0.70;        // Minimum Correlation
 input bool     InpDebugMode = false;            // Enable Debug Logs
 
+input group "=== RSI on Spread Filter (v3.4.0) ==="
+input bool     InpUseRSISpreadFilter = false;   // Enable RSI on Spread Filter
+input int      InpRSISpreadPeriod = 14;         // RSI Period for Spread
+input double   InpRSIOverbought = 70.0;         // RSI Overbought Level (SELL Zone)
+input double   InpRSIOversold = 30.0;           // RSI Oversold Level (BUY Zone)
+
 input group "=== Z-Score Timeframe Settings (v3.3.0) ==="
 input ENUM_TIMEFRAMES InpZScoreTimeframe = PERIOD_CURRENT;  // Z-Score Timeframe (CURRENT = use Correlation TF)
 input int      InpZScoreBars = 0;                            // Z-Score Bars (0 = use Correlation Bars)
 
-input group "=== Beta Calculation Settings (v3.3.6) ==="
+input group "=== Beta Calculation Settings (v3.2.6) ==="
 input ENUM_BETA_MODE InpBetaMode = BETA_AUTO_SMOOTH;   // Beta Calculation Mode
 input double   InpBetaSmoothFactor = 0.1;              // Beta EMA Smooth Factor (0.05-0.3)
 input double   InpManualBetaDefault = 1.0;             // Default Manual Beta (if MANUAL_FIXED)
 input double   InpPipBetaWeight = 0.7;                 // Pip-Value Beta Weight in Auto (0.5-0.9)
-input ENUM_LOT_CALC_MODE InpLotCalcMode = LOT_REGRESSION_BETA;  // Lot Calculation Mode (v3.3.6)
 
 //+------------------------------------------------------------------+
 //| CORRELATION DROP MODE ENUM (v3.2.9 HF2)                            |
@@ -223,16 +204,14 @@ input bool     InpRequirePositiveProfit = true;            // Require Positive P
 input int      InpMinHoldingBars = 0;                      // Minimum Holding Bars Before Exit
 input ENUM_CORR_DROP_MODE InpCorrDropMode = CORR_DROP_CLOSE_PROFIT_ONLY;  // Correlation Drop Behavior
 
-input group "=== Averaging System (v3.3.7 - Lot Progression) ==="
+input group "=== Averaging System (v3.3.0 - Simplified) ==="
 input ENUM_AVERAGING_MODE InpAveragingMode = AVG_MODE_DISABLED;  // Averaging Mode
 input string   InpZScoreGrid = "2.5;3.0;4.0;5.0";                // Z-Score Grid Levels (semicolon separated)
 input ENUM_TIMEFRAMES InpAtrTimeframe = PERIOD_H1;               // ATR Timeframe
 input int      InpAtrPeriod = 14;                                // ATR Period
 input double   InpAtrMultiplier = 1.5;                           // ATR Multiplier for Grid
-// v3.3.7: Lot Progression Mode
-input ENUM_LOT_PROGRESSION_MODE InpLotProgressionMode = LOT_PROG_MULTIPLIER;  // Lot Progression Mode
-input double   InpAveragingLotMult = 1.2;                        // Multiplier (for Multiplier mode)
-input double   InpAveragingLotAdd = 0.2;                         // Add Lot (for Additive mode)
+// v3.3.0: Removed InpMaxAveragingOrders - use InpDefaultMaxOrderBuy/Sell instead
+input double   InpAveragingLotMult = 1.0;                        // Averaging Lot Multiplier (1.0 = same)
 
 input group "=== Target Settings (v3.3.0) ==="
 input double   InpTotalTarget = 100.0;          // Total Portfolio Target ($)
@@ -700,7 +679,7 @@ int OnInit()
       CreateDashboard();
    }
    
-   PrintFormat("=== Statistical Arbitrage EA v3.3.5 Initialized - %d Active Pairs ===", g_activePairs);
+   PrintFormat("=== Statistical Arbitrage EA v3.4.0 Initialized - %d Active Pairs ===", g_activePairs);
    return(INIT_SUCCEEDED);
 }
 
@@ -925,6 +904,9 @@ void SetupPair(int index, bool enabled, string symbolA, string symbolB)
    g_pairs[index].closedProfitBuy = 0;
    g_pairs[index].closedProfitSell = 0;
    
+   // v3.4.0: RSI on Spread
+   g_pairs[index].rsiSpread = 50;  // Neutral default
+   
    // Combined
    g_pairs[index].totalPairProfit = 0;
    
@@ -1027,6 +1009,9 @@ void OnTick()
       g_lastZScoreUpdate = zCandleTime;
       // Update Z-Score specific data using its own timeframe
       UpdateZScoreData();
+      
+      // v3.4.0: Calculate RSI on Spread after Z-Score data is updated
+      CalculateAllRSIonSpread();
    }
    
    // v3.2.7: Check for auto-resume after DD
@@ -1622,7 +1607,7 @@ double CalculateReturnCorrelation(int pairIndex)
 }
 
 //+------------------------------------------------------------------+
-//| Calculate Hedge Ratio (Beta) - v3.3.8 (Added ATR Ratio Mode)       |
+//| Calculate Hedge Ratio (Beta) - v3.2.6                              |
 //+------------------------------------------------------------------+
 void CalculateHedgeRatio(int pairIndex)
 {
@@ -1645,14 +1630,6 @@ void CalculateHedgeRatio(int pairIndex)
       return;
    }
    
-   // v3.3.8: ATR Ratio Mode (Best for xxx/USD pairs)
-   if(InpBetaMode == BETA_ATR_RATIO)
-   {
-      double atrBeta = CalculateATRBasedBeta(pairIndex);
-      g_pairs[pairIndex].hedgeRatio = atrBeta;
-      return;
-   }
-   
    // Percentage Raw Mode
    if(InpBetaMode == BETA_PERCENTAGE_RAW)
    {
@@ -1662,12 +1639,11 @@ void CalculateHedgeRatio(int pairIndex)
    }
    
    // Auto + EMA Smoothing Mode (Recommended)
-   // v3.3.8: Use ATR Ratio instead of Pip Value for better accuracy on xxx/USD pairs
-   double atrBeta = CalculateATRBasedBeta(pairIndex);
+   double pipBeta = CalculatePipValueBeta(pairIndex);
    double pctBeta = CalculatePriceBasedBeta(pairIndex);
    
-   // Weighted combination using ATR instead of Pip Value
-   double rawBeta = (atrBeta * InpPipBetaWeight) + (pctBeta * (1.0 - InpPipBetaWeight));
+   // Weighted combination
+   double rawBeta = (pipBeta * InpPipBetaWeight) + (pctBeta * (1.0 - InpPipBetaWeight));
    
    // Apply EMA smoothing
    double smoothedBeta;
@@ -1683,85 +1659,6 @@ void CalculateHedgeRatio(int pairIndex)
    
    g_pairs[pairIndex].prevBeta = smoothedBeta;
    g_pairs[pairIndex].hedgeRatio = smoothedBeta;
-}
-
-//+------------------------------------------------------------------+
-//| Calculate ATR-Based Beta (v3.3.8) - Best for xxx/USD pairs         |
-//| Measures relative volatility: ATR(A)/ATR(B) normalized to pips    |
-//+------------------------------------------------------------------+
-double CalculateATRBasedBeta(int pairIndex)
-{
-   string symbolA = g_pairs[pairIndex].symbolA;
-   string symbolB = g_pairs[pairIndex].symbolB;
-   
-   // Get symbol point sizes for pip conversion
-   double pointA = SymbolInfoDouble(symbolA, SYMBOL_POINT);
-   double pointB = SymbolInfoDouble(symbolB, SYMBOL_POINT);
-   
-   if(pointA <= 0 || pointB <= 0) return 1.0;
-   
-   // Determine pip multiplier (5-digit vs 4-digit brokers)
-   int digitsA = (int)SymbolInfoInteger(symbolA, SYMBOL_DIGITS);
-   int digitsB = (int)SymbolInfoInteger(symbolB, SYMBOL_DIGITS);
-   double pipMultA = (digitsA == 5 || digitsA == 3) ? 10.0 : 1.0;
-   double pipMultB = (digitsB == 5 || digitsB == 3) ? 10.0 : 1.0;
-   
-   // Calculate ATR using simplified method (for speed in tester)
-   double atrA = 0, atrB = 0;
-   int atrPeriod = 14;
-   
-   // Use CopyClose for reliability instead of iATR handles
-   double highsA[], lowsA[], closesA[];
-   double highsB[], lowsB[], closesB[];
-   
-   ArraySetAsSeries(highsA, true);
-   ArraySetAsSeries(lowsA, true);
-   ArraySetAsSeries(closesA, true);
-   ArraySetAsSeries(highsB, true);
-   ArraySetAsSeries(lowsB, true);
-   ArraySetAsSeries(closesB, true);
-   
-   int copiedA = CopyHigh(symbolA, InpCorrTimeframe, 0, atrPeriod + 1, highsA);
-   int copiedAL = CopyLow(symbolA, InpCorrTimeframe, 0, atrPeriod + 1, lowsA);
-   int copiedAC = CopyClose(symbolA, InpCorrTimeframe, 0, atrPeriod + 1, closesA);
-   
-   int copiedB = CopyHigh(symbolB, InpCorrTimeframe, 0, atrPeriod + 1, highsB);
-   int copiedBL = CopyLow(symbolB, InpCorrTimeframe, 0, atrPeriod + 1, lowsB);
-   int copiedBC = CopyClose(symbolB, InpCorrTimeframe, 0, atrPeriod + 1, closesB);
-   
-   if(copiedA < atrPeriod || copiedB < atrPeriod) return 1.0;
-   
-   // Calculate True Range sum for ATR
-   double sumTRA = 0, sumTRB = 0;
-   for(int i = 0; i < atrPeriod; i++)
-   {
-      double tr_hl_A = highsA[i] - lowsA[i];
-      double tr_hc_A = MathAbs(highsA[i] - closesA[i + 1]);
-      double tr_lc_A = MathAbs(lowsA[i] - closesA[i + 1]);
-      sumTRA += MathMax(tr_hl_A, MathMax(tr_hc_A, tr_lc_A));
-      
-      double tr_hl_B = highsB[i] - lowsB[i];
-      double tr_hc_B = MathAbs(highsB[i] - closesB[i + 1]);
-      double tr_lc_B = MathAbs(lowsB[i] - closesB[i + 1]);
-      sumTRB += MathMax(tr_hl_B, MathMax(tr_hc_B, tr_lc_B));
-   }
-   
-   atrA = sumTRA / atrPeriod;
-   atrB = sumTRB / atrPeriod;
-   
-   if(atrB <= 0) return 1.0;
-   
-   // Convert ATR to pips
-   double atrPipsA = atrA / (pointA * pipMultA);
-   double atrPipsB = atrB / (pointB * pipMultB);
-   
-   if(atrPipsB <= 0) return 1.0;
-   
-   // Beta = How many pips A moves per pip of B
-   double beta = atrPipsA / atrPipsB;
-   
-   // Clamp to reasonable range
-   return MathMax(0.1, MathMin(10.0, beta));
 }
 
 //+------------------------------------------------------------------+
@@ -1830,8 +1727,7 @@ double GetNotionalValuePerLot(string symbol)
 }
 
 //+------------------------------------------------------------------+
-//| Calculate Price-Based Beta using Percentage Change (v3.3.6 Fixed)  |
-//| Formula: β = Cov(A,B) / Var(B) where B is the independent variable |
+//| Calculate Price-Based Beta using Percentage Change                 |
 //+------------------------------------------------------------------+
 double CalculatePriceBasedBeta(int pairIndex)
 {
@@ -1842,7 +1738,7 @@ double CalculatePriceBasedBeta(int pairIndex)
    string symbolB = g_pairs[pairIndex].symbolB;
    
    double sumA = 0, sumB = 0;
-   double sumB2 = 0;    // v3.3.6: Changed from sumA2 to sumB2 for Var(B)
+   double sumA2 = 0;
    double sumAB = 0;
    int count = 0;
    
@@ -1862,7 +1758,7 @@ double CalculatePriceBasedBeta(int pairIndex)
       
       sumA += pctA;
       sumB += pctB;
-      sumB2 += pctB * pctB;  // v3.3.6: Var(B) not Var(A)
+      sumA2 += pctA * pctA;
       sumAB += pctA * pctB;
       count++;
    }
@@ -1872,15 +1768,14 @@ double CalculatePriceBasedBeta(int pairIndex)
    double meanA = sumA / count;
    double meanB = sumB / count;
    
-   // v3.3.6 Fixed: β = Cov(A,B) / Var(B) - correct Linear Regression formula
-   // A = α + β × B + ε → β tells how much A moves per unit of B
+   // Beta = Cov(A,B) / Var(A) from percentage changes
    double covariance = (sumAB / count) - (meanA * meanB);
-   double varianceB = (sumB2 / count) - (meanB * meanB);  // v3.3.6: Use Var(B)
+   double varianceA = (sumA2 / count) - (meanA * meanA);
    
-   if(varianceB <= 0) return 1.0;
+   if(varianceA <= 0) return 1.0;
    
    // For negative correlation, we still want positive beta for hedge ratio
-   double beta = MathAbs(covariance / varianceB);  // v3.3.6: Divide by Var(B)
+   double beta = MathAbs(covariance / varianceA);
    
    // Clamp beta to reasonable range (0.1 to 10.0)
    beta = MathMax(0.1, MathMin(10.0, beta));
@@ -1973,8 +1868,7 @@ double GetPipValue(string symbol)
 }
 
 //+------------------------------------------------------------------+
-//| Calculate Dollar-Neutral Lot Sizes (v3.3.6 - Fixed)                |
-//| Supports 3 modes: Regression Beta, Dollar-Neutral, Combined        |
+//| Calculate Dollar-Neutral Lot Sizes (v3.3.4)                        |
 //+------------------------------------------------------------------+
 void CalculateDollarNeutralLots(int pairIndex)
 {
@@ -1987,40 +1881,25 @@ void CalculateDollarNeutralLots(int pairIndex)
    double pipValueA = GetPipValue(symbolA);
    double pipValueB = GetPipValue(symbolB);
    
-   // LotA = Base Lot (normalized)
-   double lotA = NormalizeLot(symbolA, baseLot);
-   double rawLotB = 0;
-   
-   // v3.3.6: Calculate LotB based on selected mode
-   switch(InpLotCalcMode)
+   // v3.3.4: Enhanced validation with warning logs
+   if(pipValueA == 0 || pipValueB == 0)
    {
-      case LOT_REGRESSION_BETA:
-         // LotB = LotA × β (Pure Regression - no pip value correction)
-         // β from Linear Regression already accounts for relative movement
-         rawLotB = baseLot * hedgeRatio;
-         break;
-         
-      case LOT_DOLLAR_NEUTRAL:
-         // LotB = LotA × (PipValueA / PipValueB) (Ignore Beta, pure dollar-neutral)
-         if(pipValueB > 0 && pipValueA > 0)
-            rawLotB = baseLot * (pipValueA / pipValueB);
-         else
-            rawLotB = baseLot;
-         break;
-         
-      case LOT_COMBINED:
-         // LotB = LotA × β × (PipValueA / PipValueB) (Legacy behavior)
-         if(pipValueB > 0 && pipValueA > 0)
-            rawLotB = baseLot * hedgeRatio * (pipValueA / pipValueB);
-         else
-            rawLotB = baseLot * hedgeRatio;
-         break;
-         
-      default:
-         rawLotB = baseLot * hedgeRatio;
-         break;
+      PrintFormat("WARNING Pair %d: Pip values invalid (A:%.5f B:%.5f) - Using normalized base lot %.2f for both",
+                  pairIndex + 1, pipValueA, pipValueB, baseLot);
+      
+      // Normalize base lot for each symbol
+      g_pairs[pairIndex].lotBuyA = NormalizeLot(symbolA, baseLot);
+      g_pairs[pairIndex].lotBuyB = NormalizeLot(symbolB, baseLot);
+      g_pairs[pairIndex].lotSellA = NormalizeLot(symbolA, baseLot);
+      g_pairs[pairIndex].lotSellB = NormalizeLot(symbolB, baseLot);
+      return;
    }
    
+   // LotA = Base Lot (normalized)
+   double lotA = NormalizeLot(symbolA, baseLot);
+   
+   // LotB = LotA × β × (PipValueA / PipValueB)
+   double rawLotB = baseLot * hedgeRatio * (pipValueA / pipValueB);
    double lotB = NormalizeLot(symbolB, rawLotB);
    
    // v3.3.4: Ensure lotB is not too small
@@ -2038,22 +1917,122 @@ void CalculateDollarNeutralLots(int pairIndex)
    g_pairs[pairIndex].lotSellA = lotA;
    g_pairs[pairIndex].lotSellB = lotB;
    
-   // v3.3.6: Enhanced debug log with mode info
+   // v3.3.4: Debug log for lot calculation
    if(InpDebugMode)
    {
-      string modeStr = (InpLotCalcMode == LOT_REGRESSION_BETA) ? "RegBeta" : 
-                       (InpLotCalcMode == LOT_DOLLAR_NEUTRAL) ? "DollarNeutral" : "Combined";
-      PrintFormat("Pair %d Lots [%s]: A=%.2f B=%.2f (BaseLot=%.2f, Beta=%.4f, PipA=%.5f, PipB=%.5f)", 
-                  pairIndex + 1, modeStr, lotA, lotB, baseLot, hedgeRatio, pipValueA, pipValueB);
+      PrintFormat("Pair %d Lots: A=%.2f B=%.2f (BaseLot=%.2f, Beta=%.4f, PipA=%.5f, PipB=%.5f)", 
+                  pairIndex + 1, lotA, lotB, baseLot, hedgeRatio, pipValueA, pipValueB);
    }
 }
 
 //+------------------------------------------------------------------+
-//| ================ SIGNAL ENGINE (v3.3.0) ================           |
+//| ================ RSI ON SPREAD (v3.4.0) ================           |
 //+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
-//| Analyze All Pairs for Trading Signals (v3.3.0)                     |
+//| Calculate RSI on Spread for Pair (v3.4.0)                          |
+//+------------------------------------------------------------------+
+void CalculateRSIonSpread(int pairIndex)
+{
+   if(!InpUseRSISpreadFilter) return;
+   if(!g_pairs[pairIndex].dataValid) return;
+   
+   int period = InpRSISpreadPeriod;
+   int barsNeeded = period + 1;
+   
+   // Check if we have enough spread history data
+   if(barsNeeded > MAX_LOOKBACK)
+   {
+      g_pairs[pairIndex].rsiSpread = 50;  // Neutral
+      return;
+   }
+   
+   // Calculate RSI from Spread History (zScoreSpreadHistory)
+   double avgGain = 0;
+   double avgLoss = 0;
+   int validCount = 0;
+   
+   for(int i = 0; i < period; i++)
+   {
+      double currentSpread = g_pairData[pairIndex].zScoreSpreadHistory[i];
+      double prevSpread = g_pairData[pairIndex].zScoreSpreadHistory[i + 1];
+      
+      if(prevSpread == 0) continue;  // Skip invalid data
+      
+      double change = currentSpread - prevSpread;
+      
+      if(change > 0)
+         avgGain += change;
+      else
+         avgLoss += MathAbs(change);
+      
+      validCount++;
+   }
+   
+   if(validCount < period / 2)
+   {
+      g_pairs[pairIndex].rsiSpread = 50;  // Not enough data, neutral
+      return;
+   }
+   
+   avgGain /= period;
+   avgLoss /= period;
+   
+   // Calculate RSI: 100 - (100 / (1 + RS))
+   double rs = (avgLoss == 0) ? 100 : avgGain / avgLoss;
+   g_pairs[pairIndex].rsiSpread = 100.0 - (100.0 / (1.0 + rs));
+   
+   // Clamp to 0-100 range
+   if(g_pairs[pairIndex].rsiSpread < 0) g_pairs[pairIndex].rsiSpread = 0;
+   if(g_pairs[pairIndex].rsiSpread > 100) g_pairs[pairIndex].rsiSpread = 100;
+}
+
+//+------------------------------------------------------------------+
+//| Calculate RSI on Spread for All Pairs (v3.4.0)                     |
+//+------------------------------------------------------------------+
+void CalculateAllRSIonSpread()
+{
+   if(!InpUseRSISpreadFilter) return;
+   
+   for(int i = 0; i < MAX_PAIRS; i++)
+   {
+      if(g_pairs[i].enabled && g_pairs[i].dataValid)
+      {
+         CalculateRSIonSpread(i);
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Check RSI Entry Confirmation (v3.4.0)                              |
+//+------------------------------------------------------------------+
+bool CheckRSIEntryConfirmation(int pairIndex, string side)
+{
+   // If filter is disabled, always confirm
+   if(!InpUseRSISpreadFilter) return true;
+   
+   double rsi = g_pairs[pairIndex].rsiSpread;
+   
+   if(side == "BUY")
+   {
+      // BUY: RSI should be in Oversold zone (< InpRSIOversold)
+      return (rsi <= InpRSIOversold);
+   }
+   else if(side == "SELL")
+   {
+      // SELL: RSI should be in Overbought zone (> InpRSIOverbought)
+      return (rsi >= InpRSIOverbought);
+   }
+   
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| ================ SIGNAL ENGINE (v3.4.0) ================           |
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//| Analyze All Pairs for Trading Signals (v3.4.0)                     |
 //+------------------------------------------------------------------+
 void AnalyzeAllPairs()
 {
@@ -2070,18 +2049,23 @@ void AnalyzeAllPairs()
       // === BUY SIDE ENTRY ===
       // Condition: directionBuy == -1 (Ready) AND Z-Score < -EntryThreshold
       // v3.3.0: Use maxOrderBuy as total limit (Main + Grid)
+      // v3.4.0: Added RSI on Spread confirmation
       if(g_pairs[i].directionBuy == -1 && g_pairs[i].orderCountBuy < g_pairs[i].maxOrderBuy)
       {
          if(zScore < -InpEntryZScore)
          {
-            if(OpenBuySideTrade(i))
+            // v3.4.0: Check RSI Entry Confirmation (BUY = RSI in Oversold zone)
+            if(CheckRSIEntryConfirmation(i, "BUY"))
             {
-               g_pairs[i].directionBuy = 1;  // Active trade
-               // v3.2.7: Store entry Z-Score for averaging
-               g_pairs[i].entryZScoreBuy = zScore;
-               g_pairs[i].lastAvgPriceBuy = SymbolInfoDouble(g_pairs[i].symbolA, SYMBOL_ASK);
-               // v3.2.9: Set flag to prevent averaging in same tick
-               g_pairs[i].justOpenedMainBuy = true;
+               if(OpenBuySideTrade(i))
+               {
+                  g_pairs[i].directionBuy = 1;  // Active trade
+                  // v3.2.7: Store entry Z-Score for averaging
+                  g_pairs[i].entryZScoreBuy = zScore;
+                  g_pairs[i].lastAvgPriceBuy = SymbolInfoDouble(g_pairs[i].symbolA, SYMBOL_ASK);
+                  // v3.2.9: Set flag to prevent averaging in same tick
+                  g_pairs[i].justOpenedMainBuy = true;
+               }
             }
          }
       }
@@ -2089,18 +2073,23 @@ void AnalyzeAllPairs()
       // === SELL SIDE ENTRY ===
       // Condition: directionSell == -1 (Ready) AND Z-Score > +EntryThreshold
       // v3.3.0: Use maxOrderSell as total limit (Main + Grid)
+      // v3.4.0: Added RSI on Spread confirmation
       if(g_pairs[i].directionSell == -1 && g_pairs[i].orderCountSell < g_pairs[i].maxOrderSell)
       {
          if(zScore > InpEntryZScore)
          {
-            if(OpenSellSideTrade(i))
+            // v3.4.0: Check RSI Entry Confirmation (SELL = RSI in Overbought zone)
+            if(CheckRSIEntryConfirmation(i, "SELL"))
             {
-               g_pairs[i].directionSell = 1;  // Active trade
-               // v3.2.7: Store entry Z-Score for averaging
-               g_pairs[i].entryZScoreSell = zScore;
-               g_pairs[i].lastAvgPriceSell = SymbolInfoDouble(g_pairs[i].symbolA, SYMBOL_BID);
-               // v3.2.9: Set flag to prevent averaging in same tick
-               g_pairs[i].justOpenedMainSell = true;
+               if(OpenSellSideTrade(i))
+               {
+                  g_pairs[i].directionSell = 1;  // Active trade
+                  // v3.2.7: Store entry Z-Score for averaging
+                  g_pairs[i].entryZScoreSell = zScore;
+                  g_pairs[i].lastAvgPriceSell = SymbolInfoDouble(g_pairs[i].symbolA, SYMBOL_BID);
+                  // v3.2.9: Set flag to prevent averaging in same tick
+                  g_pairs[i].justOpenedMainSell = true;
+               }
             }
          }
       }
@@ -2274,60 +2263,16 @@ void CheckATRAveraging(int pairIndex, string side)
 }
 
 //+------------------------------------------------------------------+
-//| Calculate Progressive Lot (v3.3.7)                                 |
-//+------------------------------------------------------------------+
-double CalculateProgressiveLot(double baseLot, double lastLot, int avgCount)
-{
-   double resultLot = baseLot;
-   
-   switch(InpLotProgressionMode)
-   {
-      case LOT_PROG_FIXED:
-         // Use same lot as Main Order
-         resultLot = baseLot;
-         break;
-         
-      case LOT_PROG_MULTIPLIER:
-         // Compound: lastLot × Multiplier
-         // avgCount 0 (first avg order) → baseLot × Mult
-         // avgCount 1+ → lastLot × Mult
-         if(avgCount == 0 || lastLot <= 0)
-            resultLot = baseLot * InpAveragingLotMult;
-         else
-            resultLot = lastLot * InpAveragingLotMult;
-         break;
-         
-      case LOT_PROG_ADDITIVE:
-         // Additive: baseLot + (avgCount+1) × AddValue
-         // Order 1 = baseLot + 0.2
-         // Order 2 = baseLot + 0.4
-         resultLot = baseLot + (InpAveragingLotAdd * (avgCount + 1));
-         break;
-   }
-   
-   return resultLot;
-}
-
-//+------------------------------------------------------------------+
-//| Open Averaging Buy Position (v3.3.7 - with Lot Progression)        |
+//| Open Averaging Buy Position (v3.3.3 - with Normalization & Rollback)|
 //+------------------------------------------------------------------+
 void OpenAveragingBuy(int pairIndex)
 {
    string symbolA = g_pairs[pairIndex].symbolA;
    string symbolB = g_pairs[pairIndex].symbolB;
    
-   // v3.3.7: Calculate progressive lot
-   double baseLotA = g_pairs[pairIndex].lotBuyA;
-   double baseLotB = g_pairs[pairIndex].lotBuyB;
-   double lastLotA = g_pairs[pairIndex].lastAvgLotBuyA;
-   double lastLotB = g_pairs[pairIndex].lastAvgLotBuyB;
-   int avgCount = g_pairs[pairIndex].avgOrderCountBuy;
-   
-   double rawLotA = CalculateProgressiveLot(baseLotA, lastLotA, avgCount);
-   double rawLotB = CalculateProgressiveLot(baseLotB, lastLotB, avgCount);
-   
-   double lotA = NormalizeLot(symbolA, rawLotA);
-   double lotB = NormalizeLot(symbolB, rawLotB);
+   // v3.3.3: Normalize lots for each symbol's volume step
+   double lotA = NormalizeLot(symbolA, g_pairs[pairIndex].lotBuyA * InpAveragingLotMult);
+   double lotB = NormalizeLot(symbolB, g_pairs[pairIndex].lotBuyB * InpAveragingLotMult);
    int corrType = g_pairs[pairIndex].correlationType;
    
    string comment = StringFormat("StatArb_AVG_BUY_%d", pairIndex + 1);
@@ -2362,38 +2307,25 @@ void OpenAveragingBuy(int pairIndex)
       return;
    }
    
-   // v3.3.7: Save last lot for compound calculation
-   g_pairs[pairIndex].lastAvgLotBuyA = lotA;
-   g_pairs[pairIndex].lastAvgLotBuyB = lotB;
    g_pairs[pairIndex].avgOrderCountBuy++;
    g_pairs[pairIndex].orderCountBuy++;
    
-   PrintFormat("Pair %d AVG BUY #%d opened at Z=%.2f (A:%.2f B:%.2f, Mode:%s)", 
+   PrintFormat("Pair %d AVG BUY #%d opened at Z=%.2f (A:%.2f B:%.2f)", 
                pairIndex + 1, g_pairs[pairIndex].avgOrderCountBuy, 
-               g_pairs[pairIndex].zScore, lotA, lotB,
-               InpLotProgressionMode == LOT_PROG_MULTIPLIER ? "Mult" : (InpLotProgressionMode == LOT_PROG_ADDITIVE ? "Add" : "Fix"));
+               g_pairs[pairIndex].zScore, lotA, lotB);
 }
 
 //+------------------------------------------------------------------+
-//| Open Averaging Sell Position (v3.3.7 - with Lot Progression)       |
+//| Open Averaging Sell Position (v3.3.3 - with Normalization & Rollback)|
 //+------------------------------------------------------------------+
 void OpenAveragingSell(int pairIndex)
 {
    string symbolA = g_pairs[pairIndex].symbolA;
    string symbolB = g_pairs[pairIndex].symbolB;
    
-   // v3.3.7: Calculate progressive lot
-   double baseLotA = g_pairs[pairIndex].lotSellA;
-   double baseLotB = g_pairs[pairIndex].lotSellB;
-   double lastLotA = g_pairs[pairIndex].lastAvgLotSellA;
-   double lastLotB = g_pairs[pairIndex].lastAvgLotSellB;
-   int avgCount = g_pairs[pairIndex].avgOrderCountSell;
-   
-   double rawLotA = CalculateProgressiveLot(baseLotA, lastLotA, avgCount);
-   double rawLotB = CalculateProgressiveLot(baseLotB, lastLotB, avgCount);
-   
-   double lotA = NormalizeLot(symbolA, rawLotA);
-   double lotB = NormalizeLot(symbolB, rawLotB);
+   // v3.3.3: Normalize lots for each symbol's volume step
+   double lotA = NormalizeLot(symbolA, g_pairs[pairIndex].lotSellA * InpAveragingLotMult);
+   double lotB = NormalizeLot(symbolB, g_pairs[pairIndex].lotSellB * InpAveragingLotMult);
    int corrType = g_pairs[pairIndex].correlationType;
    
    string comment = StringFormat("StatArb_AVG_SELL_%d", pairIndex + 1);
@@ -2428,16 +2360,12 @@ void OpenAveragingSell(int pairIndex)
       return;
    }
    
-   // v3.3.7: Save last lot for compound calculation
-   g_pairs[pairIndex].lastAvgLotSellA = lotA;
-   g_pairs[pairIndex].lastAvgLotSellB = lotB;
    g_pairs[pairIndex].avgOrderCountSell++;
    g_pairs[pairIndex].orderCountSell++;
    
-   PrintFormat("Pair %d AVG SELL #%d opened at Z=%.2f (A:%.2f B:%.2f, Mode:%s)", 
+   PrintFormat("Pair %d AVG SELL #%d opened at Z=%.2f (A:%.2f B:%.2f)", 
                pairIndex + 1, g_pairs[pairIndex].avgOrderCountSell, 
-               g_pairs[pairIndex].zScore, lotA, lotB,
-               InpLotProgressionMode == LOT_PROG_MULTIPLIER ? "Mult" : (InpLotProgressionMode == LOT_PROG_ADDITIVE ? "Add" : "Fix"));
+               g_pairs[pairIndex].zScore, lotA, lotB);
 }
 
 //+------------------------------------------------------------------+
@@ -2744,12 +2672,10 @@ bool CloseBuySide(int pairIndex)
       g_pairs[pairIndex].orderCountBuy = 0;
       g_pairs[pairIndex].lotBuyA = 0;
       g_pairs[pairIndex].lotBuyB = 0;
-      // v3.3.7: Reset averaging (including lot trackers)
+      // v3.2.7: Reset averaging
       g_pairs[pairIndex].avgOrderCountBuy = 0;
       g_pairs[pairIndex].lastAvgPriceBuy = 0;
       g_pairs[pairIndex].entryZScoreBuy = 0;
-      g_pairs[pairIndex].lastAvgLotBuyA = 0;
-      g_pairs[pairIndex].lastAvgLotBuyB = 0;
       
       return true;
    }
@@ -2837,12 +2763,10 @@ bool CloseSellSide(int pairIndex)
       g_pairs[pairIndex].orderCountSell = 0;
       g_pairs[pairIndex].lotSellA = 0;
       g_pairs[pairIndex].lotSellB = 0;
-      // v3.3.7: Reset averaging (including lot trackers)
+      // v3.2.7: Reset averaging
       g_pairs[pairIndex].avgOrderCountSell = 0;
       g_pairs[pairIndex].lastAvgPriceSell = 0;
       g_pairs[pairIndex].entryZScoreSell = 0;
-      g_pairs[pairIndex].lastAvgLotSellA = 0;
-      g_pairs[pairIndex].lastAvgLotSellB = 0;
       
       return true;
    }
@@ -3003,8 +2927,6 @@ void ForceCloseBuySide(int pairIndex)
    g_pairs[pairIndex].avgOrderCountBuy = 0;
    g_pairs[pairIndex].lastAvgPriceBuy = 0;
    g_pairs[pairIndex].entryZScoreBuy = 0;
-   g_pairs[pairIndex].lastAvgLotBuyA = 0;
-   g_pairs[pairIndex].lastAvgLotBuyB = 0;
    
    PrintFormat("Pair %d BUY SIDE FORCE CLOSED (Orphan Recovery)", pairIndex + 1);
 }
@@ -3069,8 +2991,6 @@ void ForceCloseSellSide(int pairIndex)
    g_pairs[pairIndex].avgOrderCountSell = 0;
    g_pairs[pairIndex].lastAvgPriceSell = 0;
    g_pairs[pairIndex].entryZScoreSell = 0;
-   g_pairs[pairIndex].lastAvgLotSellA = 0;
-   g_pairs[pairIndex].lastAvgLotSellB = 0;
    
    PrintFormat("Pair %d SELL SIDE FORCE CLOSED (Orphan Recovery)", pairIndex + 1);
 }

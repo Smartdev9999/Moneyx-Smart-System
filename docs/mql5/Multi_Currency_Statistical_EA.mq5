@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                Multi_Currency_Statistical_EA.mq5 |
-//|                 Statistical Arbitrage (Pairs Trading) v3.3.5     |
+//|                 Statistical Arbitrage (Pairs Trading) v3.4.0     |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "3.35"
+#property version   "3.40"
 #property strict
 #property description "Statistical Arbitrage / Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
-#property description "v3.3.5: Robust Lot Calculation & Race Condition Fix"
+#property description "v3.4.0: RSI on Spread Momentum Filter (Zone-Based)"
 
 #include <Trade/Trade.mqh>
 
@@ -100,6 +100,9 @@ struct PairInfo
    double         closedProfitBuy;   // Accumulated closed profit for Buy side
    double         closedProfitSell;  // Accumulated closed profit for Sell side
    
+   // === v3.4.0: RSI on Spread ===
+   double         rsiSpread;         // Current RSI of Spread (0-100)
+   
    // === Combined ===
    double         totalPairProfit;   // profitBuy + profitSell
 };
@@ -168,6 +171,12 @@ input double   InpEntryZScore = 2.0;            // Entry Z-Score Threshold
 input double   InpExitZScore = 0.5;             // Exit Z-Score Threshold
 input double   InpMinCorrelation = 0.70;        // Minimum Correlation
 input bool     InpDebugMode = false;            // Enable Debug Logs
+
+input group "=== RSI on Spread Filter (v3.4.0) ==="
+input bool     InpUseRSISpreadFilter = false;   // Enable RSI on Spread Filter
+input int      InpRSISpreadPeriod = 14;         // RSI Period for Spread
+input double   InpRSIOverbought = 70.0;         // RSI Overbought Level (SELL Zone)
+input double   InpRSIOversold = 30.0;           // RSI Oversold Level (BUY Zone)
 
 input group "=== Z-Score Timeframe Settings (v3.3.0) ==="
 input ENUM_TIMEFRAMES InpZScoreTimeframe = PERIOD_CURRENT;  // Z-Score Timeframe (CURRENT = use Correlation TF)
@@ -670,7 +679,7 @@ int OnInit()
       CreateDashboard();
    }
    
-   PrintFormat("=== Statistical Arbitrage EA v3.3.5 Initialized - %d Active Pairs ===", g_activePairs);
+   PrintFormat("=== Statistical Arbitrage EA v3.4.0 Initialized - %d Active Pairs ===", g_activePairs);
    return(INIT_SUCCEEDED);
 }
 
@@ -895,6 +904,9 @@ void SetupPair(int index, bool enabled, string symbolA, string symbolB)
    g_pairs[index].closedProfitBuy = 0;
    g_pairs[index].closedProfitSell = 0;
    
+   // v3.4.0: RSI on Spread
+   g_pairs[index].rsiSpread = 50;  // Neutral default
+   
    // Combined
    g_pairs[index].totalPairProfit = 0;
    
@@ -997,6 +1009,9 @@ void OnTick()
       g_lastZScoreUpdate = zCandleTime;
       // Update Z-Score specific data using its own timeframe
       UpdateZScoreData();
+      
+      // v3.4.0: Calculate RSI on Spread after Z-Score data is updated
+      CalculateAllRSIonSpread();
    }
    
    // v3.2.7: Check for auto-resume after DD
@@ -1911,11 +1926,113 @@ void CalculateDollarNeutralLots(int pairIndex)
 }
 
 //+------------------------------------------------------------------+
-//| ================ SIGNAL ENGINE (v3.3.0) ================           |
+//| ================ RSI ON SPREAD (v3.4.0) ================           |
 //+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
-//| Analyze All Pairs for Trading Signals (v3.3.0)                     |
+//| Calculate RSI on Spread for Pair (v3.4.0)                          |
+//+------------------------------------------------------------------+
+void CalculateRSIonSpread(int pairIndex)
+{
+   if(!InpUseRSISpreadFilter) return;
+   if(!g_pairs[pairIndex].dataValid) return;
+   
+   int period = InpRSISpreadPeriod;
+   int barsNeeded = period + 1;
+   
+   // Check if we have enough spread history data
+   if(barsNeeded > MAX_LOOKBACK)
+   {
+      g_pairs[pairIndex].rsiSpread = 50;  // Neutral
+      return;
+   }
+   
+   // Calculate RSI from Spread History (zScoreSpreadHistory)
+   double avgGain = 0;
+   double avgLoss = 0;
+   int validCount = 0;
+   
+   for(int i = 0; i < period; i++)
+   {
+      double currentSpread = g_pairData[pairIndex].zScoreSpreadHistory[i];
+      double prevSpread = g_pairData[pairIndex].zScoreSpreadHistory[i + 1];
+      
+      if(prevSpread == 0) continue;  // Skip invalid data
+      
+      double change = currentSpread - prevSpread;
+      
+      if(change > 0)
+         avgGain += change;
+      else
+         avgLoss += MathAbs(change);
+      
+      validCount++;
+   }
+   
+   if(validCount < period / 2)
+   {
+      g_pairs[pairIndex].rsiSpread = 50;  // Not enough data, neutral
+      return;
+   }
+   
+   avgGain /= period;
+   avgLoss /= period;
+   
+   // Calculate RSI: 100 - (100 / (1 + RS))
+   double rs = (avgLoss == 0) ? 100 : avgGain / avgLoss;
+   g_pairs[pairIndex].rsiSpread = 100.0 - (100.0 / (1.0 + rs));
+   
+   // Clamp to 0-100 range
+   if(g_pairs[pairIndex].rsiSpread < 0) g_pairs[pairIndex].rsiSpread = 0;
+   if(g_pairs[pairIndex].rsiSpread > 100) g_pairs[pairIndex].rsiSpread = 100;
+}
+
+//+------------------------------------------------------------------+
+//| Calculate RSI on Spread for All Pairs (v3.4.0)                     |
+//+------------------------------------------------------------------+
+void CalculateAllRSIonSpread()
+{
+   if(!InpUseRSISpreadFilter) return;
+   
+   for(int i = 0; i < MAX_PAIRS; i++)
+   {
+      if(g_pairs[i].enabled && g_pairs[i].dataValid)
+      {
+         CalculateRSIonSpread(i);
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Check RSI Entry Confirmation (v3.4.0)                              |
+//+------------------------------------------------------------------+
+bool CheckRSIEntryConfirmation(int pairIndex, string side)
+{
+   // If filter is disabled, always confirm
+   if(!InpUseRSISpreadFilter) return true;
+   
+   double rsi = g_pairs[pairIndex].rsiSpread;
+   
+   if(side == "BUY")
+   {
+      // BUY: RSI should be in Oversold zone (< InpRSIOversold)
+      return (rsi <= InpRSIOversold);
+   }
+   else if(side == "SELL")
+   {
+      // SELL: RSI should be in Overbought zone (> InpRSIOverbought)
+      return (rsi >= InpRSIOverbought);
+   }
+   
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| ================ SIGNAL ENGINE (v3.4.0) ================           |
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//| Analyze All Pairs for Trading Signals (v3.4.0)                     |
 //+------------------------------------------------------------------+
 void AnalyzeAllPairs()
 {
@@ -1932,18 +2049,23 @@ void AnalyzeAllPairs()
       // === BUY SIDE ENTRY ===
       // Condition: directionBuy == -1 (Ready) AND Z-Score < -EntryThreshold
       // v3.3.0: Use maxOrderBuy as total limit (Main + Grid)
+      // v3.4.0: Added RSI on Spread confirmation
       if(g_pairs[i].directionBuy == -1 && g_pairs[i].orderCountBuy < g_pairs[i].maxOrderBuy)
       {
          if(zScore < -InpEntryZScore)
          {
-            if(OpenBuySideTrade(i))
+            // v3.4.0: Check RSI Entry Confirmation (BUY = RSI in Oversold zone)
+            if(CheckRSIEntryConfirmation(i, "BUY"))
             {
-               g_pairs[i].directionBuy = 1;  // Active trade
-               // v3.2.7: Store entry Z-Score for averaging
-               g_pairs[i].entryZScoreBuy = zScore;
-               g_pairs[i].lastAvgPriceBuy = SymbolInfoDouble(g_pairs[i].symbolA, SYMBOL_ASK);
-               // v3.2.9: Set flag to prevent averaging in same tick
-               g_pairs[i].justOpenedMainBuy = true;
+               if(OpenBuySideTrade(i))
+               {
+                  g_pairs[i].directionBuy = 1;  // Active trade
+                  // v3.2.7: Store entry Z-Score for averaging
+                  g_pairs[i].entryZScoreBuy = zScore;
+                  g_pairs[i].lastAvgPriceBuy = SymbolInfoDouble(g_pairs[i].symbolA, SYMBOL_ASK);
+                  // v3.2.9: Set flag to prevent averaging in same tick
+                  g_pairs[i].justOpenedMainBuy = true;
+               }
             }
          }
       }
@@ -1951,18 +2073,23 @@ void AnalyzeAllPairs()
       // === SELL SIDE ENTRY ===
       // Condition: directionSell == -1 (Ready) AND Z-Score > +EntryThreshold
       // v3.3.0: Use maxOrderSell as total limit (Main + Grid)
+      // v3.4.0: Added RSI on Spread confirmation
       if(g_pairs[i].directionSell == -1 && g_pairs[i].orderCountSell < g_pairs[i].maxOrderSell)
       {
          if(zScore > InpEntryZScore)
          {
-            if(OpenSellSideTrade(i))
+            // v3.4.0: Check RSI Entry Confirmation (SELL = RSI in Overbought zone)
+            if(CheckRSIEntryConfirmation(i, "SELL"))
             {
-               g_pairs[i].directionSell = 1;  // Active trade
-               // v3.2.7: Store entry Z-Score for averaging
-               g_pairs[i].entryZScoreSell = zScore;
-               g_pairs[i].lastAvgPriceSell = SymbolInfoDouble(g_pairs[i].symbolA, SYMBOL_BID);
-               // v3.2.9: Set flag to prevent averaging in same tick
-               g_pairs[i].justOpenedMainSell = true;
+               if(OpenSellSideTrade(i))
+               {
+                  g_pairs[i].directionSell = 1;  // Active trade
+                  // v3.2.7: Store entry Z-Score for averaging
+                  g_pairs[i].entryZScoreSell = zScore;
+                  g_pairs[i].lastAvgPriceSell = SymbolInfoDouble(g_pairs[i].symbolA, SYMBOL_BID);
+                  // v3.2.9: Set flag to prevent averaging in same tick
+                  g_pairs[i].justOpenedMainSell = true;
+               }
             }
          }
       }
