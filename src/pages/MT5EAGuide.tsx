@@ -52,12 +52,8 @@ enum ENUM_EMA_MA_TYPE
    EMA_MA_WMA = 3    // Weighted (WMA)
 };
 
-// ZigZag Signal Mode
-enum ENUM_ZIGZAG_SIGNAL_MODE
-{
-   ZIGZAG_BOTH = 0,     // Both Signals (LL,HL=BUY | HH,LH=SELL)
-   ZIGZAG_SINGLE = 1    // Single Signal (LL=BUY | HH=SELL)
-};
+// ZigZag Color Direction (MQL5 Standard)
+// Peak = High point, Lawn = Low point
 
 // EMA Signal Bar Index
 enum ENUM_EMA_SIGNAL_BAR
@@ -134,17 +130,16 @@ int g_lastOrderCount = 0;    // Track open orders for sync events
 input string   InpSignalHeader = "=== SIGNAL STRATEGY SETTINGS ===";  // ___
 input ENUM_SIGNAL_STRATEGY InpSignalStrategy = STRATEGY_ZIGZAG;  // Signal Strategy
 
-//--- [ ZIGZAG++ SETTINGS ] -----------------------------------------
-input string   InpZigZagHeader = "=== ZIGZAG++ SETTINGS ===";  // ___
+//--- [ ZIGZAG COLOR SETTINGS ] -------------------------------------
+input string   InpZigZagHeader = "=== ZIGZAG COLOR SETTINGS (MQL5) ===";  // ___
 input ENUM_TIMEFRAMES InpZigZagTimeframe = PERIOD_CURRENT;  // ZigZag Timeframe
-input int      InpDepth        = 12;          // ZigZag Depth
-input int      InpDeviation    = 5;           // ZigZag Deviation (pips)
-input int      InpBackstep     = 2;           // ZigZag Backstep
-input color    InpBullColor    = clrLime;     // Bull Color (HL labels)
-input color    InpBearColor    = clrRed;      // Bear Color (HH, LH labels)
-input bool     InpShowLabels   = true;        // Show HH/HL/LH/LL Labels
-input bool     InpShowLines    = true;        // Show ZigZag Lines
-input ENUM_ZIGZAG_SIGNAL_MODE InpZigZagSignalMode = ZIGZAG_BOTH;  // ZigZag Signal Mode
+input int      InpZigZagDepth = 12;           // ZigZag Depth
+input int      InpZigZagDeviation = 5;        // ZigZag Deviation
+input int      InpZigZagBackstep = 3;         // ZigZag Backstep
+input color    InpZigZagUpColor = clrDodgerBlue;    // Up Line Color (Lawn→Peak)
+input color    InpZigZagDownColor = clrRed;         // Down Line Color (Peak→Lawn)
+input bool     InpShowZigZagLines = true;     // Show ZigZag Lines
+input bool     InpShowZigZagLabels = false;   // Show Peak/Lawn Labels
 
 //--- [ EMA CHANNEL SETTINGS ] --------------------------------------
 input string   InpEMAHeader = "=== EMA CHANNEL SETTINGS ===";  // ___
@@ -464,20 +459,29 @@ datetime g_lastDayCheck = 0;
 datetime g_lastWeekCheck = 0;
 datetime g_lastMonthCheck = 0;
 
-// ZigZag++ Structure (based on DevLucem ZigZag++)
-struct ZigZagPoint
+// ZigZag Color Structure (MQL5 Standard Algorithm)
+struct ZigZagColorPoint
 {
    double    price;
    datetime  time;
    int       barIndex;
-   int       direction;  // 1 = High, -1 = Low
-   string    label;      // "HH", "HL", "LH", "LL"
+   int       direction;  // 1 = Peak (High), -1 = Lawn (Low)
 };
 
-ZigZagPoint ZZPoints[];
+ZigZagColorPoint ZZPoints[];
 int ZZPointCount = 0;
-string LastZZLabel = "";       // Latest closed ZigZag label
-int CurrentDirection = 0;       // Current ZigZag direction
+int g_lastZigzagDirection = 0;   // 1=Peak(High), -1=Lawn(Low), 0=Unknown
+int g_prevZigzagDirection = 0;   // Previous direction for change detection
+double g_lastPeakPrice = 0;      // Last Peak price
+double g_lastLawnPrice = 0;      // Last Lawn price
+datetime g_lastPeakTime = 0;     // Last Peak time
+datetime g_lastLawnTime = 0;     // Last Lawn time
+
+// ZigZag Color calculation buffers
+double g_ZigzagPeakBuffer[];     // Peak (High) points
+double g_ZigzagLawnBuffer[];     // Lawn (Low) points
+double g_HighMapBuffer[];        // Intermediate high detection
+double g_LowMapBuffer[];         // Intermediate low detection
 
 // Trade Objects
 CTrade trade;
@@ -2862,233 +2866,258 @@ int GetGridDistance(bool isLossSide, int gridLevel)
 }
 
 //+------------------------------------------------------------------+
-//| ZigZag++ Algorithm (Based on DevLucem Pine Script)                |
+//| ZigZag Color Helper: Get Highest Value in Range                    |
 //+------------------------------------------------------------------+
-void CalculateZigZagPP()
+double ZZ_Highest(int range, int fromIndex)
 {
-   // Clear previous points
+   double res = iHigh(_Symbol, InpZigZagTimeframe, fromIndex);
+   for(int i = fromIndex; i > fromIndex - range && i >= 0; i--)
+   {
+      double h = iHigh(_Symbol, InpZigZagTimeframe, i);
+      if(res < h) res = h;
+   }
+   return res;
+}
+
+//+------------------------------------------------------------------+
+//| ZigZag Color Helper: Get Lowest Value in Range                     |
+//+------------------------------------------------------------------+
+double ZZ_Lowest(int range, int fromIndex)
+{
+   double res = iLow(_Symbol, InpZigZagTimeframe, fromIndex);
+   for(int i = fromIndex; i > fromIndex - range && i >= 0; i--)
+   {
+      double l = iLow(_Symbol, InpZigZagTimeframe, i);
+      if(res > l) res = l;
+   }
+   return res;
+}
+
+//+------------------------------------------------------------------+
+//| ZigZag Color Algorithm (MQL5.com Standard)                         |
+//+------------------------------------------------------------------+
+void CalculateZigZagColor()
+{
+   // Clear previous objects
+   ObjectsDeleteAll(0, ZZPrefix);
+   
+   int barsToAnalyze = 300;
+   int rates_total = Bars(_Symbol, InpZigZagTimeframe);
+   if(rates_total < 100) return;
+   
+   // Resize buffers
+   ArrayResize(g_ZigzagPeakBuffer, barsToAnalyze);
+   ArrayResize(g_ZigzagLawnBuffer, barsToAnalyze);
+   ArrayResize(g_HighMapBuffer, barsToAnalyze);
+   ArrayResize(g_LowMapBuffer, barsToAnalyze);
+   
+   ArrayInitialize(g_ZigzagPeakBuffer, 0.0);
+   ArrayInitialize(g_ZigzagLawnBuffer, 0.0);
+   ArrayInitialize(g_HighMapBuffer, 0.0);
+   ArrayInitialize(g_LowMapBuffer, 0.0);
+   
+   // === MQL5 ZigZag Color Algorithm ===
+   int level = 3;  // recounting's depth
+   int counterZ = 0;
+   int whatlookfor = 0;  // 0=look for peak or lawn, 1=look for peak, -1=look for lawn
+   int back = 0;
+   int lasthighpos = 0, lastlowpos = 0;
+   double val = 0, res = 0;
+   double curlow = 0, curhigh = 0, lasthigh = 0, lastlow = 0;
+   
+   int limit = InpZigZagDepth - 1;
+   
+   // Main ZigZag calculation loop
+   for(int shift = limit; shift < barsToAnalyze; shift++)
+   {
+      // Low detection
+      val = ZZ_Lowest(InpZigZagDepth, shift);
+      
+      if(val == lastlow) val = 0.0;
+      else
+      {
+         lastlow = val;
+         double lowPrice = iLow(_Symbol, InpZigZagTimeframe, shift);
+         if((lowPrice - val) > (InpZigZagDeviation * _Point)) val = 0.0;
+         else
+         {
+            for(back = InpZigZagBackstep; back >= 1; back--)
+            {
+               if(shift - back >= 0)
+               {
+                  res = g_LowMapBuffer[shift - back];
+                  if((res != 0) && (res > val)) g_LowMapBuffer[shift - back] = 0.0;
+               }
+            }
+         }
+      }
+      
+      double lowPrice = iLow(_Symbol, InpZigZagTimeframe, shift);
+      if(lowPrice == val) g_LowMapBuffer[shift] = val;
+      else g_LowMapBuffer[shift] = 0.0;
+      
+      // High detection
+      val = ZZ_Highest(InpZigZagDepth, shift);
+      
+      if(val == lasthigh) val = 0.0;
+      else
+      {
+         lasthigh = val;
+         double highPrice = iHigh(_Symbol, InpZigZagTimeframe, shift);
+         if((val - highPrice) > (InpZigZagDeviation * _Point)) val = 0.0;
+         else
+         {
+            for(back = InpZigZagBackstep; back >= 1; back--)
+            {
+               if(shift - back >= 0)
+               {
+                  res = g_HighMapBuffer[shift - back];
+                  if((res != 0) && (res < val)) g_HighMapBuffer[shift - back] = 0.0;
+               }
+            }
+         }
+      }
+      
+      double highPrice = iHigh(_Symbol, InpZigZagTimeframe, shift);
+      if(highPrice == val) g_HighMapBuffer[shift] = val;
+      else g_HighMapBuffer[shift] = 0.0;
+   }
+   
+   // Final cutting - build ZigZag points
+   lastlow = 0;
+   lasthigh = 0;
+   lasthighpos = 0;
+   lastlowpos = 0;
+   whatlookfor = 0;
+   
+   for(int shift = limit; shift < barsToAnalyze; shift++)
+   {
+      res = 0.0;
+      
+      switch(whatlookfor)
+      {
+         case 0:  // look for peak or lawn
+            if(lasthigh == 0 && lastlow == 0)
+            {
+               if(g_HighMapBuffer[shift] != 0)
+               {
+                  lasthigh = iHigh(_Symbol, InpZigZagTimeframe, shift);
+                  lasthighpos = shift;
+                  whatlookfor = -1;  // now look for lawn
+                  g_ZigzagPeakBuffer[shift] = lasthigh;
+               }
+               if(g_LowMapBuffer[shift] != 0)
+               {
+                  lastlow = iLow(_Symbol, InpZigZagTimeframe, shift);
+                  lastlowpos = shift;
+                  whatlookfor = 1;  // now look for peak
+                  g_ZigzagLawnBuffer[shift] = lastlow;
+               }
+            }
+            break;
+            
+         case 1:  // look for peak
+            if(g_LowMapBuffer[shift] != 0.0 && g_LowMapBuffer[shift] < lastlow && g_HighMapBuffer[shift] == 0.0)
+            {
+               g_ZigzagLawnBuffer[lastlowpos] = 0.0;
+               lastlowpos = shift;
+               lastlow = g_LowMapBuffer[shift];
+               g_ZigzagLawnBuffer[shift] = lastlow;
+            }
+            if(g_HighMapBuffer[shift] != 0.0 && g_LowMapBuffer[shift] == 0.0)
+            {
+               lasthigh = g_HighMapBuffer[shift];
+               lasthighpos = shift;
+               g_ZigzagPeakBuffer[shift] = lasthigh;
+               whatlookfor = -1;  // now look for lawn
+            }
+            break;
+            
+         case -1:  // look for lawn
+            if(g_HighMapBuffer[shift] != 0.0 && g_HighMapBuffer[shift] > lasthigh && g_LowMapBuffer[shift] == 0.0)
+            {
+               g_ZigzagPeakBuffer[lasthighpos] = 0.0;
+               lasthighpos = shift;
+               lasthigh = g_HighMapBuffer[shift];
+               g_ZigzagPeakBuffer[shift] = lasthigh;
+            }
+            if(g_LowMapBuffer[shift] != 0.0 && g_HighMapBuffer[shift] == 0.0)
+            {
+               lastlow = g_LowMapBuffer[shift];
+               lastlowpos = shift;
+               g_ZigzagLawnBuffer[shift] = lastlow;
+               whatlookfor = 1;  // now look for peak
+            }
+            break;
+      }
+   }
+   
+   // Build ZZPoints array from buffers
    ArrayResize(ZZPoints, 0);
    ZZPointCount = 0;
    
-   // Remove old objects
-   ObjectsDeleteAll(0, ZZPrefix);
-   
-   int barsToAnalyze = 200;
-   
-   // Buffers for ZigZag calculation
-   double zigzagVal[];
-   int zigzagDir[];      // 1 = high point, -1 = low point
-   datetime zigzagTime[];
-   int zigzagBar[];
-   
-   ArrayResize(zigzagVal, barsToAnalyze);
-   ArrayResize(zigzagDir, barsToAnalyze);
-   ArrayResize(zigzagTime, barsToAnalyze);
-   ArrayResize(zigzagBar, barsToAnalyze);
-   
-   ArrayInitialize(zigzagVal, 0);
-   ArrayInitialize(zigzagDir, 0);
-   
-   // Find swing highs and lows using Depth, Deviation, Backstep
-   double lastHigh = 0, lastLow = DBL_MAX;
-   int lastHighBar = 0, lastLowBar = 0;
-   int direction = 0;  // 0 = unknown, 1 = up, -1 = down
-   
-   double deviationPips = InpDeviation * _Point * 10;
-   
-   // First pass: Find potential swing points
-   double swingHigh[], swingLow[];
-   int swingHighBar[], swingLowBar[];
-   ArrayResize(swingHigh, 0);
-   ArrayResize(swingLow, 0);
-   ArrayResize(swingHighBar, 0);
-   ArrayResize(swingLowBar, 0);
-   
-   for(int i = InpDepth; i < barsToAnalyze - InpDepth; i++)
+   for(int i = 1; i < barsToAnalyze; i++)
    {
-      // Check for swing high
-      double high = iHigh(_Symbol, InpZigZagTimeframe, i);
-      bool isSwingHigh = true;
-      for(int j = 1; j <= InpDepth; j++)
+      if(g_ZigzagPeakBuffer[i] > 0 || g_ZigzagLawnBuffer[i] > 0)
       {
-         if(iHigh(_Symbol, InpZigZagTimeframe, i - j) >= high || 
-            iHigh(_Symbol, InpZigZagTimeframe, i + j) >= high)
+         int size = ArraySize(ZZPoints);
+         ArrayResize(ZZPoints, size + 1);
+         
+         ZZPoints[size].barIndex = i;
+         ZZPoints[size].time = iTime(_Symbol, InpZigZagTimeframe, i);
+         
+         if(g_ZigzagPeakBuffer[i] > 0)
          {
-            isSwingHigh = false;
-            break;
-         }
-      }
-      
-      if(isSwingHigh)
-      {
-         int size = ArraySize(swingHigh);
-         ArrayResize(swingHigh, size + 1);
-         ArrayResize(swingHighBar, size + 1);
-         swingHigh[size] = high;
-         swingHighBar[size] = i;
-      }
-      
-      // Check for swing low
-      double low = iLow(_Symbol, InpZigZagTimeframe, i);
-      bool isSwingLow = true;
-      for(int j = 1; j <= InpDepth; j++)
-      {
-         if(iLow(_Symbol, InpZigZagTimeframe, i - j) <= low || 
-            iLow(_Symbol, InpZigZagTimeframe, i + j) <= low)
-         {
-            isSwingLow = false;
-            break;
-         }
-      }
-      
-      if(isSwingLow)
-      {
-         int size = ArraySize(swingLow);
-         ArrayResize(swingLow, size + 1);
-         ArrayResize(swingLowBar, size + 1);
-         swingLow[size] = low;
-         swingLowBar[size] = i;
-      }
-   }
-   
-   // Build ZigZag from swing points (alternating high-low-high-low)
-   double zzPrices[];
-   int zzBars[];
-   int zzDirs[];
-   ArrayResize(zzPrices, 0);
-   ArrayResize(zzBars, 0);
-   ArrayResize(zzDirs, 0);
-   
-   int hiIdx = 0, loIdx = 0;
-   int lastDir = 0;
-   
-   // Merge swing highs and lows in time order (newest first)
-   while(hiIdx < ArraySize(swingHighBar) || loIdx < ArraySize(swingLowBar))
-   {
-      bool useHigh = false;
-      
-      if(hiIdx >= ArraySize(swingHighBar))
-         useHigh = false;
-      else if(loIdx >= ArraySize(swingLowBar))
-         useHigh = true;
-      else
-         useHigh = (swingHighBar[hiIdx] < swingLowBar[loIdx]);
-      
-      if(useHigh)
-      {
-         if(lastDir != 1)  // Can add high after low or at start
-         {
-            int size = ArraySize(zzPrices);
-            ArrayResize(zzPrices, size + 1);
-            ArrayResize(zzBars, size + 1);
-            ArrayResize(zzDirs, size + 1);
-            zzPrices[size] = swingHigh[hiIdx];
-            zzBars[size] = swingHighBar[hiIdx];
-            zzDirs[size] = 1;
-            lastDir = 1;
-         }
-         else if(ArraySize(zzPrices) > 0 && swingHigh[hiIdx] > zzPrices[ArraySize(zzPrices)-1])
-         {
-            // Replace last high with higher high
-            zzPrices[ArraySize(zzPrices)-1] = swingHigh[hiIdx];
-            zzBars[ArraySize(zzBars)-1] = swingHighBar[hiIdx];
-         }
-         hiIdx++;
-      }
-      else
-      {
-         if(lastDir != -1)  // Can add low after high or at start
-         {
-            int size = ArraySize(zzPrices);
-            ArrayResize(zzPrices, size + 1);
-            ArrayResize(zzBars, size + 1);
-            ArrayResize(zzDirs, size + 1);
-            zzPrices[size] = swingLow[loIdx];
-            zzBars[size] = swingLowBar[loIdx];
-            zzDirs[size] = -1;
-            lastDir = -1;
-         }
-         else if(ArraySize(zzPrices) > 0 && swingLow[loIdx] < zzPrices[ArraySize(zzPrices)-1])
-         {
-            // Replace last low with lower low
-            zzPrices[ArraySize(zzPrices)-1] = swingLow[loIdx];
-            zzBars[ArraySize(zzBars)-1] = swingLowBar[loIdx];
-         }
-         loIdx++;
-      }
-      
-      if(ArraySize(zzPrices) >= 20) break;  // Limit points
-   }
-   
-   // Now label the points as HH, HL, LH, LL
-   double lastHighPoint = 0;
-   double lastLowPoint = DBL_MAX;
-   
-   // Process from oldest to newest for proper labeling
-   for(int i = ArraySize(zzPrices) - 1; i >= 0; i--)
-   {
-      ZigZagPoint zp;
-      zp.price = zzPrices[i];
-      zp.barIndex = zzBars[i];
-      zp.time = iTime(_Symbol, InpZigZagTimeframe, zzBars[i]);
-      zp.direction = zzDirs[i];
-      
-      if(zzDirs[i] == 1)  // High point
-      {
-         if(lastHighPoint > 0)
-         {
-            if(zzPrices[i] > lastHighPoint)
-               zp.label = "HH";
-            else
-               zp.label = "LH";
+            ZZPoints[size].price = g_ZigzagPeakBuffer[i];
+            ZZPoints[size].direction = 1;  // Peak (High)
          }
          else
-            zp.label = "HH";  // First high
-            
-         lastHighPoint = zzPrices[i];
-      }
-      else  // Low point
-      {
-         if(lastLowPoint < DBL_MAX)
          {
-            if(zzPrices[i] < lastLowPoint)
-               zp.label = "LL";
-            else
-               zp.label = "HL";
+            ZZPoints[size].price = g_ZigzagLawnBuffer[i];
+            ZZPoints[size].direction = -1;  // Lawn (Low)
          }
-         else
-            zp.label = "LL";  // First low
-            
-         lastLowPoint = zzPrices[i];
+         
+         ZZPointCount++;
+         
+         if(ZZPointCount >= 30) break;  // Limit points
       }
-      
-      int size = ArraySize(ZZPoints);
-      ArrayResize(ZZPoints, size + 1);
-      ZZPoints[size] = zp;
-      ZZPointCount++;
    }
    
-   // Reverse to have newest first
-   ZigZagPoint tempPoints[];
-   ArrayResize(tempPoints, ZZPointCount);
-   for(int i = 0; i < ZZPointCount; i++)
-      tempPoints[i] = ZZPoints[ZZPointCount - 1 - i];
+   // Detect direction change for trading signal
+   DetectZigZagDirectionChange();
    
-   ArrayResize(ZZPoints, ZZPointCount);
-   for(int i = 0; i < ZZPointCount; i++)
-      ZZPoints[i] = tempPoints[i];
-   
-   // Draw ZigZag lines and labels
-   if(InpShowLines || InpShowLabels)
+   // Draw on chart
+   if(InpShowZigZagLines || InpShowZigZagLabels)
    {
-      DrawZigZagOnChart();
+      DrawZigZagColorOnChart();
    }
+}
+
+//+------------------------------------------------------------------+
+//| Detect ZigZag Direction Change for Trading Signal                  |
+//+------------------------------------------------------------------+
+void DetectZigZagDirectionChange()
+{
+   // Store previous direction
+   g_prevZigzagDirection = g_lastZigzagDirection;
    
-   // Set last label for trading signal
-   if(ZZPointCount > 0)
+   // Find the most recent confirmed ZigZag point (start from bar 1 to avoid repaint)
+   for(int i = 0; i < ZZPointCount; i++)
    {
-      LastZZLabel = ZZPoints[0].label;
-      CurrentDirection = ZZPoints[0].direction;
+      if(ZZPoints[i].direction == 1)  // Peak (High) point found
+      {
+         g_lastZigzagDirection = 1;  // Peak
+         g_lastPeakPrice = ZZPoints[i].price;
+         g_lastPeakTime = ZZPoints[i].time;
+         break;
+      }
+      else if(ZZPoints[i].direction == -1)  // Lawn (Low) point found
+      {
+         g_lastZigzagDirection = -1;  // Lawn
+         g_lastLawnPrice = ZZPoints[i].price;
+         g_lastLawnTime = ZZPoints[i].time;
+         break;
+      }
    }
 }
 
@@ -3110,48 +3139,28 @@ datetime ConvertToChartTime(datetime zzTime)
 }
 
 //+------------------------------------------------------------------+
-//| Get price at ZigZag point mapped to Chart Timeframe               |
+//| Draw ZigZag Color Lines on Chart (2 colors)                        |
 //+------------------------------------------------------------------+
-double GetChartPrice(ZigZagPoint &zp)
+void DrawZigZagColorOnChart()
 {
-   // If using current timeframe, use original price
-   if(InpZigZagTimeframe == PERIOD_CURRENT || InpZigZagTimeframe == Period())
-      return zp.price;
-   
-   // Find the bar on current chart
-   int chartBar = iBarShift(_Symbol, PERIOD_CURRENT, zp.time, false);
-   if(chartBar < 0) chartBar = 0;
-   
-   // For high points, use the high of that bar range
-   // For low points, use the low of that bar range
-   if(zp.direction == 1)  // High point
-      return iHigh(_Symbol, PERIOD_CURRENT, chartBar);
-   else  // Low point
-      return iLow(_Symbol, PERIOD_CURRENT, chartBar);
-}
-
-//+------------------------------------------------------------------+
-//| Draw ZigZag++ Lines and Labels on Chart                           |
-//+------------------------------------------------------------------+
-void DrawZigZagOnChart()
-{
-   // Draw on BOTH current chart AND ZigZag timeframe for visibility
    bool drawBothTimeframes = (InpZigZagTimeframe != PERIOD_CURRENT && InpZigZagTimeframe != Period());
    
    for(int i = 0; i < ZZPointCount - 1; i++)
    {
-      ZigZagPoint p1 = ZZPoints[i];
-      ZigZagPoint p2 = ZZPoints[i + 1];
+      ZigZagColorPoint p1 = ZZPoints[i];
+      ZigZagColorPoint p2 = ZZPoints[i + 1];
       
-      // Convert times to chart timeframe for drawing on current chart
       datetime p1ChartTime = ConvertToChartTime(p1.time);
       datetime p2ChartTime = ConvertToChartTime(p2.time);
       
-      // === Draw on CURRENT CHART (converted times) ===
-      if(InpShowLines)
+      // === Draw on CURRENT CHART ===
+      if(InpShowZigZagLines)
       {
          string lineName = ZZPrefix + "Line_" + IntegerToString(i);
-         color lineColor = (p1.direction == 1) ? InpBearColor : InpBullColor;
+         // Color based on direction:
+         // If p1 is Peak (direction=1), line goes DOWN → Red (Down color)
+         // If p1 is Lawn (direction=-1), line goes UP → Blue (Up color)
+         color lineColor = (p1.direction == 1) ? InpZigZagDownColor : InpZigZagUpColor;
          
          ObjectCreate(0, lineName, OBJ_TREND, 0, p2ChartTime, p2.price, p1ChartTime, p1.price);
          ObjectSetInteger(0, lineName, OBJPROP_COLOR, lineColor);
@@ -3161,29 +3170,28 @@ void DrawZigZagOnChart()
          ObjectSetInteger(0, lineName, OBJPROP_BACK, false);
       }
       
-      if(InpShowLabels)
+      if(InpShowZigZagLabels)
       {
          string labelName = ZZPrefix + "Label_" + IntegerToString(i);
-         color labelColor = (p1.label == "LL" || p1.label == "HL") ? InpBullColor : InpBearColor;
+         string labelText = (p1.direction == 1) ? "Peak" : "Lawn";
+         color labelColor = (p1.direction == 1) ? InpZigZagDownColor : InpZigZagUpColor;
          ENUM_ANCHOR_POINT anchor = (p1.direction == 1) ? ANCHOR_LOWER : ANCHOR_UPPER;
          
          ObjectCreate(0, labelName, OBJ_TEXT, 0, p1ChartTime, p1.price);
-         ObjectSetString(0, labelName, OBJPROP_TEXT, p1.label);
+         ObjectSetString(0, labelName, OBJPROP_TEXT, labelText);
          ObjectSetInteger(0, labelName, OBJPROP_COLOR, labelColor);
-         ObjectSetInteger(0, labelName, OBJPROP_FONTSIZE, 10);
+         ObjectSetInteger(0, labelName, OBJPROP_FONTSIZE, 9);
          ObjectSetString(0, labelName, OBJPROP_FONT, "Arial Bold");
          ObjectSetInteger(0, labelName, OBJPROP_ANCHOR, anchor);
       }
       
-      // === Draw on ZIGZAG TIMEFRAME (original times) - for viewing in that TF ===
-      // NOTE: Objects only appear on the chart they are created on.
-      // We therefore create them on a dedicated chart for InpZigZagTimeframe.
+      // === Draw on ZIGZAG TIMEFRAME (if separate chart) ===
       if(drawBothTimeframes && ZZTFChartId > 0)
       {
-         if(InpShowLines)
+         if(InpShowZigZagLines)
          {
             string lineName = ZZPrefix + "TF_Line_" + IntegerToString(i);
-            color lineColor = (p1.direction == 1) ? InpBearColor : InpBullColor;
+            color lineColor = (p1.direction == 1) ? InpZigZagDownColor : InpZigZagUpColor;
             
             ObjectCreate(ZZTFChartId, lineName, OBJ_TREND, 0, p2.time, p2.price, p1.time, p1.price);
             ObjectSetInteger(ZZTFChartId, lineName, OBJPROP_COLOR, lineColor);
@@ -3193,16 +3201,17 @@ void DrawZigZagOnChart()
             ObjectSetInteger(ZZTFChartId, lineName, OBJPROP_BACK, false);
          }
          
-         if(InpShowLabels)
+         if(InpShowZigZagLabels)
          {
             string labelName = ZZPrefix + "TF_Label_" + IntegerToString(i);
-            color labelColor = (p1.label == "LL" || p1.label == "HL") ? InpBullColor : InpBearColor;
+            string labelText = (p1.direction == 1) ? "Peak" : "Lawn";
+            color labelColor = (p1.direction == 1) ? InpZigZagDownColor : InpZigZagUpColor;
             ENUM_ANCHOR_POINT anchor = (p1.direction == 1) ? ANCHOR_LOWER : ANCHOR_UPPER;
             
             ObjectCreate(ZZTFChartId, labelName, OBJ_TEXT, 0, p1.time, p1.price);
-            ObjectSetString(ZZTFChartId, labelName, OBJPROP_TEXT, p1.label);
+            ObjectSetString(ZZTFChartId, labelName, OBJPROP_TEXT, labelText);
             ObjectSetInteger(ZZTFChartId, labelName, OBJPROP_COLOR, labelColor);
-            ObjectSetInteger(ZZTFChartId, labelName, OBJPROP_FONTSIZE, 10);
+            ObjectSetInteger(ZZTFChartId, labelName, OBJPROP_FONTSIZE, 9);
             ObjectSetString(ZZTFChartId, labelName, OBJPROP_FONT, "Arial Bold");
             ObjectSetInteger(ZZTFChartId, labelName, OBJPROP_ANCHOR, anchor);
          }
@@ -3210,32 +3219,30 @@ void DrawZigZagOnChart()
    }
    
    // Draw label for last point
-   if(InpShowLabels && ZZPointCount > 0)
+   if(InpShowZigZagLabels && ZZPointCount > 0)
    {
       int last = ZZPointCount - 1;
       datetime lastChartTime = ConvertToChartTime(ZZPoints[last].time);
       
-      // Current chart
       string labelName = ZZPrefix + "Label_" + IntegerToString(last);
-      color labelColor = (ZZPoints[last].label == "LL" || ZZPoints[last].label == "HL") ? 
-                          InpBullColor : InpBearColor;
+      string labelText = (ZZPoints[last].direction == 1) ? "Peak" : "Lawn";
+      color labelColor = (ZZPoints[last].direction == 1) ? InpZigZagDownColor : InpZigZagUpColor;
       ENUM_ANCHOR_POINT anchor = (ZZPoints[last].direction == 1) ? ANCHOR_LOWER : ANCHOR_UPPER;
       
       ObjectCreate(0, labelName, OBJ_TEXT, 0, lastChartTime, ZZPoints[last].price);
-      ObjectSetString(0, labelName, OBJPROP_TEXT, ZZPoints[last].label);
+      ObjectSetString(0, labelName, OBJPROP_TEXT, labelText);
       ObjectSetInteger(0, labelName, OBJPROP_COLOR, labelColor);
-      ObjectSetInteger(0, labelName, OBJPROP_FONTSIZE, 10);
+      ObjectSetInteger(0, labelName, OBJPROP_FONTSIZE, 9);
       ObjectSetString(0, labelName, OBJPROP_FONT, "Arial Bold");
       ObjectSetInteger(0, labelName, OBJPROP_ANCHOR, anchor);
       
-      // ZigZag Timeframe
       if(drawBothTimeframes && ZZTFChartId > 0)
       {
          string labelNameTF = ZZPrefix + "TF_Label_" + IntegerToString(last);
          ObjectCreate(ZZTFChartId, labelNameTF, OBJ_TEXT, 0, ZZPoints[last].time, ZZPoints[last].price);
-         ObjectSetString(ZZTFChartId, labelNameTF, OBJPROP_TEXT, ZZPoints[last].label);
+         ObjectSetString(ZZTFChartId, labelNameTF, OBJPROP_TEXT, labelText);
          ObjectSetInteger(ZZTFChartId, labelNameTF, OBJPROP_COLOR, labelColor);
-         ObjectSetInteger(ZZTFChartId, labelNameTF, OBJPROP_FONTSIZE, 10);
+         ObjectSetInteger(ZZTFChartId, labelNameTF, OBJPROP_FONTSIZE, 9);
          ObjectSetString(ZZTFChartId, labelNameTF, OBJPROP_FONT, "Arial Bold");
          ObjectSetInteger(ZZTFChartId, labelNameTF, OBJPROP_ANCHOR, anchor);
       }
@@ -6885,8 +6892,8 @@ void OnTick()
    // Calculate based on selected Signal Strategy
    if(InpSignalStrategy == STRATEGY_ZIGZAG)
    {
-      // Calculate ZigZag++ (custom implementation)
-      CalculateZigZagPP();
+      // Calculate ZigZag Color (MQL5 Standard Algorithm)
+      CalculateZigZagColor();
    }
    else if(InpSignalStrategy == STRATEGY_EMA_CHANNEL)
    {
@@ -7059,7 +7066,8 @@ string AnalyzeSignal()
 }
 
 //+------------------------------------------------------------------+
-//| Analyze ZigZag Signal                                              |
+//| Analyze ZigZag Signal (New Color-Based Logic)                      |
+//| Peak (High) → SELL Signal | Lawn (Low) → BUY Signal               |
 //+------------------------------------------------------------------+
 string AnalyzeZigZagSignal()
 {
@@ -7075,123 +7083,85 @@ string AnalyzeZigZagSignal()
       return "WAIT";
    }
    
-   // NEW ZigZag point confirmed!
+   // Check for direction change
+   if(g_lastZigzagDirection == g_prevZigzagDirection)
+   {
+      return "WAIT";  // No direction change
+   }
+   
+   // NEW ZigZag point confirmed with direction change!
    LastConfirmedZZTime = newestPointTime;
    
-   Print("*** NEW ZigZag++ Point Confirmed! ***");
-   Print("Label: ", LastZZLabel, " | Time: ", TimeToString(newestPointTime), " | CDC: ", CDCTrend);
+   string directionStr = (g_lastZigzagDirection == 1) ? "PEAK (High)" : "LAWN (Low)";
+   Print("*** NEW ZigZag Color Point Confirmed! ***");
+   Print("Direction: ", directionStr, " | Time: ", TimeToString(newestPointTime), " | CDC: ", CDCTrend);
    
    // *** UPDATE ZIGZAG SIGNAL RESET STATUS ***
-   // For ZigZag: BUY reset requires HH/LH point first, then LL/HL
-   // For ZigZag: SELL reset requires LL/HL point first, then HH/LH
+   // For ZigZag Color: BUY reset requires PEAK (opposite) first, then LAWN
+   // For ZigZag Color: SELL reset requires LAWN (opposite) first, then PEAK
    if(g_waitBuySignalReset)
    {
-      if(LastZZLabel == "HH" || LastZZLabel == "LH")
+      if(g_lastZigzagDirection == 1)  // Peak detected
       {
          // Opposite signal detected - BUY reset phase 1 complete
          g_buyResetWaitOppositeSignal = false;
-         Print("*** BUY Reset Phase 1 Complete - Opposite point (", LastZZLabel, ") detected ***");
+         Print("*** BUY Reset Phase 1 Complete - PEAK detected ***");
       }
    }
    
    if(g_waitSellSignalReset)
    {
-      if(LastZZLabel == "LL" || LastZZLabel == "HL")
+      if(g_lastZigzagDirection == -1)  // Lawn detected
       {
          // Opposite signal detected - SELL reset phase 1 complete
          g_sellResetWaitOppositeSignal = false;
-         Print("*** SELL Reset Phase 1 Complete - Opposite point (", LastZZLabel, ") detected ***");
+         Print("*** SELL Reset Phase 1 Complete - LAWN detected ***");
       }
    }
    
-   // BUY Signal: Based on ZigZag Signal Mode
-   if(InpZigZagSignalMode == ZIGZAG_BOTH)
+   // === NEW ENTRY LOGIC ===
+   // LAWN (Low) Confirmed → BUY Signal
+   if(g_lastZigzagDirection == -1)
    {
-      // Both Signals: LL or HL triggers BUY
-      if(LastZZLabel == "LL" || LastZZLabel == "HL")
+      // *** CHECK IF BUY SIGNAL RESET IS REQUIRED ***
+      if(g_waitBuySignalReset)
       {
-         // *** CHECK IF BUY SIGNAL RESET IS REQUIRED ***
-         if(g_waitBuySignalReset)
+         if(g_buyResetWaitOppositeSignal)
          {
-            if(g_buyResetWaitOppositeSignal)
-            {
-               Print(">>> BUY Signal detected but waiting for opposite signal (HH/LH) first");
-               return "WAIT";
-            }
-            else
-            {
-               // Reset complete - allow this BUY signal
-               g_waitBuySignalReset = false;
-               Print("*** BUY Signal Reset Complete - Executing new BUY! ***");
-            }
+            Print(">>> LAWN detected but waiting for PEAK first");
+            return "WAIT";
          }
-         Print(">>> NEW LOW point (", LastZZLabel, ") - Triggering BUY signal! [Both Mode]");
-         return "BUY";
-      }
-      // Both Signals: HH or LH triggers SELL
-      if(LastZZLabel == "HH" || LastZZLabel == "LH")
-      {
-         // *** CHECK IF SELL SIGNAL RESET IS REQUIRED ***
-         if(g_waitSellSignalReset)
+         else
          {
-            if(g_sellResetWaitOppositeSignal)
-            {
-               Print(">>> SELL Signal detected but waiting for opposite signal (LL/HL) first");
-               return "WAIT";
-            }
-            else
-            {
-               // Reset complete - allow this SELL signal
-               g_waitSellSignalReset = false;
-               Print("*** SELL Signal Reset Complete - Executing new SELL! ***");
-            }
+            // Reset complete - allow this BUY signal
+            g_waitBuySignalReset = false;
+            Print("*** BUY Signal Reset Complete - Executing new BUY! ***");
          }
-         Print(">>> NEW HIGH point (", LastZZLabel, ") - Triggering SELL signal! [Both Mode]");
-         return "SELL";
       }
+      Print(">>> LAWN (Low) Confirmed - Triggering BUY signal!");
+      return "BUY";
    }
-   else // ZIGZAG_SINGLE
+   
+   // PEAK (High) Confirmed → SELL Signal
+   if(g_lastZigzagDirection == 1)
    {
-      // Single Signal: Only LL triggers BUY
-      if(LastZZLabel == "LL")
+      // *** CHECK IF SELL SIGNAL RESET IS REQUIRED ***
+      if(g_waitSellSignalReset)
       {
-         // *** CHECK IF BUY SIGNAL RESET IS REQUIRED ***
-         if(g_waitBuySignalReset)
+         if(g_sellResetWaitOppositeSignal)
          {
-            if(g_buyResetWaitOppositeSignal)
-            {
-               Print(">>> LL detected but waiting for opposite signal (HH) first");
-               return "WAIT";
-            }
-            else
-            {
-               g_waitBuySignalReset = false;
-               Print("*** BUY Signal Reset Complete - Executing new BUY! ***");
-            }
+            Print(">>> PEAK detected but waiting for LAWN first");
+            return "WAIT";
          }
-         Print(">>> NEW LL point - Triggering BUY signal! [Single Mode]");
-         return "BUY";
-      }
-      // Single Signal: Only HH triggers SELL
-      if(LastZZLabel == "HH")
-      {
-         // *** CHECK IF SELL SIGNAL RESET IS REQUIRED ***
-         if(g_waitSellSignalReset)
+         else
          {
-            if(g_sellResetWaitOppositeSignal)
-            {
-               Print(">>> HH detected but waiting for opposite signal (LL) first");
-               return "WAIT";
-            }
-            else
-            {
-               g_waitSellSignalReset = false;
-               Print("*** SELL Signal Reset Complete - Executing new SELL! ***");
-            }
+            // Reset complete - allow this SELL signal
+            g_waitSellSignalReset = false;
+            Print("*** SELL Signal Reset Complete - Executing new SELL! ***");
          }
-         Print(">>> NEW HH point - Triggering SELL signal! [Single Mode]");
-         return "SELL";
       }
+      Print(">>> PEAK (High) Confirmed - Triggering SELL signal!");
+      return "SELL";
    }
    
    return "WAIT";
@@ -9591,52 +9561,50 @@ void UpdateChartComment(string signal, string reason = "")
               </thead>
               <tbody className="divide-y divide-border">
                 <tr>
-                  <td className="px-4 py-3 font-mono text-primary">InpDepth</td>
+                  <td className="px-4 py-3 font-mono text-primary">InpZigZagDepth</td>
                   <td className="px-4 py-3">12</td>
                   <td className="px-4 py-3 text-muted-foreground">ZigZag Depth - จำนวนแท่งสำหรับหา Swing</td>
                 </tr>
                 <tr>
-                  <td className="px-4 py-3 font-mono text-primary">InpDeviation</td>
+                  <td className="px-4 py-3 font-mono text-primary">InpZigZagDeviation</td>
                   <td className="px-4 py-3">5</td>
-                  <td className="px-4 py-3 text-muted-foreground">ZigZag Deviation (pips)</td>
+                  <td className="px-4 py-3 text-muted-foreground">ZigZag Deviation (points)</td>
                 </tr>
                 <tr>
-                  <td className="px-4 py-3 font-mono text-primary">InpBackstep</td>
-                  <td className="px-4 py-3">2</td>
+                  <td className="px-4 py-3 font-mono text-primary">InpZigZagBackstep</td>
+                  <td className="px-4 py-3">3</td>
                   <td className="px-4 py-3 text-muted-foreground">ZigZag Backstep</td>
                 </tr>
                 <tr>
-                  <td className="px-4 py-3 font-mono text-primary">InpBullColor</td>
-                  <td className="px-4 py-3 text-bull">clrLime</td>
-                  <td className="px-4 py-3 text-muted-foreground">สี Labels LL/HL (Low points)</td>
+                  <td className="px-4 py-3 font-mono text-primary">InpZigZagUpColor</td>
+                  <td className="px-4 py-3 text-bull">clrDodgerBlue</td>
+                  <td className="px-4 py-3 text-muted-foreground">สีเส้นขาขึ้น (Lawn→Peak)</td>
                 </tr>
                 <tr>
-                  <td className="px-4 py-3 font-mono text-primary">InpBearColor</td>
+                  <td className="px-4 py-3 font-mono text-primary">InpZigZagDownColor</td>
                   <td className="px-4 py-3 text-bear">clrRed</td>
-                  <td className="px-4 py-3 text-muted-foreground">สี Labels HH/LH (High points)</td>
+                  <td className="px-4 py-3 text-muted-foreground">สีเส้นขาลง (Peak→Lawn)</td>
                 </tr>
                 <tr>
-                  <td className="px-4 py-3 font-mono text-primary">InpShowLabels</td>
-                  <td className="px-4 py-3">true</td>
-                  <td className="px-4 py-3 text-muted-foreground">แสดง HH/HL/LH/LL labels บน chart</td>
+                  <td className="px-4 py-3 font-mono text-primary">InpShowZigZagLabels</td>
+                  <td className="px-4 py-3">false</td>
+                  <td className="px-4 py-3 text-muted-foreground">แสดง Peak/Lawn labels บน chart</td>
                 </tr>
                 <tr>
-                  <td className="px-4 py-3 font-mono text-primary">InpShowLines</td>
+                  <td className="px-4 py-3 font-mono text-primary">InpShowZigZagLines</td>
                   <td className="px-4 py-3">true</td>
-                  <td className="px-4 py-3 text-muted-foreground">แสดงเส้น ZigZag บน chart</td>
+                  <td className="px-4 py-3 text-muted-foreground">แสดงเส้น ZigZag สองสีบน chart</td>
                 </tr>
               </tbody>
             </table>
             <div className="p-4 bg-secondary/30">
               <p className="text-sm text-muted-foreground">
-                <span className="text-primary font-semibold">ZigZag++ </span>
-                อ้างอิงจาก TradingView indicator โดย DevLucem - แสดง Labels อัตโนมัติ:
+                <span className="text-primary font-semibold">ZigZag Color </span>
+                (MQL5.com Standard Algorithm) - ใช้สัญญาณจากการเปลี่ยนทิศทาง:
               </p>
               <div className="flex flex-wrap gap-2 mt-2">
-                <span className="px-3 py-1 rounded-full text-xs font-medium bg-bear/20 text-bear">HH - Higher High</span>
-                <span className="px-3 py-1 rounded-full text-xs font-medium bg-bear/20 text-bear">LH - Lower High</span>
-                <span className="px-3 py-1 rounded-full text-xs font-medium bg-bull/20 text-bull">HL - Higher Low</span>
-                <span className="px-3 py-1 rounded-full text-xs font-medium bg-bull/20 text-bull">LL - Lower Low</span>
+                <span className="px-3 py-1 rounded-full text-xs font-medium bg-bull/20 text-bull">Lawn (Low) → สัญญาณ BUY</span>
+                <span className="px-3 py-1 rounded-full text-xs font-medium bg-bear/20 text-bear">Peak (High) → สัญญาณ SELL</span>
               </div>
             </div>
           </div>
