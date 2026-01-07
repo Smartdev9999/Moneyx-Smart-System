@@ -483,6 +483,11 @@ double g_ZigzagLawnBuffer[];     // Lawn (Low) points
 double g_HighMapBuffer[];        // Intermediate high detection
 double g_LowMapBuffer[];         // Intermediate low detection
 
+// ZigZag Color Price Data Arrays (MQL5 Standard: index 0 = oldest bar)
+double g_ZZHighData[];           // High prices (index 0 = oldest)
+double g_ZZLowData[];            // Low prices (index 0 = oldest)
+datetime g_ZZTimeData[];         // Time data (index 0 = oldest)
+
 // Trade Objects
 CTrade trade;
 
@@ -2866,46 +2871,67 @@ int GetGridDistance(bool isLossSide, int gridLevel)
 }
 
 //+------------------------------------------------------------------+
-//| ZigZag Color Helper: Get Highest Value in Range                    |
+//| ZigZag Color Helper: Get Highest Value in Range (Array-based)      |
+//| MQL5 Standard: Uses pre-filled array where index 0 = oldest bar    |
 //+------------------------------------------------------------------+
-double ZZ_Highest(int range, int fromIndex)
+double ZZ_Highest(const double &array[], int range, int fromIndex)
 {
-   double res = iHigh(_Symbol, InpZigZagTimeframe, fromIndex);
+   if(fromIndex < 0 || fromIndex >= ArraySize(array)) return 0;
+   double res = array[fromIndex];
    for(int i = fromIndex; i > fromIndex - range && i >= 0; i--)
    {
-      double h = iHigh(_Symbol, InpZigZagTimeframe, i);
-      if(res < h) res = h;
+      if(res < array[i]) res = array[i];
    }
    return res;
 }
 
 //+------------------------------------------------------------------+
-//| ZigZag Color Helper: Get Lowest Value in Range                     |
+//| ZigZag Color Helper: Get Lowest Value in Range (Array-based)       |
+//| MQL5 Standard: Uses pre-filled array where index 0 = oldest bar    |
 //+------------------------------------------------------------------+
-double ZZ_Lowest(int range, int fromIndex)
+double ZZ_Lowest(const double &array[], int range, int fromIndex)
 {
-   double res = iLow(_Symbol, InpZigZagTimeframe, fromIndex);
+   if(fromIndex < 0 || fromIndex >= ArraySize(array)) return 0;
+   double res = array[fromIndex];
    for(int i = fromIndex; i > fromIndex - range && i >= 0; i--)
    {
-      double l = iLow(_Symbol, InpZigZagTimeframe, i);
-      if(res > l) res = l;
+      if(res > array[i]) res = array[i];
    }
    return res;
 }
 
 //+------------------------------------------------------------------+
-//| ZigZag Color Algorithm (MQL5.com Standard)                         |
+//| ZigZag Color Algorithm (MQL5.com Standard - EXACT COPY)            |
+//| Uses array-based calculation matching the standard indicator       |
 //+------------------------------------------------------------------+
 void CalculateZigZagColor()
 {
    // Clear previous objects
    ObjectsDeleteAll(0, ZZPrefix);
    
-   int barsToAnalyze = 300;
+   int barsToAnalyze = 500;  // Increased for accuracy
    int rates_total = Bars(_Symbol, InpZigZagTimeframe);
    if(rates_total < 100) return;
+   if(barsToAnalyze > rates_total) barsToAnalyze = rates_total;
    
-   // Resize buffers
+   // === CRITICAL: Copy price data into arrays (index 0 = OLDEST) ===
+   // MQL5 indicator receives High[], Low[] arrays where index 0 is oldest
+   // We must replicate this by copying iHigh/iLow with REVERSED indexing
+   ArrayResize(g_ZZHighData, barsToAnalyze);
+   ArrayResize(g_ZZLowData, barsToAnalyze);
+   ArrayResize(g_ZZTimeData, barsToAnalyze);
+   
+   // Copy data: array index i corresponds to bar shift (barsToAnalyze - 1 - i)
+   // So array[0] = oldest bar, array[barsToAnalyze-1] = newest bar (shift 0)
+   for(int i = 0; i < barsToAnalyze; i++)
+   {
+      int barShift = barsToAnalyze - 1 - i;  // Convert to bar shift
+      g_ZZHighData[i] = iHigh(_Symbol, InpZigZagTimeframe, barShift);
+      g_ZZLowData[i] = iLow(_Symbol, InpZigZagTimeframe, barShift);
+      g_ZZTimeData[i] = iTime(_Symbol, InpZigZagTimeframe, barShift);
+   }
+   
+   // Resize ZigZag buffers
    ArrayResize(g_ZigzagPeakBuffer, barsToAnalyze);
    ArrayResize(g_ZigzagLawnBuffer, barsToAnalyze);
    ArrayResize(g_HighMapBuffer, barsToAnalyze);
@@ -2916,29 +2942,24 @@ void CalculateZigZagColor()
    ArrayInitialize(g_HighMapBuffer, 0.0);
    ArrayInitialize(g_LowMapBuffer, 0.0);
    
-   // === MQL5 ZigZag Color Algorithm ===
-   int level = 3;  // recounting's depth
-   int counterZ = 0;
-   int whatlookfor = 0;  // 0=look for peak or lawn, 1=look for peak, -1=look for lawn
+   // === MQL5 ZigZag Color Algorithm (EXACT COPY from zigzagcolor.mq5) ===
+   int limit = InpZigZagDepth - 1;
    int back = 0;
    int lasthighpos = 0, lastlowpos = 0;
    double val = 0, res = 0;
-   double curlow = 0, curhigh = 0, lasthigh = 0, lastlow = 0;
+   double lasthigh = 0, lastlow = 0;
    
-   int limit = InpZigZagDepth - 1;
-   
-   // Main ZigZag calculation loop
+   // First pass: Build HighMapBuffer and LowMapBuffer
    for(int shift = limit; shift < barsToAnalyze; shift++)
    {
-      // Low detection
-      val = ZZ_Lowest(InpZigZagDepth, shift);
+      // Low detection - uses g_ZZLowData array
+      val = ZZ_Lowest(g_ZZLowData, InpZigZagDepth, shift);
       
       if(val == lastlow) val = 0.0;
       else
       {
          lastlow = val;
-         double lowPrice = iLow(_Symbol, InpZigZagTimeframe, shift);
-         if((lowPrice - val) > (InpZigZagDeviation * _Point)) val = 0.0;
+         if((g_ZZLowData[shift] - val) > (InpZigZagDeviation * _Point)) val = 0.0;
          else
          {
             for(back = InpZigZagBackstep; back >= 1; back--)
@@ -2952,19 +2973,17 @@ void CalculateZigZagColor()
          }
       }
       
-      double lowPrice = iLow(_Symbol, InpZigZagTimeframe, shift);
-      if(lowPrice == val) g_LowMapBuffer[shift] = val;
+      if(g_ZZLowData[shift] == val) g_LowMapBuffer[shift] = val;
       else g_LowMapBuffer[shift] = 0.0;
       
-      // High detection
-      val = ZZ_Highest(InpZigZagDepth, shift);
+      // High detection - uses g_ZZHighData array
+      val = ZZ_Highest(g_ZZHighData, InpZigZagDepth, shift);
       
       if(val == lasthigh) val = 0.0;
       else
       {
          lasthigh = val;
-         double highPrice = iHigh(_Symbol, InpZigZagTimeframe, shift);
-         if((val - highPrice) > (InpZigZagDeviation * _Point)) val = 0.0;
+         if((val - g_ZZHighData[shift]) > (InpZigZagDeviation * _Point)) val = 0.0;
          else
          {
             for(back = InpZigZagBackstep; back >= 1; back--)
@@ -2978,37 +2997,37 @@ void CalculateZigZagColor()
          }
       }
       
-      double highPrice = iHigh(_Symbol, InpZigZagTimeframe, shift);
-      if(highPrice == val) g_HighMapBuffer[shift] = val;
+      if(g_ZZHighData[shift] == val) g_HighMapBuffer[shift] = val;
       else g_HighMapBuffer[shift] = 0.0;
    }
    
-   // Final cutting - build ZigZag points
+   // Final cutting - reset state
    lastlow = 0;
    lasthigh = 0;
    lasthighpos = 0;
    lastlowpos = 0;
-   whatlookfor = 0;
+   int whatlookfor = 0;  // 0=look for peak or lawn, 1=look for peak, -1=look for lawn
    
+   // Second pass: Build ZigZag Peak/Lawn points (EXACT MQL5 logic)
    for(int shift = limit; shift < barsToAnalyze; shift++)
    {
       res = 0.0;
       
       switch(whatlookfor)
       {
-         case 0:  // look for peak or lawn
+         case 0:  // Look for peak or lawn
             if(lasthigh == 0 && lastlow == 0)
             {
                if(g_HighMapBuffer[shift] != 0)
                {
-                  lasthigh = iHigh(_Symbol, InpZigZagTimeframe, shift);
+                  lasthigh = g_ZZHighData[shift];
                   lasthighpos = shift;
                   whatlookfor = -1;  // now look for lawn
                   g_ZigzagPeakBuffer[shift] = lasthigh;
                }
                if(g_LowMapBuffer[shift] != 0)
                {
-                  lastlow = iLow(_Symbol, InpZigZagTimeframe, shift);
+                  lastlow = g_ZZLowData[shift];
                   lastlowpos = shift;
                   whatlookfor = 1;  // now look for peak
                   g_ZigzagLawnBuffer[shift] = lastlow;
@@ -3016,7 +3035,7 @@ void CalculateZigZagColor()
             }
             break;
             
-         case 1:  // look for peak
+         case 1:  // Look for peak (after lawn)
             if(g_LowMapBuffer[shift] != 0.0 && g_LowMapBuffer[shift] < lastlow && g_HighMapBuffer[shift] == 0.0)
             {
                g_ZigzagLawnBuffer[lastlowpos] = 0.0;
@@ -3033,7 +3052,7 @@ void CalculateZigZagColor()
             }
             break;
             
-         case -1:  // look for lawn
+         case -1:  // Look for lawn (after peak)
             if(g_HighMapBuffer[shift] != 0.0 && g_HighMapBuffer[shift] > lasthigh && g_LowMapBuffer[shift] == 0.0)
             {
                g_ZigzagPeakBuffer[lasthighpos] = 0.0;
@@ -3053,18 +3072,23 @@ void CalculateZigZagColor()
    }
    
    // Build ZZPoints array from buffers
+   // Convert array index back to bar shift for time lookup
    ArrayResize(ZZPoints, 0);
    ZZPointCount = 0;
    
-   for(int i = 1; i < barsToAnalyze; i++)
+   // Scan from newest (high array index) to oldest, skip bar 0 (unconfirmed)
+   for(int i = barsToAnalyze - 2; i >= 1; i--)  // Start from second newest (confirmed)
    {
       if(g_ZigzagPeakBuffer[i] > 0 || g_ZigzagLawnBuffer[i] > 0)
       {
          int size = ArraySize(ZZPoints);
          ArrayResize(ZZPoints, size + 1);
          
-         ZZPoints[size].barIndex = i;
-         ZZPoints[size].time = iTime(_Symbol, InpZigZagTimeframe, i);
+         // Convert array index to bar shift: barShift = barsToAnalyze - 1 - i
+         int barShift = barsToAnalyze - 1 - i;
+         
+         ZZPoints[size].barIndex = barShift;
+         ZZPoints[size].time = g_ZZTimeData[i];
          
          if(g_ZigzagPeakBuffer[i] > 0)
          {
