@@ -1781,7 +1781,12 @@ int OnInit()
           ShowWebRequestSetupAlert();
           g_lastWebRequestAlert = TimeCurrent();
        }
-    }
+     }
+   
+   // *** v5.21: Force indicator redraw on EA initialization/settings change ***
+   // This ensures indicators draw immediately when user changes parameters
+   g_forceInitialDraw = true;
+   Print("*** v5.21: Force Initial Draw enabled for immediate indicator display ***");
    
    return(INIT_SUCCEEDED);
 }
@@ -6778,8 +6783,46 @@ void OnTick()
    // Draw TP/SL lines (every tick for real-time update)
    DrawTPSLLines();
    
+   // ========== v5.21: INDICATOR DRAWING SECTION (BEFORE PAUSE/NEWS CHECK) ==========
+   // This ensures indicators are ALWAYS drawn regardless of pause/news/time filter status
+   // Visual feedback should always be available even when trading is paused
+   {
+      ENUM_TIMEFRAMES signalTF = GetSignalTimeframe();
+      static datetime lastIndicatorBarTime = 0;
+      datetime currentIndicatorBarTime = iTime(_Symbol, signalTF, 0);
+      
+      bool isFirstDraw = g_forceInitialDraw;
+      bool newIndicatorBarClosed = (lastIndicatorBarTime != currentIndicatorBarTime);
+      
+      // Draw indicators on: first draw OR new bar closed
+      if(isFirstDraw || newIndicatorBarClosed)
+      {
+         lastIndicatorBarTime = currentIndicatorBarTime;
+         
+         if(isFirstDraw)
+         {
+            g_forceInitialDraw = false;
+            Print("*** v5.21: Force Initial Draw - Drawing all indicators immediately ***");
+         }
+         
+         // *** ALWAYS CALCULATE INDICATORS ***
+         CalculateCDC();
+         
+         if(InpSignalStrategy == STRATEGY_ZIGZAG)
+            CalculateZigZagColor();
+         else if(InpSignalStrategy == STRATEGY_EMA_CHANNEL)
+            CalculateEMAChannel();
+         else if(InpSignalStrategy == STRATEGY_BOLLINGER)
+            CalculateBollingerBands();
+         else if(InpSignalStrategy == STRATEGY_SMC)
+            CalculateSMC();
+      }
+   }
+   // ========== END INDICATOR SECTION ==========
+   
    // *** EA PAUSE CHECK ***
    // If paused, only TP/SL/Hedge/Accumulate continues to work, no new orders
+   // NOTE: Indicators are already drawn above, so they remain visible during pause
    if(g_eaIsPaused)
    {
       UpdateChartComment("PAUSED", "EA Paused - No new orders");
@@ -6788,16 +6831,16 @@ void OnTick()
    
    // *** NEWS FILTER PAUSE CHECK ***
    // If news pause is active, skip new orders and grid - but TP/SL/Hedge still work
+   // NOTE: Indicators remain visible during news pause
    if(IsNewsTimePaused())
    {
       UpdateChartComment("NEWS_PAUSE", g_newsStatus);
-      // Continue to Grid check but exit before initial order logic
-      // Grid is also paused during news
       return;
    }
    
    // *** TIME FILTER CHECK - Block ALL new orders (Initial + Grid) ***
    // TP/SL/Hedge/Accumulate still work above this point
+   // NOTE: Indicators remain visible outside trading hours
    if(InpUseTimeFilter && !IsWithinTradingHours())
    {
       UpdateChartComment("WAIT", "Outside trading hours");
@@ -6809,7 +6852,7 @@ void OnTick()
    if(g_isHedgeLocked)
    {
       UpdateChartComment("HEDGE_LOCKED", "Positions locked - Manual close required");
-      return;  // Exit OnTick - no further trading until manual intervention
+      return;
    }
 
    // ========== SMC ENTRY CYCLE (NEW LOGIC - PER SIDE) ==========
@@ -6885,55 +6928,9 @@ void OnTick()
    CheckGridLossSide();
    CheckGridProfitSide();
    
-   // *** v5.1: Use Signal Timeframe for bar close check ***
+   // *** v5.21: Bar time for trading signal logic ***
    ENUM_TIMEFRAMES signalTF = GetSignalTimeframe();
-   static datetime lastBarTime = 0;
    datetime currentBarTime = iTime(_Symbol, signalTF, 0);
-   
-   // *** v5.1: Force Initial Draw - Bypass bar close check on first valid tick ***
-   // This ensures indicators are drawn immediately after license load
-   bool isFirstDraw = g_forceInitialDraw;
-   
-   if(lastBarTime == currentBarTime && !isFirstDraw)
-      return;
-      
-   lastBarTime = currentBarTime;
-   
-   // Reset force draw flag after first execution
-   if(isFirstDraw)
-   {
-      g_forceInitialDraw = false;
-      Print("*** v5.1: Force Initial Draw - Drawing all indicators immediately ***");
-   }
-   
-   // *** IMPORTANT: Calculate Indicators FIRST before PA confirmation ***
-   // This ensures that SMC OB touch, CDC trend, etc. are already determined
-   // before we check for PA confirmation as the final step.
-   
-   // Calculate CDC Action Zone (higher timeframe)
-   CalculateCDC();
-   
-   // Calculate based on selected Signal Strategy
-   if(InpSignalStrategy == STRATEGY_ZIGZAG)
-   {
-      // Calculate ZigZag Color (MQL5 Standard Algorithm)
-      CalculateZigZagColor();
-   }
-   else if(InpSignalStrategy == STRATEGY_EMA_CHANNEL)
-   {
-      // Calculate EMA Channel
-      CalculateEMAChannel();
-   }
-   else if(InpSignalStrategy == STRATEGY_BOLLINGER)
-   {
-      // Calculate Bollinger Bands
-      CalculateBollingerBands();
-   }
-   else if(InpSignalStrategy == STRATEGY_SMC)
-   {
-      // Calculate Smart Money Concepts (Order Blocks)
-      CalculateSMC();
-   }
    
    // *** PRICE ACTION CONFIRMATION CHECK ***
    // Handle pending signals waiting for PA confirmation
