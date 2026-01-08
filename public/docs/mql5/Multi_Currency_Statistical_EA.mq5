@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                Multi_Currency_Statistical_EA.mq5 |
-//|                 Statistical Arbitrage (Pairs Trading) v3.5.3 HF1 |
+//|                 Statistical Arbitrage (Pairs Trading) v3.5.3 HF2 |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "3.54"
+#property version   "3.55"
 #property strict
 #property description "Statistical Arbitrage / Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
-#property description "v3.5.3 HF1: Fixed Lot Mode + Compounding for Trend-Aligned Side"
+#property description "v3.5.3 HF2: Fixed Initial Lot Logic for ATR Trend Mode"
 
 #include <Trade/Trade.mqh>
 
@@ -2660,7 +2660,7 @@ void CalculateTrendBasedLots(int pairIndex, string side,
       return;
    }
    
-   // === Mode 3: ATR Trend Mode (v3.5.3 HF1 - with Compounding) ===
+   // === Mode 3: ATR Trend Mode (v3.5.3 HF2 - Fixed Initial Lot) ===
    if(InpGridLotMode == GRID_LOT_ATR_TREND)
    {
       // Requires CDC to be enabled
@@ -2697,31 +2697,34 @@ void CalculateTrendBasedLots(int pairIndex, string side,
       bool isTrendAlignedB = ((directionB == "BUY" && trendB == "BULLISH") ||
                               (directionB == "SELL" && trendB == "BEARISH"));
       
-      // === v3.5.3 HF1: Calculate Effective Base Lots (Compounding for Grid) ===
-      double effectiveBaseLotA = baseLotA;
-      double effectiveBaseLotB = baseLotB;
+      // === v3.5.3 HF2: Use InpBaseLot as foundation for ATR Trend Mode ===
+      // This fixes the issue where lotBuyA/B and lotSellA/B were influenced by Beta × Pip Ratio
+      double initialLotA = NormalizeLot(symbolA, InpBaseLot);
+      double initialLotB = NormalizeLot(symbolB, InpBaseLot);
       
-      // Get Initial Lots (for Counter-Trend side)
-      double initialLotA = (side == "BUY") ? g_pairs[pairIndex].lotBuyA : g_pairs[pairIndex].lotSellA;
-      double initialLotB = (side == "BUY") ? g_pairs[pairIndex].lotBuyB : g_pairs[pairIndex].lotSellB;
+      // === Calculate Effective Base Lots ===
+      double effectiveBaseLotA = initialLotA;
+      double effectiveBaseLotB = initialLotB;
       
+      // For Grid Orders with Compounding (Trend-Aligned side only)
       if(isGridOrder && InpLotProgression == LOT_PROG_COMPOUNDING)
       {
          // Use LAST Grid Lot as base for compounding (Trend-Aligned side only)
+         // Counter-Trend side will be reset to initialLot below
          if(side == "BUY")
          {
-            effectiveBaseLotA = g_pairs[pairIndex].lastGridLotBuyA;
-            effectiveBaseLotB = g_pairs[pairIndex].lastGridLotBuyB;
+            if(isTrendAlignedA && g_pairs[pairIndex].lastGridLotBuyA > 0)
+               effectiveBaseLotA = g_pairs[pairIndex].lastGridLotBuyA;
+            if(isTrendAlignedB && g_pairs[pairIndex].lastGridLotBuyB > 0)
+               effectiveBaseLotB = g_pairs[pairIndex].lastGridLotBuyB;
          }
          else
          {
-            effectiveBaseLotA = g_pairs[pairIndex].lastGridLotSellA;
-            effectiveBaseLotB = g_pairs[pairIndex].lastGridLotSellB;
+            if(isTrendAlignedA && g_pairs[pairIndex].lastGridLotSellA > 0)
+               effectiveBaseLotA = g_pairs[pairIndex].lastGridLotSellA;
+            if(isTrendAlignedB && g_pairs[pairIndex].lastGridLotSellB > 0)
+               effectiveBaseLotB = g_pairs[pairIndex].lastGridLotSellB;
          }
-         
-         // Safety check: if last lot is 0, use initial
-         if(effectiveBaseLotA <= 0) effectiveBaseLotA = initialLotA;
-         if(effectiveBaseLotB <= 0) effectiveBaseLotB = initialLotB;
       }
       
       // === Calculate Multipliers ===
@@ -2756,18 +2759,18 @@ void CalculateTrendBasedLots(int pairIndex, string side,
          multB = isTrendAlignedB ? InpTrendSideMultiplier : InpCounterSideMultiplier;
       }
       
-      // === v3.5.3 HF1: Counter-Trend Side uses Fixed Initial Lot ===
-      // Counter-Trend: ใช้ Initial Lot เท่าเดิม (ไม่ compound, ไม่คูณ multiplier)
+      // === v3.5.3 HF2: Counter-Trend Side uses Fixed Initial Lot ===
+      // Counter-Trend: ใช้ InpBaseLot × CounterSideMultiplier เท่าเดิม (ไม่ compound)
       if(!isTrendAlignedA)
       {
-         effectiveBaseLotA = initialLotA;  // Reset to initial
-         multA = 1.0;  // No multiplier
+         effectiveBaseLotA = initialLotA;  // Reset to InpBaseLot
+         multA = InpCounterSideMultiplier;  // Apply counter multiplier
       }
       
       if(!isTrendAlignedB)
       {
-         effectiveBaseLotB = initialLotB;  // Reset to initial
-         multB = 1.0;  // No multiplier
+         effectiveBaseLotB = initialLotB;  // Reset to InpBaseLot
+         multB = InpCounterSideMultiplier;  // Apply counter multiplier
       }
       
       adjustedLotA = NormalizeLot(symbolA, effectiveBaseLotA * multA);
@@ -2776,10 +2779,11 @@ void CalculateTrendBasedLots(int pairIndex, string side,
       if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
       {
          string progMode = (isGridOrder && InpLotProgression == LOT_PROG_COMPOUNDING) ? "Compound" : "Mult";
-         PrintFormat("TREND LOT [Pair %d %s %s]: A(%s)=%.2f×%.2f=%.2f [%s:%s] | B(%s)=%.2f×%.2f=%.2f [%s:%s]",
+         PrintFormat("TREND LOT [Pair %d %s %s]: A(%s)=%.2f×%.2f=%.2f [%s:%s] | B(%s)=%.2f×%.2f=%.2f [%s:%s] [Base=%.2f]",
                      pairIndex + 1, side, progMode,
                      symbolA, effectiveBaseLotA, multA, adjustedLotA, directionA, isTrendAlignedA ? "TREND" : "COUNTER",
-                     symbolB, effectiveBaseLotB, multB, adjustedLotB, directionB, isTrendAlignedB ? "TREND" : "COUNTER");
+                     symbolB, effectiveBaseLotB, multB, adjustedLotB, directionB, isTrendAlignedB ? "TREND" : "COUNTER",
+                     InpBaseLot);
       }
    }
 }
