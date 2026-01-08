@@ -3628,7 +3628,7 @@ void CreateDashboard()
    int titleHeight = 22;
    CreateRectangle(prefix + "TITLE_BG", PANEL_X, PANEL_Y, PANEL_WIDTH, titleHeight, C'20,40,60', C'20,40,60');
    CreateLabel(prefix + "TITLE_NAME", PANEL_X + 10, PANEL_Y + 4, 
-               "Multi-Currency Statistical EA v3.3.0 - MoneyX Trading", 
+               "Multi-Currency Statistical EA v3.5.0 - MoneyX Trading", 
                COLOR_GOLD, 10, "Arial Bold");
    
    // v3.2.9 Hotfix: Increased header height and spacing to prevent overlap
@@ -3677,11 +3677,12 @@ void CreateDashboard()
    CreateLabel(prefix + "COL_B_Z", buyStartX + 310, colLabelY, "Z", COLOR_HEADER_TXT, 7, "Arial");
    CreateLabel(prefix + "COL_B_PL", buyStartX + 358, colLabelY, "P/L", COLOR_HEADER_TXT, 7, "Arial");
    
-   // Center columns: Pair | C-% | Type | Beta | Total P/L
+// Center columns: Pair | Trend | C-% | Type | Beta | Total P/L
    CreateLabel(prefix + "COL_C_PR", centerX + 10, colLabelY, "Pair", COLOR_HEADER_TXT, 7, "Arial");
-   CreateLabel(prefix + "COL_C_CR", centerX + 140, colLabelY, "C-%", COLOR_HEADER_TXT, 7, "Arial");
-   CreateLabel(prefix + "COL_C_TY", centerX + 195, colLabelY, "Type", COLOR_HEADER_TXT, 7, "Arial");
-   CreateLabel(prefix + "COL_C_BT", centerX + 250, colLabelY, "Beta", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_C_TRD", centerX + 115, colLabelY, "Trend", COLOR_HEADER_TXT, 7, "Arial");  // v3.5.0: CDC Trend column
+   CreateLabel(prefix + "COL_C_CR", centerX + 160, colLabelY, "C-%", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_C_TY", centerX + 205, colLabelY, "Type", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_C_BT", centerX + 255, colLabelY, "Beta", COLOR_HEADER_TXT, 7, "Arial");
    CreateLabel(prefix + "COL_C_TP", centerX + 310, colLabelY, "Tot P/L", COLOR_HEADER_TXT, 7, "Arial");
    
    // Sell columns: P/L | Z | Status | Target | Tot | Ord | Lot | Closed | X
@@ -3742,9 +3743,11 @@ void CreatePairRow(string prefix, int idx, int buyX, int centerX, int sellX, int
    
    // === CENTER DATA ===
    CreateLabel(prefix + "P" + idxStr + "_NAME", centerX + 10, y + 3, pairName, COLOR_TEXT, FONT_SIZE, "Arial Bold");
-   CreateLabel(prefix + "P" + idxStr + "_CORR", centerX + 140, y + 3, "0%", COLOR_TEXT, FONT_SIZE, "Arial");
-   CreateLabel(prefix + "P" + idxStr + "_TYPE", centerX + 195, y + 3, "Pos", COLOR_PROFIT, FONT_SIZE, "Arial");
-   CreateLabel(prefix + "P" + idxStr + "_BETA", centerX + 250, y + 3, "1.00", COLOR_TEXT, FONT_SIZE, "Arial");
+   // v3.5.0: CDC Trend Status Badge (OK/BLOCK)
+   CreateLabel(prefix + "P" + idxStr + "_CDC", centerX + 115, y + 3, "-", COLOR_OFF, FONT_SIZE, "Arial Bold");
+   CreateLabel(prefix + "P" + idxStr + "_CORR", centerX + 160, y + 3, "0%", COLOR_TEXT, FONT_SIZE, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_TYPE", centerX + 205, y + 3, "Pos", COLOR_PROFIT, FONT_SIZE, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_BETA", centerX + 255, y + 3, "1.00", COLOR_TEXT, FONT_SIZE, "Arial");
    CreateLabel(prefix + "P" + idxStr + "_TPL", centerX + 310, y + 3, "0", COLOR_TEXT, 9, "Arial Bold");
    
    // === SELL SIDE DATA ===
@@ -3957,18 +3960,33 @@ void UpdateDashboard()
       // === Center Data ===
       if(!g_pairs[i].enabled)
       {
+         UpdateLabel(prefix + "P" + idxStr + "_CDC", "-", COLOR_OFF);  // v3.5.0
          UpdateLabel(prefix + "P" + idxStr + "_CORR", "-", COLOR_OFF);
          UpdateLabel(prefix + "P" + idxStr + "_TYPE", "-", COLOR_OFF);
          UpdateLabel(prefix + "P" + idxStr + "_BETA", "-", COLOR_OFF);
       }
       else if(!g_pairs[i].dataValid)
       {
+         UpdateLabel(prefix + "P" + idxStr + "_CDC", "-", clrGray);  // v3.5.0
          UpdateLabel(prefix + "P" + idxStr + "_CORR", "N/A", COLOR_GOLD);
          UpdateLabel(prefix + "P" + idxStr + "_TYPE", "N/A", COLOR_GOLD);
          UpdateLabel(prefix + "P" + idxStr + "_BETA", "N/A", COLOR_GOLD);
       }
       else
       {
+         // v3.5.0: Update CDC Trend Status Badge
+         if(InpUseCDCTrendFilter)
+         {
+            bool cdcOK = CheckCDCTrendConfirmation(i, "ANY");
+            string cdcStatus = cdcOK ? "OK" : "BLOCK";
+            color cdcColor = cdcOK ? clrLime : clrOrangeRed;
+            UpdateLabel(prefix + "P" + idxStr + "_CDC", cdcStatus, cdcColor);
+         }
+         else
+         {
+            UpdateLabel(prefix + "P" + idxStr + "_CDC", "OFF", clrDimGray);
+         }
+         
          double corr = g_pairs[i].correlation * 100;
          color corrColor = MathAbs(corr) >= InpMinCorrelation * 100 ? COLOR_PROFIT : COLOR_TEXT;
          UpdateLabel(prefix + "P" + idxStr + "_CORR", DoubleToString(corr, 0) + "%", corrColor);
