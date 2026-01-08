@@ -1,10 +1,10 @@
 //+------------------------------------------------------------------+
 //|                                Multi_Currency_Statistical_EA.mq5 |
-//|                 Statistical Arbitrage (Pairs Trading) v3.5.3 HF3 |
+//|                 Statistical Arbitrage (Pairs Trading) v3.5.3 HF4 |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "3.56"
+#property version   "3.57"
 #property strict
 #property description "Statistical Arbitrage / Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
@@ -3013,6 +3013,12 @@ void OpenAveragingBuy(int pairIndex)
    
    int corrType = g_pairs[pairIndex].correlationType;
    
+   // v3.5.3 HF4: Force update ADX before opening trade for Negative Correlation
+   if(corrType == -1 && InpUseADXForNegative)
+   {
+      UpdateADXForPair(pairIndex);
+   }
+   
    // v3.5.3 HF3: Add ADX values in comment for Negative Correlation pairs
    string comment;
    if(corrType == -1 && InpUseADXForNegative)
@@ -3101,6 +3107,12 @@ void OpenAveragingSell(int pairIndex)
    CalculateTrendBasedLots(pairIndex, "SELL", baseLotA, baseLotB, lotA, lotB, true);
    
    int corrType = g_pairs[pairIndex].correlationType;
+   
+   // v3.5.3 HF4: Force update ADX before opening trade for Negative Correlation
+   if(corrType == -1 && InpUseADXForNegative)
+   {
+      UpdateADXForPair(pairIndex);
+   }
    
    // v3.5.3 HF3: Add ADX values in comment for Negative Correlation pairs
    string comment;
@@ -3240,6 +3252,12 @@ bool OpenBuySideTrade(int pairIndex)
    PrintFormat("Pair %d OPENING BUY: lotA=%.2f lotB=%.2f (stored: A=%.2f B=%.2f, Base=%.2f) [Mode:%s]", 
                pairIndex + 1, lotA, lotB, 
                g_pairs[pairIndex].lotBuyA, g_pairs[pairIndex].lotBuyB, InpBaseLot, modeStr);
+   
+   // v3.5.3 HF4: Force update ADX before opening trade for Negative Correlation
+   if(corrType == -1 && InpUseADXForNegative)
+   {
+      UpdateADXForPair(pairIndex);
+   }
    
    // v3.5.3 HF3: Add ADX values in comment for Negative Correlation pairs
    string comment;
@@ -3382,6 +3400,12 @@ bool OpenSellSideTrade(int pairIndex)
    PrintFormat("Pair %d OPENING SELL: lotA=%.2f lotB=%.2f (stored: A=%.2f B=%.2f, Base=%.2f) [Mode:%s]", 
                pairIndex + 1, lotA, lotB, 
                g_pairs[pairIndex].lotSellA, g_pairs[pairIndex].lotSellB, InpBaseLot, modeStr);
+   
+   // v3.5.3 HF4: Force update ADX before opening trade for Negative Correlation
+   if(corrType == -1 && InpUseADXForNegative)
+   {
+      UpdateADXForPair(pairIndex);
+   }
    
    // v3.5.3 HF3: Add ADX values in comment for Negative Correlation pairs
    string comment;
