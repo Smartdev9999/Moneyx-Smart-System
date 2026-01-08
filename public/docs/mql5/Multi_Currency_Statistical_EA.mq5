@@ -3013,7 +3013,19 @@ void OpenAveragingBuy(int pairIndex)
    
    int corrType = g_pairs[pairIndex].correlationType;
    
-   string comment = StringFormat("StatArb_AVG_BUY_%d", pairIndex + 1);
+   // v3.5.3 HF3: Add ADX values in comment for Negative Correlation pairs
+   string comment;
+   if(corrType == -1 && InpUseADXForNegative)
+   {
+      comment = StringFormat("StatArb_AVG_BUY_%d[ADX:%.0f|%.0f]", 
+                             pairIndex + 1,
+                             g_pairs[pairIndex].adxValueA,
+                             g_pairs[pairIndex].adxValueB);
+   }
+   else
+   {
+      comment = StringFormat("StatArb_AVG_BUY_%d", pairIndex + 1);
+   }
    
    // Open Buy on Symbol A
    double askA = SymbolInfoDouble(symbolA, SYMBOL_ASK);
@@ -3056,9 +3068,20 @@ void OpenAveragingBuy(int pairIndex)
                     (InpGridLotMode == GRID_LOT_BETA) ? "Beta" : 
                     ((InpLotProgression == LOT_PROG_COMPOUNDING) ? "ATR-Compound" : "ATR-Mult");
    
-   PrintFormat("Pair %d AVG BUY #%d opened at Z=%.2f (A:%.2f B:%.2f) [Mode:%s]", 
-               pairIndex + 1, g_pairs[pairIndex].avgOrderCountBuy, 
-               g_pairs[pairIndex].zScore, lotA, lotB, modeStr);
+   // v3.5.3 HF3: Include ADX values in log for Negative Correlation pairs
+   if(corrType == -1 && InpUseADXForNegative)
+   {
+      PrintFormat("Pair %d AVG BUY #%d opened at Z=%.2f (A:%.2f B:%.2f) [Mode:%s][ADX:%.0f|%.0f]", 
+                  pairIndex + 1, g_pairs[pairIndex].avgOrderCountBuy, 
+                  g_pairs[pairIndex].zScore, lotA, lotB, modeStr,
+                  g_pairs[pairIndex].adxValueA, g_pairs[pairIndex].adxValueB);
+   }
+   else
+   {
+      PrintFormat("Pair %d AVG BUY #%d opened at Z=%.2f (A:%.2f B:%.2f) [Mode:%s]", 
+                  pairIndex + 1, g_pairs[pairIndex].avgOrderCountBuy, 
+                  g_pairs[pairIndex].zScore, lotA, lotB, modeStr);
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -3079,7 +3102,19 @@ void OpenAveragingSell(int pairIndex)
    
    int corrType = g_pairs[pairIndex].correlationType;
    
-   string comment = StringFormat("StatArb_AVG_SELL_%d", pairIndex + 1);
+   // v3.5.3 HF3: Add ADX values in comment for Negative Correlation pairs
+   string comment;
+   if(corrType == -1 && InpUseADXForNegative)
+   {
+      comment = StringFormat("StatArb_AVG_SELL_%d[ADX:%.0f|%.0f]", 
+                             pairIndex + 1,
+                             g_pairs[pairIndex].adxValueA,
+                             g_pairs[pairIndex].adxValueB);
+   }
+   else
+   {
+      comment = StringFormat("StatArb_AVG_SELL_%d", pairIndex + 1);
+   }
    
    // Open Sell on Symbol A
    double bidA = SymbolInfoDouble(symbolA, SYMBOL_BID);
@@ -3122,9 +3157,20 @@ void OpenAveragingSell(int pairIndex)
                     (InpGridLotMode == GRID_LOT_BETA) ? "Beta" : 
                     ((InpLotProgression == LOT_PROG_COMPOUNDING) ? "ATR-Compound" : "ATR-Mult");
    
-   PrintFormat("Pair %d AVG SELL #%d opened at Z=%.2f (A:%.2f B:%.2f) [Mode:%s]", 
-               pairIndex + 1, g_pairs[pairIndex].avgOrderCountSell, 
-               g_pairs[pairIndex].zScore, lotA, lotB, modeStr);
+   // v3.5.3 HF3: Include ADX values in log for Negative Correlation pairs
+   if(corrType == -1 && InpUseADXForNegative)
+   {
+      PrintFormat("Pair %d AVG SELL #%d opened at Z=%.2f (A:%.2f B:%.2f) [Mode:%s][ADX:%.0f|%.0f]", 
+                  pairIndex + 1, g_pairs[pairIndex].avgOrderCountSell, 
+                  g_pairs[pairIndex].zScore, lotA, lotB, modeStr,
+                  g_pairs[pairIndex].adxValueA, g_pairs[pairIndex].adxValueB);
+   }
+   else
+   {
+      PrintFormat("Pair %d AVG SELL #%d opened at Z=%.2f (A:%.2f B:%.2f) [Mode:%s]", 
+                  pairIndex + 1, g_pairs[pairIndex].avgOrderCountSell, 
+                  g_pairs[pairIndex].zScore, lotA, lotB, modeStr);
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -3195,7 +3241,19 @@ bool OpenBuySideTrade(int pairIndex)
                pairIndex + 1, lotA, lotB, 
                g_pairs[pairIndex].lotBuyA, g_pairs[pairIndex].lotBuyB, InpBaseLot, modeStr);
    
-   string comment = StringFormat("StatArb_BUY_%d", pairIndex + 1);
+   // v3.5.3 HF3: Add ADX values in comment for Negative Correlation pairs
+   string comment;
+   if(corrType == -1 && InpUseADXForNegative)
+   {
+      comment = StringFormat("StatArb_BUY_%d[ADX:%.0f|%.0f]", 
+                             pairIndex + 1,
+                             g_pairs[pairIndex].adxValueA,
+                             g_pairs[pairIndex].adxValueB);
+   }
+   else
+   {
+      comment = StringFormat("StatArb_BUY_%d", pairIndex + 1);
+   }
    
    ulong ticketA = 0;
    ulong ticketB = 0;
@@ -3325,7 +3383,19 @@ bool OpenSellSideTrade(int pairIndex)
                pairIndex + 1, lotA, lotB, 
                g_pairs[pairIndex].lotSellA, g_pairs[pairIndex].lotSellB, InpBaseLot, modeStr);
    
-   string comment = StringFormat("StatArb_SELL_%d", pairIndex + 1);
+   // v3.5.3 HF3: Add ADX values in comment for Negative Correlation pairs
+   string comment;
+   if(corrType == -1 && InpUseADXForNegative)
+   {
+      comment = StringFormat("StatArb_SELL_%d[ADX:%.0f|%.0f]", 
+                             pairIndex + 1,
+                             g_pairs[pairIndex].adxValueA,
+                             g_pairs[pairIndex].adxValueB);
+   }
+   else
+   {
+      comment = StringFormat("StatArb_SELL_%d", pairIndex + 1);
+   }
    
    ulong ticketA = 0;
    ulong ticketB = 0;
