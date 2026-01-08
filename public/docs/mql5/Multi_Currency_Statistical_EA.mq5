@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                Multi_Currency_Statistical_EA.mq5 |
-//|                 Statistical Arbitrage (Pairs Trading) v3.5.3 HF2 |
+//|                 Statistical Arbitrage (Pairs Trading) v3.5.3 HF3 |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "3.55"
+#property version   "3.56"
 #property strict
 #property description "Statistical Arbitrage / Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
-#property description "v3.5.3 HF2: Fixed Initial Lot Logic for ATR Trend Mode"
+#property description "v3.5.3 HF3: ADX Trend Strength for Negative Correlation Pairs"
 
 #include <Trade/Trade.mqh>
 
@@ -116,6 +116,10 @@ struct PairInfo
    double         lastGridLotBuyB;   // Last Lot B for BUY side grid
    double         lastGridLotSellA;  // Last Lot A for SELL side grid
    double         lastGridLotSellB;  // Last Lot B for SELL side grid
+   
+   // === v3.5.3 HF3: ADX for Negative Correlation Pairs ===
+   double         adxValueA;         // ADX value for Symbol A
+   double         adxValueB;         // ADX value for Symbol B
    
    // === Combined ===
    double         totalPairProfit;   // profitBuy + profitSell
@@ -275,6 +279,12 @@ input int      InpGridATRPeriod = 20;                    // ATR Period for Ratio
 input double   InpTrendSideMultiplier = 1.2;            // Trend-Aligned Side: Fixed Multiplier
 input double   InpCounterSideMultiplier = 1.0;          // Counter-Trend Side: Multiplier (Fixed)
 input bool     InpUseATRRatioForTrend = false;          // Use ATR Ratio instead of Fixed Mult
+
+input group "--- ADX for Negative Correlation (v3.5.3 HF3) ---"
+input bool     InpUseADXForNegative = true;             // Use ADX for Negative Correlation Pairs
+input ENUM_TIMEFRAMES InpADXTimeframe = PERIOD_H1;      // ADX Timeframe
+input int      InpADXPeriod = 14;                       // ADX Period
+input double   InpADXMinStrength = 20.0;                // Minimum ADX for Trend Strength
 
 input group "=== Target Settings (v3.3.0) ==="
 input double   InpTotalTarget = 100.0;          // Total Portfolio Target ($)
@@ -1096,6 +1106,17 @@ void OnTick()
    {
       g_lastCDCUpdate = cdcCandleTime;
       UpdateAllPairsCDC();
+   }
+   
+   // v3.5.3 HF3: Update ADX for Negative Correlation Pairs on new ADX timeframe candle
+   datetime adxCandleTime = iTime(_Symbol, InpADXTimeframe, 0);
+   static datetime s_lastADXUpdate = 0;
+   bool newCandleADX = (adxCandleTime != s_lastADXUpdate);
+   
+   if(newCandleADX)
+   {
+      s_lastADXUpdate = adxCandleTime;
+      UpdateAllPairsADX();
    }
    
    // v3.2.7: Check for auto-resume after DD
@@ -2291,6 +2312,73 @@ bool CheckCDCTrendConfirmation(int pairIndex, string side)
 }
 
 //+------------------------------------------------------------------+
+//| ================ ADX FOR NEGATIVE CORRELATION (v3.5.3 HF3) ================
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//| Get ADX Value for Symbol (v3.5.3 HF3)                              |
+//+------------------------------------------------------------------+
+double GetADXValue(string symbol, ENUM_TIMEFRAMES timeframe, int period)
+{
+   int handle = iADX(symbol, timeframe, period);
+   if(handle == INVALID_HANDLE)
+   {
+      if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
+         PrintFormat("ADX: Failed to create handle for %s", symbol);
+      return 0;
+   }
+   
+   double buffer[];
+   ArraySetAsSeries(buffer, true);
+   
+   if(CopyBuffer(handle, 0, 0, 1, buffer) < 1)
+   {
+      IndicatorRelease(handle);
+      return 0;
+   }
+   
+   double adxValue = buffer[0];
+   IndicatorRelease(handle);
+   
+   return adxValue;
+}
+
+//+------------------------------------------------------------------+
+//| Update ADX Values for Negative Correlation Pair (v3.5.3 HF3)       |
+//+------------------------------------------------------------------+
+void UpdateADXForPair(int pairIndex)
+{
+   if(!InpUseADXForNegative) return;
+   if(g_pairs[pairIndex].correlationType != -1) return;  // Only for Negative Correlation
+   if(!g_pairs[pairIndex].enabled) return;
+   
+   g_pairs[pairIndex].adxValueA = GetADXValue(g_pairs[pairIndex].symbolA, InpADXTimeframe, InpADXPeriod);
+   g_pairs[pairIndex].adxValueB = GetADXValue(g_pairs[pairIndex].symbolB, InpADXTimeframe, InpADXPeriod);
+   
+   if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
+   {
+      PrintFormat("ADX UPDATE [Pair %d NEG]: %s=%.1f, %s=%.1f",
+                  pairIndex + 1,
+                  g_pairs[pairIndex].symbolA, g_pairs[pairIndex].adxValueA,
+                  g_pairs[pairIndex].symbolB, g_pairs[pairIndex].adxValueB);
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Update ADX for All Negative Correlation Pairs (v3.5.3 HF3)         |
+//+------------------------------------------------------------------+
+void UpdateAllPairsADX()
+{
+   if(!InpUseADXForNegative) return;
+   
+   for(int i = 0; i < MAX_PAIRS; i++)
+   {
+      if(g_pairs[i].enabled && g_pairs[i].correlationType == -1)
+         UpdateADXForPair(i);
+   }
+}
+
+//+------------------------------------------------------------------+
 //| ================ SIGNAL ENGINE (v3.5.0) ================           |
 //+------------------------------------------------------------------+
 
@@ -2731,7 +2819,69 @@ void CalculateTrendBasedLots(int pairIndex, string side,
       double multA = 1.0;
       double multB = 1.0;
       
-      if(InpUseATRRatioForTrend)
+      // === v3.5.3 HF3: ADX for Negative Correlation Pairs ===
+      // เมื่อทั้งสองฝั่งเป็น Trend-Aligned (Negative Correlation) → ใช้ ADX ตัดสิน
+      if(corrType == -1 && InpUseADXForNegative && isTrendAlignedA && isTrendAlignedB)
+      {
+         double adxA = g_pairs[pairIndex].adxValueA;
+         double adxB = g_pairs[pairIndex].adxValueB;
+         
+         if(adxA > adxB && adxA >= InpADXMinStrength)
+         {
+            // Symbol A มี ADX สูงกว่า → A ได้ Trend Multiplier + Compounding, B ได้ Counter (Fixed)
+            multA = InpTrendSideMultiplier;
+            multB = InpCounterSideMultiplier;
+            
+            // For Compounding: Only A compounds, B stays fixed
+            if(isGridOrder && InpLotProgression == LOT_PROG_COMPOUNDING)
+            {
+               // A continues compounding from last lot
+               // B resets to initial lot
+               effectiveBaseLotB = initialLotB;
+            }
+            
+            if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
+            {
+               PrintFormat("ADX DECISION [Pair %d NEG]: %s ADX=%.1f > %s ADX=%.1f | Winner: %s (Compound), Loser: %s (Fixed)",
+                           pairIndex + 1, symbolA, adxA, symbolB, adxB, symbolA, symbolB);
+            }
+         }
+         else if(adxB > adxA && adxB >= InpADXMinStrength)
+         {
+            // Symbol B มี ADX สูงกว่า → B ได้ Trend Multiplier + Compounding, A ได้ Counter (Fixed)
+            multA = InpCounterSideMultiplier;
+            multB = InpTrendSideMultiplier;
+            
+            // For Compounding: Only B compounds, A stays fixed
+            if(isGridOrder && InpLotProgression == LOT_PROG_COMPOUNDING)
+            {
+               // B continues compounding from last lot
+               // A resets to initial lot
+               effectiveBaseLotA = initialLotA;
+            }
+            
+            if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
+            {
+               PrintFormat("ADX DECISION [Pair %d NEG]: %s ADX=%.1f > %s ADX=%.1f | Winner: %s (Compound), Loser: %s (Fixed)",
+                           pairIndex + 1, symbolB, adxB, symbolA, adxA, symbolB, symbolA);
+            }
+         }
+         else
+         {
+            // ADX เท่ากันหรือต่ำกว่า threshold → ใช้ Counter ทั้งคู่ (Conservative)
+            multA = InpCounterSideMultiplier;
+            multB = InpCounterSideMultiplier;
+            effectiveBaseLotA = initialLotA;
+            effectiveBaseLotB = initialLotB;
+            
+            if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
+            {
+               PrintFormat("ADX DECISION [Pair %d NEG]: ADX A=%.1f, B=%.1f both below threshold %.1f | Both use Counter (Fixed)",
+                           pairIndex + 1, adxA, adxB, InpADXMinStrength);
+            }
+         }
+      }
+      else if(InpUseATRRatioForTrend)
       {
          // ATR Ratio Mode: เพิ่ม lot ของฝั่งที่ถูกเทรน ตาม ATR Ratio
          double atrRatio = CalculateATRRatio(pairIndex);
@@ -2754,23 +2904,27 @@ void CalculateTrendBasedLots(int pairIndex, string side,
       }
       else
       {
-         // Fixed Multiplier Mode
+         // Fixed Multiplier Mode (for Positive Correlation or ADX disabled)
          multA = isTrendAlignedA ? InpTrendSideMultiplier : InpCounterSideMultiplier;
          multB = isTrendAlignedB ? InpTrendSideMultiplier : InpCounterSideMultiplier;
       }
       
       // === v3.5.3 HF2: Counter-Trend Side uses Fixed Initial Lot ===
       // Counter-Trend: ใช้ InpBaseLot × CounterSideMultiplier เท่าเดิม (ไม่ compound)
-      if(!isTrendAlignedA)
+      // Note: For Negative Correlation with ADX, this is already handled above
+      if(!(corrType == -1 && InpUseADXForNegative && isTrendAlignedA && isTrendAlignedB))
       {
-         effectiveBaseLotA = initialLotA;  // Reset to InpBaseLot
-         multA = InpCounterSideMultiplier;  // Apply counter multiplier
-      }
-      
-      if(!isTrendAlignedB)
-      {
-         effectiveBaseLotB = initialLotB;  // Reset to InpBaseLot
-         multB = InpCounterSideMultiplier;  // Apply counter multiplier
+         if(!isTrendAlignedA)
+         {
+            effectiveBaseLotA = initialLotA;  // Reset to InpBaseLot
+            multA = InpCounterSideMultiplier;  // Apply counter multiplier
+         }
+         
+         if(!isTrendAlignedB)
+         {
+            effectiveBaseLotB = initialLotB;  // Reset to InpBaseLot
+            multB = InpCounterSideMultiplier;  // Apply counter multiplier
+         }
       }
       
       adjustedLotA = NormalizeLot(symbolA, effectiveBaseLotA * multA);
@@ -2779,8 +2933,9 @@ void CalculateTrendBasedLots(int pairIndex, string side,
       if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
       {
          string progMode = (isGridOrder && InpLotProgression == LOT_PROG_COMPOUNDING) ? "Compound" : "Mult";
-         PrintFormat("TREND LOT [Pair %d %s %s]: A(%s)=%.2f×%.2f=%.2f [%s:%s] | B(%s)=%.2f×%.2f=%.2f [%s:%s] [Base=%.2f]",
-                     pairIndex + 1, side, progMode,
+         string corrStr = (corrType == -1) ? "NEG" : "POS";
+         PrintFormat("TREND LOT [Pair %d %s %s %s]: A(%s)=%.2f×%.2f=%.2f [%s:%s] | B(%s)=%.2f×%.2f=%.2f [%s:%s] [Base=%.2f]",
+                     pairIndex + 1, corrStr, side, progMode,
                      symbolA, effectiveBaseLotA, multA, adjustedLotA, directionA, isTrendAlignedA ? "TREND" : "COUNTER",
                      symbolB, effectiveBaseLotB, multB, adjustedLotB, directionB, isTrendAlignedB ? "TREND" : "COUNTER",
                      InpBaseLot);
