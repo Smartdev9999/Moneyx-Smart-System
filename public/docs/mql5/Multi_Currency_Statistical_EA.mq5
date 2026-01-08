@@ -290,25 +290,29 @@ input bool     InpRequirePositiveProfit = true;            // Require Positive P
 input int      InpMinHoldingBars = 0;                      // Minimum Holding Bars Before Exit
 input ENUM_CORR_DROP_MODE InpCorrDropMode = CORR_DROP_CLOSE_PROFIT_ONLY;  // Correlation Drop Behavior
 
-input group "=== Grid Loss Side Settings (v3.6.0) ==="
+input group "=== Grid Loss Side Settings (v3.6.0 HF1) ==="
 input bool     InpEnableGridLoss = true;              // Enable Grid Loss Side
 input ENUM_GRID_DISTANCE_MODE InpGridLossDistMode = GRID_DIST_ATR;  // Distance Mode
 input ENUM_GRID_LOT_TYPE      InpGridLossLotType = GRID_LOT_TYPE_TREND_BASED;  // Lot Type
 input double   InpGridLossFixedPoints = 500;          // Fixed Points (if mode = Fixed Points)
 input double   InpGridLossFixedPips = 50;             // Fixed Pips (if mode = Fixed Pips)
 input double   InpGridLossATRMult = 1.5;              // ATR Multiplier (if mode = ATR)
+input ENUM_TIMEFRAMES InpGridLossATRTimeframe = PERIOD_H1;  // ATR Timeframe (if mode = ATR)
+input int      InpGridLossATRPeriod = 14;             // ATR Period (if mode = ATR)
 input string   InpGridLossZScoreLevels = "2.5;3.0;4.0;5.0"; // Z-Score Levels (if mode = Z-Score)
 input double   InpGridLossCustomLot = 0.1;            // Custom Lot (if type = Custom)
 input double   InpGridLossLotMultiplier = 1.2;        // Lot Multiplier (if type = Multiplier)
 input int      InpMaxGridLossOrders = 5;              // Max Grid Loss Orders per Side
 
-input group "=== Grid Profit Side Settings (v3.6.0) ==="
+input group "=== Grid Profit Side Settings (v3.6.0 HF1) ==="
 input bool     InpEnableGridProfit = false;           // Enable Grid Profit Side
 input ENUM_GRID_DISTANCE_MODE InpGridProfitDistMode = GRID_DIST_ATR;  // Distance Mode
 input ENUM_GRID_LOT_TYPE      InpGridProfitLotType = GRID_LOT_TYPE_TREND_BASED;  // Lot Type
 input double   InpGridProfitFixedPoints = 500;        // Fixed Points (if mode = Fixed Points)
 input double   InpGridProfitFixedPips = 50;           // Fixed Pips (if mode = Fixed Pips)
 input double   InpGridProfitATRMult = 1.5;            // ATR Multiplier (if mode = ATR)
+input ENUM_TIMEFRAMES InpGridProfitATRTimeframe = PERIOD_H1;  // ATR Timeframe (if mode = ATR)
+input int      InpGridProfitATRPeriod = 14;           // ATR Period (if mode = ATR)
 input string   InpGridProfitZScoreLevels = "1.5;1.0;0.5"; // Z-Score Levels (if mode = Z-Score)
 input double   InpGridProfitCustomLot = 0.1;          // Custom Lot (if type = Custom)
 input double   InpGridProfitLotMultiplier = 1.1;      // Lot Multiplier (if type = Multiplier)
@@ -2674,7 +2678,7 @@ void CheckAllGridLoss()
 }
 
 //+------------------------------------------------------------------+
-//| Check Grid Loss for Specific Side (v3.6.0)                         |
+//| Check Grid Loss for Specific Side (v3.6.0 HF1)                     |
 //+------------------------------------------------------------------+
 void CheckGridLossForSide(int pairIndex, string side)
 {
@@ -2684,11 +2688,13 @@ void CheckGridLossForSide(int pairIndex, string side)
    }
    else
    {
-      // ATR, Fixed Points, Fixed Pips
+      // ATR, Fixed Points, Fixed Pips - v3.6.0 HF1: Use separate ATR settings
       double gridDist = CalculateGridDistance(pairIndex, InpGridLossDistMode,
                                                InpGridLossATRMult, 
                                                InpGridLossFixedPoints,
-                                               InpGridLossFixedPips);
+                                               InpGridLossFixedPips,
+                                               InpGridLossATRTimeframe,
+                                               InpGridLossATRPeriod);
       if(gridDist <= 0) return;
       
       CheckGridLossPrice(pairIndex, side, gridDist);
@@ -2795,7 +2801,7 @@ void CheckAllGridProfit()
 }
 
 //+------------------------------------------------------------------+
-//| Check Grid Profit for Specific Side (v3.6.0)                       |
+//| Check Grid Profit for Specific Side (v3.6.0 HF1)                   |
 //+------------------------------------------------------------------+
 void CheckGridProfitForSide(int pairIndex, string side)
 {
@@ -2805,11 +2811,13 @@ void CheckGridProfitForSide(int pairIndex, string side)
    }
    else
    {
-      // ATR, Fixed Points, Fixed Pips
+      // ATR, Fixed Points, Fixed Pips - v3.6.0 HF1: Use separate ATR settings
       double gridDist = CalculateGridDistance(pairIndex, InpGridProfitDistMode,
                                                InpGridProfitATRMult,
                                                InpGridProfitFixedPoints,
-                                               InpGridProfitFixedPips);
+                                               InpGridProfitFixedPips,
+                                               InpGridProfitATRTimeframe,
+                                               InpGridProfitATRPeriod);
       if(gridDist <= 0) return;
       
       CheckGridProfitPrice(pairIndex, side, gridDist);
@@ -2897,10 +2905,11 @@ void CheckGridProfitZScore(int pairIndex, string side)
 }
 
 //+------------------------------------------------------------------+
-//| Calculate Grid Distance (v3.6.0)                                   |
+//| Calculate Grid Distance (v3.6.0 HF1)                               |
 //+------------------------------------------------------------------+
 double CalculateGridDistance(int pairIndex, ENUM_GRID_DISTANCE_MODE mode, 
-                              double atrMult, double fixedPoints, double fixedPips)
+                              double atrMult, double fixedPoints, double fixedPips,
+                              ENUM_TIMEFRAMES atrTimeframe, int atrPeriod)
 {
    string symbolA = g_pairs[pairIndex].symbolA;
    double point = SymbolInfoDouble(symbolA, SYMBOL_POINT);
@@ -2909,7 +2918,7 @@ double CalculateGridDistance(int pairIndex, ENUM_GRID_DISTANCE_MODE mode,
    {
       case GRID_DIST_ATR:
       {
-         double atr = CalculateSimplifiedATR(symbolA, InpGridATRTimeframe, InpGridATRPeriod);
+         double atr = CalculateSimplifiedATR(symbolA, atrTimeframe, atrPeriod);
          return atr * atrMult;
       }
       case GRID_DIST_FIXED_POINTS:
