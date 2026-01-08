@@ -1941,8 +1941,8 @@ void CreateDashboard()
    
    y += rowH + 2;
    
-   // Detail Section Sidebar Label (เพิ่มความสูงสำหรับ Accumulate Close และ News Filter)
-   CreateDashLabel(DashPrefix + "DetailSide", x, y, 25, rowH * 14, InpDashHeaderColor);
+   // Detail Section Sidebar Label (เพิ่มความสูงสำหรับ Accumulate Close 3 rows และ News Filter)
+   CreateDashLabel(DashPrefix + "DetailSide", x, y, 25, rowH * 16, InpDashHeaderColor);
    CreateDashText(DashPrefix + "DetailD", x + 7, y + 10, "D", clrWhite, 9, true);
    CreateDashText(DashPrefix + "DetailE", x + 7, y + 30, "E", clrWhite, 9, true);
    CreateDashText(DashPrefix + "DetailT", x + 7, y + 50, "T", clrWhite, 9, true);
@@ -1955,7 +1955,9 @@ void CreateDashboard()
    int detailW = w - 25;
    string detailLabels[] = {"Balance", "Equity", "Margin", "Margin Level", "Floating P/L", 
                             "Current Trend", "Fix Scaling", "Position Buy P/L", "Position Sell P/L", 
-                            "Current DD%", "Max DD%", "Accumulate Close", "News Filter"};
+                            "Current DD%", "Max DD%", 
+                            "Accum. Closed", "Accum. Floating", "Accum. Total",
+                            "News Filter"};
    
    for(int i = 0; i < ArraySize(detailLabels); i++)
    {
@@ -1966,7 +1968,7 @@ void CreateDashboard()
       y += rowH;
    }
    
-   y += 5;
+   y += 10;
    
    // ========== HISTORY SECTION ==========
    CreateDashLabel(DashPrefix + "HistorySide", x, y, 25, rowH * 4, InpDashHistoryColor);
@@ -2179,12 +2181,16 @@ void UpdateDashboard()
    ObjectSetString(0, DashPrefix + "BtnPause", OBJPROP_TEXT, g_eaIsPaused ? "Start" : "Pause");
    ObjectSetInteger(0, DashPrefix + "BtnPause", OBJPROP_BGCOLOR, g_eaIsPaused ? clrGreen : clrOrangeRed);
    
-   // Update Detail Values (เพิ่ม Accumulate Close)
+   // Update Detail Values (เพิ่ม Accumulate Close 3 rows: Closed, Floating, Total)
    // คำนวณ Total P/L รวม (Floating + Accumulated Closed)
    double totalPLForAccumulate = floatingPL + g_accumulateClosedProfit;
    int currentPosCount = buyCount + sellCount;
    
-   string detailValues[13];
+   // Accumulate Close: ใช้ Locked Target ถ้ามี order ค้าง, ไม่งั้นแสดง Current Scaled
+   double displayAccumulateTarget = (g_lockedAccumulateTarget > 0) ? g_lockedAccumulateTarget : ApplyScaleDollar(InpAccumulateTarget);
+   double remainingToTarget = displayAccumulateTarget - totalPLForAccumulate;
+   
+   string detailValues[15];
    detailValues[0] = DoubleToString(balance, 2) + "$";
    detailValues[1] = DoubleToString(equity, 2) + "$";
    detailValues[2] = DoubleToString(margin, 2) + "$";
@@ -2196,10 +2202,19 @@ void UpdateDashboard()
    detailValues[8] = (sellPL >= 0 ? "+" : "") + DoubleToString(sellPL, 2) + "$ (" + DoubleToString(sellLots, 2) + "L," + IntegerToString(sellCount) + "ord)";
    detailValues[9] = (floatingPL >= 0 ? "+" : "-") + DoubleToString(MathAbs(currentDD), 1) + "%";
    detailValues[10] = DoubleToString(g_maxDrawdownPercent, 1) + "%";
-   // Accumulate Close: ใช้ Locked Target ถ้ามี order ค้าง, ไม่งั้นแสดง Current Scaled
-   double displayAccumulateTarget = (g_lockedAccumulateTarget > 0) ? g_lockedAccumulateTarget : ApplyScaleDollar(InpAccumulateTarget);
-   detailValues[11] = (totalPLForAccumulate >= 0 ? "+" : "") + DoubleToString(totalPLForAccumulate, 0) + "$ (Tg: " + DoubleToString(displayAccumulateTarget, 0) + "$)";
-   // News Filter Status: 4 states
+   
+   // === ACCUMULATE SECTION (3 rows) ===
+   // Index 11: Accum. Closed (กำไรที่ปิดไปแล้ว)
+   detailValues[11] = (g_accumulateClosedProfit >= 0 ? "+" : "") + DoubleToString(g_accumulateClosedProfit, 0) + "$";
+   // Index 12: Accum. Floating (กำไรลอยตัว)
+   detailValues[12] = (floatingPL >= 0 ? "+" : "") + DoubleToString(floatingPL, 0) + "$";
+   // Index 13: Accum. Total (รวม + Need to Target)
+   string totalStr = (totalPLForAccumulate >= 0 ? "+" : "") + DoubleToString(totalPLForAccumulate, 0) + "$";
+   string remainStr = DoubleToString(remainingToTarget, 0) + "$";
+   string targetStr = DoubleToString(displayAccumulateTarget, 0) + "$";
+   detailValues[13] = totalStr + " (Tg:" + targetStr + " Need:" + remainStr + ")";
+   
+   // News Filter Status: 4 states (moved to index 14)
    // 1. "Disable" - when feature is off
    // 2. "WebRequest: NOT CONFIGURED!" - when WebRequest not set up (blinking red)
    // 3. "No Important news" - when enabled and no news affecting (simple green message)
@@ -2247,9 +2262,9 @@ void UpdateDashboard()
       newsDisplayStatus = "No Important news";
       newsStatusColor = clrLime;
    }
-   detailValues[12] = newsDisplayStatus;
+   detailValues[14] = newsDisplayStatus;
    
-   color valueColors[13];
+   color valueColors[15];
    valueColors[0] = clrWhite;
    valueColors[1] = clrWhite;
    valueColors[2] = clrWhite;
@@ -2261,11 +2276,16 @@ void UpdateDashboard()
    valueColors[8] = (sellPL >= 0) ? clrLime : clrOrangeRed;
    valueColors[9] = (currentDD <= 10) ? clrLime : (currentDD <= 20) ? clrYellow : clrOrangeRed;
    valueColors[10] = (g_maxDrawdownPercent <= 15) ? clrLime : (g_maxDrawdownPercent <= 30) ? clrYellow : clrOrangeRed;
-   valueColors[11] = (totalPLForAccumulate >= displayAccumulateTarget * 0.8) ? clrLime : (totalPLForAccumulate >= 0) ? clrYellow : clrOrangeRed;
-   // News Filter: use the color determined above
-   valueColors[12] = newsStatusColor;
    
-   for(int i = 0; i < 13; i++)
+   // Accumulate Colors
+   valueColors[11] = (g_accumulateClosedProfit >= 0) ? clrLime : clrOrangeRed;  // Accum. Closed
+   valueColors[12] = (floatingPL >= 0) ? clrLime : clrOrangeRed;                 // Accum. Floating
+   valueColors[13] = (totalPLForAccumulate >= displayAccumulateTarget * 0.8) ? clrLime : 
+                     (totalPLForAccumulate >= 0) ? clrYellow : clrOrangeRed;     // Accum. Total
+   // News Filter: use the color determined above
+   valueColors[14] = newsStatusColor;
+   
+   for(int i = 0; i < 15; i++)
    {
       ObjectSetString(0, DashPrefix + "DetailVal" + IntegerToString(i), OBJPROP_TEXT, detailValues[i]);
       ObjectSetInteger(0, DashPrefix + "DetailVal" + IntegerToString(i), OBJPROP_COLOR, valueColors[i]);
