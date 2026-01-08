@@ -3677,13 +3677,13 @@ void CreateDashboard()
    CreateLabel(prefix + "COL_B_Z", buyStartX + 310, colLabelY, "Z", COLOR_HEADER_TXT, 7, "Arial");
    CreateLabel(prefix + "COL_B_PL", buyStartX + 358, colLabelY, "P/L", COLOR_HEADER_TXT, 7, "Arial");
    
-// Center columns: Pair | Trend | C-% | Type | Beta | Total P/L
+   // Center columns: Pair | Trend | C-% | Type | Beta | Total P/L
    CreateLabel(prefix + "COL_C_PR", centerX + 10, colLabelY, "Pair", COLOR_HEADER_TXT, 7, "Arial");
-   CreateLabel(prefix + "COL_C_TRD", centerX + 115, colLabelY, "Trend", COLOR_HEADER_TXT, 7, "Arial");  // v3.5.0: CDC Trend column
-   CreateLabel(prefix + "COL_C_CR", centerX + 160, colLabelY, "C-%", COLOR_HEADER_TXT, 7, "Arial");
-   CreateLabel(prefix + "COL_C_TY", centerX + 205, colLabelY, "Type", COLOR_HEADER_TXT, 7, "Arial");
-   CreateLabel(prefix + "COL_C_BT", centerX + 255, colLabelY, "Beta", COLOR_HEADER_TXT, 7, "Arial");
-   CreateLabel(prefix + "COL_C_TP", centerX + 310, colLabelY, "Tot P/L", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_C_TRD", centerX + 145, colLabelY, "Trend", COLOR_HEADER_TXT, 7, "Arial");  // v3.5.0: CDC Trend column
+   CreateLabel(prefix + "COL_C_CR", centerX + 195, colLabelY, "C-%", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_C_TY", centerX + 235, colLabelY, "Type", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_C_BT", centerX + 280, colLabelY, "Beta", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_C_TP", centerX + 330, colLabelY, "Tot P/L", COLOR_HEADER_TXT, 7, "Arial");
    
    // Sell columns: P/L | Z | Status | Target | Tot | Ord | Lot | Closed | X
    CreateLabel(prefix + "COL_S_PL", sellStartX + 5, colLabelY, "P/L", COLOR_HEADER_TXT, 7, "Arial");
@@ -3744,11 +3744,11 @@ void CreatePairRow(string prefix, int idx, int buyX, int centerX, int sellX, int
    // === CENTER DATA ===
    CreateLabel(prefix + "P" + idxStr + "_NAME", centerX + 10, y + 3, pairName, COLOR_TEXT, FONT_SIZE, "Arial Bold");
    // v3.5.0: CDC Trend Status Badge (OK/BLOCK)
-   CreateLabel(prefix + "P" + idxStr + "_CDC", centerX + 115, y + 3, "-", COLOR_OFF, FONT_SIZE, "Arial Bold");
-   CreateLabel(prefix + "P" + idxStr + "_CORR", centerX + 160, y + 3, "0%", COLOR_TEXT, FONT_SIZE, "Arial");
-   CreateLabel(prefix + "P" + idxStr + "_TYPE", centerX + 205, y + 3, "Pos", COLOR_PROFIT, FONT_SIZE, "Arial");
-   CreateLabel(prefix + "P" + idxStr + "_BETA", centerX + 255, y + 3, "1.00", COLOR_TEXT, FONT_SIZE, "Arial");
-   CreateLabel(prefix + "P" + idxStr + "_TPL", centerX + 310, y + 3, "0", COLOR_TEXT, 9, "Arial Bold");
+   CreateLabel(prefix + "P" + idxStr + "_CDC", centerX + 145, y + 3, "-", COLOR_OFF, FONT_SIZE, "Arial Bold");
+   CreateLabel(prefix + "P" + idxStr + "_CORR", centerX + 195, y + 3, "0%", COLOR_TEXT, FONT_SIZE, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_TYPE", centerX + 235, y + 3, "Pos", COLOR_PROFIT, FONT_SIZE, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_BETA", centerX + 280, y + 3, "1.00", COLOR_TEXT, FONT_SIZE, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_TPL", centerX + 330, y + 3, "0", COLOR_TEXT, 9, "Arial Bold");
    
    // === SELL SIDE DATA ===
    // v3.3.0: P/L | Z | Status | Target | Tot | Ord | Lot | Closed | X
