@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                Multi_Currency_Statistical_EA.mq5 |
-//|                 Statistical Arbitrage (Pairs Trading) v3.5.1     |
+//|                 Statistical Arbitrage (Pairs Trading) v3.5.2     |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "3.51"
+#property version   "3.52"
 #property strict
 #property description "Statistical Arbitrage / Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
-#property description "v3.5.1: Grid Trading Guard (Correlation & Z-Score Minimum)"
+#property description "v3.5.2: Direction-Aware Z-Score Grid Guard + CDC Block"
 
 #include <Trade/Trade.mqh>
 
@@ -2252,11 +2252,12 @@ bool CheckCDCTrendConfirmation(int pairIndex, string side)
 //+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
-//| Check if Grid/Main Trading is Allowed (v3.5.1)                     |
+//| Check if Grid/Main Trading is Allowed (v3.5.2)                     |
 //| Returns: true = สามารถออก Order ได้                                 |
-//|          false = Pause (Correlation หรือ Z-Score ไม่ผ่าน)           |
+//|          false = Pause (Correlation, Z-Score, หรือ CDC ไม่ผ่าน)     |
+//| v3.5.2: Added direction-aware Z-Score check + CDC Block            |
 //+------------------------------------------------------------------+
-bool CheckGridTradingAllowed(int pairIndex, string &pauseReason)
+bool CheckGridTradingAllowed(int pairIndex, string side, string &pauseReason)
 {
    pauseReason = "";
    
@@ -2268,30 +2269,68 @@ bool CheckGridTradingAllowed(int pairIndex, string &pauseReason)
                                  absCorr * 100, InpGridMinCorrelation * 100);
       
       if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
-         PrintFormat("GRID PAUSE [Pair %d %s/%s]: %s", pairIndex + 1, 
-                     g_pairs[pairIndex].symbolA, g_pairs[pairIndex].symbolB, pauseReason);
+         PrintFormat("GRID PAUSE [Pair %d %s/%s %s]: %s", pairIndex + 1, 
+                     g_pairs[pairIndex].symbolA, g_pairs[pairIndex].symbolB, side, pauseReason);
       
       return false;
    }
    
-   // === เงื่อนไข 2: Z-Score Minimum Check ===
-   double absZ = MathAbs(g_pairs[pairIndex].zScore);
-   if(absZ < InpGridMinZScore)
+   // === เงื่อนไข 2: Z-Score Direction-Aware Check (v3.5.2) ===
+   // BUY Side: เปิดเมื่อ Z < -Entry → Grid หยุดเมื่อ Z > -MinZ (ใกล้ศูนย์)
+   // SELL Side: เปิดเมื่อ Z > +Entry → Grid หยุดเมื่อ Z < +MinZ (ใกล้ศูนย์)
+   double zScore = g_pairs[pairIndex].zScore;
+   
+   if(side == "BUY")
    {
-      pauseReason = StringFormat("|Z|=%.2f < %.2f", absZ, InpGridMinZScore);
-      
-      if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
-         PrintFormat("GRID PAUSE [Pair %d %s/%s]: %s", pairIndex + 1,
-                     g_pairs[pairIndex].symbolA, g_pairs[pairIndex].symbolB, pauseReason);
-      
-      return false;
+      // BUY Side opened at negative Z-Score
+      // Stop grid if Z-Score crosses back toward 0 (becomes > -MinZ)
+      if(zScore > -InpGridMinZScore)
+      {
+         pauseReason = StringFormat("Z=%.2f > -%.2f (BUY)", zScore, InpGridMinZScore);
+         
+         if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
+            PrintFormat("GRID PAUSE [Pair %d %s/%s BUY]: %s", pairIndex + 1,
+                        g_pairs[pairIndex].symbolA, g_pairs[pairIndex].symbolB, pauseReason);
+         
+         return false;
+      }
+   }
+   else if(side == "SELL")
+   {
+      // SELL Side opened at positive Z-Score
+      // Stop grid if Z-Score crosses back toward 0 (becomes < +MinZ)
+      if(zScore < InpGridMinZScore)
+      {
+         pauseReason = StringFormat("Z=%.2f < +%.2f (SELL)", zScore, InpGridMinZScore);
+         
+         if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
+            PrintFormat("GRID PAUSE [Pair %d %s/%s SELL]: %s", pairIndex + 1,
+                        g_pairs[pairIndex].symbolA, g_pairs[pairIndex].symbolB, pauseReason);
+         
+         return false;
+      }
    }
    
-   return true;  // ผ่านทั้ง 2 เงื่อนไข
+   // === เงื่อนไข 3: CDC Trend Block (v3.5.2) ===
+   if(InpUseCDCTrendFilter)
+   {
+      if(!CheckCDCTrendConfirmation(pairIndex, side))
+      {
+         pauseReason = "CDC BLOCK";
+         
+         if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
+            PrintFormat("GRID PAUSE [Pair %d %s/%s %s]: %s", pairIndex + 1,
+                        g_pairs[pairIndex].symbolA, g_pairs[pairIndex].symbolB, side, pauseReason);
+         
+         return false;
+      }
+   }
+   
+   return true;  // ผ่านทั้ง 3 เงื่อนไข
 }
 
 //+------------------------------------------------------------------+
-//| Analyze All Pairs for Trading Signals (v3.5.1)                     |
+//| Analyze All Pairs for Trading Signals (v3.5.2)                     |
 //+------------------------------------------------------------------+
 void AnalyzeAllPairs()
 {
@@ -2299,31 +2338,27 @@ void AnalyzeAllPairs()
    {
       if(!g_pairs[i].enabled) continue;
       
-      // === v3.5.1: Check Grid Trading Guard for Main Entry (Optional) ===
-      if(InpGridPauseAffectsMain)
-      {
-         string pauseReason = "";
-         if(!CheckGridTradingAllowed(i, pauseReason))
-            continue;  // Skip main entry - Correlation or Z-Score below threshold
-      }
-      else
-      {
-         // Use original correlation check only (InpMinCorrelation)
-         if(MathAbs(g_pairs[i].correlation) < InpMinCorrelation)
-            continue;
-      }
+      // === Check Correlation first (always required) ===
+      if(MathAbs(g_pairs[i].correlation) < InpMinCorrelation)
+         continue;
       
       double zScore = g_pairs[i].zScore;
       
       // === BUY SIDE ENTRY ===
       // Condition: directionBuy == -1 (Ready) AND Z-Score < -EntryThreshold
-      // v3.3.0: Use maxOrderBuy as total limit (Main + Grid)
-      // v3.4.0: Added RSI on Spread confirmation
-      // v3.5.0: Added CDC Trend confirmation
+      // v3.5.2: Optional Grid Guard check for main entry
       if(g_pairs[i].directionBuy == -1 && g_pairs[i].orderCountBuy < g_pairs[i].maxOrderBuy)
       {
          if(zScore < -InpEntryZScore)
          {
+            // v3.5.2: Check Grid Trading Guard for Main Entry (Optional)
+            if(InpGridPauseAffectsMain)
+            {
+               string pauseReason = "";
+               if(!CheckGridTradingAllowed(i, "BUY", pauseReason))
+                  continue;  // Skip BUY entry
+            }
+            
             // v3.4.0: Check RSI Entry Confirmation (BUY = RSI in Oversold zone)
             if(CheckRSIEntryConfirmation(i, "BUY"))
             {
@@ -2333,10 +2368,8 @@ void AnalyzeAllPairs()
                   if(OpenBuySideTrade(i))
                   {
                      g_pairs[i].directionBuy = 1;  // Active trade
-                     // v3.2.7: Store entry Z-Score for averaging
                      g_pairs[i].entryZScoreBuy = zScore;
                      g_pairs[i].lastAvgPriceBuy = SymbolInfoDouble(g_pairs[i].symbolA, SYMBOL_ASK);
-                     // v3.2.9: Set flag to prevent averaging in same tick
                      g_pairs[i].justOpenedMainBuy = true;
                   }
                }
@@ -2346,13 +2379,19 @@ void AnalyzeAllPairs()
       
       // === SELL SIDE ENTRY ===
       // Condition: directionSell == -1 (Ready) AND Z-Score > +EntryThreshold
-      // v3.3.0: Use maxOrderSell as total limit (Main + Grid)
-      // v3.4.0: Added RSI on Spread confirmation
-      // v3.5.0: Added CDC Trend confirmation
+      // v3.5.2: Optional Grid Guard check for main entry
       if(g_pairs[i].directionSell == -1 && g_pairs[i].orderCountSell < g_pairs[i].maxOrderSell)
       {
          if(zScore > InpEntryZScore)
          {
+            // v3.5.2: Check Grid Trading Guard for Main Entry (Optional)
+            if(InpGridPauseAffectsMain)
+            {
+               string pauseReason = "";
+               if(!CheckGridTradingAllowed(i, "SELL", pauseReason))
+                  continue;  // Skip SELL entry
+            }
+            
             // v3.4.0: Check RSI Entry Confirmation (SELL = RSI in Overbought zone)
             if(CheckRSIEntryConfirmation(i, "SELL"))
             {
@@ -2362,10 +2401,8 @@ void AnalyzeAllPairs()
                   if(OpenSellSideTrade(i))
                   {
                      g_pairs[i].directionSell = 1;  // Active trade
-                     // v3.2.7: Store entry Z-Score for averaging
                      g_pairs[i].entryZScoreSell = zScore;
                      g_pairs[i].lastAvgPriceSell = SymbolInfoDouble(g_pairs[i].symbolA, SYMBOL_BID);
-                     // v3.2.9: Set flag to prevent averaging in same tick
                      g_pairs[i].justOpenedMainSell = true;
                   }
                }
@@ -2376,7 +2413,7 @@ void AnalyzeAllPairs()
 }
 
 //+------------------------------------------------------------------+
-//| Check All Pairs for Averaging (v3.5.1)                             |
+//| Check All Pairs for Averaging (v3.5.2)                             |
 //+------------------------------------------------------------------+
 void CheckAllAveraging()
 {
@@ -2386,34 +2423,44 @@ void CheckAllAveraging()
    {
       if(!g_pairs[i].enabled) continue;
       
-      // === v3.5.1: Check Grid Trading Guard ===
-      string pauseReason = "";
-      if(!CheckGridTradingAllowed(i, pauseReason))
-      {
-         // Grid is PAUSED for this pair - skip averaging
-         // Orders that are already open will continue to be managed
-         continue;
-      }
-      
       // Check Buy Side Averaging
       if(g_pairs[i].directionBuy == 1 && !g_pairs[i].justOpenedMainBuy)
       {
-         // v3.3.0: Total orders = 1 (main) + avgOrderCountBuy
-         int totalBuyOrders = 1 + g_pairs[i].avgOrderCountBuy;
-         if(totalBuyOrders < g_pairs[i].maxOrderBuy)
+         // === v3.5.2: Check Grid Trading Guard for BUY Side ===
+         string pauseReasonBuy = "";
+         if(!CheckGridTradingAllowed(i, "BUY", pauseReasonBuy))
          {
-            CheckAveragingForSide(i, "BUY");
+            // BUY Grid is PAUSED - skip BUY averaging
+            // But continue to check SELL side
+         }
+         else
+         {
+            // v3.3.0: Total orders = 1 (main) + avgOrderCountBuy
+            int totalBuyOrders = 1 + g_pairs[i].avgOrderCountBuy;
+            if(totalBuyOrders < g_pairs[i].maxOrderBuy)
+            {
+               CheckAveragingForSide(i, "BUY");
+            }
          }
       }
       
       // Check Sell Side Averaging
       if(g_pairs[i].directionSell == 1 && !g_pairs[i].justOpenedMainSell)
       {
-         // v3.3.0: Total orders = 1 (main) + avgOrderCountSell
-         int totalSellOrders = 1 + g_pairs[i].avgOrderCountSell;
-         if(totalSellOrders < g_pairs[i].maxOrderSell)
+         // === v3.5.2: Check Grid Trading Guard for SELL Side ===
+         string pauseReasonSell = "";
+         if(!CheckGridTradingAllowed(i, "SELL", pauseReasonSell))
          {
-            CheckAveragingForSide(i, "SELL");
+            // SELL Grid is PAUSED - skip SELL averaging
+         }
+         else
+         {
+            // v3.3.0: Total orders = 1 (main) + avgOrderCountSell
+            int totalSellOrders = 1 + g_pairs[i].avgOrderCountSell;
+            if(totalSellOrders < g_pairs[i].maxOrderSell)
+            {
+               CheckAveragingForSide(i, "SELL");
+            }
          }
       }
    }
