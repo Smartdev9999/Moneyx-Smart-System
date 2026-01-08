@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                Multi_Currency_Statistical_EA.mq5 |
-//|                 Statistical Arbitrage (Pairs Trading) v3.5.0     |
+//|                 Statistical Arbitrage (Pairs Trading) v3.5.1     |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "3.50"
+#property version   "3.51"
 #property strict
 #property description "Statistical Arbitrage / Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
-#property description "v3.5.0: CDC Action Zone Trend Filter"
+#property description "v3.5.1: Grid Trading Guard (Correlation & Z-Score Minimum)"
 
 #include <Trade/Trade.mqh>
 
@@ -227,6 +227,11 @@ input int      InpAtrPeriod = 14;                                // ATR Period
 input double   InpAtrMultiplier = 1.5;                           // ATR Multiplier for Grid
 // v3.3.0: Removed InpMaxAveragingOrders - use InpDefaultMaxOrderBuy/Sell instead
 input double   InpAveragingLotMult = 1.0;                        // Averaging Lot Multiplier (1.0 = same)
+
+input group "=== Grid Trading Guard (v3.5.1) ==="
+input double   InpGridMinCorrelation = 0.60;      // Grid: Minimum Correlation (ต่ำกว่านี้หยุด Grid)
+input double   InpGridMinZScore = 0.5;            // Grid: Minimum |Z-Score| (ต่ำกว่านี้หยุด Grid)
+input bool     InpGridPauseAffectsMain = true;    // Apply to Main Entry Too (เกณฑ์นี้ใช้กับ Order แรกด้วย)
 
 input group "=== Target Settings (v3.3.0) ==="
 input double   InpTotalTarget = 100.0;          // Total Portfolio Target ($)
@@ -2247,7 +2252,46 @@ bool CheckCDCTrendConfirmation(int pairIndex, string side)
 //+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
-//| Analyze All Pairs for Trading Signals (v3.5.0)                     |
+//| Check if Grid/Main Trading is Allowed (v3.5.1)                     |
+//| Returns: true = สามารถออก Order ได้                                 |
+//|          false = Pause (Correlation หรือ Z-Score ไม่ผ่าน)           |
+//+------------------------------------------------------------------+
+bool CheckGridTradingAllowed(int pairIndex, string &pauseReason)
+{
+   pauseReason = "";
+   
+   // === เงื่อนไข 1: Correlation Check ===
+   double absCorr = MathAbs(g_pairs[pairIndex].correlation);
+   if(absCorr < InpGridMinCorrelation)
+   {
+      pauseReason = StringFormat("Corr %.0f%% < %.0f%%", 
+                                 absCorr * 100, InpGridMinCorrelation * 100);
+      
+      if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
+         PrintFormat("GRID PAUSE [Pair %d %s/%s]: %s", pairIndex + 1, 
+                     g_pairs[pairIndex].symbolA, g_pairs[pairIndex].symbolB, pauseReason);
+      
+      return false;
+   }
+   
+   // === เงื่อนไข 2: Z-Score Minimum Check ===
+   double absZ = MathAbs(g_pairs[pairIndex].zScore);
+   if(absZ < InpGridMinZScore)
+   {
+      pauseReason = StringFormat("|Z|=%.2f < %.2f", absZ, InpGridMinZScore);
+      
+      if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
+         PrintFormat("GRID PAUSE [Pair %d %s/%s]: %s", pairIndex + 1,
+                     g_pairs[pairIndex].symbolA, g_pairs[pairIndex].symbolB, pauseReason);
+      
+      return false;
+   }
+   
+   return true;  // ผ่านทั้ง 2 เงื่อนไข
+}
+
+//+------------------------------------------------------------------+
+//| Analyze All Pairs for Trading Signals (v3.5.1)                     |
 //+------------------------------------------------------------------+
 void AnalyzeAllPairs()
 {
@@ -2255,9 +2299,19 @@ void AnalyzeAllPairs()
    {
       if(!g_pairs[i].enabled) continue;
       
-      // Check correlation threshold
-      if(MathAbs(g_pairs[i].correlation) < InpMinCorrelation)
-         continue;
+      // === v3.5.1: Check Grid Trading Guard for Main Entry (Optional) ===
+      if(InpGridPauseAffectsMain)
+      {
+         string pauseReason = "";
+         if(!CheckGridTradingAllowed(i, pauseReason))
+            continue;  // Skip main entry - Correlation or Z-Score below threshold
+      }
+      else
+      {
+         // Use original correlation check only (InpMinCorrelation)
+         if(MathAbs(g_pairs[i].correlation) < InpMinCorrelation)
+            continue;
+      }
       
       double zScore = g_pairs[i].zScore;
       
@@ -2322,7 +2376,7 @@ void AnalyzeAllPairs()
 }
 
 //+------------------------------------------------------------------+
-//| Check All Pairs for Averaging (v3.3.0)                             |
+//| Check All Pairs for Averaging (v3.5.1)                             |
 //+------------------------------------------------------------------+
 void CheckAllAveraging()
 {
@@ -2331,6 +2385,15 @@ void CheckAllAveraging()
    for(int i = 0; i < MAX_PAIRS; i++)
    {
       if(!g_pairs[i].enabled) continue;
+      
+      // === v3.5.1: Check Grid Trading Guard ===
+      string pauseReason = "";
+      if(!CheckGridTradingAllowed(i, pauseReason))
+      {
+         // Grid is PAUSED for this pair - skip averaging
+         // Orders that are already open will continue to be managed
+         continue;
+      }
       
       // Check Buy Side Averaging
       if(g_pairs[i].directionBuy == 1 && !g_pairs[i].justOpenedMainBuy)
