@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                Multi_Currency_Statistical_EA.mq5 |
-//|                 Statistical Arbitrage (Pairs Trading) v3.5.3 HF4 |
+//|                 Statistical Arbitrage (Pairs Trading) v3.6.0     |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "3.57"
+#property version   "3.60"
 #property strict
 #property description "Statistical Arbitrage / Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
-#property description "v3.5.3 HF3: ADX Trend Strength for Negative Correlation Pairs"
+#property description "v3.6.0: Grid Loss Side + Grid Profit Side with Custom Distance/Lot Options"
 
 #include <Trade/Trade.mqh>
 
@@ -121,6 +121,20 @@ struct PairInfo
    double         adxValueA;         // ADX value for Symbol A
    double         adxValueB;         // ADX value for Symbol B
    
+   // === v3.6.0: Grid Profit Side ===
+   int            gridProfitCountBuy;    // Profit Grid orders on BUY side
+   int            gridProfitCountSell;   // Profit Grid orders on SELL side
+   double         lastProfitPriceBuy;    // Last price for Profit Grid (BUY)
+   double         lastProfitPriceSell;   // Last price for Profit Grid (SELL)
+   double         lastProfitGridLotBuyA; // Last Profit Grid Lot A (BUY)
+   double         lastProfitGridLotBuyB; // Last Profit Grid Lot B (BUY)
+   double         lastProfitGridLotSellA; // Last Profit Grid Lot A (SELL)
+   double         lastProfitGridLotSellB; // Last Profit Grid Lot B (SELL)
+   double         initialEntryPriceBuy;  // Initial entry price (BUY)
+   double         initialEntryPriceSell; // Initial entry price (SELL)
+   int            gridProfitZLevelBuy;   // Current Z-Score level for Profit Grid (BUY)
+   int            gridProfitZLevelSell;  // Current Z-Score level for Profit Grid (SELL)
+   
    // === Combined ===
    double         totalPairProfit;   // profitBuy + profitSell
 };
@@ -144,6 +158,28 @@ enum ENUM_AVERAGING_MODE
    AVG_MODE_DISABLED = 0,   // Disabled
    AVG_MODE_ZSCORE,         // Z-Score Based Grid
    AVG_MODE_ATR             // ATR Based Grid
+};
+
+//+------------------------------------------------------------------+
+//| GRID DISTANCE MODE ENUM (v3.6.0)                                   |
+//+------------------------------------------------------------------+
+enum ENUM_GRID_DISTANCE_MODE
+{
+   GRID_DIST_ATR = 0,        // ATR Based
+   GRID_DIST_ZSCORE,         // Z-Score Based  
+   GRID_DIST_FIXED_POINTS,   // Fixed Points
+   GRID_DIST_FIXED_PIPS      // Fixed Pips
+};
+
+//+------------------------------------------------------------------+
+//| GRID LOT TYPE ENUM (v3.6.0)                                        |
+//+------------------------------------------------------------------+
+enum ENUM_GRID_LOT_TYPE
+{
+   GRID_LOT_TYPE_INITIAL = 0,     // Use Initial Order Lot
+   GRID_LOT_TYPE_CUSTOM,          // Custom Fixed Lot
+   GRID_LOT_TYPE_MULTIPLIER,      // Multiplier from Previous
+   GRID_LOT_TYPE_TREND_BASED      // Use Grid Lot Calculation Mode Settings
 };
 
 //+------------------------------------------------------------------+
@@ -254,14 +290,29 @@ input bool     InpRequirePositiveProfit = true;            // Require Positive P
 input int      InpMinHoldingBars = 0;                      // Minimum Holding Bars Before Exit
 input ENUM_CORR_DROP_MODE InpCorrDropMode = CORR_DROP_CLOSE_PROFIT_ONLY;  // Correlation Drop Behavior
 
-input group "=== Averaging System (v3.3.0 - Simplified) ==="
-input ENUM_AVERAGING_MODE InpAveragingMode = AVG_MODE_DISABLED;  // Averaging Mode
-input string   InpZScoreGrid = "2.5;3.0;4.0;5.0";                // Z-Score Grid Levels (semicolon separated)
-input ENUM_TIMEFRAMES InpAtrTimeframe = PERIOD_H1;               // ATR Timeframe
-input int      InpAtrPeriod = 14;                                // ATR Period
-input double   InpAtrMultiplier = 1.5;                           // ATR Multiplier for Grid
-// v3.3.0: Removed InpMaxAveragingOrders - use InpDefaultMaxOrderBuy/Sell instead
-input double   InpAveragingLotMult = 1.0;                        // Averaging Lot Multiplier (1.0 = same)
+input group "=== Grid Loss Side Settings (v3.6.0) ==="
+input bool     InpEnableGridLoss = true;              // Enable Grid Loss Side
+input ENUM_GRID_DISTANCE_MODE InpGridLossDistMode = GRID_DIST_ATR;  // Distance Mode
+input ENUM_GRID_LOT_TYPE      InpGridLossLotType = GRID_LOT_TYPE_TREND_BASED;  // Lot Type
+input double   InpGridLossFixedPoints = 500;          // Fixed Points (if mode = Fixed Points)
+input double   InpGridLossFixedPips = 50;             // Fixed Pips (if mode = Fixed Pips)
+input double   InpGridLossATRMult = 1.5;              // ATR Multiplier (if mode = ATR)
+input string   InpGridLossZScoreLevels = "2.5;3.0;4.0;5.0"; // Z-Score Levels (if mode = Z-Score)
+input double   InpGridLossCustomLot = 0.1;            // Custom Lot (if type = Custom)
+input double   InpGridLossLotMultiplier = 1.2;        // Lot Multiplier (if type = Multiplier)
+input int      InpMaxGridLossOrders = 5;              // Max Grid Loss Orders per Side
+
+input group "=== Grid Profit Side Settings (v3.6.0) ==="
+input bool     InpEnableGridProfit = false;           // Enable Grid Profit Side
+input ENUM_GRID_DISTANCE_MODE InpGridProfitDistMode = GRID_DIST_ATR;  // Distance Mode
+input ENUM_GRID_LOT_TYPE      InpGridProfitLotType = GRID_LOT_TYPE_TREND_BASED;  // Lot Type
+input double   InpGridProfitFixedPoints = 500;        // Fixed Points (if mode = Fixed Points)
+input double   InpGridProfitFixedPips = 50;           // Fixed Pips (if mode = Fixed Pips)
+input double   InpGridProfitATRMult = 1.5;            // ATR Multiplier (if mode = ATR)
+input string   InpGridProfitZScoreLevels = "1.5;1.0;0.5"; // Z-Score Levels (if mode = Z-Score)
+input double   InpGridProfitCustomLot = 0.1;          // Custom Lot (if type = Custom)
+input double   InpGridProfitLotMultiplier = 1.1;      // Lot Multiplier (if type = Multiplier)
+input int      InpMaxGridProfitOrders = 3;            // Max Grid Profit Orders per Side
 
 input group "=== Grid Trading Guard (v3.5.1) ==="
 input double   InpGridMinCorrelation = 0.60;      // Grid: Minimum Correlation (ต่ำกว่านี้หยุด Grid)
@@ -552,9 +603,13 @@ datetime g_lastTesterLogTime = 0;
 string g_pauseReason = "";           // Reason for pause (DD_LIMIT, MANUAL, etc.)
 double g_equityAtDDClose = 0;        // Equity when DD triggered
 
-// v3.2.7: Z-Score Grid Levels
+// v3.2.7: Z-Score Grid Levels (Grid Loss)
 double g_zScoreGridLevels[MAX_AVG_LEVELS];
 int g_zScoreGridCount = 0;
+
+// v3.6.0: Z-Score Grid Levels (Grid Profit)
+double g_profitZScoreGridLevels[MAX_AVG_LEVELS];
+int g_profitZScoreGridCount = 0;
 
 // v3.2.7: Batch Processing
 int g_currentPairIndex = 0;
@@ -655,8 +710,11 @@ int OnInit()
       WarmupSymbolData();
    }
    
-   // v3.2.7: Parse Z-Score Grid levels
-   ParseZScoreGrid(InpZScoreGrid);
+   // v3.2.7: Parse Z-Score Grid levels (Grid Loss Side)
+   ParseZScoreGrid(InpGridLossZScoreLevels, g_zScoreGridLevels, g_zScoreGridCount);
+   
+   // v3.6.0: Parse Z-Score Grid levels (Grid Profit Side)
+   ParseZScoreGrid(InpGridProfitZScoreLevels, g_profitZScoreGridLevels, g_profitZScoreGridCount);
    
    // v3.3.0: Initialize ATR handle if needed (skip in tester if InpSkipATRInTester)
    if(InpAveragingMode == AVG_MODE_ATR)
@@ -841,32 +899,32 @@ int SafeCopyClose(string symbol, ENUM_TIMEFRAMES tf, int start, int count, doubl
 }
 
 //+------------------------------------------------------------------+
-//| v3.2.7: Parse Z-Score Grid String                                  |
+//| v3.6.0: Parse Z-Score Grid String (Generic)                        |
 //+------------------------------------------------------------------+
-void ParseZScoreGrid(string gridStr)
+void ParseZScoreGrid(string gridStr, double &levels[], int &count)
 {
-   g_zScoreGridCount = 0;
-   ArrayInitialize(g_zScoreGridLevels, 0);
+   count = 0;
+   ArrayInitialize(levels, 0);
    
    string parts[];
-   int count = StringSplit(gridStr, ';', parts);
+   int partCount = StringSplit(gridStr, ';', parts);
    
-   for(int i = 0; i < count && i < MAX_AVG_LEVELS; i++)
+   for(int i = 0; i < partCount && i < MAX_AVG_LEVELS; i++)
    {
       double level = StringToDouble(parts[i]);
       if(level > 0)
       {
-         g_zScoreGridLevels[g_zScoreGridCount] = level;
-         g_zScoreGridCount++;
+         levels[count] = level;
+         count++;
       }
    }
    
    if(InpDebugMode)
    {
-      Print("Z-Score Grid Levels Parsed: ", g_zScoreGridCount);
-      for(int i = 0; i < g_zScoreGridCount; i++)
+      Print("Z-Score Grid Levels Parsed: ", count);
+      for(int i = 0; i < count; i++)
       {
-         PrintFormat("  Level %d: %.2f", i + 1, g_zScoreGridLevels[i]);
+         PrintFormat("  Level %d: %.2f", i + 1, levels[i]);
       }
    }
 }
@@ -990,6 +1048,20 @@ void SetupPair(int index, bool enabled, string symbolA, string symbolB)
    g_pairs[index].cdcSlowA = 0;
    g_pairs[index].cdcFastB = 0;
    g_pairs[index].cdcSlowB = 0;
+   
+   // v3.6.0: Grid Profit Side initialization
+   g_pairs[index].gridProfitCountBuy = 0;
+   g_pairs[index].gridProfitCountSell = 0;
+   g_pairs[index].lastProfitPriceBuy = 0;
+   g_pairs[index].lastProfitPriceSell = 0;
+   g_pairs[index].lastProfitGridLotBuyA = 0;
+   g_pairs[index].lastProfitGridLotBuyB = 0;
+   g_pairs[index].lastProfitGridLotSellA = 0;
+   g_pairs[index].lastProfitGridLotSellB = 0;
+   g_pairs[index].initialEntryPriceBuy = 0;
+   g_pairs[index].initialEntryPriceSell = 0;
+   g_pairs[index].gridProfitZLevelBuy = 0;
+   g_pairs[index].gridProfitZLevelSell = 0;
    
    // Combined
    g_pairs[index].totalPairProfit = 0;
@@ -2544,53 +2616,54 @@ void AnalyzeAllPairs()
 }
 
 //+------------------------------------------------------------------+
-//| Check All Pairs for Averaging (v3.5.2)                             |
+//| Check All Pairs for Grid Loss Side (v3.6.0)                        |
 //+------------------------------------------------------------------+
-void CheckAllAveraging()
+void CheckAllGridLoss()
 {
-   if(InpAveragingMode == AVG_MODE_DISABLED) return;
+   if(!InpEnableGridLoss) return;
    
    for(int i = 0; i < MAX_PAIRS; i++)
    {
       if(!g_pairs[i].enabled) continue;
       
-      // Check Buy Side Averaging
+      // Check Buy Side - Grid Loss (price going DOWN = losing for BUY)
       if(g_pairs[i].directionBuy == 1 && !g_pairs[i].justOpenedMainBuy)
       {
          // === v3.5.2: Check Grid Trading Guard for BUY Side ===
          string pauseReasonBuy = "";
          if(!CheckGridTradingAllowed(i, "BUY", pauseReasonBuy))
          {
-            // BUY Grid is PAUSED - skip BUY averaging
-            // But continue to check SELL side
+            // BUY Grid is PAUSED
          }
          else
          {
-            // v3.3.0: Total orders = 1 (main) + avgOrderCountBuy
+            // v3.3.0: Total orders check
             int totalBuyOrders = 1 + g_pairs[i].avgOrderCountBuy;
-            if(totalBuyOrders < g_pairs[i].maxOrderBuy)
+            if(totalBuyOrders < g_pairs[i].maxOrderBuy && 
+               g_pairs[i].avgOrderCountBuy < InpMaxGridLossOrders)
             {
-               CheckAveragingForSide(i, "BUY");
+               CheckGridLossForSide(i, "BUY");
             }
          }
       }
       
-      // Check Sell Side Averaging
+      // Check Sell Side - Grid Loss (price going UP = losing for SELL)
       if(g_pairs[i].directionSell == 1 && !g_pairs[i].justOpenedMainSell)
       {
          // === v3.5.2: Check Grid Trading Guard for SELL Side ===
          string pauseReasonSell = "";
          if(!CheckGridTradingAllowed(i, "SELL", pauseReasonSell))
          {
-            // SELL Grid is PAUSED - skip SELL averaging
+            // SELL Grid is PAUSED
          }
          else
          {
-            // v3.3.0: Total orders = 1 (main) + avgOrderCountSell
+            // v3.3.0: Total orders check
             int totalSellOrders = 1 + g_pairs[i].avgOrderCountSell;
-            if(totalSellOrders < g_pairs[i].maxOrderSell)
+            if(totalSellOrders < g_pairs[i].maxOrderSell && 
+               g_pairs[i].avgOrderCountSell < InpMaxGridLossOrders)
             {
-               CheckAveragingForSide(i, "SELL");
+               CheckGridLossForSide(i, "SELL");
             }
          }
       }
@@ -2598,25 +2671,64 @@ void CheckAllAveraging()
 }
 
 //+------------------------------------------------------------------+
-//| Check Averaging for Specific Side (v3.2.7)                         |
+//| Check Grid Loss for Specific Side (v3.6.0)                         |
 //+------------------------------------------------------------------+
-void CheckAveragingForSide(int pairIndex, string side)
+void CheckGridLossForSide(int pairIndex, string side)
 {
-   if(InpAveragingMode == AVG_MODE_ZSCORE)
+   if(InpGridLossDistMode == GRID_DIST_ZSCORE)
    {
-      CheckZScoreAveraging(pairIndex, side);
+      CheckGridLossZScore(pairIndex, side);
    }
-   else if(InpAveragingMode == AVG_MODE_ATR)
+   else
    {
-      // v3.3.1: CheckATRAveraging now handles tester mode internally
-      CheckATRAveraging(pairIndex, side);
+      // ATR, Fixed Points, Fixed Pips
+      double gridDist = CalculateGridDistance(pairIndex, InpGridLossDistMode,
+                                               InpGridLossATRMult, 
+                                               InpGridLossFixedPoints,
+                                               InpGridLossFixedPips);
+      if(gridDist <= 0) return;
+      
+      CheckGridLossPrice(pairIndex, side, gridDist);
    }
 }
 
 //+------------------------------------------------------------------+
-//| Z-Score Based Averaging (v3.2.7)                                   |
+//| Check Grid Loss by Price Distance (v3.6.0)                         |
 //+------------------------------------------------------------------+
-void CheckZScoreAveraging(int pairIndex, string side)
+void CheckGridLossPrice(int pairIndex, string side, double gridDistance)
+{
+   double currentPrice = SymbolInfoDouble(g_pairs[pairIndex].symbolA, SYMBOL_BID);
+   
+   if(side == "BUY")
+   {
+      // BUY Side: Loss direction = price going DOWN
+      double lastPrice = g_pairs[pairIndex].lastAvgPriceBuy;
+      if(lastPrice == 0) lastPrice = currentPrice;
+      
+      if(currentPrice < lastPrice - gridDistance)
+      {
+         OpenGridLossBuy(pairIndex);
+         g_pairs[pairIndex].lastAvgPriceBuy = currentPrice;
+      }
+   }
+   else // SELL
+   {
+      // SELL Side: Loss direction = price going UP
+      double lastPrice = g_pairs[pairIndex].lastAvgPriceSell;
+      if(lastPrice == 0) lastPrice = currentPrice;
+      
+      if(currentPrice > lastPrice + gridDistance)
+      {
+         OpenGridLossSell(pairIndex);
+         g_pairs[pairIndex].lastAvgPriceSell = currentPrice;
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Check Grid Loss by Z-Score (v3.6.0)                                |
+//+------------------------------------------------------------------+
+void CheckGridLossZScore(int pairIndex, string side)
 {
    double currentZ = MathAbs(g_pairs[pairIndex].zScore);
    int currentLevel = 0;
@@ -2639,12 +2751,260 @@ void CheckZScoreAveraging(int pairIndex, string side)
    {
       if(side == "BUY")
       {
-         OpenAveragingBuy(pairIndex);
+         OpenGridLossBuy(pairIndex);
       }
       else
       {
-         OpenAveragingSell(pairIndex);
+         OpenGridLossSell(pairIndex);
       }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Check All Pairs for Grid Profit Side (v3.6.0)                      |
+//+------------------------------------------------------------------+
+void CheckAllGridProfit()
+{
+   if(!InpEnableGridProfit) return;
+   
+   for(int i = 0; i < MAX_PAIRS; i++)
+   {
+      if(!g_pairs[i].enabled) continue;
+      
+      // Check BUY Side - Profit Grid (price going UP = profitable for BUY)
+      if(g_pairs[i].directionBuy == 1 && !g_pairs[i].justOpenedMainBuy)
+      {
+         if(g_pairs[i].gridProfitCountBuy < InpMaxGridProfitOrders)
+         {
+            CheckGridProfitForSide(i, "BUY");
+         }
+      }
+      
+      // Check SELL Side - Profit Grid (price going DOWN = profitable for SELL)
+      if(g_pairs[i].directionSell == 1 && !g_pairs[i].justOpenedMainSell)
+      {
+         if(g_pairs[i].gridProfitCountSell < InpMaxGridProfitOrders)
+         {
+            CheckGridProfitForSide(i, "SELL");
+         }
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Check Grid Profit for Specific Side (v3.6.0)                       |
+//+------------------------------------------------------------------+
+void CheckGridProfitForSide(int pairIndex, string side)
+{
+   if(InpGridProfitDistMode == GRID_DIST_ZSCORE)
+   {
+      CheckGridProfitZScore(pairIndex, side);
+   }
+   else
+   {
+      // ATR, Fixed Points, Fixed Pips
+      double gridDist = CalculateGridDistance(pairIndex, InpGridProfitDistMode,
+                                               InpGridProfitATRMult,
+                                               InpGridProfitFixedPoints,
+                                               InpGridProfitFixedPips);
+      if(gridDist <= 0) return;
+      
+      CheckGridProfitPrice(pairIndex, side, gridDist);
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Check Grid Profit by Price Distance (v3.6.0)                       |
+//+------------------------------------------------------------------+
+void CheckGridProfitPrice(int pairIndex, string side, double gridDistance)
+{
+   double currentPrice = SymbolInfoDouble(g_pairs[pairIndex].symbolA, SYMBOL_BID);
+   
+   if(side == "BUY")
+   {
+      // BUY Side: Profit direction = price going UP from initial entry
+      double refPrice = g_pairs[pairIndex].initialEntryPriceBuy;
+      if(refPrice == 0) return;
+      
+      double lastPrice = g_pairs[pairIndex].lastProfitPriceBuy;
+      if(lastPrice == 0) lastPrice = refPrice;
+      
+      // Price goes UP = Profit for BUY side
+      if(currentPrice > lastPrice + gridDistance)
+      {
+         OpenGridProfitBuy(pairIndex);
+         g_pairs[pairIndex].lastProfitPriceBuy = currentPrice;
+      }
+   }
+   else // SELL
+   {
+      // SELL Side: Profit direction = price going DOWN from initial entry
+      double refPrice = g_pairs[pairIndex].initialEntryPriceSell;
+      if(refPrice == 0) return;
+      
+      double lastPrice = g_pairs[pairIndex].lastProfitPriceSell;
+      if(lastPrice == 0) lastPrice = refPrice;
+      
+      // Price goes DOWN = Profit for SELL side
+      if(currentPrice < lastPrice - gridDistance)
+      {
+         OpenGridProfitSell(pairIndex);
+         g_pairs[pairIndex].lastProfitPriceSell = currentPrice;
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Check Grid Profit by Z-Score (v3.6.0)                              |
+//+------------------------------------------------------------------+
+void CheckGridProfitZScore(int pairIndex, string side)
+{
+   double currentZ = g_pairs[pairIndex].zScore;
+   
+   if(side == "SELL")
+   {
+      // SELL Side (positive Z-Score): Open Grid Profit when Z-Score decreases toward 0
+      int currentCount = g_pairs[pairIndex].gridProfitZLevelSell;
+      if(currentCount >= g_profitZScoreGridCount) return;
+      
+      double targetLevel = g_profitZScoreGridLevels[currentCount];
+      
+      // Z-Score decreasing = profitable for SELL side
+      if(currentZ <= targetLevel)
+      {
+         OpenGridProfitSell(pairIndex);
+         g_pairs[pairIndex].gridProfitZLevelSell++;
+      }
+   }
+   else // BUY Side (negative Z-Score)
+   {
+      // BUY Side: Open Grid Profit when Z-Score increases toward 0
+      int currentCount = g_pairs[pairIndex].gridProfitZLevelBuy;
+      if(currentCount >= g_profitZScoreGridCount) return;
+      
+      double targetLevel = -g_profitZScoreGridLevels[currentCount];
+      
+      // Z-Score increasing (toward 0) = profitable for BUY side
+      if(currentZ >= targetLevel)
+      {
+         OpenGridProfitBuy(pairIndex);
+         g_pairs[pairIndex].gridProfitZLevelBuy++;
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Grid Distance (v3.6.0)                                   |
+//+------------------------------------------------------------------+
+double CalculateGridDistance(int pairIndex, ENUM_GRID_DISTANCE_MODE mode, 
+                              double atrMult, double fixedPoints, double fixedPips)
+{
+   string symbolA = g_pairs[pairIndex].symbolA;
+   double point = SymbolInfoDouble(symbolA, SYMBOL_POINT);
+   
+   switch(mode)
+   {
+      case GRID_DIST_ATR:
+      {
+         double atr = CalculateSimplifiedATR(symbolA, InpGridATRTimeframe, InpGridATRPeriod);
+         return atr * atrMult;
+      }
+      case GRID_DIST_FIXED_POINTS:
+         return fixedPoints * point;
+         
+      case GRID_DIST_FIXED_PIPS:
+      {
+         // 1 pip = 10 points for 5-digit brokers
+         int digits = (int)SymbolInfoInteger(symbolA, SYMBOL_DIGITS);
+         double pipSize = (digits == 3 || digits == 5) ? point * 10 : point;
+         return fixedPips * pipSize;
+      }
+      case GRID_DIST_ZSCORE:
+         // Z-Score mode uses level-based triggering, not price distance
+         return 0;
+   }
+   return 0;
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Grid Lots by Type (v3.6.0)                               |
+//+------------------------------------------------------------------+
+void CalculateGridLots(int pairIndex, string side, 
+                       ENUM_GRID_LOT_TYPE lotType,
+                       double customLot, double lotMult,
+                       double baseLotA, double baseLotB,
+                       double &outLotA, double &outLotB,
+                       bool isGridOrder, bool isProfitSide)
+{
+   string symbolA = g_pairs[pairIndex].symbolA;
+   string symbolB = g_pairs[pairIndex].symbolB;
+   
+   switch(lotType)
+   {
+      case GRID_LOT_TYPE_INITIAL:
+         // Use Initial Order lots
+         outLotA = NormalizeLot(symbolA, baseLotA);
+         outLotB = NormalizeLot(symbolB, baseLotB);
+         break;
+         
+      case GRID_LOT_TYPE_CUSTOM:
+         // Use custom fixed lot (same for both symbols)
+         outLotA = NormalizeLot(symbolA, customLot);
+         outLotB = NormalizeLot(symbolB, customLot);
+         break;
+         
+      case GRID_LOT_TYPE_MULTIPLIER:
+         // Apply multiplier from previous grid order
+         if(isProfitSide)
+         {
+            // Grid Profit Side
+            if(side == "BUY")
+            {
+               double prevA = (g_pairs[pairIndex].lastProfitGridLotBuyA > 0) 
+                              ? g_pairs[pairIndex].lastProfitGridLotBuyA : baseLotA;
+               double prevB = (g_pairs[pairIndex].lastProfitGridLotBuyB > 0) 
+                              ? g_pairs[pairIndex].lastProfitGridLotBuyB : baseLotB;
+               outLotA = NormalizeLot(symbolA, prevA * lotMult);
+               outLotB = NormalizeLot(symbolB, prevB * lotMult);
+            }
+            else
+            {
+               double prevA = (g_pairs[pairIndex].lastProfitGridLotSellA > 0) 
+                              ? g_pairs[pairIndex].lastProfitGridLotSellA : baseLotA;
+               double prevB = (g_pairs[pairIndex].lastProfitGridLotSellB > 0) 
+                              ? g_pairs[pairIndex].lastProfitGridLotSellB : baseLotB;
+               outLotA = NormalizeLot(symbolA, prevA * lotMult);
+               outLotB = NormalizeLot(symbolB, prevB * lotMult);
+            }
+         }
+         else
+         {
+            // Grid Loss Side
+            if(side == "BUY")
+            {
+               double prevA = (g_pairs[pairIndex].lastGridLotBuyA > 0) 
+                              ? g_pairs[pairIndex].lastGridLotBuyA : baseLotA;
+               double prevB = (g_pairs[pairIndex].lastGridLotBuyB > 0) 
+                              ? g_pairs[pairIndex].lastGridLotBuyB : baseLotB;
+               outLotA = NormalizeLot(symbolA, prevA * lotMult);
+               outLotB = NormalizeLot(symbolB, prevB * lotMult);
+            }
+            else
+            {
+               double prevA = (g_pairs[pairIndex].lastGridLotSellA > 0) 
+                              ? g_pairs[pairIndex].lastGridLotSellA : baseLotA;
+               double prevB = (g_pairs[pairIndex].lastGridLotSellB > 0) 
+                              ? g_pairs[pairIndex].lastGridLotSellB : baseLotB;
+               outLotA = NormalizeLot(symbolA, prevA * lotMult);
+               outLotB = NormalizeLot(symbolB, prevB * lotMult);
+            }
+         }
+         break;
+         
+      case GRID_LOT_TYPE_TREND_BASED:
+         // Use existing CalculateTrendBasedLots() function
+         CalculateTrendBasedLots(pairIndex, side, baseLotA, baseLotB, outLotA, outLotB, isGridOrder);
+         break;
    }
 }
 
@@ -2944,74 +3304,22 @@ void CalculateTrendBasedLots(int pairIndex, string side,
 }
 
 //+------------------------------------------------------------------+
-//| ATR Based Averaging (v3.3.1)                                       |
+//| Open Grid Loss Buy Position (v3.6.0)                               |
 //+------------------------------------------------------------------+
-void CheckATRAveraging(int pairIndex, string side)
-{
-   double atr = 0;
-   
-   // v3.3.1: Use simplified ATR in tester mode for speed
-   if(g_isTesterMode && InpSkipATRInTester)
-   {
-      atr = CalculateSimplifiedATR(g_pairs[pairIndex].symbolA, InpAtrTimeframe, InpAtrPeriod);
-   }
-   else
-   {
-      if(g_atrHandle == INVALID_HANDLE) return;
-      
-      double atrBuffer[];
-      ArraySetAsSeries(atrBuffer, true);
-      
-      if(CopyBuffer(g_atrHandle, 0, 0, 1, atrBuffer) < 1) return;
-      atr = atrBuffer[0];
-   }
-   
-   if(atr <= 0) return;
-   
-   double gridDistance = atr * InpAtrMultiplier;
-   double currentPrice = SymbolInfoDouble(g_pairs[pairIndex].symbolA, SYMBOL_BID);
-   
-   if(side == "BUY")
-   {
-      double lastPrice = g_pairs[pairIndex].lastAvgPriceBuy;
-      if(lastPrice == 0) lastPrice = currentPrice;
-      
-      if(currentPrice < lastPrice - gridDistance)
-      {
-         OpenAveragingBuy(pairIndex);
-         g_pairs[pairIndex].lastAvgPriceBuy = currentPrice;
-      }
-   }
-   else
-   {
-      double lastPrice = g_pairs[pairIndex].lastAvgPriceSell;
-      if(lastPrice == 0) lastPrice = currentPrice;
-      
-      if(currentPrice > lastPrice + gridDistance)
-      {
-         OpenAveragingSell(pairIndex);
-         g_pairs[pairIndex].lastAvgPriceSell = currentPrice;
-      }
-   }
-}
-
-//+------------------------------------------------------------------+
-//| Open Averaging Buy Position (v3.5.3 HF1 - with Compounding)        |
-//+------------------------------------------------------------------+
-void OpenAveragingBuy(int pairIndex)
+void OpenGridLossBuy(int pairIndex)
 {
    string symbolA = g_pairs[pairIndex].symbolA;
    string symbolB = g_pairs[pairIndex].symbolB;
-   
-   // v3.5.3 HF1: Calculate base lots with averaging multiplier
-   double baseLotA = g_pairs[pairIndex].lotBuyA * InpAveragingLotMult;
-   double baseLotB = g_pairs[pairIndex].lotBuyB * InpAveragingLotMult;
-   
-   // v3.5.3 HF1: Apply Trend-Based Lot Calculation (isGridOrder = true for Compounding)
-   double lotA, lotB;
-   CalculateTrendBasedLots(pairIndex, "BUY", baseLotA, baseLotB, lotA, lotB, true);
-   
    int corrType = g_pairs[pairIndex].correlationType;
+   
+   // v3.6.0: Calculate lots based on selected Lot Type
+   double baseLotA = g_pairs[pairIndex].lotBuyA;
+   double baseLotB = g_pairs[pairIndex].lotBuyB;
+   double lotA, lotB;
+   
+   CalculateGridLots(pairIndex, "BUY", InpGridLossLotType,
+                     InpGridLossCustomLot, InpGridLossLotMultiplier,
+                     baseLotA, baseLotB, lotA, lotB, true, false);
    
    // v3.5.3 HF4: Force update ADX before opening trade for Negative Correlation
    if(corrType == -1 && InpUseADXForNegative)
@@ -3019,25 +3327,25 @@ void OpenAveragingBuy(int pairIndex)
       UpdateADXForPair(pairIndex);
    }
    
-   // v3.5.3 HF3: Add ADX values in comment for Negative Correlation pairs
+   // Build comment
    string comment;
    if(corrType == -1 && InpUseADXForNegative)
    {
-      comment = StringFormat("StatArb_AVG_BUY_%d[ADX:%.0f|%.0f]", 
+      comment = StringFormat("StatArb_GL_BUY_%d[ADX:%.0f|%.0f]", 
                              pairIndex + 1,
                              g_pairs[pairIndex].adxValueA,
                              g_pairs[pairIndex].adxValueB);
    }
    else
    {
-      comment = StringFormat("StatArb_AVG_BUY_%d", pairIndex + 1);
+      comment = StringFormat("StatArb_GL_BUY_%d", pairIndex + 1);
    }
    
    // Open Buy on Symbol A
    double askA = SymbolInfoDouble(symbolA, SYMBOL_ASK);
    if(!g_trade.Buy(lotA, symbolA, askA, 0, 0, comment))
    {
-      PrintFormat("AVG BUY %s failed: %d", symbolA, GetLastError());
+      PrintFormat("GL BUY %s failed: %d", symbolA, GetLastError());
       return;
    }
    ulong ticketA = g_trade.ResultOrder();
@@ -3055,39 +3363,264 @@ void OpenAveragingBuy(int pairIndex)
       successB = g_trade.Buy(lotB, symbolB, askB, 0, 0, comment);
    }
    
-   // v3.3.3: Rollback if Symbol B fails
+   // Rollback if Symbol B fails
    if(!successB)
    {
-      PrintFormat("AVG BUY %s failed: %d - ROLLING BACK %s", symbolB, GetLastError(), symbolA);
+      PrintFormat("GL BUY %s failed: %d - ROLLING BACK %s", symbolB, GetLastError(), symbolA);
       g_trade.PositionClose(ticketA);
       return;
    }
    
-   // v3.5.3 HF1: Update Last Grid Lots for next compounding
+   // Update Last Grid Lots for next compounding
    g_pairs[pairIndex].lastGridLotBuyA = lotA;
    g_pairs[pairIndex].lastGridLotBuyB = lotB;
    
    g_pairs[pairIndex].avgOrderCountBuy++;
    g_pairs[pairIndex].orderCountBuy++;
    
-   string modeStr = (InpGridLotMode == GRID_LOT_FIXED) ? "Fixed" :
-                    (InpGridLotMode == GRID_LOT_BETA) ? "Beta" : 
-                    ((InpLotProgression == LOT_PROG_COMPOUNDING) ? "ATR-Compound" : "ATR-Mult");
+   string modeStr = EnumToString(InpGridLossLotType);
    
-   // v3.5.3 HF3: Include ADX values in log for Negative Correlation pairs
+   PrintFormat("Pair %d GRID LOSS BUY #%d: Z=%.2f (A:%.2f B:%.2f) [%s]", 
+               pairIndex + 1, g_pairs[pairIndex].avgOrderCountBuy, 
+               g_pairs[pairIndex].zScore, lotA, lotB, modeStr);
+}
+
+//+------------------------------------------------------------------+
+//| Open Grid Loss Sell Position (v3.6.0)                              |
+//+------------------------------------------------------------------+
+void OpenGridLossSell(int pairIndex)
+{
+   string symbolA = g_pairs[pairIndex].symbolA;
+   string symbolB = g_pairs[pairIndex].symbolB;
+   int corrType = g_pairs[pairIndex].correlationType;
+   
+   // v3.6.0: Calculate lots based on selected Lot Type
+   double baseLotA = g_pairs[pairIndex].lotSellA;
+   double baseLotB = g_pairs[pairIndex].lotSellB;
+   double lotA, lotB;
+   
+   CalculateGridLots(pairIndex, "SELL", InpGridLossLotType,
+                     InpGridLossCustomLot, InpGridLossLotMultiplier,
+                     baseLotA, baseLotB, lotA, lotB, true, false);
+   
+   // v3.5.3 HF4: Force update ADX before opening trade for Negative Correlation
    if(corrType == -1 && InpUseADXForNegative)
    {
-      PrintFormat("Pair %d AVG BUY #%d opened at Z=%.2f (A:%.2f B:%.2f) [Mode:%s][ADX:%.0f|%.0f]", 
-                  pairIndex + 1, g_pairs[pairIndex].avgOrderCountBuy, 
-                  g_pairs[pairIndex].zScore, lotA, lotB, modeStr,
-                  g_pairs[pairIndex].adxValueA, g_pairs[pairIndex].adxValueB);
+      UpdateADXForPair(pairIndex);
+   }
+   
+   // Build comment
+   string comment;
+   if(corrType == -1 && InpUseADXForNegative)
+   {
+      comment = StringFormat("StatArb_GL_SELL_%d[ADX:%.0f|%.0f]", 
+                             pairIndex + 1,
+                             g_pairs[pairIndex].adxValueA,
+                             g_pairs[pairIndex].adxValueB);
    }
    else
    {
-      PrintFormat("Pair %d AVG BUY #%d opened at Z=%.2f (A:%.2f B:%.2f) [Mode:%s]", 
-                  pairIndex + 1, g_pairs[pairIndex].avgOrderCountBuy, 
-                  g_pairs[pairIndex].zScore, lotA, lotB, modeStr);
+      comment = StringFormat("StatArb_GL_SELL_%d", pairIndex + 1);
    }
+   
+   // Open Sell on Symbol A
+   double bidA = SymbolInfoDouble(symbolA, SYMBOL_BID);
+   if(!g_trade.Sell(lotA, symbolA, bidA, 0, 0, comment))
+   {
+      PrintFormat("GL SELL %s failed: %d", symbolA, GetLastError());
+      return;
+   }
+   ulong ticketA = g_trade.ResultOrder();
+   
+   // Open position on Symbol B based on correlation type
+   bool successB = false;
+   if(corrType == 1)  // Positive correlation: Buy B
+   {
+      double askB = SymbolInfoDouble(symbolB, SYMBOL_ASK);
+      successB = g_trade.Buy(lotB, symbolB, askB, 0, 0, comment);
+   }
+   else  // Negative correlation: Sell B
+   {
+      double bidB = SymbolInfoDouble(symbolB, SYMBOL_BID);
+      successB = g_trade.Sell(lotB, symbolB, bidB, 0, 0, comment);
+   }
+   
+   // Rollback if Symbol B fails
+   if(!successB)
+   {
+      PrintFormat("GL SELL %s failed: %d - ROLLING BACK %s", symbolB, GetLastError(), symbolA);
+      g_trade.PositionClose(ticketA);
+      return;
+   }
+   
+   // Update Last Grid Lots for next compounding
+   g_pairs[pairIndex].lastGridLotSellA = lotA;
+   g_pairs[pairIndex].lastGridLotSellB = lotB;
+   
+   g_pairs[pairIndex].avgOrderCountSell++;
+   g_pairs[pairIndex].orderCountSell++;
+   
+   string modeStr = EnumToString(InpGridLossLotType);
+   
+   PrintFormat("Pair %d GRID LOSS SELL #%d: Z=%.2f (A:%.2f B:%.2f) [%s]", 
+               pairIndex + 1, g_pairs[pairIndex].avgOrderCountSell, 
+               g_pairs[pairIndex].zScore, lotA, lotB, modeStr);
+}
+
+//+------------------------------------------------------------------+
+//| Open Grid Profit Buy Position (v3.6.0)                             |
+//+------------------------------------------------------------------+
+void OpenGridProfitBuy(int pairIndex)
+{
+   string symbolA = g_pairs[pairIndex].symbolA;
+   string symbolB = g_pairs[pairIndex].symbolB;
+   int corrType = g_pairs[pairIndex].correlationType;
+   
+   // v3.6.0: Calculate lots based on selected Lot Type
+   double baseLotA = g_pairs[pairIndex].lotBuyA;
+   double baseLotB = g_pairs[pairIndex].lotBuyB;
+   double lotA, lotB;
+   
+   CalculateGridLots(pairIndex, "BUY", InpGridProfitLotType,
+                     InpGridProfitCustomLot, InpGridProfitLotMultiplier,
+                     baseLotA, baseLotB, lotA, lotB, true, true);
+   
+   // v3.5.3 HF4: Force update ADX before opening trade for Negative Correlation
+   if(corrType == -1 && InpUseADXForNegative)
+   {
+      UpdateADXForPair(pairIndex);
+   }
+   
+   // Build comment
+   string comment;
+   if(corrType == -1 && InpUseADXForNegative)
+   {
+      comment = StringFormat("StatArb_GP_BUY_%d[ADX:%.0f|%.0f]", 
+                             pairIndex + 1,
+                             g_pairs[pairIndex].adxValueA,
+                             g_pairs[pairIndex].adxValueB);
+   }
+   else
+   {
+      comment = StringFormat("StatArb_GP_BUY_%d", pairIndex + 1);
+   }
+   
+   // Open BUY on Symbol A (same direction as Initial)
+   double askA = SymbolInfoDouble(symbolA, SYMBOL_ASK);
+   if(!g_trade.Buy(lotA, symbolA, askA, 0, 0, comment))
+   {
+      PrintFormat("GP BUY %s failed: %d", symbolA, GetLastError());
+      return;
+   }
+   ulong ticketA = g_trade.ResultOrder();
+   
+   // Open position on Symbol B based on correlation type
+   bool successB = false;
+   if(corrType == 1)  // Positive: Sell B
+   {
+      double bidB = SymbolInfoDouble(symbolB, SYMBOL_BID);
+      successB = g_trade.Sell(lotB, symbolB, bidB, 0, 0, comment);
+   }
+   else  // Negative: Buy B
+   {
+      double askB = SymbolInfoDouble(symbolB, SYMBOL_ASK);
+      successB = g_trade.Buy(lotB, symbolB, askB, 0, 0, comment);
+   }
+   
+   if(!successB)
+   {
+      PrintFormat("GP BUY %s failed: %d - ROLLING BACK", symbolB, GetLastError());
+      g_trade.PositionClose(ticketA);
+      return;
+   }
+   
+   g_pairs[pairIndex].gridProfitCountBuy++;
+   g_pairs[pairIndex].orderCountBuy++;
+   
+   // Update Last Profit Grid Lots
+   g_pairs[pairIndex].lastProfitGridLotBuyA = lotA;
+   g_pairs[pairIndex].lastProfitGridLotBuyB = lotB;
+   
+   PrintFormat("Pair %d GRID PROFIT BUY #%d: (A:%.2f B:%.2f)", 
+               pairIndex + 1, g_pairs[pairIndex].gridProfitCountBuy, lotA, lotB);
+}
+
+//+------------------------------------------------------------------+
+//| Open Grid Profit Sell Position (v3.6.0)                            |
+//+------------------------------------------------------------------+
+void OpenGridProfitSell(int pairIndex)
+{
+   string symbolA = g_pairs[pairIndex].symbolA;
+   string symbolB = g_pairs[pairIndex].symbolB;
+   int corrType = g_pairs[pairIndex].correlationType;
+   
+   // v3.6.0: Calculate lots based on selected Lot Type
+   double baseLotA = g_pairs[pairIndex].lotSellA;
+   double baseLotB = g_pairs[pairIndex].lotSellB;
+   double lotA, lotB;
+   
+   CalculateGridLots(pairIndex, "SELL", InpGridProfitLotType,
+                     InpGridProfitCustomLot, InpGridProfitLotMultiplier,
+                     baseLotA, baseLotB, lotA, lotB, true, true);
+   
+   // v3.5.3 HF4: Force update ADX before opening trade for Negative Correlation
+   if(corrType == -1 && InpUseADXForNegative)
+   {
+      UpdateADXForPair(pairIndex);
+   }
+   
+   // Build comment
+   string comment;
+   if(corrType == -1 && InpUseADXForNegative)
+   {
+      comment = StringFormat("StatArb_GP_SELL_%d[ADX:%.0f|%.0f]", 
+                             pairIndex + 1,
+                             g_pairs[pairIndex].adxValueA,
+                             g_pairs[pairIndex].adxValueB);
+   }
+   else
+   {
+      comment = StringFormat("StatArb_GP_SELL_%d", pairIndex + 1);
+   }
+   
+   // Open SELL on Symbol A
+   double bidA = SymbolInfoDouble(symbolA, SYMBOL_BID);
+   if(!g_trade.Sell(lotA, symbolA, bidA, 0, 0, comment))
+   {
+      PrintFormat("GP SELL %s failed: %d", symbolA, GetLastError());
+      return;
+   }
+   ulong ticketA = g_trade.ResultOrder();
+   
+   // Open position on Symbol B based on correlation type
+   bool successB = false;
+   if(corrType == 1)  // Positive: Buy B
+   {
+      double askB = SymbolInfoDouble(symbolB, SYMBOL_ASK);
+      successB = g_trade.Buy(lotB, symbolB, askB, 0, 0, comment);
+   }
+   else  // Negative: Sell B
+   {
+      double bidB = SymbolInfoDouble(symbolB, SYMBOL_BID);
+      successB = g_trade.Sell(lotB, symbolB, bidB, 0, 0, comment);
+   }
+   
+   if(!successB)
+   {
+      PrintFormat("GP SELL %s failed: %d - ROLLING BACK", symbolB, GetLastError());
+      g_trade.PositionClose(ticketA);
+      return;
+   }
+   
+   g_pairs[pairIndex].gridProfitCountSell++;
+   g_pairs[pairIndex].orderCountSell++;
+   
+   // Update Last Profit Grid Lots
+   g_pairs[pairIndex].lastProfitGridLotSellA = lotA;
+   g_pairs[pairIndex].lastProfitGridLotSellB = lotB;
+   
+   PrintFormat("Pair %d GRID PROFIT SELL #%d: (A:%.2f B:%.2f)", 
+               pairIndex + 1, g_pairs[pairIndex].gridProfitCountSell, lotA, lotB);
 }
 
 //+------------------------------------------------------------------+
