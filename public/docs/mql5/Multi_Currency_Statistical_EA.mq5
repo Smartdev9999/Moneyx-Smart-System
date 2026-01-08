@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                Multi_Currency_Statistical_EA.mq5 |
-//|                 Statistical Arbitrage (Pairs Trading) v3.6.0     |
+//|                 Statistical Arbitrage (Pairs Trading) v3.6.0 HF2 |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "3.60"
+#property version   "3.62"
 #property strict
 #property description "Statistical Arbitrage / Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
-#property description "v3.6.0: Grid Loss Side + Grid Profit Side with Custom Distance/Lot Options"
+#property description "v3.6.0 HF2: Basket Profit Target System"
 
 #include <Trade/Trade.mqh>
 
@@ -341,8 +341,8 @@ input ENUM_TIMEFRAMES InpADXTimeframe = PERIOD_H1;      // ADX Timeframe
 input int      InpADXPeriod = 14;                       // ADX Period
 input double   InpADXMinStrength = 20.0;                // Minimum ADX for Trend Strength
 
-input group "=== Target Settings (v3.3.0) ==="
-input double   InpTotalTarget = 100.0;          // Total Portfolio Target ($)
+input group "=== Basket Target Settings (v3.6.0 HF2) ==="
+input double   InpTotalTarget = 0;              // Basket Profit Target $ (0=Disable)
 input int      InpDefaultMaxOrderBuy = 5;       // Total Max Orders Buy (Main + Grid)
 input int      InpDefaultMaxOrderSell = 5;      // Total Max Orders Sell (Main + Grid)
 input double   InpDefaultTargetBuy = 10.0;      // Default Target (Buy Side) $
@@ -629,6 +629,12 @@ datetime g_lastZScoreUpdate = 0;
 
 // v3.5.0: CDC Action Zone timeframe tracking
 datetime g_lastCDCUpdate = 0;
+
+// === v3.6.0 HF2: Basket Profit Target System ===
+double g_basketClosedProfit = 0;      // Accumulated closed profit from all pairs
+double g_basketFloatingProfit = 0;    // Current floating profit from all pairs
+double g_basketTotalProfit = 0;       // Closed + Floating = Total
+bool   g_basketTargetTriggered = false; // Flag to prevent multiple triggers in same tick
 
 //+------------------------------------------------------------------+
 //| v3.3.0: Get Z-Score Timeframe (independent from Correlation)       |
@@ -4002,6 +4008,11 @@ bool CloseBuySide(int pairIndex)
       // v3.2.9: Accumulate closed P/L before reset
       g_pairs[pairIndex].closedProfitBuy += g_pairs[pairIndex].profitBuy;
       
+      // v3.6.0 HF2: Add to Basket Closed Profit
+      g_basketClosedProfit += g_pairs[pairIndex].profitBuy;
+      PrintFormat("BASKET: Added %.2f from Pair %d BUY | Total Closed: %.2f | Target: %.2f",
+                  g_pairs[pairIndex].profitBuy, pairIndex + 1, g_basketClosedProfit, g_totalTarget);
+      
       // Update statistics before reset
       g_dailyProfit += g_pairs[pairIndex].profitBuy;
       g_weeklyProfit += g_pairs[pairIndex].profitBuy;
@@ -4099,6 +4110,11 @@ bool CloseSellSide(int pairIndex)
       
       // v3.2.9: Accumulate closed P/L before reset
       g_pairs[pairIndex].closedProfitSell += g_pairs[pairIndex].profitSell;
+      
+      // v3.6.0 HF2: Add to Basket Closed Profit
+      g_basketClosedProfit += g_pairs[pairIndex].profitSell;
+      PrintFormat("BASKET: Added %.2f from Pair %d SELL | Total Closed: %.2f | Target: %.2f",
+                  g_pairs[pairIndex].profitSell, pairIndex + 1, g_basketClosedProfit, g_totalTarget);
       
       // Update statistics before reset
       g_dailyProfit += g_pairs[pairIndex].profitSell;
@@ -4274,6 +4290,9 @@ void ForceCloseBuySide(int pairIndex)
    // v3.2.9: Accumulate closed P/L before reset
    g_pairs[pairIndex].closedProfitBuy += g_pairs[pairIndex].profitBuy;
    
+   // v3.6.0 HF2: Add to Basket Closed Profit
+   g_basketClosedProfit += g_pairs[pairIndex].profitBuy;
+   
    // Update statistics before reset
    g_dailyProfit += g_pairs[pairIndex].profitBuy;
    g_weeklyProfit += g_pairs[pairIndex].profitBuy;
@@ -4337,6 +4356,9 @@ void ForceCloseSellSide(int pairIndex)
    
    // v3.2.9: Accumulate closed P/L before reset
    g_pairs[pairIndex].closedProfitSell += g_pairs[pairIndex].profitSell;
+   
+   // v3.6.0 HF2: Add to Basket Closed Profit
+   g_basketClosedProfit += g_pairs[pairIndex].profitSell;
    
    // Update statistics before reset
    g_dailyProfit += g_pairs[pairIndex].profitSell;
@@ -4648,33 +4670,69 @@ void CheckPairTargets()
 }
 
 //+------------------------------------------------------------------+
-//| Check Total Portfolio Target                                       |
+//| Check Basket Profit Target (v3.6.0 HF2)                            |
 //+------------------------------------------------------------------+
 void CheckTotalTarget()
 {
+   // Disable if target is 0
    if(g_totalTarget <= 0) return;
    
-   if(g_totalCurrentProfit >= g_totalTarget)
+   // v3.6.0 HF2: Calculate Basket Totals
+   g_basketFloatingProfit = g_totalCurrentProfit;
+   g_basketTotalProfit = g_basketClosedProfit + g_basketFloatingProfit;
+   
+   // Check if Basket Target reached (based on CLOSED profit only)
+   if(g_basketClosedProfit >= g_totalTarget && !g_basketTargetTriggered)
    {
-      PrintFormat(">>> TOTAL TARGET REACHED: %.2f >= %.2f - Closing ALL positions! <<<",
-         g_totalCurrentProfit, g_totalTarget);
+      g_basketTargetTriggered = true;
       
+      PrintFormat(">>> BASKET TARGET REACHED: Closed %.2f >= Target %.2f <<<",
+                  g_basketClosedProfit, g_totalTarget);
+      PrintFormat(">>> Closing ALL positions and resetting basket... <<<");
+      
+      // Close ALL open positions across all pairs
       for(int i = 0; i < MAX_PAIRS; i++)
       {
          if(g_pairs[i].directionBuy == 1)
          {
-            PrintFormat(">>> TOTAL TARGET: Closing Pair %d BUY (Profit: %.2f)", 
+            PrintFormat(">>> BASKET: Closing Pair %d BUY (Floating: %.2f)", 
                         i + 1, g_pairs[i].profitBuy);
             CloseBuySide(i);
          }
          if(g_pairs[i].directionSell == 1)
          {
-            PrintFormat(">>> TOTAL TARGET: Closing Pair %d SELL (Profit: %.2f)", 
+            PrintFormat(">>> BASKET: Closing Pair %d SELL (Floating: %.2f)", 
                         i + 1, g_pairs[i].profitSell);
             CloseSellSide(i);
          }
       }
+      
+      // Reset Basket after all positions closed
+      ResetBasketProfit();
    }
+}
+
+//+------------------------------------------------------------------+
+//| Reset Basket Profit (v3.6.0 HF2)                                   |
+//+------------------------------------------------------------------+
+void ResetBasketProfit()
+{
+   PrintFormat(">>> BASKET RESET: Previous Closed %.2f | New Closed: 0.00 <<<",
+               g_basketClosedProfit);
+   
+   g_basketClosedProfit = 0;
+   g_basketFloatingProfit = 0;
+   g_basketTotalProfit = 0;
+   g_basketTargetTriggered = false;
+   
+   // Also reset per-pair closed profit (starts fresh for new cycle)
+   for(int i = 0; i < MAX_PAIRS; i++)
+   {
+      g_pairs[i].closedProfitBuy = 0;
+      g_pairs[i].closedProfitSell = 0;
+   }
+   
+   PrintFormat(">>> BASKET: Ready for new cycle <<<");
 }
 
 //+------------------------------------------------------------------+
@@ -5079,12 +5137,36 @@ void UpdateDashboard()
    UpdateLabel(prefix + "V_BAL", DoubleToString(balance, 2), balance >= g_initialBalance ? COLOR_PROFIT : COLOR_LOSS);
    UpdateLabel(prefix + "V_EQ", DoubleToString(equity, 2), equity >= balance ? COLOR_PROFIT : COLOR_LOSS);
    UpdateLabel(prefix + "V_MG", DoubleToString(margin, 2), COLOR_TEXT_WHITE);
-   UpdateLabel(prefix + "V_TPL", DoubleToString(g_totalCurrentProfit, 2), g_totalCurrentProfit >= 0 ? COLOR_PROFIT : COLOR_LOSS);
+   
+   // v3.6.0 HF2: Show Basket info instead of floating P/L
+   double basketNeed = g_totalTarget - g_basketClosedProfit;
+   if(basketNeed < 0) basketNeed = 0;
+   
+   // If Basket Target is enabled, show Basket Closed; otherwise show Floating P/L
+   if(g_totalTarget > 0)
+   {
+      UpdateLabel(prefix + "V_TPL", DoubleToString(g_basketClosedProfit, 2), g_basketClosedProfit >= 0 ? COLOR_PROFIT : COLOR_LOSS);
+      UpdateLabel(prefix + "L_TPL", "Basket:", COLOR_TEXT_WHITE);  // Update label text
+   }
+   else
+   {
+      UpdateLabel(prefix + "V_TPL", DoubleToString(g_totalCurrentProfit, 2), g_totalCurrentProfit >= 0 ? COLOR_PROFIT : COLOR_LOSS);
+   }
    
    UpdateLabel(prefix + "V_TLOT", DoubleToString(totalLot, 2), COLOR_TEXT_WHITE);
    UpdateLabel(prefix + "V_TORD", IntegerToString(totalOrders), COLOR_TEXT_WHITE);
    UpdateLabel(prefix + "V_DD", DoubleToString(ddPercent, 2) + "%", ddPercent > 10 ? COLOR_LOSS : COLOR_TEXT_WHITE);
-   UpdateLabel(prefix + "V_MDD", DoubleToString(g_maxDrawdownPercent, 2) + "%", g_maxDrawdownPercent > InpMaxDrawdown ? COLOR_LOSS : COLOR_TEXT_WHITE);
+   
+   // v3.6.0 HF2: Show Basket Target/Need instead of Max DD when basket is enabled
+   if(g_totalTarget > 0)
+   {
+      UpdateLabel(prefix + "V_MDD", DoubleToString(basketNeed, 2), basketNeed > 0 ? COLOR_GOLD : COLOR_PROFIT);
+      UpdateLabel(prefix + "L_MDD", "Need:", COLOR_TEXT_WHITE);  // Update label text
+   }
+   else
+   {
+      UpdateLabel(prefix + "V_MDD", DoubleToString(g_maxDrawdownPercent, 2) + "%", g_maxDrawdownPercent > InpMaxDrawdown ? COLOR_LOSS : COLOR_TEXT_WHITE);
+   }
    
    // Lot Statistics with Closed Orders (v3.3.0)
    UpdateLabel(prefix + "V_DLOT", DoubleToString(g_dailyLot, 2), COLOR_TEXT_WHITE);
