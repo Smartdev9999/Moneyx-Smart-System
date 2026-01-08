@@ -4738,17 +4738,16 @@ void ResetBasketProfit()
    PrintFormat(">>> BASKET RESET: Previous Closed %.2f | New Closed: 0.00 <<<",
                g_basketClosedProfit);
    
+   // v3.6.0 HF2 Patch 2: Reset ONLY basket accumulator
+   // Per-pair closedProfitBuy/Sell are kept for dashboard display
    g_basketClosedProfit = 0;
    g_basketFloatingProfit = 0;
    g_basketTotalProfit = 0;
    g_basketTargetTriggered = false;
    
-   // Also reset per-pair closed profit (starts fresh for new cycle)
-   for(int i = 0; i < MAX_PAIRS; i++)
-   {
-      g_pairs[i].closedProfitBuy = 0;
-      g_pairs[i].closedProfitSell = 0;
-   }
+   // REMOVED: Do NOT reset per-pair closed profit
+   // closedProfitBuy and closedProfitSell are displayed on dashboard
+   // and should persist across basket cycles
    
    PrintFormat(">>> BASKET: Ready for new cycle <<<");
 }
