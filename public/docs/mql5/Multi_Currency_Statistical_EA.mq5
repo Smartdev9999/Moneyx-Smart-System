@@ -4577,9 +4577,18 @@ void UpdatePairProfits()
       {
          buyProfit = GetPositionProfit(g_pairs[i].ticketBuyA) + GetPositionProfit(g_pairs[i].ticketBuyB);
          
-         // Add averaging positions profit
-         string avgComment = StringFormat("StatArb_AVG_BUY_%d", i + 1);
-         buyProfit += GetAveragingProfit(avgComment);
+         // v3.6.0 HF2: Add ALL grid positions profit
+         // Legacy Averaging (backward compatibility)
+         string avgBuyComment = StringFormat("StatArb_AVG_BUY_%d", i + 1);
+         buyProfit += GetAveragingProfit(avgBuyComment);
+         
+         // Grid Loss positions
+         string glBuyComment = StringFormat("StatArb_GL_BUY_%d", i + 1);
+         buyProfit += GetAveragingProfit(glBuyComment);
+         
+         // Grid Profit positions
+         string gpBuyComment = StringFormat("StatArb_GP_BUY_%d", i + 1);
+         buyProfit += GetAveragingProfit(gpBuyComment);
       }
       
       // Calculate Sell side profit
@@ -4587,9 +4596,18 @@ void UpdatePairProfits()
       {
          sellProfit = GetPositionProfit(g_pairs[i].ticketSellA) + GetPositionProfit(g_pairs[i].ticketSellB);
          
-         // Add averaging positions profit
-         string avgComment = StringFormat("StatArb_AVG_SELL_%d", i + 1);
-         sellProfit += GetAveragingProfit(avgComment);
+         // v3.6.0 HF2: Add ALL grid positions profit
+         // Legacy Averaging (backward compatibility)
+         string avgSellComment = StringFormat("StatArb_AVG_SELL_%d", i + 1);
+         sellProfit += GetAveragingProfit(avgSellComment);
+         
+         // Grid Loss positions
+         string glSellComment = StringFormat("StatArb_GL_SELL_%d", i + 1);
+         sellProfit += GetAveragingProfit(glSellComment);
+         
+         // Grid Profit positions
+         string gpSellComment = StringFormat("StatArb_GP_SELL_%d", i + 1);
+         sellProfit += GetAveragingProfit(gpSellComment);
       }
       
       g_pairs[i].profitBuy = buyProfit;
