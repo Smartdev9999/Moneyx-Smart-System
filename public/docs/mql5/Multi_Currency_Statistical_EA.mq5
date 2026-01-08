@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                Multi_Currency_Statistical_EA.mq5 |
-//|                 Statistical Arbitrage (Pairs Trading) v3.5.2     |
+//|                 Statistical Arbitrage (Pairs Trading) v3.5.3     |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "3.52"
+#property version   "3.53"
 #property strict
 #property description "Statistical Arbitrage / Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
-#property description "v3.5.2: Direction-Aware Z-Score Grid Guard + CDC Block"
+#property description "v3.5.3: Grid Lot Mode Selection (Beta vs ATR Trend)"
 
 #include <Trade/Trade.mqh>
 
@@ -137,6 +137,21 @@ enum ENUM_AVERAGING_MODE
 };
 
 //+------------------------------------------------------------------+
+//| GRID LOT CALCULATION MODE ENUM (v3.5.3)                            |
+//+------------------------------------------------------------------+
+enum ENUM_GRID_LOT_MODE
+{
+   GRID_LOT_BETA = 0,       // Beta Mode (use Hedge Ratio from Beta Settings)
+   GRID_LOT_ATR_TREND       // ATR Trend Mode (use ATR Ratio + CDC Trend)
+};
+
+enum ENUM_GRID_LOT_SCOPE
+{
+   GRID_SCOPE_GRID_ONLY = 0,  // Grid Orders Only
+   GRID_SCOPE_ALL             // Both Main & Grid Orders
+};
+
+//+------------------------------------------------------------------+
 //| INPUT PARAMETERS                                                   |
 //+------------------------------------------------------------------+
 input group "=== Trading Settings ==="
@@ -232,6 +247,17 @@ input group "=== Grid Trading Guard (v3.5.1) ==="
 input double   InpGridMinCorrelation = 0.60;      // Grid: Minimum Correlation (ต่ำกว่านี้หยุด Grid)
 input double   InpGridMinZScore = 0.5;            // Grid: Minimum |Z-Score| (ต่ำกว่านี้หยุด Grid)
 input bool     InpGridPauseAffectsMain = true;    // Apply to Main Entry Too (เกณฑ์นี้ใช้กับ Order แรกด้วย)
+
+input group "=== Grid Lot Calculation Mode (v3.5.3) ==="
+input ENUM_GRID_LOT_MODE   InpGridLotMode = GRID_LOT_BETA;         // Grid Lot Calculation Mode
+input ENUM_GRID_LOT_SCOPE  InpGridLotScope = GRID_SCOPE_GRID_ONLY; // Apply to Scope
+
+input group "--- ATR Trend Mode Settings ---"
+input ENUM_TIMEFRAMES InpGridATRTimeframe = PERIOD_D1;  // ATR Timeframe for Ratio Calculation
+input int      InpGridATRPeriod = 20;                    // ATR Period for Ratio Calculation
+input double   InpTrendSideMultiplier = 1.2;            // Trend-Aligned Side: Fixed Multiplier (if not ATR Ratio)
+input double   InpCounterSideMultiplier = 1.0;          // Counter-Trend Side: Multiplier (0.5-1.0)
+input bool     InpUseATRRatioForTrend = true;           // Use ATR Ratio (true) or Fixed Mult (false)
 
 input group "=== Target Settings (v3.3.0) ==="
 input double   InpTotalTarget = 100.0;          // Total Portfolio Target ($)
@@ -2546,6 +2572,140 @@ double CalculateSimplifiedATR(string symbol, ENUM_TIMEFRAMES tf, int period)
 }
 
 //+------------------------------------------------------------------+
+//| Calculate ATR Ratio for Pair (v3.5.3)                              |
+//| Returns: Ratio = ATR(SymbolA) / ATR(SymbolB)                       |
+//+------------------------------------------------------------------+
+double CalculateATRRatio(int pairIndex)
+{
+   string symbolA = g_pairs[pairIndex].symbolA;
+   string symbolB = g_pairs[pairIndex].symbolB;
+   
+   double atrA = CalculateSimplifiedATR(symbolA, InpGridATRTimeframe, InpGridATRPeriod);
+   double atrB = CalculateSimplifiedATR(symbolB, InpGridATRTimeframe, InpGridATRPeriod);
+   
+   if(atrB <= 0) return 1.0;  // Fallback to 1:1
+   
+   double ratio = atrA / atrB;
+   
+   if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
+      PrintFormat("ATR Ratio [Pair %d]: %s=%.5f, %s=%.5f, Ratio=%.3f", 
+                  pairIndex + 1, symbolA, atrA, symbolB, atrB, ratio);
+   
+   return ratio;
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Trend-Based Lots for Grid Orders (v3.5.3)                |
+//| side: "BUY" or "SELL" - the hedge side (not individual symbol)     |
+//| Returns: Adjusted lotA and lotB via reference                       |
+//+------------------------------------------------------------------+
+void CalculateTrendBasedLots(int pairIndex, string side, 
+                              double baseLotA, double baseLotB,
+                              double &adjustedLotA, double &adjustedLotB)
+{
+   string symbolA = g_pairs[pairIndex].symbolA;
+   string symbolB = g_pairs[pairIndex].symbolB;
+   
+   // Default: no adjustment
+   adjustedLotA = baseLotA;
+   adjustedLotB = baseLotB;
+   
+   // === Mode 1: Beta Mode (เดิม) - ใช้ Hedge Ratio ===
+   if(InpGridLotMode == GRID_LOT_BETA)
+   {
+      // Beta mode uses existing hedge ratio from lot calculation
+      // Lots are already calculated with hedge ratio in CalculateDollarNeutralLots
+      adjustedLotA = NormalizeLot(symbolA, baseLotA);
+      adjustedLotB = NormalizeLot(symbolB, baseLotB);
+      return;
+   }
+   
+   // === Mode 2: ATR Trend Mode (ใหม่) ===
+   if(InpGridLotMode == GRID_LOT_ATR_TREND)
+   {
+      // Requires CDC to be enabled
+      if(!InpUseCDCTrendFilter)
+      {
+         // CDC not enabled, fallback to 1:1
+         adjustedLotA = NormalizeLot(symbolA, baseLotA);
+         adjustedLotB = NormalizeLot(symbolB, baseLotB);
+         return;
+      }
+      
+      string trendA = g_pairs[pairIndex].cdcTrendA;
+      string trendB = g_pairs[pairIndex].cdcTrendB;
+      int corrType = g_pairs[pairIndex].correlationType;
+      
+      // === Determine Direction for Each Symbol ===
+      // BUY Side (Positive Corr): Buy A, Sell B
+      // BUY Side (Negative Corr): Buy A, Buy B
+      // SELL Side (Positive Corr): Sell A, Buy B
+      // SELL Side (Negative Corr): Sell A, Sell B
+      
+      string directionA = (side == "BUY") ? "BUY" : "SELL";
+      string directionB;
+      if(corrType == 1)  // Positive Correlation
+         directionB = (side == "BUY") ? "SELL" : "BUY";
+      else  // Negative Correlation
+         directionB = (side == "BUY") ? "BUY" : "SELL";
+      
+      // === Check Trend Alignment ===
+      // BUY + BULLISH = Trend-Aligned
+      // SELL + BEARISH = Trend-Aligned
+      bool isTrendAlignedA = ((directionA == "BUY" && trendA == "BULLISH") ||
+                              (directionA == "SELL" && trendA == "BEARISH"));
+      bool isTrendAlignedB = ((directionB == "BUY" && trendB == "BULLISH") ||
+                              (directionB == "SELL" && trendB == "BEARISH"));
+      
+      // === Calculate Multipliers ===
+      double multA = 1.0;
+      double multB = 1.0;
+      
+      if(InpUseATRRatioForTrend)
+      {
+         // ATR Ratio Mode: เพิ่ม lot ของฝั่งที่ถูกเทรน ตาม ATR Ratio
+         double atrRatio = CalculateATRRatio(pairIndex);
+         
+         if(isTrendAlignedA && !isTrendAlignedB)
+         {
+            // A is Trend-Aligned: Increase A by ATR Ratio
+            multA = atrRatio;
+            multB = InpCounterSideMultiplier;
+         }
+         else if(isTrendAlignedB && !isTrendAlignedA)
+         {
+            // B is Trend-Aligned: Increase B by ATR Ratio
+            multA = InpCounterSideMultiplier;
+            multB = atrRatio;
+         }
+         else
+         {
+            // Both aligned or neither - use normal multipliers
+            multA = isTrendAlignedA ? InpTrendSideMultiplier : InpCounterSideMultiplier;
+            multB = isTrendAlignedB ? InpTrendSideMultiplier : InpCounterSideMultiplier;
+         }
+      }
+      else
+      {
+         // Fixed Multiplier Mode
+         multA = isTrendAlignedA ? InpTrendSideMultiplier : InpCounterSideMultiplier;
+         multB = isTrendAlignedB ? InpTrendSideMultiplier : InpCounterSideMultiplier;
+      }
+      
+      adjustedLotA = NormalizeLot(symbolA, baseLotA * multA);
+      adjustedLotB = NormalizeLot(symbolB, baseLotB * multB);
+      
+      if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
+      {
+         PrintFormat("TREND LOT [Pair %d %s]: A(%s)=%.2f×%.2f=%.2f [%s:%s] | B(%s)=%.2f×%.2f=%.2f [%s:%s]",
+                     pairIndex + 1, side,
+                     symbolA, baseLotA, multA, adjustedLotA, directionA, trendA,
+                     symbolB, baseLotB, multB, adjustedLotB, directionB, trendB);
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
 //| ATR Based Averaging (v3.3.1)                                       |
 //+------------------------------------------------------------------+
 void CheckATRAveraging(int pairIndex, string side)
@@ -2598,16 +2758,21 @@ void CheckATRAveraging(int pairIndex, string side)
 }
 
 //+------------------------------------------------------------------+
-//| Open Averaging Buy Position (v3.3.3 - with Normalization & Rollback)|
+//| Open Averaging Buy Position (v3.5.3 - with Trend-Based Lots)       |
 //+------------------------------------------------------------------+
 void OpenAveragingBuy(int pairIndex)
 {
    string symbolA = g_pairs[pairIndex].symbolA;
    string symbolB = g_pairs[pairIndex].symbolB;
    
-   // v3.3.3: Normalize lots for each symbol's volume step
-   double lotA = NormalizeLot(symbolA, g_pairs[pairIndex].lotBuyA * InpAveragingLotMult);
-   double lotB = NormalizeLot(symbolB, g_pairs[pairIndex].lotBuyB * InpAveragingLotMult);
+   // v3.5.3: Calculate base lots with averaging multiplier
+   double baseLotA = g_pairs[pairIndex].lotBuyA * InpAveragingLotMult;
+   double baseLotB = g_pairs[pairIndex].lotBuyB * InpAveragingLotMult;
+   
+   // v3.5.3: Apply Trend-Based Lot Calculation
+   double lotA, lotB;
+   CalculateTrendBasedLots(pairIndex, "BUY", baseLotA, baseLotB, lotA, lotB);
+   
    int corrType = g_pairs[pairIndex].correlationType;
    
    string comment = StringFormat("StatArb_AVG_BUY_%d", pairIndex + 1);
@@ -2645,22 +2810,28 @@ void OpenAveragingBuy(int pairIndex)
    g_pairs[pairIndex].avgOrderCountBuy++;
    g_pairs[pairIndex].orderCountBuy++;
    
-   PrintFormat("Pair %d AVG BUY #%d opened at Z=%.2f (A:%.2f B:%.2f)", 
+   PrintFormat("Pair %d AVG BUY #%d opened at Z=%.2f (A:%.2f B:%.2f) [Mode:%s]", 
                pairIndex + 1, g_pairs[pairIndex].avgOrderCountBuy, 
-               g_pairs[pairIndex].zScore, lotA, lotB);
+               g_pairs[pairIndex].zScore, lotA, lotB,
+               InpGridLotMode == GRID_LOT_BETA ? "Beta" : "ATR-Trend");
 }
 
 //+------------------------------------------------------------------+
-//| Open Averaging Sell Position (v3.3.3 - with Normalization & Rollback)|
+//| Open Averaging Sell Position (v3.5.3 - with Trend-Based Lots)      |
 //+------------------------------------------------------------------+
 void OpenAveragingSell(int pairIndex)
 {
    string symbolA = g_pairs[pairIndex].symbolA;
    string symbolB = g_pairs[pairIndex].symbolB;
    
-   // v3.3.3: Normalize lots for each symbol's volume step
-   double lotA = NormalizeLot(symbolA, g_pairs[pairIndex].lotSellA * InpAveragingLotMult);
-   double lotB = NormalizeLot(symbolB, g_pairs[pairIndex].lotSellB * InpAveragingLotMult);
+   // v3.5.3: Calculate base lots with averaging multiplier
+   double baseLotA = g_pairs[pairIndex].lotSellA * InpAveragingLotMult;
+   double baseLotB = g_pairs[pairIndex].lotSellB * InpAveragingLotMult;
+   
+   // v3.5.3: Apply Trend-Based Lot Calculation
+   double lotA, lotB;
+   CalculateTrendBasedLots(pairIndex, "SELL", baseLotA, baseLotB, lotA, lotB);
+   
    int corrType = g_pairs[pairIndex].correlationType;
    
    string comment = StringFormat("StatArb_AVG_SELL_%d", pairIndex + 1);
@@ -2698,9 +2869,10 @@ void OpenAveragingSell(int pairIndex)
    g_pairs[pairIndex].avgOrderCountSell++;
    g_pairs[pairIndex].orderCountSell++;
    
-   PrintFormat("Pair %d AVG SELL #%d opened at Z=%.2f (A:%.2f B:%.2f)", 
+   PrintFormat("Pair %d AVG SELL #%d opened at Z=%.2f (A:%.2f B:%.2f) [Mode:%s]", 
                pairIndex + 1, g_pairs[pairIndex].avgOrderCountSell, 
-               g_pairs[pairIndex].zScore, lotA, lotB);
+               g_pairs[pairIndex].zScore, lotA, lotB,
+               InpGridLotMode == GRID_LOT_BETA ? "Beta" : "ATR-Trend");
 }
 
 //+------------------------------------------------------------------+
@@ -2708,17 +2880,30 @@ void OpenAveragingSell(int pairIndex)
 //+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
-//| Open Buy Side Trade (v3.3.5 - with Lot Validation)                 |
+//| Open Buy Side Trade (v3.5.3 - with Trend-Based Lot Support)        |
 //+------------------------------------------------------------------+
 bool OpenBuySideTrade(int pairIndex)
 {
    string symbolA = g_pairs[pairIndex].symbolA;
    string symbolB = g_pairs[pairIndex].symbolB;
-   
-   // v3.3.5: Normalize lots for each symbol's volume step
-   double lotA = NormalizeLot(symbolA, g_pairs[pairIndex].lotBuyA);
-   double lotB = NormalizeLot(symbolB, g_pairs[pairIndex].lotBuyB);
    int corrType = g_pairs[pairIndex].correlationType;
+   
+   // v3.5.3: Get base lots
+   double baseLotA = g_pairs[pairIndex].lotBuyA;
+   double baseLotB = g_pairs[pairIndex].lotBuyB;
+   double lotA, lotB;
+   
+   // v3.5.3: Apply Trend-Based Lots if scope is ALL
+   if(InpGridLotScope == GRID_SCOPE_ALL && InpGridLotMode != GRID_LOT_BETA)
+   {
+      CalculateTrendBasedLots(pairIndex, "BUY", baseLotA, baseLotB, lotA, lotB);
+   }
+   else
+   {
+      // Original behavior: just normalize
+      lotA = NormalizeLot(symbolA, baseLotA);
+      lotB = NormalizeLot(symbolB, baseLotB);
+   }
    
    // v3.3.5: Validate lots are reasonable before trading
    double minReasonableLot = InpBaseLot * 0.1;  // At least 10% of Base Lot
@@ -2751,9 +2936,10 @@ bool OpenBuySideTrade(int pairIndex)
    }
    
    // v3.3.5: Always log lot details for main orders
-   PrintFormat("Pair %d OPENING BUY: lotA=%.2f lotB=%.2f (stored: A=%.2f B=%.2f, Base=%.2f)", 
+   PrintFormat("Pair %d OPENING BUY: lotA=%.2f lotB=%.2f (stored: A=%.2f B=%.2f, Base=%.2f) [Mode:%s]", 
                pairIndex + 1, lotA, lotB, 
-               g_pairs[pairIndex].lotBuyA, g_pairs[pairIndex].lotBuyB, InpBaseLot);
+               g_pairs[pairIndex].lotBuyA, g_pairs[pairIndex].lotBuyB, InpBaseLot,
+               InpGridLotMode == GRID_LOT_BETA ? "Beta" : "ATR-Trend");
    
    string comment = StringFormat("StatArb_BUY_%d", pairIndex + 1);
    
@@ -2818,17 +3004,30 @@ bool OpenBuySideTrade(int pairIndex)
 }
 
 //+------------------------------------------------------------------+
-//| Open Sell Side Trade (v3.3.5 - with Lot Validation)                |
+//| Open Sell Side Trade (v3.5.3 - with Trend-Based Lot Support)       |
 //+------------------------------------------------------------------+
 bool OpenSellSideTrade(int pairIndex)
 {
    string symbolA = g_pairs[pairIndex].symbolA;
    string symbolB = g_pairs[pairIndex].symbolB;
-   
-   // v3.3.5: Normalize lots for each symbol's volume step
-   double lotA = NormalizeLot(symbolA, g_pairs[pairIndex].lotSellA);
-   double lotB = NormalizeLot(symbolB, g_pairs[pairIndex].lotSellB);
    int corrType = g_pairs[pairIndex].correlationType;
+   
+   // v3.5.3: Get base lots
+   double baseLotA = g_pairs[pairIndex].lotSellA;
+   double baseLotB = g_pairs[pairIndex].lotSellB;
+   double lotA, lotB;
+   
+   // v3.5.3: Apply Trend-Based Lots if scope is ALL
+   if(InpGridLotScope == GRID_SCOPE_ALL && InpGridLotMode != GRID_LOT_BETA)
+   {
+      CalculateTrendBasedLots(pairIndex, "SELL", baseLotA, baseLotB, lotA, lotB);
+   }
+   else
+   {
+      // Original behavior: just normalize
+      lotA = NormalizeLot(symbolA, baseLotA);
+      lotB = NormalizeLot(symbolB, baseLotB);
+   }
    
    // v3.3.5: Validate lots are reasonable before trading
    double minReasonableLot = InpBaseLot * 0.1;  // At least 10% of Base Lot
@@ -2861,9 +3060,10 @@ bool OpenSellSideTrade(int pairIndex)
    }
    
    // v3.3.5: Always log lot details for main orders
-   PrintFormat("Pair %d OPENING SELL: lotA=%.2f lotB=%.2f (stored: A=%.2f B=%.2f, Base=%.2f)", 
+   PrintFormat("Pair %d OPENING SELL: lotA=%.2f lotB=%.2f (stored: A=%.2f B=%.2f, Base=%.2f) [Mode:%s]", 
                pairIndex + 1, lotA, lotB, 
-               g_pairs[pairIndex].lotSellA, g_pairs[pairIndex].lotSellB, InpBaseLot);
+               g_pairs[pairIndex].lotSellA, g_pairs[pairIndex].lotSellB, InpBaseLot,
+               InpGridLotMode == GRID_LOT_BETA ? "Beta" : "ATR-Trend");
    
    string comment = StringFormat("StatArb_SELL_%d", pairIndex + 1);
    
