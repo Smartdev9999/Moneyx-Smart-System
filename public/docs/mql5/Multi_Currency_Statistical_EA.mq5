@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                Multi_Currency_Statistical_EA.mq5 |
-//|                 Statistical Arbitrage (Pairs Trading) v3.6.0 HF2 |
+//|                 Statistical Arbitrage (Pairs Trading) v3.6.0 HF3 |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "3.62"
+#property version   "3.63"
 #property strict
 #property description "Statistical Arbitrage / Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
-#property description "v3.6.0 HF2: Basket Profit Target System"
+#property description "v3.6.0 HF3: Independent Per-Pair & Basket Exit Logic"
 
 #include <Trade/Trade.mqh>
 
@@ -341,8 +341,9 @@ input ENUM_TIMEFRAMES InpADXTimeframe = PERIOD_H1;      // ADX Timeframe
 input int      InpADXPeriod = 14;                       // ADX Period
 input double   InpADXMinStrength = 20.0;                // Minimum ADX for Trend Strength
 
-input group "=== Basket Target Settings (v3.6.0 HF2) ==="
-input double   InpTotalTarget = 0;              // Basket Profit Target $ (0=Disable)
+input group "=== Basket Target Settings (v3.6.0 HF3) ==="
+input double   InpTotalTarget = 0;              // Basket Closed Profit Target $ (0=Disable)
+input double   InpBasketFloatingTarget = 0;     // Basket Floating Profit Target $ (0=Disable)
 input int      InpDefaultMaxOrderBuy = 5;       // Total Max Orders Buy (Main + Grid)
 input int      InpDefaultMaxOrderSell = 5;      // Total Max Orders Sell (Main + Grid)
 input double   InpDefaultTargetBuy = 10.0;      // Default Target (Buy Side) $
@@ -630,11 +631,14 @@ datetime g_lastZScoreUpdate = 0;
 // v3.5.0: CDC Action Zone timeframe tracking
 datetime g_lastCDCUpdate = 0;
 
-// === v3.6.0 HF2: Basket Profit Target System ===
+// === v3.6.0 HF3: Basket Profit Target System ===
 double g_basketClosedProfit = 0;      // Accumulated closed profit from all pairs
 double g_basketFloatingProfit = 0;    // Current floating profit from all pairs
 double g_basketTotalProfit = 0;       // Closed + Floating = Total
 bool   g_basketTargetTriggered = false; // Flag to prevent multiple triggers in same tick
+
+// === v3.6.0 HF3: EA-Initiated Close Flag ===
+bool   g_eaClosingInProgress = false; // Flag to skip Orphan check when EA closes positions
 
 //+------------------------------------------------------------------+
 //| v3.3.0: Get Z-Score Timeframe (independent from Correlation)       |
@@ -3955,11 +3959,14 @@ bool OpenSellSideTrade(int pairIndex)
 }
 
 //+------------------------------------------------------------------+
-//| Close Buy Side Trade (v3.3.0 - with Closed Orders Count)           |
+//| Close Buy Side Trade (v3.6.0 HF3 - with EA Close Flag)             |
 //+------------------------------------------------------------------+
 bool CloseBuySide(int pairIndex)
 {
    if(g_pairs[pairIndex].directionBuy == 0) return false;
+   
+   // v3.6.0 HF3: Set flag to prevent orphan detection
+   g_eaClosingInProgress = true;
    
    bool closedA = false;
    bool closedB = false;
@@ -4051,18 +4058,26 @@ bool CloseBuySide(int pairIndex)
       g_pairs[pairIndex].lastProfitGridLotBuyB = 0;
       g_pairs[pairIndex].gridProfitZLevelBuy = 0;
       
+      // v3.6.0 HF3: Reset EA close flag
+      g_eaClosingInProgress = false;
+      
       return true;
    }
    
+   // v3.6.0 HF3: Reset EA close flag even on failure
+   g_eaClosingInProgress = false;
    return false;
 }
 
 //+------------------------------------------------------------------+
-//| Close Sell Side Trade (v3.3.0 - with Closed Orders Count)          |
+//| Close Sell Side Trade (v3.6.0 HF3 - with EA Close Flag)            |
 //+------------------------------------------------------------------+
 bool CloseSellSide(int pairIndex)
 {
    if(g_pairs[pairIndex].directionSell == 0) return false;
+   
+   // v3.6.0 HF3: Set flag to prevent orphan detection
+   g_eaClosingInProgress = true;
    
    bool closedA = false;
    bool closedB = false;
@@ -4154,9 +4169,14 @@ bool CloseSellSide(int pairIndex)
       g_pairs[pairIndex].lastProfitGridLotSellB = 0;
       g_pairs[pairIndex].gridProfitZLevelSell = 0;
       
+      // v3.6.0 HF3: Reset EA close flag
+      g_eaClosingInProgress = false;
+      
       return true;
    }
    
+   // v3.6.0 HF3: Reset EA close flag even on failure
+   g_eaClosingInProgress = false;
    return false;
 }
 
@@ -4209,10 +4229,13 @@ void CloseAveragingPositions(int pairIndex, string side)
 }
 
 //+------------------------------------------------------------------+
-//| Check for Orphan Positions (v3.3.2)                                |
+//| Check for Orphan Positions (v3.6.0 HF3 - Skip when EA closing)     |
 //+------------------------------------------------------------------+
 void CheckOrphanPositions()
 {
+   // v3.6.0 HF3: Skip orphan check if EA is closing positions intentionally
+   if(g_eaClosingInProgress) return;
+   
    for(int i = 0; i < MAX_PAIRS; i++)
    {
       if(!g_pairs[i].enabled) continue;
@@ -4688,24 +4711,44 @@ void CheckPairTargets()
 }
 
 //+------------------------------------------------------------------+
-//| Check Basket Profit Target (v3.6.0 HF2)                            |
+//| Check Basket Profit Target (v3.6.0 HF3)                            |
 //+------------------------------------------------------------------+
 void CheckTotalTarget()
 {
-   // Disable if target is 0
-   if(g_totalTarget <= 0) return;
-   
-   // v3.6.0 HF2: Calculate Basket Totals
+   // v3.6.0 HF3: Calculate Basket Totals (always calculate for dashboard)
    g_basketFloatingProfit = g_totalCurrentProfit;
    g_basketTotalProfit = g_basketClosedProfit + g_basketFloatingProfit;
    
-   // Check if Basket Target reached (based on CLOSED profit only)
-   if(g_basketClosedProfit >= g_totalTarget && !g_basketTargetTriggered)
+   // Disable if both targets are 0
+   if(g_totalTarget <= 0 && InpBasketFloatingTarget <= 0) return;
+   
+   bool shouldCloseAll = false;
+   string closeReason = "";
+   
+   // Check 1: Closed Profit Target
+   if(g_totalTarget > 0 && g_basketClosedProfit >= g_totalTarget)
+   {
+      shouldCloseAll = true;
+      closeReason = StringFormat("Closed Profit %.2f >= Target %.2f", 
+                                  g_basketClosedProfit, g_totalTarget);
+   }
+   
+   // Check 2: Floating Profit Target (NEW v3.6.0 HF3)
+   if(!shouldCloseAll && InpBasketFloatingTarget > 0 && 
+      g_basketFloatingProfit >= InpBasketFloatingTarget)
+   {
+      shouldCloseAll = true;
+      closeReason = StringFormat("Floating Profit %.2f >= Target %.2f", 
+                                  g_basketFloatingProfit, InpBasketFloatingTarget);
+   }
+   
+   // Execute close if any condition met
+   if(shouldCloseAll && !g_basketTargetTriggered)
    {
       g_basketTargetTriggered = true;
+      g_eaClosingInProgress = true;  // v3.6.0 HF3: Prevent Orphan Detection
       
-      PrintFormat(">>> BASKET TARGET REACHED: Closed %.2f >= Target %.2f <<<",
-                  g_basketClosedProfit, g_totalTarget);
+      PrintFormat(">>> BASKET TARGET REACHED: %s <<<", closeReason);
       PrintFormat(">>> Closing ALL positions and resetting basket... <<<");
       
       // Close ALL open positions across all pairs
@@ -4725,13 +4768,15 @@ void CheckTotalTarget()
          }
       }
       
+      g_eaClosingInProgress = false; // v3.6.0 HF3: Reset flag
+      
       // Reset Basket after all positions closed
       ResetBasketProfit();
    }
 }
 
 //+------------------------------------------------------------------+
-//| Reset Basket Profit (v3.6.0 HF2)                                   |
+//| Reset Basket Profit (v3.6.0 HF3)                                   |
 //+------------------------------------------------------------------+
 void ResetBasketProfit()
 {
