@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                Multi_Currency_Statistical_EA.mq5 |
-//|                 Statistical Arbitrage (Pairs Trading) v3.4.0     |
+//|                 Statistical Arbitrage (Pairs Trading) v3.5.0     |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "3.40"
+#property version   "3.50"
 #property strict
 #property description "Statistical Arbitrage / Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
-#property description "v3.4.0: RSI on Spread Momentum Filter (Zone-Based)"
+#property description "v3.5.0: CDC Action Zone Trend Filter"
 
 #include <Trade/Trade.mqh>
 
@@ -103,6 +103,14 @@ struct PairInfo
    // === v3.4.0: RSI on Spread ===
    double         rsiSpread;         // Current RSI of Spread (0-100)
    
+   // === v3.5.0: CDC Action Zone Trend Filter ===
+   string         cdcTrendA;         // CDC Trend for Symbol A ("BULLISH", "BEARISH", "NEUTRAL")
+   string         cdcTrendB;         // CDC Trend for Symbol B ("BULLISH", "BEARISH", "NEUTRAL")
+   double         cdcFastA;          // CDC Fast EMA value for Symbol A
+   double         cdcSlowA;          // CDC Slow EMA value for Symbol A
+   double         cdcFastB;          // CDC Fast EMA value for Symbol B
+   double         cdcSlowB;          // CDC Slow EMA value for Symbol B
+   
    // === Combined ===
    double         totalPairProfit;   // profitBuy + profitSell
 };
@@ -177,6 +185,13 @@ input bool     InpUseRSISpreadFilter = false;   // Enable RSI on Spread Filter
 input int      InpRSISpreadPeriod = 14;         // RSI Period for Spread
 input double   InpRSIOverbought = 70.0;         // RSI Overbought Level (SELL Zone)
 input double   InpRSIOversold = 30.0;           // RSI Oversold Level (BUY Zone)
+
+input group "=== CDC Action Zone Trend Filter (v3.5.0) ==="
+input bool     InpUseCDCTrendFilter = false;    // Enable CDC Trend Filter
+input ENUM_TIMEFRAMES InpCDCTimeframe = PERIOD_D1;  // CDC Timeframe (D1 recommended)
+input int      InpCDCFastPeriod = 12;           // CDC Fast EMA Period
+input int      InpCDCSlowPeriod = 26;           // CDC Slow EMA Period
+input bool     InpRequireStrongTrend = false;   // Require Crossover (not just position)
 
 input group "=== Z-Score Timeframe Settings (v3.3.0) ==="
 input ENUM_TIMEFRAMES InpZScoreTimeframe = PERIOD_CURRENT;  // Z-Score Timeframe (CURRENT = use Correlation TF)
@@ -495,6 +510,9 @@ int g_tickCounter = 0;
 // v3.3.0: Separate Z-Score timeframe tracking
 datetime g_lastZScoreUpdate = 0;
 
+// v3.5.0: CDC Action Zone timeframe tracking
+datetime g_lastCDCUpdate = 0;
+
 //+------------------------------------------------------------------+
 //| v3.3.0: Get Z-Score Timeframe (independent from Correlation)       |
 //+------------------------------------------------------------------+
@@ -679,7 +697,7 @@ int OnInit()
       CreateDashboard();
    }
    
-   PrintFormat("=== Statistical Arbitrage EA v3.4.0 Initialized - %d Active Pairs ===", g_activePairs);
+   PrintFormat("=== Statistical Arbitrage EA v3.5.0 Initialized - %d Active Pairs ===", g_activePairs);
    return(INIT_SUCCEEDED);
 }
 
@@ -907,6 +925,14 @@ void SetupPair(int index, bool enabled, string symbolA, string symbolB)
    // v3.4.0: RSI on Spread
    g_pairs[index].rsiSpread = 50;  // Neutral default
    
+   // v3.5.0: CDC Action Zone Trend Filter
+   g_pairs[index].cdcTrendA = "NEUTRAL";
+   g_pairs[index].cdcTrendB = "NEUTRAL";
+   g_pairs[index].cdcFastA = 0;
+   g_pairs[index].cdcSlowA = 0;
+   g_pairs[index].cdcFastB = 0;
+   g_pairs[index].cdcSlowB = 0;
+   
    // Combined
    g_pairs[index].totalPairProfit = 0;
    
@@ -1012,6 +1038,16 @@ void OnTick()
       
       // v3.4.0: Calculate RSI on Spread after Z-Score data is updated
       CalculateAllRSIonSpread();
+   }
+   
+   // v3.5.0: Update CDC Trend Data on new CDC timeframe candle
+   datetime cdcCandleTime = iTime(_Symbol, InpCDCTimeframe, 0);
+   bool newCandleCDC = (cdcCandleTime != g_lastCDCUpdate);
+   
+   if(newCandleCDC)
+   {
+      g_lastCDCUpdate = cdcCandleTime;
+      UpdateAllPairsCDC();
    }
    
    // v3.2.7: Check for auto-resume after DD
@@ -2028,11 +2064,190 @@ bool CheckRSIEntryConfirmation(int pairIndex, string side)
 }
 
 //+------------------------------------------------------------------+
-//| ================ SIGNAL ENGINE (v3.4.0) ================           |
+//| ================ CDC ACTION ZONE (v3.5.0) ================         |
 //+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
-//| Analyze All Pairs for Trading Signals (v3.4.0)                     |
+//| Calculate EMA for CDC (v3.5.0)                                     |
+//+------------------------------------------------------------------+
+void CalculateCDC_EMA(double &src[], double &result[], int period, int size)
+{
+   if(size < period) return;
+   
+   double multiplier = 2.0 / (period + 1);
+   
+   // Initial SMA
+   double sum = 0;
+   for(int i = size - period; i < size; i++)
+      sum += src[i];
+   result[size - 1] = sum / period;
+   
+   // EMA calculation from oldest to newest
+   for(int i = size - 2; i >= 0; i--)
+      result[i] = (src[i] - result[i + 1]) * multiplier + result[i + 1];
+}
+
+//+------------------------------------------------------------------+
+//| Calculate CDC Action Zone for Single Symbol (v3.5.0)               |
+//+------------------------------------------------------------------+
+void CalculateCDCForSymbol(string symbol, string &trend, double &fastEMA, double &slowEMA)
+{
+   trend = "NEUTRAL";
+   fastEMA = 0;
+   slowEMA = 0;
+   
+   double closeArr[], highArr[], lowArr[], openArr[];
+   ArraySetAsSeries(closeArr, true);
+   ArraySetAsSeries(highArr, true);
+   ArraySetAsSeries(lowArr, true);
+   ArraySetAsSeries(openArr, true);
+   
+   int barsNeeded = InpCDCSlowPeriod * 3 + 50;
+   
+   if(CopyClose(symbol, InpCDCTimeframe, 0, barsNeeded, closeArr) < barsNeeded) return;
+   if(CopyHigh(symbol, InpCDCTimeframe, 0, barsNeeded, highArr) < barsNeeded) return;
+   if(CopyLow(symbol, InpCDCTimeframe, 0, barsNeeded, lowArr) < barsNeeded) return;
+   if(CopyOpen(symbol, InpCDCTimeframe, 0, barsNeeded, openArr) < barsNeeded) return;
+   
+   // Calculate OHLC4
+   double ohlc4[];
+   ArrayResize(ohlc4, barsNeeded);
+   for(int i = 0; i < barsNeeded; i++)
+      ohlc4[i] = (openArr[i] + highArr[i] + lowArr[i] + closeArr[i]) / 4.0;
+   
+   // Calculate AP (Smoothed OHLC4 with EMA2)
+   double ap[];
+   ArrayResize(ap, barsNeeded);
+   CalculateCDC_EMA(ohlc4, ap, 2, barsNeeded);
+   
+   // Calculate Fast & Slow EMA
+   double fast[], slow[];
+   ArrayResize(fast, barsNeeded);
+   ArrayResize(slow, barsNeeded);
+   CalculateCDC_EMA(ap, fast, InpCDCFastPeriod, barsNeeded);
+   CalculateCDC_EMA(ap, slow, InpCDCSlowPeriod, barsNeeded);
+   
+   fastEMA = fast[0];
+   slowEMA = slow[0];
+   
+   // Determine Trend
+   if(InpRequireStrongTrend)
+   {
+      // Require actual crossover
+      bool crossUp = (fast[1] <= slow[1] && fast[0] > slow[0]);
+      bool crossDown = (fast[1] >= slow[1] && fast[0] < slow[0]);
+      
+      if(crossUp) trend = "BULLISH";
+      else if(crossDown) trend = "BEARISH";
+   }
+   else
+   {
+      // Just check relative position
+      if(fast[0] > slow[0]) trend = "BULLISH";
+      else if(fast[0] < slow[0]) trend = "BEARISH";
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Update CDC Trend Data for Single Pair (v3.5.0)                     |
+//+------------------------------------------------------------------+
+void UpdateCDCForPair(int pairIndex)
+{
+   if(!InpUseCDCTrendFilter) return;
+   if(!g_pairs[pairIndex].enabled) return;
+   
+   CalculateCDCForSymbol(
+      g_pairs[pairIndex].symbolA,
+      g_pairs[pairIndex].cdcTrendA,
+      g_pairs[pairIndex].cdcFastA,
+      g_pairs[pairIndex].cdcSlowA
+   );
+   
+   CalculateCDCForSymbol(
+      g_pairs[pairIndex].symbolB,
+      g_pairs[pairIndex].cdcTrendB,
+      g_pairs[pairIndex].cdcFastB,
+      g_pairs[pairIndex].cdcSlowB
+   );
+}
+
+//+------------------------------------------------------------------+
+//| Update CDC for All Enabled Pairs (v3.5.0)                          |
+//+------------------------------------------------------------------+
+void UpdateAllPairsCDC()
+{
+   if(!InpUseCDCTrendFilter) return;
+   
+   for(int i = 0; i < MAX_PAIRS; i++)
+   {
+      if(g_pairs[i].enabled)
+         UpdateCDCForPair(i);
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Check CDC Trend Confirmation for Entry (v3.5.0)                    |
+//| Logic:                                                             |
+//|   - Positive Correlation: Both symbols SAME trend                  |
+//|   - Negative Correlation: Both symbols OPPOSITE trend              |
+//+------------------------------------------------------------------+
+bool CheckCDCTrendConfirmation(int pairIndex, string side)
+{
+   // If filter is disabled, always confirm
+   if(!InpUseCDCTrendFilter) return true;
+   
+   string trendA = g_pairs[pairIndex].cdcTrendA;
+   string trendB = g_pairs[pairIndex].cdcTrendB;
+   int corrType = g_pairs[pairIndex].correlationType;
+   
+   // Skip if either trend is NEUTRAL
+   if(trendA == "NEUTRAL" || trendB == "NEUTRAL")
+   {
+      if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
+         PrintFormat("CDC: Pair %d skipped - NEUTRAL trend (A:%s B:%s)", 
+                     pairIndex + 1, trendA, trendB);
+      return false;
+   }
+   
+   bool sameTrend = (trendA == trendB);
+   bool oppositeTrend = (trendA != trendB);
+   
+   if(corrType == 1)  // Positive Correlation
+   {
+      // Require SAME trend for both symbols
+      if(!sameTrend)
+      {
+         if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
+            PrintFormat("CDC BLOCK: Pair %d (Pos Corr) - Trends differ (A:%s B:%s)", 
+                        pairIndex + 1, trendA, trendB);
+         return false;
+      }
+   }
+   else  // Negative Correlation (corrType == -1)
+   {
+      // Require OPPOSITE trends
+      if(!oppositeTrend)
+      {
+         if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
+            PrintFormat("CDC BLOCK: Pair %d (Neg Corr) - Trends same (A:%s B:%s)", 
+                        pairIndex + 1, trendA, trendB);
+         return false;
+      }
+   }
+   
+   if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
+      PrintFormat("CDC CONFIRM: Pair %d - A:%s B:%s (CorrType:%d)", 
+                  pairIndex + 1, trendA, trendB, corrType);
+   
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| ================ SIGNAL ENGINE (v3.5.0) ================           |
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//| Analyze All Pairs for Trading Signals (v3.5.0)                     |
 //+------------------------------------------------------------------+
 void AnalyzeAllPairs()
 {
@@ -2050,6 +2265,7 @@ void AnalyzeAllPairs()
       // Condition: directionBuy == -1 (Ready) AND Z-Score < -EntryThreshold
       // v3.3.0: Use maxOrderBuy as total limit (Main + Grid)
       // v3.4.0: Added RSI on Spread confirmation
+      // v3.5.0: Added CDC Trend confirmation
       if(g_pairs[i].directionBuy == -1 && g_pairs[i].orderCountBuy < g_pairs[i].maxOrderBuy)
       {
          if(zScore < -InpEntryZScore)
@@ -2057,14 +2273,18 @@ void AnalyzeAllPairs()
             // v3.4.0: Check RSI Entry Confirmation (BUY = RSI in Oversold zone)
             if(CheckRSIEntryConfirmation(i, "BUY"))
             {
-               if(OpenBuySideTrade(i))
+               // v3.5.0: Check CDC Trend Confirmation
+               if(CheckCDCTrendConfirmation(i, "BUY"))
                {
-                  g_pairs[i].directionBuy = 1;  // Active trade
-                  // v3.2.7: Store entry Z-Score for averaging
-                  g_pairs[i].entryZScoreBuy = zScore;
-                  g_pairs[i].lastAvgPriceBuy = SymbolInfoDouble(g_pairs[i].symbolA, SYMBOL_ASK);
-                  // v3.2.9: Set flag to prevent averaging in same tick
-                  g_pairs[i].justOpenedMainBuy = true;
+                  if(OpenBuySideTrade(i))
+                  {
+                     g_pairs[i].directionBuy = 1;  // Active trade
+                     // v3.2.7: Store entry Z-Score for averaging
+                     g_pairs[i].entryZScoreBuy = zScore;
+                     g_pairs[i].lastAvgPriceBuy = SymbolInfoDouble(g_pairs[i].symbolA, SYMBOL_ASK);
+                     // v3.2.9: Set flag to prevent averaging in same tick
+                     g_pairs[i].justOpenedMainBuy = true;
+                  }
                }
             }
          }
@@ -2074,6 +2294,7 @@ void AnalyzeAllPairs()
       // Condition: directionSell == -1 (Ready) AND Z-Score > +EntryThreshold
       // v3.3.0: Use maxOrderSell as total limit (Main + Grid)
       // v3.4.0: Added RSI on Spread confirmation
+      // v3.5.0: Added CDC Trend confirmation
       if(g_pairs[i].directionSell == -1 && g_pairs[i].orderCountSell < g_pairs[i].maxOrderSell)
       {
          if(zScore > InpEntryZScore)
@@ -2081,14 +2302,18 @@ void AnalyzeAllPairs()
             // v3.4.0: Check RSI Entry Confirmation (SELL = RSI in Overbought zone)
             if(CheckRSIEntryConfirmation(i, "SELL"))
             {
-               if(OpenSellSideTrade(i))
+               // v3.5.0: Check CDC Trend Confirmation
+               if(CheckCDCTrendConfirmation(i, "SELL"))
                {
-                  g_pairs[i].directionSell = 1;  // Active trade
-                  // v3.2.7: Store entry Z-Score for averaging
-                  g_pairs[i].entryZScoreSell = zScore;
-                  g_pairs[i].lastAvgPriceSell = SymbolInfoDouble(g_pairs[i].symbolA, SYMBOL_BID);
-                  // v3.2.9: Set flag to prevent averaging in same tick
-                  g_pairs[i].justOpenedMainSell = true;
+                  if(OpenSellSideTrade(i))
+                  {
+                     g_pairs[i].directionSell = 1;  // Active trade
+                     // v3.2.7: Store entry Z-Score for averaging
+                     g_pairs[i].entryZScoreSell = zScore;
+                     g_pairs[i].lastAvgPriceSell = SymbolInfoDouble(g_pairs[i].symbolA, SYMBOL_BID);
+                     // v3.2.9: Set flag to prevent averaging in same tick
+                     g_pairs[i].justOpenedMainSell = true;
+                  }
                }
             }
          }
