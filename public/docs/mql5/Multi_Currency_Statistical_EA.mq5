@@ -4739,20 +4739,22 @@ void CheckTotalTarget()
    bool shouldCloseAll = false;
    string closeReason = "";
    
-   // Check 1: Closed Profit Target
-   if(g_totalTarget > 0 && g_basketClosedProfit >= g_totalTarget)
+   // Check 1: TOTAL Profit Target (Closed + Floating) - v3.6.0 HF3 Patch 2
+   // This is the main basket target check - closes when combined profit reaches target
+   if(g_totalTarget > 0 && g_basketTotalProfit >= g_totalTarget)
    {
       shouldCloseAll = true;
-      closeReason = StringFormat("Closed Profit %.2f >= Target %.2f", 
-                                  g_basketClosedProfit, g_totalTarget);
+      closeReason = StringFormat("Total Profit %.2f (Closed: %.2f + Floating: %.2f) >= Target %.2f", 
+                                  g_basketTotalProfit, g_basketClosedProfit, g_basketFloatingProfit, g_totalTarget);
    }
    
-   // Check 2: Floating Profit Target (NEW v3.6.0 HF3)
+   // Check 2: Floating-Only Profit Target (Optional - for special use cases)
+   // This triggers ONLY on floating profit, ignoring accumulated closed profit
    if(!shouldCloseAll && InpBasketFloatingTarget > 0 && 
       g_basketFloatingProfit >= InpBasketFloatingTarget)
    {
       shouldCloseAll = true;
-      closeReason = StringFormat("Floating Profit %.2f >= Target %.2f", 
+      closeReason = StringFormat("Floating Only %.2f >= Target %.2f", 
                                   g_basketFloatingProfit, InpBasketFloatingTarget);
    }
    
