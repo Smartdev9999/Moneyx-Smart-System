@@ -4015,10 +4015,14 @@ bool CloseBuySide(int pairIndex)
       // v3.2.9: Accumulate closed P/L before reset
       g_pairs[pairIndex].closedProfitBuy += g_pairs[pairIndex].profitBuy;
       
-      // v3.6.0 HF2: Add to Basket Closed Profit
-      g_basketClosedProfit += g_pairs[pairIndex].profitBuy;
-      PrintFormat("BASKET: Added %.2f from Pair %d BUY | Total Closed: %.2f | Target: %.2f",
-                  g_pairs[pairIndex].profitBuy, pairIndex + 1, g_basketClosedProfit, g_totalTarget);
+      // v3.6.0 HF3 Patch: Only add to basket if NOT in Basket Close mode
+      // (Basket mode closes all at once and resets - avoid double counting)
+      if(!g_eaClosingInProgress)
+      {
+         g_basketClosedProfit += g_pairs[pairIndex].profitBuy;
+         PrintFormat("BASKET: Added %.2f from Pair %d BUY | Total Closed: %.2f | Target: %.2f",
+                     g_pairs[pairIndex].profitBuy, pairIndex + 1, g_basketClosedProfit, g_totalTarget);
+      }
       
       // Update statistics before reset
       g_dailyProfit += g_pairs[pairIndex].profitBuy;
@@ -4126,10 +4130,14 @@ bool CloseSellSide(int pairIndex)
       // v3.2.9: Accumulate closed P/L before reset
       g_pairs[pairIndex].closedProfitSell += g_pairs[pairIndex].profitSell;
       
-      // v3.6.0 HF2: Add to Basket Closed Profit
-      g_basketClosedProfit += g_pairs[pairIndex].profitSell;
-      PrintFormat("BASKET: Added %.2f from Pair %d SELL | Total Closed: %.2f | Target: %.2f",
-                  g_pairs[pairIndex].profitSell, pairIndex + 1, g_basketClosedProfit, g_totalTarget);
+      // v3.6.0 HF3 Patch: Only add to basket if NOT in Basket Close mode
+      // (Basket mode closes all at once and resets - avoid double counting)
+      if(!g_eaClosingInProgress)
+      {
+         g_basketClosedProfit += g_pairs[pairIndex].profitSell;
+         PrintFormat("BASKET: Added %.2f from Pair %d SELL | Total Closed: %.2f | Target: %.2f",
+                     g_pairs[pairIndex].profitSell, pairIndex + 1, g_basketClosedProfit, g_totalTarget);
+      }
       
       // Update statistics before reset
       g_dailyProfit += g_pairs[pairIndex].profitSell;
@@ -4313,8 +4321,11 @@ void ForceCloseBuySide(int pairIndex)
    // v3.2.9: Accumulate closed P/L before reset
    g_pairs[pairIndex].closedProfitBuy += g_pairs[pairIndex].profitBuy;
    
-   // v3.6.0 HF2: Add to Basket Closed Profit
-   g_basketClosedProfit += g_pairs[pairIndex].profitBuy;
+   // v3.6.0 HF3 Patch: Only add to basket if NOT in Basket Close mode
+   if(!g_eaClosingInProgress)
+   {
+      g_basketClosedProfit += g_pairs[pairIndex].profitBuy;
+   }
    
    // Update statistics before reset
    g_dailyProfit += g_pairs[pairIndex].profitBuy;
@@ -4380,8 +4391,11 @@ void ForceCloseSellSide(int pairIndex)
    // v3.2.9: Accumulate closed P/L before reset
    g_pairs[pairIndex].closedProfitSell += g_pairs[pairIndex].profitSell;
    
-   // v3.6.0 HF2: Add to Basket Closed Profit
-   g_basketClosedProfit += g_pairs[pairIndex].profitSell;
+   // v3.6.0 HF3 Patch: Only add to basket if NOT in Basket Close mode
+   if(!g_eaClosingInProgress)
+   {
+      g_basketClosedProfit += g_pairs[pairIndex].profitSell;
+   }
    
    // Update statistics before reset
    g_dailyProfit += g_pairs[pairIndex].profitSell;
