@@ -637,8 +637,9 @@ double g_basketFloatingProfit = 0;    // Current floating profit from all pairs
 double g_basketTotalProfit = 0;       // Closed + Floating = Total
 bool   g_basketTargetTriggered = false; // Flag to prevent multiple triggers in same tick
 
-// === v3.6.0 HF3: EA-Initiated Close Flag ===
-bool   g_eaClosingInProgress = false; // Flag to skip Orphan check when EA closes positions
+// === v3.6.0 HF3 Patch 3: Separate Flags for Different Purposes ===
+bool   g_orphanCheckPaused = false;   // Pause orphan check during any position closing operation
+bool   g_basketCloseMode = false;     // TRUE when Basket is closing all (don't accumulate to basket)
 
 //+------------------------------------------------------------------+
 //| v3.3.0: Get Z-Score Timeframe (independent from Correlation)       |
@@ -3965,8 +3966,8 @@ bool CloseBuySide(int pairIndex)
 {
    if(g_pairs[pairIndex].directionBuy == 0) return false;
    
-   // v3.6.0 HF3: Set flag to prevent orphan detection
-   g_eaClosingInProgress = true;
+   // v3.6.0 HF3 Patch 3: Pause orphan detection during close
+   g_orphanCheckPaused = true;
    
    bool closedA = false;
    bool closedB = false;
@@ -4015,9 +4016,9 @@ bool CloseBuySide(int pairIndex)
       // v3.2.9: Accumulate closed P/L before reset
       g_pairs[pairIndex].closedProfitBuy += g_pairs[pairIndex].profitBuy;
       
-      // v3.6.0 HF3 Patch: Only add to basket if NOT in Basket Close mode
+      // v3.6.0 HF3 Patch 3: Only add to basket if NOT in Basket Close mode
       // (Basket mode closes all at once and resets - avoid double counting)
-      if(!g_eaClosingInProgress)
+      if(!g_basketCloseMode)
       {
          g_basketClosedProfit += g_pairs[pairIndex].profitBuy;
          PrintFormat("BASKET: Added %.2f from Pair %d BUY | Total Closed: %.2f | Target: %.2f",
@@ -4062,14 +4063,14 @@ bool CloseBuySide(int pairIndex)
       g_pairs[pairIndex].lastProfitGridLotBuyB = 0;
       g_pairs[pairIndex].gridProfitZLevelBuy = 0;
       
-      // v3.6.0 HF3: Reset EA close flag
-      g_eaClosingInProgress = false;
+      // v3.6.0 HF3 Patch 3: Resume orphan detection
+      g_orphanCheckPaused = false;
       
       return true;
    }
    
-   // v3.6.0 HF3: Reset EA close flag even on failure
-   g_eaClosingInProgress = false;
+   // v3.6.0 HF3 Patch 3: Resume orphan detection even on failure
+   g_orphanCheckPaused = false;
    return false;
 }
 
@@ -4080,8 +4081,8 @@ bool CloseSellSide(int pairIndex)
 {
    if(g_pairs[pairIndex].directionSell == 0) return false;
    
-   // v3.6.0 HF3: Set flag to prevent orphan detection
-   g_eaClosingInProgress = true;
+   // v3.6.0 HF3 Patch 3: Pause orphan detection during close
+   g_orphanCheckPaused = true;
    
    bool closedA = false;
    bool closedB = false;
@@ -4130,9 +4131,9 @@ bool CloseSellSide(int pairIndex)
       // v3.2.9: Accumulate closed P/L before reset
       g_pairs[pairIndex].closedProfitSell += g_pairs[pairIndex].profitSell;
       
-      // v3.6.0 HF3 Patch: Only add to basket if NOT in Basket Close mode
+      // v3.6.0 HF3 Patch 3: Only add to basket if NOT in Basket Close mode
       // (Basket mode closes all at once and resets - avoid double counting)
-      if(!g_eaClosingInProgress)
+      if(!g_basketCloseMode)
       {
          g_basketClosedProfit += g_pairs[pairIndex].profitSell;
          PrintFormat("BASKET: Added %.2f from Pair %d SELL | Total Closed: %.2f | Target: %.2f",
@@ -4177,14 +4178,14 @@ bool CloseSellSide(int pairIndex)
       g_pairs[pairIndex].lastProfitGridLotSellB = 0;
       g_pairs[pairIndex].gridProfitZLevelSell = 0;
       
-      // v3.6.0 HF3: Reset EA close flag
-      g_eaClosingInProgress = false;
+      // v3.6.0 HF3 Patch 3: Resume orphan detection
+      g_orphanCheckPaused = false;
       
       return true;
    }
    
-   // v3.6.0 HF3: Reset EA close flag even on failure
-   g_eaClosingInProgress = false;
+   // v3.6.0 HF3 Patch 3: Resume orphan detection even on failure
+   g_orphanCheckPaused = false;
    return false;
 }
 
@@ -4241,8 +4242,8 @@ void CloseAveragingPositions(int pairIndex, string side)
 //+------------------------------------------------------------------+
 void CheckOrphanPositions()
 {
-   // v3.6.0 HF3: Skip orphan check if EA is closing positions intentionally
-   if(g_eaClosingInProgress) return;
+   // v3.6.0 HF3 Patch 3: Skip orphan check if EA is closing positions
+   if(g_orphanCheckPaused) return;
    
    for(int i = 0; i < MAX_PAIRS; i++)
    {
@@ -4321,8 +4322,8 @@ void ForceCloseBuySide(int pairIndex)
    // v3.2.9: Accumulate closed P/L before reset
    g_pairs[pairIndex].closedProfitBuy += g_pairs[pairIndex].profitBuy;
    
-   // v3.6.0 HF3 Patch: Only add to basket if NOT in Basket Close mode
-   if(!g_eaClosingInProgress)
+   // v3.6.0 HF3 Patch 3: Only add to basket if NOT in Basket Close mode
+   if(!g_basketCloseMode)
    {
       g_basketClosedProfit += g_pairs[pairIndex].profitBuy;
    }
@@ -4391,8 +4392,8 @@ void ForceCloseSellSide(int pairIndex)
    // v3.2.9: Accumulate closed P/L before reset
    g_pairs[pairIndex].closedProfitSell += g_pairs[pairIndex].profitSell;
    
-   // v3.6.0 HF3 Patch: Only add to basket if NOT in Basket Close mode
-   if(!g_eaClosingInProgress)
+   // v3.6.0 HF3 Patch 3: Only add to basket if NOT in Basket Close mode
+   if(!g_basketCloseMode)
    {
       g_basketClosedProfit += g_pairs[pairIndex].profitSell;
    }
@@ -4762,7 +4763,8 @@ void CheckTotalTarget()
    if(shouldCloseAll && !g_basketTargetTriggered)
    {
       g_basketTargetTriggered = true;
-      g_eaClosingInProgress = true;  // v3.6.0 HF3: Prevent Orphan Detection
+      g_basketCloseMode = true;      // v3.6.0 HF3 Patch 3: Mark as basket close (don't accumulate)
+      g_orphanCheckPaused = true;    // v3.6.0 HF3 Patch 3: Prevent Orphan Detection
       
       PrintFormat(">>> BASKET TARGET REACHED: %s <<<", closeReason);
       PrintFormat(">>> Closing ALL positions and resetting basket... <<<");
@@ -4784,7 +4786,8 @@ void CheckTotalTarget()
          }
       }
       
-      g_eaClosingInProgress = false; // v3.6.0 HF3: Reset flag
+      g_basketCloseMode = false;     // v3.6.0 HF3 Patch 3: Reset basket mode
+      g_orphanCheckPaused = false;   // v3.6.0 HF3 Patch 3: Resume orphan detection
       
       // Reset Basket after all positions closed
       ResetBasketProfit();
