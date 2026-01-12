@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                Multi_Currency_Statistical_EA.mq5 |
-//|                 Statistical Arbitrage (Pairs Trading) v3.6.0 HF3 |
+//|                 Statistical Arbitrage (Pairs Trading) v3.6.0 HF4 |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "3.63"
+#property version   "3.64"
 #property strict
 #property description "Statistical Arbitrage / Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
-#property description "v3.6.0 HF3: Independent Per-Pair & Basket Exit Logic"
+#property description "v3.6.0 HF4: Dashboard Improvements & Basket Accumulation Fix"
 
 #include <Trade/Trade.mqh>
 
