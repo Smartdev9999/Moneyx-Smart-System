@@ -4,11 +4,11 @@
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "3.69"
+#property version   "3.70"
 #property strict
 #property description "Statistical Arbitrage / Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
-#property description "v3.6.9: Fixed CDC ArraySetAsSeries bug + corrected EMA index access"
+#property description "v3.7.0: Fixed CDC to match Moneyx Smart System (ArraySetAsSeries=true, use index 0)"
 
 #include <Trade/Trade.mqh>
 
@@ -2995,11 +2995,11 @@ void CalculateCDCForSymbol(string symbol, string &trend, double &fastEMA, double
    }
    
    double closeArr[], highArr[], lowArr[], openArr[];
-   // DO NOT set as series - CalculateCDC_EMA expects oldest first (index 0 = oldest)
-   ArraySetAsSeries(closeArr, false);
-   ArraySetAsSeries(highArr, false);
-   ArraySetAsSeries(lowArr, false);
-   ArraySetAsSeries(openArr, false);
+   // Set as series - index 0 = newest (matches Moneyx Smart System / CalculateCDC_EMA design)
+   ArraySetAsSeries(closeArr, true);
+   ArraySetAsSeries(highArr, true);
+   ArraySetAsSeries(lowArr, true);
+   ArraySetAsSeries(openArr, true);
    
    int barsNeeded = InpCDCSlowPeriod * 3 + 50;
    int minBarsRequired = InpCDCSlowPeriod + 10;  // Minimum bars needed for calculation
@@ -3054,20 +3054,9 @@ void CalculateCDCForSymbol(string symbol, string &trend, double &fastEMA, double
    CalculateCDC_EMA(ap, fast, InpCDCFastPeriod, actualBars);
    CalculateCDC_EMA(ap, slow, InpCDCSlowPeriod, actualBars);
    
-   // Non-series array: index 0 = oldest, last index = newest
-   int newestIdx = actualBars - 1;
-   int prevIdx = actualBars - 2;
-   
-   // Safety check
-   if(newestIdx < 0 || prevIdx < 0)
-   {
-      if(InpDebugMode)
-         Print("[CDC] ", symbol, ": Not enough bars after calculation");
-      return;
-   }
-   
-   fastEMA = fast[newestIdx];
-   slowEMA = slow[newestIdx];
+   // Series array: index 0 = newest, index 1 = previous (same as Moneyx Smart System)
+   fastEMA = fast[0];
+   slowEMA = slow[0];
    
    // Validate EMA values
    if(fastEMA == 0 || slowEMA == 0)
@@ -3077,25 +3066,30 @@ void CalculateCDCForSymbol(string symbol, string &trend, double &fastEMA, double
       return;
    }
    
-   // Determine Trend
+   // Get previous values for crossover detection
+   double fastPrev = fast[1];
+   double slowPrev = slow[1];
+   
+   // Determine Trend (same logic as Moneyx Smart System)
    if(InpRequireStrongTrend)
    {
       // Require actual crossover
-      bool crossUp = (fast[prevIdx] <= slow[prevIdx] && fast[newestIdx] > slow[newestIdx]);
-      bool crossDown = (fast[prevIdx] >= slow[prevIdx] && fast[newestIdx] < slow[newestIdx]);
+      bool crossUp = (fastPrev <= slowPrev && fastEMA > slowEMA);
+      bool crossDown = (fastPrev >= slowPrev && fastEMA < slowEMA);
       
       if(crossUp) trend = "BULLISH";
       else if(crossDown) trend = "BEARISH";
    }
    else
    {
-      // Just check relative position
-      if(fast[newestIdx] > slow[newestIdx]) trend = "BULLISH";
-      else if(fast[newestIdx] < slow[newestIdx]) trend = "BEARISH";
+      // Just check relative position (matches Moneyx Smart System)
+      if(fastEMA > slowEMA) trend = "BULLISH";
+      else if(fastEMA < slowEMA) trend = "BEARISH";
    }
    
    // Always log CDC result for debugging
-   PrintFormat("[CDC] %s: %s (Fast: %.5f, Slow: %.5f, Bars: %d)", symbol, trend, fastEMA, slowEMA, actualBars);
+   PrintFormat("[CDC] %s: %s (Fast: %.5f, Slow: %.5f, FastPrev: %.5f, SlowPrev: %.5f, Bars: %d)", 
+               symbol, trend, fastEMA, slowEMA, fastPrev, slowPrev, actualBars);
 }
 
 //+------------------------------------------------------------------+
