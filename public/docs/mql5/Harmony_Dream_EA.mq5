@@ -435,9 +435,6 @@ input double   InpGroup1TargetBuy = 10.0;       // Default Target (Buy Side) $
 input double   InpGroup1TargetSell = 10.0;      // Default Target (Sell Side) $
 
 input group "=== Pair 6-10 Configuration ==="
-input string   InpPair5_SymbolB = "USDCHF";     // Pair 5: Symbol B
-
-input group "=== Pair 6-10 Configuration ==="
 input bool     InpEnablePair6 = false;          // Enable Pair 6
 input string   InpPair6_SymbolA = "EURUSD";     // Pair 6: Symbol A
 input string   InpPair6_SymbolB = "USDJPY";     // Pair 6: Symbol B
@@ -2171,7 +2168,7 @@ int JsonGetInt(string json, string key)
    while(valueStart < StringLen(json))
    {
       ushort ch = StringGetCharacter(json, valueStart);
-      if(ch >= '0' && ch <= '9' || ch == '-')
+      if((ch >= '0' && ch <= '9') || ch == '-')
          valueStr += ShortToString(ch);
       else
          break;
@@ -6411,6 +6408,10 @@ void CreateDashboard()
    int centerX = buyStartX + buyWidth + 5;
    int sellStartX = centerX + centerWidth + 5;
    
+   // v1.1: Group Info Column
+   int groupInfoWidth = 115;
+   int groupInfoX = sellStartX + sellWidth + 5;
+   
    // ===== MAIN SECTION HEADERS =====
    // Buy Header - text centered vertically
    CreateRectangle(prefix + "HDR_BUY", buyStartX, headerY + 3, buyWidth, headerHeight, COLOR_HEADER_BUY, COLOR_HEADER_BUY);
@@ -6424,10 +6425,16 @@ void CreateDashboard()
    CreateRectangle(prefix + "HDR_SELL", sellStartX, headerY + 3, sellWidth, headerHeight, COLOR_HEADER_SELL, COLOR_HEADER_SELL);
    CreateLabel(prefix + "HDR_SELL_TXT", sellStartX + 165, headerY + 8, "SELL DATA", COLOR_HEADER_TXT, 10, "Arial Bold");
    
+   // v1.1: Group Info Header
+   CreateRectangle(prefix + "HDR_GROUP", groupInfoX, headerY + 3, groupInfoWidth, headerHeight, C'60,40,80', C'60,40,80');
+   CreateLabel(prefix + "HDR_GROUP_TXT", groupInfoX + 15, headerY + 8, "GROUP INFO", COLOR_HEADER_TXT, 10, "Arial Bold");
+   
    // ===== COLUMN HEADER BACKGROUNDS (v3.2.9: Separate row with background) =====
    CreateRectangle(prefix + "COLHDR_BUY_BG", buyStartX, colHeaderY - 1, buyWidth, colHeaderHeight, C'10,60,100', C'10,60,100');
    CreateRectangle(prefix + "COLHDR_CENTER_BG", centerX, colHeaderY - 1, centerWidth, colHeaderHeight, C'40,45,60', C'40,45,60');
    CreateRectangle(prefix + "COLHDR_SELL_BG", sellStartX, colHeaderY - 1, sellWidth, colHeaderHeight, C'100,40,40', C'100,40,40');
+   // v1.1: Group Info Column Header Background
+   CreateRectangle(prefix + "COLHDR_GROUP_BG", groupInfoX, colHeaderY - 1, groupInfoWidth, colHeaderHeight, C'45,30,60', C'45,30,60');
    
    // ===== COLUMN HEADERS (v3.2.9: Labels on top of backgrounds) =====
    int colLabelY = colHeaderY + 2;  // Center text vertically in column header row
@@ -6444,13 +6451,13 @@ void CreateDashboard()
    CreateLabel(prefix + "COL_B_PL", buyStartX + 358, colLabelY, "P/L", COLOR_HEADER_TXT, 7, "Arial");
    
    // Center columns: Pair | Trend | C-% | Type | Total P/L (v3.7.1: Balanced after Beta removed)
-   CreateLabel(prefix + "COL_C_PR", centerX + 10, colLabelY, "Pair", COLOR_HEADER_TXT, 7, "Arial");
-   CreateLabel(prefix + "COL_C_TRD", centerX + 135, colLabelY, "Trend", COLOR_HEADER_TXT, 7, "Arial");  // v3.7.1: Adjusted position
-   CreateLabel(prefix + "COL_C_CR", centerX + 200, colLabelY, "C-%", COLOR_HEADER_TXT, 7, "Arial");      // v3.7.1: Adjusted position
-   CreateLabel(prefix + "COL_C_TY", centerX + 255, colLabelY, "Type", COLOR_HEADER_TXT, 7, "Arial");     // v3.7.1: Adjusted position
+   CreateLabel(prefix + "COL_C_PR", centerX + 10, colLabelY, "#.Pair", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_C_TRD", centerX + 155, colLabelY, "Trend", COLOR_HEADER_TXT, 7, "Arial");  // v1.1: Adjusted for pair number
+   CreateLabel(prefix + "COL_C_CR", centerX + 215, colLabelY, "C-%", COLOR_HEADER_TXT, 7, "Arial");     // v1.1: Adjusted position
+   CreateLabel(prefix + "COL_C_TY", centerX + 265, colLabelY, "Type", COLOR_HEADER_TXT, 7, "Arial");    // v1.1: Adjusted position
    // v3.6.0 HF4: Beta column hidden - not frequently used
    // CreateLabel(prefix + "COL_C_BT", centerX + 280, colLabelY, "Beta", COLOR_HEADER_TXT, 7, "Arial");
-   CreateLabel(prefix + "COL_C_TP", centerX + 320, colLabelY, "Tot P/L", COLOR_HEADER_TXT, 7, "Arial");  // v3.7.1: Adjusted position
+   CreateLabel(prefix + "COL_C_TP", centerX + 330, colLabelY, "Tot P/L", COLOR_HEADER_TXT, 7, "Arial");  // v1.1: Adjusted position
    
    // Sell columns: P/L | Z | Status | Target | Tot | Ord | Lot | Closed | X
    CreateLabel(prefix + "COL_S_PL", sellStartX + 5, colLabelY, "P/L", COLOR_HEADER_TXT, 7, "Arial");
@@ -6463,6 +6470,11 @@ void CreateDashboard()
    CreateLabel(prefix + "COL_S_PF", sellStartX + 340, colLabelY, "Closed", COLOR_HEADER_TXT, 7, "Arial");
    CreateLabel(prefix + "COL_S_X", sellStartX + 378, colLabelY, "X", COLOR_HEADER_TXT, 7, "Arial");
    
+   // v1.1: Group Info columns: Grp | Target | Closed
+   CreateLabel(prefix + "COL_G_GRP", groupInfoX + 5, colLabelY, "Grp", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_G_TGT", groupInfoX + 35, colLabelY, "Target", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_G_CL", groupInfoX + 80, colLabelY, "Closed", COLOR_HEADER_TXT, 7, "Arial");
+   
    // ===== PAIR ROWS =====
    for(int i = 0; i < MAX_PAIRS; i++)
    {
@@ -6474,8 +6486,17 @@ void CreateDashboard()
       CreateRectangle(prefix + "ROW_C_" + IntegerToString(i), centerX, rowY, centerWidth, ROW_HEIGHT - 1, rowBg, rowBg);
       CreateRectangle(prefix + "ROW_S_" + IntegerToString(i), sellStartX, rowY, sellWidth, ROW_HEIGHT - 1, rowBg, rowBg);
       
-      // Create pair row content
-      CreatePairRow(prefix, i, buyStartX, centerX, sellStartX, rowY);
+      // v1.1: Group Info row background (only for first pair of each group)
+      if(i % PAIRS_PER_GROUP == 0)
+      {
+         // This group spans 5 rows
+         int groupRowHeight = PAIRS_PER_GROUP * ROW_HEIGHT - 1;
+         color grpBg = C'35,25,45';
+         CreateRectangle(prefix + "ROW_G_" + IntegerToString(i / PAIRS_PER_GROUP), groupInfoX, rowY, groupInfoWidth, groupRowHeight, grpBg, C'60,40,80');
+      }
+      
+      // Create pair row content (v1.1: Pass groupInfoX)
+      CreatePairRow(prefix, i, buyStartX, centerX, sellStartX, rowY, groupInfoX);
    }
    
    // ===== ACCOUNT SUMMARY SECTION =====
@@ -6488,10 +6509,15 @@ void CreateDashboard()
 //+------------------------------------------------------------------+
 //| Create Pair Row (v3.3.0 - Closed P/L Column)                       |
 //+------------------------------------------------------------------+
-void CreatePairRow(string prefix, int idx, int buyX, int centerX, int sellX, int y)
+void CreatePairRow(string prefix, int idx, int buyX, int centerX, int sellX, int y, int groupInfoX)
 {
    string idxStr = IntegerToString(idx);
-   string pairName = g_pairs[idx].symbolA + "-" + g_pairs[idx].symbolB;
+   // v1.1: Add pair number (1-30) before pair name
+   string pairNum = IntegerToString(idx + 1);
+   string pairName = pairNum + ". " + g_pairs[idx].symbolA + "-" + g_pairs[idx].symbolB;
+   
+   // v1.1: Get group index for this pair
+   int groupIdx = idx / PAIRS_PER_GROUP;
    
    // === BUY SIDE DATA ===
    // v3.3.0: X | Closed | Lot | Ord | Tot | Target | Status | Z | P/L
@@ -6499,8 +6525,9 @@ void CreatePairRow(string prefix, int idx, int buyX, int centerX, int sellX, int
    CreateLabel(prefix + "P" + idxStr + "_B_CLOSED", buyX + 25, y + 3, "0", COLOR_TEXT, FONT_SIZE, "Arial");  // Closed P/L
    CreateLabel(prefix + "P" + idxStr + "_B_LOT", buyX + 75, y + 3, "0.00", COLOR_TEXT, FONT_SIZE, "Arial");
    CreateLabel(prefix + "P" + idxStr + "_B_ORD", buyX + 128, y + 3, "0", COLOR_TEXT, FONT_SIZE, "Arial");
-   CreateEditField(prefix + "_MAX_BUY_" + idxStr, buyX + 160, y + 2, 30, 14, IntegerToString(InpDefaultMaxOrderBuy));
-   CreateEditField(prefix + "_TGT_BUY_" + idxStr, buyX + 200, y + 2, 45, 14, DoubleToString(InpDefaultTargetBuy, 0));
+   // v1.1: Use group settings instead of removed global settings
+   CreateEditField(prefix + "_MAX_BUY_" + idxStr, buyX + 160, y + 2, 30, 14, IntegerToString(g_groups[groupIdx].maxOrderBuy));
+   CreateEditField(prefix + "_TGT_BUY_" + idxStr, buyX + 200, y + 2, 45, 14, DoubleToString(g_groups[groupIdx].targetBuy, 0));
    
    string buyStatusText = g_pairs[idx].enabled ? "Off" : "-";
    color buyStatusColor = COLOR_OFF;
@@ -6511,12 +6538,12 @@ void CreatePairRow(string prefix, int idx, int buyX, int centerX, int sellX, int
    // === CENTER DATA (v3.7.1: Balanced column positions) ===
    CreateLabel(prefix + "P" + idxStr + "_NAME", centerX + 10, y + 3, pairName, COLOR_TEXT, FONT_SIZE, "Arial Bold");
    // v3.7.1: CDC Trend Status Badge (OK/BLOCK/LOADING)
-   CreateLabel(prefix + "P" + idxStr + "_CDC", centerX + 135, y + 3, "-", COLOR_OFF, FONT_SIZE, "Arial Bold");
-   CreateLabel(prefix + "P" + idxStr + "_CORR", centerX + 200, y + 3, "0%", COLOR_TEXT, FONT_SIZE, "Arial");
-   CreateLabel(prefix + "P" + idxStr + "_TYPE", centerX + 255, y + 3, "Pos", COLOR_PROFIT, FONT_SIZE, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_CDC", centerX + 155, y + 3, "-", COLOR_OFF, FONT_SIZE, "Arial Bold");
+   CreateLabel(prefix + "P" + idxStr + "_CORR", centerX + 215, y + 3, "0%", COLOR_TEXT, FONT_SIZE, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_TYPE", centerX + 265, y + 3, "Pos", COLOR_PROFIT, FONT_SIZE, "Arial");
    // v3.6.0 HF4: Beta label hidden
    // CreateLabel(prefix + "P" + idxStr + "_BETA", centerX + 280, y + 3, "1.00", COLOR_TEXT, FONT_SIZE, "Arial");
-   CreateLabel(prefix + "P" + idxStr + "_TPL", centerX + 320, y + 3, "0", COLOR_TEXT, 9, "Arial Bold");
+   CreateLabel(prefix + "P" + idxStr + "_TPL", centerX + 330, y + 3, "0", COLOR_TEXT, 9, "Arial Bold");
    
    // === SELL SIDE DATA ===
    // v3.3.0: P/L | Z | Status | Target | Tot | Ord | Lot | Closed | X
@@ -6526,12 +6553,30 @@ void CreatePairRow(string prefix, int idx, int buyX, int centerX, int sellX, int
    string sellStatusText = g_pairs[idx].enabled ? "Off" : "-";
    color sellStatusColor = COLOR_OFF;
    CreateButton(prefix + "_ST_SELL_" + idxStr, sellX + 100, y + 2, 40, 14, sellStatusText, sellStatusColor, clrWhite);
-   CreateEditField(prefix + "_TGT_SELL_" + idxStr, sellX + 150, y + 2, 45, 14, DoubleToString(InpDefaultTargetSell, 0));
-   CreateEditField(prefix + "_MAX_SELL_" + idxStr, sellX + 205, y + 2, 30, 14, IntegerToString(InpDefaultMaxOrderSell));
+   // v1.1: Use group settings instead of removed global settings
+   CreateEditField(prefix + "_TGT_SELL_" + idxStr, sellX + 150, y + 2, 45, 14, DoubleToString(g_groups[groupIdx].targetSell, 0));
+   CreateEditField(prefix + "_MAX_SELL_" + idxStr, sellX + 205, y + 2, 30, 14, IntegerToString(g_groups[groupIdx].maxOrderSell));
    CreateLabel(prefix + "P" + idxStr + "_S_ORD", sellX + 262, y + 3, "0", COLOR_TEXT, FONT_SIZE, "Arial");
    CreateLabel(prefix + "P" + idxStr + "_S_LOT", sellX + 305, y + 3, "0.00", COLOR_TEXT, FONT_SIZE, "Arial");
    CreateLabel(prefix + "P" + idxStr + "_S_CLOSED", sellX + 340, y + 3, "0", COLOR_TEXT, FONT_SIZE, "Arial");  // Closed P/L
    CreateButton(prefix + "_CLOSE_SELL_" + idxStr, sellX + 375, y + 2, 16, 14, "X", clrRed, clrWhite);
+   
+   // === v1.1: GROUP INFO COLUMN (Display only on first pair of each group) ===
+   if(idx % PAIRS_PER_GROUP == 0)
+   {
+      int gIdx = idx / PAIRS_PER_GROUP;
+      string grpStr = "G" + IntegerToString(gIdx + 1);
+      
+      // Group Label
+      CreateLabel(prefix + "G" + IntegerToString(gIdx) + "_LBL", groupInfoX + 5, y + 3, grpStr, COLOR_GOLD, 8, "Arial Bold");
+      
+      // Target
+      string tgtStr = (g_groups[gIdx].closedTarget > 0) ? "$" + DoubleToString(g_groups[gIdx].closedTarget, 0) : "-";
+      CreateLabel(prefix + "G" + IntegerToString(gIdx) + "_TGT", groupInfoX + 35, y + 3, tgtStr, COLOR_TEXT_WHITE, 8, "Arial");
+      
+      // Closed P/L (accumulated)
+      CreateLabel(prefix + "G" + IntegerToString(gIdx) + "_CL", groupInfoX + 80, y + 3, "$0", COLOR_PROFIT, 8, "Arial Bold");
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -6935,6 +6980,19 @@ void UpdateDashboard()
          ObjectSetString(0, sellBtnName, OBJPROP_TEXT, sellStatus);
          ObjectSetInteger(0, sellBtnName, OBJPROP_BGCOLOR, sellBgColor);
       }
+   }
+   
+   // === v1.1: Update Group Info Column ===
+   for(int g = 0; g < MAX_GROUPS; g++)
+   {
+      string gIdxStr = IntegerToString(g);
+      
+      // Calculate group's closed profit for display
+      double grpClosed = g_groups[g].closedProfit;
+      color grpClosedColor = (grpClosed >= 0) ? COLOR_PROFIT : COLOR_LOSS;
+      string grpClosedStr = "$" + DoubleToString(grpClosed, 0);
+      
+      UpdateLabel(prefix + "G" + gIdxStr + "_CL", grpClosedStr, grpClosedColor);
    }
    
    ChartRedraw();
