@@ -164,16 +164,16 @@ const Developer = () => {
     }
   };
 
-  // Fetch Multi Currency Statistical EA Code
+  // Fetch MoneyX Harmony Flow EA Code
   const fetchStatisticalEACode = async () => {
     try {
-      const response = await fetch('/docs/mql5/Multi_Currency_Statistical_EA.mq5');
+      const response = await fetch('/docs/mql5/MoneyX_Harmony_Flow_EA.mq5');
       if (response.ok) {
         const code = await response.text();
         setStatisticalEACode(code);
       }
     } catch (error) {
-      console.error('Error fetching Statistical EA code:', error);
+      console.error('Error fetching Harmony Flow EA code:', error);
     }
   };
 
@@ -713,7 +713,7 @@ enum ENUM_BB_MA_TYPE
                     </Button>
                   </CardContent>
                 </Card>
-              ) : selectedSystem.name.includes('Multi Currency Statistical') || selectedSystem.name.includes('Statistical') ? (
+              ) : selectedSystem.name.includes('MoneyX Harmony Flow') || selectedSystem.name.includes('Harmony') ? (
                 <Card>
                   <CardHeader>
                     <div className="flex items-center justify-between">
@@ -741,7 +741,7 @@ enum ENUM_BB_MA_TYPE
                     
                     <div className="relative">
                       <div className="flex items-center justify-between mb-2">
-                        <span className="text-sm font-medium text-muted-foreground">Multi_Currency_Statistical_EA.mq5</span>
+                        <span className="text-sm font-medium text-muted-foreground">MoneyX_Harmony_Flow_EA.mq5</span>
                         <div className="flex items-center gap-2">
                           <Badge variant="secondary">mql5</Badge>
                           <Button
