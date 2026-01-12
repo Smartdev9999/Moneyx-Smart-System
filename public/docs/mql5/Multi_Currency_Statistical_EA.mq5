@@ -124,6 +124,10 @@ struct PairInfo
    // === v3.6.0: Grid Profit Side ===
    int            gridProfitCountBuy;    // Profit Grid orders on BUY side
    int            gridProfitCountSell;   // Profit Grid orders on SELL side
+   
+   // === v3.6.0 HF4: Total Lot Tracking for All Grid Orders ===
+   double         avgTotalLotBuy;        // Total lot of all Grid orders (BUY side)
+   double         avgTotalLotSell;       // Total lot of all Grid orders (SELL side)
    double         lastProfitPriceBuy;    // Last price for Profit Grid (BUY)
    double         lastProfitPriceSell;   // Last price for Profit Grid (SELL)
    double         lastProfitGridLotBuyA; // Last Profit Grid Lot A (BUY)
@@ -3401,6 +3405,9 @@ void OpenGridLossBuy(int pairIndex)
    g_pairs[pairIndex].avgOrderCountBuy++;
    g_pairs[pairIndex].orderCountBuy++;
    
+   // v3.6.0 HF4: Track total grid lot for history
+   g_pairs[pairIndex].avgTotalLotBuy += lotA + lotB;
+   
    string modeStr = EnumToString(InpGridLossLotType);
    
    PrintFormat("Pair %d GRID LOSS BUY #%d: Z=%.2f (A:%.2f B:%.2f) [%s]", 
@@ -3483,6 +3490,9 @@ void OpenGridLossSell(int pairIndex)
    g_pairs[pairIndex].avgOrderCountSell++;
    g_pairs[pairIndex].orderCountSell++;
    
+   // v3.6.0 HF4: Track total grid lot for history
+   g_pairs[pairIndex].avgTotalLotSell += lotA + lotB;
+   
    string modeStr = EnumToString(InpGridLossLotType);
    
    PrintFormat("Pair %d GRID LOSS SELL #%d: Z=%.2f (A:%.2f B:%.2f) [%s]", 
@@ -3564,6 +3574,9 @@ void OpenGridProfitBuy(int pairIndex)
    g_pairs[pairIndex].lastProfitGridLotBuyA = lotA;
    g_pairs[pairIndex].lastProfitGridLotBuyB = lotB;
    
+   // v3.6.0 HF4: Track total grid lot for history
+   g_pairs[pairIndex].avgTotalLotBuy += lotA + lotB;
+   
    PrintFormat("Pair %d GRID PROFIT BUY #%d: (A:%.2f B:%.2f)", 
                pairIndex + 1, g_pairs[pairIndex].gridProfitCountBuy, lotA, lotB);
 }
@@ -3641,6 +3654,9 @@ void OpenGridProfitSell(int pairIndex)
    // Update Last Profit Grid Lots
    g_pairs[pairIndex].lastProfitGridLotSellA = lotA;
    g_pairs[pairIndex].lastProfitGridLotSellB = lotB;
+   
+   // v3.6.0 HF4: Track total grid lot for history
+   g_pairs[pairIndex].avgTotalLotSell += lotA + lotB;
    
    PrintFormat("Pair %d GRID PROFIT SELL #%d: (A:%.2f B:%.2f)", 
                pairIndex + 1, g_pairs[pairIndex].gridProfitCountSell, lotA, lotB);
@@ -4065,6 +4081,8 @@ bool CloseBuySide(int pairIndex)
       g_pairs[pairIndex].lastProfitGridLotBuyA = 0;
       g_pairs[pairIndex].lastProfitGridLotBuyB = 0;
       g_pairs[pairIndex].gridProfitZLevelBuy = 0;
+      // v3.6.0 HF4: Reset total grid lot
+      g_pairs[pairIndex].avgTotalLotBuy = 0;
       
       // v3.6.0 HF3 Patch 3: Resume orphan detection
       g_orphanCheckPaused = false;
@@ -4183,6 +4201,8 @@ bool CloseSellSide(int pairIndex)
       g_pairs[pairIndex].lastProfitGridLotSellA = 0;
       g_pairs[pairIndex].lastProfitGridLotSellB = 0;
       g_pairs[pairIndex].gridProfitZLevelSell = 0;
+      // v3.6.0 HF4: Reset total grid lot
+      g_pairs[pairIndex].avgTotalLotSell = 0;
       
       // v3.6.0 HF3 Patch 3: Resume orphan detection
       g_orphanCheckPaused = false;
@@ -4366,6 +4386,8 @@ void ForceCloseBuySide(int pairIndex)
    g_pairs[pairIndex].avgOrderCountBuy = 0;
    g_pairs[pairIndex].lastAvgPriceBuy = 0;
    g_pairs[pairIndex].entryZScoreBuy = 0;
+   // v3.6.0 HF4: Reset total grid lot
+   g_pairs[pairIndex].avgTotalLotBuy = 0;
    
    PrintFormat("Pair %d BUY SIDE FORCE CLOSED (Orphan Recovery)", pairIndex + 1);
 }
@@ -4439,6 +4461,8 @@ void ForceCloseSellSide(int pairIndex)
    g_pairs[pairIndex].avgOrderCountSell = 0;
    g_pairs[pairIndex].lastAvgPriceSell = 0;
    g_pairs[pairIndex].entryZScoreSell = 0;
+   // v3.6.0 HF4: Reset total grid lot
+   g_pairs[pairIndex].avgTotalLotSell = 0;
    
    PrintFormat("Pair %d SELL SIDE FORCE CLOSED (Orphan Recovery)", pairIndex + 1);
 }
