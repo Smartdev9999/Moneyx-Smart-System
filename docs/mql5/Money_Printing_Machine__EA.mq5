@@ -1115,6 +1115,7 @@ bool SyncAccountData(string eventType = "scheduled")
    json += "\"win_trades\":" + IntegerToString(winTrades) + ",";
    json += "\"loss_trades\":" + IntegerToString(lossTrades) + ",";
    json += "\"ea_status\":\"" + g_eaStatus + "\",";
+   json += "\"ea_name\":\"Money Printing Machine\",";
    json += "\"event_type\":\"" + eventType + "\",";
    json += "\"trade_history\":" + tradeHistoryJson;
    json += "}";

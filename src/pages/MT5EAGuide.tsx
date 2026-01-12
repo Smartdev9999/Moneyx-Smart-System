@@ -975,6 +975,7 @@ bool SyncAccountDataWithEvent(ENUM_SYNC_EVENT eventType)
    json += "\\"loss_trades\\":" + IntegerToString(lossTrades) + ",";
    json += "\\"total_trades\\":" + IntegerToString(totalTrades) + ",";
    json += "\\"event_type\\":\\"" + eventTypeStr + "\\",";
+   json += "\\"ea_name\\":\\"Moneyx Smart Gold System\\",";
    json += "\\"ea_status\\":\\"" + eaStatus + "\\"";
    
    // Include trade history on all sync events (scheduled + order close)
