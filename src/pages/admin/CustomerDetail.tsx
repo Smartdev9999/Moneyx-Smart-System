@@ -36,7 +36,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { useToast } from '@/hooks/use-toast';
-import AccountHistoryChart from '@/components/AccountHistoryChart';
+import TotalAccountHistoryChart from '@/components/TotalAccountHistoryChart';
 import { 
   ArrowLeft, 
   User,
@@ -659,7 +659,7 @@ const CustomerDetail = () => {
         </div>
 
         {/* P/L Chart */}
-        <AccountHistoryChart accountIds={accountIds} />
+        <TotalAccountHistoryChart accountIds={accountIds} />
 
         {/* MT5 Accounts */}
         <Card>
