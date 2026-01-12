@@ -4,11 +4,11 @@
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "3.67"
+#property version   "3.68"
 #property strict
 #property description "Statistical Arbitrage / Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
-#property description "v3.6.6: Full Portfolio Stats & Trade History Sync"
+#property description "v3.6.8: OnTradeTransaction Sync + EA Status Reporting"
 
 #include <Trade/Trade.mqh>
 
@@ -570,6 +570,9 @@ CTrade g_trade;
 bool g_isLicenseValid = false;
 bool g_isNewsPaused = false;
 bool g_isPaused = false;
+
+// === v3.6.8: EA Status for Admin Dashboard ===
+string            g_eaStatus = "Working";     // Working, Paused, Offline, Suspended, Expired, Invalid
 
 // === v3.6.5: License System Variables ===
 ENUM_LICENSE_STATUS g_licenseStatus = LICENSE_ERROR;
@@ -1175,6 +1178,81 @@ void OnDeinit(const int reason)
    {
       IndicatorRelease(g_atrHandle);
       g_atrHandle = INVALID_HANDLE;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Trade Transaction Event Handler (v3.6.8)                           |
+//| Triggers immediate sync when orders open/close                     |
+//+------------------------------------------------------------------+
+void OnTradeTransaction(const MqlTradeTransaction &trans,
+                        const MqlTradeRequest &request,
+                        const MqlTradeResult &result)
+{
+   // Skip in tester mode to avoid slowing down backtests
+   if(g_isTesterMode) return;
+   
+   // Only sync on deal added or history update events
+   if(trans.type == TRADE_TRANSACTION_DEAL_ADD || 
+      trans.type == TRADE_TRANSACTION_HISTORY_ADD)
+   {
+      // Update EA status based on current state
+      UpdateEAStatus();
+      
+      // Check if it's a trade deal (not balance/credit operation)
+      if(trans.deal_type == DEAL_TYPE_BUY || trans.deal_type == DEAL_TYPE_SELL)
+      {
+         // Determine if order was opened or closed
+         ENUM_SYNC_EVENT eventType = SYNC_ORDER_CLOSE;
+         
+         if(trans.deal_type == DEAL_TYPE_BUY || trans.deal_type == DEAL_TYPE_SELL)
+         {
+            // Check entry type to determine open vs close
+            if(HistoryDealSelect(trans.deal))
+            {
+               ENUM_DEAL_ENTRY entryType = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(trans.deal, DEAL_ENTRY);
+               if(entryType == DEAL_ENTRY_IN)
+                  eventType = SYNC_ORDER_OPEN;
+               else if(entryType == DEAL_ENTRY_OUT || entryType == DEAL_ENTRY_OUT_BY)
+                  eventType = SYNC_ORDER_CLOSE;
+            }
+         }
+         
+         // Sync immediately
+         Print("[Sync] OnTradeTransaction triggered - Event: ", 
+               (eventType == SYNC_ORDER_OPEN ? "ORDER_OPEN" : "ORDER_CLOSE"),
+               ", Deal: ", trans.deal);
+         
+         SyncAccountData(eventType);
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Update EA Status Based on Current State (v3.6.8)                   |
+//+------------------------------------------------------------------+
+void UpdateEAStatus()
+{
+   // Priority: Suspended > Expired > Invalid > Paused > Working
+   if(g_licenseStatus == LICENSE_SUSPENDED)
+   {
+      g_eaStatus = "Suspended";
+   }
+   else if(g_licenseStatus == LICENSE_EXPIRED)
+   {
+      g_eaStatus = "Expired";
+   }
+   else if(!g_isLicenseValid && g_licenseStatus != LICENSE_VALID)
+   {
+      g_eaStatus = "Invalid";
+   }
+   else if(g_isPaused || g_isNewsPaused)
+   {
+      g_eaStatus = "Paused";
+   }
+   else
+   {
+      g_eaStatus = "Working";
    }
 }
 
@@ -2058,6 +2136,9 @@ bool SyncAccountData(ENUM_SYNC_EVENT eventType)
    json += "\"win_trades\":" + IntegerToString(winTrades) + ",";
    json += "\"loss_trades\":" + IntegerToString(lossTrades) + ",";
    json += "\"total_trades\":" + IntegerToString(totalTrades) + ",";
+   // v3.6.8: EA Status for Admin Dashboard
+   UpdateEAStatus();
+   json += "\"ea_status\":\"" + g_eaStatus + "\",";
    json += "\"event_type\":\"" + eventStr + "\"";
    
    // Include trade history on all sync events
