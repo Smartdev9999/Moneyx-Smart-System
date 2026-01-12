@@ -21,7 +21,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import AccountHistoryChart from '@/components/AccountHistoryChart';
+import TotalAccountHistoryChart from '@/components/TotalAccountHistoryChart';
 import { 
   ArrowLeft, 
   CreditCard,
@@ -449,7 +449,7 @@ const AccountPortfolio = () => {
         {/* Performance Chart */}
         {account && (
           <div className="mb-8">
-            <AccountHistoryChart accountIds={[account.id]} />
+            <TotalAccountHistoryChart accountIds={[account.id]} />
           </div>
         )}
 
