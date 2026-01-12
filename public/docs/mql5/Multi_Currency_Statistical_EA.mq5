@@ -1601,8 +1601,14 @@ ENUM_LICENSE_STATUS VerifyLicenseWithServer()
    long accountNumber = AccountInfoInteger(ACCOUNT_LOGIN);
    string jsonRequest = "{\"account_number\":\"" + IntegerToString(accountNumber) + "\"}";
    
+   Print("[License] Sending request to: ", url);
+   Print("[License] Request body: ", jsonRequest);
+   
    string response = "";
    int httpCode = SendLicenseRequest(url, jsonRequest, response);
+   
+   Print("[License] HTTP Code: ", httpCode);
+   Print("[License] Response: ", StringSubstr(response, 0, 200));
    
    if(httpCode != 200)
    {
@@ -1633,6 +1639,8 @@ int SendLicenseRequest(string url, string jsonData, string &response)
    if(httpCode == -1)
    {
       int errorCode = GetLastError();
+      Print("[License] WebRequest FAILED! Error code: ", errorCode);
+      
       g_lastLicenseError = "WebRequest failed. Error: " + IntegerToString(errorCode);
       
       if(errorCode == 4014)
@@ -1640,6 +1648,15 @@ int SendLicenseRequest(string url, string jsonData, string &response)
          g_lastLicenseError = "WebRequest not allowed. Add URL to allowed list:\n" + 
                               "Tools > Options > Expert Advisors > Allow WebRequest\n" +
                               "Add: " + g_licenseServerUrl;
+         Print("[License] ERROR 4014: WebRequest not allowed for URL: ", g_licenseServerUrl);
+      }
+      else if(errorCode == 5200)
+      {
+         Print("[License] ERROR 5200: Invalid URL format");
+      }
+      else if(errorCode == 5203)
+      {
+         Print("[License] ERROR 5203: Connection failed - Check internet");
       }
       return -1;
    }
@@ -2129,6 +2146,9 @@ bool VerifyLicense()
    Print("[License] Verifying license for account: ", IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN)));
    bool result = InitLicense();
    
+   // Always show popup first (even for demo accounts)
+   ShowLicensePopup(g_licenseStatus);
+   
    // Demo accounts can continue even if license fails (for testing)
    if(isDemo && !result)
    {
@@ -2136,9 +2156,6 @@ bool VerifyLicense()
       g_isLicenseValid = true;
       return true;
    }
-   
-   // Show popup for license status
-   ShowLicensePopup(g_licenseStatus);
    
    // Print license details
    if(result)
