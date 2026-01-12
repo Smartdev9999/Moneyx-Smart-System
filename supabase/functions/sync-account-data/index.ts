@@ -134,7 +134,8 @@ serve(async (req) => {
     }
 
     const eventType = syncData.event_type || 'scheduled';
-    console.log(`[sync-account-data] Syncing data for MT5 account: ${syncData.account_number} (event: ${eventType})`);
+    const eaName = syncData.ea_name || 'not provided';
+    console.log(`[sync-account-data] Syncing data for MT5 account: ${syncData.account_number} (event: ${eventType}, ea_name: ${eaName})`);
 
     if (!syncData.account_number) {
       console.log('[sync-account-data] No account number provided');
