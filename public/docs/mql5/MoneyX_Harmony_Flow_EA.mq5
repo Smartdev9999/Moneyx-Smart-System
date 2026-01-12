@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
-//|                                Multi_Currency_Statistical_EA.mq5 |
-//|                 Statistical Arbitrage (Pairs Trading) v3.7.3     |
+//|                                    MoneyX_Harmony_Flow_EA.mq5    |
+//|                   MoneyX Harmony Flow (Pairs Trading) v3.7.5     |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "3.73"
+#property version   "3.75"
 #property strict
-#property description "Statistical Arbitrage / Pairs Trading Expert Advisor"
+#property description "MoneyX Harmony Flow - Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
-#property description "v3.7.3: Fix EA status + center title + Pause button + status display"
+#property description "v3.7.5: Rebrand to MoneyX Harmony Flow"
 
 #include <Trade/Trade.mqh>
 
@@ -929,7 +929,7 @@ int OnInit()
       CreateDashboard();
    }
    
-   PrintFormat("=== Statistical Arbitrage EA v3.5.0 Initialized - %d Active Pairs ===", g_activePairs);
+   PrintFormat("=== MoneyX Harmony Flow EA v3.7.5 Initialized - %d Active Pairs ===", g_activePairs);
    return(INIT_SUCCEEDED);
 }
 
@@ -2216,8 +2216,8 @@ bool SyncAccountData(ENUM_SYNC_EVENT eventType)
    json += "\"win_trades\":" + IntegerToString(winTrades) + ",";
    json += "\"loss_trades\":" + IntegerToString(lossTrades) + ",";
    json += "\"total_trades\":" + IntegerToString(totalTrades) + ",";
-   // v3.7.4: EA Name for auto-linking trading system
-   json += "\"ea_name\":\"Multi Currency Statistical\",";
+   // v3.7.5: EA Name for auto-linking trading system
+   json += "\"ea_name\":\"MoneyX Harmony Flow\",";
    // v3.6.8: EA Status for Admin Dashboard
    UpdateEAStatus();
    json += "\"ea_status\":\"" + g_eaStatus + "\",";
@@ -4371,14 +4371,14 @@ void OpenGridLossBuy(int pairIndex)
    string comment;
    if(corrType == -1 && InpUseADXForNegative)
    {
-      comment = StringFormat("StatArb_GL_BUY_%d[ADX:%.0f|%.0f]", 
-                             pairIndex + 1,
-                             g_pairs[pairIndex].adxValueA,
-                             g_pairs[pairIndex].adxValueB);
+       comment = StringFormat("HrmFlow_GL_BUY_%d[ADX:%.0f|%.0f]", 
+                              pairIndex + 1,
+                              g_pairs[pairIndex].adxValueA,
+                              g_pairs[pairIndex].adxValueB);
    }
    else
    {
-      comment = StringFormat("StatArb_GL_BUY_%d", pairIndex + 1);
+      comment = StringFormat("HrmFlow_GL_BUY_%d", pairIndex + 1);
    }
    
    // Open Buy on Symbol A
@@ -4456,14 +4456,14 @@ void OpenGridLossSell(int pairIndex)
    string comment;
    if(corrType == -1 && InpUseADXForNegative)
    {
-      comment = StringFormat("StatArb_GL_SELL_%d[ADX:%.0f|%.0f]", 
-                             pairIndex + 1,
-                             g_pairs[pairIndex].adxValueA,
-                             g_pairs[pairIndex].adxValueB);
+       comment = StringFormat("HrmFlow_GL_SELL_%d[ADX:%.0f|%.0f]", 
+                              pairIndex + 1,
+                              g_pairs[pairIndex].adxValueA,
+                              g_pairs[pairIndex].adxValueB);
    }
    else
    {
-      comment = StringFormat("StatArb_GL_SELL_%d", pairIndex + 1);
+      comment = StringFormat("HrmFlow_GL_SELL_%d", pairIndex + 1);
    }
    
    // Open Sell on Symbol A
@@ -4541,14 +4541,14 @@ void OpenGridProfitBuy(int pairIndex)
    string comment;
    if(corrType == -1 && InpUseADXForNegative)
    {
-      comment = StringFormat("StatArb_GP_BUY_%d[ADX:%.0f|%.0f]", 
-                             pairIndex + 1,
-                             g_pairs[pairIndex].adxValueA,
-                             g_pairs[pairIndex].adxValueB);
+       comment = StringFormat("HrmFlow_GP_BUY_%d[ADX:%.0f|%.0f]", 
+                              pairIndex + 1,
+                              g_pairs[pairIndex].adxValueA,
+                              g_pairs[pairIndex].adxValueB);
    }
    else
    {
-      comment = StringFormat("StatArb_GP_BUY_%d", pairIndex + 1);
+      comment = StringFormat("HrmFlow_GP_BUY_%d", pairIndex + 1);
    }
    
    // Open BUY on Symbol A (same direction as Initial)
@@ -4622,14 +4622,14 @@ void OpenGridProfitSell(int pairIndex)
    string comment;
    if(corrType == -1 && InpUseADXForNegative)
    {
-      comment = StringFormat("StatArb_GP_SELL_%d[ADX:%.0f|%.0f]", 
-                             pairIndex + 1,
-                             g_pairs[pairIndex].adxValueA,
-                             g_pairs[pairIndex].adxValueB);
+       comment = StringFormat("HrmFlow_GP_SELL_%d[ADX:%.0f|%.0f]", 
+                              pairIndex + 1,
+                              g_pairs[pairIndex].adxValueA,
+                              g_pairs[pairIndex].adxValueB);
    }
    else
    {
-      comment = StringFormat("StatArb_GP_SELL_%d", pairIndex + 1);
+      comment = StringFormat("HrmFlow_GP_SELL_%d", pairIndex + 1);
    }
    
    // Open SELL on Symbol A
@@ -4754,14 +4754,14 @@ bool OpenBuySideTrade(int pairIndex)
    string comment;
    if(corrType == -1 && InpUseADXForNegative)
    {
-      comment = StringFormat("StatArb_BUY_%d[ADX:%.0f|%.0f]", 
-                             pairIndex + 1,
-                             g_pairs[pairIndex].adxValueA,
-                             g_pairs[pairIndex].adxValueB);
+       comment = StringFormat("HrmFlow_BUY_%d[ADX:%.0f|%.0f]", 
+                              pairIndex + 1,
+                              g_pairs[pairIndex].adxValueA,
+                              g_pairs[pairIndex].adxValueB);
    }
    else
    {
-      comment = StringFormat("StatArb_BUY_%d", pairIndex + 1);
+      comment = StringFormat("HrmFlow_BUY_%d", pairIndex + 1);
    }
    
    ulong ticketA = 0;
@@ -4908,14 +4908,14 @@ bool OpenSellSideTrade(int pairIndex)
    string comment;
    if(corrType == -1 && InpUseADXForNegative)
    {
-      comment = StringFormat("StatArb_SELL_%d[ADX:%.0f|%.0f]", 
-                             pairIndex + 1,
-                             g_pairs[pairIndex].adxValueA,
-                             g_pairs[pairIndex].adxValueB);
+       comment = StringFormat("HrmFlow_SELL_%d[ADX:%.0f|%.0f]", 
+                              pairIndex + 1,
+                              g_pairs[pairIndex].adxValueA,
+                              g_pairs[pairIndex].adxValueB);
    }
    else
    {
-      comment = StringFormat("StatArb_SELL_%d", pairIndex + 1);
+      comment = StringFormat("HrmFlow_SELL_%d", pairIndex + 1);
    }
    
    ulong ticketA = 0;
@@ -5237,9 +5237,9 @@ void CloseAveragingPositions(int pairIndex, string side)
    string symbolB = g_pairs[pairIndex].symbolB;
    
    // v3.6.0: Close all grid orders - Grid Loss, Grid Profit, and old AVG format
-   string commentGL = StringFormat("StatArb_GL_%s_%d", side, pairIndex + 1);
-   string commentGP = StringFormat("StatArb_GP_%s_%d", side, pairIndex + 1);
-   string commentAVG = StringFormat("StatArb_AVG_%s_%d", side, pairIndex + 1);  // Legacy support
+   string commentGL = StringFormat("HrmFlow_GL_%s_%d", side, pairIndex + 1);
+   string commentGP = StringFormat("HrmFlow_GP_%s_%d", side, pairIndex + 1);
+   string commentAVG = StringFormat("HrmFlow_AVG_%s_%d", side, pairIndex + 1);  // Legacy support
    
    int closeAttempts = 0;
    int maxAttempts = 10;  // Prevent infinite loop
@@ -5337,8 +5337,8 @@ void ForceCloseBuySide(int pairIndex)
 {
    string symbolA = g_pairs[pairIndex].symbolA;
    string symbolB = g_pairs[pairIndex].symbolB;
-   string mainComment = StringFormat("StatArb_BUY_%d", pairIndex + 1);
-   string avgComment = StringFormat("StatArb_AVG_BUY_%d", pairIndex + 1);
+   string mainComment = StringFormat("HrmFlow_BUY_%d", pairIndex + 1);
+   string avgComment = StringFormat("HrmFlow_AVG_BUY_%d", pairIndex + 1);
    
    // Close ALL positions on both symbols with matching comments
    for(int i = PositionsTotal() - 1; i >= 0; i--)
@@ -5412,8 +5412,8 @@ void ForceCloseSellSide(int pairIndex)
 {
    string symbolA = g_pairs[pairIndex].symbolA;
    string symbolB = g_pairs[pairIndex].symbolB;
-   string mainComment = StringFormat("StatArb_SELL_%d", pairIndex + 1);
-   string avgComment = StringFormat("StatArb_AVG_SELL_%d", pairIndex + 1);
+   string mainComment = StringFormat("HrmFlow_SELL_%d", pairIndex + 1);
+   string avgComment = StringFormat("HrmFlow_AVG_SELL_%d", pairIndex + 1);
    
    // Close ALL positions on both symbols with matching comments
    for(int i = PositionsTotal() - 1; i >= 0; i--)
@@ -5666,15 +5666,15 @@ void UpdatePairProfits()
          
          // v3.6.0 HF2: Add ALL grid positions profit
          // Legacy Averaging (backward compatibility)
-         string avgBuyComment = StringFormat("StatArb_AVG_BUY_%d", i + 1);
+         string avgBuyComment = StringFormat("HrmFlow_AVG_BUY_%d", i + 1);
          buyProfit += GetAveragingProfit(avgBuyComment);
          
          // Grid Loss positions
-         string glBuyComment = StringFormat("StatArb_GL_BUY_%d", i + 1);
+         string glBuyComment = StringFormat("HrmFlow_GL_BUY_%d", i + 1);
          buyProfit += GetAveragingProfit(glBuyComment);
          
          // Grid Profit positions
-         string gpBuyComment = StringFormat("StatArb_GP_BUY_%d", i + 1);
+         string gpBuyComment = StringFormat("HrmFlow_GP_BUY_%d", i + 1);
          buyProfit += GetAveragingProfit(gpBuyComment);
       }
       
@@ -5685,15 +5685,15 @@ void UpdatePairProfits()
          
          // v3.6.0 HF2: Add ALL grid positions profit
          // Legacy Averaging (backward compatibility)
-         string avgSellComment = StringFormat("StatArb_AVG_SELL_%d", i + 1);
+         string avgSellComment = StringFormat("HrmFlow_AVG_SELL_%d", i + 1);
          sellProfit += GetAveragingProfit(avgSellComment);
          
          // Grid Loss positions
-         string glSellComment = StringFormat("StatArb_GL_SELL_%d", i + 1);
+         string glSellComment = StringFormat("HrmFlow_GL_SELL_%d", i + 1);
          sellProfit += GetAveragingProfit(glSellComment);
          
          // Grid Profit positions
-         string gpSellComment = StringFormat("StatArb_GP_SELL_%d", i + 1);
+         string gpSellComment = StringFormat("HrmFlow_GP_SELL_%d", i + 1);
          sellProfit += GetAveragingProfit(gpSellComment);
       }
       
@@ -5973,7 +5973,7 @@ void CreateDashboard()
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_XDISTANCE, PANEL_X + (PANEL_WIDTH / 2));
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_YDISTANCE, PANEL_Y + 4);
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_ANCHOR, ANCHOR_UPPER);
-   ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_TEXT, "Multi-Currency Statistical EA v3.7.3 - MoneyX Trading");
+   ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_TEXT, "MoneyX Harmony Flow EA v3.7.5");
    ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_FONT, "Arial Bold");
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_FONTSIZE, 10);
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_COLOR, COLOR_GOLD);
@@ -6264,8 +6264,8 @@ void UpdateDashboard()
       if(PositionSelectByTicket(ticket))
       {
          string comment = PositionGetString(POSITION_COMMENT);
-         // Include all StatArb positions: Main, AVG, GL (Grid Loss), GP (Grid Profit)
-         if(StringFind(comment, "StatArb_") == 0)
+         // Include all HrmFlow positions: Main, AVG, GL (Grid Loss), GP (Grid Profit)
+         if(StringFind(comment, "HrmFlow_") == 0)
          {
             totalLot += PositionGetDouble(POSITION_VOLUME);
             totalOrders++;
