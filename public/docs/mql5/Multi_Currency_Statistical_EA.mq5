@@ -1,16 +1,22 @@
 //+------------------------------------------------------------------+
 //|                                Multi_Currency_Statistical_EA.mq5 |
-//|                 Statistical Arbitrage (Pairs Trading) v3.6.0 HF4 |
+//|                 Statistical Arbitrage (Pairs Trading) v3.6.5     |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "3.64"
+#property version   "3.65"
 #property strict
 #property description "Statistical Arbitrage / Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
-#property description "v3.6.0 HF4: Dashboard Improvements & Basket Accumulation Fix"
+#property description "v3.6.5: License Verification System Integration"
 
 #include <Trade/Trade.mqh>
+
+//+------------------------------------------------------------------+
+//| LICENSE CONFIGURATION (v3.6.5)                                     |
+//+------------------------------------------------------------------+
+#define LICENSE_BASE_URL    "https://lkbhomsulgycxawwlnfh.supabase.co"
+#define EA_API_SECRET       "moneyx-ea-secret-2024-secure-key-v1"
 
 //+------------------------------------------------------------------+
 //| CONSTANTS                                                          |
@@ -524,14 +530,38 @@ input bool     InpEnablePair30 = false;         // Enable Pair 30
 input string   InpPair30_SymbolA = "USDMXN";    // Pair 30: Symbol A
 input string   InpPair30_SymbolB = "EURMXN";    // Pair 30: Symbol B
 
-input group "=== License Settings ==="
-input string   InpApiUrl = "https://lkbhomsulgycxawwlnfh.supabase.co/functions/v1";  // API URL
-input string   InpApiKey = "moneyx-ea-secret-2024-secure-key-v1";  // API Key
+input group "=== License Settings (v3.6.5) ==="
+input string   InpLicenseServer = LICENSE_BASE_URL;    // License Server URL
+input int      InpLicenseCheckMinutes = 60;            // License Check Interval (minutes)
+input int      InpDataSyncMinutes = 5;                 // Data Sync Interval (minutes)
 
 input group "=== News Filter ==="
 input bool     InpEnableNewsFilter = true;      // Enable News Filter
 input int      InpNewsBeforeMinutes = 30;       // Minutes Before News
 input int      InpNewsAfterMinutes = 30;        // Minutes After News
+
+//+------------------------------------------------------------------+
+//| LICENSE STATUS ENUM (v3.6.5)                                       |
+//+------------------------------------------------------------------+
+enum ENUM_LICENSE_STATUS
+{
+   LICENSE_VALID,           // License valid
+   LICENSE_EXPIRING_SOON,   // License expiring within 7 days
+   LICENSE_EXPIRED,         // License expired
+   LICENSE_NOT_FOUND,       // Account not registered
+   LICENSE_SUSPENDED,       // License suspended
+   LICENSE_ERROR            // Connection error
+};
+
+//+------------------------------------------------------------------+
+//| SYNC EVENT TYPE ENUM (v3.6.5)                                      |
+//+------------------------------------------------------------------+
+enum ENUM_SYNC_EVENT
+{
+   SYNC_SCHEDULED,          // Scheduled sync
+   SYNC_ORDER_OPEN,         // Order opened
+   SYNC_ORDER_CLOSE         // Order closed
+};
 
 //+------------------------------------------------------------------+
 //| GLOBAL VARIABLES                                                   |
@@ -540,6 +570,22 @@ CTrade g_trade;
 bool g_isLicenseValid = false;
 bool g_isNewsPaused = false;
 bool g_isPaused = false;
+
+// === v3.6.5: License System Variables ===
+ENUM_LICENSE_STATUS g_licenseStatus = LICENSE_ERROR;
+string            g_customerName = "";
+string            g_packageType = "";
+string            g_tradingSystem = "";
+datetime          g_expiryDate = 0;
+int               g_daysRemaining = 0;
+bool              g_isLifetime = false;
+string            g_lastLicenseError = "";
+datetime          g_lastLicenseCheck = 0;
+datetime          g_lastDataSync = 0;
+datetime          g_lastExpiryPopup = 0;
+string            g_licenseServerUrl = "";
+int               g_licenseCheckInterval = 60;
+int               g_dataSyncInterval = 5;
 datetime g_lastCandleTime = 0;
 datetime g_lastCorrUpdate = 0;
 
@@ -1215,6 +1261,9 @@ void OnTick()
    // v3.2.7: Check for auto-resume after DD
    CheckAutoResume();
    
+   // v3.6.5: Periodic license check and data sync
+   PeriodicLicenseCheck();
+   
    // Skip trading logic if not licensed or paused
    if(!g_isLicenseValid || g_isPaused)
    {
@@ -1509,23 +1558,389 @@ void CheckAutoResume()
 }
 
 //+------------------------------------------------------------------+
-//| Verify License                                                     |
+//| ============= LICENSE VERIFICATION SYSTEM (v3.6.5) ============    |
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//| Initialize License System                                          |
+//+------------------------------------------------------------------+
+bool InitLicense()
+{
+   g_licenseServerUrl = InpLicenseServer;
+   g_licenseCheckInterval = InpLicenseCheckMinutes;
+   g_dataSyncInterval = InpDataSyncMinutes;
+   
+   if(StringLen(g_licenseServerUrl) == 0)
+   {
+      g_lastLicenseError = "License server URL is empty";
+      g_licenseStatus = LICENSE_ERROR;
+      return false;
+   }
+   
+   g_licenseStatus = VerifyLicenseWithServer();
+   g_lastLicenseCheck = TimeCurrent();
+   
+   g_isLicenseValid = (g_licenseStatus == LICENSE_VALID || 
+                       g_licenseStatus == LICENSE_EXPIRING_SOON);
+   
+   if(g_isLicenseValid)
+   {
+      SyncAccountData(SYNC_SCHEDULED);
+      g_lastDataSync = TimeCurrent();
+   }
+   
+   return g_isLicenseValid;
+}
+
+//+------------------------------------------------------------------+
+//| Verify License with Server                                         |
+//+------------------------------------------------------------------+
+ENUM_LICENSE_STATUS VerifyLicenseWithServer()
+{
+   string url = g_licenseServerUrl + "/functions/v1/verify-license";
+   long accountNumber = AccountInfoInteger(ACCOUNT_LOGIN);
+   string jsonRequest = "{\"account_number\":\"" + IntegerToString(accountNumber) + "\"}";
+   
+   string response = "";
+   int httpCode = SendLicenseRequest(url, jsonRequest, response);
+   
+   if(httpCode != 200)
+   {
+      g_lastLicenseError = "HTTP Error: " + IntegerToString(httpCode);
+      return LICENSE_ERROR;
+   }
+   
+   return ParseVerifyResponse(response);
+}
+
+//+------------------------------------------------------------------+
+//| Send HTTP POST Request                                             |
+//+------------------------------------------------------------------+
+int SendLicenseRequest(string url, string jsonData, string &response)
+{
+   char postData[];
+   char result[];
+   string headers = "Content-Type: application/json\r\nx-api-key: " + 
+                    EA_API_SECRET + "\r\n";
+   string resultHeaders;
+   
+   StringToCharArray(jsonData, postData, 0, StringLen(jsonData));
+   ArrayResize(postData, StringLen(jsonData));
+   
+   int timeout = 10000; // 10 seconds
+   int httpCode = WebRequest("POST", url, headers, timeout, postData, result, resultHeaders);
+   
+   if(httpCode == -1)
+   {
+      int errorCode = GetLastError();
+      g_lastLicenseError = "WebRequest failed. Error: " + IntegerToString(errorCode);
+      
+      if(errorCode == 4014)
+      {
+         g_lastLicenseError = "WebRequest not allowed. Add URL to allowed list:\n" + 
+                              "Tools > Options > Expert Advisors > Allow WebRequest\n" +
+                              "Add: " + g_licenseServerUrl;
+      }
+      return -1;
+   }
+   
+   response = CharArrayToString(result, 0, WHOLE_ARRAY, CP_UTF8);
+   return httpCode;
+}
+
+//+------------------------------------------------------------------+
+//| Parse Verify License Response                                      |
+//+------------------------------------------------------------------+
+ENUM_LICENSE_STATUS ParseVerifyResponse(string response)
+{
+   bool valid = JsonGetBool(response, "valid");
+   
+   if(!valid)
+   {
+      string message = JsonGetString(response, "message");
+      g_lastLicenseError = message;
+      
+      if(StringFind(message, "not found") >= 0) return LICENSE_NOT_FOUND;
+      if(StringFind(message, "suspended") >= 0) return LICENSE_SUSPENDED;
+      if(StringFind(message, "expired") >= 0) return LICENSE_EXPIRED;
+      
+      return LICENSE_ERROR;
+   }
+   
+   g_customerName = JsonGetString(response, "customer_name");
+   g_packageType = JsonGetString(response, "package_type");
+   g_tradingSystem = JsonGetString(response, "trading_system");
+   g_daysRemaining = JsonGetInt(response, "days_remaining");
+   g_isLifetime = JsonGetBool(response, "is_lifetime");
+   
+   string expiryStr = JsonGetString(response, "expiry_date");
+   if(StringLen(expiryStr) > 0 && expiryStr != "null")
+   {
+      g_expiryDate = StringToTime(StringSubstr(expiryStr, 0, 10));
+   }
+   
+   if(!g_isLifetime && g_daysRemaining <= 7 && g_daysRemaining > 0)
+   {
+      return LICENSE_EXPIRING_SOON;
+   }
+   
+   return LICENSE_VALID;
+}
+
+//+------------------------------------------------------------------+
+//| JSON Helper - Get String Value                                     |
+//+------------------------------------------------------------------+
+string JsonGetString(string json, string key)
+{
+   string searchKey = "\"" + key + "\":";
+   int keyPos = StringFind(json, searchKey);
+   if(keyPos < 0) return "";
+   
+   int valueStart = keyPos + StringLen(searchKey);
+   while(valueStart < StringLen(json) && 
+         (StringGetCharacter(json, valueStart) == ' ' || 
+          StringGetCharacter(json, valueStart) == '"'))
+      valueStart++;
+   
+   if(StringGetCharacter(json, valueStart - 1) != '"') return "";
+   
+   int valueEnd = StringFind(json, "\"", valueStart);
+   if(valueEnd < 0) return "";
+   
+   return StringSubstr(json, valueStart, valueEnd - valueStart);
+}
+
+//+------------------------------------------------------------------+
+//| JSON Helper - Get Int Value                                        |
+//+------------------------------------------------------------------+
+int JsonGetInt(string json, string key)
+{
+   string searchKey = "\"" + key + "\":";
+   int keyPos = StringFind(json, searchKey);
+   if(keyPos < 0) return 0;
+   
+   int valueStart = keyPos + StringLen(searchKey);
+   while(valueStart < StringLen(json) && StringGetCharacter(json, valueStart) == ' ')
+      valueStart++;
+   
+   string valueStr = "";
+   while(valueStart < StringLen(json))
+   {
+      ushort ch = StringGetCharacter(json, valueStart);
+      if(ch >= '0' && ch <= '9' || ch == '-')
+         valueStr += ShortToString(ch);
+      else
+         break;
+      valueStart++;
+   }
+   
+   return (int)StringToInteger(valueStr);
+}
+
+//+------------------------------------------------------------------+
+//| JSON Helper - Get Bool Value                                       |
+//+------------------------------------------------------------------+
+bool JsonGetBool(string json, string key)
+{
+   string searchKey = "\"" + key + "\":";
+   int keyPos = StringFind(json, searchKey);
+   if(keyPos < 0) return false;
+   
+   int valueStart = keyPos + StringLen(searchKey);
+   while(valueStart < StringLen(json) && StringGetCharacter(json, valueStart) == ' ')
+      valueStart++;
+   
+   return (StringFind(json, "true", valueStart) == valueStart);
+}
+
+//+------------------------------------------------------------------+
+//| Show License Status Popup                                          |
+//+------------------------------------------------------------------+
+void ShowLicensePopup(ENUM_LICENSE_STATUS status)
+{
+   string title = "Statistical EA v3.6.5 - License";
+   string message = "";
+   uint flags = MB_OK;
+   
+   switch(status)
+   {
+      case LICENSE_VALID:
+         message = "License Verified Successfully!\n\n";
+         message += "Customer: " + g_customerName + "\n";
+         message += "Package: " + g_packageType + "\n";
+         if(g_isLifetime)
+            message += "License Type: LIFETIME\n";
+         else
+            message += "Days Remaining: " + IntegerToString(g_daysRemaining) + "\n";
+         flags = MB_OK | MB_ICONINFORMATION;
+         break;
+         
+      case LICENSE_EXPIRING_SOON:
+         message = "License Expiring Soon!\n\n";
+         message += "Days Remaining: " + IntegerToString(g_daysRemaining) + "\n";
+         message += "Please renew your license.\n";
+         message += "Contact: support@moneyx-smart.com";
+         flags = MB_OK | MB_ICONWARNING;
+         break;
+         
+      case LICENSE_EXPIRED:
+         message = "License Expired!\n\n";
+         message += "Trading is disabled.\n";
+         message += "Please renew your license.\n";
+         message += "Contact: support@moneyx-smart.com";
+         flags = MB_OK | MB_ICONERROR;
+         break;
+         
+      case LICENSE_NOT_FOUND:
+         message = "Account Not Registered!\n\n";
+         message += "Account: " + IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN)) + "\n\n";
+         message += "This account is not in our system.\n";
+         message += "Please purchase a license.\n";
+         message += "Contact: support@moneyx-smart.com";
+         flags = MB_OK | MB_ICONERROR;
+         break;
+         
+      case LICENSE_SUSPENDED:
+         message = "License Suspended!\n\n";
+         message += "Trading is disabled.\n";
+         message += "Contact: support@moneyx-smart.com";
+         flags = MB_OK | MB_ICONERROR;
+         break;
+         
+      case LICENSE_ERROR:
+         message = "License Verification Error!\n\n";
+         message += "Error: " + g_lastLicenseError + "\n\n";
+         message += "Check:\n";
+         message += "1. Internet connection\n";
+         message += "2. WebRequest allowed for:\n";
+         message += "   " + g_licenseServerUrl;
+         flags = MB_OK | MB_ICONWARNING;
+         break;
+   }
+   
+   MessageBox(message, title, flags);
+}
+
+//+------------------------------------------------------------------+
+//| Sync Account Data with Server                                      |
+//+------------------------------------------------------------------+
+bool SyncAccountData(ENUM_SYNC_EVENT eventType)
+{
+   string url = g_licenseServerUrl + "/functions/v1/sync-account-data";
+   
+   long accountNumber = AccountInfoInteger(ACCOUNT_LOGIN);
+   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+   double floatingPL = AccountInfoDouble(ACCOUNT_PROFIT);
+   int openOrders = PositionsTotal();
+   
+   string eventStr = "scheduled";
+   if(eventType == SYNC_ORDER_OPEN) eventStr = "order_open";
+   else if(eventType == SYNC_ORDER_CLOSE) eventStr = "order_close";
+   
+   string json = "{";
+   json += "\"account_number\":\"" + IntegerToString(accountNumber) + "\",";
+   json += "\"balance\":" + DoubleToString(balance, 2) + ",";
+   json += "\"equity\":" + DoubleToString(equity, 2) + ",";
+   json += "\"floating_pl\":" + DoubleToString(floatingPL, 2) + ",";
+   json += "\"open_orders\":" + IntegerToString(openOrders) + ",";
+   json += "\"event_type\":\"" + eventStr + "\"";
+   json += "}";
+   
+   string response = "";
+   int httpCode = SendLicenseRequest(url, json, response);
+   
+   return (httpCode == 200 && JsonGetBool(response, "success"));
+}
+
+//+------------------------------------------------------------------+
+//| Periodic License Check (called from OnTick)                        |
+//+------------------------------------------------------------------+
+void PeriodicLicenseCheck()
+{
+   if(g_isTesterMode) return;
+   
+   datetime currentTime = TimeCurrent();
+   MqlDateTime dt;
+   TimeToStruct(currentTime, dt);
+   
+   // Check license daily at 05:00
+   if(dt.hour == 5 && dt.min == 0)
+   {
+      if(currentTime - g_lastLicenseCheck >= 3600) // At least 1 hour since last check
+      {
+         g_licenseStatus = VerifyLicenseWithServer();
+         g_lastLicenseCheck = currentTime;
+         g_isLicenseValid = (g_licenseStatus == LICENSE_VALID || 
+                             g_licenseStatus == LICENSE_EXPIRING_SOON);
+         
+         // Show popup if license expired or suspended
+         if(g_licenseStatus == LICENSE_EXPIRED || g_licenseStatus == LICENSE_SUSPENDED)
+         {
+            ShowLicensePopup(g_licenseStatus);
+         }
+      }
+   }
+   
+   // Scheduled data sync at 05:00 and 23:00
+   if((dt.hour == 5 || dt.hour == 23) && dt.min == 0)
+   {
+      if(currentTime - g_lastDataSync >= 3600)
+      {
+         SyncAccountData(SYNC_SCHEDULED);
+         g_lastDataSync = currentTime;
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Verify License (Main entry point - backward compatible)            |
 //+------------------------------------------------------------------+
 bool VerifyLicense()
 {
-   // Bypass license check in tester/optimizer
+   // Bypass in tester/optimizer
    if(MQLInfoInteger(MQL_TESTER) || MQLInfoInteger(MQL_OPTIMIZATION))
    {
+      g_isLicenseValid = true;
+      g_licenseStatus = LICENSE_VALID;
+      g_customerName = "Tester Mode";
+      Print("[License] Running in Tester/Optimizer - License check bypassed");
       return true;
    }
    
-   // For demo accounts, always allow
-   if(AccountInfoInteger(ACCOUNT_TRADE_MODE) == ACCOUNT_TRADE_MODE_DEMO)
+   // For demo accounts - still verify but allow on error (for testing)
+   bool isDemo = (AccountInfoInteger(ACCOUNT_TRADE_MODE) == ACCOUNT_TRADE_MODE_DEMO);
+   
+   // Initialize license system
+   Print("[License] Verifying license for account: ", IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN)));
+   bool result = InitLicense();
+   
+   // Demo accounts can continue even if license fails (for testing)
+   if(isDemo && !result)
    {
+      Print("[License] Demo account - allowing trading despite license error");
+      g_isLicenseValid = true;
       return true;
    }
    
-   return true;  // Simplified for now
+   // Show popup for license status
+   ShowLicensePopup(g_licenseStatus);
+   
+   // Print license details
+   if(result)
+   {
+      Print("[License] Valid - Customer: ", g_customerName, " | Package: ", g_packageType);
+      if(g_isLifetime)
+         Print("[License] License Type: LIFETIME");
+      else
+         Print("[License] Days Remaining: ", g_daysRemaining);
+   }
+   else
+   {
+      Print("[License] FAILED - ", g_lastLicenseError);
+   }
+   
+   return result;
 }
 
 //+------------------------------------------------------------------+
