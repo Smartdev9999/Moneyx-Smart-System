@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                    MoneyX_Harmony_Flow_EA.mq5    |
-//|                   MoneyX Harmony Flow (Pairs Trading) v3.7.5     |
+//|                   MoneyX Harmony Flow (Pairs Trading) v3.76      |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "3.75"
+#property version   "3.76"
 #property strict
 #property description "MoneyX Harmony Flow - Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
-#property description "v3.7.5: Rebrand to MoneyX Harmony Flow"
+#property description "v3.76: 5-min Heartbeat Sync + Error Logging + Last Sync Display"
 
 #include <Trade/Trade.mqh>
 
@@ -598,6 +598,12 @@ int               g_dataSyncInterval = 5;
 datetime g_lastCandleTime = 0;
 datetime g_lastCorrUpdate = 0;
 
+// === v3.76: Heartbeat Sync Variables ===
+datetime          g_lastHeartbeat = 0;            // Last heartbeat sync time
+datetime          g_lastSuccessfulSync = 0;       // Last successful sync time (for dashboard display)
+int               g_syncFailCount = 0;            // Consecutive sync failure counter
+string            g_lastSyncStatus = "Pending";   // "OK", "Failed", "Pending"
+
 // Pairs Data
 PairInfo g_pairs[MAX_PAIRS];
 PairData g_pairData[MAX_PAIRS];
@@ -929,7 +935,7 @@ int OnInit()
       CreateDashboard();
    }
    
-   PrintFormat("=== MoneyX Harmony Flow EA v3.7.5 Initialized - %d Active Pairs ===", g_activePairs);
+   PrintFormat("=== MoneyX Harmony Flow EA v3.76 Initialized - %d Active Pairs ===", g_activePairs);
    return(INIT_SUCCEEDED);
 }
 
@@ -2238,11 +2244,77 @@ bool SyncAccountData(ENUM_SYNC_EVENT eventType)
    if(httpCode == 200 && JsonGetBool(response, "success"))
    {
       Print("[Data Sync] Success - Balance: ", balance, ", Trades: ", totalTrades);
+      // v3.76: Update successful sync tracking
+      g_lastSuccessfulSync = TimeCurrent();
+      g_syncFailCount = 0;
+      g_lastSyncStatus = "OK";
       return true;
    }
    else
    {
-      Print("[Data Sync] Failed - HTTP: ", httpCode, ", Response: ", response);
+      // v3.76: Enhanced error logging with details
+      int lastError = GetLastError();
+      PrintFormat("!!! SYNC ERROR !!! HTTP: %d | Error: %d | Response: %s", httpCode, lastError, response);
+      g_syncFailCount++;
+      g_lastSyncStatus = "Failed";
+      return false;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| v3.76: Sync Account Data with Heartbeat (Lightweight)              |
+//+------------------------------------------------------------------+
+bool SyncAccountDataWithHeartbeat()
+{
+   string url = g_licenseServerUrl + "/functions/v1/sync-account-data";
+   
+   // Basic account info
+   long accountNumber = AccountInfoInteger(ACCOUNT_LOGIN);
+   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+   double floatingPL = AccountInfoDouble(ACCOUNT_PROFIT);
+   double marginLevel = AccountInfoDouble(ACCOUNT_MARGIN_LEVEL);
+   int openOrders = PositionsTotal();
+   
+   // Calculate Drawdown
+   double drawdown = 0;
+   if(balance > 0)
+   {
+      drawdown = ((balance - equity) / balance) * 100;
+      if(drawdown < 0) drawdown = 0;
+   }
+   
+   // Get EA Status
+   UpdateEAStatus();
+   
+   // Build lightweight JSON payload (no trade history for heartbeat)
+   string json = "{";
+   json += "\"account_number\":\"" + IntegerToString(accountNumber) + "\",";
+   json += "\"balance\":" + DoubleToString(balance, 2) + ",";
+   json += "\"equity\":" + DoubleToString(equity, 2) + ",";
+   json += "\"margin_level\":" + DoubleToString(marginLevel, 2) + ",";
+   json += "\"drawdown\":" + DoubleToString(drawdown, 2) + ",";
+   json += "\"profit_loss\":" + DoubleToString(floatingPL, 2) + ",";
+   json += "\"open_orders\":" + IntegerToString(openOrders) + ",";
+   json += "\"floating_pl\":" + DoubleToString(floatingPL, 2) + ",";
+   json += "\"ea_name\":\"MoneyX Harmony Flow\",";
+   json += "\"ea_status\":\"" + g_eaStatus + "\",";
+   json += "\"event_type\":\"heartbeat\"";
+   json += "}";
+   
+   string response = "";
+   int httpCode = SendLicenseRequest(url, json, response);
+   
+   if(httpCode == 200 && JsonGetBool(response, "success"))
+   {
+      if(InpDebugMode)
+         Print("[Heartbeat] Success - Equity: ", equity);
+      return true;
+   }
+   else
+   {
+      int lastError = GetLastError();
+      PrintFormat("!!! HEARTBEAT ERROR !!! HTTP: %d | Error: %d | Response: %s", httpCode, lastError, response);
       return false;
    }
 }
@@ -2283,6 +2355,25 @@ void PeriodicLicenseCheck()
       {
          SyncAccountData(SYNC_SCHEDULED);
          g_lastDataSync = currentTime;
+      }
+   }
+   
+   // === v3.76: Heartbeat Sync every 5 minutes ===
+   // This ensures the Admin Dashboard always shows the EA as "Online"
+   if(currentTime - g_lastHeartbeat >= 300)  // 300 seconds = 5 minutes
+   {
+      if(SyncAccountDataWithHeartbeat())
+      {
+         g_lastHeartbeat = currentTime;
+         g_lastSuccessfulSync = currentTime;
+         g_syncFailCount = 0;
+         g_lastSyncStatus = "OK";
+      }
+      else
+      {
+         g_syncFailCount++;
+         g_lastSyncStatus = "Failed";
+         PrintFormat("!!! HEARTBEAT SYNC FAILED !!! Consecutive failures: %d", g_syncFailCount);
       }
    }
 }
@@ -5973,12 +6064,17 @@ void CreateDashboard()
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_XDISTANCE, PANEL_X + (PANEL_WIDTH / 2));
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_YDISTANCE, PANEL_Y + 4);
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_ANCHOR, ANCHOR_UPPER);
-   ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_TEXT, "MoneyX Harmony Flow EA v3.7.5");
+   ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_TEXT, "MoneyX Harmony Flow EA v3.76");
    ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_FONT, "Arial Bold");
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_FONTSIZE, 10);
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_COLOR, COLOR_GOLD);
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_SELECTABLE, false);
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_HIDDEN, true);
+   
+   // v3.76: Last Sync Display (new - left side of title bar)
+   CreateLabel(prefix + "SYNC_LBL", PANEL_X + 10, PANEL_Y + 5, "Sync:", COLOR_TEXT_WHITE, 8, "Arial");
+   CreateLabel(prefix + "SYNC_VAL", PANEL_X + 45, PANEL_Y + 4, "Pending", clrYellow, 9, "Arial Bold");
+   CreateLabel(prefix + "SYNC_AGO", PANEL_X + 100, PANEL_Y + 5, "", clrGray, 8, "Arial");
    
    // v3.7.4: EA Status Display (adjusted position - moved left by 50px)
    CreateLabel(prefix + "EA_STATUS_LBL", PANEL_X + PANEL_WIDTH - 210, PANEL_Y + 5, "Status:", COLOR_TEXT_WHITE, 8, "Arial");
@@ -6316,6 +6412,34 @@ void UpdateDashboard()
    }
    
    UpdateLabel(prefix + "EA_STATUS_VAL", eaStatusDisplay, eaStatusColor);
+   
+   // v3.76: Update Last Sync Display
+   color syncColor = clrYellow;
+   string syncStatus = g_lastSyncStatus;
+   if(g_lastSyncStatus == "OK") syncColor = clrLime;
+   else if(g_lastSyncStatus == "Failed") syncColor = clrRed;
+   UpdateLabel(prefix + "SYNC_VAL", syncStatus, syncColor);
+   
+   // v3.76: Calculate time since last sync
+   string syncAgoText = "";
+   if(g_lastSuccessfulSync > 0)
+   {
+      int secAgo = (int)(TimeCurrent() - g_lastSuccessfulSync);
+      if(secAgo < 60)
+         syncAgoText = IntegerToString(secAgo) + "s ago";
+      else if(secAgo < 3600)
+         syncAgoText = IntegerToString(secAgo / 60) + "m ago";
+      else
+         syncAgoText = IntegerToString(secAgo / 3600) + "h ago";
+         
+      // Warning if sync is stale (>10 min)
+      color agoColor = (secAgo > 600) ? clrOrange : clrGray;
+      UpdateLabel(prefix + "SYNC_AGO", "(" + syncAgoText + ")", agoColor);
+   }
+   else
+   {
+      UpdateLabel(prefix + "SYNC_AGO", "", clrGray);
+   }
    
    // ===== Update Account Labels =====
    UpdateLabel(prefix + "V_BAL", DoubleToString(balance, 2), balance >= g_initialBalance ? COLOR_PROFIT : COLOR_LOSS);
