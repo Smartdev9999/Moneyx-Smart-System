@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                Multi_Currency_Statistical_EA.mq5 |
-//|                 Statistical Arbitrage (Pairs Trading) v3.7.1     |
+//|                 Statistical Arbitrage (Pairs Trading) v3.7.2     |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "3.71"
+#property version   "3.72"
 #property strict
 #property description "Statistical Arbitrage / Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
-#property description "v3.7.1: CDC TF-independent + LOADING state + dashboard column fix"
+#property description "v3.7.2: Fix CDC log spam - only log on status change"
 
 #include <Trade/Trade.mqh>
 
@@ -688,6 +688,8 @@ int g_tickCounter = 0;
 datetime g_lastZScoreUpdate = 0;
 
 // v3.5.0: CDC Action Zone timeframe tracking
+// v3.7.2: Last CDC status per pair (for log spam prevention)
+string g_lastCDCStatus[];
 datetime g_lastCDCUpdate = 0;
 
 // === v3.6.0 HF3: Basket Profit Target System ===
@@ -827,6 +829,11 @@ int OnInit()
    
    // v3.3.0: Force initial Z-Score data update (may use different TF)
    UpdateZScoreData();
+   
+   // v3.7.2: Initialize CDC status tracking array
+   ArrayResize(g_lastCDCStatus, MAX_PAIRS);
+   for(int i = 0; i < MAX_PAIRS; i++)
+      g_lastCDCStatus[i] = "";
    
    // v3.7.1: Force initial CDC calculation and initialize per-symbol tracking
    if(InpUseCDCTrendFilter)
@@ -3265,33 +3272,57 @@ string GetCDCStatusText(int pairIndex, color &statusColor)
    }
    
    // v3.7.1: Check if CDC data is ready for both symbols
+   string newStatus = "";
+   string trendA = g_pairs[pairIndex].cdcTrendA;
+   string trendB = g_pairs[pairIndex].cdcTrendB;
+   
    if(!g_pairs[pairIndex].cdcReadyA || !g_pairs[pairIndex].cdcReadyB)
    {
       statusColor = clrOrange;  // Orange = Loading
-      return "LOADING";
+      newStatus = "LOADING";
    }
-   
    // Check if trends are NEUTRAL (calculation failed but returned true)
-   string trendA = g_pairs[pairIndex].cdcTrendA;
-   string trendB = g_pairs[pairIndex].cdcTrendB;
-   if(trendA == "NEUTRAL" || trendB == "NEUTRAL")
+   else if(trendA == "NEUTRAL" || trendB == "NEUTRAL")
    {
       statusColor = clrOrange;
-      return "LOADING";
-   }
-   
-   // Data is ready - check trend confirmation
-   bool cdcOK = CheckCDCTrendConfirmation(pairIndex, "ANY");
-   if(cdcOK)
-   {
-      statusColor = clrLime;  // Green = OK
-      return "OK";
+      newStatus = "LOADING";
    }
    else
    {
-      statusColor = clrOrangeRed;  // Red = Block (trend mismatch)
-      return "BLOCK";
+      // Data is ready - check trend confirmation (without logging)
+      int corrType = g_pairs[pairIndex].correlationType;
+      bool sameTrend = (trendA == trendB);
+      bool oppositeTrend = ((trendA == "BULLISH" && trendB == "BEARISH") || 
+                            (trendA == "BEARISH" && trendB == "BULLISH"));
+      
+      bool cdcOK = false;
+      if(corrType == 1)  // Positive Correlation
+         cdcOK = sameTrend;
+      else  // Negative Correlation
+         cdcOK = oppositeTrend;
+      
+      if(cdcOK)
+      {
+         statusColor = clrLime;  // Green = OK
+         newStatus = "OK";
+      }
+      else
+      {
+         statusColor = clrOrangeRed;  // Red = Block (trend mismatch)
+         newStatus = "BLOCK";
+      }
    }
+   
+   // v3.7.2: Log only when status changes
+   if(newStatus != g_lastCDCStatus[pairIndex])
+   {
+      g_lastCDCStatus[pairIndex] = newStatus;
+      if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
+         PrintFormat("CDC STATUS CHANGE: Pair %d - %s (A:%s B:%s CorrType:%d)", 
+                     pairIndex + 1, newStatus, trendA, trendB, g_pairs[pairIndex].correlationType);
+   }
+   
+   return newStatus;
 }
 
 //+------------------------------------------------------------------+
@@ -3338,9 +3369,7 @@ bool CheckCDCTrendConfirmation(int pairIndex, string side)
       // Require SAME trend for both symbols
       if(!sameTrend)
       {
-         if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
-            PrintFormat("CDC BLOCK: Pair %d (Pos Corr) - Trends differ (A:%s B:%s)", 
-                        pairIndex + 1, trendA, trendB);
+         // v3.7.2: Removed log spam - status change is logged in GetCDCStatusText()
          return false;
       }
    }
@@ -3349,17 +3378,12 @@ bool CheckCDCTrendConfirmation(int pairIndex, string side)
       // Require OPPOSITE trends
       if(!oppositeTrend)
       {
-         if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
-            PrintFormat("CDC BLOCK: Pair %d (Neg Corr) - Trends same (A:%s B:%s)", 
-                        pairIndex + 1, trendA, trendB);
+         // v3.7.2: Removed log spam - status change is logged in GetCDCStatusText()
          return false;
       }
    }
    
-   if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
-      PrintFormat("CDC CONFIRM: Pair %d - A:%s B:%s (CorrType:%d)", 
-                  pairIndex + 1, trendA, trendB, corrType);
-   
+   // v3.7.2: Removed log spam - status change is logged in GetCDCStatusText()
    return true;
 }
 
