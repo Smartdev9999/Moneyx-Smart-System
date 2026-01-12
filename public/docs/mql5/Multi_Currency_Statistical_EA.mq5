@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                Multi_Currency_Statistical_EA.mq5 |
-//|                 Statistical Arbitrage (Pairs Trading) v3.6.6     |
+//|                 Statistical Arbitrage (Pairs Trading) v3.7.1     |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "3.70"
+#property version   "3.71"
 #property strict
 #property description "Statistical Arbitrage / Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
-#property description "v3.7.0: Fixed CDC to match Moneyx Smart System (ArraySetAsSeries=true, use index 0)"
+#property description "v3.7.1: CDC TF-independent + LOADING state + dashboard column fix"
 
 #include <Trade/Trade.mqh>
 
@@ -116,6 +116,12 @@ struct PairInfo
    double         cdcSlowA;          // CDC Slow EMA value for Symbol A
    double         cdcFastB;          // CDC Fast EMA value for Symbol B
    double         cdcSlowB;          // CDC Slow EMA value for Symbol B
+   
+   // === v3.7.1: CDC Status per Symbol (for TF-independent refresh) ===
+   datetime       lastCdcTimeA;      // Last CDC candle time for Symbol A
+   datetime       lastCdcTimeB;      // Last CDC candle time for Symbol B
+   bool           cdcReadyA;         // CDC data ready for Symbol A
+   bool           cdcReadyB;         // CDC data ready for Symbol B
    
    // === v3.5.3 HF1: Last Grid Lot for Compounding ===
    double         lastGridLotBuyA;   // Last Lot A for BUY side grid
@@ -822,6 +828,40 @@ int OnInit()
    // v3.3.0: Force initial Z-Score data update (may use different TF)
    UpdateZScoreData();
    
+   // v3.7.1: Force initial CDC calculation and initialize per-symbol tracking
+   if(InpUseCDCTrendFilter)
+   {
+      for(int i = 0; i < MAX_PAIRS; i++)
+      {
+         if(!g_pairs[i].enabled) continue;
+         
+         // Initialize lastCdcTime for each symbol
+         g_pairs[i].lastCdcTimeA = iTime(g_pairs[i].symbolA, InpCDCTimeframe, 0);
+         g_pairs[i].lastCdcTimeB = iTime(g_pairs[i].symbolB, InpCDCTimeframe, 0);
+         
+         // Force initial CDC calculation
+         g_pairs[i].cdcReadyA = CalculateCDCForSymbol(
+            g_pairs[i].symbolA,
+            g_pairs[i].cdcTrendA,
+            g_pairs[i].cdcFastA,
+            g_pairs[i].cdcSlowA
+         );
+         g_pairs[i].cdcReadyB = CalculateCDCForSymbol(
+            g_pairs[i].symbolB,
+            g_pairs[i].cdcTrendB,
+            g_pairs[i].cdcFastB,
+            g_pairs[i].cdcSlowB
+         );
+         
+         if(InpDebugMode)
+            PrintFormat("[OnInit] Pair %d CDC Init: A=%s(%s) B=%s(%s)", 
+                        i + 1, 
+                        g_pairs[i].symbolA, g_pairs[i].cdcReadyA ? g_pairs[i].cdcTrendA : "LOADING",
+                        g_pairs[i].symbolB, g_pairs[i].cdcReadyB ? g_pairs[i].cdcTrendB : "LOADING");
+      }
+      Print("[OnInit] CDC Action Zone initialized for all pairs");
+   }
+   
    // v3.3.5: Force lot recalculation after data is loaded with delay for symbol info
    Sleep(100);  // Wait 100ms for symbol data to be available
    
@@ -1116,6 +1156,12 @@ void SetupPair(int index, bool enabled, string symbolA, string symbolB)
    g_pairs[index].cdcTrendB = "NEUTRAL";
    g_pairs[index].cdcFastA = 0;
    g_pairs[index].cdcSlowA = 0;
+   
+   // v3.7.1: CDC Status per Symbol
+   g_pairs[index].lastCdcTimeA = 0;
+   g_pairs[index].lastCdcTimeB = 0;
+   g_pairs[index].cdcReadyA = false;
+   g_pairs[index].cdcReadyB = false;
    g_pairs[index].cdcFastB = 0;
    g_pairs[index].cdcSlowB = 0;
    
@@ -1315,14 +1361,12 @@ void OnTick()
       CalculateAllRSIonSpread();
    }
    
-   // v3.5.0: Update CDC Trend Data on new CDC timeframe candle
-   datetime cdcCandleTime = iTime(_Symbol, InpCDCTimeframe, 0);
-   bool newCandleCDC = (cdcCandleTime != g_lastCDCUpdate);
-   
-   if(newCandleCDC)
+   // v3.7.1: Update CDC Trend Data - per-symbol based (independent from chart TF)
+   // Instead of using _Symbol, we check each pair's symbols independently in UpdateAllPairsCDC()
+   // This makes CDC refresh independent from chart timeframe changes
+   if(InpUseCDCTrendFilter)
    {
-      g_lastCDCUpdate = cdcCandleTime;
-      UpdateAllPairsCDC();
+      UpdateAllPairsCDC();  // Function now handles per-symbol candle time tracking
    }
    
    // v3.5.3 HF3: Update ADX for Negative Correlation Pairs on new ADX timeframe candle
@@ -2978,9 +3022,10 @@ void CalculateCDC_EMA(double &src[], double &result[], int period, int size)
 }
 
 //+------------------------------------------------------------------+
-//| Calculate CDC Action Zone for Single Symbol (v3.6.7)               |
+//| Calculate CDC Action Zone for Single Symbol (v3.7.1)               |
+//| Returns: true if calculation succeeded, false if data not ready   |
 //+------------------------------------------------------------------+
-void CalculateCDCForSymbol(string symbol, string &trend, double &fastEMA, double &slowEMA)
+bool CalculateCDCForSymbol(string symbol, string &trend, double &fastEMA, double &slowEMA)
 {
    trend = "NEUTRAL";
    fastEMA = 0;
@@ -2991,7 +3036,18 @@ void CalculateCDCForSymbol(string symbol, string &trend, double &fastEMA, double
    {
       if(InpDebugMode)
          Print("[CDC] Symbol not found or cannot be selected: ", symbol);
-      return;
+      return false;  // v3.7.1: Return false for LOADING state
+   }
+   
+   // v3.7.1: Guard - Check Bars available first
+   int barsAvailable = Bars(symbol, InpCDCTimeframe);
+   int minBarsRequired = InpCDCSlowPeriod + 10;
+   if(barsAvailable < minBarsRequired)
+   {
+      if(InpDebugMode)
+         PrintFormat("[CDC] %s: Not enough bars (%d < %d), status=LOADING", 
+                     symbol, barsAvailable, minBarsRequired);
+      return false;  // v3.7.1: Return false for LOADING state
    }
    
    double closeArr[], highArr[], lowArr[], openArr[];
@@ -3002,38 +3058,50 @@ void CalculateCDCForSymbol(string symbol, string &trend, double &fastEMA, double
    ArraySetAsSeries(openArr, true);
    
    int barsNeeded = InpCDCSlowPeriod * 3 + 50;
-   int minBarsRequired = InpCDCSlowPeriod + 10;  // Minimum bars needed for calculation
    
-   // Copy Close with debug logging
+   // v3.7.1: Copy Close with error checking
    int copied = CopyClose(symbol, InpCDCTimeframe, 0, barsNeeded, closeArr);
+   if(copied < 0)
+   {
+      int err = GetLastError();
+      if(InpDebugMode)
+         PrintFormat("[CDC] %s: CopyClose failed (error=%d), status=LOADING", symbol, err);
+      return false;  // v3.7.1: Return false for LOADING state
+   }
    if(copied < minBarsRequired) 
    {
       if(InpDebugMode)
          PrintFormat("[CDC] %s: Insufficient data - got %d/%d bars (min: %d) on %s", 
                      symbol, copied, barsNeeded, minBarsRequired, EnumToString(InpCDCTimeframe));
-      return;
+      return false;  // v3.7.1: Return false for LOADING state
    }
    
    // Use actual copied count if less than requested (fallback)
    int actualBars = MathMin(copied, barsNeeded);
    
-   if(CopyHigh(symbol, InpCDCTimeframe, 0, actualBars, highArr) < actualBars) 
+   // v3.7.1: Copy other arrays with error checking
+   int copiedHigh = CopyHigh(symbol, InpCDCTimeframe, 0, actualBars, highArr);
+   if(copiedHigh < 0 || copiedHigh < actualBars) 
    {
       if(InpDebugMode)
-         Print("[CDC] ", symbol, ": CopyHigh failed");
-      return;
+         PrintFormat("[CDC] %s: CopyHigh failed (got %d, error=%d)", symbol, copiedHigh, GetLastError());
+      return false;
    }
-   if(CopyLow(symbol, InpCDCTimeframe, 0, actualBars, lowArr) < actualBars) 
+   
+   int copiedLow = CopyLow(symbol, InpCDCTimeframe, 0, actualBars, lowArr);
+   if(copiedLow < 0 || copiedLow < actualBars) 
    {
       if(InpDebugMode)
-         Print("[CDC] ", symbol, ": CopyLow failed");
-      return;
+         PrintFormat("[CDC] %s: CopyLow failed (got %d, error=%d)", symbol, copiedLow, GetLastError());
+      return false;
    }
-   if(CopyOpen(symbol, InpCDCTimeframe, 0, actualBars, openArr) < actualBars) 
+   
+   int copiedOpen = CopyOpen(symbol, InpCDCTimeframe, 0, actualBars, openArr);
+   if(copiedOpen < 0 || copiedOpen < actualBars) 
    {
       if(InpDebugMode)
-         Print("[CDC] ", symbol, ": CopyOpen failed");
-      return;
+         PrintFormat("[CDC] %s: CopyOpen failed (got %d, error=%d)", symbol, copiedOpen, GetLastError());
+      return false;
    }
    
    // Calculate OHLC4
@@ -3054,6 +3122,15 @@ void CalculateCDCForSymbol(string symbol, string &trend, double &fastEMA, double
    CalculateCDC_EMA(ap, fast, InpCDCFastPeriod, actualBars);
    CalculateCDC_EMA(ap, slow, InpCDCSlowPeriod, actualBars);
    
+   // v3.7.1: Guard - Check array size before access
+   if(ArraySize(fast) < 2 || ArraySize(slow) < 2)
+   {
+      if(InpDebugMode)
+         PrintFormat("[CDC] %s: EMA array too small (fast=%d, slow=%d), status=LOADING", 
+                     symbol, ArraySize(fast), ArraySize(slow));
+      return false;
+   }
+   
    // Series array: index 0 = newest, index 1 = previous (same as Moneyx Smart System)
    fastEMA = fast[0];
    slowEMA = slow[0];
@@ -3063,7 +3140,7 @@ void CalculateCDCForSymbol(string symbol, string &trend, double &fastEMA, double
    {
       if(InpDebugMode)
          PrintFormat("[CDC] %s: Invalid EMA values (Fast: %.5f, Slow: %.5f)", symbol, fastEMA, slowEMA);
-      return;
+      return false;  // v3.7.1: Return false for LOADING state
    }
    
    // Get previous values for crossover detection
@@ -3088,26 +3165,31 @@ void CalculateCDCForSymbol(string symbol, string &trend, double &fastEMA, double
    }
    
    // Always log CDC result for debugging
-   PrintFormat("[CDC] %s: %s (Fast: %.5f, Slow: %.5f, FastPrev: %.5f, SlowPrev: %.5f, Bars: %d)", 
-               symbol, trend, fastEMA, slowEMA, fastPrev, slowPrev, actualBars);
+   if(InpDebugMode)
+      PrintFormat("[CDC] %s: %s (Fast: %.5f, Slow: %.5f, FastPrev: %.5f, SlowPrev: %.5f, Bars: %d)", 
+                  symbol, trend, fastEMA, slowEMA, fastPrev, slowPrev, actualBars);
+   
+   return true;  // v3.7.1: Return true = data ready
 }
 
 //+------------------------------------------------------------------+
-//| Update CDC Trend Data for Single Pair (v3.5.0)                     |
+//| Update CDC Trend Data for Single Pair (v3.7.1)                     |
 //+------------------------------------------------------------------+
 void UpdateCDCForPair(int pairIndex)
 {
    if(!InpUseCDCTrendFilter) return;
    if(!g_pairs[pairIndex].enabled) return;
    
-   CalculateCDCForSymbol(
+   // v3.7.1: Calculate CDC for Symbol A and track ready status
+   g_pairs[pairIndex].cdcReadyA = CalculateCDCForSymbol(
       g_pairs[pairIndex].symbolA,
       g_pairs[pairIndex].cdcTrendA,
       g_pairs[pairIndex].cdcFastA,
       g_pairs[pairIndex].cdcSlowA
    );
    
-   CalculateCDCForSymbol(
+   // v3.7.1: Calculate CDC for Symbol B and track ready status
+   g_pairs[pairIndex].cdcReadyB = CalculateCDCForSymbol(
       g_pairs[pairIndex].symbolB,
       g_pairs[pairIndex].cdcTrendB,
       g_pairs[pairIndex].cdcFastB,
@@ -3116,7 +3198,7 @@ void UpdateCDCForPair(int pairIndex)
 }
 
 //+------------------------------------------------------------------+
-//| Update CDC for All Enabled Pairs (v3.5.0)                          |
+//| Update CDC for All Enabled Pairs (v3.7.1: Per-symbol tracking)     |
 //+------------------------------------------------------------------+
 void UpdateAllPairsCDC()
 {
@@ -3124,21 +3206,116 @@ void UpdateAllPairsCDC()
    
    for(int i = 0; i < MAX_PAIRS; i++)
    {
-      if(g_pairs[i].enabled)
-         UpdateCDCForPair(i);
+      if(!g_pairs[i].enabled) continue;
+      
+      // v3.7.1: Check for new candle on each symbol's CDC timeframe independently
+      datetime tA = iTime(g_pairs[i].symbolA, InpCDCTimeframe, 0);
+      datetime tB = iTime(g_pairs[i].symbolB, InpCDCTimeframe, 0);
+      
+      // Guard: If iTime returns 0, data not ready
+      if(tA <= 0)
+      {
+         g_pairs[i].cdcReadyA = false;
+         if(InpDebugMode)
+            PrintFormat("[CDC] %s: iTime returned 0, status=LOADING", g_pairs[i].symbolA);
+      }
+      else if(tA != g_pairs[i].lastCdcTimeA)
+      {
+         // New candle for Symbol A - recalculate
+         g_pairs[i].lastCdcTimeA = tA;
+         g_pairs[i].cdcReadyA = CalculateCDCForSymbol(
+            g_pairs[i].symbolA,
+            g_pairs[i].cdcTrendA,
+            g_pairs[i].cdcFastA,
+            g_pairs[i].cdcSlowA
+         );
+      }
+      
+      if(tB <= 0)
+      {
+         g_pairs[i].cdcReadyB = false;
+         if(InpDebugMode)
+            PrintFormat("[CDC] %s: iTime returned 0, status=LOADING", g_pairs[i].symbolB);
+      }
+      else if(tB != g_pairs[i].lastCdcTimeB)
+      {
+         // New candle for Symbol B - recalculate
+         g_pairs[i].lastCdcTimeB = tB;
+         g_pairs[i].cdcReadyB = CalculateCDCForSymbol(
+            g_pairs[i].symbolB,
+            g_pairs[i].cdcTrendB,
+            g_pairs[i].cdcFastB,
+            g_pairs[i].cdcSlowB
+         );
+      }
    }
 }
 
 //+------------------------------------------------------------------+
-//| Check CDC Trend Confirmation for Entry (v3.5.0)                    |
+//| Get CDC Status Text for Dashboard (v3.7.1)                         |
+//| Returns: "LOADING" (orange), "BLOCK" (red), or "OK" (green)        |
+//+------------------------------------------------------------------+
+string GetCDCStatusText(int pairIndex, color &statusColor)
+{
+   // If filter is disabled
+   if(!InpUseCDCTrendFilter)
+   {
+      statusColor = clrDimGray;
+      return "OFF";
+   }
+   
+   // v3.7.1: Check if CDC data is ready for both symbols
+   if(!g_pairs[pairIndex].cdcReadyA || !g_pairs[pairIndex].cdcReadyB)
+   {
+      statusColor = clrOrange;  // Orange = Loading
+      return "LOADING";
+   }
+   
+   // Check if trends are NEUTRAL (calculation failed but returned true)
+   string trendA = g_pairs[pairIndex].cdcTrendA;
+   string trendB = g_pairs[pairIndex].cdcTrendB;
+   if(trendA == "NEUTRAL" || trendB == "NEUTRAL")
+   {
+      statusColor = clrOrange;
+      return "LOADING";
+   }
+   
+   // Data is ready - check trend confirmation
+   bool cdcOK = CheckCDCTrendConfirmation(pairIndex, "ANY");
+   if(cdcOK)
+   {
+      statusColor = clrLime;  // Green = OK
+      return "OK";
+   }
+   else
+   {
+      statusColor = clrOrangeRed;  // Red = Block (trend mismatch)
+      return "BLOCK";
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Check CDC Trend Confirmation for Entry (v3.7.1)                    |
 //| Logic:                                                             |
 //|   - Positive Correlation: Both symbols SAME trend                  |
 //|   - Negative Correlation: Both symbols OPPOSITE trend              |
+//|   - Returns FALSE if data is not ready (LOADING state)             |
 //+------------------------------------------------------------------+
 bool CheckCDCTrendConfirmation(int pairIndex, string side)
 {
    // If filter is disabled, always confirm
    if(!InpUseCDCTrendFilter) return true;
+   
+   // v3.7.1: Check if CDC data is ready
+   if(!g_pairs[pairIndex].cdcReadyA || !g_pairs[pairIndex].cdcReadyB)
+   {
+      if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
+         PrintFormat("CDC: Pair %d - LOADING (A:%s B:%s)", 
+                     pairIndex + 1, 
+                     g_pairs[pairIndex].cdcReadyA ? "Ready" : "Loading",
+                     g_pairs[pairIndex].cdcReadyB ? "Ready" : "Loading");
+      return false;  // Block entry during loading
+   }
    
    string trendA = g_pairs[pairIndex].cdcTrendA;
    string trendB = g_pairs[pairIndex].cdcTrendB;
@@ -5784,14 +5961,14 @@ void CreateDashboard()
    CreateLabel(prefix + "COL_B_Z", buyStartX + 310, colLabelY, "Z", COLOR_HEADER_TXT, 7, "Arial");
    CreateLabel(prefix + "COL_B_PL", buyStartX + 358, colLabelY, "P/L", COLOR_HEADER_TXT, 7, "Arial");
    
-   // Center columns: Pair | Trend | C-% | Type | Total P/L (v3.6.0 HF4: Beta hidden)
+   // Center columns: Pair | Trend | C-% | Type | Total P/L (v3.7.1: Balanced after Beta removed)
    CreateLabel(prefix + "COL_C_PR", centerX + 10, colLabelY, "Pair", COLOR_HEADER_TXT, 7, "Arial");
-   CreateLabel(prefix + "COL_C_TRD", centerX + 145, colLabelY, "Trend", COLOR_HEADER_TXT, 7, "Arial");  // v3.5.0: CDC Trend column
-   CreateLabel(prefix + "COL_C_CR", centerX + 195, colLabelY, "C-%", COLOR_HEADER_TXT, 7, "Arial");
-   CreateLabel(prefix + "COL_C_TY", centerX + 235, colLabelY, "Type", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_C_TRD", centerX + 135, colLabelY, "Trend", COLOR_HEADER_TXT, 7, "Arial");  // v3.7.1: Adjusted position
+   CreateLabel(prefix + "COL_C_CR", centerX + 200, colLabelY, "C-%", COLOR_HEADER_TXT, 7, "Arial");      // v3.7.1: Adjusted position
+   CreateLabel(prefix + "COL_C_TY", centerX + 255, colLabelY, "Type", COLOR_HEADER_TXT, 7, "Arial");     // v3.7.1: Adjusted position
    // v3.6.0 HF4: Beta column hidden - not frequently used
    // CreateLabel(prefix + "COL_C_BT", centerX + 280, colLabelY, "Beta", COLOR_HEADER_TXT, 7, "Arial");
-   CreateLabel(prefix + "COL_C_TP", centerX + 290, colLabelY, "Tot P/L", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_C_TP", centerX + 320, colLabelY, "Tot P/L", COLOR_HEADER_TXT, 7, "Arial");  // v3.7.1: Adjusted position
    
    // Sell columns: P/L | Z | Status | Target | Tot | Ord | Lot | Closed | X
    CreateLabel(prefix + "COL_S_PL", sellStartX + 5, colLabelY, "P/L", COLOR_HEADER_TXT, 7, "Arial");
@@ -5849,15 +6026,15 @@ void CreatePairRow(string prefix, int idx, int buyX, int centerX, int sellX, int
    CreateLabel(prefix + "P" + idxStr + "_B_Z", buyX + 310, y + 3, "0.00", COLOR_TEXT, FONT_SIZE, "Arial");
    CreateLabel(prefix + "P" + idxStr + "_B_PL", buyX + 358, y + 3, "0", COLOR_TEXT, FONT_SIZE, "Arial");  // Current P/L
    
-   // === CENTER DATA ===
+   // === CENTER DATA (v3.7.1: Balanced column positions) ===
    CreateLabel(prefix + "P" + idxStr + "_NAME", centerX + 10, y + 3, pairName, COLOR_TEXT, FONT_SIZE, "Arial Bold");
-   // v3.5.0: CDC Trend Status Badge (OK/BLOCK)
-   CreateLabel(prefix + "P" + idxStr + "_CDC", centerX + 145, y + 3, "-", COLOR_OFF, FONT_SIZE, "Arial Bold");
-   CreateLabel(prefix + "P" + idxStr + "_CORR", centerX + 195, y + 3, "0%", COLOR_TEXT, FONT_SIZE, "Arial");
-   CreateLabel(prefix + "P" + idxStr + "_TYPE", centerX + 235, y + 3, "Pos", COLOR_PROFIT, FONT_SIZE, "Arial");
+   // v3.7.1: CDC Trend Status Badge (OK/BLOCK/LOADING)
+   CreateLabel(prefix + "P" + idxStr + "_CDC", centerX + 135, y + 3, "-", COLOR_OFF, FONT_SIZE, "Arial Bold");
+   CreateLabel(prefix + "P" + idxStr + "_CORR", centerX + 200, y + 3, "0%", COLOR_TEXT, FONT_SIZE, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_TYPE", centerX + 255, y + 3, "Pos", COLOR_PROFIT, FONT_SIZE, "Arial");
    // v3.6.0 HF4: Beta label hidden
    // CreateLabel(prefix + "P" + idxStr + "_BETA", centerX + 280, y + 3, "1.00", COLOR_TEXT, FONT_SIZE, "Arial");
-   CreateLabel(prefix + "P" + idxStr + "_TPL", centerX + 290, y + 3, "0", COLOR_TEXT, 9, "Arial Bold");
+   CreateLabel(prefix + "P" + idxStr + "_TPL", centerX + 320, y + 3, "0", COLOR_TEXT, 9, "Arial Bold");
    
    // === SELL SIDE DATA ===
    // v3.3.0: P/L | Z | Status | Target | Tot | Ord | Lot | Closed | X
@@ -6101,18 +6278,10 @@ void UpdateDashboard()
       }
       else
       {
-         // v3.5.0: Update CDC Trend Status Badge
-         if(InpUseCDCTrendFilter)
-         {
-            bool cdcOK = CheckCDCTrendConfirmation(i, "ANY");
-            string cdcStatus = cdcOK ? "OK" : "BLOCK";
-            color cdcColor = cdcOK ? clrLime : clrOrangeRed;
-            UpdateLabel(prefix + "P" + idxStr + "_CDC", cdcStatus, cdcColor);
-         }
-         else
-         {
-            UpdateLabel(prefix + "P" + idxStr + "_CDC", "OFF", clrDimGray);
-         }
+         // v3.7.1: Update CDC Trend Status Badge using GetCDCStatusText
+         color cdcColor;
+         string cdcStatus = GetCDCStatusText(i, cdcColor);
+         UpdateLabel(prefix + "P" + idxStr + "_CDC", cdcStatus, cdcColor);
          
          double corr = g_pairs[i].correlation * 100;
          color corrColor = MathAbs(corr) >= InpMinCorrelation * 100 ? COLOR_PROFIT : COLOR_TEXT;
