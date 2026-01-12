@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                    MoneyX_Harmony_Flow_EA.mq5    |
-//|                   MoneyX Harmony Flow (Pairs Trading) v3.76      |
+//|                   MoneyX Harmony Flow (Pairs Trading) v3.77      |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "3.76"
+#property version   "3.77"
 #property strict
 #property description "MoneyX Harmony Flow - Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
-#property description "v3.76: 5-min Heartbeat Sync + Error Logging + Last Sync Display"
+#property description "v3.77: Magic Number-based Order Detection + Restore on Init"
 
 #include <Trade/Trade.mqh>
 
@@ -935,8 +935,130 @@ int OnInit()
       CreateDashboard();
    }
    
-   PrintFormat("=== MoneyX Harmony Flow EA v3.76 Initialized - %d Active Pairs ===", g_activePairs);
+   // v3.77: Restore open positions from previous session (Magic Number-based)
+   RestoreOpenPositions();
+   
+   PrintFormat("=== MoneyX Harmony Flow EA v3.77 Initialized - %d Active Pairs ===", g_activePairs);
    return(INIT_SUCCEEDED);
+}
+
+//+------------------------------------------------------------------+
+//| v3.77: Restore Open Positions from Previous Session                |
+//| Scans all positions with matching Magic Number and restores state |
+//+------------------------------------------------------------------+
+void RestoreOpenPositions()
+{
+   int restoredBuy = 0;
+   int restoredSell = 0;
+   
+   Print("[v3.77] Scanning for existing positions with Magic Number: ", InpMagicNumber);
+   
+   for(int pos = PositionsTotal() - 1; pos >= 0; pos--)
+   {
+      ulong ticket = PositionGetTicket(pos);
+      if(!PositionSelectByTicket(ticket)) continue;
+      
+      long magic = PositionGetInteger(POSITION_MAGIC);
+      string symbol = PositionGetString(POSITION_SYMBOL);
+      string comment = PositionGetString(POSITION_COMMENT);
+      ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+      
+      // Check if this is our order (Magic Number match OR legacy comment match)
+      bool isOurOrder = (magic == InpMagicNumber) || 
+                        (StringFind(comment, "HrmFlow_") == 0) ||
+                        (StringFind(comment, "StatArb_") == 0);
+      
+      if(!isOurOrder) continue;
+      
+      // Try to match with configured pairs
+      for(int i = 0; i < MAX_PAIRS; i++)
+      {
+         if(!g_pairs[i].enabled) continue;
+         
+         string symbolA = g_pairs[i].symbolA;
+         string symbolB = g_pairs[i].symbolB;
+         
+         if(symbol != symbolA && symbol != symbolB) continue;
+         
+         // Determine if BUY or SELL side based on comment or position type
+         bool isBuySide = false;
+         bool isSellSide = false;
+         
+         // Check comment for explicit side indication
+         if(StringFind(comment, "_BUY_") >= 0 || StringFind(comment, "GL_BUY") >= 0 || StringFind(comment, "GP_BUY") >= 0)
+         {
+            isBuySide = true;
+         }
+         else if(StringFind(comment, "_SELL_") >= 0 || StringFind(comment, "GL_SELL") >= 0 || StringFind(comment, "GP_SELL") >= 0)
+         {
+            isSellSide = true;
+         }
+         else
+         {
+            // Fallback: use position type for Symbol A
+            if(symbol == symbolA)
+            {
+               isBuySide = (posType == POSITION_TYPE_BUY);
+               isSellSide = (posType == POSITION_TYPE_SELL);
+            }
+         }
+         
+         // Restore BUY side
+         if(isBuySide && g_pairs[i].directionBuy != 1)
+         {
+            g_pairs[i].directionBuy = 1;  // Set to Active
+            if(symbol == symbolA && g_pairs[i].ticketBuyA == 0)
+            {
+               g_pairs[i].ticketBuyA = ticket;
+               g_pairs[i].lotBuyA = PositionGetDouble(POSITION_VOLUME);
+            }
+            else if(symbol == symbolB && g_pairs[i].ticketBuyB == 0)
+            {
+               g_pairs[i].ticketBuyB = ticket;
+               g_pairs[i].lotBuyB = PositionGetDouble(POSITION_VOLUME);
+            }
+            g_pairs[i].orderCountBuy++;
+            g_pairs[i].entryTimeBuy = (datetime)PositionGetInteger(POSITION_TIME);
+            restoredBuy++;
+            
+            PrintFormat("[v3.77] Restored BUY Pair %d: %s ticket=%d lot=%.2f", 
+                        i + 1, symbol, ticket, PositionGetDouble(POSITION_VOLUME));
+         }
+         
+         // Restore SELL side
+         if(isSellSide && g_pairs[i].directionSell != 1)
+         {
+            g_pairs[i].directionSell = 1;  // Set to Active
+            if(symbol == symbolA && g_pairs[i].ticketSellA == 0)
+            {
+               g_pairs[i].ticketSellA = ticket;
+               g_pairs[i].lotSellA = PositionGetDouble(POSITION_VOLUME);
+            }
+            else if(symbol == symbolB && g_pairs[i].ticketSellB == 0)
+            {
+               g_pairs[i].ticketSellB = ticket;
+               g_pairs[i].lotSellB = PositionGetDouble(POSITION_VOLUME);
+            }
+            g_pairs[i].orderCountSell++;
+            g_pairs[i].entryTimeSell = (datetime)PositionGetInteger(POSITION_TIME);
+            restoredSell++;
+            
+            PrintFormat("[v3.77] Restored SELL Pair %d: %s ticket=%d lot=%.2f", 
+                        i + 1, symbol, ticket, PositionGetDouble(POSITION_VOLUME));
+         }
+         
+         break;  // Found matching pair, move to next position
+      }
+   }
+   
+   if(restoredBuy > 0 || restoredSell > 0)
+   {
+      PrintFormat("[v3.77] Position Restore Complete: BUY=%d SELL=%d positions restored", restoredBuy, restoredSell);
+   }
+   else
+   {
+      Print("[v3.77] No existing positions found to restore");
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -4458,18 +4580,18 @@ void OpenGridLossBuy(int pairIndex)
       UpdateADXForPair(pairIndex);
    }
    
-   // Build comment
+   // v3.77: Build comment with Magic Number for order recovery
    string comment;
    if(corrType == -1 && InpUseADXForNegative)
    {
-       comment = StringFormat("HrmFlow_GL_BUY_%d[ADX:%.0f|%.0f]", 
-                              pairIndex + 1,
+       comment = StringFormat("HrmFlow_GL_BUY_%d[M:%d][ADX:%.0f|%.0f]", 
+                              pairIndex + 1, InpMagicNumber,
                               g_pairs[pairIndex].adxValueA,
                               g_pairs[pairIndex].adxValueB);
    }
    else
    {
-      comment = StringFormat("HrmFlow_GL_BUY_%d", pairIndex + 1);
+      comment = StringFormat("HrmFlow_GL_BUY_%d[M:%d]", pairIndex + 1, InpMagicNumber);
    }
    
    // Open Buy on Symbol A
@@ -4543,18 +4665,18 @@ void OpenGridLossSell(int pairIndex)
       UpdateADXForPair(pairIndex);
    }
    
-   // Build comment
+   // v3.77: Build comment with Magic Number for order recovery
    string comment;
    if(corrType == -1 && InpUseADXForNegative)
    {
-       comment = StringFormat("HrmFlow_GL_SELL_%d[ADX:%.0f|%.0f]", 
-                              pairIndex + 1,
+       comment = StringFormat("HrmFlow_GL_SELL_%d[M:%d][ADX:%.0f|%.0f]", 
+                              pairIndex + 1, InpMagicNumber,
                               g_pairs[pairIndex].adxValueA,
                               g_pairs[pairIndex].adxValueB);
    }
    else
    {
-      comment = StringFormat("HrmFlow_GL_SELL_%d", pairIndex + 1);
+      comment = StringFormat("HrmFlow_GL_SELL_%d[M:%d]", pairIndex + 1, InpMagicNumber);
    }
    
    // Open Sell on Symbol A
@@ -4628,18 +4750,18 @@ void OpenGridProfitBuy(int pairIndex)
       UpdateADXForPair(pairIndex);
    }
    
-   // Build comment
+   // v3.77: Build comment with Magic Number for order recovery
    string comment;
    if(corrType == -1 && InpUseADXForNegative)
    {
-       comment = StringFormat("HrmFlow_GP_BUY_%d[ADX:%.0f|%.0f]", 
-                              pairIndex + 1,
+       comment = StringFormat("HrmFlow_GP_BUY_%d[M:%d][ADX:%.0f|%.0f]", 
+                              pairIndex + 1, InpMagicNumber,
                               g_pairs[pairIndex].adxValueA,
                               g_pairs[pairIndex].adxValueB);
    }
    else
    {
-      comment = StringFormat("HrmFlow_GP_BUY_%d", pairIndex + 1);
+      comment = StringFormat("HrmFlow_GP_BUY_%d[M:%d]", pairIndex + 1, InpMagicNumber);
    }
    
    // Open BUY on Symbol A (same direction as Initial)
@@ -4709,18 +4831,18 @@ void OpenGridProfitSell(int pairIndex)
       UpdateADXForPair(pairIndex);
    }
    
-   // Build comment
+   // v3.77: Build comment with Magic Number for order recovery
    string comment;
    if(corrType == -1 && InpUseADXForNegative)
    {
-       comment = StringFormat("HrmFlow_GP_SELL_%d[ADX:%.0f|%.0f]", 
-                              pairIndex + 1,
+       comment = StringFormat("HrmFlow_GP_SELL_%d[M:%d][ADX:%.0f|%.0f]", 
+                              pairIndex + 1, InpMagicNumber,
                               g_pairs[pairIndex].adxValueA,
                               g_pairs[pairIndex].adxValueB);
    }
    else
    {
-      comment = StringFormat("HrmFlow_GP_SELL_%d", pairIndex + 1);
+      comment = StringFormat("HrmFlow_GP_SELL_%d[M:%d]", pairIndex + 1, InpMagicNumber);
    }
    
    // Open SELL on Symbol A
@@ -4841,18 +4963,18 @@ bool OpenBuySideTrade(int pairIndex)
       UpdateADXForPair(pairIndex);
    }
    
-   // v3.5.3 HF3: Add ADX values in comment for Negative Correlation pairs
+   // v3.77: Add Magic Number in comment for order recovery across EA updates
    string comment;
    if(corrType == -1 && InpUseADXForNegative)
    {
-       comment = StringFormat("HrmFlow_BUY_%d[ADX:%.0f|%.0f]", 
-                              pairIndex + 1,
+       comment = StringFormat("HrmFlow_BUY_%d[M:%d][ADX:%.0f|%.0f]", 
+                              pairIndex + 1, InpMagicNumber,
                               g_pairs[pairIndex].adxValueA,
                               g_pairs[pairIndex].adxValueB);
    }
    else
    {
-      comment = StringFormat("HrmFlow_BUY_%d", pairIndex + 1);
+      comment = StringFormat("HrmFlow_BUY_%d[M:%d]", pairIndex + 1, InpMagicNumber);
    }
    
    ulong ticketA = 0;
@@ -4995,18 +5117,18 @@ bool OpenSellSideTrade(int pairIndex)
       UpdateADXForPair(pairIndex);
    }
    
-   // v3.5.3 HF3: Add ADX values in comment for Negative Correlation pairs
+   // v3.77: Add Magic Number in comment for order recovery across EA updates
    string comment;
    if(corrType == -1 && InpUseADXForNegative)
    {
-       comment = StringFormat("HrmFlow_SELL_%d[ADX:%.0f|%.0f]", 
-                              pairIndex + 1,
+       comment = StringFormat("HrmFlow_SELL_%d[M:%d][ADX:%.0f|%.0f]", 
+                              pairIndex + 1, InpMagicNumber,
                               g_pairs[pairIndex].adxValueA,
                               g_pairs[pairIndex].adxValueB);
    }
    else
    {
-      comment = StringFormat("HrmFlow_SELL_%d", pairIndex + 1);
+      comment = StringFormat("HrmFlow_SELL_%d[M:%d]", pairIndex + 1, InpMagicNumber);
    }
    
    ulong ticketA = 0;
@@ -5422,7 +5544,7 @@ bool VerifyPositionExists(ulong ticket)
 }
 
 //+------------------------------------------------------------------+
-//| Force Close Buy Side (v3.3.2 - Close ALL related positions)        |
+//| Force Close Buy Side (v3.77 - Magic Number + Comment detection)    |
 //+------------------------------------------------------------------+
 void ForceCloseBuySide(int pairIndex)
 {
@@ -5430,8 +5552,10 @@ void ForceCloseBuySide(int pairIndex)
    string symbolB = g_pairs[pairIndex].symbolB;
    string mainComment = StringFormat("HrmFlow_BUY_%d", pairIndex + 1);
    string avgComment = StringFormat("HrmFlow_AVG_BUY_%d", pairIndex + 1);
+   string glComment = StringFormat("HrmFlow_GL_BUY_%d", pairIndex + 1);
+   string gpComment = StringFormat("HrmFlow_GP_BUY_%d", pairIndex + 1);
    
-   // Close ALL positions on both symbols with matching comments
+   // v3.77: Close ALL positions using Magic Number + Comment match
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       ulong ticket = PositionGetTicket(i);
@@ -5439,13 +5563,24 @@ void ForceCloseBuySide(int pairIndex)
       
       string posSymbol = PositionGetString(POSITION_SYMBOL);
       string posComment = PositionGetString(POSITION_COMMENT);
+      long magic = PositionGetInteger(POSITION_MAGIC);
       
-      // Close if symbol matches AND comment matches
-      if((posSymbol == symbolA || posSymbol == symbolB) &&
-         (StringFind(posComment, mainComment) >= 0 || StringFind(posComment, avgComment) >= 0))
+      // v3.77: Check Magic Number OR comment prefix for backward compatibility
+      bool isMagicMatch = (magic == InpMagicNumber);
+      bool isCommentMatch = (StringFind(posComment, mainComment) >= 0 || 
+                             StringFind(posComment, avgComment) >= 0 ||
+                             StringFind(posComment, glComment) >= 0 ||
+                             StringFind(posComment, gpComment) >= 0);
+      
+      // Close if symbol matches AND (Magic OR Comment matches)
+      if((posSymbol == symbolA || posSymbol == symbolB) && (isMagicMatch || isCommentMatch))
       {
-         g_trade.PositionClose(ticket);
-         PrintFormat("Force closed ticket %d (%s)", ticket, posSymbol);
+         // Also verify the position is for BUY side (check comment or position type)
+         if(StringFind(posComment, "_BUY_") >= 0 || StringFind(posComment, "GL_BUY") >= 0 || StringFind(posComment, "GP_BUY") >= 0)
+         {
+            g_trade.PositionClose(ticket);
+            PrintFormat("Force closed ticket %d (%s)", ticket, posSymbol);
+         }
       }
    }
    
@@ -5497,7 +5632,7 @@ void ForceCloseBuySide(int pairIndex)
 }
 
 //+------------------------------------------------------------------+
-//| Force Close Sell Side (v3.3.2 - Close ALL related positions)       |
+//| Force Close Sell Side (v3.77 - Magic Number + Comment detection)   |
 //+------------------------------------------------------------------+
 void ForceCloseSellSide(int pairIndex)
 {
@@ -5505,8 +5640,10 @@ void ForceCloseSellSide(int pairIndex)
    string symbolB = g_pairs[pairIndex].symbolB;
    string mainComment = StringFormat("HrmFlow_SELL_%d", pairIndex + 1);
    string avgComment = StringFormat("HrmFlow_AVG_SELL_%d", pairIndex + 1);
+   string glComment = StringFormat("HrmFlow_GL_SELL_%d", pairIndex + 1);
+   string gpComment = StringFormat("HrmFlow_GP_SELL_%d", pairIndex + 1);
    
-   // Close ALL positions on both symbols with matching comments
+   // v3.77: Close ALL positions using Magic Number + Comment match
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       ulong ticket = PositionGetTicket(i);
@@ -5514,13 +5651,24 @@ void ForceCloseSellSide(int pairIndex)
       
       string posSymbol = PositionGetString(POSITION_SYMBOL);
       string posComment = PositionGetString(POSITION_COMMENT);
+      long magic = PositionGetInteger(POSITION_MAGIC);
       
-      // Close if symbol matches AND comment matches
-      if((posSymbol == symbolA || posSymbol == symbolB) &&
-         (StringFind(posComment, mainComment) >= 0 || StringFind(posComment, avgComment) >= 0))
+      // v3.77: Check Magic Number OR comment prefix for backward compatibility
+      bool isMagicMatch = (magic == InpMagicNumber);
+      bool isCommentMatch = (StringFind(posComment, mainComment) >= 0 || 
+                             StringFind(posComment, avgComment) >= 0 ||
+                             StringFind(posComment, glComment) >= 0 ||
+                             StringFind(posComment, gpComment) >= 0);
+      
+      // Close if symbol matches AND (Magic OR Comment matches)
+      if((posSymbol == symbolA || posSymbol == symbolB) && (isMagicMatch || isCommentMatch))
       {
-         g_trade.PositionClose(ticket);
-         PrintFormat("Force closed ticket %d (%s)", ticket, posSymbol);
+         // Also verify the position is for SELL side
+         if(StringFind(posComment, "_SELL_") >= 0 || StringFind(posComment, "GL_SELL") >= 0 || StringFind(posComment, "GP_SELL") >= 0)
+         {
+            g_trade.PositionClose(ticket);
+            PrintFormat("Force closed ticket %d (%s)", ticket, posSymbol);
+         }
       }
    }
    
@@ -6064,7 +6212,7 @@ void CreateDashboard()
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_XDISTANCE, PANEL_X + (PANEL_WIDTH / 2));
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_YDISTANCE, PANEL_Y + 4);
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_ANCHOR, ANCHOR_UPPER);
-   ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_TEXT, "MoneyX Harmony Flow EA v3.76");
+   ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_TEXT, "MoneyX Harmony Flow EA v3.77");
    ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_FONT, "Arial Bold");
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_FONTSIZE, 10);
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_COLOR, COLOR_GOLD);
@@ -6350,7 +6498,7 @@ void UpdateDashboard()
    double equity = AccountInfoDouble(ACCOUNT_EQUITY);
    double margin = AccountInfoDouble(ACCOUNT_MARGIN);
    
-   // v3.6.0 HF4: Calculate totals from ALL open positions (including Grid orders)
+   // v3.77: Calculate totals from ALL open positions using Magic Number (backward compatible)
    double totalLot = 0;
    int totalOrders = 0;
    
@@ -6359,9 +6507,13 @@ void UpdateDashboard()
       ulong ticket = PositionGetTicket(pos);
       if(PositionSelectByTicket(ticket))
       {
+         long magic = PositionGetInteger(POSITION_MAGIC);
          string comment = PositionGetString(POSITION_COMMENT);
-         // Include all HrmFlow positions: Main, AVG, GL (Grid Loss), GP (Grid Profit)
-         if(StringFind(comment, "HrmFlow_") == 0)
+         // v3.77: Check Magic Number first, then fallback to comment prefix for backward compatibility
+         bool isOurOrder = (magic == InpMagicNumber) || 
+                           (StringFind(comment, "HrmFlow_") == 0) ||
+                           (StringFind(comment, "StatArb_") == 0);
+         if(isOurOrder)
          {
             totalLot += PositionGetDouble(POSITION_VOLUME);
             totalOrders++;
