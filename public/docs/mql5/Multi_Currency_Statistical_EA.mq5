@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                Multi_Currency_Statistical_EA.mq5 |
-//|                 Statistical Arbitrage (Pairs Trading) v3.7.2     |
+//|                 Statistical Arbitrage (Pairs Trading) v3.7.3     |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "3.72"
+#property version   "3.73"
 #property strict
 #property description "Statistical Arbitrage / Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
-#property description "v3.7.2: Fix CDC log spam - only log on status change"
+#property description "v3.7.3: Fix EA status + center title + Pause button + status display"
 
 #include <Trade/Trade.mqh>
 
@@ -1287,25 +1287,26 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
 void UpdateEAStatus()
 {
    // Priority: Suspended > Expired > Invalid > Paused > Working
+   // v3.7.3: Use lowercase to match backend expectation
    if(g_licenseStatus == LICENSE_SUSPENDED)
    {
-      g_eaStatus = "Suspended";
+      g_eaStatus = "suspended";
    }
    else if(g_licenseStatus == LICENSE_EXPIRED)
    {
-      g_eaStatus = "Expired";
+      g_eaStatus = "expired";
    }
    else if(!g_isLicenseValid && g_licenseStatus != LICENSE_VALID)
    {
-      g_eaStatus = "Invalid";
+      g_eaStatus = "invalid";
    }
    else if(g_isPaused || g_isNewsPaused)
    {
-      g_eaStatus = "Paused";
+      g_eaStatus = "paused";
    }
    else
    {
-      g_eaStatus = "Working";
+      g_eaStatus = "working";
    }
 }
 
@@ -1522,6 +1523,34 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
       {
          StopAllPairs();
          ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
+      }
+      // v3.7.3: Global Pause/Start Button
+      else if(sparam == prefix + "_BTN_PAUSE")
+      {
+         g_isPaused = !g_isPaused;
+         
+         // Update button appearance
+         if(g_isPaused)
+         {
+            ObjectSetString(0, sparam, OBJPROP_TEXT, "Start");
+            ObjectSetInteger(0, sparam, OBJPROP_BGCOLOR, clrGreen);
+            g_pauseReason = "MANUAL";
+         }
+         else
+         {
+            ObjectSetString(0, sparam, OBJPROP_TEXT, "Pause");
+            ObjectSetInteger(0, sparam, OBJPROP_BGCOLOR, clrOrangeRed);
+            g_pauseReason = "";
+         }
+         
+         ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
+         
+         // Trigger sync to update backend status
+         UpdateEAStatus();
+         if(g_isLicenseValid)
+            SyncAccountData(SYNC_SCHEDULED);
+            
+         PrintFormat("[v3.7.3] Global Pause toggled: %s", g_isPaused ? "PAUSED" : "RUNNING");
       }
    }
    else if(id == CHARTEVENT_OBJECT_ENDEDIT)
@@ -5932,12 +5961,31 @@ void CreateDashboard()
    // Main background
    CreateRectangle(prefix + "BG_MAIN", PANEL_X, PANEL_Y, PANEL_WIDTH, PANEL_HEIGHT, COLOR_BG_DARK, COLOR_BG_DARK);
    
-   // v3.3.0: Add EA Title Row
+   // v3.7.3: Add EA Title Row with centered title + EA Status + Pause button
    int titleHeight = 22;
    CreateRectangle(prefix + "TITLE_BG", PANEL_X, PANEL_Y, PANEL_WIDTH, titleHeight, C'20,40,60', C'20,40,60');
-   CreateLabel(prefix + "TITLE_NAME", PANEL_X + 10, PANEL_Y + 4, 
-               "Multi-Currency Statistical EA v3.5.0 - MoneyX Trading", 
-               COLOR_GOLD, 10, "Arial Bold");
+   
+   // v3.7.3: Center the title using manual centering approach
+   ObjectCreate(0, prefix + "TITLE_NAME", OBJ_LABEL, 0, 0, 0);
+   ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_CORNER, CORNER_LEFT_UPPER);
+   ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_XDISTANCE, PANEL_X + (PANEL_WIDTH / 2));
+   ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_YDISTANCE, PANEL_Y + 4);
+   ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_ANCHOR, ANCHOR_UPPER);
+   ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_TEXT, "Multi-Currency Statistical EA v3.7.3 - MoneyX Trading");
+   ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_FONT, "Arial Bold");
+   ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_FONTSIZE, 10);
+   ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_COLOR, COLOR_GOLD);
+   ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_HIDDEN, true);
+   
+   // v3.7.3: EA Status Display (right side of title bar)
+   CreateLabel(prefix + "EA_STATUS_LBL", PANEL_X + PANEL_WIDTH - 160, PANEL_Y + 5, "Status:", COLOR_TEXT_WHITE, 8, "Arial");
+   CreateLabel(prefix + "EA_STATUS_VAL", PANEL_X + PANEL_WIDTH - 115, PANEL_Y + 4, "Working", clrLime, 9, "Arial Bold");
+   
+   // v3.7.3: Global Pause/Start Button (right-most on title bar)
+   string pauseBtnText = g_isPaused ? "Start" : "Pause";
+   color pauseBtnColor = g_isPaused ? clrGreen : clrOrangeRed;
+   CreateButton(prefix + "_BTN_PAUSE", PANEL_X + PANEL_WIDTH - 58, PANEL_Y + 2, 50, 18, pauseBtnText, pauseBtnColor, clrWhite);
    
    // v3.2.9 Hotfix: Increased header height and spacing to prevent overlap
    int buyWidth = 395;
@@ -6234,6 +6282,38 @@ void UpdateDashboard()
       ddPercent = MathAbs(g_totalCurrentProfit) / balance * 100;
    }
    if(ddPercent > g_maxDrawdownPercent) g_maxDrawdownPercent = ddPercent;
+   
+   // v3.7.3: Update EA Status Display on title bar
+   string eaStatusDisplay = "Working";
+   color eaStatusColor = clrLime;
+   
+   if(g_licenseStatus == LICENSE_SUSPENDED)
+   {
+      eaStatusDisplay = "Suspended";
+      eaStatusColor = clrRed;
+   }
+   else if(g_licenseStatus == LICENSE_EXPIRED)
+   {
+      eaStatusDisplay = "Expired";
+      eaStatusColor = clrRed;
+   }
+   else if(!g_isLicenseValid)
+   {
+      eaStatusDisplay = "Invalid";
+      eaStatusColor = clrRed;
+   }
+   else if(g_isPaused)
+   {
+      eaStatusDisplay = "Paused";
+      eaStatusColor = clrOrange;
+   }
+   else if(g_isNewsPaused)
+   {
+      eaStatusDisplay = "News";
+      eaStatusColor = clrYellow;
+   }
+   
+   UpdateLabel(prefix + "EA_STATUS_VAL", eaStatusDisplay, eaStatusColor);
    
    // ===== Update Account Labels =====
    UpdateLabel(prefix + "V_BAL", DoubleToString(balance, 2), balance >= g_initialBalance ? COLOR_PROFIT : COLOR_LOSS);
