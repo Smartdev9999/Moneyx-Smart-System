@@ -623,7 +623,7 @@ enum ENUM_BB_MA_TYPE
                             <p className="text-sm text-muted-foreground">{system.description || 'ไม่มีคำอธิบาย'}</p>
                           </div>
                         </div>
-                        <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2">
                           <div className="flex items-center gap-1 text-sm text-muted-foreground mr-2">
                             <LinkIcon className="w-3 h-3" />
                             <span>{system.accounts_count || 0} accounts</span>
@@ -634,6 +634,34 @@ enum ENUM_BB_MA_TYPE
                           <Badge variant={system.is_active ? "default" : "secondary"}>
                             {system.is_active ? 'Active' : 'Inactive'}
                           </Badge>
+                          {(system.name.includes('Statistical') || system.name.includes('Multi Currency')) && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              title="Sync version from EA file"
+                              onClick={async (e) => {
+                                e.stopPropagation();
+                                try {
+                                  const response = await fetch('/docs/mql5/Multi_Currency_Statistical_EA.mq5');
+                                  const code = await response.text();
+                                  const versionMatch = code.match(/#property\s+version\s+"([^"]+)"/);
+                                  if (!versionMatch) throw new Error('Version not found');
+                                  const newVersion = versionMatch[1];
+                                  const { error } = await supabase
+                                    .from('trading_systems')
+                                    .update({ version: newVersion, updated_at: new Date().toISOString() })
+                                    .eq('id', system.id);
+                                  if (error) throw error;
+                                  toast({ title: "Sync Complete", description: `Version updated to v${newVersion}` });
+                                  fetchSystems();
+                                } catch (err: any) {
+                                  toast({ title: "Sync Failed", description: err.message, variant: "destructive" });
+                                }
+                              }}
+                            >
+                              <RefreshCw className="w-4 h-4" />
+                            </Button>
+                          )}
                           <Button
                             variant="ghost"
                             size="icon"

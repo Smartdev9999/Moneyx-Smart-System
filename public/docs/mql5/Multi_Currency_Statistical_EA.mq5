@@ -4,11 +4,11 @@
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "3.68"
+#property version   "3.69"
 #property strict
 #property description "Statistical Arbitrage / Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
-#property description "v3.6.8: OnTradeTransaction Sync + EA Status Reporting"
+#property description "v3.6.9: Fixed CDC ArraySetAsSeries bug + corrected EMA index access"
 
 #include <Trade/Trade.mqh>
 
@@ -2995,10 +2995,11 @@ void CalculateCDCForSymbol(string symbol, string &trend, double &fastEMA, double
    }
    
    double closeArr[], highArr[], lowArr[], openArr[];
-   ArraySetAsSeries(closeArr, true);
-   ArraySetAsSeries(highArr, true);
-   ArraySetAsSeries(lowArr, true);
-   ArraySetAsSeries(openArr, true);
+   // DO NOT set as series - CalculateCDC_EMA expects oldest first (index 0 = oldest)
+   ArraySetAsSeries(closeArr, false);
+   ArraySetAsSeries(highArr, false);
+   ArraySetAsSeries(lowArr, false);
+   ArraySetAsSeries(openArr, false);
    
    int barsNeeded = InpCDCSlowPeriod * 3 + 50;
    int minBarsRequired = InpCDCSlowPeriod + 10;  // Minimum bars needed for calculation
@@ -3053,15 +3054,35 @@ void CalculateCDCForSymbol(string symbol, string &trend, double &fastEMA, double
    CalculateCDC_EMA(ap, fast, InpCDCFastPeriod, actualBars);
    CalculateCDC_EMA(ap, slow, InpCDCSlowPeriod, actualBars);
    
-   fastEMA = fast[0];
-   slowEMA = slow[0];
+   // Non-series array: index 0 = oldest, last index = newest
+   int newestIdx = actualBars - 1;
+   int prevIdx = actualBars - 2;
+   
+   // Safety check
+   if(newestIdx < 0 || prevIdx < 0)
+   {
+      if(InpDebugMode)
+         Print("[CDC] ", symbol, ": Not enough bars after calculation");
+      return;
+   }
+   
+   fastEMA = fast[newestIdx];
+   slowEMA = slow[newestIdx];
+   
+   // Validate EMA values
+   if(fastEMA == 0 || slowEMA == 0)
+   {
+      if(InpDebugMode)
+         PrintFormat("[CDC] %s: Invalid EMA values (Fast: %.5f, Slow: %.5f)", symbol, fastEMA, slowEMA);
+      return;
+   }
    
    // Determine Trend
    if(InpRequireStrongTrend)
    {
       // Require actual crossover
-      bool crossUp = (fast[1] <= slow[1] && fast[0] > slow[0]);
-      bool crossDown = (fast[1] >= slow[1] && fast[0] < slow[0]);
+      bool crossUp = (fast[prevIdx] <= slow[prevIdx] && fast[newestIdx] > slow[newestIdx]);
+      bool crossDown = (fast[prevIdx] >= slow[prevIdx] && fast[newestIdx] < slow[newestIdx]);
       
       if(crossUp) trend = "BULLISH";
       else if(crossDown) trend = "BEARISH";
@@ -3069,13 +3090,12 @@ void CalculateCDCForSymbol(string symbol, string &trend, double &fastEMA, double
    else
    {
       // Just check relative position
-      if(fast[0] > slow[0]) trend = "BULLISH";
-      else if(fast[0] < slow[0]) trend = "BEARISH";
+      if(fast[newestIdx] > slow[newestIdx]) trend = "BULLISH";
+      else if(fast[newestIdx] < slow[newestIdx]) trend = "BEARISH";
    }
    
-   if(InpDebugMode)
-      PrintFormat("[CDC] %s: %s (Fast: %.5f, Slow: %.5f, Bars: %d/%d)", 
-                  symbol, trend, fastEMA, slowEMA, actualBars, barsNeeded);
+   // Always log CDC result for debugging
+   PrintFormat("[CDC] %s: %s (Fast: %.5f, Slow: %.5f, Bars: %d)", symbol, trend, fastEMA, slowEMA, actualBars);
 }
 
 //+------------------------------------------------------------------+
