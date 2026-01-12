@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                         Harmony_Dream_EA.mq5     |
-//|                      Harmony Dream (Pairs Trading) v1.0          |
+//|                      Harmony Dream (Pairs Trading) v1.1          |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "1.00"
+#property version   "1.10"
 #property strict
 #property description "Harmony Dream - Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
-#property description "v1.0: Forked from MoneyX Harmony Flow v3.77"
+#property description "v1.1: Group Target System (6 Groups x 5 Pairs)"
 
 #include <Trade/Trade.mqh>
 
@@ -24,6 +24,8 @@
 #define MAX_PAIRS 30
 #define MAX_LOOKBACK 200
 #define MAX_AVG_LEVELS 10
+#define MAX_GROUPS 6
+#define PAIRS_PER_GROUP 5
 
 //+------------------------------------------------------------------+
 //| PAIR DATA STRUCTURE (with embedded arrays)                         |
@@ -357,14 +359,7 @@ input ENUM_TIMEFRAMES InpADXTimeframe = PERIOD_H1;      // ADX Timeframe
 input int      InpADXPeriod = 14;                       // ADX Period
 input double   InpADXMinStrength = 20.0;                // Minimum ADX for Trend Strength
 
-input group "=== Basket Target Settings (v3.6.0 HF3) ==="
-input double   InpTotalTarget = 0;              // Basket Closed Profit Target $ (0=Disable)
-input double   InpBasketFloatingTarget = 0;     // Basket Floating Profit Target $ (0=Disable)
-input int      InpDefaultMaxOrderBuy = 5;       // Total Max Orders Buy (Main + Grid)
-input int      InpDefaultMaxOrderSell = 5;      // Total Max Orders Sell (Main + Grid)
-input double   InpDefaultTargetBuy = 10.0;      // Default Target (Buy Side) $
-input double   InpDefaultTargetSell = 10.0;     // Default Target (Sell Side) $
-
+// v1.1: Global Basket Target Settings REMOVED - now per-group settings below each Pair Configuration
 input group "=== Dashboard Settings ==="
 input int      InpPanelX = 10;                  // Dashboard X Position
 input int      InpPanelY = 30;                  // Dashboard Y Position
@@ -431,6 +426,17 @@ input bool     InpEnablePair5 = true;           // Enable Pair 5
 input string   InpPair5_SymbolA = "EURUSD";     // Pair 5: Symbol A
 input string   InpPair5_SymbolB = "USDCHF";     // Pair 5: Symbol B
 
+input group "=== Group 1-5 Target Settings (v1.1) ==="
+input double   InpGroup1ClosedTarget = 0;       // Basket Closed Profit Target $ (0=Disable)
+input double   InpGroup1FloatingTarget = 0;     // Basket Floating Profit Target $ (0=Disable)
+input int      InpGroup1MaxOrderBuy = 5;        // Total Max Orders Buy (Main + Grid)
+input int      InpGroup1MaxOrderSell = 5;       // Total Max Orders Sell (Main + Grid)
+input double   InpGroup1TargetBuy = 10.0;       // Default Target (Buy Side) $
+input double   InpGroup1TargetSell = 10.0;      // Default Target (Sell Side) $
+
+input group "=== Pair 6-10 Configuration ==="
+input string   InpPair5_SymbolB = "USDCHF";     // Pair 5: Symbol B
+
 input group "=== Pair 6-10 Configuration ==="
 input bool     InpEnablePair6 = false;          // Enable Pair 6
 input string   InpPair6_SymbolA = "EURUSD";     // Pair 6: Symbol A
@@ -452,7 +458,13 @@ input bool     InpEnablePair10 = false;         // Enable Pair 10
 input string   InpPair10_SymbolA = "EURJPY";    // Pair 10: Symbol A
 input string   InpPair10_SymbolB = "GBPJPY";    // Pair 10: Symbol B
 
-input group "=== Pair 11-15 Configuration ==="
+input group "=== Group 6-10 Target Settings (v1.1) ==="
+input double   InpGroup2ClosedTarget = 0;       // Basket Closed Profit Target $ (0=Disable)
+input double   InpGroup2FloatingTarget = 0;     // Basket Floating Profit Target $ (0=Disable)
+input int      InpGroup2MaxOrderBuy = 5;        // Total Max Orders Buy (Main + Grid)
+input int      InpGroup2MaxOrderSell = 5;       // Total Max Orders Sell (Main + Grid)
+input double   InpGroup2TargetBuy = 10.0;       // Default Target (Buy Side) $
+input double   InpGroup2TargetSell = 10.0;      // Default Target (Sell Side) $
 input bool     InpEnablePair11 = false;         // Enable Pair 11
 input string   InpPair11_SymbolA = "EURGBP";    // Pair 11: Symbol A
 input string   InpPair11_SymbolB = "EURCHF";    // Pair 11: Symbol B
@@ -473,7 +485,13 @@ input bool     InpEnablePair15 = false;         // Enable Pair 15
 input string   InpPair15_SymbolA = "EURAUD";    // Pair 15: Symbol A
 input string   InpPair15_SymbolB = "EURNZD";    // Pair 15: Symbol B
 
-input group "=== Pair 16-20 Configuration ==="
+input group "=== Group 11-15 Target Settings (v1.1) ==="
+input double   InpGroup3ClosedTarget = 0;       // Basket Closed Profit Target $ (0=Disable)
+input double   InpGroup3FloatingTarget = 0;     // Basket Floating Profit Target $ (0=Disable)
+input int      InpGroup3MaxOrderBuy = 5;        // Total Max Orders Buy (Main + Grid)
+input int      InpGroup3MaxOrderSell = 5;       // Total Max Orders Sell (Main + Grid)
+input double   InpGroup3TargetBuy = 10.0;       // Default Target (Buy Side) $
+input double   InpGroup3TargetSell = 10.0;      // Default Target (Sell Side) $
 input bool     InpEnablePair16 = false;         // Enable Pair 16
 input string   InpPair16_SymbolA = "CHFJPY";    // Pair 16: Symbol A
 input string   InpPair16_SymbolB = "CADJPY";    // Pair 16: Symbol B
@@ -494,7 +512,13 @@ input bool     InpEnablePair20 = false;         // Enable Pair 20
 input string   InpPair20_SymbolA = "CADCHF";    // Pair 20: Symbol A
 input string   InpPair20_SymbolB = "CADJPY";    // Pair 20: Symbol B
 
-input group "=== Pair 21-25 Configuration ==="
+input group "=== Group 16-20 Target Settings (v1.1) ==="
+input double   InpGroup4ClosedTarget = 0;       // Basket Closed Profit Target $ (0=Disable)
+input double   InpGroup4FloatingTarget = 0;     // Basket Floating Profit Target $ (0=Disable)
+input int      InpGroup4MaxOrderBuy = 5;        // Total Max Orders Buy (Main + Grid)
+input int      InpGroup4MaxOrderSell = 5;       // Total Max Orders Sell (Main + Grid)
+input double   InpGroup4TargetBuy = 10.0;       // Default Target (Buy Side) $
+input double   InpGroup4TargetSell = 10.0;      // Default Target (Sell Side) $
 input bool     InpEnablePair21 = false;         // Enable Pair 21
 input string   InpPair21_SymbolA = "AUDCHF";    // Pair 21: Symbol A
 input string   InpPair21_SymbolB = "NZDCHF";    // Pair 21: Symbol B
@@ -515,7 +539,13 @@ input bool     InpEnablePair25 = false;         // Enable Pair 25
 input string   InpPair25_SymbolA = "NZDJPY";    // Pair 25: Symbol A
 input string   InpPair25_SymbolB = "CADJPY";    // Pair 25: Symbol B
 
-input group "=== Pair 26-30 Configuration ==="
+input group "=== Group 21-25 Target Settings (v1.1) ==="
+input double   InpGroup5ClosedTarget = 0;       // Basket Closed Profit Target $ (0=Disable)
+input double   InpGroup5FloatingTarget = 0;     // Basket Floating Profit Target $ (0=Disable)
+input int      InpGroup5MaxOrderBuy = 5;        // Total Max Orders Buy (Main + Grid)
+input int      InpGroup5MaxOrderSell = 5;       // Total Max Orders Sell (Main + Grid)
+input double   InpGroup5TargetBuy = 10.0;       // Default Target (Buy Side) $
+input double   InpGroup5TargetSell = 10.0;      // Default Target (Sell Side) $
 input bool     InpEnablePair26 = false;         // Enable Pair 26
 input string   InpPair26_SymbolA = "AUDSGD";    // Pair 26: Symbol A
 input string   InpPair26_SymbolB = "NZDSGD";    // Pair 26: Symbol B
@@ -536,7 +566,13 @@ input bool     InpEnablePair30 = false;         // Enable Pair 30
 input string   InpPair30_SymbolA = "USDMXN";    // Pair 30: Symbol A
 input string   InpPair30_SymbolB = "EURMXN";    // Pair 30: Symbol B
 
-input group "=== License Settings (v3.6.5) ==="
+input group "=== Group 26-30 Target Settings (v1.1) ==="
+input double   InpGroup6ClosedTarget = 0;       // Basket Closed Profit Target $ (0=Disable)
+input double   InpGroup6FloatingTarget = 0;     // Basket Floating Profit Target $ (0=Disable)
+input int      InpGroup6MaxOrderBuy = 5;        // Total Max Orders Buy (Main + Grid)
+input int      InpGroup6MaxOrderSell = 5;       // Total Max Orders Sell (Main + Grid)
+input double   InpGroup6TargetBuy = 10.0;       // Default Target (Buy Side) $
+input double   InpGroup6TargetSell = 10.0;      // Default Target (Sell Side) $
 input string   InpLicenseServer = LICENSE_BASE_URL;    // License Server URL
 input int      InpLicenseCheckMinutes = 60;            // License Check Interval (minutes)
 input int      InpDataSyncMinutes = 5;                 // Data Sync Interval (minutes)
@@ -570,8 +606,26 @@ enum ENUM_SYNC_EVENT
 };
 
 //+------------------------------------------------------------------+
-//| GLOBAL VARIABLES                                                   |
+//| GROUP TARGET STRUCTURE (v1.1)                                      |
 //+------------------------------------------------------------------+
+struct GroupTarget
+{
+   double closedProfit;        // Accumulated closed profit for this group
+   double floatingProfit;      // Current floating profit
+   double totalProfit;         // Closed + Floating
+   
+   // Settings from inputs
+   double closedTarget;        // Target closed+floating
+   double floatingTarget;      // Floating-only target
+   int    maxOrderBuy;         // Max orders buy for pairs in this group
+   int    maxOrderSell;        // Max orders sell for pairs in this group
+   double targetBuy;           // Per-side target buy
+   double targetSell;          // Per-side target sell
+   
+   // Control flags
+   bool   targetTriggered;     // Prevent multiple triggers
+   bool   closeMode;           // TRUE when group is closing all
+};
 CTrade g_trade;
 bool g_isLicenseValid = false;
 bool g_isNewsPaused = false;
@@ -698,15 +752,16 @@ datetime g_lastZScoreUpdate = 0;
 string g_lastCDCStatus[];
 datetime g_lastCDCUpdate = 0;
 
-// === v3.6.0 HF3: Basket Profit Target System ===
-double g_basketClosedProfit = 0;      // Accumulated closed profit from all pairs
-double g_basketFloatingProfit = 0;    // Current floating profit from all pairs
-double g_basketTotalProfit = 0;       // Closed + Floating = Total
-bool   g_basketTargetTriggered = false; // Flag to prevent multiple triggers in same tick
+// === v1.1: Group Target System (replaces single Basket) ===
+GroupTarget g_groups[MAX_GROUPS];
+
+// Legacy basket variables (for backward compatibility in functions)
+double g_basketClosedProfit = 0;      // Total across all groups (for stats display)
+double g_basketFloatingProfit = 0;    // Total floating across all groups
+double g_basketTotalProfit = 0;       // Total profit across all groups
 
 // === v3.6.0 HF3 Patch 3: Separate Flags for Different Purposes ===
 bool   g_orphanCheckPaused = false;   // Pause orphan check during any position closing operation
-bool   g_basketCloseMode = false;     // TRUE when Basket is closing all (don't accumulate to basket)
 
 //+------------------------------------------------------------------+
 //| v3.3.0: Get Z-Score Timeframe (independent from Correlation)       |
@@ -776,8 +831,8 @@ int OnInit()
    g_trade.SetDeviationInPoints(InpSlippage);
    g_trade.SetTypeFilling(ORDER_FILLING_IOC);
    
-   // Initialize target from input
-   g_totalTarget = InpTotalTarget;
+   // v1.1: Initialize Group Target System (must be before InitializePairs)
+   InitializeGroups();
    
    // Initialize pairs
    if(!InitializePairs())
@@ -1218,7 +1273,91 @@ bool InitializePairs()
 }
 
 //+------------------------------------------------------------------+
-//| Setup Individual Pair (v3.3.0 - with consolidated max orders)      |
+//| v1.1: Initialize Group Target System                               |
+//+------------------------------------------------------------------+
+void InitializeGroups()
+{
+   // Group 1 (Pairs 1-5)
+   g_groups[0].closedTarget = InpGroup1ClosedTarget;
+   g_groups[0].floatingTarget = InpGroup1FloatingTarget;
+   g_groups[0].maxOrderBuy = InpGroup1MaxOrderBuy;
+   g_groups[0].maxOrderSell = InpGroup1MaxOrderSell;
+   g_groups[0].targetBuy = InpGroup1TargetBuy;
+   g_groups[0].targetSell = InpGroup1TargetSell;
+   ResetGroupProfit(0);
+   
+   // Group 2 (Pairs 6-10)
+   g_groups[1].closedTarget = InpGroup2ClosedTarget;
+   g_groups[1].floatingTarget = InpGroup2FloatingTarget;
+   g_groups[1].maxOrderBuy = InpGroup2MaxOrderBuy;
+   g_groups[1].maxOrderSell = InpGroup2MaxOrderSell;
+   g_groups[1].targetBuy = InpGroup2TargetBuy;
+   g_groups[1].targetSell = InpGroup2TargetSell;
+   ResetGroupProfit(1);
+   
+   // Group 3 (Pairs 11-15)
+   g_groups[2].closedTarget = InpGroup3ClosedTarget;
+   g_groups[2].floatingTarget = InpGroup3FloatingTarget;
+   g_groups[2].maxOrderBuy = InpGroup3MaxOrderBuy;
+   g_groups[2].maxOrderSell = InpGroup3MaxOrderSell;
+   g_groups[2].targetBuy = InpGroup3TargetBuy;
+   g_groups[2].targetSell = InpGroup3TargetSell;
+   ResetGroupProfit(2);
+   
+   // Group 4 (Pairs 16-20)
+   g_groups[3].closedTarget = InpGroup4ClosedTarget;
+   g_groups[3].floatingTarget = InpGroup4FloatingTarget;
+   g_groups[3].maxOrderBuy = InpGroup4MaxOrderBuy;
+   g_groups[3].maxOrderSell = InpGroup4MaxOrderSell;
+   g_groups[3].targetBuy = InpGroup4TargetBuy;
+   g_groups[3].targetSell = InpGroup4TargetSell;
+   ResetGroupProfit(3);
+   
+   // Group 5 (Pairs 21-25)
+   g_groups[4].closedTarget = InpGroup5ClosedTarget;
+   g_groups[4].floatingTarget = InpGroup5FloatingTarget;
+   g_groups[4].maxOrderBuy = InpGroup5MaxOrderBuy;
+   g_groups[4].maxOrderSell = InpGroup5MaxOrderSell;
+   g_groups[4].targetBuy = InpGroup5TargetBuy;
+   g_groups[4].targetSell = InpGroup5TargetSell;
+   ResetGroupProfit(4);
+   
+   // Group 6 (Pairs 26-30)
+   g_groups[5].closedTarget = InpGroup6ClosedTarget;
+   g_groups[5].floatingTarget = InpGroup6FloatingTarget;
+   g_groups[5].maxOrderBuy = InpGroup6MaxOrderBuy;
+   g_groups[5].maxOrderSell = InpGroup6MaxOrderSell;
+   g_groups[5].targetBuy = InpGroup6TargetBuy;
+   g_groups[5].targetSell = InpGroup6TargetSell;
+   ResetGroupProfit(5);
+   
+   PrintFormat("v1.1: Group Target System initialized - 6 Groups x 5 Pairs");
+}
+
+//+------------------------------------------------------------------+
+//| v1.1: Reset Group Profit                                           |
+//+------------------------------------------------------------------+
+void ResetGroupProfit(int groupIndex)
+{
+   if(groupIndex < 0 || groupIndex >= MAX_GROUPS) return;
+   
+   g_groups[groupIndex].closedProfit = 0;
+   g_groups[groupIndex].floatingProfit = 0;
+   g_groups[groupIndex].totalProfit = 0;
+   g_groups[groupIndex].targetTriggered = false;
+   g_groups[groupIndex].closeMode = false;
+}
+
+//+------------------------------------------------------------------+
+//| v1.1: Get Group Index from Pair Index                              |
+//+------------------------------------------------------------------+
+int GetGroupIndex(int pairIndex)
+{
+   return pairIndex / PAIRS_PER_GROUP;  // 0-4 -> 0, 5-9 -> 1, etc.
+}
+
+//+------------------------------------------------------------------+
+//| Setup Individual Pair (v1.1 - with Group Target System)            |
 //+------------------------------------------------------------------+
 void SetupPair(int index, bool enabled, string symbolA, string symbolB)
 {
@@ -1250,9 +1389,10 @@ void SetupPair(int index, bool enabled, string symbolA, string symbolB)
    g_pairs[index].lotBuyB = InpBaseLot;
    g_pairs[index].profitBuy = 0;
    g_pairs[index].orderCountBuy = 0;
-   // v3.3.0: maxOrderBuy = Total limit (1 Main + N Grid orders)
-   g_pairs[index].maxOrderBuy = InpDefaultMaxOrderBuy;
-   g_pairs[index].targetBuy = InpDefaultTargetBuy;
+   // v1.1: Use Group's max orders and targets
+   int groupIdx = GetGroupIndex(index);
+   g_pairs[index].maxOrderBuy = g_groups[groupIdx].maxOrderBuy;
+   g_pairs[index].targetBuy = g_groups[groupIdx].targetBuy;
    g_pairs[index].entryTimeBuy = 0;
    
    // Sell Side initialization - directionSell = -1 means Ready to trade
@@ -1263,9 +1403,9 @@ void SetupPair(int index, bool enabled, string symbolA, string symbolB)
    g_pairs[index].lotSellB = InpBaseLot;
    g_pairs[index].profitSell = 0;
    g_pairs[index].orderCountSell = 0;
-   // v3.3.0: maxOrderSell = Total limit (1 Main + N Grid orders)
-   g_pairs[index].maxOrderSell = InpDefaultMaxOrderSell;
-   g_pairs[index].targetSell = InpDefaultTargetSell;
+   // v1.1: Use Group's max orders and targets
+   g_pairs[index].maxOrderSell = g_groups[groupIdx].maxOrderSell;
+   g_pairs[index].targetSell = g_groups[groupIdx].targetSell;
    g_pairs[index].entryTimeSell = 0;
    
    // v3.2.7: Averaging System initialization
@@ -5203,11 +5343,14 @@ bool OpenSellSideTrade(int pairIndex)
 }
 
 //+------------------------------------------------------------------+
-//| Close Buy Side Trade (v3.6.0 HF3 - with EA Close Flag)             |
+//| Close Buy Side Trade (v1.1 - Group Target System)                  |
 //+------------------------------------------------------------------+
 bool CloseBuySide(int pairIndex)
 {
    if(g_pairs[pairIndex].directionBuy == 0) return false;
+   
+   // v1.1: Get group index
+   int groupIdx = GetGroupIndex(pairIndex);
    
    // v3.6.0 HF3 Patch 3: Pause orphan detection during close
    g_orphanCheckPaused = true;
@@ -5254,18 +5397,19 @@ bool CloseBuySide(int pairIndex)
    
    if(closedA && closedB)
    {
-      PrintFormat("Pair %d BUY SIDE CLOSED | Profit: %.2f", pairIndex + 1, g_pairs[pairIndex].profitBuy);
+      PrintFormat("Pair %d BUY SIDE CLOSED | Profit: %.2f | Group: %d", 
+                  pairIndex + 1, g_pairs[pairIndex].profitBuy, groupIdx + 1);
       
       // v3.2.9: Accumulate closed P/L before reset
       g_pairs[pairIndex].closedProfitBuy += g_pairs[pairIndex].profitBuy;
       
-      // v3.6.0 HF3 Patch 3: Only add to basket if NOT in Basket Close mode
-      // (Basket mode closes all at once and resets - avoid double counting)
-      if(!g_basketCloseMode)
+      // v1.1: Add to GROUP instead of global basket (unless group is closing all)
+      if(!g_groups[groupIdx].closeMode)
       {
-         g_basketClosedProfit += g_pairs[pairIndex].profitBuy;
-         PrintFormat("BASKET: Added %.2f from Pair %d BUY | Total Closed: %.2f | Target: %.2f",
-                     g_pairs[pairIndex].profitBuy, pairIndex + 1, g_basketClosedProfit, g_totalTarget);
+         g_groups[groupIdx].closedProfit += g_pairs[pairIndex].profitBuy;
+         PrintFormat("GROUP %d: Added %.2f from Pair %d BUY | Group Total: %.2f | Target: %.2f",
+                     groupIdx + 1, g_pairs[pairIndex].profitBuy, pairIndex + 1, 
+                     g_groups[groupIdx].closedProfit, g_groups[groupIdx].closedTarget);
       }
       
       // Update statistics before reset
@@ -5323,11 +5467,14 @@ bool CloseBuySide(int pairIndex)
 }
 
 //+------------------------------------------------------------------+
-//| Close Sell Side Trade (v3.6.0 HF3 - with EA Close Flag)            |
+//| Close Sell Side Trade (v1.1 - Group Target System)                 |
 //+------------------------------------------------------------------+
 bool CloseSellSide(int pairIndex)
 {
    if(g_pairs[pairIndex].directionSell == 0) return false;
+   
+   // v1.1: Get group index
+   int groupIdx = GetGroupIndex(pairIndex);
    
    // v3.6.0 HF3 Patch 3: Pause orphan detection during close
    g_orphanCheckPaused = true;
@@ -5374,18 +5521,19 @@ bool CloseSellSide(int pairIndex)
    
    if(closedA && closedB)
    {
-      PrintFormat("Pair %d SELL SIDE CLOSED | Profit: %.2f", pairIndex + 1, g_pairs[pairIndex].profitSell);
+      PrintFormat("Pair %d SELL SIDE CLOSED | Profit: %.2f | Group: %d", 
+                  pairIndex + 1, g_pairs[pairIndex].profitSell, groupIdx + 1);
       
       // v3.2.9: Accumulate closed P/L before reset
       g_pairs[pairIndex].closedProfitSell += g_pairs[pairIndex].profitSell;
       
-      // v3.6.0 HF3 Patch 3: Only add to basket if NOT in Basket Close mode
-      // (Basket mode closes all at once and resets - avoid double counting)
-      if(!g_basketCloseMode)
+      // v1.1: Add to GROUP instead of global basket (unless group is closing all)
+      if(!g_groups[groupIdx].closeMode)
       {
-         g_basketClosedProfit += g_pairs[pairIndex].profitSell;
-         PrintFormat("BASKET: Added %.2f from Pair %d SELL | Total Closed: %.2f | Target: %.2f",
-                     g_pairs[pairIndex].profitSell, pairIndex + 1, g_basketClosedProfit, g_totalTarget);
+         g_groups[groupIdx].closedProfit += g_pairs[pairIndex].profitSell;
+         PrintFormat("GROUP %d: Added %.2f from Pair %d SELL | Group Total: %.2f | Target: %.2f",
+                     groupIdx + 1, g_pairs[pairIndex].profitSell, pairIndex + 1, 
+                     g_groups[groupIdx].closedProfit, g_groups[groupIdx].closedTarget);
       }
       
       // Update statistics before reset
@@ -5588,10 +5736,11 @@ void ForceCloseBuySide(int pairIndex)
    // v3.2.9: Accumulate closed P/L before reset
    g_pairs[pairIndex].closedProfitBuy += g_pairs[pairIndex].profitBuy;
    
-   // v3.6.0 HF3 Patch 3: Only add to basket if NOT in Basket Close mode
-   if(!g_basketCloseMode)
+   // v1.1: Add to GROUP instead of global basket
+   int groupIdx = GetGroupIndex(pairIndex);
+   if(!g_groups[groupIdx].closeMode)
    {
-      g_basketClosedProfit += g_pairs[pairIndex].profitBuy;
+      g_groups[groupIdx].closedProfit += g_pairs[pairIndex].profitBuy;
    }
    
    // Update statistics before reset
@@ -5676,10 +5825,11 @@ void ForceCloseSellSide(int pairIndex)
    // v3.2.9: Accumulate closed P/L before reset
    g_pairs[pairIndex].closedProfitSell += g_pairs[pairIndex].profitSell;
    
-   // v3.6.0 HF3 Patch 3: Only add to basket if NOT in Basket Close mode
-   if(!g_basketCloseMode)
+   // v1.1: Add to GROUP instead of global basket
+   int groupIdx = GetGroupIndex(pairIndex);
+   if(!g_groups[groupIdx].closeMode)
    {
-      g_basketClosedProfit += g_pairs[pairIndex].profitSell;
+      g_groups[groupIdx].closedProfit += g_pairs[pairIndex].profitSell;
    }
    
    // Update statistics before reset
@@ -6015,94 +6165,107 @@ void CheckPairTargets()
 }
 
 //+------------------------------------------------------------------+
-//| Check Basket Profit Target (v3.6.0 HF3)                            |
+//| Check Group Profit Targets (v1.1 - Group-based)                    |
 //+------------------------------------------------------------------+
 void CheckTotalTarget()
 {
-   // v3.6.0 HF3: Calculate Basket Totals (always calculate for dashboard)
-   g_basketFloatingProfit = g_totalCurrentProfit;
-   g_basketTotalProfit = g_basketClosedProfit + g_basketFloatingProfit;
+   // v1.1: Calculate floating profit per group and check targets
+   g_basketClosedProfit = 0;
+   g_basketFloatingProfit = 0;
    
-   // Disable if both targets are 0
-   if(g_totalTarget <= 0 && InpBasketFloatingTarget <= 0) return;
-   
-   bool shouldCloseAll = false;
-   string closeReason = "";
-   
-   // Check 1: TOTAL Profit Target (Closed + Floating) - v3.6.0 HF3 Patch 2
-   // This is the main basket target check - closes when combined profit reaches target
-   if(g_totalTarget > 0 && g_basketTotalProfit >= g_totalTarget)
+   for(int g = 0; g < MAX_GROUPS; g++)
    {
-      shouldCloseAll = true;
-      closeReason = StringFormat("Total Profit %.2f (Closed: %.2f + Floating: %.2f) >= Target %.2f", 
-                                  g_basketTotalProfit, g_basketClosedProfit, g_basketFloatingProfit, g_totalTarget);
-   }
-   
-   // Check 2: Floating-Only Profit Target (Optional - for special use cases)
-   // This triggers ONLY on floating profit, ignoring accumulated closed profit
-   if(!shouldCloseAll && InpBasketFloatingTarget > 0 && 
-      g_basketFloatingProfit >= InpBasketFloatingTarget)
-   {
-      shouldCloseAll = true;
-      closeReason = StringFormat("Floating Only %.2f >= Target %.2f", 
-                                  g_basketFloatingProfit, InpBasketFloatingTarget);
-   }
-   
-   // Execute close if any condition met
-   if(shouldCloseAll && !g_basketTargetTriggered)
-   {
-      g_basketTargetTriggered = true;
-      g_basketCloseMode = true;      // v3.6.0 HF3 Patch 3: Mark as basket close (don't accumulate)
-      g_orphanCheckPaused = true;    // v3.6.0 HF3 Patch 3: Prevent Orphan Detection
+      // 1. Calculate floating profit for this group
+      g_groups[g].floatingProfit = 0;
+      int startPair = g * PAIRS_PER_GROUP;
+      int endPair = startPair + PAIRS_PER_GROUP;
       
-      PrintFormat(">>> BASKET TARGET REACHED: %s <<<", closeReason);
-      PrintFormat(">>> Closing ALL positions and resetting basket... <<<");
-      
-      // Close ALL open positions across all pairs
-      for(int i = 0; i < MAX_PAIRS; i++)
+      for(int i = startPair; i < endPair && i < MAX_PAIRS; i++)
       {
-         if(g_pairs[i].directionBuy == 1)
+         if(g_pairs[i].enabled)
          {
-            PrintFormat(">>> BASKET: Closing Pair %d BUY (Floating: %.2f)", 
-                        i + 1, g_pairs[i].profitBuy);
-            CloseBuySide(i);
-         }
-         if(g_pairs[i].directionSell == 1)
-         {
-            PrintFormat(">>> BASKET: Closing Pair %d SELL (Floating: %.2f)", 
-                        i + 1, g_pairs[i].profitSell);
-            CloseSellSide(i);
+            g_groups[g].floatingProfit += g_pairs[i].profitBuy + g_pairs[i].profitSell;
          }
       }
       
-      g_basketCloseMode = false;     // v3.6.0 HF3 Patch 3: Reset basket mode
-      g_orphanCheckPaused = false;   // v3.6.0 HF3 Patch 3: Resume orphan detection
+      g_groups[g].totalProfit = g_groups[g].closedProfit + g_groups[g].floatingProfit;
       
-      // Reset Basket after all positions closed
-      ResetBasketProfit();
+      // Accumulate to legacy global variables for stats display
+      g_basketClosedProfit += g_groups[g].closedProfit;
+      g_basketFloatingProfit += g_groups[g].floatingProfit;
    }
-}
-
-//+------------------------------------------------------------------+
-//| Reset Basket Profit (v3.6.0 HF3)                                   |
-//+------------------------------------------------------------------+
-void ResetBasketProfit()
-{
-   PrintFormat(">>> BASKET RESET: Previous Closed %.2f | New Closed: 0.00 <<<",
-               g_basketClosedProfit);
    
-   // v3.6.0 HF2 Patch 2: Reset ONLY basket accumulator
-   // Per-pair closedProfitBuy/Sell are kept for dashboard display
-   g_basketClosedProfit = 0;
-   g_basketFloatingProfit = 0;
-   g_basketTotalProfit = 0;
-   g_basketTargetTriggered = false;
+   g_basketTotalProfit = g_basketClosedProfit + g_basketFloatingProfit;
    
-   // REMOVED: Do NOT reset per-pair closed profit
-   // closedProfitBuy and closedProfitSell are displayed on dashboard
-   // and should persist across basket cycles
-   
-   PrintFormat(">>> BASKET: Ready for new cycle <<<");
+   // 2. Check each group's target independently
+   for(int g = 0; g < MAX_GROUPS; g++)
+   {
+      // Skip if no targets set
+      if(g_groups[g].closedTarget <= 0 && g_groups[g].floatingTarget <= 0)
+         continue;
+      
+      bool shouldClose = false;
+      string reason = "";
+      
+      // Check TOTAL target (Closed + Floating)
+      if(g_groups[g].closedTarget > 0 && 
+         g_groups[g].totalProfit >= g_groups[g].closedTarget)
+      {
+         shouldClose = true;
+         reason = StringFormat("Total %.2f >= Target %.2f", 
+                               g_groups[g].totalProfit, g_groups[g].closedTarget);
+      }
+      
+      // Check Floating-only target
+      if(!shouldClose && g_groups[g].floatingTarget > 0 && 
+         g_groups[g].floatingProfit >= g_groups[g].floatingTarget)
+      {
+         shouldClose = true;
+         reason = StringFormat("Floating %.2f >= Target %.2f", 
+                               g_groups[g].floatingProfit, g_groups[g].floatingTarget);
+      }
+      
+      // Execute close for THIS GROUP ONLY
+      if(shouldClose && !g_groups[g].targetTriggered)
+      {
+         g_groups[g].targetTriggered = true;
+         g_groups[g].closeMode = true;
+         g_orphanCheckPaused = true;
+         
+         PrintFormat(">>> GROUP %d TARGET REACHED: %s <<<", g + 1, reason);
+         PrintFormat(">>> Closing Group %d positions (Pairs %d-%d)... <<<", 
+                     g + 1, g * PAIRS_PER_GROUP + 1, (g + 1) * PAIRS_PER_GROUP);
+         
+         // Close only pairs in THIS group
+         int startPair = g * PAIRS_PER_GROUP;
+         int endPair = startPair + PAIRS_PER_GROUP;
+         
+         for(int i = startPair; i < endPair && i < MAX_PAIRS; i++)
+         {
+            if(g_pairs[i].directionBuy == 1)
+            {
+               PrintFormat(">>> GROUP %d: Closing Pair %d BUY (Floating: %.2f)", 
+                           g + 1, i + 1, g_pairs[i].profitBuy);
+               CloseBuySide(i);
+            }
+            if(g_pairs[i].directionSell == 1)
+            {
+               PrintFormat(">>> GROUP %d: Closing Pair %d SELL (Floating: %.2f)", 
+                           g + 1, i + 1, g_pairs[i].profitSell);
+               CloseSellSide(i);
+            }
+         }
+         
+         g_groups[g].closeMode = false;
+         g_orphanCheckPaused = false;
+         
+         // Reset this group's profit
+         PrintFormat(">>> GROUP %d RESET: Previous Closed %.2f | New: 0.00 <<<",
+                     g + 1, g_groups[g].closedProfit);
+         ResetGroupProfit(g);
+         PrintFormat(">>> GROUP %d: Ready for new cycle <<<", g + 1);
+      }
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -6213,7 +6376,7 @@ void CreateDashboard()
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_XDISTANCE, PANEL_X + (PANEL_WIDTH / 2));
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_YDISTANCE, PANEL_Y + 4);
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_ANCHOR, ANCHOR_UPPER);
-   ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_TEXT, "Harmony Dream EA v1.0");
+   ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_TEXT, "Harmony Dream EA v1.1");
    ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_FONT, "Arial Bold");
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_FONTSIZE, 10);
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_COLOR, COLOR_GOLD);
