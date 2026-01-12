@@ -4,7 +4,7 @@
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "3.66"
+#property version   "3.67"
 #property strict
 #property description "Statistical Arbitrage / Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
@@ -2897,13 +2897,21 @@ void CalculateCDC_EMA(double &src[], double &result[], int period, int size)
 }
 
 //+------------------------------------------------------------------+
-//| Calculate CDC Action Zone for Single Symbol (v3.5.0)               |
+//| Calculate CDC Action Zone for Single Symbol (v3.6.7)               |
 //+------------------------------------------------------------------+
 void CalculateCDCForSymbol(string symbol, string &trend, double &fastEMA, double &slowEMA)
 {
    trend = "NEUTRAL";
    fastEMA = 0;
    slowEMA = 0;
+   
+   // Check if symbol exists and can be selected
+   if(!SymbolSelect(symbol, true))
+   {
+      if(InpDebugMode)
+         Print("[CDC] Symbol not found or cannot be selected: ", symbol);
+      return;
+   }
    
    double closeArr[], highArr[], lowArr[], openArr[];
    ArraySetAsSeries(closeArr, true);
@@ -2912,29 +2920,57 @@ void CalculateCDCForSymbol(string symbol, string &trend, double &fastEMA, double
    ArraySetAsSeries(openArr, true);
    
    int barsNeeded = InpCDCSlowPeriod * 3 + 50;
+   int minBarsRequired = InpCDCSlowPeriod + 10;  // Minimum bars needed for calculation
    
-   if(CopyClose(symbol, InpCDCTimeframe, 0, barsNeeded, closeArr) < barsNeeded) return;
-   if(CopyHigh(symbol, InpCDCTimeframe, 0, barsNeeded, highArr) < barsNeeded) return;
-   if(CopyLow(symbol, InpCDCTimeframe, 0, barsNeeded, lowArr) < barsNeeded) return;
-   if(CopyOpen(symbol, InpCDCTimeframe, 0, barsNeeded, openArr) < barsNeeded) return;
+   // Copy Close with debug logging
+   int copied = CopyClose(symbol, InpCDCTimeframe, 0, barsNeeded, closeArr);
+   if(copied < minBarsRequired) 
+   {
+      if(InpDebugMode)
+         PrintFormat("[CDC] %s: Insufficient data - got %d/%d bars (min: %d) on %s", 
+                     symbol, copied, barsNeeded, minBarsRequired, EnumToString(InpCDCTimeframe));
+      return;
+   }
+   
+   // Use actual copied count if less than requested (fallback)
+   int actualBars = MathMin(copied, barsNeeded);
+   
+   if(CopyHigh(symbol, InpCDCTimeframe, 0, actualBars, highArr) < actualBars) 
+   {
+      if(InpDebugMode)
+         Print("[CDC] ", symbol, ": CopyHigh failed");
+      return;
+   }
+   if(CopyLow(symbol, InpCDCTimeframe, 0, actualBars, lowArr) < actualBars) 
+   {
+      if(InpDebugMode)
+         Print("[CDC] ", symbol, ": CopyLow failed");
+      return;
+   }
+   if(CopyOpen(symbol, InpCDCTimeframe, 0, actualBars, openArr) < actualBars) 
+   {
+      if(InpDebugMode)
+         Print("[CDC] ", symbol, ": CopyOpen failed");
+      return;
+   }
    
    // Calculate OHLC4
    double ohlc4[];
-   ArrayResize(ohlc4, barsNeeded);
-   for(int i = 0; i < barsNeeded; i++)
+   ArrayResize(ohlc4, actualBars);
+   for(int i = 0; i < actualBars; i++)
       ohlc4[i] = (openArr[i] + highArr[i] + lowArr[i] + closeArr[i]) / 4.0;
    
    // Calculate AP (Smoothed OHLC4 with EMA2)
    double ap[];
-   ArrayResize(ap, barsNeeded);
-   CalculateCDC_EMA(ohlc4, ap, 2, barsNeeded);
+   ArrayResize(ap, actualBars);
+   CalculateCDC_EMA(ohlc4, ap, 2, actualBars);
    
    // Calculate Fast & Slow EMA
    double fast[], slow[];
-   ArrayResize(fast, barsNeeded);
-   ArrayResize(slow, barsNeeded);
-   CalculateCDC_EMA(ap, fast, InpCDCFastPeriod, barsNeeded);
-   CalculateCDC_EMA(ap, slow, InpCDCSlowPeriod, barsNeeded);
+   ArrayResize(fast, actualBars);
+   ArrayResize(slow, actualBars);
+   CalculateCDC_EMA(ap, fast, InpCDCFastPeriod, actualBars);
+   CalculateCDC_EMA(ap, slow, InpCDCSlowPeriod, actualBars);
    
    fastEMA = fast[0];
    slowEMA = slow[0];
@@ -2955,6 +2991,10 @@ void CalculateCDCForSymbol(string symbol, string &trend, double &fastEMA, double
       if(fast[0] > slow[0]) trend = "BULLISH";
       else if(fast[0] < slow[0]) trend = "BEARISH";
    }
+   
+   if(InpDebugMode)
+      PrintFormat("[CDC] %s: %s (Fast: %.5f, Slow: %.5f, Bars: %d/%d)", 
+                  symbol, trend, fastEMA, slowEMA, actualBars, barsNeeded);
 }
 
 //+------------------------------------------------------------------+
