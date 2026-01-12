@@ -2216,6 +2216,8 @@ bool SyncAccountData(ENUM_SYNC_EVENT eventType)
    json += "\"win_trades\":" + IntegerToString(winTrades) + ",";
    json += "\"loss_trades\":" + IntegerToString(lossTrades) + ",";
    json += "\"total_trades\":" + IntegerToString(totalTrades) + ",";
+   // v3.7.4: EA Name for auto-linking trading system
+   json += "\"ea_name\":\"Multi Currency Statistical\",";
    // v3.6.8: EA Status for Admin Dashboard
    UpdateEAStatus();
    json += "\"ea_status\":\"" + g_eaStatus + "\",";
@@ -5978,14 +5980,14 @@ void CreateDashboard()
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_SELECTABLE, false);
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_HIDDEN, true);
    
-   // v3.7.3: EA Status Display (right side of title bar)
-   CreateLabel(prefix + "EA_STATUS_LBL", PANEL_X + PANEL_WIDTH - 160, PANEL_Y + 5, "Status:", COLOR_TEXT_WHITE, 8, "Arial");
-   CreateLabel(prefix + "EA_STATUS_VAL", PANEL_X + PANEL_WIDTH - 115, PANEL_Y + 4, "Working", clrLime, 9, "Arial Bold");
+   // v3.7.4: EA Status Display (adjusted position - moved left by 50px)
+   CreateLabel(prefix + "EA_STATUS_LBL", PANEL_X + PANEL_WIDTH - 210, PANEL_Y + 5, "Status:", COLOR_TEXT_WHITE, 8, "Arial");
+   CreateLabel(prefix + "EA_STATUS_VAL", PANEL_X + PANEL_WIDTH - 165, PANEL_Y + 4, "Working", clrLime, 9, "Arial Bold");
    
-   // v3.7.3: Global Pause/Start Button (right-most on title bar)
+   // v3.7.4: Global Pause/Start Button (adjusted position - moved left by 50px)
    string pauseBtnText = g_isPaused ? "Start" : "Pause";
    color pauseBtnColor = g_isPaused ? clrGreen : clrOrangeRed;
-   CreateButton(prefix + "_BTN_PAUSE", PANEL_X + PANEL_WIDTH - 58, PANEL_Y + 2, 50, 18, pauseBtnText, pauseBtnColor, clrWhite);
+   CreateButton(prefix + "_BTN_PAUSE", PANEL_X + PANEL_WIDTH - 108, PANEL_Y + 2, 50, 18, pauseBtnText, pauseBtnColor, clrWhite);
    
    // v3.2.9 Hotfix: Increased header height and spacing to prevent overlap
    int buyWidth = 395;

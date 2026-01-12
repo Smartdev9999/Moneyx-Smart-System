@@ -58,6 +58,8 @@ interface SyncRequest {
   event_type?: 'scheduled' | 'order_open' | 'order_close';
   // EA status for dashboard display
   ea_status?: 'working' | 'paused' | 'suspended' | 'expired' | 'invalid' | 'offline';
+  // v3.7.4: EA name for auto-linking trading system
+  ea_name?: string;
 }
 
 interface SyncResponse {
@@ -212,6 +214,23 @@ serve(async (req) => {
     // EA status for dashboard display
     if (syncData.ea_status !== undefined) {
       updateData.ea_status = syncData.ea_status;
+    }
+
+    // v3.7.4: Auto-link trading system if ea_name is provided
+    if (syncData.ea_name) {
+      const { data: tradingSystem } = await supabase
+        .from('trading_systems')
+        .select('id')
+        .eq('name', syncData.ea_name)
+        .eq('is_active', true)
+        .maybeSingle();
+        
+      if (tradingSystem) {
+        updateData.trading_system_id = tradingSystem.id;
+        console.log(`[sync-account-data] Auto-linked trading system: ${syncData.ea_name}`);
+      } else {
+        console.log(`[sync-account-data] Trading system not found: ${syncData.ea_name}`);
+      }
     }
 
     const { error: updateError } = await supabase
