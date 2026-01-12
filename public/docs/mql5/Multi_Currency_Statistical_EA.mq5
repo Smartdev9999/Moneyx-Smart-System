@@ -4030,13 +4030,16 @@ bool CloseBuySide(int pairIndex)
       g_weeklyProfit += g_pairs[pairIndex].profitBuy;
       g_monthlyProfit += g_pairs[pairIndex].profitBuy;
       g_allTimeProfit += g_pairs[pairIndex].profitBuy;
-      g_dailyLot += g_pairs[pairIndex].lotBuyA + g_pairs[pairIndex].lotBuyB;
-      g_weeklyLot += g_pairs[pairIndex].lotBuyA + g_pairs[pairIndex].lotBuyB;
-      g_monthlyLot += g_pairs[pairIndex].lotBuyA + g_pairs[pairIndex].lotBuyB;
-      g_allTimeLot += g_pairs[pairIndex].lotBuyA + g_pairs[pairIndex].lotBuyB;
+      // v3.6.0 HF4: Record ALL closed lots including Grid orders
+      double closedLot = g_pairs[pairIndex].lotBuyA + g_pairs[pairIndex].lotBuyB + 
+                         g_pairs[pairIndex].avgTotalLotBuy;  // Main + Grid orders
+      g_dailyLot += closedLot;
+      g_weeklyLot += closedLot;
+      g_monthlyLot += closedLot;
+      g_allTimeLot += closedLot;
       
-      // v3.3.0: Count closed orders (1 main + averaging orders)
-      int closedOrdersCount = 1 + g_pairs[pairIndex].avgOrderCountBuy;
+      // v3.6.0 HF4: Count ALL closed orders (main pairs + all grid orders)
+      int closedOrdersCount = g_pairs[pairIndex].orderCountBuy;  // Total orders on this side
       g_dailyClosedOrders += closedOrdersCount;
       g_weeklyClosedOrders += closedOrdersCount;
       g_monthlyClosedOrders += closedOrdersCount;
@@ -4145,13 +4148,16 @@ bool CloseSellSide(int pairIndex)
       g_weeklyProfit += g_pairs[pairIndex].profitSell;
       g_monthlyProfit += g_pairs[pairIndex].profitSell;
       g_allTimeProfit += g_pairs[pairIndex].profitSell;
-      g_dailyLot += g_pairs[pairIndex].lotSellA + g_pairs[pairIndex].lotSellB;
-      g_weeklyLot += g_pairs[pairIndex].lotSellA + g_pairs[pairIndex].lotSellB;
-      g_monthlyLot += g_pairs[pairIndex].lotSellA + g_pairs[pairIndex].lotSellB;
-      g_allTimeLot += g_pairs[pairIndex].lotSellA + g_pairs[pairIndex].lotSellB;
+      // v3.6.0 HF4: Record ALL closed lots including Grid orders
+      double closedLot = g_pairs[pairIndex].lotSellA + g_pairs[pairIndex].lotSellB + 
+                         g_pairs[pairIndex].avgTotalLotSell;  // Main + Grid orders
+      g_dailyLot += closedLot;
+      g_weeklyLot += closedLot;
+      g_monthlyLot += closedLot;
+      g_allTimeLot += closedLot;
       
-      // v3.3.0: Count closed orders (1 main + averaging orders)
-      int closedOrdersCount = 1 + g_pairs[pairIndex].avgOrderCountSell;
+      // v3.6.0 HF4: Count ALL closed orders (main pairs + all grid orders)
+      int closedOrdersCount = g_pairs[pairIndex].orderCountSell;  // Total orders on this side
       g_dailyClosedOrders += closedOrdersCount;
       g_weeklyClosedOrders += closedOrdersCount;
       g_monthlyClosedOrders += closedOrdersCount;
@@ -4333,13 +4339,16 @@ void ForceCloseBuySide(int pairIndex)
    g_weeklyProfit += g_pairs[pairIndex].profitBuy;
    g_monthlyProfit += g_pairs[pairIndex].profitBuy;
    g_allTimeProfit += g_pairs[pairIndex].profitBuy;
-   g_dailyLot += g_pairs[pairIndex].lotBuyA + g_pairs[pairIndex].lotBuyB;
-   g_weeklyLot += g_pairs[pairIndex].lotBuyA + g_pairs[pairIndex].lotBuyB;
-   g_monthlyLot += g_pairs[pairIndex].lotBuyA + g_pairs[pairIndex].lotBuyB;
-   g_allTimeLot += g_pairs[pairIndex].lotBuyA + g_pairs[pairIndex].lotBuyB;
+   // v3.6.0 HF4: Record ALL closed lots including Grid orders
+   double closedLot = g_pairs[pairIndex].lotBuyA + g_pairs[pairIndex].lotBuyB + 
+                      g_pairs[pairIndex].avgTotalLotBuy;
+   g_dailyLot += closedLot;
+   g_weeklyLot += closedLot;
+   g_monthlyLot += closedLot;
+   g_allTimeLot += closedLot;
    
-   // v3.3.0: Count closed orders (1 main + averaging orders)
-   int closedOrdersCount = 1 + g_pairs[pairIndex].avgOrderCountBuy;
+   // v3.6.0 HF4: Count ALL closed orders
+   int closedOrdersCount = g_pairs[pairIndex].orderCountBuy;
    g_dailyClosedOrders += closedOrdersCount;
    g_weeklyClosedOrders += closedOrdersCount;
    g_monthlyClosedOrders += closedOrdersCount;
@@ -4403,13 +4412,16 @@ void ForceCloseSellSide(int pairIndex)
    g_weeklyProfit += g_pairs[pairIndex].profitSell;
    g_monthlyProfit += g_pairs[pairIndex].profitSell;
    g_allTimeProfit += g_pairs[pairIndex].profitSell;
-   g_dailyLot += g_pairs[pairIndex].lotSellA + g_pairs[pairIndex].lotSellB;
-   g_weeklyLot += g_pairs[pairIndex].lotSellA + g_pairs[pairIndex].lotSellB;
-   g_monthlyLot += g_pairs[pairIndex].lotSellA + g_pairs[pairIndex].lotSellB;
-   g_allTimeLot += g_pairs[pairIndex].lotSellA + g_pairs[pairIndex].lotSellB;
+   // v3.6.0 HF4: Record ALL closed lots including Grid orders
+   double closedLot = g_pairs[pairIndex].lotSellA + g_pairs[pairIndex].lotSellB + 
+                      g_pairs[pairIndex].avgTotalLotSell;
+   g_dailyLot += closedLot;
+   g_weeklyLot += closedLot;
+   g_monthlyLot += closedLot;
+   g_allTimeLot += closedLot;
    
-   // v3.3.0: Count closed orders (1 main + averaging orders)
-   int closedOrdersCount = 1 + g_pairs[pairIndex].avgOrderCountSell;
+   // v3.6.0 HF4: Count ALL closed orders
+   int closedOrdersCount = g_pairs[pairIndex].orderCountSell;
    g_dailyClosedOrders += closedOrdersCount;
    g_weeklyClosedOrders += closedOrdersCount;
    g_monthlyClosedOrders += closedOrdersCount;
@@ -4967,13 +4979,14 @@ void CreateDashboard()
    CreateLabel(prefix + "COL_B_Z", buyStartX + 310, colLabelY, "Z", COLOR_HEADER_TXT, 7, "Arial");
    CreateLabel(prefix + "COL_B_PL", buyStartX + 358, colLabelY, "P/L", COLOR_HEADER_TXT, 7, "Arial");
    
-   // Center columns: Pair | Trend | C-% | Type | Beta | Total P/L
+   // Center columns: Pair | Trend | C-% | Type | Total P/L (v3.6.0 HF4: Beta hidden)
    CreateLabel(prefix + "COL_C_PR", centerX + 10, colLabelY, "Pair", COLOR_HEADER_TXT, 7, "Arial");
    CreateLabel(prefix + "COL_C_TRD", centerX + 145, colLabelY, "Trend", COLOR_HEADER_TXT, 7, "Arial");  // v3.5.0: CDC Trend column
    CreateLabel(prefix + "COL_C_CR", centerX + 195, colLabelY, "C-%", COLOR_HEADER_TXT, 7, "Arial");
    CreateLabel(prefix + "COL_C_TY", centerX + 235, colLabelY, "Type", COLOR_HEADER_TXT, 7, "Arial");
-   CreateLabel(prefix + "COL_C_BT", centerX + 280, colLabelY, "Beta", COLOR_HEADER_TXT, 7, "Arial");
-   CreateLabel(prefix + "COL_C_TP", centerX + 330, colLabelY, "Tot P/L", COLOR_HEADER_TXT, 7, "Arial");
+   // v3.6.0 HF4: Beta column hidden - not frequently used
+   // CreateLabel(prefix + "COL_C_BT", centerX + 280, colLabelY, "Beta", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_C_TP", centerX + 290, colLabelY, "Tot P/L", COLOR_HEADER_TXT, 7, "Arial");
    
    // Sell columns: P/L | Z | Status | Target | Tot | Ord | Lot | Closed | X
    CreateLabel(prefix + "COL_S_PL", sellStartX + 5, colLabelY, "P/L", COLOR_HEADER_TXT, 7, "Arial");
@@ -5037,8 +5050,9 @@ void CreatePairRow(string prefix, int idx, int buyX, int centerX, int sellX, int
    CreateLabel(prefix + "P" + idxStr + "_CDC", centerX + 145, y + 3, "-", COLOR_OFF, FONT_SIZE, "Arial Bold");
    CreateLabel(prefix + "P" + idxStr + "_CORR", centerX + 195, y + 3, "0%", COLOR_TEXT, FONT_SIZE, "Arial");
    CreateLabel(prefix + "P" + idxStr + "_TYPE", centerX + 235, y + 3, "Pos", COLOR_PROFIT, FONT_SIZE, "Arial");
-   CreateLabel(prefix + "P" + idxStr + "_BETA", centerX + 280, y + 3, "1.00", COLOR_TEXT, FONT_SIZE, "Arial");
-   CreateLabel(prefix + "P" + idxStr + "_TPL", centerX + 330, y + 3, "0", COLOR_TEXT, 9, "Arial Bold");
+   // v3.6.0 HF4: Beta label hidden
+   // CreateLabel(prefix + "P" + idxStr + "_BETA", centerX + 280, y + 3, "1.00", COLOR_TEXT, FONT_SIZE, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_TPL", centerX + 290, y + 3, "0", COLOR_TEXT, 9, "Arial Bold");
    
    // === SELL SIDE DATA ===
    // v3.3.0: P/L | Z | Status | Target | Tot | Ord | Lot | Closed | X
@@ -5184,33 +5198,34 @@ void UpdateDashboard()
    double equity = AccountInfoDouble(ACCOUNT_EQUITY);
    double margin = AccountInfoDouble(ACCOUNT_MARGIN);
    
-   // Calculate totals
+   // v3.6.0 HF4: Calculate totals from ALL open positions (including Grid orders)
    double totalLot = 0;
    int totalOrders = 0;
    
-   for(int i = 0; i < MAX_PAIRS; i++)
+   for(int pos = PositionsTotal() - 1; pos >= 0; pos--)
    {
-      if(g_pairs[i].directionBuy == 1)
+      ulong ticket = PositionGetTicket(pos);
+      if(PositionSelectByTicket(ticket))
       {
-         totalLot += g_pairs[i].lotBuyA + g_pairs[i].lotBuyB;
-         totalOrders += 2 + g_pairs[i].avgOrderCountBuy * 2;  // Include averaging orders
-      }
-      if(g_pairs[i].directionSell == 1)
-      {
-         totalLot += g_pairs[i].lotSellA + g_pairs[i].lotSellB;
-         totalOrders += 2 + g_pairs[i].avgOrderCountSell * 2;  // Include averaging orders
+         string comment = PositionGetString(POSITION_COMMENT);
+         // Include all StatArb positions: Main, AVG, GL (Grid Loss), GP (Grid Profit)
+         if(StringFind(comment, "StatArb_") == 0)
+         {
+            totalLot += PositionGetDouble(POSITION_VOLUME);
+            totalOrders++;
+         }
       }
    }
    
    // Update max equity
    if(equity > g_maxEquity) g_maxEquity = equity;
    
-   // Calculate drawdown
+   // v3.6.0 HF4: Calculate DD from Total P/L (Negative = Drawdown)
+   // DD% = |Negative Floating P/L| / Balance * 100
    double ddPercent = 0;
-   if(g_maxEquity > 0)
+   if(balance > 0 && g_totalCurrentProfit < 0)
    {
-      ddPercent = ((g_maxEquity - equity) / g_maxEquity) * 100;
-      if(ddPercent < 0) ddPercent = 0;
+      ddPercent = MathAbs(g_totalCurrentProfit) / balance * 100;
    }
    if(ddPercent > g_maxDrawdownPercent) g_maxDrawdownPercent = ddPercent;
    
@@ -5238,16 +5253,10 @@ void UpdateDashboard()
    UpdateLabel(prefix + "V_TORD", IntegerToString(totalOrders), COLOR_TEXT_WHITE);
    UpdateLabel(prefix + "V_DD", DoubleToString(ddPercent, 2) + "%", ddPercent > 10 ? COLOR_LOSS : COLOR_TEXT_WHITE);
    
-   // v3.6.0 HF2: Show Basket Target/Need instead of Max DD when basket is enabled
-   if(g_totalTarget > 0)
-   {
-      UpdateLabel(prefix + "V_MDD", DoubleToString(basketNeed, 2), basketNeed > 0 ? COLOR_GOLD : COLOR_PROFIT);
-      UpdateLabel(prefix + "L_MDD", "Need:", COLOR_TEXT_WHITE);  // Update label text
-   }
-   else
-   {
-      UpdateLabel(prefix + "V_MDD", DoubleToString(g_maxDrawdownPercent, 2) + "%", g_maxDrawdownPercent > InpMaxDrawdown ? COLOR_LOSS : COLOR_TEXT_WHITE);
-   }
+   // v3.6.0 HF4: Always show Max DD% (removed "Need" - Basket vs Target is enough)
+   UpdateLabel(prefix + "L_MDD", "Max DD%:", COLOR_TEXT_WHITE);
+   UpdateLabel(prefix + "V_MDD", DoubleToString(g_maxDrawdownPercent, 2) + "%", 
+               g_maxDrawdownPercent > InpMaxDrawdown ? COLOR_LOSS : COLOR_TEXT_WHITE);
    
    // Lot Statistics with Closed Orders (v3.3.0)
    UpdateLabel(prefix + "V_DLOT", DoubleToString(g_dailyLot, 2), COLOR_TEXT_WHITE);
@@ -5308,7 +5317,8 @@ void UpdateDashboard()
          color typeColor = g_pairs[i].correlationType == 1 ? COLOR_PROFIT : COLOR_LOSS;
          UpdateLabel(prefix + "P" + idxStr + "_TYPE", corrType, typeColor);
          
-         UpdateLabel(prefix + "P" + idxStr + "_BETA", DoubleToString(g_pairs[i].hedgeRatio, 2), COLOR_TEXT);
+         // v3.6.0 HF4: Beta update hidden
+         // UpdateLabel(prefix + "P" + idxStr + "_BETA", DoubleToString(g_pairs[i].hedgeRatio, 2), COLOR_TEXT);
       }
       
       // Total P/L
