@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                         Harmony_Dream_EA.mq5     |
-//|                      Harmony Dream (Pairs Trading) v1.3          |
+//|                      Harmony Dream (Pairs Trading) v1.4          |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "1.30"
+#property version   "1.40"
 #property strict
 #property description "Harmony Dream - Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
-#property description "v1.3: Sync P/L Calculation Fix + Auto-Recovery (from HrmFlow v3.81)"
+#property description "v1.4: Fix Main vs Grid Ticket Matching + Net Profit (incl Commission)"
 #include <Trade/Trade.mqh>
 
 //+------------------------------------------------------------------+
@@ -993,22 +993,63 @@ int OnInit()
    // v1.3: Restore open positions from previous session (Magic Number-based)
    RestoreOpenPositions();
    
-   PrintFormat("=== Harmony Dream EA v1.3 Initialized - %d Active Pairs ===", g_activePairs);
+   PrintFormat("=== Harmony Dream EA v1.4 Initialized - %d Active Pairs | Net Profit Mode ===", g_activePairs);
    return(INIT_SUCCEEDED);
 }
 
 //+------------------------------------------------------------------+
-//| v1.3: Find Position Ticket by Symbol and Comment (Fallback)       |
+//| v1.4: Check if Comment is a MAIN order (not Grid)                  |
+//| Main comments: "HrmDream_BUY_X" or "HrmDream_SELL_X"               |
+//| Grid comments contain: "_GL_", "_GP_", "_AVG_"                     |
 //+------------------------------------------------------------------+
-ulong FindPositionTicketBySymbolAndComment(string symbol, string commentPattern)
+bool IsMainComment(string comment, string side, int pairIndex)
+{
+   // Build the exact prefix for main orders
+   string mainPrefix = StringFormat("HrmDream_%s_%d", side, pairIndex + 1);
+   
+   // Must START with the main prefix
+   if(StringFind(comment, mainPrefix) != 0)
+      return false;
+   
+   // Must NOT contain grid identifiers
+   if(StringFind(comment, "_GL_") >= 0) return false;
+   if(StringFind(comment, "_GP_") >= 0) return false;
+   if(StringFind(comment, "_AVG_") >= 0) return false;
+   
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| v1.4: Check if Comment is a GRID order                             |
+//+------------------------------------------------------------------+
+bool IsGridComment(string comment, string side, int pairIndex)
+{
+   string pairStr = IntegerToString(pairIndex + 1);
+   
+   // Check for Grid Loss, Grid Profit, or legacy Averaging
+   if(StringFind(comment, "HrmDream_GL_" + side + "_" + pairStr) >= 0) return true;
+   if(StringFind(comment, "HrmDream_GP_" + side + "_" + pairStr) >= 0) return true;
+   if(StringFind(comment, "HrmDream_AVG_" + side + "_" + pairStr) >= 0) return true;
+   
+   return false;
+}
+
+//+------------------------------------------------------------------+
+//| v1.4: Find MAIN Position Ticket by Symbol (exclude Grid)           |
+//+------------------------------------------------------------------+
+ulong FindMainTicketBySymbol(string symbol, string side, int pairIndex)
 {
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       ulong ticket = PositionGetTicket(i);
       if(!PositionSelectByTicket(ticket)) continue;
       
-      if(PositionGetString(POSITION_SYMBOL) == symbol &&
-         StringFind(PositionGetString(POSITION_COMMENT), commentPattern) >= 0)
+      if(PositionGetString(POSITION_SYMBOL) != symbol) continue;
+      
+      string comment = PositionGetString(POSITION_COMMENT);
+      
+      // Must be main comment, NOT grid
+      if(IsMainComment(comment, side, pairIndex))
       {
          return ticket;
       }
@@ -1017,12 +1058,43 @@ ulong FindPositionTicketBySymbolAndComment(string symbol, string commentPattern)
 }
 
 //+------------------------------------------------------------------+
-//| v1.3: Recover Missing Tickets by Comment Scan                      |
+//| v1.4: Find Position Ticket by Symbol and Comment (Fallback)        |
+//| Uses prefix matching + excludes grid comments                      |
+//+------------------------------------------------------------------+
+ulong FindPositionTicketBySymbolAndComment(string symbol, string commentPattern)
+{
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(!PositionSelectByTicket(ticket)) continue;
+      
+      if(PositionGetString(POSITION_SYMBOL) != symbol) continue;
+      
+      string comment = PositionGetString(POSITION_COMMENT);
+      
+      // v1.4: Must START with commentPattern (prefix match)
+      if(StringFind(comment, commentPattern) != 0) continue;
+      
+      // v1.4: Exclude grid orders from main ticket recovery
+      if(StringFind(comment, "_GL_") >= 0) continue;
+      if(StringFind(comment, "_GP_") >= 0) continue;
+      if(StringFind(comment, "_AVG_") >= 0) continue;
+      
+      return ticket;
+   }
+   return 0;
+}
+
+//+------------------------------------------------------------------+
+//| v1.4: Recover Missing Tickets by Comment Scan (Main Orders Only)   |
+//| Uses IsMainComment to prevent Grid tickets from being assigned     |
 //+------------------------------------------------------------------+
 void RecoverMissingTickets(int pairIndex, string side, string commentPattern)
 {
    string symbolA = g_pairs[pairIndex].symbolA;
    string symbolB = g_pairs[pairIndex].symbolB;
+   
+   bool foundGridNotMain = false;
    
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
@@ -1032,7 +1104,17 @@ void RecoverMissingTickets(int pairIndex, string side, string commentPattern)
       string symbol = PositionGetString(POSITION_SYMBOL);
       string comment = PositionGetString(POSITION_COMMENT);
       
-      if(StringFind(comment, commentPattern) < 0) continue;
+      // v1.4: SANITY CHECK - Must be a MAIN comment, NOT a Grid comment
+      if(!IsMainComment(comment, side, pairIndex))
+      {
+         // Check if this is a Grid ticket that would have matched with old logic
+         if(IsGridComment(comment, side, pairIndex) && 
+            (symbol == symbolA || symbol == symbolB))
+         {
+            foundGridNotMain = true;
+         }
+         continue;  // Skip grid orders
+      }
       
       if(side == "SELL")
       {
@@ -1040,15 +1122,15 @@ void RecoverMissingTickets(int pairIndex, string side, string commentPattern)
          {
             g_pairs[pairIndex].ticketSellA = ticket;
             g_pairs[pairIndex].lotSellA = PositionGetDouble(POSITION_VOLUME);
-            PrintFormat("[v1.3 RECOVERED] Pair %d SELL SymbolA: %s ticket=%d", 
-                        pairIndex + 1, symbol, ticket);
+            PrintFormat("[v1.4 RECOVERED] Pair %d SELL SymbolA: %s ticket=%d comment='%s'", 
+                        pairIndex + 1, symbol, ticket, comment);
          }
          else if(symbol == symbolB && g_pairs[pairIndex].ticketSellB == 0)
          {
             g_pairs[pairIndex].ticketSellB = ticket;
             g_pairs[pairIndex].lotSellB = PositionGetDouble(POSITION_VOLUME);
-            PrintFormat("[v1.3 RECOVERED] Pair %d SELL SymbolB: %s ticket=%d", 
-                        pairIndex + 1, symbol, ticket);
+            PrintFormat("[v1.4 RECOVERED] Pair %d SELL SymbolB: %s ticket=%d comment='%s'", 
+                        pairIndex + 1, symbol, ticket, comment);
          }
       }
       else if(side == "BUY")
@@ -1057,16 +1139,31 @@ void RecoverMissingTickets(int pairIndex, string side, string commentPattern)
          {
             g_pairs[pairIndex].ticketBuyA = ticket;
             g_pairs[pairIndex].lotBuyA = PositionGetDouble(POSITION_VOLUME);
-            PrintFormat("[v1.3 RECOVERED] Pair %d BUY SymbolA: %s ticket=%d", 
-                        pairIndex + 1, symbol, ticket);
+            PrintFormat("[v1.4 RECOVERED] Pair %d BUY SymbolA: %s ticket=%d comment='%s'", 
+                        pairIndex + 1, symbol, ticket, comment);
          }
          else if(symbol == symbolB && g_pairs[pairIndex].ticketBuyB == 0)
          {
             g_pairs[pairIndex].ticketBuyB = ticket;
             g_pairs[pairIndex].lotBuyB = PositionGetDouble(POSITION_VOLUME);
-            PrintFormat("[v1.3 RECOVERED] Pair %d BUY SymbolB: %s ticket=%d", 
-                        pairIndex + 1, symbol, ticket);
+            PrintFormat("[v1.4 RECOVERED] Pair %d BUY SymbolB: %s ticket=%d comment='%s'", 
+                        pairIndex + 1, symbol, ticket, comment);
          }
+      }
+   }
+   
+   // v1.4: WARN if we found Grid tickets but no Main tickets
+   if(foundGridNotMain)
+   {
+      if(side == "BUY" && (g_pairs[pairIndex].ticketBuyA == 0 || g_pairs[pairIndex].ticketBuyB == 0))
+      {
+         PrintFormat("[v1.4 WARN] Pair %d BUY: Found Grid tickets but NO Main ticket! A=%d B=%d",
+                     pairIndex + 1, g_pairs[pairIndex].ticketBuyA, g_pairs[pairIndex].ticketBuyB);
+      }
+      else if(side == "SELL" && (g_pairs[pairIndex].ticketSellA == 0 || g_pairs[pairIndex].ticketSellB == 0))
+      {
+         PrintFormat("[v1.4 WARN] Pair %d SELL: Found Grid tickets but NO Main ticket! A=%d B=%d",
+                     pairIndex + 1, g_pairs[pairIndex].ticketSellA, g_pairs[pairIndex].ticketSellB);
       }
    }
 }
@@ -1079,7 +1176,7 @@ void RestoreOpenPositions()
    int restoredBuy = 0;
    int restoredSell = 0;
    
-   Print("[v3.77] Scanning for existing positions with Magic Number: ", InpMagicNumber);
+   Print("[v1.4] Scanning for existing positions with Magic Number: ", InpMagicNumber);
    
    for(int pos = PositionsTotal() - 1; pos >= 0; pos--)
    {
@@ -1196,11 +1293,11 @@ void RestoreOpenPositions()
    
    if(restoredBuy > 0 || restoredSell > 0)
    {
-      PrintFormat("[v3.77] Position Restore Complete: BUY=%d SELL=%d positions restored", restoredBuy, restoredSell);
+      PrintFormat("[v1.4] Position Restore Complete: BUY=%d SELL=%d positions restored", restoredBuy, restoredSell);
    }
    else
    {
-      Print("[v3.77] No existing positions found to restore");
+      Print("[v1.4] No existing positions found to restore");
    }
 }
 
@@ -1753,23 +1850,25 @@ void OnTick()
    // Skip trading logic if not licensed or paused
    if(!g_isLicenseValid || g_isPaused)
    {
-      // v3.2.5: Dashboard update with throttling in tester
-      if(g_dashboardEnabled)
+   // v1.4: Dashboard update with throttling in tester (even when paused)
+   if(g_dashboardEnabled)
+   {
+      if(g_isTesterMode && InpFastBacktest)
       {
-         if(g_isTesterMode && InpFastBacktest)
+         if(TimeCurrent() - g_lastTesterDashboardUpdate >= InpBacktestUiUpdateSec)
          {
-            if(TimeCurrent() - g_lastTesterDashboardUpdate >= InpBacktestUiUpdateSec)
-            {
-               UpdateDashboard();
-               g_lastTesterDashboardUpdate = TimeCurrent();
-            }
-         }
-         else
-         {
+            UpdatePairProfits();   // v1.4: Force profit update before dashboard refresh
+            UpdateAccountStats();  // v1.4: Force account stats update
             UpdateDashboard();
+            g_lastTesterDashboardUpdate = TimeCurrent();
          }
       }
-      return;
+      else
+      {
+         UpdateDashboard();
+      }
+   }
+   return;
    }
    
    // Main trading logic
@@ -1786,13 +1885,16 @@ void OnTick()
    CheckRiskLimits();
    UpdateAccountStats();
    
-   // v3.2.5: Dashboard update with throttling in tester
+   // v1.4: Dashboard update with throttling in tester
+   // CRITICAL: Call UpdatePairProfits() BEFORE UpdateDashboard() to ensure current values
    if(g_dashboardEnabled)
    {
       if(g_isTesterMode && InpFastBacktest)
       {
          if(TimeCurrent() - g_lastTesterDashboardUpdate >= InpBacktestUiUpdateSec)
          {
+            UpdatePairProfits();   // v1.4: Force profit update before dashboard refresh
+            UpdateAccountStats();  // v1.4: Force account stats update
             UpdateDashboard();
             g_lastTesterDashboardUpdate = TimeCurrent();
          }
@@ -6288,7 +6390,7 @@ void UpdatePairProfits()
 }
 
 //+------------------------------------------------------------------+
-//| Get Position Profit by Ticket                                      |
+//| v1.4: Get Position NET Profit (Profit + Swap + Commission)         |
 //+------------------------------------------------------------------+
 double GetPositionProfit(ulong ticket)
 {
@@ -6296,14 +6398,17 @@ double GetPositionProfit(ulong ticket)
    
    if(PositionSelectByTicket(ticket))
    {
-      return PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+      // v1.4: Include COMMISSION for Net Profit (matches MT5 display)
+      return PositionGetDouble(POSITION_PROFIT) + 
+             PositionGetDouble(POSITION_SWAP) + 
+             PositionGetDouble(POSITION_COMMISSION);
    }
    
    return 0;
 }
 
 //+------------------------------------------------------------------+
-//| Get Averaging Positions Profit                                     |
+//| v1.4: Get Averaging Positions NET Profit (incl Commission)         |
 //+------------------------------------------------------------------+
 double GetAveragingProfit(string commentPattern)
 {
@@ -6315,7 +6420,10 @@ double GetAveragingProfit(string commentPattern)
       {
          if(StringFind(PositionGetString(POSITION_COMMENT), commentPattern) >= 0)
          {
-            totalProfit += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+            // v1.4: Include COMMISSION for Net Profit
+            totalProfit += PositionGetDouble(POSITION_PROFIT) + 
+                           PositionGetDouble(POSITION_SWAP) + 
+                           PositionGetDouble(POSITION_COMMISSION);
          }
       }
    }
@@ -6568,7 +6676,7 @@ void CreateDashboard()
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_XDISTANCE, PANEL_X + (PANEL_WIDTH / 2));
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_YDISTANCE, PANEL_Y + 4);
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_ANCHOR, ANCHOR_UPPER);
-   ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_TEXT, "Harmony Dream EA v1.1");
+   ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_TEXT, "Harmony Dream EA v1.4");
    ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_FONT, "Arial Bold");
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_FONTSIZE, 10);
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_COLOR, COLOR_GOLD);
