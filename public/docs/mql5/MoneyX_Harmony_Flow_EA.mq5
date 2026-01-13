@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                    MoneyX_Harmony_Flow_EA.mq5    |
-//|                   MoneyX Harmony Flow (Pairs Trading) v3.78      |
+//|                   MoneyX Harmony Flow (Pairs Trading) v3.79      |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "3.78"
+#property version   "3.79"
 #property strict
 #property description "MoneyX Harmony Flow - Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
-#property description "v3.78: CDC Retry Mechanism + Grid Log Debounce"
+#property description "v3.79: Fix Pair Profit Calculation + Enhanced Position Restore"
 
 #include <Trade/Trade.mqh>
 
@@ -956,7 +956,7 @@ int OnInit()
    // v3.77: Restore open positions from previous session (Magic Number-based)
    RestoreOpenPositions();
    
-   PrintFormat("=== MoneyX Harmony Flow EA v3.77 Initialized - %d Active Pairs ===", g_activePairs);
+   PrintFormat("=== MoneyX Harmony Flow EA v3.79 Initialized - %d Active Pairs ===", g_activePairs);
    return(INIT_SUCCEEDED);
 }
 
@@ -1021,48 +1021,61 @@ void RestoreOpenPositions()
             }
          }
          
-         // Restore BUY side
-         if(isBuySide && g_pairs[i].directionBuy != 1)
+         // v3.79: FIX - Restore BUY side (allow restoring BOTH symbols)
+         // Bug fix: Previous version used "directionBuy != 1" which blocked second symbol
+         if(isBuySide)
          {
-            g_pairs[i].directionBuy = 1;  // Set to Active
+            // Always set direction to active when we find any matching position
+            g_pairs[i].directionBuy = 1;
+            
+            // Assign ticket to correct symbol slot (only if not already assigned)
             if(symbol == symbolA && g_pairs[i].ticketBuyA == 0)
             {
                g_pairs[i].ticketBuyA = ticket;
                g_pairs[i].lotBuyA = PositionGetDouble(POSITION_VOLUME);
+               restoredBuy++;
+               PrintFormat("[v3.79] Restored BUY Pair %d SymbolA: %s ticket=%d lot=%.2f", 
+                           i + 1, symbol, ticket, PositionGetDouble(POSITION_VOLUME));
             }
             else if(symbol == symbolB && g_pairs[i].ticketBuyB == 0)
             {
                g_pairs[i].ticketBuyB = ticket;
                g_pairs[i].lotBuyB = PositionGetDouble(POSITION_VOLUME);
+               restoredBuy++;
+               PrintFormat("[v3.79] Restored BUY Pair %d SymbolB: %s ticket=%d lot=%.2f", 
+                           i + 1, symbol, ticket, PositionGetDouble(POSITION_VOLUME));
             }
+            
             g_pairs[i].orderCountBuy++;
             g_pairs[i].entryTimeBuy = (datetime)PositionGetInteger(POSITION_TIME);
-            restoredBuy++;
-            
-            PrintFormat("[v3.77] Restored BUY Pair %d: %s ticket=%d lot=%.2f", 
-                        i + 1, symbol, ticket, PositionGetDouble(POSITION_VOLUME));
          }
          
-         // Restore SELL side
-         if(isSellSide && g_pairs[i].directionSell != 1)
+         // v3.79: FIX - Restore SELL side (allow restoring BOTH symbols)
+         if(isSellSide)
          {
-            g_pairs[i].directionSell = 1;  // Set to Active
+            // Always set direction to active when we find any matching position
+            g_pairs[i].directionSell = 1;
+            
+            // Assign ticket to correct symbol slot (only if not already assigned)
             if(symbol == symbolA && g_pairs[i].ticketSellA == 0)
             {
                g_pairs[i].ticketSellA = ticket;
                g_pairs[i].lotSellA = PositionGetDouble(POSITION_VOLUME);
+               restoredSell++;
+               PrintFormat("[v3.79] Restored SELL Pair %d SymbolA: %s ticket=%d lot=%.2f", 
+                           i + 1, symbol, ticket, PositionGetDouble(POSITION_VOLUME));
             }
             else if(symbol == symbolB && g_pairs[i].ticketSellB == 0)
             {
                g_pairs[i].ticketSellB = ticket;
                g_pairs[i].lotSellB = PositionGetDouble(POSITION_VOLUME);
+               restoredSell++;
+               PrintFormat("[v3.79] Restored SELL Pair %d SymbolB: %s ticket=%d lot=%.2f", 
+                           i + 1, symbol, ticket, PositionGetDouble(POSITION_VOLUME));
             }
+            
             g_pairs[i].orderCountSell++;
             g_pairs[i].entryTimeSell = (datetime)PositionGetInteger(POSITION_TIME);
-            restoredSell++;
-            
-            PrintFormat("[v3.77] Restored SELL Pair %d: %s ticket=%d lot=%.2f", 
-                        i + 1, symbol, ticket, PositionGetDouble(POSITION_VOLUME));
          }
          
          break;  // Found matching pair, move to next position
@@ -1071,11 +1084,51 @@ void RestoreOpenPositions()
    
    if(restoredBuy > 0 || restoredSell > 0)
    {
-      PrintFormat("[v3.77] Position Restore Complete: BUY=%d SELL=%d positions restored", restoredBuy, restoredSell);
+      PrintFormat("[v3.79] Position Restore Complete: BUY=%d SELL=%d positions restored", restoredBuy, restoredSell);
+      
+      // v3.79: Post-restore validation - warn if pair is incomplete
+      for(int i = 0; i < MAX_PAIRS; i++)
+      {
+         if(!g_pairs[i].enabled) continue;
+         
+         // Check if SELL side is active but missing one of the symbols
+         if(g_pairs[i].directionSell == 1)
+         {
+            if(g_pairs[i].ticketSellA == 0 || g_pairs[i].ticketSellB == 0)
+            {
+               PrintFormat("[v3.79 WARNING] Pair %d SELL incomplete: TicketA=%d TicketB=%d (one symbol may have closed early)", 
+                           i + 1, g_pairs[i].ticketSellA, g_pairs[i].ticketSellB);
+            }
+            else
+            {
+               PrintFormat("[v3.79] Pair %d SELL fully restored: TicketA=%d (%s) TicketB=%d (%s)", 
+                           i + 1, 
+                           g_pairs[i].ticketSellA, g_pairs[i].symbolA,
+                           g_pairs[i].ticketSellB, g_pairs[i].symbolB);
+            }
+         }
+         
+         // Check if BUY side is active but missing one of the symbols
+         if(g_pairs[i].directionBuy == 1)
+         {
+            if(g_pairs[i].ticketBuyA == 0 || g_pairs[i].ticketBuyB == 0)
+            {
+               PrintFormat("[v3.79 WARNING] Pair %d BUY incomplete: TicketA=%d TicketB=%d (one symbol may have closed early)", 
+                           i + 1, g_pairs[i].ticketBuyA, g_pairs[i].ticketBuyB);
+            }
+            else
+            {
+               PrintFormat("[v3.79] Pair %d BUY fully restored: TicketA=%d (%s) TicketB=%d (%s)", 
+                           i + 1, 
+                           g_pairs[i].ticketBuyA, g_pairs[i].symbolA,
+                           g_pairs[i].ticketBuyB, g_pairs[i].symbolB);
+            }
+         }
+      }
    }
    else
    {
-      Print("[v3.77] No existing positions found to restore");
+      Print("[v3.79] No existing positions found to restore");
    }
 }
 
@@ -5946,7 +5999,19 @@ void UpdatePairProfits()
       // Calculate Buy side profit
       if(g_pairs[i].directionBuy == 1)
       {
-         buyProfit = GetPositionProfit(g_pairs[i].ticketBuyA) + GetPositionProfit(g_pairs[i].ticketBuyB);
+         double profitA = GetPositionProfit(g_pairs[i].ticketBuyA);
+         double profitB = GetPositionProfit(g_pairs[i].ticketBuyB);
+         buyProfit = profitA + profitB;
+         
+         // v3.79: Debug logging for profit calculation
+         if(InpDebugMode)
+         {
+            PrintFormat("[v3.79 PROFIT DEBUG] Pair %d BUY: TicketA=%d (%.2f) + TicketB=%d (%.2f) = %.2f", 
+                        i + 1, 
+                        g_pairs[i].ticketBuyA, profitA,
+                        g_pairs[i].ticketBuyB, profitB,
+                        buyProfit);
+         }
          
          // v3.6.0 HF2: Add ALL grid positions profit
          // Legacy Averaging (backward compatibility)
@@ -5965,7 +6030,19 @@ void UpdatePairProfits()
       // Calculate Sell side profit
       if(g_pairs[i].directionSell == 1)
       {
-         sellProfit = GetPositionProfit(g_pairs[i].ticketSellA) + GetPositionProfit(g_pairs[i].ticketSellB);
+         double profitA = GetPositionProfit(g_pairs[i].ticketSellA);
+         double profitB = GetPositionProfit(g_pairs[i].ticketSellB);
+         sellProfit = profitA + profitB;
+         
+         // v3.79: Debug logging for profit calculation
+         if(InpDebugMode)
+         {
+            PrintFormat("[v3.79 PROFIT DEBUG] Pair %d SELL: TicketA=%d (%.2f) + TicketB=%d (%.2f) = %.2f", 
+                        i + 1, 
+                        g_pairs[i].ticketSellA, profitA,
+                        g_pairs[i].ticketSellB, profitB,
+                        sellProfit);
+         }
          
          // v3.6.0 HF2: Add ALL grid positions profit
          // Legacy Averaging (backward compatibility)
