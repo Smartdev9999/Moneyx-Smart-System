@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                    MoneyX_Harmony_Flow_EA.mq5    |
-//|                   MoneyX Harmony Flow (Pairs Trading) v3.80      |
+//|                   MoneyX Harmony Flow (Pairs Trading) v3.81      |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "3.80"
+#property version   "3.81"
 #property strict
 #property description "MoneyX Harmony Flow - Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
-#property description "v3.80: Auto-Recovery Missing Tickets + Fallback Scan"
+#property description "v3.81: Fix Log Spam + Throttle Debug Logs"
 
 #include <Trade/Trade.mqh>
 
@@ -703,6 +703,10 @@ string g_lastGridPauseReason[][2];  // [MAX_PAIRS][BUY=0/SELL=1]
 
 // v3.7.8: CDC Retry timer per pair
 datetime g_lastCDCRetryTime[];
+
+// v3.81: Log throttling for profit debug
+datetime g_lastProfitLogTime = 0;
+int PROFIT_LOG_INTERVAL = 5;  // Log every 5 seconds max
 
 // === v3.6.0 HF3: Basket Profit Target System ===
 double g_basketClosedProfit = 0;      // Accumulated closed profit from all pairs
@@ -6047,12 +6051,25 @@ void UpdatePairProfits()
       double sellProfit = 0;
       
       // Calculate Buy side profit
+      // v3.81: Throttle debug logging - only log every 5 seconds when debug mode is on
+      bool shouldLogProfit = false;
+      if(InpDebugMode)
+      {
+         datetime currentTime = TimeCurrent();
+         if(currentTime - g_lastProfitLogTime >= PROFIT_LOG_INTERVAL)
+         {
+            shouldLogProfit = true;
+            g_lastProfitLogTime = currentTime;
+         }
+      }
+      
       if(g_pairs[i].directionBuy == 1)
       {
          // v3.80: Auto-recover missing tickets before calculating profit
-         if(g_pairs[i].ticketBuyA == 0 || g_pairs[i].ticketBuyB == 0)
+         bool hadMissingBuyTicket = (g_pairs[i].ticketBuyA == 0 || g_pairs[i].ticketBuyB == 0);
+         if(hadMissingBuyTicket)
          {
-            PrintFormat("[v3.80 WARN] Pair %d BUY: Missing ticket! A=%d B=%d - Attempting recovery...", 
+            PrintFormat("[v3.81 WARN] Pair %d BUY: Missing ticket! A=%d B=%d - Attempting recovery...", 
                         i + 1, g_pairs[i].ticketBuyA, g_pairs[i].ticketBuyB);
             string buyComment = StringFormat("HrmFlow_BUY_%d", i + 1);
             RecoverMissingTickets(i, "BUY", buyComment);
@@ -6062,10 +6079,10 @@ void UpdatePairProfits()
          double profitB = GetPositionProfit(g_pairs[i].ticketBuyB);
          buyProfit = profitA + profitB;
          
-         // v3.80: Debug logging for profit calculation (always log if tickets were 0)
-         if(InpDebugMode || profitA == 0 || profitB == 0)
+         // v3.81: Only log profit if throttle allows (remove profitA/B == 0 spam trigger)
+         if(shouldLogProfit)
          {
-            PrintFormat("[v3.80 PROFIT] Pair %d BUY: TicketA=%d (%.2f) + TicketB=%d (%.2f) = %.2f", 
+            PrintFormat("[v3.81 PROFIT] Pair %d BUY: TicketA=%d (%.2f) + TicketB=%d (%.2f) = %.2f", 
                         i + 1, 
                         g_pairs[i].ticketBuyA, profitA,
                         g_pairs[i].ticketBuyB, profitB,
@@ -6090,9 +6107,10 @@ void UpdatePairProfits()
       if(g_pairs[i].directionSell == 1)
       {
          // v3.80: Auto-recover missing tickets before calculating profit
-         if(g_pairs[i].ticketSellA == 0 || g_pairs[i].ticketSellB == 0)
+         bool hadMissingSellTicket = (g_pairs[i].ticketSellA == 0 || g_pairs[i].ticketSellB == 0);
+         if(hadMissingSellTicket)
          {
-            PrintFormat("[v3.80 WARN] Pair %d SELL: Missing ticket! A=%d B=%d - Attempting recovery...", 
+            PrintFormat("[v3.81 WARN] Pair %d SELL: Missing ticket! A=%d B=%d - Attempting recovery...", 
                         i + 1, g_pairs[i].ticketSellA, g_pairs[i].ticketSellB);
             string sellComment = StringFormat("HrmFlow_SELL_%d", i + 1);
             RecoverMissingTickets(i, "SELL", sellComment);
@@ -6102,10 +6120,10 @@ void UpdatePairProfits()
          double profitB = GetPositionProfit(g_pairs[i].ticketSellB);
          sellProfit = profitA + profitB;
          
-         // v3.80: Debug logging for profit calculation (always log if tickets were 0)
-         if(InpDebugMode || profitA == 0 || profitB == 0)
+         // v3.81: Only log profit if throttle allows (remove profitA/B == 0 spam trigger)
+         if(shouldLogProfit)
          {
-            PrintFormat("[v3.80 PROFIT] Pair %d SELL: TicketA=%d (%.2f) + TicketB=%d (%.2f) = %.2f", 
+            PrintFormat("[v3.81 PROFIT] Pair %d SELL: TicketA=%d (%.2f) + TicketB=%d (%.2f) = %.2f", 
                         i + 1, 
                         g_pairs[i].ticketSellA, profitA,
                         g_pairs[i].ticketSellB, profitB,
