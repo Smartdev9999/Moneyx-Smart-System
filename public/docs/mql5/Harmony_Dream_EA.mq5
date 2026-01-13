@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                         Harmony_Dream_EA.mq5     |
-//|                      Harmony Dream (Pairs Trading) v1.1          |
+//|                      Harmony Dream (Pairs Trading) v1.2          |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "1.10"
+#property version   "1.20"
 #property strict
 #property description "Harmony Dream - Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
-#property description "v1.1: Group Target System (6 Groups x 5 Pairs)"
+#property description "v1.2: Editable Max Order/Target + Settings Persistence"
 
 #include <Trade/Trade.mqh>
 
@@ -760,6 +760,18 @@ double g_basketTotalProfit = 0;       // Total profit across all groups
 // === v3.6.0 HF3 Patch 3: Separate Flags for Different Purposes ===
 bool   g_orphanCheckPaused = false;   // Pause orphan check during any position closing operation
 
+// === v1.2: Settings Persistence System ===
+struct PairSettings
+{
+   int    maxOrderBuy;
+   int    maxOrderSell;
+   double targetBuy;
+   double targetSell;
+   bool   modified;  // Flag to track if user modified this pair
+};
+
+PairSettings g_pairSettings[MAX_PAIRS];
+
 //+------------------------------------------------------------------+
 //| v3.3.0: Get Z-Score Timeframe (independent from Correlation)       |
 //+------------------------------------------------------------------+
@@ -837,6 +849,10 @@ int OnInit()
       Print("ERROR: No valid pairs configured!");
       return INIT_FAILED;
    }
+   
+   // v1.2: Load user-modified settings (after InitializePairs, before CreateDashboard)
+   // This overrides Group defaults with previously saved user settings
+   LoadPairSettings();
    
    // v3.2.7: Warmup symbol data for backtesting
    if(g_isTesterMode)
@@ -1490,6 +1506,9 @@ void SetupPair(int index, bool enabled, string symbolA, string symbolB)
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
+   // v1.2: Save user-modified settings before exit
+   SavePairSettings();
+   
    EventKillTimer();
    ObjectsDeleteAll(0, "STAT_");
    
@@ -1498,6 +1517,98 @@ void OnDeinit(const int reason)
       IndicatorRelease(g_atrHandle);
       g_atrHandle = INVALID_HANDLE;
    }
+}
+
+//+------------------------------------------------------------------+
+//| v1.2: Save Pair Settings to File                                   |
+//| Saves user-modified Max Orders and Targets to CSV file             |
+//+------------------------------------------------------------------+
+void SavePairSettings()
+{
+   string filename = "HarmonyDream_" + IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN)) + "_settings.csv";
+   
+   int handle = FileOpen(filename, FILE_WRITE | FILE_CSV | FILE_COMMON, ',');
+   if(handle == INVALID_HANDLE)
+   {
+      Print("[v1.2] Failed to save settings to ", filename, " Error: ", GetLastError());
+      return;
+   }
+   
+   // Write header
+   FileWrite(handle, "PairIndex", "MaxBuy", "MaxSell", "TargetBuy", "TargetSell", "Modified");
+   
+   // Write modified pairs only
+   int savedCount = 0;
+   for(int i = 0; i < MAX_PAIRS; i++)
+   {
+      if(g_pairSettings[i].modified)
+      {
+         FileWrite(handle, i, 
+                   g_pairs[i].maxOrderBuy, 
+                   g_pairs[i].maxOrderSell,
+                   g_pairs[i].targetBuy, 
+                   g_pairs[i].targetSell, 
+                   1);
+         savedCount++;
+      }
+   }
+   
+   FileClose(handle);
+   if(savedCount > 0)
+      PrintFormat("[v1.2] Settings saved: %d pairs to %s", savedCount, filename);
+}
+
+//+------------------------------------------------------------------+
+//| v1.2: Load Pair Settings from File                                 |
+//| Loads user-modified Max Orders and Targets from CSV file           |
+//+------------------------------------------------------------------+
+void LoadPairSettings()
+{
+   // Initialize all pairs as not modified
+   for(int i = 0; i < MAX_PAIRS; i++)
+   {
+      g_pairSettings[i].modified = false;
+   }
+   
+   string filename = "HarmonyDream_" + IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN)) + "_settings.csv";
+   
+   int handle = FileOpen(filename, FILE_READ | FILE_CSV | FILE_COMMON, ',');
+   if(handle == INVALID_HANDLE)
+   {
+      // No saved settings file - use defaults
+      return;
+   }
+   
+   // Skip header line (6 columns)
+   for(int h = 0; h < 6; h++) 
+      FileReadString(handle);
+   
+   int loadedCount = 0;
+   while(!FileIsEnding(handle))
+   {
+      string idxStr = FileReadString(handle);
+      if(idxStr == "") break;  // Empty line
+      
+      int idx = (int)StringToInteger(idxStr);
+      if(idx >= 0 && idx < MAX_PAIRS)
+      {
+         g_pairs[idx].maxOrderBuy = (int)StringToInteger(FileReadString(handle));
+         g_pairs[idx].maxOrderSell = (int)StringToInteger(FileReadString(handle));
+         g_pairs[idx].targetBuy = StringToDouble(FileReadString(handle));
+         g_pairs[idx].targetSell = StringToDouble(FileReadString(handle));
+         g_pairSettings[idx].modified = (FileReadString(handle) == "1");
+         loadedCount++;
+      }
+      else
+      {
+         // Skip remaining columns for invalid index
+         for(int c = 0; c < 5; c++) FileReadString(handle);
+      }
+   }
+   
+   FileClose(handle);
+   if(loadedCount > 0)
+      PrintFormat("[v1.2] Settings loaded: %d pairs from %s", loadedCount, filename);
 }
 
 //+------------------------------------------------------------------+
@@ -1829,10 +1940,13 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
          int pairIndex = (int)StringToInteger(StringSubstr(sparam, StringLen(prefix + "_MAX_BUY_")));
          string value = ObjectGetString(0, sparam, OBJPROP_TEXT);
          int newMax = (int)StringToInteger(value);
-         if(newMax >= 1)
+         if(newMax >= 1 && pairIndex >= 0 && pairIndex < MAX_PAIRS)
          {
-            // v3.3.0: Update total max orders (Main + Grid)
+            // v1.2: Update max orders and mark as modified
             g_pairs[pairIndex].maxOrderBuy = newMax;
+            g_pairSettings[pairIndex].modified = true;
+            SavePairSettings();  // Save immediately
+            PrintFormat("[v1.2] Pair %d Max Buy Order updated to %d", pairIndex + 1, newMax);
          }
       }
       else if(StringFind(sparam, prefix + "_MAX_SELL_") >= 0)
@@ -1840,25 +1954,42 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
          int pairIndex = (int)StringToInteger(StringSubstr(sparam, StringLen(prefix + "_MAX_SELL_")));
          string value = ObjectGetString(0, sparam, OBJPROP_TEXT);
          int newMax = (int)StringToInteger(value);
-         if(newMax >= 1)
+         if(newMax >= 1 && pairIndex >= 0 && pairIndex < MAX_PAIRS)
          {
-            // v3.3.0: Update total max orders (Main + Grid)
+            // v1.2: Update max orders and mark as modified
             g_pairs[pairIndex].maxOrderSell = newMax;
+            g_pairSettings[pairIndex].modified = true;
+            SavePairSettings();  // Save immediately
+            PrintFormat("[v1.2] Pair %d Max Sell Order updated to %d", pairIndex + 1, newMax);
          }
       }
       else if(StringFind(sparam, prefix + "_TGT_BUY_") >= 0)
       {
          int pairIndex = (int)StringToInteger(StringSubstr(sparam, StringLen(prefix + "_TGT_BUY_")));
-         string value = ObjectGetString(0, sparam, OBJPROP_TEXT);
-         double newTarget = StringToDouble(value);
-         g_pairs[pairIndex].targetBuy = newTarget;
+         if(pairIndex >= 0 && pairIndex < MAX_PAIRS)
+         {
+            string value = ObjectGetString(0, sparam, OBJPROP_TEXT);
+            double newTarget = StringToDouble(value);
+            // v1.2: Update target and mark as modified
+            g_pairs[pairIndex].targetBuy = newTarget;
+            g_pairSettings[pairIndex].modified = true;
+            SavePairSettings();  // Save immediately
+            PrintFormat("[v1.2] Pair %d Target Buy updated to %.2f", pairIndex + 1, newTarget);
+         }
       }
       else if(StringFind(sparam, prefix + "_TGT_SELL_") >= 0)
       {
          int pairIndex = (int)StringToInteger(StringSubstr(sparam, StringLen(prefix + "_TGT_SELL_")));
-         string value = ObjectGetString(0, sparam, OBJPROP_TEXT);
-         double newTarget = StringToDouble(value);
-         g_pairs[pairIndex].targetSell = newTarget;
+         if(pairIndex >= 0 && pairIndex < MAX_PAIRS)
+         {
+            string value = ObjectGetString(0, sparam, OBJPROP_TEXT);
+            double newTarget = StringToDouble(value);
+            // v1.2: Update target and mark as modified
+            g_pairs[pairIndex].targetSell = newTarget;
+            g_pairSettings[pairIndex].modified = true;
+            SavePairSettings();  // Save immediately
+            PrintFormat("[v1.2] Pair %d Target Sell updated to %.2f", pairIndex + 1, newTarget);
+         }
       }
       else if(sparam == prefix + "_TOTAL_TARGET")
       {
@@ -6525,9 +6656,9 @@ void CreatePairRow(string prefix, int idx, int buyX, int centerX, int sellX, int
    CreateLabel(prefix + "P" + idxStr + "_B_CLOSED", buyX + 25, y + 3, "0", COLOR_TEXT, FONT_SIZE, "Arial");  // Closed P/L
    CreateLabel(prefix + "P" + idxStr + "_B_LOT", buyX + 75, y + 3, "0.00", COLOR_TEXT, FONT_SIZE, "Arial");
    CreateLabel(prefix + "P" + idxStr + "_B_ORD", buyX + 128, y + 3, "0", COLOR_TEXT, FONT_SIZE, "Arial");
-   // v1.1: Use group settings instead of removed global settings
-   CreateEditField(prefix + "_MAX_BUY_" + idxStr, buyX + 160, y + 2, 30, 14, IntegerToString(g_groups[groupIdx].maxOrderBuy));
-   CreateEditField(prefix + "_TGT_BUY_" + idxStr, buyX + 200, y + 2, 45, 14, DoubleToString(g_groups[groupIdx].targetBuy, 0));
+   // v1.2: Use g_pairs values (which may be user-modified and loaded from settings file)
+   CreateEditField(prefix + "_MAX_BUY_" + idxStr, buyX + 160, y + 2, 30, 14, IntegerToString(g_pairs[idx].maxOrderBuy));
+   CreateEditField(prefix + "_TGT_BUY_" + idxStr, buyX + 200, y + 2, 45, 14, DoubleToString(g_pairs[idx].targetBuy, 0));
    
    string buyStatusText = g_pairs[idx].enabled ? "Off" : "-";
    color buyStatusColor = COLOR_OFF;
@@ -6553,9 +6684,9 @@ void CreatePairRow(string prefix, int idx, int buyX, int centerX, int sellX, int
    string sellStatusText = g_pairs[idx].enabled ? "Off" : "-";
    color sellStatusColor = COLOR_OFF;
    CreateButton(prefix + "_ST_SELL_" + idxStr, sellX + 100, y + 2, 40, 14, sellStatusText, sellStatusColor, clrWhite);
-   // v1.1: Use group settings instead of removed global settings
-   CreateEditField(prefix + "_TGT_SELL_" + idxStr, sellX + 150, y + 2, 45, 14, DoubleToString(g_groups[groupIdx].targetSell, 0));
-   CreateEditField(prefix + "_MAX_SELL_" + idxStr, sellX + 205, y + 2, 30, 14, IntegerToString(g_groups[groupIdx].maxOrderSell));
+   // v1.2: Use g_pairs values (which may be user-modified and loaded from settings file)
+   CreateEditField(prefix + "_TGT_SELL_" + idxStr, sellX + 150, y + 2, 45, 14, DoubleToString(g_pairs[idx].targetSell, 0));
+   CreateEditField(prefix + "_MAX_SELL_" + idxStr, sellX + 205, y + 2, 30, 14, IntegerToString(g_pairs[idx].maxOrderSell));
    CreateLabel(prefix + "P" + idxStr + "_S_ORD", sellX + 262, y + 3, "0", COLOR_TEXT, FONT_SIZE, "Arial");
    CreateLabel(prefix + "P" + idxStr + "_S_LOT", sellX + 305, y + 3, "0.00", COLOR_TEXT, FONT_SIZE, "Arial");
    CreateLabel(prefix + "P" + idxStr + "_S_CLOSED", sellX + 340, y + 3, "0", COLOR_TEXT, FONT_SIZE, "Arial");  // Closed P/L
