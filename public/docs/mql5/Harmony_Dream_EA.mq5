@@ -10,7 +10,7 @@
 #property description "Full Hedging with Independent Buy/Sell Sides"
 #property description "v1.2: Editable Max Order/Target + Settings Persistence"
 
-#include <Trade/Trade.mqh>
+#include <Trade\Trade.mqh>
 
 //+------------------------------------------------------------------+
 //| LICENSE CONFIGURATION (v3.6.5)                                     |
