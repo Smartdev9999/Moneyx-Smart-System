@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                         Harmony_Dream_EA.mq5     |
-//|                      Harmony Dream (Pairs Trading) v1.1          |
+//|                      Harmony Dream (Pairs Trading) v1.2          |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "1.10"
+#property version   "1.20"
 #property strict
 #property description "Harmony Dream - Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
-#property description "v1.1: Group Target System (6 Groups x 5 Pairs)"
+#property description "v1.2: Fixed Trend-Based Lot Logic for Positive Correlation"
 
 #include <Trade/Trade.mqh>
 
@@ -4393,8 +4393,8 @@ void CalculateGridLots(int pairIndex, string side,
          break;
          
       case GRID_LOT_TYPE_TREND_BASED:
-         // Use existing CalculateTrendBasedLots() function
-         CalculateTrendBasedLots(pairIndex, side, baseLotA, baseLotB, outLotA, outLotB, isGridOrder);
+         // v1.2: Force CDC Trend logic regardless of InpGridLotMode
+         CalculateTrendBasedLots(pairIndex, side, baseLotA, baseLotB, outLotA, outLotB, isGridOrder, true);
          break;
    }
 }
@@ -4451,15 +4451,17 @@ double CalculateATRRatio(int pairIndex)
 }
 
 //+------------------------------------------------------------------+
-//| Calculate Trend-Based Lots for Grid Orders (v3.5.3 HF1)            |
+//| Calculate Trend-Based Lots for Grid Orders (v1.2 Updated)          |
 //| side: "BUY" or "SELL" - the hedge side (not individual symbol)     |
 //| isGridOrder: true = Grid/Averaging order, false = Main entry       |
+//| forceTrendLogic: true = Skip mode checks, always apply CDC logic   |
 //| Returns: Adjusted lotA and lotB via reference                       |
 //+------------------------------------------------------------------+
 void CalculateTrendBasedLots(int pairIndex, string side, 
                               double baseLotA, double baseLotB,
                               double &adjustedLotA, double &adjustedLotB,
-                              bool isGridOrder = false)
+                              bool isGridOrder = false,
+                              bool forceTrendLogic = false)
 {
    string symbolA = g_pairs[pairIndex].symbolA;
    string symbolB = g_pairs[pairIndex].symbolB;
@@ -4468,35 +4470,40 @@ void CalculateTrendBasedLots(int pairIndex, string side,
    adjustedLotA = baseLotA;
    adjustedLotB = baseLotB;
    
-   // === Mode 1: Fixed Lot (v3.5.3 HF1) - ใช้ Initial Lot เดิมตลอดทุก Level ===
-   if(InpGridLotMode == GRID_LOT_FIXED)
+   // === v1.2: Skip mode checks if forceTrendLogic is true ===
+   // When called from GRID_LOT_TYPE_TREND_BASED, always apply CDC Trend logic
+   if(!forceTrendLogic)
    {
-      // ใช้ Lot จาก Main Entry เท่าเดิมทุก Grid Level
-      if(side == "BUY")
+      // === Mode 1: Fixed Lot (v3.5.3 HF1) - ใช้ Initial Lot เดิมตลอดทุก Level ===
+      if(InpGridLotMode == GRID_LOT_FIXED)
       {
-         adjustedLotA = NormalizeLot(symbolA, g_pairs[pairIndex].lotBuyA);
-         adjustedLotB = NormalizeLot(symbolB, g_pairs[pairIndex].lotBuyB);
-      }
-      else
-      {
-         adjustedLotA = NormalizeLot(symbolA, g_pairs[pairIndex].lotSellA);
-         adjustedLotB = NormalizeLot(symbolB, g_pairs[pairIndex].lotSellB);
+         // ใช้ Lot จาก Main Entry เท่าเดิมทุก Grid Level
+         if(side == "BUY")
+         {
+            adjustedLotA = NormalizeLot(symbolA, g_pairs[pairIndex].lotBuyA);
+            adjustedLotB = NormalizeLot(symbolB, g_pairs[pairIndex].lotBuyB);
+         }
+         else
+         {
+            adjustedLotA = NormalizeLot(symbolA, g_pairs[pairIndex].lotSellA);
+            adjustedLotB = NormalizeLot(symbolB, g_pairs[pairIndex].lotSellB);
+         }
+         
+         if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
+            PrintFormat("FIXED LOT [Pair %d %s]: A=%.2f, B=%.2f (Initial Lot)", 
+                        pairIndex + 1, side, adjustedLotA, adjustedLotB);
+         return;
       }
       
-      if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
-         PrintFormat("FIXED LOT [Pair %d %s]: A=%.2f, B=%.2f (Initial Lot)", 
-                     pairIndex + 1, side, adjustedLotA, adjustedLotB);
-      return;
-   }
-   
-   // === Mode 2: Beta Mode (เดิม) - ใช้ Hedge Ratio ===
-   if(InpGridLotMode == GRID_LOT_BETA)
-   {
-      // Beta mode uses existing hedge ratio from lot calculation
-      // Lots are already calculated with hedge ratio in CalculateDollarNeutralLots
-      adjustedLotA = NormalizeLot(symbolA, baseLotA);
-      adjustedLotB = NormalizeLot(symbolB, baseLotB);
-      return;
+      // === Mode 2: Beta Mode (เดิม) - ใช้ Hedge Ratio ===
+      if(InpGridLotMode == GRID_LOT_BETA)
+      {
+         // Beta mode uses existing hedge ratio from lot calculation
+         // Lots are already calculated with hedge ratio in CalculateDollarNeutralLots
+         adjustedLotA = NormalizeLot(symbolA, baseLotA);
+         adjustedLotB = NormalizeLot(symbolB, baseLotB);
+         return;
+      }
    }
    
    // === Mode 3: ATR Trend Mode (v3.5.3 HF2 - Fixed Initial Lot) ===
