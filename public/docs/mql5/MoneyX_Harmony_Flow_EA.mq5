@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                    MoneyX_Harmony_Flow_EA.mq5    |
-//|                   MoneyX Harmony Flow (Pairs Trading) v3.77      |
+//|                   MoneyX Harmony Flow (Pairs Trading) v3.78      |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "3.77"
+#property version   "3.78"
 #property strict
 #property description "MoneyX Harmony Flow - Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
-#property description "v3.77: Magic Number-based Order Detection + Restore on Init"
+#property description "v3.78: CDC Retry Mechanism + Grid Log Debounce"
 
 #include <Trade/Trade.mqh>
 
@@ -698,6 +698,12 @@ datetime g_lastZScoreUpdate = 0;
 string g_lastCDCStatus[];
 datetime g_lastCDCUpdate = 0;
 
+// v3.7.8: Grid Pause Reason tracking (for log debounce)
+string g_lastGridPauseReason[][2];  // [MAX_PAIRS][BUY=0/SELL=1]
+
+// v3.7.8: CDC Retry timer per pair
+datetime g_lastCDCRetryTime[];
+
 // === v3.6.0 HF3: Basket Profit Target System ===
 double g_basketClosedProfit = 0;      // Accumulated closed profit from all pairs
 double g_basketFloatingProfit = 0;    // Current floating profit from all pairs
@@ -840,6 +846,18 @@ int OnInit()
    ArrayResize(g_lastCDCStatus, MAX_PAIRS);
    for(int i = 0; i < MAX_PAIRS; i++)
       g_lastCDCStatus[i] = "";
+   
+   // v3.7.8: Initialize Grid Pause Reason tracking array (for log debounce)
+   ArrayResize(g_lastGridPauseReason, MAX_PAIRS);
+   for(int i = 0; i < MAX_PAIRS; i++)
+   {
+      g_lastGridPauseReason[i][0] = "";  // BUY side
+      g_lastGridPauseReason[i][1] = "";  // SELL side
+   }
+   
+   // v3.7.8: Initialize CDC Retry timer array
+   ArrayResize(g_lastCDCRetryTime, MAX_PAIRS);
+   ArrayInitialize(g_lastCDCRetryTime, 0);
    
    // v3.7.1: Force initial CDC calculation and initialize per-symbol tracking
    if(InpUseCDCTrendFilter)
@@ -3449,11 +3467,13 @@ void UpdateCDCForPair(int pairIndex)
 }
 
 //+------------------------------------------------------------------+
-//| Update CDC for All Enabled Pairs (v3.7.1: Per-symbol tracking)     |
+//| Update CDC for All Enabled Pairs (v3.7.8: Added retry mechanism)   |
 //+------------------------------------------------------------------+
 void UpdateAllPairsCDC()
 {
    if(!InpUseCDCTrendFilter) return;
+   
+   datetime currentTime = TimeCurrent();
    
    for(int i = 0; i < MAX_PAIRS; i++)
    {
@@ -3463,7 +3483,7 @@ void UpdateAllPairsCDC()
       datetime tA = iTime(g_pairs[i].symbolA, InpCDCTimeframe, 0);
       datetime tB = iTime(g_pairs[i].symbolB, InpCDCTimeframe, 0);
       
-      // Guard: If iTime returns 0, data not ready
+      // === Symbol A CDC Check ===
       if(tA <= 0)
       {
          g_pairs[i].cdcReadyA = false;
@@ -3481,7 +3501,24 @@ void UpdateAllPairsCDC()
             g_pairs[i].cdcSlowA
          );
       }
+      else if(!g_pairs[i].cdcReadyA)
+      {
+         // v3.7.8: Retry if still not ready (every 5 seconds)
+         if(currentTime - g_lastCDCRetryTime[i] >= 5)
+         {
+            g_lastCDCRetryTime[i] = currentTime;
+            g_pairs[i].cdcReadyA = CalculateCDCForSymbol(
+               g_pairs[i].symbolA,
+               g_pairs[i].cdcTrendA,
+               g_pairs[i].cdcFastA,
+               g_pairs[i].cdcSlowA
+            );
+            if(InpDebugMode && g_pairs[i].cdcReadyA)
+               PrintFormat("[CDC] %s: Retry SUCCESS - status=OK", g_pairs[i].symbolA);
+         }
+      }
       
+      // === Symbol B CDC Check ===
       if(tB <= 0)
       {
          g_pairs[i].cdcReadyB = false;
@@ -3498,6 +3535,22 @@ void UpdateAllPairsCDC()
             g_pairs[i].cdcFastB,
             g_pairs[i].cdcSlowB
          );
+      }
+      else if(!g_pairs[i].cdcReadyB)
+      {
+         // v3.7.8: Retry if still not ready (every 5 seconds)
+         if(currentTime - g_lastCDCRetryTime[i] >= 5)
+         {
+            g_lastCDCRetryTime[i] = currentTime;
+            g_pairs[i].cdcReadyB = CalculateCDCForSymbol(
+               g_pairs[i].symbolB,
+               g_pairs[i].cdcTrendB,
+               g_pairs[i].cdcFastB,
+               g_pairs[i].cdcSlowB
+            );
+            if(InpDebugMode && g_pairs[i].cdcReadyB)
+               PrintFormat("[CDC] %s: Retry SUCCESS - status=OK", g_pairs[i].symbolB);
+         }
       }
    }
 }
@@ -3703,14 +3756,15 @@ void UpdateAllPairsADX()
 //+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
-//| Check if Grid/Main Trading is Allowed (v3.5.2)                     |
+//| Check if Grid/Main Trading is Allowed (v3.7.8: Debounced logging)  |
 //| Returns: true = สามารถออก Order ได้                                 |
 //|          false = Pause (Correlation, Z-Score, หรือ CDC ไม่ผ่าน)     |
-//| v3.5.2: Added direction-aware Z-Score check + CDC Block            |
+//| v3.7.8: Log only when pause reason CHANGES (prevents spam)         |
 //+------------------------------------------------------------------+
 bool CheckGridTradingAllowed(int pairIndex, string side, string &pauseReason)
 {
    pauseReason = "";
+   int sideIdx = (side == "BUY") ? 0 : 1;
    
    // === เงื่อนไข 1: Correlation Check ===
    double absCorr = MathAbs(g_pairs[pairIndex].correlation);
@@ -3718,66 +3772,57 @@ bool CheckGridTradingAllowed(int pairIndex, string side, string &pauseReason)
    {
       pauseReason = StringFormat("Corr %.0f%% < %.0f%%", 
                                  absCorr * 100, InpGridMinCorrelation * 100);
-      
-      if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
-         PrintFormat("GRID PAUSE [Pair %d %s/%s %s]: %s", pairIndex + 1, 
-                     g_pairs[pairIndex].symbolA, g_pairs[pairIndex].symbolB, side, pauseReason);
-      
-      return false;
    }
    
    // === เงื่อนไข 2: Z-Score Direction-Aware Check (v3.5.2) ===
-   // BUY Side: เปิดเมื่อ Z < -Entry → Grid หยุดเมื่อ Z > -MinZ (ใกล้ศูนย์)
-   // SELL Side: เปิดเมื่อ Z > +Entry → Grid หยุดเมื่อ Z < +MinZ (ใกล้ศูนย์)
-   double zScore = g_pairs[pairIndex].zScore;
-   
-   if(side == "BUY")
+   if(pauseReason == "")
    {
-      // BUY Side opened at negative Z-Score
-      // Stop grid if Z-Score crosses back toward 0 (becomes > -MinZ)
-      if(zScore > -InpGridMinZScore)
+      double zScore = g_pairs[pairIndex].zScore;
+      
+      if(side == "BUY")
       {
-         pauseReason = StringFormat("Z=%.2f > -%.2f (BUY)", zScore, InpGridMinZScore);
-         
-         if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
-            PrintFormat("GRID PAUSE [Pair %d %s/%s BUY]: %s", pairIndex + 1,
-                        g_pairs[pairIndex].symbolA, g_pairs[pairIndex].symbolB, pauseReason);
-         
-         return false;
+         if(zScore > -InpGridMinZScore)
+            pauseReason = StringFormat("Z=%.2f > -%.2f (BUY)", zScore, InpGridMinZScore);
       }
-   }
-   else if(side == "SELL")
-   {
-      // SELL Side opened at positive Z-Score
-      // Stop grid if Z-Score crosses back toward 0 (becomes < +MinZ)
-      if(zScore < InpGridMinZScore)
+      else if(side == "SELL")
       {
-         pauseReason = StringFormat("Z=%.2f < +%.2f (SELL)", zScore, InpGridMinZScore);
-         
-         if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
-            PrintFormat("GRID PAUSE [Pair %d %s/%s SELL]: %s", pairIndex + 1,
-                        g_pairs[pairIndex].symbolA, g_pairs[pairIndex].symbolB, pauseReason);
-         
-         return false;
+         if(zScore < InpGridMinZScore)
+            pauseReason = StringFormat("Z=%.2f < +%.2f (SELL)", zScore, InpGridMinZScore);
       }
    }
    
    // === เงื่อนไข 3: CDC Trend Block (v3.5.2) ===
-   if(InpUseCDCTrendFilter)
+   if(pauseReason == "" && InpUseCDCTrendFilter)
    {
       if(!CheckCDCTrendConfirmation(pairIndex, side))
-      {
          pauseReason = "CDC BLOCK";
-         
-         if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
-            PrintFormat("GRID PAUSE [Pair %d %s/%s %s]: %s", pairIndex + 1,
-                        g_pairs[pairIndex].symbolA, g_pairs[pairIndex].symbolB, side, pauseReason);
-         
-         return false;
-      }
    }
    
-   return true;  // ผ่านทั้ง 3 เงื่อนไข
+   // === v3.7.8: Log ONLY when pause reason CHANGES (debounce) ===
+   if(pauseReason != "")
+   {
+      // Log only if reason is NEW or DIFFERENT
+      if(pauseReason != g_lastGridPauseReason[pairIndex][sideIdx])
+      {
+         g_lastGridPauseReason[pairIndex][sideIdx] = pauseReason;
+         if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
+            PrintFormat("GRID PAUSE [Pair %d %s/%s %s]: %s", pairIndex + 1, 
+                        g_pairs[pairIndex].symbolA, g_pairs[pairIndex].symbolB, side, pauseReason);
+      }
+      return false;
+   }
+   else
+   {
+      // Grid is allowed - log RESUME only if previously paused
+      if(g_lastGridPauseReason[pairIndex][sideIdx] != "")
+      {
+         if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
+            PrintFormat("GRID RESUME [Pair %d %s/%s %s]: All conditions met", pairIndex + 1,
+                        g_pairs[pairIndex].symbolA, g_pairs[pairIndex].symbolB, side);
+         g_lastGridPauseReason[pairIndex][sideIdx] = "";
+      }
+      return true;  // ผ่านทั้ง 3 เงื่อนไข
+   }
 }
 
 //+------------------------------------------------------------------+
