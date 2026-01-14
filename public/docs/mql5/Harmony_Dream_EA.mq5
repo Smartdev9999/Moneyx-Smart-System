@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
 //|                                         Harmony_Dream_EA.mq5     |
-//|                      Harmony Dream (Pairs Trading) v1.6.2        |
+//|                      Harmony Dream (Pairs Trading) v1.6.3        |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
@@ -755,6 +755,9 @@ datetime g_lastCDCUpdate = 0;
 // v1.6.2: CDC Initial-Only Retry Timer (per pair)
 datetime g_lastCDCRetryTime[];
 
+// v1.6.3: History download attempt tracking
+bool g_historyLoadAttempted[];
+
 // === v1.1: Group Target System (replaces single Basket) ===
 GroupTarget g_groups[MAX_GROUPS];
 
@@ -1007,7 +1010,32 @@ int OnInit()
    ArrayResize(g_lastCDCRetryTime, MAX_PAIRS);
    ArrayInitialize(g_lastCDCRetryTime, 0);
    
-   PrintFormat("=== Harmony Dream EA v1.6.2 Initialized - %d Active Pairs | Net Profit Mode ===", g_activePairs);
+   // v1.6.3: Initialize history load tracking
+   ArrayResize(g_historyLoadAttempted, MAX_PAIRS * 2);  // 2 symbols per pair
+   ArrayInitialize(g_historyLoadAttempted, false);
+   
+   // v1.6.3: Pre-load history for all enabled pairs at startup
+   if(InpUseCDCTrendFilter)
+   {
+      int minBars = InpCDCSlowPeriod + 10;
+      PrintFormat("[INIT] Pre-loading %s history for CDC filter (%d pairs)...", 
+                  EnumToString(InpCDCTimeframe), g_activePairs);
+      
+      for(int i = 0; i < MAX_PAIRS; i++)
+      {
+         if(!g_pairs[i].enabled) continue;
+         
+         // Pre-load Symbol A
+         EnsureHistoryLoaded(g_pairs[i].symbolA, InpCDCTimeframe, minBars);
+         
+         // Pre-load Symbol B
+         EnsureHistoryLoaded(g_pairs[i].symbolB, InpCDCTimeframe, minBars);
+      }
+      
+      Print("[INIT] History pre-load request sent. CDC will retry every 5s if needed.");
+   }
+   
+   PrintFormat("=== Harmony Dream EA v1.6.3 Initialized - %d Active Pairs | Net Profit Mode ===", g_activePairs);
    return(INIT_SUCCEEDED);
 }
 
@@ -3687,6 +3715,53 @@ bool CheckRSIEntryConfirmation(int pairIndex, string side)
 //+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
+//| v1.6.3: Force historical data download for symbol                  |
+//| Returns: true if data is ready, false if still loading            |
+//+------------------------------------------------------------------+
+bool EnsureHistoryLoaded(string symbol, ENUM_TIMEFRAMES period, int minBars)
+{
+   // Step 1: Ensure symbol is selected in Market Watch
+   if(!SymbolSelect(symbol, true))
+   {
+      if(InpDebugMode)
+         PrintFormat("[HISTORY] %s: Cannot select symbol", symbol);
+      return false;
+   }
+   
+   // Step 2: Check if already synchronized
+   bool isSynced = (bool)SeriesInfoInteger(symbol, period, SERIES_SYNCHRONIZED);
+   int currentBars = Bars(symbol, period);
+   
+   if(isSynced && currentBars >= minBars)
+      return true;  // Already loaded!
+   
+   // Step 3: Force download by requesting data
+   MqlRates rates[];
+   ArraySetAsSeries(rates, true);
+   
+   // Request more bars than needed to trigger server download
+   int requestBars = minBars * 2;
+   int copied = CopyRates(symbol, period, 0, requestBars, rates);
+   
+   if(copied >= minBars)
+   {
+      if(InpDebugMode)
+         PrintFormat("[HISTORY] %s: Downloaded %d/%d bars on %s", 
+                     symbol, copied, requestBars, EnumToString(period));
+      return true;
+   }
+   
+   // Step 4: Still loading - return false
+   if(InpDebugMode)
+   {
+      PrintFormat("[HISTORY] %s: Still loading (%d/%d bars, synced=%s)", 
+                  symbol, currentBars, minBars, isSynced ? "true" : "false");
+   }
+   
+   return false;
+}
+
+//+------------------------------------------------------------------+
 //| Calculate EMA for CDC (v3.5.0)                                     |
 //+------------------------------------------------------------------+
 void CalculateCDC_EMA(double &src[], double &result[], int period, int size)
@@ -3724,16 +3799,16 @@ bool CalculateCDCForSymbol(string symbol, string &trend, double &fastEMA, double
       return false;  // v3.7.1: Return false for LOADING state
    }
    
-   // v3.7.1: Guard - Check Bars available first
-   int barsAvailable = Bars(symbol, InpCDCTimeframe);
+   // v1.6.3: Force history download if needed
    int minBarsRequired = InpCDCSlowPeriod + 10;
-   if(barsAvailable < minBarsRequired)
+   if(!EnsureHistoryLoaded(symbol, InpCDCTimeframe, minBarsRequired))
    {
-      if(InpDebugMode)
-         PrintFormat("[CDC] %s: Not enough bars (%d < %d), status=LOADING", 
-                     symbol, barsAvailable, minBarsRequired);
-      return false;  // v3.7.1: Return false for LOADING state
+      // Still loading - EnsureHistoryLoaded already printed debug info
+      return false;
    }
+   
+   // v3.7.1: Guard - Check Bars available (should pass after EnsureHistoryLoaded)
+   int barsAvailable = Bars(symbol, InpCDCTimeframe);
    
    double closeArr[], highArr[], lowArr[], openArr[];
    // Set as series - index 0 = newest (matches Moneyx Smart System / CalculateCDC_EMA design)
@@ -6883,7 +6958,7 @@ void CreateDashboard()
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_XDISTANCE, PANEL_X + (PANEL_WIDTH / 2));
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_YDISTANCE, PANEL_Y + 4);
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_ANCHOR, ANCHOR_UPPER);
-   ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_TEXT, "Harmony Dream EA v1.6.2");
+   ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_TEXT, "Harmony Dream EA v1.6.3");
    ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_FONT, "Arial Bold");
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_FONTSIZE, 10);
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_COLOR, COLOR_GOLD);
