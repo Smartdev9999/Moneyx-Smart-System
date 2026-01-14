@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
 //|                                         Harmony_Dream_EA.mq5     |
-//|                      Harmony Dream (Pairs Trading) v1.6.4        |
+//|                      Harmony Dream (Pairs Trading) v1.6.5        |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
@@ -233,6 +233,14 @@ input double   InpMaxLot = 10.0;                // Maximum Lot Size
 input int      InpMagicNumber = 999999;         // Magic Number
 input int      InpSlippage = 30;                // Slippage (points)
 // (Removed) Trading Timeframe - not needed, trades based on Z-Score/Corr thresholds
+
+input group "=== AUTO BALANCE SCALING (v1.6.5) ==="
+input bool     InpEnableAutoScaling = false;        // Enable Auto Balance Scaling
+input double   InpBaseAccountSize = 100000.0;       // Base Account Size ($) - scale reference
+input bool     InpEnableFixedScale = false;         // Enable Fixed Scale Account (lock scale)
+input double   InpFixedScaleAccount = 100000.0;     // Fixed Scale Account ($) - lock at this size
+input double   InpScaleMin = 0.1;                   // Minimum Scale Factor (safety limit)
+input double   InpScaleMax = 10.0;                  // Maximum Scale Factor (safety limit)
 
 //+------------------------------------------------------------------+
 //| CORRELATION METHOD ENUM (v3.2.1)                                   |
@@ -1506,60 +1514,69 @@ bool InitializePairs()
 //+------------------------------------------------------------------+
 void InitializeGroups()
 {
+   // v1.6.5: Use scaled targets
    // Group 1 (Pairs 1-5)
-   g_groups[0].closedTarget = InpGroup1ClosedTarget;
-   g_groups[0].floatingTarget = InpGroup1FloatingTarget;
+   g_groups[0].closedTarget = GetScaledGroupClosedTarget(0);
+   g_groups[0].floatingTarget = GetScaledGroupFloatingTarget(0);
    g_groups[0].maxOrderBuy = InpGroup1MaxOrderBuy;
    g_groups[0].maxOrderSell = InpGroup1MaxOrderSell;
-   g_groups[0].targetBuy = InpGroup1TargetBuy;
-   g_groups[0].targetSell = InpGroup1TargetSell;
+   g_groups[0].targetBuy = GetScaledGroupTargetBuy(0);
+   g_groups[0].targetSell = GetScaledGroupTargetSell(0);
    ResetGroupProfit(0);
    
    // Group 2 (Pairs 6-10)
-   g_groups[1].closedTarget = InpGroup2ClosedTarget;
-   g_groups[1].floatingTarget = InpGroup2FloatingTarget;
+   g_groups[1].closedTarget = GetScaledGroupClosedTarget(1);
+   g_groups[1].floatingTarget = GetScaledGroupFloatingTarget(1);
    g_groups[1].maxOrderBuy = InpGroup2MaxOrderBuy;
    g_groups[1].maxOrderSell = InpGroup2MaxOrderSell;
-   g_groups[1].targetBuy = InpGroup2TargetBuy;
-   g_groups[1].targetSell = InpGroup2TargetSell;
+   g_groups[1].targetBuy = GetScaledGroupTargetBuy(1);
+   g_groups[1].targetSell = GetScaledGroupTargetSell(1);
    ResetGroupProfit(1);
    
    // Group 3 (Pairs 11-15)
-   g_groups[2].closedTarget = InpGroup3ClosedTarget;
-   g_groups[2].floatingTarget = InpGroup3FloatingTarget;
+   g_groups[2].closedTarget = GetScaledGroupClosedTarget(2);
+   g_groups[2].floatingTarget = GetScaledGroupFloatingTarget(2);
    g_groups[2].maxOrderBuy = InpGroup3MaxOrderBuy;
    g_groups[2].maxOrderSell = InpGroup3MaxOrderSell;
-   g_groups[2].targetBuy = InpGroup3TargetBuy;
-   g_groups[2].targetSell = InpGroup3TargetSell;
+   g_groups[2].targetBuy = GetScaledGroupTargetBuy(2);
+   g_groups[2].targetSell = GetScaledGroupTargetSell(2);
    ResetGroupProfit(2);
    
    // Group 4 (Pairs 16-20)
-   g_groups[3].closedTarget = InpGroup4ClosedTarget;
-   g_groups[3].floatingTarget = InpGroup4FloatingTarget;
+   g_groups[3].closedTarget = GetScaledGroupClosedTarget(3);
+   g_groups[3].floatingTarget = GetScaledGroupFloatingTarget(3);
    g_groups[3].maxOrderBuy = InpGroup4MaxOrderBuy;
    g_groups[3].maxOrderSell = InpGroup4MaxOrderSell;
-   g_groups[3].targetBuy = InpGroup4TargetBuy;
-   g_groups[3].targetSell = InpGroup4TargetSell;
+   g_groups[3].targetBuy = GetScaledGroupTargetBuy(3);
+   g_groups[3].targetSell = GetScaledGroupTargetSell(3);
    ResetGroupProfit(3);
    
    // Group 5 (Pairs 21-25)
-   g_groups[4].closedTarget = InpGroup5ClosedTarget;
-   g_groups[4].floatingTarget = InpGroup5FloatingTarget;
+   g_groups[4].closedTarget = GetScaledGroupClosedTarget(4);
+   g_groups[4].floatingTarget = GetScaledGroupFloatingTarget(4);
    g_groups[4].maxOrderBuy = InpGroup5MaxOrderBuy;
    g_groups[4].maxOrderSell = InpGroup5MaxOrderSell;
-   g_groups[4].targetBuy = InpGroup5TargetBuy;
-   g_groups[4].targetSell = InpGroup5TargetSell;
+   g_groups[4].targetBuy = GetScaledGroupTargetBuy(4);
+   g_groups[4].targetSell = GetScaledGroupTargetSell(4);
    ResetGroupProfit(4);
    
    // Group 6 (Pairs 26-30)
-   g_groups[5].closedTarget = InpGroup6ClosedTarget;
-   g_groups[5].floatingTarget = InpGroup6FloatingTarget;
+   g_groups[5].closedTarget = GetScaledGroupClosedTarget(5);
+   g_groups[5].floatingTarget = GetScaledGroupFloatingTarget(5);
    g_groups[5].maxOrderBuy = InpGroup6MaxOrderBuy;
    g_groups[5].maxOrderSell = InpGroup6MaxOrderSell;
-   g_groups[5].targetBuy = InpGroup6TargetBuy;
-   g_groups[5].targetSell = InpGroup6TargetSell;
+   g_groups[5].targetBuy = GetScaledGroupTargetBuy(5);
+   g_groups[5].targetSell = GetScaledGroupTargetSell(5);
    ResetGroupProfit(5);
    
+   // v1.6.5: Log scaling info
+   if(InpEnableAutoScaling)
+   {
+      double scaleFactor = GetScaleFactor();
+      PrintFormat("v1.6.5: Auto Scaling ENABLED | Factor=%.2fx | Base=$%.0f | Effective=$%.0f",
+                  scaleFactor, InpBaseAccountSize,
+                  InpEnableFixedScale ? InpFixedScaleAccount : AccountInfoDouble(ACCOUNT_BALANCE));
+   }
    PrintFormat("v1.1: Group Target System initialized - 6 Groups x 5 Pairs");
 }
 
@@ -1614,8 +1631,10 @@ void SetupPair(int index, bool enabled, string symbolA, string symbolB)
    g_pairs[index].directionBuy = enabled ? -1 : 0;
    g_pairs[index].ticketBuyA = 0;
    g_pairs[index].ticketBuyB = 0;
-   g_pairs[index].lotBuyA = InpBaseLot;
-   g_pairs[index].lotBuyB = InpBaseLot;
+   // v1.6.5: Use scaled lot for initialization
+   double scaledBaseLot = GetScaledBaseLot();
+   g_pairs[index].lotBuyA = scaledBaseLot;
+   g_pairs[index].lotBuyB = scaledBaseLot;
    g_pairs[index].profitBuy = 0;
    g_pairs[index].orderCountBuy = 0;
    // v1.1: Use Group's max orders and targets
@@ -1628,8 +1647,8 @@ void SetupPair(int index, bool enabled, string symbolA, string symbolB)
    g_pairs[index].directionSell = enabled ? -1 : 0;
    g_pairs[index].ticketSellA = 0;
    g_pairs[index].ticketSellB = 0;
-   g_pairs[index].lotSellA = InpBaseLot;
-   g_pairs[index].lotSellB = InpBaseLot;
+   g_pairs[index].lotSellA = scaledBaseLot;
+   g_pairs[index].lotSellB = scaledBaseLot;
    g_pairs[index].profitSell = 0;
    g_pairs[index].orderCountSell = 0;
    // v1.1: Use Group's max orders and targets
@@ -3517,13 +3536,162 @@ double NormalizeLot(string symbol, double lot)
    }
    if(lot > maxLot) lot = maxLot;
    
-   // Also apply user-defined max
-   if(lot > InpMaxLot) lot = InpMaxLot;
+   // v1.6.5: Apply scaled max lot
+   double scaledMaxLot = GetScaledMaxLot();
+   if(lot > scaledMaxLot) lot = scaledMaxLot;
    
    // Round to avoid floating point issues
    lot = NormalizeDouble(lot, 2);
    
    return lot;
+}
+
+//+------------------------------------------------------------------+
+//| ================ AUTO BALANCE SCALING (v1.6.5) ================    |
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//| Get Scale Factor (v1.6.5)                                          |
+//+------------------------------------------------------------------+
+double GetScaleFactor()
+{
+   // If auto scaling disabled, return 1.0 (no scaling)
+   if(!InpEnableAutoScaling || InpBaseAccountSize <= 0)
+      return 1.0;
+   
+   // Determine account size to use for scaling
+   double accountSize;
+   if(InpEnableFixedScale && InpFixedScaleAccount > 0)
+   {
+      accountSize = InpFixedScaleAccount;  // Fixed Mode
+   }
+   else
+   {
+      accountSize = AccountInfoDouble(ACCOUNT_BALANCE);  // Dynamic Mode
+   }
+   
+   if(accountSize <= 0) return 1.0;
+   
+   // Calculate scale factor
+   double factor = accountSize / InpBaseAccountSize;
+   
+   // Apply safety limits
+   factor = MathMax(InpScaleMin, MathMin(InpScaleMax, factor));
+   
+   return NormalizeDouble(factor, 4);
+}
+
+//+------------------------------------------------------------------+
+//| Apply Scale to Lot Size (v1.6.5)                                   |
+//+------------------------------------------------------------------+
+double ApplyScaleLot(string symbol, double baseLot)
+{
+   double scaledLot = baseLot * GetScaleFactor();
+   return NormalizeLot(symbol, scaledLot);
+}
+
+//+------------------------------------------------------------------+
+//| Get Scaled Base Lot (v1.6.5)                                       |
+//+------------------------------------------------------------------+
+double GetScaledBaseLot(string symbol = "")
+{
+   double scaledLot = InpBaseLot * GetScaleFactor();
+   if(symbol != "")
+      return NormalizeLot(symbol, scaledLot);
+   return NormalizeDouble(scaledLot, 4);
+}
+
+//+------------------------------------------------------------------+
+//| Get Scaled Max Lot (v1.6.5)                                        |
+//+------------------------------------------------------------------+
+double GetScaledMaxLot()
+{
+   return NormalizeDouble(InpMaxLot * GetScaleFactor(), 2);
+}
+
+//+------------------------------------------------------------------+
+//| Apply Scale to Dollar Value (v1.6.5)                               |
+//+------------------------------------------------------------------+
+double ApplyScaleDollar(double baseDollar)
+{
+   if(baseDollar <= 0) return 0;  // 0 = Disabled, keep it disabled
+   return NormalizeDouble(baseDollar * GetScaleFactor(), 2);
+}
+
+//+------------------------------------------------------------------+
+//| Get Scaled Grid Custom Lot (v1.6.5)                                |
+//+------------------------------------------------------------------+
+double GetScaledGridLossCustomLot(string symbol)
+{
+   return ApplyScaleLot(symbol, InpGridLossCustomLot);
+}
+
+double GetScaledGridProfitCustomLot(string symbol)
+{
+   return ApplyScaleLot(symbol, InpGridProfitCustomLot);
+}
+
+//+------------------------------------------------------------------+
+//| Get Scaled Group Target (v1.6.5)                                   |
+//+------------------------------------------------------------------+
+double GetScaledGroupClosedTarget(int groupIndex)
+{
+   double baseTarget = 0;
+   switch(groupIndex)
+   {
+      case 0: baseTarget = InpGroup1ClosedTarget; break;
+      case 1: baseTarget = InpGroup2ClosedTarget; break;
+      case 2: baseTarget = InpGroup3ClosedTarget; break;
+      case 3: baseTarget = InpGroup4ClosedTarget; break;
+      case 4: baseTarget = InpGroup5ClosedTarget; break;
+      case 5: baseTarget = InpGroup6ClosedTarget; break;
+   }
+   return ApplyScaleDollar(baseTarget);
+}
+
+double GetScaledGroupFloatingTarget(int groupIndex)
+{
+   double baseTarget = 0;
+   switch(groupIndex)
+   {
+      case 0: baseTarget = InpGroup1FloatingTarget; break;
+      case 1: baseTarget = InpGroup2FloatingTarget; break;
+      case 2: baseTarget = InpGroup3FloatingTarget; break;
+      case 3: baseTarget = InpGroup4FloatingTarget; break;
+      case 4: baseTarget = InpGroup5FloatingTarget; break;
+      case 5: baseTarget = InpGroup6FloatingTarget; break;
+   }
+   return ApplyScaleDollar(baseTarget);
+}
+
+double GetScaledGroupTargetBuy(int groupIndex)
+{
+   double baseTarget = 0;
+   switch(groupIndex)
+   {
+      case 0: baseTarget = InpGroup1TargetBuy; break;
+      case 1: baseTarget = InpGroup2TargetBuy; break;
+      case 2: baseTarget = InpGroup3TargetBuy; break;
+      case 3: baseTarget = InpGroup4TargetBuy; break;
+      case 4: baseTarget = InpGroup5TargetBuy; break;
+      case 5: baseTarget = InpGroup6TargetBuy; break;
+   }
+   return ApplyScaleDollar(baseTarget);
+}
+
+double GetScaledGroupTargetSell(int groupIndex)
+{
+   double baseTarget = 0;
+   switch(groupIndex)
+   {
+      case 0: baseTarget = InpGroup1TargetSell; break;
+      case 1: baseTarget = InpGroup2TargetSell; break;
+      case 2: baseTarget = InpGroup3TargetSell; break;
+      case 3: baseTarget = InpGroup4TargetSell; break;
+      case 4: baseTarget = InpGroup5TargetSell; break;
+      case 5: baseTarget = InpGroup6TargetSell; break;
+   }
+   return ApplyScaleDollar(baseTarget);
 }
 
 //+------------------------------------------------------------------+
@@ -3561,11 +3729,12 @@ double GetPipValue(string symbol)
 }
 
 //+------------------------------------------------------------------+
-//| Calculate Dollar-Neutral Lot Sizes (v3.3.4)                        |
+//| Calculate Dollar-Neutral Lot Sizes (v1.6.5 - with Auto Scaling)    |
 //+------------------------------------------------------------------+
 void CalculateDollarNeutralLots(int pairIndex)
 {
-   double baseLot = InpBaseLot;
+   // v1.6.5: Use scaled base lot
+   double baseLot = GetScaledBaseLot();
    double hedgeRatio = g_pairs[pairIndex].hedgeRatio;
    
    string symbolA = g_pairs[pairIndex].symbolA;
@@ -3577,7 +3746,7 @@ void CalculateDollarNeutralLots(int pairIndex)
    // v3.3.4: Enhanced validation with warning logs
    if(pipValueA == 0 || pipValueB == 0)
    {
-      PrintFormat("WARNING Pair %d: Pip values invalid (A:%.5f B:%.5f) - Using normalized base lot %.2f for both",
+      PrintFormat("WARNING Pair %d: Pip values invalid (A:%.5f B:%.5f) - Using normalized base lot %.4f for both",
                   pairIndex + 1, pipValueA, pipValueB, baseLot);
       
       // Normalize base lot for each symbol
@@ -3610,11 +3779,12 @@ void CalculateDollarNeutralLots(int pairIndex)
    g_pairs[pairIndex].lotSellA = lotA;
    g_pairs[pairIndex].lotSellB = lotB;
    
-   // v3.3.4: Debug log for lot calculation
+   // v1.6.5: Debug log for lot calculation with scaling info
    if(InpDebugMode)
    {
-      PrintFormat("Pair %d Lots: A=%.2f B=%.2f (BaseLot=%.2f, Beta=%.4f, PipA=%.5f, PipB=%.5f)", 
-                  pairIndex + 1, lotA, lotB, baseLot, hedgeRatio, pipValueA, pipValueB);
+      double scaleFactor = GetScaleFactor();
+      PrintFormat("Pair %d Lots: A=%.2f B=%.2f (BaseLot=%.4f [%.2f×%.2fx], Beta=%.4f, PipA=%.5f, PipB=%.5f)", 
+                  pairIndex + 1, lotA, lotB, baseLot, InpBaseLot, scaleFactor, hedgeRatio, pipValueA, pipValueB);
    }
 }
 
@@ -5027,10 +5197,11 @@ void CalculateTrendBasedLots(int pairIndex, string side,
       bool isTrendAlignedB = ((directionB == "BUY" && trendB == "BULLISH") ||
                               (directionB == "SELL" && trendB == "BEARISH"));
       
-      // === v3.5.3 HF2: Use InpBaseLot as foundation for ATR Trend Mode ===
+      // === v1.6.5: Use GetScaledBaseLot as foundation for ATR Trend Mode ===
       // This fixes the issue where lotBuyA/B and lotSellA/B were influenced by Beta × Pip Ratio
-      double initialLotA = NormalizeLot(symbolA, InpBaseLot);
-      double initialLotB = NormalizeLot(symbolB, InpBaseLot);
+      double scaledBaseLot = GetScaledBaseLot();
+      double initialLotA = NormalizeLot(symbolA, scaledBaseLot);
+      double initialLotB = NormalizeLot(symbolB, scaledBaseLot);
       
       // === Calculate Effective Base Lots ===
       double effectiveBaseLotA = initialLotA;
@@ -5176,11 +5347,12 @@ void CalculateTrendBasedLots(int pairIndex, string side,
       {
          string progMode = (isGridOrder && InpLotProgression == LOT_PROG_COMPOUNDING) ? "Compound" : "Mult";
          string corrStr = (corrType == -1) ? "NEG" : "POS";
-         PrintFormat("TREND LOT [Pair %d %s %s %s]: A(%s)=%.2f×%.2f=%.2f [%s:%s] | B(%s)=%.2f×%.2f=%.2f [%s:%s] [Base=%.2f]",
+         double scaleFactor = GetScaleFactor();
+         PrintFormat("TREND LOT [Pair %d %s %s %s]: A(%s)=%.2f×%.2f=%.2f [%s:%s] | B(%s)=%.2f×%.2f=%.2f [%s:%s] [ScaledBase=%.4f (%.2f×%.2fx)]",
                      pairIndex + 1, corrStr, side, progMode,
                      symbolA, effectiveBaseLotA, multA, adjustedLotA, directionA, isTrendAlignedA ? "TREND" : "COUNTER",
                      symbolB, effectiveBaseLotB, multB, adjustedLotB, directionB, isTrendAlignedB ? "TREND" : "COUNTER",
-                     InpBaseLot);
+                     scaledBaseLot, InpBaseLot, scaleFactor);
       }
    }
 }
@@ -5198,9 +5370,9 @@ void OpenGridLossBuy(int pairIndex)
    double baseLotA = g_pairs[pairIndex].lotBuyA;
    double baseLotB = g_pairs[pairIndex].lotBuyB;
    double lotA, lotB;
-   
+   // v1.6.5: Use scaled custom lot
    CalculateGridLots(pairIndex, "BUY", InpGridLossLotType,
-                     InpGridLossCustomLot, InpGridLossLotMultiplier,
+                     GetScaledGridLossCustomLot(symbolA), InpGridLossLotMultiplier,
                      baseLotA, baseLotB, lotA, lotB, true, false);
    
    // v3.5.3 HF4: Force update ADX before opening trade for Negative Correlation
@@ -5283,9 +5455,9 @@ void OpenGridLossSell(int pairIndex)
    double baseLotA = g_pairs[pairIndex].lotSellA;
    double baseLotB = g_pairs[pairIndex].lotSellB;
    double lotA, lotB;
-   
+   // v1.6.5: Use scaled custom lot
    CalculateGridLots(pairIndex, "SELL", InpGridLossLotType,
-                     InpGridLossCustomLot, InpGridLossLotMultiplier,
+                     GetScaledGridLossCustomLot(symbolA), InpGridLossLotMultiplier,
                      baseLotA, baseLotB, lotA, lotB, true, false);
    
    // v3.5.3 HF4: Force update ADX before opening trade for Negative Correlation
@@ -5368,9 +5540,9 @@ void OpenGridProfitBuy(int pairIndex)
    double baseLotA = g_pairs[pairIndex].lotBuyA;
    double baseLotB = g_pairs[pairIndex].lotBuyB;
    double lotA, lotB;
-   
+   // v1.6.5: Use scaled custom lot
    CalculateGridLots(pairIndex, "BUY", InpGridProfitLotType,
-                     InpGridProfitCustomLot, InpGridProfitLotMultiplier,
+                     GetScaledGridProfitCustomLot(symbolA), InpGridProfitLotMultiplier,
                      baseLotA, baseLotB, lotA, lotB, true, true);
    
    // v3.5.3 HF4: Force update ADX before opening trade for Negative Correlation
@@ -5449,11 +5621,10 @@ void OpenGridProfitSell(int pairIndex)
    double baseLotA = g_pairs[pairIndex].lotSellA;
    double baseLotB = g_pairs[pairIndex].lotSellB;
    double lotA, lotB;
-   
+   // v1.6.5: Use scaled custom lot
    CalculateGridLots(pairIndex, "SELL", InpGridProfitLotType,
-                     InpGridProfitCustomLot, InpGridProfitLotMultiplier,
+                     GetScaledGridProfitCustomLot(symbolA), InpGridProfitLotMultiplier,
                      baseLotA, baseLotB, lotA, lotB, true, true);
-   
    // v3.5.3 HF4: Force update ADX before opening trade for Negative Correlation
    if(corrType == -1 && InpUseADXForNegative)
    {
@@ -6968,7 +7139,7 @@ void CreateDashboard()
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_XDISTANCE, PANEL_X + (PANEL_WIDTH / 2));
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_YDISTANCE, PANEL_Y + 4);
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_ANCHOR, ANCHOR_UPPER);
-   ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_TEXT, "Harmony Dream EA v1.6.4");
+   ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_TEXT, "Harmony Dream EA v1.6.5");
    ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_FONT, "Arial Bold");
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_FONTSIZE, 10);
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_COLOR, COLOR_GOLD);
@@ -7228,12 +7399,10 @@ void CreateAccountSummary(string prefix, int y)
    CreateLabel(prefix + "L_PAIRS", box2X + 10, y + 54, "Active Pairs:", COLOR_TEXT_WHITE, 8, "Arial");
    CreateLabel(prefix + "V_PAIRS", box2X + 90, y + 54, IntegerToString(g_activePairs), COLOR_GOLD, 9, "Arial Bold");
    
-   // v3.2.7: Show Exit Mode
-   string exitModeStr = "Z|P";
-   if(InpExitMode == EXIT_ZSCORE_ONLY) exitModeStr = "Z-Only";
-   else if(InpExitMode == EXIT_PROFIT_ONLY) exitModeStr = "P-Only";
-   else if(InpExitMode == EXIT_ZSCORE_AND_PROFIT) exitModeStr = "Z&P";
-   CreateLabel(prefix + "L_EXIT", box2X + 155, y + 54, "Exit: " + exitModeStr, COLOR_TEXT_WHITE, 8, "Arial");
+   // v1.6.5: Show Scale Factor
+   string scaleStr = InpEnableAutoScaling ? StringFormat("%.2fx", GetScaleFactor()) : "Off";
+   CreateLabel(prefix + "L_SCALE", box2X + 155, y + 54, "Scale:", COLOR_TEXT_WHITE, 8, "Arial");
+   CreateLabel(prefix + "V_SCALE", box2X + 195, y + 54, scaleStr, InpEnableAutoScaling ? COLOR_GOLD : COLOR_OFF, 9, "Arial Bold");
    
    // === BOX 3: HISTORY LOT (v3.3.0 - with Closed Orders) ===
    int box3X = startX + 2 * (boxWidth + gap);
@@ -7464,6 +7633,18 @@ void UpdateDashboard()
    UpdateLabel(prefix + "L_MDD", "Max DD%:", COLOR_TEXT_WHITE);
    UpdateLabel(prefix + "V_MDD", DoubleToString(g_maxDrawdownPercent, 2) + "%", 
                g_maxDrawdownPercent > InpMaxDrawdown ? COLOR_LOSS : COLOR_TEXT_WHITE);
+   
+   // v1.6.5: Update Scale Factor display (dynamic mode recalculates based on current balance)
+   if(InpEnableAutoScaling)
+   {
+      double currentScale = GetScaleFactor();
+      string scaleStr = StringFormat("%.2fx", currentScale);
+      UpdateLabel(prefix + "V_SCALE", scaleStr, COLOR_GOLD);
+   }
+   else
+   {
+      UpdateLabel(prefix + "V_SCALE", "Off", COLOR_OFF);
+   }
    
    // Lot Statistics with Closed Orders (v3.3.0)
    UpdateLabel(prefix + "V_DLOT", DoubleToString(g_dailyLot, 2), COLOR_TEXT_WHITE);
