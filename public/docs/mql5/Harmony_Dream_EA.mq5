@@ -232,7 +232,7 @@ input double   InpBaseLot = 0.1;                // Base Lot Size (Symbol A)
 input double   InpMaxLot = 10.0;                // Maximum Lot Size
 input int      InpMagicNumber = 999999;         // Magic Number
 input int      InpSlippage = 30;                // Slippage (points)
-input ENUM_TIMEFRAMES InpTimeframe = PERIOD_H1; // Trading Timeframe
+// (Removed) Trading Timeframe - not needed, trades based on Z-Score/Corr thresholds
 
 //+------------------------------------------------------------------+
 //| CORRELATION METHOD ENUM (v3.2.1)                                   |
@@ -993,7 +993,7 @@ int OnInit()
    // v1.3: Restore open positions from previous session (Magic Number-based)
    RestoreOpenPositions();
    
-   PrintFormat("=== Harmony Dream EA v1.4 Initialized - %d Active Pairs | Net Profit Mode ===", g_activePairs);
+   PrintFormat("=== Harmony Dream EA v1.5 Initialized - %d Active Pairs | Net Profit Mode ===", g_activePairs);
    return(INIT_SUCCEEDED);
 }
 
@@ -3015,8 +3015,9 @@ void UpdateZScoreData()
       ArraySetAsSeries(closesA, true);
       ArraySetAsSeries(closesB, true);
       
-      int copiedA = CopyClose(g_pairs[i].symbolA, zTF, 0, zBars, closesA);
-      int copiedB = CopyClose(g_pairs[i].symbolB, zTF, 0, zBars, closesB);
+      // v1.5: Use shift=1 to get only closed candles (Z-Score stays static within current bar)
+      int copiedA = CopyClose(g_pairs[i].symbolA, zTF, 1, zBars, closesA);
+      int copiedB = CopyClose(g_pairs[i].symbolB, zTF, 1, zBars, closesB);
       
       if(copiedA < zBars || copiedB < zBars)
       {
@@ -6757,7 +6758,7 @@ void CreateDashboard()
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_XDISTANCE, PANEL_X + (PANEL_WIDTH / 2));
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_YDISTANCE, PANEL_Y + 4);
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_ANCHOR, ANCHOR_UPPER);
-   ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_TEXT, "Harmony Dream EA v1.4");
+   ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_TEXT, "Harmony Dream EA v1.5");
    ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_FONT, "Arial Bold");
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_FONTSIZE, 10);
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_COLOR, COLOR_GOLD);
