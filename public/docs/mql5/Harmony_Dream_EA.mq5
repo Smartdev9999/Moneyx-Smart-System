@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
 //|                                         Harmony_Dream_EA.mq5     |
-//|                      Harmony Dream (Pairs Trading) v1.6.3        |
+//|                      Harmony Dream (Pairs Trading) v1.6.4        |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
@@ -746,6 +746,9 @@ int g_tickCounter = 0;
 
 // v3.3.0: Separate Z-Score timeframe tracking
 datetime g_lastZScoreUpdate = 0;
+
+// v1.6.4: Z-Score Update Display (actual update time, not candle time)
+datetime g_lastZScoreUpdateDisplay = 0;
 
 // v3.5.0: CDC Action Zone timeframe tracking
 // v3.7.2: Last CDC status per pair (for log spam prevention)
@@ -1715,14 +1718,17 @@ void SetupPair(int index, bool enabled, string symbolA, string symbolB)
 }
 
 //+------------------------------------------------------------------+
-//| v1.5: Get Reference Symbol for Z-Score Candle Detection           |
+//| v1.6.4: Get Reference Symbol for Z-Score Candle Detection         |
 //| Returns first enabled pair's symbolA for consistent timing        |
+//| FIXED: No longer requires dataValid - uses enabled symbol only    |
 //+------------------------------------------------------------------+
 string GetZScoreReferenceSymbol()
 {
+   // v1.6.4: Don't wait for dataValid - we just need an enabled symbol for timing
+   // This ensures Z-Score updates work even during initialization
    for(int i = 0; i < MAX_PAIRS; i++)
    {
-      if(g_pairs[i].enabled && g_pairs[i].dataValid)
+      if(g_pairs[i].enabled && g_pairs[i].symbolA != "")
       {
          return g_pairs[i].symbolA;
       }
@@ -1930,6 +1936,9 @@ void OnTick()
       g_lastZScoreUpdate = zCandleTime;
       // Update Z-Score specific data using its own timeframe
       UpdateZScoreData();
+      
+      // v1.6.4: Record actual update time for Dashboard display
+      g_lastZScoreUpdateDisplay = TimeCurrent();
       
       // v3.4.0: Calculate RSI on Spread after Z-Score data is updated
       CalculateAllRSIonSpread();
@@ -3125,21 +3134,22 @@ void UpdateZScoreData()
       }
    }
    
-   // Debug log for first pair if enabled
+   // v1.6.4: Log Z-Score update with timestamp (always log update time, details only in debug mode)
    if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
    {
+      PrintFormat("[Z-SCORE v1.6.4] Updated at %s | TF=%s | Bars=%d",
+                  TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES),
+                  EnumToString(zTF), zBars);
+      
       for(int i = 0; i < MAX_PAIRS; i++)
       {
          if(g_pairs[i].enabled && g_pairs[i].dataValid)
          {
-            PrintFormat("Z-Score Debug [Pair %d]: TF=%s, Bars=%d, Spread=%.6f, Mean=%.6f, StdDev=%.6f, Z=%.4f",
-                        i + 1, EnumToString(zTF), zBars,
+            PrintFormat("  Pair %d: Z=%.4f | Spread=%.6f | Mean=%.6f | StdDev=%.6f",
+                        i + 1, g_pairs[i].zScore,
                         g_pairs[i].currentSpread, g_pairs[i].spreadMean, 
-                        g_pairs[i].spreadStdDev, g_pairs[i].zScore);
-            PrintFormat("  Interpretation: Z=%.2f means Symbol A is %s relative to B",
-                        g_pairs[i].zScore, 
-                        g_pairs[i].zScore > 0 ? "EXPENSIVE (Sell A)" : "CHEAP (Buy A)");
-            break;  // Only log first enabled pair
+                        g_pairs[i].spreadStdDev);
+            break;  // Only log first enabled pair for brevity
          }
       }
    }
@@ -6958,7 +6968,7 @@ void CreateDashboard()
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_XDISTANCE, PANEL_X + (PANEL_WIDTH / 2));
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_YDISTANCE, PANEL_Y + 4);
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_ANCHOR, ANCHOR_UPPER);
-   ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_TEXT, "Harmony Dream EA v1.6.3");
+   ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_TEXT, "Harmony Dream EA v1.6.4");
    ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_FONT, "Arial Bold");
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_FONTSIZE, 10);
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_COLOR, COLOR_GOLD);
@@ -6969,6 +6979,10 @@ void CreateDashboard()
    CreateLabel(prefix + "SYNC_LBL", PANEL_X + 10, PANEL_Y + 5, "Sync:", COLOR_TEXT_WHITE, 8, "Arial");
    CreateLabel(prefix + "SYNC_VAL", PANEL_X + 45, PANEL_Y + 4, "Pending", clrYellow, 9, "Arial Bold");
    CreateLabel(prefix + "SYNC_AGO", PANEL_X + 100, PANEL_Y + 5, "", clrGray, 8, "Arial");
+   
+   // v1.6.4: Z-Score Update Display (shows when Z-Score was last updated)
+   CreateLabel(prefix + "ZSCORE_LBL", PANEL_X + 160, PANEL_Y + 5, "Z-Update:", COLOR_TEXT_WHITE, 8, "Arial");
+   CreateLabel(prefix + "ZSCORE_AGO", PANEL_X + 215, PANEL_Y + 4, "Pending", clrYellow, 9, "Arial Bold");
    
    // v3.7.4: EA Status Display (adjusted position - moved left by 50px)
    CreateLabel(prefix + "EA_STATUS_LBL", PANEL_X + PANEL_WIDTH - 210, PANEL_Y + 5, "Status:", COLOR_TEXT_WHITE, 8, "Arial");
@@ -7397,6 +7411,29 @@ void UpdateDashboard()
    else
    {
       UpdateLabel(prefix + "SYNC_AGO", "", clrGray);
+   }
+   
+   // v1.6.4: Calculate time since last Z-Score update
+   if(g_lastZScoreUpdateDisplay > 0)
+   {
+      int zSecAgo = (int)(TimeCurrent() - g_lastZScoreUpdateDisplay);
+      string zUpdateText = "";
+      if(zSecAgo < 60)
+         zUpdateText = IntegerToString(zSecAgo) + "s ago";
+      else if(zSecAgo < 3600)
+         zUpdateText = IntegerToString(zSecAgo / 60) + "m ago";
+      else
+         zUpdateText = IntegerToString(zSecAgo / 3600) + "h ago";
+      
+      // Color based on Z-Score TF (warn if longer than expected)
+      ENUM_TIMEFRAMES zTF = GetZScoreTimeframe();
+      int expectedSeconds = PeriodSeconds(zTF);
+      color zColor = (zSecAgo > expectedSeconds * 2) ? clrOrange : clrLime;
+      UpdateLabel(prefix + "ZSCORE_AGO", zUpdateText, zColor);
+   }
+   else
+   {
+      UpdateLabel(prefix + "ZSCORE_AGO", "Pending", clrYellow);
    }
    
    // ===== Update Account Labels =====
