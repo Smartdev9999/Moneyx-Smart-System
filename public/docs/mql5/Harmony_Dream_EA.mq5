@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
 //|                                         Harmony_Dream_EA.mq5     |
-//|                      Harmony Dream (Pairs Trading) v1.6.5        |
+//|                      Harmony Dream (Pairs Trading) v1.6.6        |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
@@ -1046,7 +1046,7 @@ int OnInit()
       Print("[INIT] History pre-load request sent. CDC will retry every 5s if needed.");
    }
    
-   PrintFormat("=== Harmony Dream EA v1.6.3 Initialized - %d Active Pairs | Net Profit Mode ===", g_activePairs);
+   PrintFormat("=== Harmony Dream EA v1.6.6 Initialized - %d Active Pairs | Net Profit Mode ===", g_activePairs);
    return(INIT_SUCCEEDED);
 }
 
@@ -1510,72 +1510,76 @@ bool InitializePairs()
 }
 
 //+------------------------------------------------------------------+
-//| v1.1: Initialize Group Target System                               |
+//| v1.1: Initialize Group Target System (v1.6.6: Store BASE values)   |
 //+------------------------------------------------------------------+
 void InitializeGroups()
 {
-   // v1.6.5: Use scaled targets
+   // v1.6.6: Store BASE targets (not scaled) - scaling happens at runtime
+   // This allows real-time recalculation when balance changes
+   
    // Group 1 (Pairs 1-5)
-   g_groups[0].closedTarget = GetScaledGroupClosedTarget(0);
-   g_groups[0].floatingTarget = GetScaledGroupFloatingTarget(0);
+   g_groups[0].closedTarget = InpGroup1ClosedTarget;      // BASE value
+   g_groups[0].floatingTarget = InpGroup1FloatingTarget;  // BASE value
    g_groups[0].maxOrderBuy = InpGroup1MaxOrderBuy;
    g_groups[0].maxOrderSell = InpGroup1MaxOrderSell;
-   g_groups[0].targetBuy = GetScaledGroupTargetBuy(0);
-   g_groups[0].targetSell = GetScaledGroupTargetSell(0);
+   g_groups[0].targetBuy = InpGroup1TargetBuy;            // BASE value
+   g_groups[0].targetSell = InpGroup1TargetSell;          // BASE value
    ResetGroupProfit(0);
    
    // Group 2 (Pairs 6-10)
-   g_groups[1].closedTarget = GetScaledGroupClosedTarget(1);
-   g_groups[1].floatingTarget = GetScaledGroupFloatingTarget(1);
+   g_groups[1].closedTarget = InpGroup2ClosedTarget;
+   g_groups[1].floatingTarget = InpGroup2FloatingTarget;
    g_groups[1].maxOrderBuy = InpGroup2MaxOrderBuy;
    g_groups[1].maxOrderSell = InpGroup2MaxOrderSell;
-   g_groups[1].targetBuy = GetScaledGroupTargetBuy(1);
-   g_groups[1].targetSell = GetScaledGroupTargetSell(1);
+   g_groups[1].targetBuy = InpGroup2TargetBuy;
+   g_groups[1].targetSell = InpGroup2TargetSell;
    ResetGroupProfit(1);
    
    // Group 3 (Pairs 11-15)
-   g_groups[2].closedTarget = GetScaledGroupClosedTarget(2);
-   g_groups[2].floatingTarget = GetScaledGroupFloatingTarget(2);
+   g_groups[2].closedTarget = InpGroup3ClosedTarget;
+   g_groups[2].floatingTarget = InpGroup3FloatingTarget;
    g_groups[2].maxOrderBuy = InpGroup3MaxOrderBuy;
    g_groups[2].maxOrderSell = InpGroup3MaxOrderSell;
-   g_groups[2].targetBuy = GetScaledGroupTargetBuy(2);
-   g_groups[2].targetSell = GetScaledGroupTargetSell(2);
+   g_groups[2].targetBuy = InpGroup3TargetBuy;
+   g_groups[2].targetSell = InpGroup3TargetSell;
    ResetGroupProfit(2);
    
    // Group 4 (Pairs 16-20)
-   g_groups[3].closedTarget = GetScaledGroupClosedTarget(3);
-   g_groups[3].floatingTarget = GetScaledGroupFloatingTarget(3);
+   g_groups[3].closedTarget = InpGroup4ClosedTarget;
+   g_groups[3].floatingTarget = InpGroup4FloatingTarget;
    g_groups[3].maxOrderBuy = InpGroup4MaxOrderBuy;
    g_groups[3].maxOrderSell = InpGroup4MaxOrderSell;
-   g_groups[3].targetBuy = GetScaledGroupTargetBuy(3);
-   g_groups[3].targetSell = GetScaledGroupTargetSell(3);
+   g_groups[3].targetBuy = InpGroup4TargetBuy;
+   g_groups[3].targetSell = InpGroup4TargetSell;
    ResetGroupProfit(3);
    
    // Group 5 (Pairs 21-25)
-   g_groups[4].closedTarget = GetScaledGroupClosedTarget(4);
-   g_groups[4].floatingTarget = GetScaledGroupFloatingTarget(4);
+   g_groups[4].closedTarget = InpGroup5ClosedTarget;
+   g_groups[4].floatingTarget = InpGroup5FloatingTarget;
    g_groups[4].maxOrderBuy = InpGroup5MaxOrderBuy;
    g_groups[4].maxOrderSell = InpGroup5MaxOrderSell;
-   g_groups[4].targetBuy = GetScaledGroupTargetBuy(4);
-   g_groups[4].targetSell = GetScaledGroupTargetSell(4);
+   g_groups[4].targetBuy = InpGroup5TargetBuy;
+   g_groups[4].targetSell = InpGroup5TargetSell;
    ResetGroupProfit(4);
    
    // Group 6 (Pairs 26-30)
-   g_groups[5].closedTarget = GetScaledGroupClosedTarget(5);
-   g_groups[5].floatingTarget = GetScaledGroupFloatingTarget(5);
+   g_groups[5].closedTarget = InpGroup6ClosedTarget;
+   g_groups[5].floatingTarget = InpGroup6FloatingTarget;
    g_groups[5].maxOrderBuy = InpGroup6MaxOrderBuy;
    g_groups[5].maxOrderSell = InpGroup6MaxOrderSell;
-   g_groups[5].targetBuy = GetScaledGroupTargetBuy(5);
-   g_groups[5].targetSell = GetScaledGroupTargetSell(5);
+   g_groups[5].targetBuy = InpGroup6TargetBuy;
+   g_groups[5].targetSell = InpGroup6TargetSell;
    ResetGroupProfit(5);
    
-   // v1.6.5: Log scaling info
+   // v1.6.6: Log scaling info (show effective values)
    if(InpEnableAutoScaling)
    {
       double scaleFactor = GetScaleFactor();
-      PrintFormat("v1.6.5: Auto Scaling ENABLED | Factor=%.2fx | Base=$%.0f | Effective=$%.0f",
+      PrintFormat("v1.6.6: Auto Scaling ENABLED | Factor=%.2fx | Base=$%.0f | Effective=$%.0f",
                   scaleFactor, InpBaseAccountSize,
                   InpEnableFixedScale ? InpFixedScaleAccount : AccountInfoDouble(ACCOUNT_BALANCE));
+      PrintFormat("v1.6.6: Group 1 Targets - Base Closed=$%.0f → Scaled=$%.0f",
+                  InpGroup1ClosedTarget, GetScaledGroupClosedTarget(0));
    }
    PrintFormat("v1.1: Group Target System initialized - 6 Groups x 5 Pairs");
 }
@@ -3692,6 +3696,39 @@ double GetScaledGroupTargetSell(int groupIndex)
       case 5: baseTarget = InpGroup6TargetSell; break;
    }
    return ApplyScaleDollar(baseTarget);
+}
+
+//+------------------------------------------------------------------+
+//| v1.6.6: Get Real-Time Scaled Closed Target (dynamic calculation)   |
+//+------------------------------------------------------------------+
+double GetRealTimeScaledClosedTarget(int groupIndex)
+{
+   // Use BASE value from g_groups and apply current scale factor
+   return ApplyScaleDollar(g_groups[groupIndex].closedTarget);
+}
+
+//+------------------------------------------------------------------+
+//| v1.6.6: Get Real-Time Scaled Floating Target                       |
+//+------------------------------------------------------------------+
+double GetRealTimeScaledFloatingTarget(int groupIndex)
+{
+   return ApplyScaleDollar(g_groups[groupIndex].floatingTarget);
+}
+
+//+------------------------------------------------------------------+
+//| v1.6.6: Get Real-Time Scaled Target Buy                            |
+//+------------------------------------------------------------------+
+double GetRealTimeScaledTargetBuy(int groupIndex)
+{
+   return ApplyScaleDollar(g_groups[groupIndex].targetBuy);
+}
+
+//+------------------------------------------------------------------+
+//| v1.6.6: Get Real-Time Scaled Target Sell                           |
+//+------------------------------------------------------------------+
+double GetRealTimeScaledTargetSell(int groupIndex)
+{
+   return ApplyScaleDollar(g_groups[groupIndex].targetSell);
 }
 
 //+------------------------------------------------------------------+
@@ -6895,7 +6932,7 @@ double GetAveragingProfit(string commentPattern)
 }
 
 //+------------------------------------------------------------------+
-//| Check Pair Targets                                                 |
+//| Check Pair Targets (v1.6.6: Real-Time Scaled Targets)              |
 //+------------------------------------------------------------------+
 void CheckPairTargets()
 {
@@ -6903,24 +6940,29 @@ void CheckPairTargets()
    {
       if(!g_pairs[i].enabled) continue;
       
-      // Check Buy side target
-      if(g_pairs[i].directionBuy == 1 && g_pairs[i].targetBuy > 0)
+      // v1.6.6: Get group index and real-time scaled targets
+      int groupIdx = GetGroupIndex(i);
+      double scaledTargetBuy = GetRealTimeScaledTargetBuy(groupIdx);
+      double scaledTargetSell = GetRealTimeScaledTargetSell(groupIdx);
+      
+      // Check Buy side target (using real-time scaled value)
+      if(g_pairs[i].directionBuy == 1 && scaledTargetBuy > 0)
       {
-         if(g_pairs[i].profitBuy >= g_pairs[i].targetBuy)
+         if(g_pairs[i].profitBuy >= scaledTargetBuy)
          {
-            PrintFormat("Pair %d BUY TARGET HIT: %.2f >= %.2f", 
-                        i + 1, g_pairs[i].profitBuy, g_pairs[i].targetBuy);
+            PrintFormat("Pair %d BUY TARGET HIT: %.2f >= %.2f (Scaled)", 
+                        i + 1, g_pairs[i].profitBuy, scaledTargetBuy);
             CloseBuySide(i);
          }
       }
       
-      // Check Sell side target
-      if(g_pairs[i].directionSell == 1 && g_pairs[i].targetSell > 0)
+      // Check Sell side target (using real-time scaled value)
+      if(g_pairs[i].directionSell == 1 && scaledTargetSell > 0)
       {
-         if(g_pairs[i].profitSell >= g_pairs[i].targetSell)
+         if(g_pairs[i].profitSell >= scaledTargetSell)
          {
-            PrintFormat("Pair %d SELL TARGET HIT: %.2f >= %.2f", 
-                        i + 1, g_pairs[i].profitSell, g_pairs[i].targetSell);
+            PrintFormat("Pair %d SELL TARGET HIT: %.2f >= %.2f (Scaled)", 
+                        i + 1, g_pairs[i].profitSell, scaledTargetSell);
             CloseSellSide(i);
          }
       }
@@ -6963,29 +7005,33 @@ void CheckTotalTarget()
    // 2. Check each group's target independently
    for(int g = 0; g < MAX_GROUPS; g++)
    {
+      // v1.6.6: Get real-time scaled targets for this group
+      double scaledClosedTarget = GetRealTimeScaledClosedTarget(g);
+      double scaledFloatingTarget = GetRealTimeScaledFloatingTarget(g);
+      
       // Skip if no targets set
-      if(g_groups[g].closedTarget <= 0 && g_groups[g].floatingTarget <= 0)
+      if(scaledClosedTarget <= 0 && scaledFloatingTarget <= 0)
          continue;
       
       bool shouldClose = false;
       string reason = "";
       
-      // Check TOTAL target (Closed + Floating)
-      if(g_groups[g].closedTarget > 0 && 
-         g_groups[g].totalProfit >= g_groups[g].closedTarget)
+      // Check TOTAL target (Closed + Floating) using real-time scaled value
+      if(scaledClosedTarget > 0 && 
+         g_groups[g].totalProfit >= scaledClosedTarget)
       {
          shouldClose = true;
-         reason = StringFormat("Total %.2f >= Target %.2f", 
-                               g_groups[g].totalProfit, g_groups[g].closedTarget);
+         reason = StringFormat("Total %.2f >= Target %.2f (Scaled)", 
+                               g_groups[g].totalProfit, scaledClosedTarget);
       }
       
-      // Check Floating-only target
-      if(!shouldClose && g_groups[g].floatingTarget > 0 && 
-         g_groups[g].floatingProfit >= g_groups[g].floatingTarget)
+      // Check Floating-only target using real-time scaled value
+      if(!shouldClose && scaledFloatingTarget > 0 && 
+         g_groups[g].floatingProfit >= scaledFloatingTarget)
       {
          shouldClose = true;
-         reason = StringFormat("Floating %.2f >= Target %.2f", 
-                               g_groups[g].floatingProfit, g_groups[g].floatingTarget);
+         reason = StringFormat("Floating %.2f >= Target %.2f (Scaled)", 
+                               g_groups[g].floatingProfit, scaledFloatingTarget);
       }
       
       // Execute close for THIS GROUP ONLY
@@ -7139,7 +7185,7 @@ void CreateDashboard()
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_XDISTANCE, PANEL_X + (PANEL_WIDTH / 2));
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_YDISTANCE, PANEL_Y + 4);
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_ANCHOR, ANCHOR_UPPER);
-   ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_TEXT, "Harmony Dream EA v1.6.5");
+   ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_TEXT, "Harmony Dream EA v1.6.6");
    ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_FONT, "Arial Bold");
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_FONTSIZE, 10);
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_COLOR, COLOR_GOLD);
@@ -7340,8 +7386,9 @@ void CreatePairRow(string prefix, int idx, int buyX, int centerX, int sellX, int
       // Group Label
       CreateLabel(prefix + "G" + IntegerToString(gIdx) + "_LBL", groupInfoX + 5, y + 3, grpStr, COLOR_GOLD, 8, "Arial Bold");
       
-      // Target
-      string tgtStr = (g_groups[gIdx].closedTarget > 0) ? "$" + DoubleToString(g_groups[gIdx].closedTarget, 0) : "-";
+      // Target - v1.6.6: Display real-time scaled target
+      double scaledTarget = GetRealTimeScaledClosedTarget(gIdx);
+      string tgtStr = (scaledTarget > 0) ? "$" + DoubleToString(scaledTarget, 0) : "-";
       CreateLabel(prefix + "G" + IntegerToString(gIdx) + "_TGT", groupInfoX + 35, y + 3, tgtStr, COLOR_TEXT_WHITE, 8, "Arial");
       
       // Closed P/L (accumulated)
@@ -7796,10 +7843,15 @@ void UpdateDashboard()
       }
    }
    
-   // === v1.1: Update Group Info Column ===
+   // === v1.1: Update Group Info Column (v1.6.6: Real-Time Scaled Targets) ===
    for(int g = 0; g < MAX_GROUPS; g++)
    {
       string gIdxStr = IntegerToString(g);
+      
+      // v1.6.6: Update Group Target with real-time scaled value
+      double scaledTarget = GetRealTimeScaledClosedTarget(g);
+      string tgtStr = (scaledTarget > 0) ? "$" + DoubleToString(scaledTarget, 0) : "-";
+      UpdateLabel(prefix + "G" + gIdxStr + "_TGT", tgtStr, COLOR_TEXT_WHITE);
       
       // Calculate group's closed profit for display
       double grpClosed = g_groups[g].closedProfit;
