@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
 //|                                         Harmony_Dream_EA.mq5     |
-//|                      Harmony Dream (Pairs Trading) v1.6          |
+//|                      Harmony Dream (Pairs Trading) v1.6.2        |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
@@ -752,6 +752,9 @@ datetime g_lastZScoreUpdate = 0;
 string g_lastCDCStatus[];
 datetime g_lastCDCUpdate = 0;
 
+// v1.6.2: CDC Initial-Only Retry Timer (per pair)
+datetime g_lastCDCRetryTime[];
+
 // === v1.1: Group Target System (replaces single Basket) ===
 GroupTarget g_groups[MAX_GROUPS];
 
@@ -1000,7 +1003,11 @@ int OnInit()
    // v1.3: Restore open positions from previous session (Magic Number-based)
    RestoreOpenPositions();
    
-   PrintFormat("=== Harmony Dream EA v1.6.1 Initialized - %d Active Pairs | Net Profit Mode ===", g_activePairs);
+   // v1.6.2: Initialize CDC Retry timer array
+   ArrayResize(g_lastCDCRetryTime, MAX_PAIRS);
+   ArrayInitialize(g_lastCDCRetryTime, 0);
+   
+   PrintFormat("=== Harmony Dream EA v1.6.2 Initialized - %d Active Pairs | Net Profit Mode ===", g_activePairs);
    return(INIT_SUCCEEDED);
 }
 
@@ -3876,11 +3883,13 @@ void UpdateCDCForPair(int pairIndex)
 }
 
 //+------------------------------------------------------------------+
-//| Update CDC for All Enabled Pairs (v3.7.1: Per-symbol tracking)     |
+//| Update CDC for All Enabled Pairs (v1.6.2: Initial-Only Retry)      |
 //+------------------------------------------------------------------+
 void UpdateAllPairsCDC()
 {
    if(!InpUseCDCTrendFilter) return;
+   
+   datetime currentTime = TimeCurrent();  // v1.6.2: For retry timing
    
    for(int i = 0; i < MAX_PAIRS; i++)
    {
@@ -3890,9 +3899,10 @@ void UpdateAllPairsCDC()
       datetime tA = iTime(g_pairs[i].symbolA, InpCDCTimeframe, 0);
       datetime tB = iTime(g_pairs[i].symbolB, InpCDCTimeframe, 0);
       
-      // Guard: If iTime returns 0, data not ready
+      // === Symbol A ===
       if(tA <= 0)
       {
+         // iTime failed - data not ready
          g_pairs[i].cdcReadyA = false;
          if(InpDebugMode)
             PrintFormat("[CDC] %s: iTime returned 0, status=LOADING", g_pairs[i].symbolA);
@@ -3908,9 +3918,28 @@ void UpdateAllPairsCDC()
             g_pairs[i].cdcSlowA
          );
       }
+      else if(!g_pairs[i].cdcReadyA)
+      {
+         // v1.6.2: Initial-Only Retry - if still not ready, retry every 5 seconds
+         if(currentTime - g_lastCDCRetryTime[i] >= 5)
+         {
+            g_lastCDCRetryTime[i] = currentTime;
+            g_pairs[i].cdcReadyA = CalculateCDCForSymbol(
+               g_pairs[i].symbolA,
+               g_pairs[i].cdcTrendA,
+               g_pairs[i].cdcFastA,
+               g_pairs[i].cdcSlowA
+            );
+            if(InpDebugMode && g_pairs[i].cdcReadyA)
+               PrintFormat("[CDC] %s: Initial Retry SUCCESS - status=OK", g_pairs[i].symbolA);
+         }
+      }
+      // If cdcReadyA = true -> no retry needed, wait for next new candle
       
+      // === Symbol B ===
       if(tB <= 0)
       {
+         // iTime failed - data not ready
          g_pairs[i].cdcReadyB = false;
          if(InpDebugMode)
             PrintFormat("[CDC] %s: iTime returned 0, status=LOADING", g_pairs[i].symbolB);
@@ -3926,6 +3955,23 @@ void UpdateAllPairsCDC()
             g_pairs[i].cdcSlowB
          );
       }
+      else if(!g_pairs[i].cdcReadyB)
+      {
+         // v1.6.2: Initial-Only Retry - if still not ready, retry every 5 seconds
+         if(currentTime - g_lastCDCRetryTime[i] >= 5)
+         {
+            g_lastCDCRetryTime[i] = currentTime;
+            g_pairs[i].cdcReadyB = CalculateCDCForSymbol(
+               g_pairs[i].symbolB,
+               g_pairs[i].cdcTrendB,
+               g_pairs[i].cdcFastB,
+               g_pairs[i].cdcSlowB
+            );
+            if(InpDebugMode && g_pairs[i].cdcReadyB)
+               PrintFormat("[CDC] %s: Initial Retry SUCCESS - status=OK", g_pairs[i].symbolB);
+         }
+      }
+      // If cdcReadyB = true -> no retry needed, wait for next new candle
    }
 }
 
@@ -6837,7 +6883,7 @@ void CreateDashboard()
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_XDISTANCE, PANEL_X + (PANEL_WIDTH / 2));
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_YDISTANCE, PANEL_Y + 4);
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_ANCHOR, ANCHOR_UPPER);
-   ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_TEXT, "Harmony Dream EA v1.6.1");
+   ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_TEXT, "Harmony Dream EA v1.6.2");
    ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_FONT, "Arial Bold");
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_FONTSIZE, 10);
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_COLOR, COLOR_GOLD);
