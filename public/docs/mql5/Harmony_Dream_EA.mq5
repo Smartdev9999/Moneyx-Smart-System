@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                         Harmony_Dream_EA.mq5     |
-//|                      Harmony Dream (Pairs Trading) v1.4          |
+//|                      Harmony Dream (Pairs Trading) v1.5          |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "1.40"
+#property version   "1.50"
 #property strict
 #property description "Harmony Dream - Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
-#property description "v1.4: Fix Main vs Grid Ticket Matching + Net Profit (incl Commission)"
+#property description "v1.5: Z-Score & Corr Timeframe Independence from Chart TF"
 #include <Trade/Trade.mqh>
 
 //+------------------------------------------------------------------+
@@ -1673,6 +1673,38 @@ void SetupPair(int index, bool enabled, string symbolA, string symbolB)
 }
 
 //+------------------------------------------------------------------+
+//| v1.5: Get Reference Symbol for Z-Score Candle Detection           |
+//| Returns first enabled pair's symbolA for consistent timing        |
+//+------------------------------------------------------------------+
+string GetZScoreReferenceSymbol()
+{
+   for(int i = 0; i < MAX_PAIRS; i++)
+   {
+      if(g_pairs[i].enabled && g_pairs[i].dataValid)
+      {
+         return g_pairs[i].symbolA;
+      }
+   }
+   return "";  // No active pair found
+}
+
+//+------------------------------------------------------------------+
+//| v1.5: Get Reference Symbol for Correlation Candle Detection       |
+//| Returns first enabled pair's symbolA for consistent timing        |
+//+------------------------------------------------------------------+
+string GetCorrReferenceSymbol()
+{
+   for(int i = 0; i < MAX_PAIRS; i++)
+   {
+      if(g_pairs[i].enabled && g_pairs[i].dataValid)
+      {
+         return g_pairs[i].symbolA;
+      }
+   }
+   return "";  // No active pair found
+}
+
+//+------------------------------------------------------------------+
 //| Expert deinitialization function                                   |
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
@@ -1792,8 +1824,20 @@ void OnTick()
       g_pairs[i].justOpenedMainSell = false;
    }
    
-   // Check for new candle on correlation timeframe
-   datetime currentCandleTime = iTime(_Symbol, InpCorrTimeframe, 0);
+   // v1.5: Check for new candle on correlation timeframe - USE PAIR SYMBOL, NOT CHART SYMBOL
+   string corrRefSymbol = GetCorrReferenceSymbol();
+   datetime currentCandleTime = 0;
+   
+   if(corrRefSymbol != "")
+   {
+      currentCandleTime = iTime(corrRefSymbol, InpCorrTimeframe, 0);
+   }
+   else
+   {
+      // Fallback if no active pair
+      currentCandleTime = iTime(_Symbol, InpCorrTimeframe, 0);
+   }
+   
    bool newCandleCorr = (currentCandleTime != g_lastCandleTime);
    
    if(newCandleCorr)
@@ -1805,11 +1849,30 @@ void OnTick()
       {
          UpdateAllPairData();
       }
+      
+      // v1.5: Debug log for correlation update timing
+      if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
+      {
+         PrintFormat("[v1.5] Correlation Update | TF=%s | RefSymbol=%s | CandleTime=%s",
+                     EnumToString(InpCorrTimeframe), corrRefSymbol, TimeToString(currentCandleTime));
+      }
    }
    
-   // v3.3.0: Check for new candle on Z-Score timeframe (if different from correlation TF)
+   // v1.5: Check for new candle on Z-Score timeframe - USE PAIR SYMBOL, NOT CHART SYMBOL
    ENUM_TIMEFRAMES zTF = GetZScoreTimeframe();
-   datetime zCandleTime = iTime(_Symbol, zTF, 0);
+   string zRefSymbol = GetZScoreReferenceSymbol();
+   datetime zCandleTime = 0;
+   
+   if(zRefSymbol != "")
+   {
+      zCandleTime = iTime(zRefSymbol, zTF, 0);
+   }
+   else
+   {
+      // Fallback if no active pair
+      zCandleTime = iTime(_Symbol, zTF, 0);
+   }
+   
    bool newCandleZScore = (zCandleTime != g_lastZScoreUpdate);
    
    if(newCandleZScore)
@@ -1820,6 +1883,13 @@ void OnTick()
       
       // v3.4.0: Calculate RSI on Spread after Z-Score data is updated
       CalculateAllRSIonSpread();
+      
+      // v1.5: Debug log for Z-Score update timing
+      if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
+      {
+         PrintFormat("[v1.5] Z-Score Update | TF=%s | RefSymbol=%s | CandleTime=%s",
+                     EnumToString(zTF), zRefSymbol, TimeToString(zCandleTime));
+      }
    }
    
    // v3.7.1: Update CDC Trend Data - per-symbol based (independent from chart TF)
@@ -1830,8 +1900,19 @@ void OnTick()
       UpdateAllPairsCDC();  // Function now handles per-symbol candle time tracking
    }
    
-   // v3.5.3 HF3: Update ADX for Negative Correlation Pairs on new ADX timeframe candle
-   datetime adxCandleTime = iTime(_Symbol, InpADXTimeframe, 0);
+   // v1.5: Update ADX - USE PAIR SYMBOL, NOT CHART SYMBOL
+   string adxRefSymbol = GetZScoreReferenceSymbol();  // Reuse same reference logic
+   datetime adxCandleTime = 0;
+   
+   if(adxRefSymbol != "")
+   {
+      adxCandleTime = iTime(adxRefSymbol, InpADXTimeframe, 0);
+   }
+   else
+   {
+      adxCandleTime = iTime(_Symbol, InpADXTimeframe, 0);
+   }
+   
    static datetime s_lastADXUpdate = 0;
    bool newCandleADX = (adxCandleTime != s_lastADXUpdate);
    
