@@ -632,7 +632,7 @@ bool g_isNewsPaused = false;
 bool g_isPaused = false;
 
 // === v3.6.8: EA Status for Admin Dashboard ===
-string            g_eaStatus = "Working";     // Working, Paused, Offline, Suspended, Expired, Invalid
+string            g_eaStatus = "initializing";     // v1.6.1: Default to initializing (not Working)
 
 // === v3.6.5: License System Variables ===
 ENUM_LICENSE_STATUS g_licenseStatus = LICENSE_ERROR;
@@ -882,6 +882,9 @@ int OnInit()
       Print("License verification failed - EA will not trade");
    }
    
+   // v1.6.1: Force update EA status after license check
+   UpdateEAStatus();
+   
    // Initialize account tracking
    g_initialBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    g_maxEquity = AccountInfoDouble(ACCOUNT_EQUITY);
@@ -997,7 +1000,7 @@ int OnInit()
    // v1.3: Restore open positions from previous session (Magic Number-based)
    RestoreOpenPositions();
    
-   PrintFormat("=== Harmony Dream EA v1.5 Initialized - %d Active Pairs | Net Profit Mode ===", g_activePairs);
+   PrintFormat("=== Harmony Dream EA v1.6.1 Initialized - %d Active Pairs | Net Profit Mode ===", g_activePairs);
    return(INIT_SUCCEEDED);
 }
 
@@ -1771,11 +1774,11 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
 }
 
 //+------------------------------------------------------------------+
-//| Update EA Status Based on Current State (v3.6.8)                   |
+//| Update EA Status Based on Current State (v1.6.1)                   |
 //+------------------------------------------------------------------+
 void UpdateEAStatus()
 {
-   // Priority: Suspended > Expired > Invalid > Paused > Working
+   // v1.6.1: Priority: Suspended > Expired > Not Found > Error > Invalid > Paused > Working
    // v3.7.3: Use lowercase to match backend expectation
    if(g_licenseStatus == LICENSE_SUSPENDED)
    {
@@ -1785,9 +1788,17 @@ void UpdateEAStatus()
    {
       g_eaStatus = "expired";
    }
-   else if(!g_isLicenseValid && g_licenseStatus != LICENSE_VALID)
+   else if(g_licenseStatus == LICENSE_NOT_FOUND)
    {
-      g_eaStatus = "invalid";
+      g_eaStatus = "invalid";  // v1.6.1: Account not registered -> invalid
+   }
+   else if(g_licenseStatus == LICENSE_ERROR)
+   {
+      g_eaStatus = "error";    // v1.6.1: Connection/Server error -> error
+   }
+   else if(!g_isLicenseValid)
+   {
+      g_eaStatus = "invalid";  // v1.6.1: Any other invalid state
    }
    else if(g_isPaused || g_isNewsPaused)
    {
@@ -6826,7 +6837,7 @@ void CreateDashboard()
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_XDISTANCE, PANEL_X + (PANEL_WIDTH / 2));
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_YDISTANCE, PANEL_Y + 4);
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_ANCHOR, ANCHOR_UPPER);
-   ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_TEXT, "Harmony Dream EA v1.6");
+   ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_TEXT, "Harmony Dream EA v1.6.1");
    ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_FONT, "Arial Bold");
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_FONTSIZE, 10);
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_COLOR, COLOR_GOLD);
@@ -7197,6 +7208,7 @@ void UpdateDashboard()
    if(ddPercent > g_maxDrawdownPercent) g_maxDrawdownPercent = ddPercent;
    
    // v3.7.3: Update EA Status Display on title bar
+   // v1.6.1: Enhanced status display with proper priority
    string eaStatusDisplay = "Working";
    color eaStatusColor = clrLime;
    
@@ -7209,6 +7221,16 @@ void UpdateDashboard()
    {
       eaStatusDisplay = "Expired";
       eaStatusColor = clrRed;
+   }
+   else if(g_licenseStatus == LICENSE_NOT_FOUND)
+   {
+      eaStatusDisplay = "Invalid";  // v1.6.1: Account not registered
+      eaStatusColor = clrRed;
+   }
+   else if(g_licenseStatus == LICENSE_ERROR)
+   {
+      eaStatusDisplay = "Error";    // v1.6.1: Connection/Server error
+      eaStatusColor = clrOrange;
    }
    else if(!g_isLicenseValid)
    {
