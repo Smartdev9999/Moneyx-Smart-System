@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                         Harmony_Dream_EA.mq5     |
-//|                      Harmony Dream (Pairs Trading) v1.5          |
+//|                      Harmony Dream (Pairs Trading) v1.6          |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "1.50"
+#property version   "1.60"
 #property strict
 #property description "Harmony Dream - Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
-#property description "v1.5: Z-Score & Corr Timeframe Independence from Chart TF"
+#property description "v1.6: Unified Max Order + Symbol-Specific ATR Grid"
 #include <Trade/Trade.mqh>
 
 //+------------------------------------------------------------------+
@@ -307,33 +307,37 @@ input bool     InpRequirePositiveProfit = true;            // Require Positive P
 input int      InpMinHoldingBars = 0;                      // Minimum Holding Bars Before Exit
 input ENUM_CORR_DROP_MODE InpCorrDropMode = CORR_DROP_CLOSE_PROFIT_ONLY;  // Correlation Drop Behavior
 
-input group "=== Grid Loss Side Settings (v3.6.0 HF1) ==="
+input group "=== Grid Loss Side Settings (v1.6) ==="
 input bool     InpEnableGridLoss = true;              // Enable Grid Loss Side
 input ENUM_GRID_DISTANCE_MODE InpGridLossDistMode = GRID_DIST_ATR;  // Distance Mode
 input ENUM_GRID_LOT_TYPE      InpGridLossLotType = GRID_LOT_TYPE_TREND_BASED;  // Lot Type
 input double   InpGridLossFixedPoints = 500;          // Fixed Points (if mode = Fixed Points)
 input double   InpGridLossFixedPips = 50;             // Fixed Pips (if mode = Fixed Pips)
-input double   InpGridLossATRMult = 1.5;              // ATR Multiplier (if mode = ATR)
-input ENUM_TIMEFRAMES InpGridLossATRTimeframe = PERIOD_H1;  // ATR Timeframe (if mode = ATR)
+input double   InpGridLossATRMultForex = 3.0;         // ATR Multiplier - Forex Pairs (if mode = ATR)
+input double   InpGridLossATRMultGold = 1.5;          // ATR Multiplier - Gold/XAU Pairs (if mode = ATR)
+input double   InpGridLossMinDistPips = 100.0;        // Minimum Grid Distance (Pips) - Fallback
+input ENUM_TIMEFRAMES InpGridLossATRTimeframe = PERIOD_H4;  // ATR Timeframe (if mode = ATR)
 input int      InpGridLossATRPeriod = 14;             // ATR Period (if mode = ATR)
 input string   InpGridLossZScoreLevels = "2.5;3.0;4.0;5.0"; // Z-Score Levels (if mode = Z-Score)
 input double   InpGridLossCustomLot = 0.1;            // Custom Lot (if type = Custom)
 input double   InpGridLossLotMultiplier = 1.2;        // Lot Multiplier (if type = Multiplier)
-input int      InpMaxGridLossOrders = 5;              // Max Grid Loss Orders per Side
+input int      InpMaxGridLossOrders = 5;              // Max Grid Loss Orders (Sub-Limit)
 
-input group "=== Grid Profit Side Settings (v3.6.0 HF1) ==="
+input group "=== Grid Profit Side Settings (v1.6) ==="
 input bool     InpEnableGridProfit = false;           // Enable Grid Profit Side
 input ENUM_GRID_DISTANCE_MODE InpGridProfitDistMode = GRID_DIST_ATR;  // Distance Mode
 input ENUM_GRID_LOT_TYPE      InpGridProfitLotType = GRID_LOT_TYPE_TREND_BASED;  // Lot Type
 input double   InpGridProfitFixedPoints = 500;        // Fixed Points (if mode = Fixed Points)
 input double   InpGridProfitFixedPips = 50;           // Fixed Pips (if mode = Fixed Pips)
-input double   InpGridProfitATRMult = 1.5;            // ATR Multiplier (if mode = ATR)
-input ENUM_TIMEFRAMES InpGridProfitATRTimeframe = PERIOD_H1;  // ATR Timeframe (if mode = ATR)
+input double   InpGridProfitATRMultForex = 3.0;       // ATR Multiplier - Forex Pairs (if mode = ATR)
+input double   InpGridProfitATRMultGold = 1.5;        // ATR Multiplier - Gold/XAU Pairs (if mode = ATR)
+input double   InpGridProfitMinDistPips = 100.0;      // Minimum Grid Distance (Pips) - Fallback
+input ENUM_TIMEFRAMES InpGridProfitATRTimeframe = PERIOD_H4;  // ATR Timeframe (if mode = ATR)
 input int      InpGridProfitATRPeriod = 14;           // ATR Period (if mode = ATR)
 input string   InpGridProfitZScoreLevels = "1.5;1.0;0.5"; // Z-Score Levels (if mode = Z-Score)
 input double   InpGridProfitCustomLot = 0.1;          // Custom Lot (if type = Custom)
 input double   InpGridProfitLotMultiplier = 1.1;      // Lot Multiplier (if type = Multiplier)
-input int      InpMaxGridProfitOrders = 3;            // Max Grid Profit Orders per Side
+input int      InpMaxGridProfitOrders = 3;            // Max Grid Profit Orders (Sub-Limit)
 
 input group "=== Grid Trading Guard (v3.5.1) ==="
 input double   InpGridMinCorrelation = 0.60;      // Grid: Minimum Correlation (ต่ำกว่านี้หยุด Grid)
@@ -425,11 +429,11 @@ input bool     InpEnablePair5 = true;           // Enable Pair 5
 input string   InpPair5_SymbolA = "EURUSD";     // Pair 5: Symbol A
 input string   InpPair5_SymbolB = "USDCHF";     // Pair 5: Symbol B
 
-input group "=== Group 1-5 Target Settings (v1.1) ==="
+input group "=== Group 1-5 Target Settings (v1.6) ==="
 input double   InpGroup1ClosedTarget = 0;       // Basket Closed Profit Target $ (0=Disable)
 input double   InpGroup1FloatingTarget = 0;     // Basket Floating Profit Target $ (0=Disable)
-input int      InpGroup1MaxOrderBuy = 5;        // Total Max Orders Buy (Main + Grid)
-input int      InpGroup1MaxOrderSell = 5;       // Total Max Orders Sell (Main + Grid)
+input int      InpGroup1MaxOrderBuy = 5;        // Total Max Orders Buy (Hard Cap: Main + All Grids)
+input int      InpGroup1MaxOrderSell = 5;       // Total Max Orders Sell (Hard Cap: Main + All Grids)
 input double   InpGroup1TargetBuy = 10.0;       // Default Target (Buy Side) $
 input double   InpGroup1TargetSell = 10.0;      // Default Target (Sell Side) $
 
@@ -454,11 +458,11 @@ input bool     InpEnablePair10 = false;         // Enable Pair 10
 input string   InpPair10_SymbolA = "EURJPY";    // Pair 10: Symbol A
 input string   InpPair10_SymbolB = "GBPJPY";    // Pair 10: Symbol B
 
-input group "=== Group 6-10 Target Settings (v1.1) ==="
+input group "=== Group 6-10 Target Settings (v1.6) ==="
 input double   InpGroup2ClosedTarget = 0;       // Basket Closed Profit Target $ (0=Disable)
 input double   InpGroup2FloatingTarget = 0;     // Basket Floating Profit Target $ (0=Disable)
-input int      InpGroup2MaxOrderBuy = 5;        // Total Max Orders Buy (Main + Grid)
-input int      InpGroup2MaxOrderSell = 5;       // Total Max Orders Sell (Main + Grid)
+input int      InpGroup2MaxOrderBuy = 5;        // Total Max Orders Buy (Hard Cap: Main + All Grids)
+input int      InpGroup2MaxOrderSell = 5;       // Total Max Orders Sell (Hard Cap: Main + All Grids)
 input double   InpGroup2TargetBuy = 10.0;       // Default Target (Buy Side) $
 input double   InpGroup2TargetSell = 10.0;      // Default Target (Sell Side) $
 input bool     InpEnablePair11 = false;         // Enable Pair 11
@@ -481,11 +485,11 @@ input bool     InpEnablePair15 = false;         // Enable Pair 15
 input string   InpPair15_SymbolA = "EURAUD";    // Pair 15: Symbol A
 input string   InpPair15_SymbolB = "EURNZD";    // Pair 15: Symbol B
 
-input group "=== Group 11-15 Target Settings (v1.1) ==="
+input group "=== Group 11-15 Target Settings (v1.6) ==="
 input double   InpGroup3ClosedTarget = 0;       // Basket Closed Profit Target $ (0=Disable)
 input double   InpGroup3FloatingTarget = 0;     // Basket Floating Profit Target $ (0=Disable)
-input int      InpGroup3MaxOrderBuy = 5;        // Total Max Orders Buy (Main + Grid)
-input int      InpGroup3MaxOrderSell = 5;       // Total Max Orders Sell (Main + Grid)
+input int      InpGroup3MaxOrderBuy = 5;        // Total Max Orders Buy (Hard Cap: Main + All Grids)
+input int      InpGroup3MaxOrderSell = 5;       // Total Max Orders Sell (Hard Cap: Main + All Grids)
 input double   InpGroup3TargetBuy = 10.0;       // Default Target (Buy Side) $
 input double   InpGroup3TargetSell = 10.0;      // Default Target (Sell Side) $
 input bool     InpEnablePair16 = false;         // Enable Pair 16
@@ -508,11 +512,11 @@ input bool     InpEnablePair20 = false;         // Enable Pair 20
 input string   InpPair20_SymbolA = "CADCHF";    // Pair 20: Symbol A
 input string   InpPair20_SymbolB = "CADJPY";    // Pair 20: Symbol B
 
-input group "=== Group 16-20 Target Settings (v1.1) ==="
+input group "=== Group 16-20 Target Settings (v1.6) ==="
 input double   InpGroup4ClosedTarget = 0;       // Basket Closed Profit Target $ (0=Disable)
 input double   InpGroup4FloatingTarget = 0;     // Basket Floating Profit Target $ (0=Disable)
-input int      InpGroup4MaxOrderBuy = 5;        // Total Max Orders Buy (Main + Grid)
-input int      InpGroup4MaxOrderSell = 5;       // Total Max Orders Sell (Main + Grid)
+input int      InpGroup4MaxOrderBuy = 5;        // Total Max Orders Buy (Hard Cap: Main + All Grids)
+input int      InpGroup4MaxOrderSell = 5;       // Total Max Orders Sell (Hard Cap: Main + All Grids)
 input double   InpGroup4TargetBuy = 10.0;       // Default Target (Buy Side) $
 input double   InpGroup4TargetSell = 10.0;      // Default Target (Sell Side) $
 input bool     InpEnablePair21 = false;         // Enable Pair 21
@@ -535,11 +539,11 @@ input bool     InpEnablePair25 = false;         // Enable Pair 25
 input string   InpPair25_SymbolA = "NZDJPY";    // Pair 25: Symbol A
 input string   InpPair25_SymbolB = "CADJPY";    // Pair 25: Symbol B
 
-input group "=== Group 21-25 Target Settings (v1.1) ==="
+input group "=== Group 21-25 Target Settings (v1.6) ==="
 input double   InpGroup5ClosedTarget = 0;       // Basket Closed Profit Target $ (0=Disable)
 input double   InpGroup5FloatingTarget = 0;     // Basket Floating Profit Target $ (0=Disable)
-input int      InpGroup5MaxOrderBuy = 5;        // Total Max Orders Buy (Main + Grid)
-input int      InpGroup5MaxOrderSell = 5;       // Total Max Orders Sell (Main + Grid)
+input int      InpGroup5MaxOrderBuy = 5;        // Total Max Orders Buy (Hard Cap: Main + All Grids)
+input int      InpGroup5MaxOrderSell = 5;       // Total Max Orders Sell (Hard Cap: Main + All Grids)
 input double   InpGroup5TargetBuy = 10.0;       // Default Target (Buy Side) $
 input double   InpGroup5TargetSell = 10.0;      // Default Target (Sell Side) $
 input bool     InpEnablePair26 = false;         // Enable Pair 26
@@ -562,11 +566,11 @@ input bool     InpEnablePair30 = false;         // Enable Pair 30
 input string   InpPair30_SymbolA = "USDMXN";    // Pair 30: Symbol A
 input string   InpPair30_SymbolB = "EURMXN";    // Pair 30: Symbol B
 
-input group "=== Group 26-30 Target Settings (v1.1) ==="
+input group "=== Group 26-30 Target Settings (v1.6) ==="
 input double   InpGroup6ClosedTarget = 0;       // Basket Closed Profit Target $ (0=Disable)
 input double   InpGroup6FloatingTarget = 0;     // Basket Floating Profit Target $ (0=Disable)
-input int      InpGroup6MaxOrderBuy = 5;        // Total Max Orders Buy (Main + Grid)
-input int      InpGroup6MaxOrderSell = 5;       // Total Max Orders Sell (Main + Grid)
+input int      InpGroup6MaxOrderBuy = 5;        // Total Max Orders Buy (Hard Cap: Main + All Grids)
+input int      InpGroup6MaxOrderSell = 5;       // Total Max Orders Sell (Hard Cap: Main + All Grids)
 input double   InpGroup6TargetBuy = 10.0;       // Default Target (Buy Side) $
 input double   InpGroup6TargetSell = 10.0;      // Default Target (Sell Side) $
 input string   InpLicenseServer = LICENSE_BASE_URL;    // License Server URL
@@ -4297,36 +4301,40 @@ void CheckAllGridLoss()
          }
          else
          {
-            // v3.3.0: Total orders check
-            int totalBuyOrders = 1 + g_pairs[i].avgOrderCountBuy;
-            if(totalBuyOrders < g_pairs[i].maxOrderBuy && 
-               g_pairs[i].avgOrderCountBuy < InpMaxGridLossOrders)
-            {
-               CheckGridLossForSide(i, "BUY");
-            }
+         // v1.6: Unified Max Order Check (Hard Cap + Sub-Limit)
+         int totalOrders = GetTotalOrderCount(i, "BUY");
+         bool hardCapOK = totalOrders < g_pairs[i].maxOrderBuy;
+         bool subLimitOK = g_pairs[i].avgOrderCountBuy < InpMaxGridLossOrders;
+         
+         if(hardCapOK && subLimitOK)
+         {
+            CheckGridLossForSide(i, "BUY");
          }
       }
-      
-      // Check Sell Side - Grid Loss (price going UP = losing for SELL)
-      if(g_pairs[i].directionSell == 1 && !g_pairs[i].justOpenedMainSell)
+   }
+   
+   // Check Sell Side - Grid Loss (price going UP = losing for SELL)
+   if(g_pairs[i].directionSell == 1 && !g_pairs[i].justOpenedMainSell)
+   {
+      // === v3.5.2: Check Grid Trading Guard for SELL Side ===
+      string pauseReasonSell = "";
+      if(!CheckGridTradingAllowed(i, "SELL", pauseReasonSell))
       {
-         // === v3.5.2: Check Grid Trading Guard for SELL Side ===
-         string pauseReasonSell = "";
-         if(!CheckGridTradingAllowed(i, "SELL", pauseReasonSell))
+         // SELL Grid is PAUSED
+      }
+      else
+      {
+         // v1.6: Unified Max Order Check (Hard Cap + Sub-Limit)
+         int totalOrders = GetTotalOrderCount(i, "SELL");
+         bool hardCapOK = totalOrders < g_pairs[i].maxOrderSell;
+         bool subLimitOK = g_pairs[i].avgOrderCountSell < InpMaxGridLossOrders;
+         
+         if(hardCapOK && subLimitOK)
          {
-            // SELL Grid is PAUSED
-         }
-         else
-         {
-            // v3.3.0: Total orders check
-            int totalSellOrders = 1 + g_pairs[i].avgOrderCountSell;
-            if(totalSellOrders < g_pairs[i].maxOrderSell && 
-               g_pairs[i].avgOrderCountSell < InpMaxGridLossOrders)
-            {
-               CheckGridLossForSide(i, "SELL");
-            }
+            CheckGridLossForSide(i, "SELL");
          }
       }
+   }
    }
 }
 
@@ -4341,9 +4349,11 @@ void CheckGridLossForSide(int pairIndex, string side)
    }
    else
    {
-      // ATR, Fixed Points, Fixed Pips - v3.6.0 HF1: Use separate ATR settings
+      // ATR, Fixed Points, Fixed Pips - v1.6: Use symbol-specific ATR settings
       double gridDist = CalculateGridDistance(pairIndex, InpGridLossDistMode,
-                                               InpGridLossATRMult, 
+                                               InpGridLossATRMultForex,
+                                               InpGridLossATRMultGold,
+                                               InpGridLossMinDistPips,
                                                InpGridLossFixedPoints,
                                                InpGridLossFixedPips,
                                                InpGridLossATRTimeframe,
@@ -4436,7 +4446,12 @@ void CheckAllGridProfit()
       // Check BUY Side - Profit Grid (price going UP = profitable for BUY)
       if(g_pairs[i].directionBuy == 1 && !g_pairs[i].justOpenedMainBuy)
       {
-         if(g_pairs[i].gridProfitCountBuy < InpMaxGridProfitOrders)
+         // v1.6: Unified Max Order Check (Hard Cap + Sub-Limit)
+         int totalOrders = GetTotalOrderCount(i, "BUY");
+         bool hardCapOK = totalOrders < g_pairs[i].maxOrderBuy;
+         bool subLimitOK = g_pairs[i].gridProfitCountBuy < InpMaxGridProfitOrders;
+         
+         if(hardCapOK && subLimitOK)
          {
             CheckGridProfitForSide(i, "BUY");
          }
@@ -4445,7 +4460,12 @@ void CheckAllGridProfit()
       // Check SELL Side - Profit Grid (price going DOWN = profitable for SELL)
       if(g_pairs[i].directionSell == 1 && !g_pairs[i].justOpenedMainSell)
       {
-         if(g_pairs[i].gridProfitCountSell < InpMaxGridProfitOrders)
+         // v1.6: Unified Max Order Check (Hard Cap + Sub-Limit)
+         int totalOrders = GetTotalOrderCount(i, "SELL");
+         bool hardCapOK = totalOrders < g_pairs[i].maxOrderSell;
+         bool subLimitOK = g_pairs[i].gridProfitCountSell < InpMaxGridProfitOrders;
+         
+         if(hardCapOK && subLimitOK)
          {
             CheckGridProfitForSide(i, "SELL");
          }
@@ -4464,9 +4484,11 @@ void CheckGridProfitForSide(int pairIndex, string side)
    }
    else
    {
-      // ATR, Fixed Points, Fixed Pips - v3.6.0 HF1: Use separate ATR settings
+      // ATR, Fixed Points, Fixed Pips - v1.6: Use symbol-specific ATR settings
       double gridDist = CalculateGridDistance(pairIndex, InpGridProfitDistMode,
-                                               InpGridProfitATRMult,
+                                               InpGridProfitATRMultForex,
+                                               InpGridProfitATRMultGold,
+                                               InpGridProfitMinDistPips,
                                                InpGridProfitFixedPoints,
                                                InpGridProfitFixedPips,
                                                InpGridProfitATRTimeframe,
@@ -4558,32 +4580,78 @@ void CheckGridProfitZScore(int pairIndex, string side)
 }
 
 //+------------------------------------------------------------------+
-//| Calculate Grid Distance (v3.6.0 HF1)                               |
+//| Check if Symbol is Gold/XAU Pair (v1.6)                            |
+//+------------------------------------------------------------------+
+bool IsGoldPair(string symbol)
+{
+   string upper = symbol;
+   StringToUpper(upper);
+   return (StringFind(upper, "XAU") >= 0 || StringFind(upper, "GOLD") >= 0);
+}
+
+//+------------------------------------------------------------------+
+//| Get Total Order Count for a Pair Side (v1.6)                       |
+//| Returns: Main Order (1) + Grid Loss + Grid Profit                  |
+//+------------------------------------------------------------------+
+int GetTotalOrderCount(int pairIndex, string side)
+{
+   if(side == "BUY")
+   {
+      int main = (g_pairs[pairIndex].directionBuy == 1) ? 1 : 0;
+      int gridLoss = g_pairs[pairIndex].avgOrderCountBuy;
+      int gridProfit = g_pairs[pairIndex].gridProfitCountBuy;
+      return main + gridLoss + gridProfit;
+   }
+   else
+   {
+      int main = (g_pairs[pairIndex].directionSell == 1) ? 1 : 0;
+      int gridLoss = g_pairs[pairIndex].avgOrderCountSell;
+      int gridProfit = g_pairs[pairIndex].gridProfitCountSell;
+      return main + gridLoss + gridProfit;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Grid Distance (v1.6 - Symbol-Specific ATR + Min Dist)    |
 //+------------------------------------------------------------------+
 double CalculateGridDistance(int pairIndex, ENUM_GRID_DISTANCE_MODE mode, 
-                              double atrMult, double fixedPoints, double fixedPips,
+                              double atrMultForex, double atrMultGold, double minDistPips,
+                              double fixedPoints, double fixedPips,
                               ENUM_TIMEFRAMES atrTimeframe, int atrPeriod)
 {
    string symbolA = g_pairs[pairIndex].symbolA;
    double point = SymbolInfoDouble(symbolA, SYMBOL_POINT);
+   int digits = (int)SymbolInfoInteger(symbolA, SYMBOL_DIGITS);
+   double pipSize = (digits == 3 || digits == 5) ? point * 10 : point;
    
    switch(mode)
    {
       case GRID_DIST_ATR:
       {
          double atr = CalculateSimplifiedATR(symbolA, atrTimeframe, atrPeriod);
-         return atr * atrMult;
+         
+         // v1.6: Use symbol-specific ATR multiplier
+         double mult = IsGoldPair(symbolA) ? atrMultGold : atrMultForex;
+         double distance = atr * mult;
+         
+         // v1.6: Apply minimum distance fallback
+         double minDistance = minDistPips * pipSize;
+         
+         if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
+         {
+            PrintFormat("[v1.6 GRID] %s: ATR=%.5f, Mult=%.2f (%s), Dist=%.5f, MinDist=%.5f (%.0f pips), Final=%.5f",
+                        symbolA, atr, mult, IsGoldPair(symbolA) ? "Gold" : "Forex",
+                        distance, minDistance, minDistPips, MathMax(distance, minDistance));
+         }
+         
+         return MathMax(distance, minDistance);
       }
       case GRID_DIST_FIXED_POINTS:
          return fixedPoints * point;
          
       case GRID_DIST_FIXED_PIPS:
-      {
-         // 1 pip = 10 points for 5-digit brokers
-         int digits = (int)SymbolInfoInteger(symbolA, SYMBOL_DIGITS);
-         double pipSize = (digits == 3 || digits == 5) ? point * 10 : point;
          return fixedPips * pipSize;
-      }
+         
       case GRID_DIST_ZSCORE:
          // Z-Score mode uses level-based triggering, not price distance
          return 0;
@@ -6758,7 +6826,7 @@ void CreateDashboard()
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_XDISTANCE, PANEL_X + (PANEL_WIDTH / 2));
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_YDISTANCE, PANEL_Y + 4);
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_ANCHOR, ANCHOR_UPPER);
-   ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_TEXT, "Harmony Dream EA v1.5");
+   ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_TEXT, "Harmony Dream EA v1.6");
    ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_FONT, "Arial Bold");
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_FONTSIZE, 10);
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_COLOR, COLOR_GOLD);
