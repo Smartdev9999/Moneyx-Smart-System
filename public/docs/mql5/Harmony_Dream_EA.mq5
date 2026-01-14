@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
 //|                                         Harmony_Dream_EA.mq5     |
-//|                      Harmony Dream (Pairs Trading) v1.6.6        |
+//|                      Harmony Dream (Pairs Trading) v1.6.7        |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
@@ -289,9 +289,20 @@ input int      InpCDCFastPeriod = 12;           // CDC Fast EMA Period
 input int      InpCDCSlowPeriod = 26;           // CDC Slow EMA Period
 input bool     InpRequireStrongTrend = false;   // Require Crossover (not just position)
 
-input group "=== Z-Score Timeframe Settings (v3.3.0) ==="
+//+------------------------------------------------------------------+
+//| Z-SCORE BAR MODE ENUM (v1.6.7)                                     |
+//+------------------------------------------------------------------+
+enum ENUM_ZSCORE_BAR_MODE
+{
+   ZSCORE_BAR_CLOSE = 0,     // Close Bar (shift=1, stable - updates on new candle)
+   ZSCORE_BAR_CURRENT        // Current Bar (real-time - updates every X minutes)
+};
+
+input group "=== Z-Score Timeframe Settings (v1.6.7) ==="
 input ENUM_TIMEFRAMES InpZScoreTimeframe = PERIOD_CURRENT;  // Z-Score Timeframe (CURRENT = use Correlation TF)
 input int      InpZScoreBars = 0;                            // Z-Score Bars (0 = use Correlation Bars)
+input ENUM_ZSCORE_BAR_MODE InpZScoreBarMode = ZSCORE_BAR_CLOSE;  // Z-Score Bar Mode
+input int      InpZScoreCurrentUpdateMins = 5;               // Current Bar Update Interval (minutes)
 
 input group "=== Beta Calculation Settings (v3.2.6) ==="
 input ENUM_BETA_MODE InpBetaMode = BETA_AUTO_SMOOTH;   // Beta Calculation Mode
@@ -757,6 +768,9 @@ datetime g_lastZScoreUpdate = 0;
 
 // v1.6.4: Z-Score Update Display (actual update time, not candle time)
 datetime g_lastZScoreUpdateDisplay = 0;
+
+// v1.6.7: Z-Score Current Bar Mode Timer
+datetime g_lastZScoreCurrentUpdate = 0;
 
 // v3.5.0: CDC Action Zone timeframe tracking
 // v3.7.2: Last CDC status per pair (for log spam prevention)
@@ -1952,25 +1966,48 @@ void OnTick()
       zCandleTime = iTime(_Symbol, zTF, 0);
    }
    
-   bool newCandleZScore = (zCandleTime != g_lastZScoreUpdate);
-   
-   if(newCandleZScore)
+   // v1.6.7: Z-Score Bar Mode handling
+   if(InpZScoreBarMode == ZSCORE_BAR_CURRENT)
    {
-      g_lastZScoreUpdate = zCandleTime;
-      // Update Z-Score specific data using its own timeframe
-      UpdateZScoreData();
+      // Current Bar Mode: Update every X minutes using real-time data (shift=0)
+      datetime currentTime = TimeCurrent();
+      int updateIntervalSec = InpZScoreCurrentUpdateMins * 60;
       
-      // v1.6.4: Record actual update time for Dashboard display
-      g_lastZScoreUpdateDisplay = TimeCurrent();
-      
-      // v3.4.0: Calculate RSI on Spread after Z-Score data is updated
-      CalculateAllRSIonSpread();
-      
-      // v1.5: Debug log for Z-Score update timing
-      if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
+      if(g_lastZScoreCurrentUpdate == 0 || 
+         (currentTime - g_lastZScoreCurrentUpdate) >= updateIntervalSec)
       {
-         PrintFormat("[v1.5] Z-Score Update | TF=%s | RefSymbol=%s | CandleTime=%s",
-                     EnumToString(zTF), zRefSymbol, TimeToString(zCandleTime));
+         g_lastZScoreCurrentUpdate = currentTime;
+         UpdateZScoreData();  // Will use shift=0 internally for Current Bar mode
+         
+         g_lastZScoreUpdateDisplay = TimeCurrent();
+         CalculateAllRSIonSpread();
+         
+         if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
+         {
+            PrintFormat("[Z-SCORE v1.6.7] Current Bar Update at %s (every %d min)",
+                        TimeToString(currentTime, TIME_DATE|TIME_MINUTES),
+                        InpZScoreCurrentUpdateMins);
+         }
+      }
+   }
+   else
+   {
+      // Close Bar Mode: Update only on new candle (shift=1 - stable)
+      bool newCandleZScore = (zCandleTime != g_lastZScoreUpdate);
+      
+      if(newCandleZScore)
+      {
+         g_lastZScoreUpdate = zCandleTime;
+         UpdateZScoreData();  // Will use shift=1 internally for Close Bar mode
+         
+         g_lastZScoreUpdateDisplay = TimeCurrent();
+         CalculateAllRSIonSpread();
+         
+         if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
+         {
+            PrintFormat("[v1.6.7] Z-Score Close Bar Update | TF=%s | RefSymbol=%s | CandleTime=%s",
+                        EnumToString(zTF), zRefSymbol, TimeToString(zCandleTime));
+         }
       }
    }
    
@@ -3079,12 +3116,16 @@ void UpdateAllPairData()
 }
 
 //+------------------------------------------------------------------+
-//| v3.3.0: Update Z-Score Data (Separate from Correlation)            |
+//| v1.6.7: Update Z-Score Data (Separate from Correlation)            |
+//|         Now supports Current Bar (shift=0) and Close Bar (shift=1) |
 //+------------------------------------------------------------------+
 void UpdateZScoreData()
 {
    ENUM_TIMEFRAMES zTF = GetZScoreTimeframe();
    int zBars = GetZScoreBars();
+   
+   // v1.6.7: Determine shift based on Bar Mode
+   int shift = (InpZScoreBarMode == ZSCORE_BAR_CURRENT) ? 0 : 1;
    
    for(int i = 0; i < MAX_PAIRS; i++)
    {
@@ -3097,9 +3138,9 @@ void UpdateZScoreData()
       ArraySetAsSeries(closesA, true);
       ArraySetAsSeries(closesB, true);
       
-      // v1.5: Use shift=1 to get only closed candles (Z-Score stays static within current bar)
-      int copiedA = CopyClose(g_pairs[i].symbolA, zTF, 1, zBars, closesA);
-      int copiedB = CopyClose(g_pairs[i].symbolB, zTF, 1, zBars, closesB);
+      // v1.6.7: Use dynamic shift based on Bar Mode (0 = Current, 1 = Close)
+      int copiedA = CopyClose(g_pairs[i].symbolA, zTF, shift, zBars, closesA);
+      int copiedB = CopyClose(g_pairs[i].symbolB, zTF, shift, zBars, closesB);
       
       if(copiedA < zBars || copiedB < zBars)
       {
@@ -3157,12 +3198,13 @@ void UpdateZScoreData()
       }
    }
    
-   // v1.6.4: Log Z-Score update with timestamp (always log update time, details only in debug mode)
+   // v1.6.7: Log Z-Score update with timestamp and mode
    if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
    {
-      PrintFormat("[Z-SCORE v1.6.4] Updated at %s | TF=%s | Bars=%d",
-                  TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES),
-                  EnumToString(zTF), zBars);
+      string modeStr = (InpZScoreBarMode == ZSCORE_BAR_CURRENT) ? "Current" : "Close";
+      PrintFormat("[Z-SCORE v1.6.7] Mode=%s | Shift=%d | TF=%s | Bars=%d | Updated at %s",
+                  modeStr, shift, EnumToString(zTF), zBars,
+                  TimeToString(TimeCurrent(), TIME_DATE|TIME_MINUTES));
       
       for(int i = 0; i < MAX_PAIRS; i++)
       {
@@ -7185,7 +7227,7 @@ void CreateDashboard()
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_XDISTANCE, PANEL_X + (PANEL_WIDTH / 2));
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_YDISTANCE, PANEL_Y + 4);
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_ANCHOR, ANCHOR_UPPER);
-   ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_TEXT, "Harmony Dream EA v1.6.6");
+   ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_TEXT, "Harmony Dream EA v1.6.7");
    ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_FONT, "Arial Bold");
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_FONTSIZE, 10);
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_COLOR, COLOR_GOLD);
@@ -7197,9 +7239,12 @@ void CreateDashboard()
    CreateLabel(prefix + "SYNC_VAL", PANEL_X + 45, PANEL_Y + 4, "Pending", clrYellow, 9, "Arial Bold");
    CreateLabel(prefix + "SYNC_AGO", PANEL_X + 100, PANEL_Y + 5, "", clrGray, 8, "Arial");
    
-   // v1.6.4: Z-Score Update Display (shows when Z-Score was last updated)
-   CreateLabel(prefix + "ZSCORE_LBL", PANEL_X + 160, PANEL_Y + 5, "Z-Update:", COLOR_TEXT_WHITE, 8, "Arial");
-   CreateLabel(prefix + "ZSCORE_AGO", PANEL_X + 215, PANEL_Y + 4, "Pending", clrYellow, 9, "Arial Bold");
+   // v1.6.7: Z-Score Update Display (shows mode and when Z-Score was last updated)
+   string zModeLbl = (InpZScoreBarMode == ZSCORE_BAR_CURRENT) 
+                     ? StringFormat("Z(%dm):", InpZScoreCurrentUpdateMins)
+                     : "Z(Close):";
+   CreateLabel(prefix + "ZSCORE_LBL", PANEL_X + 160, PANEL_Y + 5, zModeLbl, COLOR_TEXT_WHITE, 8, "Arial");
+   CreateLabel(prefix + "ZSCORE_AGO", PANEL_X + 210, PANEL_Y + 4, "Pending", clrYellow, 9, "Arial Bold");
    
    // v3.7.4: EA Status Display (adjusted position - moved left by 50px)
    CreateLabel(prefix + "EA_STATUS_LBL", PANEL_X + PANEL_WIDTH - 210, PANEL_Y + 5, "Status:", COLOR_TEXT_WHITE, 8, "Arial");
