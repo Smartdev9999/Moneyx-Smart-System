@@ -3577,24 +3577,30 @@ double GetGridLotSize(bool isLossSide, int gridLevel, string direction = "")
       // gridLevel = 2 = Second Grid = InitialLot + AddLot*2
       calculatedLot = baseLot + (addLot * gridLevel);
    }
-   else if(lotMode == GRID_LOT_CDC_TREND)  // v5.25: NEW CDC Trend Mode
+   else if(lotMode == GRID_LOT_CDC_TREND)  // v5.25.1: CDC Trend Compounding Mode
    {
-      // CDC Trend Mode: Trend-Aligned = Multiplier, Counter-Trend = Fixed
+      // CDC Trend Mode: Trend-Aligned = Compounding, Counter-Trend = Fixed
       // direction parameter is required for this mode
       bool trendAligned = (direction == "BUY" && CDCTrend == "BULLISH") ||
                           (direction == "SELL" && CDCTrend == "BEARISH");
       
       if(trendAligned)
       {
-         // Trend-Aligned: Use Trend Multiplier (e.g., 2.0x)
-         calculatedLot = baseLot * InpTrendSideMultiplier;
-         Print("[GRID CDC v5.25] ", direction, " Trend-Aligned: ", baseLot, " x ", InpTrendSideMultiplier, " = ", calculatedLot);
+         // v5.25.1: Trend-Aligned = COMPOUNDING LOT (Power/ยกกำลัง)
+         // Initial (level 0): baseLot × TrendMult^1 = 3 × 1.5 = 4.5
+         // Grid 1 (level 1): baseLot × TrendMult^2 = 3 × 2.25 = 6.75
+         // Grid 2 (level 2): baseLot × TrendMult^3 = 3 × 3.375 = 10.125
+         int power = gridLevel + 1;  // Initial=1, Grid1=2, Grid2=3, etc.
+         calculatedLot = baseLot * MathPow(InpTrendSideMultiplier, power);
+         Print("[GRID CDC v5.25.1] ", direction, " Trend-Aligned Compound: ", 
+               baseLot, " x ", InpTrendSideMultiplier, "^", power, " = ", calculatedLot);
       }
       else
       {
-         // Counter-Trend: Use Counter Multiplier (e.g., 1.0x = Fixed)
+         // Counter-Trend: Use Counter Multiplier FIXED (ไม่ compound ทุกระดับ)
          calculatedLot = baseLot * InpCounterSideMultiplier;
-         Print("[GRID CDC v5.25] ", direction, " Counter-Trend: ", baseLot, " x ", InpCounterSideMultiplier, " = ", calculatedLot);
+         Print("[GRID CDC v5.25.1] ", direction, " Counter-Trend Fixed: ", 
+               baseLot, " x ", InpCounterSideMultiplier, " = ", calculatedLot);
       }
    }
    
