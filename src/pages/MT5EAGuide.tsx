@@ -5,13 +5,13 @@ import StepCard from '@/components/StepCard';
 
 const MT5EAGuide = () => {
   const fullEACode = `//+------------------------------------------------------------------+
-//|                   Moneyx Smart Gold System v5.25.1                 |
+//|                   Moneyx Smart Gold System v5.25.2                 |
 //|           Smart Money Trading System with CDC Action Zone          |
 //| + Grid Trading + Auto Scaling + Hedging + CDC Trend Compounding   |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
 #property link      ""
-#property version   "5.251"
+#property version   "5.252"
 #property strict
 
 // *** Logo File ***
@@ -3536,9 +3536,10 @@ void CloseHedgeSellSide()
 //|   - gridLevel = 1 = First Grid Profit = InitialLot + AddLotProfit  |
 //|   - gridLevel = 2 = Second Grid Profit = InitialLot + AddLotProfit*2|
 //|                                                                    |
-//| v5.25.1 CDC Trend COMPOUNDING Mode:                                |
-//|   - Trend-Aligned = baseLot * TrendMult^(level+1) (Compound)       |
-//|   - Counter-Trend = baseLot * CounterMultiplier (Fixed)            |
+//| v5.25.2 CDC Trend COMPOUNDING Mode (ALL LEVELS):                   |
+//|   - Initial Order (level 0): baseLot * TrendMult^1 = 4.5           |
+//|   - Grid 1 (level 1): baseLot * TrendMult^2 = 6.75                 |
+//|   - Counter-Trend = baseLot * CounterMultiplier (Fixed all levels) |
 //+------------------------------------------------------------------+
 double GetGridLotSize(bool isLossSide, int gridLevel, string direction = "")
 {
@@ -3546,9 +3547,37 @@ double GetGridLotSize(bool isLossSide, int gridLevel, string direction = "")
    double baseLot = InpInitialLot;
    double calculatedLot = baseLot;
    
-   // gridLevel = 0 means Initial Order (uses InitialLot only)
-   if(gridLevel == 0)
+   // v5.25.2: CDC Trend Mode applies to ALL levels INCLUDING Initial Order (gridLevel=0)
+   // Must check CDC_TREND BEFORE gridLevel==0 check
+   if(lotMode == GRID_LOT_CDC_TREND)
    {
+      // CDC Trend Mode: Trend-Aligned = Compounding, Counter-Trend = Fixed
+      // direction parameter is required for this mode
+      bool trendAligned = (direction == "BUY" && CDCTrend == "BULLISH") ||
+                          (direction == "SELL" && CDCTrend == "BEARISH");
+      
+      if(trendAligned)
+      {
+         // v5.25.2: Trend-Aligned = COMPOUNDING LOT (Power) - ALL LEVELS
+         // Initial (level 0): baseLot × TrendMult^1 = 3 × 1.5 = 4.5
+         // Grid 1 (level 1):  baseLot × TrendMult^2 = 3 × 2.25 = 6.75
+         // Grid 2 (level 2):  baseLot × TrendMult^3 = 3 × 3.375 = 10.125
+         int power = gridLevel + 1;  // Initial=1, Grid1=2, Grid2=3, etc.
+         calculatedLot = baseLot * MathPow(InpTrendSideMultiplier, power);
+         Print("[GRID CDC v5.25.2] ", direction, " Trend-Aligned Compound: ", 
+               baseLot, " x ", InpTrendSideMultiplier, "^", power, " = ", calculatedLot);
+      }
+      else
+      {
+         // Counter-Trend: Use Counter Multiplier FIXED (ไม่ compound ทุกระดับ)
+         calculatedLot = baseLot * InpCounterSideMultiplier;
+         Print("[GRID CDC v5.25.2] ", direction, " Counter-Trend Fixed: ", 
+               baseLot, " x ", InpCounterSideMultiplier, " = ", calculatedLot);
+      }
+   }
+   else if(gridLevel == 0)
+   {
+      // Non-CDC modes: Initial Order uses baseLot
       calculatedLot = baseLot;
    }
    else if(lotMode == GRID_LOT_CUSTOM)
@@ -3570,38 +3599,11 @@ double GetGridLotSize(bool isLossSide, int gridLevel, string direction = "")
    else if(lotMode == GRID_LOT_ADD)
    {
       // Add Lot Mode: InitialLot + (AddLot * gridLevel)
-      // Grid Loss และ Grid Profit ใช้ AddLot ของตัวเอง แยกกันอิสระ
       double addLot = isLossSide ? InpGridLossAddLot : InpGridProfitAddLot;
       
       // gridLevel = 1 = First Grid = InitialLot + AddLot*1
       // gridLevel = 2 = Second Grid = InitialLot + AddLot*2
       calculatedLot = baseLot + (addLot * gridLevel);
-   }
-   else if(lotMode == GRID_LOT_CDC_TREND)  // v5.25.1: CDC Trend Compounding Mode
-   {
-      // CDC Trend Mode: Trend-Aligned = Compounding, Counter-Trend = Fixed
-      // direction parameter is required for this mode
-      bool trendAligned = (direction == "BUY" && CDCTrend == "BULLISH") ||
-                          (direction == "SELL" && CDCTrend == "BEARISH");
-      
-      if(trendAligned)
-      {
-         // v5.25.1: Trend-Aligned = COMPOUNDING LOT (Power/ยกกำลัง)
-         // Initial (level 0): baseLot × TrendMult^1 = 3 × 1.5 = 4.5
-         // Grid 1 (level 1): baseLot × TrendMult^2 = 3 × 2.25 = 6.75
-         // Grid 2 (level 2): baseLot × TrendMult^3 = 3 × 3.375 = 10.125
-         int power = gridLevel + 1;  // Initial=1, Grid1=2, Grid2=3, etc.
-         calculatedLot = baseLot * MathPow(InpTrendSideMultiplier, power);
-         Print("[GRID CDC v5.25.1] ", direction, " Trend-Aligned Compound: ", 
-               baseLot, " x ", InpTrendSideMultiplier, "^", power, " = ", calculatedLot);
-      }
-      else
-      {
-         // Counter-Trend: Use Counter Multiplier FIXED (ไม่ compound ทุกระดับ)
-         calculatedLot = baseLot * InpCounterSideMultiplier;
-         Print("[GRID CDC v5.25.1] ", direction, " Counter-Trend Fixed: ", 
-               baseLot, " x ", InpCounterSideMultiplier, " = ", calculatedLot);
-      }
    }
    
    // Apply Auto Balance Scaling
@@ -9998,9 +10000,12 @@ bool ExecuteBuy()
    
    // === SINGLE MODE (ORIGINAL) ===
    double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-   double lot = CalculateLotSize();
    
-   Print("Executing BUY - CDC: ", CDCTrend, " | Mode: ", GetTradeModeString(), " | Lot Mode: ", EnumToString(InpLotMode));
+   // v5.25.2: Use GetGridLotSize with gridLevel=0 for Initial Order
+   // This ensures CDC Trend Multiplier is applied to initial order too
+   double lot = GetGridLotSize(true, 0, "BUY");  // isLossSide=true for initial order
+   
+   Print("Executing BUY v5.25.2 - CDC: ", CDCTrend, " | Lot: ", lot, " | Mode: ", GetTradeModeString());
    
    // Grid orders have no SL/TP - will use Close All
    if(trade.Buy(lot, _Symbol, price, 0, 0, "ZigZag++ Initial BUY"))
@@ -10052,9 +10057,12 @@ bool ExecuteSell()
    
    // === SINGLE MODE (ORIGINAL) ===
    double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   double lot = CalculateLotSize();
    
-   Print("Executing SELL - CDC: ", CDCTrend, " | Mode: ", GetTradeModeString(), " | Lot Mode: ", EnumToString(InpLotMode));
+   // v5.25.2: Use GetGridLotSize with gridLevel=0 for Initial Order
+   // This ensures CDC Trend Multiplier is applied to initial order too
+   double lot = GetGridLotSize(true, 0, "SELL");  // isLossSide=true for initial order
+   
+   Print("Executing SELL v5.25.2 - CDC: ", CDCTrend, " | Lot: ", lot, " | Mode: ", GetTradeModeString());
    
    // Grid orders have no SL/TP - will use Close All
    if(trade.Sell(lot, _Symbol, price, 0, 0, "ZigZag++ Initial SELL"))
