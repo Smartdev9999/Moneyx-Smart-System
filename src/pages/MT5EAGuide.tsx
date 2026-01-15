@@ -5,13 +5,13 @@ import StepCard from '@/components/StepCard';
 
 const MT5EAGuide = () => {
   const fullEACode = `//+------------------------------------------------------------------+
-//|                   Moneyx Smart Gold System v5.23                   |
+//|                   Moneyx Smart Gold System v5.24                   |
 //|           Smart Money Trading System with CDC Action Zone          |
-//|           + Grid Trading + Auto Scaling + Hedging Mode             |
+//|   + Grid Trading + Auto Scaling + Hedging Mode + Side Accumulate   |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
 #property link      ""
-#property version   "5.23"
+#property version   "5.24"
 #property strict
 
 // *** Logo File ***
@@ -228,6 +228,12 @@ input ENUM_HEDGE_LOT_MODE InpHedgeLotMode = HEDGE_LOT_CDC_TREND;  // Hedge Lot M
 input double   InpTrendSideMultiplier = 2.0;                   // Trend-Aligned Side Multiplier
 input double   InpCounterSideMultiplier = 1.0;                 // Counter-Trend Side Multiplier
 input bool     InpHedgeInverseTrade = true;                    // Sub Symbol Trade Inverse (BUY→SELL)
+
+//--- [ HEDGE ACCUMULATE TARGETS (v5.24) ] --------------------------
+input string   InpHedgeAccHeader = "=== HEDGE ACCUMULATE TARGETS (v5.24) ===";  // ___
+input double   InpHedgeBuyTarget = 10.0;          // BUY Side Accumulate Target $ (Main+Sub)
+input double   InpHedgeSellTarget = 10.0;         // SELL Side Accumulate Target $ (Main+Sub)
+input double   InpHedgeTotalTarget = 0;           // Total Accumulate Target $ (0=Disabled, use side-based)
 
 //--- [ AUTO BALANCE SCALING ] --------------------------------------
 input string   InpAutoScaleHeader = "=== AUTO BALANCE SCALING ===";  // ___
@@ -770,6 +776,11 @@ double g_subCDCFast = 0;
 double g_subCDCSlow = 0;
 bool g_hedgeModeInitialized = false;        // Hedging mode init flag
 
+// v5.24: Side-Based Accumulate Tracking for Hedge Mode
+double g_hedgeBuyClosedProfit = 0;          // Accumulated closed profit - BUY side (Main+Sub)
+double g_hedgeSellClosedProfit = 0;         // Accumulated closed profit - SELL side (Main+Sub)
+double g_hedgeTotalClosedProfit = 0;        // Accumulated closed profit - TOTAL (both sides)
+
 // Price Action Confirmation Tracking
 string g_pendingSignal = "NONE";       // "BUY", "SELL", or "NONE"
 datetime g_signalBarTime = 0;          // Time when signal was detected
@@ -1253,6 +1264,78 @@ void OnTradeTransaction(const MqlTradeTransaction& trans,
             {
                Print("[Sync] Order closed - syncing data with trade history...");
                SyncAccountDataWithEvent(SYNC_ORDER_CLOSE);
+               
+               // v5.24: Track closed profit per side for Hedge Mode
+               if(InpTradingMode == TRADING_MODE_HEDGING)
+               {
+                  double profit = HistoryDealGetDouble(trans.deal, DEAL_PROFIT);
+                  double swap = HistoryDealGetDouble(trans.deal, DEAL_SWAP);
+                  double commission = HistoryDealGetDouble(trans.deal, DEAL_COMMISSION);
+                  double netProfit = profit + swap + commission;
+                  
+                  string symbol = HistoryDealGetString(trans.deal, DEAL_SYMBOL);
+                  string comment = HistoryDealGetString(trans.deal, DEAL_COMMENT);
+                  ENUM_DEAL_TYPE dealType = (ENUM_DEAL_TYPE)HistoryDealGetInteger(trans.deal, DEAL_TYPE);
+                  
+                  // Determine which side this deal belongs to
+                  bool isBuySide = false;
+                  bool isSellSide = false;
+                  
+                  // Main symbol closing:
+                  // Closing a BUY position = DEAL_TYPE_SELL (sell to close buy)
+                  // Closing a SELL position = DEAL_TYPE_BUY (buy to close sell)
+                  if(symbol == _Symbol)
+                  {
+                     // Check comment for BUY/SELL side indication
+                     if(StringFind(comment, "BUY") >= 0 || dealType == DEAL_TYPE_SELL)
+                        isBuySide = true;
+                     if(StringFind(comment, "SELL") >= 0 || dealType == DEAL_TYPE_BUY)
+                        isSellSide = true;
+                     
+                     // Fallback: use deal type directly
+                     if(!isBuySide && !isSellSide)
+                     {
+                        if(dealType == DEAL_TYPE_SELL) isBuySide = true;  // Closing BUY
+                        if(dealType == DEAL_TYPE_BUY) isSellSide = true;  // Closing SELL
+                     }
+                  }
+                  // Sub symbol closing
+                  else if(symbol == g_subSymbol)
+                  {
+                     if(InpHedgeInverseTrade)
+                     {
+                        // Sub SELL paired with Main BUY (close Sub SELL = BUY deal)
+                        if(dealType == DEAL_TYPE_BUY)
+                           isBuySide = true;
+                        // Sub BUY paired with Main SELL (close Sub BUY = SELL deal)
+                        if(dealType == DEAL_TYPE_SELL)
+                           isSellSide = true;
+                     }
+                     else
+                     {
+                        // Same direction: Sub BUY with Main BUY, Sub SELL with Main SELL
+                        if(dealType == DEAL_TYPE_SELL)
+                           isBuySide = true;  // Closing Sub BUY
+                        if(dealType == DEAL_TYPE_BUY)
+                           isSellSide = true;  // Closing Sub SELL
+                     }
+                  }
+                  
+                  // Add to side accumulate
+                  if(isBuySide)
+                  {
+                     g_hedgeBuyClosedProfit += netProfit;
+                     Print("[HEDGE v5.24] BUY side profit: +", DoubleToString(netProfit, 2), "$ | Total: ", DoubleToString(g_hedgeBuyClosedProfit, 2), "$");
+                  }
+                  if(isSellSide)
+                  {
+                     g_hedgeSellClosedProfit += netProfit;
+                     Print("[HEDGE v5.24] SELL side profit: +", DoubleToString(netProfit, 2), "$ | Total: ", DoubleToString(g_hedgeSellClosedProfit, 2), "$");
+                  }
+                  
+                  // Always add to total
+                  g_hedgeTotalClosedProfit += netProfit;
+               }
             }
          }
       }
@@ -2615,29 +2698,71 @@ double GetRecentClosedProfit()
 //+------------------------------------------------------------------+
 bool CheckAccumulateClose()
 {
-   // v5.22: Hedging Mode forces Accumulate Close (skip InpUseAccumulateClose check)
+   // v5.24: Hedging Mode with Side-Based Accumulate Close
    if(InpTradingMode == TRADING_MODE_HEDGING)
    {
-      // Use hedge-specific floating PL calculation
-      double currentFloatingPL = GetHedgeTotalFloatingPL();
-      double totalPL = currentFloatingPL + g_accumulateClosedProfit;
-      double scaledTarget = (g_lockedAccumulateTarget > 0) ? g_lockedAccumulateTarget : ApplyScaleDollar(InpAccumulateTarget);
-      
-      if(totalPL >= scaledTarget)
+      // === TOTAL ACCUMULATE TARGET (if enabled - InpHedgeTotalTarget > 0) ===
+      if(InpHedgeTotalTarget > 0)
       {
-         Print("=== [HEDGE] ACCUMULATE CLOSE TARGET REACHED ===");
-         Print("Accumulated Closed: ", DoubleToString(g_accumulateClosedProfit, 2), "$");
-         Print("Current Floating (Hedge): ", DoubleToString(currentFloatingPL, 2), "$");
-         Print("Total P/L: ", DoubleToString(totalPL, 2), "$ >= Locked Target: ", DoubleToString(scaledTarget, 2), "$");
-         Print("Closing ALL hedge positions...");
+         double totalFloating = GetHedgeTotalFloatingPL();
+         double totalPL = totalFloating + g_hedgeTotalClosedProfit;
+         double scaledTarget = ApplyScaleDollar(InpHedgeTotalTarget);
          
-         // Close all hedge positions (both symbols)
-         CloseAllHedgePositions();
-         
-         Print("=== [HEDGE] ACCUMULATE CLOSE COMPLETED ===");
-         return true;
+         if(totalPL >= scaledTarget)
+         {
+            Print("=== [HEDGE v5.24] TOTAL ACCUMULATE TARGET REACHED ===");
+            Print("Total Floating: ", DoubleToString(totalFloating, 2), "$");
+            Print("Total Closed: ", DoubleToString(g_hedgeTotalClosedProfit, 2), "$");
+            Print("Total P/L: ", DoubleToString(totalPL, 2), "$ >= Target: ", DoubleToString(scaledTarget, 2), "$");
+            Print("Closing ALL hedge positions (both sides)...");
+            
+            CloseAllHedgePositions();
+            
+            // Reset all accumulators
+            g_hedgeBuyClosedProfit = 0;
+            g_hedgeSellClosedProfit = 0;
+            g_hedgeTotalClosedProfit = 0;
+            g_accumulateClosedProfit = 0;
+            g_lockedAccumulateTarget = 0;
+            
+            Print("=== [HEDGE v5.24] TOTAL ACCUMULATE CLOSE COMPLETED ===");
+            return true;
+         }
       }
-      return false;
+      
+      // === BUY SIDE ACCUMULATE ===
+      double buyFloating = GetHedgeBuySideFloatingPL();
+      double buyTotalPL = buyFloating + g_hedgeBuyClosedProfit;
+      double buyTarget = ApplyScaleDollar(InpHedgeBuyTarget);
+      
+      if(buyTotalPL >= buyTarget)
+      {
+         Print("=== [HEDGE v5.24] BUY SIDE TARGET REACHED ===");
+         Print("BUY Floating: ", DoubleToString(buyFloating, 2), "$");
+         Print("BUY Closed: ", DoubleToString(g_hedgeBuyClosedProfit, 2), "$");
+         Print("BUY Total P/L: ", DoubleToString(buyTotalPL, 2), "$ >= Target: ", DoubleToString(buyTarget, 2), "$");
+         
+         CloseHedgeBuySide();
+         Print("=== [HEDGE v5.24] BUY SIDE CLOSE COMPLETED ===");
+      }
+      
+      // === SELL SIDE ACCUMULATE ===
+      double sellFloating = GetHedgeSellSideFloatingPL();
+      double sellTotalPL = sellFloating + g_hedgeSellClosedProfit;
+      double sellTarget = ApplyScaleDollar(InpHedgeSellTarget);
+      
+      if(sellTotalPL >= sellTarget)
+      {
+         Print("=== [HEDGE v5.24] SELL SIDE TARGET REACHED ===");
+         Print("SELL Floating: ", DoubleToString(sellFloating, 2), "$");
+         Print("SELL Closed: ", DoubleToString(g_hedgeSellClosedProfit, 2), "$");
+         Print("SELL Total P/L: ", DoubleToString(sellTotalPL, 2), "$ >= Target: ", DoubleToString(sellTarget, 2), "$");
+         
+         CloseHedgeSellSide();
+         Print("=== [HEDGE v5.24] SELL SIDE CLOSE COMPLETED ===");
+      }
+      
+      return false;  // Continue - no total close triggered
    }
    
    // === SINGLE MODE (ORIGINAL) ===
@@ -3115,35 +3240,41 @@ double GetHedgeTotalFloatingPL()
 }
 
 //+------------------------------------------------------------------+
-//| Execute Hedge Grid Order (for Grid Loss/Profit)                    |
+//| Execute Hedge Grid Order (for Grid Loss/Profit) v5.24              |
 //| Opens corresponding Sub symbol order when Grid triggers            |
+//| v5.24: Added CDC Trend-based lot sizing for Grid orders            |
 //+------------------------------------------------------------------+
 bool ExecuteHedgeGridOrder(string gridType, string direction, double mainLot, int gridLevel)
 {
    if(InpTradingMode != TRADING_MODE_HEDGING) return false;
    if(!g_hedgeModeInitialized || g_subSymbol == "") return false;
    
-   // Calculate sub lot using hedge lot mode
-   double baseLot = mainLot;  // Use same lot as main grid
-   double subLot = baseLot;
+   // v5.24: Calculate sub lot using CDC Trend Logic
+   double subLot = mainLot;
    
    if(InpHedgeLotMode == HEDGE_LOT_CDC_TREND)
    {
-      // Determine if main is trend-aligned
+      // Determine Main order trend alignment
       bool mainTrendAligned = (direction == "BUY" && CDCTrend == "BULLISH") ||
                               (direction == "SELL" && CDCTrend == "BEARISH");
       
+      // === v5.24 CDC TREND LOGIC FOR GRID ===
+      // Main Trend-Aligned = Main uses Multiplier, Sub uses Counter (smaller)
+      // Main Counter-Trend = Main uses Fixed, Sub uses Trend Multiplier
+      
       if(mainTrendAligned)
       {
-         // Main is trend-aligned, so it already has multiplier
-         // Sub gets counter multiplier
-         subLot = (baseLot / InpTrendSideMultiplier) * InpCounterSideMultiplier;
+         // Main is trend-aligned: 
+         // - Main already has trend multiplier applied (from GetGridLotSize)
+         // - Sub uses counter multiplier (inverse relationship)
+         subLot = (mainLot / InpTrendSideMultiplier) * InpCounterSideMultiplier;
       }
       else
       {
-         // Main is counter-trend
-         // Sub gets trend multiplier
-         subLot = (baseLot / InpCounterSideMultiplier) * InpTrendSideMultiplier;
+         // Main is counter-trend:
+         // - Main uses counter/fixed lot (as passed)
+         // - Sub uses trend multiplier (larger lot)
+         subLot = (mainLot / InpCounterSideMultiplier) * InpTrendSideMultiplier;
       }
    }
    
@@ -3193,6 +3324,196 @@ bool ExecuteHedgeGridOrder(string gridType, string direction, double mainLot, in
    }
    
    return subSuccess;
+}
+
+//+------------------------------------------------------------------+
+//| v5.24: Get Floating PL for BUY Side (Main BUY + paired Sub)        |
+//| BUY Side = Main BUY + Sub (inverse=SELL, same=BUY)                 |
+//+------------------------------------------------------------------+
+double GetHedgeBuySideFloatingPL()
+{
+   double total = 0;
+   
+   for(int i = 0; i < PositionsTotal(); i++)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(PositionSelectByTicket(ticket))
+      {
+         string posSymbol = PositionGetString(POSITION_SYMBOL);
+         string comment = PositionGetString(POSITION_COMMENT);
+         ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+         
+         bool isOurOrder = (StringFind(comment, "MPM_") >= 0) ||
+                           (PositionGetInteger(POSITION_MAGIC) == InpMagicNumber);
+         
+         if(!isOurOrder) continue;
+         
+         // BUY Side = Main BUY + Sub (inverse = SELL, same = BUY)
+         bool isBuySide = false;
+         
+         if(posSymbol == _Symbol && posType == POSITION_TYPE_BUY)
+            isBuySide = true;  // Main BUY
+         else if(posSymbol == g_subSymbol)
+         {
+            // Sub symbol: Check if paired with Main BUY
+            if(InpHedgeInverseTrade && posType == POSITION_TYPE_SELL)
+               isBuySide = true;  // Sub SELL paired with Main BUY
+            else if(!InpHedgeInverseTrade && posType == POSITION_TYPE_BUY)
+               isBuySide = true;  // Sub BUY paired with Main BUY
+         }
+         
+         if(isBuySide)
+         {
+            double profit = PositionGetDouble(POSITION_PROFIT);
+            double swap = PositionGetDouble(POSITION_SWAP);
+            total += profit + swap;
+         }
+      }
+   }
+   
+   return total;
+}
+
+//+------------------------------------------------------------------+
+//| v5.24: Get Floating PL for SELL Side (Main SELL + paired Sub)      |
+//| SELL Side = Main SELL + Sub (inverse=BUY, same=SELL)               |
+//+------------------------------------------------------------------+
+double GetHedgeSellSideFloatingPL()
+{
+   double total = 0;
+   
+   for(int i = 0; i < PositionsTotal(); i++)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(PositionSelectByTicket(ticket))
+      {
+         string posSymbol = PositionGetString(POSITION_SYMBOL);
+         string comment = PositionGetString(POSITION_COMMENT);
+         ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+         
+         bool isOurOrder = (StringFind(comment, "MPM_") >= 0) ||
+                           (PositionGetInteger(POSITION_MAGIC) == InpMagicNumber);
+         
+         if(!isOurOrder) continue;
+         
+         // SELL Side = Main SELL + Sub (inverse = BUY, same = SELL)
+         bool isSellSide = false;
+         
+         if(posSymbol == _Symbol && posType == POSITION_TYPE_SELL)
+            isSellSide = true;  // Main SELL
+         else if(posSymbol == g_subSymbol)
+         {
+            // Sub symbol: Check if paired with Main SELL
+            if(InpHedgeInverseTrade && posType == POSITION_TYPE_BUY)
+               isSellSide = true;  // Sub BUY paired with Main SELL
+            else if(!InpHedgeInverseTrade && posType == POSITION_TYPE_SELL)
+               isSellSide = true;  // Sub SELL paired with Main SELL
+         }
+         
+         if(isSellSide)
+         {
+            double profit = PositionGetDouble(POSITION_PROFIT);
+            double swap = PositionGetDouble(POSITION_SWAP);
+            total += profit + swap;
+         }
+      }
+   }
+   
+   return total;
+}
+
+//+------------------------------------------------------------------+
+//| v5.24: Close BUY Side Hedge Positions (Main BUY + paired Sub)      |
+//+------------------------------------------------------------------+
+void CloseHedgeBuySide()
+{
+   Print("[HEDGE v5.24] Closing BUY side positions...");
+   int closed = 0;
+   
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(PositionSelectByTicket(ticket))
+      {
+         string posSymbol = PositionGetString(POSITION_SYMBOL);
+         string comment = PositionGetString(POSITION_COMMENT);
+         ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+         
+         bool isOurOrder = (StringFind(comment, "MPM_") >= 0) ||
+                           (PositionGetInteger(POSITION_MAGIC) == InpMagicNumber);
+         
+         if(!isOurOrder) continue;
+         
+         bool isBuySide = false;
+         
+         if(posSymbol == _Symbol && posType == POSITION_TYPE_BUY)
+            isBuySide = true;
+         else if(posSymbol == g_subSymbol)
+         {
+            if(InpHedgeInverseTrade && posType == POSITION_TYPE_SELL)
+               isBuySide = true;
+            else if(!InpHedgeInverseTrade && posType == POSITION_TYPE_BUY)
+               isBuySide = true;
+         }
+         
+         if(isBuySide)
+         {
+            trade.PositionClose(ticket);
+            closed++;
+            Sleep(50);
+         }
+      }
+   }
+   
+   Print("[HEDGE v5.24] BUY side closed: ", closed, " positions");
+   g_hedgeBuyClosedProfit = 0;  // Reset BUY side accumulate
+}
+
+//+------------------------------------------------------------------+
+//| v5.24: Close SELL Side Hedge Positions (Main SELL + paired Sub)    |
+//+------------------------------------------------------------------+
+void CloseHedgeSellSide()
+{
+   Print("[HEDGE v5.24] Closing SELL side positions...");
+   int closed = 0;
+   
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(PositionSelectByTicket(ticket))
+      {
+         string posSymbol = PositionGetString(POSITION_SYMBOL);
+         string comment = PositionGetString(POSITION_COMMENT);
+         ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+         
+         bool isOurOrder = (StringFind(comment, "MPM_") >= 0) ||
+                           (PositionGetInteger(POSITION_MAGIC) == InpMagicNumber);
+         
+         if(!isOurOrder) continue;
+         
+         bool isSellSide = false;
+         
+         if(posSymbol == _Symbol && posType == POSITION_TYPE_SELL)
+            isSellSide = true;
+         else if(posSymbol == g_subSymbol)
+         {
+            if(InpHedgeInverseTrade && posType == POSITION_TYPE_BUY)
+               isSellSide = true;
+            else if(!InpHedgeInverseTrade && posType == POSITION_TYPE_SELL)
+               isSellSide = true;
+         }
+         
+         if(isSellSide)
+         {
+            trade.PositionClose(ticket);
+            closed++;
+            Sleep(50);
+         }
+      }
+   }
+   
+   Print("[HEDGE v5.24] SELL side closed: ", closed, " positions");
+   g_hedgeSellClosedProfit = 0;  // Reset SELL side accumulate
 }
 
 //+------------------------------------------------------------------+
