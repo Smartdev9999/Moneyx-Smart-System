@@ -5,13 +5,13 @@ import StepCard from '@/components/StepCard';
 
 const MT5EAGuide = () => {
   const fullEACode = `//+------------------------------------------------------------------+
-//|                   Moneyx Smart Gold System v5.24                   |
+//|                   Moneyx Smart Gold System v5.25                   |
 //|           Smart Money Trading System with CDC Action Zone          |
-//|   + Grid Trading + Auto Scaling + Hedging Mode + Side Accumulate   |
+//|   + Grid Trading + Auto Scaling + Hedging Mode + Grid CDC Trend    |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
 #property link      ""
-#property version   "5.24"
+#property version   "5.25"
 #property strict
 
 // *** Logo File ***
@@ -78,11 +78,12 @@ enum ENUM_LOT_MODE
    LOT_RISK_DOLLAR = 2    // Fixed Dollar Risk
 };
 
-// Grid Lot Mode
+// Grid Lot Mode (v5.25: Added CDC Trend)
 enum ENUM_GRID_LOT_MODE
 {
    GRID_LOT_CUSTOM = 0,    // Custom Lot (use string)
-   GRID_LOT_ADD = 1        // Add Lot (InitialLot + AddLot*Level)
+   GRID_LOT_ADD = 1,       // Add Lot (InitialLot + AddLot*Level)
+   GRID_LOT_CDC_TREND = 2  // CDC Trend Mode (Trend=Mult, Counter=Fixed)
 };
 
 // Grid Gap Type
@@ -3240,17 +3241,19 @@ double GetHedgeTotalFloatingPL()
 }
 
 //+------------------------------------------------------------------+
-//| Execute Hedge Grid Order (for Grid Loss/Profit) v5.24              |
+//| Execute Hedge Grid Order (for Grid Loss/Profit) v5.25              |
 //| Opens corresponding Sub symbol order when Grid triggers            |
-//| v5.24: Added CDC Trend-based lot sizing for Grid orders            |
+//| v5.25: Fixed CDC Trend lot sizing - uses baseLot instead of mainLot|
 //+------------------------------------------------------------------+
 bool ExecuteHedgeGridOrder(string gridType, string direction, double mainLot, int gridLevel)
 {
    if(InpTradingMode != TRADING_MODE_HEDGING) return false;
    if(!g_hedgeModeInitialized || g_subSymbol == "") return false;
    
-   // v5.24: Calculate sub lot using CDC Trend Logic
+   // v5.25: Calculate sub lot using baseLot (not mainLot)
+   // This ensures Sub symbol lot is based on InpInitialLot, not the scaled mainLot
    double subLot = mainLot;
+   double baseLot = ApplyScaleLot(InpInitialLot);
    
    if(InpHedgeLotMode == HEDGE_LOT_CDC_TREND)
    {
@@ -3258,23 +3261,26 @@ bool ExecuteHedgeGridOrder(string gridType, string direction, double mainLot, in
       bool mainTrendAligned = (direction == "BUY" && CDCTrend == "BULLISH") ||
                               (direction == "SELL" && CDCTrend == "BEARISH");
       
-      // === v5.24 CDC TREND LOGIC FOR GRID ===
-      // Main Trend-Aligned = Main uses Multiplier, Sub uses Counter (smaller)
-      // Main Counter-Trend = Main uses Fixed, Sub uses Trend Multiplier
+      // === v5.25 CORRECT CDC TREND LOGIC FOR GRID ===
+      // Main Trend-Aligned = Main uses TrendMult, Sub uses CounterMult (fixed/smaller)
+      // Main Counter-Trend = Main uses CounterMult, Sub uses TrendMult (larger)
+      // Use baseLot as the reference, not mainLot
       
       if(mainTrendAligned)
       {
          // Main is trend-aligned: 
-         // - Main already has trend multiplier applied (from GetGridLotSize)
-         // - Sub uses counter multiplier (inverse relationship)
-         subLot = (mainLot / InpTrendSideMultiplier) * InpCounterSideMultiplier;
+         // - Main uses baseLot * TrendMultiplier (already applied)
+         // - Sub should use baseLot * CounterMultiplier (smaller/fixed)
+         subLot = baseLot * InpCounterSideMultiplier;
+         Print("[HEDGE GRID v5.25] Main Trend-Aligned -> Sub Counter: ", baseLot, " x ", InpCounterSideMultiplier, " = ", subLot);
       }
       else
       {
          // Main is counter-trend:
-         // - Main uses counter/fixed lot (as passed)
-         // - Sub uses trend multiplier (larger lot)
-         subLot = (mainLot / InpCounterSideMultiplier) * InpTrendSideMultiplier;
+         // - Main uses baseLot * CounterMultiplier (fixed)
+         // - Sub should use baseLot * TrendMultiplier (larger)
+         subLot = baseLot * InpTrendSideMultiplier;
+         Print("[HEDGE GRID v5.25] Main Counter-Trend -> Sub Trend: ", baseLot, " x ", InpTrendSideMultiplier, " = ", subLot);
       }
    }
    
@@ -3517,7 +3523,7 @@ void CloseHedgeSellSide()
 }
 
 //+------------------------------------------------------------------+
-//| Get Lot Size for Grid based on level                               |
+//| Get Lot Size for Grid based on level (v5.25: Added CDC Trend)      |
 //| *** Grid Loss และ Grid Profit แยกนับ level กันอิสระ ***            |
 //|                                                                    |
 //| Initial Order = level 0 = InpInitialLot (เป็นตัวกลาง)               |
@@ -3530,14 +3536,11 @@ void CloseHedgeSellSide()
 //|   - gridLevel = 1 = First Grid Profit = InitialLot + AddLotProfit  |
 //|   - gridLevel = 2 = Second Grid Profit = InitialLot + AddLotProfit*2|
 //|                                                                    |
-//| ตัวอย่าง: InitialLot=1, AddLotLoss=1, AddLotProfit=0.5            |
-//|   Initial Order: 1.0 lot                                           |
-//|   Grid Profit #1: 1.0 + 0.5*1 = 1.5 lot                            |
-//|   Grid Loss #1: 1.0 + 1.0*1 = 2.0 lot                              |
-//|   Grid Profit #2: 1.0 + 0.5*2 = 2.0 lot                            |
-//|   Grid Loss #2: 1.0 + 1.0*2 = 3.0 lot                              |
+//| v5.25 CDC Trend Mode:                                              |
+//|   - Trend-Aligned = baseLot * TrendMultiplier (e.g., 2x)           |
+//|   - Counter-Trend = baseLot * CounterMultiplier (e.g., 1x Fixed)   |
 //+------------------------------------------------------------------+
-double GetGridLotSize(bool isLossSide, int gridLevel)
+double GetGridLotSize(bool isLossSide, int gridLevel, string direction = "")
 {
    ENUM_GRID_LOT_MODE lotMode = isLossSide ? InpGridLossLotMode : InpGridProfitLotMode;
    double baseLot = InpInitialLot;
@@ -3564,7 +3567,7 @@ double GetGridLotSize(bool isLossSide, int gridLevel)
       else if(ArraySize(lots) > 0)
          calculatedLot = lots[ArraySize(lots) - 1];  // Use last value for levels beyond array
    }
-   else  // GRID_LOT_ADD
+   else if(lotMode == GRID_LOT_ADD)
    {
       // Add Lot Mode: InitialLot + (AddLot * gridLevel)
       // Grid Loss และ Grid Profit ใช้ AddLot ของตัวเอง แยกกันอิสระ
@@ -3573,6 +3576,26 @@ double GetGridLotSize(bool isLossSide, int gridLevel)
       // gridLevel = 1 = First Grid = InitialLot + AddLot*1
       // gridLevel = 2 = Second Grid = InitialLot + AddLot*2
       calculatedLot = baseLot + (addLot * gridLevel);
+   }
+   else if(lotMode == GRID_LOT_CDC_TREND)  // v5.25: NEW CDC Trend Mode
+   {
+      // CDC Trend Mode: Trend-Aligned = Multiplier, Counter-Trend = Fixed
+      // direction parameter is required for this mode
+      bool trendAligned = (direction == "BUY" && CDCTrend == "BULLISH") ||
+                          (direction == "SELL" && CDCTrend == "BEARISH");
+      
+      if(trendAligned)
+      {
+         // Trend-Aligned: Use Trend Multiplier (e.g., 2.0x)
+         calculatedLot = baseLot * InpTrendSideMultiplier;
+         Print("[GRID CDC v5.25] ", direction, " Trend-Aligned: ", baseLot, " x ", InpTrendSideMultiplier, " = ", calculatedLot);
+      }
+      else
+      {
+         // Counter-Trend: Use Counter Multiplier (e.g., 1.0x = Fixed)
+         calculatedLot = baseLot * InpCounterSideMultiplier;
+         Print("[GRID CDC v5.25] ", direction, " Counter-Trend: ", baseLot, " x ", InpCounterSideMultiplier, " = ", calculatedLot);
+      }
    }
    
    // Apply Auto Balance Scaling
@@ -6214,7 +6237,8 @@ void CheckGridLossSide()
       // Price went DOWN from last buy by grid distance
       if(lastBuyPrice - currentPrice >= distance * _Point)
       {
-         double lot = GetGridLotSize(true, gridLossLevel);
+         // v5.25: Pass direction to GetGridLotSize for CDC Trend Mode
+         double lot = GetGridLotSize(true, gridLossLevel, "BUY");
          double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
          
          Print("Grid Loss BUY #", gridLossLevel, " | Lot: ", lot, " | Distance: ", distance);
@@ -6224,7 +6248,7 @@ void CheckGridLossSide()
             LastGridBuyTime = currentBarTime;
             GridBuyCount = buyCount + 1;
             
-            // v5.22: Execute Hedge Grid Order for Sub symbol
+            // v5.25: Execute Hedge Grid Order for Sub symbol
             if(InpTradingMode == TRADING_MODE_HEDGING)
             {
                Sleep(50);
@@ -6280,7 +6304,8 @@ void CheckGridLossSide()
       // Price went UP from last sell by grid distance
       if(currentPrice - lastSellPrice >= distance * _Point)
       {
-         double lot = GetGridLotSize(true, gridLossLevel);
+         // v5.25: Pass direction to GetGridLotSize for CDC Trend Mode
+         double lot = GetGridLotSize(true, gridLossLevel, "SELL");
          double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
          
          Print("Grid Loss SELL #", gridLossLevel, " | Lot: ", lot, " | Distance: ", distance);
@@ -6290,7 +6315,7 @@ void CheckGridLossSide()
             LastGridSellTime = currentBarTime;
             GridSellCount = sellCount + 1;
             
-            // v5.22: Execute Hedge Grid Order for Sub symbol
+            // v5.25: Execute Hedge Grid Order for Sub symbol
             if(InpTradingMode == TRADING_MODE_HEDGING)
             {
                Sleep(50);
@@ -6356,7 +6381,8 @@ void CheckGridProfitSide()
           {
             // Grid Profit uses gridLevel starting from 1 (Initial Order is the base)
             // profitGridCount=0 means first Grid Profit order, which should use level 1
-            double lot = GetGridLotSize(false, profitGridCount + 1);
+            // v5.25: Pass direction to GetGridLotSize for CDC Trend Mode
+            double lot = GetGridLotSize(false, profitGridCount + 1, "BUY");
             double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
             
             Print("Grid Profit BUY #", profitGridCount, " | Lot: ", lot, " | Distance: ", distance);
@@ -6365,7 +6391,7 @@ void CheckGridProfitSide()
             {
                LastGridBuyTime = currentBarTime;
                
-               // v5.22: Execute Hedge Grid Order for Sub symbol
+               // v5.25: Execute Hedge Grid Order for Sub symbol
                if(InpTradingMode == TRADING_MODE_HEDGING)
                {
                   Sleep(50);
@@ -6421,7 +6447,8 @@ void CheckGridProfitSide()
           {
             // Grid Profit uses gridLevel starting from 1 (Initial Order is the base)
             // profitGridCount=0 means first Grid Profit order, which should use level 1
-            double lot = GetGridLotSize(false, profitGridCount + 1);
+            // v5.25: Pass direction to GetGridLotSize for CDC Trend Mode
+            double lot = GetGridLotSize(false, profitGridCount + 1, "SELL");
             double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
             
             Print("Grid Profit SELL #", profitGridCount, " | Lot: ", lot, " | Distance: ", distance);
@@ -6430,7 +6457,7 @@ void CheckGridProfitSide()
             {
                LastGridSellTime = currentBarTime;
                
-               // v5.22: Execute Hedge Grid Order for Sub symbol
+               // v5.25: Execute Hedge Grid Order for Sub symbol
                if(InpTradingMode == TRADING_MODE_HEDGING)
                {
                   Sleep(50);
