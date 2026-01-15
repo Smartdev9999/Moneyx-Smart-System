@@ -5,13 +5,13 @@ import StepCard from '@/components/StepCard';
 
 const MT5EAGuide = () => {
   const fullEACode = `//+------------------------------------------------------------------+
-//|                   Moneyx Smart Gold System v5.1                    |
+//|                   Moneyx Smart Gold System v5.22                   |
 //|           Smart Money Trading System with CDC Action Zone          |
-//|           + Grid Trading + Auto Scaling + Dashboard Panel          |
+//|           + Grid Trading + Auto Scaling + Hedging Mode             |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
 #property link      ""
-#property version   "5.21"
+#property version   "5.22"
 #property strict
 
 // *** Logo File ***
@@ -119,6 +119,20 @@ enum ENUM_SYNC_EVENT
    SYNC_ORDER_CLOSE         // Order closed
 };
 
+// Trading Mode Selection (v5.22)
+enum ENUM_TRADING_MODE
+{
+   TRADING_MODE_SINGLE = 0,   // Single Mode (Original)
+   TRADING_MODE_HEDGING       // Hedging Mode (Dual Symbol)
+};
+
+// Hedge Lot Calculation Mode (v5.22)
+enum ENUM_HEDGE_LOT_MODE
+{
+   HEDGE_LOT_FIXED = 0,       // Fixed Lot (Same as Main)
+   HEDGE_LOT_CDC_TREND        // CDC Trend Mode (Trend = Mult, Counter = 1x)
+};
+
 // Global variables for trade tracking
 int g_lastOrderCount = 0;    // Track open orders for sync events
 
@@ -205,6 +219,15 @@ input bool     InpShowCDCLines = true;        // Show CDC Lines on Chart
 //--- [ TRADE MODE SETTINGS ] ---------------------------------------
 input string   InpTradeModeHeader = "=== TRADE MODE SETTINGS ===";  // ___
 input ENUM_TRADE_MODE InpTradeMode = TRADE_BUY_SELL;  // Trade Mode
+
+//--- [ HEDGING MODE SETTINGS (v5.22) ] -----------------------------
+input string   InpHedgingHeader = "=== HEDGING MODE SETTINGS (v5.22) ===";  // ___
+input ENUM_TRADING_MODE InpTradingMode = TRADING_MODE_SINGLE;  // Trading Mode
+input string   InpSubSymbol = "XAUEUR";                        // Sub Symbol (for Hedging Mode)
+input ENUM_HEDGE_LOT_MODE InpHedgeLotMode = HEDGE_LOT_CDC_TREND;  // Hedge Lot Mode
+input double   InpTrendSideMultiplier = 2.0;                   // Trend-Aligned Side Multiplier
+input double   InpCounterSideMultiplier = 1.0;                 // Counter-Trend Side Multiplier
+input bool     InpHedgeInverseTrade = true;                    // Sub Symbol Trade Inverse (BUY→SELL)
 
 //--- [ AUTO BALANCE SCALING ] --------------------------------------
 input string   InpAutoScaleHeader = "=== AUTO BALANCE SCALING ===";  // ___
@@ -729,6 +752,23 @@ double g_accumulateClosedProfit = 0.0;    // กำไรสะสมจาก o
 int g_lastKnownPositionCount = 0;          // จำนวน position ล่าสุดเพื่อ detect การปิด
 double g_lastKnownFloatingPL = 0.0;        // Floating P/L ล่าสุด
 double g_lockedAccumulateTarget = 0.0;     // Locked Scaled Target (ล็อคไว้ตอนเริ่มมี order)
+
+// =====================================================================
+// HEDGING MODE VARIABLES (v5.22)
+// =====================================================================
+string g_subSymbol = "";                    // Sub symbol for hedging
+double g_subSymbolPoint = 0;                // Sub symbol point value
+int g_subSymbolDigits = 0;                  // Sub symbol digits
+ulong g_mainTicketBuy = 0;                  // Main BUY ticket for linking
+ulong g_mainTicketSell = 0;                 // Main SELL ticket for linking
+ulong g_subTicketBuy = 0;                   // Sub BUY ticket
+ulong g_subTicketSell = 0;                  // Sub SELL ticket
+
+// CDC Trend for Sub Symbol
+string g_subCDCTrend = "NEUTRAL";           // CDC trend for sub symbol
+double g_subCDCFast = 0;
+double g_subCDCSlow = 0;
+bool g_hedgeModeInitialized = false;        // Hedging mode init flag
 
 // Price Action Confirmation Tracking
 string g_pendingSignal = "NONE";       // "BUY", "SELL", or "NONE"
@@ -1483,15 +1523,22 @@ int OnInit()
    }
    
    Print("===========================================");
-   Print("Moneyx Smart Gold System v5.1");
+   Print("Moneyx Smart Gold System v5.22");
    Print("Symbol: ", _Symbol);
    Print("Entry TF: ", EnumToString(Period()));
    Print("ZigZag TF: ", EnumToString(InpZigZagTimeframe));
    Print("CDC Filter TF: ", EnumToString(InpCDCTimeframe));
    Print("Trade Mode: ", EnumToString(InpTradeMode));
+   Print("Trading Mode: ", EnumToString(InpTradingMode));
    Print("Lot Mode: ", EnumToString(InpLotMode));
    Print("Grid Loss Max: ", InpGridLossMaxTrades);
    Print("Grid Profit Max: ", InpGridProfitMaxTrades);
+   if(InpTradingMode == TRADING_MODE_HEDGING)
+   {
+      Print("Hedging Mode: Main=", _Symbol, " Sub=", InpSubSymbol);
+      Print("Hedge Lot Mode: ", EnumToString(InpHedgeLotMode));
+      Print("Trend Multiplier: ", InpTrendSideMultiplier, "x | Counter: ", InpCounterSideMultiplier, "x");
+   }
    Print("===========================================");
    
    trade.SetExpertMagicNumber(InpMagicNumber);
@@ -1681,6 +1728,17 @@ int OnInit()
    else
    {
       Print("Auto Balance Scaling: DISABLED (using fixed values)");
+   }
+   
+   // *** HEDGING MODE INITIALIZATION (v5.22) ***
+   if(InpTradingMode == TRADING_MODE_HEDGING)
+   {
+      if(!InitHedgingMode())
+      {
+         Print("ERROR: Failed to initialize Hedging Mode!");
+         return INIT_FAILED;
+      }
+      Print("[HEDGING] Note: In Hedging Mode, only Accumulate Close is used for TP");
    }
    
    // Create Dashboard Panel
@@ -2557,6 +2615,32 @@ double GetRecentClosedProfit()
 //+------------------------------------------------------------------+
 bool CheckAccumulateClose()
 {
+   // v5.22: Hedging Mode forces Accumulate Close (skip InpUseAccumulateClose check)
+   if(InpTradingMode == TRADING_MODE_HEDGING)
+   {
+      // Use hedge-specific floating PL calculation
+      double currentFloatingPL = GetHedgeTotalFloatingPL();
+      double totalPL = currentFloatingPL + g_accumulateClosedProfit;
+      double scaledTarget = (g_lockedAccumulateTarget > 0) ? g_lockedAccumulateTarget : ApplyScaleDollar(InpAccumulateTarget);
+      
+      if(totalPL >= scaledTarget)
+      {
+         Print("=== [HEDGE] ACCUMULATE CLOSE TARGET REACHED ===");
+         Print("Accumulated Closed: ", DoubleToString(g_accumulateClosedProfit, 2), "$");
+         Print("Current Floating (Hedge): ", DoubleToString(currentFloatingPL, 2), "$");
+         Print("Total P/L: ", DoubleToString(totalPL, 2), "$ >= Locked Target: ", DoubleToString(scaledTarget, 2), "$");
+         Print("Closing ALL hedge positions...");
+         
+         // Close all hedge positions (both symbols)
+         CloseAllHedgePositions();
+         
+         Print("=== [HEDGE] ACCUMULATE CLOSE COMPLETED ===");
+         return true;
+      }
+      return false;
+   }
+   
+   // === SINGLE MODE (ORIGINAL) ===
    if(!InpUseAccumulateClose) return false;
    
    double currentFloatingPL = AccountInfoDouble(ACCOUNT_PROFIT);
@@ -2741,6 +2825,293 @@ void ParseStringToIntArray(string inputStr, int &arr[])
    {
       arr[i] = (int)StringToInteger(parts[i]);
    }
+}
+
+// =====================================================================
+// HEDGING MODE FUNCTIONS (v5.22)
+// =====================================================================
+
+//+------------------------------------------------------------------+
+//| Initialize Hedging Mode                                            |
+//+------------------------------------------------------------------+
+bool InitHedgingMode()
+{
+   if(InpTradingMode != TRADING_MODE_HEDGING) return true;
+   
+   g_subSymbol = InpSubSymbol;
+   
+   // Validate sub symbol
+   if(!SymbolSelect(g_subSymbol, true))
+   {
+      Print("[HEDGING] ERROR: Sub symbol not found: ", g_subSymbol);
+      return false;
+   }
+   
+   g_subSymbolPoint = SymbolInfoDouble(g_subSymbol, SYMBOL_POINT);
+   g_subSymbolDigits = (int)SymbolInfoInteger(g_subSymbol, SYMBOL_DIGITS);
+   g_hedgeModeInitialized = true;
+   
+   Print("[HEDGING] Initialized: Main=", _Symbol, " Sub=", g_subSymbol);
+   Print("[HEDGING] Sub Point=", g_subSymbolPoint, " Digits=", g_subSymbolDigits);
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| Normalize lot to symbol specifications                             |
+//+------------------------------------------------------------------+
+double NormalizeLotForSymbol(string symbol, double lot)
+{
+   double minLot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
+   double maxLot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
+   double stepLot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
+   
+   lot = MathMax(minLot, lot);
+   lot = MathMin(maxLot, lot);
+   lot = NormalizeDouble(MathRound(lot / stepLot) * stepLot, 2);
+   
+   return lot;
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Hedge Lots based on CDC Trend                            |
+//+------------------------------------------------------------------+
+void CalculateHedgeLots(string direction, double baseLot,
+                        double &mainLot, double &subLot)
+{
+   // Default: same lot for both
+   mainLot = baseLot;
+   subLot = baseLot;
+   
+   if(InpHedgeLotMode != HEDGE_LOT_CDC_TREND) 
+   {
+      // Fixed lot mode - same for both
+      mainLot = NormalizeLotForSymbol(_Symbol, mainLot);
+      subLot = NormalizeLotForSymbol(g_subSymbol, subLot);
+      return;
+   }
+   
+   // Determine trend alignment for MAIN symbol
+   bool mainTrendAligned = (direction == "BUY" && CDCTrend == "BULLISH") ||
+                           (direction == "SELL" && CDCTrend == "BEARISH");
+   
+   // Apply multipliers
+   if(mainTrendAligned)
+   {
+      mainLot = baseLot * InpTrendSideMultiplier;
+      subLot = baseLot * InpCounterSideMultiplier;
+   }
+   else
+   {
+      mainLot = baseLot * InpCounterSideMultiplier;
+      subLot = baseLot * InpTrendSideMultiplier;
+   }
+   
+   // Normalize lots
+   mainLot = NormalizeLotForSymbol(_Symbol, mainLot);
+   subLot = NormalizeLotForSymbol(g_subSymbol, subLot);
+   
+   Print("[HEDGE] CDC=", CDCTrend, " Dir=", direction, 
+         " MainAligned=", mainTrendAligned,
+         " MainLot=", mainLot, " SubLot=", subLot);
+}
+
+//+------------------------------------------------------------------+
+//| Execute Hedge BUY (Main BUY + Sub SELL or BUY based on setting)    |
+//+------------------------------------------------------------------+
+bool ExecuteHedgeBuy()
+{
+   double baseLot = CalculateLotSize();
+   double mainLot, subLot;
+   CalculateHedgeLots("BUY", baseLot, mainLot, subLot);
+   
+   // Open MAIN symbol BUY
+   double mainPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   string mainComment = "MPM_BUY_MAIN[HEDGE]";
+   
+   Print("[HEDGE BUY] Opening Main: ", _Symbol, " BUY @ ", mainPrice, " Lot: ", mainLot);
+   
+   if(!trade.Buy(mainLot, _Symbol, mainPrice, 0, 0, mainComment))
+   {
+      Print("[HEDGE BUY] MAIN order failed: ", trade.ResultRetcode());
+      return false;
+   }
+   g_mainTicketBuy = trade.ResultOrder();
+   Print("[HEDGE BUY] MAIN Success! Ticket: ", g_mainTicketBuy);
+   
+   Sleep(50);  // Delay between orders
+   
+   // Open SUB symbol (Inverse = SELL, Same = BUY)
+   double subPrice;
+   string subComment = "MPM_" + (InpHedgeInverseTrade ? "SELL" : "BUY") + "_SUB[HEDGE]";
+   bool subSuccess = false;
+   
+   if(InpHedgeInverseTrade)
+   {
+      subPrice = SymbolInfoDouble(g_subSymbol, SYMBOL_BID);
+      Print("[HEDGE BUY] Opening Sub: ", g_subSymbol, " SELL @ ", subPrice, " Lot: ", subLot);
+      subSuccess = trade.Sell(subLot, g_subSymbol, subPrice, 0, 0, subComment);
+   }
+   else
+   {
+      subPrice = SymbolInfoDouble(g_subSymbol, SYMBOL_ASK);
+      Print("[HEDGE BUY] Opening Sub: ", g_subSymbol, " BUY @ ", subPrice, " Lot: ", subLot);
+      subSuccess = trade.Buy(subLot, g_subSymbol, subPrice, 0, 0, subComment);
+   }
+   
+   if(!subSuccess)
+   {
+      Print("[HEDGE BUY] SUB order failed: ", trade.ResultRetcode());
+      // Main order is still open - will need orphan handling
+   }
+   else
+   {
+      g_subTicketBuy = trade.ResultOrder();
+      Print("[HEDGE BUY] SUB Success! Ticket: ", g_subTicketBuy);
+   }
+   
+   Print("[HEDGE] BUY executed: Main=", mainLot, "lot Sub=", subLot, "lot",
+         " Mode=", EnumToString(InpHedgeLotMode));
+   
+   InitialBuyBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
+   GridBuyCount = 1;
+   
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| Execute Hedge SELL (Main SELL + Sub BUY or SELL based on setting)  |
+//+------------------------------------------------------------------+
+bool ExecuteHedgeSell()
+{
+   double baseLot = CalculateLotSize();
+   double mainLot, subLot;
+   CalculateHedgeLots("SELL", baseLot, mainLot, subLot);
+   
+   // Open MAIN symbol SELL
+   double mainPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   string mainComment = "MPM_SELL_MAIN[HEDGE]";
+   
+   Print("[HEDGE SELL] Opening Main: ", _Symbol, " SELL @ ", mainPrice, " Lot: ", mainLot);
+   
+   if(!trade.Sell(mainLot, _Symbol, mainPrice, 0, 0, mainComment))
+   {
+      Print("[HEDGE SELL] MAIN order failed: ", trade.ResultRetcode());
+      return false;
+   }
+   g_mainTicketSell = trade.ResultOrder();
+   Print("[HEDGE SELL] MAIN Success! Ticket: ", g_mainTicketSell);
+   
+   Sleep(50);  // Delay between orders
+   
+   // Open SUB symbol (Inverse = BUY, Same = SELL)
+   double subPrice;
+   string subComment = "MPM_" + (InpHedgeInverseTrade ? "BUY" : "SELL") + "_SUB[HEDGE]";
+   bool subSuccess = false;
+   
+   if(InpHedgeInverseTrade)
+   {
+      subPrice = SymbolInfoDouble(g_subSymbol, SYMBOL_ASK);
+      Print("[HEDGE SELL] Opening Sub: ", g_subSymbol, " BUY @ ", subPrice, " Lot: ", subLot);
+      subSuccess = trade.Buy(subLot, g_subSymbol, subPrice, 0, 0, subComment);
+   }
+   else
+   {
+      subPrice = SymbolInfoDouble(g_subSymbol, SYMBOL_BID);
+      Print("[HEDGE SELL] Opening Sub: ", g_subSymbol, " SELL @ ", subPrice, " Lot: ", subLot);
+      subSuccess = trade.Sell(subLot, g_subSymbol, subPrice, 0, 0, subComment);
+   }
+   
+   if(!subSuccess)
+   {
+      Print("[HEDGE SELL] SUB order failed: ", trade.ResultRetcode());
+      // Main order is still open - will need orphan handling
+   }
+   else
+   {
+      g_subTicketSell = trade.ResultOrder();
+      Print("[HEDGE SELL] SUB Success! Ticket: ", g_subTicketSell);
+   }
+   
+   Print("[HEDGE] SELL executed: Main=", mainLot, "lot Sub=", subLot, "lot",
+         " Mode=", EnumToString(InpHedgeLotMode));
+   
+   InitialSellBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
+   GridSellCount = 1;
+   
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| Close All Hedge Positions                                          |
+//+------------------------------------------------------------------+
+void CloseAllHedgePositions()
+{
+   Print("[HEDGE] Closing all hedge positions...");
+   int closed = 0;
+   
+   // Close all positions with MPM_ prefix on both Main and Sub symbols
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(PositionSelectByTicket(ticket))
+      {
+         string comment = PositionGetString(POSITION_COMMENT);
+         string posSymbol = PositionGetString(POSITION_SYMBOL);
+         
+         // Check if it's our hedge order (MPM_ prefix) or matches magic number
+         bool isOurOrder = (StringFind(comment, "MPM_") >= 0) ||
+                           (PositionGetInteger(POSITION_MAGIC) == InpMagicNumber);
+         
+         // Only close positions on Main or Sub symbols
+         if(isOurOrder && (posSymbol == _Symbol || posSymbol == g_subSymbol))
+         {
+            if(trade.PositionClose(ticket))
+            {
+               closed++;
+               Print("[HEDGE] Closed position: ", ticket, " Symbol: ", posSymbol);
+            }
+            Sleep(50);
+         }
+      }
+   }
+   
+   Print("[HEDGE] Total positions closed: ", closed);
+   
+   // Reset accumulate
+   g_accumulateClosedProfit = 0;
+   g_lockedAccumulateTarget = 0;
+}
+
+//+------------------------------------------------------------------+
+//| Get Total Floating PL for Hedge Mode (both symbols)                |
+//+------------------------------------------------------------------+
+double GetHedgeTotalFloatingPL()
+{
+   double total = 0;
+   
+   for(int i = 0; i < PositionsTotal(); i++)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(PositionSelectByTicket(ticket))
+      {
+         string posSymbol = PositionGetString(POSITION_SYMBOL);
+         string comment = PositionGetString(POSITION_COMMENT);
+         
+         // Include positions on Main or Sub symbols with MPM_ prefix or magic number
+         bool isOurOrder = (StringFind(comment, "MPM_") >= 0) ||
+                           (PositionGetInteger(POSITION_MAGIC) == InpMagicNumber);
+         
+         if(isOurOrder && (posSymbol == _Symbol || posSymbol == g_subSymbol))
+         {
+            double profit = PositionGetDouble(POSITION_PROFIT);
+            double swap = PositionGetDouble(POSITION_SWAP);
+            double commission = 0;  // Commission on close
+            total += profit + swap + commission;
+         }
+      }
+   }
+   
+   return total;
 }
 
 //+------------------------------------------------------------------+
@@ -9156,6 +9527,13 @@ string AnalyzeSMCSignal()
 
 bool ExecuteBuy()
 {
+   // v5.22: Check Trading Mode - use Hedging if enabled
+   if(InpTradingMode == TRADING_MODE_HEDGING)
+   {
+      return ExecuteHedgeBuy();
+   }
+   
+   // === SINGLE MODE (ORIGINAL) ===
    double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
    double lot = CalculateLotSize();
    
@@ -9203,6 +9581,13 @@ bool ExecuteBuy()
 //+------------------------------------------------------------------+
 bool ExecuteSell()
 {
+   // v5.22: Check Trading Mode - use Hedging if enabled
+   if(InpTradingMode == TRADING_MODE_HEDGING)
+   {
+      return ExecuteHedgeSell();
+   }
+   
+   // === SINGLE MODE (ORIGINAL) ===
    double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
    double lot = CalculateLotSize();
    
