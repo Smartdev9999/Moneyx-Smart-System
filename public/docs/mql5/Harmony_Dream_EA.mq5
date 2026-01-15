@@ -1,6 +1,6 @@
 //+------------------------------------------------------------------+
 //|                                         Harmony_Dream_EA.mq5     |
-//|                      Harmony Dream (Pairs Trading) v1.6.7        |
+//|                      Harmony Dream (Pairs Trading) v1.7.0        |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
@@ -133,6 +133,11 @@ struct PairInfo
    // === v3.5.3 HF3: ADX for Negative Correlation Pairs ===
    double         adxValueA;         // ADX value for Symbol A
    double         adxValueB;         // ADX value for Symbol B
+   
+   // === v1.7.0: ADX Winner Tracking for Negative Correlation ===
+   int            adxWinner;         // -1=None/Equal, 0=Symbol A wins, 1=Symbol B wins
+   double         adxWinnerValue;    // ADX value of Winner
+   double         adxLoserValue;     // ADX value of Loser
    
    // === v3.6.0: Grid Profit Side ===
    int            gridProfitCountBuy;    // Profit Grid orders on BUY side
@@ -4471,7 +4476,38 @@ double GetADXValue(string symbol, ENUM_TIMEFRAMES timeframe, int period)
 }
 
 //+------------------------------------------------------------------+
-//| Update ADX Values for Negative Correlation Pair (v3.5.3 HF3)       |
+//| Determine ADX Winner for Negative Correlation Pair (v1.7.0)        |
+//+------------------------------------------------------------------+
+void DetermineADXWinner(int pairIndex)
+{
+   if(!InpUseADXForNegative) return;
+   if(g_pairs[pairIndex].correlationType != -1) return;  // Only for Negative Correlation
+   
+   double adxA = g_pairs[pairIndex].adxValueA;
+   double adxB = g_pairs[pairIndex].adxValueB;
+   
+   if(adxA > adxB && adxA >= InpADXMinStrength)
+   {
+      g_pairs[pairIndex].adxWinner = 0;  // Symbol A wins
+      g_pairs[pairIndex].adxWinnerValue = adxA;
+      g_pairs[pairIndex].adxLoserValue = adxB;
+   }
+   else if(adxB > adxA && adxB >= InpADXMinStrength)
+   {
+      g_pairs[pairIndex].adxWinner = 1;  // Symbol B wins
+      g_pairs[pairIndex].adxWinnerValue = adxB;
+      g_pairs[pairIndex].adxLoserValue = adxA;
+   }
+   else
+   {
+      g_pairs[pairIndex].adxWinner = -1;  // None/Equal (below threshold or equal)
+      g_pairs[pairIndex].adxWinnerValue = MathMax(adxA, adxB);
+      g_pairs[pairIndex].adxLoserValue = MathMin(adxA, adxB);
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Update ADX Values for Negative Correlation Pair (v1.7.0)           |
 //+------------------------------------------------------------------+
 void UpdateADXForPair(int pairIndex)
 {
@@ -4482,12 +4518,17 @@ void UpdateADXForPair(int pairIndex)
    g_pairs[pairIndex].adxValueA = GetADXValue(g_pairs[pairIndex].symbolA, InpADXTimeframe, InpADXPeriod);
    g_pairs[pairIndex].adxValueB = GetADXValue(g_pairs[pairIndex].symbolB, InpADXTimeframe, InpADXPeriod);
    
+   // v1.7.0: Determine Winner after update
+   DetermineADXWinner(pairIndex);
+   
    if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
    {
-      PrintFormat("ADX UPDATE [Pair %d NEG]: %s=%.1f, %s=%.1f",
-                  pairIndex + 1,
-                  g_pairs[pairIndex].symbolA, g_pairs[pairIndex].adxValueA,
-                  g_pairs[pairIndex].symbolB, g_pairs[pairIndex].adxValueB);
+      string winnerStr = (g_pairs[pairIndex].adxWinner == 0) ? g_pairs[pairIndex].symbolA :
+                         (g_pairs[pairIndex].adxWinner == 1) ? g_pairs[pairIndex].symbolB : "NONE";
+      PrintFormat("ADX UPDATE [Pair %d NEG]: A=%.1f, B=%.1f | Winner: %s (Mult: %.1fx)",
+                  pairIndex + 1, 
+                  g_pairs[pairIndex].adxValueA, g_pairs[pairIndex].adxValueB, 
+                  winnerStr, InpTrendSideMultiplier);
    }
 }
 
@@ -5842,14 +5883,17 @@ bool OpenBuySideTrade(int pairIndex)
       UpdateADXForPair(pairIndex);
    }
    
-   // v3.77: Add Magic Number in comment for order recovery across EA updates
+   // v1.7.0: Enhanced ADX comment showing winner symbol clearly
    string comment;
    if(corrType == -1 && InpUseADXForNegative)
    {
-        comment = StringFormat("HrmDream_BUY_%d[M:%d][ADX:%.0f|%.0f]", 
-                               pairIndex + 1, InpMagicNumber,
-                               g_pairs[pairIndex].adxValueA,
-                               g_pairs[pairIndex].adxValueB);
+      string winnerSym = (g_pairs[pairIndex].adxWinner == 0) ? g_pairs[pairIndex].symbolA :
+                         (g_pairs[pairIndex].adxWinner == 1) ? g_pairs[pairIndex].symbolB : "NONE";
+      comment = StringFormat("HrmDream_BUY_%d[M:%d][ADX:%s=%.0f>%.0f]", 
+                             pairIndex + 1, InpMagicNumber,
+                             winnerSym,
+                             g_pairs[pairIndex].adxWinnerValue,
+                             g_pairs[pairIndex].adxLoserValue);
    }
    else
    {
@@ -6020,14 +6064,17 @@ bool OpenSellSideTrade(int pairIndex)
       UpdateADXForPair(pairIndex);
    }
    
-   // v3.77: Add Magic Number in comment for order recovery across EA updates
+   // v1.7.0: Enhanced ADX comment showing winner symbol clearly
    string comment;
    if(corrType == -1 && InpUseADXForNegative)
    {
-        comment = StringFormat("HrmDream_SELL_%d[M:%d][ADX:%.0f|%.0f]", 
-                               pairIndex + 1, InpMagicNumber,
-                               g_pairs[pairIndex].adxValueA,
-                               g_pairs[pairIndex].adxValueB);
+      string winnerSym = (g_pairs[pairIndex].adxWinner == 0) ? g_pairs[pairIndex].symbolA :
+                         (g_pairs[pairIndex].adxWinner == 1) ? g_pairs[pairIndex].symbolB : "NONE";
+      comment = StringFormat("HrmDream_SELL_%d[M:%d][ADX:%s=%.0f>%.0f]", 
+                             pairIndex + 1, InpMagicNumber,
+                             winnerSym,
+                             g_pairs[pairIndex].adxWinnerValue,
+                             g_pairs[pairIndex].adxLoserValue);
    }
    else
    {
@@ -7785,8 +7832,45 @@ void UpdateDashboard()
          color corrColor = MathAbs(corr) >= InpMinCorrelation * 100 ? COLOR_PROFIT : COLOR_TEXT;
          UpdateLabel(prefix + "P" + idxStr + "_CORR", DoubleToString(corr, 0) + "%", corrColor);
          
-         string corrType = g_pairs[i].correlationType == 1 ? "Pos" : "Neg";
-         color typeColor = g_pairs[i].correlationType == 1 ? COLOR_PROFIT : COLOR_LOSS;
+         // v1.7.0: Enhanced TYPE display with ADX Winner for Negative Correlation
+         string corrType;
+         color typeColor;
+         
+         if(g_pairs[i].correlationType == 1)
+         {
+            corrType = "Pos";
+            typeColor = COLOR_PROFIT;
+         }
+         else
+         {
+            // Negative Correlation - show ADX winner info
+            if(InpUseADXForNegative)
+            {
+               if(g_pairs[i].adxWinner == 0)
+               {
+                  // Symbol A wins - show "A:XX" in green
+                  corrType = StringFormat("A:%.0f", g_pairs[i].adxWinnerValue);
+                  typeColor = COLOR_PROFIT;  // Green - A side gets multiplier
+               }
+               else if(g_pairs[i].adxWinner == 1)
+               {
+                  // Symbol B wins - show "B:XX" in gold
+                  corrType = StringFormat("B:%.0f", g_pairs[i].adxWinnerValue);
+                  typeColor = C'255,180,0';  // Gold - B side gets multiplier
+               }
+               else
+               {
+                  // No winner (below threshold) - show "=XX" in grey
+                  corrType = StringFormat("=%.0f", MathMax(g_pairs[i].adxValueA, g_pairs[i].adxValueB));
+                  typeColor = COLOR_OFF;  // Grey - no multiplier applied
+               }
+            }
+            else
+            {
+               corrType = "Neg";
+               typeColor = COLOR_LOSS;
+            }
+         }
          UpdateLabel(prefix + "P" + idxStr + "_TYPE", corrType, typeColor);
          
          // v3.6.0 HF4: Beta update hidden
