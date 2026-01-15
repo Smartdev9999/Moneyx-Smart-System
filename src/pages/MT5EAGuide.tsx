@@ -5,13 +5,13 @@ import StepCard from '@/components/StepCard';
 
 const MT5EAGuide = () => {
   const fullEACode = `//+------------------------------------------------------------------+
-//|                   Moneyx Smart Gold System v5.25                   |
+//|                   Moneyx Smart Gold System v5.25.1                 |
 //|           Smart Money Trading System with CDC Action Zone          |
-//|   + Grid Trading + Auto Scaling + Hedging Mode + Grid CDC Trend    |
+//| + Grid Trading + Auto Scaling + Hedging + CDC Trend Compounding   |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
 #property link      ""
-#property version   "5.25"
+#property version   "5.251"
 #property strict
 
 // *** Logo File ***
@@ -3536,9 +3536,9 @@ void CloseHedgeSellSide()
 //|   - gridLevel = 1 = First Grid Profit = InitialLot + AddLotProfit  |
 //|   - gridLevel = 2 = Second Grid Profit = InitialLot + AddLotProfit*2|
 //|                                                                    |
-//| v5.25 CDC Trend Mode:                                              |
-//|   - Trend-Aligned = baseLot * TrendMultiplier (e.g., 2x)           |
-//|   - Counter-Trend = baseLot * CounterMultiplier (e.g., 1x Fixed)   |
+//| v5.25.1 CDC Trend COMPOUNDING Mode:                                |
+//|   - Trend-Aligned = baseLot * TrendMult^(level+1) (Compound)       |
+//|   - Counter-Trend = baseLot * CounterMultiplier (Fixed)            |
 //+------------------------------------------------------------------+
 double GetGridLotSize(bool isLossSide, int gridLevel, string direction = "")
 {
