@@ -5,13 +5,13 @@ import StepCard from '@/components/StepCard';
 
 const MT5EAGuide = () => {
   const fullEACode = `//+------------------------------------------------------------------+
-//|                   Moneyx Smart Gold System v5.22                   |
+//|                   Moneyx Smart Gold System v5.23                   |
 //|           Smart Money Trading System with CDC Action Zone          |
 //|           + Grid Trading + Auto Scaling + Hedging Mode             |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
 #property link      ""
-#property version   "5.22"
+#property version   "5.23"
 #property strict
 
 // *** Logo File ***
@@ -3115,6 +3115,87 @@ double GetHedgeTotalFloatingPL()
 }
 
 //+------------------------------------------------------------------+
+//| Execute Hedge Grid Order (for Grid Loss/Profit)                    |
+//| Opens corresponding Sub symbol order when Grid triggers            |
+//+------------------------------------------------------------------+
+bool ExecuteHedgeGridOrder(string gridType, string direction, double mainLot, int gridLevel)
+{
+   if(InpTradingMode != TRADING_MODE_HEDGING) return false;
+   if(!g_hedgeModeInitialized || g_subSymbol == "") return false;
+   
+   // Calculate sub lot using hedge lot mode
+   double baseLot = mainLot;  // Use same lot as main grid
+   double subLot = baseLot;
+   
+   if(InpHedgeLotMode == HEDGE_LOT_CDC_TREND)
+   {
+      // Determine if main is trend-aligned
+      bool mainTrendAligned = (direction == "BUY" && CDCTrend == "BULLISH") ||
+                              (direction == "SELL" && CDCTrend == "BEARISH");
+      
+      if(mainTrendAligned)
+      {
+         // Main is trend-aligned, so it already has multiplier
+         // Sub gets counter multiplier
+         subLot = (baseLot / InpTrendSideMultiplier) * InpCounterSideMultiplier;
+      }
+      else
+      {
+         // Main is counter-trend
+         // Sub gets trend multiplier
+         subLot = (baseLot / InpCounterSideMultiplier) * InpTrendSideMultiplier;
+      }
+   }
+   
+   subLot = NormalizeLotForSymbol(g_subSymbol, subLot);
+   
+   // Determine sub direction based on InpHedgeInverseTrade
+   bool subSuccess = false;
+   double subPrice;
+   string subComment = "MPM_" + gridType + "_SUB[HEDGE]#" + IntegerToString(gridLevel);
+   
+   if(direction == "BUY")
+   {
+      // Main is BUY, Sub is SELL (inverse) or BUY (same)
+      if(InpHedgeInverseTrade)
+      {
+         subPrice = SymbolInfoDouble(g_subSymbol, SYMBOL_BID);
+         subSuccess = trade.Sell(subLot, g_subSymbol, subPrice, 0, 0, subComment);
+         Print("[HEDGE GRID] Sub SELL: ", g_subSymbol, " @ ", subPrice, " Lot: ", subLot, " | ", gridType, " #", gridLevel);
+      }
+      else
+      {
+         subPrice = SymbolInfoDouble(g_subSymbol, SYMBOL_ASK);
+         subSuccess = trade.Buy(subLot, g_subSymbol, subPrice, 0, 0, subComment);
+         Print("[HEDGE GRID] Sub BUY: ", g_subSymbol, " @ ", subPrice, " Lot: ", subLot, " | ", gridType, " #", gridLevel);
+      }
+   }
+   else // SELL
+   {
+      // Main is SELL, Sub is BUY (inverse) or SELL (same)
+      if(InpHedgeInverseTrade)
+      {
+         subPrice = SymbolInfoDouble(g_subSymbol, SYMBOL_ASK);
+         subSuccess = trade.Buy(subLot, g_subSymbol, subPrice, 0, 0, subComment);
+         Print("[HEDGE GRID] Sub BUY: ", g_subSymbol, " @ ", subPrice, " Lot: ", subLot, " | ", gridType, " #", gridLevel);
+      }
+      else
+      {
+         subPrice = SymbolInfoDouble(g_subSymbol, SYMBOL_BID);
+         subSuccess = trade.Sell(subLot, g_subSymbol, subPrice, 0, 0, subComment);
+         Print("[HEDGE GRID] Sub SELL: ", g_subSymbol, " @ ", subPrice, " Lot: ", subLot, " | ", gridType, " #", gridLevel);
+      }
+   }
+   
+   if(!subSuccess)
+   {
+      Print("[HEDGE GRID] Sub order failed: ", trade.ResultRetcode(), " | ", gridType, " #", gridLevel);
+   }
+   
+   return subSuccess;
+}
+
+//+------------------------------------------------------------------+
 //| Get Lot Size for Grid based on level                               |
 //| *** Grid Loss และ Grid Profit แยกนับ level กันอิสระ ***            |
 //|                                                                    |
@@ -5821,6 +5902,13 @@ void CheckGridLossSide()
          {
             LastGridBuyTime = currentBarTime;
             GridBuyCount = buyCount + 1;
+            
+            // v5.22: Execute Hedge Grid Order for Sub symbol
+            if(InpTradingMode == TRADING_MODE_HEDGING)
+            {
+               Sleep(50);
+               ExecuteHedgeGridOrder("Grid Loss BUY", "BUY", lot, gridLossLevel);
+            }
          }
       }
    }
@@ -5880,6 +5968,13 @@ void CheckGridLossSide()
          {
             LastGridSellTime = currentBarTime;
             GridSellCount = sellCount + 1;
+            
+            // v5.22: Execute Hedge Grid Order for Sub symbol
+            if(InpTradingMode == TRADING_MODE_HEDGING)
+            {
+               Sleep(50);
+               ExecuteHedgeGridOrder("Grid Loss SELL", "SELL", lot, gridLossLevel);
+            }
          }
       }
    }
@@ -5948,6 +6043,13 @@ void CheckGridProfitSide()
             if(trade.Buy(lot, _Symbol, price, 0, 0, "Grid Profit BUY #" + IntegerToString(profitGridCount)))
             {
                LastGridBuyTime = currentBarTime;
+               
+               // v5.22: Execute Hedge Grid Order for Sub symbol
+               if(InpTradingMode == TRADING_MODE_HEDGING)
+               {
+                  Sleep(50);
+                  ExecuteHedgeGridOrder("Grid Profit BUY", "BUY", lot, profitGridCount);
+               }
             }
          }
       }
@@ -6006,6 +6108,13 @@ void CheckGridProfitSide()
             if(trade.Sell(lot, _Symbol, price, 0, 0, "Grid Profit SELL #" + IntegerToString(profitGridCount)))
             {
                LastGridSellTime = currentBarTime;
+               
+               // v5.22: Execute Hedge Grid Order for Sub symbol
+               if(InpTradingMode == TRADING_MODE_HEDGING)
+               {
+                  Sleep(50);
+                  ExecuteHedgeGridOrder("Grid Profit SELL", "SELL", lot, profitGridCount);
+               }
             }
          }
       }
