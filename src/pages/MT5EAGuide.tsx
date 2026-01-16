@@ -5,13 +5,13 @@ import StepCard from '@/components/StepCard';
 
 const MT5EAGuide = () => {
   const fullEACode = `//+------------------------------------------------------------------+
-//|                   Moneyx Smart Gold System v5.25.3                 |
+//|                   Moneyx Smart Gold System v5.25.4                 |
 //|           Smart Money Trading System with CDC Action Zone          |
 //| + Grid Trading + Auto Scaling + Hedging + CDC Trend Compounding   |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
 #property link      ""
-#property version   "5.253"
+#property version   "5.254"
 #property strict
 
 // *** Logo File ***
@@ -3285,6 +3285,56 @@ bool ExecuteHedgeGridOrder(string gridType, string direction, double mainLot, in
 {
    if(InpTradingMode != TRADING_MODE_HEDGING) return false;
    if(!g_hedgeModeInitialized || g_subSymbol == "") return false;
+   
+   // === v5.25.4: Verify Sub pair doesn't already have this grid level ===
+   // Count existing Sub orders with matching grid type to prevent over-trading
+   int subGridCount = 0;
+   ENUM_POSITION_TYPE expectedSubType;
+   
+   // Determine expected Sub position type based on direction and InpHedgeInverseTrade
+   if(direction == "BUY")
+      expectedSubType = InpHedgeInverseTrade ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
+   else
+      expectedSubType = InpHedgeInverseTrade ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
+   
+   for(int i = 0; i < PositionsTotal(); i++)
+   {
+      if(PositionGetSymbol(i) == g_subSymbol)
+      {
+         if(PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
+         {
+            if(PositionGetInteger(POSITION_TYPE) == expectedSubType)
+            {
+               string comment = PositionGetString(POSITION_COMMENT);
+               // Check if this is same grid type (e.g., "Grid Loss" or "Grid Profit")
+               if(StringFind(comment, gridType) >= 0 || StringFind(comment, "_SUB") >= 0)
+                  subGridCount++;
+            }
+         }
+      }
+   }
+   
+   // Also count Main pair positions of this direction to compare
+   int mainCount = 0;
+   ENUM_POSITION_TYPE mainType = (direction == "BUY") ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
+   for(int i = 0; i < PositionsTotal(); i++)
+   {
+      if(PositionGetSymbol(i) == _Symbol)
+      {
+         if(PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
+         {
+            if(PositionGetInteger(POSITION_TYPE) == mainType)
+               mainCount++;
+         }
+      }
+   }
+   
+   // v5.25.4: Skip if Sub already has >= Main orders (prevent over-trading)
+   if(subGridCount >= mainCount)
+   {
+      Print("[HEDGE SYNC v5.25.4] Main=", mainCount, " Sub=", subGridCount, " | Skip - Sub already synced for ", gridType);
+      return false;
+   }
    
    // v5.25: Calculate sub lot using baseLot (not mainLot)
    // This ensures Sub symbol lot is based on InpInitialLot, not the scaled mainLot
