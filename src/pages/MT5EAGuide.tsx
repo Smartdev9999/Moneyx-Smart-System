@@ -5,13 +5,13 @@ import StepCard from '@/components/StepCard';
 
 const MT5EAGuide = () => {
   const fullEACode = `//+------------------------------------------------------------------+
-//|                   Moneyx Smart Gold System v5.25.4                 |
+//|                   Moneyx Smart Gold System v5.25.5                 |
 //|           Smart Money Trading System with CDC Action Zone          |
-//| + Grid Trading + Auto Scaling + Hedging + CDC Trend Compounding   |
+//| + Grid Trading + Auto Scaling + Hedging + Hedge Orphan Detection  |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
 #property link      ""
-#property version   "5.254"
+#property version   "5.255"
 #property strict
 
 // *** Logo File ***
@@ -781,6 +781,10 @@ bool g_hedgeModeInitialized = false;        // Hedging mode init flag
 double g_hedgeBuyClosedProfit = 0;          // Accumulated closed profit - BUY side (Main+Sub)
 double g_hedgeSellClosedProfit = 0;         // Accumulated closed profit - SELL side (Main+Sub)
 double g_hedgeTotalClosedProfit = 0;        // Accumulated closed profit - TOTAL (both sides)
+
+// v5.25.5: Hedge Orphan Detection System
+bool g_orphanCheckPaused = false;           // Pause orphan check during basket close
+datetime g_lastOrphanCheck = 0;             // Last orphan check time (throttle to 1 sec)
 
 // Price Action Confirmation Tracking
 string g_pendingSignal = "NONE";       // "BUY", "SELL", or "NONE"
@@ -3419,7 +3423,164 @@ bool ExecuteHedgeGridOrder(string gridType, string direction, double mainLot, in
 }
 
 //+------------------------------------------------------------------+
-//| v5.24: Get Floating PL for BUY Side (Main BUY + paired Sub)        |
+//| v5.25.5: Close orphan Sub positions (oldest first - FIFO)          |
+//| Called when Main positions are closed by SL/TP but Sub remains     |
+//+------------------------------------------------------------------+
+void CloseOrphanSubPositions(ENUM_POSITION_TYPE posType, int countToClose)
+{
+   if(countToClose <= 0) return;
+   if(g_subSymbol == "") return;
+   
+   // Collect Sub positions of matching type, sorted by open time (oldest first)
+   ulong tickets[];
+   datetime openTimes[];
+   int found = 0;
+   
+   for(int i = 0; i < PositionsTotal(); i++)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(PositionSelectByTicket(ticket))
+      {
+         if(PositionGetString(POSITION_SYMBOL) != g_subSymbol) continue;
+         if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
+         if(PositionGetInteger(POSITION_TYPE) != posType) continue;
+         
+         ArrayResize(tickets, found + 1);
+         ArrayResize(openTimes, found + 1);
+         tickets[found] = ticket;
+         openTimes[found] = (datetime)PositionGetInteger(POSITION_TIME);
+         found++;
+      }
+   }
+   
+   if(found == 0) return;
+   
+   // Sort by open time (oldest first) - simple bubble sort
+   for(int i = 0; i < found - 1; i++)
+   {
+      for(int j = i + 1; j < found; j++)
+      {
+         if(openTimes[j] < openTimes[i])
+         {
+            datetime tempTime = openTimes[i];
+            openTimes[i] = openTimes[j];
+            openTimes[j] = tempTime;
+            
+            ulong tempTicket = tickets[i];
+            tickets[i] = tickets[j];
+            tickets[j] = tempTicket;
+         }
+      }
+   }
+   
+   // Close oldest positions
+   int closedCount = 0;
+   for(int i = 0; i < found && closedCount < countToClose; i++)
+   {
+      if(trade.PositionClose(tickets[i]))
+      {
+         Print("[ORPHAN v5.25.5] Closed orphan Sub ticket #", tickets[i]);
+         closedCount++;
+         Sleep(50);  // Wait for MT5 to process
+      }
+      else
+      {
+         Print("[ORPHAN v5.25.5] Failed to close ticket #", tickets[i], " Error: ", GetLastError());
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| v5.25.5: Check and close orphan Sub positions                      |
+//| Called every tick when in Hedging Mode (throttled to 1 sec)        |
+//| Detects when Main orders are closed by SL/TP but Sub remains       |
+//+------------------------------------------------------------------+
+void CheckHedgeOrphanPositions()
+{
+   if(InpTradingMode != TRADING_MODE_HEDGING) return;
+   if(!g_hedgeModeInitialized || g_subSymbol == "") return;
+   
+   // v5.25.5: Skip during basket close to avoid interference
+   if(g_orphanCheckPaused) return;
+   
+   // Count Main positions per side
+   int mainBuyCount = 0, mainSellCount = 0;
+   for(int i = 0; i < PositionsTotal(); i++)
+   {
+      if(PositionGetSymbol(i) == _Symbol)
+      {
+         if(PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
+         {
+            if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
+               mainBuyCount++;
+            else
+               mainSellCount++;
+         }
+      }
+   }
+   
+   // Count Sub positions per side
+   int subBuyCount = 0, subSellCount = 0;
+   for(int i = 0; i < PositionsTotal(); i++)
+   {
+      if(PositionGetSymbol(i) == g_subSymbol)
+      {
+         if(PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
+         {
+            if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
+               subBuyCount++;
+            else
+               subSellCount++;
+         }
+      }
+   }
+   
+   // Determine expected Sub counts based on InpHedgeInverseTrade
+   // Main BUY pairs with Sub (inverse=SELL, same=BUY)
+   // Main SELL pairs with Sub (inverse=BUY, same=SELL)
+   int expectedSubForBuySide, expectedSubForSellSide;
+   ENUM_POSITION_TYPE orphanTypeForBuy, orphanTypeForSell;
+   
+   if(InpHedgeInverseTrade)
+   {
+      // Main BUY -> Sub SELL, Main SELL -> Sub BUY
+      expectedSubForBuySide = subSellCount;  // Sub SELLs paired with Main BUYs
+      expectedSubForSellSide = subBuyCount;  // Sub BUYs paired with Main SELLs
+      orphanTypeForBuy = POSITION_TYPE_SELL;
+      orphanTypeForSell = POSITION_TYPE_BUY;
+   }
+   else
+   {
+      // Same direction
+      expectedSubForBuySide = subBuyCount;
+      expectedSubForSellSide = subSellCount;
+      orphanTypeForBuy = POSITION_TYPE_BUY;
+      orphanTypeForSell = POSITION_TYPE_SELL;
+   }
+   
+   // Check BUY Side Orphans: Sub has more than Main
+   if(expectedSubForBuySide > mainBuyCount)
+   {
+      int orphanCount = expectedSubForBuySide - mainBuyCount;
+      Print("[ORPHAN v5.25.5] BUY Side: Main=", mainBuyCount, " Sub=", expectedSubForBuySide, 
+            " | Closing ", orphanCount, " orphan Sub orders");
+      
+      // Close oldest orphan Sub positions (FIFO)
+      CloseOrphanSubPositions(orphanTypeForBuy, orphanCount);
+   }
+   
+   // Check SELL Side Orphans: Sub has more than Main
+   if(expectedSubForSellSide > mainSellCount)
+   {
+      int orphanCount = expectedSubForSellSide - mainSellCount;
+      Print("[ORPHAN v5.25.5] SELL Side: Main=", mainSellCount, " Sub=", expectedSubForSellSide, 
+            " | Closing ", orphanCount, " orphan Sub orders");
+      
+      // Close oldest orphan Sub positions (FIFO)
+      CloseOrphanSubPositions(orphanTypeForSell, orphanCount);
+   }
+}
+
 //| BUY Side = Main BUY + Sub (inverse=SELL, same=BUY)                 |
 //+------------------------------------------------------------------+
 double GetHedgeBuySideFloatingPL()
@@ -7870,6 +8031,18 @@ void OnTick()
    // Check Grid conditions (every tick for real-time)
    CheckGridLossSide();
    CheckGridProfitSide();
+   
+   // v5.25.5: Check for orphan Sub positions every tick (in Hedging Mode)
+   // Detects when Main orders are closed by SL/TP but Sub remains
+   if(InpTradingMode == TRADING_MODE_HEDGING)
+   {
+      // Throttle to once per second to avoid excessive checks
+      if(TimeCurrent() - g_lastOrphanCheck >= 1)
+      {
+         CheckHedgeOrphanPositions();
+         g_lastOrphanCheck = TimeCurrent();
+      }
+   }
    
    // *** v5.21: Bar time for trading signal logic ***
    ENUM_TIMEFRAMES signalTF = GetSignalTimeframe();
