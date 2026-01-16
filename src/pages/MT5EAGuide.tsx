@@ -5,13 +5,13 @@ import StepCard from '@/components/StepCard';
 
 const MT5EAGuide = () => {
   const fullEACode = `//+------------------------------------------------------------------+
-//|                   Moneyx Smart Gold System v5.25.5                 |
+//|                   Moneyx Smart Gold System v5.25.6                 |
 //|           Smart Money Trading System with CDC Action Zone          |
-//| + Grid Trading + Auto Scaling + Hedging + Hedge Orphan Detection  |
+//| + Grid Trading + Auto Scaling + Hedging + Grid Return Bug Fix     |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
 #property link      ""
-#property version   "5.255"
+#property version   "5.256"
 #property strict
 
 // *** Logo File ***
@@ -6467,47 +6467,53 @@ void CheckGridLossSide()
       }
    }
    
+   // v5.25.6: Use flag instead of return to allow SELL grid to be checked independently
    if(buyCount > 0 && buyGridLossCount < InpGridLossMaxTrades)
    {
+      bool buyGridAllowed = true;
+      
       // Check if should skip same candle
       if(InpGridLossDontOpenSameCandle && currentBarTime == InitialBuyBarTime)
-         return;
+         buyGridAllowed = false;
       
       // Check new candle requirement
       if(InpGridLossNewCandle && currentBarTime == LastGridBuyTime)
-         return;
+         buyGridAllowed = false;
       
       // Check signal requirement
       if(InpGridLossOnlySignal && !IsTradeAllowed("BUY"))
-         return;
+         buyGridAllowed = false;
       
-      double lastBuyPrice = GetLastPositionPrice(POSITION_TYPE_BUY);
-      
-      // *** Grid Loss นับ level แยกจาก Grid Profit ***
-      // buyGridLossCount = จำนวน Grid Loss orders ที่มีอยู่แล้ว (นับจาก comment)
-      // gridLevel สำหรับ Grid Loss = buyGridLossCount + 1 (ออเดอร์ถัดไป)
-      int gridLossLevel = buyGridLossCount + 1;
-      int distance = GetGridDistance(true, buyGridLossCount);
-      
-      // Price went DOWN from last buy by grid distance
-      if(lastBuyPrice - currentPrice >= distance * _Point)
+      if(buyGridAllowed)
       {
-         // v5.25: Pass direction to GetGridLotSize for CDC Trend Mode
-         double lot = GetGridLotSize(true, gridLossLevel, "BUY");
-         double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+         double lastBuyPrice = GetLastPositionPrice(POSITION_TYPE_BUY);
          
-         Print("Grid Loss BUY #", gridLossLevel, " | Lot: ", lot, " | Distance: ", distance);
+         // *** Grid Loss นับ level แยกจาก Grid Profit ***
+         // buyGridLossCount = จำนวน Grid Loss orders ที่มีอยู่แล้ว (นับจาก comment)
+         // gridLevel สำหรับ Grid Loss = buyGridLossCount + 1 (ออเดอร์ถัดไป)
+         int gridLossLevel = buyGridLossCount + 1;
+         int distance = GetGridDistance(true, buyGridLossCount);
          
-         if(trade.Buy(lot, _Symbol, price, 0, 0, "Grid Loss BUY #" + IntegerToString(gridLossLevel)))
+         // Price went DOWN from last buy by grid distance
+         if(lastBuyPrice - currentPrice >= distance * _Point)
          {
-            LastGridBuyTime = currentBarTime;
-            GridBuyCount = buyCount + 1;
+            // v5.25: Pass direction to GetGridLotSize for CDC Trend Mode
+            double lot = GetGridLotSize(true, gridLossLevel, "BUY");
+            double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
             
-            // v5.25: Execute Hedge Grid Order for Sub symbol
-            if(InpTradingMode == TRADING_MODE_HEDGING)
+            Print("Grid Loss BUY #", gridLossLevel, " | Lot: ", lot, " | Distance: ", distance);
+            
+            if(trade.Buy(lot, _Symbol, price, 0, 0, "Grid Loss BUY #" + IntegerToString(gridLossLevel)))
             {
-               Sleep(50);
-               ExecuteHedgeGridOrder("Grid Loss BUY", "BUY", lot, gridLossLevel);
+               LastGridBuyTime = currentBarTime;
+               GridBuyCount = buyCount + 1;
+               
+               // v5.25: Execute Hedge Grid Order for Sub symbol
+               if(InpTradingMode == TRADING_MODE_HEDGING)
+               {
+                  Sleep(50);
+                  ExecuteHedgeGridOrder("Grid Loss BUY", "BUY", lot, gridLossLevel);
+               }
             }
          }
       }
@@ -6534,47 +6540,53 @@ void CheckGridLossSide()
       }
    }
    
+   // v5.25.6: Use flag instead of return to allow BUY/SELL to be checked independently
    if(sellCount > 0 && sellGridLossCount < InpGridLossMaxTrades)
    {
+      bool sellGridAllowed = true;
+      
       // Check if should skip same candle
       if(InpGridLossDontOpenSameCandle && currentBarTime == InitialSellBarTime)
-         return;
+         sellGridAllowed = false;
       
       // Check new candle requirement
       if(InpGridLossNewCandle && currentBarTime == LastGridSellTime)
-         return;
+         sellGridAllowed = false;
       
       // Check signal requirement
       if(InpGridLossOnlySignal && !IsTradeAllowed("SELL"))
-         return;
+         sellGridAllowed = false;
       
-      double lastSellPrice = GetLastPositionPrice(POSITION_TYPE_SELL);
-      
-      // *** Grid Loss นับ level แยกจาก Grid Profit ***
-      // sellGridLossCount = จำนวน Grid Loss orders ที่มีอยู่แล้ว (นับจาก comment)
-      // gridLevel สำหรับ Grid Loss = sellGridLossCount + 1 (ออเดอร์ถัดไป)
-      int gridLossLevel = sellGridLossCount + 1;
-      int distance = GetGridDistance(true, sellGridLossCount);
-      
-      // Price went UP from last sell by grid distance
-      if(currentPrice - lastSellPrice >= distance * _Point)
+      if(sellGridAllowed)
       {
-         // v5.25: Pass direction to GetGridLotSize for CDC Trend Mode
-         double lot = GetGridLotSize(true, gridLossLevel, "SELL");
-         double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+         double lastSellPrice = GetLastPositionPrice(POSITION_TYPE_SELL);
          
-         Print("Grid Loss SELL #", gridLossLevel, " | Lot: ", lot, " | Distance: ", distance);
+         // *** Grid Loss นับ level แยกจาก Grid Profit ***
+         // sellGridLossCount = จำนวน Grid Loss orders ที่มีอยู่แล้ว (นับจาก comment)
+         // gridLevel สำหรับ Grid Loss = sellGridLossCount + 1 (ออเดอร์ถัดไป)
+         int gridLossLevel = sellGridLossCount + 1;
+         int distance = GetGridDistance(true, sellGridLossCount);
          
-         if(trade.Sell(lot, _Symbol, price, 0, 0, "Grid Loss SELL #" + IntegerToString(gridLossLevel)))
+         // Price went UP from last sell by grid distance
+         if(currentPrice - lastSellPrice >= distance * _Point)
          {
-            LastGridSellTime = currentBarTime;
-            GridSellCount = sellCount + 1;
+            // v5.25: Pass direction to GetGridLotSize for CDC Trend Mode
+            double lot = GetGridLotSize(true, gridLossLevel, "SELL");
+            double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
             
-            // v5.25: Execute Hedge Grid Order for Sub symbol
-            if(InpTradingMode == TRADING_MODE_HEDGING)
+            Print("Grid Loss SELL #", gridLossLevel, " | Lot: ", lot, " | Distance: ", distance);
+            
+            if(trade.Sell(lot, _Symbol, price, 0, 0, "Grid Loss SELL #" + IntegerToString(gridLossLevel)))
             {
-               Sleep(50);
-               ExecuteHedgeGridOrder("Grid Loss SELL", "SELL", lot, gridLossLevel);
+               LastGridSellTime = currentBarTime;
+               GridSellCount = sellCount + 1;
+               
+               // v5.25: Execute Hedge Grid Order for Sub symbol
+               if(InpTradingMode == TRADING_MODE_HEDGING)
+               {
+                  Sleep(50);
+                  ExecuteHedgeGridOrder("Grid Loss SELL", "SELL", lot, gridLossLevel);
+               }
             }
          }
       }
@@ -6614,43 +6626,49 @@ void CheckGridProfitSide()
          }
       }
       
+      // v5.25.6: Use flag instead of return to allow SELL grid profit to be checked independently
       if(profitGridCount < InpGridProfitMaxTrades)
       {
+         bool buyProfitAllowed = true;
+         
          // Check new candle requirement
          if(InpGridProfitNewCandle && currentBarTime == LastGridBuyTime)
-            return;
+            buyProfitAllowed = false;
          
          // Check signal requirement
          if(InpGridProfitOnlySignal && !IsTradeAllowed("BUY"))
-            return;
+            buyProfitAllowed = false;
           
-          // Get initial order price and last buy price
-          double initialBuyPrice = GetFirstPositionPrice(POSITION_TYPE_BUY);
-          double lastBuyPrice = GetLastPositionPrice(POSITION_TYPE_BUY);
-          int distance = GetGridDistance(false, profitGridCount);
-          
-          // Grid Profit only triggers when:
-          // 1. Current price is ABOVE initial order price (profit zone for BUY)
-          // 2. Price went UP from last buy by grid distance
-          if(currentPrice > initialBuyPrice && currentPrice - lastBuyPrice >= distance * _Point)
-          {
-            // Grid Profit uses gridLevel starting from 1 (Initial Order is the base)
-            // profitGridCount=0 means first Grid Profit order, which should use level 1
-            // v5.25: Pass direction to GetGridLotSize for CDC Trend Mode
-            double lot = GetGridLotSize(false, profitGridCount + 1, "BUY");
-            double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+         if(buyProfitAllowed)
+         {
+            // Get initial order price and last buy price
+            double initialBuyPrice = GetFirstPositionPrice(POSITION_TYPE_BUY);
+            double lastBuyPrice = GetLastPositionPrice(POSITION_TYPE_BUY);
+            int distance = GetGridDistance(false, profitGridCount);
             
-            Print("Grid Profit BUY #", profitGridCount, " | Lot: ", lot, " | Distance: ", distance);
-            
-            if(trade.Buy(lot, _Symbol, price, 0, 0, "Grid Profit BUY #" + IntegerToString(profitGridCount)))
+            // Grid Profit only triggers when:
+            // 1. Current price is ABOVE initial order price (profit zone for BUY)
+            // 2. Price went UP from last buy by grid distance
+            if(currentPrice > initialBuyPrice && currentPrice - lastBuyPrice >= distance * _Point)
             {
-               LastGridBuyTime = currentBarTime;
+               // Grid Profit uses gridLevel starting from 1 (Initial Order is the base)
+               // profitGridCount=0 means first Grid Profit order, which should use level 1
+               // v5.25: Pass direction to GetGridLotSize for CDC Trend Mode
+               double lot = GetGridLotSize(false, profitGridCount + 1, "BUY");
+               double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
                
-               // v5.25: Execute Hedge Grid Order for Sub symbol
-               if(InpTradingMode == TRADING_MODE_HEDGING)
+               Print("Grid Profit BUY #", profitGridCount, " | Lot: ", lot, " | Distance: ", distance);
+               
+               if(trade.Buy(lot, _Symbol, price, 0, 0, "Grid Profit BUY #" + IntegerToString(profitGridCount)))
                {
-                  Sleep(50);
-                  ExecuteHedgeGridOrder("Grid Profit BUY", "BUY", lot, profitGridCount);
+                  LastGridBuyTime = currentBarTime;
+                  
+                  // v5.25: Execute Hedge Grid Order for Sub symbol
+                  if(InpTradingMode == TRADING_MODE_HEDGING)
+                  {
+                     Sleep(50);
+                     ExecuteHedgeGridOrder("Grid Profit BUY", "BUY", lot, profitGridCount);
+                  }
                }
             }
          }
@@ -6680,43 +6698,49 @@ void CheckGridProfitSide()
          }
       }
       
+      // v5.25.6: Use flag instead of return to allow BUY/SELL to be checked independently
       if(profitGridCount < InpGridProfitMaxTrades)
       {
+         bool sellProfitAllowed = true;
+         
          // Check new candle requirement
          if(InpGridProfitNewCandle && currentBarTime == LastGridSellTime)
-            return;
+            sellProfitAllowed = false;
          
          // Check signal requirement
          if(InpGridProfitOnlySignal && !IsTradeAllowed("SELL"))
-            return;
+            sellProfitAllowed = false;
           
-          // Get initial order price and last sell price
-          double initialSellPrice = GetFirstPositionPrice(POSITION_TYPE_SELL);
-          double lastSellPrice = GetLastPositionPrice(POSITION_TYPE_SELL);
-          int distance = GetGridDistance(false, profitGridCount);
-          
-          // Grid Profit only triggers when:
-          // 1. Current price is BELOW initial order price (profit zone for SELL)
-          // 2. Price went DOWN from last sell by grid distance
-          if(currentPrice < initialSellPrice && lastSellPrice - currentPrice >= distance * _Point)
-          {
-            // Grid Profit uses gridLevel starting from 1 (Initial Order is the base)
-            // profitGridCount=0 means first Grid Profit order, which should use level 1
-            // v5.25: Pass direction to GetGridLotSize for CDC Trend Mode
-            double lot = GetGridLotSize(false, profitGridCount + 1, "SELL");
-            double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+         if(sellProfitAllowed)
+         {
+            // Get initial order price and last sell price
+            double initialSellPrice = GetFirstPositionPrice(POSITION_TYPE_SELL);
+            double lastSellPrice = GetLastPositionPrice(POSITION_TYPE_SELL);
+            int distance = GetGridDistance(false, profitGridCount);
             
-            Print("Grid Profit SELL #", profitGridCount, " | Lot: ", lot, " | Distance: ", distance);
-            
-            if(trade.Sell(lot, _Symbol, price, 0, 0, "Grid Profit SELL #" + IntegerToString(profitGridCount)))
+            // Grid Profit only triggers when:
+            // 1. Current price is BELOW initial order price (profit zone for SELL)
+            // 2. Price went DOWN from last sell by grid distance
+            if(currentPrice < initialSellPrice && lastSellPrice - currentPrice >= distance * _Point)
             {
-               LastGridSellTime = currentBarTime;
+               // Grid Profit uses gridLevel starting from 1 (Initial Order is the base)
+               // profitGridCount=0 means first Grid Profit order, which should use level 1
+               // v5.25: Pass direction to GetGridLotSize for CDC Trend Mode
+               double lot = GetGridLotSize(false, profitGridCount + 1, "SELL");
+               double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
                
-               // v5.25: Execute Hedge Grid Order for Sub symbol
-               if(InpTradingMode == TRADING_MODE_HEDGING)
+               Print("Grid Profit SELL #", profitGridCount, " | Lot: ", lot, " | Distance: ", distance);
+               
+               if(trade.Sell(lot, _Symbol, price, 0, 0, "Grid Profit SELL #" + IntegerToString(profitGridCount)))
                {
-                  Sleep(50);
-                  ExecuteHedgeGridOrder("Grid Profit SELL", "SELL", lot, profitGridCount);
+                  LastGridSellTime = currentBarTime;
+                  
+                  // v5.25: Execute Hedge Grid Order for Sub symbol
+                  if(InpTradingMode == TRADING_MODE_HEDGING)
+                  {
+                     Sleep(50);
+                     ExecuteHedgeGridOrder("Grid Profit SELL", "SELL", lot, profitGridCount);
+                  }
                }
             }
          }
