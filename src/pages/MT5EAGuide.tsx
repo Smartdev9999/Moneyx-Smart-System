@@ -5,13 +5,13 @@ import StepCard from '@/components/StepCard';
 
 const MT5EAGuide = () => {
   const fullEACode = `//+------------------------------------------------------------------+
-//|                   Moneyx Smart Gold System v5.25.2                 |
+//|                   Moneyx Smart Gold System v5.25.3                 |
 //|           Smart Money Trading System with CDC Action Zone          |
 //| + Grid Trading + Auto Scaling + Hedging + CDC Trend Compounding   |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
 #property link      ""
-#property version   "5.252"
+#property version   "5.253"
 #property strict
 
 // *** Logo File ***
@@ -2325,12 +2325,36 @@ void UpdateDashboard()
    ObjectSetInteger(0, DashPrefix + "BtnPause", OBJPROP_BGCOLOR, g_eaIsPaused ? clrGreen : clrOrangeRed);
    
    // Update Detail Values (เพิ่ม Accumulate Close 3 rows: Closed, Floating, Total)
-   // คำนวณ Total P/L รวม (Floating + Accumulated Closed)
-   double totalPLForAccumulate = floatingPL + g_accumulateClosedProfit;
    int currentPosCount = buyCount + sellCount;
    
-   // Accumulate Close: ใช้ Locked Target ถ้ามี order ค้าง, ไม่งั้นแสดง Current Scaled
-   double displayAccumulateTarget = (g_lockedAccumulateTarget > 0) ? g_lockedAccumulateTarget : ApplyScaleDollar(InpAccumulateTarget);
+   // v5.25.3: Use Hedge-specific values in Hedging Mode
+   double totalFloatingPL = floatingPL;
+   double totalClosedProfit = g_accumulateClosedProfit;
+   double displayAccumulateTarget = ApplyScaleDollar(InpAccumulateTarget);
+   
+   if(InpTradingMode == TRADING_MODE_HEDGING)
+   {
+      // Get combined floating P/L from both Main and Sub symbols
+      totalFloatingPL = GetHedgeTotalFloatingPL();
+      totalClosedProfit = g_hedgeTotalClosedProfit;
+      
+      // Use Hedge Total Target if set, otherwise use side-based display
+      if(InpHedgeTotalTarget > 0)
+      {
+         displayAccumulateTarget = ApplyScaleDollar(InpHedgeTotalTarget);
+      }
+      else
+      {
+         // Side-based mode: show combined side targets
+         displayAccumulateTarget = ApplyScaleDollar(InpHedgeBuyTarget + InpHedgeSellTarget);
+      }
+   }
+   else if(g_lockedAccumulateTarget > 0)
+   {
+      displayAccumulateTarget = g_lockedAccumulateTarget;
+   }
+   
+   double totalPLForAccumulate = totalFloatingPL + totalClosedProfit;
    double remainingToTarget = displayAccumulateTarget - totalPLForAccumulate;
    
    string detailValues[15];
@@ -2346,11 +2370,11 @@ void UpdateDashboard()
    detailValues[9] = (floatingPL >= 0 ? "+" : "-") + DoubleToString(MathAbs(currentDD), 1) + "%";
    detailValues[10] = DoubleToString(g_maxDrawdownPercent, 1) + "%";
    
-   // === ACCUMULATE SECTION (3 rows) ===
-   // Index 11: Accum. Closed (กำไรที่ปิดไปแล้ว)
-   detailValues[11] = (g_accumulateClosedProfit >= 0 ? "+" : "") + DoubleToString(g_accumulateClosedProfit, 0) + "$";
-   // Index 12: Accum. Floating (กำไรลอยตัว)
-   detailValues[12] = (floatingPL >= 0 ? "+" : "") + DoubleToString(floatingPL, 0) + "$";
+   // === ACCUMULATE SECTION (3 rows) - v5.25.3: Use Hedge-combined values ===
+   // Index 11: Accum. Closed (Main + Sub in Hedge Mode)
+   detailValues[11] = (totalClosedProfit >= 0 ? "+" : "") + DoubleToString(totalClosedProfit, 0) + "$";
+   // Index 12: Accum. Floating (Main + Sub in Hedge Mode)
+   detailValues[12] = (totalFloatingPL >= 0 ? "+" : "") + DoubleToString(totalFloatingPL, 0) + "$";
    // Index 13: Accum. Total (รวม + Need to Target)
    string totalStr = (totalPLForAccumulate >= 0 ? "+" : "") + DoubleToString(totalPLForAccumulate, 0) + "$";
    string remainStr = DoubleToString(remainingToTarget, 0) + "$";
@@ -2484,7 +2508,19 @@ void UpdateProfitHistory()
       
       // Only count our EA's deals
       if(HistoryDealGetInteger(dealTicket, DEAL_MAGIC) != InpMagicNumber) continue;
-      if(HistoryDealGetString(dealTicket, DEAL_SYMBOL) != _Symbol) continue;
+      
+      // v5.25.3: Include both Main and Sub symbol deals in Hedging Mode
+      string dealSymbol = HistoryDealGetString(dealTicket, DEAL_SYMBOL);
+      if(InpTradingMode == TRADING_MODE_HEDGING)
+      {
+         // Accept Main symbol OR Sub symbol
+         if(dealSymbol != _Symbol && dealSymbol != InpSubSymbol) continue;
+      }
+      else
+      {
+         // Single Mode: Only Main symbol
+         if(dealSymbol != _Symbol) continue;
+      }
       
       // Only count profit-related entries (not deposits/withdrawals)
       ENUM_DEAL_ENTRY entry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
