@@ -5,13 +5,13 @@ import StepCard from '@/components/StepCard';
 
 const MT5EAGuide = () => {
   const fullEACode = `//+------------------------------------------------------------------+
-//|                   Moneyx Smart Gold System v5.25.7                 |
+//|                   Moneyx Smart Gold System v5.25.8                 |
 //|           Smart Money Trading System with CDC Action Zone          |
 //| + Grid Trading + Auto Scaling + Hedging + Max Lot Setting         |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
 #property link      ""
-#property version   "5.257"
+#property version   "5.258"
 #property strict
 
 // *** Logo File ***
@@ -3867,6 +3867,9 @@ double GetGridLotSize(bool isLossSide, int gridLevel, string direction = "")
    
    // Apply Auto Balance Scaling
    calculatedLot = ApplyScaleLot(calculatedLot);
+   
+   // v5.25.8: Apply Max Lot limit - ensures all grid orders are capped
+   calculatedLot = NormalizeLotForSymbol(_Symbol, calculatedLot);
    
    return calculatedLot;
 }
