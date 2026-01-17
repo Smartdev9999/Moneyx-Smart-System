@@ -5,13 +5,13 @@ import StepCard from '@/components/StepCard';
 
 const MT5EAGuide = () => {
   const fullEACode = `//+------------------------------------------------------------------+
-//|                   Moneyx Smart Gold System v5.25.8                 |
+//|                   Moneyx Smart Gold System v5.25.9                 |
 //|           Smart Money Trading System with CDC Action Zone          |
-//| + Grid Trading + Auto Scaling + Hedging + Max Lot Setting         |
+//| + Grid Trading + Auto Scaling + Hedging + Max Lot + SL Fix        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
 #property link      ""
-#property version   "5.258"
+#property version   "5.259"
 #property strict
 
 // *** Logo File ***
@@ -3782,6 +3782,86 @@ void CloseHedgeSellSide()
 }
 
 //+------------------------------------------------------------------+
+//| v5.25.9: Count BUY Side Positions (Main BUY + paired Sub)          |
+//+------------------------------------------------------------------+
+int CountHedgeBuySidePositions()
+{
+   int count = 0;
+   
+   for(int i = 0; i < PositionsTotal(); i++)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(PositionSelectByTicket(ticket))
+      {
+         string posSymbol = PositionGetString(POSITION_SYMBOL);
+         string comment = PositionGetString(POSITION_COMMENT);
+         ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+         
+         bool isOurOrder = (StringFind(comment, "MPM_") >= 0) ||
+                           (PositionGetInteger(POSITION_MAGIC) == InpMagicNumber);
+         
+         if(!isOurOrder) continue;
+         
+         bool isBuySide = false;
+         
+         if(posSymbol == _Symbol && posType == POSITION_TYPE_BUY)
+            isBuySide = true;
+         else if(posSymbol == g_subSymbol)
+         {
+            if(InpHedgeInverseTrade && posType == POSITION_TYPE_SELL)
+               isBuySide = true;
+            else if(!InpHedgeInverseTrade && posType == POSITION_TYPE_BUY)
+               isBuySide = true;
+         }
+         
+         if(isBuySide) count++;
+      }
+   }
+   
+   return count;
+}
+
+//+------------------------------------------------------------------+
+//| v5.25.9: Count SELL Side Positions (Main SELL + paired Sub)        |
+//+------------------------------------------------------------------+
+int CountHedgeSellSidePositions()
+{
+   int count = 0;
+   
+   for(int i = 0; i < PositionsTotal(); i++)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(PositionSelectByTicket(ticket))
+      {
+         string posSymbol = PositionGetString(POSITION_SYMBOL);
+         string comment = PositionGetString(POSITION_COMMENT);
+         ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+         
+         bool isOurOrder = (StringFind(comment, "MPM_") >= 0) ||
+                           (PositionGetInteger(POSITION_MAGIC) == InpMagicNumber);
+         
+         if(!isOurOrder) continue;
+         
+         bool isSellSide = false;
+         
+         if(posSymbol == _Symbol && posType == POSITION_TYPE_SELL)
+            isSellSide = true;
+         else if(posSymbol == g_subSymbol)
+         {
+            if(InpHedgeInverseTrade && posType == POSITION_TYPE_BUY)
+               isSellSide = true;
+            else if(!InpHedgeInverseTrade && posType == POSITION_TYPE_SELL)
+               isSellSide = true;
+         }
+         
+         if(isSellSide) count++;
+      }
+   }
+   
+   return count;
+}
+
+//+------------------------------------------------------------------+
 //| Get Lot Size for Grid based on level (v5.25: Added CDC Trend)      |
 //| *** Grid Loss และ Grid Profit แยกนับ level กันอิสระ ***            |
 //|                                                                    |
@@ -6129,7 +6209,19 @@ void ExecuteSLAction(ENUM_POSITION_TYPE posType, double totalLots, string reason
    if(InpSLActionMode == SL_ACTION_CLOSE)
    {
       Print(reason, " - Closing positions");
-      ClosePositionsByType(posType);
+      
+      // v5.25.9: In Hedging Mode, close both Main and Sub positions for the side
+      if(InpTradingMode == TRADING_MODE_HEDGING && g_hedgeModeInitialized)
+      {
+         if(posType == POSITION_TYPE_BUY)
+            CloseHedgeBuySide();
+         else
+            CloseHedgeSellSide();
+      }
+      else
+      {
+         ClosePositionsByType(posType);
+      }
    }
    else // SL_ACTION_HEDGE
    {
@@ -6146,7 +6238,17 @@ void ExecuteSLActionAll(double buyLots, double sellLots, string reason)
    if(InpSLActionMode == SL_ACTION_CLOSE)
    {
       Print(reason, " - Closing all positions");
-      CloseAllPositions();
+      
+      // v5.25.9: In Hedging Mode, close both Main and Sub symbols for both sides
+      if(InpTradingMode == TRADING_MODE_HEDGING && g_hedgeModeInitialized)
+      {
+         CloseHedgeBuySide();
+         CloseHedgeSellSide();
+      }
+      else
+      {
+         CloseAllPositions();
+      }
    }
    else // SL_ACTION_HEDGE
    {
@@ -6247,12 +6349,29 @@ void CheckTPSLConditions()
    }
    
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
-   double totalPL = GetTotalFloatingPL();
-   double buyPL = GetFloatingPLByType(POSITION_TYPE_BUY);
-   double sellPL = GetFloatingPLByType(POSITION_TYPE_SELL);
    
-   int buyCount = CountPositions(POSITION_TYPE_BUY);
-   int sellCount = CountPositions(POSITION_TYPE_SELL);
+   // v5.25.9: Use hedging-aware P/L calculation in Dual Mode
+   double totalPL, buyPL, sellPL;
+   int buyCount, sellCount;
+   
+   if(InpTradingMode == TRADING_MODE_HEDGING && g_hedgeModeInitialized)
+   {
+      // Hedging Mode: Include both Main and Sub symbol P/L
+      totalPL = GetHedgeTotalFloatingPL();
+      buyPL = GetHedgeBuySideFloatingPL();
+      sellPL = GetHedgeSellSideFloatingPL();
+      buyCount = CountHedgeBuySidePositions();
+      sellCount = CountHedgeSellSidePositions();
+   }
+   else
+   {
+      // Single Mode: Main symbol only
+      totalPL = GetTotalFloatingPL();
+      buyPL = GetFloatingPLByType(POSITION_TYPE_BUY);
+      sellPL = GetFloatingPLByType(POSITION_TYPE_SELL);
+      buyCount = CountPositions(POSITION_TYPE_BUY);
+      sellCount = CountPositions(POSITION_TYPE_SELL);
+   }
    
    double avgBuy, lotsBuy, avgSell, lotsSell;
    GetAveragePriceAndLots(POSITION_TYPE_BUY, avgBuy, lotsBuy);
