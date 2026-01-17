@@ -5,13 +5,13 @@ import StepCard from '@/components/StepCard';
 
 const MT5EAGuide = () => {
   const fullEACode = `//+------------------------------------------------------------------+
-//|                   Moneyx Smart Gold System v5.25.6                 |
+//|                   Moneyx Smart Gold System v5.25.7                 |
 //|           Smart Money Trading System with CDC Action Zone          |
-//| + Grid Trading + Auto Scaling + Hedging + Grid Return Bug Fix     |
+//| + Grid Trading + Auto Scaling + Hedging + Max Lot Setting         |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
 #property link      ""
-#property version   "5.256"
+#property version   "5.257"
 #property strict
 
 // *** Logo File ***
@@ -256,6 +256,7 @@ input ENUM_LOT_MODE InpLotMode = LOT_FIXED;  // Lot Mode
 input double   InpInitialLot   = 0.01;       // Initial Lot Size (Base)
 input double   InpRiskPercent  = 1.0;        // Risk % of Balance (for Risk Mode)
 input double   InpRiskDollar   = 50.0;       // Fixed Dollar Risk (for Risk Mode)
+input double   InpMaxLot       = 0;          // Max Lot Size (0=Disabled)
 input int      InpMagicNumber  = 123456;     // Magic Number
 
 //--- [ GRID LOSS SIDE SETTINGS ] -----------------------------------
@@ -3033,6 +3034,17 @@ double NormalizeLotForSymbol(string symbol, double lot)
    
    lot = MathMax(minLot, lot);
    lot = MathMin(maxLot, lot);
+   
+   // v5.25.7: Apply user-defined Max Lot limit (0 = disabled)
+   if(InpMaxLot > 0)
+   {
+      if(lot > InpMaxLot)
+      {
+         Print("[MAX LOT v5.25.7] Lot capped: ", lot, " -> ", InpMaxLot);
+         lot = InpMaxLot;
+      }
+   }
+   
    lot = NormalizeDouble(MathRound(lot / stepLot) * stepLot, 2);
    
    return lot;
