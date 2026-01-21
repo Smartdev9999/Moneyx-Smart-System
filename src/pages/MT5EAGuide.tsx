@@ -1013,6 +1013,9 @@ bool SyncAccountDataWithEvent(ENUM_SYNC_EVENT eventType)
    else if(g_licenseStatus == LICENSE_NOT_FOUND || g_licenseStatus == LICENSE_ERROR) eaStatus = "invalid";
    else if(!g_isLicenseValid) eaStatus = "paused";
    
+   // v5.27: Get account currency for auto-detection (USD, USC, EUR, etc.)
+   string accountCurrency = AccountInfoString(ACCOUNT_CURRENCY);
+   
    string json = "{";
    json += "\\"account_number\\":\\"" + IntegerToString(accountNumber) + "\\",";
    json += "\\"balance\\":" + DoubleToString(balance, 2) + ",";
@@ -1033,7 +1036,8 @@ bool SyncAccountDataWithEvent(ENUM_SYNC_EVENT eventType)
    json += "\\"total_trades\\":" + IntegerToString(totalTrades) + ",";
    json += "\\"event_type\\":\\"" + eventTypeStr + "\\",";
    json += "\\"ea_name\\":\\"Moneyx Smart Gold System\\",";
-   json += "\\"ea_status\\":\\"" + eaStatus + "\\"";
+   json += "\\"ea_status\\":\\"" + eaStatus + "\\",";
+   json += "\\"currency\\":\\"" + accountCurrency + "\\"";
    
    // Include trade history on all sync events (scheduled + order close)
    // This ensures historical data is synced on EA startup and periodically

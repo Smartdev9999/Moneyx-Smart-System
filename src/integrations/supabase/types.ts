@@ -380,6 +380,7 @@ export type Database = {
           account_number: string
           balance: number | null
           created_at: string
+          currency: string | null
           customer_id: string
           drawdown: number | null
           ea_status: string | null
@@ -410,6 +411,7 @@ export type Database = {
           account_number: string
           balance?: number | null
           created_at?: string
+          currency?: string | null
           customer_id: string
           drawdown?: number | null
           ea_status?: string | null
@@ -440,6 +442,7 @@ export type Database = {
           account_number?: string
           balance?: number | null
           created_at?: string
+          currency?: string | null
           customer_id?: string
           drawdown?: number | null
           ea_status?: string | null

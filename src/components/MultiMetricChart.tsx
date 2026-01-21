@@ -36,6 +36,7 @@ const MultiMetricChart = ({ accountIds }: MultiMetricChartProps) => {
   const [isLoading, setIsLoading] = useState(true);
   const [metric, setMetric] = useState<MetricType>('growth');
   const [timeframe, setTimeframe] = useState<TimeFrame>('30d');
+  const [currency, setCurrency] = useState<string>('USD');
 
   useEffect(() => {
     fetchMetricData();
@@ -63,13 +64,27 @@ const MultiMetricChart = ({ accountIds }: MultiMetricChartProps) => {
           break;
       }
 
-      // Get account IDs
+      // Get account IDs and currency
       let targetAccountIds = accountIds;
       if (!targetAccountIds || targetAccountIds.length === 0) {
         const { data: allAccounts } = await supabase
           .from('mt5_accounts')
-          .select('id, balance, equity, initial_balance');
+          .select('id, balance, equity, initial_balance, currency');
         targetAccountIds = allAccounts?.map(a => a.id) || [];
+        // Get currency from first account
+        if (allAccounts && allAccounts.length > 0) {
+          setCurrency(allAccounts[0].currency || 'USD');
+        }
+      } else {
+        // Fetch currency for provided account IDs
+        const { data: accountData } = await supabase
+          .from('mt5_accounts')
+          .select('currency')
+          .in('id', targetAccountIds)
+          .limit(1);
+        if (accountData && accountData.length > 0) {
+          setCurrency(accountData[0].currency || 'USD');
+        }
       }
 
       if (targetAccountIds.length === 0) {
@@ -193,13 +208,18 @@ const MultiMetricChart = ({ accountIds }: MultiMetricChartProps) => {
   };
 
   const formatValue = (value: number) => {
+    const currencyLabel = currency === 'USC' ? ' USC' : '';
     if (metric === 'growth' || metric === 'drawdown' || metric === 'margin') {
       return `${value.toFixed(1)}%`;
     }
     if (Math.abs(value) >= 1000) {
-      return `$${(value / 1000).toFixed(1)}K`;
+      return currency === 'USC' 
+        ? `${(value / 1000).toFixed(1)}K${currencyLabel}`
+        : `$${(value / 1000).toFixed(1)}K`;
     }
-    return `$${value.toFixed(0)}`;
+    return currency === 'USC' 
+      ? `${value.toFixed(0)}${currencyLabel}`
+      : `$${value.toFixed(0)}`;
   };
 
   const getMetricLabel = (m: MetricType) => {
@@ -237,7 +257,7 @@ const MultiMetricChart = ({ accountIds }: MultiMetricChartProps) => {
           )}
           {dailyPL && dailyPL.value !== 0 && (
             <p className={`text-xs mt-1 ${dailyPL.value >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>
-              Daily P/L: {dailyPL.value >= 0 ? '+' : ''}{dailyPL.value.toFixed(0)} USD
+              Daily P/L: {dailyPL.value >= 0 ? '+' : ''}{dailyPL.value.toFixed(0)} {currency === 'USC' ? 'USC' : 'USD'}
             </p>
           )}
         </div>

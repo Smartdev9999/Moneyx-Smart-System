@@ -61,6 +61,7 @@ interface MT5Account {
   drawdown: number;
   last_sync: string | null;
   ea_status: string | null;
+  currency: string | null;
   trading_system: { name: string } | null;
   customer: { name: string; customer_id: string } | null;
 }
@@ -168,8 +169,22 @@ const AccountPortfolio = () => {
     }
   };
 
-  const formatCurrency = (value: number) => {
-    return `$${Number(value || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
+  // Get currency from account (auto-detected from EA)
+  const getCurrency = () => account?.currency || 'USD';
+  
+  // Format currency with proper symbol based on account currency
+  const formatCurrency = (value: number, showSign: boolean = false) => {
+    const currency = getCurrency();
+    const formattedValue = Number(value || 0).toLocaleString('en-US', { minimumFractionDigits: 2 });
+    const sign = showSign && value >= 0 ? '+' : '';
+    
+    // USC = US Cent account - display without $ symbol, add USC suffix
+    if (currency === 'USC') {
+      return `${sign}${formattedValue} USC`;
+    }
+    // Default USD or other currencies
+    const symbol = currency === 'EUR' ? '€' : '$';
+    return `${sign}${symbol}${formattedValue}`;
   };
 
   const formatPercent = (value: number) => {
@@ -181,9 +196,16 @@ const AccountPortfolio = () => {
     return ((account.win_trades || 0) / account.total_trades) * 100;
   };
 
+  // Net Profit: Use total_profit from EA (correct value excluding withdrawals)
+  // Fallback: balance - initial_balance + total_withdrawal
   const getNetProfit = () => {
     if (!account) return 0;
-    return (account.balance || 0) - (account.initial_balance || 0);
+    // Priority 1: Use total_profit from EA (already calculated correctly)
+    if (account.total_profit !== null && account.total_profit !== undefined && account.total_profit !== 0) {
+      return account.total_profit;
+    }
+    // Fallback: Add back withdrawals to get actual profit
+    return (account.balance || 0) - (account.initial_balance || 0) + (account.total_withdrawal || 0);
   };
 
   const getROI = () => {
@@ -271,7 +293,14 @@ const AccountPortfolio = () => {
             <ArrowLeft className="h-5 w-5" />
           </Button>
           <div>
-            <h1 className="text-2xl font-bold">Portfolio: {account?.account_number || 'Loading...'}</h1>
+            <div className="flex items-center gap-2">
+              <h1 className="text-2xl font-bold">Portfolio: {account?.account_number || 'Loading...'}</h1>
+              {account?.currency && (
+                <Badge variant="outline" className={account.currency === 'USC' ? 'text-amber-400 border-amber-500' : 'text-emerald-400 border-emerald-500'}>
+                  {account.currency === 'USC' ? 'Cent Account' : account.currency}
+                </Badge>
+              )}
+            </div>
             <p className="text-muted-foreground">
               {account?.customer?.name} ({account?.customer?.customer_id})
             </p>
@@ -307,7 +336,7 @@ const AccountPortfolio = () => {
                 Net Profit
               </div>
               <p className={`text-xl font-bold ${getNetProfit() >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                {getNetProfit() >= 0 ? '+' : ''}{formatCurrency(getNetProfit())}
+                {formatCurrency(getNetProfit(), true)}
               </p>
             </CardContent>
           </Card>
