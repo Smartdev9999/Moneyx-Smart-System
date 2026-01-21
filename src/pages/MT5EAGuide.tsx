@@ -5,13 +5,13 @@ import StepCard from '@/components/StepCard';
 
 const MT5EAGuide = () => {
   const fullEACode = `//+------------------------------------------------------------------+
-//|                   Moneyx Smart Gold System v5.25.9                 |
+//|                   Moneyx Smart Gold System v5.26.0                 |
 //|           Smart Money Trading System with CDC Action Zone          |
-//| + Grid Trading + Auto Scaling + Hedging + Max Lot + SL Fix        |
+//| + Grid Trading + Auto Scaling + Hedging + Scaled Max Lot          |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
 #property link      ""
-#property version   "5.259"
+#property version   "5.260"
 #property strict
 
 // *** Logo File ***
@@ -2934,6 +2934,16 @@ double GetScaleFactor()
 }
 
 //+------------------------------------------------------------------+
+//| Get Scaled Max Lot (v5.26.0)                                       |
+//| Returns Max Lot adjusted by Auto Balance Scaling factor            |
+//+------------------------------------------------------------------+
+double GetScaledMaxLot()
+{
+   if(InpMaxLot <= 0) return 0;  // 0 = Disabled
+   return NormalizeDouble(InpMaxLot * GetScaleFactor(), 2);
+}
+
+//+------------------------------------------------------------------+
 //| Apply Auto Scale to Lot Size                                       |
 //| Returns scaled lot size based on account balance                   |
 //+------------------------------------------------------------------+
@@ -3035,13 +3045,15 @@ double NormalizeLotForSymbol(string symbol, double lot)
    lot = MathMax(minLot, lot);
    lot = MathMin(maxLot, lot);
    
-   // v5.25.7: Apply user-defined Max Lot limit (0 = disabled)
-   if(InpMaxLot > 0)
+   // v5.26.0: Apply user-defined Max Lot limit with Auto Balance Scaling
+   double scaledMaxLot = GetScaledMaxLot();
+   if(scaledMaxLot > 0)
    {
-      if(lot > InpMaxLot)
+      if(lot > scaledMaxLot)
       {
-         Print("[MAX LOT v5.25.7] Lot capped: ", lot, " -> ", InpMaxLot);
-         lot = InpMaxLot;
+         Print("[MAX LOT v5.26.0] Lot capped: ", lot, " -> ", scaledMaxLot, 
+               " (InpMaxLot=", InpMaxLot, " x ScaleFactor=", GetScaleFactor(), ")");
+         lot = scaledMaxLot;
       }
    }
    
