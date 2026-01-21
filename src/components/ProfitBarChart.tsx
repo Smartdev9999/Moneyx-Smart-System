@@ -34,6 +34,7 @@ const ProfitBarChart = ({ accountIds }: ProfitBarChartProps) => {
   const [period, setPeriod] = useState<PeriodType>('monthly');
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
   const [availableYears, setAvailableYears] = useState<number[]>([new Date().getFullYear()]);
+  const [currency, setCurrency] = useState<string>('USD');
 
   useEffect(() => {
     fetchProfitData();
@@ -42,13 +43,27 @@ const ProfitBarChart = ({ accountIds }: ProfitBarChartProps) => {
   const fetchProfitData = async () => {
     setIsLoading(true);
     try {
-      // Get account IDs
+      // Get account IDs and currency
       let targetAccountIds = accountIds;
       if (!targetAccountIds || targetAccountIds.length === 0) {
         const { data: allAccounts } = await supabase
           .from('mt5_accounts')
-          .select('id');
+          .select('id, currency');
         targetAccountIds = allAccounts?.map(a => a.id) || [];
+        // Get currency from first account (assume all accounts have same currency)
+        if (allAccounts && allAccounts.length > 0) {
+          setCurrency(allAccounts[0].currency || 'USD');
+        }
+      } else {
+        // Fetch currency for provided account IDs
+        const { data: accountData } = await supabase
+          .from('mt5_accounts')
+          .select('currency')
+          .in('id', targetAccountIds)
+          .limit(1);
+        if (accountData && accountData.length > 0) {
+          setCurrency(accountData[0].currency || 'USD');
+        }
       }
 
       if (targetAccountIds.length === 0) {
@@ -163,11 +178,12 @@ const ProfitBarChart = ({ accountIds }: ProfitBarChartProps) => {
     if (active && payload && payload.length) {
       const value = payload[0].value;
       const isProfit = value >= 0;
+      const currencyLabel = currency === 'USC' ? 'USC' : 'USD';
       return (
         <div className="bg-card/95 backdrop-blur-sm border border-border rounded-lg p-3 shadow-xl">
           <p className="text-sm text-muted-foreground mb-1">{label}</p>
           <p className={`text-sm font-bold ${isProfit ? 'text-emerald-500' : 'text-red-500'}`}>
-            {isProfit ? '+' : ''}{formatValue(value)} USD
+            {isProfit ? '+' : ''}{formatValue(value)} {currencyLabel}
           </p>
         </div>
       );

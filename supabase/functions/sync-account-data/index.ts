@@ -60,6 +60,8 @@ interface SyncRequest {
   ea_status?: 'working' | 'paused' | 'suspended' | 'expired' | 'invalid' | 'offline';
   // v3.7.4: EA name for auto-linking trading system
   ea_name?: string;
+  // v5.27: Account currency (USD, USC, EUR, etc.) for auto-detection
+  currency?: string;
 }
 
 interface SyncResponse {
@@ -215,6 +217,12 @@ serve(async (req) => {
     // EA status for dashboard display
     if (syncData.ea_status !== undefined) {
       updateData.ea_status = syncData.ea_status;
+    }
+
+    // v5.27: Account currency for auto-detection (USD, USC, EUR, etc.)
+    if (syncData.currency !== undefined) {
+      updateData.currency = syncData.currency;
+      console.log(`[sync-account-data] Account currency: ${syncData.currency}`);
     }
 
     // v3.7.4: Auto-link trading system if ea_name is provided
