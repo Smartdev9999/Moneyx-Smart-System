@@ -5,13 +5,13 @@ import StepCard from '@/components/StepCard';
 
 const MT5EAGuide = () => {
   const fullEACode = `//+------------------------------------------------------------------+
-//|                   Moneyx Smart Gold System v5.26.0                 |
+//|                   Moneyx Smart Gold System v5.26.1                 |
 //|           Smart Money Trading System with CDC Action Zone          |
-//| + Grid Trading + Auto Scaling + Hedging + Scaled Max Lot          |
+//| + Grid Trading + Auto Scaling + Hedging + Auto Symbol Detection   |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
 #property link      ""
-#property version   "5.260"
+#property version   "5.261"
 #property strict
 
 // *** Logo File ***
@@ -1819,15 +1819,15 @@ int OnInit()
       Print("Auto Balance Scaling: DISABLED (using fixed values)");
    }
    
-   // *** HEDGING MODE INITIALIZATION (v5.22) ***
+   // *** HEDGING MODE INITIALIZATION (v5.22, v5.26.1: Graceful Fallback) ***
    if(InpTradingMode == TRADING_MODE_HEDGING)
    {
-      if(!InitHedgingMode())
-      {
-         Print("ERROR: Failed to initialize Hedging Mode!");
-         return INIT_FAILED;
-      }
-      Print("[HEDGING] Note: In Hedging Mode, only Accumulate Close is used for TP");
+      InitHedgingMode();  // v5.26.1: Always succeeds (fallback to Single Mode if needed)
+      
+      if(g_hedgeModeInitialized)
+         Print("[HEDGING] Note: In Hedging Mode, only Accumulate Close is used for TP");
+      else
+         Print("[SINGLE] Running in Single Symbol mode (Hedging fallback)");
    }
    
    // Create Dashboard Panel
@@ -3009,21 +3009,59 @@ void ParseStringToIntArray(string inputStr, int &arr[])
 // =====================================================================
 
 //+------------------------------------------------------------------+
-//| Initialize Hedging Mode                                            |
+//| Initialize Hedging Mode (v5.26.1: Auto-detect suffix + fallback)   |
 //+------------------------------------------------------------------+
 bool InitHedgingMode()
 {
    if(InpTradingMode != TRADING_MODE_HEDGING) return true;
    
    g_subSymbol = InpSubSymbol;
+   bool symbolFound = false;
    
-   // Validate sub symbol
-   if(!SymbolSelect(g_subSymbol, true))
+   // v5.26.1: First try exact match
+   if(SymbolSelect(g_subSymbol, true))
    {
-      Print("[HEDGING] ERROR: Sub symbol not found: ", g_subSymbol);
-      return false;
+      symbolFound = true;
+   }
+   else
+   {
+      // v5.26.1: Try with main symbol's suffix (e.g., .v, .m, etc.)
+      int dotPos = StringFind(_Symbol, ".");
+      if(dotPos > 0)
+      {
+         string mainSuffix = StringSubstr(_Symbol, dotPos);
+         string trySymbol = InpSubSymbol + mainSuffix;
+         
+         if(SymbolSelect(trySymbol, true))
+         {
+            g_subSymbol = trySymbol;
+            symbolFound = true;
+            Print("[HEDGING] Auto-detected Sub Symbol with suffix: ", g_subSymbol);
+         }
+      }
    }
    
+   if(!symbolFound)
+   {
+      // v5.26.1: Fallback to Single Mode instead of failing EA
+      Print("[HEDGING] WARNING: Sub symbol not found: ", InpSubSymbol);
+      Print("[HEDGING] Tried auto-detect with main symbol suffix from: ", _Symbol);
+      Print("[HEDGING] >>> FALLING BACK TO SINGLE SYMBOL MODE <<<");
+      
+      // Show popup warning to user
+      MessageBox("Hedging Mode Warning!\\n\\n" +
+                 "Sub Symbol '" + InpSubSymbol + "' not found in Market Watch.\\n\\n" +
+                 "EA will run in SINGLE SYMBOL mode instead.\\n\\n" +
+                 "To use Hedging Mode, please update 'Sub Symbol' setting\\n" +
+                 "to match your broker's symbol name (e.g., add .v suffix).",
+                 "MoneyX Smart Gold - Hedging Fallback",
+                 MB_OK | MB_ICONWARNING);
+      
+      g_hedgeModeInitialized = false;
+      return true;  // v5.26.1: Don't fail EA, just disable hedging
+   }
+   
+   // Symbol found - initialize hedging mode
    g_subSymbolPoint = SymbolInfoDouble(g_subSymbol, SYMBOL_POINT);
    g_subSymbolDigits = (int)SymbolInfoInteger(g_subSymbol, SYMBOL_DIGITS);
    g_hedgeModeInitialized = true;
