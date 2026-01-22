@@ -5,13 +5,13 @@ import StepCard from '@/components/StepCard';
 
 const MT5EAGuide = () => {
   const fullEACode = `//+------------------------------------------------------------------+
-//|                   Moneyx Smart Gold System v5.26.1                 |
+//|                   Moneyx Smart Gold System v5.26.2                 |
 //|           Smart Money Trading System with CDC Action Zone          |
-//| + Grid Trading + Auto Scaling + Hedging + Auto Symbol Detection   |
+//| + Grid Trading + Auto Scaling + Hedging + CDC Backtest Reliability |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
 #property link      ""
-#property version   "5.261"
+#property version   "5.262"
 #property strict
 
 // *** Logo File ***
@@ -528,6 +528,11 @@ double CDCFast = 0;
 double CDCSlow = 0;
 double CDCAP = 0;
 color CDCZoneColor = clrWhite;
+
+// v5.26.2: CDC Backtest Reliability - Force History Download + Initial-Only Retry
+bool g_cdcReady = false;              // true เมื่อ CDC โหลดสำเร็จครั้งแรก
+datetime g_lastCDCRetryTime = 0;      // สำหรับ Initial-Only Retry (ทุก 5 วินาที)
+bool g_cdcHistoryAttempted = false;   // ติดตามว่าเคยพยายามโหลด history หรือยัง
 
 // Chart Objects Prefix
 string ZZPrefix = "ZZ_";
@@ -1834,6 +1839,26 @@ int OnInit()
          Print("[SINGLE] Running in Single Symbol mode (Hedging fallback)");
    }
    
+   // v5.26.2: Pre-load CDC history for backtesting reliability
+   if(InpUseCDCFilter)
+   {
+      int minBars = InpCDCSlowPeriod * 3 + 50;
+      PrintFormat("[INIT] v5.26.2: Pre-loading %s history for CDC filter (%d bars)...", 
+                  EnumToString(InpCDCTimeframe), minBars);
+      
+      bool loaded = EnsureHistoryLoaded(_Symbol, InpCDCTimeframe, minBars);
+      if(loaded)
+         Print("[INIT] CDC history ready!");
+      else
+         Print("[INIT] CDC history still loading - will retry every 5 seconds");
+      
+      // Also pre-load sub symbol if in Hedging Mode
+      if(InpTradingMode == TRADING_MODE_HEDGING && g_hedgeModeInitialized && g_subSymbol != "")
+      {
+         EnsureHistoryLoaded(g_subSymbol, InpCDCTimeframe, minBars);
+      }
+   }
+   
    // Create Dashboard Panel
    CreateDashboard();
    g_peakBalance = AccountInfoDouble(ACCOUNT_BALANCE);
@@ -2294,7 +2319,16 @@ void UpdateDashboard()
       : "OFF";
    
    // Get Current Trend from CDC
-   string trendDisplay = CDCTrend + " (" + EnumToString(InpCDCTimeframe) + ")";
+   // v5.26.2: แสดง LOADING... สีส้มถ้า CDC กำลังรอ sync data
+   string trendDisplay;
+   if(CDCTrend == "LOADING")
+   {
+      trendDisplay = "LOADING... (" + EnumToString(InpCDCTimeframe) + ")";
+   }
+   else
+   {
+      trendDisplay = CDCTrend + " (" + EnumToString(InpCDCTimeframe) + ")";
+   }
    
    // Update Status - Priority: License Status > EA Pause Status
    string statusText = "Working";
@@ -4500,13 +4534,72 @@ void DrawZigZagColorOnChart()
 }
 
 //+------------------------------------------------------------------+
-//| Calculate CDC Action Zone Values                                   |
+//| v5.26.2: Force History Download for Strategy Tester                |
+//| บังคับดาวน์โหลด historical data เพื่อแก้ปัญหา CDC NEUTRAL ใน Backtest |
 //+------------------------------------------------------------------+
+bool EnsureHistoryLoaded(string symbol, ENUM_TIMEFRAMES period, int minBars)
+{
+   // Step 1: Ensure symbol is selected in Market Watch
+   if(!SymbolSelect(symbol, true))
+   {
+      Print("[HISTORY] ", symbol, ": Cannot select symbol");
+      return false;
+   }
+   
+   // Step 2: Check if already synchronized
+   bool isSynced = (bool)SeriesInfoInteger(symbol, period, SERIES_SYNCHRONIZED);
+   int currentBars = Bars(symbol, period);
+   
+   if(isSynced && currentBars >= minBars)
+      return true;  // Data พร้อมใช้งาน
+   
+   // Step 3: Force download by requesting data
+   MqlRates rates[];
+   ArraySetAsSeries(rates, true);
+   
+   int requestBars = minBars * 2;
+   int copied = CopyRates(symbol, period, 0, requestBars, rates);
+   
+   if(copied >= minBars)
+   {
+      if(!g_cdcHistoryAttempted)
+      {
+         PrintFormat("[HISTORY] %s: Downloaded %d/%d bars on %s", 
+                     symbol, copied, requestBars, EnumToString(period));
+         g_cdcHistoryAttempted = true;
+      }
+      return true;
+   }
+   
+   // Step 4: Still loading - log only once
+   if(!g_cdcHistoryAttempted)
+   {
+      PrintFormat("[HISTORY] %s: Waiting for data sync (%d/%d bars on %s)...", 
+                  symbol, copied, minBars, EnumToString(period));
+   }
+   
+   return false;
+}
+
 //+------------------------------------------------------------------+
 //| Calculate CDC Action Zone Values                                   |
 //+------------------------------------------------------------------+
 void CalculateCDC()
 {
+   // v5.26.2: Force History Download for backtesting reliability
+   int minBarsRequired = InpCDCSlowPeriod * 3 + 50;
+   
+   if(!EnsureHistoryLoaded(_Symbol, InpCDCTimeframe, minBarsRequired))
+   {
+      // ยังโหลดไม่เสร็จ - dashboard จะแสดง "LOADING"
+      if(!g_cdcReady)
+      {
+         CDCTrend = "LOADING";
+         CDCZoneColor = clrOrange;
+      }
+      return;
+   }
+   
    // Always calculate CDC values and draw lines for trend visualization
    // The InpUseCDCFilter only controls whether CDC gates trade execution
    
@@ -4518,7 +4611,7 @@ void CalculateCDC()
    ArraySetAsSeries(openArr, true);
    ArraySetAsSeries(timeArr, true);
    
-   int barsNeeded = InpCDCSlowPeriod * 3 + 50;
+   int barsNeeded = minBarsRequired;
    
    if(CopyClose(_Symbol, InpCDCTimeframe, 0, barsNeeded, closeArr) < barsNeeded) return;
    if(CopyHigh(_Symbol, InpCDCTimeframe, 0, barsNeeded, highArr) < barsNeeded) return;
@@ -4565,6 +4658,14 @@ void CalculateCDC()
    {
       CDCTrend = "BEARISH";
       CDCZoneColor = clrRed;
+   }
+   
+   // v5.26.2: Mark CDC as ready after first successful calculation
+   if(!g_cdcReady)
+   {
+      g_cdcReady = true;
+      PrintFormat("[CDC] v5.26.2: Initial load SUCCESS - Trend=%s TF=%s", 
+                  CDCTrend, EnumToString(InpCDCTimeframe));
    }
    
    // If CDC Filter is disabled, set trend to neutral for trade gating only
@@ -8099,7 +8200,7 @@ void OnTick()
    // Draw TP/SL lines (every tick for real-time update)
    DrawTPSLLines();
    
-   // ========== v5.21: INDICATOR DRAWING SECTION (BEFORE PAUSE/NEWS CHECK) ==========
+   // ========== v5.21/5.26.2: INDICATOR DRAWING SECTION (BEFORE PAUSE/NEWS CHECK) ==========
    // This ensures indicators are ALWAYS drawn regardless of pause/news/time filter status
    // Visual feedback should always be available even when trading is paused
    {
@@ -8110,8 +8211,21 @@ void OnTick()
       bool isFirstDraw = g_forceInitialDraw;
       bool newIndicatorBarClosed = (lastIndicatorBarTime != currentIndicatorBarTime);
       
-      // Draw indicators on: first draw OR new bar closed
-      if(isFirstDraw || newIndicatorBarClosed)
+      // v5.26.2: CDC Initial-Only Retry mechanism
+      // ถ้า CDC ยังไม่พร้อม จะ retry ทุก 5 วินาที จนกว่าจะโหลดสำเร็จ
+      bool needCDCRetry = false;
+      if(!g_cdcReady && InpUseCDCFilter)
+      {
+         datetime currentTime = TimeCurrent();
+         if(currentTime - g_lastCDCRetryTime >= 5)  // Retry every 5 seconds
+         {
+            g_lastCDCRetryTime = currentTime;
+            needCDCRetry = true;
+         }
+      }
+      
+      // Draw indicators on: first draw OR new bar closed OR CDC retry needed
+      if(isFirstDraw || newIndicatorBarClosed || needCDCRetry)
       {
          lastIndicatorBarTime = currentIndicatorBarTime;
          
@@ -8122,6 +8236,7 @@ void OnTick()
          }
          
          // *** ALWAYS CALCULATE INDICATORS ***
+         // v5.26.2: CalculateCDC จะ retry โหลด history ถ้ายังไม่พร้อม
          CalculateCDC();
          
          if(InpSignalStrategy == STRATEGY_ZIGZAG)
