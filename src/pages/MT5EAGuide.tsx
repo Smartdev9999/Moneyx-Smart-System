@@ -3381,17 +3381,28 @@ double GetHedgeTotalFloatingPL()
 }
 
 //+------------------------------------------------------------------+
-//| Execute Hedge Grid Order (for Grid Loss/Profit) v5.25              |
+//| Execute Hedge Grid Order (for Grid Loss/Profit) v5.26.3            |
 //| Opens corresponding Sub symbol order when Grid triggers            |
 //| v5.25: Fixed CDC Trend lot sizing - uses baseLot instead of mainLot|
+//| v5.26.3: Fixed position counting - count only matching grid type   |
 //+------------------------------------------------------------------+
 bool ExecuteHedgeGridOrder(string gridType, string direction, double mainLot, int gridLevel)
 {
    if(InpTradingMode != TRADING_MODE_HEDGING) return false;
    if(!g_hedgeModeInitialized || g_subSymbol == "") return false;
    
-   // === v5.25.4: Verify Sub pair doesn't already have this grid level ===
-   // Count existing Sub orders with matching grid type to prevent over-trading
+   // === v5.26.3: Extract base grid type for accurate counting ===
+   // gridType comes in as "Grid Profit BUY" or "Grid Loss SELL" etc.
+   // We extract just "Grid Profit" or "Grid Loss" for matching
+   string baseGridType = "";
+   if(StringFind(gridType, "Grid Profit") >= 0)
+      baseGridType = "Grid Profit";
+   else if(StringFind(gridType, "Grid Loss") >= 0)
+      baseGridType = "Grid Loss";
+   else
+      baseGridType = gridType; // fallback
+   
+   // === v5.26.3: Count Sub positions with matching grid type ===
    int subGridCount = 0;
    ENUM_POSITION_TYPE expectedSubType;
    
@@ -3410,15 +3421,15 @@ bool ExecuteHedgeGridOrder(string gridType, string direction, double mainLot, in
             if(PositionGetInteger(POSITION_TYPE) == expectedSubType)
             {
                string comment = PositionGetString(POSITION_COMMENT);
-               // Check if this is same grid type (e.g., "Grid Loss" or "Grid Profit")
-               if(StringFind(comment, gridType) >= 0 || StringFind(comment, "_SUB") >= 0)
+               // v5.26.3: Count ONLY positions matching the baseGridType (not all _SUB)
+               if(StringFind(comment, baseGridType) >= 0)
                   subGridCount++;
             }
          }
       }
    }
    
-   // Also count Main pair positions of this direction to compare
+   // === v5.26.3: Count Main positions with matching grid type (not ALL positions) ===
    int mainCount = 0;
    ENUM_POSITION_TYPE mainType = (direction == "BUY") ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
    for(int i = 0; i < PositionsTotal(); i++)
@@ -3428,15 +3439,23 @@ bool ExecuteHedgeGridOrder(string gridType, string direction, double mainLot, in
          if(PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
          {
             if(PositionGetInteger(POSITION_TYPE) == mainType)
-               mainCount++;
+            {
+               string comment = PositionGetString(POSITION_COMMENT);
+               // v5.26.3: Count ONLY positions matching the baseGridType
+               if(StringFind(comment, baseGridType) >= 0)
+                  mainCount++;
+            }
          }
       }
    }
    
+   // v5.26.3: Enhanced debug log with baseGridType
+   Print("[HEDGE SYNC v5.26.3] ", baseGridType, " ", direction, " | Main=", mainCount, " Sub=", subGridCount);
+   
    // v5.25.4: Skip if Sub already has >= Main orders (prevent over-trading)
    if(subGridCount >= mainCount)
    {
-      Print("[HEDGE SYNC v5.25.4] Main=", mainCount, " Sub=", subGridCount, " | Skip - Sub already synced for ", gridType);
+      Print("[HEDGE SYNC v5.26.3] Skip - Sub already synced (", subGridCount, " >= ", mainCount, ") for ", gridType);
       return false;
    }
    
