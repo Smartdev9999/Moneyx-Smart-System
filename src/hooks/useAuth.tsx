@@ -3,7 +3,13 @@ import { User, Session } from '@supabase/supabase-js';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 
-type AppRole = 'super_admin' | 'admin' | 'developer' | 'user';
+type AppRole = 'super_admin' | 'admin' | 'developer' | 'customer' | 'user';
+
+interface CustomerInfo {
+  customerId: string | null;
+  customerUuid: string | null;
+  status: 'pending' | 'approved' | 'rejected' | null;
+}
 
 interface AuthContextType {
   user: User | null;
@@ -15,6 +21,9 @@ interface AuthContextType {
   signOut: () => Promise<void>;
   isAdmin: boolean;
   isSuperAdmin: boolean;
+  isCustomer: boolean;
+  isApprovedCustomer: boolean;
+  customerInfo: CustomerInfo;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -25,6 +34,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [role, setRole] = useState<AppRole | null>(null);
   const [loading, setLoading] = useState(true);
   const [roleLoading, setRoleLoading] = useState(false);
+  const [customerInfo, setCustomerInfo] = useState<CustomerInfo>({
+    customerId: null,
+    customerUuid: null,
+    status: null,
+  });
   const { toast } = useToast();
 
   const fetchUserRole = async (userId: string) => {
@@ -47,6 +61,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  const fetchCustomerInfo = async (userId: string): Promise<CustomerInfo> => {
+    try {
+      const { data, error } = await supabase
+        .from('customer_users')
+        .select(`
+          status,
+          customer_id,
+          customers:customer_id (
+            customer_id,
+            id
+          )
+        `)
+        .eq('user_id', userId)
+        .maybeSingle();
+
+      if (error || !data) {
+        return { customerId: null, customerUuid: null, status: null };
+      }
+
+      const customer = data.customers as { customer_id: string; id: string } | null;
+      return {
+        customerId: customer?.customer_id || null,
+        customerUuid: customer?.id || null,
+        status: data.status as 'pending' | 'approved' | 'rejected',
+      };
+    } catch (err) {
+      console.error('Error fetching customer info:', err);
+      return { customerId: null, customerUuid: null, status: null };
+    }
+  };
+
   useEffect(() => {
     // Set up auth state listener FIRST
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
@@ -57,14 +102,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // Defer role fetching with setTimeout to prevent deadlock
         if (session?.user) {
           setRoleLoading(true);
-          setTimeout(() => {
-            fetchUserRole(session.user.id).then((fetchedRole) => {
-              setRole(fetchedRole);
-              setRoleLoading(false);
-            });
+          setTimeout(async () => {
+            const [fetchedRole, fetchedCustomerInfo] = await Promise.all([
+              fetchUserRole(session.user.id),
+              fetchCustomerInfo(session.user.id),
+            ]);
+            setRole(fetchedRole);
+            setCustomerInfo(fetchedCustomerInfo);
+            setRoleLoading(false);
           }, 0);
         } else {
           setRole(null);
+          setCustomerInfo({ customerId: null, customerUuid: null, status: null });
           setRoleLoading(false);
         }
       }
@@ -76,8 +125,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(session?.user ?? null);
       
       if (session?.user) {
-        const fetchedRole = await fetchUserRole(session.user.id);
+        const [fetchedRole, fetchedCustomerInfo] = await Promise.all([
+          fetchUserRole(session.user.id),
+          fetchCustomerInfo(session.user.id),
+        ]);
         setRole(fetchedRole);
+        setCustomerInfo(fetchedCustomerInfo);
       }
       setLoading(false);
     });
@@ -151,7 +204,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       
       toast({
         title: "สมัครสมาชิกสำเร็จ",
-        description: "กรุณาตรวจสอบอีเมลเพื่อยืนยันบัญชี",
+        description: "กรุณารอ Admin อนุมัติบัญชีของคุณ",
       });
       
       return { error: null };
@@ -169,6 +222,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signOut = async () => {
     await supabase.auth.signOut();
     setRole(null);
+    setCustomerInfo({ customerId: null, customerUuid: null, status: null });
     toast({
       title: "ออกจากระบบแล้ว",
       description: "ขอบคุณที่ใช้บริการ",
@@ -177,6 +231,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const isAdmin = role === 'admin' || role === 'super_admin';
   const isSuperAdmin = role === 'super_admin';
+  const isCustomer = role === 'customer';
+  const isApprovedCustomer = isCustomer && customerInfo.status === 'approved';
 
   return (
     <AuthContext.Provider value={{
@@ -189,6 +245,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signOut,
       isAdmin,
       isSuperAdmin,
+      isCustomer,
+      isApprovedCustomer,
+      customerInfo,
     }}>
       {children}
     </AuthContext.Provider>

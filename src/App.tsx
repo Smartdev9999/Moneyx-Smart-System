@@ -10,6 +10,8 @@ import Contact from "./pages/Contact";
 import Auth from "./pages/Auth";
 import Admin from "./pages/Admin";
 import Developer from "./pages/Developer";
+import Customer from "./pages/Customer";
+import CustomerSettings from "./pages/customer/Settings";
 import MT5EAGuide from "./pages/MT5EAGuide";
 import MT5IndicatorGuide from "./pages/MT5IndicatorGuide";
 import Customers from "./pages/admin/Customers";
@@ -43,6 +45,8 @@ const App = () => (
             <Route path="/admin/accounts/:id/portfolio" element={<AccountPortfolio />} />
             <Route path="/admin/systems" element={<TradingSystems />} />
             <Route path="/admin/users" element={<UserManagement />} />
+            <Route path="/customer" element={<Customer />} />
+            <Route path="/customer/settings" element={<CustomerSettings />} />
             <Route path="/developer" element={<Developer />} />
             <Route path="/mt5-ea-guide" element={<MT5EAGuide />} />
             <Route path="/mt5-indicator-guide" element={<MT5IndicatorGuide />} />

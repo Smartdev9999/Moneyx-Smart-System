@@ -270,6 +270,47 @@ export type Database = {
         }
         Relationships: []
       }
+      customer_users: {
+        Row: {
+          approved_at: string | null
+          approved_by: string | null
+          created_at: string | null
+          customer_id: string
+          id: string
+          status: string
+          updated_at: string | null
+          user_id: string
+        }
+        Insert: {
+          approved_at?: string | null
+          approved_by?: string | null
+          created_at?: string | null
+          customer_id: string
+          id?: string
+          status?: string
+          updated_at?: string | null
+          user_id: string
+        }
+        Update: {
+          approved_at?: string | null
+          approved_by?: string | null
+          created_at?: string | null
+          customer_id?: string
+          id?: string
+          status?: string
+          updated_at?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "customer_users_customer_id_fkey"
+            columns: ["customer_id"]
+            isOneToOne: true
+            referencedRelation: "customers"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       customers: {
         Row: {
           broker: string | null
@@ -374,6 +415,114 @@ export type Database = {
           last_updated?: string
         }
         Relationships: []
+      }
+      fund_allocations: {
+        Row: {
+          allocated_amount: number
+          allocation_date: string | null
+          current_value: number
+          customer_id: string
+          id: string
+          last_updated: string | null
+          mt5_account_id: string | null
+          notes: string | null
+          profit_loss: number
+          roi_percent: number | null
+          trading_system_id: string
+        }
+        Insert: {
+          allocated_amount?: number
+          allocation_date?: string | null
+          current_value?: number
+          customer_id: string
+          id?: string
+          last_updated?: string | null
+          mt5_account_id?: string | null
+          notes?: string | null
+          profit_loss?: number
+          roi_percent?: number | null
+          trading_system_id: string
+        }
+        Update: {
+          allocated_amount?: number
+          allocation_date?: string | null
+          current_value?: number
+          customer_id?: string
+          id?: string
+          last_updated?: string | null
+          mt5_account_id?: string | null
+          notes?: string | null
+          profit_loss?: number
+          roi_percent?: number | null
+          trading_system_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fund_allocations_customer_id_fkey"
+            columns: ["customer_id"]
+            isOneToOne: false
+            referencedRelation: "customers"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fund_allocations_mt5_account_id_fkey"
+            columns: ["mt5_account_id"]
+            isOneToOne: false
+            referencedRelation: "mt5_accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fund_allocations_trading_system_id_fkey"
+            columns: ["trading_system_id"]
+            isOneToOne: false
+            referencedRelation: "trading_systems"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      fund_wallets: {
+        Row: {
+          created_at: string | null
+          customer_id: string
+          id: string
+          is_active: boolean | null
+          label: string | null
+          last_sync: string | null
+          network: string
+          updated_at: string | null
+          wallet_address: string
+        }
+        Insert: {
+          created_at?: string | null
+          customer_id: string
+          id?: string
+          is_active?: boolean | null
+          label?: string | null
+          last_sync?: string | null
+          network: string
+          updated_at?: string | null
+          wallet_address: string
+        }
+        Update: {
+          created_at?: string | null
+          customer_id?: string
+          id?: string
+          is_active?: boolean | null
+          label?: string | null
+          last_sync?: string | null
+          network?: string
+          updated_at?: string | null
+          wallet_address?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fund_wallets_customer_id_fkey"
+            columns: ["customer_id"]
+            isOneToOne: false
+            referencedRelation: "customers"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       mt5_accounts: {
         Row: {
@@ -644,6 +793,78 @@ export type Database = {
         }
         Relationships: []
       }
+      wallet_transactions: {
+        Row: {
+          amount: number
+          block_time: string
+          classification: string | null
+          classified_at: string | null
+          classified_by: string | null
+          created_at: string | null
+          from_address: string | null
+          id: string
+          notes: string | null
+          raw_data: Json | null
+          target_system_id: string | null
+          to_address: string | null
+          token_symbol: string | null
+          tx_hash: string
+          tx_type: string
+          wallet_id: string
+        }
+        Insert: {
+          amount: number
+          block_time: string
+          classification?: string | null
+          classified_at?: string | null
+          classified_by?: string | null
+          created_at?: string | null
+          from_address?: string | null
+          id?: string
+          notes?: string | null
+          raw_data?: Json | null
+          target_system_id?: string | null
+          to_address?: string | null
+          token_symbol?: string | null
+          tx_hash: string
+          tx_type: string
+          wallet_id: string
+        }
+        Update: {
+          amount?: number
+          block_time?: string
+          classification?: string | null
+          classified_at?: string | null
+          classified_by?: string | null
+          created_at?: string | null
+          from_address?: string | null
+          id?: string
+          notes?: string | null
+          raw_data?: Json | null
+          target_system_id?: string | null
+          to_address?: string | null
+          token_symbol?: string | null
+          tx_hash?: string
+          tx_type?: string
+          wallet_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "wallet_transactions_target_system_id_fkey"
+            columns: ["target_system_id"]
+            isOneToOne: false
+            referencedRelation: "trading_systems"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "wallet_transactions_wallet_id_fkey"
+            columns: ["wallet_id"]
+            isOneToOne: false
+            referencedRelation: "fund_wallets"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never
@@ -651,6 +872,7 @@ export type Database = {
     Functions: {
       cleanup_old_candle_data: { Args: never; Returns: undefined }
       cleanup_old_history: { Args: never; Returns: undefined }
+      get_customer_id_for_user: { Args: { _user_id: string }; Returns: string }
       has_role: {
         Args: {
           _role: Database["public"]["Enums"]["app_role"]
@@ -659,6 +881,8 @@ export type Database = {
         Returns: boolean
       }
       is_admin: { Args: { _user_id: string }; Returns: boolean }
+      is_approved_customer: { Args: { _user_id: string }; Returns: boolean }
+      is_customer: { Args: { _user_id: string }; Returns: boolean }
     }
     Enums: {
       app_role: "super_admin" | "admin" | "user" | "developer" | "customer"
