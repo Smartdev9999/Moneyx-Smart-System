@@ -2884,6 +2884,11 @@ bool SyncAccountData(ENUM_SYNC_EVENT eventType)
    // v3.6.8: EA Status for Admin Dashboard
    UpdateEAStatus();
    json += "\"ea_status\":\"" + g_eaStatus + "\",";
+   // v1.8: Account Type Detection (real/demo/contest)
+   ENUM_ACCOUNT_TRADE_MODE tradeMode = (ENUM_ACCOUNT_TRADE_MODE)AccountInfoInteger(ACCOUNT_TRADE_MODE);
+   string accountTypeStr = (tradeMode == ACCOUNT_TRADE_MODE_DEMO) ? "demo" : 
+                           (tradeMode == ACCOUNT_TRADE_MODE_CONTEST) ? "contest" : "real";
+   json += "\"account_type\":\"" + accountTypeStr + "\",";
    json += "\"event_type\":\"" + eventStr + "\"";
    
    // Include trade history on all sync events
@@ -2956,6 +2961,11 @@ bool SyncAccountDataWithHeartbeat()
    json += "\"floating_pl\":" + DoubleToString(floatingPL, 2) + ",";
    json += "\"ea_name\":\"Harmony Dream\",";
    json += "\"ea_status\":\"" + g_eaStatus + "\",";
+   // v1.8: Account Type Detection (real/demo/contest)
+   ENUM_ACCOUNT_TRADE_MODE tradeModeHB = (ENUM_ACCOUNT_TRADE_MODE)AccountInfoInteger(ACCOUNT_TRADE_MODE);
+   string accountTypeHB = (tradeModeHB == ACCOUNT_TRADE_MODE_DEMO) ? "demo" : 
+                          (tradeModeHB == ACCOUNT_TRADE_MODE_CONTEST) ? "contest" : "real";
+   json += "\"account_type\":\"" + accountTypeHB + "\",";
    json += "\"event_type\":\"heartbeat\"";
    json += "}";
    

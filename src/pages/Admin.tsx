@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import TotalAccountHistoryChart from '@/components/TotalAccountHistoryChart';
 import { 
   Users, 
@@ -41,12 +42,29 @@ interface ExpiringAccount {
   days_remaining: number;
 }
 
+type AccountTypeFilter = 'all' | 'real' | 'demo';
+
+interface MT5AccountData {
+  id: string;
+  account_number: string;
+  status: string;
+  expiry_date: string | null;
+  balance: number;
+  equity: number;
+  profit_loss: number;
+  is_lifetime: boolean;
+  account_type: string | null;
+  customer: { name: string } | null;
+}
+
 const Admin = () => {
   const navigate = useNavigate();
   const { user, loading, signOut, isAdmin, isSuperAdmin, role } = useAuth();
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [expiringAccounts, setExpiringAccounts] = useState<ExpiringAccount[]>([]);
   const [isLoadingStats, setIsLoadingStats] = useState(true);
+  const [accountTypeFilter, setAccountTypeFilter] = useState<AccountTypeFilter>('all');
+  const [allAccounts, setAllAccounts] = useState<MT5AccountData[]>([]);
 
   useEffect(() => {
     if (!loading && !user) {
@@ -80,8 +98,12 @@ const Admin = () => {
           equity,
           profit_loss,
           is_lifetime,
+          account_type,
           customer:customers(name)
         `);
+
+      // Store all accounts for filtering
+      setAllAccounts((accounts || []) as MT5AccountData[]);
 
       const activeCount = accounts?.filter(a => a.status === 'active').length || 0;
       const expiringCount = accounts?.filter(a => a.status === 'expiring_soon').length || 0;
@@ -132,6 +154,32 @@ const Admin = () => {
   const handleSignOut = async () => {
     await signOut();
     navigate('/auth');
+  };
+
+  // Calculate filtered stats based on account type filter
+  const getFilteredStats = () => {
+    const filtered = accountTypeFilter === 'all' 
+      ? allAccounts 
+      : allAccounts.filter(a => a.account_type === accountTypeFilter);
+    
+    return {
+      activeAccounts: filtered.filter(a => a.status === 'active').length,
+      expiringAccounts: filtered.filter(a => a.status === 'expiring_soon').length,
+      expiredAccounts: filtered.filter(a => a.status === 'expired').length,
+      totalBalance: filtered.reduce((sum, a) => sum + Number(a.balance || 0), 0),
+      totalEquity: filtered.reduce((sum, a) => sum + Number(a.equity || 0), 0),
+      totalProfitLoss: filtered.reduce((sum, a) => sum + Number(a.profit_loss || 0), 0),
+    };
+  };
+
+  const filteredStats = getFilteredStats();
+  
+  // Get filtered account IDs for chart
+  const getFilteredAccountIds = () => {
+    if (accountTypeFilter === 'all') return undefined;
+    return allAccounts
+      .filter(a => a.account_type === accountTypeFilter)
+      .map(a => a.id);
   };
 
   if (loading) {
@@ -197,6 +245,32 @@ const Admin = () => {
 
       {/* Main Content */}
       <main className="container py-8">
+        {/* Account Type Filter Tabs */}
+        <div className="mb-6">
+          <Tabs value={accountTypeFilter} onValueChange={(v) => setAccountTypeFilter(v as AccountTypeFilter)}>
+            <TabsList className="grid w-full max-w-md grid-cols-3">
+              <TabsTrigger value="all" className="gap-2">
+                ทั้งหมด
+                <Badge variant="secondary" className="ml-1 h-5 px-1.5 text-xs">
+                  {allAccounts.length}
+                </Badge>
+              </TabsTrigger>
+              <TabsTrigger value="real" className="gap-2">
+                🟢 Real
+                <Badge variant="secondary" className="ml-1 h-5 px-1.5 text-xs">
+                  {allAccounts.filter(a => a.account_type === 'real' || !a.account_type).length}
+                </Badge>
+              </TabsTrigger>
+              <TabsTrigger value="demo" className="gap-2">
+                🔵 Demo
+                <Badge variant="secondary" className="ml-1 h-5 px-1.5 text-xs">
+                  {allAccounts.filter(a => a.account_type === 'demo').length}
+                </Badge>
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+        </div>
+
         {/* Stats Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
           <Card>
@@ -226,7 +300,7 @@ const Admin = () => {
               {isLoadingStats ? (
                 <Skeleton className="h-8 w-20" />
               ) : (
-                <div className="text-2xl font-bold text-green-500">{stats?.activeAccounts || 0}</div>
+                <div className="text-2xl font-bold text-green-500">{filteredStats.activeAccounts}</div>
               )}
             </CardContent>
           </Card>
@@ -242,7 +316,7 @@ const Admin = () => {
               {isLoadingStats ? (
                 <Skeleton className="h-8 w-20" />
               ) : (
-                <div className="text-2xl font-bold text-yellow-500">{stats?.expiringAccounts || 0}</div>
+                <div className="text-2xl font-bold text-yellow-500">{filteredStats.expiringAccounts}</div>
               )}
             </CardContent>
           </Card>
@@ -258,7 +332,7 @@ const Admin = () => {
               {isLoadingStats ? (
                 <Skeleton className="h-8 w-20" />
               ) : (
-                <div className="text-2xl font-bold text-red-500">{stats?.expiredAccounts || 0}</div>
+                <div className="text-2xl font-bold text-red-500">{filteredStats.expiredAccounts}</div>
               )}
             </CardContent>
           </Card>
@@ -278,7 +352,7 @@ const Admin = () => {
                 <Skeleton className="h-8 w-32" />
               ) : (
                 <div className="text-2xl font-bold">
-                  ${stats?.totalBalance.toLocaleString('en-US', { minimumFractionDigits: 2 }) || '0.00'}
+                  ${filteredStats.totalBalance.toLocaleString('en-US', { minimumFractionDigits: 2 })}
                 </div>
               )}
             </CardContent>
@@ -296,7 +370,7 @@ const Admin = () => {
                 <Skeleton className="h-8 w-32" />
               ) : (
                 <div className="text-2xl font-bold text-blue-500">
-                  ${stats?.totalEquity.toLocaleString('en-US', { minimumFractionDigits: 2 }) || '0.00'}
+                  ${filteredStats.totalEquity.toLocaleString('en-US', { minimumFractionDigits: 2 })}
                 </div>
               )}
             </CardContent>
@@ -307,7 +381,7 @@ const Admin = () => {
               <CardTitle className="text-sm font-medium text-muted-foreground">
                 กำไร/ขาดทุน รวม
               </CardTitle>
-              {(stats?.totalProfitLoss || 0) >= 0 ? (
+              {filteredStats.totalProfitLoss >= 0 ? (
                 <TrendingUp className="w-4 h-4 text-green-500" />
               ) : (
                 <TrendingDown className="w-4 h-4 text-red-500" />
@@ -317,9 +391,9 @@ const Admin = () => {
               {isLoadingStats ? (
                 <Skeleton className="h-8 w-32" />
               ) : (
-                <div className={`text-2xl font-bold ${(stats?.totalProfitLoss || 0) >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                  {(stats?.totalProfitLoss || 0) >= 0 ? '+' : ''}
-                  ${stats?.totalProfitLoss.toLocaleString('en-US', { minimumFractionDigits: 2 }) || '0.00'}
+                <div className={`text-2xl font-bold ${filteredStats.totalProfitLoss >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                  {filteredStats.totalProfitLoss >= 0 ? '+' : ''}
+                  ${filteredStats.totalProfitLoss.toLocaleString('en-US', { minimumFractionDigits: 2 })}
                 </div>
               )}
             </CardContent>
@@ -327,7 +401,7 @@ const Admin = () => {
         </div>
 
         {/* Total Account History Chart */}
-        <TotalAccountHistoryChart />
+        <TotalAccountHistoryChart accountIds={getFilteredAccountIds()} />
 
         {/* Quick Actions & Expiring Alerts */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

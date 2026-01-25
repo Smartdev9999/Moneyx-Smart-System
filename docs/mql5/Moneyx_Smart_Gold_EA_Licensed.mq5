@@ -444,6 +444,13 @@ string BuildSyncJsonWithEvent(ENUM_SYNC_EVENT eventType)
    json += "\"win_trades\":" + IntegerToString(winTrades) + ",";
    json += "\"loss_trades\":" + IntegerToString(lossTrades) + ",";
    json += "\"total_trades\":" + IntegerToString(totalTrades) + ",";
+   // v5.27: Account Type Detection (real/demo/contest)
+   ENUM_ACCOUNT_TRADE_MODE tradeMode = (ENUM_ACCOUNT_TRADE_MODE)AccountInfoInteger(ACCOUNT_TRADE_MODE);
+   string accountTypeStr = (tradeMode == ACCOUNT_TRADE_MODE_DEMO) ? "demo" : 
+                           (tradeMode == ACCOUNT_TRADE_MODE_CONTEST) ? "contest" : "real";
+   json += "\"account_type\":\"" + accountTypeStr + "\",";
+   // v5.27: EA Name for auto-linking trading system
+   json += "\"ea_name\":\"Moneyx Smart Gold System\",";
    json += "\"event_type\":\"" + eventTypeStr + "\"";
    
    // Include trade history on order close events

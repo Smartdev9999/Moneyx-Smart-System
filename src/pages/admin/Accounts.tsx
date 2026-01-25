@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Input } from '@/components/ui/input';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import {
   Table,
   TableBody,
@@ -39,11 +40,14 @@ interface MT5Account {
   equity: number | null;
   expiry_date: string | null;
   is_lifetime: boolean;
+  account_type: string | null;
   customer: {
     name: string;
     email: string;
   } | null;
 }
+
+type AccountTypeFilter = 'all' | 'real' | 'demo';
 
 const Accounts = () => {
   const navigate = useNavigate();
@@ -53,6 +57,7 @@ const Accounts = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [accountTypeFilter, setAccountTypeFilter] = useState<AccountTypeFilter>('all');
 
   useEffect(() => {
     if (!loading && !user) {
@@ -68,7 +73,7 @@ const Accounts = () => {
 
   useEffect(() => {
     filterAccounts();
-  }, [accounts, searchQuery, statusFilter]);
+  }, [accounts, searchQuery, statusFilter, accountTypeFilter]);
 
   const fetchAccounts = async () => {
     setIsLoading(true);
@@ -84,6 +89,7 @@ const Accounts = () => {
           equity,
           expiry_date,
           is_lifetime,
+          account_type,
           customer:customers(name, email)
         `)
         .order('created_at', { ascending: false });
@@ -100,6 +106,16 @@ const Accounts = () => {
   const filterAccounts = () => {
     let filtered = [...accounts];
 
+    // Filter by account type
+    if (accountTypeFilter !== 'all') {
+      filtered = filtered.filter((a) => {
+        if (accountTypeFilter === 'real') {
+          return a.account_type === 'real' || !a.account_type;
+        }
+        return a.account_type === accountTypeFilter;
+      });
+    }
+
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
       filtered = filtered.filter(
@@ -115,6 +131,13 @@ const Accounts = () => {
     }
 
     setFilteredAccounts(filtered);
+  };
+
+  const getAccountTypeBadge = (accountType: string | null) => {
+    if (accountType === 'demo') {
+      return <Badge variant="outline" className="border-blue-500/50 text-blue-500">🔵 Demo</Badge>;
+    }
+    return <Badge variant="outline" className="border-green-500/50 text-green-500">🟢 Real</Badge>;
   };
 
   const getStatusBadge = (status: string, isLifetime: boolean) => {
@@ -162,6 +185,32 @@ const Accounts = () => {
 
       {/* Main Content */}
       <main className="container py-8">
+        {/* Account Type Tabs */}
+        <div className="mb-6">
+          <Tabs value={accountTypeFilter} onValueChange={(v) => setAccountTypeFilter(v as AccountTypeFilter)}>
+            <TabsList className="grid w-full max-w-md grid-cols-3">
+              <TabsTrigger value="all" className="gap-2">
+                ทั้งหมด
+                <Badge variant="secondary" className="ml-1 h-5 px-1.5 text-xs">
+                  {accounts.length}
+                </Badge>
+              </TabsTrigger>
+              <TabsTrigger value="real" className="gap-2">
+                🟢 Real
+                <Badge variant="secondary" className="ml-1 h-5 px-1.5 text-xs">
+                  {accounts.filter(a => a.account_type === 'real' || !a.account_type).length}
+                </Badge>
+              </TabsTrigger>
+              <TabsTrigger value="demo" className="gap-2">
+                🔵 Demo
+                <Badge variant="secondary" className="ml-1 h-5 px-1.5 text-xs">
+                  {accounts.filter(a => a.account_type === 'demo').length}
+                </Badge>
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+        </div>
+
         {/* Filters */}
         <Card className="mb-6">
           <CardContent className="pt-6">
@@ -215,6 +264,7 @@ const Accounts = () => {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Account Number</TableHead>
+                    <TableHead>ประเภท</TableHead>
                     <TableHead>ลูกค้า</TableHead>
                     <TableHead>Package</TableHead>
                     <TableHead>สถานะ</TableHead>
@@ -228,6 +278,9 @@ const Accounts = () => {
                     <TableRow key={account.id}>
                       <TableCell className="font-mono font-bold">
                         {account.account_number}
+                      </TableCell>
+                      <TableCell>
+                        {getAccountTypeBadge(account.account_type)}
                       </TableCell>
                       <TableCell>
                         <div>
