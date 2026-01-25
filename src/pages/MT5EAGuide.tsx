@@ -5,14 +5,15 @@ import StepCard from '@/components/StepCard';
 
 const MT5EAGuide = () => {
 const fullEACode = `//+------------------------------------------------------------------+
-//|                   Moneyx Smart Gold System v5.32                   |
+//|                   Moneyx Smart Gold System v5.33                   |
 //|           Smart Money Trading System with CDC Action Zone          |
 //| + Grid + Hedging + Account Type + Position Recovery (VPS Support)  |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
 #property link      ""
-#property version   "5.32"
-// v5.32: Fixed Grid Loss Custom Distance - now measures from Initial Order, not Last Order
+#property version   "5.33"
+// v5.33: Fix Custom Distance - revert to Step-by-Step (measure from Last Position, not Initial)
+//        Grid#1 = Initial - distance[0], Grid#2 = Grid#1 - distance[1], etc.
 #property strict
 
 // *** Logo File ***
@@ -7036,45 +7037,8 @@ double GetFirstPositionPrice(ENUM_POSITION_TYPE posType)
    return firstPrice;
 }
 
-//+------------------------------------------------------------------+
-//| Get Initial Position Price (excludes Grid orders) for Custom Distance |
-//| v5.32: Fix Custom Distance bug - measure from Initial, not Last   |
-//+------------------------------------------------------------------+
-double GetInitialPositionPrice(ENUM_POSITION_TYPE posType)
-{
-   double initialPrice = 0;
-   datetime oldestTime = D'2099.01.01';
-   
-   for(int i = 0; i < PositionsTotal(); i++)
-   {
-      if(PositionGetSymbol(i) == _Symbol)
-      {
-         if(PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
-         {
-            if(PositionGetInteger(POSITION_TYPE) == posType)
-            {
-               string comment = PositionGetString(POSITION_COMMENT);
-               // Exclude Grid orders - only find Initial/Main orders
-               if(StringFind(comment, "Grid") < 0)
-               {
-                  datetime posTime = (datetime)PositionGetInteger(POSITION_TIME);
-                  if(posTime < oldestTime)
-                  {
-                     oldestTime = posTime;
-                     initialPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-                  }
-               }
-            }
-         }
-      }
-   }
-   
-   // Fallback: if no Initial order found, use GetFirstPositionPrice
-   if(initialPrice == 0)
-      initialPrice = GetFirstPositionPrice(posType);
-      
-   return initialPrice;
-}
+// v5.33: GetInitialPositionPrice removed - Custom Distance now uses Step-by-Step like Fixed/ATR
+// All gap types measure from Last Position, each level uses different distance from the array
 
 //+------------------------------------------------------------------+
 //| Check and Execute Grid Loss Side                                   |
@@ -7126,18 +7090,25 @@ void CheckGridLossSide()
       
       if(buyGridAllowed)
       {
-         // v5.32: Custom Distance measures from Initial Position, Fixed/ATR from Last
-         double referencePrice;
-         if(InpGridLossGapType == GAP_CUSTOM_DISTANCE)
-            referencePrice = GetInitialPositionPrice(POSITION_TYPE_BUY);
-         else
-            referencePrice = GetLastPositionPrice(POSITION_TYPE_BUY);
+         // v5.33: ALL gap types (Fixed/Custom/ATR) use Step-by-Step from Last Position
+         // Custom Distance uses different distance for each level from the array
+         double referencePrice = GetLastPositionPrice(POSITION_TYPE_BUY);
          
          // *** Grid Loss นับ level แยกจาก Grid Profit ***
          // buyGridLossCount = จำนวน Grid Loss orders ที่มีอยู่แล้ว (นับจาก comment)
          // gridLevel สำหรับ Grid Loss = buyGridLossCount + 1 (ออเดอร์ถัดไป)
          int gridLossLevel = buyGridLossCount + 1;
          int distance = GetGridDistance(true, buyGridLossCount);
+         
+         // Debug log for Custom Distance troubleshooting
+         if(InpGridLossGapType == GAP_CUSTOM_DISTANCE)
+         {
+            Print("[Grid Loss Debug] BUY | Ref(Last): ", DoubleToString(referencePrice, _Digits),
+                  " | Current: ", DoubleToString(currentPrice, _Digits),
+                  " | Level: #", gridLossLevel,
+                  " | Dist: ", distance, " pts",
+                  " | Gap: ", DoubleToString((referencePrice - currentPrice) / _Point, 0), " pts");
+         }
          
          // Price went DOWN from reference by grid distance
          if(referencePrice - currentPrice >= distance * _Point)
@@ -7204,18 +7175,25 @@ void CheckGridLossSide()
       
       if(sellGridAllowed)
       {
-         // v5.32: Custom Distance measures from Initial Position, Fixed/ATR from Last
-         double referencePrice;
-         if(InpGridLossGapType == GAP_CUSTOM_DISTANCE)
-            referencePrice = GetInitialPositionPrice(POSITION_TYPE_SELL);
-         else
-            referencePrice = GetLastPositionPrice(POSITION_TYPE_SELL);
+         // v5.33: ALL gap types (Fixed/Custom/ATR) use Step-by-Step from Last Position
+         // Custom Distance uses different distance for each level from the array
+         double referencePrice = GetLastPositionPrice(POSITION_TYPE_SELL);
          
          // *** Grid Loss นับ level แยกจาก Grid Profit ***
          // sellGridLossCount = จำนวน Grid Loss orders ที่มีอยู่แล้ว (นับจาก comment)
          // gridLevel สำหรับ Grid Loss = sellGridLossCount + 1 (ออเดอร์ถัดไป)
          int gridLossLevel = sellGridLossCount + 1;
          int distance = GetGridDistance(true, sellGridLossCount);
+         
+         // Debug log for Custom Distance troubleshooting
+         if(InpGridLossGapType == GAP_CUSTOM_DISTANCE)
+         {
+            Print("[Grid Loss Debug] SELL | Ref(Last): ", DoubleToString(referencePrice, _Digits),
+                  " | Current: ", DoubleToString(currentPrice, _Digits),
+                  " | Level: #", gridLossLevel,
+                  " | Dist: ", distance, " pts",
+                  " | Gap: ", DoubleToString((currentPrice - referencePrice) / _Point, 0), " pts");
+         }
          
          // Price went UP from reference by grid distance
          if(currentPrice - referencePrice >= distance * _Point)
@@ -7291,15 +7269,26 @@ void CheckGridProfitSide()
           
          if(buyProfitAllowed)
          {
-            // Get initial order price and last buy price
+            // v5.33: ALL gap types (Fixed/Custom/ATR) use Step-by-Step from Last Position
             double initialBuyPrice = GetFirstPositionPrice(POSITION_TYPE_BUY);
-            double lastBuyPrice = GetLastPositionPrice(POSITION_TYPE_BUY);
+            double referencePrice = GetLastPositionPrice(POSITION_TYPE_BUY);
+            int gridProfitLevel = profitGridCount + 1;
             int distance = GetGridDistance(false, profitGridCount);
+            
+            // Debug log for Custom Distance troubleshooting
+            if(InpGridProfitGapType == GAP_CUSTOM_DISTANCE)
+            {
+               Print("[Grid Profit Debug] BUY | Ref(Last): ", DoubleToString(referencePrice, _Digits),
+                     " | Current: ", DoubleToString(currentPrice, _Digits),
+                     " | Level: #", gridProfitLevel,
+                     " | Dist: ", distance, " pts",
+                     " | Gap: ", DoubleToString((currentPrice - referencePrice) / _Point, 0), " pts");
+            }
             
             // Grid Profit only triggers when:
             // 1. Current price is ABOVE initial order price (profit zone for BUY)
-            // 2. Price went UP from last buy by grid distance
-            if(currentPrice > initialBuyPrice && currentPrice - lastBuyPrice >= distance * _Point)
+            // 2. Price went UP from reference (Last Position) by grid distance
+            if(currentPrice > initialBuyPrice && currentPrice - referencePrice >= distance * _Point)
             {
                // Grid Profit uses gridLevel starting from 1 (Initial Order is the base)
                // profitGridCount=0 means first Grid Profit order, which should use level 1
@@ -7309,7 +7298,7 @@ void CheckGridProfitSide()
                double lot = GetGridLotSize(false, gridProfitLevel, "BUY");
                double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
                
-               Print("Grid Profit BUY #", gridProfitLevel, " | Lot: ", lot, " | Distance: ", distance);
+               Print("Grid Profit BUY #", gridProfitLevel, " | Lot: ", DoubleToString(lot, 2), " | Distance: ", distance);
                
                if(trade.Buy(lot, _Symbol, price, 0, 0, "Grid Profit BUY #" + IntegerToString(gridProfitLevel)))
                {
@@ -7365,15 +7354,26 @@ void CheckGridProfitSide()
           
          if(sellProfitAllowed)
          {
-            // Get initial order price and last sell price
+            // v5.33: ALL gap types (Fixed/Custom/ATR) use Step-by-Step from Last Position
             double initialSellPrice = GetFirstPositionPrice(POSITION_TYPE_SELL);
-            double lastSellPrice = GetLastPositionPrice(POSITION_TYPE_SELL);
+            double referencePrice = GetLastPositionPrice(POSITION_TYPE_SELL);
+            int gridProfitLevel = profitGridCount + 1;
             int distance = GetGridDistance(false, profitGridCount);
+            
+            // Debug log for Custom Distance troubleshooting
+            if(InpGridProfitGapType == GAP_CUSTOM_DISTANCE)
+            {
+               Print("[Grid Profit Debug] SELL | Ref(Last): ", DoubleToString(referencePrice, _Digits),
+                     " | Current: ", DoubleToString(currentPrice, _Digits),
+                     " | Level: #", gridProfitLevel,
+                     " | Dist: ", distance, " pts",
+                     " | Gap: ", DoubleToString((referencePrice - currentPrice) / _Point, 0), " pts");
+            }
             
             // Grid Profit only triggers when:
             // 1. Current price is BELOW initial order price (profit zone for SELL)
-            // 2. Price went DOWN from last sell by grid distance
-            if(currentPrice < initialSellPrice && lastSellPrice - currentPrice >= distance * _Point)
+            // 2. Price went DOWN from reference (Last Position) by grid distance
+            if(currentPrice < initialSellPrice && referencePrice - currentPrice >= distance * _Point)
             {
                // Grid Profit uses gridLevel starting from 1 (Initial Order is the base)
                // profitGridCount=0 means first Grid Profit order, which should use level 1
@@ -7383,7 +7383,7 @@ void CheckGridProfitSide()
                double lot = GetGridLotSize(false, gridProfitLevel, "SELL");
                double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
                
-               Print("Grid Profit SELL #", gridProfitLevel, " | Lot: ", lot, " | Distance: ", distance);
+               Print("Grid Profit SELL #", gridProfitLevel, " | Lot: ", DoubleToString(lot, 2), " | Distance: ", distance);
                
                if(trade.Sell(lot, _Symbol, price, 0, 0, "Grid Profit SELL #" + IntegerToString(gridProfitLevel)))
                {
