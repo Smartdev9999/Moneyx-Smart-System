@@ -5,14 +5,14 @@ import StepCard from '@/components/StepCard';
 
 const MT5EAGuide = () => {
 const fullEACode = `//+------------------------------------------------------------------+
-//|                   Moneyx Smart Gold System v5.30                   |
+//|                   Moneyx Smart Gold System v5.31                   |
 //|           Smart Money Trading System with CDC Action Zone          |
 //| + Grid + Hedging + Account Type + Position Recovery (VPS Support)  |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
 #property link      ""
-#property version   "5.30"
-// v5.30: Fixed Grid Profit level numbering (#0 -> #1) + gridLevel safety check
+#property version   "5.31"
+// v5.31: Fixed Sub Hedge comment format (spaces->underscores) + IntegerToString validation
 #property strict
 
 // *** Logo File ***
@@ -3623,15 +3623,15 @@ bool ExecuteHedgeGridOrder(string gridType, string direction, double mainLot, in
    if(InpTradingMode != TRADING_MODE_HEDGING) return false;
    if(!g_hedgeModeInitialized || g_subSymbol == "") return false;
    
-   // v5.30: Safety check - ensure gridLevel is always >= 1
+   // v5.31: Safety check - ensure gridLevel is always >= 1
    if(gridLevel <= 0)
    {
-      Print("[HEDGE GRID v5.30] WARNING: Invalid gridLevel=", gridLevel, " for ", gridType, " - Forcing to 1");
+      Print("[HEDGE GRID v5.31] WARNING: Invalid gridLevel=", gridLevel, " for ", gridType, " - Forcing to 1");
       gridLevel = 1;
    }
    
-   // v5.30: Entry log for debugging
-   Print("[HEDGE GRID v5.30] Entry - gridType=", gridType, " dir=", direction, " lot=", mainLot, " level=", gridLevel);
+   // v5.31: Entry log for debugging
+   Print("[HEDGE GRID v5.31] Entry - gridType=", gridType, " dir=", direction, " lot=", mainLot, " level=", gridLevel);
    
    // === v5.26.3: Extract base grid type for accurate counting ===
    // gridType comes in as "Grid Profit BUY" or "Grid Loss SELL" etc.
@@ -3740,8 +3740,23 @@ bool ExecuteHedgeGridOrder(string gridType, string direction, double mainLot, in
    // Determine sub direction based on InpHedgeInverseTrade
    bool subSuccess = false;
    double subPrice;
-   string subComment = "MPM_" + gridType + "_SUB[HEDGE]#" + IntegerToString(gridLevel);
-   Print("[HEDGE GRID v5.30] Generated Comment: ", subComment);  // Debug log
+   
+   // v5.31: Enhanced debug - log all values before comment creation
+   Print("[HEDGE GRID v5.31 DEBUG] gridType='", gridType, "' gridLevel=", gridLevel, " IntegerToString=", IntegerToString(gridLevel));
+   
+   // v5.31: IntegerToString validation with fallback
+   string levelStr = IntegerToString(gridLevel);
+   if(levelStr == "" || levelStr == "0")
+   {
+      Print("[HEDGE GRID v5.31] WARNING: IntegerToString returned '", levelStr, "' for gridLevel=", gridLevel, " - Forcing to 1");
+      levelStr = "1";
+   }
+   
+   // v5.31: Clean comment format - replace spaces with underscores
+   string cleanGridType = gridType;
+   StringReplace(cleanGridType, " ", "_");  // "Grid Profit BUY" -> "Grid_Profit_BUY"
+   string subComment = "MPM_" + cleanGridType + "_SUB#" + levelStr;
+   Print("[HEDGE GRID v5.31] Final Comment: '", subComment, "'");
    
    if(direction == "BUY")
    {
