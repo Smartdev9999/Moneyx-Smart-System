@@ -5,13 +5,13 @@ import StepCard from '@/components/StepCard';
 
 const MT5EAGuide = () => {
   const fullEACode = `//+------------------------------------------------------------------+
-//|                   Moneyx Smart Gold System v5.27                   |
+//|                   Moneyx Smart Gold System v5.28                   |
 //|           Smart Money Trading System with CDC Action Zone          |
-//| + Grid Trading + Auto Scaling + Hedging + Account Type Detection   |
+//| + Grid + Hedging + Account Type + Position Recovery (VPS Support)  |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
 #property link      ""
-#property version   "5.27"
+#property version   "5.28"
 #property strict
 
 // *** Logo File ***
@@ -1845,6 +1845,13 @@ int OnInit()
          Print("[SINGLE] Running in Single Symbol mode (Hedging fallback)");
    }
    
+   // *** v5.28: RESTORE OPEN POSITIONS FROM PREVIOUS SESSION ***
+   // This allows EA to continue trading from existing orders after:
+   // - Re-attaching EA to chart
+   // - VPS migration
+   // - Terminal restart
+   RestoreOpenPositions();
+   
    // v5.26.2: Pre-load CDC history for backtesting reliability
    if(InpUseCDCFilter)
    {
@@ -2031,6 +2038,224 @@ void OnDeinit(const int reason)
    
    // ไม่ใช้ Comment แล้ว เพราะมี Dashboard แทน
    Print("EA Stopped - Reason: ", reason);
+}
+
+//+------------------------------------------------------------------+
+//| Restore Open Positions from Previous Session (v5.28)              |
+//| Recover internal state when EA is re-attached to chart            |
+//| Supports: VPS Migration, Terminal Restart, EA Re-attach           |
+//+------------------------------------------------------------------+
+void RestoreOpenPositions()
+{
+   int restoredBuy = 0;
+   int restoredSell = 0;
+   int restoredHedgeBuy = 0;
+   int restoredHedgeSell = 0;
+   
+   Print("[v5.28] Scanning for existing positions with Magic Number: ", InpMagicNumber);
+   
+   datetime oldestBuyTime = 0;
+   datetime oldestSellTime = 0;
+   
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(!PositionSelectByTicket(ticket)) continue;
+      
+      long magic = PositionGetInteger(POSITION_MAGIC);
+      string symbol = PositionGetString(POSITION_SYMBOL);
+      string comment = PositionGetString(POSITION_COMMENT);
+      ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+      datetime posTime = (datetime)PositionGetInteger(POSITION_TIME);
+      
+      // Check if this is our order (Magic Number match)
+      if(magic != InpMagicNumber) continue;
+      
+      // Check if Main Symbol or Sub Symbol (Hedging Mode)
+      bool isMainSymbol = (symbol == _Symbol);
+      bool isSubSymbol = (InpTradingMode == TRADING_MODE_HEDGING && 
+                          g_hedgeModeInitialized && symbol == g_subSymbol);
+      
+      if(!isMainSymbol && !isSubSymbol) continue;
+      
+      // ========== MAIN SYMBOL RECOVERY ==========
+      if(isMainSymbol)
+      {
+         if(posType == POSITION_TYPE_BUY)
+         {
+            restoredBuy++;
+            
+            // Track oldest BUY position for InitialBuyBarTime
+            if(oldestBuyTime == 0 || posTime < oldestBuyTime)
+            {
+               oldestBuyTime = posTime;
+               int shift = iBarShift(_Symbol, PERIOD_CURRENT, posTime);
+               if(shift >= 0)
+                  InitialBuyBarTime = iTime(_Symbol, PERIOD_CURRENT, shift);
+            }
+            
+            // Check if this is initial order or grid order
+            if(StringFind(comment, "Grid") < 0)
+               g_mainTicketBuy = ticket;
+         }
+         else if(posType == POSITION_TYPE_SELL)
+         {
+            restoredSell++;
+            
+            // Track oldest SELL position for InitialSellBarTime
+            if(oldestSellTime == 0 || posTime < oldestSellTime)
+            {
+               oldestSellTime = posTime;
+               int shift = iBarShift(_Symbol, PERIOD_CURRENT, posTime);
+               if(shift >= 0)
+                  InitialSellBarTime = iTime(_Symbol, PERIOD_CURRENT, shift);
+            }
+            
+            if(StringFind(comment, "Grid") < 0)
+               g_mainTicketSell = ticket;
+         }
+      }
+      
+      // ========== SUB SYMBOL RECOVERY (Hedging Mode) ==========
+      if(isSubSymbol)
+      {
+         if(posType == POSITION_TYPE_BUY)
+         {
+            restoredHedgeBuy++;
+            if(StringFind(comment, "Grid") < 0)
+               g_subTicketBuy = ticket;
+         }
+         else if(posType == POSITION_TYPE_SELL)
+         {
+            restoredHedgeSell++;
+            if(StringFind(comment, "Grid") < 0)
+               g_subTicketSell = ticket;
+         }
+      }
+   }
+   
+   // ========== RESTORE ACCUMULATED PROFIT FROM HISTORY ==========
+   if(InpUseTPAccumulateClose || InpUseAccumulateClose)
+      RestoreAccumulatedProfit();
+   
+   // ========== LOG RESULTS ==========
+   if(restoredBuy > 0 || restoredSell > 0 || restoredHedgeBuy > 0 || restoredHedgeSell > 0)
+   {
+      Print("╔══════════════════════════════════════════════════════════════╗");
+      Print("║         POSITION RECOVERY COMPLETED (v5.28)                  ║");
+      Print("╠══════════════════════════════════════════════════════════════╣");
+      PrintFormat("║  Main Symbol BUY:  %d positions recovered", restoredBuy);
+      PrintFormat("║  Main Symbol SELL: %d positions recovered", restoredSell);
+      if(InpTradingMode == TRADING_MODE_HEDGING)
+      {
+         PrintFormat("║  Sub Symbol BUY:   %d positions recovered", restoredHedgeBuy);
+         PrintFormat("║  Sub Symbol SELL:  %d positions recovered", restoredHedgeSell);
+      }
+      if(InitialBuyBarTime > 0)
+         PrintFormat("║  Initial BUY Candle: %s", TimeToString(InitialBuyBarTime));
+      if(InitialSellBarTime > 0)
+         PrintFormat("║  Initial SELL Candle: %s", TimeToString(InitialSellBarTime));
+      Print("╚══════════════════════════════════════════════════════════════╝");
+      
+      // Update grid counts based on restored positions
+      GridBuyCount = restoredBuy;
+      GridSellCount = restoredSell;
+   }
+   else
+   {
+      Print("[v5.28] No existing positions found for Magic Number: ", InpMagicNumber);
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Restore Accumulated Profit from Trade History (v5.28)             |
+//| Calculates closed profit since the first open position            |
+//+------------------------------------------------------------------+
+void RestoreAccumulatedProfit()
+{
+   g_accumulateClosedProfit = 0;
+   g_hedgeBuyClosedProfit = 0;
+   g_hedgeSellClosedProfit = 0;
+   g_hedgeTotalClosedProfit = 0;
+   
+   // Find the oldest open position time
+   datetime oldestOpenTime = 0;
+   for(int i = 0; i < PositionsTotal(); i++)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(!PositionSelectByTicket(ticket)) continue;
+      
+      if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
+      
+      string symbol = PositionGetString(POSITION_SYMBOL);
+      if(symbol != _Symbol && symbol != g_subSymbol) continue;
+      
+      datetime posTime = (datetime)PositionGetInteger(POSITION_TIME);
+      if(oldestOpenTime == 0 || posTime < oldestOpenTime)
+         oldestOpenTime = posTime;
+   }
+   
+   if(oldestOpenTime == 0)
+   {
+      Print("[v5.28] No open positions - Accumulated Profit not restored");
+      return;
+   }
+   
+   // Select history from oldest position time to now
+   if(!HistorySelect(oldestOpenTime, TimeCurrent()))
+   {
+      Print("[v5.28] Failed to select history for accumulated profit");
+      return;
+   }
+   
+   // Calculate closed profit from deals
+   int totalDeals = HistoryDealsTotal();
+   for(int i = 0; i < totalDeals; i++)
+   {
+      ulong dealTicket = HistoryDealGetTicket(i);
+      if(dealTicket == 0) continue;
+      
+      // Only count our deals
+      if(HistoryDealGetInteger(dealTicket, DEAL_MAGIC) != InpMagicNumber) continue;
+      
+      // Check symbol
+      string dealSymbol = HistoryDealGetString(dealTicket, DEAL_SYMBOL);
+      if(dealSymbol != _Symbol && dealSymbol != g_subSymbol) continue;
+      
+      // Only count exit deals
+      ENUM_DEAL_ENTRY dealEntry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
+      if(dealEntry != DEAL_ENTRY_OUT && dealEntry != DEAL_ENTRY_INOUT) continue;
+      
+      double netProfit = HistoryDealGetDouble(dealTicket, DEAL_PROFIT) +
+                         HistoryDealGetDouble(dealTicket, DEAL_SWAP) +
+                         HistoryDealGetDouble(dealTicket, DEAL_COMMISSION);
+      
+      g_accumulateClosedProfit += netProfit;
+      g_hedgeTotalClosedProfit += netProfit;
+      
+      // For Hedging Mode - separate by deal type (BUY exit = was BUY position)
+      if(InpTradingMode == TRADING_MODE_HEDGING)
+      {
+         ENUM_DEAL_TYPE dealType = (ENUM_DEAL_TYPE)HistoryDealGetInteger(dealTicket, DEAL_TYPE);
+         
+         // Exit from BUY = SELL deal, Exit from SELL = BUY deal
+         if(dealType == DEAL_TYPE_SELL)
+            g_hedgeBuyClosedProfit += netProfit;  // This was closing a BUY
+         else if(dealType == DEAL_TYPE_BUY)
+            g_hedgeSellClosedProfit += netProfit; // This was closing a SELL
+      }
+   }
+   
+   if(MathAbs(g_accumulateClosedProfit) > 0.01)
+   {
+      PrintFormat("[v5.28] Restored Accumulated Profit: $%.2f", g_accumulateClosedProfit);
+      
+      if(InpTradingMode == TRADING_MODE_HEDGING)
+      {
+         PrintFormat("[v5.28] Hedge BUY Side Closed: $%.2f | SELL Side Closed: $%.2f", 
+                     g_hedgeBuyClosedProfit, g_hedgeSellClosedProfit);
+      }
+   }
 }
 
 //+------------------------------------------------------------------+
