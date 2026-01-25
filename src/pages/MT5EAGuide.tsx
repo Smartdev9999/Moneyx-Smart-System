@@ -2135,7 +2135,7 @@ void RestoreOpenPositions()
    }
    
    // ========== RESTORE ACCUMULATED PROFIT FROM HISTORY ==========
-   if(InpUseTPAccumulateClose || InpUseAccumulateClose)
+   if(InpUseAccumulateClose)
       RestoreAccumulatedProfit();
    
    // ========== LOG RESULTS ==========
