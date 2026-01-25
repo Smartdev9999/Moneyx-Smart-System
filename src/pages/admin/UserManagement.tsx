@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { useToast } from '@/hooks/use-toast';
+import { CustomerApprovalSection } from '@/components/admin/CustomerApprovalSection';
 import { 
   ArrowLeft,
   Users,
@@ -17,7 +18,8 @@ import {
   UserCog,
   Crown,
   Code2,
-  User
+  User,
+  UserCheck
 } from 'lucide-react';
 
 interface UserWithRole {
@@ -142,6 +144,8 @@ const UserManagement = () => {
         return <Shield className="w-4 h-4 text-blue-500" />;
       case 'developer':
         return <Code2 className="w-4 h-4 text-green-500" />;
+      case 'customer':
+        return <UserCheck className="w-4 h-4 text-purple-500" />;
       default:
         return <User className="w-4 h-4 text-muted-foreground" />;
     }
@@ -155,6 +159,8 @@ const UserManagement = () => {
         return <Badge className="bg-blue-500/20 text-blue-600 border-blue-500/30">Admin</Badge>;
       case 'developer':
         return <Badge className="bg-green-500/20 text-green-600 border-green-500/30">Developer</Badge>;
+      case 'customer':
+        return <Badge className="bg-purple-500/20 text-purple-600 border-purple-500/30">Customer</Badge>;
       case 'user':
         return <Badge variant="secondary">User</Badge>;
       default:
@@ -223,6 +229,9 @@ const UserManagement = () => {
 
       {/* Main Content */}
       <main className="container py-8">
+        {/* Customer Approval Section */}
+        <CustomerApprovalSection onApprovalComplete={fetchUsers} />
+
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
@@ -230,7 +239,7 @@ const UserManagement = () => {
               รายชื่อผู้ใช้ทั้งหมด
             </CardTitle>
             <CardDescription>
-              กำหนด role ให้ผู้ใช้: Super Admin, Admin, Developer, User
+              กำหนด role ให้ผู้ใช้: Super Admin, Admin, Developer, Customer, User
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -298,6 +307,12 @@ const UserManagement = () => {
                               <div className="flex items-center gap-2">
                                 <Code2 className="w-3 h-3 text-green-500" />
                                 Developer
+                              </div>
+                            </SelectItem>
+                            <SelectItem value="customer">
+                              <div className="flex items-center gap-2">
+                                <UserCheck className="w-3 h-3 text-purple-500" />
+                                Customer
                               </div>
                             </SelectItem>
                             <SelectItem value="user">

@@ -5,10 +5,11 @@ import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { FundManagementTab } from '@/components/admin/FundManagementTab';
 import {
   Select,
   SelectContent,
@@ -62,7 +63,8 @@ import {
   Activity,
   DollarSign,
   Wifi,
-  WifiOff
+  WifiOff,
+  Wallet
 } from 'lucide-react';
 
 interface Customer {
@@ -99,6 +101,7 @@ interface MT5Account {
 }
 
 type AccountTypeFilter = 'all' | 'real' | 'demo';
+type MainTab = 'accounts' | 'funds';
 
 interface TradingSystem {
   id: string;
@@ -117,6 +120,7 @@ const CustomerDetail = () => {
   const [isAddingAccount, setIsAddingAccount] = useState(false);
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [accountTypeFilter, setAccountTypeFilter] = useState<AccountTypeFilter>('all');
+  const [mainTab, setMainTab] = useState<MainTab>('accounts');
   
   // Edit dialog state
   const [showEditDialog, setShowEditDialog] = useState(false);
@@ -681,34 +685,48 @@ const CustomerDetail = () => {
           </Card>
         </div>
 
-        {/* Account Type Filter Tabs */}
-        <div className="mb-6">
-          <Tabs value={accountTypeFilter} onValueChange={(v) => setAccountTypeFilter(v as AccountTypeFilter)}>
-            <TabsList className="grid w-full max-w-md grid-cols-3">
-              <TabsTrigger value="all" className="gap-2">
-                ทั้งหมด
-                <Badge variant="secondary" className="ml-1 h-5 px-1.5 text-xs">
-                  {accounts.length}
-                </Badge>
-              </TabsTrigger>
-              <TabsTrigger value="real" className="gap-2">
-                🟢 Real
-                <Badge variant="secondary" className="ml-1 h-5 px-1.5 text-xs">
-                  {accounts.filter(a => a.account_type === 'real' || !a.account_type).length}
-                </Badge>
-              </TabsTrigger>
-              <TabsTrigger value="demo" className="gap-2">
-                🔵 Demo
-                <Badge variant="secondary" className="ml-1 h-5 px-1.5 text-xs">
-                  {accounts.filter(a => a.account_type === 'demo').length}
-                </Badge>
-              </TabsTrigger>
-            </TabsList>
-          </Tabs>
-        </div>
+        {/* Main Tabs: Accounts & Fund Management */}
+        <Tabs value={mainTab} onValueChange={(v) => setMainTab(v as MainTab)} className="mb-6">
+          <TabsList className="grid w-full max-w-md grid-cols-2">
+            <TabsTrigger value="accounts" className="gap-2">
+              <CreditCard className="w-4 h-4" />
+              MT5 Accounts
+            </TabsTrigger>
+            <TabsTrigger value="funds" className="gap-2">
+              <Wallet className="w-4 h-4" />
+              Fund Management
+            </TabsTrigger>
+          </TabsList>
 
-        {/* P/L Chart */}
-        <TotalAccountHistoryChart accountIds={filteredAccountIds} />
+          <TabsContent value="accounts" className="mt-6">
+            {/* Account Type Filter Tabs */}
+            <div className="mb-6">
+              <Tabs value={accountTypeFilter} onValueChange={(v) => setAccountTypeFilter(v as AccountTypeFilter)}>
+                <TabsList className="grid w-full max-w-md grid-cols-3">
+                  <TabsTrigger value="all" className="gap-2">
+                    ทั้งหมด
+                    <Badge variant="secondary" className="ml-1 h-5 px-1.5 text-xs">
+                      {accounts.length}
+                    </Badge>
+                  </TabsTrigger>
+                  <TabsTrigger value="real" className="gap-2">
+                    🟢 Real
+                    <Badge variant="secondary" className="ml-1 h-5 px-1.5 text-xs">
+                      {accounts.filter(a => a.account_type === 'real' || !a.account_type).length}
+                    </Badge>
+                  </TabsTrigger>
+                  <TabsTrigger value="demo" className="gap-2">
+                    🔵 Demo
+                    <Badge variant="secondary" className="ml-1 h-5 px-1.5 text-xs">
+                      {accounts.filter(a => a.account_type === 'demo').length}
+                    </Badge>
+                  </TabsTrigger>
+                </TabsList>
+              </Tabs>
+            </div>
+
+            {/* P/L Chart */}
+            <TotalAccountHistoryChart accountIds={filteredAccountIds} />
 
         {/* MT5 Accounts */}
         <Card>
@@ -915,6 +933,12 @@ const CustomerDetail = () => {
             )}
           </CardContent>
         </Card>
+          </TabsContent>
+
+          <TabsContent value="funds" className="mt-6">
+            <FundManagementTab customerId={id!} />
+          </TabsContent>
+        </Tabs>
 
         {/* Edit Dialog */}
         <Dialog open={showEditDialog} onOpenChange={setShowEditDialog}>
