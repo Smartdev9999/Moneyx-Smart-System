@@ -22,7 +22,8 @@ import {
   CheckCircle,
   XCircle,
   RefreshCw,
-  FileBarChart
+  FileBarChart,
+  Percent
 } from 'lucide-react';
 
 interface DashboardStats {
@@ -462,13 +463,21 @@ const Admin = () => {
                 <FileBarChart className="w-6 h-6" />
                 <span>รายงานกองทุน</span>
               </Button>
+              <Button 
+                variant="outline" 
+                className="h-24 flex flex-col gap-2"
+                onClick={() => navigate('/admin/roi-report')}
+              >
+                <Percent className="w-6 h-6" />
+                <span>ROI Report</span>
+              </Button>
               {isSuperAdmin && (
                 <Button 
                   variant="outline" 
-                  className="h-24 flex flex-col gap-2 col-span-2 border-yellow-500/30 hover:border-yellow-500"
+                  className="h-24 flex flex-col gap-2 col-span-2 border-primary/30 hover:border-primary"
                   onClick={() => navigate('/admin/users')}
                 >
-                  <Settings className="w-6 h-6 text-yellow-500" />
+                  <Settings className="w-6 h-6 text-primary" />
                   <span>จัดการผู้ใช้ / Role</span>
                 </Button>
               )}
