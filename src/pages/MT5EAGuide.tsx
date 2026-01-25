@@ -4,14 +4,14 @@ import CodeBlock from '@/components/CodeBlock';
 import StepCard from '@/components/StepCard';
 
 const MT5EAGuide = () => {
-  const fullEACode = `//+------------------------------------------------------------------+
-//|                   Moneyx Smart Gold System v5.28                   |
+const fullEACode = `//+------------------------------------------------------------------+
+//|                   Moneyx Smart Gold System v5.29                   |
 //|           Smart Money Trading System with CDC Action Zone          |
 //| + Grid + Hedging + Account Type + Position Recovery (VPS Support)  |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
 #property link      ""
-#property version   "5.28"
+#property version   "5.29"
 #property strict
 
 // *** Logo File ***
@@ -4863,11 +4863,34 @@ void CalculateCDC()
    
    int barsNeeded = minBarsRequired;
    
-   if(CopyClose(_Symbol, InpCDCTimeframe, 0, barsNeeded, closeArr) < barsNeeded) return;
-   if(CopyHigh(_Symbol, InpCDCTimeframe, 0, barsNeeded, highArr) < barsNeeded) return;
-   if(CopyLow(_Symbol, InpCDCTimeframe, 0, barsNeeded, lowArr) < barsNeeded) return;
-   if(CopyOpen(_Symbol, InpCDCTimeframe, 0, barsNeeded, openArr) < barsNeeded) return;
-   if(CopyTime(_Symbol, InpCDCTimeframe, 0, barsNeeded, timeArr) < barsNeeded) return;
+   // v5.29: Add logging and LOADING fallback for data copy failures
+   int copiedClose = CopyClose(_Symbol, InpCDCTimeframe, 0, barsNeeded, closeArr);
+   int copiedHigh = CopyHigh(_Symbol, InpCDCTimeframe, 0, barsNeeded, highArr);
+   int copiedLow = CopyLow(_Symbol, InpCDCTimeframe, 0, barsNeeded, lowArr);
+   int copiedOpen = CopyOpen(_Symbol, InpCDCTimeframe, 0, barsNeeded, openArr);
+   int copiedTime = CopyTime(_Symbol, InpCDCTimeframe, 0, barsNeeded, timeArr);
+   
+   // Check if any copy failed
+   if(copiedClose < barsNeeded || copiedHigh < barsNeeded || copiedLow < barsNeeded || 
+      copiedOpen < barsNeeded || copiedTime < barsNeeded)
+   {
+      // v5.29: Set LOADING status instead of silent return
+      if(!g_cdcReady)
+      {
+         CDCTrend = "LOADING";
+         CDCZoneColor = clrOrange;
+         
+         // Log only once to prevent spam
+         static bool dataCopyWarningLogged = false;
+         if(!dataCopyWarningLogged)
+         {
+            PrintFormat("[CDC] v5.29: Data copy incomplete - Close:%d High:%d Low:%d Open:%d Time:%d (need %d)",
+                        copiedClose, copiedHigh, copiedLow, copiedOpen, copiedTime, barsNeeded);
+            dataCopyWarningLogged = true;
+         }
+      }
+      return;
+   }
    
    double ohlc4[];
    ArrayResize(ohlc4, barsNeeded);
@@ -4908,6 +4931,17 @@ void CalculateCDC()
    {
       CDCTrend = "BEARISH";
       CDCZoneColor = clrRed;
+   }
+   else
+   {
+      // v5.29: Fallback when Fast == Slow (extremely rare but handle it)
+      // Keep previous trend if already set, otherwise set to NEUTRAL
+      if(CDCTrend == "LOADING" || CDCTrend == "NEUTRAL" || CDCTrend == "")
+      {
+         CDCTrend = "NEUTRAL";
+         CDCZoneColor = clrYellow;
+      }
+      // else: keep previous BULLISH/BEARISH trend
    }
    
    // v5.26.2: Mark CDC as ready after first successful calculation
