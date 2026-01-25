@@ -62,6 +62,8 @@ interface SyncRequest {
   ea_name?: string;
   // v5.27: Account currency (USD, USC, EUR, etc.) for auto-detection
   currency?: string;
+  // v5.27: Account type (real/demo/contest) for dashboard filtering
+  account_type?: 'demo' | 'real' | 'contest';
 }
 
 interface SyncResponse {
@@ -223,6 +225,12 @@ serve(async (req) => {
     if (syncData.currency !== undefined) {
       updateData.currency = syncData.currency;
       console.log(`[sync-account-data] Account currency: ${syncData.currency}`);
+    }
+
+    // v5.27: Account type for Real/Demo separation
+    if (syncData.account_type !== undefined) {
+      updateData.account_type = syncData.account_type;
+      console.log(`[sync-account-data] Account type: ${syncData.account_type}`);
     }
 
     // v3.7.4: Auto-link trading system if ea_name is provided

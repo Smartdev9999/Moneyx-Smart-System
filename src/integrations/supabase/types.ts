@@ -378,6 +378,7 @@ export type Database = {
       mt5_accounts: {
         Row: {
           account_number: string
+          account_type: string | null
           balance: number | null
           created_at: string
           currency: string | null
@@ -409,6 +410,7 @@ export type Database = {
         }
         Insert: {
           account_number: string
+          account_type?: string | null
           balance?: number | null
           created_at?: string
           currency?: string | null
@@ -440,6 +442,7 @@ export type Database = {
         }
         Update: {
           account_number?: string
+          account_type?: string | null
           balance?: number | null
           created_at?: string
           currency?: string | null
