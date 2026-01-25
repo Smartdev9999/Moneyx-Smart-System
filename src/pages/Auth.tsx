@@ -51,6 +51,8 @@ const Auth = () => {
           navigate('/admin');
         } else if (role === 'developer') {
           navigate('/developer');
+        } else if (role === 'customer') {
+          navigate('/customer');
         }
         // Users without role or with 'user' role - stay on page
       }, 100);

@@ -24,7 +24,7 @@ interface UserWithRole {
   id: string;
   email: string | null;
   full_name: string | null;
-  role: 'super_admin' | 'admin' | 'developer' | 'user' | null;
+  role: 'super_admin' | 'admin' | 'developer' | 'customer' | 'user' | null;
   created_at: string;
 }
 

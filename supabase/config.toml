@@ -23,3 +23,6 @@ verify_jwt = false
 
 [functions.refresh-economic-news]
 verify_jwt = false
+
+[functions.sync-wallet-transactions]
+verify_jwt = false
