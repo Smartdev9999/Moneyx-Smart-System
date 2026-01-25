@@ -5,14 +5,14 @@ import StepCard from '@/components/StepCard';
 
 const MT5EAGuide = () => {
 const fullEACode = `//+------------------------------------------------------------------+
-//|                   Moneyx Smart Gold System v5.31                   |
+//|                   Moneyx Smart Gold System v5.32                   |
 //|           Smart Money Trading System with CDC Action Zone          |
 //| + Grid + Hedging + Account Type + Position Recovery (VPS Support)  |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
 #property link      ""
-#property version   "5.31"
-// v5.31: Fixed Sub Hedge comment format (spaces->underscores) + IntegerToString validation
+#property version   "5.32"
+// v5.32: Fixed Grid Loss Custom Distance - now measures from Initial Order, not Last Order
 #property strict
 
 // *** Logo File ***
@@ -7037,6 +7037,46 @@ double GetFirstPositionPrice(ENUM_POSITION_TYPE posType)
 }
 
 //+------------------------------------------------------------------+
+//| Get Initial Position Price (excludes Grid orders) for Custom Distance |
+//| v5.32: Fix Custom Distance bug - measure from Initial, not Last   |
+//+------------------------------------------------------------------+
+double GetInitialPositionPrice(ENUM_POSITION_TYPE posType)
+{
+   double initialPrice = 0;
+   datetime oldestTime = D'2099.01.01';
+   
+   for(int i = 0; i < PositionsTotal(); i++)
+   {
+      if(PositionGetSymbol(i) == _Symbol)
+      {
+         if(PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
+         {
+            if(PositionGetInteger(POSITION_TYPE) == posType)
+            {
+               string comment = PositionGetString(POSITION_COMMENT);
+               // Exclude Grid orders - only find Initial/Main orders
+               if(StringFind(comment, "Grid") < 0)
+               {
+                  datetime posTime = (datetime)PositionGetInteger(POSITION_TIME);
+                  if(posTime < oldestTime)
+                  {
+                     oldestTime = posTime;
+                     initialPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+                  }
+               }
+            }
+         }
+      }
+   }
+   
+   // Fallback: if no Initial order found, use GetFirstPositionPrice
+   if(initialPrice == 0)
+      initialPrice = GetFirstPositionPrice(posType);
+      
+   return initialPrice;
+}
+
+//+------------------------------------------------------------------+
 //| Check and Execute Grid Loss Side                                   |
 //+------------------------------------------------------------------+
 void CheckGridLossSide()
@@ -7086,7 +7126,12 @@ void CheckGridLossSide()
       
       if(buyGridAllowed)
       {
-         double lastBuyPrice = GetLastPositionPrice(POSITION_TYPE_BUY);
+         // v5.32: Custom Distance measures from Initial Position, Fixed/ATR from Last
+         double referencePrice;
+         if(InpGridLossGapType == GAP_CUSTOM_DISTANCE)
+            referencePrice = GetInitialPositionPrice(POSITION_TYPE_BUY);
+         else
+            referencePrice = GetLastPositionPrice(POSITION_TYPE_BUY);
          
          // *** Grid Loss นับ level แยกจาก Grid Profit ***
          // buyGridLossCount = จำนวน Grid Loss orders ที่มีอยู่แล้ว (นับจาก comment)
@@ -7094,8 +7139,8 @@ void CheckGridLossSide()
          int gridLossLevel = buyGridLossCount + 1;
          int distance = GetGridDistance(true, buyGridLossCount);
          
-         // Price went DOWN from last buy by grid distance
-         if(lastBuyPrice - currentPrice >= distance * _Point)
+         // Price went DOWN from reference by grid distance
+         if(referencePrice - currentPrice >= distance * _Point)
          {
             // v5.25: Pass direction to GetGridLotSize for CDC Trend Mode
             double lot = GetGridLotSize(true, gridLossLevel, "BUY");
@@ -7159,7 +7204,12 @@ void CheckGridLossSide()
       
       if(sellGridAllowed)
       {
-         double lastSellPrice = GetLastPositionPrice(POSITION_TYPE_SELL);
+         // v5.32: Custom Distance measures from Initial Position, Fixed/ATR from Last
+         double referencePrice;
+         if(InpGridLossGapType == GAP_CUSTOM_DISTANCE)
+            referencePrice = GetInitialPositionPrice(POSITION_TYPE_SELL);
+         else
+            referencePrice = GetLastPositionPrice(POSITION_TYPE_SELL);
          
          // *** Grid Loss นับ level แยกจาก Grid Profit ***
          // sellGridLossCount = จำนวน Grid Loss orders ที่มีอยู่แล้ว (นับจาก comment)
@@ -7167,8 +7217,8 @@ void CheckGridLossSide()
          int gridLossLevel = sellGridLossCount + 1;
          int distance = GetGridDistance(true, sellGridLossCount);
          
-         // Price went UP from last sell by grid distance
-         if(currentPrice - lastSellPrice >= distance * _Point)
+         // Price went UP from reference by grid distance
+         if(currentPrice - referencePrice >= distance * _Point)
          {
             // v5.25: Pass direction to GetGridLotSize for CDC Trend Mode
             double lot = GetGridLotSize(true, gridLossLevel, "SELL");
