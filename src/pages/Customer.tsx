@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
@@ -19,10 +19,12 @@ import {
   PieChart,
   DollarSign,
   Percent,
-  Activity
+  Activity,
+  Bell
 } from 'lucide-react';
 import { FundPieChart } from '@/components/FundPieChart';
 import { PortfolioSummary } from '@/components/PortfolioSummary';
+import { useToast } from '@/hooks/use-toast';
 
 interface CustomerData {
   id: string;
@@ -86,6 +88,7 @@ type AccountTypeFilter = 'all' | 'real' | 'demo';
 
 const Customer = () => {
   const navigate = useNavigate();
+  const { toast } = useToast();
   const { user, loading, isCustomer, isApprovedCustomer, customerInfo, signOut } = useAuth();
   const [customerData, setCustomerData] = useState<CustomerData | null>(null);
   const [mt5Accounts, setMT5Accounts] = useState<MT5Account[]>([]);
@@ -101,13 +104,7 @@ const Customer = () => {
     }
   }, [user, loading, navigate]);
 
-  useEffect(() => {
-    if (user && isApprovedCustomer && customerInfo.customerUuid) {
-      fetchAllData();
-    }
-  }, [user, isApprovedCustomer, customerInfo.customerUuid]);
-
-  const fetchAllData = async () => {
+  const fetchAllData = useCallback(async () => {
     if (!customerInfo.customerUuid) return;
     
     setIsLoading(true);
@@ -166,7 +163,7 @@ const Customer = () => {
           .select('*')
           .in('wallet_id', walletIds)
           .order('block_time', { ascending: false })
-          .limit(20);
+          .limit(50);
 
         if (transactions) {
           setWalletTransactions(transactions);
@@ -177,7 +174,100 @@ const Customer = () => {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [customerInfo.customerUuid]);
+
+  useEffect(() => {
+    if (user && isApprovedCustomer && customerInfo.customerUuid) {
+      fetchAllData();
+    }
+  }, [user, isApprovedCustomer, customerInfo.customerUuid, fetchAllData]);
+
+  // Real-time subscriptions
+  useEffect(() => {
+    if (!customerInfo.customerUuid) return;
+
+    // Subscribe to MT5 account updates
+    const mt5Channel = supabase
+      .channel('customer-mt5-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'mt5_accounts',
+          filter: `customer_id=eq.${customerInfo.customerUuid}`,
+        },
+        (payload) => {
+          console.log('MT5 account change:', payload);
+          if (payload.eventType === 'UPDATE') {
+            setMT5Accounts((prev) =>
+              prev.map((acc) =>
+                acc.id === payload.new.id ? { ...acc, ...payload.new } : acc
+              )
+            );
+            toast({
+              title: 'บัญชีอัพเดท',
+              description: `บัญชี ${payload.new.account_number} มีการอัพเดท`,
+            });
+          } else if (payload.eventType === 'INSERT') {
+            setMT5Accounts((prev) => [payload.new as MT5Account, ...prev]);
+          } else if (payload.eventType === 'DELETE') {
+            setMT5Accounts((prev) => prev.filter((acc) => acc.id !== payload.old.id));
+          }
+        }
+      )
+      .subscribe();
+
+    // Subscribe to fund allocation updates
+    const allocChannel = supabase
+      .channel('customer-allocation-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'fund_allocations',
+          filter: `customer_id=eq.${customerInfo.customerUuid}`,
+        },
+        (payload) => {
+          console.log('Fund allocation change:', payload);
+          // Refetch allocations to get related data
+          fetchAllData();
+        }
+      )
+      .subscribe();
+
+    // Subscribe to wallet transaction updates
+    const txChannel = supabase
+      .channel('customer-transaction-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'wallet_transactions',
+        },
+        async (payload) => {
+          // Check if this transaction belongs to customer's wallet
+          const walletIds = fundWallets.map((w) => w.id);
+          if (walletIds.includes(payload.new.wallet_id)) {
+            console.log('New transaction:', payload);
+            setWalletTransactions((prev) => [payload.new as WalletTransaction, ...prev.slice(0, 49)]);
+            toast({
+              title: 'ธุรกรรมใหม่',
+              description: `${payload.new.tx_type === 'in' ? 'รับเข้า' : 'ส่งออก'} $${payload.new.amount}`,
+            });
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(mt5Channel);
+      supabase.removeChannel(allocChannel);
+      supabase.removeChannel(txChannel);
+    };
+  }, [customerInfo.customerUuid, fundWallets, fetchAllData, toast]);
 
   const handleSignOut = async () => {
     await signOut();
@@ -265,6 +355,17 @@ const Customer = () => {
     );
   }
 
+  const getClassificationLabel = (classification: string | null) => {
+    const labels: Record<string, string> = {
+      fund_deposit: 'ฝากเงิน',
+      fund_withdraw: 'ถอนเงิน',
+      profit_transfer: 'โอนกำไร',
+      invest_transfer: 'โอนลงทุน',
+      dividend: 'ปันผล',
+    };
+    return classification ? labels[classification] || classification : '-';
+  };
+
   return (
     <div className="min-h-screen bg-background">
       {/* Header */}
@@ -283,6 +384,10 @@ const Customer = () => {
           </div>
           
           <div className="flex items-center gap-2">
+            <Badge variant="outline" className="hidden md:flex items-center gap-1">
+              <Bell className="w-3 h-3" />
+              Real-time
+            </Badge>
             <Button variant="ghost" size="icon" onClick={() => navigate('/customer/settings')}>
               <Settings className="w-4 h-4" />
             </Button>
@@ -340,7 +445,7 @@ const Customer = () => {
                   MT5 Accounts
                 </CardTitle>
                 <CardDescription>
-                  รายการบัญชี MT5 ของคุณ
+                  รายการบัญชี MT5 ของคุณ (อัพเดทแบบ Real-time)
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -453,7 +558,7 @@ const Customer = () => {
                                   <div>
                                     <p className="text-xs text-muted-foreground">Profit</p>
                                     <p className={`font-mono font-bold ${(account.total_profit || 0) >= 0 ? 'text-green-500' : 'text-red-500'}`}>
-                                      {(account.total_profit || 0) >= 0 ? '+' : ''}{account.total_profit?.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                                      {account.currency === 'USC' ? '' : '$'}{account.total_profit?.toLocaleString('en-US', { minimumFractionDigits: 2 })} {account.currency === 'USC' ? 'USC' : ''}
                                     </p>
                                   </div>
                                 </div>
@@ -468,45 +573,65 @@ const Customer = () => {
               </CardContent>
             </Card>
 
-            {/* Recent Transactions */}
-            {walletTransactions.length > 0 && (
-              <Card>
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <Wallet className="w-5 h-5" />
-                    Recent Wallet Transactions
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
+            {/* Transaction History */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Wallet className="w-5 h-5" />
+                  ประวัติธุรกรรม
+                </CardTitle>
+                <CardDescription>
+                  รายการเงินเข้า-ออก ล่าสุด 50 รายการ (อัพเดทแบบ Real-time)
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {walletTransactions.length === 0 ? (
+                  <div className="text-center py-8 text-muted-foreground">
+                    <Wallet className="w-12 h-12 mx-auto mb-2 opacity-50" />
+                    <p>ไม่พบประวัติธุรกรรม</p>
+                  </div>
+                ) : (
                   <div className="space-y-2">
-                    {walletTransactions.slice(0, 10).map((tx) => (
-                      <div key={tx.id} className="flex items-center justify-between py-2 border-b border-border last:border-0">
+                    {walletTransactions.map((tx) => (
+                      <div key={tx.id} className="flex items-center justify-between py-3 border-b border-border last:border-0">
                         <div className="flex items-center gap-3">
-                          <div className={`w-8 h-8 rounded-full flex items-center justify-center ${tx.tx_type === 'in' ? 'bg-green-500/20' : 'bg-red-500/20'}`}>
+                          <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
+                            tx.tx_type === 'in' ? 'bg-green-500/20' : 'bg-red-500/20'
+                          }`}>
                             {tx.tx_type === 'in' ? (
-                              <TrendingUp className="w-4 h-4 text-green-500" />
+                              <TrendingUp className="w-5 h-5 text-green-500" />
                             ) : (
-                              <TrendingDown className="w-4 h-4 text-red-500" />
+                              <TrendingDown className="w-5 h-5 text-red-500" />
                             )}
                           </div>
                           <div>
                             <p className="font-medium">
-                              {tx.classification || (tx.tx_type === 'in' ? 'เงินเข้า' : 'เงินออก')}
+                              {tx.tx_type === 'in' ? 'รับเข้า' : 'ส่งออก'}
+                              {tx.classification && (
+                                <Badge variant="outline" className="ml-2 text-xs">
+                                  {getClassificationLabel(tx.classification)}
+                                </Badge>
+                              )}
                             </p>
-                            <p className="text-xs text-muted-foreground">
-                              {new Date(tx.block_time).toLocaleString('th-TH')}
+                            <p className="text-xs text-muted-foreground font-mono">
+                              {tx.tx_hash.substring(0, 16)}...
                             </p>
                           </div>
                         </div>
-                        <p className={`font-mono font-bold ${tx.tx_type === 'in' ? 'text-green-500' : 'text-red-500'}`}>
-                          {tx.tx_type === 'in' ? '+' : '-'}{tx.amount.toLocaleString('en-US', { minimumFractionDigits: 2 })} USDT
-                        </p>
+                        <div className="text-right">
+                          <p className={`font-mono font-bold ${tx.tx_type === 'in' ? 'text-green-500' : 'text-red-500'}`}>
+                            {tx.tx_type === 'in' ? '+' : '-'}${tx.amount.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            {new Date(tx.block_time).toLocaleString('th-TH')}
+                          </p>
+                        </div>
                       </div>
                     ))}
                   </div>
-                </CardContent>
-              </Card>
-            )}
+                )}
+              </CardContent>
+            </Card>
           </>
         )}
       </main>

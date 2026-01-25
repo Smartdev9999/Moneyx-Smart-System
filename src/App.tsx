@@ -21,6 +21,7 @@ import AccountPortfolio from "./pages/admin/AccountPortfolio";
 import Accounts from "./pages/admin/Accounts";
 import TradingSystems from "./pages/admin/TradingSystems";
 import UserManagement from "./pages/admin/UserManagement";
+import FundReport from "./pages/admin/FundReport";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -45,6 +46,7 @@ const App = () => (
             <Route path="/admin/accounts/:id/portfolio" element={<AccountPortfolio />} />
             <Route path="/admin/systems" element={<TradingSystems />} />
             <Route path="/admin/users" element={<UserManagement />} />
+            <Route path="/admin/fund-report" element={<FundReport />} />
             <Route path="/customer" element={<Customer />} />
             <Route path="/customer/settings" element={<CustomerSettings />} />
             <Route path="/developer" element={<Developer />} />

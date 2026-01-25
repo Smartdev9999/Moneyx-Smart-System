@@ -21,7 +21,8 @@ import {
   Clock,
   CheckCircle,
   XCircle,
-  RefreshCw
+  RefreshCw,
+  FileBarChart
 } from 'lucide-react';
 
 interface DashboardStats {
@@ -452,6 +453,14 @@ const Admin = () => {
               >
                 <BarChart3 className="w-6 h-6" />
                 <span>ระบบเทรด</span>
+              </Button>
+              <Button 
+                variant="outline" 
+                className="h-24 flex flex-col gap-2"
+                onClick={() => navigate('/admin/fund-report')}
+              >
+                <FileBarChart className="w-6 h-6" />
+                <span>รายงานกองทุน</span>
               </Button>
               {isSuperAdmin && (
                 <Button 
