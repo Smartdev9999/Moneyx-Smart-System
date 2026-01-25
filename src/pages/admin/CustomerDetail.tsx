@@ -5,6 +5,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -94,7 +95,10 @@ interface MT5Account {
   trading_system: { name: string; id: string } | null;
   days_remaining: number | null;
   ea_status: string | null;
+  account_type: string | null;
 }
+
+type AccountTypeFilter = 'all' | 'real' | 'demo';
 
 interface TradingSystem {
   id: string;
@@ -112,6 +116,7 @@ const CustomerDetail = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [isAddingAccount, setIsAddingAccount] = useState(false);
   const [showAddDialog, setShowAddDialog] = useState(false);
+  const [accountTypeFilter, setAccountTypeFilter] = useState<AccountTypeFilter>('all');
   
   // Edit dialog state
   const [showEditDialog, setShowEditDialog] = useState(false);
@@ -176,11 +181,12 @@ const CustomerDetail = () => {
         floating_pl: a.floating_pl || 0,
         total_profit: a.total_profit || 0,
         ea_status: a.ea_status || 'offline',
+        account_type: a.account_type || 'real',
         days_remaining: a.is_lifetime ? null : 
           a.expiry_date ? Math.ceil((new Date(a.expiry_date).getTime() - now.getTime()) / (1000 * 60 * 60 * 24)) : null,
       })) || [];
 
-      setAccounts(processedAccounts);
+      setAccounts(processedAccounts as MT5Account[]);
     } catch (error) {
       console.error('Error fetching customer:', error);
       toast({
@@ -525,13 +531,30 @@ const CustomerDetail = () => {
     }
   };
 
-  const totalBalance = accounts.reduce((sum, a) => sum + Number(a.balance || 0), 0);
-  const totalEquity = accounts.reduce((sum, a) => sum + Number(a.equity || 0), 0);
-  const totalPL = accounts.reduce((sum, a) => sum + Number(a.profit_loss || 0), 0);
-  const totalFloatingPL = accounts.reduce((sum, a) => sum + Number(a.floating_pl || 0), 0);
-  const totalOpenOrders = accounts.reduce((sum, a) => sum + Number(a.open_orders || 0), 0);
+  // Filter accounts based on account type filter
+  const filteredAccounts = accountTypeFilter === 'all' 
+    ? accounts 
+    : accounts.filter(a => {
+        if (accountTypeFilter === 'real') {
+          return a.account_type === 'real' || !a.account_type;
+        }
+        return a.account_type === accountTypeFilter;
+      });
 
-  const accountIds = accounts.map(a => a.id);
+  const totalBalance = filteredAccounts.reduce((sum, a) => sum + Number(a.balance || 0), 0);
+  const totalEquity = filteredAccounts.reduce((sum, a) => sum + Number(a.equity || 0), 0);
+  const totalPL = filteredAccounts.reduce((sum, a) => sum + Number(a.profit_loss || 0), 0);
+  const totalFloatingPL = filteredAccounts.reduce((sum, a) => sum + Number(a.floating_pl || 0), 0);
+  const totalOpenOrders = filteredAccounts.reduce((sum, a) => sum + Number(a.open_orders || 0), 0);
+
+  const filteredAccountIds = filteredAccounts.map(a => a.id);
+  
+  const getAccountTypeBadge = (accountType: string | null) => {
+    if (accountType === 'demo') {
+      return <Badge variant="secondary" className="text-xs">🔵 Demo</Badge>;
+    }
+    return <Badge variant="outline" className="text-xs border-emerald-500/50 text-emerald-500">🟢 Real</Badge>;
+  };
 
   if (!isAdmin) {
     return null;
@@ -621,7 +644,7 @@ const CustomerDetail = () => {
             <CardContent className="space-y-4">
               <div className="flex justify-between items-center">
                 <span className="text-muted-foreground">MT5 Accounts</span>
-                <span className="font-bold">{accounts.length}</span>
+                <span className="font-bold">{filteredAccounts.length}</span>
               </div>
               <div className="flex justify-between items-center">
                 <span className="text-muted-foreground">Balance รวม</span>
@@ -658,8 +681,34 @@ const CustomerDetail = () => {
           </Card>
         </div>
 
+        {/* Account Type Filter Tabs */}
+        <div className="mb-6">
+          <Tabs value={accountTypeFilter} onValueChange={(v) => setAccountTypeFilter(v as AccountTypeFilter)}>
+            <TabsList className="grid w-full max-w-md grid-cols-3">
+              <TabsTrigger value="all" className="gap-2">
+                ทั้งหมด
+                <Badge variant="secondary" className="ml-1 h-5 px-1.5 text-xs">
+                  {accounts.length}
+                </Badge>
+              </TabsTrigger>
+              <TabsTrigger value="real" className="gap-2">
+                🟢 Real
+                <Badge variant="secondary" className="ml-1 h-5 px-1.5 text-xs">
+                  {accounts.filter(a => a.account_type === 'real' || !a.account_type).length}
+                </Badge>
+              </TabsTrigger>
+              <TabsTrigger value="demo" className="gap-2">
+                🔵 Demo
+                <Badge variant="secondary" className="ml-1 h-5 px-1.5 text-xs">
+                  {accounts.filter(a => a.account_type === 'demo').length}
+                </Badge>
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+        </div>
+
         {/* P/L Chart */}
-        <TotalAccountHistoryChart accountIds={accountIds} />
+        <TotalAccountHistoryChart accountIds={filteredAccountIds} />
 
         {/* MT5 Accounts */}
         <Card>
@@ -746,15 +795,19 @@ const CustomerDetail = () => {
             </Dialog>
           </CardHeader>
           <CardContent>
-            {accounts.length === 0 ? (
+            {filteredAccounts.length === 0 ? (
               <div className="text-center py-12 text-muted-foreground">
                 <CreditCard className="w-16 h-16 mx-auto mb-4 opacity-20" />
-                <p className="text-lg font-medium">ยังไม่มี MT5 Account</p>
-                <p className="text-sm">คลิก "เพิ่ม Account" เพื่อเริ่มต้น</p>
+                <p className="text-lg font-medium">
+                  {accountTypeFilter === 'all' ? 'ยังไม่มี MT5 Account' : `ไม่มี ${accountTypeFilter === 'real' ? 'Real' : 'Demo'} Account`}
+                </p>
+                <p className="text-sm">
+                  {accountTypeFilter === 'all' ? 'คลิก "เพิ่ม Account" เพื่อเริ่มต้น' : 'ลองเลือกดูประเภทอื่น'}
+                </p>
               </div>
             ) : (
               <div className="grid gap-4">
-                {accounts.map((account) => (
+                {filteredAccounts.map((account) => (
                   <div
                     key={account.id}
                     className="flex flex-col p-4 rounded-xl border border-border bg-card/50 hover:bg-card transition-colors"
@@ -765,7 +818,10 @@ const CustomerDetail = () => {
                           <CreditCard className="w-6 h-6 text-primary" />
                         </div>
                         <div>
-                          <p className="font-bold font-mono text-lg">{account.account_number}</p>
+                          <div className="flex items-center gap-2">
+                            <p className="font-bold font-mono text-lg">{account.account_number}</p>
+                            {getAccountTypeBadge(account.account_type)}
+                          </div>
                           <p className="text-sm text-muted-foreground">
                             {account.trading_system?.name || 'ไม่ระบุระบบ'} • {getPackageLabel(account.package_type)}
                           </p>
