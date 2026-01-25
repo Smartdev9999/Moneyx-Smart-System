@@ -45,6 +45,13 @@ const MultiMetricChart = ({ accountIds }: MultiMetricChartProps) => {
   const fetchMetricData = async () => {
     setIsLoading(true);
     try {
+      // Early return if accountIds is an empty array (filtered but no matches)
+      if (accountIds && accountIds.length === 0) {
+        setData([]);
+        setIsLoading(false);
+        return;
+      }
+      
       // Calculate date range
       let startDate: Date | null = null;
       const now = new Date();

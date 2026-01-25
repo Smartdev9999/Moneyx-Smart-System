@@ -5,13 +5,13 @@ import StepCard from '@/components/StepCard';
 
 const MT5EAGuide = () => {
   const fullEACode = `//+------------------------------------------------------------------+
-//|                   Moneyx Smart Gold System v5.26.2                 |
+//|                   Moneyx Smart Gold System v5.27                   |
 //|           Smart Money Trading System with CDC Action Zone          |
-//| + Grid Trading + Auto Scaling + Hedging + CDC Backtest Reliability |
+//| + Grid Trading + Auto Scaling + Hedging + Account Type Detection   |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
 #property link      ""
-#property version   "5.262"
+#property version   "5.27"
 #property strict
 
 // *** Logo File ***
@@ -1021,6 +1021,11 @@ bool SyncAccountDataWithEvent(ENUM_SYNC_EVENT eventType)
    // v5.27: Get account currency for auto-detection (USD, USC, EUR, etc.)
    string accountCurrency = AccountInfoString(ACCOUNT_CURRENCY);
    
+   // v5.27: Get account type (real, demo, contest) for dashboard separation
+   ENUM_ACCOUNT_TRADE_MODE tradeMode = (ENUM_ACCOUNT_TRADE_MODE)AccountInfoInteger(ACCOUNT_TRADE_MODE);
+   string accountTypeStr = (tradeMode == ACCOUNT_TRADE_MODE_DEMO) ? "demo" : 
+                           (tradeMode == ACCOUNT_TRADE_MODE_CONTEST) ? "contest" : "real";
+   
    string json = "{";
    json += "\\"account_number\\":\\"" + IntegerToString(accountNumber) + "\\",";
    json += "\\"balance\\":" + DoubleToString(balance, 2) + ",";
@@ -1042,7 +1047,8 @@ bool SyncAccountDataWithEvent(ENUM_SYNC_EVENT eventType)
    json += "\\"event_type\\":\\"" + eventTypeStr + "\\",";
    json += "\\"ea_name\\":\\"Moneyx Smart Gold System\\",";
    json += "\\"ea_status\\":\\"" + eaStatus + "\\",";
-   json += "\\"currency\\":\\"" + accountCurrency + "\\"";
+   json += "\\"currency\\":\\"" + accountCurrency + "\\",";
+   json += "\\"account_type\\":\\"" + accountTypeStr + "\\"";
    
    // Include trade history on all sync events (scheduled + order close)
    // This ensures historical data is synced on EA startup and periodically

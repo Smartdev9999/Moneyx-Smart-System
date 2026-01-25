@@ -43,6 +43,13 @@ const ProfitBarChart = ({ accountIds }: ProfitBarChartProps) => {
   const fetchProfitData = async () => {
     setIsLoading(true);
     try {
+      // Early return if accountIds is an empty array (filtered but no matches)
+      if (accountIds && accountIds.length === 0) {
+        setData([]);
+        setIsLoading(false);
+        return;
+      }
+      
       // Get account IDs and currency
       let targetAccountIds = accountIds;
       if (!targetAccountIds || targetAccountIds.length === 0) {

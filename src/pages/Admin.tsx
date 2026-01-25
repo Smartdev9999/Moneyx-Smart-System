@@ -273,7 +273,10 @@ const Admin = () => {
 
         {/* Stats Grid */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-          <Card>
+          <Card 
+            className="cursor-pointer hover:border-primary/50 transition-colors"
+            onClick={() => navigate('/admin/customers')}
+          >
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground">
                 ลูกค้าทั้งหมด
@@ -289,7 +292,10 @@ const Admin = () => {
             </CardContent>
           </Card>
 
-          <Card>
+          <Card 
+            className="cursor-pointer hover:border-primary/50 transition-colors"
+            onClick={() => navigate('/admin/accounts')}
+          >
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground">
                 MT5 Accounts (Active)
