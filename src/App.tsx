@@ -1,4 +1,5 @@
 import { Toaster } from "@/components/ui/toaster";
+import { lazy, Suspense } from "react";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -22,6 +23,7 @@ import Accounts from "./pages/admin/Accounts";
 import TradingSystems from "./pages/admin/TradingSystems";
 import UserManagement from "./pages/admin/UserManagement";
 import FundReport from "./pages/admin/FundReport";
+import CustomerROIReport from "./pages/admin/CustomerROIReport";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -47,6 +49,7 @@ const App = () => (
             <Route path="/admin/systems" element={<TradingSystems />} />
             <Route path="/admin/users" element={<UserManagement />} />
             <Route path="/admin/fund-report" element={<FundReport />} />
+            <Route path="/admin/roi-report" element={<CustomerROIReport />} />
             <Route path="/customer" element={<Customer />} />
             <Route path="/customer/settings" element={<CustomerSettings />} />
             <Route path="/developer" element={<Developer />} />
