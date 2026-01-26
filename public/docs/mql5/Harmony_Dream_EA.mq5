@@ -4,7 +4,7 @@
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "1.60"
+#property version   "1.80"
 #property strict
 #property description "Harmony Dream - Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
@@ -4367,14 +4367,23 @@ string GetCDCStatusText(int pairIndex, color &statusColor)
       else  // Negative Correlation
          cdcOK = oppositeTrend;
       
+      // v1.8: Show Up/Down based on trendA direction
       if(cdcOK)
       {
-         statusColor = clrLime;  // Green = OK
-         newStatus = "OK";
+         if(trendA == "BULLISH")
+         {
+            statusColor = clrLime;       // Green = Uptrend
+            newStatus = "Up";
+         }
+         else  // BEARISH
+         {
+            statusColor = clrOrangeRed;  // Red = Downtrend
+            newStatus = "Down";
+         }
       }
       else
       {
-         statusColor = clrOrangeRed;  // Red = Block (trend mismatch)
+         statusColor = clrGray;          // Gray = Block (trend mismatch)
          newStatus = "BLOCK";
       }
    }
@@ -5511,19 +5520,19 @@ void OpenGridLossBuy(int pairIndex)
       UpdateADXForPair(pairIndex);
    }
    
-   // v3.77: Build comment with Magic Number for order recovery
-   string comment;
-   if(corrType == -1 && InpUseADXForNegative)
-   {
-        comment = StringFormat("HrmDream_GL_BUY_%d[M:%d][ADX:%.0f|%.0f]", 
-                               pairIndex + 1, InpMagicNumber,
-                               g_pairs[pairIndex].adxValueA,
-                               g_pairs[pairIndex].adxValueB);
-   }
-   else
-   {
-      comment = StringFormat("HrmDream_GL_BUY_%d[M:%d]", pairIndex + 1, InpMagicNumber);
-   }
+    // v1.8: Build comment with ADX:A/B format
+    string comment;
+    if(corrType == -1 && InpUseADXForNegative)
+    {
+         comment = StringFormat("HrmDream_GL_BUY_%d[M:%d][ADX:%.0f/%.0f]", 
+                                pairIndex + 1, InpMagicNumber,
+                                g_pairs[pairIndex].adxValueA,
+                                g_pairs[pairIndex].adxValueB);
+    }
+    else
+    {
+       comment = StringFormat("HrmDream_GL_BUY_%d[M:%d]", pairIndex + 1, InpMagicNumber);
+    }
    
    // Open Buy on Symbol A
    double askA = SymbolInfoDouble(symbolA, SYMBOL_ASK);
@@ -5596,11 +5605,11 @@ void OpenGridLossSell(int pairIndex)
       UpdateADXForPair(pairIndex);
    }
    
-   // v3.77: Build comment with Magic Number for order recovery
+   // v1.8: Build comment with ADX:A/B format
    string comment;
    if(corrType == -1 && InpUseADXForNegative)
    {
-        comment = StringFormat("HrmDream_GL_SELL_%d[M:%d][ADX:%.0f|%.0f]", 
+        comment = StringFormat("HrmDream_GL_SELL_%d[M:%d][ADX:%.0f/%.0f]", 
                                pairIndex + 1, InpMagicNumber,
                                g_pairs[pairIndex].adxValueA,
                                g_pairs[pairIndex].adxValueB);
@@ -5681,11 +5690,11 @@ void OpenGridProfitBuy(int pairIndex)
       UpdateADXForPair(pairIndex);
    }
    
-   // v3.77: Build comment with Magic Number for order recovery
+   // v1.8: Build comment with ADX:A/B format
    string comment;
    if(corrType == -1 && InpUseADXForNegative)
    {
-        comment = StringFormat("HrmDream_GP_BUY_%d[M:%d][ADX:%.0f|%.0f]", 
+        comment = StringFormat("HrmDream_GP_BUY_%d[M:%d][ADX:%.0f/%.0f]", 
                                pairIndex + 1, InpMagicNumber,
                                g_pairs[pairIndex].adxValueA,
                                g_pairs[pairIndex].adxValueB);
@@ -5761,11 +5770,11 @@ void OpenGridProfitSell(int pairIndex)
       UpdateADXForPair(pairIndex);
    }
    
-   // v3.77: Build comment with Magic Number for order recovery
+   // v1.8: Build comment with ADX:A/B format
    string comment;
    if(corrType == -1 && InpUseADXForNegative)
    {
-        comment = StringFormat("HrmDream_GP_SELL_%d[M:%d][ADX:%.0f|%.0f]", 
+        comment = StringFormat("HrmDream_GP_SELL_%d[M:%d][ADX:%.0f/%.0f]", 
                                pairIndex + 1, InpMagicNumber,
                                g_pairs[pairIndex].adxValueA,
                                g_pairs[pairIndex].adxValueB);
@@ -5893,17 +5902,14 @@ bool OpenBuySideTrade(int pairIndex)
       UpdateADXForPair(pairIndex);
    }
    
-   // v1.7.0: Enhanced ADX comment showing winner symbol clearly
+   // v1.8: ADX comment with A/B format (Left=SymbolA, Right=SymbolB)
    string comment;
    if(corrType == -1 && InpUseADXForNegative)
    {
-      string winnerSym = (g_pairs[pairIndex].adxWinner == 0) ? g_pairs[pairIndex].symbolA :
-                         (g_pairs[pairIndex].adxWinner == 1) ? g_pairs[pairIndex].symbolB : "NONE";
-      comment = StringFormat("HrmDream_BUY_%d[M:%d][ADX:%s=%.0f>%.0f]", 
+      comment = StringFormat("HrmDream_BUY_%d[M:%d][ADX:%.0f/%.0f]", 
                              pairIndex + 1, InpMagicNumber,
-                             winnerSym,
-                             g_pairs[pairIndex].adxWinnerValue,
-                             g_pairs[pairIndex].adxLoserValue);
+                             g_pairs[pairIndex].adxValueA,
+                             g_pairs[pairIndex].adxValueB);
    }
    else
    {
@@ -6074,17 +6080,14 @@ bool OpenSellSideTrade(int pairIndex)
       UpdateADXForPair(pairIndex);
    }
    
-   // v1.7.0: Enhanced ADX comment showing winner symbol clearly
+   // v1.8: ADX comment with A/B format (Left=SymbolA, Right=SymbolB)
    string comment;
    if(corrType == -1 && InpUseADXForNegative)
    {
-      string winnerSym = (g_pairs[pairIndex].adxWinner == 0) ? g_pairs[pairIndex].symbolA :
-                         (g_pairs[pairIndex].adxWinner == 1) ? g_pairs[pairIndex].symbolB : "NONE";
-      comment = StringFormat("HrmDream_SELL_%d[M:%d][ADX:%s=%.0f>%.0f]", 
+      comment = StringFormat("HrmDream_SELL_%d[M:%d][ADX:%.0f/%.0f]", 
                              pairIndex + 1, InpMagicNumber,
-                             winnerSym,
-                             g_pairs[pairIndex].adxWinnerValue,
-                             g_pairs[pairIndex].adxLoserValue);
+                             g_pairs[pairIndex].adxValueA,
+                             g_pairs[pairIndex].adxValueB);
    }
    else
    {
@@ -7284,7 +7287,7 @@ void CreateDashboard()
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_XDISTANCE, PANEL_X + (PANEL_WIDTH / 2));
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_YDISTANCE, PANEL_Y + 4);
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_ANCHOR, ANCHOR_UPPER);
-   ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_TEXT, "Harmony Dream EA v1.6.7");
+   ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_TEXT, "Harmony Dream EA v1.8");
    ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_FONT, "Arial Bold");
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_FONTSIZE, 10);
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_COLOR, COLOR_GOLD);
@@ -7842,44 +7845,19 @@ void UpdateDashboard()
          color corrColor = MathAbs(corr) >= InpMinCorrelation * 100 ? COLOR_PROFIT : COLOR_TEXT;
          UpdateLabel(prefix + "P" + idxStr + "_CORR", DoubleToString(corr, 0) + "%", corrColor);
          
-         // v1.7.0: Enhanced TYPE display with ADX Winner for Negative Correlation
+         // v1.8: Simplified TYPE display - always show Pos/Neg only
          string corrType;
          color typeColor;
          
          if(g_pairs[i].correlationType == 1)
          {
             corrType = "Pos";
-            typeColor = COLOR_PROFIT;
+            typeColor = COLOR_PROFIT;  // Green
          }
          else
          {
-            // Negative Correlation - show ADX winner info
-            if(InpUseADXForNegative)
-            {
-               if(g_pairs[i].adxWinner == 0)
-               {
-                  // Symbol A wins - show "A:XX" in green
-                  corrType = StringFormat("A:%.0f", g_pairs[i].adxWinnerValue);
-                  typeColor = COLOR_PROFIT;  // Green - A side gets multiplier
-               }
-               else if(g_pairs[i].adxWinner == 1)
-               {
-                  // Symbol B wins - show "B:XX" in gold
-                  corrType = StringFormat("B:%.0f", g_pairs[i].adxWinnerValue);
-                  typeColor = C'255,180,0';  // Gold - B side gets multiplier
-               }
-               else
-               {
-                  // No winner (below threshold) - show "=XX" in grey
-                  corrType = StringFormat("=%.0f", MathMax(g_pairs[i].adxValueA, g_pairs[i].adxValueB));
-                  typeColor = COLOR_OFF;  // Grey - no multiplier applied
-               }
-            }
-            else
-            {
-               corrType = "Neg";
-               typeColor = COLOR_LOSS;
-            }
+            corrType = "Neg";
+            typeColor = COLOR_LOSS;    // Red
          }
          UpdateLabel(prefix + "P" + idxStr + "_TYPE", corrType, typeColor);
          
