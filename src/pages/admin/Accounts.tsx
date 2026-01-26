@@ -28,7 +28,11 @@ import {
   CreditCard, 
   Search, 
   Eye,
-  RefreshCw 
+  RefreshCw,
+  Activity,
+  WifiOff,
+  Pause,
+  Ban
 } from 'lucide-react';
 
 interface MT5Account {
@@ -41,6 +45,11 @@ interface MT5Account {
   expiry_date: string | null;
   is_lifetime: boolean;
   account_type: string | null;
+  ea_status: string | null;
+  last_sync: string | null;
+  trading_system: {
+    name: string;
+  } | null;
   customer: {
     name: string;
     email: string;
@@ -90,6 +99,9 @@ const Accounts = () => {
           expiry_date,
           is_lifetime,
           account_type,
+          ea_status,
+          last_sync,
+          trading_system:trading_systems(name),
           customer:customers(name, email)
         `)
         .order('created_at', { ascending: false });
@@ -138,6 +150,75 @@ const Accounts = () => {
       return <Badge variant="outline" className="border-blue-500/50 text-blue-500">🔵 Demo</Badge>;
     }
     return <Badge variant="outline" className="border-green-500/50 text-green-500">🟢 Real</Badge>;
+  };
+
+  const getEAStatusBadge = (eaStatus: string | null, lastSync: string | null) => {
+    // Check if offline (last_sync > 10 minutes)
+    if (lastSync) {
+      const lastSyncTime = new Date(lastSync);
+      const now = new Date();
+      const diffMinutes = (now.getTime() - lastSyncTime.getTime()) / (1000 * 60);
+      if (diffMinutes > 10) {
+        return (
+          <Badge variant="outline" className="border-gray-500/50 text-gray-400 gap-1">
+            <WifiOff className="w-3 h-3" />
+            Offline
+          </Badge>
+        );
+      }
+    } else if (!eaStatus) {
+      return (
+        <Badge variant="outline" className="border-gray-500/50 text-gray-400 gap-1">
+          <WifiOff className="w-3 h-3" />
+          Offline
+        </Badge>
+      );
+    }
+
+    switch (eaStatus) {
+      case 'working':
+        return (
+          <Badge className="bg-green-600/20 text-green-500 border border-green-500/50 gap-1">
+            <Activity className="w-3 h-3" />
+            Working
+          </Badge>
+        );
+      case 'paused':
+        return (
+          <Badge className="bg-yellow-600/20 text-yellow-500 border border-yellow-500/50 gap-1">
+            <Pause className="w-3 h-3" />
+            Paused
+          </Badge>
+        );
+      case 'suspended':
+        return (
+          <Badge className="bg-red-600/20 text-red-500 border border-red-500/50 gap-1">
+            <Ban className="w-3 h-3" />
+            Suspended
+          </Badge>
+        );
+      case 'invalid':
+        return (
+          <Badge className="bg-red-600/20 text-red-500 border border-red-500/50 gap-1">
+            <Ban className="w-3 h-3" />
+            Invalid
+          </Badge>
+        );
+      case 'expired':
+        return (
+          <Badge className="bg-orange-600/20 text-orange-500 border border-orange-500/50 gap-1">
+            <Ban className="w-3 h-3" />
+            Expired
+          </Badge>
+        );
+      default:
+        return (
+          <Badge variant="outline" className="border-gray-500/50 text-gray-400 gap-1">
+            <WifiOff className="w-3 h-3" />
+            Offline
+          </Badge>
+        );
+    }
   };
 
   const getStatusBadge = (status: string, isLifetime: boolean) => {
@@ -266,6 +347,8 @@ const Accounts = () => {
                     <TableHead>Account Number</TableHead>
                     <TableHead>ประเภท</TableHead>
                     <TableHead>ลูกค้า</TableHead>
+                    <TableHead>Trading System</TableHead>
+                    <TableHead>EA Status</TableHead>
                     <TableHead>Package</TableHead>
                     <TableHead>สถานะ</TableHead>
                     <TableHead className="text-right">Balance</TableHead>
@@ -287,6 +370,12 @@ const Accounts = () => {
                           <p className="font-medium">{account.customer?.name || '-'}</p>
                           <p className="text-xs text-muted-foreground">{account.customer?.email || '-'}</p>
                         </div>
+                      </TableCell>
+                      <TableCell>
+                        <span className="text-sm">{account.trading_system?.name || '-'}</span>
+                      </TableCell>
+                      <TableCell>
+                        {getEAStatusBadge(account.ea_status, account.last_sync)}
                       </TableCell>
                       <TableCell>{account.package_type}</TableCell>
                       <TableCell>
