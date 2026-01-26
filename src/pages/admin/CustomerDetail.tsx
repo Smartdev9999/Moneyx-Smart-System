@@ -64,7 +64,10 @@ import {
   DollarSign,
   Wifi,
   WifiOff,
-  Wallet
+  Wallet,
+  KeyRound,
+  Eye,
+  EyeOff
 } from 'lucide-react';
 
 interface Customer {
@@ -108,6 +111,17 @@ interface TradingSystem {
   name: string;
 }
 
+interface LinkedUser {
+  id: string;
+  user_id: string;
+  status: string;
+  approved_at: string | null;
+  profiles: {
+    email: string | null;
+    full_name: string | null;
+  } | null;
+}
+
 const CustomerDetail = () => {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -145,11 +159,23 @@ const CustomerDetail = () => {
     package_type: '1month',
     trading_system_id: '',
   });
+  
+  // Linked user state
+  const [linkedUser, setLinkedUser] = useState<LinkedUser | null>(null);
+  const [showCreateUserDialog, setShowCreateUserDialog] = useState(false);
+  const [isCreatingUser, setIsCreatingUser] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+  const [userForm, setUserForm] = useState({
+    email: '',
+    password: '',
+    confirmPassword: '',
+  });
 
   useEffect(() => {
     if (id && isAdmin) {
       fetchCustomerData();
       fetchTradingSystems();
+      fetchLinkedUser();
     }
   }, [id, isAdmin]);
 
@@ -211,6 +237,101 @@ const CustomerDetail = () => {
       .eq('is_active', true);
     
     setTradingSystems(data || []);
+  };
+
+  const fetchLinkedUser = async () => {
+    if (!id) return;
+    
+    const { data, error } = await supabase
+      .from('customer_users')
+      .select(`
+        id,
+        user_id,
+        status,
+        approved_at,
+        profiles:user_id (email, full_name)
+      `)
+      .eq('customer_id', id)
+      .maybeSingle();
+
+    if (!error && data) {
+      setLinkedUser(data as unknown as LinkedUser);
+    } else {
+      setLinkedUser(null);
+    }
+  };
+
+  const handleCreateUser = async () => {
+    // Validation
+    if (!userForm.email || !userForm.password) {
+      toast({
+        variant: "destructive",
+        title: "ข้อมูลไม่ครบ",
+        description: "กรุณากรอกอีเมลและรหัสผ่าน",
+      });
+      return;
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(userForm.email)) {
+      toast({
+        variant: "destructive",
+        title: "อีเมลไม่ถูกต้อง",
+        description: "กรุณากรอกอีเมลให้ถูกรูปแบบ",
+      });
+      return;
+    }
+
+    if (userForm.password.length < 6) {
+      toast({
+        variant: "destructive",
+        title: "รหัสผ่านสั้นเกินไป",
+        description: "รหัสผ่านต้องมีอย่างน้อย 6 ตัวอักษร",
+      });
+      return;
+    }
+
+    if (userForm.password !== userForm.confirmPassword) {
+      toast({
+        variant: "destructive",
+        title: "รหัสผ่านไม่ตรงกัน",
+        description: "กรุณากรอกรหัสผ่านให้ตรงกัน",
+      });
+      return;
+    }
+
+    setIsCreatingUser(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('create-customer-user', {
+        body: {
+          email: userForm.email,
+          password: userForm.password,
+          customerId: id,
+          fullName: customer?.name,
+        },
+      });
+
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+
+      toast({
+        title: "สร้างบัญชีสำเร็จ",
+        description: `บัญชี ${userForm.email} ถูกสร้างแล้ว`,
+      });
+
+      setShowCreateUserDialog(false);
+      setUserForm({ email: '', password: '', confirmPassword: '' });
+      fetchLinkedUser();
+    } catch (error: any) {
+      console.error('Error creating user:', error);
+      toast({
+        variant: "destructive",
+        title: "เกิดข้อผิดพลาด",
+        description: error.message || "ไม่สามารถสร้างบัญชีได้",
+      });
+    } finally {
+      setIsCreatingUser(false);
+    }
   };
 
   const calculateExpiryDate = (packageType: string, fromDate?: Date): string => {
@@ -636,6 +757,129 @@ const CustomerDetail = () => {
                 <div>
                   <p className="text-sm text-muted-foreground">วันที่ลงทะเบียน</p>
                   <p>{customer?.created_at ? new Date(customer.created_at).toLocaleDateString('th-TH') : '-'}</p>
+                </div>
+              </div>
+              
+              {/* Login Account Section */}
+              <div className="md:col-span-2 border-t border-border pt-4 mt-2">
+                <div className="flex items-center gap-3">
+                  <KeyRound className="w-4 h-4 text-muted-foreground" />
+                  <div className="flex-1">
+                    <p className="text-sm text-muted-foreground">บัญชี Login</p>
+                    {linkedUser ? (
+                      <div className="flex items-center gap-2 mt-1">
+                        <Badge className="bg-green-500/20 text-green-500 border-green-500/50">
+                          <CheckCircle className="w-3 h-3 mr-1" />
+                          เชื่อมแล้ว
+                        </Badge>
+                        <span className="text-sm">{linkedUser.profiles?.email}</span>
+                        {linkedUser.approved_at && (
+                          <span className="text-xs text-muted-foreground">
+                            (อนุมัติ: {new Date(linkedUser.approved_at).toLocaleDateString('th-TH')})
+                          </span>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2 mt-1">
+                        <Badge variant="outline" className="text-yellow-500 border-yellow-500/50">
+                          <XCircle className="w-3 h-3 mr-1" />
+                          ยังไม่มีบัญชี
+                        </Badge>
+                        <Dialog open={showCreateUserDialog} onOpenChange={(open) => {
+                          setShowCreateUserDialog(open);
+                          if (open) {
+                            setUserForm({
+                              email: customer?.email || '',
+                              password: '',
+                              confirmPassword: '',
+                            });
+                          }
+                        }}>
+                          <DialogTrigger asChild>
+                            <Button size="sm" variant="outline" className="gap-1">
+                              <Plus className="w-3 h-3" />
+                              สร้างบัญชี Login
+                            </Button>
+                          </DialogTrigger>
+                          <DialogContent>
+                            <DialogHeader>
+                              <DialogTitle className="flex items-center gap-2">
+                                <KeyRound className="w-5 h-5" />
+                                สร้างบัญชี Login
+                              </DialogTitle>
+                              <DialogDescription>
+                                สร้างบัญชีสำหรับลูกค้า {customer?.name} เพื่อเข้าดู Portfolio
+                              </DialogDescription>
+                            </DialogHeader>
+                            <div className="space-y-4 py-4">
+                              <div className="space-y-2">
+                                <Label>อีเมล *</Label>
+                                <Input
+                                  type="email"
+                                  placeholder="email@example.com"
+                                  value={userForm.email}
+                                  onChange={(e) => setUserForm(prev => ({ ...prev, email: e.target.value }))}
+                                />
+                              </div>
+                              <div className="space-y-2">
+                                <Label>รหัสผ่าน * (อย่างน้อย 6 ตัวอักษร)</Label>
+                                <div className="relative">
+                                  <Input
+                                    type={showPassword ? "text" : "password"}
+                                    placeholder="••••••••"
+                                    value={userForm.password}
+                                    onChange={(e) => setUserForm(prev => ({ ...prev, password: e.target.value }))}
+                                  />
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon"
+                                    className="absolute right-0 top-0 h-full px-3"
+                                    onClick={() => setShowPassword(!showPassword)}
+                                  >
+                                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                                  </Button>
+                                </div>
+                              </div>
+                              <div className="space-y-2">
+                                <Label>ยืนยันรหัสผ่าน *</Label>
+                                <Input
+                                  type={showPassword ? "text" : "password"}
+                                  placeholder="••••••••"
+                                  value={userForm.confirmPassword}
+                                  onChange={(e) => setUserForm(prev => ({ ...prev, confirmPassword: e.target.value }))}
+                                />
+                                {userForm.password && userForm.confirmPassword && userForm.password !== userForm.confirmPassword && (
+                                  <p className="text-xs text-destructive">รหัสผ่านไม่ตรงกัน</p>
+                                )}
+                              </div>
+                            </div>
+                            <DialogFooter>
+                              <Button variant="outline" onClick={() => setShowCreateUserDialog(false)}>
+                                ยกเลิก
+                              </Button>
+                              <Button 
+                                onClick={handleCreateUser} 
+                                disabled={isCreatingUser || !userForm.email || !userForm.password || userForm.password !== userForm.confirmPassword}
+                              >
+                                {isCreatingUser ? (
+                                  <>
+                                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                                    กำลังสร้าง...
+                                  </>
+                                ) : (
+                                  <>
+                                    <KeyRound className="w-4 h-4 mr-2" />
+                                    สร้างบัญชี
+                                  </>
+                                )}
+                              </Button>
+                            </DialogFooter>
+                          </DialogContent>
+                        </Dialog>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             </CardContent>

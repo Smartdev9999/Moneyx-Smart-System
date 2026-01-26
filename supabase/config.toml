@@ -26,3 +26,6 @@ verify_jwt = false
 
 [functions.sync-wallet-transactions]
 verify_jwt = false
+
+[functions.create-customer-user]
+verify_jwt = false
