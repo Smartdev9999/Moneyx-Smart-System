@@ -4,7 +4,7 @@
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "1.81"
+#property version   "1.82"
 #property strict
 #property description "Harmony Dream - Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
@@ -5552,10 +5552,10 @@ void OpenGridLossBuy(int pairIndex)
     string comment;
     if(corrType == -1 && InpUseADXForNegative)
     {
-         comment = StringFormat("HrmDream_GL_BUY_%d[M:%d][ADX:%.0f/%.0f]", 
-                                pairIndex + 1, InpMagicNumber,
+         comment = StringFormat("HrmDream_GL_BUY_%d[ADX:%.0f/%.0f][M:%d]", 
+                                pairIndex + 1,
                                 g_pairs[pairIndex].adxValueA,
-                                g_pairs[pairIndex].adxValueB);
+                                g_pairs[pairIndex].adxValueB, InpMagicNumber);
     }
     else
     {
@@ -5637,10 +5637,10 @@ void OpenGridLossSell(int pairIndex)
    string comment;
    if(corrType == -1 && InpUseADXForNegative)
    {
-        comment = StringFormat("HrmDream_GL_SELL_%d[M:%d][ADX:%.0f/%.0f]", 
-                               pairIndex + 1, InpMagicNumber,
+        comment = StringFormat("HrmDream_GL_SELL_%d[ADX:%.0f/%.0f][M:%d]", 
+                               pairIndex + 1,
                                g_pairs[pairIndex].adxValueA,
-                               g_pairs[pairIndex].adxValueB);
+                               g_pairs[pairIndex].adxValueB, InpMagicNumber);
    }
    else
    {
@@ -5722,10 +5722,10 @@ void OpenGridProfitBuy(int pairIndex)
    string comment;
    if(corrType == -1 && InpUseADXForNegative)
    {
-        comment = StringFormat("HrmDream_GP_BUY_%d[M:%d][ADX:%.0f/%.0f]", 
-                               pairIndex + 1, InpMagicNumber,
+        comment = StringFormat("HrmDream_GP_BUY_%d[ADX:%.0f/%.0f][M:%d]", 
+                               pairIndex + 1,
                                g_pairs[pairIndex].adxValueA,
-                               g_pairs[pairIndex].adxValueB);
+                               g_pairs[pairIndex].adxValueB, InpMagicNumber);
    }
    else
    {
@@ -5802,10 +5802,10 @@ void OpenGridProfitSell(int pairIndex)
    string comment;
    if(corrType == -1 && InpUseADXForNegative)
    {
-        comment = StringFormat("HrmDream_GP_SELL_%d[M:%d][ADX:%.0f/%.0f]", 
-                               pairIndex + 1, InpMagicNumber,
+        comment = StringFormat("HrmDream_GP_SELL_%d[ADX:%.0f/%.0f][M:%d]", 
+                               pairIndex + 1,
                                g_pairs[pairIndex].adxValueA,
-                               g_pairs[pairIndex].adxValueB);
+                               g_pairs[pairIndex].adxValueB, InpMagicNumber);
    }
    else
    {
@@ -5934,10 +5934,10 @@ bool OpenBuySideTrade(int pairIndex)
    string comment;
    if(corrType == -1 && InpUseADXForNegative)
    {
-      comment = StringFormat("HrmDream_BUY_%d[M:%d][ADX:%.0f/%.0f]", 
-                             pairIndex + 1, InpMagicNumber,
+      comment = StringFormat("HrmDream_BUY_%d[ADX:%.0f/%.0f][M:%d]", 
+                             pairIndex + 1,
                              g_pairs[pairIndex].adxValueA,
-                             g_pairs[pairIndex].adxValueB);
+                             g_pairs[pairIndex].adxValueB, InpMagicNumber);
    }
    else
    {
@@ -6112,10 +6112,10 @@ bool OpenSellSideTrade(int pairIndex)
    string comment;
    if(corrType == -1 && InpUseADXForNegative)
    {
-      comment = StringFormat("HrmDream_SELL_%d[M:%d][ADX:%.0f/%.0f]", 
-                             pairIndex + 1, InpMagicNumber,
+      comment = StringFormat("HrmDream_SELL_%d[ADX:%.0f/%.0f][M:%d]", 
+                             pairIndex + 1,
                              g_pairs[pairIndex].adxValueA,
-                             g_pairs[pairIndex].adxValueB);
+                             g_pairs[pairIndex].adxValueB, InpMagicNumber);
    }
    else
    {
@@ -7315,7 +7315,7 @@ void CreateDashboard()
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_XDISTANCE, PANEL_X + (PANEL_WIDTH / 2));
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_YDISTANCE, PANEL_Y + 4);
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_ANCHOR, ANCHOR_UPPER);
-   ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_TEXT, "Harmony Dream EA v1.8.1");
+   ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_TEXT, "Harmony Dream EA v1.8.2");
    ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_FONT, "Arial Bold");
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_FONTSIZE, 10);
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_COLOR, COLOR_GOLD);
