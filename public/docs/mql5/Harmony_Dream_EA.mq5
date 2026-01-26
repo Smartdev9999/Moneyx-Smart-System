@@ -4,7 +4,7 @@
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "1.80"
+#property version   "1.81"
 #property strict
 #property description "Harmony Dream - Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
@@ -1711,6 +1711,13 @@ void SetupPair(int index, bool enabled, string symbolA, string symbolB)
    g_pairs[index].cdcReadyB = false;
    g_pairs[index].cdcFastB = 0;
    g_pairs[index].cdcSlowB = 0;
+   
+   // v1.8.1: ADX Value Initialization for Negative Correlation Filter
+   g_pairs[index].adxValueA = 0.0;
+   g_pairs[index].adxValueB = 0.0;
+   g_pairs[index].adxWinner = -1;           // -1 = None/Equal
+   g_pairs[index].adxWinnerValue = 0.0;
+   g_pairs[index].adxLoserValue = 0.0;
    
    // v3.6.0: Grid Profit Side initialization
    g_pairs[index].gridProfitCountBuy = 0;
@@ -4482,8 +4489,15 @@ double GetADXValue(string symbol, ENUM_TIMEFRAMES timeframe, int period)
    double buffer[];
    ArraySetAsSeries(buffer, true);
    
-   if(CopyBuffer(handle, 0, 0, 1, buffer) < 1)
+   int copied = CopyBuffer(handle, 0, 0, 1, buffer);
+   if(copied < 1)
    {
+      // v1.8.1: Debug log when CopyBuffer fails
+      if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
+      {
+         PrintFormat("ADX: CopyBuffer failed for %s (TF:%s, Period:%d) - copied=%d, error=%d", 
+                     symbol, EnumToString(timeframe), period, copied, GetLastError());
+      }
       IndicatorRelease(handle);
       return 0;
    }
@@ -4536,6 +4550,20 @@ void UpdateADXForPair(int pairIndex)
    
    g_pairs[pairIndex].adxValueA = GetADXValue(g_pairs[pairIndex].symbolA, InpADXTimeframe, InpADXPeriod);
    g_pairs[pairIndex].adxValueB = GetADXValue(g_pairs[pairIndex].symbolB, InpADXTimeframe, InpADXPeriod);
+   
+   // v1.8.1: Validation log if either ADX is zero (potential data issue)
+   if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
+   {
+      if(g_pairs[pairIndex].adxValueA == 0 || g_pairs[pairIndex].adxValueB == 0)
+      {
+         PrintFormat("WARNING: ADX ZERO [Pair %d %s/%s]: A=%.1f, B=%.1f - Check data availability", 
+                     pairIndex + 1,
+                     g_pairs[pairIndex].symbolA,
+                     g_pairs[pairIndex].symbolB,
+                     g_pairs[pairIndex].adxValueA,
+                     g_pairs[pairIndex].adxValueB);
+      }
+   }
    
    // v1.7.0: Determine Winner after update
    DetermineADXWinner(pairIndex);
@@ -7287,7 +7315,7 @@ void CreateDashboard()
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_XDISTANCE, PANEL_X + (PANEL_WIDTH / 2));
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_YDISTANCE, PANEL_Y + 4);
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_ANCHOR, ANCHOR_UPPER);
-   ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_TEXT, "Harmony Dream EA v1.8");
+   ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_TEXT, "Harmony Dream EA v1.8.1");
    ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_FONT, "Arial Bold");
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_FONTSIZE, 10);
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_COLOR, COLOR_GOLD);
