@@ -4,7 +4,7 @@
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "1.82"
+#property version   "1.83"
 #property strict
 #property description "Harmony Dream - Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
@@ -395,17 +395,17 @@ input int      InpPanelHeight = 820;            // Dashboard Height (for 30 pair
 input int      InpRowHeight = 18;               // Row Height per Pair
 input int      InpFontSize = 8;                 // Font Size
 
-input group "=== Dashboard Colors ==="
-input color    InpColorBgDark = C'20,60,80';        // Background Color (Dark)
-input color    InpColorRowOdd = C'255,235,180';     // Row Color (Odd)
-input color    InpColorRowEven = C'255,245,200';    // Row Color (Even)
-input color    InpColorHeaderMain = C'50,50,80';    // Header Main Color
-input color    InpColorHeaderBuy = C'0,100,150';    // Header Buy Color
-input color    InpColorHeaderSell = C'150,60,60';   // Header Sell Color
-input color    InpColorProfit = C'0,150,0';         // Profit Color
-input color    InpColorLoss = C'200,0,0';           // Loss Color
-input color    InpColorOn = C'0,255,0';             // Status On Color
-input color    InpColorOff = C'128,128,128';        // Status Off Color
+input group "=== Dashboard Colors (v1.8.3 Modern Dark Theme) ==="
+input color    InpColorBgDark = C'18,24,38';        // Background Color (Dark Navy)
+input color    InpColorRowOdd = C'28,36,52';        // Row Color (Odd - Dark Slate)
+input color    InpColorRowEven = C'22,30,46';       // Row Color (Even - Darker Slate)
+input color    InpColorHeaderMain = C'45,55,90';    // Header Main Color (Muted Indigo)
+input color    InpColorHeaderBuy = C'15,75,135';    // Header Buy Color (Deep Blue)
+input color    InpColorHeaderSell = C'135,45,55';   // Header Sell Color (Deep Red)
+input color    InpColorProfit = C'50,205,100';      // Profit Color (Bright Green)
+input color    InpColorLoss = C'235,70,80';         // Loss Color (Coral Red)
+input color    InpColorOn = C'0,200,120';           // Status On Color (Teal Green)
+input color    InpColorOff = C'90,100,120';         // Status Off Color (Cool Gray)
 
 input group "=== Fast Backtest Settings (v3.3.0) ==="
 input bool     InpFastBacktest = true;              // Enable Fast Backtest Mode
@@ -723,15 +723,15 @@ color COLOR_HEADER_MAIN;
 color COLOR_HEADER_BUY;
 color COLOR_HEADER_SELL;
 color COLOR_HEADER_TXT = clrWhite;
-color COLOR_TEXT = C'40,40,40';
+color COLOR_TEXT = C'200,210,225';          // v1.8.3: Light Gray for dark bg
 color COLOR_TEXT_WHITE = clrWhite;
 color COLOR_PROFIT;
 color COLOR_LOSS;
 color COLOR_ON;
 color COLOR_OFF;
-color COLOR_GOLD = C'255,180,0';
-color COLOR_ACTIVE = C'0,150,255';
-color COLOR_BORDER = C'100,100,100';
+color COLOR_GOLD = C'255,200,60';           // v1.8.3: Warm Gold
+color COLOR_ACTIVE = C'70,160,250';         // v1.8.3: Sky Blue
+color COLOR_BORDER = C'55,65,85';           // v1.8.3: Subtle Border
 
 // Dashboard Dimensions (from inputs)
 int PANEL_X;
@@ -7307,7 +7307,7 @@ void CreateDashboard()
    
    // v3.7.3: Add EA Title Row with centered title + EA Status + Pause button
    int titleHeight = 22;
-   CreateRectangle(prefix + "TITLE_BG", PANEL_X, PANEL_Y, PANEL_WIDTH, titleHeight, C'20,40,60', C'20,40,60');
+   CreateRectangle(prefix + "TITLE_BG", PANEL_X, PANEL_Y, PANEL_WIDTH, titleHeight, C'25,45,70', C'25,45,70');
    
    // v3.7.3: Center the title using manual centering approach
    ObjectCreate(0, prefix + "TITLE_NAME", OBJ_LABEL, 0, 0, 0);
@@ -7315,7 +7315,7 @@ void CreateDashboard()
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_XDISTANCE, PANEL_X + (PANEL_WIDTH / 2));
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_YDISTANCE, PANEL_Y + 4);
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_ANCHOR, ANCHOR_UPPER);
-   ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_TEXT, "Harmony Dream EA v1.8.2");
+   ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_TEXT, "Harmony Dream EA v1.8.3");
    ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_FONT, "Arial Bold");
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_FONTSIZE, 10);
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_COLOR, COLOR_GOLD);
@@ -7374,16 +7374,16 @@ void CreateDashboard()
    CreateRectangle(prefix + "HDR_SELL", sellStartX, headerY + 3, sellWidth, headerHeight, COLOR_HEADER_SELL, COLOR_HEADER_SELL);
    CreateLabel(prefix + "HDR_SELL_TXT", sellStartX + 165, headerY + 8, "SELL DATA", COLOR_HEADER_TXT, 10, "Arial Bold");
    
-   // v1.1: Group Info Header
-   CreateRectangle(prefix + "HDR_GROUP", groupInfoX, headerY + 3, groupInfoWidth, headerHeight, C'60,40,80', C'60,40,80');
+   // v1.1: Group Info Header (v1.8.3: Updated colors)
+   CreateRectangle(prefix + "HDR_GROUP", groupInfoX, headerY + 3, groupInfoWidth, headerHeight, C'65,50,95', C'65,50,95');
    CreateLabel(prefix + "HDR_GROUP_TXT", groupInfoX + 15, headerY + 8, "GROUP INFO", COLOR_HEADER_TXT, 10, "Arial Bold");
    
-   // ===== COLUMN HEADER BACKGROUNDS (v3.2.9: Separate row with background) =====
-   CreateRectangle(prefix + "COLHDR_BUY_BG", buyStartX, colHeaderY - 1, buyWidth, colHeaderHeight, C'10,60,100', C'10,60,100');
-   CreateRectangle(prefix + "COLHDR_CENTER_BG", centerX, colHeaderY - 1, centerWidth, colHeaderHeight, C'40,45,60', C'40,45,60');
-   CreateRectangle(prefix + "COLHDR_SELL_BG", sellStartX, colHeaderY - 1, sellWidth, colHeaderHeight, C'100,40,40', C'100,40,40');
-   // v1.1: Group Info Column Header Background
-   CreateRectangle(prefix + "COLHDR_GROUP_BG", groupInfoX, colHeaderY - 1, groupInfoWidth, colHeaderHeight, C'45,30,60', C'45,30,60');
+   // ===== COLUMN HEADER BACKGROUNDS (v1.8.3: Modern Dark Theme) =====
+   CreateRectangle(prefix + "COLHDR_BUY_BG", buyStartX, colHeaderY - 1, buyWidth, colHeaderHeight, C'20,60,100', C'20,60,100');
+   CreateRectangle(prefix + "COLHDR_CENTER_BG", centerX, colHeaderY - 1, centerWidth, colHeaderHeight, C'35,42,58', C'35,42,58');
+   CreateRectangle(prefix + "COLHDR_SELL_BG", sellStartX, colHeaderY - 1, sellWidth, colHeaderHeight, C'100,45,50', C'100,45,50');
+   // v1.1: Group Info Column Header Background (v1.8.3: Updated)
+   CreateRectangle(prefix + "COLHDR_GROUP_BG", groupInfoX, colHeaderY - 1, groupInfoWidth, colHeaderHeight, C'50,40,70', C'50,40,70');
    
    // ===== COLUMN HEADERS (v3.2.9: Labels on top of backgrounds) =====
    int colLabelY = colHeaderY + 2;  // Center text vertically in column header row
@@ -7541,7 +7541,7 @@ void CreateAccountSummary(string prefix, int y)
    
    // === BOX 1: DETAIL ===
    int box1X = startX;
-   CreateRectangle(prefix + "BOX1_BG", box1X, y, boxWidth, boxHeight, C'30,35,45', COLOR_BORDER);
+   CreateRectangle(prefix + "BOX1_BG", box1X, y, boxWidth, boxHeight, C'28,35,50', COLOR_BORDER);
    CreateLabel(prefix + "BOX1_HDR", box1X + 10, y + 5, "DETAIL", COLOR_GOLD, 9, "Arial Bold");
    
    CreateLabel(prefix + "L_BAL", box1X + 10, y + 22, "Balance:", COLOR_TEXT_WHITE, 8, "Arial");
@@ -7561,7 +7561,7 @@ void CreateAccountSummary(string prefix, int y)
    
    // === BOX 2: STATUS ===
    int box2X = startX + boxWidth + gap;
-   CreateRectangle(prefix + "BOX2_BG", box2X, y, boxWidth, boxHeight, C'30,35,45', COLOR_BORDER);
+   CreateRectangle(prefix + "BOX2_BG", box2X, y, boxWidth, boxHeight, C'28,35,50', COLOR_BORDER);
    CreateLabel(prefix + "BOX2_HDR", box2X + 10, y + 5, "STATUS", COLOR_GOLD, 9, "Arial Bold");
    
    CreateLabel(prefix + "L_TLOT", box2X + 10, y + 22, "Total Lot:", COLOR_TEXT_WHITE, 8, "Arial");
@@ -7586,7 +7586,7 @@ void CreateAccountSummary(string prefix, int y)
    
    // === BOX 3: HISTORY LOT (v3.3.0 - with Closed Orders) ===
    int box3X = startX + 2 * (boxWidth + gap);
-   CreateRectangle(prefix + "BOX3_BG", box3X, y, boxWidth, boxHeight, C'30,35,45', COLOR_BORDER);
+   CreateRectangle(prefix + "BOX3_BG", box3X, y, boxWidth, boxHeight, C'28,35,50', COLOR_BORDER);
    CreateLabel(prefix + "BOX3_HDR", box3X + 10, y + 5, "HISTORY LOT", COLOR_GOLD, 9, "Arial Bold");
    
    // v3.3.0: Format: "Lot (Orders)"
@@ -7617,7 +7617,7 @@ void CreateAccountSummary(string prefix, int y)
    
    // === BOX 4: HISTORY PROFIT ===
    int box4X = startX + 3 * (boxWidth + gap);
-   CreateRectangle(prefix + "BOX4_BG", box4X, y, boxWidth, boxHeight, C'30,35,45', COLOR_BORDER);
+   CreateRectangle(prefix + "BOX4_BG", box4X, y, boxWidth, boxHeight, C'28,35,50', COLOR_BORDER);
    CreateLabel(prefix + "BOX4_HDR", box4X + 10, y + 5, "HISTORY PROFIT", COLOR_GOLD, 9, "Arial Bold");
    
    CreateLabel(prefix + "L_DP", box4X + 10, y + 22, "Daily:", COLOR_TEXT_WHITE, 8, "Arial");
