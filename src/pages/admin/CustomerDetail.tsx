@@ -171,6 +171,13 @@ const CustomerDetail = () => {
     confirmPassword: '',
   });
 
+  // Reset password state
+  const [showResetPasswordDialog, setShowResetPasswordDialog] = useState(false);
+  const [isResettingPassword, setIsResettingPassword] = useState(false);
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmNewPassword, setConfirmNewPassword] = useState('');
+  const [showNewPassword, setShowNewPassword] = useState(false);
+
   useEffect(() => {
     if (id && isAdmin) {
       fetchCustomerData();
@@ -334,6 +341,65 @@ const CustomerDetail = () => {
     }
   };
 
+  const handleResetPassword = async () => {
+    if (!linkedUser?.user_id) {
+      toast({
+        variant: "destructive",
+        title: "ข้อผิดพลาด",
+        description: "ไม่พบข้อมูล User",
+      });
+      return;
+    }
+
+    if (newPassword.length < 6) {
+      toast({
+        variant: "destructive",
+        title: "รหัสผ่านสั้นเกินไป",
+        description: "รหัสผ่านต้องมีอย่างน้อย 6 ตัวอักษร",
+      });
+      return;
+    }
+
+    if (newPassword !== confirmNewPassword) {
+      toast({
+        variant: "destructive",
+        title: "รหัสผ่านไม่ตรงกัน",
+        description: "กรุณากรอกรหัสผ่านให้ตรงกัน",
+      });
+      return;
+    }
+
+    setIsResettingPassword(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('reset-customer-password', {
+        body: {
+          userId: linkedUser.user_id,
+          newPassword: newPassword,
+        },
+      });
+
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+
+      toast({
+        title: "รีเซ็ตรหัสผ่านสำเร็จ",
+        description: `รหัสผ่านของ ${linkedUser.profiles?.email} ถูกเปลี่ยนแล้ว`,
+      });
+
+      setShowResetPasswordDialog(false);
+      setNewPassword('');
+      setConfirmNewPassword('');
+    } catch (error: any) {
+      console.error('Error resetting password:', error);
+      toast({
+        variant: "destructive",
+        title: "เกิดข้อผิดพลาด",
+        description: error.message || "ไม่สามารถรีเซ็ตรหัสผ่านได้",
+      });
+    } finally {
+      setIsResettingPassword(false);
+    }
+  };
   const calculateExpiryDate = (packageType: string, fromDate?: Date): string => {
     // Clone the date to avoid mutating the original
     const date = fromDate ? new Date(fromDate.getTime()) : new Date();
@@ -767,7 +833,7 @@ const CustomerDetail = () => {
                   <div className="flex-1">
                     <p className="text-sm text-muted-foreground">บัญชี Login</p>
                     {linkedUser ? (
-                      <div className="flex items-center gap-2 mt-1">
+                      <div className="flex items-center gap-2 mt-1 flex-wrap">
                         <Badge className="bg-green-500/20 text-green-500 border-green-500/50">
                           <CheckCircle className="w-3 h-3 mr-1" />
                           เชื่อมแล้ว
@@ -778,6 +844,87 @@ const CustomerDetail = () => {
                             (อนุมัติ: {new Date(linkedUser.approved_at).toLocaleDateString('th-TH')})
                           </span>
                         )}
+                        {/* Reset Password Button */}
+                        <Dialog open={showResetPasswordDialog} onOpenChange={(open) => {
+                          setShowResetPasswordDialog(open);
+                          if (!open) {
+                            setNewPassword('');
+                            setConfirmNewPassword('');
+                          }
+                        }}>
+                          <DialogTrigger asChild>
+                            <Button size="sm" variant="outline" className="gap-1 ml-2">
+                              <KeyRound className="w-3 h-3" />
+                              Reset Password
+                            </Button>
+                          </DialogTrigger>
+                          <DialogContent>
+                            <DialogHeader>
+                              <DialogTitle className="flex items-center gap-2">
+                                <KeyRound className="w-5 h-5" />
+                                รีเซ็ตรหัสผ่าน
+                              </DialogTitle>
+                              <DialogDescription>
+                                ตั้งรหัสผ่านใหม่สำหรับ {linkedUser.profiles?.email}
+                              </DialogDescription>
+                            </DialogHeader>
+                            <div className="space-y-4 py-4">
+                              <div className="space-y-2">
+                                <Label>รหัสผ่านใหม่ * (อย่างน้อย 6 ตัวอักษร)</Label>
+                                <div className="relative">
+                                  <Input
+                                    type={showNewPassword ? "text" : "password"}
+                                    placeholder="••••••••"
+                                    value={newPassword}
+                                    onChange={(e) => setNewPassword(e.target.value)}
+                                  />
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon"
+                                    className="absolute right-0 top-0 h-full px-3"
+                                    onClick={() => setShowNewPassword(!showNewPassword)}
+                                  >
+                                    {showNewPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                                  </Button>
+                                </div>
+                              </div>
+                              <div className="space-y-2">
+                                <Label>ยืนยันรหัสผ่านใหม่ *</Label>
+                                <Input
+                                  type={showNewPassword ? "text" : "password"}
+                                  placeholder="••••••••"
+                                  value={confirmNewPassword}
+                                  onChange={(e) => setConfirmNewPassword(e.target.value)}
+                                />
+                                {newPassword && confirmNewPassword && newPassword !== confirmNewPassword && (
+                                  <p className="text-xs text-destructive">รหัสผ่านไม่ตรงกัน</p>
+                                )}
+                              </div>
+                            </div>
+                            <DialogFooter>
+                              <Button variant="outline" onClick={() => setShowResetPasswordDialog(false)}>
+                                ยกเลิก
+                              </Button>
+                              <Button 
+                                onClick={handleResetPassword} 
+                                disabled={isResettingPassword || !newPassword || newPassword !== confirmNewPassword || newPassword.length < 6}
+                              >
+                                {isResettingPassword ? (
+                                  <>
+                                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                                    กำลังรีเซ็ต...
+                                  </>
+                                ) : (
+                                  <>
+                                    <KeyRound className="w-4 h-4 mr-2" />
+                                    รีเซ็ตรหัสผ่าน
+                                  </>
+                                )}
+                              </Button>
+                            </DialogFooter>
+                          </DialogContent>
+                        </Dialog>
                       </div>
                     ) : (
                       <div className="flex items-center gap-2 mt-1">
