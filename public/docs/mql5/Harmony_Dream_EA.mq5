@@ -4,7 +4,7 @@
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "1.83"
+#property version   "1.84"
 #property strict
 #property description "Harmony Dream - Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
@@ -4374,18 +4374,32 @@ string GetCDCStatusText(int pairIndex, color &statusColor)
       else  // Negative Correlation
          cdcOK = oppositeTrend;
       
-      // v1.8: Show Up/Down based on trendA direction
+      // v1.8.4: Show trend status based on correlation type
       if(cdcOK)
       {
-         if(trendA == "BULLISH")
+         if(corrType == 1)  // Positive Correlation - ทั้งคู่ไปทางเดียวกัน
          {
-            statusColor = clrLime;       // Green = Uptrend
-            newStatus = "Up";
+            if(trendA == "BULLISH")
+            {
+               statusColor = clrLime;       // Green = Uptrend
+               newStatus = "Up";
+            }
+            else  // BEARISH
+            {
+               statusColor = clrOrangeRed;  // Red = Downtrend
+               newStatus = "Down";
+            }
          }
-         else  // BEARISH
+         else  // Negative Correlation - แสดง A/B แยกกัน
          {
-            statusColor = clrOrangeRed;  // Red = Downtrend
-            newStatus = "Down";
+            // trendA = BULLISH, trendB = BEARISH → "Up/Dw"
+            // trendA = BEARISH, trendB = BULLISH → "Dw/Up"
+            string statusA = (trendA == "BULLISH") ? "Up" : "Dw";
+            string statusB = (trendB == "BULLISH") ? "Up" : "Dw";
+            newStatus = statusA + "/" + statusB;
+            
+            // สี: ใช้สีเขียวเพราะ cdcOK = true (อนุญาตเทรด)
+            statusColor = clrLime;
          }
       }
       else
@@ -7315,7 +7329,7 @@ void CreateDashboard()
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_XDISTANCE, PANEL_X + (PANEL_WIDTH / 2));
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_YDISTANCE, PANEL_Y + 4);
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_ANCHOR, ANCHOR_UPPER);
-   ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_TEXT, "Harmony Dream EA v1.8.3");
+   ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_TEXT, "Harmony Dream EA v1.8.4");
    ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_FONT, "Arial Bold");
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_FONTSIZE, 10);
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_COLOR, COLOR_GOLD);
