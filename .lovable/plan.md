@@ -1,115 +1,102 @@
 
+## แผนแก้ไข Floating P/L Calculation - Harmony Dream EA v1.8.8 Hotfix 2
 
-## แผนแก้ไข Grid Order Issues - Harmony Dream EA v1.8.8 Hotfix
+### สาเหตุของปัญหา:
 
-### สรุปปัญหาที่พบ (2 ปัญหาหลัก):
+หลังจาก Hotfix ล่าสุดที่เพิ่ม Grid Level Number (#1, #2...) ใน Comment:
 
-#### ปัญหาที่ 1: Grid Comment ไม่มี Level Number (#1, #2, #3...)
+| ฟังก์ชัน | Comment ที่ค้นหา | Comment จริงใน Order |
+|----------|-----------------|----------------------|
+| `UpdatePairProfits()` | `XU-XE_GL_BUY_20` | `XU-XE_GL#1_BUY_20` |
+| `GetAveragingProfit()` | StringFind(...) | **ไม่เจอ!** |
 
-**ตอนนี้ผิด:**
-```text
-XU-XE_GL_SELL_20[M:888888]   ← ไม่มี Grid Level
-```
-
-**ที่ควรจะเป็น:**
-```text
-XU-XE_GL#1_SELL_20[M:888888]  ← มี Grid Level
-```
-
-**สาเหตุ:**
-- บรรทัด 6112, 6198, 6284, 6365 ใช้ `pairIndex + 1` แทน Grid Level
-- ไม่มีการใส่ #number ลงใน Comment
-
----
-
-#### ปัญหาที่ 2: Total Basket ไปรบกวน Grid Order Count
-
-เมื่อเปิด Total Basket:
-- `g_accumulatedBasketProfit` ถูกเก็บสะสมจาก Group ที่ปิดไปแล้ว
-- แต่อาจมีการ reset หรือ conflict กับ Grid Order Count
-
-**เมื่อปิด Total Basket:**
-- ระบบไม่ใช้ `CheckTotalTarget()` ส่วนที่เกี่ยวกับ Total Basket
-- Grid Orders ทำงานปกติเพราะไม่มี interference
+**ผลลัพธ์:** Grid Order ทั้งหมดไม่ถูกนับเข้า Floating P/L ทำให้ Dashboard แสดงค่าผิด
 
 ---
 
 ### รายละเอียดการแก้ไข:
 
-#### 1. แก้ไข OpenGridLossBuy() - เพิ่ม Grid Level ใน Comment
+#### แนวทาง: เปลี่ยน Pattern ให้ Match ทั้ง Format เก่าและใหม่
 
-**ตำแหน่ง:** บรรทัด 6107-6120
+แทนที่จะค้นหา `XU-XE_GL_BUY_20` (ซึ่ง match แค่ format เก่า)
+
+เปลี่ยนเป็นค้นหา **Base Prefix + Side + Pair** โดยไม่สนใจ # number:
+- ใช้ Pattern: `XU-XE_GL` (สำหรับ Grid Loss) หรือ `XU-XE_GP` (สำหรับ Grid Profit)
+- รวมกับ Pattern: `_BUY_20` หรือ `_SELL_20`
+- Match ทั้ง `XU-XE_GL_BUY_20` (เก่า) และ `XU-XE_GL#1_BUY_20` (ใหม่)
+
+---
+
+#### 1. แก้ไข UpdatePairProfits() - Buy Side (บรรทัด 7540-7552)
 
 **เดิม:**
 ```mql5
-string pairPrefix = GetPairCommentPrefix(pairIndex);
-string comment;
-if(corrType == -1 && InpUseADXForNegative)
-{
-     comment = StringFormat("%s_GL_BUY_%d[ADX:%.0f/%.0f][M:%d]", 
-                            pairPrefix, pairIndex + 1, ...);
-}
-else
-{
-   comment = StringFormat("%s_GL_BUY_%d[M:%d]", pairPrefix, pairIndex + 1, InpMagicNumber);
-}
+// v1.8.7: Add grid positions profit using NEW comment format
+string glBuyComment = StringFormat("%s_GL_BUY_%d", pairPrefix, i + 1);
+string gpBuyComment = StringFormat("%s_GP_BUY_%d", pairPrefix, i + 1);
+buyProfit += GetAveragingProfit(glBuyComment);
+buyProfit += GetAveragingProfit(gpBuyComment);
 ```
 
 **แก้ไขเป็น:**
 ```mql5
-// v1.8.8 HF: Get next Grid Level BEFORE opening (current count + 1)
-int gridLevel = g_pairs[pairIndex].avgOrderCountBuy + 1;
+// v1.8.8 HF2: Use flexible pattern that matches both old and new format
+// Old: XU-XE_GL_BUY_20  |  New: XU-XE_GL#1_BUY_20
+// Strategy: Search for prefix AND side suffix separately
+string glPrefix = StringFormat("%s_GL", pairPrefix);
+string gpPrefix = StringFormat("%s_GP", pairPrefix);
+string buySuffix = StringFormat("_BUY_%d", i + 1);
 
-string pairPrefix = GetPairCommentPrefix(pairIndex);
-string comment;
-if(corrType == -1 && InpUseADXForNegative)
-{
-     comment = StringFormat("%s_GL#%d_BUY_%d[ADX:%.0f/%.0f][M:%d]", 
-                            pairPrefix, gridLevel, pairIndex + 1, ...);
-}
-else
-{
-   comment = StringFormat("%s_GL#%d_BUY_%d[M:%d]", pairPrefix, gridLevel, pairIndex + 1, InpMagicNumber);
-}
+buyProfit += GetAveragingProfitWithSuffix(glPrefix, buySuffix);
+buyProfit += GetAveragingProfitWithSuffix(gpPrefix, buySuffix);
 ```
 
 ---
 
-#### 2. แก้ไข OpenGridLossSell() - เพิ่ม Grid Level
-
-**ตำแหน่ง:** บรรทัด 6193-6206
+#### 2. แก้ไข UpdatePairProfits() - Sell Side (บรรทัด 7582-7594)
 
 **แก้ไขเหมือนกัน:**
 ```mql5
-int gridLevel = g_pairs[pairIndex].avgOrderCountSell + 1;
+string glPrefix = StringFormat("%s_GL", pairPrefix);
+string gpPrefix = StringFormat("%s_GP", pairPrefix);
+string sellSuffix = StringFormat("_SELL_%d", i + 1);
 
-// ... ใน StringFormat ใช้ %s_GL#%d_SELL_%d ...
+sellProfit += GetAveragingProfitWithSuffix(glPrefix, sellSuffix);
+sellProfit += GetAveragingProfitWithSuffix(gpPrefix, sellSuffix);
 ```
 
 ---
 
-#### 3. แก้ไข OpenGridProfitBuy() - เพิ่ม Grid Level
+#### 3. เพิ่มฟังก์ชันใหม่: GetAveragingProfitWithSuffix()
 
-**ตำแหน่ง:** บรรทัด 6279-6292
-
-**แก้ไข:**
 ```mql5
-int gridLevel = g_pairs[pairIndex].gridProfitCountBuy + 1;
-
-// ... ใน StringFormat ใช้ %s_GP#%d_BUY_%d ...
-```
-
----
-
-#### 4. แก้ไข OpenGridProfitSell() - เพิ่ม Grid Level
-
-**ตำแหน่ง:** บรรทัด 6360-6373
-
-**แก้ไข:**
-```mql5
-int gridLevel = g_pairs[pairIndex].gridProfitCountSell + 1;
-
-// ... ใน StringFormat ใช้ %s_GP#%d_SELL_%d ...
+//+------------------------------------------------------------------+
+//| v1.8.8 HF2: Get profit from positions matching prefix AND suffix  |
+//| Matches both old format (GL_BUY) and new format (GL#1_BUY)        |
+//+------------------------------------------------------------------+
+double GetAveragingProfitWithSuffix(string prefix, string suffix)
+{
+   double totalProfit = 0;
+   
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      if(PositionSelectByTicket(PositionGetTicket(i)))
+      {
+         string comment = PositionGetString(POSITION_COMMENT);
+         
+         // Check if comment contains BOTH prefix AND suffix
+         if(StringFind(comment, prefix) >= 0 && StringFind(comment, suffix) >= 0)
+         {
+            // v1.4: Include COMMISSION for Net Profit
+            totalProfit += PositionGetDouble(POSITION_PROFIT) + 
+                           PositionGetDouble(POSITION_SWAP) + 
+                           PositionGetDouble(POSITION_COMMISSION);
+         }
+      }
+   }
+   
+   return totalProfit;
+}
 ```
 
 ---
@@ -118,38 +105,32 @@ int gridLevel = g_pairs[pairIndex].gridProfitCountSell + 1;
 
 | ไฟล์ | การเปลี่ยนแปลง |
 |------|----------------|
-| `public/docs/mql5/Harmony_Dream_EA.mq5` | แก้ไข 4 ฟังก์ชัน OpenGridLossBuy/Sell, OpenGridProfitBuy/Sell เพิ่ม Grid Level (#1, #2...) ใน Comment |
+| `public/docs/mql5/Harmony_Dream_EA.mq5` | เพิ่ม `GetAveragingProfitWithSuffix()` + แก้ไข `UpdatePairProfits()` ให้ใช้ Prefix/Suffix matching |
 
 ---
 
 ### ผลลัพธ์ที่คาดหวัง:
 
-**Comment Format ใหม่:**
+**Comment Matching:**
 ```text
-XU-XE_GL#1_SELL_20[M:888888]   ← Grid Loss #1
-XU-XE_GL#2_SELL_20[M:888888]   ← Grid Loss #2
-XU-XE_GL#3_SELL_20[M:888888]   ← Grid Loss #3
+Prefix: "XU-XE_GL"  +  Suffix: "_BUY_20"
 
-XU-XE_GP#1_SELL_20[M:888888]   ← Grid Profit #1
-XU-XE_GP#2_SELL_20[M:888888]   ← Grid Profit #2
+✅ Match: "XU-XE_GL_BUY_20"      (เก่า)
+✅ Match: "XU-XE_GL#1_BUY_20"    (ใหม่)
+✅ Match: "XU-XE_GL#2_BUY_20"    (ใหม่)
+✅ Match: "XU-XE_GL#99_BUY_20"   (ใหม่)
 ```
 
----
-
-### หมายเหตุเกี่ยวกับ Total Basket:
-
-จากการทดสอบของผู้ใช้ - เมื่อปิด Total Basket แล้ว Grid ทำงานปกติ:
-- ปัญหา Total Basket interference เป็นเรื่องแยกต่างหาก
-- Hotfix นี้จะแก้ไข Grid Level Comment ก่อน
-- หากยังมีปัญหา Grid Count เมื่อเปิด Total Basket จะวิเคราะห์เพิ่มเติม
+**Dashboard:**
+- Floating P/L จะคำนวณถูกต้องโดยนับรวม Grid Order ทั้งหมด
+- Group Info จะแสดงค่า Float ที่ถูกต้อง
 
 ---
 
 ### สิ่งที่ไม่แตะต้อง:
 
-- Entry Mode Logic (Z-Score / Correlation Only)
-- Grid Distance Calculation  
-- Grid Lot Sizing Logic (CDC Multiplier, ADX)
-- Total Basket Logic (จะทดสอบแยก)
-- Auto Balance Scaling
-
+- Grid Comment Format (ยังคงมี #1, #2...)
+- Entry Mode Logic
+- Grid Distance/Lot Calculation
+- Total Basket System
+- Legacy HrmDream_ comment support (ยังคงใช้ GetAveragingProfit เดิมได้)
