@@ -7537,11 +7537,15 @@ void UpdatePairProfits()
                         g_pairs[i].ticketBuyB, profitB, buyProfit);
          }
          
-         // v1.8.7: Add grid positions profit using NEW comment format
-         string glBuyComment = StringFormat("%s_GL_BUY_%d", pairPrefix, i + 1);
-         string gpBuyComment = StringFormat("%s_GP_BUY_%d", pairPrefix, i + 1);
-         buyProfit += GetAveragingProfit(glBuyComment);
-         buyProfit += GetAveragingProfit(gpBuyComment);
+         // v1.8.8 HF2: Use flexible pattern that matches both old and new format
+         // Old: XU-XE_GL_BUY_20  |  New: XU-XE_GL#1_BUY_20
+         // Strategy: Search for prefix AND side suffix separately
+         string glPrefix = StringFormat("%s_GL", pairPrefix);
+         string gpPrefix = StringFormat("%s_GP", pairPrefix);
+         string buySuffix = StringFormat("_BUY_%d", i + 1);
+         
+         buyProfit += GetAveragingProfitWithSuffix(glPrefix, buySuffix);
+         buyProfit += GetAveragingProfitWithSuffix(gpPrefix, buySuffix);
          
          // Legacy support: Also check old HrmDream_ format for backward compatibility
          string legacyAVGBuy = StringFormat("HrmDream_AVG_BUY_%d", i + 1);
@@ -7579,11 +7583,15 @@ void UpdatePairProfits()
                         g_pairs[i].ticketSellB, profitB, sellProfit);
          }
          
-         // v1.8.7: Add grid positions profit using NEW comment format
-         string glSellComment = StringFormat("%s_GL_SELL_%d", pairPrefix, i + 1);
-         string gpSellComment = StringFormat("%s_GP_SELL_%d", pairPrefix, i + 1);
-         sellProfit += GetAveragingProfit(glSellComment);
-         sellProfit += GetAveragingProfit(gpSellComment);
+         // v1.8.8 HF2: Use flexible pattern that matches both old and new format
+         // Old: XU-XE_GL_SELL_20  |  New: XU-XE_GL#1_SELL_20
+         // Strategy: Search for prefix AND side suffix separately
+         string glPrefix = StringFormat("%s_GL", pairPrefix);
+         string gpPrefix = StringFormat("%s_GP", pairPrefix);
+         string sellSuffix = StringFormat("_SELL_%d", i + 1);
+         
+         sellProfit += GetAveragingProfitWithSuffix(glPrefix, sellSuffix);
+         sellProfit += GetAveragingProfitWithSuffix(gpPrefix, sellSuffix);
          
          // Legacy support: Also check old HrmDream_ format for backward compatibility
          string legacyAVGSell = StringFormat("HrmDream_AVG_SELL_%d", i + 1);
@@ -7600,6 +7608,34 @@ void UpdatePairProfits()
       
       g_totalCurrentProfit += g_pairs[i].totalPairProfit;
    }
+}
+
+//+------------------------------------------------------------------+
+//| v1.8.8 HF2: Get profit from positions matching prefix AND suffix  |
+//| Matches both old format (GL_BUY) and new format (GL#1_BUY)        |
+//+------------------------------------------------------------------+
+double GetAveragingProfitWithSuffix(string prefix, string suffix)
+{
+   double totalProfit = 0;
+   
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      if(PositionSelectByTicket(PositionGetTicket(i)))
+      {
+         string comment = PositionGetString(POSITION_COMMENT);
+         
+         // Check if comment contains BOTH prefix AND suffix
+         if(StringFind(comment, prefix) >= 0 && StringFind(comment, suffix) >= 0)
+         {
+            // v1.4: Include COMMISSION for Net Profit
+            totalProfit += PositionGetDouble(POSITION_PROFIT) + 
+                           PositionGetDouble(POSITION_SWAP) + 
+                           PositionGetDouble(POSITION_COMMISSION);
+         }
+      }
+   }
+   
+   return totalProfit;
 }
 
 //+------------------------------------------------------------------+
