@@ -4,7 +4,7 @@
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "1.85"
+#property version   "1.86"
 #property strict
 #property description "Harmony Dream - Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
@@ -877,6 +877,97 @@ void InitializeThemeColors()
       COLOR_COLHDR_SELL  = C'100,45,50';        // Dark Red
       COLOR_COLHDR_GROUP = C'50,40,70';         // Dark Purple
    }
+}
+
+//+------------------------------------------------------------------+
+//| v1.8.6: Get Symbol Abbreviation for Order Comments                 |
+//+------------------------------------------------------------------+
+string GetSymbolAbbreviation(string symbol)
+{
+   // Clean symbol - remove suffix (e.g., EURUSD.i, EURUSDm)
+   string cleanSymbol = symbol;
+   int dotPos = StringFind(symbol, ".");
+   if(dotPos > 0) cleanSymbol = StringSubstr(symbol, 0, dotPos);
+   
+   // Gold pairs
+   if(StringFind(cleanSymbol, "XAUUSD") >= 0) return "XU";
+   if(StringFind(cleanSymbol, "XAUEUR") >= 0) return "XE";
+   
+   // Major pairs - use first letters of each currency
+   if(StringFind(cleanSymbol, "EURUSD") >= 0) return "EU";
+   if(StringFind(cleanSymbol, "GBPUSD") >= 0) return "GU";
+   if(StringFind(cleanSymbol, "AUDUSD") >= 0) return "AU";
+   if(StringFind(cleanSymbol, "NZDUSD") >= 0) return "NU";
+   if(StringFind(cleanSymbol, "USDJPY") >= 0) return "UJ";
+   if(StringFind(cleanSymbol, "USDCHF") >= 0) return "UC";
+   if(StringFind(cleanSymbol, "USDCAD") >= 0) return "UCd";
+   
+   // Cross pairs
+   if(StringFind(cleanSymbol, "EURGBP") >= 0) return "EG";
+   if(StringFind(cleanSymbol, "EURJPY") >= 0) return "EJ";
+   if(StringFind(cleanSymbol, "EURCHF") >= 0) return "EC";
+   if(StringFind(cleanSymbol, "EURAUD") >= 0) return "EA";
+   if(StringFind(cleanSymbol, "EURNZD") >= 0) return "EN";
+   if(StringFind(cleanSymbol, "EURCAD") >= 0) return "ECd";
+   if(StringFind(cleanSymbol, "GBPJPY") >= 0) return "GJ";
+   if(StringFind(cleanSymbol, "GBPCHF") >= 0) return "GC";
+   if(StringFind(cleanSymbol, "GBPAUD") >= 0) return "GA";
+   if(StringFind(cleanSymbol, "GBPNZD") >= 0) return "GN";
+   if(StringFind(cleanSymbol, "GBPCAD") >= 0) return "GCd";
+   if(StringFind(cleanSymbol, "AUDJPY") >= 0) return "AJ";
+   if(StringFind(cleanSymbol, "AUDNZD") >= 0) return "AN";
+   if(StringFind(cleanSymbol, "AUDCAD") >= 0) return "ACd";
+   if(StringFind(cleanSymbol, "AUDCHF") >= 0) return "AC";
+   if(StringFind(cleanSymbol, "NZDJPY") >= 0) return "NJ";
+   if(StringFind(cleanSymbol, "NZDCHF") >= 0) return "NC";
+   if(StringFind(cleanSymbol, "NZDCAD") >= 0) return "NCd";
+   if(StringFind(cleanSymbol, "CADJPY") >= 0) return "CJ";
+   if(StringFind(cleanSymbol, "CADCHF") >= 0) return "CC";
+   if(StringFind(cleanSymbol, "CHFJPY") >= 0) return "CHJ";
+   
+   // Fallback: use first 2 characters
+   return StringSubstr(cleanSymbol, 0, 2);
+}
+
+//+------------------------------------------------------------------+
+//| v1.8.6: Get Pair Comment Prefix (e.g., "EU-GU")                    |
+//+------------------------------------------------------------------+
+string GetPairCommentPrefix(int pairIndex)
+{
+   string abbrevA = GetSymbolAbbreviation(g_pairs[pairIndex].symbolA);
+   string abbrevB = GetSymbolAbbreviation(g_pairs[pairIndex].symbolB);
+   return abbrevA + "-" + abbrevB;
+}
+
+//+------------------------------------------------------------------+
+//| v1.8.6: Get Total Lot for Pair from actual positions               |
+//+------------------------------------------------------------------+
+double GetTotalLotForPair(int pairIndex, bool isBuySide)
+{
+   double totalLot = 0;
+   string pairPrefix = GetPairCommentPrefix(pairIndex);
+   
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      
+      string comment = PositionGetString(POSITION_COMMENT);
+      long magic = PositionGetInteger(POSITION_MAGIC);
+      
+      if(magic != InpMagicNumber) continue;
+      
+      // Check if comment starts with pair prefix
+      if(StringFind(comment, pairPrefix) < 0) continue;
+      
+      // Check Buy/Sell side
+      if(isBuySide && StringFind(comment, "_BUY") < 0) continue;
+      if(!isBuySide && StringFind(comment, "_SELL") < 0) continue;
+      
+      totalLot += PositionGetDouble(POSITION_VOLUME);
+   }
+   
+   return totalLot;
 }
 
 //+------------------------------------------------------------------+
@@ -2217,53 +2308,148 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
       string prefix = "STAT_";
       
       // Handle button clicks
+      // v1.8.6: Close Buy (per pair) with confirmation
       if(StringFind(sparam, prefix + "_CLOSE_BUY_") >= 0)
       {
          int pairIndex = (int)StringToInteger(StringSubstr(sparam, StringLen(prefix + "_CLOSE_BUY_")));
+         
+         // v1.8.6: Confirmation popup
+         string msg = StringFormat("Close Buy side for Pair %d (%s/%s)?", 
+                                   pairIndex + 1, 
+                                   g_pairs[pairIndex].symbolA, g_pairs[pairIndex].symbolB);
+         int result = MessageBox(msg, "Confirm Close", MB_YESNO | MB_ICONQUESTION);
+         if(result != IDYES)
+         {
+            ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
+            return;
+         }
+         
          CloseBuySide(pairIndex);
          ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
       }
+      // v1.8.6: Close Sell (per pair) with confirmation
       else if(StringFind(sparam, prefix + "_CLOSE_SELL_") >= 0)
       {
          int pairIndex = (int)StringToInteger(StringSubstr(sparam, StringLen(prefix + "_CLOSE_SELL_")));
+         
+         // v1.8.6: Confirmation popup
+         string msg = StringFormat("Close Sell side for Pair %d (%s/%s)?", 
+                                   pairIndex + 1, 
+                                   g_pairs[pairIndex].symbolA, g_pairs[pairIndex].symbolB);
+         int result = MessageBox(msg, "Confirm Close", MB_YESNO | MB_ICONQUESTION);
+         if(result != IDYES)
+         {
+            ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
+            return;
+         }
+         
          CloseSellSide(pairIndex);
          ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
       }
+      // v1.8.6: Toggle Buy Status with confirmation
       else if(StringFind(sparam, prefix + "_ST_BUY_") >= 0)
       {
          int pairIndex = (int)StringToInteger(StringSubstr(sparam, StringLen(prefix + "_ST_BUY_")));
+         
+         // v1.8.6: Confirmation popup
+         string action = (g_pairs[pairIndex].directionBuy == 0) ? "Enable" : "Disable";
+         string msg = StringFormat("%s Buy side for Pair %d (%s/%s)?", 
+                                   action, pairIndex + 1, 
+                                   g_pairs[pairIndex].symbolA, g_pairs[pairIndex].symbolB);
+         int result = MessageBox(msg, "Confirm Toggle", MB_YESNO | MB_ICONQUESTION);
+         if(result != IDYES)
+         {
+            ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
+            return;
+         }
+         
          ToggleBuySide(pairIndex);
          ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
       }
+      // v1.8.6: Toggle Sell Status with confirmation
       else if(StringFind(sparam, prefix + "_ST_SELL_") >= 0)
       {
          int pairIndex = (int)StringToInteger(StringSubstr(sparam, StringLen(prefix + "_ST_SELL_")));
+         
+         // v1.8.6: Confirmation popup
+         string action = (g_pairs[pairIndex].directionSell == 0) ? "Enable" : "Disable";
+         string msg = StringFormat("%s Sell side for Pair %d (%s/%s)?", 
+                                   action, pairIndex + 1, 
+                                   g_pairs[pairIndex].symbolA, g_pairs[pairIndex].symbolB);
+         int result = MessageBox(msg, "Confirm Toggle", MB_YESNO | MB_ICONQUESTION);
+         if(result != IDYES)
+         {
+            ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
+            return;
+         }
+         
          ToggleSellSide(pairIndex);
          ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
       }
+      // v1.8.6: Close All Buy with confirmation
       else if(sparam == prefix + "_CLOSE_ALL_BUY")
       {
+         int result = MessageBox("Close ALL Buy positions?", "Confirm Close All", MB_YESNO | MB_ICONWARNING);
+         if(result != IDYES)
+         {
+            ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
+            return;
+         }
+         
          CloseAllBuySides();
          ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
       }
+      // v1.8.6: Close All Sell with confirmation
       else if(sparam == prefix + "_CLOSE_ALL_SELL")
       {
+         int result = MessageBox("Close ALL Sell positions?", "Confirm Close All", MB_YESNO | MB_ICONWARNING);
+         if(result != IDYES)
+         {
+            ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
+            return;
+         }
+         
          CloseAllSellSides();
          ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
       }
+      // v1.8.6: Start All with confirmation
       else if(sparam == prefix + "_START_ALL")
       {
+         int result = MessageBox("Start ALL pairs?", "Confirm Start All", MB_YESNO | MB_ICONQUESTION);
+         if(result != IDYES)
+         {
+            ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
+            return;
+         }
+         
          StartAllPairs();
          ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
       }
+      // v1.8.6: Stop All with confirmation
       else if(sparam == prefix + "_STOP_ALL")
       {
+         int result = MessageBox("Stop ALL pairs?", "Confirm Stop All", MB_YESNO | MB_ICONWARNING);
+         if(result != IDYES)
+         {
+            ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
+            return;
+         }
+         
          StopAllPairs();
          ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
       }
-      // v3.7.3: Global Pause/Start Button
+      // v3.7.3: Global Pause/Start Button (v1.8.6: with confirmation)
       else if(sparam == prefix + "_BTN_PAUSE")
       {
+         string action = g_isPaused ? "Resume" : "Pause";
+         string msg = StringFormat("%s EA trading?", action);
+         int result = MessageBox(msg, "Confirm " + action, MB_YESNO | MB_ICONQUESTION);
+         if(result != IDYES)
+         {
+            ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
+            return;
+         }
+         
          g_isPaused = !g_isPaused;
          
          // Update button appearance
@@ -2287,7 +2473,7 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
          if(g_isLicenseValid)
             SyncAccountData(SYNC_SCHEDULED);
             
-         PrintFormat("[v3.7.3] Global Pause toggled: %s", g_isPaused ? "PAUSED" : "RUNNING");
+         PrintFormat("[v1.8.6] Global Pause toggled: %s", g_isPaused ? "PAUSED" : "RUNNING");
       }
    }
    else if(id == CHARTEVENT_OBJECT_ENDEDIT)
@@ -5629,18 +5815,19 @@ void OpenGridLossBuy(int pairIndex)
       UpdateADXForPair(pairIndex);
    }
    
-    // v1.8: Build comment with ADX:A/B format
+    // v1.8.6: Build comment with pair abbreviation prefix
+    string pairPrefix = GetPairCommentPrefix(pairIndex);
     string comment;
     if(corrType == -1 && InpUseADXForNegative)
     {
-         comment = StringFormat("HrmDream_GL_BUY_%d[ADX:%.0f/%.0f][M:%d]", 
-                                pairIndex + 1,
+         comment = StringFormat("%s_GL_BUY[ADX:%.0f/%.0f][M:%d]", 
+                                pairPrefix,
                                 g_pairs[pairIndex].adxValueA,
                                 g_pairs[pairIndex].adxValueB, InpMagicNumber);
     }
     else
     {
-       comment = StringFormat("HrmDream_GL_BUY_%d[M:%d]", pairIndex + 1, InpMagicNumber);
+       comment = StringFormat("%s_GL_BUY[M:%d]", pairPrefix, InpMagicNumber);
     }
    
    // Open Buy on Symbol A
@@ -5714,18 +5901,19 @@ void OpenGridLossSell(int pairIndex)
       UpdateADXForPair(pairIndex);
    }
    
-   // v1.8: Build comment with ADX:A/B format
+   // v1.8.6: Build comment with pair abbreviation prefix
+   string pairPrefix = GetPairCommentPrefix(pairIndex);
    string comment;
    if(corrType == -1 && InpUseADXForNegative)
    {
-        comment = StringFormat("HrmDream_GL_SELL_%d[ADX:%.0f/%.0f][M:%d]", 
-                               pairIndex + 1,
+        comment = StringFormat("%s_GL_SELL[ADX:%.0f/%.0f][M:%d]", 
+                               pairPrefix,
                                g_pairs[pairIndex].adxValueA,
                                g_pairs[pairIndex].adxValueB, InpMagicNumber);
    }
    else
    {
-      comment = StringFormat("HrmDream_GL_SELL_%d[M:%d]", pairIndex + 1, InpMagicNumber);
+      comment = StringFormat("%s_GL_SELL[M:%d]", pairPrefix, InpMagicNumber);
    }
    
    // Open Sell on Symbol A
@@ -5799,18 +5987,19 @@ void OpenGridProfitBuy(int pairIndex)
       UpdateADXForPair(pairIndex);
    }
    
-   // v1.8: Build comment with ADX:A/B format
+   // v1.8.6: Build comment with pair abbreviation prefix
+   string pairPrefix = GetPairCommentPrefix(pairIndex);
    string comment;
    if(corrType == -1 && InpUseADXForNegative)
    {
-        comment = StringFormat("HrmDream_GP_BUY_%d[ADX:%.0f/%.0f][M:%d]", 
-                               pairIndex + 1,
+        comment = StringFormat("%s_GP_BUY[ADX:%.0f/%.0f][M:%d]", 
+                               pairPrefix,
                                g_pairs[pairIndex].adxValueA,
                                g_pairs[pairIndex].adxValueB, InpMagicNumber);
    }
    else
    {
-      comment = StringFormat("HrmDream_GP_BUY_%d[M:%d]", pairIndex + 1, InpMagicNumber);
+      comment = StringFormat("%s_GP_BUY[M:%d]", pairPrefix, InpMagicNumber);
    }
    
    // Open BUY on Symbol A (same direction as Initial)
@@ -5879,18 +6068,19 @@ void OpenGridProfitSell(int pairIndex)
       UpdateADXForPair(pairIndex);
    }
    
-   // v1.8: Build comment with ADX:A/B format
+   // v1.8.6: Build comment with pair abbreviation prefix
+   string pairPrefix = GetPairCommentPrefix(pairIndex);
    string comment;
    if(corrType == -1 && InpUseADXForNegative)
    {
-        comment = StringFormat("HrmDream_GP_SELL_%d[ADX:%.0f/%.0f][M:%d]", 
-                               pairIndex + 1,
+        comment = StringFormat("%s_GP_SELL[ADX:%.0f/%.0f][M:%d]", 
+                               pairPrefix,
                                g_pairs[pairIndex].adxValueA,
                                g_pairs[pairIndex].adxValueB, InpMagicNumber);
    }
    else
    {
-      comment = StringFormat("HrmDream_GP_SELL_%d[M:%d]", pairIndex + 1, InpMagicNumber);
+      comment = StringFormat("%s_GP_SELL[M:%d]", pairPrefix, InpMagicNumber);
    }
    
    // Open SELL on Symbol A
@@ -6011,18 +6201,19 @@ bool OpenBuySideTrade(int pairIndex)
       UpdateADXForPair(pairIndex);
    }
    
-   // v1.8: ADX comment with A/B format (Left=SymbolA, Right=SymbolB)
+   // v1.8.6: ADX comment with pair abbreviation prefix
+   string pairPrefix = GetPairCommentPrefix(pairIndex);
    string comment;
    if(corrType == -1 && InpUseADXForNegative)
    {
-      comment = StringFormat("HrmDream_BUY_%d[ADX:%.0f/%.0f][M:%d]", 
-                             pairIndex + 1,
+      comment = StringFormat("%s_BUY[ADX:%.0f/%.0f][M:%d]", 
+                             pairPrefix,
                              g_pairs[pairIndex].adxValueA,
                              g_pairs[pairIndex].adxValueB, InpMagicNumber);
    }
    else
    {
-      comment = StringFormat("HrmDream_BUY_%d[M:%d]", pairIndex + 1, InpMagicNumber);
+      comment = StringFormat("%s_BUY[M:%d]", pairPrefix, InpMagicNumber);
    }
    
    ulong ticketA = 0;
@@ -6189,18 +6380,19 @@ bool OpenSellSideTrade(int pairIndex)
       UpdateADXForPair(pairIndex);
    }
    
-   // v1.8: ADX comment with A/B format (Left=SymbolA, Right=SymbolB)
+   // v1.8.6: ADX comment with pair abbreviation prefix
+   string pairPrefix = GetPairCommentPrefix(pairIndex);
    string comment;
    if(corrType == -1 && InpUseADXForNegative)
    {
-      comment = StringFormat("HrmDream_SELL_%d[ADX:%.0f/%.0f][M:%d]", 
-                             pairIndex + 1,
+      comment = StringFormat("%s_SELL[ADX:%.0f/%.0f][M:%d]", 
+                             pairPrefix,
                              g_pairs[pairIndex].adxValueA,
                              g_pairs[pairIndex].adxValueB, InpMagicNumber);
    }
    else
    {
-      comment = StringFormat("HrmDream_SELL_%d[M:%d]", pairIndex + 1, InpMagicNumber);
+      comment = StringFormat("%s_SELL[M:%d]", pairPrefix, InpMagicNumber);
    }
    
    ulong ticketA = 0;
@@ -7396,7 +7588,7 @@ void CreateDashboard()
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_XDISTANCE, PANEL_X + (PANEL_WIDTH / 2));
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_YDISTANCE, PANEL_Y + 4);
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_ANCHOR, ANCHOR_UPPER);
-   ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_TEXT, "Harmony Dream EA v1.8.5");
+   ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_TEXT, "Moneyx Harmony Dream v1.8.6");
    ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_FONT, "Arial Bold");
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_FONTSIZE, 10);
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_COLOR, COLOR_GOLD);
@@ -7983,7 +8175,8 @@ void UpdateDashboard()
       UpdateLabel(prefix + "P" + idxStr + "_B_CLOSED", DoubleToString(g_pairs[i].closedProfitBuy, 0), 
                   g_pairs[i].closedProfitBuy >= 0 ? COLOR_PROFIT : COLOR_LOSS);
       
-      double buyLot = g_pairs[i].directionBuy == 1 ? g_pairs[i].lotBuyA + g_pairs[i].lotBuyB : 0;
+      // v1.8.6: Calculate total lot from actual positions (Main + Sub + Grid)
+      double buyLot = g_pairs[i].directionBuy == 1 ? GetTotalLotForPair(i, true) : 0;
       UpdateLabel(prefix + "P" + idxStr + "_B_LOT", DoubleToString(buyLot, 2), COLOR_TEXT);
       
       // v3.2.7: Show order count including averaging
@@ -8029,7 +8222,8 @@ void UpdateDashboard()
       UpdateLabel(prefix + "P" + idxStr + "_S_PL", DoubleToString(g_pairs[i].profitSell, 0),
                   g_pairs[i].profitSell >= 0 ? COLOR_PROFIT : COLOR_LOSS);
       
-      double sellLot = g_pairs[i].directionSell == 1 ? g_pairs[i].lotSellA + g_pairs[i].lotSellB : 0;
+      // v1.8.6: Calculate total lot from actual positions (Main + Sub + Grid)
+      double sellLot = g_pairs[i].directionSell == 1 ? GetTotalLotForPair(i, false) : 0;
       UpdateLabel(prefix + "P" + idxStr + "_S_LOT", DoubleToString(sellLot, 2), COLOR_TEXT);
       
       // v3.2.7: Show order count including averaging
