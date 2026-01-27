@@ -1,98 +1,115 @@
 
 
-## แผนเพิ่ม Entry Mode: Correlation Only - Harmony Dream EA v1.8.8
+## แผนแก้ไข Grid Order Issues - Harmony Dream EA v1.8.8 Hotfix
 
-### สรุปความต้องการ:
+### สรุปปัญหาที่พบ (2 ปัญหาหลัก):
 
-เพิ่มโหมดใหม่ **Correlation Only** ที่ใช้ค่า Correlation + CDC Trend + ADX เป็นเกณฑ์หลักในการเปิด Initial Order แทน Z-Score
+#### ปัญหาที่ 1: Grid Comment ไม่มี Level Number (#1, #2, #3...)
 
----
-
-### 1. Positive Correlation Logic (EURUSD-GBPUSD +67%)
-
-| CDC Trend | Order Direction | รายละเอียด |
-|-----------|-----------------|-------------|
-| **CDC Up (ทั้งคู่ Bullish)** | Buy EURUSD, Sell GBPUSD | BUY Data |
-| **CDC Down (ทั้งคู่ Bearish)** | Sell EURUSD, Buy GBPUSD | SELL Data |
-
----
-
-### 2. Negative Correlation Logic (AUDUSD-USDCHF -70%)
-
-**ขั้นตอนที่ 1: CDC ต้องเป็น Opposite Trends**
-- `Dw/Up` หรือ `Up/Dw` = เข้าเงื่อนไข
-- `Up/Up` หรือ `Dw/Dw` = ไม่เข้าเงื่อนไข (BLOCK)
-
-**ขั้นตอนที่ 2: ใช้ ADX ตัดสินฝั่งที่แข็งแกร่งกว่า**
-
-| CDC | ADX Winner | Order Direction |
-|-----|------------|-----------------|
-| `Dw/Up` | A สูงกว่า (50:20) | Sell A + Sell B |
-| `Dw/Up` | B สูงกว่า (20:50) | Buy A + Buy B |
-| `Up/Dw` | A สูงกว่า (50:20) | Buy A + Buy B |
-| `Up/Dw` | B สูงกว่า (20:50) | Sell A + Sell B |
-
----
-
-### 3. เงื่อนไขการเปิด Order ใหม่เมื่อ Trend เปลี่ยน
-
-**Initial Order:**
-- ฝั่งที่มี Order อยู่แล้ว → **ไม่เปิด Initial Order ใหม่** จนกว่าจะปิดทั้งหมด
-- ฝั่งที่ว่าง + Correlation ถึงเกณฑ์ + CDC/ADX เข้าเงื่อนไข → **เปิด Initial Order ได้**
-
-**Grid Orders:**
-- ทำงานปกติตามเงื่อนไข Grid (Distance + Corr/CDC Guard)
-- ไม่ถูกบล็อกจากเงื่อนไข Initial Order
-
----
-
-### รายละเอียดทางเทคนิค:
-
-#### 1. เพิ่ม Entry Mode Enum และ Input Parameters
-
+**ตอนนี้ผิด:**
 ```text
-enum ENUM_ENTRY_MODE
+XU-XE_GL_SELL_20[M:888888]   ← ไม่มี Grid Level
+```
+
+**ที่ควรจะเป็น:**
+```text
+XU-XE_GL#1_SELL_20[M:888888]  ← มี Grid Level
+```
+
+**สาเหตุ:**
+- บรรทัด 6112, 6198, 6284, 6365 ใช้ `pairIndex + 1` แทน Grid Level
+- ไม่มีการใส่ #number ลงใน Comment
+
+---
+
+#### ปัญหาที่ 2: Total Basket ไปรบกวน Grid Order Count
+
+เมื่อเปิด Total Basket:
+- `g_accumulatedBasketProfit` ถูกเก็บสะสมจาก Group ที่ปิดไปแล้ว
+- แต่อาจมีการ reset หรือ conflict กับ Grid Order Count
+
+**เมื่อปิด Total Basket:**
+- ระบบไม่ใช้ `CheckTotalTarget()` ส่วนที่เกี่ยวกับ Total Basket
+- Grid Orders ทำงานปกติเพราะไม่มี interference
+
+---
+
+### รายละเอียดการแก้ไข:
+
+#### 1. แก้ไข OpenGridLossBuy() - เพิ่ม Grid Level ใน Comment
+
+**ตำแหน่ง:** บรรทัด 6107-6120
+
+**เดิม:**
+```mql5
+string pairPrefix = GetPairCommentPrefix(pairIndex);
+string comment;
+if(corrType == -1 && InpUseADXForNegative)
 {
-   ENTRY_MODE_ZSCORE = 0,        // Z-Score Based (Original)
-   ENTRY_MODE_CORRELATION_ONLY   // Correlation Only (No Z-Score)
-};
-
-input group "=== Entry Mode Settings (v1.8.8) ==="
-input ENUM_ENTRY_MODE InpEntryMode = ENTRY_MODE_ZSCORE;
-input double InpCorrOnlyPositiveThreshold = 0.60;  // 60%
-input double InpCorrOnlyNegativeThreshold = -0.60; // -60%
-```
-
-#### 2. ฟังก์ชันใหม่ที่ต้องสร้าง
-
-| ฟังก์ชัน | หน้าที่ |
-|----------|---------|
-| `CheckCorrelationOnlyEntry()` | เช็คว่า Correlation ถึงเกณฑ์หรือไม่ |
-| `DetermineTradeDirectionForCorrOnly()` | กำหนด BUY/SELL Data จาก CDC + ADX |
-| `CheckGridTradingAllowedCorrOnly()` | Grid Guard แบบ Corr+CDC (ไม่สน Z-Score) |
-
-#### 3. แก้ไข AnalyzeAllPairs()
-
-เพิ่ม branch สำหรับ `ENTRY_MODE_CORRELATION_ONLY`:
-- เช็ค Correlation threshold
-- เรียก `DetermineTradeDirectionForCorrOnly()` เพื่อกำหนดทิศทาง
-- เช็ค `directionBuy == -1` หรือ `directionSell == -1` (ยังไม่มี Order)
-- เปิด Initial Order ตามทิศทางที่กำหนด
-
-#### 4. แก้ไข CheckAllGridLoss() และ CheckAllGridProfit()
-
-เปลี่ยนจาก:
-```text
-if(!CheckGridTradingAllowed(i, "BUY", pauseReason))
-```
-
-เป็น:
-```text
-bool gridAllowed = false;
-if(InpEntryMode == ENTRY_MODE_ZSCORE)
-   gridAllowed = CheckGridTradingAllowed(i, "BUY", pauseReason);
+     comment = StringFormat("%s_GL_BUY_%d[ADX:%.0f/%.0f][M:%d]", 
+                            pairPrefix, pairIndex + 1, ...);
+}
 else
-   gridAllowed = CheckGridTradingAllowedCorrOnly(i, "BUY", pauseReason);
+{
+   comment = StringFormat("%s_GL_BUY_%d[M:%d]", pairPrefix, pairIndex + 1, InpMagicNumber);
+}
+```
+
+**แก้ไขเป็น:**
+```mql5
+// v1.8.8 HF: Get next Grid Level BEFORE opening (current count + 1)
+int gridLevel = g_pairs[pairIndex].avgOrderCountBuy + 1;
+
+string pairPrefix = GetPairCommentPrefix(pairIndex);
+string comment;
+if(corrType == -1 && InpUseADXForNegative)
+{
+     comment = StringFormat("%s_GL#%d_BUY_%d[ADX:%.0f/%.0f][M:%d]", 
+                            pairPrefix, gridLevel, pairIndex + 1, ...);
+}
+else
+{
+   comment = StringFormat("%s_GL#%d_BUY_%d[M:%d]", pairPrefix, gridLevel, pairIndex + 1, InpMagicNumber);
+}
+```
+
+---
+
+#### 2. แก้ไข OpenGridLossSell() - เพิ่ม Grid Level
+
+**ตำแหน่ง:** บรรทัด 6193-6206
+
+**แก้ไขเหมือนกัน:**
+```mql5
+int gridLevel = g_pairs[pairIndex].avgOrderCountSell + 1;
+
+// ... ใน StringFormat ใช้ %s_GL#%d_SELL_%d ...
+```
+
+---
+
+#### 3. แก้ไข OpenGridProfitBuy() - เพิ่ม Grid Level
+
+**ตำแหน่ง:** บรรทัด 6279-6292
+
+**แก้ไข:**
+```mql5
+int gridLevel = g_pairs[pairIndex].gridProfitCountBuy + 1;
+
+// ... ใน StringFormat ใช้ %s_GP#%d_BUY_%d ...
+```
+
+---
+
+#### 4. แก้ไข OpenGridProfitSell() - เพิ่ม Grid Level
+
+**ตำแหน่ง:** บรรทัด 6360-6373
+
+**แก้ไข:**
+```mql5
+int gridLevel = g_pairs[pairIndex].gridProfitCountSell + 1;
+
+// ... ใน StringFormat ใช้ %s_GP#%d_SELL_%d ...
 ```
 
 ---
@@ -101,37 +118,38 @@ else
 
 | ไฟล์ | การเปลี่ยนแปลง |
 |------|----------------|
-| `public/docs/mql5/Harmony_Dream_EA.mq5` | เพิ่ม Enum, Inputs, 3 ฟังก์ชันใหม่, แก้ AnalyzeAllPairs(), แก้ Grid functions |
-
----
-
-### สิ่งที่ไม่เปลี่ยนแปลง:
-
-- Exit Logic (Z-Score Exit, Profit Exit)
-- Grid Distance Calculation
-- Grid Lot Sizing (CDC Multiplier + ADX)
-- RSI Spread Filter
-- Group/Total Basket System
-- License System
+| `public/docs/mql5/Harmony_Dream_EA.mq5` | แก้ไข 4 ฟังก์ชัน OpenGridLossBuy/Sell, OpenGridProfitBuy/Sell เพิ่ม Grid Level (#1, #2...) ใน Comment |
 
 ---
 
 ### ผลลัพธ์ที่คาดหวัง:
 
-**Positive (EURUSD-GBPUSD +67%, CDC Up/Up):**
+**Comment Format ใหม่:**
 ```text
-[CORR ONLY] Pair 1 OPENED BUY DATA → Buy EURUSD, Sell GBPUSD
-Grid Orders ทำงานปกติตาม Corr+CDC Guard
+XU-XE_GL#1_SELL_20[M:888888]   ← Grid Loss #1
+XU-XE_GL#2_SELL_20[M:888888]   ← Grid Loss #2
+XU-XE_GL#3_SELL_20[M:888888]   ← Grid Loss #3
+
+XU-XE_GP#1_SELL_20[M:888888]   ← Grid Profit #1
+XU-XE_GP#2_SELL_20[M:888888]   ← Grid Profit #2
 ```
 
-**Negative (AUDUSD-USDCHF -70%, CDC Dw/Up, ADX 50:20):**
-```text
-[CORR ONLY] Pair 21 OPENED SELL DATA → Sell AUDUSD, Sell USDCHF
-Grid Orders ทำงานปกติตาม Corr+CDC Guard
-```
+---
 
-**เมื่อ Trend เปลี่ยน + Correlation กลับมา:**
-- ฝั่ง SELL Data มี Order อยู่ → ไม่เปิด SELL ใหม่
-- ฝั่ง BUY Data ว่าง + เข้าเงื่อนไข → เปิด BUY ได้
-- Grid Orders ทั้งสองฝั่งทำงานปกติ
+### หมายเหตุเกี่ยวกับ Total Basket:
+
+จากการทดสอบของผู้ใช้ - เมื่อปิด Total Basket แล้ว Grid ทำงานปกติ:
+- ปัญหา Total Basket interference เป็นเรื่องแยกต่างหาก
+- Hotfix นี้จะแก้ไข Grid Level Comment ก่อน
+- หากยังมีปัญหา Grid Count เมื่อเปิด Total Basket จะวิเคราะห์เพิ่มเติม
+
+---
+
+### สิ่งที่ไม่แตะต้อง:
+
+- Entry Mode Logic (Z-Score / Correlation Only)
+- Grid Distance Calculation  
+- Grid Lot Sizing Logic (CDC Multiplier, ADX)
+- Total Basket Logic (จะทดสอบแยก)
+- Auto Balance Scaling
 
