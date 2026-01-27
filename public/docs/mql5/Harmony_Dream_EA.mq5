@@ -5770,8 +5770,8 @@ void CalculateGridLots(int pairIndex, string side,
          break;
          
       case GRID_LOT_TYPE_TREND_BASED:
-         // v1.2: Force CDC Trend logic regardless of InpGridLotMode
-         CalculateTrendBasedLots(pairIndex, side, baseLotA, baseLotB, outLotA, outLotB, isGridOrder, true);
+         // v1.8.8 HF4: Pass isProfitSide to differentiate Grid Loss vs Grid Profit
+         CalculateTrendBasedLots(pairIndex, side, baseLotA, baseLotB, outLotA, outLotB, isGridOrder, true, isProfitSide);
          break;
    }
 }
@@ -5838,7 +5838,8 @@ void CalculateTrendBasedLots(int pairIndex, string side,
                               double baseLotA, double baseLotB,
                               double &adjustedLotA, double &adjustedLotB,
                               bool isGridOrder = false,
-                              bool forceTrendLogic = false)
+                              bool forceTrendLogic = false,
+                              bool isProfitSide = false)  // v1.8.8 HF4: Add Profit Side flag
 {
    string symbolA = g_pairs[pairIndex].symbolA;
    string symbolB = g_pairs[pairIndex].symbolB;
@@ -5931,23 +5932,48 @@ void CalculateTrendBasedLots(int pairIndex, string side,
       double effectiveBaseLotB = initialLotB;
       
       // For Grid Orders with Compounding (Trend-Aligned side only)
+      // v1.8.8 HF4: Separate Grid Loss vs Grid Profit compounding
       if(isGridOrder && InpLotProgression == LOT_PROG_COMPOUNDING)
       {
          // Use LAST Grid Lot as base for compounding (Trend-Aligned side only)
          // Counter-Trend side will be reset to initialLot below
          if(side == "BUY")
          {
-            if(isTrendAlignedA && g_pairs[pairIndex].lastGridLotBuyA > 0)
-               effectiveBaseLotA = g_pairs[pairIndex].lastGridLotBuyA;
-            if(isTrendAlignedB && g_pairs[pairIndex].lastGridLotBuyB > 0)
-               effectiveBaseLotB = g_pairs[pairIndex].lastGridLotBuyB;
+            if(isProfitSide)
+            {
+               // Grid Profit: Use lastProfitGridLot variables
+               if(isTrendAlignedA && g_pairs[pairIndex].lastProfitGridLotBuyA > 0)
+                  effectiveBaseLotA = g_pairs[pairIndex].lastProfitGridLotBuyA;
+               if(isTrendAlignedB && g_pairs[pairIndex].lastProfitGridLotBuyB > 0)
+                  effectiveBaseLotB = g_pairs[pairIndex].lastProfitGridLotBuyB;
+            }
+            else
+            {
+               // Grid Loss: Use lastGridLot variables
+               if(isTrendAlignedA && g_pairs[pairIndex].lastGridLotBuyA > 0)
+                  effectiveBaseLotA = g_pairs[pairIndex].lastGridLotBuyA;
+               if(isTrendAlignedB && g_pairs[pairIndex].lastGridLotBuyB > 0)
+                  effectiveBaseLotB = g_pairs[pairIndex].lastGridLotBuyB;
+            }
          }
          else
          {
-            if(isTrendAlignedA && g_pairs[pairIndex].lastGridLotSellA > 0)
-               effectiveBaseLotA = g_pairs[pairIndex].lastGridLotSellA;
-            if(isTrendAlignedB && g_pairs[pairIndex].lastGridLotSellB > 0)
-               effectiveBaseLotB = g_pairs[pairIndex].lastGridLotSellB;
+            if(isProfitSide)
+            {
+               // Grid Profit: Use lastProfitGridLot variables
+               if(isTrendAlignedA && g_pairs[pairIndex].lastProfitGridLotSellA > 0)
+                  effectiveBaseLotA = g_pairs[pairIndex].lastProfitGridLotSellA;
+               if(isTrendAlignedB && g_pairs[pairIndex].lastProfitGridLotSellB > 0)
+                  effectiveBaseLotB = g_pairs[pairIndex].lastProfitGridLotSellB;
+            }
+            else
+            {
+               // Grid Loss: Use lastGridLot variables
+               if(isTrendAlignedA && g_pairs[pairIndex].lastGridLotSellA > 0)
+                  effectiveBaseLotA = g_pairs[pairIndex].lastGridLotSellA;
+               if(isTrendAlignedB && g_pairs[pairIndex].lastGridLotSellB > 0)
+                  effectiveBaseLotB = g_pairs[pairIndex].lastGridLotSellB;
+            }
          }
       }
       
