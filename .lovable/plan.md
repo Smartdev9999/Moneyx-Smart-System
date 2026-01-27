@@ -1,165 +1,89 @@
 
 
-## แผนแก้ไข Grid Profit Lot Calculation - Harmony Dream EA v1.8.8 Hotfix 4
+## แผนแก้ไข Grid Profit Lot Initialization - Harmony Dream EA v1.8.8 Hotfix 5
 
 ### สาเหตุของปัญหา
 
 จากภาพที่ส่งมา:
-| Order | Comment | Volume | ที่ควรจะเป็น |
-|-------|---------|--------|--------------|
-| Initial | `XU-XE_BUY_20` | 0.4 | 0.4 ✅ |
-| GP#1 | `XU-XE_GP#1_BUY_20` | 3.0 | 0.2 × multiplier ❌ |
-| GP#2 | `XU-XE_GP#2_BUY_20` | 3.0 | compound from GP#1 ❌ |
-| GL#1 | `XU-XE_GL#1_BUY_20` | 0.8 | ✅ |
-| GL#2 | `XU-XE_GL#2_BUY_20` | 1.6 | ✅ |
+| Order | Comment | Volume | ที่ควรจะเป็น | สาเหตุ |
+|-------|---------|--------|--------------|--------|
+| Initial | `XU-XE_BUY_20` | 0.4 | 0.4 ✅ | - |
+| GP#1 | `XU-XE_GP#1_BUY_20` | 0.4 | **0.8** ❌ | ใช้ initialLotA แทน lotA |
+| GP#2 | `XU-XE_GP#2_BUY_20` | 0.8 | **1.6** ❌ | ควร compound จาก 0.8 |
+| GL#1 | `XU-XE_GL#1_BUY_20` | 0.8 | 0.8 ✅ | ใช้ lastGridLotBuyA ถูกต้อง |
 
-**ปัญหาหลัก:** Grid Profit (GP) ไม่ compound ถูกต้องและข้ามไปใช้ Maximum Lot (3.0) ทันที
-
----
-
-### การวิเคราะห์โค้ด
-
-#### บรรทัด 5774 - ไม่ส่ง isProfitSide
-```mql5
-case GRID_LOT_TYPE_TREND_BASED:
-   // v1.2: Force CDC Trend logic regardless of InpGridLotMode
-   CalculateTrendBasedLots(pairIndex, side, baseLotA, baseLotB, outLotA, outLotB, isGridOrder, true);
-   //                                                                              ↑ ไม่มี isProfitSide!
-   break;
-```
-
-#### บรรทัด 5937-5951 - ใช้ Grid Loss variable สำหรับ Grid Profit
-```mql5
-if(isGridOrder && InpLotProgression == LOT_PROG_COMPOUNDING)
-{
-   if(side == "BUY")
-   {
-      // ← ใช้ lastGridLotBuyA ซึ่งเป็น Grid Loss!
-      if(isTrendAlignedA && g_pairs[pairIndex].lastGridLotBuyA > 0)
-         effectiveBaseLotA = g_pairs[pairIndex].lastGridLotBuyA;
-   }
-}
-```
-
-**ผลลัพธ์:** 
-- `lastGridLotBuyA = 0` (เพราะ Grid Profit ไม่ได้อัพเดท variable นี้)
-- Fallback ไปใช้ `initialLotA`
-- แต่ Multiplier คูณเข้าไปทำให้พุ่งไปสูงสุด
+**Root Cause:** เมื่อเปิด Main Entry:
+- `lastGridLotBuyA = lotA` (0.4) → Grid Loss ใช้ค่านี้เป็น base ✅
+- `lastProfitGridLotBuyA = 0` (ไม่ได้ set!) → Grid Profit fallback ไป `initialLotA` (0.2) ❌
 
 ---
 
-### รายละเอียดการแก้ไข
+### การแก้ไข
 
-#### 1. เพิ่ม Parameter isProfitSide ใน CalculateTrendBasedLots()
-
-**เดิม (บรรทัด 5837-5841):**
-```mql5
-void CalculateTrendBasedLots(int pairIndex, string side, 
-                              double baseLotA, double baseLotB,
-                              double &adjustedLotA, double &adjustedLotB,
-                              bool isGridOrder = false,
-                              bool forceTrendLogic = false)
-```
-
-**แก้ไขเป็น:**
-```mql5
-void CalculateTrendBasedLots(int pairIndex, string side, 
-                              double baseLotA, double baseLotB,
-                              double &adjustedLotA, double &adjustedLotB,
-                              bool isGridOrder = false,
-                              bool forceTrendLogic = false,
-                              bool isProfitSide = false)  // v1.8.8 HF4: Add Profit Side flag
-```
-
----
-
-#### 2. แก้ไข Compounding Logic แยก Grid Loss vs Grid Profit (บรรทัด 5934-5951)
+#### 1. Initialize lastProfitGridLot ใน OpenBuySideTrade() (บรรทัด 6613-6621)
 
 **เดิม:**
 ```mql5
-if(isGridOrder && InpLotProgression == LOT_PROG_COMPOUNDING)
-{
-   if(side == "BUY")
-   {
-      if(isTrendAlignedA && g_pairs[pairIndex].lastGridLotBuyA > 0)
-         effectiveBaseLotA = g_pairs[pairIndex].lastGridLotBuyA;
-      if(isTrendAlignedB && g_pairs[pairIndex].lastGridLotBuyB > 0)
-         effectiveBaseLotB = g_pairs[pairIndex].lastGridLotBuyB;
-   }
-   else
-   {
-      if(isTrendAlignedA && g_pairs[pairIndex].lastGridLotSellA > 0)
-         effectiveBaseLotA = g_pairs[pairIndex].lastGridLotSellA;
-      if(isTrendAlignedB && g_pairs[pairIndex].lastGridLotSellB > 0)
-         effectiveBaseLotB = g_pairs[pairIndex].lastGridLotSellB;
-   }
-}
+// v3.5.3 HF1: Initialize Last Grid Lots for Compounding (first level = main entry lot)
+g_pairs[pairIndex].lastGridLotBuyA = lotA;
+g_pairs[pairIndex].lastGridLotBuyB = lotB;
+
+// v3.6.0: Store initial entry price for Grid Profit Side
+g_pairs[pairIndex].initialEntryPriceBuy = SymbolInfoDouble(symbolA, SYMBOL_ASK);
+g_pairs[pairIndex].lastProfitPriceBuy = 0;
+g_pairs[pairIndex].gridProfitCountBuy = 0;
+g_pairs[pairIndex].gridProfitZLevelBuy = 0;
 ```
 
 **แก้ไขเป็น:**
 ```mql5
-// v1.8.8 HF4: Separate Grid Loss vs Grid Profit compounding
-if(isGridOrder && InpLotProgression == LOT_PROG_COMPOUNDING)
-{
-   if(side == "BUY")
-   {
-      if(isProfitSide)
-      {
-         // Grid Profit: Use lastProfitGridLot
-         if(isTrendAlignedA && g_pairs[pairIndex].lastProfitGridLotBuyA > 0)
-            effectiveBaseLotA = g_pairs[pairIndex].lastProfitGridLotBuyA;
-         if(isTrendAlignedB && g_pairs[pairIndex].lastProfitGridLotBuyB > 0)
-            effectiveBaseLotB = g_pairs[pairIndex].lastProfitGridLotBuyB;
-      }
-      else
-      {
-         // Grid Loss: Use lastGridLot
-         if(isTrendAlignedA && g_pairs[pairIndex].lastGridLotBuyA > 0)
-            effectiveBaseLotA = g_pairs[pairIndex].lastGridLotBuyA;
-         if(isTrendAlignedB && g_pairs[pairIndex].lastGridLotBuyB > 0)
-            effectiveBaseLotB = g_pairs[pairIndex].lastGridLotBuyB;
-      }
-   }
-   else
-   {
-      if(isProfitSide)
-      {
-         // Grid Profit: Use lastProfitGridLot
-         if(isTrendAlignedA && g_pairs[pairIndex].lastProfitGridLotSellA > 0)
-            effectiveBaseLotA = g_pairs[pairIndex].lastProfitGridLotSellA;
-         if(isTrendAlignedB && g_pairs[pairIndex].lastProfitGridLotSellB > 0)
-            effectiveBaseLotB = g_pairs[pairIndex].lastProfitGridLotSellB;
-      }
-      else
-      {
-         // Grid Loss: Use lastGridLot
-         if(isTrendAlignedA && g_pairs[pairIndex].lastGridLotSellA > 0)
-            effectiveBaseLotA = g_pairs[pairIndex].lastGridLotSellA;
-         if(isTrendAlignedB && g_pairs[pairIndex].lastGridLotSellB > 0)
-            effectiveBaseLotB = g_pairs[pairIndex].lastGridLotSellB;
-      }
-   }
-}
+// v3.5.3 HF1: Initialize Last Grid Lots for Compounding (first level = main entry lot)
+g_pairs[pairIndex].lastGridLotBuyA = lotA;
+g_pairs[pairIndex].lastGridLotBuyB = lotB;
+
+// v1.8.8 HF5: Initialize Grid Profit lots to main entry lot (GP#1 will multiply from this)
+g_pairs[pairIndex].lastProfitGridLotBuyA = lotA;
+g_pairs[pairIndex].lastProfitGridLotBuyB = lotB;
+
+// v3.6.0: Store initial entry price for Grid Profit Side
+g_pairs[pairIndex].initialEntryPriceBuy = SymbolInfoDouble(symbolA, SYMBOL_ASK);
+g_pairs[pairIndex].lastProfitPriceBuy = 0;
+g_pairs[pairIndex].gridProfitCountBuy = 0;
+g_pairs[pairIndex].gridProfitZLevelBuy = 0;
 ```
 
 ---
 
-#### 3. อัพเดท Caller ให้ส่ง isProfitSide (บรรทัด 5772-5775)
+#### 2. Initialize lastProfitGridLot ใน OpenSellSideTrade() (บรรทัด 6792-6800)
 
 **เดิม:**
 ```mql5
-case GRID_LOT_TYPE_TREND_BASED:
-   // v1.2: Force CDC Trend logic regardless of InpGridLotMode
-   CalculateTrendBasedLots(pairIndex, side, baseLotA, baseLotB, outLotA, outLotB, isGridOrder, true);
-   break;
+// v3.5.3 HF1: Initialize Last Grid Lots for Compounding (first level = main entry lot)
+g_pairs[pairIndex].lastGridLotSellA = lotA;
+g_pairs[pairIndex].lastGridLotSellB = lotB;
+
+// v3.6.0: Store initial entry price for Grid Profit Side
+g_pairs[pairIndex].initialEntryPriceSell = SymbolInfoDouble(symbolA, SYMBOL_BID);
+g_pairs[pairIndex].lastProfitPriceSell = 0;
+g_pairs[pairIndex].gridProfitCountSell = 0;
+g_pairs[pairIndex].gridProfitZLevelSell = 0;
 ```
 
 **แก้ไขเป็น:**
 ```mql5
-case GRID_LOT_TYPE_TREND_BASED:
-   // v1.8.8 HF4: Pass isProfitSide to differentiate Grid Loss vs Grid Profit
-   CalculateTrendBasedLots(pairIndex, side, baseLotA, baseLotB, outLotA, outLotB, isGridOrder, true, isProfitSide);
-   break;
+// v3.5.3 HF1: Initialize Last Grid Lots for Compounding (first level = main entry lot)
+g_pairs[pairIndex].lastGridLotSellA = lotA;
+g_pairs[pairIndex].lastGridLotSellB = lotB;
+
+// v1.8.8 HF5: Initialize Grid Profit lots to main entry lot (GP#1 will multiply from this)
+g_pairs[pairIndex].lastProfitGridLotSellA = lotA;
+g_pairs[pairIndex].lastProfitGridLotSellB = lotB;
+
+// v3.6.0: Store initial entry price for Grid Profit Side
+g_pairs[pairIndex].initialEntryPriceSell = SymbolInfoDouble(symbolA, SYMBOL_BID);
+g_pairs[pairIndex].lastProfitPriceSell = 0;
+g_pairs[pairIndex].gridProfitCountSell = 0;
+g_pairs[pairIndex].gridProfitZLevelSell = 0;
 ```
 
 ---
@@ -168,37 +92,73 @@ case GRID_LOT_TYPE_TREND_BASED:
 
 | ไฟล์ | การเปลี่ยนแปลง |
 |------|----------------|
-| `public/docs/mql5/Harmony_Dream_EA.mq5` | 1. เพิ่ม `isProfitSide` parameter ใน `CalculateTrendBasedLots()` |
-| | 2. แก้ Compounding logic แยก Grid Loss/Profit variables |
-| | 3. อัพเดท `CalculateGridLots()` ให้ส่ง `isProfitSide` |
+| `public/docs/mql5/Harmony_Dream_EA.mq5` | 1. เพิ่ม `lastProfitGridLotBuyA/B = lotA/lotB` ใน `OpenBuySideTrade()` |
+| | 2. เพิ่ม `lastProfitGridLotSellA/B = lotA/lotB` ใน `OpenSellSideTrade()` |
 
 ---
 
 ### ผลลัพธ์ที่คาดหวัง
 
-**หลังแก้ไข - Grid Profit จะ Compound แยกจาก Grid Loss:**
+**Flow หลังแก้ไข:**
 
 ```text
-Initial Order: 0.4 lot (lotBuyA)
+1. Main Entry เปิด:
+   lotA = 0.4 (scaledBaseLot × multiplier)
+   lastProfitGridLotBuyA = 0.4 ✅ (เพิ่มใหม่)
 
-Grid Loss Side:
-GL#1: lastGridLotBuyA = 0 → ใช้ initialLotA = 0.2
-      0.2 × multA = 0.4 → บันทึก lastGridLotBuyA = 0.4
-GL#2: lastGridLotBuyA = 0.4 → 0.4 × multA = 0.8
+2. GP#1 คำนวณ:
+   isProfitSide = true
+   lastProfitGridLotBuyA = 0.4 → effectiveBaseLotA = 0.4
+   0.4 × 2 (multiplier) = 0.8 lot ✅
 
-Grid Profit Side (แยก track):
-GP#1: lastProfitGridLotBuyA = 0 → ใช้ initialLotA = 0.2
-      0.2 × multA = 0.4 → บันทึก lastProfitGridLotBuyA = 0.4
-GP#2: lastProfitGridLotBuyA = 0.4 → 0.4 × multA = 0.8
+3. GP#1 เปิดสำเร็จ:
+   lastProfitGridLotBuyA = 0.8 (update หลังเปิด)
+
+4. GP#2 คำนวณ:
+   lastProfitGridLotBuyA = 0.8 → effectiveBaseLotA = 0.8
+   0.8 × 2 = 1.6 lot ✅
+
+5. GP#3 คำนวณ:
+   1.6 × 2 = 3.2 → cap at 3.0 lot (Max Lot) ✅
 ```
+
+**เปรียบเทียบก่อน/หลัง:**
+
+| Order | ก่อนแก้ | หลังแก้ |
+|-------|--------|--------|
+| Initial | 0.4 | 0.4 |
+| GP#1 | 0.4 ❌ | 0.8 ✅ |
+| GP#2 | 0.8 ❌ | 1.6 ✅ |
+| GP#3 | 1.6 ❌ | 3.0 ✅ |
 
 ---
 
 ### สิ่งที่ไม่แตะต้อง
 
-- Grid Loss lot calculation (ยังใช้ `lastGridLotBuyA/B` เหมือนเดิม)
-- GRID_LOT_TYPE_MULTIPLIER logic (มี isProfitSide อยู่แล้ว)
+- Grid Loss lot calculation (ทำงานถูกต้องอยู่แล้ว)
+- Compounding logic ใน `CalculateTrendBasedLots()` (HF4 แก้ไปแล้ว)
+- Close order logic (HF3 แก้ไปแล้ว)
 - Comment format (#1, #2...)
-- Close order logic (แก้ไขแล้วใน HF3)
-- Floating P/L calculation (แก้ไขแล้วใน HF2)
+- Floating P/L calculation (HF2 แก้ไปแล้ว)
+
+---
+
+### เหตุผลทางเทคนิค
+
+**ทำไม Grid Loss ทำงานถูกต้อง:**
+- `lastGridLotBuyA = lotA` (0.4) ถูก set ตั้งแต่ Main Entry
+- GL#1 คำนวณ: `effectiveBaseLotA = lastGridLotBuyA = 0.4`
+- ผลลัพธ์: 0.4 × 2 = 0.8 ✅
+
+**ทำไม Grid Profit ไม่ทำงาน (ก่อน HF5):**
+- `lastProfitGridLotBuyA = 0` (ไม่เคย set)
+- GP#1 คำนวณ: condition `lastProfitGridLotBuyA > 0` = false
+- Fallback: `effectiveBaseLotA = initialLotA = 0.2`
+- ผลลัพธ์: 0.2 × 2 = 0.4 ❌
+
+**หลัง HF5:**
+- `lastProfitGridLotBuyA = lotA = 0.4` (set ตอน Main Entry)
+- GP#1 คำนวณ: condition `lastProfitGridLotBuyA > 0` = true
+- ใช้: `effectiveBaseLotA = 0.4`
+- ผลลัพธ์: 0.4 × 2 = 0.8 ✅
 
