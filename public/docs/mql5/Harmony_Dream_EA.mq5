@@ -6104,19 +6104,20 @@ void OpenGridLossBuy(int pairIndex)
       UpdateADXForPair(pairIndex);
    }
    
-    // v1.8.7: Build comment with pair abbreviation prefix AND set number
+    // v1.8.8 HF: Build comment with Grid Level number (#1, #2, #3...)
+    int gridLevel = g_pairs[pairIndex].avgOrderCountBuy + 1;
     string pairPrefix = GetPairCommentPrefix(pairIndex);
     string comment;
     if(corrType == -1 && InpUseADXForNegative)
     {
-         comment = StringFormat("%s_GL_BUY_%d[ADX:%.0f/%.0f][M:%d]", 
-                                pairPrefix, pairIndex + 1,
+         comment = StringFormat("%s_GL#%d_BUY_%d[ADX:%.0f/%.0f][M:%d]", 
+                                pairPrefix, gridLevel, pairIndex + 1,
                                 g_pairs[pairIndex].adxValueA,
                                 g_pairs[pairIndex].adxValueB, InpMagicNumber);
     }
     else
     {
-       comment = StringFormat("%s_GL_BUY_%d[M:%d]", pairPrefix, pairIndex + 1, InpMagicNumber);
+       comment = StringFormat("%s_GL#%d_BUY_%d[M:%d]", pairPrefix, gridLevel, pairIndex + 1, InpMagicNumber);
     }
    
    // Open Buy on Symbol A
@@ -6190,19 +6191,20 @@ void OpenGridLossSell(int pairIndex)
       UpdateADXForPair(pairIndex);
    }
    
-   // v1.8.7: Build comment with pair abbreviation prefix AND set number
+   // v1.8.8 HF: Build comment with Grid Level number (#1, #2, #3...)
+   int gridLevel = g_pairs[pairIndex].avgOrderCountSell + 1;
    string pairPrefix = GetPairCommentPrefix(pairIndex);
    string comment;
    if(corrType == -1 && InpUseADXForNegative)
    {
-        comment = StringFormat("%s_GL_SELL_%d[ADX:%.0f/%.0f][M:%d]", 
-                               pairPrefix, pairIndex + 1,
+        comment = StringFormat("%s_GL#%d_SELL_%d[ADX:%.0f/%.0f][M:%d]", 
+                               pairPrefix, gridLevel, pairIndex + 1,
                                g_pairs[pairIndex].adxValueA,
                                g_pairs[pairIndex].adxValueB, InpMagicNumber);
    }
    else
    {
-      comment = StringFormat("%s_GL_SELL_%d[M:%d]", pairPrefix, pairIndex + 1, InpMagicNumber);
+      comment = StringFormat("%s_GL#%d_SELL_%d[M:%d]", pairPrefix, gridLevel, pairIndex + 1, InpMagicNumber);
    }
    
    // Open Sell on Symbol A
@@ -6276,19 +6278,20 @@ void OpenGridProfitBuy(int pairIndex)
       UpdateADXForPair(pairIndex);
    }
    
-   // v1.8.7: Build comment with pair abbreviation prefix AND set number
+   // v1.8.8 HF: Build comment with Grid Level number (#1, #2, #3...)
+   int gridLevel = g_pairs[pairIndex].gridProfitCountBuy + 1;
    string pairPrefix = GetPairCommentPrefix(pairIndex);
    string comment;
    if(corrType == -1 && InpUseADXForNegative)
    {
-        comment = StringFormat("%s_GP_BUY_%d[ADX:%.0f/%.0f][M:%d]", 
-                               pairPrefix, pairIndex + 1,
+        comment = StringFormat("%s_GP#%d_BUY_%d[ADX:%.0f/%.0f][M:%d]", 
+                               pairPrefix, gridLevel, pairIndex + 1,
                                g_pairs[pairIndex].adxValueA,
                                g_pairs[pairIndex].adxValueB, InpMagicNumber);
    }
    else
    {
-      comment = StringFormat("%s_GP_BUY_%d[M:%d]", pairPrefix, pairIndex + 1, InpMagicNumber);
+      comment = StringFormat("%s_GP#%d_BUY_%d[M:%d]", pairPrefix, gridLevel, pairIndex + 1, InpMagicNumber);
    }
    
    // Open BUY on Symbol A (same direction as Initial)
@@ -6357,19 +6360,20 @@ void OpenGridProfitSell(int pairIndex)
       UpdateADXForPair(pairIndex);
    }
    
-   // v1.8.7: Build comment with pair abbreviation prefix AND set number
+   // v1.8.8 HF: Build comment with Grid Level number (#1, #2, #3...)
+   int gridLevel = g_pairs[pairIndex].gridProfitCountSell + 1;
    string pairPrefix = GetPairCommentPrefix(pairIndex);
    string comment;
    if(corrType == -1 && InpUseADXForNegative)
    {
-        comment = StringFormat("%s_GP_SELL_%d[ADX:%.0f/%.0f][M:%d]", 
-                               pairPrefix, pairIndex + 1,
+        comment = StringFormat("%s_GP#%d_SELL_%d[ADX:%.0f/%.0f][M:%d]", 
+                               pairPrefix, gridLevel, pairIndex + 1,
                                g_pairs[pairIndex].adxValueA,
                                g_pairs[pairIndex].adxValueB, InpMagicNumber);
    }
    else
    {
-      comment = StringFormat("%s_GP_SELL_%d[M:%d]", pairPrefix, pairIndex + 1, InpMagicNumber);
+      comment = StringFormat("%s_GP#%d_SELL_%d[M:%d]", pairPrefix, gridLevel, pairIndex + 1, InpMagicNumber);
    }
    
    // Open SELL on Symbol A
