@@ -1,16 +1,16 @@
 
-## แผนแก้ไข Floating P/L Calculation - Harmony Dream EA v1.8.8 Hotfix 2
+## แผนแก้ไข CloseAveragingPositions - Harmony Dream EA v1.8.8 Hotfix 3
 
 ### สาเหตุของปัญหา:
 
-หลังจาก Hotfix ล่าสุดที่เพิ่ม Grid Level Number (#1, #2...) ใน Comment:
+หลังจาก Hotfix ที่เพิ่ม Grid Level Number (#1, #2...) ใน Comment:
 
-| ฟังก์ชัน | Comment ที่ค้นหา | Comment จริงใน Order |
-|----------|-----------------|----------------------|
-| `UpdatePairProfits()` | `XU-XE_GL_BUY_20` | `XU-XE_GL#1_BUY_20` |
-| `GetAveragingProfit()` | StringFind(...) | **ไม่เจอ!** |
+| ฟังก์ชัน | Pattern ที่ค้นหา | Comment จริงใน Order | ผลลัพธ์ |
+|----------|------------------|----------------------|---------|
+| `CloseAveragingPositions` | `XU-XE_GL_BUY_20` | `XU-XE_GL#1_BUY_20` | **ไม่เจอ!** |
+| `CloseAveragingPositions` | `XU-XE_GP_BUY_20` | `XU-XE_GP#5_BUY_20` | **ไม่เจอ!** |
 
-**ผลลัพธ์:** Grid Order ทั้งหมดไม่ถูกนับเข้า Floating P/L ทำให้ Dashboard แสดงค่าผิด
+**ผลลัพธ์:** Grid Order ทั้งหมดไม่ถูกปิดแม้ถึง Group Target → Dashboard reset แล้ว แต่ positions ยังค้างใน Trade tab!
 
 ---
 
@@ -20,83 +20,56 @@
 
 แทนที่จะค้นหา `XU-XE_GL_BUY_20` (ซึ่ง match แค่ format เก่า)
 
-เปลี่ยนเป็นค้นหา **Base Prefix + Side + Pair** โดยไม่สนใจ # number:
-- ใช้ Pattern: `XU-XE_GL` (สำหรับ Grid Loss) หรือ `XU-XE_GP` (สำหรับ Grid Profit)
-- รวมกับ Pattern: `_BUY_20` หรือ `_SELL_20`
+เปลี่ยนเป็นค้นหา **Base Prefix + Side Suffix** แยกกัน:
+- Prefix: `XU-XE_GL` หรือ `XU-XE_GP`
+- Suffix: `_BUY_20` หรือ `_SELL_20`
 - Match ทั้ง `XU-XE_GL_BUY_20` (เก่า) และ `XU-XE_GL#1_BUY_20` (ใหม่)
 
 ---
 
-#### 1. แก้ไข UpdatePairProfits() - Buy Side (บรรทัด 7540-7552)
+#### 1. แก้ไข CloseAveragingPositions() (บรรทัด 7044-7046)
 
 **เดิม:**
 ```mql5
-// v1.8.7: Add grid positions profit using NEW comment format
-string glBuyComment = StringFormat("%s_GL_BUY_%d", pairPrefix, i + 1);
-string gpBuyComment = StringFormat("%s_GP_BUY_%d", pairPrefix, i + 1);
-buyProfit += GetAveragingProfit(glBuyComment);
-buyProfit += GetAveragingProfit(gpBuyComment);
+// v1.8.7: New format comments with pair abbreviation
+string commentGLNew = StringFormat("%s_GL_%s_%d", pairPrefix, side, pairIndex + 1);
+string commentGPNew = StringFormat("%s_GP_%s_%d", pairPrefix, side, pairIndex + 1);
 ```
 
 **แก้ไขเป็น:**
 ```mql5
-// v1.8.8 HF2: Use flexible pattern that matches both old and new format
+// v1.8.8 HF3: Use prefix + suffix pattern to match BOTH old and new formats
 // Old: XU-XE_GL_BUY_20  |  New: XU-XE_GL#1_BUY_20
-// Strategy: Search for prefix AND side suffix separately
 string glPrefix = StringFormat("%s_GL", pairPrefix);
 string gpPrefix = StringFormat("%s_GP", pairPrefix);
-string buySuffix = StringFormat("_BUY_%d", i + 1);
-
-buyProfit += GetAveragingProfitWithSuffix(glPrefix, buySuffix);
-buyProfit += GetAveragingProfitWithSuffix(gpPrefix, buySuffix);
+string sideSuffix = StringFormat("_%s_%d", side, pairIndex + 1);
 ```
 
 ---
 
-#### 2. แก้ไข UpdatePairProfits() - Sell Side (บรรทัด 7582-7594)
+#### 2. แก้ไขเงื่อนไข Matching (บรรทัด 7069-7075)
 
-**แก้ไขเหมือนกัน:**
+**เดิม:**
 ```mql5
-string glPrefix = StringFormat("%s_GL", pairPrefix);
-string gpPrefix = StringFormat("%s_GP", pairPrefix);
-string sellSuffix = StringFormat("_SELL_%d", i + 1);
-
-sellProfit += GetAveragingProfitWithSuffix(glPrefix, sellSuffix);
-sellProfit += GetAveragingProfitWithSuffix(gpPrefix, sellSuffix);
+if((posSymbol == symbolA || posSymbol == symbolB) &&
+   (StringFind(posComment, commentGLNew) >= 0 || 
+    StringFind(posComment, commentGPNew) >= 0 ||
+    StringFind(posComment, commentGLOld) >= 0 || 
+    StringFind(posComment, commentGPOld) >= 0 ||
+    StringFind(posComment, commentAVGOld) >= 0))
 ```
 
----
-
-#### 3. เพิ่มฟังก์ชันใหม่: GetAveragingProfitWithSuffix()
-
+**แก้ไขเป็น:**
 ```mql5
-//+------------------------------------------------------------------+
-//| v1.8.8 HF2: Get profit from positions matching prefix AND suffix  |
-//| Matches both old format (GL_BUY) and new format (GL#1_BUY)        |
-//+------------------------------------------------------------------+
-double GetAveragingProfitWithSuffix(string prefix, string suffix)
-{
-   double totalProfit = 0;
-   
-   for(int i = PositionsTotal() - 1; i >= 0; i--)
-   {
-      if(PositionSelectByTicket(PositionGetTicket(i)))
-      {
-         string comment = PositionGetString(POSITION_COMMENT);
-         
-         // Check if comment contains BOTH prefix AND suffix
-         if(StringFind(comment, prefix) >= 0 && StringFind(comment, suffix) >= 0)
-         {
-            // v1.4: Include COMMISSION for Net Profit
-            totalProfit += PositionGetDouble(POSITION_PROFIT) + 
-                           PositionGetDouble(POSITION_SWAP) + 
-                           PositionGetDouble(POSITION_COMMISSION);
-         }
-      }
-   }
-   
-   return totalProfit;
-}
+// v1.8.8 HF3: Match prefix + suffix pattern (supports both old and new #N format)
+bool matchGLNew = StringFind(posComment, glPrefix) >= 0 && StringFind(posComment, sideSuffix) >= 0;
+bool matchGPNew = StringFind(posComment, gpPrefix) >= 0 && StringFind(posComment, sideSuffix) >= 0;
+
+if((posSymbol == symbolA || posSymbol == symbolB) &&
+   (matchGLNew || matchGPNew ||
+    StringFind(posComment, commentGLOld) >= 0 || 
+    StringFind(posComment, commentGPOld) >= 0 ||
+    StringFind(posComment, commentAVGOld) >= 0))
 ```
 
 ---
@@ -105,25 +78,32 @@ double GetAveragingProfitWithSuffix(string prefix, string suffix)
 
 | ไฟล์ | การเปลี่ยนแปลง |
 |------|----------------|
-| `public/docs/mql5/Harmony_Dream_EA.mq5` | เพิ่ม `GetAveragingProfitWithSuffix()` + แก้ไข `UpdatePairProfits()` ให้ใช้ Prefix/Suffix matching |
+| `public/docs/mql5/Harmony_Dream_EA.mq5` | แก้ไข `CloseAveragingPositions()` ให้ใช้ Prefix/Suffix matching |
 
 ---
 
 ### ผลลัพธ์ที่คาดหวัง:
 
-**Comment Matching:**
+**Comment Matching เมื่อปิด Grid:**
 ```text
-Prefix: "XU-XE_GL"  +  Suffix: "_BUY_20"
+glPrefix: "XU-XE_GL"  +  sideSuffix: "_BUY_20"
 
-✅ Match: "XU-XE_GL_BUY_20"      (เก่า)
+✅ Match: "XU-XE_GL_BUY_20"      (เก่า - ถ้ามี)
 ✅ Match: "XU-XE_GL#1_BUY_20"    (ใหม่)
 ✅ Match: "XU-XE_GL#2_BUY_20"    (ใหม่)
 ✅ Match: "XU-XE_GL#99_BUY_20"   (ใหม่)
+
+gpPrefix: "XU-XE_GP"  +  sideSuffix: "_BUY_20"
+
+✅ Match: "XU-XE_GP_BUY_20"      (เก่า - ถ้ามี)
+✅ Match: "XU-XE_GP#1_BUY_20"    (ใหม่)
+✅ Match: "XU-XE_GP#5_BUY_20"    (ใหม่)
 ```
 
-**Dashboard:**
-- Floating P/L จะคำนวณถูกต้องโดยนับรวม Grid Order ทั้งหมด
-- Group Info จะแสดงค่า Float ที่ถูกต้อง
+**Behavior หลังแก้ไข:**
+- เมื่อ Group Target ถึง → CloseBuySide/CloseSellSide ถูกเรียก
+- CloseAveragingPositions จะปิด Grid Orders ทั้งหมด (รวม #1, #2, #3...)
+- Trade Tab จะว่างเปล่าหลังปิด Group
 
 ---
 
@@ -133,4 +113,14 @@ Prefix: "XU-XE_GL"  +  Suffix: "_BUY_20"
 - Entry Mode Logic
 - Grid Distance/Lot Calculation
 - Total Basket System
-- Legacy HrmDream_ comment support (ยังคงใช้ GetAveragingProfit เดิมได้)
+- Floating P/L calculation (แก้ไขไปแล้วใน HF2)
+- Legacy HrmDream_ comment support (ยังคงใช้งานได้)
+
+---
+
+### หมายเหตุทางเทคนิค:
+
+การแก้ไขนี้ใช้หลักการเดียวกับ `GetAveragingProfitWithSuffix()` ที่เพิ่มใน Hotfix 2:
+- ไม่ค้นหา exact match ของ comment ทั้งหมด
+- ค้นหา prefix (ส่วนหัว) และ suffix (ส่วนท้าย) แยกกัน
+- วิธีนี้จะ match ได้ทุก format ไม่ว่าจะมี `#N` อยู่ตรงกลางหรือไม่ก็ตาม
