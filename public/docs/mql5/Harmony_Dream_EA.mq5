@@ -812,6 +812,9 @@ double g_basketClosedProfit = 0;      // Total across all groups (for stats disp
 double g_basketFloatingProfit = 0;    // Total floating across all groups
 double g_basketTotalProfit = 0;       // Total profit across all groups
 
+// v1.8.7 HF2: Accumulated profit from groups that have already closed their targets
+double g_accumulatedBasketProfit = 0;   // Preserved when individual group closes
+
 // === v3.6.0 HF3 Patch 3: Separate Flags for Different Purposes ===
 bool   g_orphanCheckPaused = false;   // Pause orphan check during any position closing operation
 
@@ -7451,7 +7454,8 @@ void CheckTotalTarget()
       g_basketFloatingProfit += g_groups[g].floatingProfit;
    }
    
-   g_basketTotalProfit = g_basketClosedProfit + g_basketFloatingProfit;
+   // v1.8.7 HF2: Include accumulated profit from already-closed groups
+   g_basketTotalProfit = g_accumulatedBasketProfit + g_basketClosedProfit + g_basketFloatingProfit;
    
    // === v1.8.7: Check Total Basket Target (ALL GROUPS) ===
    if(InpEnableTotalBasket && InpTotalBasketTarget > 0)
@@ -7483,6 +7487,10 @@ void CheckTotalTarget()
             g_groups[grp].closeMode = false;
             ResetGroupProfit(grp);
          }
+         
+         // v1.8.7 HF2: Reset accumulated basket after closing all groups
+         g_accumulatedBasketProfit = 0;
+         PrintFormat(">>> TOTAL BASKET RESET: Accumulated = 0 <<<");
          
          g_orphanCheckPaused = false;
          PrintFormat(">>> TOTAL BASKET CLOSE COMPLETE <<<");
@@ -7556,7 +7564,12 @@ void CheckTotalTarget()
          g_groups[g].closeMode = false;
          g_orphanCheckPaused = false;
          
-         // Reset this group's profit
+         // v1.8.7 HF2: Accumulate this group's closed profit to basket BEFORE reset
+         double groupRealizedProfit = g_groups[g].closedProfit + g_groups[g].floatingProfit;
+         g_accumulatedBasketProfit += groupRealizedProfit;
+         
+         PrintFormat(">>> GROUP %d REALIZED: $%.2f | Accumulated Basket: $%.2f <<<",
+                     g + 1, groupRealizedProfit, g_accumulatedBasketProfit);
          PrintFormat(">>> GROUP %d RESET: Previous Closed %.2f | New: 0.00 <<<",
                      g + 1, g_groups[g].closedProfit);
          ResetGroupProfit(g);
@@ -7597,6 +7610,12 @@ void CloseGroupOrders(int groupIdx)
    
    g_groups[groupIdx].closeMode = false;
    g_orphanCheckPaused = false;
+   
+   // v1.8.7 HF2: Accumulate this group's profit before reset
+   double groupRealizedProfit = g_groups[groupIdx].closedProfit + g_groups[groupIdx].floatingProfit;
+   g_accumulatedBasketProfit += groupRealizedProfit;
+   PrintFormat(">>> GROUP %d MANUAL CLOSE: Realized $%.2f | Accumulated: $%.2f <<<",
+               groupIdx + 1, groupRealizedProfit, g_accumulatedBasketProfit);
    
    // Reset group's profit after manual close
    ResetGroupProfit(groupIdx);
@@ -7962,7 +7981,9 @@ void CreateAccountSummary(string prefix, int y)
    CreateLabel(prefix + "V_TPL", box1X + 230, y + 22, "0.00", COLOR_PROFIT, 10, "Arial Bold");
    
    CreateLabel(prefix + "L_TTG", box1X + 155, y + 40, "Total Target:", COLOR_TEXT_LABEL, 8, "Arial");
-   CreateEditField(prefix + "_TOTAL_TARGET", box1X + 230, y + 38, 50, 16, DoubleToString(g_totalTarget, 0));
+   // v1.8.7 HF2: Show InpTotalBasketTarget value (user-defined)
+   double displayTarget = InpEnableTotalBasket ? InpTotalBasketTarget : g_totalTarget;
+   CreateEditField(prefix + "_TOTAL_TARGET", box1X + 230, y + 38, 60, 16, DoubleToString(displayTarget, 0));
    
    // === BOX 2: STATUS ===
    int box2X = startX + boxWidth + gap;
@@ -8195,14 +8216,16 @@ void UpdateDashboard()
    UpdateLabel(prefix + "V_EQ", DoubleToString(equity, 2), equity >= balance ? COLOR_PROFIT : COLOR_LOSS);
    UpdateLabel(prefix + "V_MG", DoubleToString(margin, 2), COLOR_TEXT_WHITE);
    
-   // v3.6.0 HF2: Show Basket info instead of floating P/L
-   double basketNeed = g_totalTarget - g_basketClosedProfit;
+   // v1.8.7 HF2: Show Basket including accumulated profit from closed groups
+   double displayBasket = g_accumulatedBasketProfit + g_basketClosedProfit;
+   double displayTarget = InpEnableTotalBasket ? InpTotalBasketTarget : g_totalTarget;
+   double basketNeed = displayTarget - displayBasket;
    if(basketNeed < 0) basketNeed = 0;
    
-   // If Basket Target is enabled, show Basket Closed; otherwise show Floating P/L
-   if(g_totalTarget > 0)
+   // If Basket Target is enabled, show Basket (with accumulated); otherwise show Floating P/L
+   if(displayTarget > 0)
    {
-      UpdateLabel(prefix + "V_TPL", DoubleToString(g_basketClosedProfit, 2), g_basketClosedProfit >= 0 ? COLOR_PROFIT : COLOR_LOSS);
+      UpdateLabel(prefix + "V_TPL", DoubleToString(displayBasket, 2), displayBasket >= 0 ? COLOR_PROFIT : COLOR_LOSS);
       UpdateLabel(prefix + "L_TPL", "Basket:", COLOR_TEXT_WHITE);  // Update label text
    }
    else
