@@ -6614,6 +6614,10 @@ bool OpenBuySideTrade(int pairIndex)
    g_pairs[pairIndex].lastGridLotBuyA = lotA;
    g_pairs[pairIndex].lastGridLotBuyB = lotB;
    
+   // v1.8.8 HF5: Initialize Grid Profit lots to main entry lot (GP#1 will multiply from this)
+   g_pairs[pairIndex].lastProfitGridLotBuyA = lotA;
+   g_pairs[pairIndex].lastProfitGridLotBuyB = lotB;
+   
    // v3.6.0: Store initial entry price for Grid Profit Side
    g_pairs[pairIndex].initialEntryPriceBuy = SymbolInfoDouble(symbolA, SYMBOL_ASK);
    g_pairs[pairIndex].lastProfitPriceBuy = 0;
@@ -6792,6 +6796,10 @@ bool OpenSellSideTrade(int pairIndex)
    // v3.5.3 HF1: Initialize Last Grid Lots for Compounding (first level = main entry lot)
    g_pairs[pairIndex].lastGridLotSellA = lotA;
    g_pairs[pairIndex].lastGridLotSellB = lotB;
+   
+   // v1.8.8 HF5: Initialize Grid Profit lots to main entry lot (GP#1 will multiply from this)
+   g_pairs[pairIndex].lastProfitGridLotSellA = lotA;
+   g_pairs[pairIndex].lastProfitGridLotSellB = lotB;
    
    // v3.6.0: Store initial entry price for Grid Profit Side
    g_pairs[pairIndex].initialEntryPriceSell = SymbolInfoDouble(symbolA, SYMBOL_BID);
