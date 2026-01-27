@@ -7041,9 +7041,11 @@ void CloseAveragingPositions(int pairIndex, string side)
    // v1.8.7: Get dynamic pair prefix for new comment format
    string pairPrefix = GetPairCommentPrefix(pairIndex);
    
-   // v1.8.7: New format comments with pair abbreviation
-   string commentGLNew = StringFormat("%s_GL_%s_%d", pairPrefix, side, pairIndex + 1);
-   string commentGPNew = StringFormat("%s_GP_%s_%d", pairPrefix, side, pairIndex + 1);
+   // v1.8.8 HF3: Use prefix + suffix pattern to match BOTH old and new formats
+   // Old: XU-XE_GL_BUY_20  |  New: XU-XE_GL#1_BUY_20
+   string glPrefix = StringFormat("%s_GL", pairPrefix);
+   string gpPrefix = StringFormat("%s_GP", pairPrefix);
+   string sideSuffix = StringFormat("_%s_%d", side, pairIndex + 1);
    
    // Legacy format comments (backward compatibility)
    string commentGLOld = StringFormat("HrmDream_GL_%s_%d", side, pairIndex + 1);
@@ -7066,10 +7068,13 @@ void CloseAveragingPositions(int pairIndex, string side)
          string posSymbol = PositionGetString(POSITION_SYMBOL);
          string posComment = PositionGetString(POSITION_COMMENT);
          
+         // v1.8.8 HF3: Match prefix + suffix pattern (supports both old and new #N format)
+         bool matchGLNew = StringFind(posComment, glPrefix) >= 0 && StringFind(posComment, sideSuffix) >= 0;
+         bool matchGPNew = StringFind(posComment, gpPrefix) >= 0 && StringFind(posComment, sideSuffix) >= 0;
+         
          // Match symbol AND any of the grid comments (both new and legacy formats)
          if((posSymbol == symbolA || posSymbol == symbolB) &&
-            (StringFind(posComment, commentGLNew) >= 0 || 
-             StringFind(posComment, commentGPNew) >= 0 ||
+            (matchGLNew || matchGPNew ||
              StringFind(posComment, commentGLOld) >= 0 || 
              StringFind(posComment, commentGPOld) >= 0 ||
              StringFind(posComment, commentAVGOld) >= 0))
