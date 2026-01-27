@@ -4,7 +4,7 @@
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "1.84"
+#property version   "1.85"
 #property strict
 #property description "Harmony Dream - Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
@@ -230,6 +230,15 @@ enum ENUM_LOT_PROGRESSION
 };
 
 //+------------------------------------------------------------------+
+//| THEME MODE ENUM (v1.8.5)                                           |
+//+------------------------------------------------------------------+
+enum ENUM_THEME_MODE
+{
+   THEME_DARK = 0,    // Dark Mode (Default)
+   THEME_LIGHT        // Light Mode
+};
+
+//+------------------------------------------------------------------+
 //| INPUT PARAMETERS                                                   |
 //+------------------------------------------------------------------+
 input group "=== Trading Settings ==="
@@ -394,18 +403,6 @@ input int      InpPanelWidth = 1200;            // Dashboard Width
 input int      InpPanelHeight = 820;            // Dashboard Height (for 30 pairs)
 input int      InpRowHeight = 18;               // Row Height per Pair
 input int      InpFontSize = 8;                 // Font Size
-
-input group "=== Dashboard Colors (v1.8.3 Modern Dark Theme) ==="
-input color    InpColorBgDark = C'18,24,38';        // Background Color (Dark Navy)
-input color    InpColorRowOdd = C'28,36,52';        // Row Color (Odd - Dark Slate)
-input color    InpColorRowEven = C'22,30,46';       // Row Color (Even - Darker Slate)
-input color    InpColorHeaderMain = C'45,55,90';    // Header Main Color (Muted Indigo)
-input color    InpColorHeaderBuy = C'15,75,135';    // Header Buy Color (Deep Blue)
-input color    InpColorHeaderSell = C'135,45,55';   // Header Sell Color (Deep Red)
-input color    InpColorProfit = C'50,205,100';      // Profit Color (Bright Green)
-input color    InpColorLoss = C'235,70,80';         // Loss Color (Coral Red)
-input color    InpColorOn = C'0,200,120';           // Status On Color (Teal Green)
-input color    InpColorOff = C'90,100,120';         // Status Off Color (Cool Gray)
 
 input group "=== Fast Backtest Settings (v3.3.0) ==="
 input bool     InpFastBacktest = true;              // Enable Fast Backtest Mode
@@ -606,6 +603,9 @@ input bool     InpEnableNewsFilter = true;      // Enable News Filter
 input int      InpNewsBeforeMinutes = 30;       // Minutes Before News
 input int      InpNewsAfterMinutes = 30;        // Minutes After News
 
+input group "=== Dashboard Theme (v1.8.5) ==="
+input ENUM_THEME_MODE InpThemeMode = THEME_DARK;    // Dashboard Theme
+
 //+------------------------------------------------------------------+
 //| LICENSE STATUS ENUM (v3.6.5)                                       |
 //+------------------------------------------------------------------+
@@ -715,7 +715,7 @@ int g_weeklyClosedOrders = 0;
 int g_monthlyClosedOrders = 0;
 int g_allTimeClosedOrders = 0;
 
-// Dashboard Colors (from inputs)
+// Dashboard Colors (from theme - v1.8.5)
 color COLOR_BG_DARK;
 color COLOR_BG_ROW_ODD;
 color COLOR_BG_ROW_EVEN;
@@ -723,15 +723,24 @@ color COLOR_HEADER_MAIN;
 color COLOR_HEADER_BUY;
 color COLOR_HEADER_SELL;
 color COLOR_HEADER_TXT = clrWhite;
-color COLOR_TEXT = C'200,210,225';          // v1.8.3: Light Gray for dark bg
+color COLOR_TEXT;                           // v1.8.5: Theme-based text color
 color COLOR_TEXT_WHITE = clrWhite;
 color COLOR_PROFIT;
 color COLOR_LOSS;
 color COLOR_ON;
 color COLOR_OFF;
-color COLOR_GOLD = C'255,200,60';           // v1.8.3: Warm Gold
-color COLOR_ACTIVE = C'70,160,250';         // v1.8.3: Sky Blue
-color COLOR_BORDER = C'55,65,85';           // v1.8.3: Subtle Border
+color COLOR_GOLD;                           // v1.8.5: Theme-based gold
+color COLOR_ACTIVE;                         // v1.8.5: Theme-based active
+color COLOR_BORDER;                         // v1.8.5: Theme-based border
+
+// v1.8.5: Extended Theme Colors
+color COLOR_TITLE_BG;
+color COLOR_BOX_BG;
+color COLOR_HEADER_GROUP;
+color COLOR_COLHDR_BUY;
+color COLOR_COLHDR_CENTER;
+color COLOR_COLHDR_SELL;
+color COLOR_COLHDR_GROUP;
 
 // Dashboard Dimensions (from inputs)
 int PANEL_X;
@@ -804,6 +813,73 @@ datetime g_lastProfitLogTime = 0;
 int PROFIT_LOG_INTERVAL = 5;  // Log every 5 seconds
 
 //+------------------------------------------------------------------+
+//| v1.8.5: Initialize Theme Colors                                    |
+//+------------------------------------------------------------------+
+void InitializeThemeColors()
+{
+   if(InpThemeMode == THEME_LIGHT)
+   {
+      // === LIGHT MODE COLOR PALETTE ===
+      COLOR_BG_DARK      = C'245,247,250';      // Light Gray Background
+      COLOR_BG_ROW_ODD   = C'255,255,255';      // White
+      COLOR_BG_ROW_EVEN  = C'240,242,245';      // Very Light Gray
+      COLOR_HEADER_MAIN  = C'80,100,140';       // Muted Blue
+      COLOR_HEADER_BUY   = C'30,110,180';       // Professional Blue
+      COLOR_HEADER_SELL  = C'180,50,60';        // Professional Red
+      COLOR_PROFIT       = C'0,150,80';         // Dark Green
+      COLOR_LOSS         = C'200,40,50';        // Dark Red
+      COLOR_ON           = C'0,160,100';        // Teal Green
+      COLOR_OFF          = C'140,145,155';      // Medium Gray
+      
+      // Additional Light Mode colors
+      COLOR_TEXT         = C'30,35,45';         // Dark Text
+      COLOR_GOLD         = C'200,150,0';        // Dark Gold
+      COLOR_ACTIVE       = C'30,120,200';       // Blue
+      COLOR_BORDER       = C'200,205,215';      // Light Border
+      COLOR_HEADER_TXT   = clrWhite;            // Keep white for headers
+      
+      // Extended colors for Dashboard elements
+      COLOR_TITLE_BG     = C'74,96,128';        // Slate Blue
+      COLOR_BOX_BG       = C'232,235,240';      // Subtle Gray
+      COLOR_HEADER_GROUP = C'107,90,133';       // Muted Purple
+      COLOR_COLHDR_BUY   = C'30,110,180';       // Professional Blue
+      COLOR_COLHDR_CENTER= C'80,100,140';       // Muted Blue
+      COLOR_COLHDR_SELL  = C'180,50,60';        // Professional Red
+      COLOR_COLHDR_GROUP = C'90,75,110';        // Light Purple
+   }
+   else  // THEME_DARK (Default)
+   {
+      // === DARK MODE COLOR PALETTE (v1.8.3) ===
+      COLOR_BG_DARK      = C'18,24,38';         // Dark Navy
+      COLOR_BG_ROW_ODD   = C'28,36,52';         // Dark Slate
+      COLOR_BG_ROW_EVEN  = C'22,30,46';         // Darker Slate
+      COLOR_HEADER_MAIN  = C'45,55,90';         // Muted Indigo
+      COLOR_HEADER_BUY   = C'15,75,135';        // Deep Blue
+      COLOR_HEADER_SELL  = C'135,45,55';        // Deep Red
+      COLOR_PROFIT       = C'50,205,100';       // Bright Green
+      COLOR_LOSS         = C'235,70,80';        // Coral Red
+      COLOR_ON           = C'0,200,120';        // Teal Green
+      COLOR_OFF          = C'90,100,120';       // Cool Gray
+      
+      // Additional Dark Mode colors
+      COLOR_TEXT         = C'200,210,225';      // Light Gray
+      COLOR_GOLD         = C'255,200,60';       // Warm Gold
+      COLOR_ACTIVE       = C'70,160,250';       // Sky Blue
+      COLOR_BORDER       = C'55,65,85';         // Subtle Border
+      COLOR_HEADER_TXT   = clrWhite;            // White headers
+      
+      // Extended colors for Dashboard elements
+      COLOR_TITLE_BG     = C'25,45,70';         // Dark Blue
+      COLOR_BOX_BG       = C'28,35,50';         // Dark Box
+      COLOR_HEADER_GROUP = C'65,50,95';         // Purple
+      COLOR_COLHDR_BUY   = C'20,60,100';        // Darker Blue
+      COLOR_COLHDR_CENTER= C'35,42,58';         // Dark Center
+      COLOR_COLHDR_SELL  = C'100,45,50';        // Dark Red
+      COLOR_COLHDR_GROUP = C'50,40,70';         // Dark Purple
+   }
+}
+
+//+------------------------------------------------------------------+
 //| v3.3.0: Get Z-Score Timeframe (independent from Correlation)       |
 //+------------------------------------------------------------------+
 ENUM_TIMEFRAMES GetZScoreTimeframe()
@@ -846,17 +922,8 @@ int OnInit()
       }
    }
    
-   // Initialize dashboard colors from inputs
-   COLOR_BG_DARK = InpColorBgDark;
-   COLOR_BG_ROW_ODD = InpColorRowOdd;
-   COLOR_BG_ROW_EVEN = InpColorRowEven;
-   COLOR_HEADER_MAIN = InpColorHeaderMain;
-   COLOR_HEADER_BUY = InpColorHeaderBuy;
-   COLOR_HEADER_SELL = InpColorHeaderSell;
-   COLOR_PROFIT = InpColorProfit;
-   COLOR_LOSS = InpColorLoss;
-   COLOR_ON = InpColorOn;
-   COLOR_OFF = InpColorOff;
+   // v1.8.5: Initialize theme colors
+   InitializeThemeColors();
    
    // Dashboard dimensions
    PANEL_X = InpPanelX;
@@ -7321,7 +7388,7 @@ void CreateDashboard()
    
    // v3.7.3: Add EA Title Row with centered title + EA Status + Pause button
    int titleHeight = 22;
-   CreateRectangle(prefix + "TITLE_BG", PANEL_X, PANEL_Y, PANEL_WIDTH, titleHeight, C'25,45,70', C'25,45,70');
+   CreateRectangle(prefix + "TITLE_BG", PANEL_X, PANEL_Y, PANEL_WIDTH, titleHeight, COLOR_TITLE_BG, COLOR_TITLE_BG);
    
    // v3.7.3: Center the title using manual centering approach
    ObjectCreate(0, prefix + "TITLE_NAME", OBJ_LABEL, 0, 0, 0);
@@ -7329,7 +7396,7 @@ void CreateDashboard()
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_XDISTANCE, PANEL_X + (PANEL_WIDTH / 2));
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_YDISTANCE, PANEL_Y + 4);
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_ANCHOR, ANCHOR_UPPER);
-   ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_TEXT, "Harmony Dream EA v1.8.4");
+   ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_TEXT, "Harmony Dream EA v1.8.5");
    ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_FONT, "Arial Bold");
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_FONTSIZE, 10);
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_COLOR, COLOR_GOLD);
@@ -7388,16 +7455,16 @@ void CreateDashboard()
    CreateRectangle(prefix + "HDR_SELL", sellStartX, headerY + 3, sellWidth, headerHeight, COLOR_HEADER_SELL, COLOR_HEADER_SELL);
    CreateLabel(prefix + "HDR_SELL_TXT", sellStartX + 165, headerY + 8, "SELL DATA", COLOR_HEADER_TXT, 10, "Arial Bold");
    
-   // v1.1: Group Info Header (v1.8.3: Updated colors)
-   CreateRectangle(prefix + "HDR_GROUP", groupInfoX, headerY + 3, groupInfoWidth, headerHeight, C'65,50,95', C'65,50,95');
+   // v1.1: Group Info Header (v1.8.5: Theme-based colors)
+   CreateRectangle(prefix + "HDR_GROUP", groupInfoX, headerY + 3, groupInfoWidth, headerHeight, COLOR_HEADER_GROUP, COLOR_HEADER_GROUP);
    CreateLabel(prefix + "HDR_GROUP_TXT", groupInfoX + 15, headerY + 8, "GROUP INFO", COLOR_HEADER_TXT, 10, "Arial Bold");
    
-   // ===== COLUMN HEADER BACKGROUNDS (v1.8.3: Modern Dark Theme) =====
-   CreateRectangle(prefix + "COLHDR_BUY_BG", buyStartX, colHeaderY - 1, buyWidth, colHeaderHeight, C'20,60,100', C'20,60,100');
-   CreateRectangle(prefix + "COLHDR_CENTER_BG", centerX, colHeaderY - 1, centerWidth, colHeaderHeight, C'35,42,58', C'35,42,58');
-   CreateRectangle(prefix + "COLHDR_SELL_BG", sellStartX, colHeaderY - 1, sellWidth, colHeaderHeight, C'100,45,50', C'100,45,50');
-   // v1.1: Group Info Column Header Background (v1.8.3: Updated)
-   CreateRectangle(prefix + "COLHDR_GROUP_BG", groupInfoX, colHeaderY - 1, groupInfoWidth, colHeaderHeight, C'50,40,70', C'50,40,70');
+   // ===== COLUMN HEADER BACKGROUNDS (v1.8.5: Theme-based colors) =====
+   CreateRectangle(prefix + "COLHDR_BUY_BG", buyStartX, colHeaderY - 1, buyWidth, colHeaderHeight, COLOR_COLHDR_BUY, COLOR_COLHDR_BUY);
+   CreateRectangle(prefix + "COLHDR_CENTER_BG", centerX, colHeaderY - 1, centerWidth, colHeaderHeight, COLOR_COLHDR_CENTER, COLOR_COLHDR_CENTER);
+   CreateRectangle(prefix + "COLHDR_SELL_BG", sellStartX, colHeaderY - 1, sellWidth, colHeaderHeight, COLOR_COLHDR_SELL, COLOR_COLHDR_SELL);
+   // v1.1: Group Info Column Header Background (v1.8.5: Theme-based)
+   CreateRectangle(prefix + "COLHDR_GROUP_BG", groupInfoX, colHeaderY - 1, groupInfoWidth, colHeaderHeight, COLOR_COLHDR_GROUP, COLOR_COLHDR_GROUP);
    
    // ===== COLUMN HEADERS (v3.2.9: Labels on top of backgrounds) =====
    int colLabelY = colHeaderY + 2;  // Center text vertically in column header row
@@ -7555,7 +7622,7 @@ void CreateAccountSummary(string prefix, int y)
    
    // === BOX 1: DETAIL ===
    int box1X = startX;
-   CreateRectangle(prefix + "BOX1_BG", box1X, y, boxWidth, boxHeight, C'28,35,50', COLOR_BORDER);
+   CreateRectangle(prefix + "BOX1_BG", box1X, y, boxWidth, boxHeight, COLOR_BOX_BG, COLOR_BORDER);
    CreateLabel(prefix + "BOX1_HDR", box1X + 10, y + 5, "DETAIL", COLOR_GOLD, 9, "Arial Bold");
    
    CreateLabel(prefix + "L_BAL", box1X + 10, y + 22, "Balance:", COLOR_TEXT_WHITE, 8, "Arial");
@@ -7575,7 +7642,7 @@ void CreateAccountSummary(string prefix, int y)
    
    // === BOX 2: STATUS ===
    int box2X = startX + boxWidth + gap;
-   CreateRectangle(prefix + "BOX2_BG", box2X, y, boxWidth, boxHeight, C'28,35,50', COLOR_BORDER);
+   CreateRectangle(prefix + "BOX2_BG", box2X, y, boxWidth, boxHeight, COLOR_BOX_BG, COLOR_BORDER);
    CreateLabel(prefix + "BOX2_HDR", box2X + 10, y + 5, "STATUS", COLOR_GOLD, 9, "Arial Bold");
    
    CreateLabel(prefix + "L_TLOT", box2X + 10, y + 22, "Total Lot:", COLOR_TEXT_WHITE, 8, "Arial");
@@ -7600,7 +7667,7 @@ void CreateAccountSummary(string prefix, int y)
    
    // === BOX 3: HISTORY LOT (v3.3.0 - with Closed Orders) ===
    int box3X = startX + 2 * (boxWidth + gap);
-   CreateRectangle(prefix + "BOX3_BG", box3X, y, boxWidth, boxHeight, C'28,35,50', COLOR_BORDER);
+   CreateRectangle(prefix + "BOX3_BG", box3X, y, boxWidth, boxHeight, COLOR_BOX_BG, COLOR_BORDER);
    CreateLabel(prefix + "BOX3_HDR", box3X + 10, y + 5, "HISTORY LOT", COLOR_GOLD, 9, "Arial Bold");
    
    // v3.3.0: Format: "Lot (Orders)"
@@ -7631,7 +7698,7 @@ void CreateAccountSummary(string prefix, int y)
    
    // === BOX 4: HISTORY PROFIT ===
    int box4X = startX + 3 * (boxWidth + gap);
-   CreateRectangle(prefix + "BOX4_BG", box4X, y, boxWidth, boxHeight, C'28,35,50', COLOR_BORDER);
+   CreateRectangle(prefix + "BOX4_BG", box4X, y, boxWidth, boxHeight, COLOR_BOX_BG, COLOR_BORDER);
    CreateLabel(prefix + "BOX4_HDR", box4X + 10, y + 5, "HISTORY PROFIT", COLOR_GOLD, 9, "Arial Bold");
    
    CreateLabel(prefix + "L_DP", box4X + 10, y + 22, "Daily:", COLOR_TEXT_WHITE, 8, "Arial");
