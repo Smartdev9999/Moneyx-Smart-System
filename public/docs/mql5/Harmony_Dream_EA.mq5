@@ -1,10 +1,10 @@
 //+------------------------------------------------------------------+
 //|                                         Harmony_Dream_EA.mq5     |
-//|                      Harmony Dream (Pairs Trading) v1.7.0        |
+//|                      Harmony Dream (Pairs Trading) v1.8.8        |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "1.87"
+#property version   "1.88"
 #property strict
 #property description "Harmony Dream - Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
@@ -236,6 +236,15 @@ enum ENUM_THEME_MODE
 {
    THEME_DARK = 0,    // Dark Mode (Default)
    THEME_LIGHT        // Light Mode
+};
+
+//+------------------------------------------------------------------+
+//| ENTRY MODE ENUM (v1.8.8)                                           |
+//+------------------------------------------------------------------+
+enum ENUM_ENTRY_MODE
+{
+   ENTRY_MODE_ZSCORE = 0,        // Z-Score Based (Original)
+   ENTRY_MODE_CORRELATION_ONLY   // Correlation Only (No Z-Score)
 };
 
 //+------------------------------------------------------------------+
@@ -605,6 +614,11 @@ input int      InpNewsAfterMinutes = 30;        // Minutes After News
 
 input group "=== Dashboard Theme (v1.8.5) ==="
 input ENUM_THEME_MODE InpThemeMode = THEME_DARK;    // Dashboard Theme
+
+input group "=== Entry Mode Settings (v1.8.8) ==="
+input ENUM_ENTRY_MODE InpEntryMode = ENTRY_MODE_ZSCORE;    // Entry Mode
+input double   InpCorrOnlyPositiveThreshold = 0.60;        // Correlation Only: Positive Threshold (0.60 = 60%)
+input double   InpCorrOnlyNegativeThreshold = -0.60;       // Correlation Only: Negative Threshold (-0.60 = -60%)
 
 input group "=== Total Basket Target (v1.8.7) ==="
 input bool     InpEnableTotalBasket = false;        // Enable Total Basket Close (All Groups)
@@ -4977,7 +4991,145 @@ bool CheckGridTradingAllowed(int pairIndex, string side, string &pauseReason)
 }
 
 //+------------------------------------------------------------------+
-//| Analyze All Pairs for Trading Signals (v3.5.2)                     |
+//| Check Entry for Correlation Only Mode (v1.8.8)                     |
+//| Returns: true = Correlation อยู่ในเกณฑ์ที่กำหนด                       |
+//+------------------------------------------------------------------+
+bool CheckCorrelationOnlyEntry(int pairIndex)
+{
+   double corr = g_pairs[pairIndex].correlation;
+   int corrType = g_pairs[pairIndex].correlationType;
+   
+   // Positive Correlation: Corr >= Threshold (e.g., >= 0.60)
+   if(corrType == 1)
+   {
+      return (corr >= InpCorrOnlyPositiveThreshold);
+   }
+   // Negative Correlation: Corr <= Threshold (e.g., <= -0.60)
+   else
+   {
+      return (corr <= InpCorrOnlyNegativeThreshold);
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Determine Trade Direction for Correlation Only Mode (v1.8.8)       |
+//| Returns: "BUY" = Open BUY Side (Buy A + action on B)               |
+//|          "SELL" = Open SELL Side (Sell A + action on B)            |
+//|          "" = No valid direction (CDC not ready or conditions fail)|
+//+------------------------------------------------------------------+
+string DetermineTradeDirectionForCorrOnly(int pairIndex)
+{
+   int corrType = g_pairs[pairIndex].correlationType;
+   string trendA = g_pairs[pairIndex].cdcTrendA;
+   string trendB = g_pairs[pairIndex].cdcTrendB;
+   
+   // Check CDC data is ready
+   if(!g_pairs[pairIndex].cdcReadyA || !g_pairs[pairIndex].cdcReadyB)
+      return "";
+   
+   // Skip if either trend is NEUTRAL
+   if(trendA == "NEUTRAL" || trendB == "NEUTRAL")
+      return "";
+   
+   // === POSITIVE CORRELATION ===
+   // Both symbols should have SAME trend
+   // CDC Up (Both Bullish) → BUY Side (Buy A, Sell B)
+   // CDC Down (Both Bearish) → SELL Side (Sell A, Buy B)
+   if(corrType == 1)
+   {
+      if(trendA != trendB)
+         return "";  // Positive requires same trend
+      
+      if(trendA == "BULLISH")
+         return "BUY";   // Both Up → Buy A, Sell B
+      else
+         return "SELL";  // Both Down → Sell A, Buy B
+   }
+   
+   // === NEGATIVE CORRELATION ===
+   // Both symbols should have OPPOSITE trends
+   // Use ADX to determine which symbol's trend to follow
+   else
+   {
+      if(trendA == trendB)
+         return "";  // Negative requires opposite trends
+      
+      // Check ADX Winner
+      if(!InpUseADXForNegative)
+      {
+         // Without ADX: Default to following Symbol A's trend
+         return (trendA == "BULLISH") ? "BUY" : "SELL";
+      }
+      
+      double adxA = g_pairs[pairIndex].adxValueA;
+      double adxB = g_pairs[pairIndex].adxValueB;
+      
+      // Determine ADX Winner
+      int adxWinner = -1;  // -1 = none, 0 = A, 1 = B
+      if(adxA > adxB && adxA >= InpADXMinStrength)
+         adxWinner = 0;  // Symbol A wins
+      else if(adxB > adxA && adxB >= InpADXMinStrength)
+         adxWinner = 1;  // Symbol B wins
+      else
+         return "";  // Neither has clear strength - wait
+      
+      // Follow the trend of ADX Winner
+      // Winner = A → follow trendA
+      // Winner = B → follow trendB
+      string winnerTrend = (adxWinner == 0) ? trendA : trendB;
+      
+      // For Negative Correlation:
+      // If Winner's trend is BULLISH → Both should BUY (Buy A + Buy B)
+      // If Winner's trend is BEARISH → Both should SELL (Sell A + Sell B)
+      return (winnerTrend == "BULLISH") ? "BUY" : "SELL";
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Check if Grid Trading is Allowed - Correlation Only Mode (v1.8.8)  |
+//| Returns: true = สามารถออก Grid Order ได้                            |
+//|          false = Pause (Correlation หรือ CDC ไม่ผ่าน)               |
+//| NOTE: ไม่เช็ค Z-Score เลย                                           |
+//+------------------------------------------------------------------+
+bool CheckGridTradingAllowedCorrOnly(int pairIndex, string side, string &pauseReason)
+{
+   pauseReason = "";
+   
+   // === เงื่อนไข 1: Correlation Check (ใช้ InpGridMinCorrelation เหมือนเดิม) ===
+   double absCorr = MathAbs(g_pairs[pairIndex].correlation);
+   if(absCorr < InpGridMinCorrelation)
+   {
+      pauseReason = StringFormat("Corr %.0f%% < %.0f%%", 
+                                 absCorr * 100, InpGridMinCorrelation * 100);
+      
+      if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
+         PrintFormat("GRID PAUSE [CORR ONLY] [Pair %d %s/%s %s]: %s", pairIndex + 1, 
+                     g_pairs[pairIndex].symbolA, g_pairs[pairIndex].symbolB, side, pauseReason);
+      
+      return false;
+   }
+   
+   // === เงื่อนไข 2: CDC Trend Block (v3.5.2) ===
+   if(InpUseCDCTrendFilter)
+   {
+      if(!CheckCDCTrendConfirmation(pairIndex, side))
+      {
+         pauseReason = "CDC BLOCK";
+         
+         if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
+            PrintFormat("GRID PAUSE [CORR ONLY] [Pair %d %s/%s %s]: %s", pairIndex + 1,
+                        g_pairs[pairIndex].symbolA, g_pairs[pairIndex].symbolB, side, pauseReason);
+         
+         return false;
+      }
+   }
+   
+   // ไม่มีเช็ค Z-Score - ผ่านเลย
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| Analyze All Pairs for Trading Signals (v1.8.8)                     |
 //+------------------------------------------------------------------+
 void AnalyzeAllPairs()
 {
@@ -4990,6 +5142,75 @@ void AnalyzeAllPairs()
          continue;
       
       double zScore = g_pairs[i].zScore;
+      
+      // ================================================================
+      // v1.8.8: CORRELATION ONLY MODE
+      // ================================================================
+      if(InpEntryMode == ENTRY_MODE_CORRELATION_ONLY)
+      {
+         // Step 1: Check Correlation Threshold
+         if(!CheckCorrelationOnlyEntry(i))
+            continue;
+         
+         // Step 2: Determine Trade Direction based on CDC + ADX
+         string direction = DetermineTradeDirectionForCorrOnly(i);
+         if(direction == "")
+            continue;
+         
+         // Step 3: Check Grid Guard (Correlation Only version)
+         if(InpGridPauseAffectsMain)
+         {
+            string pauseReason = "";
+            if(!CheckGridTradingAllowedCorrOnly(i, direction, pauseReason))
+               continue;
+         }
+         
+         // Step 4: Check RSI Entry Confirmation (still apply)
+         if(!CheckRSIEntryConfirmation(i, direction))
+            continue;
+         
+         // Step 5: Open Trade based on determined direction
+         if(direction == "BUY")
+         {
+            if(g_pairs[i].directionBuy == -1 && g_pairs[i].orderCountBuy < g_pairs[i].maxOrderBuy)
+            {
+               if(OpenBuySideTrade(i))
+               {
+                  g_pairs[i].directionBuy = 1;
+                  g_pairs[i].entryZScoreBuy = zScore;
+                  g_pairs[i].lastAvgPriceBuy = SymbolInfoDouble(g_pairs[i].symbolA, SYMBOL_ASK);
+                  g_pairs[i].justOpenedMainBuy = true;
+                  PrintFormat("[CORR ONLY] Pair %d OPENED BUY DATA: Corr=%.2f%%, CDC=%s/%s, ADX=%.0f/%.0f",
+                              i + 1, g_pairs[i].correlation * 100,
+                              g_pairs[i].cdcTrendA, g_pairs[i].cdcTrendB,
+                              g_pairs[i].adxValueA, g_pairs[i].adxValueB);
+               }
+            }
+         }
+         else // direction == "SELL"
+         {
+            if(g_pairs[i].directionSell == -1 && g_pairs[i].orderCountSell < g_pairs[i].maxOrderSell)
+            {
+               if(OpenSellSideTrade(i))
+               {
+                  g_pairs[i].directionSell = 1;
+                  g_pairs[i].entryZScoreSell = zScore;
+                  g_pairs[i].lastAvgPriceSell = SymbolInfoDouble(g_pairs[i].symbolA, SYMBOL_BID);
+                  g_pairs[i].justOpenedMainSell = true;
+                  PrintFormat("[CORR ONLY] Pair %d OPENED SELL DATA: Corr=%.2f%%, CDC=%s/%s, ADX=%.0f/%.0f",
+                              i + 1, g_pairs[i].correlation * 100,
+                              g_pairs[i].cdcTrendA, g_pairs[i].cdcTrendB,
+                              g_pairs[i].adxValueA, g_pairs[i].adxValueB);
+               }
+            }
+         }
+         
+         continue;  // Skip Z-Score logic for this pair
+      }
+      
+      // ================================================================
+      // ORIGINAL Z-SCORE MODE (unchanged)
+      // ================================================================
       
       // === BUY SIDE ENTRY ===
       // Condition: directionBuy == -1 (Ready) AND Z-Score < -EntryThreshold
@@ -5060,7 +5281,7 @@ void AnalyzeAllPairs()
 }
 
 //+------------------------------------------------------------------+
-//| Check All Pairs for Grid Loss Side (v3.6.0)                        |
+//| Check All Pairs for Grid Loss Side (v1.8.8)                        |
 //+------------------------------------------------------------------+
 void CheckAllGridLoss()
 {
@@ -5073,48 +5294,60 @@ void CheckAllGridLoss()
       // Check Buy Side - Grid Loss (price going DOWN = losing for BUY)
       if(g_pairs[i].directionBuy == 1 && !g_pairs[i].justOpenedMainBuy)
       {
-         // === v3.5.2: Check Grid Trading Guard for BUY Side ===
+         // === v1.8.8: Check Grid Trading Guard based on Entry Mode ===
          string pauseReasonBuy = "";
-         if(!CheckGridTradingAllowed(i, "BUY", pauseReasonBuy))
+         bool gridAllowed = false;
+         if(InpEntryMode == ENTRY_MODE_ZSCORE)
+            gridAllowed = CheckGridTradingAllowed(i, "BUY", pauseReasonBuy);
+         else
+            gridAllowed = CheckGridTradingAllowedCorrOnly(i, "BUY", pauseReasonBuy);
+         
+         if(!gridAllowed)
          {
             // BUY Grid is PAUSED
          }
          else
          {
-         // v1.6: Unified Max Order Check (Hard Cap + Sub-Limit)
-         int totalOrders = GetTotalOrderCount(i, "BUY");
-         bool hardCapOK = totalOrders < g_pairs[i].maxOrderBuy;
-         bool subLimitOK = g_pairs[i].avgOrderCountBuy < InpMaxGridLossOrders;
-         
-         if(hardCapOK && subLimitOK)
-         {
-            CheckGridLossForSide(i, "BUY");
+            // v1.6: Unified Max Order Check (Hard Cap + Sub-Limit)
+            int totalOrders = GetTotalOrderCount(i, "BUY");
+            bool hardCapOK = totalOrders < g_pairs[i].maxOrderBuy;
+            bool subLimitOK = g_pairs[i].avgOrderCountBuy < InpMaxGridLossOrders;
+            
+            if(hardCapOK && subLimitOK)
+            {
+               CheckGridLossForSide(i, "BUY");
+            }
          }
       }
-   }
-   
-   // Check Sell Side - Grid Loss (price going UP = losing for SELL)
-   if(g_pairs[i].directionSell == 1 && !g_pairs[i].justOpenedMainSell)
-   {
-      // === v3.5.2: Check Grid Trading Guard for SELL Side ===
-      string pauseReasonSell = "";
-      if(!CheckGridTradingAllowed(i, "SELL", pauseReasonSell))
+      
+      // Check Sell Side - Grid Loss (price going UP = losing for SELL)
+      if(g_pairs[i].directionSell == 1 && !g_pairs[i].justOpenedMainSell)
       {
-         // SELL Grid is PAUSED
-      }
-      else
-      {
-         // v1.6: Unified Max Order Check (Hard Cap + Sub-Limit)
-         int totalOrders = GetTotalOrderCount(i, "SELL");
-         bool hardCapOK = totalOrders < g_pairs[i].maxOrderSell;
-         bool subLimitOK = g_pairs[i].avgOrderCountSell < InpMaxGridLossOrders;
+         // === v1.8.8: Check Grid Trading Guard based on Entry Mode ===
+         string pauseReasonSell = "";
+         bool gridAllowed = false;
+         if(InpEntryMode == ENTRY_MODE_ZSCORE)
+            gridAllowed = CheckGridTradingAllowed(i, "SELL", pauseReasonSell);
+         else
+            gridAllowed = CheckGridTradingAllowedCorrOnly(i, "SELL", pauseReasonSell);
          
-         if(hardCapOK && subLimitOK)
+         if(!gridAllowed)
          {
-            CheckGridLossForSide(i, "SELL");
+            // SELL Grid is PAUSED
+         }
+         else
+         {
+            // v1.6: Unified Max Order Check (Hard Cap + Sub-Limit)
+            int totalOrders = GetTotalOrderCount(i, "SELL");
+            bool hardCapOK = totalOrders < g_pairs[i].maxOrderSell;
+            bool subLimitOK = g_pairs[i].avgOrderCountSell < InpMaxGridLossOrders;
+            
+            if(hardCapOK && subLimitOK)
+            {
+               CheckGridLossForSide(i, "SELL");
+            }
          }
       }
-   }
    }
 }
 
@@ -5213,7 +5446,7 @@ void CheckGridLossZScore(int pairIndex, string side)
 }
 
 //+------------------------------------------------------------------+
-//| Check All Pairs for Grid Profit Side (v3.6.0)                      |
+//| Check All Pairs for Grid Profit Side (v1.8.8)                      |
 //+------------------------------------------------------------------+
 void CheckAllGridProfit()
 {
@@ -5226,28 +5459,50 @@ void CheckAllGridProfit()
       // Check BUY Side - Profit Grid (price going UP = profitable for BUY)
       if(g_pairs[i].directionBuy == 1 && !g_pairs[i].justOpenedMainBuy)
       {
-         // v1.6: Unified Max Order Check (Hard Cap + Sub-Limit)
-         int totalOrders = GetTotalOrderCount(i, "BUY");
-         bool hardCapOK = totalOrders < g_pairs[i].maxOrderBuy;
-         bool subLimitOK = g_pairs[i].gridProfitCountBuy < InpMaxGridProfitOrders;
+         // === v1.8.8: Check Grid Trading Guard based on Entry Mode ===
+         string pauseReasonBuy = "";
+         bool gridAllowed = false;
+         if(InpEntryMode == ENTRY_MODE_ZSCORE)
+            gridAllowed = CheckGridTradingAllowed(i, "BUY", pauseReasonBuy);
+         else
+            gridAllowed = CheckGridTradingAllowedCorrOnly(i, "BUY", pauseReasonBuy);
          
-         if(hardCapOK && subLimitOK)
+         if(gridAllowed)
          {
-            CheckGridProfitForSide(i, "BUY");
+            // v1.6: Unified Max Order Check (Hard Cap + Sub-Limit)
+            int totalOrders = GetTotalOrderCount(i, "BUY");
+            bool hardCapOK = totalOrders < g_pairs[i].maxOrderBuy;
+            bool subLimitOK = g_pairs[i].gridProfitCountBuy < InpMaxGridProfitOrders;
+            
+            if(hardCapOK && subLimitOK)
+            {
+               CheckGridProfitForSide(i, "BUY");
+            }
          }
       }
       
       // Check SELL Side - Profit Grid (price going DOWN = profitable for SELL)
       if(g_pairs[i].directionSell == 1 && !g_pairs[i].justOpenedMainSell)
       {
-         // v1.6: Unified Max Order Check (Hard Cap + Sub-Limit)
-         int totalOrders = GetTotalOrderCount(i, "SELL");
-         bool hardCapOK = totalOrders < g_pairs[i].maxOrderSell;
-         bool subLimitOK = g_pairs[i].gridProfitCountSell < InpMaxGridProfitOrders;
+         // === v1.8.8: Check Grid Trading Guard based on Entry Mode ===
+         string pauseReasonSell = "";
+         bool gridAllowed = false;
+         if(InpEntryMode == ENTRY_MODE_ZSCORE)
+            gridAllowed = CheckGridTradingAllowed(i, "SELL", pauseReasonSell);
+         else
+            gridAllowed = CheckGridTradingAllowedCorrOnly(i, "SELL", pauseReasonSell);
          
-         if(hardCapOK && subLimitOK)
+         if(gridAllowed)
          {
-            CheckGridProfitForSide(i, "SELL");
+            // v1.6: Unified Max Order Check (Hard Cap + Sub-Limit)
+            int totalOrders = GetTotalOrderCount(i, "SELL");
+            bool hardCapOK = totalOrders < g_pairs[i].maxOrderSell;
+            bool subLimitOK = g_pairs[i].gridProfitCountSell < InpMaxGridProfitOrders;
+            
+            if(hardCapOK && subLimitOK)
+            {
+               CheckGridProfitForSide(i, "SELL");
+            }
          }
       }
    }
@@ -7730,7 +7985,7 @@ void CreateDashboard()
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_XDISTANCE, PANEL_X + (PANEL_WIDTH / 2));
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_YDISTANCE, PANEL_Y + 4);
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_ANCHOR, ANCHOR_UPPER);
-   ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_TEXT, "Moneyx Harmony Dream v1.8.7");
+   ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_TEXT, "Moneyx Harmony Dream v1.8.8");
    ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_FONT, "Arial Bold");
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_FONTSIZE, 10);
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_COLOR, COLOR_GOLD);
