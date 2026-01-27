@@ -4,7 +4,7 @@
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "1.86"
+#property version   "1.87"
 #property strict
 #property description "Harmony Dream - Pairs Trading Expert Advisor"
 #property description "Full Hedging with Independent Buy/Sell Sides"
@@ -606,6 +606,10 @@ input int      InpNewsAfterMinutes = 30;        // Minutes After News
 input group "=== Dashboard Theme (v1.8.5) ==="
 input ENUM_THEME_MODE InpThemeMode = THEME_DARK;    // Dashboard Theme
 
+input group "=== Total Basket Target (v1.8.7) ==="
+input bool     InpEnableTotalBasket = false;        // Enable Total Basket Close (All Groups)
+input double   InpTotalBasketTarget = 500.0;        // Total Basket Target ($) - Close ALL when hit
+
 //+------------------------------------------------------------------+
 //| LICENSE STATUS ENUM (v3.6.5)                                       |
 //+------------------------------------------------------------------+
@@ -742,6 +746,9 @@ color COLOR_COLHDR_CENTER;
 color COLOR_COLHDR_SELL;
 color COLOR_COLHDR_GROUP;
 
+// v1.8.7: Theme-aware label color for bottom sections
+color COLOR_TEXT_LABEL;
+
 // Dashboard Dimensions (from inputs)
 int PANEL_X;
 int PANEL_Y;
@@ -846,6 +853,9 @@ void InitializeThemeColors()
       COLOR_COLHDR_CENTER= C'80,100,140';       // Muted Blue
       COLOR_COLHDR_SELL  = C'180,50,60';        // Professional Red
       COLOR_COLHDR_GROUP = C'90,75,110';        // Light Purple
+      
+      // v1.8.7: Dark text for light backgrounds (bottom section labels)
+      COLOR_TEXT_LABEL   = C'60,65,75';         // Dark Gray for light backgrounds
    }
    else  // THEME_DARK (Default)
    {
@@ -876,6 +886,9 @@ void InitializeThemeColors()
       COLOR_COLHDR_CENTER= C'35,42,58';         // Dark Center
       COLOR_COLHDR_SELL  = C'100,45,50';        // Dark Red
       COLOR_COLHDR_GROUP = C'50,40,70';         // Dark Purple
+      
+      // v1.8.7: Light text for dark backgrounds (bottom section labels)
+      COLOR_TEXT_LABEL   = C'180,185,195';      // Light Gray for dark backgrounds
    }
 }
 
@@ -2474,6 +2487,24 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
             SyncAccountData(SYNC_SCHEDULED);
             
          PrintFormat("[v1.8.6] Global Pause toggled: %s", g_isPaused ? "PAUSED" : "RUNNING");
+      }
+      // v1.8.7: Close Group button handler
+      else if(StringFind(sparam, prefix + "_CLOSE_GRP_") >= 0)
+      {
+         int grpIdx = (int)StringToInteger(StringSubstr(sparam, StringLen(prefix + "_CLOSE_GRP_")));
+         
+         // Confirmation popup
+         string msg = StringFormat("Close ALL orders in Group %d (Pairs %d-%d)?", 
+                                   grpIdx + 1, grpIdx * PAIRS_PER_GROUP + 1, (grpIdx + 1) * PAIRS_PER_GROUP);
+         int result = MessageBox(msg, "Confirm Close Group", MB_YESNO | MB_ICONWARNING);
+         if(result != IDYES)
+         {
+            ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
+            return;
+         }
+         
+         CloseGroupOrders(grpIdx);
+         ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
       }
    }
    else if(id == CHARTEVENT_OBJECT_ENDEDIT)
@@ -5815,19 +5846,19 @@ void OpenGridLossBuy(int pairIndex)
       UpdateADXForPair(pairIndex);
    }
    
-    // v1.8.6: Build comment with pair abbreviation prefix
+    // v1.8.7: Build comment with pair abbreviation prefix AND set number
     string pairPrefix = GetPairCommentPrefix(pairIndex);
     string comment;
     if(corrType == -1 && InpUseADXForNegative)
     {
-         comment = StringFormat("%s_GL_BUY[ADX:%.0f/%.0f][M:%d]", 
-                                pairPrefix,
+         comment = StringFormat("%s_GL_BUY_%d[ADX:%.0f/%.0f][M:%d]", 
+                                pairPrefix, pairIndex + 1,
                                 g_pairs[pairIndex].adxValueA,
                                 g_pairs[pairIndex].adxValueB, InpMagicNumber);
     }
     else
     {
-       comment = StringFormat("%s_GL_BUY[M:%d]", pairPrefix, InpMagicNumber);
+       comment = StringFormat("%s_GL_BUY_%d[M:%d]", pairPrefix, pairIndex + 1, InpMagicNumber);
     }
    
    // Open Buy on Symbol A
@@ -5901,19 +5932,19 @@ void OpenGridLossSell(int pairIndex)
       UpdateADXForPair(pairIndex);
    }
    
-   // v1.8.6: Build comment with pair abbreviation prefix
+   // v1.8.7: Build comment with pair abbreviation prefix AND set number
    string pairPrefix = GetPairCommentPrefix(pairIndex);
    string comment;
    if(corrType == -1 && InpUseADXForNegative)
    {
-        comment = StringFormat("%s_GL_SELL[ADX:%.0f/%.0f][M:%d]", 
-                               pairPrefix,
+        comment = StringFormat("%s_GL_SELL_%d[ADX:%.0f/%.0f][M:%d]", 
+                               pairPrefix, pairIndex + 1,
                                g_pairs[pairIndex].adxValueA,
                                g_pairs[pairIndex].adxValueB, InpMagicNumber);
    }
    else
    {
-      comment = StringFormat("%s_GL_SELL[M:%d]", pairPrefix, InpMagicNumber);
+      comment = StringFormat("%s_GL_SELL_%d[M:%d]", pairPrefix, pairIndex + 1, InpMagicNumber);
    }
    
    // Open Sell on Symbol A
@@ -5987,19 +6018,19 @@ void OpenGridProfitBuy(int pairIndex)
       UpdateADXForPair(pairIndex);
    }
    
-   // v1.8.6: Build comment with pair abbreviation prefix
+   // v1.8.7: Build comment with pair abbreviation prefix AND set number
    string pairPrefix = GetPairCommentPrefix(pairIndex);
    string comment;
    if(corrType == -1 && InpUseADXForNegative)
    {
-        comment = StringFormat("%s_GP_BUY[ADX:%.0f/%.0f][M:%d]", 
-                               pairPrefix,
+        comment = StringFormat("%s_GP_BUY_%d[ADX:%.0f/%.0f][M:%d]", 
+                               pairPrefix, pairIndex + 1,
                                g_pairs[pairIndex].adxValueA,
                                g_pairs[pairIndex].adxValueB, InpMagicNumber);
    }
    else
    {
-      comment = StringFormat("%s_GP_BUY[M:%d]", pairPrefix, InpMagicNumber);
+      comment = StringFormat("%s_GP_BUY_%d[M:%d]", pairPrefix, pairIndex + 1, InpMagicNumber);
    }
    
    // Open BUY on Symbol A (same direction as Initial)
@@ -6068,19 +6099,19 @@ void OpenGridProfitSell(int pairIndex)
       UpdateADXForPair(pairIndex);
    }
    
-   // v1.8.6: Build comment with pair abbreviation prefix
+   // v1.8.7: Build comment with pair abbreviation prefix AND set number
    string pairPrefix = GetPairCommentPrefix(pairIndex);
    string comment;
    if(corrType == -1 && InpUseADXForNegative)
    {
-        comment = StringFormat("%s_GP_SELL[ADX:%.0f/%.0f][M:%d]", 
-                               pairPrefix,
+        comment = StringFormat("%s_GP_SELL_%d[ADX:%.0f/%.0f][M:%d]", 
+                               pairPrefix, pairIndex + 1,
                                g_pairs[pairIndex].adxValueA,
                                g_pairs[pairIndex].adxValueB, InpMagicNumber);
    }
    else
    {
-      comment = StringFormat("%s_GP_SELL[M:%d]", pairPrefix, InpMagicNumber);
+      comment = StringFormat("%s_GP_SELL_%d[M:%d]", pairPrefix, pairIndex + 1, InpMagicNumber);
    }
    
    // Open SELL on Symbol A
@@ -6201,19 +6232,19 @@ bool OpenBuySideTrade(int pairIndex)
       UpdateADXForPair(pairIndex);
    }
    
-   // v1.8.6: ADX comment with pair abbreviation prefix
+   // v1.8.7: ADX comment with pair abbreviation prefix AND set number
    string pairPrefix = GetPairCommentPrefix(pairIndex);
    string comment;
    if(corrType == -1 && InpUseADXForNegative)
    {
-      comment = StringFormat("%s_BUY[ADX:%.0f/%.0f][M:%d]", 
-                             pairPrefix,
+      comment = StringFormat("%s_BUY_%d[ADX:%.0f/%.0f][M:%d]", 
+                             pairPrefix, pairIndex + 1,
                              g_pairs[pairIndex].adxValueA,
                              g_pairs[pairIndex].adxValueB, InpMagicNumber);
    }
    else
    {
-      comment = StringFormat("%s_BUY[M:%d]", pairPrefix, InpMagicNumber);
+      comment = StringFormat("%s_BUY_%d[M:%d]", pairPrefix, pairIndex + 1, InpMagicNumber);
    }
    
    ulong ticketA = 0;
@@ -6380,19 +6411,19 @@ bool OpenSellSideTrade(int pairIndex)
       UpdateADXForPair(pairIndex);
    }
    
-   // v1.8.6: ADX comment with pair abbreviation prefix
+   // v1.8.7: ADX comment with pair abbreviation prefix AND set number
    string pairPrefix = GetPairCommentPrefix(pairIndex);
    string comment;
    if(corrType == -1 && InpUseADXForNegative)
    {
-      comment = StringFormat("%s_SELL[ADX:%.0f/%.0f][M:%d]", 
-                             pairPrefix,
+      comment = StringFormat("%s_SELL_%d[ADX:%.0f/%.0f][M:%d]", 
+                             pairPrefix, pairIndex + 1,
                              g_pairs[pairIndex].adxValueA,
                              g_pairs[pairIndex].adxValueB, InpMagicNumber);
    }
    else
    {
-      comment = StringFormat("%s_SELL[M:%d]", pairPrefix, InpMagicNumber);
+      comment = StringFormat("%s_SELL_%d[M:%d]", pairPrefix, pairIndex + 1, InpMagicNumber);
    }
    
    ulong ticketA = 0;
@@ -6745,10 +6776,17 @@ void CloseAveragingPositions(int pairIndex, string side)
    string symbolA = g_pairs[pairIndex].symbolA;
    string symbolB = g_pairs[pairIndex].symbolB;
    
-   // v3.6.0: Close all grid orders - Grid Loss, Grid Profit, and old AVG format
-   string commentGL = StringFormat("HrmDream_GL_%s_%d", side, pairIndex + 1);
-   string commentGP = StringFormat("HrmDream_GP_%s_%d", side, pairIndex + 1);
-   string commentAVG = StringFormat("HrmDream_AVG_%s_%d", side, pairIndex + 1);  // Legacy support
+   // v1.8.7: Get dynamic pair prefix for new comment format
+   string pairPrefix = GetPairCommentPrefix(pairIndex);
+   
+   // v1.8.7: New format comments with pair abbreviation
+   string commentGLNew = StringFormat("%s_GL_%s_%d", pairPrefix, side, pairIndex + 1);
+   string commentGPNew = StringFormat("%s_GP_%s_%d", pairPrefix, side, pairIndex + 1);
+   
+   // Legacy format comments (backward compatibility)
+   string commentGLOld = StringFormat("HrmDream_GL_%s_%d", side, pairIndex + 1);
+   string commentGPOld = StringFormat("HrmDream_GP_%s_%d", side, pairIndex + 1);
+   string commentAVGOld = StringFormat("HrmDream_AVG_%s_%d", side, pairIndex + 1);
    
    int closeAttempts = 0;
    int maxAttempts = 10;  // Prevent infinite loop
@@ -6766,11 +6804,13 @@ void CloseAveragingPositions(int pairIndex, string side)
          string posSymbol = PositionGetString(POSITION_SYMBOL);
          string posComment = PositionGetString(POSITION_COMMENT);
          
-         // Match symbol AND any of the grid comments
+         // Match symbol AND any of the grid comments (both new and legacy formats)
          if((posSymbol == symbolA || posSymbol == symbolB) &&
-            (StringFind(posComment, commentGL) >= 0 || 
-             StringFind(posComment, commentGP) >= 0 ||
-             StringFind(posComment, commentAVG) >= 0))
+            (StringFind(posComment, commentGLNew) >= 0 || 
+             StringFind(posComment, commentGPNew) >= 0 ||
+             StringFind(posComment, commentGLOld) >= 0 || 
+             StringFind(posComment, commentGPOld) >= 0 ||
+             StringFind(posComment, commentAVGOld) >= 0))
          {
             if(g_trade.PositionClose(ticket))
             {
@@ -7211,12 +7251,15 @@ void UpdatePairProfits()
       // Calculate Buy side profit
       if(g_pairs[i].directionBuy == 1)
       {
-         // v1.3: Auto-recover missing tickets before calculating profit
+         // v1.8.7: Get dynamic pair prefix for new comment format
+         string pairPrefix = GetPairCommentPrefix(i);
+         
+         // v1.8.7: Auto-recover missing tickets with NEW comment format
          if(g_pairs[i].ticketBuyA == 0 || g_pairs[i].ticketBuyB == 0)
          {
-            PrintFormat("[v1.3 WARN] Pair %d BUY: Missing ticket! A=%d B=%d - Attempting recovery...", 
+            PrintFormat("[v1.8.7 WARN] Pair %d BUY: Missing ticket! A=%d B=%d - Attempting recovery...", 
                         i + 1, g_pairs[i].ticketBuyA, g_pairs[i].ticketBuyB);
-            string buyComment = StringFormat("HrmDream_BUY_%d", i + 1);
+            string buyComment = StringFormat("%s_BUY_%d", pairPrefix, i + 1);
             RecoverMissingTickets(i, "BUY", buyComment);
          }
          
@@ -7232,29 +7275,33 @@ void UpdatePairProfits()
                         g_pairs[i].ticketBuyB, profitB, buyProfit);
          }
          
-         // v3.6.0 HF2: Add ALL grid positions profit
-         // Legacy Averaging (backward compatibility)
-         string avgBuyComment = StringFormat("HrmDream_AVG_BUY_%d", i + 1);
-         buyProfit += GetAveragingProfit(avgBuyComment);
-         
-         // Grid Loss positions
-         string glBuyComment = StringFormat("HrmDream_GL_BUY_%d", i + 1);
+         // v1.8.7: Add grid positions profit using NEW comment format
+         string glBuyComment = StringFormat("%s_GL_BUY_%d", pairPrefix, i + 1);
+         string gpBuyComment = StringFormat("%s_GP_BUY_%d", pairPrefix, i + 1);
          buyProfit += GetAveragingProfit(glBuyComment);
-         
-         // Grid Profit positions
-         string gpBuyComment = StringFormat("HrmDream_GP_BUY_%d", i + 1);
          buyProfit += GetAveragingProfit(gpBuyComment);
+         
+         // Legacy support: Also check old HrmDream_ format for backward compatibility
+         string legacyAVGBuy = StringFormat("HrmDream_AVG_BUY_%d", i + 1);
+         string legacyGLBuy = StringFormat("HrmDream_GL_BUY_%d", i + 1);
+         string legacyGPBuy = StringFormat("HrmDream_GP_BUY_%d", i + 1);
+         buyProfit += GetAveragingProfit(legacyAVGBuy);
+         buyProfit += GetAveragingProfit(legacyGLBuy);
+         buyProfit += GetAveragingProfit(legacyGPBuy);
       }
       
       // Calculate Sell side profit
       if(g_pairs[i].directionSell == 1)
       {
-         // v1.3: Auto-recover missing tickets before calculating profit
+         // v1.8.7: Get dynamic pair prefix for new comment format
+         string pairPrefix = GetPairCommentPrefix(i);
+         
+         // v1.8.7: Auto-recover missing tickets with NEW comment format
          if(g_pairs[i].ticketSellA == 0 || g_pairs[i].ticketSellB == 0)
          {
-            PrintFormat("[v1.3 WARN] Pair %d SELL: Missing ticket! A=%d B=%d - Attempting recovery...", 
+            PrintFormat("[v1.8.7 WARN] Pair %d SELL: Missing ticket! A=%d B=%d - Attempting recovery...", 
                         i + 1, g_pairs[i].ticketSellA, g_pairs[i].ticketSellB);
-            string sellComment = StringFormat("HrmDream_SELL_%d", i + 1);
+            string sellComment = StringFormat("%s_SELL_%d", pairPrefix, i + 1);
             RecoverMissingTickets(i, "SELL", sellComment);
          }
          
@@ -7270,18 +7317,19 @@ void UpdatePairProfits()
                         g_pairs[i].ticketSellB, profitB, sellProfit);
          }
          
-         // v3.6.0 HF2: Add ALL grid positions profit
-         // Legacy Averaging (backward compatibility)
-         string avgSellComment = StringFormat("HrmDream_AVG_SELL_%d", i + 1);
-         sellProfit += GetAveragingProfit(avgSellComment);
-         
-         // Grid Loss positions
-         string glSellComment = StringFormat("HrmDream_GL_SELL_%d", i + 1);
+         // v1.8.7: Add grid positions profit using NEW comment format
+         string glSellComment = StringFormat("%s_GL_SELL_%d", pairPrefix, i + 1);
+         string gpSellComment = StringFormat("%s_GP_SELL_%d", pairPrefix, i + 1);
          sellProfit += GetAveragingProfit(glSellComment);
-         
-         // Grid Profit positions
-         string gpSellComment = StringFormat("HrmDream_GP_SELL_%d", i + 1);
          sellProfit += GetAveragingProfit(gpSellComment);
+         
+         // Legacy support: Also check old HrmDream_ format for backward compatibility
+         string legacyAVGSell = StringFormat("HrmDream_AVG_SELL_%d", i + 1);
+         string legacyGLSell = StringFormat("HrmDream_GL_SELL_%d", i + 1);
+         string legacyGPSell = StringFormat("HrmDream_GP_SELL_%d", i + 1);
+         sellProfit += GetAveragingProfit(legacyAVGSell);
+         sellProfit += GetAveragingProfit(legacyGLSell);
+         sellProfit += GetAveragingProfit(legacyGPSell);
       }
       
       g_pairs[i].profitBuy = buyProfit;
@@ -7405,6 +7453,43 @@ void CheckTotalTarget()
    
    g_basketTotalProfit = g_basketClosedProfit + g_basketFloatingProfit;
    
+   // === v1.8.7: Check Total Basket Target (ALL GROUPS) ===
+   if(InpEnableTotalBasket && InpTotalBasketTarget > 0)
+   {
+      if(g_basketTotalProfit >= InpTotalBasketTarget)
+      {
+         PrintFormat(">>> TOTAL BASKET TARGET REACHED: $%.2f >= $%.2f <<<", 
+                     g_basketTotalProfit, InpTotalBasketTarget);
+         PrintFormat(">>> Closing ALL Groups... <<<");
+         
+         g_orphanCheckPaused = true;
+         
+         // Close all groups
+         for(int grp = 0; grp < MAX_GROUPS; grp++)
+         {
+            g_groups[grp].closeMode = true;
+            
+            int startPairG = grp * PAIRS_PER_GROUP;
+            int endPairG = startPairG + PAIRS_PER_GROUP;
+            
+            for(int pi = startPairG; pi < endPairG && pi < MAX_PAIRS; pi++)
+            {
+               if(g_pairs[pi].directionBuy == 1)
+                  CloseBuySide(pi);
+               if(g_pairs[pi].directionSell == 1)
+                  CloseSellSide(pi);
+            }
+            
+            g_groups[grp].closeMode = false;
+            ResetGroupProfit(grp);
+         }
+         
+         g_orphanCheckPaused = false;
+         PrintFormat(">>> TOTAL BASKET CLOSE COMPLETE <<<");
+         return;  // Skip per-group checks after total basket close
+      }
+   }
+   
    // 2. Check each group's target independently
    for(int g = 0; g < MAX_GROUPS; g++)
    {
@@ -7478,6 +7563,44 @@ void CheckTotalTarget()
          PrintFormat(">>> GROUP %d: Ready for new cycle <<<", g + 1);
       }
    }
+}
+
+//+------------------------------------------------------------------+
+//| v1.8.7: Close Group Orders (Manual Close Group button)             |
+//+------------------------------------------------------------------+
+void CloseGroupOrders(int groupIdx)
+{
+   g_orphanCheckPaused = true;
+   g_groups[groupIdx].closeMode = true;
+   
+   int startPair = groupIdx * PAIRS_PER_GROUP;
+   int endPair = startPair + PAIRS_PER_GROUP;
+   
+   PrintFormat(">>> MANUAL CLOSE: Group %d (Pairs %d-%d) <<<", 
+               groupIdx + 1, startPair + 1, endPair);
+   
+   for(int i = startPair; i < endPair && i < MAX_PAIRS; i++)
+   {
+      if(g_pairs[i].directionBuy == 1)
+      {
+         PrintFormat(">>> GROUP %d: Closing Pair %d BUY (Floating: %.2f)", 
+                     groupIdx + 1, i + 1, g_pairs[i].profitBuy);
+         CloseBuySide(i);
+      }
+      if(g_pairs[i].directionSell == 1)
+      {
+         PrintFormat(">>> GROUP %d: Closing Pair %d SELL (Floating: %.2f)", 
+                     groupIdx + 1, i + 1, g_pairs[i].profitSell);
+         CloseSellSide(i);
+      }
+   }
+   
+   g_groups[groupIdx].closeMode = false;
+   g_orphanCheckPaused = false;
+   
+   // Reset group's profit after manual close
+   ResetGroupProfit(groupIdx);
+   PrintFormat(">>> GROUP %d MANUAL CLOSE COMPLETE <<<", groupIdx + 1);
 }
 
 //+------------------------------------------------------------------+
@@ -7588,7 +7711,7 @@ void CreateDashboard()
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_XDISTANCE, PANEL_X + (PANEL_WIDTH / 2));
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_YDISTANCE, PANEL_Y + 4);
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_ANCHOR, ANCHOR_UPPER);
-   ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_TEXT, "Moneyx Harmony Dream v1.8.6");
+   ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_TEXT, "Moneyx Harmony Dream v1.8.7");
    ObjectSetString(0, prefix + "TITLE_NAME", OBJPROP_FONT, "Arial Bold");
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_FONTSIZE, 10);
    ObjectSetInteger(0, prefix + "TITLE_NAME", OBJPROP_COLOR, COLOR_GOLD);
@@ -7783,22 +7906,31 @@ void CreatePairRow(string prefix, int idx, int buyX, int centerX, int sellX, int
    CreateLabel(prefix + "P" + idxStr + "_S_CLOSED", sellX + 340, y + 3, "0", COLOR_TEXT, FONT_SIZE, "Arial");  // Closed P/L
    CreateButton(prefix + "_CLOSE_SELL_" + idxStr, sellX + 375, y + 2, 16, 14, "X", clrRed, clrWhite);
    
-   // === v1.1: GROUP INFO COLUMN (Display only on first pair of each group) ===
+   // === v1.8.7: GROUP INFO COLUMN - Vertical Layout (Display only on first pair of each group) ===
    if(idx % PAIRS_PER_GROUP == 0)
    {
       int gIdx = idx / PAIRS_PER_GROUP;
-      string grpStr = "G" + IntegerToString(gIdx + 1);
+      string gIdxStr = IntegerToString(gIdx);
       
-      // Group Label
-      CreateLabel(prefix + "G" + IntegerToString(gIdx) + "_LBL", groupInfoX + 5, y + 3, grpStr, COLOR_GOLD, 8, "Arial Bold");
+      // v1.8.7: Vertical layout - Group header
+      CreateLabel(prefix + "G" + gIdxStr + "_HDR", groupInfoX + 5, y + 2, "Group " + IntegerToString(gIdx + 1), COLOR_GOLD, 8, "Arial Bold");
       
-      // Target - v1.6.6: Display real-time scaled target
+      // Floating P/L row
+      CreateLabel(prefix + "G" + gIdxStr + "_L_FLT", groupInfoX + 5, y + 16, "Float:", COLOR_TEXT_LABEL, 7, "Arial");
+      CreateLabel(prefix + "G" + gIdxStr + "_V_FLT", groupInfoX + 40, y + 16, "$0", COLOR_PROFIT, 8, "Arial Bold");
+      
+      // Closed P/L row
+      CreateLabel(prefix + "G" + gIdxStr + "_L_CL", groupInfoX + 5, y + 30, "Closed:", COLOR_TEXT_LABEL, 7, "Arial");
+      CreateLabel(prefix + "G" + gIdxStr + "_V_CL", groupInfoX + 48, y + 30, "$0", COLOR_PROFIT, 8, "Arial Bold");
+      
+      // Target row - v1.6.6: Display real-time scaled target
       double scaledTarget = GetRealTimeScaledClosedTarget(gIdx);
       string tgtStr = (scaledTarget > 0) ? "$" + DoubleToString(scaledTarget, 0) : "-";
-      CreateLabel(prefix + "G" + IntegerToString(gIdx) + "_TGT", groupInfoX + 35, y + 3, tgtStr, COLOR_TEXT_WHITE, 8, "Arial");
+      CreateLabel(prefix + "G" + gIdxStr + "_L_TGT", groupInfoX + 5, y + 44, "Target:", COLOR_TEXT_LABEL, 7, "Arial");
+      CreateLabel(prefix + "G" + gIdxStr + "_V_TGT", groupInfoX + 45, y + 44, tgtStr, COLOR_GOLD, 8, "Arial");
       
-      // Closed P/L (accumulated)
-      CreateLabel(prefix + "G" + IntegerToString(gIdx) + "_CL", groupInfoX + 80, y + 3, "$0", COLOR_PROFIT, 8, "Arial Bold");
+      // v1.8.7: Close Group button
+      CreateButton(prefix + "_CLOSE_GRP_" + gIdxStr, groupInfoX + 5, y + 58, 70, 14, "Close Grp", COLOR_HEADER_SELL, clrWhite);
    }
 }
 
@@ -7817,19 +7949,19 @@ void CreateAccountSummary(string prefix, int y)
    CreateRectangle(prefix + "BOX1_BG", box1X, y, boxWidth, boxHeight, COLOR_BOX_BG, COLOR_BORDER);
    CreateLabel(prefix + "BOX1_HDR", box1X + 10, y + 5, "DETAIL", COLOR_GOLD, 9, "Arial Bold");
    
-   CreateLabel(prefix + "L_BAL", box1X + 10, y + 22, "Balance:", COLOR_TEXT_WHITE, 8, "Arial");
+   CreateLabel(prefix + "L_BAL", box1X + 10, y + 22, "Balance:", COLOR_TEXT_LABEL, 8, "Arial");
    CreateLabel(prefix + "V_BAL", box1X + 80, y + 22, "0.00", COLOR_PROFIT, 9, "Arial Bold");
    
-   CreateLabel(prefix + "L_EQ", box1X + 10, y + 38, "Equity:", COLOR_TEXT_WHITE, 8, "Arial");
+   CreateLabel(prefix + "L_EQ", box1X + 10, y + 38, "Equity:", COLOR_TEXT_LABEL, 8, "Arial");
    CreateLabel(prefix + "V_EQ", box1X + 80, y + 38, "0.00", COLOR_PROFIT, 9, "Arial Bold");
    
-   CreateLabel(prefix + "L_MG", box1X + 10, y + 54, "Margin:", COLOR_TEXT_WHITE, 8, "Arial");
-   CreateLabel(prefix + "V_MG", box1X + 80, y + 54, "0.00", COLOR_TEXT_WHITE, 9, "Arial");
+   CreateLabel(prefix + "L_MG", box1X + 10, y + 54, "Margin:", COLOR_TEXT_LABEL, 8, "Arial");
+   CreateLabel(prefix + "V_MG", box1X + 80, y + 54, "0.00", COLOR_TEXT_LABEL, 9, "Arial");
    
-   CreateLabel(prefix + "L_TPL", box1X + 155, y + 22, "Current P/L:", COLOR_TEXT_WHITE, 8, "Arial");
+   CreateLabel(prefix + "L_TPL", box1X + 155, y + 22, "Current P/L:", COLOR_TEXT_LABEL, 8, "Arial");
    CreateLabel(prefix + "V_TPL", box1X + 230, y + 22, "0.00", COLOR_PROFIT, 10, "Arial Bold");
    
-   CreateLabel(prefix + "L_TTG", box1X + 155, y + 40, "Total Target:", COLOR_TEXT_WHITE, 8, "Arial");
+   CreateLabel(prefix + "L_TTG", box1X + 155, y + 40, "Total Target:", COLOR_TEXT_LABEL, 8, "Arial");
    CreateEditField(prefix + "_TOTAL_TARGET", box1X + 230, y + 38, 50, 16, DoubleToString(g_totalTarget, 0));
    
    // === BOX 2: STATUS ===
@@ -7837,24 +7969,24 @@ void CreateAccountSummary(string prefix, int y)
    CreateRectangle(prefix + "BOX2_BG", box2X, y, boxWidth, boxHeight, COLOR_BOX_BG, COLOR_BORDER);
    CreateLabel(prefix + "BOX2_HDR", box2X + 10, y + 5, "STATUS", COLOR_GOLD, 9, "Arial Bold");
    
-   CreateLabel(prefix + "L_TLOT", box2X + 10, y + 22, "Total Lot:", COLOR_TEXT_WHITE, 8, "Arial");
-   CreateLabel(prefix + "V_TLOT", box2X + 80, y + 22, "0.00", COLOR_TEXT_WHITE, 9, "Arial");
+   CreateLabel(prefix + "L_TLOT", box2X + 10, y + 22, "Total Lot:", COLOR_TEXT_LABEL, 8, "Arial");
+   CreateLabel(prefix + "V_TLOT", box2X + 80, y + 22, "0.00", COLOR_TEXT_LABEL, 9, "Arial");
    
-   CreateLabel(prefix + "L_TORD", box2X + 10, y + 38, "Total Order:", COLOR_TEXT_WHITE, 8, "Arial");
-   CreateLabel(prefix + "V_TORD", box2X + 85, y + 38, "0", COLOR_TEXT_WHITE, 9, "Arial");
+   CreateLabel(prefix + "L_TORD", box2X + 10, y + 38, "Total Order:", COLOR_TEXT_LABEL, 8, "Arial");
+   CreateLabel(prefix + "V_TORD", box2X + 85, y + 38, "0", COLOR_TEXT_LABEL, 9, "Arial");
    
-   CreateLabel(prefix + "L_DD", box2X + 155, y + 22, "DD%:", COLOR_TEXT_WHITE, 8, "Arial");
+   CreateLabel(prefix + "L_DD", box2X + 155, y + 22, "DD%:", COLOR_TEXT_LABEL, 8, "Arial");
    CreateLabel(prefix + "V_DD", box2X + 195, y + 22, "0.00%", COLOR_LOSS, 9, "Arial Bold");
    
-   CreateLabel(prefix + "L_MDD", box2X + 155, y + 38, "Max DD%:", COLOR_TEXT_WHITE, 8, "Arial");
+   CreateLabel(prefix + "L_MDD", box2X + 155, y + 38, "Max DD%:", COLOR_TEXT_LABEL, 8, "Arial");
    CreateLabel(prefix + "V_MDD", box2X + 215, y + 38, "0.00%", COLOR_LOSS, 9, "Arial Bold");
    
-   CreateLabel(prefix + "L_PAIRS", box2X + 10, y + 54, "Active Pairs:", COLOR_TEXT_WHITE, 8, "Arial");
+   CreateLabel(prefix + "L_PAIRS", box2X + 10, y + 54, "Active Pairs:", COLOR_TEXT_LABEL, 8, "Arial");
    CreateLabel(prefix + "V_PAIRS", box2X + 90, y + 54, IntegerToString(g_activePairs), COLOR_GOLD, 9, "Arial Bold");
    
    // v1.6.5: Show Scale Factor
    string scaleStr = InpEnableAutoScaling ? StringFormat("%.2fx", GetScaleFactor()) : "Off";
-   CreateLabel(prefix + "L_SCALE", box2X + 155, y + 54, "Scale:", COLOR_TEXT_WHITE, 8, "Arial");
+   CreateLabel(prefix + "L_SCALE", box2X + 155, y + 54, "Scale:", COLOR_TEXT_LABEL, 8, "Arial");
    CreateLabel(prefix + "V_SCALE", box2X + 195, y + 54, scaleStr, InpEnableAutoScaling ? COLOR_GOLD : COLOR_OFF, 9, "Arial Bold");
    
    // === BOX 3: HISTORY LOT (v3.3.0 - with Closed Orders) ===
@@ -7863,46 +7995,46 @@ void CreateAccountSummary(string prefix, int y)
    CreateLabel(prefix + "BOX3_HDR", box3X + 10, y + 5, "HISTORY LOT", COLOR_GOLD, 9, "Arial Bold");
    
    // v3.3.0: Format: "Lot (Orders)"
-   CreateLabel(prefix + "L_DLOT", box3X + 10, y + 22, "Daily:", COLOR_TEXT_WHITE, 8, "Arial");
-   CreateLabel(prefix + "V_DLOT", box3X + 55, y + 22, "0.00", COLOR_TEXT_WHITE, 9, "Arial");
+   CreateLabel(prefix + "L_DLOT", box3X + 10, y + 22, "Daily:", COLOR_TEXT_LABEL, 8, "Arial");
+   CreateLabel(prefix + "V_DLOT", box3X + 55, y + 22, "0.00", COLOR_TEXT_LABEL, 9, "Arial");
    CreateLabel(prefix + "V_DORD", box3X + 95, y + 22, "(0)", COLOR_GOLD, 8, "Arial");  // Closed orders
    
-   CreateLabel(prefix + "L_WLOT", box3X + 10, y + 38, "Weekly:", COLOR_TEXT_WHITE, 8, "Arial");
-   CreateLabel(prefix + "V_WLOT", box3X + 55, y + 38, "0.00", COLOR_TEXT_WHITE, 9, "Arial");
+   CreateLabel(prefix + "L_WLOT", box3X + 10, y + 38, "Weekly:", COLOR_TEXT_LABEL, 8, "Arial");
+   CreateLabel(prefix + "V_WLOT", box3X + 55, y + 38, "0.00", COLOR_TEXT_LABEL, 9, "Arial");
    CreateLabel(prefix + "V_WORD", box3X + 95, y + 38, "(0)", COLOR_GOLD, 8, "Arial");  // Closed orders
    
-   CreateLabel(prefix + "L_MLOT", box3X + 145, y + 22, "Monthly:", COLOR_TEXT_WHITE, 8, "Arial");
-   CreateLabel(prefix + "V_MLOT", box3X + 200, y + 22, "0.00", COLOR_TEXT_WHITE, 9, "Arial");
+   CreateLabel(prefix + "L_MLOT", box3X + 145, y + 22, "Monthly:", COLOR_TEXT_LABEL, 8, "Arial");
+   CreateLabel(prefix + "V_MLOT", box3X + 200, y + 22, "0.00", COLOR_TEXT_LABEL, 9, "Arial");
    CreateLabel(prefix + "V_MORD", box3X + 240, y + 22, "(0)", COLOR_GOLD, 8, "Arial");  // Closed orders
    
-   CreateLabel(prefix + "L_ALOT", box3X + 145, y + 38, "All Time:", COLOR_TEXT_WHITE, 8, "Arial");
-   CreateLabel(prefix + "V_ALOT", box3X + 200, y + 38, "0.00", COLOR_TEXT_WHITE, 9, "Arial");
+   CreateLabel(prefix + "L_ALOT", box3X + 145, y + 38, "All Time:", COLOR_TEXT_LABEL, 8, "Arial");
+   CreateLabel(prefix + "V_ALOT", box3X + 200, y + 38, "0.00", COLOR_TEXT_LABEL, 9, "Arial");
    CreateLabel(prefix + "V_AORD", box3X + 240, y + 38, "(0)", COLOR_GOLD, 8, "Arial");  // Closed orders
    
    // v3.6.0: Show Grid Loss Mode
    string gridLossStr = InpEnableGridLoss ? EnumToString(InpGridLossDistMode) : "Off";
    StringReplace(gridLossStr, "GRID_DIST_", "");
-   CreateLabel(prefix + "L_AVG", box3X + 10, y + 54, "GL: " + gridLossStr, COLOR_TEXT_WHITE, 8, "Arial");
+   CreateLabel(prefix + "L_AVG", box3X + 10, y + 54, "GL: " + gridLossStr, COLOR_TEXT_LABEL, 8, "Arial");
    
    // v3.3.0: Show Z-Score TF info
    string zTFStr = EnumToString(GetZScoreTimeframe());
-   CreateLabel(prefix + "L_ZTF", box3X + 145, y + 54, "Z-TF: " + zTFStr, COLOR_TEXT_WHITE, 8, "Arial");
+   CreateLabel(prefix + "L_ZTF", box3X + 145, y + 54, "Z-TF: " + zTFStr, COLOR_TEXT_LABEL, 8, "Arial");
    
    // === BOX 4: HISTORY PROFIT ===
    int box4X = startX + 3 * (boxWidth + gap);
    CreateRectangle(prefix + "BOX4_BG", box4X, y, boxWidth, boxHeight, COLOR_BOX_BG, COLOR_BORDER);
    CreateLabel(prefix + "BOX4_HDR", box4X + 10, y + 5, "HISTORY PROFIT", COLOR_GOLD, 9, "Arial Bold");
    
-   CreateLabel(prefix + "L_DP", box4X + 10, y + 22, "Daily:", COLOR_TEXT_WHITE, 8, "Arial");
+   CreateLabel(prefix + "L_DP", box4X + 10, y + 22, "Daily:", COLOR_TEXT_LABEL, 8, "Arial");
    CreateLabel(prefix + "V_DP", box4X + 55, y + 22, "0.00", COLOR_PROFIT, 9, "Arial Bold");
    
-   CreateLabel(prefix + "L_WP", box4X + 10, y + 38, "Weekly:", COLOR_TEXT_WHITE, 8, "Arial");
+   CreateLabel(prefix + "L_WP", box4X + 10, y + 38, "Weekly:", COLOR_TEXT_LABEL, 8, "Arial");
    CreateLabel(prefix + "V_WP", box4X + 60, y + 38, "0.00", COLOR_PROFIT, 9, "Arial Bold");
    
-   CreateLabel(prefix + "L_MP", box4X + 155, y + 22, "Monthly:", COLOR_TEXT_WHITE, 8, "Arial");
+   CreateLabel(prefix + "L_MP", box4X + 155, y + 22, "Monthly:", COLOR_TEXT_LABEL, 8, "Arial");
    CreateLabel(prefix + "V_MP", box4X + 210, y + 22, "0.00", COLOR_PROFIT, 9, "Arial Bold");
    
-   CreateLabel(prefix + "L_AP", box4X + 155, y + 38, "All Time:", COLOR_TEXT_WHITE, 8, "Arial");
+   CreateLabel(prefix + "L_AP", box4X + 155, y + 38, "All Time:", COLOR_TEXT_LABEL, 8, "Arial");
    CreateLabel(prefix + "V_AP", box4X + 210, y + 38, "0.00", COLOR_PROFIT, 9, "Arial Bold");
    
    // Close All Buttons
@@ -8263,22 +8395,25 @@ void UpdateDashboard()
       }
    }
    
-   // === v1.1: Update Group Info Column (v1.6.6: Real-Time Scaled Targets) ===
+   // === v1.8.7: Update Group Info Column (Vertical Layout) ===
    for(int g = 0; g < MAX_GROUPS; g++)
    {
       string gIdxStr = IntegerToString(g);
       
+      // v1.8.7: Update Floating P/L
+      double grpFloating = g_groups[g].floatingProfit;
+      color fltColor = (grpFloating >= 0) ? COLOR_PROFIT : COLOR_LOSS;
+      UpdateLabel(prefix + "G" + gIdxStr + "_V_FLT", "$" + DoubleToString(grpFloating, 0), fltColor);
+      
+      // v1.8.7: Update Closed P/L
+      double grpClosed = g_groups[g].closedProfit;
+      color clColor = (grpClosed >= 0) ? COLOR_PROFIT : COLOR_LOSS;
+      UpdateLabel(prefix + "G" + gIdxStr + "_V_CL", "$" + DoubleToString(grpClosed, 0), clColor);
+      
       // v1.6.6: Update Group Target with real-time scaled value
       double scaledTarget = GetRealTimeScaledClosedTarget(g);
       string tgtStr = (scaledTarget > 0) ? "$" + DoubleToString(scaledTarget, 0) : "-";
-      UpdateLabel(prefix + "G" + gIdxStr + "_TGT", tgtStr, COLOR_TEXT_WHITE);
-      
-      // Calculate group's closed profit for display
-      double grpClosed = g_groups[g].closedProfit;
-      color grpClosedColor = (grpClosed >= 0) ? COLOR_PROFIT : COLOR_LOSS;
-      string grpClosedStr = "$" + DoubleToString(grpClosed, 0);
-      
-      UpdateLabel(prefix + "G" + gIdxStr + "_CL", grpClosedStr, grpClosedColor);
+      UpdateLabel(prefix + "G" + gIdxStr + "_V_TGT", tgtStr, COLOR_GOLD);
    }
    
    ChartRedraw();
