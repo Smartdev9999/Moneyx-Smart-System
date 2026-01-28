@@ -5,6 +5,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import PasswordChangeCard from '@/components/customer/PasswordChangeCard';
 import { 
   ArrowLeft,
   Settings as SettingsIcon,
@@ -46,6 +47,7 @@ const CustomerSettings = () => {
   const [customerData, setCustomerData] = useState<CustomerData | null>(null);
   const [fundWallets, setFundWallets] = useState<FundWallet[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [userEmail, setUserEmail] = useState<string | null>(null);
 
   useEffect(() => {
     if (!loading && !user) {
@@ -56,6 +58,10 @@ const CustomerSettings = () => {
   useEffect(() => {
     if (user && isApprovedCustomer && customerInfo.customerUuid) {
       fetchData();
+    }
+    // Get user email for password change
+    if (user?.email) {
+      setUserEmail(user.email);
     }
   }, [user, isApprovedCustomer, customerInfo.customerUuid]);
 
@@ -204,6 +210,9 @@ const CustomerSettings = () => {
             </div>
           </CardContent>
         </Card>
+
+        {/* Password Change */}
+        <PasswordChangeCard userEmail={userEmail} />
 
         {/* Fund Wallets */}
         <Card>
