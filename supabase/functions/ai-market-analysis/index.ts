@@ -58,11 +58,27 @@ serve(async (req) => {
   }
 
   try {
-    const apiKey = req.headers.get('x-api-key');
     const expectedKey = Deno.env.get('EA_API_SECRET');
+    // Fail closed if secret not configured or too short
+    if (!expectedKey || expectedKey.length < 16) {
+      console.error('[AI Bias] CRITICAL: EA_API_SECRET not configured or too short');
+      return new Response(
+        JSON.stringify({ success: false, error: 'Server configuration error' }),
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+    
+    const apiKey = req.headers.get('x-api-key');
+    if (!apiKey) {
+      console.log('[AI Bias] Missing API key in request');
+      return new Response(
+        JSON.stringify({ success: false, error: 'Unauthorized' }),
+        { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
     
     if (apiKey !== expectedKey) {
-      console.log('[AI Bias] Unauthorized request');
+      console.log('[AI Bias] Invalid API key');
       return new Response(
         JSON.stringify({ success: false, error: 'Unauthorized' }),
         { status: 401, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
