@@ -249,23 +249,29 @@ const CustomerDetail = () => {
   const fetchLinkedUser = async () => {
     if (!id) return;
     
-    const { data, error } = await supabase
+    // Step 1: Get customer_users record
+    const { data: cuData, error: cuError } = await supabase
       .from('customer_users')
-      .select(`
-        id,
-        user_id,
-        status,
-        approved_at,
-        profiles:user_id (email, full_name)
-      `)
+      .select('id, user_id, status, approved_at')
       .eq('customer_id', id)
       .maybeSingle();
 
-    if (!error && data) {
-      setLinkedUser(data as unknown as LinkedUser);
-    } else {
+    if (cuError || !cuData) {
       setLinkedUser(null);
+      return;
     }
+
+    // Step 2: Get profile data separately (no FK constraint needed)
+    const { data: profileData } = await supabase
+      .from('profiles')
+      .select('email, full_name')
+      .eq('id', cuData.user_id)
+      .maybeSingle();
+
+    setLinkedUser({
+      ...cuData,
+      profiles: profileData || null,
+    } as LinkedUser);
   };
 
   const handleCreateUser = async () => {
