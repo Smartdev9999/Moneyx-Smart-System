@@ -6,10 +6,18 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-api-key',
 };
 
-const EA_API_SECRET = Deno.env.get('EA_API_SECRET');
-
 function validateApiKey(req: Request): boolean {
+  const EA_API_SECRET = Deno.env.get('EA_API_SECRET');
+  // Fail closed if secret not configured or too short
+  if (!EA_API_SECRET || EA_API_SECRET.length < 16) {
+    console.error('[sync-account-data] CRITICAL: EA_API_SECRET not configured or too short');
+    return false;
+  }
   const apiKey = req.headers.get('x-api-key');
+  if (!apiKey) {
+    console.log('[sync-account-data] Missing API key in request');
+    return false;
+  }
   return apiKey === EA_API_SECRET;
 }
 
