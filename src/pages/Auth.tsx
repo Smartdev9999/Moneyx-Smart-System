@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { z } from 'zod';
 import { useAuth } from '@/hooks/useAuth';
 import { Button } from '@/components/ui/button';
@@ -8,24 +9,12 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Loader2, Shield, User, Mail, Lock, Eye, EyeOff } from 'lucide-react';
-
-const loginSchema = z.object({
-  email: z.string().trim().email({ message: "กรุณากรอกอีเมลที่ถูกต้อง" }),
-  password: z.string().min(6, { message: "รหัสผ่านต้องมีอย่างน้อย 6 ตัวอักษร" }),
-});
-
-const signupSchema = z.object({
-  fullName: z.string().trim().min(2, { message: "กรุณากรอกชื่อ-นามสกุล" }).max(100),
-  email: z.string().trim().email({ message: "กรุณากรอกอีเมลที่ถูกต้อง" }),
-  password: z.string().min(6, { message: "รหัสผ่านต้องมีอย่างน้อย 6 ตัวอักษร" }),
-  confirmPassword: z.string(),
-}).refine((data) => data.password === data.confirmPassword, {
-  message: "รหัสผ่านไม่ตรงกัน",
-  path: ["confirmPassword"],
-});
+import { ThemeToggle } from '@/components/ThemeToggle';
+import { LanguageSwitcher } from '@/components/LanguageSwitcher';
 
 const Auth = () => {
   const navigate = useNavigate();
+  const { t } = useTranslation();
   const { signIn, signUp, user, loading, role, isAdmin } = useAuth();
   const [isLoading, setIsLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
@@ -41,6 +30,22 @@ const Auth = () => {
   const [signupEmail, setSignupEmail] = useState('');
   const [signupPassword, setSignupPassword] = useState('');
   const [signupConfirmPassword, setSignupConfirmPassword] = useState('');
+
+  // Dynamic validation schemas with translated messages
+  const loginSchema = z.object({
+    email: z.string().trim().email({ message: t('auth.emailValidation') }),
+    password: z.string().min(6, { message: t('auth.passwordMinLength') }),
+  });
+
+  const signupSchema = z.object({
+    fullName: z.string().trim().min(2, { message: t('auth.fullNameRequired') }).max(100),
+    email: z.string().trim().email({ message: t('auth.emailValidation') }),
+    password: z.string().min(6, { message: t('auth.passwordMinLength') }),
+    confirmPassword: z.string(),
+  }).refine((data) => data.password === data.confirmPassword, {
+    message: t('auth.passwordMismatch'),
+    path: ["confirmPassword"],
+  });
 
   useEffect(() => {
     // Wait for both auth loading and role to be determined
@@ -129,21 +134,27 @@ const Auth = () => {
         <div className="absolute inset-0 bg-gradient-to-b from-primary/5 via-transparent to-transparent" />
         <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[400px] bg-primary/10 rounded-full blur-[120px]" />
         
+        {/* Theme & Language controls */}
+        <div className="absolute top-4 right-4 flex items-center gap-2">
+          <LanguageSwitcher />
+          <ThemeToggle />
+        </div>
+        
         <Card className="w-full max-w-md relative z-10 border-border/50 bg-card/80 backdrop-blur-sm">
           <CardHeader className="text-center">
             <div className="mx-auto w-16 h-16 rounded-2xl bg-green-500/20 flex items-center justify-center mb-4">
               <Mail className="w-8 h-8 text-green-500" />
             </div>
-            <CardTitle className="text-2xl font-bold">สมัครสมาชิกสำเร็จ!</CardTitle>
+            <CardTitle className="text-2xl font-bold">{t('auth.signupSuccess')}</CardTitle>
             <CardDescription className="text-base mt-2">
-              บัญชีของคุณ <span className="font-medium text-foreground">{signupEmail}</span> ถูกสร้างแล้ว
+              {t('auth.accountCreated')} <span className="font-medium text-foreground">{signupEmail}</span>
             </CardDescription>
           </CardHeader>
           <CardContent className="text-center space-y-4">
             <div className="p-4 rounded-lg bg-amber-500/10 border border-amber-500/30">
-              <p className="text-sm text-amber-400 font-medium">⏳ รอการกำหนด Role</p>
+              <p className="text-sm text-amber-400 font-medium">⏳ {t('auth.waitingForRole')}</p>
               <p className="text-sm text-muted-foreground mt-1">
-                กรุณารอ Super Admin กำหนด Role ให้คุณก่อนใช้งานระบบ
+                {t('auth.waitingForRoleDesc')}
               </p>
             </div>
             <Button 
@@ -151,7 +162,7 @@ const Auth = () => {
               className="w-full"
               onClick={() => setShowEmailConfirmation(false)}
             >
-              ไปหน้าเข้าสู่ระบบ
+              {t('auth.goToLogin')}
             </Button>
           </CardContent>
         </Card>
@@ -164,6 +175,12 @@ const Auth = () => {
       <div className="absolute inset-0 bg-gradient-to-b from-primary/5 via-transparent to-transparent" />
       <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[400px] bg-primary/10 rounded-full blur-[120px]" />
       
+      {/* Theme & Language controls */}
+      <div className="absolute top-4 right-4 flex items-center gap-2">
+        <LanguageSwitcher />
+        <ThemeToggle />
+      </div>
+      
       <Card className="w-full max-w-md relative z-10 border-border/50 bg-card/80 backdrop-blur-sm">
         <CardHeader className="text-center">
           <div className="mx-auto w-16 h-16 rounded-2xl bg-primary/20 flex items-center justify-center mb-4">
@@ -171,21 +188,21 @@ const Auth = () => {
           </div>
           <CardTitle className="text-2xl font-bold">Moneyx Admin</CardTitle>
           <CardDescription>
-            ระบบจัดการลูกค้าและ License
+            {t('admin.subtitle')}
           </CardDescription>
         </CardHeader>
         
         <Tabs defaultValue="login" className="w-full">
           <TabsList className="grid w-full grid-cols-2 mx-6" style={{ width: 'calc(100% - 48px)' }}>
-            <TabsTrigger value="login">เข้าสู่ระบบ</TabsTrigger>
-            <TabsTrigger value="signup">สมัครสมาชิก</TabsTrigger>
+            <TabsTrigger value="login">{t('auth.login')}</TabsTrigger>
+            <TabsTrigger value="signup">{t('auth.signup')}</TabsTrigger>
           </TabsList>
           
           <TabsContent value="login">
             <form onSubmit={handleLogin}>
               <CardContent className="space-y-4 pt-4">
                 <div className="space-y-2">
-                  <Label htmlFor="login-email">อีเมล</Label>
+                  <Label htmlFor="login-email">{t('auth.email')}</Label>
                   <div className="relative">
                     <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                     <Input
@@ -201,7 +218,7 @@ const Auth = () => {
                 </div>
                 
                 <div className="space-y-2">
-                  <Label htmlFor="login-password">รหัสผ่าน</Label>
+                  <Label htmlFor="login-password">{t('auth.password')}</Label>
                   <div className="relative">
                     <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                     <Input
@@ -229,10 +246,10 @@ const Auth = () => {
                   {isLoading ? (
                     <>
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      กำลังเข้าสู่ระบบ...
+                      {t('auth.loggingIn')}
                     </>
                   ) : (
-                    "เข้าสู่ระบบ"
+                    t('auth.login')
                   )}
                 </Button>
               </CardFooter>
@@ -243,12 +260,12 @@ const Auth = () => {
             <form onSubmit={handleSignup}>
               <CardContent className="space-y-4 pt-4">
                 <div className="p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-sm">
-                  <p className="text-amber-400 font-medium">⏳ รอการอนุมัติ</p>
-                  <p className="text-muted-foreground mt-1">หลังสมัครสำเร็จ Super Admin จะกำหนด Role ให้คุณ</p>
+                  <p className="text-amber-400 font-medium">⏳ {t('auth.waitingApproval')}</p>
+                  <p className="text-muted-foreground mt-1">{t('auth.afterSignupNote')}</p>
                 </div>
                 
                 <div className="space-y-2">
-                  <Label htmlFor="signup-name">ชื่อ-นามสกุล</Label>
+                  <Label htmlFor="signup-name">{t('auth.fullName')}</Label>
                   <div className="relative">
                     <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                     <Input
@@ -264,7 +281,7 @@ const Auth = () => {
                 </div>
                 
                 <div className="space-y-2">
-                  <Label htmlFor="signup-email">อีเมล</Label>
+                  <Label htmlFor="signup-email">{t('auth.email')}</Label>
                   <div className="relative">
                     <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                     <Input
@@ -280,7 +297,7 @@ const Auth = () => {
                 </div>
                 
                 <div className="space-y-2">
-                  <Label htmlFor="signup-password">รหัสผ่าน</Label>
+                  <Label htmlFor="signup-password">{t('auth.password')}</Label>
                   <div className="relative">
                     <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                     <Input
@@ -303,7 +320,7 @@ const Auth = () => {
                 </div>
                 
                 <div className="space-y-2">
-                  <Label htmlFor="signup-confirm">ยืนยันรหัสผ่าน</Label>
+                  <Label htmlFor="signup-confirm">{t('auth.confirmPassword')}</Label>
                   <div className="relative">
                     <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                     <Input
@@ -324,10 +341,10 @@ const Auth = () => {
                   {isLoading ? (
                     <>
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      กำลังสมัครสมาชิก...
+                      {t('auth.signingUp')}
                     </>
                   ) : (
-                    "สมัครสมาชิก"
+                    t('auth.signup')
                   )}
                 </Button>
               </CardFooter>

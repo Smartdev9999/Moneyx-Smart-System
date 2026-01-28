@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
@@ -8,6 +9,8 @@ import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import TotalAccountHistoryChart from '@/components/TotalAccountHistoryChart';
+import { ThemeToggle } from '@/components/ThemeToggle';
+import { LanguageSwitcher } from '@/components/LanguageSwitcher';
 import { 
   Users, 
   CreditCard, 
@@ -61,6 +64,7 @@ interface MT5AccountData {
 
 const Admin = () => {
   const navigate = useNavigate();
+  const { t } = useTranslation();
   const { user, loading, signOut, isAdmin, isSuperAdmin, role } = useAuth();
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [expiringAccounts, setExpiringAccounts] = useState<ExpiringAccount[]>([]);
@@ -200,15 +204,15 @@ const Admin = () => {
             <div className="mx-auto w-16 h-16 rounded-full bg-destructive/20 flex items-center justify-center mb-4">
               <XCircle className="w-8 h-8 text-destructive" />
             </div>
-            <CardTitle>ไม่มีสิทธิ์เข้าถึง</CardTitle>
+            <CardTitle>{t('admin.noAccess')}</CardTitle>
             <CardDescription>
-              คุณไม่มีสิทธิ์เข้าถึงหน้านี้ กรุณาติดต่อ Admin
+              {t('admin.noAccessDesc')}
             </CardDescription>
           </CardHeader>
           <CardContent className="flex justify-center">
             <Button onClick={handleSignOut} variant="outline">
               <LogOut className="w-4 h-4 mr-2" />
-              ออกจากระบบ
+              {t('auth.logout')}
             </Button>
           </CardContent>
         </Card>
@@ -226,16 +230,18 @@ const Admin = () => {
               <BarChart3 className="w-5 h-5 text-primary" />
             </div>
             <div>
-              <h1 className="font-bold text-lg">Moneyx Admin</h1>
-              <p className="text-xs text-muted-foreground">ระบบจัดการลูกค้า</p>
+              <h1 className="font-bold text-lg">{t('admin.title')}</h1>
+              <p className="text-xs text-muted-foreground">{t('admin.subtitle')}</p>
             </div>
           </div>
           
-          <div className="flex items-center gap-4">
-            <Badge variant={isSuperAdmin ? "default" : "secondary"} className="gap-1">
+          <div className="flex items-center gap-2">
+            <LanguageSwitcher />
+            <ThemeToggle />
+            <Badge variant={isSuperAdmin ? "default" : "secondary"} className="gap-1 hidden sm:flex">
               {isSuperAdmin ? "Super Admin" : "Admin"}
             </Badge>
-            <span className="text-sm text-muted-foreground hidden md:block">
+            <span className="text-sm text-muted-foreground hidden lg:block">
               {user?.email}
             </span>
             <Button variant="ghost" size="icon" onClick={handleSignOut}>
@@ -252,19 +258,19 @@ const Admin = () => {
           <Tabs value={accountTypeFilter} onValueChange={(v) => setAccountTypeFilter(v as AccountTypeFilter)}>
             <TabsList className="grid w-full max-w-md grid-cols-3">
               <TabsTrigger value="all" className="gap-2">
-                ทั้งหมด
+                {t('common.all')}
                 <Badge variant="secondary" className="ml-1 h-5 px-1.5 text-xs">
                   {allAccounts.length}
                 </Badge>
               </TabsTrigger>
               <TabsTrigger value="real" className="gap-2">
-                🟢 Real
+                🟢 {t('common.real')}
                 <Badge variant="secondary" className="ml-1 h-5 px-1.5 text-xs">
                   {allAccounts.filter(a => a.account_type === 'real' || !a.account_type).length}
                 </Badge>
               </TabsTrigger>
               <TabsTrigger value="demo" className="gap-2">
-                🔵 Demo
+                🔵 {t('common.demo')}
                 <Badge variant="secondary" className="ml-1 h-5 px-1.5 text-xs">
                   {allAccounts.filter(a => a.account_type === 'demo').length}
                 </Badge>
@@ -281,7 +287,7 @@ const Admin = () => {
           >
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground">
-                ลูกค้าทั้งหมด
+                {t('admin.totalCustomers')}
               </CardTitle>
               <Users className="w-4 h-4 text-muted-foreground" />
             </CardHeader>
@@ -300,15 +306,15 @@ const Admin = () => {
           >
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground">
-                MT5 Accounts (Active)
+                {t('admin.activeAccounts')}
               </CardTitle>
-              <CheckCircle className="w-4 h-4 text-green-500" />
+              <CheckCircle className="w-4 h-4 text-candle-green" />
             </CardHeader>
             <CardContent>
               {isLoadingStats ? (
                 <Skeleton className="h-8 w-20" />
               ) : (
-                <div className="text-2xl font-bold text-green-500">{filteredStats.activeAccounts}</div>
+                <div className="text-2xl font-bold text-candle-green">{filteredStats.activeAccounts}</div>
               )}
             </CardContent>
           </Card>
@@ -316,7 +322,7 @@ const Admin = () => {
           <Card>
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground">
-                กำลังจะหมดอายุ
+                {t('admin.expiringSoon')}
               </CardTitle>
               <Clock className="w-4 h-4 text-yellow-500" />
             </CardHeader>
@@ -332,15 +338,15 @@ const Admin = () => {
           <Card>
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground">
-                หมดอายุแล้ว
+                {t('admin.expired')}
               </CardTitle>
-              <XCircle className="w-4 h-4 text-red-500" />
+              <XCircle className="w-4 h-4 text-destructive" />
             </CardHeader>
             <CardContent>
               {isLoadingStats ? (
                 <Skeleton className="h-8 w-20" />
               ) : (
-                <div className="text-2xl font-bold text-red-500">{filteredStats.expiredAccounts}</div>
+                <div className="text-2xl font-bold text-destructive">{filteredStats.expiredAccounts}</div>
               )}
             </CardContent>
           </Card>
@@ -351,7 +357,7 @@ const Admin = () => {
           <Card>
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground">
-                ยอด Balance รวม
+                {t('admin.totalBalance')}
               </CardTitle>
               <CreditCard className="w-4 h-4 text-primary" />
             </CardHeader>
@@ -369,15 +375,15 @@ const Admin = () => {
           <Card>
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground">
-                ยอด Equity รวม
+                {t('admin.totalEquity')}
               </CardTitle>
-              <TrendingUp className="w-4 h-4 text-blue-500" />
+              <TrendingUp className="w-4 h-4 text-primary" />
             </CardHeader>
             <CardContent>
               {isLoadingStats ? (
                 <Skeleton className="h-8 w-32" />
               ) : (
-                <div className="text-2xl font-bold text-blue-500">
+                <div className="text-2xl font-bold text-primary">
                   ${filteredStats.totalEquity.toLocaleString('en-US', { minimumFractionDigits: 2 })}
                 </div>
               )}
@@ -387,19 +393,19 @@ const Admin = () => {
           <Card>
             <CardHeader className="flex flex-row items-center justify-between pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground">
-                กำไร/ขาดทุน รวม
+                {t('admin.profitLoss')}
               </CardTitle>
               {filteredStats.totalProfitLoss >= 0 ? (
-                <TrendingUp className="w-4 h-4 text-green-500" />
+                <TrendingUp className="w-4 h-4 text-candle-green" />
               ) : (
-                <TrendingDown className="w-4 h-4 text-red-500" />
+                <TrendingDown className="w-4 h-4 text-destructive" />
               )}
             </CardHeader>
             <CardContent>
               {isLoadingStats ? (
                 <Skeleton className="h-8 w-32" />
               ) : (
-                <div className={`text-2xl font-bold ${filteredStats.totalProfitLoss >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                <div className={`text-2xl font-bold ${filteredStats.totalProfitLoss >= 0 ? 'text-candle-green' : 'text-destructive'}`}>
                   {filteredStats.totalProfitLoss >= 0 ? '+' : ''}
                   ${filteredStats.totalProfitLoss.toLocaleString('en-US', { minimumFractionDigits: 2 })}
                 </div>
@@ -418,9 +424,9 @@ const Admin = () => {
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Settings className="w-5 h-5" />
-                การดำเนินการด่วน
+                {t('admin.quickActions')}
               </CardTitle>
-              <CardDescription>จัดการลูกค้าและ MT5 Accounts</CardDescription>
+              <CardDescription>{t('admin.quickActionsDesc')}</CardDescription>
             </CardHeader>
             <CardContent className="grid grid-cols-2 gap-4">
               <Button 
@@ -429,7 +435,7 @@ const Admin = () => {
                 onClick={() => navigate('/admin/customers')}
               >
                 <Users className="w-6 h-6" />
-                <span>จัดการลูกค้า</span>
+                <span>{t('admin.manageCustomers')}</span>
               </Button>
               <Button 
                 variant="outline" 
@@ -437,7 +443,7 @@ const Admin = () => {
                 onClick={() => navigate('/admin/customers/new')}
               >
                 <UserPlus className="w-6 h-6" />
-                <span>เพิ่มลูกค้าใหม่</span>
+                <span>{t('admin.addCustomer')}</span>
               </Button>
               <Button 
                 variant="outline" 
@@ -445,7 +451,7 @@ const Admin = () => {
                 onClick={() => navigate('/admin/accounts')}
               >
                 <CreditCard className="w-6 h-6" />
-                <span>MT5 Accounts</span>
+                <span>{t('admin.mt5Accounts')}</span>
               </Button>
               <Button 
                 variant="outline" 
@@ -453,7 +459,7 @@ const Admin = () => {
                 onClick={() => navigate('/admin/systems')}
               >
                 <BarChart3 className="w-6 h-6" />
-                <span>ระบบเทรด</span>
+                <span>{t('admin.tradingSystems')}</span>
               </Button>
               <Button 
                 variant="outline" 
@@ -461,7 +467,7 @@ const Admin = () => {
                 onClick={() => navigate('/admin/fund-report')}
               >
                 <FileBarChart className="w-6 h-6" />
-                <span>รายงานกองทุน</span>
+                <span>{t('admin.fundReport')}</span>
               </Button>
               <Button 
                 variant="outline" 
@@ -469,7 +475,7 @@ const Admin = () => {
                 onClick={() => navigate('/admin/roi-report')}
               >
                 <Percent className="w-6 h-6" />
-                <span>ROI Report</span>
+                <span>{t('admin.roiReport')}</span>
               </Button>
               {isSuperAdmin && (
                 <Button 
@@ -478,7 +484,7 @@ const Admin = () => {
                   onClick={() => navigate('/admin/users')}
                 >
                   <Settings className="w-6 h-6 text-primary" />
-                  <span>จัดการผู้ใช้ / Role</span>
+                  <span>User Management</span>
                 </Button>
               )}
             </CardContent>
@@ -489,9 +495,9 @@ const Admin = () => {
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <AlertTriangle className={`w-5 h-5 ${expiringAccounts.length > 0 ? 'text-yellow-500' : 'text-muted-foreground'}`} />
-                แจ้งเตือนหมดอายุ
+                {t('admin.expiringAlerts')}
               </CardTitle>
-              <CardDescription>Accounts ที่จะหมดอายุภายใน 5 วัน</CardDescription>
+              <CardDescription>{t('admin.expiringAlertsDesc')}</CardDescription>
             </CardHeader>
             <CardContent>
               {isLoadingStats ? (
@@ -501,8 +507,8 @@ const Admin = () => {
                 </div>
               ) : expiringAccounts.length === 0 ? (
                 <div className="text-center py-8 text-muted-foreground">
-                  <CheckCircle className="w-12 h-12 mx-auto mb-2 text-green-500/50" />
-                  <p>ไม่มี Account ที่จะหมดอายุ</p>
+                  <CheckCircle className="w-12 h-12 mx-auto mb-2 text-candle-green/50" />
+                  <p>{t('admin.noExpiring')}</p>
                 </div>
               ) : (
                 <div className="space-y-2">
@@ -516,13 +522,13 @@ const Admin = () => {
                         <p className="text-sm text-muted-foreground">{account.customer_name}</p>
                       </div>
                       <Badge variant="outline" className="text-yellow-600 border-yellow-500">
-                        {account.days_remaining} วัน
+                        {account.days_remaining} {t('admin.daysRemaining')}
                       </Badge>
                     </div>
                   ))}
                   {expiringAccounts.length > 5 && (
                     <p className="text-sm text-muted-foreground text-center pt-2">
-                      และอีก {expiringAccounts.length - 5} accounts...
+                      +{expiringAccounts.length - 5} more...
                     </p>
                   )}
                 </div>
