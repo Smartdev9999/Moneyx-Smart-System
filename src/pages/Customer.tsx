@@ -1,11 +1,14 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/hooks/useAuth';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { ThemeToggle } from '@/components/ThemeToggle';
+import { LanguageSwitcher } from '@/components/LanguageSwitcher';
 import { 
   LogOut,
   Settings,
@@ -88,6 +91,7 @@ type AccountTypeFilter = 'all' | 'real' | 'demo';
 
 const Customer = () => {
   const navigate = useNavigate();
+  const { t } = useTranslation();
   const { toast } = useToast();
   const { user, loading, isCustomer, isApprovedCustomer, customerInfo, signOut } = useAuth();
   const [customerData, setCustomerData] = useState<CustomerData | null>(null);
@@ -314,16 +318,15 @@ const Customer = () => {
             <div className="mx-auto w-16 h-16 rounded-full bg-warning/20 flex items-center justify-center mb-4">
               <Clock className="w-8 h-8 text-warning" />
             </div>
-            <CardTitle>รอการอนุมัติ</CardTitle>
+            <CardTitle>{t('customer.pendingApproval')}</CardTitle>
             <CardDescription>
-              บัญชีของคุณกำลังรอการอนุมัติจาก Admin<br />
-              กรุณารอสักครู่ ระบบจะแจ้งเตือนเมื่อบัญชีถูกอนุมัติ
+              {t('customer.pendingApprovalDesc')}
             </CardDescription>
           </CardHeader>
           <CardContent className="flex justify-center">
             <Button onClick={handleSignOut} variant="outline">
               <LogOut className="w-4 h-4 mr-2" />
-              ออกจากระบบ
+              {t('auth.logout')}
             </Button>
           </CardContent>
         </Card>
@@ -340,14 +343,14 @@ const Customer = () => {
             <div className="mx-auto w-16 h-16 rounded-full bg-destructive/20 flex items-center justify-center mb-4">
               <XCircle className="w-8 h-8 text-destructive" />
             </div>
-            <CardTitle>ไม่มีสิทธิ์เข้าถึง</CardTitle>
+            <CardTitle>{t('customer.noAccess')}</CardTitle>
             <CardDescription>
-              คุณไม่มีสิทธิ์เข้าถึงหน้านี้
+              {t('customer.noAccessDesc')}
             </CardDescription>
           </CardHeader>
           <CardContent className="flex justify-center gap-2">
             <Button onClick={() => navigate('/auth')} variant="outline">
-              กลับไปหน้า Login
+              {t('customer.goToLogin')}
             </Button>
           </CardContent>
         </Card>
@@ -377,8 +380,8 @@ const Customer = () => {
                 <PieChart className="w-5 h-5 text-primary" />
               </div>
               <div>
-                <h1 className="font-bold text-lg">Customer Dashboard</h1>
-                <p className="text-xs text-muted-foreground">{customerData?.name || 'Loading...'}</p>
+                <h1 className="font-bold text-lg">{t('customer.title')}</h1>
+                <p className="text-xs text-muted-foreground">{customerData?.name || t('common.loading')}</p>
               </div>
             </div>
           </div>
@@ -386,14 +389,16 @@ const Customer = () => {
           <div className="flex items-center gap-2">
             <Badge variant="outline" className="hidden md:flex items-center gap-1">
               <Bell className="w-3 h-3" />
-              Real-time
+              {t('customer.realtime')}
             </Badge>
+            <LanguageSwitcher />
+            <ThemeToggle />
             <Button variant="ghost" size="icon" onClick={() => navigate('/customer/settings')}>
               <Settings className="w-4 h-4" />
             </Button>
             <Button variant="ghost" size="sm" onClick={handleSignOut}>
               <LogOut className="w-4 h-4 mr-2" />
-              ออกจากระบบ
+              <span className="hidden sm:inline">{t('auth.logout')}</span>
             </Button>
           </div>
         </div>
@@ -422,10 +427,10 @@ const Customer = () => {
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
                     <PieChart className="w-5 h-5" />
-                    การกระจายเงินลงทุน
+                    {t('customer.fundAllocation')}
                   </CardTitle>
                   <CardDescription>
-                    แสดงสัดส่วนเงินใน Wallet และระบบเทรดต่างๆ
+                    {t('customer.fundAllocationDesc')}
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
@@ -442,18 +447,18 @@ const Customer = () => {
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <BarChart3 className="w-5 h-5" />
-                  MT5 Accounts
+                  {t('customer.myAccounts')}
                 </CardTitle>
                 <CardDescription>
-                  รายการบัญชี MT5 ของคุณ (อัพเดทแบบ Real-time)
+                  MT5 ({t('customer.realtime')})
                 </CardDescription>
               </CardHeader>
               <CardContent>
                 <Tabs value={accountTypeFilter} onValueChange={(v) => setAccountTypeFilter(v as AccountTypeFilter)}>
                   <TabsList className="mb-4">
-                    <TabsTrigger value="all">ทั้งหมด ({mt5Accounts.length})</TabsTrigger>
+                    <TabsTrigger value="all">{t('common.all')} ({mt5Accounts.length})</TabsTrigger>
                     <TabsTrigger value="real">
-                      Real ({mt5Accounts.filter(a => a.account_type === 'real').length})
+                      {t('common.real')} ({mt5Accounts.filter(a => a.account_type === 'real').length})
                     </TabsTrigger>
                     <TabsTrigger value="demo">
                       Demo ({mt5Accounts.filter(a => a.account_type === 'demo' || a.account_type === 'contest').length})
