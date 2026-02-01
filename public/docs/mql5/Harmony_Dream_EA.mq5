@@ -1259,7 +1259,8 @@ int OnInit()
    g_lastZScoreUpdateDisplay = TimeCurrent();
    CalculateAllRSIonSpread();
    UpdatePairProfits();
-   UpdateGroupProfits();
+   // Note: No UpdateGroupProfits() function exists in this EA version;
+   // UpdatePairProfits() already refreshes totals used by the dashboard.
    
    PrintFormat("=== Harmony Dream EA v1.8.9 Initialized - %d Active Pairs | Net Profit Mode ===", g_activePairs);
    return(INIT_SUCCEEDED);
