@@ -1224,14 +1224,6 @@ int OnInit()
    // v1.3: Restore open positions from previous session (Magic Number-based)
    RestoreOpenPositions();
    
-   // v1.8.9: Force immediate P/L and Z-Score calculation after restore
-   // This prevents "Pending" state and ensures P/L displays correctly
-   UpdateZScoreData();
-   g_lastZScoreUpdateDisplay = TimeCurrent();
-   CalculateAllRSIonSpread();
-   UpdatePairProfits();
-   UpdateGroupProfits();
-   
    // v1.6.2: Initialize CDC Retry timer array
    ArrayResize(g_lastCDCRetryTime, MAX_PAIRS);
    ArrayInitialize(g_lastCDCRetryTime, 0);
@@ -1261,7 +1253,15 @@ int OnInit()
       Print("[INIT] History pre-load request sent. CDC will retry every 5s if needed.");
    }
    
-   PrintFormat("=== Harmony Dream EA v1.6.6 Initialized - %d Active Pairs | Net Profit Mode ===", g_activePairs);
+   // v1.8.9: Force immediate P/L and Z-Score calculation after restore
+   // This prevents "Pending" state and ensures P/L displays correctly
+   UpdateZScoreData();
+   g_lastZScoreUpdateDisplay = TimeCurrent();
+   CalculateAllRSIonSpread();
+   UpdatePairProfits();
+   UpdateGroupProfits();
+   
+   PrintFormat("=== Harmony Dream EA v1.8.9 Initialized - %d Active Pairs | Net Profit Mode ===", g_activePairs);
    return(INIT_SUCCEEDED);
 }
 
