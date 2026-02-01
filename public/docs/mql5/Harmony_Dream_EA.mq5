@@ -4,11 +4,11 @@
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "1.88"
+#property version   "1.89"
 #property strict
 #property description "Harmony Dream - Pairs Trading Expert Advisor"
+#property description "v1.8.9: Enhanced Comment-Based P/L Recovery + Immediate Z-Score Init"
 #property description "Full Hedging with Independent Buy/Sell Sides"
-#property description "v1.6: Unified Max Order + Symbol-Specific ATR Grid"
 #include <Trade/Trade.mqh>
 
 //+------------------------------------------------------------------+
@@ -1224,6 +1224,14 @@ int OnInit()
    // v1.3: Restore open positions from previous session (Magic Number-based)
    RestoreOpenPositions();
    
+   // v1.8.9: Force immediate P/L and Z-Score calculation after restore
+   // This prevents "Pending" state and ensures P/L displays correctly
+   UpdateZScoreData();
+   g_lastZScoreUpdateDisplay = TimeCurrent();
+   CalculateAllRSIonSpread();
+   UpdatePairProfits();
+   UpdateGroupProfits();
+   
    // v1.6.2: Initialize CDC Retry timer array
    ArrayResize(g_lastCDCRetryTime, MAX_PAIRS);
    ArrayInitialize(g_lastCDCRetryTime, 0);
@@ -1264,16 +1272,25 @@ int OnInit()
 //+------------------------------------------------------------------+
 bool IsMainComment(string comment, string side, int pairIndex)
 {
-   // Build the exact prefix for main orders
-   string mainPrefix = StringFormat("HrmDream_%s_%d", side, pairIndex + 1);
+   // v1.8.9: Support BOTH legacy and new comment format
    
-   // Must START with the main prefix
-   if(StringFind(comment, mainPrefix) != 0)
+   // Format 1 (Legacy): HrmDream_BUY_1
+   string legacyPrefix = StringFormat("HrmDream_%s_%d", side, pairIndex + 1);
+   
+   // Format 2 (New v1.8.6+): EU-GU_BUY_1
+   string newPrefix = GetPairCommentPrefix(pairIndex);
+   string newSuffix = StringFormat("_%s_%d", side, pairIndex + 1);
+   
+   bool matchLegacy = (StringFind(comment, legacyPrefix) == 0);
+   bool matchNew = (StringFind(comment, newPrefix) == 0 && 
+                    StringFind(comment, newSuffix) >= 0);
+   
+   if(!matchLegacy && !matchNew)
       return false;
    
    // Must NOT contain grid identifiers
-   if(StringFind(comment, "_GL_") >= 0) return false;
-   if(StringFind(comment, "_GP_") >= 0) return false;
+   if(StringFind(comment, "_GL") >= 0) return false;
+   if(StringFind(comment, "_GP") >= 0) return false;
    if(StringFind(comment, "_AVG_") >= 0) return false;
    
    return true;
@@ -1284,12 +1301,21 @@ bool IsMainComment(string comment, string side, int pairIndex)
 //+------------------------------------------------------------------+
 bool IsGridComment(string comment, string side, int pairIndex)
 {
+   // v1.8.9: Support BOTH legacy and new comment format
    string pairStr = IntegerToString(pairIndex + 1);
+   string newPrefix = GetPairCommentPrefix(pairIndex);
    
-   // Check for Grid Loss, Grid Profit, or legacy Averaging
+   // Legacy format: HrmDream_GL_BUY_1
    if(StringFind(comment, "HrmDream_GL_" + side + "_" + pairStr) >= 0) return true;
    if(StringFind(comment, "HrmDream_GP_" + side + "_" + pairStr) >= 0) return true;
    if(StringFind(comment, "HrmDream_AVG_" + side + "_" + pairStr) >= 0) return true;
+   
+   // New format: EU-GU_GL#1_BUY_1 หรือ EU-GU_GP#1_BUY_1
+   string sideSuffix = "_" + side + "_" + pairStr;
+   if(StringFind(comment, newPrefix + "_GL") >= 0 && 
+      StringFind(comment, sideSuffix) >= 0) return true;
+   if(StringFind(comment, newPrefix + "_GP") >= 0 && 
+      StringFind(comment, sideSuffix) >= 0) return true;
    
    return false;
 }
