@@ -1,13 +1,13 @@
 //+------------------------------------------------------------------+
 //|                                         Harmony_Dream_EA.mq5     |
-//|                      Harmony Dream (Pairs Trading) v1.8.8        |
+//|                      Harmony Dream (Pairs Trading) v2.0          |
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "1.89"
+#property version   "2.00"
 #property strict
 #property description "Harmony Dream - Pairs Trading Expert Advisor"
-#property description "v1.8.9: Enhanced Comment-Based P/L Recovery + Immediate Z-Score Init"
+#property description "v2.0: Mini Group System (5 Groups × 6 Pairs, 15 Mini Groups)"
 #property description "Full Hedging with Independent Buy/Sell Sides"
 #include <Trade/Trade.mqh>
 
@@ -23,8 +23,11 @@
 #define MAX_PAIRS 30
 #define MAX_LOOKBACK 200
 #define MAX_AVG_LEVELS 10
-#define MAX_GROUPS 6
-#define PAIRS_PER_GROUP 5
+#define MAX_GROUPS 5
+#define PAIRS_PER_GROUP 6
+#define MAX_MINI_GROUPS 15     // 15 Mini Groups (numbered 1-15)
+#define PAIRS_PER_MINI 2       // 2 pairs per Mini Group
+#define MINIS_PER_GROUP 3      // 3 Mini Groups per Main Group
 
 //+------------------------------------------------------------------+
 //| PAIR DATA STRUCTURE (with embedded arrays)                         |
@@ -438,7 +441,7 @@ input group "=== Drawdown Recovery Settings (v3.2.7) ==="
 input bool     InpAutoResumeAfterDD = true;     // Auto Resume After DD Close
 input double   InpResumeEquityPercent = 95.0;   // Resume When Equity Recovers To (%)
 
-input group "=== Pair 1-5 Configuration ==="
+input group "=== Pair 1-6 Configuration (Group 1) ==="
 input bool     InpEnablePair1 = true;           // Enable Pair 1
 input string   InpPair1_SymbolA = "XAUUSD";     // Pair 1: Symbol A
 input string   InpPair1_SymbolB = "XAUEUR";     // Pair 1: Symbol B
@@ -459,7 +462,11 @@ input bool     InpEnablePair5 = true;           // Enable Pair 5
 input string   InpPair5_SymbolA = "EURUSD";     // Pair 5: Symbol A
 input string   InpPair5_SymbolB = "USDCHF";     // Pair 5: Symbol B
 
-input group "=== Group 1-5 Target Settings (v1.6) ==="
+input bool     InpEnablePair6 = false;          // Enable Pair 6
+input string   InpPair6_SymbolA = "EURUSD";     // Pair 6: Symbol A
+input string   InpPair6_SymbolB = "USDJPY";     // Pair 6: Symbol B
+
+input group "=== Group 1 Target Settings (v2.0) ==="
 input double   InpGroup1ClosedTarget = 0;       // Basket Closed Profit Target $ (0=Disable)
 input double   InpGroup1FloatingTarget = 0;     // Basket Floating Profit Target $ (0=Disable)
 input int      InpGroup1MaxOrderBuy = 5;        // Total Max Orders Buy (Hard Cap: Main + All Grids)
@@ -467,11 +474,12 @@ input int      InpGroup1MaxOrderSell = 5;       // Total Max Orders Sell (Hard C
 input double   InpGroup1TargetBuy = 10.0;       // Default Target (Buy Side) $
 input double   InpGroup1TargetSell = 10.0;      // Default Target (Sell Side) $
 
-input group "=== Pair 6-10 Configuration ==="
-input bool     InpEnablePair6 = false;          // Enable Pair 6
-input string   InpPair6_SymbolA = "EURUSD";     // Pair 6: Symbol A
-input string   InpPair6_SymbolB = "USDJPY";     // Pair 6: Symbol B
+input group "=== Mini Group Targets (M1-M3) ==="
+input double   InpMini1Target = 0;              // Mini 1 (Pair 1-2) Target $ (0=Disable)
+input double   InpMini2Target = 0;              // Mini 2 (Pair 3-4) Target $ (0=Disable)
+input double   InpMini3Target = 0;              // Mini 3 (Pair 5-6) Target $ (0=Disable)
 
+input group "=== Pair 7-12 Configuration (Group 2) ==="
 input bool     InpEnablePair7 = false;          // Enable Pair 7
 input string   InpPair7_SymbolA = "GBPUSD";     // Pair 7: Symbol A
 input string   InpPair7_SymbolB = "NZDUSD";     // Pair 7: Symbol B
@@ -488,13 +496,6 @@ input bool     InpEnablePair10 = false;         // Enable Pair 10
 input string   InpPair10_SymbolA = "EURJPY";    // Pair 10: Symbol A
 input string   InpPair10_SymbolB = "GBPJPY";    // Pair 10: Symbol B
 
-input group "=== Group 6-10 Target Settings (v1.6) ==="
-input double   InpGroup2ClosedTarget = 0;       // Basket Closed Profit Target $ (0=Disable)
-input double   InpGroup2FloatingTarget = 0;     // Basket Floating Profit Target $ (0=Disable)
-input int      InpGroup2MaxOrderBuy = 5;        // Total Max Orders Buy (Hard Cap: Main + All Grids)
-input int      InpGroup2MaxOrderSell = 5;       // Total Max Orders Sell (Hard Cap: Main + All Grids)
-input double   InpGroup2TargetBuy = 10.0;       // Default Target (Buy Side) $
-input double   InpGroup2TargetSell = 10.0;      // Default Target (Sell Side) $
 input bool     InpEnablePair11 = false;         // Enable Pair 11
 input string   InpPair11_SymbolA = "EURGBP";    // Pair 11: Symbol A
 input string   InpPair11_SymbolB = "EURCHF";    // Pair 11: Symbol B
@@ -503,6 +504,20 @@ input bool     InpEnablePair12 = false;         // Enable Pair 12
 input string   InpPair12_SymbolA = "NZDUSD";    // Pair 12: Symbol A
 input string   InpPair12_SymbolB = "USDCAD";    // Pair 12: Symbol B
 
+input group "=== Group 2 Target Settings (v2.0) ==="
+input double   InpGroup2ClosedTarget = 0;       // Basket Closed Profit Target $ (0=Disable)
+input double   InpGroup2FloatingTarget = 0;     // Basket Floating Profit Target $ (0=Disable)
+input int      InpGroup2MaxOrderBuy = 5;        // Total Max Orders Buy (Hard Cap: Main + All Grids)
+input int      InpGroup2MaxOrderSell = 5;       // Total Max Orders Sell (Hard Cap: Main + All Grids)
+input double   InpGroup2TargetBuy = 10.0;       // Default Target (Buy Side) $
+input double   InpGroup2TargetSell = 10.0;      // Default Target (Sell Side) $
+
+input group "=== Mini Group Targets (M4-M6) ==="
+input double   InpMini4Target = 0;              // Mini 4 (Pair 7-8) Target $ (0=Disable)
+input double   InpMini5Target = 0;              // Mini 5 (Pair 9-10) Target $ (0=Disable)
+input double   InpMini6Target = 0;              // Mini 6 (Pair 11-12) Target $ (0=Disable)
+
+input group "=== Pair 13-18 Configuration (Group 3) ==="
 input bool     InpEnablePair13 = false;         // Enable Pair 13
 input string   InpPair13_SymbolA = "AUDJPY";    // Pair 13: Symbol A
 input string   InpPair13_SymbolB = "NZDJPY";    // Pair 13: Symbol B
@@ -515,13 +530,6 @@ input bool     InpEnablePair15 = false;         // Enable Pair 15
 input string   InpPair15_SymbolA = "EURAUD";    // Pair 15: Symbol A
 input string   InpPair15_SymbolB = "EURNZD";    // Pair 15: Symbol B
 
-input group "=== Group 11-15 Target Settings (v1.6) ==="
-input double   InpGroup3ClosedTarget = 0;       // Basket Closed Profit Target $ (0=Disable)
-input double   InpGroup3FloatingTarget = 0;     // Basket Floating Profit Target $ (0=Disable)
-input int      InpGroup3MaxOrderBuy = 5;        // Total Max Orders Buy (Hard Cap: Main + All Grids)
-input int      InpGroup3MaxOrderSell = 5;       // Total Max Orders Sell (Hard Cap: Main + All Grids)
-input double   InpGroup3TargetBuy = 10.0;       // Default Target (Buy Side) $
-input double   InpGroup3TargetSell = 10.0;      // Default Target (Sell Side) $
 input bool     InpEnablePair16 = false;         // Enable Pair 16
 input string   InpPair16_SymbolA = "CHFJPY";    // Pair 16: Symbol A
 input string   InpPair16_SymbolB = "CADJPY";    // Pair 16: Symbol B
@@ -534,6 +542,20 @@ input bool     InpEnablePair18 = false;         // Enable Pair 18
 input string   InpPair18_SymbolA = "GBPCAD";    // Pair 18: Symbol A
 input string   InpPair18_SymbolB = "GBPCHF";    // Pair 18: Symbol B
 
+input group "=== Group 3 Target Settings (v2.0) ==="
+input double   InpGroup3ClosedTarget = 0;       // Basket Closed Profit Target $ (0=Disable)
+input double   InpGroup3FloatingTarget = 0;     // Basket Floating Profit Target $ (0=Disable)
+input int      InpGroup3MaxOrderBuy = 5;        // Total Max Orders Buy (Hard Cap: Main + All Grids)
+input int      InpGroup3MaxOrderSell = 5;       // Total Max Orders Sell (Hard Cap: Main + All Grids)
+input double   InpGroup3TargetBuy = 10.0;       // Default Target (Buy Side) $
+input double   InpGroup3TargetSell = 10.0;      // Default Target (Sell Side) $
+
+input group "=== Mini Group Targets (M7-M9) ==="
+input double   InpMini7Target = 0;              // Mini 7 (Pair 13-14) Target $ (0=Disable)
+input double   InpMini8Target = 0;              // Mini 8 (Pair 15-16) Target $ (0=Disable)
+input double   InpMini9Target = 0;              // Mini 9 (Pair 17-18) Target $ (0=Disable)
+
+input group "=== Pair 19-24 Configuration (Group 4) ==="
 input bool     InpEnablePair19 = false;         // Enable Pair 19
 input string   InpPair19_SymbolA = "EURCAD";    // Pair 19: Symbol A
 input string   InpPair19_SymbolB = "EURCHF";    // Pair 19: Symbol B
@@ -542,13 +564,6 @@ input bool     InpEnablePair20 = false;         // Enable Pair 20
 input string   InpPair20_SymbolA = "CADCHF";    // Pair 20: Symbol A
 input string   InpPair20_SymbolB = "CADJPY";    // Pair 20: Symbol B
 
-input group "=== Group 16-20 Target Settings (v1.6) ==="
-input double   InpGroup4ClosedTarget = 0;       // Basket Closed Profit Target $ (0=Disable)
-input double   InpGroup4FloatingTarget = 0;     // Basket Floating Profit Target $ (0=Disable)
-input int      InpGroup4MaxOrderBuy = 5;        // Total Max Orders Buy (Hard Cap: Main + All Grids)
-input int      InpGroup4MaxOrderSell = 5;       // Total Max Orders Sell (Hard Cap: Main + All Grids)
-input double   InpGroup4TargetBuy = 10.0;       // Default Target (Buy Side) $
-input double   InpGroup4TargetSell = 10.0;      // Default Target (Sell Side) $
 input bool     InpEnablePair21 = false;         // Enable Pair 21
 input string   InpPair21_SymbolA = "AUDCHF";    // Pair 21: Symbol A
 input string   InpPair21_SymbolB = "NZDCHF";    // Pair 21: Symbol B
@@ -565,17 +580,24 @@ input bool     InpEnablePair24 = false;         // Enable Pair 24
 input string   InpPair24_SymbolA = "EURNZD";    // Pair 24: Symbol A
 input string   InpPair24_SymbolB = "GBPNZD";    // Pair 24: Symbol B
 
+input group "=== Group 4 Target Settings (v2.0) ==="
+input double   InpGroup4ClosedTarget = 0;       // Basket Closed Profit Target $ (0=Disable)
+input double   InpGroup4FloatingTarget = 0;     // Basket Floating Profit Target $ (0=Disable)
+input int      InpGroup4MaxOrderBuy = 5;        // Total Max Orders Buy (Hard Cap: Main + All Grids)
+input int      InpGroup4MaxOrderSell = 5;       // Total Max Orders Sell (Hard Cap: Main + All Grids)
+input double   InpGroup4TargetBuy = 10.0;       // Default Target (Buy Side) $
+input double   InpGroup4TargetSell = 10.0;      // Default Target (Sell Side) $
+
+input group "=== Mini Group Targets (M10-M12) ==="
+input double   InpMini10Target = 0;             // Mini 10 (Pair 19-20) Target $ (0=Disable)
+input double   InpMini11Target = 0;             // Mini 11 (Pair 21-22) Target $ (0=Disable)
+input double   InpMini12Target = 0;             // Mini 12 (Pair 23-24) Target $ (0=Disable)
+
+input group "=== Pair 25-30 Configuration (Group 5) ==="
 input bool     InpEnablePair25 = false;         // Enable Pair 25
 input string   InpPair25_SymbolA = "NZDJPY";    // Pair 25: Symbol A
 input string   InpPair25_SymbolB = "CADJPY";    // Pair 25: Symbol B
 
-input group "=== Group 21-25 Target Settings (v1.6) ==="
-input double   InpGroup5ClosedTarget = 0;       // Basket Closed Profit Target $ (0=Disable)
-input double   InpGroup5FloatingTarget = 0;     // Basket Floating Profit Target $ (0=Disable)
-input int      InpGroup5MaxOrderBuy = 5;        // Total Max Orders Buy (Hard Cap: Main + All Grids)
-input int      InpGroup5MaxOrderSell = 5;       // Total Max Orders Sell (Hard Cap: Main + All Grids)
-input double   InpGroup5TargetBuy = 10.0;       // Default Target (Buy Side) $
-input double   InpGroup5TargetSell = 10.0;      // Default Target (Sell Side) $
 input bool     InpEnablePair26 = false;         // Enable Pair 26
 input string   InpPair26_SymbolA = "AUDSGD";    // Pair 26: Symbol A
 input string   InpPair26_SymbolB = "NZDSGD";    // Pair 26: Symbol B
@@ -596,13 +618,18 @@ input bool     InpEnablePair30 = false;         // Enable Pair 30
 input string   InpPair30_SymbolA = "USDMXN";    // Pair 30: Symbol A
 input string   InpPair30_SymbolB = "EURMXN";    // Pair 30: Symbol B
 
-input group "=== Group 26-30 Target Settings (v1.6) ==="
-input double   InpGroup6ClosedTarget = 0;       // Basket Closed Profit Target $ (0=Disable)
-input double   InpGroup6FloatingTarget = 0;     // Basket Floating Profit Target $ (0=Disable)
-input int      InpGroup6MaxOrderBuy = 5;        // Total Max Orders Buy (Hard Cap: Main + All Grids)
-input int      InpGroup6MaxOrderSell = 5;       // Total Max Orders Sell (Hard Cap: Main + All Grids)
-input double   InpGroup6TargetBuy = 10.0;       // Default Target (Buy Side) $
-input double   InpGroup6TargetSell = 10.0;      // Default Target (Sell Side) $
+input group "=== Group 5 Target Settings (v2.0) ==="
+input double   InpGroup5ClosedTarget = 0;       // Basket Closed Profit Target $ (0=Disable)
+input double   InpGroup5FloatingTarget = 0;     // Basket Floating Profit Target $ (0=Disable)
+input int      InpGroup5MaxOrderBuy = 5;        // Total Max Orders Buy (Hard Cap: Main + All Grids)
+input int      InpGroup5MaxOrderSell = 5;       // Total Max Orders Sell (Hard Cap: Main + All Grids)
+input double   InpGroup5TargetBuy = 10.0;       // Default Target (Buy Side) $
+input double   InpGroup5TargetSell = 10.0;      // Default Target (Sell Side) $
+
+input group "=== Mini Group Targets (M13-M15) ==="
+input double   InpMini13Target = 0;             // Mini 13 (Pair 25-26) Target $ (0=Disable)
+input double   InpMini14Target = 0;             // Mini 14 (Pair 27-28) Target $ (0=Disable)
+input double   InpMini15Target = 0;             // Mini 15 (Pair 29-30) Target $ (0=Disable)
 input string   InpLicenseServer = LICENSE_BASE_URL;    // License Server URL
 input int      InpLicenseCheckMinutes = 60;            // License Check Interval (minutes)
 input int      InpDataSyncMinutes = 5;                 // Data Sync Interval (minutes)
@@ -668,6 +695,20 @@ struct GroupTarget
    bool   targetTriggered;     // Prevent multiple triggers
    bool   closeMode;           // TRUE when group is closing all
 };
+
+//+------------------------------------------------------------------+
+//| v2.0: MINI GROUP STRUCTURE (2 pairs per mini, numbered 1-15)       |
+//+------------------------------------------------------------------+
+struct MiniGroupData
+{
+   double closedProfit;        // Accumulated closed profit
+   double floatingProfit;      // Current floating profit
+   double totalProfit;         // Closed + Floating
+   double closedTarget;        // Target for auto-close (from input)
+   bool   targetTriggered;     // Prevent multiple triggers
+};
+
+MiniGroupData g_miniGroups[MAX_MINI_GROUPS];
 CTrade g_trade;
 bool g_isLicenseValid = false;
 bool g_isNewsPaused = false;
@@ -1744,23 +1785,114 @@ bool InitializePairs()
 }
 
 //+------------------------------------------------------------------+
-//| v1.1: Initialize Group Target System (v1.6.6: Store BASE values)   |
+//| v2.0: Initialize Mini Group System                                 |
+//+------------------------------------------------------------------+
+void InitializeMiniGroups()
+{
+   // Mini Group 1-3 (Group 1)
+   g_miniGroups[0].closedTarget = InpMini1Target;
+   g_miniGroups[1].closedTarget = InpMini2Target;
+   g_miniGroups[2].closedTarget = InpMini3Target;
+   
+   // Mini Group 4-6 (Group 2)
+   g_miniGroups[3].closedTarget = InpMini4Target;
+   g_miniGroups[4].closedTarget = InpMini5Target;
+   g_miniGroups[5].closedTarget = InpMini6Target;
+   
+   // Mini Group 7-9 (Group 3)
+   g_miniGroups[6].closedTarget = InpMini7Target;
+   g_miniGroups[7].closedTarget = InpMini8Target;
+   g_miniGroups[8].closedTarget = InpMini9Target;
+   
+   // Mini Group 10-12 (Group 4)
+   g_miniGroups[9].closedTarget = InpMini10Target;
+   g_miniGroups[10].closedTarget = InpMini11Target;
+   g_miniGroups[11].closedTarget = InpMini12Target;
+   
+   // Mini Group 13-15 (Group 5)
+   g_miniGroups[12].closedTarget = InpMini13Target;
+   g_miniGroups[13].closedTarget = InpMini14Target;
+   g_miniGroups[14].closedTarget = InpMini15Target;
+   
+   // Reset all Mini Group profits
+   for(int m = 0; m < MAX_MINI_GROUPS; m++)
+   {
+      g_miniGroups[m].closedProfit = 0;
+      g_miniGroups[m].floatingProfit = 0;
+      g_miniGroups[m].totalProfit = 0;
+      g_miniGroups[m].targetTriggered = false;
+   }
+   
+   PrintFormat("v2.0: Mini Group System initialized - 15 Mini Groups (2 pairs each)");
+}
+
+//+------------------------------------------------------------------+
+//| v2.0: Get Mini Group Index from Pair Index (0-29 → 0-14)           |
+//+------------------------------------------------------------------+
+int GetMiniGroupIndex(int pairIndex)
+{
+   return pairIndex / PAIRS_PER_MINI;
+}
+
+//+------------------------------------------------------------------+
+//| v2.0: Get Parent Group Index from Mini Group Index (0-14 → 0-4)    |
+//+------------------------------------------------------------------+
+int GetGroupFromMini(int miniIndex)
+{
+   return miniIndex / MINIS_PER_GROUP;
+}
+
+//+------------------------------------------------------------------+
+//| v2.0: Get sum of Mini Group targets for a Group                    |
+//+------------------------------------------------------------------+
+double GetMiniGroupSumTarget(int groupIndex)
+{
+   double sum = 0;
+   int startMini = groupIndex * MINIS_PER_GROUP;
+   for(int i = 0; i < MINIS_PER_GROUP; i++)
+   {
+      sum += g_miniGroups[startMini + i].closedTarget;
+   }
+   return sum;
+}
+
+//+------------------------------------------------------------------+
+//| v2.0: Update Mini Group Profits from Pair P/L                      |
+//+------------------------------------------------------------------+
+void UpdateMiniGroupProfits()
+{
+   for(int m = 0; m < MAX_MINI_GROUPS; m++)
+   {
+      int startPair = m * PAIRS_PER_MINI;
+      g_miniGroups[m].floatingProfit = 0;
+      
+      for(int p = startPair; p < startPair + PAIRS_PER_MINI && p < MAX_PAIRS; p++)
+      {
+         g_miniGroups[m].floatingProfit += g_pairs[p].profitBuy + g_pairs[p].profitSell;
+      }
+      
+      g_miniGroups[m].totalProfit = g_miniGroups[m].closedProfit + g_miniGroups[m].floatingProfit;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| v2.0: Initialize Group Target System (5 Groups × 6 Pairs)          |
 //+------------------------------------------------------------------+
 void InitializeGroups()
 {
-   // v1.6.6: Store BASE targets (not scaled) - scaling happens at runtime
-   // This allows real-time recalculation when balance changes
+   // v2.0: Initialize Mini Groups first
+   InitializeMiniGroups();
    
-   // Group 1 (Pairs 1-5)
-   g_groups[0].closedTarget = InpGroup1ClosedTarget;      // BASE value
-   g_groups[0].floatingTarget = InpGroup1FloatingTarget;  // BASE value
+   // Group 1 (Pairs 1-6)
+   g_groups[0].closedTarget = InpGroup1ClosedTarget;
+   g_groups[0].floatingTarget = InpGroup1FloatingTarget;
    g_groups[0].maxOrderBuy = InpGroup1MaxOrderBuy;
    g_groups[0].maxOrderSell = InpGroup1MaxOrderSell;
-   g_groups[0].targetBuy = InpGroup1TargetBuy;            // BASE value
-   g_groups[0].targetSell = InpGroup1TargetSell;          // BASE value
+   g_groups[0].targetBuy = InpGroup1TargetBuy;
+   g_groups[0].targetSell = InpGroup1TargetSell;
    ResetGroupProfit(0);
    
-   // Group 2 (Pairs 6-10)
+   // Group 2 (Pairs 7-12)
    g_groups[1].closedTarget = InpGroup2ClosedTarget;
    g_groups[1].floatingTarget = InpGroup2FloatingTarget;
    g_groups[1].maxOrderBuy = InpGroup2MaxOrderBuy;
@@ -1769,7 +1901,7 @@ void InitializeGroups()
    g_groups[1].targetSell = InpGroup2TargetSell;
    ResetGroupProfit(1);
    
-   // Group 3 (Pairs 11-15)
+   // Group 3 (Pairs 13-18)
    g_groups[2].closedTarget = InpGroup3ClosedTarget;
    g_groups[2].floatingTarget = InpGroup3FloatingTarget;
    g_groups[2].maxOrderBuy = InpGroup3MaxOrderBuy;
@@ -1778,7 +1910,7 @@ void InitializeGroups()
    g_groups[2].targetSell = InpGroup3TargetSell;
    ResetGroupProfit(2);
    
-   // Group 4 (Pairs 16-20)
+   // Group 4 (Pairs 19-24)
    g_groups[3].closedTarget = InpGroup4ClosedTarget;
    g_groups[3].floatingTarget = InpGroup4FloatingTarget;
    g_groups[3].maxOrderBuy = InpGroup4MaxOrderBuy;
@@ -1787,7 +1919,7 @@ void InitializeGroups()
    g_groups[3].targetSell = InpGroup4TargetSell;
    ResetGroupProfit(3);
    
-   // Group 5 (Pairs 21-25)
+   // Group 5 (Pairs 25-30)
    g_groups[4].closedTarget = InpGroup5ClosedTarget;
    g_groups[4].floatingTarget = InpGroup5FloatingTarget;
    g_groups[4].maxOrderBuy = InpGroup5MaxOrderBuy;
@@ -1795,15 +1927,6 @@ void InitializeGroups()
    g_groups[4].targetBuy = InpGroup5TargetBuy;
    g_groups[4].targetSell = InpGroup5TargetSell;
    ResetGroupProfit(4);
-   
-   // Group 6 (Pairs 26-30)
-   g_groups[5].closedTarget = InpGroup6ClosedTarget;
-   g_groups[5].floatingTarget = InpGroup6FloatingTarget;
-   g_groups[5].maxOrderBuy = InpGroup6MaxOrderBuy;
-   g_groups[5].maxOrderSell = InpGroup6MaxOrderSell;
-   g_groups[5].targetBuy = InpGroup6TargetBuy;
-   g_groups[5].targetSell = InpGroup6TargetSell;
-   ResetGroupProfit(5);
    
    // v1.6.6: Log scaling info (show effective values)
    if(InpEnableAutoScaling)
@@ -1815,7 +1938,7 @@ void InitializeGroups()
       PrintFormat("v1.6.6: Group 1 Targets - Base Closed=$%.0f → Scaled=$%.0f",
                   InpGroup1ClosedTarget, GetScaledGroupClosedTarget(0));
    }
-   PrintFormat("v1.1: Group Target System initialized - 6 Groups x 5 Pairs");
+   PrintFormat("v2.0: Group Target System initialized - 5 Groups x 6 Pairs");
 }
 
 //+------------------------------------------------------------------+
@@ -8133,9 +8256,13 @@ void CreateDashboard()
    int centerX = buyStartX + buyWidth + 5;
    int sellStartX = centerX + centerWidth + 5;
    
-   // v1.1: Group Info Column
-   int groupInfoWidth = 115;
-   int groupInfoX = sellStartX + sellWidth + 5;
+   // v2.0: Mini Group Column (NEW!)
+   int miniGroupWidth = 90;
+   int miniGroupX = sellStartX + sellWidth + 5;
+   
+   // v2.0: Group Info Column (shifted right)
+   int groupInfoWidth = 125;
+   int groupInfoX = miniGroupX + miniGroupWidth + 5;
    
    // ===== MAIN SECTION HEADERS =====
    // Buy Header - text centered vertically
@@ -8150,7 +8277,11 @@ void CreateDashboard()
    CreateRectangle(prefix + "HDR_SELL", sellStartX, headerY + 3, sellWidth, headerHeight, COLOR_HEADER_SELL, COLOR_HEADER_SELL);
    CreateLabel(prefix + "HDR_SELL_TXT", sellStartX + 165, headerY + 8, "SELL DATA", COLOR_HEADER_TXT, 10, "Arial Bold");
    
-   // v1.1: Group Info Header (v1.8.5: Theme-based colors)
+   // v2.0: Mini Group Header (NEW!)
+   CreateRectangle(prefix + "HDR_MINI", miniGroupX, headerY + 3, miniGroupWidth, headerHeight, COLOR_HEADER_GROUP, COLOR_HEADER_GROUP);
+   CreateLabel(prefix + "HDR_MINI_TXT", miniGroupX + 8, headerY + 8, "MINI GROUP", COLOR_HEADER_TXT, 9, "Arial Bold");
+   
+   // v2.0: Group Info Header (shifted right)
    CreateRectangle(prefix + "HDR_GROUP", groupInfoX, headerY + 3, groupInfoWidth, headerHeight, COLOR_HEADER_GROUP, COLOR_HEADER_GROUP);
    CreateLabel(prefix + "HDR_GROUP_TXT", groupInfoX + 15, headerY + 8, "GROUP INFO", COLOR_HEADER_TXT, 10, "Arial Bold");
    
@@ -8158,7 +8289,9 @@ void CreateDashboard()
    CreateRectangle(prefix + "COLHDR_BUY_BG", buyStartX, colHeaderY - 1, buyWidth, colHeaderHeight, COLOR_COLHDR_BUY, COLOR_COLHDR_BUY);
    CreateRectangle(prefix + "COLHDR_CENTER_BG", centerX, colHeaderY - 1, centerWidth, colHeaderHeight, COLOR_COLHDR_CENTER, COLOR_COLHDR_CENTER);
    CreateRectangle(prefix + "COLHDR_SELL_BG", sellStartX, colHeaderY - 1, sellWidth, colHeaderHeight, COLOR_COLHDR_SELL, COLOR_COLHDR_SELL);
-   // v1.1: Group Info Column Header Background (v1.8.5: Theme-based)
+   // v2.0: Mini Group Column Header Background
+   CreateRectangle(prefix + "COLHDR_MINI_BG", miniGroupX, colHeaderY - 1, miniGroupWidth, colHeaderHeight, COLOR_COLHDR_GROUP, COLOR_COLHDR_GROUP);
+   // v2.0: Group Info Column Header Background (shifted right)
    CreateRectangle(prefix + "COLHDR_GROUP_BG", groupInfoX, colHeaderY - 1, groupInfoWidth, colHeaderHeight, COLOR_COLHDR_GROUP, COLOR_COLHDR_GROUP);
    
    // ===== COLUMN HEADERS (v3.2.9: Labels on top of backgrounds) =====
@@ -8169,36 +8302,39 @@ void CreateDashboard()
    CreateLabel(prefix + "COL_B_PF", buyStartX + 25, colLabelY, "Closed", COLOR_HEADER_TXT, 7, "Arial");
    CreateLabel(prefix + "COL_B_LT", buyStartX + 75, colLabelY, "Lot", COLOR_HEADER_TXT, 7, "Arial");
    CreateLabel(prefix + "COL_B_OR", buyStartX + 128, colLabelY, "Ord", COLOR_HEADER_TXT, 7, "Arial");
-   CreateLabel(prefix + "COL_B_MX", buyStartX + 165, colLabelY, "Tot", COLOR_HEADER_TXT, 7, "Arial");  // v3.3.0: Changed to "Tot" (Total)
+   CreateLabel(prefix + "COL_B_MX", buyStartX + 165, colLabelY, "Tot", COLOR_HEADER_TXT, 7, "Arial");
    CreateLabel(prefix + "COL_B_TG", buyStartX + 205, colLabelY, "Target", COLOR_HEADER_TXT, 7, "Arial");
    CreateLabel(prefix + "COL_B_ST", buyStartX + 260, colLabelY, "Status", COLOR_HEADER_TXT, 7, "Arial");
    CreateLabel(prefix + "COL_B_Z", buyStartX + 310, colLabelY, "Z", COLOR_HEADER_TXT, 7, "Arial");
    CreateLabel(prefix + "COL_B_PL", buyStartX + 358, colLabelY, "P/L", COLOR_HEADER_TXT, 7, "Arial");
    
-   // Center columns: Pair | Trend | C-% | Type | Total P/L (v3.7.1: Balanced after Beta removed)
+   // Center columns: Pair | Trend | C-% | Type | Total P/L
    CreateLabel(prefix + "COL_C_PR", centerX + 10, colLabelY, "#.Pair", COLOR_HEADER_TXT, 7, "Arial");
-   CreateLabel(prefix + "COL_C_TRD", centerX + 155, colLabelY, "Trend", COLOR_HEADER_TXT, 7, "Arial");  // v1.1: Adjusted for pair number
-   CreateLabel(prefix + "COL_C_CR", centerX + 215, colLabelY, "C-%", COLOR_HEADER_TXT, 7, "Arial");     // v1.1: Adjusted position
-   CreateLabel(prefix + "COL_C_TY", centerX + 265, colLabelY, "Type", COLOR_HEADER_TXT, 7, "Arial");    // v1.1: Adjusted position
-   // v3.6.0 HF4: Beta column hidden - not frequently used
-   // CreateLabel(prefix + "COL_C_BT", centerX + 280, colLabelY, "Beta", COLOR_HEADER_TXT, 7, "Arial");
-   CreateLabel(prefix + "COL_C_TP", centerX + 330, colLabelY, "Tot P/L", COLOR_HEADER_TXT, 7, "Arial");  // v1.1: Adjusted position
+   CreateLabel(prefix + "COL_C_TRD", centerX + 155, colLabelY, "Trend", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_C_CR", centerX + 215, colLabelY, "C-%", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_C_TY", centerX + 265, colLabelY, "Type", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_C_TP", centerX + 330, colLabelY, "Tot P/L", COLOR_HEADER_TXT, 7, "Arial");
    
    // Sell columns: P/L | Z | Status | Target | Tot | Ord | Lot | Closed | X
    CreateLabel(prefix + "COL_S_PL", sellStartX + 5, colLabelY, "P/L", COLOR_HEADER_TXT, 7, "Arial");
    CreateLabel(prefix + "COL_S_Z", sellStartX + 50, colLabelY, "Z", COLOR_HEADER_TXT, 7, "Arial");
    CreateLabel(prefix + "COL_S_ST", sellStartX + 105, colLabelY, "Status", COLOR_HEADER_TXT, 7, "Arial");
    CreateLabel(prefix + "COL_S_TG", sellStartX + 155, colLabelY, "Target", COLOR_HEADER_TXT, 7, "Arial");
-   CreateLabel(prefix + "COL_S_MX", sellStartX + 210, colLabelY, "Tot", COLOR_HEADER_TXT, 7, "Arial");  // v3.3.0: Changed to "Tot" (Total)
+   CreateLabel(prefix + "COL_S_MX", sellStartX + 210, colLabelY, "Tot", COLOR_HEADER_TXT, 7, "Arial");
    CreateLabel(prefix + "COL_S_OR", sellStartX + 262, colLabelY, "Ord", COLOR_HEADER_TXT, 7, "Arial");
    CreateLabel(prefix + "COL_S_LT", sellStartX + 305, colLabelY, "Lot", COLOR_HEADER_TXT, 7, "Arial");
    CreateLabel(prefix + "COL_S_PF", sellStartX + 340, colLabelY, "Closed", COLOR_HEADER_TXT, 7, "Arial");
    CreateLabel(prefix + "COL_S_X", sellStartX + 378, colLabelY, "X", COLOR_HEADER_TXT, 7, "Arial");
    
-   // v1.1: Group Info columns: Grp | Target | Closed
+   // v2.0: Mini Group columns: # | Float | Closed
+   CreateLabel(prefix + "COL_M_HDR", miniGroupX + 5, colLabelY, "#", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_M_FLT", miniGroupX + 25, colLabelY, "Float", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_M_CL", miniGroupX + 55, colLabelY, "Closed", COLOR_HEADER_TXT, 7, "Arial");
+   
+   // v2.0: Group Info columns (Grp | Float | Closed | Tgt | M.Tgt)
    CreateLabel(prefix + "COL_G_GRP", groupInfoX + 5, colLabelY, "Grp", COLOR_HEADER_TXT, 7, "Arial");
-   CreateLabel(prefix + "COL_G_TGT", groupInfoX + 35, colLabelY, "Target", COLOR_HEADER_TXT, 7, "Arial");
-   CreateLabel(prefix + "COL_G_CL", groupInfoX + 80, colLabelY, "Closed", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_G_FLT", groupInfoX + 35, colLabelY, "Float", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_G_CL", groupInfoX + 75, colLabelY, "Closed", COLOR_HEADER_TXT, 7, "Arial");
    
    // ===== PAIR ROWS =====
    for(int i = 0; i < MAX_PAIRS; i++)
@@ -8211,17 +8347,24 @@ void CreateDashboard()
       CreateRectangle(prefix + "ROW_C_" + IntegerToString(i), centerX, rowY, centerWidth, ROW_HEIGHT - 1, rowBg, rowBg);
       CreateRectangle(prefix + "ROW_S_" + IntegerToString(i), sellStartX, rowY, sellWidth, ROW_HEIGHT - 1, rowBg, rowBg);
       
-      // v1.1: Group Info row background (only for first pair of each group)
+      // v2.0: Mini Group row background (every 2 pairs)
+      if(i % PAIRS_PER_MINI == 0)
+      {
+         int miniRowHeight = PAIRS_PER_MINI * ROW_HEIGHT - 1;
+         color miniBg = C'30,25,40';
+         CreateRectangle(prefix + "ROW_M_" + IntegerToString(i / PAIRS_PER_MINI), miniGroupX, rowY, miniGroupWidth, miniRowHeight, miniBg, C'50,40,65');
+      }
+      
+      // v2.0: Group Info row background (every 6 pairs)
       if(i % PAIRS_PER_GROUP == 0)
       {
-         // This group spans 5 rows
          int groupRowHeight = PAIRS_PER_GROUP * ROW_HEIGHT - 1;
          color grpBg = C'35,25,45';
          CreateRectangle(prefix + "ROW_G_" + IntegerToString(i / PAIRS_PER_GROUP), groupInfoX, rowY, groupInfoWidth, groupRowHeight, grpBg, C'60,40,80');
       }
       
-      // Create pair row content (v1.1: Pass groupInfoX)
-      CreatePairRow(prefix, i, buyStartX, centerX, sellStartX, rowY, groupInfoX);
+      // Create pair row content (v2.0: Pass miniGroupX and groupInfoX)
+      CreatePairRow(prefix, i, buyStartX, centerX, sellStartX, rowY, miniGroupX, groupInfoX);
    }
    
    // ===== ACCOUNT SUMMARY SECTION =====
@@ -8232,25 +8375,21 @@ void CreateDashboard()
 }
 
 //+------------------------------------------------------------------+
-//| Create Pair Row (v3.3.0 - Closed P/L Column)                       |
+//| Create Pair Row (v2.0 - with Mini Group Column)                    |
 //+------------------------------------------------------------------+
-void CreatePairRow(string prefix, int idx, int buyX, int centerX, int sellX, int y, int groupInfoX)
+void CreatePairRow(string prefix, int idx, int buyX, int centerX, int sellX, int y, int miniGroupX, int groupInfoX)
 {
    string idxStr = IntegerToString(idx);
-   // v1.1: Add pair number (1-30) before pair name
    string pairNum = IntegerToString(idx + 1);
    string pairName = pairNum + ". " + g_pairs[idx].symbolA + "-" + g_pairs[idx].symbolB;
    
-   // v1.1: Get group index for this pair
    int groupIdx = idx / PAIRS_PER_GROUP;
    
    // === BUY SIDE DATA ===
-   // v3.3.0: X | Closed | Lot | Ord | Tot | Target | Status | Z | P/L
    CreateButton(prefix + "_CLOSE_BUY_" + idxStr, buyX + 5, y + 2, 16, 14, "X", clrRed, clrWhite);
-   CreateLabel(prefix + "P" + idxStr + "_B_CLOSED", buyX + 25, y + 3, "0", COLOR_TEXT, FONT_SIZE, "Arial");  // Closed P/L
+   CreateLabel(prefix + "P" + idxStr + "_B_CLOSED", buyX + 25, y + 3, "0", COLOR_TEXT, FONT_SIZE, "Arial");
    CreateLabel(prefix + "P" + idxStr + "_B_LOT", buyX + 75, y + 3, "0.00", COLOR_TEXT, FONT_SIZE, "Arial");
    CreateLabel(prefix + "P" + idxStr + "_B_ORD", buyX + 128, y + 3, "0", COLOR_TEXT, FONT_SIZE, "Arial");
-   // v1.1: Use group settings instead of removed global settings
    CreateEditField(prefix + "_MAX_BUY_" + idxStr, buyX + 160, y + 2, 30, 14, IntegerToString(g_groups[groupIdx].maxOrderBuy));
    CreateEditField(prefix + "_TGT_BUY_" + idxStr, buyX + 200, y + 2, 45, 14, DoubleToString(g_groups[groupIdx].targetBuy, 0));
    
@@ -8258,59 +8397,68 @@ void CreatePairRow(string prefix, int idx, int buyX, int centerX, int sellX, int
    color buyStatusColor = COLOR_OFF;
    CreateButton(prefix + "_ST_BUY_" + idxStr, buyX + 255, y + 2, 40, 14, buyStatusText, buyStatusColor, clrWhite);
    CreateLabel(prefix + "P" + idxStr + "_B_Z", buyX + 310, y + 3, "0.00", COLOR_TEXT, FONT_SIZE, "Arial");
-   CreateLabel(prefix + "P" + idxStr + "_B_PL", buyX + 358, y + 3, "0", COLOR_TEXT, FONT_SIZE, "Arial");  // Current P/L
+   CreateLabel(prefix + "P" + idxStr + "_B_PL", buyX + 358, y + 3, "0", COLOR_TEXT, FONT_SIZE, "Arial");
    
-   // === CENTER DATA (v3.7.1: Balanced column positions) ===
+   // === CENTER DATA ===
    CreateLabel(prefix + "P" + idxStr + "_NAME", centerX + 10, y + 3, pairName, COLOR_TEXT, FONT_SIZE, "Arial Bold");
-   // v3.7.1: CDC Trend Status Badge (OK/BLOCK/LOADING)
    CreateLabel(prefix + "P" + idxStr + "_CDC", centerX + 155, y + 3, "-", COLOR_OFF, FONT_SIZE, "Arial Bold");
    CreateLabel(prefix + "P" + idxStr + "_CORR", centerX + 215, y + 3, "0%", COLOR_TEXT, FONT_SIZE, "Arial");
    CreateLabel(prefix + "P" + idxStr + "_TYPE", centerX + 265, y + 3, "Pos", COLOR_PROFIT, FONT_SIZE, "Arial");
-   // v3.6.0 HF4: Beta label hidden
-   // CreateLabel(prefix + "P" + idxStr + "_BETA", centerX + 280, y + 3, "1.00", COLOR_TEXT, FONT_SIZE, "Arial");
    CreateLabel(prefix + "P" + idxStr + "_TPL", centerX + 330, y + 3, "0", COLOR_TEXT, 9, "Arial Bold");
    
    // === SELL SIDE DATA ===
-   // v3.3.0: P/L | Z | Status | Target | Tot | Ord | Lot | Closed | X
-   CreateLabel(prefix + "P" + idxStr + "_S_PL", sellX + 5, y + 3, "0", COLOR_TEXT, FONT_SIZE, "Arial");  // Current P/L
+   CreateLabel(prefix + "P" + idxStr + "_S_PL", sellX + 5, y + 3, "0", COLOR_TEXT, FONT_SIZE, "Arial");
    CreateLabel(prefix + "P" + idxStr + "_S_Z", sellX + 50, y + 3, "0.00", COLOR_TEXT, FONT_SIZE, "Arial");
    
    string sellStatusText = g_pairs[idx].enabled ? "Off" : "-";
    color sellStatusColor = COLOR_OFF;
    CreateButton(prefix + "_ST_SELL_" + idxStr, sellX + 100, y + 2, 40, 14, sellStatusText, sellStatusColor, clrWhite);
-   // v1.1: Use group settings instead of removed global settings
    CreateEditField(prefix + "_TGT_SELL_" + idxStr, sellX + 150, y + 2, 45, 14, DoubleToString(g_groups[groupIdx].targetSell, 0));
    CreateEditField(prefix + "_MAX_SELL_" + idxStr, sellX + 205, y + 2, 30, 14, IntegerToString(g_groups[groupIdx].maxOrderSell));
    CreateLabel(prefix + "P" + idxStr + "_S_ORD", sellX + 262, y + 3, "0", COLOR_TEXT, FONT_SIZE, "Arial");
    CreateLabel(prefix + "P" + idxStr + "_S_LOT", sellX + 305, y + 3, "0.00", COLOR_TEXT, FONT_SIZE, "Arial");
-   CreateLabel(prefix + "P" + idxStr + "_S_CLOSED", sellX + 340, y + 3, "0", COLOR_TEXT, FONT_SIZE, "Arial");  // Closed P/L
+   CreateLabel(prefix + "P" + idxStr + "_S_CLOSED", sellX + 340, y + 3, "0", COLOR_TEXT, FONT_SIZE, "Arial");
    CreateButton(prefix + "_CLOSE_SELL_" + idxStr, sellX + 375, y + 2, 16, 14, "X", clrRed, clrWhite);
    
-   // === v1.8.7: GROUP INFO COLUMN - Vertical Layout (Display only on first pair of each group) ===
+   // === v2.0: MINI GROUP COLUMN (Display every 2 pairs) ===
+   if(idx % PAIRS_PER_MINI == 0)
+   {
+      int mIdx = idx / PAIRS_PER_MINI;
+      string mIdxStr = IntegerToString(mIdx);
+      string miniLabel = "M" + IntegerToString(mIdx + 1);
+      
+      // Row 1: Mini number + Float value
+      CreateLabel(prefix + "M" + mIdxStr + "_HDR", miniGroupX + 5, y + 3, miniLabel, COLOR_GOLD, 8, "Arial Bold");
+      CreateLabel(prefix + "M" + mIdxStr + "_V_FLT", miniGroupX + 28, y + 3, "$0", COLOR_PROFIT, 8, "Arial");
+      CreateLabel(prefix + "M" + mIdxStr + "_V_CL", miniGroupX + 55, y + 3, "$0", COLOR_PROFIT, 8, "Arial");
+   }
+   
+   // === v2.0: GROUP INFO COLUMN (Display every 6 pairs) ===
    if(idx % PAIRS_PER_GROUP == 0)
    {
       int gIdx = idx / PAIRS_PER_GROUP;
       string gIdxStr = IntegerToString(gIdx);
       
-      // v1.8.7: Vertical layout - Group header
       CreateLabel(prefix + "G" + gIdxStr + "_HDR", groupInfoX + 5, y + 2, "Group " + IntegerToString(gIdx + 1), COLOR_GOLD, 8, "Arial Bold");
       
-      // Floating P/L row
       CreateLabel(prefix + "G" + gIdxStr + "_L_FLT", groupInfoX + 5, y + 16, "Float:", COLOR_TEXT_LABEL, 7, "Arial");
       CreateLabel(prefix + "G" + gIdxStr + "_V_FLT", groupInfoX + 40, y + 16, "$0", COLOR_PROFIT, 8, "Arial Bold");
       
-      // Closed P/L row
       CreateLabel(prefix + "G" + gIdxStr + "_L_CL", groupInfoX + 5, y + 30, "Closed:", COLOR_TEXT_LABEL, 7, "Arial");
       CreateLabel(prefix + "G" + gIdxStr + "_V_CL", groupInfoX + 48, y + 30, "$0", COLOR_PROFIT, 8, "Arial Bold");
       
-      // Target row - v1.6.6: Display real-time scaled target
       double scaledTarget = GetRealTimeScaledClosedTarget(gIdx);
       string tgtStr = (scaledTarget > 0) ? "$" + DoubleToString(scaledTarget, 0) : "-";
       CreateLabel(prefix + "G" + gIdxStr + "_L_TGT", groupInfoX + 5, y + 44, "Target:", COLOR_TEXT_LABEL, 7, "Arial");
       CreateLabel(prefix + "G" + gIdxStr + "_V_TGT", groupInfoX + 45, y + 44, tgtStr, COLOR_GOLD, 8, "Arial");
       
-      // v1.8.7: Close Group button
-      CreateButton(prefix + "_CLOSE_GRP_" + gIdxStr, groupInfoX + 5, y + 58, 70, 14, "Close Grp", COLOR_HEADER_SELL, clrWhite);
+      // v2.0: Mini Target row (NEW!)
+      double miniTgt = GetMiniGroupSumTarget(gIdx);
+      string miniTgtStr = (miniTgt > 0) ? "$" + DoubleToString(miniTgt, 0) : "-";
+      CreateLabel(prefix + "G" + gIdxStr + "_L_MTGT", groupInfoX + 5, y + 58, "M.Tgt:", COLOR_TEXT_LABEL, 7, "Arial");
+      CreateLabel(prefix + "G" + gIdxStr + "_V_MTGT", groupInfoX + 45, y + 58, miniTgtStr, COLOR_ACTIVE, 8, "Arial");
+      
+      CreateButton(prefix + "_CLOSE_GRP_" + gIdxStr, groupInfoX + 5, y + 75, 80, 14, "Close Grp", COLOR_HEADER_SELL, clrWhite);
    }
 }
 
