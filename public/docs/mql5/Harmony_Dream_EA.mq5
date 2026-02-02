@@ -4,10 +4,10 @@
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "2.14"
+#property version   "2.15"
 #property strict
 #property description "Harmony Dream - Pairs Trading Expert Advisor"
-#property description "v2.1.4: Skip ADX Chart in Tester (Trading Logic Unchanged)"
+#property description "v2.1.5: Hierarchical Basket Reset System (Mini→Group→Total)"
 #property description "Full Hedging with Independent Buy/Sell Sides"
 #include <Trade/Trade.mqh>
 
@@ -1989,11 +1989,38 @@ void ResetGroupProfit(int groupIndex)
 {
    if(groupIndex < 0 || groupIndex >= MAX_GROUPS) return;
    
+   // v2.1.5: Reset all Mini Groups within this Group FIRST (hierarchy: small → big)
+   int startMini = groupIndex * MINIS_PER_GROUP;
+   for(int m = startMini; m < startMini + MINIS_PER_GROUP && m < MAX_MINI_GROUPS; m++)
+   {
+      ResetMiniGroupProfit(m);
+   }
+   
+   // Reset Group itself
    g_groups[groupIndex].closedProfit = 0;
    g_groups[groupIndex].floatingProfit = 0;
    g_groups[groupIndex].totalProfit = 0;
    g_groups[groupIndex].targetTriggered = false;
    g_groups[groupIndex].closeMode = false;
+   
+   PrintFormat("[v2.1.5] Group %d RESET: closedProfit = 0, Mini Groups M%d-M%d also reset",
+               groupIndex + 1, startMini + 1, startMini + MINIS_PER_GROUP);
+}
+
+//+------------------------------------------------------------------+
+//| v2.1.5: Reset Mini Group Profit                                    |
+//+------------------------------------------------------------------+
+void ResetMiniGroupProfit(int miniIndex)
+{
+   if(miniIndex < 0 || miniIndex >= MAX_MINI_GROUPS) return;
+   
+   g_miniGroups[miniIndex].closedProfit = 0;
+   g_miniGroups[miniIndex].floatingProfit = 0;
+   g_miniGroups[miniIndex].totalProfit = 0;
+   g_miniGroups[miniIndex].targetTriggered = false;
+   
+   PrintFormat("[v2.1.5] Mini Group %d RESET: closedProfit = 0, targetTriggered = false",
+               miniIndex + 1);
 }
 
 //+------------------------------------------------------------------+
@@ -4398,8 +4425,8 @@ void CloseMiniGroup(int miniIndex)
    // v2.1.3: Note - profit was already added to Group via CloseBuySide/CloseSellSide
    // No need to add again here to avoid double-counting
    
-   // v2.1.3: Reset Mini Group closed profit for NEW CYCLE
-   g_miniGroups[miniIndex].closedProfit = 0;
+   // v2.1.5: Use dedicated reset function (hierarchy-aware)
+   ResetMiniGroupProfit(miniIndex);
    
    PrintFormat("[v2.1.3] Mini Group %d TARGET CLOSED | Accumulated: $%.2f | Mini RESET to $0 for new cycle",
                miniIndex + 1, finalClosedProfit);
