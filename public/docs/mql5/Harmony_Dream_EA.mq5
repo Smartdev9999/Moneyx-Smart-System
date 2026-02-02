@@ -2415,7 +2415,7 @@ void OnTick()
       }
       
       // v2.1.6: Update ATR cache on new bar for all active pairs
-      for(int i = 0; i < g_totalPairs; i++)
+      for(int i = 0; i < MAX_PAIRS; i++)
       {
          if(!g_pairs[i].enabled) continue;
          UpdateATRCache(i);
@@ -8235,10 +8235,10 @@ double GetAveragingProfitWithSuffix(string prefix, string suffix)
          // Check if comment contains BOTH prefix AND suffix
          if(StringFind(comment, prefix) >= 0 && StringFind(comment, suffix) >= 0)
          {
-            // v1.4: Include COMMISSION for Net Profit
+            // v1.4: Include FEE for Net Profit (v2.1.6: POSITION_COMMISSION deprecated)
             totalProfit += PositionGetDouble(POSITION_PROFIT) + 
                            PositionGetDouble(POSITION_SWAP) + 
-                           PositionGetDouble(POSITION_COMMISSION);
+                           PositionGetDouble(POSITION_FEE);
          }
       }
    }
@@ -8255,10 +8255,10 @@ double GetPositionProfit(ulong ticket)
    
    if(PositionSelectByTicket(ticket))
    {
-      // v1.4: Include COMMISSION for Net Profit (matches MT5 display)
+      // v1.4: Include FEE for Net Profit (v2.1.6: POSITION_COMMISSION deprecated)
       return PositionGetDouble(POSITION_PROFIT) + 
              PositionGetDouble(POSITION_SWAP) + 
-             PositionGetDouble(POSITION_COMMISSION);
+             PositionGetDouble(POSITION_FEE);
    }
    
    return 0;
@@ -8277,10 +8277,10 @@ double GetAveragingProfit(string commentPattern)
       {
          if(StringFind(PositionGetString(POSITION_COMMENT), commentPattern) >= 0)
          {
-            // v1.4: Include COMMISSION for Net Profit
+            // v1.4: Include FEE for Net Profit (v2.1.6: POSITION_COMMISSION deprecated)
             totalProfit += PositionGetDouble(POSITION_PROFIT) + 
                            PositionGetDouble(POSITION_SWAP) + 
-                           PositionGetDouble(POSITION_COMMISSION);
+                           PositionGetDouble(POSITION_FEE);
          }
       }
    }
