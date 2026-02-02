@@ -4,10 +4,10 @@
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "2.00"
+#property version   "2.10"
 #property strict
 #property description "Harmony Dream - Pairs Trading Expert Advisor"
-#property description "v2.0: Mini Group System (5 Groups × 6 Pairs, 15 Mini Groups)"
+#property description "v2.1: Mini Group Close Button + Target Trigger Reset"
 #property description "Full Hedging with Independent Buy/Sell Sides"
 #include <Trade/Trade.mqh>
 
@@ -2675,10 +2675,31 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
             return;
          }
          
-         CloseGroupOrders(grpIdx);
-         ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
-      }
+      CloseGroupOrders(grpIdx);
+      ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
    }
+   // v2.1: Close Mini Group button handler
+   else if(StringFind(sparam, prefix + "_CLOSE_MINI_") >= 0)
+   {
+      int miniIdx = (int)StringToInteger(StringSubstr(sparam, StringLen(prefix + "_CLOSE_MINI_")));
+      
+      // Confirmation popup
+      int startPair = miniIdx * PAIRS_PER_MINI + 1;
+      int endPair = startPair + PAIRS_PER_MINI - 1;
+      string msg = StringFormat("Close ALL orders in Mini Group %d (Pairs %d-%d)?", 
+                                miniIdx + 1, startPair, endPair);
+      int result = MessageBox(msg, "Confirm Close Mini Group", MB_YESNO | MB_ICONWARNING);
+      if(result != IDYES)
+      {
+         ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
+         return;
+      }
+      
+      CloseMiniGroup(miniIdx);
+      ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
+      PrintFormat("[v2.1] Manual Close Mini Group %d completed", miniIdx + 1);
+   }
+}
    else if(id == CHARTEVENT_OBJECT_ENDEDIT)
    {
       string prefix = "STAT_";
@@ -6896,6 +6917,14 @@ bool OpenBuySideTrade(int pairIndex)
    g_pairs[pairIndex].gridProfitCountBuy = 0;
    g_pairs[pairIndex].gridProfitZLevelBuy = 0;
    
+   // v2.1: Reset Mini Group target trigger when new position opened
+   int miniIdx = GetMiniGroupIndex(pairIndex);
+   if(g_miniGroups[miniIdx].targetTriggered)
+   {
+      g_miniGroups[miniIdx].targetTriggered = false;
+      PrintFormat("[v2.1] Mini Group %d target trigger RESET (new BUY position opened)", miniIdx + 1);
+   }
+   
    PrintFormat("Pair %d BUY SIDE OPENED: BUY %s | %s %s | Z=%.2f | Corr=%s",
       pairIndex + 1, symbolA,
       corrType == 1 ? "SELL" : "BUY", symbolB,
@@ -7078,6 +7107,14 @@ bool OpenSellSideTrade(int pairIndex)
    g_pairs[pairIndex].lastProfitPriceSell = 0;
    g_pairs[pairIndex].gridProfitCountSell = 0;
    g_pairs[pairIndex].gridProfitZLevelSell = 0;
+   
+   // v2.1: Reset Mini Group target trigger when new position opened
+   int miniIdx = GetMiniGroupIndex(pairIndex);
+   if(g_miniGroups[miniIdx].targetTriggered)
+   {
+      g_miniGroups[miniIdx].targetTriggered = false;
+      PrintFormat("[v2.1] Mini Group %d target trigger RESET (new SELL position opened)", miniIdx + 1);
+   }
    
    PrintFormat("Pair %d SELL SIDE OPENED: SELL %s | %s %s | Z=%.2f | Corr=%s",
       pairIndex + 1, symbolA,
@@ -8549,10 +8586,13 @@ void CreatePairRow(string prefix, int idx, int buyX, int centerX, int sellX, int
       string mIdxStr = IntegerToString(mIdx);
       string miniLabel = "M" + IntegerToString(mIdx + 1);
       
-      // Row 1: Mini number + Float value
-      CreateLabel(prefix + "M" + mIdxStr + "_HDR", miniGroupX + 5, y + 3, miniLabel, COLOR_GOLD, 8, "Arial Bold");
-      CreateLabel(prefix + "M" + mIdxStr + "_V_FLT", miniGroupX + 28, y + 3, "$0", COLOR_PROFIT, 8, "Arial");
-      CreateLabel(prefix + "M" + mIdxStr + "_V_CL", miniGroupX + 55, y + 3, "$0", COLOR_PROFIT, 8, "Arial");
+      // Row 1: Mini number + Float value + Closed value
+      CreateLabel(prefix + "M" + mIdxStr + "_HDR", miniGroupX + 3, y + 3, miniLabel, COLOR_GOLD, 8, "Arial Bold");
+      CreateLabel(prefix + "M" + mIdxStr + "_V_FLT", miniGroupX + 22, y + 3, "$0", COLOR_PROFIT, 7, "Arial");
+      CreateLabel(prefix + "M" + mIdxStr + "_V_CL", miniGroupX + 52, y + 3, "$0", COLOR_PROFIT, 7, "Arial");
+      
+      // v2.1: Close Mini Group button (smaller X button)
+      CreateButton(prefix + "_CLOSE_MINI_" + mIdxStr, miniGroupX + 75, y + 2, 12, 12, "X", clrRed, clrWhite);
    }
    
    // === v2.0: GROUP INFO COLUMN (Display every 6 pairs) ===
