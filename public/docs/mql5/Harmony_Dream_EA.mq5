@@ -4397,7 +4397,6 @@ void CloseMiniGroup(int miniIndex)
    }
    
    // v2.1.2: Add closed profit to PARENT GROUP (for Group tracking)
-   int groupIdx = GetGroupFromMini(miniIndex);
    g_groups[groupIdx].closedProfit += closedProfit;
    
    // v2.1.2: Reset Mini Group closed profit for NEW CYCLE
