@@ -4,10 +4,10 @@
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "2.10"
+#property version   "2.12"
 #property strict
 #property description "Harmony Dream - Pairs Trading Expert Advisor"
-#property description "v2.1: Mini Group Close Button + Target Trigger Reset"
+#property description "v2.1.2: Mini Group UI + M.Tgt Format + Reset Cycle Logic"
 #property description "Full Hedging with Independent Buy/Sell Sides"
 #include <Trade/Trade.mqh>
 
@@ -801,6 +801,12 @@ color COLOR_COLHDR_CENTER;
 color COLOR_COLHDR_SELL;
 color COLOR_COLHDR_GROUP;
 
+// v2.1.2: Mini Group specific colors (distinct from Group Info)
+color COLOR_HEADER_MINI;
+color COLOR_COLHDR_MINI;
+color COLOR_MINI_BG;
+color COLOR_MINI_BORDER;
+
 // v1.8.7: Theme-aware label color for bottom sections
 color COLOR_TEXT_LABEL;
 
@@ -912,6 +918,12 @@ void InitializeThemeColors()
       COLOR_COLHDR_SELL  = C'180,50,60';        // Professional Red
       COLOR_COLHDR_GROUP = C'90,75,110';        // Light Purple
       
+      // v2.1.2: Mini Group specific colors (distinct blue)
+      COLOR_HEADER_MINI  = C'50,80,140';        // Medium Blue Header
+      COLOR_COLHDR_MINI  = C'60,90,150';        // Column Header Blue
+      COLOR_MINI_BG      = C'210,225,245';      // Light Blue Row Background
+      COLOR_MINI_BORDER  = C'100,130,180';      // Blue Border
+      
       // v1.8.7: Dark text for light backgrounds (bottom section labels)
       COLOR_TEXT_LABEL   = C'60,65,75';         // Dark Gray for light backgrounds
    }
@@ -944,6 +956,12 @@ void InitializeThemeColors()
       COLOR_COLHDR_CENTER= C'35,42,58';         // Dark Center
       COLOR_COLHDR_SELL  = C'100,45,50';        // Dark Red
       COLOR_COLHDR_GROUP = C'50,40,70';         // Dark Purple
+      
+      // v2.1.2: Mini Group specific colors (distinct blue)
+      COLOR_HEADER_MINI  = C'25,45,80';         // Dark Blue Header
+      COLOR_COLHDR_MINI  = C'30,50,90';         // Column Header Blue
+      COLOR_MINI_BG      = C'20,35,60';         // Row Background Blue
+      COLOR_MINI_BORDER  = C'40,60,100';        // Border Blue
       
       // v1.8.7: Light text for dark backgrounds (bottom section labels)
       COLOR_TEXT_LABEL   = C'180,185,195';      // Light Gray for dark backgrounds
@@ -1854,6 +1872,28 @@ double GetMiniGroupSumTarget(int groupIndex)
       sum += g_miniGroups[startMini + i].closedTarget;
    }
    return sum;
+}
+
+//+------------------------------------------------------------------+
+//| v2.1.2: Get Mini Group Targets as formatted string (1000/1000/1000)|
+//+------------------------------------------------------------------+
+string GetMiniGroupTargetString(int groupIndex)
+{
+   int startMini = groupIndex * MINIS_PER_GROUP;
+   string result = "";
+   
+   for(int i = 0; i < MINIS_PER_GROUP; i++)
+   {
+      double target = GetScaledMiniGroupTarget(startMini + i);
+      if(i > 0) result += "/";
+      
+      if(target > 0)
+         result += IntegerToString((int)target);
+      else
+         result += "0";
+   }
+   
+   return result;  // Format: "1000/1000/1000" or "0/1000/500"
 }
 
 //+------------------------------------------------------------------+
@@ -4356,14 +4396,15 @@ void CloseMiniGroup(int miniIndex)
       }
    }
    
-   // Add closed profit to Mini Group's accumulated closed
-   g_miniGroups[miniIndex].closedProfit += closedProfit;
+   // v2.1.2: Add closed profit to PARENT GROUP (for Group tracking)
+   int groupIdx = GetGroupFromMini(miniIndex);
+   g_groups[groupIdx].closedProfit += closedProfit;
    
-   // Reset trigger for next cycle (optional - depends on requirement)
-   // g_miniGroups[miniIndex].targetTriggered = false;
+   // v2.1.2: Reset Mini Group closed profit for NEW CYCLE
+   g_miniGroups[miniIndex].closedProfit = 0;
    
-   PrintFormat("[v2.0] Mini Group %d CLOSED | Profit Added: $%.2f | Total Closed: $%.2f",
-               miniIndex + 1, closedProfit, g_miniGroups[miniIndex].closedProfit);
+   PrintFormat("[v2.1.2] Mini Group %d TARGET CLOSED | Profit: $%.2f → Group %d | Mini RESET to $0",
+               miniIndex + 1, closedProfit, groupIdx + 1);
 }
 
 double GetRealTimeScaledTargetSell(int groupIndex)
@@ -8397,8 +8438,8 @@ void CreateDashboard()
    int centerX = buyStartX + buyWidth + 5;
    int sellStartX = centerX + centerWidth + 5;
    
-   // v2.0: Mini Group Column (NEW!)
-   int miniGroupWidth = 90;
+   // v2.1.2: Mini Group Column (EXPANDED)
+   int miniGroupWidth = 110;  // Increased from 90 to 110
    int miniGroupX = sellStartX + sellWidth + 5;
    
    // v2.0: Group Info Column (shifted right)
@@ -8418,9 +8459,9 @@ void CreateDashboard()
    CreateRectangle(prefix + "HDR_SELL", sellStartX, headerY + 3, sellWidth, headerHeight, COLOR_HEADER_SELL, COLOR_HEADER_SELL);
    CreateLabel(prefix + "HDR_SELL_TXT", sellStartX + 165, headerY + 8, "SELL DATA", COLOR_HEADER_TXT, 10, "Arial Bold");
    
-   // v2.0: Mini Group Header (NEW!)
-   CreateRectangle(prefix + "HDR_MINI", miniGroupX, headerY + 3, miniGroupWidth, headerHeight, COLOR_HEADER_GROUP, COLOR_HEADER_GROUP);
-   CreateLabel(prefix + "HDR_MINI_TXT", miniGroupX + 8, headerY + 8, "MINI GROUP", COLOR_HEADER_TXT, 9, "Arial Bold");
+   // v2.1.2: Mini Group Header (distinct blue color)
+   CreateRectangle(prefix + "HDR_MINI", miniGroupX, headerY + 3, miniGroupWidth, headerHeight, COLOR_HEADER_MINI, COLOR_HEADER_MINI);
+   CreateLabel(prefix + "HDR_MINI_TXT", miniGroupX + 15, headerY + 8, "MINI GROUP", COLOR_HEADER_TXT, 9, "Arial Bold");
    
    // v2.0: Group Info Header (shifted right)
    CreateRectangle(prefix + "HDR_GROUP", groupInfoX, headerY + 3, groupInfoWidth, headerHeight, COLOR_HEADER_GROUP, COLOR_HEADER_GROUP);
@@ -8430,8 +8471,8 @@ void CreateDashboard()
    CreateRectangle(prefix + "COLHDR_BUY_BG", buyStartX, colHeaderY - 1, buyWidth, colHeaderHeight, COLOR_COLHDR_BUY, COLOR_COLHDR_BUY);
    CreateRectangle(prefix + "COLHDR_CENTER_BG", centerX, colHeaderY - 1, centerWidth, colHeaderHeight, COLOR_COLHDR_CENTER, COLOR_COLHDR_CENTER);
    CreateRectangle(prefix + "COLHDR_SELL_BG", sellStartX, colHeaderY - 1, sellWidth, colHeaderHeight, COLOR_COLHDR_SELL, COLOR_COLHDR_SELL);
-   // v2.0: Mini Group Column Header Background
-   CreateRectangle(prefix + "COLHDR_MINI_BG", miniGroupX, colHeaderY - 1, miniGroupWidth, colHeaderHeight, COLOR_COLHDR_GROUP, COLOR_COLHDR_GROUP);
+   // v2.1.2: Mini Group Column Header Background (distinct blue)
+   CreateRectangle(prefix + "COLHDR_MINI_BG", miniGroupX, colHeaderY - 1, miniGroupWidth, colHeaderHeight, COLOR_COLHDR_MINI, COLOR_COLHDR_MINI);
    // v2.0: Group Info Column Header Background (shifted right)
    CreateRectangle(prefix + "COLHDR_GROUP_BG", groupInfoX, colHeaderY - 1, groupInfoWidth, colHeaderHeight, COLOR_COLHDR_GROUP, COLOR_COLHDR_GROUP);
    
@@ -8467,10 +8508,10 @@ void CreateDashboard()
    CreateLabel(prefix + "COL_S_PF", sellStartX + 340, colLabelY, "Closed", COLOR_HEADER_TXT, 7, "Arial");
    CreateLabel(prefix + "COL_S_X", sellStartX + 378, colLabelY, "X", COLOR_HEADER_TXT, 7, "Arial");
    
-   // v2.0: Mini Group columns: # | Float | Closed
+   // v2.1.2: Mini Group columns: # | Float | Closed (adjusted positions for wider column)
    CreateLabel(prefix + "COL_M_HDR", miniGroupX + 5, colLabelY, "#", COLOR_HEADER_TXT, 7, "Arial");
-   CreateLabel(prefix + "COL_M_FLT", miniGroupX + 25, colLabelY, "Float", COLOR_HEADER_TXT, 7, "Arial");
-   CreateLabel(prefix + "COL_M_CL", miniGroupX + 55, colLabelY, "Closed", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_M_FLT", miniGroupX + 30, colLabelY, "Float", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_M_CL", miniGroupX + 70, colLabelY, "Closed", COLOR_HEADER_TXT, 7, "Arial");
    
    // v2.0: Group Info columns (Grp | Float | Closed | Tgt | M.Tgt)
    CreateLabel(prefix + "COL_G_GRP", groupInfoX + 5, colLabelY, "Grp", COLOR_HEADER_TXT, 7, "Arial");
@@ -8488,12 +8529,11 @@ void CreateDashboard()
       CreateRectangle(prefix + "ROW_C_" + IntegerToString(i), centerX, rowY, centerWidth, ROW_HEIGHT - 1, rowBg, rowBg);
       CreateRectangle(prefix + "ROW_S_" + IntegerToString(i), sellStartX, rowY, sellWidth, ROW_HEIGHT - 1, rowBg, rowBg);
       
-      // v2.0: Mini Group row background (every 2 pairs)
+      // v2.1.2: Mini Group row background (distinct blue - every 2 pairs)
       if(i % PAIRS_PER_MINI == 0)
       {
          int miniRowHeight = PAIRS_PER_MINI * ROW_HEIGHT - 1;
-         color miniBg = C'30,25,40';
-         CreateRectangle(prefix + "ROW_M_" + IntegerToString(i / PAIRS_PER_MINI), miniGroupX, rowY, miniGroupWidth, miniRowHeight, miniBg, C'50,40,65');
+         CreateRectangle(prefix + "ROW_M_" + IntegerToString(i / PAIRS_PER_MINI), miniGroupX, rowY, miniGroupWidth, miniRowHeight, COLOR_MINI_BG, COLOR_MINI_BORDER);
       }
       
       // v2.0: Group Info row background (every 6 pairs)
@@ -8561,20 +8601,26 @@ void CreatePairRow(string prefix, int idx, int buyX, int centerX, int sellX, int
    CreateLabel(prefix + "P" + idxStr + "_S_CLOSED", sellX + 340, y + 3, "0", COLOR_TEXT, FONT_SIZE, "Arial");
    CreateButton(prefix + "_CLOSE_SELL_" + idxStr, sellX + 375, y + 2, 16, 14, "X", clrRed, clrWhite);
    
-   // === v2.0: MINI GROUP COLUMN (Display every 2 pairs) ===
+   // === v2.1.2: MINI GROUP COLUMN (Display every 2 pairs) ===
    if(idx % PAIRS_PER_MINI == 0)
    {
       int mIdx = idx / PAIRS_PER_MINI;
       string mIdxStr = IntegerToString(mIdx);
       string miniLabel = "M" + IntegerToString(mIdx + 1);
       
-      // Row 1: Mini number + Float value + Closed value
-      CreateLabel(prefix + "M" + mIdxStr + "_HDR", miniGroupX + 3, y + 3, miniLabel, COLOR_GOLD, 8, "Arial Bold");
-      CreateLabel(prefix + "M" + mIdxStr + "_V_FLT", miniGroupX + 22, y + 3, "$0", COLOR_PROFIT, 7, "Arial");
-      CreateLabel(prefix + "M" + mIdxStr + "_V_CL", miniGroupX + 52, y + 3, "$0", COLOR_PROFIT, 7, "Arial");
+      // Row 1: Mini number + Float value + Closed value (expanded layout)
+      CreateLabel(prefix + "M" + mIdxStr + "_HDR", miniGroupX + 5, y + 3, miniLabel, COLOR_GOLD, 8, "Arial Bold");
+      CreateLabel(prefix + "M" + mIdxStr + "_V_FLT", miniGroupX + 30, y + 3, "$0", COLOR_PROFIT, 8, "Arial");
+      CreateLabel(prefix + "M" + mIdxStr + "_V_CL", miniGroupX + 70, y + 3, "$0", COLOR_PROFIT, 8, "Arial");
+   }
+   // v2.1.2: Row 2 - Close Mini Group button (on second row of each Mini)
+   else if(idx % PAIRS_PER_MINI == 1)
+   {
+      int mIdx = idx / PAIRS_PER_MINI;
+      string mIdxStr = IntegerToString(mIdx);
       
-      // v2.1: Close Mini Group button (smaller X button)
-      CreateButton(prefix + "_CLOSE_MINI_" + mIdxStr, miniGroupX + 75, y + 2, 12, 12, "X", clrRed, clrWhite);
+      // Close Mini button on Row 2 (centered, larger button)
+      CreateButton(prefix + "_CLOSE_MINI_" + mIdxStr, miniGroupX + 10, y + 2, 90, 14, "Close Mini", clrDarkRed, clrWhite);
    }
    
    // === v2.0: GROUP INFO COLUMN (Display every 6 pairs) ===
@@ -8596,11 +8642,10 @@ void CreatePairRow(string prefix, int idx, int buyX, int centerX, int sellX, int
       CreateLabel(prefix + "G" + gIdxStr + "_L_TGT", groupInfoX + 5, y + 44, "Target:", COLOR_TEXT_LABEL, 7, "Arial");
       CreateLabel(prefix + "G" + gIdxStr + "_V_TGT", groupInfoX + 45, y + 44, tgtStr, COLOR_GOLD, 8, "Arial");
       
-      // v2.0: Mini Target row (NEW!)
-      double miniTgt = GetMiniGroupSumTarget(gIdx);
-      string miniTgtStr = (miniTgt > 0) ? "$" + DoubleToString(miniTgt, 0) : "-";
+      // v2.1.2: Mini Target row - Display format: 1000/1000/1000
+      string miniTgtStr = GetMiniGroupTargetString(gIdx);  // Returns "1000/1000/1000"
       CreateLabel(prefix + "G" + gIdxStr + "_L_MTGT", groupInfoX + 5, y + 58, "M.Tgt:", COLOR_TEXT_LABEL, 7, "Arial");
-      CreateLabel(prefix + "G" + gIdxStr + "_V_MTGT", groupInfoX + 45, y + 58, miniTgtStr, COLOR_ACTIVE, 8, "Arial");
+      CreateLabel(prefix + "G" + gIdxStr + "_V_MTGT", groupInfoX + 40, y + 58, miniTgtStr, COLOR_ACTIVE, 7, "Arial");
       
       CreateButton(prefix + "_CLOSE_GRP_" + gIdxStr, groupInfoX + 5, y + 75, 80, 14, "Close Grp", COLOR_HEADER_SELL, clrWhite);
    }
@@ -9107,9 +9152,8 @@ void UpdateDashboard()
       string tgtStr = (scaledTarget > 0) ? "$" + DoubleToString(scaledTarget, 0) : "-";
       UpdateLabel(prefix + "G" + gIdxStr + "_V_TGT", tgtStr, COLOR_GOLD);
       
-      // v2.0: Update Mini Target sum for this Group
-      double miniTgt = GetMiniGroupSumTarget(g);
-      string miniTgtStr = (miniTgt > 0) ? "$" + DoubleToString(miniTgt, 0) : "-";
+      // v2.1.2: Update Mini Target with individual format
+      string miniTgtStr = GetMiniGroupTargetString(g);  // Returns "1000/1000/1000"
       UpdateLabel(prefix + "G" + gIdxStr + "_V_MTGT", miniTgtStr, COLOR_ACTIVE);
    }
    
