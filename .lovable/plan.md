@@ -1,216 +1,117 @@
 
-
-## แผนแก้ไข: Correlation Only Mode - Full Debug + RSI Bypass (v2.1.7)
-
-### สรุปปัญหาจากภาพ
-
-| Set | Pair | Corr | Type | Trend | Direction ที่คาดว่าจะได้ | สถานะ |
-|-----|------|------|------|-------|------------------------|-------|
-| 10 | GBPUSD-NZDUSD | 94% | Pos | Up | BUY | ❌ ไม่เปิด order |
-| 11 | AUDUSD-NZDUSD | 99% | Pos | Up | BUY | ❌ ไม่เปิด order |
-
-**สาเหตุที่เป็นไปได้:**
-
-1. **RSI Entry Confirmation Block** - ถ้า `InpUseRSISpreadFilter = true`:
-   - BUY ต้องมี RSI <= InpRSIOversold (ค่า default ≤ 30)
-   - ถ้า RSI อยู่ที่ 45 ก็จะ fail
-
-2. **directionBuy/Sell ไม่เท่ากับ -1** - อาจถูก set ไว้จาก operation ก่อนหน้า
-
-3. **Grid Guard Block** - ถ้า `InpGridPauseAffectsMain = true` และเงื่อนไข Grid Guard ไม่ผ่าน
+## แผนแก้ไข 2 ปัญหา: Fix License Reload + Duplicate Orders (v2.1.8)
 
 ---
 
-### การแก้ไข
+### ปัญหาที่ 1: License ไม่ Reload เมื่อเปลี่ยน Timeframe
 
-#### Part A: เพิ่ม Option ข้าม RSI Check สำหรับ Correlation Only Mode
+**สาเหตุที่วิเคราะห์ได้:**
 
-**เพิ่ม Input Parameter:**
+จากโค้ดปัจจุบัน `OnInit()` → `VerifyLicense()` → `InitLicense()` → `VerifyLicenseWithServer()` ถูกเรียกทุกครั้งที่เปลี่ยน Timeframe แต่ปัญหาอาจเกิดจาก:
+
+1. **ไม่มี Log แสดงชัดเจนว่า License กำลัง Reload** เมื่อเปลี่ยน TF
+2. **Popup ถูกแสดงแต่อาจถูกปิดเร็วเกินไป** หรือ minimize ลงไป
+3. **global variables ไม่ได้ถูก reset** ก่อน verify ใหม่
+
+**การแก้ไข:**
+
+#### Part A: เพิ่ม Log ที่ชัดเจนเมื่อ License Reload
 
 ```cpp
-input group "=== Entry Mode Settings (v1.8.8) ==="
-input ENUM_ENTRY_MODE InpEntryMode = ENTRY_MODE_ZSCORE;    // Entry Mode
-input double   InpCorrOnlyPositiveThreshold = 0.60;        // Correlation Only: Positive Threshold
-input double   InpCorrOnlyNegativeThreshold = -0.60;       // Correlation Only: Negative Threshold
-// v2.1.7: NEW - Option to skip filters for immediate entry
-input bool     InpCorrOnlySkipADXCheck = false;            // Correlation Only: Skip ADX Check (Neg Corr)
-input bool     InpCorrOnlySkipRSICheck = false;            // Correlation Only: Skip RSI Confirmation
+// OnInit() - เพิ่ม log ก่อน VerifyLicense()
+Print("=================================================");
+Print("[OnInit] EA Restarted - Reloading License...");
+Print("[OnInit] Reason: Timeframe Change / Chart Reload");
+Print("=================================================");
+
+// Reset license variables ก่อน verify
+g_isLicenseValid = false;
+g_licenseStatus = LICENSE_ERROR;
+g_lastLicenseCheck = 0;
+
+// Verify license
+g_isLicenseValid = VerifyLicense();
 ```
+
+#### Part B: เพิ่ม Option ให้เลือกแสดง/ซ่อน Popup เมื่อ Reload
+
+```cpp
+// Input Parameters (ใหม่)
+input bool InpShowPopupOnReload = true;  // Show License Popup on TF Change
+```
+
+```cpp
+// VerifyLicense() - เพิ่มเงื่อนไข
+if(InpShowPopupOnReload || g_isFirstInit)
+{
+   ShowLicensePopup(g_licenseStatus);
+}
+```
+
+#### Part C: แสดง License Status บน Dashboard แทน Popup
+
+เพิ่มการแสดง License Status ที่มุมบน Dashboard:
+- `LICENSE: OK` (สีเขียว)
+- `LICENSE: EXPIRING` (สีเหลือง)
+- `LICENSE: ERROR` (สีแดง)
 
 ---
 
-#### Part B: แก้ไข AnalyzeAllPairs() - ข้าม RSI ถ้า Option เปิด
+### ปัญหาที่ 2: Duplicate Orders เมื่อ Restart EA
 
-**ตำแหน่ง:** บรรทัด 5665-5667
+**สาเหตุ:** `RestoreOpenPositions()` match symbol โดยไม่ดู pair index จาก comment
 
-**จาก:**
+**การแก้ไข (จากแผนก่อนหน้า):**
+
+#### Part D: เพิ่มฟังก์ชัน Extract Pair Index จาก Comment
+
 ```cpp
-// Step 4: Check RSI Entry Confirmation (still apply)
-if(!CheckRSIEntryConfirmation(i, direction))
-   continue;
-```
-
-**เป็น:**
-```cpp
-// Step 4: Check RSI Entry Confirmation (v2.1.7: Optional skip)
-if(!InpCorrOnlySkipRSICheck && !CheckRSIEntryConfirmation(i, direction))
+int ExtractPairIndexFromComment(string comment)
 {
-   if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
-      PrintFormat("[CORR ONLY SKIP] Pair %d %s/%s: RSI BLOCK (dir=%s, RSI=%.1f)", 
-                  i + 1, g_pairs[i].symbolA, g_pairs[i].symbolB, 
-                  direction, g_pairs[i].rsiSpread);
-   continue;
+   // Pattern: "_BUY_XX" หรือ "_SELL_XX"
+   int buyPos = StringFind(comment, "_BUY_");
+   int sellPos = StringFind(comment, "_SELL_");
+   
+   int sidePos = (buyPos >= 0) ? buyPos : sellPos;
+   if(sidePos < 0) return -1;
+   
+   int numStart = sidePos + ((buyPos >= 0) ? 5 : 6);
+   string numStr = "";
+   for(int i = numStart; i < StringLen(comment); i++)
+   {
+      ushort ch = StringGetCharacter(comment, i);
+      if(ch >= '0' && ch <= '9')
+         numStr += CharToString((uchar)ch);
+      else
+         break;
+   }
+   
+   if(numStr == "") return -1;
+   return (int)StringToInteger(numStr) - 1;  // 0-based index
 }
 ```
 
----
-
-#### Part C: เพิ่ม Comprehensive Debug Log ทุกขั้นตอน
-
-**แก้ไข AnalyzeAllPairs() - เพิ่ม Log ทุก Step:**
+#### Part E: แก้ไข RestoreOpenPositions() ให้ตรวจสอบ Pair Index
 
 ```cpp
-// ================================================================
-// v1.8.8: CORRELATION ONLY MODE (v2.1.7: Full Debug)
-// ================================================================
-if(InpEntryMode == ENTRY_MODE_CORRELATION_ONLY)
+// RestoreOpenPositions() - เพิ่มการตรวจสอบ
+int commentPairIndex = ExtractPairIndexFromComment(comment);
+
+for(int i = 0; i < MAX_PAIRS; i++)
 {
-   bool debugLog = InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester);
+   if(!g_pairs[i].enabled) continue;
+   if(symbol != g_pairs[i].symbolA && symbol != g_pairs[i].symbolB) continue;
    
-   // Step 1: Check Correlation Threshold
-   if(!CheckCorrelationOnlyEntry(i))
-   {
-      if(debugLog)
-         PrintFormat("[CORR ONLY] Pair %d %s/%s: SKIP - Corr %.0f%% not in range (Pos>=%.0f%%, Neg<=%.0f%%)",
-                     i + 1, g_pairs[i].symbolA, g_pairs[i].symbolB,
-                     g_pairs[i].correlation * 100,
-                     InpCorrOnlyPositiveThreshold * 100,
-                     InpCorrOnlyNegativeThreshold * 100);
-      continue;
-   }
+   // v2.1.8: Verify pair index from comment
+   if(commentPairIndex >= 0 && commentPairIndex != i)
+      continue;  // Wrong pair - skip
    
-   // Step 2: Determine Trade Direction based on CDC + ADX
-   string direction = DetermineTradeDirectionForCorrOnly(i);
-   if(direction == "")
-   {
-      if(debugLog)
-      {
-         string reason = "";
-         if(!g_pairs[i].cdcReadyA || !g_pairs[i].cdcReadyB)
-            reason = "CDC NOT READY";
-         else if(g_pairs[i].cdcTrendA == "NEUTRAL" || g_pairs[i].cdcTrendB == "NEUTRAL")
-            reason = StringFormat("CDC NEUTRAL (A=%s, B=%s)", g_pairs[i].cdcTrendA, g_pairs[i].cdcTrendB);
-         else if(g_pairs[i].correlationType == 1 && g_pairs[i].cdcTrendA != g_pairs[i].cdcTrendB)
-            reason = StringFormat("POS CORR TREND MISMATCH (A=%s, B=%s)", g_pairs[i].cdcTrendA, g_pairs[i].cdcTrendB);
-         else if(g_pairs[i].correlationType == -1 && g_pairs[i].cdcTrendA == g_pairs[i].cdcTrendB)
-            reason = StringFormat("NEG CORR SAME TREND (A=%s, B=%s)", g_pairs[i].cdcTrendA, g_pairs[i].cdcTrendB);
-         else if(g_pairs[i].correlationType == -1 && InpUseADXForNegative && !InpCorrOnlySkipADXCheck)
-            reason = StringFormat("ADX FAIL (A=%.1f, B=%.1f, Min=%.1f)", 
-                                  g_pairs[i].adxValueA, g_pairs[i].adxValueB, InpADXMinStrength);
-         else
-            reason = "UNKNOWN";
-         
-         PrintFormat("[CORR ONLY] Pair %d %s/%s: SKIP - Direction empty, Reason: %s",
-                     i + 1, g_pairs[i].symbolA, g_pairs[i].symbolB, reason);
-      }
-      continue;
-   }
+   // Also verify prefix for new format
+   string expectedPrefix = GetPairCommentPrefix(i);
+   if(StringFind(comment, "-") > 0 && StringFind(comment, expectedPrefix) != 0)
+      continue;  // Prefix mismatch - skip
    
-   // Step 3: Check Grid Guard (Correlation Only version)
-   if(InpGridPauseAffectsMain)
-   {
-      string pauseReason = "";
-      if(!CheckGridTradingAllowedCorrOnly(i, direction, pauseReason))
-      {
-         if(debugLog)
-            PrintFormat("[CORR ONLY] Pair %d %s/%s: SKIP - Grid Guard: %s",
-                        i + 1, g_pairs[i].symbolA, g_pairs[i].symbolB, pauseReason);
-         continue;
-      }
-   }
-   
-   // Step 4: Check RSI Entry Confirmation (v2.1.7: Optional skip)
-   if(!InpCorrOnlySkipRSICheck && !CheckRSIEntryConfirmation(i, direction))
-   {
-      if(debugLog)
-         PrintFormat("[CORR ONLY] Pair %d %s/%s: SKIP - RSI BLOCK (dir=%s, RSI=%.1f, OB=%.0f, OS=%.0f)", 
-                     i + 1, g_pairs[i].symbolA, g_pairs[i].symbolB, 
-                     direction, g_pairs[i].rsiSpread, InpRSIOverbought, InpRSIOversold);
-      continue;
-   }
-   
-   // Step 5: Open Trade based on determined direction
-   if(direction == "BUY")
-   {
-      if(g_pairs[i].directionBuy == -1 && g_pairs[i].orderCountBuy < g_pairs[i].maxOrderBuy)
-      {
-         // ... open order
-      }
-      else if(debugLog)
-      {
-         PrintFormat("[CORR ONLY] Pair %d %s/%s: BUY BLOCKED (directionBuy=%d, orderCount=%d/%d)",
-                     i + 1, g_pairs[i].symbolA, g_pairs[i].symbolB,
-                     g_pairs[i].directionBuy, g_pairs[i].orderCountBuy, g_pairs[i].maxOrderBuy);
-      }
-   }
-   else // direction == "SELL"
-   {
-      if(g_pairs[i].directionSell == -1 && g_pairs[i].orderCountSell < g_pairs[i].maxOrderSell)
-      {
-         // ... open order
-      }
-      else if(debugLog)
-      {
-         PrintFormat("[CORR ONLY] Pair %d %s/%s: SELL BLOCKED (directionSell=%d, orderCount=%d/%d)",
-                     i + 1, g_pairs[i].symbolA, g_pairs[i].symbolB,
-                     g_pairs[i].directionSell, g_pairs[i].orderCountSell, g_pairs[i].maxOrderSell);
-      }
-   }
-   
-   continue;
-}
-```
-
----
-
-#### Part D: แก้ไข DetermineTradeDirectionForCorrOnly() - เพิ่ม Skip ADX
-
-**ตำแหน่ง:** บรรทัด 5554-5571
-
-**จาก:**
-```cpp
-// Check ADX Winner
-if(!InpUseADXForNegative)
-{
-   // Without ADX: Default to following Symbol A's trend
-   return (trendA == "BULLISH") ? "BUY" : "SELL";
-}
-```
-
-**เป็น:**
-```cpp
-// v2.1.7: Check ADX Winner (with Skip option)
-if(!InpUseADXForNegative || InpCorrOnlySkipADXCheck)
-{
-   // Without ADX or Skip ADX: Default to following Symbol A's trend
-   return (trendA == "BULLISH") ? "BUY" : "SELL";
-}
-```
-
-**และแก้ไข Fallback เมื่อ ADX ทั้งคู่ไม่ผ่าน:**
-
-**จาก:**
-```cpp
-else
-   return "";  // Neither has clear strength - wait
-```
-
-**เป็น:**
-```cpp
-else
-{
-   // v2.1.7: Fallback to Symbol A's trend instead of blocking
-   return (trendA == "BULLISH") ? "BUY" : "SELL";
+   // ... rest of restore logic
 }
 ```
 
@@ -220,25 +121,13 @@ else
 
 | ไฟล์ | ส่วนที่แก้ไข | บรรทัด (ประมาณ) | รายละเอียด |
 |------|-------------|-----------------|------------|
-| `Harmony_Dream_EA.mq5` | Version | 7-10 | อัปเดตเป็น v2.17 |
-| `Harmony_Dream_EA.mq5` | Input Parameters | 654-656 | เพิ่ม `InpCorrOnlySkipADXCheck` + `InpCorrOnlySkipRSICheck` |
-| `Harmony_Dream_EA.mq5` | `DetermineTradeDirectionForCorrOnly()` | 5554-5571 | เพิ่ม Skip ADX + Fallback |
-| `Harmony_Dream_EA.mq5` | `AnalyzeAllPairs()` | 5646-5705 | เพิ่ม Full Debug Logs + Skip RSI option |
-
----
-
-### การตั้งค่าแนะนำ
-
-เพื่อให้ออก order ทันทีทุกตัวเมื่อดึง EA เข้า chart:
-
-| Parameter | Value | เหตุผล |
-|-----------|-------|--------|
-| Entry Mode | Correlation Only | ข้าม Z-Score |
-| Correlation Threshold (Pos) | 0.60 | ≥ 60% จะเปิด |
-| Correlation Threshold (Neg) | -0.60 | ≤ -60% จะเปิด |
-| **Skip ADX Check** | **true** | ไม่รอ ADX สำหรับ Neg Corr |
-| **Skip RSI Check** | **true** | ไม่รอ RSI zone |
-| **Debug Mode** | **true** | ดู log ว่าทำไมไม่เปิด |
+| `Harmony_Dream_EA.mq5` | Version | 7-10 | อัปเดตเป็น v2.18 |
+| `Harmony_Dream_EA.mq5` | Input Parameters | 610-612 | เพิ่ม `InpShowPopupOnReload` |
+| `Harmony_Dream_EA.mq5` | `OnInit()` | 1168-1180 | เพิ่ม log + reset license vars |
+| `Harmony_Dream_EA.mq5` | New Function | 1520-1550 | เพิ่ม `ExtractPairIndexFromComment()` |
+| `Harmony_Dream_EA.mq5` | `RestoreOpenPositions()` | 1555-1600 | เพิ่มการตรวจสอบ pair index |
+| `Harmony_Dream_EA.mq5` | `VerifyLicense()` | 3685-3690 | เพิ่มเงื่อนไข popup |
+| `Harmony_Dream_EA.mq5` | Dashboard | TBD | เพิ่มแสดง License Status |
 
 ---
 
@@ -246,16 +135,15 @@ else
 
 | สถานการณ์ | ก่อนแก้ไข | หลังแก้ไข |
 |-----------|----------|----------|
-| Set 10 (94% Pos, Up trend) | ❌ ไม่เปิด | ✅ เปิด BUY ทันที |
-| Set 11 (99% Pos, Up trend) | ❌ ไม่เปิด | ✅ เปิด BUY ทันที |
-| Debug Info | ไม่มี log | แสดงสาเหตุที่ไม่เปิดทุก step |
+| เปลี่ยน Timeframe | ไม่รู้ว่า License reload หรือไม่ | เห็น Log + Dashboard แสดง status |
+| Restart EA + มี order อยู่ | Order ถูก restore ผิด pair | Order restore ถูก pair ตาม comment |
+| Duplicate Orders | เกิดขึ้น | ไม่เกิดขึ้น |
 
 ---
 
 ### Version Update
 
 ```cpp
-#property version   "2.17"
-#property description "v2.1.7: Correlation Only - Skip RSI/ADX + Full Debug"
+#property version   "2.18"
+#property description "v2.1.8: Fix License Reload + Duplicate Orders Prevention"
 ```
-
