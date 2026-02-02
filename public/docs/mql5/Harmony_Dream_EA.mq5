@@ -4,10 +4,10 @@
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "2.16"
+#property version   "2.17"
 #property strict
 #property description "Harmony Dream - Pairs Trading Expert Advisor"
-#property description "v2.1.6: Order Counting Fix + ATR Caching + Stable Grid Distance"
+#property description "v2.1.7: Correlation Only - Skip RSI/ADX + Full Debug"
 #property description "Full Hedging with Independent Buy/Sell Sides"
 #include <Trade/Trade.mqh>
 
@@ -652,6 +652,9 @@ input group "=== Entry Mode Settings (v1.8.8) ==="
 input ENUM_ENTRY_MODE InpEntryMode = ENTRY_MODE_ZSCORE;    // Entry Mode
 input double   InpCorrOnlyPositiveThreshold = 0.60;        // Correlation Only: Positive Threshold (0.60 = 60%)
 input double   InpCorrOnlyNegativeThreshold = -0.60;       // Correlation Only: Negative Threshold (-0.60 = -60%)
+// v2.1.7: NEW - Option to skip filters for immediate entry
+input bool     InpCorrOnlySkipADXCheck = false;            // Correlation Only: Skip ADX Check (Neg Corr)
+input bool     InpCorrOnlySkipRSICheck = false;            // Correlation Only: Skip RSI Confirmation
 
 input group "=== Total Basket Target (v1.8.7) ==="
 input bool     InpEnableTotalBasket = false;        // Enable Total Basket Close (All Groups)
@@ -5551,10 +5554,10 @@ string DetermineTradeDirectionForCorrOnly(int pairIndex)
       if(trendA == trendB)
          return "";  // Negative requires opposite trends
       
-      // Check ADX Winner
-      if(!InpUseADXForNegative)
+      // v2.1.7: Check ADX Winner (with Skip option)
+      if(!InpUseADXForNegative || InpCorrOnlySkipADXCheck)
       {
-         // Without ADX: Default to following Symbol A's trend
+         // Without ADX or Skip ADX: Default to following Symbol A's trend
          return (trendA == "BULLISH") ? "BUY" : "SELL";
       }
       
@@ -5568,7 +5571,10 @@ string DetermineTradeDirectionForCorrOnly(int pairIndex)
       else if(adxB > adxA && adxB >= InpADXMinStrength)
          adxWinner = 1;  // Symbol B wins
       else
-         return "";  // Neither has clear strength - wait
+      {
+         // v2.1.7: Fallback to Symbol A's trend instead of blocking
+         return (trendA == "BULLISH") ? "BUY" : "SELL";
+      }
       
       // Follow the trend of ADX Winner
       // Winner = A → follow trendA
@@ -5645,26 +5651,70 @@ void AnalyzeAllPairs()
       // ================================================================
       if(InpEntryMode == ENTRY_MODE_CORRELATION_ONLY)
       {
+         // v2.1.7: Debug flag
+         bool debugLog = InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester);
+         
          // Step 1: Check Correlation Threshold
          if(!CheckCorrelationOnlyEntry(i))
+         {
+            if(debugLog)
+               PrintFormat("[CORR ONLY] Pair %d %s/%s: SKIP - Corr %.0f%% not in range (Pos>=%.0f%%, Neg<=%.0f%%)",
+                           i + 1, g_pairs[i].symbolA, g_pairs[i].symbolB,
+                           g_pairs[i].correlation * 100,
+                           InpCorrOnlyPositiveThreshold * 100,
+                           InpCorrOnlyNegativeThreshold * 100);
             continue;
+         }
          
          // Step 2: Determine Trade Direction based on CDC + ADX
          string direction = DetermineTradeDirectionForCorrOnly(i);
          if(direction == "")
+         {
+            if(debugLog)
+            {
+               string reason = "";
+               if(!g_pairs[i].cdcReadyA || !g_pairs[i].cdcReadyB)
+                  reason = "CDC NOT READY";
+               else if(g_pairs[i].cdcTrendA == "NEUTRAL" || g_pairs[i].cdcTrendB == "NEUTRAL")
+                  reason = StringFormat("CDC NEUTRAL (A=%s, B=%s)", g_pairs[i].cdcTrendA, g_pairs[i].cdcTrendB);
+               else if(g_pairs[i].correlationType == 1 && g_pairs[i].cdcTrendA != g_pairs[i].cdcTrendB)
+                  reason = StringFormat("POS CORR TREND MISMATCH (A=%s, B=%s)", g_pairs[i].cdcTrendA, g_pairs[i].cdcTrendB);
+               else if(g_pairs[i].correlationType == -1 && g_pairs[i].cdcTrendA == g_pairs[i].cdcTrendB)
+                  reason = StringFormat("NEG CORR SAME TREND (A=%s, B=%s)", g_pairs[i].cdcTrendA, g_pairs[i].cdcTrendB);
+               else if(g_pairs[i].correlationType == -1 && InpUseADXForNegative && !InpCorrOnlySkipADXCheck)
+                  reason = StringFormat("ADX FAIL (A=%.1f, B=%.1f, Min=%.1f)", 
+                                        g_pairs[i].adxValueA, g_pairs[i].adxValueB, InpADXMinStrength);
+               else
+                  reason = "UNKNOWN";
+               
+               PrintFormat("[CORR ONLY] Pair %d %s/%s: SKIP - Direction empty, Reason: %s",
+                           i + 1, g_pairs[i].symbolA, g_pairs[i].symbolB, reason);
+            }
             continue;
+         }
          
          // Step 3: Check Grid Guard (Correlation Only version)
          if(InpGridPauseAffectsMain)
          {
             string pauseReason = "";
             if(!CheckGridTradingAllowedCorrOnly(i, direction, pauseReason))
+            {
+               if(debugLog)
+                  PrintFormat("[CORR ONLY] Pair %d %s/%s: SKIP - Grid Guard: %s",
+                              i + 1, g_pairs[i].symbolA, g_pairs[i].symbolB, pauseReason);
                continue;
+            }
          }
          
-         // Step 4: Check RSI Entry Confirmation (still apply)
-         if(!CheckRSIEntryConfirmation(i, direction))
+         // Step 4: Check RSI Entry Confirmation (v2.1.7: Optional skip)
+         if(!InpCorrOnlySkipRSICheck && !CheckRSIEntryConfirmation(i, direction))
+         {
+            if(debugLog)
+               PrintFormat("[CORR ONLY] Pair %d %s/%s: SKIP - RSI BLOCK (dir=%s, RSI=%.1f, OB=%.0f, OS=%.0f)", 
+                           i + 1, g_pairs[i].symbolA, g_pairs[i].symbolB, 
+                           direction, g_pairs[i].rsiSpread, InpRSIOverbought, InpRSIOversold);
             continue;
+         }
          
          // Step 5: Open Trade based on determined direction
          if(direction == "BUY")
@@ -5683,6 +5733,12 @@ void AnalyzeAllPairs()
                               g_pairs[i].adxValueA, g_pairs[i].adxValueB);
                }
             }
+            else if(debugLog)
+            {
+               PrintFormat("[CORR ONLY] Pair %d %s/%s: BUY BLOCKED (directionBuy=%d, orderCount=%d/%d)",
+                           i + 1, g_pairs[i].symbolA, g_pairs[i].symbolB,
+                           g_pairs[i].directionBuy, g_pairs[i].orderCountBuy, g_pairs[i].maxOrderBuy);
+            }
          }
          else // direction == "SELL"
          {
@@ -5699,6 +5755,12 @@ void AnalyzeAllPairs()
                               g_pairs[i].cdcTrendA, g_pairs[i].cdcTrendB,
                               g_pairs[i].adxValueA, g_pairs[i].adxValueB);
                }
+            }
+            else if(debugLog)
+            {
+               PrintFormat("[CORR ONLY] Pair %d %s/%s: SELL BLOCKED (directionSell=%d, orderCount=%d/%d)",
+                           i + 1, g_pairs[i].symbolA, g_pairs[i].symbolB,
+                           g_pairs[i].directionSell, g_pairs[i].orderCountSell, g_pairs[i].maxOrderSell);
             }
          }
          
