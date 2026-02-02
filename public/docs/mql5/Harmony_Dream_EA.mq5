@@ -4,7 +4,7 @@
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "2.12"
+#property version   "2.13"
 #property strict
 #property description "Harmony Dream - Pairs Trading Expert Advisor"
 #property description "v2.1.2: Mini Group UI + M.Tgt Format + Reset Cycle Logic"
@@ -4378,32 +4378,30 @@ void CloseMiniGroup(int miniIndex)
    {
       if(!g_pairs[p].enabled) continue;
       
-      // Track profit before closing
-      double pairProfit = g_pairs[p].profitBuy + g_pairs[p].profitSell;
-      
-      // Close Buy side
+      // v2.1.3: Close Buy side (profit is added to Mini Group inside CloseBuySide)
       if(g_pairs[p].directionBuy == 1)
       {
-         closedProfit += g_pairs[p].profitBuy;
          CloseBuySide(p);
       }
       
-      // Close Sell side
+      // v2.1.3: Close Sell side (profit is added to Mini Group inside CloseSellSide)
       if(g_pairs[p].directionSell == 1)
       {
-         closedProfit += g_pairs[p].profitSell;
          CloseSellSide(p);
       }
    }
    
-   // v2.1.2: Add closed profit to PARENT GROUP (for Group tracking)
-   g_groups[groupIdx].closedProfit += closedProfit;
+   // v2.1.3: Get total accumulated closed profit from Mini Group (already updated by CloseBuySide/CloseSellSide)
+   double finalClosedProfit = g_miniGroups[miniIndex].closedProfit;
    
-   // v2.1.2: Reset Mini Group closed profit for NEW CYCLE
+   // v2.1.3: Note - profit was already added to Group via CloseBuySide/CloseSellSide
+   // No need to add again here to avoid double-counting
+   
+   // v2.1.3: Reset Mini Group closed profit for NEW CYCLE
    g_miniGroups[miniIndex].closedProfit = 0;
    
-   PrintFormat("[v2.1.2] Mini Group %d TARGET CLOSED | Profit: $%.2f → Group %d | Mini RESET to $0",
-               miniIndex + 1, closedProfit, groupIdx + 1);
+   PrintFormat("[v2.1.3] Mini Group %d TARGET CLOSED | Accumulated: $%.2f | Mini RESET to $0 for new cycle",
+               miniIndex + 1, finalClosedProfit);
 }
 
 double GetRealTimeScaledTargetSell(int groupIndex)
@@ -7208,14 +7206,24 @@ bool CloseBuySide(int pairIndex)
       // v3.2.9: Accumulate closed P/L before reset
       g_pairs[pairIndex].closedProfitBuy += g_pairs[pairIndex].profitBuy;
       
-      // v1.1: Add to GROUP instead of global basket (unless group is closing all)
-      if(!g_groups[groupIdx].closeMode)
-      {
-         g_groups[groupIdx].closedProfit += g_pairs[pairIndex].profitBuy;
-         PrintFormat("GROUP %d: Added %.2f from Pair %d BUY | Group Total: %.2f | Target: %.2f",
-                     groupIdx + 1, g_pairs[pairIndex].profitBuy, pairIndex + 1, 
-                     g_groups[groupIdx].closedProfit, g_groups[groupIdx].closedTarget);
-      }
+       // v2.1.3: Add to MINI GROUP for basket accumulation
+       int miniIdx = GetMiniGroupIndex(pairIndex);
+       if(!g_miniGroups[miniIdx].targetTriggered)
+       {
+          g_miniGroups[miniIdx].closedProfit += g_pairs[pairIndex].profitBuy;
+          PrintFormat("MINI GROUP %d: Added $%.2f from Pair %d BUY | Mini Total: $%.2f | Target: $%.2f",
+                      miniIdx + 1, g_pairs[pairIndex].profitBuy, pairIndex + 1, 
+                      g_miniGroups[miniIdx].closedProfit, g_miniGroups[miniIdx].closedTarget);
+       }
+       
+       // v1.1: Also add to GROUP for Group-level tracking (unless group is closing all)
+       if(!g_groups[groupIdx].closeMode)
+       {
+          g_groups[groupIdx].closedProfit += g_pairs[pairIndex].profitBuy;
+          PrintFormat("GROUP %d: Added $%.2f from Pair %d BUY | Group Total: $%.2f | Target: $%.2f",
+                      groupIdx + 1, g_pairs[pairIndex].profitBuy, pairIndex + 1, 
+                      g_groups[groupIdx].closedProfit, g_groups[groupIdx].closedTarget);
+       }
       
       // Update statistics before reset
       g_dailyProfit += g_pairs[pairIndex].profitBuy;
@@ -7332,14 +7340,24 @@ bool CloseSellSide(int pairIndex)
       // v3.2.9: Accumulate closed P/L before reset
       g_pairs[pairIndex].closedProfitSell += g_pairs[pairIndex].profitSell;
       
-      // v1.1: Add to GROUP instead of global basket (unless group is closing all)
-      if(!g_groups[groupIdx].closeMode)
-      {
-         g_groups[groupIdx].closedProfit += g_pairs[pairIndex].profitSell;
-         PrintFormat("GROUP %d: Added %.2f from Pair %d SELL | Group Total: %.2f | Target: %.2f",
-                     groupIdx + 1, g_pairs[pairIndex].profitSell, pairIndex + 1, 
-                     g_groups[groupIdx].closedProfit, g_groups[groupIdx].closedTarget);
-      }
+       // v2.1.3: Add to MINI GROUP for basket accumulation
+       int miniIdx = GetMiniGroupIndex(pairIndex);
+       if(!g_miniGroups[miniIdx].targetTriggered)
+       {
+          g_miniGroups[miniIdx].closedProfit += g_pairs[pairIndex].profitSell;
+          PrintFormat("MINI GROUP %d: Added $%.2f from Pair %d SELL | Mini Total: $%.2f | Target: $%.2f",
+                      miniIdx + 1, g_pairs[pairIndex].profitSell, pairIndex + 1, 
+                      g_miniGroups[miniIdx].closedProfit, g_miniGroups[miniIdx].closedTarget);
+       }
+       
+       // v1.1: Also add to GROUP for Group-level tracking (unless group is closing all)
+       if(!g_groups[groupIdx].closeMode)
+       {
+          g_groups[groupIdx].closedProfit += g_pairs[pairIndex].profitSell;
+          PrintFormat("GROUP %d: Added $%.2f from Pair %d SELL | Group Total: $%.2f | Target: $%.2f",
+                      groupIdx + 1, g_pairs[pairIndex].profitSell, pairIndex + 1, 
+                      g_groups[groupIdx].closedProfit, g_groups[groupIdx].closedTarget);
+       }
       
       // Update statistics before reset
       g_dailyProfit += g_pairs[pairIndex].profitSell;
