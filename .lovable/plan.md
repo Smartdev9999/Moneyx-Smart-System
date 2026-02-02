@@ -1,163 +1,201 @@
-## ✅ แผนเพิ่ม: Reset Mini Group Trigger + ปุ่ม Close Mini Group (v2.1) - COMPLETED
 
-### สรุปความต้องการ
 
-1. **Reset Mini Group target trigger** เมื่อเปิด position ใหม่หลังจากปิดตาม target แล้ว
-2. **เพิ่มปุ่ม Close Mini Group** สำหรับปิด positions ของ Mini Group เฉพาะตัวด้วยตนเอง
+## แผนรวม: Mini Group Complete Update (v2.1.2)
 
----
+### สรุปทั้งหมดที่จะทำ
 
-### ส่วนที่ต้องแก้ไข
-
-#### 1. Reset Target Trigger เมื่อเปิด Position ใหม่
-
-**ไฟล์:** `public/docs/mql5/Harmony_Dream_EA.mq5`
-
-**ตำแหน่ง:** ฟังก์ชัน `OpenBuySideTrade()` (~บรรทัด 6880-6905)
-
-**เพิ่ม:**
-```cpp
-// v2.1: Reset Mini Group target trigger when new position opened
-int miniIdx = GetMiniGroupIndex(pairIndex);
-if(g_miniGroups[miniIdx].targetTriggered)
-{
-   g_miniGroups[miniIdx].targetTriggered = false;
-   PrintFormat("[v2.1] Mini Group %d target trigger RESET (new BUY position opened)", miniIdx + 1);
-}
-```
-
-**ตำแหน่ง:** ฟังก์ชัน `OpenSellSideTrade()` (~บรรทัด 7080-7105)
-
-**เพิ่มเหมือนกัน:**
-```cpp
-// v2.1: Reset Mini Group target trigger when new position opened
-int miniIdx = GetMiniGroupIndex(pairIndex);
-if(g_miniGroups[miniIdx].targetTriggered)
-{
-   g_miniGroups[miniIdx].targetTriggered = false;
-   PrintFormat("[v2.1] Mini Group %d target trigger RESET (new SELL position opened)", miniIdx + 1);
-}
-```
+| หมวด | รายละเอียด |
+|------|------------|
+| **UI** | ขยาย Mini Group Column (90→110px), สีน้ำเงินแยกชัด, ปุ่ม Close Mini ไป Row 2 |
+| **Display** | M.Tgt แสดงเป็น `1000/1000/1000` แทนผลรวม `$3000` |
+| **Logic** | Reset `closedProfit = 0` เมื่อ Mini Group ถึง target และปิดแล้ว เพื่อเริ่มรอบใหม่ |
 
 ---
 
-#### 2. เพิ่มปุ่ม Close Mini Group บน Dashboard
+### ส่วนที่ 1: UI Improvements
 
-**ตำแหน่ง:** ฟังก์ชัน `CreatePairRow()` (~บรรทัด 8545-8556)
+#### 1.1 เพิ่มสีใหม่สำหรับ Mini Group
 
-**แก้ไข MINI GROUP Column:**
+**ตำแหน่ง:** Color definitions (~บรรทัด 106-130)
+
 ```cpp
-// === v2.0: MINI GROUP COLUMN (Display every 2 pairs) ===
+// v2.1.2: Mini Group specific colors (distinct from Group Info)
+#define COLOR_HEADER_MINI        C'25,45,80'     // Dark blue header
+#define COLOR_COLHDR_MINI        C'30,50,90'     // Column header blue
+#define COLOR_MINI_BG            C'20,35,60'     // Row background blue
+#define COLOR_MINI_BORDER        C'40,60,100'    // Border blue
+```
+
+#### 1.2 ขยาย Mini Group Column Width
+
+**ตำแหน่ง:** CreateDashboard() - บรรทัด 8400-8402
+
+```cpp
+// v2.1.2: Mini Group Column (EXPANDED)
+int miniGroupWidth = 110;  // Increased from 90 to 110
+```
+
+#### 1.3 เปลี่ยนสี Mini Group Headers และ Row Backgrounds
+
+- ใช้ `COLOR_HEADER_MINI` แทน `COLOR_HEADER_GROUP`
+- ใช้ `COLOR_COLHDR_MINI` แทน `COLOR_COLHDR_GROUP`  
+- ใช้ `COLOR_MINI_BG` และ `COLOR_MINI_BORDER` สำหรับ row backgrounds
+
+#### 1.4 ย้าย Close Mini Button ไป Row 2
+
+**ตำแหน่ง:** CreatePairRow() - บรรทัด 8564-8578
+
+```cpp
+// Row 1 (idx % 2 == 0): แสดง M1, Float, Closed
 if(idx % PAIRS_PER_MINI == 0)
 {
-   int mIdx = idx / PAIRS_PER_MINI;
-   string mIdxStr = IntegerToString(mIdx);
-   string miniLabel = "M" + IntegerToString(mIdx + 1);
-   
-   // Row 1: Mini number + Float value + Closed value
-   CreateLabel(prefix + "M" + mIdxStr + "_HDR", miniGroupX + 3, y + 3, miniLabel, COLOR_GOLD, 8, "Arial Bold");
-   CreateLabel(prefix + "M" + mIdxStr + "_V_FLT", miniGroupX + 22, y + 3, "$0", COLOR_PROFIT, 7, "Arial");
-   CreateLabel(prefix + "M" + mIdxStr + "_V_CL", miniGroupX + 52, y + 3, "$0", COLOR_PROFIT, 7, "Arial");
-   
-   // v2.1: Close Mini Group button (smaller X button)
-   CreateButton(prefix + "_CLOSE_MINI_" + mIdxStr, miniGroupX + 75, y + 2, 12, 12, "X", clrRed, clrWhite);
+   // Mini label + Float + Closed values only
+   CreateLabel(... "M1", ...);
+   CreateLabel(... "$0", ...);  // Float
+   CreateLabel(... "$0", ...);  // Closed
+}
+// Row 2 (idx % 2 == 1): แสดงปุ่ม Close Mini
+else if(idx % PAIRS_PER_MINI == 1)
+{
+   // Close Mini button on Row 2 (larger, centered)
+   CreateButton(... "Close Mini", ...);
 }
 ```
 
 ---
 
-#### 3. เพิ่ม Event Handler สำหรับปุ่ม Close Mini Group
+### ส่วนที่ 2: M.Tgt Display Format
 
-**ตำแหน่ง:** ฟังก์ชัน `OnChartEvent()` (~บรรทัด 2663-2680)
+#### 2.1 เพิ่ม Helper Function ใหม่
 
-**เพิ่มหลัง Close Group handler:**
+**ตำแหน่ง:** หลัง GetMiniGroupSumTarget() (~บรรทัด 1858)
+
 ```cpp
-// v2.1: Close Mini Group button handler
-else if(StringFind(sparam, prefix + "_CLOSE_MINI_") >= 0)
+//+------------------------------------------------------------------+
+//| v2.1.2: Get Mini Group Targets as formatted string               |
+//+------------------------------------------------------------------+
+string GetMiniGroupTargetString(int groupIndex)
 {
-   int miniIdx = (int)StringToInteger(StringSubstr(sparam, StringLen(prefix + "_CLOSE_MINI_")));
+   int startMini = groupIndex * MINIS_PER_GROUP;
+   string result = "";
    
-   // Confirmation popup
-   int startPair = miniIdx * PAIRS_PER_MINI + 1;
-   int endPair = startPair + PAIRS_PER_MINI - 1;
-   string msg = StringFormat("Close ALL orders in Mini Group %d (Pairs %d-%d)?", 
-                             miniIdx + 1, startPair, endPair);
-   int result = MessageBox(msg, "Confirm Close Mini Group", MB_YESNO | MB_ICONWARNING);
-   if(result != IDYES)
+   for(int i = 0; i < MINIS_PER_GROUP; i++)
    {
-      ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
-      return;
+      double target = GetScaledMiniGroupTarget(startMini + i);
+      if(i > 0) result += "/";
+      
+      if(target > 0)
+         result += IntegerToString((int)target);
+      else
+         result += "0";
    }
    
-   CloseMiniGroup(miniIdx);
-   ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
-   PrintFormat("[v2.1] Manual Close Mini Group %d completed", miniIdx + 1);
+   return result;  // Format: "1000/1000/1000"
 }
 ```
 
----
+#### 2.2 อัปเดต M.Tgt Display
 
-### สรุปการเปลี่ยนแปลง
+**ตำแหน่ง:** CreatePairRow() และ UpdateDashboard()
 
-| ส่วน | รายละเอียด | บรรทัด (ประมาณ) |
-|------|------------|-----------------|
-| OpenBuySideTrade() | เพิ่ม reset trigger เมื่อเปิด BUY | ~6900 |
-| OpenSellSideTrade() | เพิ่ม reset trigger เมื่อเปิด SELL | ~7080 |
-| CreatePairRow() | เพิ่มปุ่ม X สำหรับ Close Mini Group | ~8550 |
-| OnChartEvent() | เพิ่ม handler สำหรับ _CLOSE_MINI_ | ~2680 |
+```cpp
+// แทนที่:
+double miniTgt = GetMiniGroupSumTarget(gIdx);
+string miniTgtStr = "$" + DoubleToString(miniTgt, 0);
 
----
-
-### Dashboard Layout ใหม่ (MINI GROUP Column)
-
-```text
-┌─────────────────────────────────────────────────┐
-│           MINI GROUP (90px)                     │
-├─────────────────────────────────────────────────┤
-│ M1   $50     $0      [X]     ← Float/Closed/X   │
-│                                                 │
-│ M2   $30     $100    [X]                        │
-│                                                 │
-│ M3   $20     $0      [X]                        │
-│                                                 │
-└─────────────────────────────────────────────────┘
+// ด้วย:
+string miniTgtStr = GetMiniGroupTargetString(gIdx);  // "1000/1000/1000"
 ```
 
 ---
 
-### Logic Flow (Reset Trigger)
+### ส่วนที่ 3: Reset Logic เมื่อถึง Target
 
-```text
-1. Mini Group M1 profit reaches target ($100)
-   ↓
-2. CheckMiniGroupTargets() triggers:
-   - g_miniGroups[0].targetTriggered = true
-   - CloseMiniGroup(0) executed
-   ↓
-3. Later: New position opened on Pair 1 or 2
-   ↓
-4. OpenBuySideTrade() or OpenSellSideTrade():
-   - Check if targetTriggered == true
-   - Reset to false
-   - Log: "Mini Group 1 target trigger RESET"
-   ↓
-5. CheckMiniGroupTargets() can trigger again when target reached
+#### 3.1 แก้ไข CloseMiniGroup()
+
+**ตำแหน่ง:** CloseMiniGroup() - บรรทัด 4359-4366
+
+**จาก:**
+```cpp
+// Add closed profit to Mini Group's accumulated closed
+g_miniGroups[miniIndex].closedProfit += closedProfit;
+```
+
+**เป็น:**
+```cpp
+// v2.1.2: Add closed profit to PARENT GROUP (for Group tracking)
+int groupIdx = GetGroupFromMini(miniIndex);
+g_groups[groupIdx].closedProfit += closedProfit;
+
+// v2.1.2: Reset Mini Group closed profit for NEW CYCLE
+g_miniGroups[miniIndex].closedProfit = 0;
+
+PrintFormat("[v2.1.2] Mini Group %d TARGET CLOSED | Profit: $%.2f → Group %d | Mini RESET to $0",
+            miniIndex + 1, closedProfit, groupIdx + 1);
 ```
 
 ---
 
-### ข้อควรระวัง
+### Logic Flow หลังแก้ไข
 
-1. **ปุ่ม X ขนาดเล็ก (12x12px)** เพื่อประหยัดพื้นที่ใน MINI GROUP column
-2. **Confirmation Popup** ก่อนปิดทุกครั้ง เพื่อป้องกันการกดผิด
-3. **Reset Trigger** เฉพาะเมื่อเปิด position ใหม่ใน Mini Group นั้นๆ เท่านั้น
-4. **ไม่แตะต้อง** Order entry logic, Grid logic, Comment format อื่นๆ
+```text
+Mini Group M1 ทำงาน:
+┌───────────────────────────────────────────────────────────┐
+│ 1. Pair 1-2 เทรดสะสม → Dashboard แสดง Closed = $800      │
+│                                                           │
+│ 2. M1 total profit ถึง Target ($1000)                     │
+│                                                           │
+│ 3. CloseMiniGroup(0) executes:                            │
+│    ├─ ปิด positions ทั้งหมดใน Pair 1-2                     │
+│    ├─ บวก $1000 ไปที่ Group 1 closedProfit (สะสมไว้)       │
+│    ├─ Reset g_miniGroups[0].closedProfit = 0  ← ใหม่!     │
+│    └─ Set targetTriggered = true                          │
+│                                                           │
+│ 4. Dashboard แสดง M1 Closed = $0 (เริ่มรอบใหม่)           │
+│                                                           │
+│ 5. เปิด position ใหม่ → Reset targetTriggered = false     │
+│                                                           │
+│ 6. M1 พร้อมเก็บสะสมรอบใหม่ได้แล้ว                          │
+└───────────────────────────────────────────────────────────┘
+```
+
+---
+
+### Dashboard Display เปรียบเทียบ
+
+**ก่อนแก้ไข:**
+```text
+GROUP INFO                    │ MINI GROUP (90px, สีม่วง)
+├─ Float: $-1154              │ M1 $1000 $1000 [X]  ← ยังค้าง $1000
+├─ Closed: $1000              │                     ← Row 2 ว่าง
+├─ Target: $2000              │
+└─ M.Tgt: $3000  ← ผลรวมสับสน │
+```
+
+**หลังแก้ไข:**
+```text
+GROUP INFO                    │ MINI GROUP (110px, สีน้ำเงิน)
+├─ Float: $-1154              │ M1    $0      $0       ← Reset เป็น $0 แล้ว
+├─ Closed: $2000 (รวม Mini)   │ [ Close Mini ]        ← ปุ่มอยู่ Row 2
+├─ Target: $2000              │
+└─ M.Tgt: 1000/1000/1000      │ ← แยกชัดเจน
+```
+
+---
+
+### สรุปไฟล์ที่แก้ไข
+
+| ไฟล์ | ส่วนที่แก้ไข |
+|------|-------------|
+| `public/docs/mql5/Harmony_Dream_EA.mq5` | Color definitions, CreateDashboard(), CreatePairRow(), UpdateDashboard(), CloseMiniGroup(), เพิ่ม GetMiniGroupTargetString() |
+| `.lovable/plan.md` | อัปเดตสถานะแผน v2.1.2 |
 
 ---
 
 ### Version Update
 
 ```cpp
-#property version   "2.10"
-#property description "v2.1: Mini Group Close Button + Target Trigger Reset"
+#property version   "2.12"
+#property description "v2.1.2: Mini Group UI + M.Tgt Format + Reset Cycle Logic"
 ```
+
