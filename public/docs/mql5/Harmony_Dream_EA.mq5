@@ -4,10 +4,10 @@
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "2.18"
+#property version   "2.19"
 #property strict
 #property description "Harmony Dream - Pairs Trading Expert Advisor"
-#property description "v2.1.8: Fix License Reload + Duplicate Orders Prevention"
+#property description "v2.1.9: Fix Debug Log Spam + Dashboard Order Count"
 #property description "Full Hedging with Independent Buy/Sell Sides"
 #include <Trade/Trade.mqh>
 
@@ -164,6 +164,10 @@ struct PairInfo
    double         cachedGridLossATR;      // Cached ATR value for Grid Loss
    double         cachedGridProfitATR;    // Cached ATR value for Grid Profit
    datetime       lastATRBarTime;         // Last bar time ATR was calculated
+   
+   // === v2.1.9: Debug Log Throttling ===
+   string         lastBlockReason;        // Last block reason logged (for spam prevention)
+   datetime       lastBlockLogTime;       // Last time block was logged
    
    // === Combined ===
    double         totalPairProfit;   // profitBuy + profitSell
@@ -892,6 +896,10 @@ bool   g_orphanCheckPaused = false;   // Pause orphan check during any position 
 datetime g_lastProfitLogTime = 0;
 int PROFIT_LOG_INTERVAL = 5;  // Log every 5 seconds
 
+// === v2.1.9: Debug Log Control ===
+bool   g_firstAnalyzeRun = true;              // First run after init/TF change
+int    DEBUG_LOG_INTERVAL = 30;               // Log same reason every 30 seconds
+
 //+------------------------------------------------------------------+
 //| v1.8.5: Initialize Theme Colors                                    |
 //+------------------------------------------------------------------+
@@ -1304,6 +1312,9 @@ int OnInit()
    // v1.3: Restore open positions from previous session (Magic Number-based)
    RestoreOpenPositions();
    
+   // v2.1.9: Reset first-run flag for debug logs
+   g_firstAnalyzeRun = true;
+   
    // v1.6.2: Initialize CDC Retry timer array
    ArrayResize(g_lastCDCRetryTime, MAX_PAIRS);
    ArrayInitialize(g_lastCDCRetryTime, 0);
@@ -1342,7 +1353,7 @@ int OnInit()
    // Note: No UpdateGroupProfits() function exists in this EA version;
    // UpdatePairProfits() already refreshes totals used by the dashboard.
    
-   PrintFormat("=== Harmony Dream EA v2.1.8 Initialized - %d Active Pairs | Net Profit Mode ===", g_activePairs);
+   PrintFormat("=== Harmony Dream EA v2.1.9 Initialized - %d Active Pairs | Net Profit Mode ===", g_activePairs);
    return(INIT_SUCCEEDED);
 }
 
@@ -1582,7 +1593,13 @@ void RestoreOpenPositions()
    int restoredBuy = 0;
    int restoredSell = 0;
    
-   Print("[v1.4] Scanning for existing positions with Magic Number: ", InpMagicNumber);
+   // v2.1.9: Track which pairs have already counted their main orders
+   bool mainBuyCounted[MAX_PAIRS];
+   bool mainSellCounted[MAX_PAIRS];
+   ArrayInitialize(mainBuyCounted, false);
+   ArrayInitialize(mainSellCounted, false);
+   
+   Print("[v2.1.9] Scanning for existing positions with Magic Number: ", InpMagicNumber);
    
    for(int pos = PositionsTotal() - 1; pos >= 0; pos--)
    {
@@ -1700,23 +1717,24 @@ void RestoreOpenPositions()
                 if(isMainOrder && g_pairs[i].ticketBuyA == 0) shouldCount = true;
              }
              
-             // v2.1.6: Count Grid orders individually (they have _GL or _GP in comment)
-             if(!isMainOrder)
-             {
-                g_pairs[i].orderCountBuy++;
-                if(StringFind(comment, "_GL") >= 0)
-                   g_pairs[i].avgOrderCountBuy++;
-                else if(StringFind(comment, "_GP") >= 0)
-                   g_pairs[i].gridProfitCountBuy++;
-             }
-             else if(shouldCount)
-             {
-                // v2.1.6: Count main order only once per pair (not per symbol)
-                g_pairs[i].orderCountBuy++;
-             }
-             
-             g_pairs[i].entryTimeBuy = (datetime)PositionGetInteger(POSITION_TIME);
-             restoredBuy++;
+              // v2.1.6: Count Grid orders individually (they have _GL or _GP in comment)
+              if(!isMainOrder)
+              {
+                 g_pairs[i].orderCountBuy++;
+                 if(StringFind(comment, "_GL") >= 0)
+                    g_pairs[i].avgOrderCountBuy++;
+                 else if(StringFind(comment, "_GP") >= 0)
+                    g_pairs[i].gridProfitCountBuy++;
+              }
+              else if(shouldCount && !mainBuyCounted[i])
+              {
+                 // v2.1.9: Count main order only once per pair (not per symbol)
+                 mainBuyCounted[i] = true;
+                 g_pairs[i].orderCountBuy++;
+              }
+              
+              g_pairs[i].entryTimeBuy = (datetime)PositionGetInteger(POSITION_TIME);
+              restoredBuy++;
           }
          
           // v2.1.6: Fixed - Restore SELL side with correct order counting
@@ -1753,23 +1771,24 @@ void RestoreOpenPositions()
                 if(isMainOrderSell && g_pairs[i].ticketSellA == 0) shouldCountSell = true;
              }
              
-             // v2.1.6: Count Grid orders individually (they have _GL or _GP in comment)
-             if(!isMainOrderSell)
-             {
-                g_pairs[i].orderCountSell++;
-                if(StringFind(comment, "_GL") >= 0)
-                   g_pairs[i].avgOrderCountSell++;
-                else if(StringFind(comment, "_GP") >= 0)
-                   g_pairs[i].gridProfitCountSell++;
-             }
-             else if(shouldCountSell)
-             {
-                // v2.1.6: Count main order only once per pair (not per symbol)
-                g_pairs[i].orderCountSell++;
-             }
-             
-             g_pairs[i].entryTimeSell = (datetime)PositionGetInteger(POSITION_TIME);
-             restoredSell++;
+              // v2.1.6: Count Grid orders individually (they have _GL or _GP in comment)
+              if(!isMainOrderSell)
+              {
+                 g_pairs[i].orderCountSell++;
+                 if(StringFind(comment, "_GL") >= 0)
+                    g_pairs[i].avgOrderCountSell++;
+                 else if(StringFind(comment, "_GP") >= 0)
+                    g_pairs[i].gridProfitCountSell++;
+              }
+              else if(shouldCountSell && !mainSellCounted[i])
+              {
+                 // v2.1.9: Count main order only once per pair (not per symbol)
+                 mainSellCounted[i] = true;
+                 g_pairs[i].orderCountSell++;
+              }
+              
+              g_pairs[i].entryTimeSell = (datetime)PositionGetInteger(POSITION_TIME);
+              restoredSell++;
           }
          
          break;  // Found matching pair, move to next position
@@ -5739,12 +5758,23 @@ void AnalyzeAllPairs()
          // Step 1: Check Correlation Threshold
          if(!CheckCorrelationOnlyEntry(i))
          {
+            // v2.1.9: Throttled debug log
             if(debugLog)
-               PrintFormat("[CORR ONLY] Pair %d %s/%s: SKIP - Corr %.0f%% not in range (Pos>=%.0f%%, Neg<=%.0f%%)",
-                           i + 1, g_pairs[i].symbolA, g_pairs[i].symbolB,
-                           g_pairs[i].correlation * 100,
-                           InpCorrOnlyPositiveThreshold * 100,
-                           InpCorrOnlyNegativeThreshold * 100);
+            {
+               string reason = StringFormat("SKIP - Corr %.0f%% not in range (Pos>=%.0f%%, Neg<=%.0f%%)",
+                                            g_pairs[i].correlation * 100,
+                                            InpCorrOnlyPositiveThreshold * 100,
+                                            InpCorrOnlyNegativeThreshold * 100);
+               datetime now = TimeCurrent();
+               if(g_firstAnalyzeRun || reason != g_pairs[i].lastBlockReason || 
+                  now - g_pairs[i].lastBlockLogTime >= DEBUG_LOG_INTERVAL)
+               {
+                  PrintFormat("[CORR ONLY] Pair %d %s/%s: %s",
+                              i + 1, g_pairs[i].symbolA, g_pairs[i].symbolB, reason);
+                  g_pairs[i].lastBlockReason = reason;
+                  g_pairs[i].lastBlockLogTime = now;
+               }
+            }
             continue;
          }
          
@@ -5752,6 +5782,7 @@ void AnalyzeAllPairs()
          string direction = DetermineTradeDirectionForCorrOnly(i);
          if(direction == "")
          {
+            // v2.1.9: Throttled debug log
             if(debugLog)
             {
                string reason = "";
@@ -5769,8 +5800,15 @@ void AnalyzeAllPairs()
                else
                   reason = "UNKNOWN";
                
-               PrintFormat("[CORR ONLY] Pair %d %s/%s: SKIP - Direction empty, Reason: %s",
-                           i + 1, g_pairs[i].symbolA, g_pairs[i].symbolB, reason);
+               datetime now = TimeCurrent();
+               if(g_firstAnalyzeRun || reason != g_pairs[i].lastBlockReason || 
+                  now - g_pairs[i].lastBlockLogTime >= DEBUG_LOG_INTERVAL)
+               {
+                  PrintFormat("[CORR ONLY] Pair %d %s/%s: SKIP - Direction empty, Reason: %s",
+                              i + 1, g_pairs[i].symbolA, g_pairs[i].symbolB, reason);
+                  g_pairs[i].lastBlockReason = reason;
+                  g_pairs[i].lastBlockLogTime = now;
+               }
             }
             continue;
          }
@@ -5781,9 +5819,20 @@ void AnalyzeAllPairs()
             string pauseReason = "";
             if(!CheckGridTradingAllowedCorrOnly(i, direction, pauseReason))
             {
+               // v2.1.9: Throttled debug log
                if(debugLog)
-                  PrintFormat("[CORR ONLY] Pair %d %s/%s: SKIP - Grid Guard: %s",
-                              i + 1, g_pairs[i].symbolA, g_pairs[i].symbolB, pauseReason);
+               {
+                  string reason = "Grid Guard: " + pauseReason;
+                  datetime now = TimeCurrent();
+                  if(g_firstAnalyzeRun || reason != g_pairs[i].lastBlockReason || 
+                     now - g_pairs[i].lastBlockLogTime >= DEBUG_LOG_INTERVAL)
+                  {
+                     PrintFormat("[CORR ONLY] Pair %d %s/%s: SKIP - %s",
+                                 i + 1, g_pairs[i].symbolA, g_pairs[i].symbolB, reason);
+                     g_pairs[i].lastBlockReason = reason;
+                     g_pairs[i].lastBlockLogTime = now;
+                  }
+               }
                continue;
             }
          }
@@ -5791,10 +5840,21 @@ void AnalyzeAllPairs()
          // Step 4: Check RSI Entry Confirmation (v2.1.7: Optional skip)
          if(!InpCorrOnlySkipRSICheck && !CheckRSIEntryConfirmation(i, direction))
          {
+            // v2.1.9: Throttled debug log
             if(debugLog)
-               PrintFormat("[CORR ONLY] Pair %d %s/%s: SKIP - RSI BLOCK (dir=%s, RSI=%.1f, OB=%.0f, OS=%.0f)", 
-                           i + 1, g_pairs[i].symbolA, g_pairs[i].symbolB, 
-                           direction, g_pairs[i].rsiSpread, InpRSIOverbought, InpRSIOversold);
+            {
+               string reason = StringFormat("RSI BLOCK (dir=%s, RSI=%.1f, OB=%.0f, OS=%.0f)", 
+                                            direction, g_pairs[i].rsiSpread, InpRSIOverbought, InpRSIOversold);
+               datetime now = TimeCurrent();
+               if(g_firstAnalyzeRun || reason != g_pairs[i].lastBlockReason || 
+                  now - g_pairs[i].lastBlockLogTime >= DEBUG_LOG_INTERVAL)
+               {
+                  PrintFormat("[CORR ONLY] Pair %d %s/%s: SKIP - %s", 
+                              i + 1, g_pairs[i].symbolA, g_pairs[i].symbolB, reason);
+                  g_pairs[i].lastBlockReason = reason;
+                  g_pairs[i].lastBlockLogTime = now;
+               }
+            }
             continue;
          }
          
@@ -5817,9 +5877,18 @@ void AnalyzeAllPairs()
             }
             else if(debugLog)
             {
-               PrintFormat("[CORR ONLY] Pair %d %s/%s: BUY BLOCKED (directionBuy=%d, orderCount=%d/%d)",
-                           i + 1, g_pairs[i].symbolA, g_pairs[i].symbolB,
-                           g_pairs[i].directionBuy, g_pairs[i].orderCountBuy, g_pairs[i].maxOrderBuy);
+               // v2.1.9: Throttled debug log for BUY BLOCKED
+               string reason = StringFormat("BUY BLOCKED (directionBuy=%d, orderCount=%d/%d)",
+                                            g_pairs[i].directionBuy, g_pairs[i].orderCountBuy, g_pairs[i].maxOrderBuy);
+               datetime now = TimeCurrent();
+               if(g_firstAnalyzeRun || reason != g_pairs[i].lastBlockReason || 
+                  now - g_pairs[i].lastBlockLogTime >= DEBUG_LOG_INTERVAL)
+               {
+                  PrintFormat("[CORR ONLY] Pair %d %s/%s: %s",
+                              i + 1, g_pairs[i].symbolA, g_pairs[i].symbolB, reason);
+                  g_pairs[i].lastBlockReason = reason;
+                  g_pairs[i].lastBlockLogTime = now;
+               }
             }
          }
          else // direction == "SELL"
@@ -5840,9 +5909,18 @@ void AnalyzeAllPairs()
             }
             else if(debugLog)
             {
-               PrintFormat("[CORR ONLY] Pair %d %s/%s: SELL BLOCKED (directionSell=%d, orderCount=%d/%d)",
-                           i + 1, g_pairs[i].symbolA, g_pairs[i].symbolB,
-                           g_pairs[i].directionSell, g_pairs[i].orderCountSell, g_pairs[i].maxOrderSell);
+               // v2.1.9: Throttled debug log for SELL BLOCKED
+               string reason = StringFormat("SELL BLOCKED (directionSell=%d, orderCount=%d/%d)",
+                                            g_pairs[i].directionSell, g_pairs[i].orderCountSell, g_pairs[i].maxOrderSell);
+               datetime now = TimeCurrent();
+               if(g_firstAnalyzeRun || reason != g_pairs[i].lastBlockReason || 
+                  now - g_pairs[i].lastBlockLogTime >= DEBUG_LOG_INTERVAL)
+               {
+                  PrintFormat("[CORR ONLY] Pair %d %s/%s: %s",
+                              i + 1, g_pairs[i].symbolA, g_pairs[i].symbolB, reason);
+                  g_pairs[i].lastBlockReason = reason;
+                  g_pairs[i].lastBlockLogTime = now;
+               }
             }
          }
          
@@ -5919,6 +5997,10 @@ void AnalyzeAllPairs()
          }
       }
    }
+   
+   // v2.1.9: Clear first-run flag after initial analysis
+   if(g_firstAnalyzeRun)
+      g_firstAnalyzeRun = false;
 }
 
 //+------------------------------------------------------------------+
