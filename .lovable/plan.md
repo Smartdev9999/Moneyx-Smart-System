@@ -1,5 +1,4 @@
-
-## แผนเพิ่ม: Reset Mini Group Trigger + ปุ่ม Close Mini Group (v2.1)
+## ✅ แผนเพิ่ม: Reset Mini Group Trigger + ปุ่ม Close Mini Group (v2.1) - COMPLETED
 
 ### สรุปความต้องการ
 
