@@ -2432,6 +2432,11 @@ void OnTick()
    ManageAllPositions();
    CheckPairTargets();
    CheckTotalTarget();
+   
+   // v2.0: Update Mini Group profits and check targets
+   UpdateMiniGroupProfits();
+   CheckMiniGroupTargets();
+   
    CheckRiskLimits();
    UpdateAccountStats();
    
@@ -4241,6 +4246,123 @@ double GetRealTimeScaledTargetBuy(int groupIndex)
 //+------------------------------------------------------------------+
 //| v1.6.6: Get Real-Time Scaled Target Sell                           |
 //+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| v2.0: Get Scaled Mini Group Target                                  |
+//+------------------------------------------------------------------+
+double GetScaledMiniGroupTarget(int miniIndex)
+{
+   double baseTarget = 0;
+   switch(miniIndex)
+   {
+      case 0:  baseTarget = InpMini1Target;  break;
+      case 1:  baseTarget = InpMini2Target;  break;
+      case 2:  baseTarget = InpMini3Target;  break;
+      case 3:  baseTarget = InpMini4Target;  break;
+      case 4:  baseTarget = InpMini5Target;  break;
+      case 5:  baseTarget = InpMini6Target;  break;
+      case 6:  baseTarget = InpMini7Target;  break;
+      case 7:  baseTarget = InpMini8Target;  break;
+      case 8:  baseTarget = InpMini9Target;  break;
+      case 9:  baseTarget = InpMini10Target; break;
+      case 10: baseTarget = InpMini11Target; break;
+      case 11: baseTarget = InpMini12Target; break;
+      case 12: baseTarget = InpMini13Target; break;
+      case 13: baseTarget = InpMini14Target; break;
+      case 14: baseTarget = InpMini15Target; break;
+   }
+   return ApplyScaleDollar(baseTarget);
+}
+
+//+------------------------------------------------------------------+
+//| v2.0: Update Mini Group Profits from Pair Data                     |
+//+------------------------------------------------------------------+
+void UpdateMiniGroupProfits()
+{
+   for(int m = 0; m < MAX_MINI_GROUPS; m++)
+   {
+      int startPair = m * PAIRS_PER_MINI;
+      g_miniGroups[m].floatingProfit = 0;
+      
+      for(int p = startPair; p < startPair + PAIRS_PER_MINI && p < MAX_PAIRS; p++)
+      {
+         // Sum both BUY and SELL floating P/L for this pair
+         g_miniGroups[m].floatingProfit += g_pairs[p].profitBuy + g_pairs[p].profitSell;
+      }
+      
+      g_miniGroups[m].totalProfit = g_miniGroups[m].closedProfit + g_miniGroups[m].floatingProfit;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| v2.0: Check Mini Group Targets and Close if Reached                |
+//+------------------------------------------------------------------+
+void CheckMiniGroupTargets()
+{
+   for(int m = 0; m < MAX_MINI_GROUPS; m++)
+   {
+      double target = GetScaledMiniGroupTarget(m);
+      if(target <= 0) continue;  // Target disabled
+      if(g_miniGroups[m].targetTriggered) continue;  // Already triggered
+      
+      double totalProfit = g_miniGroups[m].totalProfit;
+      
+      if(totalProfit >= target)
+      {
+         g_miniGroups[m].targetTriggered = true;
+         
+         PrintFormat("[v2.0] MINI GROUP %d TARGET REACHED! Profit: $%.2f >= Target: $%.2f",
+                     m + 1, totalProfit, target);
+         
+         // Close all positions in this Mini Group (2 pairs)
+         CloseMiniGroup(m);
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| v2.0: Close All Positions in a Mini Group                          |
+//+------------------------------------------------------------------+
+void CloseMiniGroup(int miniIndex)
+{
+   int startPair = miniIndex * PAIRS_PER_MINI;
+   int groupIdx = GetGroupFromMini(miniIndex);
+   double closedProfit = 0;
+   
+   PrintFormat("[v2.0] Closing Mini Group %d (Pairs %d-%d) | Parent Group: %d",
+               miniIndex + 1, startPair + 1, startPair + PAIRS_PER_MINI, groupIdx + 1);
+   
+   for(int p = startPair; p < startPair + PAIRS_PER_MINI && p < MAX_PAIRS; p++)
+   {
+      if(!g_pairs[p].enabled) continue;
+      
+      // Track profit before closing
+      double pairProfit = g_pairs[p].profitBuy + g_pairs[p].profitSell;
+      
+      // Close Buy side
+      if(g_pairs[p].directionBuy == 1)
+      {
+         closedProfit += g_pairs[p].profitBuy;
+         CloseBuySide(p);
+      }
+      
+      // Close Sell side
+      if(g_pairs[p].directionSell == 1)
+      {
+         closedProfit += g_pairs[p].profitSell;
+         CloseSellSide(p);
+      }
+   }
+   
+   // Add closed profit to Mini Group's accumulated closed
+   g_miniGroups[miniIndex].closedProfit += closedProfit;
+   
+   // Reset trigger for next cycle (optional - depends on requirement)
+   // g_miniGroups[miniIndex].targetTriggered = false;
+   
+   PrintFormat("[v2.0] Mini Group %d CLOSED | Profit Added: $%.2f | Total Closed: $%.2f",
+               miniIndex + 1, closedProfit, g_miniGroups[miniIndex].closedProfit);
+}
+
 double GetRealTimeScaledTargetSell(int groupIndex)
 {
    return ApplyScaleDollar(g_groups[groupIndex].targetSell);
@@ -8927,6 +9049,22 @@ void UpdateDashboard()
       }
    }
    
+   // === v2.0: Update Mini Group Column ===
+   for(int m = 0; m < MAX_MINI_GROUPS; m++)
+   {
+      string mIdxStr = IntegerToString(m);
+      
+      // Update Floating P/L
+      double mFloat = g_miniGroups[m].floatingProfit;
+      color mFltColor = (mFloat >= 0) ? COLOR_PROFIT : COLOR_LOSS;
+      UpdateLabel(prefix + "M" + mIdxStr + "_V_FLT", "$" + DoubleToString(mFloat, 0), mFltColor);
+      
+      // Update Closed P/L
+      double mClosed = g_miniGroups[m].closedProfit;
+      color mClColor = (mClosed >= 0) ? COLOR_PROFIT : COLOR_LOSS;
+      UpdateLabel(prefix + "M" + mIdxStr + "_V_CL", "$" + DoubleToString(mClosed, 0), mClColor);
+   }
+   
    // === v1.8.7: Update Group Info Column (Vertical Layout) ===
    for(int g = 0; g < MAX_GROUPS; g++)
    {
@@ -8946,6 +9084,11 @@ void UpdateDashboard()
       double scaledTarget = GetRealTimeScaledClosedTarget(g);
       string tgtStr = (scaledTarget > 0) ? "$" + DoubleToString(scaledTarget, 0) : "-";
       UpdateLabel(prefix + "G" + gIdxStr + "_V_TGT", tgtStr, COLOR_GOLD);
+      
+      // v2.0: Update Mini Target sum for this Group
+      double miniTgt = GetMiniGroupSumTarget(g);
+      string miniTgtStr = (miniTgt > 0) ? "$" + DoubleToString(miniTgt, 0) : "-";
+      UpdateLabel(prefix + "G" + gIdxStr + "_V_MTGT", miniTgtStr, COLOR_ACTIVE);
    }
    
    ChartRedraw();
