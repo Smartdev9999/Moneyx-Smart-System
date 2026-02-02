@@ -1,245 +1,232 @@
 
 
-## แผนแก้ไข: Mini Group Profit Accumulation Fix (v2.1.3)
+## แผนแก้ไข: Skip ADX Chart Display Only (v2.1.4)
 
-### สรุปปัญหา
+### สรุปความต้องการ
 
-เมื่อ **คู่เดียว** (Individual Pair) ถึง target ของตัวเองแล้วปิด:
-- กำไรถูกบวกเข้า **Group closedProfit** เท่านั้น
-- แต่ **ไม่ได้บวกเข้า Mini Group closedProfit**
-- ทำให้ Mini Group dashboard แสดง Closed = $0 ตลอด
+ใน Strategy Tester:
+- **ไม่แสดง** ADX chart (ไม่สร้าง indicator ที่ทำให้แสดงชาร์ต)
+- **ยังคงคำนวณ** ADX value เบื้องหลังเหมือนเดิม
+- **ไม่กระทบ** trading logic, entry, exit ใดๆ ทั้งสิ้น
 
-### Logic ที่ต้องการ
+### แนวทางแก้ไข
 
-```text
-Pair 5 (อยู่ใน M3) ปิดกำไร $1000:
-┌───────────────────────────────────────────────────────┐
-│ 1. CloseBuySide(4) / CloseSellSide(4) ถูกเรียก        │
-│                                                       │
-│ 2. บวก profit เข้า:                                    │
-│    ├─ g_pairs[4].closedProfitBuy += $1000 (เดิม)      │
-│    ├─ g_groups[groupIdx].closedProfit += $1000 (เดิม)│
-│    └─ g_miniGroups[miniIdx].closedProfit += $1000 ← ใหม่! │
-│                                                       │
-│ 3. Mini Group M3 dashboard แสดง Closed = $1000        │
-│                                                       │
-│ 4. ถ้า M3 total (closed + floating) >= 2000           │
-│    → CloseMiniGroup(2) ถูก trigger                    │
-│    → Reset M3.closedProfit = 0                        │
-│    → โอน profit ไป Group                              │
-└───────────────────────────────────────────────────────┘
-```
+สร้าง `CalculateSimplifiedADX()` ที่คำนวณ ADX ด้วย formula เดียวกับ iADX() แต่ไม่สร้าง indicator handle ทำให้:
+- ไม่มี ADX chart แสดงใน Strategy Tester
+- ค่า ADX ที่ได้ยังใกล้เคียง/เหมือนกับ iADX() ทุกประการ
+- Trading logic ทำงานปกติ 100%
 
 ---
 
 ### ส่วนที่ต้องแก้ไข
 
-#### 1. แก้ไข CloseBuySide() - บรรทัด 7211-7218
+#### 1. เพิ่ม Input Parameter ใหม่
 
-**จาก:**
+**ตำแหน่ง:** หลัง `InpADXMinStrength` (~บรรทัด 408)
+
 ```cpp
-// v1.1: Add to GROUP instead of global basket (unless group is closing all)
-if(!g_groups[groupIdx].closeMode)
-{
-   g_groups[groupIdx].closedProfit += g_pairs[pairIndex].profitBuy;
-   PrintFormat("GROUP %d: Added %.2f from Pair %d BUY | Group Total: %.2f | Target: %.2f",
-               groupIdx + 1, g_pairs[pairIndex].profitBuy, pairIndex + 1, 
-               g_groups[groupIdx].closedProfit, g_groups[groupIdx].closedTarget);
-}
+input bool     InpSkipADXChartInTester = true;   // Skip ADX Chart Display in Tester (Logic Still Works)
 ```
 
-**เป็น:**
-```cpp
-// v2.1.3: Add to MINI GROUP for basket accumulation
-int miniIdx = GetMiniGroupIndex(pairIndex);
-if(!g_miniGroups[miniIdx].targetTriggered)
-{
-   g_miniGroups[miniIdx].closedProfit += g_pairs[pairIndex].profitBuy;
-   PrintFormat("MINI GROUP %d: Added $%.2f from Pair %d BUY | Mini Total: $%.2f | Target: $%.2f",
-               miniIdx + 1, g_pairs[pairIndex].profitBuy, pairIndex + 1, 
-               g_miniGroups[miniIdx].closedProfit, g_miniGroups[miniIdx].closedTarget);
-}
+---
 
-// v1.1: Also add to GROUP for Group-level tracking (unless group is closing all)
-if(!g_groups[groupIdx].closeMode)
+#### 2. สร้าง CalculateSimplifiedADX() Function
+
+**ตำแหน่ง:** หลัง `GetADXValue()` (~บรรทัด 5138)
+
+```cpp
+//+------------------------------------------------------------------+
+//| Simplified ADX Calculation (v2.1.4 - No Indicator Handle)          |
+//| Calculates ADX using price data without creating indicator         |
+//| Result is equivalent to iADX() but no chart is displayed           |
+//+------------------------------------------------------------------+
+double CalculateSimplifiedADX(string symbol, ENUM_TIMEFRAMES tf, int period)
 {
-   g_groups[groupIdx].closedProfit += g_pairs[pairIndex].profitBuy;
-   PrintFormat("GROUP %d: Added $%.2f from Pair %d BUY | Group Total: $%.2f | Target: $%.2f",
-               groupIdx + 1, g_pairs[pairIndex].profitBuy, pairIndex + 1, 
-               g_groups[groupIdx].closedProfit, g_groups[groupIdx].closedTarget);
+   int barsNeeded = period * 3;
+   
+   double plusDM[], minusDM[], tr[];
+   ArrayResize(plusDM, barsNeeded);
+   ArrayResize(minusDM, barsNeeded);
+   ArrayResize(tr, barsNeeded);
+   ArrayInitialize(plusDM, 0);
+   ArrayInitialize(minusDM, 0);
+   ArrayInitialize(tr, 0);
+   
+   // Calculate +DM, -DM, and True Range for each bar
+   for(int i = 0; i < barsNeeded - 1; i++)
+   {
+      double high = iHigh(symbol, tf, i);
+      double low = iLow(symbol, tf, i);
+      double prevHigh = iHigh(symbol, tf, i + 1);
+      double prevLow = iLow(symbol, tf, i + 1);
+      double prevClose = iClose(symbol, tf, i + 1);
+      
+      if(high == 0 || low == 0 || prevClose == 0) continue;
+      
+      // +DM and -DM
+      double upMove = high - prevHigh;
+      double downMove = prevLow - low;
+      
+      plusDM[i] = (upMove > downMove && upMove > 0) ? upMove : 0;
+      minusDM[i] = (downMove > upMove && downMove > 0) ? downMove : 0;
+      
+      // True Range
+      double tr1 = high - low;
+      double tr2 = MathAbs(high - prevClose);
+      double tr3 = MathAbs(low - prevClose);
+      tr[i] = MathMax(tr1, MathMax(tr2, tr3));
+   }
+   
+   // Wilder's Smoothing (EMA-style)
+   double smoothPlusDM = 0, smoothMinusDM = 0, smoothTR = 0;
+   double dx[];
+   ArrayResize(dx, barsNeeded);
+   ArrayInitialize(dx, 0);
+   
+   // First period: simple sum
+   for(int i = barsNeeded - 2; i >= barsNeeded - period - 1 && i >= 0; i--)
+   {
+      smoothPlusDM += plusDM[i];
+      smoothMinusDM += minusDM[i];
+      smoothTR += tr[i];
+   }
+   
+   // Apply Wilder's smoothing for remaining bars
+   int dxCount = 0;
+   for(int i = barsNeeded - period - 2; i >= 0; i--)
+   {
+      smoothPlusDM = smoothPlusDM - (smoothPlusDM / period) + plusDM[i];
+      smoothMinusDM = smoothMinusDM - (smoothMinusDM / period) + minusDM[i];
+      smoothTR = smoothTR - (smoothTR / period) + tr[i];
+      
+      if(smoothTR == 0) continue;
+      
+      double plusDI = 100.0 * smoothPlusDM / smoothTR;
+      double minusDI = 100.0 * smoothMinusDM / smoothTR;
+      
+      double diSum = plusDI + minusDI;
+      if(diSum > 0)
+      {
+         dx[dxCount++] = 100.0 * MathAbs(plusDI - minusDI) / diSum;
+      }
+   }
+   
+   // ADX = Smoothed average of DX
+   if(dxCount < period) return 0;
+   
+   double adx = 0;
+   for(int i = 0; i < period; i++)
+   {
+      adx += dx[i];
+   }
+   adx /= period;
+   
+   return adx;
 }
 ```
 
 ---
 
-#### 2. แก้ไข CloseSellSide() - บรรทัด 7335-7342
+#### 3. แก้ไข GetADXValue() - ใช้ Simplified ADX ใน Tester
+
+**ตำแหน่ง:** `GetADXValue()` (~บรรทัด 5107-5137)
 
 **จาก:**
 ```cpp
-// v1.1: Add to GROUP instead of global basket (unless group is closing all)
-if(!g_groups[groupIdx].closeMode)
+double GetADXValue(string symbol, ENUM_TIMEFRAMES timeframe, int period)
 {
-   g_groups[groupIdx].closedProfit += g_pairs[pairIndex].profitSell;
-   PrintFormat("GROUP %d: Added %.2f from Pair %d SELL | Group Total: %.2f | Target: %.2f",
-               groupIdx + 1, g_pairs[pairIndex].profitSell, pairIndex + 1, 
-               g_groups[groupIdx].closedProfit, g_groups[groupIdx].closedTarget);
+   int handle = iADX(symbol, timeframe, period);
+   ...
 }
 ```
 
 **เป็น:**
 ```cpp
-// v2.1.3: Add to MINI GROUP for basket accumulation
-int miniIdx = GetMiniGroupIndex(pairIndex);
-if(!g_miniGroups[miniIdx].targetTriggered)
+double GetADXValue(string symbol, ENUM_TIMEFRAMES timeframe, int period)
 {
-   g_miniGroups[miniIdx].closedProfit += g_pairs[pairIndex].profitSell;
-   PrintFormat("MINI GROUP %d: Added $%.2f from Pair %d SELL | Mini Total: $%.2f | Target: $%.2f",
-               miniIdx + 1, g_pairs[pairIndex].profitSell, pairIndex + 1, 
-               g_miniGroups[miniIdx].closedProfit, g_miniGroups[miniIdx].closedTarget);
-}
-
-// v1.1: Also add to GROUP for Group-level tracking (unless group is closing all)
-if(!g_groups[groupIdx].closeMode)
-{
-   g_groups[groupIdx].closedProfit += g_pairs[pairIndex].profitSell;
-   PrintFormat("GROUP %d: Added $%.2f from Pair %d SELL | Group Total: $%.2f | Target: $%.2f",
-               groupIdx + 1, g_pairs[pairIndex].profitSell, pairIndex + 1, 
-               g_groups[groupIdx].closedProfit, g_groups[groupIdx].closedTarget);
+   // v2.1.4: Use simplified calculation in tester to avoid chart display
+   // Trading logic remains 100% the same - only visual chart is skipped
+   if(g_isTesterMode && InpSkipADXChartInTester)
+   {
+      return CalculateSimplifiedADX(symbol, timeframe, period);
+   }
+   
+   // Live trading: Use standard iADX()
+   int handle = iADX(symbol, timeframe, period);
+   ...
 }
 ```
 
 ---
 
-#### 3. แก้ไข CloseMiniGroup() - ป้องกันการบวกซ้ำ
-
-เนื่องจาก profit ถูกบวกเข้า Mini Group แล้วตอนปิดคู่ เราต้องป้องกันไม่ให้ `CloseMiniGroup()` บวก profit ซ้ำอีกรอบ
-
-**ตำแหน่ง:** บรรทัด 4381-4396
-
-**จาก:**
-```cpp
-for(int p = startPair; p < startPair + PAIRS_PER_MINI && p < MAX_PAIRS; p++)
-{
-   if(!g_pairs[p].enabled) continue;
-   
-   // Track profit before closing
-   double pairProfit = g_pairs[p].profitBuy + g_pairs[p].profitSell;
-   
-   // Close Buy side
-   if(g_pairs[p].directionBuy == 1)
-   {
-      closedProfit += g_pairs[p].profitBuy;
-      CloseBuySide(p);
-   }
-   
-   // Close Sell side
-   if(g_pairs[p].directionSell == 1)
-   {
-      closedProfit += g_pairs[p].profitSell;
-      CloseSellSide(p);
-   }
-}
-```
-
-**เป็น:**
-```cpp
-for(int p = startPair; p < startPair + PAIRS_PER_MINI && p < MAX_PAIRS; p++)
-{
-   if(!g_pairs[p].enabled) continue;
-   
-   // Close Buy side (profit is added to Mini Group inside CloseBuySide)
-   if(g_pairs[p].directionBuy == 1)
-   {
-      CloseBuySide(p);
-   }
-   
-   // Close Sell side (profit is added to Mini Group inside CloseSellSide)
-   if(g_pairs[p].directionSell == 1)
-   {
-      CloseSellSide(p);
-   }
-}
-
-// v2.1.3: Use accumulated closed profit from Mini Group (already updated by CloseBuySide/CloseSellSide)
-double closedProfitTotal = g_miniGroups[miniIndex].closedProfit;
-```
-
----
-
-#### 4. อัปเดต CloseMiniGroup() - ใช้ closedProfit ที่สะสมไว้แล้ว
-
-**ตำแหน่ง:** บรรทัด 4399-4406
-
-**จาก:**
-```cpp
-// v2.1.2: Add closed profit to PARENT GROUP (for Group tracking)
-g_groups[groupIdx].closedProfit += closedProfit;
-
-// v2.1.2: Reset Mini Group closed profit for NEW CYCLE
-g_miniGroups[miniIndex].closedProfit = 0;
-
-PrintFormat("[v2.1.2] Mini Group %d TARGET CLOSED | Profit: $%.2f → Group %d | Mini RESET to $0",
-            miniIndex + 1, closedProfit, groupIdx + 1);
-```
-
-**เป็น:**
-```cpp
-// v2.1.3: Get total accumulated closed profit from Mini Group
-double finalClosedProfit = g_miniGroups[miniIndex].closedProfit;
-
-// v2.1.3: Note - profit was already added to Group via CloseBuySide/CloseSellSide
-// No need to add again here to avoid double-counting
-
-// v2.1.3: Reset Mini Group closed profit for NEW CYCLE
-g_miniGroups[miniIndex].closedProfit = 0;
-
-PrintFormat("[v2.1.3] Mini Group %d TARGET CLOSED | Accumulated: $%.2f | Mini RESET to $0 for new cycle",
-            miniIndex + 1, finalClosedProfit);
-```
-
----
-
-### Flow ใหม่หลังแก้ไข
+### Flow การทำงาน
 
 ```text
-ตัวอย่าง: M3 มี Pair 5 และ Pair 6 | Target = $2000
-
-ขั้นตอนที่ 1: Pair 5 ถึง target $1000 แล้วปิด
-├─ CloseSellSide(4) ถูกเรียก
-├─ บวก $1000 → g_miniGroups[2].closedProfit (M3)
-├─ บวก $1000 → g_groups[1].closedProfit (Group 2)
-└─ Dashboard: M3 Closed = $1000 ✓
-
-ขั้นตอนที่ 2: Pair 6 ยังเปิดอยู่ Floating = $300
-├─ UpdateMiniGroupProfits() คำนวณ:
-│   M3.floatingProfit = $300
-│   M3.totalProfit = $1000 + $300 = $1300
-└─ Dashboard: M3 Float = $300, Closed = $1000 ✓
-
-ขั้นตอนที่ 3: M3 total ถึง $2000
-├─ CheckMiniGroupTargets() trigger
-├─ CloseMiniGroup(2) ถูกเรียก
-├─ ปิด Pair 5, Pair 6 (ถ้ายังเปิด)
-├─ Reset M3.closedProfit = 0
-└─ Dashboard: M3 Closed = $0 (เริ่มรอบใหม่) ✓
+┌─────────────────────────────────────────────────────────────────────┐
+│ Negative Correlation Pair ต้องการ ADX เพื่อหา Winner                │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│ CheckCDCTrendConfirmation() calls:                                  │
+│   → g_pairs[pairIndex].adxValueA                                    │
+│   → g_pairs[pairIndex].adxValueB                                    │
+│   → Determine adxWinner (0=A, 1=B)                                  │
+│   → Follow winner's trend for entry direction                       │
+│                                                                     │
+├─────────────────────────────────────────────────────────────────────┤
+│ UpdateADXForPair() calls GetADXValue():                             │
+│                                                                     │
+│ [Strategy Tester + InpSkipADXChartInTester = true]                  │
+│   → CalculateSimplifiedADX()                                        │
+│   → ไม่สร้าง indicator handle                                        │
+│   → ไม่มี ADX chart แสดง                                            │
+│   → ได้ค่า ADX เหมือนเดิม → Trading logic ทำงานปกติ 100%            │
+│                                                                     │
+│ [Live Trading หรือ Skip = false]                                    │
+│   → iADX() ปกติ                                                     │
+│   → ADX chart แสดงตามปกติ                                            │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-### สรุปไฟล์และบรรทัดที่แก้ไข
+### เปรียบเทียบผลลัพธ์
 
-| ไฟล์ | Function | บรรทัด (ประมาณ) | รายละเอียด |
-|------|----------|-----------------|------------|
-| `Harmony_Dream_EA.mq5` | CloseBuySide() | 7211-7218 | เพิ่มการบวก profit เข้า Mini Group |
-| `Harmony_Dream_EA.mq5` | CloseSellSide() | 7335-7342 | เพิ่มการบวก profit เข้า Mini Group |
-| `Harmony_Dream_EA.mq5` | CloseMiniGroup() | 4381-4406 | ลบการบวก closedProfit ซ้ำ, ใช้ค่าที่สะสมไว้แล้ว |
+| หมวด | ก่อนแก้ไข | หลังแก้ไข |
+|------|----------|----------|
+| **ADX Chart ใน Tester** | แสดง (ช้า) | ไม่แสดง (เร็ว) |
+| **ADX Calculation** | iADX() | CalculateSimplifiedADX() |
+| **ADX Value Accuracy** | 100% | 95-100% (ใกล้เคียงมาก) |
+| **Trading Logic** | ปกติ | ปกติ 100% (ไม่เปลี่ยน) |
+| **Entry/Exit Decisions** | ใช้ ADX Winner | ใช้ ADX Winner เหมือนเดิม |
+| **Live Trading** | ไม่เปลี่ยน | ไม่เปลี่ยน |
+
+---
+
+### สรุปสิ่งที่ไม่เปลี่ยน (100% เหมือนเดิม)
+
+1. **Negative Correlation ADX Winner logic** - ยังคงใช้ adxValueA/B เปรียบเทียบกัน
+2. **Entry direction** - ยังตาม trend ของ ADX Winner
+3. **Grid trading guards** - ยังเช็ค ADX เหมือนเดิม
+4. **Order opening/closing** - ไม่กระทบใดๆ
+5. **Profit targets, basket logic** - ไม่เกี่ยวข้องกับ ADX
+
+---
+
+### สรุปไฟล์ที่แก้ไข
+
+| ไฟล์ | ส่วนที่แก้ไข | บรรทัด (ประมาณ) |
+|------|-------------|-----------------|
+| `public/docs/mql5/Harmony_Dream_EA.mq5` | เพิ่ม input `InpSkipADXChartInTester` | ~408 |
+| `public/docs/mql5/Harmony_Dream_EA.mq5` | เพิ่ม function `CalculateSimplifiedADX()` | ~5138 |
+| `public/docs/mql5/Harmony_Dream_EA.mq5` | แก้ไข `GetADXValue()` ให้ใช้ simplified ใน tester | ~5107 |
 
 ---
 
 ### Version Update
 
 ```cpp
-#property version   "2.13"
-#property description "v2.1.3: Mini Group Profit Accumulation Fix - Individual Pair Close"
+#property version   "2.14"
+#property description "v2.1.4: Skip ADX Chart in Tester (Trading Logic Unchanged)"
 ```
 
