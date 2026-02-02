@@ -1,103 +1,261 @@
 
 
-## แผนแก้ไข: Compilation Error & Deprecated Warnings Fix
+## แผนแก้ไข: Correlation Only Mode - Full Debug + RSI Bypass (v2.1.7)
 
-### สรุปปัญหาที่พบจากภาพ
+### สรุปปัญหาจากภาพ
 
-| ประเภท | ตำแหน่ง | คำอธิบาย |
-|--------|---------|----------|
-| **Error** | บรรทัด 2418 | `undeclared identifier` - ตัวแปร `g_totalPairs` ไม่ได้ประกาศ |
-| **Warning** | บรรทัด 8241, 8261, 8283 | `POSITION_COMMISSION` is deprecated |
+| Set | Pair | Corr | Type | Trend | Direction ที่คาดว่าจะได้ | สถานะ |
+|-----|------|------|------|-------|------------------------|-------|
+| 10 | GBPUSD-NZDUSD | 94% | Pos | Up | BUY | ❌ ไม่เปิด order |
+| 11 | AUDUSD-NZDUSD | 99% | Pos | Up | BUY | ❌ ไม่เปิด order |
+
+**สาเหตุที่เป็นไปได้:**
+
+1. **RSI Entry Confirmation Block** - ถ้า `InpUseRSISpreadFilter = true`:
+   - BUY ต้องมี RSI <= InpRSIOversold (ค่า default ≤ 30)
+   - ถ้า RSI อยู่ที่ 45 ก็จะ fail
+
+2. **directionBuy/Sell ไม่เท่ากับ -1** - อาจถูก set ไว้จาก operation ก่อนหน้า
+
+3. **Grid Guard Block** - ถ้า `InpGridPauseAffectsMain = true` และเงื่อนไข Grid Guard ไม่ผ่าน
 
 ---
 
 ### การแก้ไข
 
-#### 1. แก้ไข Error: undeclared identifier (บรรทัด 2418)
+#### Part A: เพิ่ม Option ข้าม RSI Check สำหรับ Correlation Only Mode
 
-**สาเหตุ:** ในการ update v2.1.6 ใช้ตัวแปร `g_totalPairs` ที่ไม่มีอยู่ในโค้ด
+**เพิ่ม Input Parameter:**
+
+```cpp
+input group "=== Entry Mode Settings (v1.8.8) ==="
+input ENUM_ENTRY_MODE InpEntryMode = ENTRY_MODE_ZSCORE;    // Entry Mode
+input double   InpCorrOnlyPositiveThreshold = 0.60;        // Correlation Only: Positive Threshold
+input double   InpCorrOnlyNegativeThreshold = -0.60;       // Correlation Only: Negative Threshold
+// v2.1.7: NEW - Option to skip filters for immediate entry
+input bool     InpCorrOnlySkipADXCheck = false;            // Correlation Only: Skip ADX Check (Neg Corr)
+input bool     InpCorrOnlySkipRSICheck = false;            // Correlation Only: Skip RSI Confirmation
+```
+
+---
+
+#### Part B: แก้ไข AnalyzeAllPairs() - ข้าม RSI ถ้า Option เปิด
+
+**ตำแหน่ง:** บรรทัด 5665-5667
 
 **จาก:**
 ```cpp
-// v2.1.6: Update ATR cache on new bar for all active pairs
-for(int i = 0; i < g_totalPairs; i++)
-{
-   if(!g_pairs[i].enabled) continue;
-   UpdateATRCache(i);
-}
+// Step 4: Check RSI Entry Confirmation (still apply)
+if(!CheckRSIEntryConfirmation(i, direction))
+   continue;
 ```
 
 **เป็น:**
 ```cpp
-// v2.1.6: Update ATR cache on new bar for all active pairs
-for(int i = 0; i < MAX_PAIRS; i++)
+// Step 4: Check RSI Entry Confirmation (v2.1.7: Optional skip)
+if(!InpCorrOnlySkipRSICheck && !CheckRSIEntryConfirmation(i, direction))
 {
-   if(!g_pairs[i].enabled) continue;
-   UpdateATRCache(i);
+   if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
+      PrintFormat("[CORR ONLY SKIP] Pair %d %s/%s: RSI BLOCK (dir=%s, RSI=%.1f)", 
+                  i + 1, g_pairs[i].symbolA, g_pairs[i].symbolB, 
+                  direction, g_pairs[i].rsiSpread);
+   continue;
 }
 ```
 
 ---
 
-#### 2. แก้ไข Warning: POSITION_COMMISSION deprecated
+#### Part C: เพิ่ม Comprehensive Debug Log ทุกขั้นตอน
 
-**สาเหตุ:** ใน MT5 Build ใหม่ `POSITION_COMMISSION` ถูก deprecated และแนะนำให้ใช้ `POSITION_FEE` แทน
+**แก้ไข AnalyzeAllPairs() - เพิ่ม Log ทุก Step:**
 
-**แก้ไข 3 ตำแหน่ง:**
-
-**บรรทัด 8241** (ใน GetFilteredFloatingProfit):
 ```cpp
-// จาก:
-PositionGetDouble(POSITION_COMMISSION);
-
-// เป็น:
-PositionGetDouble(POSITION_FEE);
+// ================================================================
+// v1.8.8: CORRELATION ONLY MODE (v2.1.7: Full Debug)
+// ================================================================
+if(InpEntryMode == ENTRY_MODE_CORRELATION_ONLY)
+{
+   bool debugLog = InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester);
+   
+   // Step 1: Check Correlation Threshold
+   if(!CheckCorrelationOnlyEntry(i))
+   {
+      if(debugLog)
+         PrintFormat("[CORR ONLY] Pair %d %s/%s: SKIP - Corr %.0f%% not in range (Pos>=%.0f%%, Neg<=%.0f%%)",
+                     i + 1, g_pairs[i].symbolA, g_pairs[i].symbolB,
+                     g_pairs[i].correlation * 100,
+                     InpCorrOnlyPositiveThreshold * 100,
+                     InpCorrOnlyNegativeThreshold * 100);
+      continue;
+   }
+   
+   // Step 2: Determine Trade Direction based on CDC + ADX
+   string direction = DetermineTradeDirectionForCorrOnly(i);
+   if(direction == "")
+   {
+      if(debugLog)
+      {
+         string reason = "";
+         if(!g_pairs[i].cdcReadyA || !g_pairs[i].cdcReadyB)
+            reason = "CDC NOT READY";
+         else if(g_pairs[i].cdcTrendA == "NEUTRAL" || g_pairs[i].cdcTrendB == "NEUTRAL")
+            reason = StringFormat("CDC NEUTRAL (A=%s, B=%s)", g_pairs[i].cdcTrendA, g_pairs[i].cdcTrendB);
+         else if(g_pairs[i].correlationType == 1 && g_pairs[i].cdcTrendA != g_pairs[i].cdcTrendB)
+            reason = StringFormat("POS CORR TREND MISMATCH (A=%s, B=%s)", g_pairs[i].cdcTrendA, g_pairs[i].cdcTrendB);
+         else if(g_pairs[i].correlationType == -1 && g_pairs[i].cdcTrendA == g_pairs[i].cdcTrendB)
+            reason = StringFormat("NEG CORR SAME TREND (A=%s, B=%s)", g_pairs[i].cdcTrendA, g_pairs[i].cdcTrendB);
+         else if(g_pairs[i].correlationType == -1 && InpUseADXForNegative && !InpCorrOnlySkipADXCheck)
+            reason = StringFormat("ADX FAIL (A=%.1f, B=%.1f, Min=%.1f)", 
+                                  g_pairs[i].adxValueA, g_pairs[i].adxValueB, InpADXMinStrength);
+         else
+            reason = "UNKNOWN";
+         
+         PrintFormat("[CORR ONLY] Pair %d %s/%s: SKIP - Direction empty, Reason: %s",
+                     i + 1, g_pairs[i].symbolA, g_pairs[i].symbolB, reason);
+      }
+      continue;
+   }
+   
+   // Step 3: Check Grid Guard (Correlation Only version)
+   if(InpGridPauseAffectsMain)
+   {
+      string pauseReason = "";
+      if(!CheckGridTradingAllowedCorrOnly(i, direction, pauseReason))
+      {
+         if(debugLog)
+            PrintFormat("[CORR ONLY] Pair %d %s/%s: SKIP - Grid Guard: %s",
+                        i + 1, g_pairs[i].symbolA, g_pairs[i].symbolB, pauseReason);
+         continue;
+      }
+   }
+   
+   // Step 4: Check RSI Entry Confirmation (v2.1.7: Optional skip)
+   if(!InpCorrOnlySkipRSICheck && !CheckRSIEntryConfirmation(i, direction))
+   {
+      if(debugLog)
+         PrintFormat("[CORR ONLY] Pair %d %s/%s: SKIP - RSI BLOCK (dir=%s, RSI=%.1f, OB=%.0f, OS=%.0f)", 
+                     i + 1, g_pairs[i].symbolA, g_pairs[i].symbolB, 
+                     direction, g_pairs[i].rsiSpread, InpRSIOverbought, InpRSIOversold);
+      continue;
+   }
+   
+   // Step 5: Open Trade based on determined direction
+   if(direction == "BUY")
+   {
+      if(g_pairs[i].directionBuy == -1 && g_pairs[i].orderCountBuy < g_pairs[i].maxOrderBuy)
+      {
+         // ... open order
+      }
+      else if(debugLog)
+      {
+         PrintFormat("[CORR ONLY] Pair %d %s/%s: BUY BLOCKED (directionBuy=%d, orderCount=%d/%d)",
+                     i + 1, g_pairs[i].symbolA, g_pairs[i].symbolB,
+                     g_pairs[i].directionBuy, g_pairs[i].orderCountBuy, g_pairs[i].maxOrderBuy);
+      }
+   }
+   else // direction == "SELL"
+   {
+      if(g_pairs[i].directionSell == -1 && g_pairs[i].orderCountSell < g_pairs[i].maxOrderSell)
+      {
+         // ... open order
+      }
+      else if(debugLog)
+      {
+         PrintFormat("[CORR ONLY] Pair %d %s/%s: SELL BLOCKED (directionSell=%d, orderCount=%d/%d)",
+                     i + 1, g_pairs[i].symbolA, g_pairs[i].symbolB,
+                     g_pairs[i].directionSell, g_pairs[i].orderCountSell, g_pairs[i].maxOrderSell);
+      }
+   }
+   
+   continue;
+}
 ```
 
-**บรรทัด 8261** (ใน GetPositionProfit):
-```cpp
-// จาก:
-return PositionGetDouble(POSITION_PROFIT) + 
-       PositionGetDouble(POSITION_SWAP) + 
-       PositionGetDouble(POSITION_COMMISSION);
+---
 
-// เป็น:
-return PositionGetDouble(POSITION_PROFIT) + 
-       PositionGetDouble(POSITION_SWAP) + 
-       PositionGetDouble(POSITION_FEE);
+#### Part D: แก้ไข DetermineTradeDirectionForCorrOnly() - เพิ่ม Skip ADX
+
+**ตำแหน่ง:** บรรทัด 5554-5571
+
+**จาก:**
+```cpp
+// Check ADX Winner
+if(!InpUseADXForNegative)
+{
+   // Without ADX: Default to following Symbol A's trend
+   return (trendA == "BULLISH") ? "BUY" : "SELL";
+}
 ```
 
-**บรรทัด 8283** (ใน GetAveragingProfit):
+**เป็น:**
 ```cpp
-// จาก:
-totalProfit += PositionGetDouble(POSITION_PROFIT) + 
-               PositionGetDouble(POSITION_SWAP) + 
-               PositionGetDouble(POSITION_COMMISSION);
+// v2.1.7: Check ADX Winner (with Skip option)
+if(!InpUseADXForNegative || InpCorrOnlySkipADXCheck)
+{
+   // Without ADX or Skip ADX: Default to following Symbol A's trend
+   return (trendA == "BULLISH") ? "BUY" : "SELL";
+}
+```
 
-// เป็น:
-totalProfit += PositionGetDouble(POSITION_PROFIT) + 
-               PositionGetDouble(POSITION_SWAP) + 
-               PositionGetDouble(POSITION_FEE);
+**และแก้ไข Fallback เมื่อ ADX ทั้งคู่ไม่ผ่าน:**
+
+**จาก:**
+```cpp
+else
+   return "";  // Neither has clear strength - wait
+```
+
+**เป็น:**
+```cpp
+else
+{
+   // v2.1.7: Fallback to Symbol A's trend instead of blocking
+   return (trendA == "BULLISH") ? "BUY" : "SELL";
+}
 ```
 
 ---
 
 ### สรุปไฟล์และบรรทัดที่แก้ไข
 
-| ไฟล์ | บรรทัด | รายละเอียด |
-|------|--------|------------|
-| `Harmony_Dream_EA.mq5` | 2418 | เปลี่ยน `g_totalPairs` → `MAX_PAIRS` |
-| `Harmony_Dream_EA.mq5` | 8241 | เปลี่ยน `POSITION_COMMISSION` → `POSITION_FEE` |
-| `Harmony_Dream_EA.mq5` | 8261 | เปลี่ยน `POSITION_COMMISSION` → `POSITION_FEE` |
-| `Harmony_Dream_EA.mq5` | 8283 | เปลี่ยน `POSITION_COMMISSION` → `POSITION_FEE` |
+| ไฟล์ | ส่วนที่แก้ไข | บรรทัด (ประมาณ) | รายละเอียด |
+|------|-------------|-----------------|------------|
+| `Harmony_Dream_EA.mq5` | Version | 7-10 | อัปเดตเป็น v2.17 |
+| `Harmony_Dream_EA.mq5` | Input Parameters | 654-656 | เพิ่ม `InpCorrOnlySkipADXCheck` + `InpCorrOnlySkipRSICheck` |
+| `Harmony_Dream_EA.mq5` | `DetermineTradeDirectionForCorrOnly()` | 5554-5571 | เพิ่ม Skip ADX + Fallback |
+| `Harmony_Dream_EA.mq5` | `AnalyzeAllPairs()` | 5646-5705 | เพิ่ม Full Debug Logs + Skip RSI option |
+
+---
+
+### การตั้งค่าแนะนำ
+
+เพื่อให้ออก order ทันทีทุกตัวเมื่อดึง EA เข้า chart:
+
+| Parameter | Value | เหตุผล |
+|-----------|-------|--------|
+| Entry Mode | Correlation Only | ข้าม Z-Score |
+| Correlation Threshold (Pos) | 0.60 | ≥ 60% จะเปิด |
+| Correlation Threshold (Neg) | -0.60 | ≤ -60% จะเปิด |
+| **Skip ADX Check** | **true** | ไม่รอ ADX สำหรับ Neg Corr |
+| **Skip RSI Check** | **true** | ไม่รอ RSI zone |
+| **Debug Mode** | **true** | ดู log ว่าทำไมไม่เปิด |
 
 ---
 
 ### ผลลัพธ์ที่คาดหวัง
 
-หลังแก้ไขแล้ว:
-- **0 errors** 
-- **0 warnings**
+| สถานการณ์ | ก่อนแก้ไข | หลังแก้ไข |
+|-----------|----------|----------|
+| Set 10 (94% Pos, Up trend) | ❌ ไม่เปิด | ✅ เปิด BUY ทันที |
+| Set 11 (99% Pos, Up trend) | ❌ ไม่เปิด | ✅ เปิด BUY ทันที |
+| Debug Info | ไม่มี log | แสดงสาเหตุที่ไม่เปิดทุก step |
 
-EA จะสามารถ compile ได้สำเร็จ
+---
+
+### Version Update
+
+```cpp
+#property version   "2.17"
+#property description "v2.1.7: Correlation Only - Skip RSI/ADX + Full Debug"
+```
 
