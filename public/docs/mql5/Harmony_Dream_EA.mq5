@@ -4189,7 +4189,7 @@ double GetScaledGroupClosedTarget(int groupIndex)
       case 2: baseTarget = InpGroup3ClosedTarget; break;
       case 3: baseTarget = InpGroup4ClosedTarget; break;
       case 4: baseTarget = InpGroup5ClosedTarget; break;
-      case 5: baseTarget = InpGroup6ClosedTarget; break;
+      // v2.0: Removed case 5 (only 5 groups now)
    }
    return ApplyScaleDollar(baseTarget);
 }
@@ -4204,7 +4204,7 @@ double GetScaledGroupFloatingTarget(int groupIndex)
       case 2: baseTarget = InpGroup3FloatingTarget; break;
       case 3: baseTarget = InpGroup4FloatingTarget; break;
       case 4: baseTarget = InpGroup5FloatingTarget; break;
-      case 5: baseTarget = InpGroup6FloatingTarget; break;
+      // v2.0: Removed case 5 (only 5 groups now)
    }
    return ApplyScaleDollar(baseTarget);
 }
@@ -4219,7 +4219,7 @@ double GetScaledGroupTargetBuy(int groupIndex)
       case 2: baseTarget = InpGroup3TargetBuy; break;
       case 3: baseTarget = InpGroup4TargetBuy; break;
       case 4: baseTarget = InpGroup5TargetBuy; break;
-      case 5: baseTarget = InpGroup6TargetBuy; break;
+      // v2.0: Removed case 5 (only 5 groups now)
    }
    return ApplyScaleDollar(baseTarget);
 }
@@ -4234,7 +4234,7 @@ double GetScaledGroupTargetSell(int groupIndex)
       case 2: baseTarget = InpGroup3TargetSell; break;
       case 3: baseTarget = InpGroup4TargetSell; break;
       case 4: baseTarget = InpGroup5TargetSell; break;
-      case 5: baseTarget = InpGroup6TargetSell; break;
+      // v2.0: Removed case 5 (only 5 groups now)
    }
    return ApplyScaleDollar(baseTarget);
 }
@@ -4294,25 +4294,7 @@ double GetScaledMiniGroupTarget(int miniIndex)
    return ApplyScaleDollar(baseTarget);
 }
 
-//+------------------------------------------------------------------+
-//| v2.0: Update Mini Group Profits from Pair Data                     |
-//+------------------------------------------------------------------+
-void UpdateMiniGroupProfits()
-{
-   for(int m = 0; m < MAX_MINI_GROUPS; m++)
-   {
-      int startPair = m * PAIRS_PER_MINI;
-      g_miniGroups[m].floatingProfit = 0;
-      
-      for(int p = startPair; p < startPair + PAIRS_PER_MINI && p < MAX_PAIRS; p++)
-      {
-         // Sum both BUY and SELL floating P/L for this pair
-         g_miniGroups[m].floatingProfit += g_pairs[p].profitBuy + g_pairs[p].profitSell;
-      }
-      
-      g_miniGroups[m].totalProfit = g_miniGroups[m].closedProfit + g_miniGroups[m].floatingProfit;
-   }
-}
+// (v2.0: UpdateMiniGroupProfits moved to line ~1862 - avoid duplicate)
 
 //+------------------------------------------------------------------+
 //| v2.0: Check Mini Group Targets and Close if Reached                |
