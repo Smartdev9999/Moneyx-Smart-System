@@ -1,232 +1,208 @@
 
 
-## แผนแก้ไข: Skip ADX Chart Display Only (v2.1.4)
+## แผนแก้ไข: Hierarchical Basket Reset System (v2.1.5)
 
-### สรุปความต้องการ
+### สรุปปัญหา
 
-ใน Strategy Tester:
-- **ไม่แสดง** ADX chart (ไม่สร้าง indicator ที่ทำให้แสดงชาร์ต)
-- **ยังคงคำนวณ** ADX value เบื้องหลังเหมือนเดิม
-- **ไม่กระทบ** trading logic, entry, exit ใดๆ ทั้งสิ้น
+ปัจจุบัน reset logic ไม่ถูกต้องตาม hierarchy:
 
-### แนวทางแก้ไข
+| Level | ปิด Target แล้ว | ควรรีเซ็ท | ปัจจุบัน |
+|-------|----------------|----------|---------|
+| **Mini Group** | M3 ถึง $2000 | M3 เท่านั้น | ✅ ถูกต้อง |
+| **Group** | Group 1 ถึง $4000 | M1, M2, M3 + Group 1 | ❌ รีเซ็ทเฉพาะ Group 1 |
+| **Total Basket** | Total ถึง $10000 | All M1-M15 + All Groups + Total | ❌ รีเซ็ทเฉพาะ Groups + Total |
 
-สร้าง `CalculateSimplifiedADX()` ที่คำนวณ ADX ด้วย formula เดียวกับ iADX() แต่ไม่สร้าง indicator handle ทำให้:
-- ไม่มี ADX chart แสดงใน Strategy Tester
-- ค่า ADX ที่ได้ยังใกล้เคียง/เหมือนกับ iADX() ทุกประการ
-- Trading logic ทำงานปกติ 100%
+### Hierarchy ที่ถูกต้อง
+
+```text
+โครงสร้าง:
+┌─────────────────────────────────────────────────────────────┐
+│ Total Basket                                                │
+│   ├── Group 1                                               │
+│   │     ├── M1 (Pair 1-2)                                   │
+│   │     ├── M2 (Pair 3-4)                                   │
+│   │     └── M3 (Pair 5-6)                                   │
+│   ├── Group 2                                               │
+│   │     ├── M4 (Pair 7-8)                                   │
+│   │     ├── M5 (Pair 9-10)                                  │
+│   │     └── M6 (Pair 11-12)                                 │
+│   └── ... (Group 3-5)                                       │
+└─────────────────────────────────────────────────────────────┘
+
+Reset Rules (เล็กไปใหญ่):
+- Mini Group reset → รีเซ็ท Mini Group ตัวเองเท่านั้น
+- Group reset → รีเซ็ท Mini Groups ใน Group + Group ตัวเอง
+- Total Basket reset → รีเซ็ท ALL Mini Groups + ALL Groups + Total Basket
+```
 
 ---
 
 ### ส่วนที่ต้องแก้ไข
 
-#### 1. เพิ่ม Input Parameter ใหม่
+#### 1. สร้าง ResetMiniGroupProfit() Function ใหม่
 
-**ตำแหน่ง:** หลัง `InpADXMinStrength` (~บรรทัด 408)
-
-```cpp
-input bool     InpSkipADXChartInTester = true;   // Skip ADX Chart Display in Tester (Logic Still Works)
-```
-
----
-
-#### 2. สร้าง CalculateSimplifiedADX() Function
-
-**ตำแหน่ง:** หลัง `GetADXValue()` (~บรรทัด 5138)
+**ตำแหน่ง:** หลัง `ResetGroupProfit()` (~บรรทัด 1998)
 
 ```cpp
 //+------------------------------------------------------------------+
-//| Simplified ADX Calculation (v2.1.4 - No Indicator Handle)          |
-//| Calculates ADX using price data without creating indicator         |
-//| Result is equivalent to iADX() but no chart is displayed           |
+//| v2.1.5: Reset Mini Group Profit                                    |
 //+------------------------------------------------------------------+
-double CalculateSimplifiedADX(string symbol, ENUM_TIMEFRAMES tf, int period)
+void ResetMiniGroupProfit(int miniIndex)
 {
-   int barsNeeded = period * 3;
+   if(miniIndex < 0 || miniIndex >= MAX_MINI_GROUPS) return;
    
-   double plusDM[], minusDM[], tr[];
-   ArrayResize(plusDM, barsNeeded);
-   ArrayResize(minusDM, barsNeeded);
-   ArrayResize(tr, barsNeeded);
-   ArrayInitialize(plusDM, 0);
-   ArrayInitialize(minusDM, 0);
-   ArrayInitialize(tr, 0);
+   g_miniGroups[miniIndex].closedProfit = 0;
+   g_miniGroups[miniIndex].floatingProfit = 0;
+   g_miniGroups[miniIndex].totalProfit = 0;
+   g_miniGroups[miniIndex].targetTriggered = false;
    
-   // Calculate +DM, -DM, and True Range for each bar
-   for(int i = 0; i < barsNeeded - 1; i++)
-   {
-      double high = iHigh(symbol, tf, i);
-      double low = iLow(symbol, tf, i);
-      double prevHigh = iHigh(symbol, tf, i + 1);
-      double prevLow = iLow(symbol, tf, i + 1);
-      double prevClose = iClose(symbol, tf, i + 1);
-      
-      if(high == 0 || low == 0 || prevClose == 0) continue;
-      
-      // +DM and -DM
-      double upMove = high - prevHigh;
-      double downMove = prevLow - low;
-      
-      plusDM[i] = (upMove > downMove && upMove > 0) ? upMove : 0;
-      minusDM[i] = (downMove > upMove && downMove > 0) ? downMove : 0;
-      
-      // True Range
-      double tr1 = high - low;
-      double tr2 = MathAbs(high - prevClose);
-      double tr3 = MathAbs(low - prevClose);
-      tr[i] = MathMax(tr1, MathMax(tr2, tr3));
-   }
-   
-   // Wilder's Smoothing (EMA-style)
-   double smoothPlusDM = 0, smoothMinusDM = 0, smoothTR = 0;
-   double dx[];
-   ArrayResize(dx, barsNeeded);
-   ArrayInitialize(dx, 0);
-   
-   // First period: simple sum
-   for(int i = barsNeeded - 2; i >= barsNeeded - period - 1 && i >= 0; i--)
-   {
-      smoothPlusDM += plusDM[i];
-      smoothMinusDM += minusDM[i];
-      smoothTR += tr[i];
-   }
-   
-   // Apply Wilder's smoothing for remaining bars
-   int dxCount = 0;
-   for(int i = barsNeeded - period - 2; i >= 0; i--)
-   {
-      smoothPlusDM = smoothPlusDM - (smoothPlusDM / period) + plusDM[i];
-      smoothMinusDM = smoothMinusDM - (smoothMinusDM / period) + minusDM[i];
-      smoothTR = smoothTR - (smoothTR / period) + tr[i];
-      
-      if(smoothTR == 0) continue;
-      
-      double plusDI = 100.0 * smoothPlusDM / smoothTR;
-      double minusDI = 100.0 * smoothMinusDM / smoothTR;
-      
-      double diSum = plusDI + minusDI;
-      if(diSum > 0)
-      {
-         dx[dxCount++] = 100.0 * MathAbs(plusDI - minusDI) / diSum;
-      }
-   }
-   
-   // ADX = Smoothed average of DX
-   if(dxCount < period) return 0;
-   
-   double adx = 0;
-   for(int i = 0; i < period; i++)
-   {
-      adx += dx[i];
-   }
-   adx /= period;
-   
-   return adx;
+   PrintFormat("[v2.1.5] Mini Group %d RESET: closedProfit = 0, targetTriggered = false",
+               miniIndex + 1);
 }
 ```
 
 ---
 
-#### 3. แก้ไข GetADXValue() - ใช้ Simplified ADX ใน Tester
+#### 2. แก้ไข ResetGroupProfit() - รีเซ็ท Mini Groups ภายในด้วย
 
-**ตำแหน่ง:** `GetADXValue()` (~บรรทัด 5107-5137)
+**ตำแหน่ง:** `ResetGroupProfit()` (~บรรทัด 1988-1997)
 
 **จาก:**
 ```cpp
-double GetADXValue(string symbol, ENUM_TIMEFRAMES timeframe, int period)
+void ResetGroupProfit(int groupIndex)
 {
-   int handle = iADX(symbol, timeframe, period);
-   ...
+   if(groupIndex < 0 || groupIndex >= MAX_GROUPS) return;
+   
+   g_groups[groupIndex].closedProfit = 0;
+   g_groups[groupIndex].floatingProfit = 0;
+   g_groups[groupIndex].totalProfit = 0;
+   g_groups[groupIndex].targetTriggered = false;
+   g_groups[groupIndex].closeMode = false;
 }
 ```
 
 **เป็น:**
 ```cpp
-double GetADXValue(string symbol, ENUM_TIMEFRAMES timeframe, int period)
+void ResetGroupProfit(int groupIndex)
 {
-   // v2.1.4: Use simplified calculation in tester to avoid chart display
-   // Trading logic remains 100% the same - only visual chart is skipped
-   if(g_isTesterMode && InpSkipADXChartInTester)
+   if(groupIndex < 0 || groupIndex >= MAX_GROUPS) return;
+   
+   // v2.1.5: Reset all Mini Groups within this Group FIRST (hierarchy: small → big)
+   int startMini = groupIndex * MINIS_PER_GROUP;
+   for(int m = startMini; m < startMini + MINIS_PER_GROUP && m < MAX_MINI_GROUPS; m++)
    {
-      return CalculateSimplifiedADX(symbol, timeframe, period);
+      ResetMiniGroupProfit(m);
    }
    
-   // Live trading: Use standard iADX()
-   int handle = iADX(symbol, timeframe, period);
-   ...
+   // Reset Group itself
+   g_groups[groupIndex].closedProfit = 0;
+   g_groups[groupIndex].floatingProfit = 0;
+   g_groups[groupIndex].totalProfit = 0;
+   g_groups[groupIndex].targetTriggered = false;
+   g_groups[groupIndex].closeMode = false;
+   
+   PrintFormat("[v2.1.5] Group %d RESET: closedProfit = 0, Mini Groups M%d-M%d also reset",
+               groupIndex + 1, startMini + 1, startMini + MINIS_PER_GROUP);
 }
 ```
 
 ---
 
-### Flow การทำงาน
+#### 3. Total Basket Close - Already correct (เรียก ResetGroupProfit ซึ่งจะ reset Mini Groups ด้วย)
+
+เมื่อแก้ไข `ResetGroupProfit()` แล้ว Total Basket close จะทำงานถูกต้องโดยอัตโนมัติ:
 
 ```text
-┌─────────────────────────────────────────────────────────────────────┐
-│ Negative Correlation Pair ต้องการ ADX เพื่อหา Winner                │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                     │
-│ CheckCDCTrendConfirmation() calls:                                  │
-│   → g_pairs[pairIndex].adxValueA                                    │
-│   → g_pairs[pairIndex].adxValueB                                    │
-│   → Determine adxWinner (0=A, 1=B)                                  │
-│   → Follow winner's trend for entry direction                       │
-│                                                                     │
-├─────────────────────────────────────────────────────────────────────┤
-│ UpdateADXForPair() calls GetADXValue():                             │
-│                                                                     │
-│ [Strategy Tester + InpSkipADXChartInTester = true]                  │
-│   → CalculateSimplifiedADX()                                        │
-│   → ไม่สร้าง indicator handle                                        │
-│   → ไม่มี ADX chart แสดง                                            │
-│   → ได้ค่า ADX เหมือนเดิม → Trading logic ทำงานปกติ 100%            │
-│                                                                     │
-│ [Live Trading หรือ Skip = false]                                    │
-│   → iADX() ปกติ                                                     │
-│   → ADX chart แสดงตามปกติ                                            │
-│                                                                     │
-└─────────────────────────────────────────────────────────────────────┘
+Total Basket Close Flow (v2.1.5):
+1. g_basketTotalProfit >= InpTotalBasketTarget
+2. Loop all Groups: ResetGroupProfit(grp)
+3. ResetGroupProfit(0):
+   ├── ResetMiniGroupProfit(0) → M1 = 0
+   ├── ResetMiniGroupProfit(1) → M2 = 0  
+   ├── ResetMiniGroupProfit(2) → M3 = 0
+   └── Group 1 = 0
+4. ResetGroupProfit(1):
+   ├── ResetMiniGroupProfit(3) → M4 = 0
+   ├── ...
+5. ... (All 5 Groups and 15 Mini Groups reset)
+6. g_accumulatedBasketProfit = 0 → Total Basket = 0
 ```
 
 ---
 
-### เปรียบเทียบผลลัพธ์
+#### 4. ปรับ CloseMiniGroup() - ใช้ ResetMiniGroupProfit() แทน
 
-| หมวด | ก่อนแก้ไข | หลังแก้ไข |
-|------|----------|----------|
-| **ADX Chart ใน Tester** | แสดง (ช้า) | ไม่แสดง (เร็ว) |
-| **ADX Calculation** | iADX() | CalculateSimplifiedADX() |
-| **ADX Value Accuracy** | 100% | 95-100% (ใกล้เคียงมาก) |
-| **Trading Logic** | ปกติ | ปกติ 100% (ไม่เปลี่ยน) |
-| **Entry/Exit Decisions** | ใช้ ADX Winner | ใช้ ADX Winner เหมือนเดิม |
-| **Live Trading** | ไม่เปลี่ยน | ไม่เปลี่ยน |
+**ตำแหน่ง:** `CloseMiniGroup()` บรรทัด 4401-4402
 
----
+**จาก:**
+```cpp
+// v2.1.3: Reset Mini Group closed profit for NEW CYCLE
+g_miniGroups[miniIndex].closedProfit = 0;
+```
 
-### สรุปสิ่งที่ไม่เปลี่ยน (100% เหมือนเดิม)
-
-1. **Negative Correlation ADX Winner logic** - ยังคงใช้ adxValueA/B เปรียบเทียบกัน
-2. **Entry direction** - ยังตาม trend ของ ADX Winner
-3. **Grid trading guards** - ยังเช็ค ADX เหมือนเดิม
-4. **Order opening/closing** - ไม่กระทบใดๆ
-5. **Profit targets, basket logic** - ไม่เกี่ยวข้องกับ ADX
+**เป็น:**
+```cpp
+// v2.1.5: Use dedicated reset function
+ResetMiniGroupProfit(miniIndex);
+```
 
 ---
 
-### สรุปไฟล์ที่แก้ไข
+### Flow หลังแก้ไข
 
-| ไฟล์ | ส่วนที่แก้ไข | บรรทัด (ประมาณ) |
-|------|-------------|-----------------|
-| `public/docs/mql5/Harmony_Dream_EA.mq5` | เพิ่ม input `InpSkipADXChartInTester` | ~408 |
-| `public/docs/mql5/Harmony_Dream_EA.mq5` | เพิ่ม function `CalculateSimplifiedADX()` | ~5138 |
-| `public/docs/mql5/Harmony_Dream_EA.mq5` | แก้ไข `GetADXValue()` ให้ใช้ simplified ใน tester | ~5107 |
+```text
+ตัวอย่าง 1: M3 ถึง Target $2000
+├── CloseMiniGroup(2) ถูกเรียก
+├── ResetMiniGroupProfit(2) → M3 = 0, targetTriggered = false
+└── M1, M2 ไม่ถูกกระทบ ✅
+
+ตัวอย่าง 2: Group 1 ถึง Target $4000
+├── ResetGroupProfit(0) ถูกเรียก
+│   ├── ResetMiniGroupProfit(0) → M1 = 0
+│   ├── ResetMiniGroupProfit(1) → M2 = 0
+│   ├── ResetMiniGroupProfit(2) → M3 = 0
+│   └── Group 1 = 0
+└── Group 2-5 ไม่ถูกกระทบ ✅
+
+ตัวอย่าง 3: Total Basket ถึง Target $10000
+├── Loop all Groups: ResetGroupProfit(grp)
+│   ├── ResetGroupProfit(0) → M1,M2,M3 + G1 = 0
+│   ├── ResetGroupProfit(1) → M4,M5,M6 + G2 = 0
+│   ├── ResetGroupProfit(2) → M7,M8,M9 + G3 = 0
+│   ├── ResetGroupProfit(3) → M10,M11,M12 + G4 = 0
+│   └── ResetGroupProfit(4) → M13,M14,M15 + G5 = 0
+├── g_accumulatedBasketProfit = 0
+└── ALL reset ✅
+```
+
+---
+
+### สรุปไฟล์และบรรทัดที่แก้ไข
+
+| ไฟล์ | Function | บรรทัด (ประมาณ) | รายละเอียด |
+|------|----------|-----------------|------------|
+| `Harmony_Dream_EA.mq5` | ResetMiniGroupProfit() | ~1998 (ใหม่) | สร้าง function reset Mini Group |
+| `Harmony_Dream_EA.mq5` | ResetGroupProfit() | 1988-1997 | เพิ่ม loop reset Mini Groups ก่อน reset Group |
+| `Harmony_Dream_EA.mq5` | CloseMiniGroup() | ~4401 | ใช้ ResetMiniGroupProfit() แทน |
 
 ---
 
 ### Version Update
 
 ```cpp
-#property version   "2.14"
-#property description "v2.1.4: Skip ADX Chart in Tester (Trading Logic Unchanged)"
+#property version   "2.15"
+#property description "v2.1.5: Hierarchical Basket Reset System (Mini→Group→Total)"
 ```
+
+---
+
+### ผลลัพธ์ที่คาดหวัง
+
+Dashboard หลังแก้ไข:
+
+| Event | M1 | M2 | M3 | Group 1 |
+|-------|-----|-----|-----|---------|
+| **เริ่มต้น** | $0 | $0 | $0 | $0 |
+| **M3 ถึง $2000** | $500 | $300 | **$0** | $1003 |
+| **Group 1 ถึง $4000** | **$0** | **$0** | **$0** | **$0** |
 
