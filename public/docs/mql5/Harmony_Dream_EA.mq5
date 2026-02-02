@@ -4,10 +4,10 @@
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "2.15"
+#property version   "2.16"
 #property strict
 #property description "Harmony Dream - Pairs Trading Expert Advisor"
-#property description "v2.1.5: Hierarchical Basket Reset System (Mini→Group→Total)"
+#property description "v2.1.6: Order Counting Fix + ATR Caching + Stable Grid Distance"
 #property description "Full Hedging with Independent Buy/Sell Sides"
 #include <Trade/Trade.mqh>
 
@@ -159,6 +159,11 @@ struct PairInfo
    double         initialEntryPriceSell; // Initial entry price (SELL)
    int            gridProfitZLevelBuy;   // Current Z-Score level for Profit Grid (BUY)
    int            gridProfitZLevelSell;  // Current Z-Score level for Profit Grid (SELL)
+   
+   // === v2.1.6: ATR Caching ===
+   double         cachedGridLossATR;      // Cached ATR value for Grid Loss
+   double         cachedGridProfitATR;    // Cached ATR value for Grid Profit
+   datetime       lastATRBarTime;         // Last bar time ATR was calculated
    
    // === Combined ===
    double         totalPairProfit;   // profitBuy + profitSell
@@ -1576,7 +1581,7 @@ void RestoreOpenPositions()
             }
          }
          
-          // v1.3: Fixed - Restore BUY side (allow restoring both symbols)
+          // v2.1.6: Fixed - Restore BUY side with correct order counting
           if(isBuySide)
           {
              if(g_pairs[i].directionBuy != 1)
@@ -1584,28 +1589,52 @@ void RestoreOpenPositions()
                 g_pairs[i].directionBuy = 1;  // Set to Active only once
              }
              
-             // v1.3: Always try to restore both symbols
+             // v2.1.6: Track if this is Main or Grid order
+             bool isMainOrder = (StringFind(comment, "_GL") < 0 && StringFind(comment, "_GP") < 0);
+             bool shouldCount = false;
+             
+             // v2.1.6: Restore both symbols but count only once per pair
              if(symbol == symbolA && g_pairs[i].ticketBuyA == 0)
              {
                 g_pairs[i].ticketBuyA = ticket;
                 g_pairs[i].lotBuyA = PositionGetDouble(POSITION_VOLUME);
-                PrintFormat("[v1.3] Restored BUY Pair %d SymbolA: %s ticket=%d lot=%.2f", 
+                PrintFormat("[v2.1.6] Restored BUY Pair %d SymbolA: %s ticket=%d lot=%.2f", 
                             i + 1, symbol, ticket, PositionGetDouble(POSITION_VOLUME));
+                
+                // v2.1.6: Count only when restoring Symbol A (main side) for Main orders
+                if(isMainOrder) shouldCount = true;
              }
              else if(symbol == symbolB && g_pairs[i].ticketBuyB == 0)
              {
                 g_pairs[i].ticketBuyB = ticket;
                 g_pairs[i].lotBuyB = PositionGetDouble(POSITION_VOLUME);
-                PrintFormat("[v1.3] Restored BUY Pair %d SymbolB: %s ticket=%d lot=%.2f", 
+                PrintFormat("[v2.1.6] Restored BUY Pair %d SymbolB: %s ticket=%d lot=%.2f", 
                             i + 1, symbol, ticket, PositionGetDouble(POSITION_VOLUME));
+                
+                // v2.1.6: Only count if Symbol A was NOT restored yet (orphan case)
+                if(isMainOrder && g_pairs[i].ticketBuyA == 0) shouldCount = true;
              }
              
-             g_pairs[i].orderCountBuy++;
+             // v2.1.6: Count Grid orders individually (they have _GL or _GP in comment)
+             if(!isMainOrder)
+             {
+                g_pairs[i].orderCountBuy++;
+                if(StringFind(comment, "_GL") >= 0)
+                   g_pairs[i].avgOrderCountBuy++;
+                else if(StringFind(comment, "_GP") >= 0)
+                   g_pairs[i].gridProfitCountBuy++;
+             }
+             else if(shouldCount)
+             {
+                // v2.1.6: Count main order only once per pair (not per symbol)
+                g_pairs[i].orderCountBuy++;
+             }
+             
              g_pairs[i].entryTimeBuy = (datetime)PositionGetInteger(POSITION_TIME);
              restoredBuy++;
           }
          
-          // v1.3: Fixed - Restore SELL side (allow restoring both symbols)
+          // v2.1.6: Fixed - Restore SELL side with correct order counting
           if(isSellSide)
           {
              if(g_pairs[i].directionSell != 1)
@@ -1613,23 +1642,47 @@ void RestoreOpenPositions()
                 g_pairs[i].directionSell = 1;  // Set to Active only once
              }
              
-             // v1.3: Always try to restore both symbols
+             // v2.1.6: Track if this is Main or Grid order
+             bool isMainOrderSell = (StringFind(comment, "_GL") < 0 && StringFind(comment, "_GP") < 0);
+             bool shouldCountSell = false;
+             
+             // v2.1.6: Restore both symbols but count only once per pair
              if(symbol == symbolA && g_pairs[i].ticketSellA == 0)
              {
                 g_pairs[i].ticketSellA = ticket;
                 g_pairs[i].lotSellA = PositionGetDouble(POSITION_VOLUME);
-                PrintFormat("[v1.3] Restored SELL Pair %d SymbolA: %s ticket=%d lot=%.2f", 
+                PrintFormat("[v2.1.6] Restored SELL Pair %d SymbolA: %s ticket=%d lot=%.2f", 
                             i + 1, symbol, ticket, PositionGetDouble(POSITION_VOLUME));
+                
+                // v2.1.6: Count only when restoring Symbol A (main side) for Main orders
+                if(isMainOrderSell) shouldCountSell = true;
              }
              else if(symbol == symbolB && g_pairs[i].ticketSellB == 0)
              {
                 g_pairs[i].ticketSellB = ticket;
                 g_pairs[i].lotSellB = PositionGetDouble(POSITION_VOLUME);
-                PrintFormat("[v1.3] Restored SELL Pair %d SymbolB: %s ticket=%d lot=%.2f", 
+                PrintFormat("[v2.1.6] Restored SELL Pair %d SymbolB: %s ticket=%d lot=%.2f", 
                             i + 1, symbol, ticket, PositionGetDouble(POSITION_VOLUME));
+                
+                // v2.1.6: Only count if Symbol A was NOT restored yet (orphan case)
+                if(isMainOrderSell && g_pairs[i].ticketSellA == 0) shouldCountSell = true;
              }
              
-             g_pairs[i].orderCountSell++;
+             // v2.1.6: Count Grid orders individually (they have _GL or _GP in comment)
+             if(!isMainOrderSell)
+             {
+                g_pairs[i].orderCountSell++;
+                if(StringFind(comment, "_GL") >= 0)
+                   g_pairs[i].avgOrderCountSell++;
+                else if(StringFind(comment, "_GP") >= 0)
+                   g_pairs[i].gridProfitCountSell++;
+             }
+             else if(shouldCountSell)
+             {
+                // v2.1.6: Count main order only once per pair (not per symbol)
+                g_pairs[i].orderCountSell++;
+             }
+             
              g_pairs[i].entryTimeSell = (datetime)PositionGetInteger(POSITION_TIME);
              restoredSell++;
           }
@@ -2359,6 +2412,13 @@ void OnTick()
       if(!(g_isTesterMode && InpSkipCorrUpdateInTester))
       {
          UpdateAllPairData();
+      }
+      
+      // v2.1.6: Update ATR cache on new bar for all active pairs
+      for(int i = 0; i < g_totalPairs; i++)
+      {
+         if(!g_pairs[i].enabled) continue;
+         UpdateATRCache(i);
       }
       
       // v1.5: Debug log for correlation update timing
@@ -6100,7 +6160,14 @@ double CalculateGridDistance(int pairIndex, ENUM_GRID_DISTANCE_MODE mode,
    {
       case GRID_DIST_ATR:
       {
-         double atr = CalculateSimplifiedATR(symbolA, atrTimeframe, atrPeriod);
+         // v2.1.6: Use cached ATR (updated once per new bar) for stable grid distance
+         double atr = g_pairs[pairIndex].cachedGridLossATR;
+         if(atr <= 0)
+         {
+            // Fallback: calculate if cache empty (first run)
+            atr = CalculateSimplifiedATR(symbolA, atrTimeframe, atrPeriod);
+            g_pairs[pairIndex].cachedGridLossATR = atr;
+         }
          
          // v1.6: Use symbol-specific ATR multiplier
          double mult = IsGoldPair(symbolA) ? atrMultGold : atrMultForex;
@@ -6109,12 +6176,7 @@ double CalculateGridDistance(int pairIndex, ENUM_GRID_DISTANCE_MODE mode,
          // v1.6: Apply minimum distance fallback
          double minDistance = minDistPips * pipSize;
          
-         if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
-         {
-            PrintFormat("[v1.6 GRID] %s: ATR=%.5f, Mult=%.2f (%s), Dist=%.5f, MinDist=%.5f (%.0f pips), Final=%.5f",
-                        symbolA, atr, mult, IsGoldPair(symbolA) ? "Gold" : "Forex",
-                        distance, minDistance, minDistPips, MathMax(distance, minDistance));
-         }
+         // v2.1.6: Debug log removed from here - now only logs when cache updates (once per bar)
          
          return MathMax(distance, minDistance);
       }
@@ -6221,7 +6283,9 @@ double CalculateSimplifiedATR(string symbol, ENUM_TIMEFRAMES tf, int period)
    double sum = 0;
    int validBars = 0;
    
-   for(int i = 0; i < period; i++)
+   // v2.1.6: Start from bar 1 (first CLOSED bar) for stable ATR
+   // This ensures ATR doesn't change during the current bar
+   for(int i = 1; i <= period; i++)
    {
       double high = iHigh(symbol, tf, i);
       double low = iLow(symbol, tf, i);
@@ -6239,6 +6303,38 @@ double CalculateSimplifiedATR(string symbol, ENUM_TIMEFRAMES tf, int period)
    
    if(validBars == 0) return 0;
    return sum / validBars;
+}
+
+//+------------------------------------------------------------------+
+//| v2.1.6: Update ATR Cache on New Bar                                |
+//+------------------------------------------------------------------+
+void UpdateATRCache(int pairIndex)
+{
+   string symbolA = g_pairs[pairIndex].symbolA;
+   
+   // Check if new bar formed (using Grid ATR timeframe)
+   datetime currentBar = iTime(symbolA, InpGridATRTimeframe, 0);
+   if(currentBar == g_pairs[pairIndex].lastATRBarTime)
+      return;  // Same bar - use cached value
+   
+   // New bar - recalculate ATR
+   g_pairs[pairIndex].lastATRBarTime = currentBar;
+   
+   // Grid Loss ATR
+   g_pairs[pairIndex].cachedGridLossATR = CalculateSimplifiedATR(
+      symbolA, InpGridLossATRTimeframe, InpGridLossATRPeriod);
+   
+   // Grid Profit ATR (may use different settings)
+   g_pairs[pairIndex].cachedGridProfitATR = CalculateSimplifiedATR(
+      symbolA, InpGridProfitATRTimeframe, InpGridProfitATRPeriod);
+   
+   if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
+   {
+      PrintFormat("[v2.1.6 ATR CACHE] Pair %d (%s): GridLossATR=%.5f, GridProfitATR=%.5f",
+                  pairIndex + 1, symbolA, 
+                  g_pairs[pairIndex].cachedGridLossATR,
+                  g_pairs[pairIndex].cachedGridProfitATR);
+   }
 }
 
 //+------------------------------------------------------------------+
