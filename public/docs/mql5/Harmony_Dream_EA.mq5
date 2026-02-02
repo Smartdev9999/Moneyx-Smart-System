@@ -4,10 +4,10 @@
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "2.17"
+#property version   "2.18"
 #property strict
 #property description "Harmony Dream - Pairs Trading Expert Advisor"
-#property description "v2.1.7: Correlation Only - Skip RSI/ADX + Full Debug"
+#property description "v2.1.8: Fix License Reload + Duplicate Orders Prevention"
 #property description "Full Hedging with Independent Buy/Sell Sides"
 #include <Trade/Trade.mqh>
 
@@ -1167,6 +1167,18 @@ int OnInit()
       }
    }
    
+   // ========== v2.1.8: Force License Reload on TF Change ==========
+   Print("=================================================");
+   Print("[v2.1.8] EA Restarted - Reloading License...");
+   Print("[v2.1.8] Reason: Timeframe Change / Chart Reload");
+   Print("=================================================");
+   
+   // Reset license variables BEFORE verify
+   g_isLicenseValid = false;
+   g_licenseStatus = LICENSE_ERROR;
+   g_lastLicenseCheck = 0;
+   // ================================================================
+   
    // Verify license
    g_isLicenseValid = VerifyLicense();
    if(!g_isLicenseValid)
@@ -1330,8 +1342,47 @@ int OnInit()
    // Note: No UpdateGroupProfits() function exists in this EA version;
    // UpdatePairProfits() already refreshes totals used by the dashboard.
    
-   PrintFormat("=== Harmony Dream EA v1.8.9 Initialized - %d Active Pairs | Net Profit Mode ===", g_activePairs);
+   PrintFormat("=== Harmony Dream EA v2.1.8 Initialized - %d Active Pairs | Net Profit Mode ===", g_activePairs);
    return(INIT_SUCCEEDED);
+}
+
+//+------------------------------------------------------------------+
+//| v2.1.8: Extract Pair Index from Order Comment                      |
+//| Returns 0-based pair index, or -1 if not found/invalid             |
+//| Supports: "AU-AJ_BUY_26[M:888888]", "HrmDream_SELL_12", etc.       |
+//+------------------------------------------------------------------+
+int ExtractPairIndexFromComment(string comment)
+{
+   // Try to find pattern: "_BUY_XX" or "_SELL_XX" or "_GL#N_BUY_XX" etc.
+   // where XX is the pair number (1-based)
+   
+   int buyPos = StringFind(comment, "_BUY_");
+   int sellPos = StringFind(comment, "_SELL_");
+   
+   int sidePos = (buyPos >= 0) ? buyPos : sellPos;
+   if(sidePos < 0) return -1;
+   
+   // Find the number after "_BUY_" or "_SELL_"
+   int numStart = sidePos + 5;  // Skip "_BUY_" (5 chars)
+   if(sellPos >= 0 && buyPos < 0) numStart = sellPos + 6;  // Skip "_SELL_" (6 chars)
+   
+   // Extract digits until non-digit
+   string numStr = "";
+   for(int i = numStart; i < StringLen(comment); i++)
+   {
+      ushort ch = StringGetCharacter(comment, i);
+      if(ch >= '0' && ch <= '9')
+         numStr += CharToString((uchar)ch);
+      else
+         break;
+   }
+   
+   if(numStr == "") return -1;
+   
+   int pairNum = (int)StringToInteger(numStr);
+   if(pairNum < 1 || pairNum > MAX_PAIRS) return -1;
+   
+   return pairNum - 1;  // Convert to 0-based index
 }
 
 //+------------------------------------------------------------------+
@@ -1551,6 +1602,10 @@ void RestoreOpenPositions()
       
       if(!isOurOrder) continue;
       
+      // ========== v2.1.8: Extract pair index from comment first ==========
+      int commentPairIndex = ExtractPairIndexFromComment(comment);
+      // ===================================================================
+      
       // Try to match with configured pairs
       for(int i = 0; i < MAX_PAIRS; i++)
       {
@@ -1560,6 +1615,33 @@ void RestoreOpenPositions()
          string symbolB = g_pairs[i].symbolB;
          
          if(symbol != symbolA && symbol != symbolB) continue;
+         
+         // ========== v2.1.8: Verify pair index matches ==========
+         if(commentPairIndex >= 0 && commentPairIndex != i)
+         {
+            // Comment explicitly specifies a different pair index - skip this pair
+            if(InpDebugMode)
+            {
+               PrintFormat("[v2.1.8] SKIP Pair %d for %s - Comment says Pair %d (comment: %s)",
+                           i + 1, symbol, commentPairIndex + 1, comment);
+            }
+            continue;
+         }
+         
+         // Also verify pair prefix for new format comments (e.g., "AU-AJ_BUY_26")
+         string expectedPrefix = GetPairCommentPrefix(i);
+         bool hasNewFormat = (StringFind(comment, "-") > 0 && StringFind(comment, "_") > 0);
+         if(hasNewFormat && StringFind(comment, expectedPrefix) != 0)
+         {
+            // New format but prefix doesn't match this pair - skip
+            if(InpDebugMode)
+            {
+               PrintFormat("[v2.1.8] SKIP Pair %d - Prefix mismatch: Expected '%s', Got '%s'",
+                           i + 1, expectedPrefix, StringSubstr(comment, 0, 5));
+            }
+            continue;
+         }
+         // ========================================================
          
          // Determine if BUY or SELL side based on comment or position type
          bool isBuySide = false;
