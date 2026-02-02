@@ -8235,10 +8235,10 @@ double GetAveragingProfitWithSuffix(string prefix, string suffix)
          // Check if comment contains BOTH prefix AND suffix
          if(StringFind(comment, prefix) >= 0 && StringFind(comment, suffix) >= 0)
          {
-            // v1.4: Include FEE for Net Profit (v2.1.6: POSITION_COMMISSION deprecated)
+            // v1.4: Include Commission for Net Profit
             totalProfit += PositionGetDouble(POSITION_PROFIT) + 
                            PositionGetDouble(POSITION_SWAP) + 
-                           PositionGetDouble(POSITION_FEE);
+                           PositionGetDouble(POSITION_COMMISSION);
          }
       }
    }
@@ -8255,10 +8255,10 @@ double GetPositionProfit(ulong ticket)
    
    if(PositionSelectByTicket(ticket))
    {
-      // v1.4: Include FEE for Net Profit (v2.1.6: POSITION_COMMISSION deprecated)
+      // v1.4: Include Commission for Net Profit
       return PositionGetDouble(POSITION_PROFIT) + 
              PositionGetDouble(POSITION_SWAP) + 
-             PositionGetDouble(POSITION_FEE);
+             PositionGetDouble(POSITION_COMMISSION);
    }
    
    return 0;
@@ -8277,10 +8277,10 @@ double GetAveragingProfit(string commentPattern)
       {
          if(StringFind(PositionGetString(POSITION_COMMENT), commentPattern) >= 0)
          {
-            // v1.4: Include FEE for Net Profit (v2.1.6: POSITION_COMMISSION deprecated)
+            // v1.4: Include Commission for Net Profit
             totalProfit += PositionGetDouble(POSITION_PROFIT) + 
                            PositionGetDouble(POSITION_SWAP) + 
-                           PositionGetDouble(POSITION_FEE);
+                           PositionGetDouble(POSITION_COMMISSION);
          }
       }
    }
