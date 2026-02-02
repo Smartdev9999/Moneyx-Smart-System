@@ -4,10 +4,10 @@
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "2.13"
+#property version   "2.14"
 #property strict
 #property description "Harmony Dream - Pairs Trading Expert Advisor"
-#property description "v2.1.2: Mini Group UI + M.Tgt Format + Reset Cycle Logic"
+#property description "v2.1.4: Skip ADX Chart in Tester (Trading Logic Unchanged)"
 #property description "Full Hedging with Independent Buy/Sell Sides"
 #include <Trade/Trade.mqh>
 
@@ -427,6 +427,7 @@ input bool     InpUltraFastMode = false;            // Ultra Fast Mode (Skip som
 input int      InpStatCalcInterval = 10;            // Stat Calculation Interval (ticks, 0=every tick)
 input bool     InpSkipCorrUpdateInTester = false;   // Skip Correlation Updates in Tester
 input bool     InpSkipATRInTester = false;          // Skip ATR Indicator in Tester (use Simplified ATR)
+input bool     InpSkipADXChartInTester = true;      // Skip ADX Chart in Tester (v2.1.4 - Logic Still Works)
 
 input group "=== Lot Sizing (Dollar-Neutral) ==="
 input bool     InpUseDollarNeutral = true;      // Use Dollar-Neutral Sizing
@@ -5106,6 +5107,13 @@ bool CheckCDCTrendConfirmation(int pairIndex, string side)
 //+------------------------------------------------------------------+
 double GetADXValue(string symbol, ENUM_TIMEFRAMES timeframe, int period)
 {
+   // v2.1.4: Use simplified calculation in tester to avoid chart display
+   // Trading logic remains 100% the same - only visual chart is skipped
+   if(g_isTesterMode && InpSkipADXChartInTester)
+   {
+      return CalculateSimplifiedADX(symbol, timeframe, period);
+   }
+   
    int handle = iADX(symbol, timeframe, period);
    if(handle == INVALID_HANDLE)
    {
@@ -5134,6 +5142,95 @@ double GetADXValue(string symbol, ENUM_TIMEFRAMES timeframe, int period)
    IndicatorRelease(handle);
    
    return adxValue;
+}
+
+//+------------------------------------------------------------------+
+//| Simplified ADX Calculation (v2.1.4 - No Indicator Handle)          |
+//| Calculates ADX using price data without creating indicator         |
+//| Result is equivalent to iADX() but no chart is displayed           |
+//+------------------------------------------------------------------+
+double CalculateSimplifiedADX(string symbol, ENUM_TIMEFRAMES tf, int period)
+{
+   int barsNeeded = period * 3;
+   
+   double plusDM[], minusDM[], tr[];
+   ArrayResize(plusDM, barsNeeded);
+   ArrayResize(minusDM, barsNeeded);
+   ArrayResize(tr, barsNeeded);
+   ArrayInitialize(plusDM, 0);
+   ArrayInitialize(minusDM, 0);
+   ArrayInitialize(tr, 0);
+   
+   // Calculate +DM, -DM, and True Range for each bar
+   for(int i = 0; i < barsNeeded - 1; i++)
+   {
+      double high = iHigh(symbol, tf, i);
+      double low = iLow(symbol, tf, i);
+      double prevHigh = iHigh(symbol, tf, i + 1);
+      double prevLow = iLow(symbol, tf, i + 1);
+      double prevClose = iClose(symbol, tf, i + 1);
+      
+      if(high == 0 || low == 0 || prevClose == 0) continue;
+      
+      // +DM and -DM
+      double upMove = high - prevHigh;
+      double downMove = prevLow - low;
+      
+      plusDM[i] = (upMove > downMove && upMove > 0) ? upMove : 0;
+      minusDM[i] = (downMove > upMove && downMove > 0) ? downMove : 0;
+      
+      // True Range
+      double tr1 = high - low;
+      double tr2 = MathAbs(high - prevClose);
+      double tr3 = MathAbs(low - prevClose);
+      tr[i] = MathMax(tr1, MathMax(tr2, tr3));
+   }
+   
+   // Wilder's Smoothing (EMA-style)
+   double smoothPlusDM = 0, smoothMinusDM = 0, smoothTR = 0;
+   double dx[];
+   ArrayResize(dx, barsNeeded);
+   ArrayInitialize(dx, 0);
+   
+   // First period: simple sum
+   for(int i = barsNeeded - 2; i >= barsNeeded - period - 1 && i >= 0; i--)
+   {
+      smoothPlusDM += plusDM[i];
+      smoothMinusDM += minusDM[i];
+      smoothTR += tr[i];
+   }
+   
+   // Apply Wilder's smoothing for remaining bars
+   int dxCount = 0;
+   for(int i = barsNeeded - period - 2; i >= 0; i--)
+   {
+      smoothPlusDM = smoothPlusDM - (smoothPlusDM / period) + plusDM[i];
+      smoothMinusDM = smoothMinusDM - (smoothMinusDM / period) + minusDM[i];
+      smoothTR = smoothTR - (smoothTR / period) + tr[i];
+      
+      if(smoothTR == 0) continue;
+      
+      double plusDI = 100.0 * smoothPlusDM / smoothTR;
+      double minusDI = 100.0 * smoothMinusDM / smoothTR;
+      
+      double diSum = plusDI + minusDI;
+      if(diSum > 0)
+      {
+         dx[dxCount++] = 100.0 * MathAbs(plusDI - minusDI) / diSum;
+      }
+   }
+   
+   // ADX = Smoothed average of DX
+   if(dxCount < period) return 0;
+   
+   double adx = 0;
+   for(int i = 0; i < period; i++)
+   {
+      adx += dx[i];
+   }
+   adx /= period;
+   
+   return adx;
 }
 
 //+------------------------------------------------------------------+
