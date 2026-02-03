@@ -4,10 +4,10 @@
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "2.19"
+#property version   "2.20"
 #property strict
 #property description "Harmony Dream - Pairs Trading Expert Advisor"
-#property description "v2.1.9: Fix Debug Log Spam + Dashboard Order Count"
+#property description "v2.2.0: Fix Z-Score Entry - Add Debug Logs + Remove continue bug"
 #property description "Full Hedging with Independent Buy/Sell Sides"
 #include <Trade/Trade.mqh>
 
@@ -5931,67 +5931,129 @@ void AnalyzeAllPairs()
       // ORIGINAL Z-SCORE MODE (unchanged)
       // ================================================================
       
-      // === BUY SIDE ENTRY ===
-      // Condition: directionBuy == -1 (Ready) AND Z-Score < -EntryThreshold
-      // v3.5.2: Optional Grid Guard check for main entry
+      // === BUY SIDE ENTRY (Z-SCORE MODE) ===
+      // v2.2.0: Fixed continue bug + Added throttled debug logs
       if(g_pairs[i].directionBuy == -1 && g_pairs[i].orderCountBuy < g_pairs[i].maxOrderBuy)
       {
          if(zScore < -InpEntryZScore)
          {
-            // v3.5.2: Check Grid Trading Guard for Main Entry (Optional)
-            if(InpGridPauseAffectsMain)
+            bool buyAllowed = true;
+            string buyBlockReason = "";
+            
+            // Check 1: Grid Guard (Optional)
+            if(buyAllowed && InpGridPauseAffectsMain)
             {
                string pauseReason = "";
                if(!CheckGridTradingAllowed(i, "BUY", pauseReason))
-                  continue;  // Skip BUY entry
+               {
+                  buyAllowed = false;
+                  buyBlockReason = "Grid Guard: " + pauseReason;
+               }
             }
             
-            // v3.4.0: Check RSI Entry Confirmation (BUY = RSI in Oversold zone)
-            if(CheckRSIEntryConfirmation(i, "BUY"))
+            // Check 2: RSI Confirmation
+            if(buyAllowed && !CheckRSIEntryConfirmation(i, "BUY"))
             {
-               // v3.5.0: Check CDC Trend Confirmation
-               if(CheckCDCTrendConfirmation(i, "BUY"))
+               buyAllowed = false;
+               buyBlockReason = StringFormat("RSI Block (RSI=%.1f, need<=%.0f)", 
+                                             g_pairs[i].rsiSpread, InpRSIOversold);
+            }
+            
+            // Check 3: CDC Trend Confirmation
+            if(buyAllowed && !CheckCDCTrendConfirmation(i, "BUY"))
+            {
+               buyAllowed = false;
+               buyBlockReason = "CDC Block";
+            }
+            
+            // Execute or Log
+            if(buyAllowed)
+            {
+               if(OpenBuySideTrade(i))
                {
-                  if(OpenBuySideTrade(i))
-                  {
-                     g_pairs[i].directionBuy = 1;  // Active trade
-                     g_pairs[i].entryZScoreBuy = zScore;
-                     g_pairs[i].lastAvgPriceBuy = SymbolInfoDouble(g_pairs[i].symbolA, SYMBOL_ASK);
-                     g_pairs[i].justOpenedMainBuy = true;
-                  }
+                  g_pairs[i].directionBuy = 1;
+                  g_pairs[i].entryZScoreBuy = zScore;
+                  g_pairs[i].lastAvgPriceBuy = SymbolInfoDouble(g_pairs[i].symbolA, SYMBOL_ASK);
+                  g_pairs[i].justOpenedMainBuy = true;
+                  PrintFormat("[Z-SCORE] Pair %d OPENED BUY: Z=%.2f", i + 1, zScore);
+               }
+            }
+            else if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
+            {
+               // v2.2.0: Throttled debug log
+               string reason = StringFormat("BUY BLOCKED: %s (Z=%.2f)", buyBlockReason, zScore);
+               datetime now = TimeCurrent();
+               if(g_firstAnalyzeRun || reason != g_pairs[i].lastBlockReason || 
+                  now - g_pairs[i].lastBlockLogTime >= DEBUG_LOG_INTERVAL)
+               {
+                  PrintFormat("[Z-SCORE] Pair %d %s/%s: %s",
+                              i + 1, g_pairs[i].symbolA, g_pairs[i].symbolB, reason);
+                  g_pairs[i].lastBlockReason = reason;
+                  g_pairs[i].lastBlockLogTime = now;
                }
             }
          }
       }
       
-      // === SELL SIDE ENTRY ===
-      // Condition: directionSell == -1 (Ready) AND Z-Score > +EntryThreshold
-      // v3.5.2: Optional Grid Guard check for main entry
+      // === SELL SIDE ENTRY (Z-SCORE MODE) ===
+      // v2.2.0: Fixed continue bug + Added throttled debug logs
       if(g_pairs[i].directionSell == -1 && g_pairs[i].orderCountSell < g_pairs[i].maxOrderSell)
       {
          if(zScore > InpEntryZScore)
          {
-            // v3.5.2: Check Grid Trading Guard for Main Entry (Optional)
-            if(InpGridPauseAffectsMain)
+            bool sellAllowed = true;
+            string sellBlockReason = "";
+            
+            // Check 1: Grid Guard (Optional)
+            if(sellAllowed && InpGridPauseAffectsMain)
             {
                string pauseReason = "";
                if(!CheckGridTradingAllowed(i, "SELL", pauseReason))
-                  continue;  // Skip SELL entry
+               {
+                  sellAllowed = false;
+                  sellBlockReason = "Grid Guard: " + pauseReason;
+               }
             }
             
-            // v3.4.0: Check RSI Entry Confirmation (SELL = RSI in Overbought zone)
-            if(CheckRSIEntryConfirmation(i, "SELL"))
+            // Check 2: RSI Confirmation
+            if(sellAllowed && !CheckRSIEntryConfirmation(i, "SELL"))
             {
-               // v3.5.0: Check CDC Trend Confirmation
-               if(CheckCDCTrendConfirmation(i, "SELL"))
+               sellAllowed = false;
+               sellBlockReason = StringFormat("RSI Block (RSI=%.1f, need>=%.0f)", 
+                                              g_pairs[i].rsiSpread, InpRSIOverbought);
+            }
+            
+            // Check 3: CDC Trend Confirmation
+            if(sellAllowed && !CheckCDCTrendConfirmation(i, "SELL"))
+            {
+               sellAllowed = false;
+               sellBlockReason = "CDC Block";
+            }
+            
+            // Execute or Log
+            if(sellAllowed)
+            {
+               if(OpenSellSideTrade(i))
                {
-                  if(OpenSellSideTrade(i))
-                  {
-                     g_pairs[i].directionSell = 1;  // Active trade
-                     g_pairs[i].entryZScoreSell = zScore;
-                     g_pairs[i].lastAvgPriceSell = SymbolInfoDouble(g_pairs[i].symbolA, SYMBOL_BID);
-                     g_pairs[i].justOpenedMainSell = true;
-                  }
+                  g_pairs[i].directionSell = 1;
+                  g_pairs[i].entryZScoreSell = zScore;
+                  g_pairs[i].lastAvgPriceSell = SymbolInfoDouble(g_pairs[i].symbolA, SYMBOL_BID);
+                  g_pairs[i].justOpenedMainSell = true;
+                  PrintFormat("[Z-SCORE] Pair %d OPENED SELL: Z=%.2f", i + 1, zScore);
+               }
+            }
+            else if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
+            {
+               // v2.2.0: Throttled debug log
+               string reason = StringFormat("SELL BLOCKED: %s (Z=%.2f)", sellBlockReason, zScore);
+               datetime now = TimeCurrent();
+               if(g_firstAnalyzeRun || reason != g_pairs[i].lastBlockReason || 
+                  now - g_pairs[i].lastBlockLogTime >= DEBUG_LOG_INTERVAL)
+               {
+                  PrintFormat("[Z-SCORE] Pair %d %s/%s: %s",
+                              i + 1, g_pairs[i].symbolA, g_pairs[i].symbolB, reason);
+                  g_pairs[i].lastBlockReason = reason;
+                  g_pairs[i].lastBlockLogTime = now;
                }
             }
          }
