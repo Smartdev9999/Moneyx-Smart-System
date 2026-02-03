@@ -4,10 +4,10 @@
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "2.20"
+#property version   "2.21"
 #property strict
 #property description "Harmony Dream - Pairs Trading Expert Advisor"
-#property description "v2.2.0: Fix Z-Score Entry - Add Debug Logs + Remove continue bug"
+#property description "v2.2.1: Fix Grid Guard Log Spam - Add Debounced Logging"
 #property description "Full Hedging with Independent Buy/Sell Sides"
 #include <Trade/Trade.mqh>
 
@@ -899,6 +899,10 @@ int PROFIT_LOG_INTERVAL = 5;  // Log every 5 seconds
 // === v2.1.9: Debug Log Control ===
 bool   g_firstAnalyzeRun = true;              // First run after init/TF change
 int    DEBUG_LOG_INTERVAL = 30;               // Log same reason every 30 seconds
+
+// === v2.2.1: Grid Pause Reason Tracking (separate from Main Entry tracking) ===
+string g_lastGridPauseReason[MAX_PAIRS][2];    // [pairIndex][0=BUY, 1=SELL]
+datetime g_lastGridPauseLogTime[MAX_PAIRS][2]; // Last time grid pause was logged
 
 //+------------------------------------------------------------------+
 //| v1.8.5: Initialize Theme Colors                                    |
@@ -5522,6 +5526,9 @@ void UpdateAllPairsADX()
 bool CheckGridTradingAllowed(int pairIndex, string side, string &pauseReason)
 {
    pauseReason = "";
+   int sideIdx = (side == "BUY") ? 0 : 1;
+   bool debugLog = InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester);
+   datetime now = TimeCurrent();
    
    // === เงื่อนไข 1: Correlation Check ===
    double absCorr = MathAbs(g_pairs[pairIndex].correlation);
@@ -5529,66 +5536,53 @@ bool CheckGridTradingAllowed(int pairIndex, string side, string &pauseReason)
    {
       pauseReason = StringFormat("Corr %.0f%% < %.0f%%", 
                                  absCorr * 100, InpGridMinCorrelation * 100);
-      
-      if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
-         PrintFormat("GRID PAUSE [Pair %d %s/%s %s]: %s", pairIndex + 1, 
-                     g_pairs[pairIndex].symbolA, g_pairs[pairIndex].symbolB, side, pauseReason);
-      
-      return false;
    }
    
    // === เงื่อนไข 2: Z-Score Direction-Aware Check (v3.5.2) ===
    // BUY Side: เปิดเมื่อ Z < -Entry → Grid หยุดเมื่อ Z > -MinZ (ใกล้ศูนย์)
    // SELL Side: เปิดเมื่อ Z > +Entry → Grid หยุดเมื่อ Z < +MinZ (ใกล้ศูนย์)
-   double zScore = g_pairs[pairIndex].zScore;
-   
-   if(side == "BUY")
+   if(pauseReason == "")
    {
-      // BUY Side opened at negative Z-Score
-      // Stop grid if Z-Score crosses back toward 0 (becomes > -MinZ)
-      if(zScore > -InpGridMinZScore)
-      {
+      double zScore = g_pairs[pairIndex].zScore;
+      if(side == "BUY" && zScore > -InpGridMinZScore)
          pauseReason = StringFormat("Z=%.2f > -%.2f (BUY)", zScore, InpGridMinZScore);
-         
-         if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
-            PrintFormat("GRID PAUSE [Pair %d %s/%s BUY]: %s", pairIndex + 1,
-                        g_pairs[pairIndex].symbolA, g_pairs[pairIndex].symbolB, pauseReason);
-         
-         return false;
-      }
-   }
-   else if(side == "SELL")
-   {
-      // SELL Side opened at positive Z-Score
-      // Stop grid if Z-Score crosses back toward 0 (becomes < +MinZ)
-      if(zScore < InpGridMinZScore)
-      {
+      else if(side == "SELL" && zScore < InpGridMinZScore)
          pauseReason = StringFormat("Z=%.2f < +%.2f (SELL)", zScore, InpGridMinZScore);
-         
-         if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
-            PrintFormat("GRID PAUSE [Pair %d %s/%s SELL]: %s", pairIndex + 1,
-                        g_pairs[pairIndex].symbolA, g_pairs[pairIndex].symbolB, pauseReason);
-         
-         return false;
-      }
    }
    
    // === เงื่อนไข 3: CDC Trend Block (v3.5.2) ===
-   if(InpUseCDCTrendFilter)
+   if(pauseReason == "" && InpUseCDCTrendFilter)
    {
       if(!CheckCDCTrendConfirmation(pairIndex, side))
-      {
          pauseReason = "CDC BLOCK";
-         
-         if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
-            PrintFormat("GRID PAUSE [Pair %d %s/%s %s]: %s", pairIndex + 1,
-                        g_pairs[pairIndex].symbolA, g_pairs[pairIndex].symbolB, side, pauseReason);
-         
-         return false;
-      }
    }
    
-   return true;  // ผ่านทั้ง 3 เงื่อนไข
+   // === v2.2.1: Debounced Logging ===
+   if(pauseReason != "")
+   {
+      // Log only if reason is NEW/DIFFERENT or 30 seconds passed
+      if(debugLog && (g_firstAnalyzeRun || 
+         pauseReason != g_lastGridPauseReason[pairIndex][sideIdx] ||
+         now - g_lastGridPauseLogTime[pairIndex][sideIdx] >= DEBUG_LOG_INTERVAL))
+      {
+         PrintFormat("GRID PAUSE [Pair %d %s/%s %s]: %s", pairIndex + 1, 
+                     g_pairs[pairIndex].symbolA, g_pairs[pairIndex].symbolB, side, pauseReason);
+         g_lastGridPauseReason[pairIndex][sideIdx] = pauseReason;
+         g_lastGridPauseLogTime[pairIndex][sideIdx] = now;
+      }
+      return false;
+   }
+   else
+   {
+      // Grid allowed - log RESUME only if previously paused
+      if(debugLog && g_lastGridPauseReason[pairIndex][sideIdx] != "")
+      {
+         PrintFormat("GRID RESUME [Pair %d %s/%s %s]: All conditions met", pairIndex + 1,
+                     g_pairs[pairIndex].symbolA, g_pairs[pairIndex].symbolB, side);
+         g_lastGridPauseReason[pairIndex][sideIdx] = "";
+      }
+      return true;
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -5698,6 +5692,9 @@ string DetermineTradeDirectionForCorrOnly(int pairIndex)
 bool CheckGridTradingAllowedCorrOnly(int pairIndex, string side, string &pauseReason)
 {
    pauseReason = "";
+   int sideIdx = (side == "BUY") ? 0 : 1;
+   bool debugLog = InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester);
+   datetime now = TimeCurrent();
    
    // === เงื่อนไข 1: Correlation Check (ใช้ InpGridMinCorrelation เหมือนเดิม) ===
    double absCorr = MathAbs(g_pairs[pairIndex].correlation);
@@ -5705,31 +5702,40 @@ bool CheckGridTradingAllowedCorrOnly(int pairIndex, string side, string &pauseRe
    {
       pauseReason = StringFormat("Corr %.0f%% < %.0f%%", 
                                  absCorr * 100, InpGridMinCorrelation * 100);
-      
-      if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
-         PrintFormat("GRID PAUSE [CORR ONLY] [Pair %d %s/%s %s]: %s", pairIndex + 1, 
-                     g_pairs[pairIndex].symbolA, g_pairs[pairIndex].symbolB, side, pauseReason);
-      
-      return false;
    }
    
    // === เงื่อนไข 2: CDC Trend Block (v3.5.2) ===
-   if(InpUseCDCTrendFilter)
+   if(pauseReason == "" && InpUseCDCTrendFilter)
    {
       if(!CheckCDCTrendConfirmation(pairIndex, side))
-      {
          pauseReason = "CDC BLOCK";
-         
-         if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
-            PrintFormat("GRID PAUSE [CORR ONLY] [Pair %d %s/%s %s]: %s", pairIndex + 1,
-                        g_pairs[pairIndex].symbolA, g_pairs[pairIndex].symbolB, side, pauseReason);
-         
-         return false;
-      }
    }
    
-   // ไม่มีเช็ค Z-Score - ผ่านเลย
-   return true;
+   // === v2.2.1: Debounced Logging ===
+   if(pauseReason != "")
+   {
+      if(debugLog && (g_firstAnalyzeRun || 
+         pauseReason != g_lastGridPauseReason[pairIndex][sideIdx] ||
+         now - g_lastGridPauseLogTime[pairIndex][sideIdx] >= DEBUG_LOG_INTERVAL))
+      {
+         PrintFormat("GRID PAUSE [CORR ONLY] [Pair %d %s/%s %s]: %s", pairIndex + 1, 
+                     g_pairs[pairIndex].symbolA, g_pairs[pairIndex].symbolB, side, pauseReason);
+         g_lastGridPauseReason[pairIndex][sideIdx] = pauseReason;
+         g_lastGridPauseLogTime[pairIndex][sideIdx] = now;
+      }
+      return false;
+   }
+   else
+   {
+      // Grid allowed - log RESUME only if previously paused
+      if(debugLog && g_lastGridPauseReason[pairIndex][sideIdx] != "")
+      {
+         PrintFormat("GRID RESUME [CORR ONLY] [Pair %d %s/%s %s]: All conditions met", pairIndex + 1,
+                     g_pairs[pairIndex].symbolA, g_pairs[pairIndex].symbolB, side);
+         g_lastGridPauseReason[pairIndex][sideIdx] = "";
+      }
+      return true;
+   }
 }
 
 //+------------------------------------------------------------------+
