@@ -4,10 +4,10 @@
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "2.21"
+#property version   "2.22"
 #property strict
 #property description "Harmony Dream - Pairs Trading Expert Advisor"
-#property description "v2.2.1: Fix Grid Guard Log Spam - Add Debounced Logging"
+#property description "v2.2.2: Add Grid Trend Guard - Block Grid Counter-Trend"
 #property description "Full Hedging with Independent Buy/Sell Sides"
 #include <Trade/Trade.mqh>
 
@@ -397,6 +397,7 @@ input group "=== Grid Trading Guard (v3.5.1) ==="
 input double   InpGridMinCorrelation = 0.60;      // Grid: Minimum Correlation (ต่ำกว่านี้หยุด Grid)
 input double   InpGridMinZScore = 0.5;            // Grid: Minimum |Z-Score| (ต่ำกว่านี้หยุด Grid)
 input bool     InpGridPauseAffectsMain = true;    // Apply to Main Entry Too (เกณฑ์นี้ใช้กับ Order แรกด้วย)
+input bool     InpGridTrendGuard = true;          // Grid Trend Guard (Block Grid ที่สวนเทรน - Positive Corr Only)
 
 input group "=== Grid Lot Calculation Mode (v3.5.3 HF1) ==="
 input ENUM_GRID_LOT_MODE   InpGridLotMode = GRID_LOT_BETA;         // Grid Lot Calculation Mode
@@ -5294,6 +5295,59 @@ bool CheckCDCTrendConfirmation(int pairIndex, string side)
 }
 
 //+------------------------------------------------------------------+
+//| Check Grid Trend Direction Guard (v2.2.2)                          |
+//| Logic:                                                             |
+//|   - For Positive Correlation: Block Grid that goes AGAINST trend   |
+//|   - BUY Grid blocked when trend = BEARISH (Down)                   |
+//|   - SELL Grid blocked when trend = BULLISH (Up)                    |
+//|   - Returns TRUE if Grid is allowed                                |
+//|   - Returns FALSE if Grid should be blocked (counter-trend)        |
+//+------------------------------------------------------------------+
+bool CheckGridTrendDirection(int pairIndex, string side)
+{
+   // If Grid Trend Guard is disabled, always allow
+   if(!InpGridTrendGuard) return true;
+   
+   // Only apply to Positive Correlation
+   int corrType = g_pairs[pairIndex].correlationType;
+   if(corrType != 1) return true;  // Skip for Negative Correlation
+   
+   // If CDC Filter is disabled, skip this check
+   if(!InpUseCDCTrendFilter) return true;
+   
+   // Check if CDC data is ready
+   if(!g_pairs[pairIndex].cdcReadyA || !g_pairs[pairIndex].cdcReadyB)
+      return true;  // Allow during loading (don't block prematurely)
+   
+   string trendA = g_pairs[pairIndex].cdcTrendA;
+   string trendB = g_pairs[pairIndex].cdcTrendB;
+   
+   // If either trend is NEUTRAL, allow (can't determine direction)
+   if(trendA == "NEUTRAL" || trendB == "NEUTRAL")
+      return true;
+   
+   // For Positive Correlation: Both symbols should have SAME trend
+   // If mismatch → CheckCDCTrendConfirmation already blocks, so allow here
+   if(trendA != trendB)
+      return true;  // Mismatch handled by CheckCDCTrendConfirmation
+   
+   // trendA == trendB at this point
+   bool isBullish = (trendA == "BULLISH");
+   bool isBearish = (trendA == "BEARISH");
+   
+   // Grid Trend Guard Logic:
+   // BUY Grid → Block when BEARISH (Down trend)
+   // SELL Grid → Block when BULLISH (Up trend)
+   if(side == "BUY" && isBearish)
+      return false;  // BUY Grid blocked in DOWN trend
+   
+   if(side == "SELL" && isBullish)
+      return false;  // SELL Grid blocked in UP trend
+   
+   return true;  // Grid allowed
+}
+
+//+------------------------------------------------------------------+
 //| ================ ADX FOR NEGATIVE CORRELATION (v3.5.3 HF3) ================
 //+------------------------------------------------------------------+
 
@@ -5557,6 +5611,12 @@ bool CheckGridTradingAllowed(int pairIndex, string side, string &pauseReason)
          pauseReason = "CDC BLOCK";
    }
    
+   // === v2.2.2: Grid Trend Guard (Block Counter-Trend Grid) ===
+   if(pauseReason == "" && !CheckGridTrendDirection(pairIndex, side))
+   {
+      pauseReason = "TREND GUARD";
+   }
+   
    // === v2.2.1: Debounced Logging ===
    if(pauseReason != "")
    {
@@ -5709,6 +5769,12 @@ bool CheckGridTradingAllowedCorrOnly(int pairIndex, string side, string &pauseRe
    {
       if(!CheckCDCTrendConfirmation(pairIndex, side))
          pauseReason = "CDC BLOCK";
+   }
+   
+   // === v2.2.2: Grid Trend Guard (Block Counter-Trend Grid) ===
+   if(pauseReason == "" && !CheckGridTrendDirection(pairIndex, side))
+   {
+      pauseReason = "TREND GUARD";
    }
    
    // === v2.2.1: Debounced Logging ===
