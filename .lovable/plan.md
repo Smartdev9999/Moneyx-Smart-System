@@ -1,14 +1,34 @@
 
-## แผนดำเนินการ: Fix Grid Log Throttling (v2.2.1)
+## แผนดำเนินการ: Grid Trend Guard v2.2.2
 
 ---
 
-### สรุปสิ่งที่ต้องแก้ไข
+### สรุปสิ่งที่ต้องเพิ่ม
 
-| ปัญหา | ตำแหน่ง | สาเหตุ |
-|-------|---------|--------|
-| **CDC BLOCK log spam** | `CheckGridTradingAllowed()` (บรรทัด 5522-5592) | Log ทุก tick ไม่มี debouncing |
-| **CDC BLOCK log spam** | `CheckGridTradingAllowedCorrOnly()` (บรรทัด 5698-5733) | Log ทุก tick ไม่มี debouncing |
+| ฟีเจอร์ใหม่ | รายละเอียด |
+|------------|-----------|
+| **Grid Trend Guard** | Block Grid ในฝั่งที่สวนกับ CDC Trend Direction |
+| **Enable/Disable Toggle** | สามารถเปิด-ปิดฟีเจอร์นี้ได้ |
+| **Positive Correlation Only** | ใช้กับ Positive Correlation เท่านั้น (ตามที่ต้องการ) |
+
+---
+
+### Logic ที่ต้องการ
+
+```text
+Positive Correlation + CDC Trend Filter:
+┌────────────────────────────────────────────────────────────┐
+│ Trend A = BULLISH, Trend B = BULLISH (Both UP)             │
+│ ─────────────────────────────────────────────────────────  │
+│   BUY Grid  → ✓ ALLOWED (ตามเทรน)                          │
+│   SELL Grid → ✗ BLOCKED (สวนเทรน) ← Grid Trend Guard!      │
+├────────────────────────────────────────────────────────────┤
+│ Trend A = BEARISH, Trend B = BEARISH (Both DOWN)           │
+│ ─────────────────────────────────────────────────────────  │
+│   BUY Grid  → ✗ BLOCKED (สวนเทรน) ← Grid Trend Guard!      │
+│   SELL Grid → ✓ ALLOWED (ตามเทรน)                          │
+└────────────────────────────────────────────────────────────┘
+```
 
 ---
 
@@ -20,153 +40,136 @@
 **บรรทัด:** 7, 10
 
 ```cpp
-#property version   "2.21"
-#property description "v2.2.1: Fix Grid Guard Log Spam - Add Debounced Logging"
+#property version   "2.22"
+#property description "v2.2.2: Add Grid Trend Guard - Block Grid Counter-Trend"
 ```
 
 ---
 
-#### Part B: เพิ่ม Global Variables สำหรับ Grid Pause Tracking
+#### Part B: เพิ่ม Input Parameter
 
 **ไฟล์:** `public/docs/mql5/Harmony_Dream_EA.mq5`
-**ตำแหน่ง:** หลังบรรทัด 901 (หลัง DEBUG_LOG_INTERVAL)
+**ตำแหน่ง:** ใน group "=== Grid Trading Guard (v3.5.1) ===" (บรรทัด 396-399)
 
-เพิ่ม:
+เพิ่ม Input ใหม่:
 ```cpp
-// v2.2.1: Grid Pause Reason Tracking (separate from Main Entry tracking)
-string g_lastGridPauseReason[MAX_PAIRS][2];    // [pairIndex][0=BUY, 1=SELL]
-datetime g_lastGridPauseLogTime[MAX_PAIRS][2]; // Last time grid pause was logged
+input group "=== Grid Trading Guard (v3.5.1) ==="
+input double   InpGridMinCorrelation = 0.60;      // Grid: Minimum Correlation (ต่ำกว่านี้หยุด Grid)
+input double   InpGridMinZScore = 0.5;            // Grid: Minimum |Z-Score| (ต่ำกว่านี้หยุด Grid)
+input bool     InpGridPauseAffectsMain = true;    // Apply to Main Entry Too (เกณฑ์นี้ใช้กับ Order แรกด้วย)
+input bool     InpGridTrendGuard = true;          // Grid Trend Guard (Block Grid ที่สวนเทรน - Positive Corr Only)
 ```
 
 ---
 
-#### Part C: แก้ไข `CheckGridTradingAllowed()` (Z-Score Mode)
+#### Part C: สร้างฟังก์ชันใหม่ `CheckGridTrendDirection()`
 
 **ไฟล์:** `public/docs/mql5/Harmony_Dream_EA.mq5`
-**บรรทัด:** 5522-5592
-
-**เปลี่ยนจาก:** Log ทุก tick เมื่อ block
-**เป็น:** Log เฉพาะเมื่อ reason เปลี่ยน หรือทุก 30 วินาที
+**ตำแหน่ง:** หลัง `CheckCDCTrendConfirmation()` (ประมาณบรรทัด 5295)
 
 ```cpp
-bool CheckGridTradingAllowed(int pairIndex, string side, string &pauseReason)
+//+------------------------------------------------------------------+
+//| Check Grid Trend Direction Guard (v2.2.2)                          |
+//| Logic:                                                             |
+//|   - For Positive Correlation: Block Grid that goes AGAINST trend   |
+//|   - BUY Grid blocked when trend = BEARISH (Down)                   |
+//|   - SELL Grid blocked when trend = BULLISH (Up)                    |
+//|   - Returns TRUE if Grid is allowed                                |
+//|   - Returns FALSE if Grid should be blocked (counter-trend)        |
+//+------------------------------------------------------------------+
+bool CheckGridTrendDirection(int pairIndex, string side)
 {
-   pauseReason = "";
-   int sideIdx = (side == "BUY") ? 0 : 1;
-   bool debugLog = InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester);
-   datetime now = TimeCurrent();
+   // If Grid Trend Guard is disabled, always allow
+   if(!InpGridTrendGuard) return true;
    
-   // === เงื่อนไข 1: Correlation Check ===
-   double absCorr = MathAbs(g_pairs[pairIndex].correlation);
-   if(absCorr < InpGridMinCorrelation)
-   {
-      pauseReason = StringFormat("Corr %.0f%% < %.0f%%", 
-                                 absCorr * 100, InpGridMinCorrelation * 100);
-   }
+   // Only apply to Positive Correlation
+   int corrType = g_pairs[pairIndex].correlationType;
+   if(corrType != 1) return true;  // Skip for Negative Correlation
    
-   // === เงื่อนไข 2: Z-Score Direction-Aware Check ===
-   if(pauseReason == "")
-   {
-      double zScore = g_pairs[pairIndex].zScore;
-      if(side == "BUY" && zScore > -InpGridMinZScore)
-         pauseReason = StringFormat("Z=%.2f > -%.2f (BUY)", zScore, InpGridMinZScore);
-      else if(side == "SELL" && zScore < InpGridMinZScore)
-         pauseReason = StringFormat("Z=%.2f < +%.2f (SELL)", zScore, InpGridMinZScore);
-   }
+   // If CDC Filter is disabled, skip this check
+   if(!InpUseCDCTrendFilter) return true;
    
-   // === เงื่อนไข 3: CDC Trend Block ===
+   // Check if CDC data is ready
+   if(!g_pairs[pairIndex].cdcReadyA || !g_pairs[pairIndex].cdcReadyB)
+      return true;  // Allow during loading (don't block prematurely)
+   
+   string trendA = g_pairs[pairIndex].cdcTrendA;
+   string trendB = g_pairs[pairIndex].cdcTrendB;
+   
+   // If either trend is NEUTRAL, allow (can't determine direction)
+   if(trendA == "NEUTRAL" || trendB == "NEUTRAL")
+      return true;
+   
+   // For Positive Correlation: Both symbols should have SAME trend
+   // Determine the dominant trend direction
+   // If both are BULLISH → UP trend
+   // If both are BEARISH → DOWN trend
+   // If mismatch → CheckCDCTrendConfirmation already blocks, so allow here
+   
+   if(trendA != trendB)
+      return true;  // Mismatch handled by CheckCDCTrendConfirmation
+   
+   // trendA == trendB at this point
+   bool isBullish = (trendA == "BULLISH");
+   bool isBearish = (trendA == "BEARISH");
+   
+   // Grid Trend Guard Logic:
+   // BUY Grid → Block when BEARISH (Down trend)
+   // SELL Grid → Block when BULLISH (Up trend)
+   if(side == "BUY" && isBearish)
+      return false;  // BUY Grid blocked in DOWN trend
+   
+   if(side == "SELL" && isBullish)
+      return false;  // SELL Grid blocked in UP trend
+   
+   return true;  // Grid allowed
+}
+```
+
+---
+
+#### Part D: เพิ่มการเรียก `CheckGridTrendDirection()` ใน `CheckGridTradingAllowed()`
+
+**ไฟล์:** `public/docs/mql5/Harmony_Dream_EA.mq5`
+**ตำแหน่ง:** ใน `CheckGridTradingAllowed()` หลัง CDC Block check (บรรทัด 5553-5558)
+
+เพิ่มเงื่อนไขที่ 4:
+```cpp
+   // === เงื่อนไข 3: CDC Trend Block (v3.5.2) ===
    if(pauseReason == "" && InpUseCDCTrendFilter)
    {
       if(!CheckCDCTrendConfirmation(pairIndex, side))
          pauseReason = "CDC BLOCK";
    }
    
-   // === v2.2.1: Debounced Logging ===
-   if(pauseReason != "")
+   // === v2.2.2: Grid Trend Guard (Block Counter-Trend Grid) ===
+   if(pauseReason == "" && !CheckGridTrendDirection(pairIndex, side))
    {
-      // Log only if reason is NEW/DIFFERENT or 30 seconds passed
-      if(debugLog && (g_firstAnalyzeRun || 
-         pauseReason != g_lastGridPauseReason[pairIndex][sideIdx] ||
-         now - g_lastGridPauseLogTime[pairIndex][sideIdx] >= DEBUG_LOG_INTERVAL))
-      {
-         PrintFormat("GRID PAUSE [Pair %d %s/%s %s]: %s", pairIndex + 1, 
-                     g_pairs[pairIndex].symbolA, g_pairs[pairIndex].symbolB, side, pauseReason);
-         g_lastGridPauseReason[pairIndex][sideIdx] = pauseReason;
-         g_lastGridPauseLogTime[pairIndex][sideIdx] = now;
-      }
-      return false;
+      pauseReason = "TREND GUARD";
    }
-   else
-   {
-      // Grid allowed - log RESUME only if previously paused
-      if(debugLog && g_lastGridPauseReason[pairIndex][sideIdx] != "")
-      {
-         PrintFormat("GRID RESUME [Pair %d %s/%s %s]: All conditions met", pairIndex + 1,
-                     g_pairs[pairIndex].symbolA, g_pairs[pairIndex].symbolB, side);
-         g_lastGridPauseReason[pairIndex][sideIdx] = "";
-      }
-      return true;
-   }
-}
 ```
 
 ---
 
-#### Part D: แก้ไข `CheckGridTradingAllowedCorrOnly()` (Correlation Only Mode)
+#### Part E: เพิ่มการเรียก `CheckGridTrendDirection()` ใน `CheckGridTradingAllowedCorrOnly()`
 
 **ไฟล์:** `public/docs/mql5/Harmony_Dream_EA.mq5`
-**บรรทัด:** 5698-5733
+**ตำแหน่ง:** ใน `CheckGridTradingAllowedCorrOnly()` หลัง CDC Block check (บรรทัด 5707-5712)
 
-**เหมือน Part C แต่สำหรับ Correlation Only Mode:**
-
+เพิ่มเงื่อนไขเดียวกัน:
 ```cpp
-bool CheckGridTradingAllowedCorrOnly(int pairIndex, string side, string &pauseReason)
-{
-   pauseReason = "";
-   int sideIdx = (side == "BUY") ? 0 : 1;
-   bool debugLog = InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester);
-   datetime now = TimeCurrent();
-   
-   // === เงื่อนไข 1: Correlation Check ===
-   double absCorr = MathAbs(g_pairs[pairIndex].correlation);
-   if(absCorr < InpGridMinCorrelation)
-   {
-      pauseReason = StringFormat("Corr %.0f%% < %.0f%%", 
-                                 absCorr * 100, InpGridMinCorrelation * 100);
-   }
-   
-   // === เงื่อนไข 2: CDC Trend Block ===
+   // === เงื่อนไข 2: CDC Trend Block (v3.5.2) ===
    if(pauseReason == "" && InpUseCDCTrendFilter)
    {
       if(!CheckCDCTrendConfirmation(pairIndex, side))
          pauseReason = "CDC BLOCK";
    }
    
-   // === v2.2.1: Debounced Logging ===
-   if(pauseReason != "")
+   // === v2.2.2: Grid Trend Guard (Block Counter-Trend Grid) ===
+   if(pauseReason == "" && !CheckGridTrendDirection(pairIndex, side))
    {
-      if(debugLog && (g_firstAnalyzeRun || 
-         pauseReason != g_lastGridPauseReason[pairIndex][sideIdx] ||
-         now - g_lastGridPauseLogTime[pairIndex][sideIdx] >= DEBUG_LOG_INTERVAL))
-      {
-         PrintFormat("GRID PAUSE [CORR ONLY] [Pair %d %s/%s %s]: %s", pairIndex + 1, 
-                     g_pairs[pairIndex].symbolA, g_pairs[pairIndex].symbolB, side, pauseReason);
-         g_lastGridPauseReason[pairIndex][sideIdx] = pauseReason;
-         g_lastGridPauseLogTime[pairIndex][sideIdx] = now;
-      }
-      return false;
+      pauseReason = "TREND GUARD";
    }
-   else
-   {
-      if(debugLog && g_lastGridPauseReason[pairIndex][sideIdx] != "")
-      {
-         PrintFormat("GRID RESUME [CORR ONLY] [Pair %d %s/%s %s]: All conditions met", pairIndex + 1,
-                     g_pairs[pairIndex].symbolA, g_pairs[pairIndex].symbolB, side);
-         g_lastGridPauseReason[pairIndex][sideIdx] = "";
-      }
-      return true;
-   }
-}
 ```
 
 ---
@@ -175,28 +178,42 @@ bool CheckGridTradingAllowedCorrOnly(int pairIndex, string side, string &pauseRe
 
 | ไฟล์ | ส่วนที่แก้ไข | บรรทัด | รายละเอียด |
 |------|-------------|--------|------------|
-| `Harmony_Dream_EA.mq5` | Version | 7, 10 | อัปเดตเป็น v2.21 |
-| `Harmony_Dream_EA.mq5` | Global Variables | หลัง 901 | เพิ่ม `g_lastGridPauseReason[][]` และ `g_lastGridPauseLogTime[][]` |
-| `Harmony_Dream_EA.mq5` | `CheckGridTradingAllowed()` | 5522-5592 | เพิ่ม debounced logging |
-| `Harmony_Dream_EA.mq5` | `CheckGridTradingAllowedCorrOnly()` | 5698-5733 | เพิ่ม debounced logging |
+| `Harmony_Dream_EA.mq5` | Version | 7, 10 | อัปเดตเป็น v2.22 |
+| `Harmony_Dream_EA.mq5` | Input Parameters | ~399 | เพิ่ม `InpGridTrendGuard` |
+| `Harmony_Dream_EA.mq5` | ฟังก์ชันใหม่ | หลัง 5295 | เพิ่ม `CheckGridTrendDirection()` |
+| `Harmony_Dream_EA.mq5` | `CheckGridTradingAllowed()` | ~5558 | เพิ่มการเรียก `CheckGridTrendDirection()` |
+| `Harmony_Dream_EA.mq5` | `CheckGridTradingAllowedCorrOnly()` | ~5712 | เพิ่มการเรียก `CheckGridTrendDirection()` |
 
 ---
 
 ### ผลลัพธ์ที่คาดหวัง
 
-| สถานการณ์ | ก่อนแก้ไข | หลังแก้ไข v2.2.1 |
-|-----------|----------|------------------|
-| CDC BLOCK log | แสดง **ทุก tick** (spam) | แสดงครั้งแรก + ทุก **30 วินาที** |
-| Correlation block log | แสดง **ทุก tick** | แสดงครั้งแรก + ทุก **30 วินาที** |
-| Z-Score block log | แสดง **ทุก tick** | แสดงครั้งแรก + ทุก **30 วินาที** |
-| Grid Resume | ไม่มี log | แสดง **GRID RESUME** เมื่อกลับมาทำงาน |
-| Journal Clarity | ไม่รู้ว่า Grid ถูก block ตรงไหน | เห็นชัดว่าทำไม Grid หยุด + เมื่อกลับมา |
+| สถานการณ์ | Trend | Grid BUY | Grid SELL |
+|-----------|-------|----------|-----------|
+| Positive Corr, Both UP | BULLISH | ✅ ALLOWED | ❌ TREND GUARD |
+| Positive Corr, Both DOWN | BEARISH | ❌ TREND GUARD | ✅ ALLOWED |
+| Positive Corr, Mismatch | - | ❌ CDC BLOCK | ❌ CDC BLOCK |
+| Negative Corr | - | ✅ (ไม่มีผล) | ✅ (ไม่มีผล) |
+| InpGridTrendGuard = false | - | ✅ (ปิดฟีเจอร์) | ✅ (ปิดฟีเจอร์) |
+
+---
+
+### Log Output ที่จะเห็น
+
+```text
+GRID PAUSE [CORR ONLY] [Pair 7 EURUSD/GBPUSD SELL]: TREND GUARD
+   → เมื่อ Pair 7 เป็นเทรนขาขึ้น SELL Grid จะหยุด
+
+GRID RESUME [CORR ONLY] [Pair 7 EURUSD/GBPUSD SELL]: All conditions met
+   → เมื่อเทรนกลับเป็นขาลง SELL Grid กลับมาทำงาน
+```
 
 ---
 
 ### Technical Notes
 
-- ใช้ global arrays `g_lastGridPauseReason[MAX_PAIRS][2]` และ `g_lastGridPauseLogTime[MAX_PAIRS][2]` แยกจาก `lastBlockReason` ใน PairInfo (ที่ใช้สำหรับ Main Entry)
-- `sideIdx = 0` สำหรับ BUY, `sideIdx = 1` สำหรับ SELL
-- Log throttling ใช้ `DEBUG_LOG_INTERVAL = 30` วินาที (เหมือน Main Entry)
-- เพิ่ม "GRID RESUME" log เมื่อเงื่อนไขกลับมาผ่าน (เพื่อให้รู้ว่า Grid พร้อมทำงานแล้ว)
+- ฟีเจอร์นี้ทำงานเฉพาะ **Positive Correlation** (ตามที่ต้องการ)
+- สามารถเปิด-ปิดได้ผ่าน `InpGridTrendGuard`
+- ไม่กระทบกับ Main Entry หรือกลยุทธ์อื่น
+- ใช้ระบบ log throttling จาก v2.2.1 (แสดงเฉพาะเมื่อ reason เปลี่ยน)
+- ทำงานร่วมกับทั้ง Z-Score mode และ Correlation Only mode
