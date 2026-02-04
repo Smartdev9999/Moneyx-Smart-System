@@ -4,10 +4,10 @@
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "2.25"
+#property version   "2.26"
 #property strict
 #property description "Harmony Dream - Pairs Trading Expert Advisor"
-#property description "v2.2.5: Fix New Cycle Lot - Recalculate Lots Before Opening New Trade"
+#property description "v2.2.6: Fix CDC Filter OFF - Allow Correlation Only Entry Without CDC"
 #property description "Full Hedging with Independent Buy/Sell Sides"
 #include <Trade/Trade.mqh>
 
@@ -5823,6 +5823,35 @@ bool CheckCorrelationOnlyEntry(int pairIndex)
 string DetermineTradeDirectionForCorrOnly(int pairIndex)
 {
    int corrType = g_pairs[pairIndex].correlationType;
+   
+   // v2.2.6: If CDC Filter is DISABLED, use Symbol A price direction as trade direction
+   // This allows pure Correlation-based trading without CDC requirements
+   if(!InpUseCDCTrendFilter)
+   {
+      // For Positive Correlation: Follow current price momentum of Symbol A
+      // For Negative Correlation: Same logic (follow A)
+      
+      // Simple momentum check: Compare current price to SMA
+      double prices[];
+      ArraySetAsSeries(prices, true);
+      int copied = CopyClose(g_pairs[pairIndex].symbolA, InpZScoreTimeframe, 0, 20, prices);
+      if(copied < 20) return "";  // Not enough data
+      
+      double currentPrice = prices[0];
+      double sum = 0;
+      for(int j = 0; j < 20; j++) sum += prices[j];
+      double sma = sum / 20.0;
+      
+      // Determine direction based on price vs SMA
+      if(currentPrice > sma)
+         return "BUY";
+      else if(currentPrice < sma)
+         return "SELL";
+      else
+         return "";  // Price exactly at SMA - no direction
+   }
+   
+   // === Original CDC-based logic (when CDC Filter is ENABLED) ===
    string trendA = g_pairs[pairIndex].cdcTrendA;
    string trendB = g_pairs[pairIndex].cdcTrendB;
    
