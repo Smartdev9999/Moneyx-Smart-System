@@ -4,10 +4,10 @@
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "2.24"
+#property version   "2.25"
 #property strict
 #property description "Harmony Dream - Pairs Trading Expert Advisor"
-#property description "v2.2.4: Fix Grid Lot Recovery - Restore Last Grid Lots for Compounding"
+#property description "v2.2.5: Fix New Cycle Lot - Recalculate Lots Before Opening New Trade"
 #property description "Full Hedging with Independent Buy/Sell Sides"
 #include <Trade/Trade.mqh>
 
@@ -7500,7 +7500,15 @@ bool OpenBuySideTrade(int pairIndex)
    string symbolB = g_pairs[pairIndex].symbolB;
    int corrType = g_pairs[pairIndex].correlationType;
    
-   // v3.5.3: Get base lots
+   // v2.2.5: Recalculate lots if they were reset (after close)
+   if(g_pairs[pairIndex].lotBuyA == 0 || g_pairs[pairIndex].lotBuyB == 0)
+   {
+      CalculateDollarNeutralLots(pairIndex);
+      PrintFormat("[v2.2.5] Pair %d BUY: Lots were 0 - Recalculated (A=%.2f B=%.2f)", 
+                  pairIndex + 1, g_pairs[pairIndex].lotBuyA, g_pairs[pairIndex].lotBuyB);
+   }
+   
+   // v3.5.3: Get base lots (now guaranteed to be non-zero)
    double baseLotA = g_pairs[pairIndex].lotBuyA;
    double baseLotB = g_pairs[pairIndex].lotBuyB;
    double lotA, lotB;
@@ -7691,7 +7699,15 @@ bool OpenSellSideTrade(int pairIndex)
    string symbolB = g_pairs[pairIndex].symbolB;
    int corrType = g_pairs[pairIndex].correlationType;
    
-   // v3.5.3: Get base lots
+   // v2.2.5: Recalculate lots if they were reset (after close)
+   if(g_pairs[pairIndex].lotSellA == 0 || g_pairs[pairIndex].lotSellB == 0)
+   {
+      CalculateDollarNeutralLots(pairIndex);
+      PrintFormat("[v2.2.5] Pair %d SELL: Lots were 0 - Recalculated (A=%.2f B=%.2f)", 
+                  pairIndex + 1, g_pairs[pairIndex].lotSellA, g_pairs[pairIndex].lotSellB);
+   }
+   
+   // v3.5.3: Get base lots (now guaranteed to be non-zero)
    double baseLotA = g_pairs[pairIndex].lotSellA;
    double baseLotB = g_pairs[pairIndex].lotSellB;
    double lotA, lotB;
