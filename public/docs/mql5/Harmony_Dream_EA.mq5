@@ -4,10 +4,10 @@
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "2.22"
+#property version   "2.23"
 #property strict
 #property description "Harmony Dream - Pairs Trading Expert Advisor"
-#property description "v2.2.2: Add Grid Trend Guard - Block Grid Counter-Trend"
+#property description "v2.2.3: Fix Grid Recovery - Restore Entry Price from Positions"
 #property description "Full Hedging with Independent Buy/Sell Sides"
 #include <Trade/Trade.mqh>
 
@@ -1727,9 +1727,27 @@ void RestoreOpenPositions()
               {
                  g_pairs[i].orderCountBuy++;
                  if(StringFind(comment, "_GL") >= 0)
+                 {
                     g_pairs[i].avgOrderCountBuy++;
+                    
+                    // v2.2.3: Update lastAvgPriceBuy to latest Grid Loss price (lowest for BUY)
+                    double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+                    if(g_pairs[i].lastAvgPriceBuy == 0 || openPrice < g_pairs[i].lastAvgPriceBuy)
+                    {
+                       g_pairs[i].lastAvgPriceBuy = openPrice;
+                    }
+                 }
                  else if(StringFind(comment, "_GP") >= 0)
+                 {
                     g_pairs[i].gridProfitCountBuy++;
+                    
+                    // v2.2.3: Update lastProfitPriceBuy to latest Grid Profit price (highest for BUY)
+                    double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+                    if(g_pairs[i].lastProfitPriceBuy == 0 || openPrice > g_pairs[i].lastProfitPriceBuy)
+                    {
+                       g_pairs[i].lastProfitPriceBuy = openPrice;
+                    }
+                 }
               }
               else if(shouldCount && !mainBuyCounted[i])
               {
@@ -1739,6 +1757,28 @@ void RestoreOpenPositions()
               }
               
               g_pairs[i].entryTimeBuy = (datetime)PositionGetInteger(POSITION_TIME);
+              
+              // v2.2.3: Restore entry price for Grid calculations
+              if(isMainOrder && symbol == symbolA)
+              {
+                 double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+                 
+                 // Set initialEntryPriceBuy if not set yet (use lowest price for BUY)
+                 if(g_pairs[i].initialEntryPriceBuy == 0 || openPrice < g_pairs[i].initialEntryPriceBuy)
+                 {
+                    g_pairs[i].initialEntryPriceBuy = openPrice;
+                 }
+                 
+                 // Set lastAvgPriceBuy to entry price (Grid Loss reference)
+                 if(g_pairs[i].lastAvgPriceBuy == 0)
+                 {
+                    g_pairs[i].lastAvgPriceBuy = openPrice;
+                 }
+                 
+                 PrintFormat("[v2.2.3] Pair %d BUY: Restored EntryPrice=%.5f, LastAvgPrice=%.5f",
+                             i + 1, g_pairs[i].initialEntryPriceBuy, g_pairs[i].lastAvgPriceBuy);
+              }
+              
               restoredBuy++;
           }
          
@@ -1781,9 +1821,27 @@ void RestoreOpenPositions()
               {
                  g_pairs[i].orderCountSell++;
                  if(StringFind(comment, "_GL") >= 0)
+                 {
                     g_pairs[i].avgOrderCountSell++;
+                    
+                    // v2.2.3: Update lastAvgPriceSell to latest Grid Loss price (highest for SELL)
+                    double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+                    if(g_pairs[i].lastAvgPriceSell == 0 || openPrice > g_pairs[i].lastAvgPriceSell)
+                    {
+                       g_pairs[i].lastAvgPriceSell = openPrice;
+                    }
+                 }
                  else if(StringFind(comment, "_GP") >= 0)
+                 {
                     g_pairs[i].gridProfitCountSell++;
+                    
+                    // v2.2.3: Update lastProfitPriceSell to latest Grid Profit price (lowest for SELL)
+                    double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+                    if(g_pairs[i].lastProfitPriceSell == 0 || openPrice < g_pairs[i].lastProfitPriceSell)
+                    {
+                       g_pairs[i].lastProfitPriceSell = openPrice;
+                    }
+                 }
               }
               else if(shouldCountSell && !mainSellCounted[i])
               {
@@ -1793,6 +1851,28 @@ void RestoreOpenPositions()
               }
               
               g_pairs[i].entryTimeSell = (datetime)PositionGetInteger(POSITION_TIME);
+              
+              // v2.2.3: Restore entry price for Grid calculations
+              if(isMainOrderSell && symbol == symbolA)
+              {
+                 double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+                 
+                 // Set initialEntryPriceSell if not set yet (use highest price for SELL)
+                 if(g_pairs[i].initialEntryPriceSell == 0 || openPrice > g_pairs[i].initialEntryPriceSell)
+                 {
+                    g_pairs[i].initialEntryPriceSell = openPrice;
+                 }
+                 
+                 // Set lastAvgPriceSell to entry price (Grid Loss reference)
+                 if(g_pairs[i].lastAvgPriceSell == 0)
+                 {
+                    g_pairs[i].lastAvgPriceSell = openPrice;
+                 }
+                 
+                 PrintFormat("[v2.2.3] Pair %d SELL: Restored EntryPrice=%.5f, LastAvgPrice=%.5f",
+                             i + 1, g_pairs[i].initialEntryPriceSell, g_pairs[i].lastAvgPriceSell);
+              }
+              
               restoredSell++;
           }
          
