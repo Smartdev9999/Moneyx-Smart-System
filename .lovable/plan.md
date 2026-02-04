@@ -1,6 +1,6 @@
 
 
-## แผนแก้ไข: Grid Recovery v2.2.3
+## แผนแก้ไข: Grid Lot Recovery v2.2.4
 
 ---
 
@@ -8,22 +8,46 @@
 
 | ตัวแปร | Backtest | Live Trading (หลัง Restart) |
 |--------|----------|----------------------------|
-| `initialEntryPriceBuy/Sell` | ถูกตั้งค่าตอน open order | **= 0** (ไม่ถูก restore) |
-| `lastAvgPriceBuy/Sell` | อัปเดตต่อเนื่อง | **= 0** → reset เป็น currentPrice |
-| **Grid Profit** | ทำงานปกติ | **ไม่ทำงานเลย** (return ทันที) |
-| **Grid Loss** | ทำงานปกติ | ต้องรอราคาเคลื่อนที่ใหม่ |
+| `lastProfitGridLotBuyA/B` | อัปเดตหลัง open GP | **= 0** (ไม่ถูก restore) |
+| `lastProfitGridLotSellA/B` | อัปเดตหลัง open GP | **= 0** (ไม่ถูก restore) |
+| `lastGridLotBuyA/B` | อัปเดตหลัง open GL | **= 0** (ไม่ถูก restore) |
+| `lastGridLotSellA/B` | อัปเดตหลัง open GL | **= 0** (ไม่ถูก restore) |
+| **Compounding** | ทำงานปกติ | **ใช้ baseLot แทน!** |
+
+---
+
+### ตัวอย่างจากรูปที่แนบ
+
+```text
+Settings:
+- Grid Lot Calculation Mode: ATR Trend Mode (CDC Trend + Compounding)
+- Lot Progression Mode: Compounding (prev × mult each level)
+- Trend-Aligned Side: Fixed Multiplier = 2.0
+
+Expected:
+Initial: 0.1 → GP#1: 0.2 (0.1 × 2.0) → GP#2: 0.4 (0.2 × 2.0)
+
+Actual (หลัง restart):
+Initial: 0.1 → GP#1: 0.1 (ใช้ baseLot!) → GP#2: 0.1 (ใช้ baseLot!)
+```
 
 ---
 
 ### สาเหตุ
 
 ```text
-RestoreOpenPositions() (บรรทัด 1596-1811)
-├── ✅ Restore tickets (ticketBuyA, ticketSellA, etc.)
-├── ✅ Restore lots (lotBuyA, lotSellA, etc.)
-├── ✅ Restore direction (directionBuy, directionSell)
-├── ❌ ไม่ restore initialEntryPriceBuy/Sell
-└── ❌ ไม่ restore lastAvgPriceBuy/Sell
+CalculateTrendBasedLots() (บรรทัด 6909-6951)
+├── ถ้า isGridOrder && Compounding:
+│   ├── ใช้ lastProfitGridLotBuyA/B สำหรับ Grid Profit
+│   └── ใช้ lastGridLotBuyA/B สำหรับ Grid Loss
+│
+└── ปัญหา: หลัง restart ค่าเหล่านี้ = 0 → fallback ไปใช้ initialLot!
+
+if(isProfitSide) {
+   if(isTrendAlignedA && g_pairs[pairIndex].lastProfitGridLotBuyA > 0)  // = 0 หลัง restart!
+      effectiveBaseLotA = g_pairs[pairIndex].lastProfitGridLotBuyA;
+   // ... ถ้า = 0 ก็จะใช้ initialLotA แทน!
+}
 ```
 
 ---
@@ -32,155 +56,205 @@ RestoreOpenPositions() (บรรทัด 1596-1811)
 
 #### Part A: อัปเดต Version
 
-**ไฟล์:** `public/docs/mql5/Harmony_Dream_EA.mq5`
+**ไฟล์:** `public/docs/mql5/Harmony_Dream_EA.mq5`  
 **บรรทัด:** 7, 10
 
 ```cpp
-#property version   "2.23"
-#property description "v2.2.3: Fix Grid Recovery - Restore Entry Price from Positions"
+#property version   "2.24"
+#property description "v2.2.4: Fix Grid Lot Recovery - Restore Last Grid Lots for Compounding"
 ```
 
 ---
 
-#### Part B: แก้ไข `RestoreOpenPositions()` เพิ่ม Entry Price Recovery
+#### Part B: เพิ่ม Grid Lot Recovery ใน BUY Grid Loss section
 
-**ไฟล์:** `public/docs/mql5/Harmony_Dream_EA.mq5`
-**ตำแหน่ง:** หลังบรรทัด 1741 (หลัง `g_pairs[i].entryTimeBuy = ...`)
+**ไฟล์:** `public/docs/mql5/Harmony_Dream_EA.mq5`  
+**ตำแหน่ง:** หลังบรรทัด 1737 (ใน Grid Loss BUY recovery)
 
-เพิ่มโค้ดสำหรับ BUY side:
 ```cpp
-   g_pairs[i].entryTimeBuy = (datetime)PositionGetInteger(POSITION_TIME);
+if(StringFind(comment, "_GL") >= 0)
+{
+   g_pairs[i].avgOrderCountBuy++;
    
-   // v2.2.3: Restore entry price for Grid calculations
-   if(isMainOrder && symbol == symbolA)
+   // v2.2.3: Update lastAvgPriceBuy to latest Grid Loss price (lowest for BUY)
+   double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+   if(g_pairs[i].lastAvgPriceBuy == 0 || openPrice < g_pairs[i].lastAvgPriceBuy)
    {
-      double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-      
-      // Set initialEntryPriceBuy if not set yet
-      if(g_pairs[i].initialEntryPriceBuy == 0 || openPrice < g_pairs[i].initialEntryPriceBuy)
-      {
-         g_pairs[i].initialEntryPriceBuy = openPrice;
-      }
-      
-      // Set lastAvgPriceBuy to entry price (Grid Loss reference)
-      if(g_pairs[i].lastAvgPriceBuy == 0)
-      {
-         g_pairs[i].lastAvgPriceBuy = openPrice;
-      }
-      
-      PrintFormat("[v2.2.3] Pair %d BUY: Restored EntryPrice=%.5f, LastAvgPrice=%.5f",
-                  i + 1, g_pairs[i].initialEntryPriceBuy, g_pairs[i].lastAvgPriceBuy);
+      g_pairs[i].lastAvgPriceBuy = openPrice;
    }
    
-   restoredBuy++;
+   // v2.2.4: Restore lastGridLotBuy for Compounding (use LARGEST lot = latest level)
+   double gridLot = PositionGetDouble(POSITION_VOLUME);
+   if(symbol == symbolA && gridLot > g_pairs[i].lastGridLotBuyA)
+   {
+      g_pairs[i].lastGridLotBuyA = gridLot;
+   }
+   else if(symbol == symbolB && gridLot > g_pairs[i].lastGridLotBuyB)
+   {
+      g_pairs[i].lastGridLotBuyB = gridLot;
+   }
+}
 ```
 
 ---
 
-#### Part C: เพิ่ม Entry Price Recovery สำหรับ SELL side
+#### Part C: เพิ่ม Grid Lot Recovery ใน BUY Grid Profit section
 
-**ไฟล์:** `public/docs/mql5/Harmony_Dream_EA.mq5`
-**ตำแหน่ง:** หลังบรรทัด 1795 (หลัง `g_pairs[i].entryTimeSell = ...`)
+**ไฟล์:** `public/docs/mql5/Harmony_Dream_EA.mq5`  
+**ตำแหน่ง:** หลังบรรทัด 1748 (ใน Grid Profit BUY recovery)
 
-เพิ่มโค้ดสำหรับ SELL side:
 ```cpp
-   g_pairs[i].entryTimeSell = (datetime)PositionGetInteger(POSITION_TIME);
+else if(StringFind(comment, "_GP") >= 0)
+{
+   g_pairs[i].gridProfitCountBuy++;
    
-   // v2.2.3: Restore entry price for Grid calculations
-   if(isMainOrderSell && symbol == symbolA)
+   // v2.2.3: Update lastProfitPriceBuy to latest Grid Profit price (highest for BUY)
+   double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+   if(g_pairs[i].lastProfitPriceBuy == 0 || openPrice > g_pairs[i].lastProfitPriceBuy)
    {
-      double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-      
-      // Set initialEntryPriceSell if not set yet
-      if(g_pairs[i].initialEntryPriceSell == 0 || openPrice > g_pairs[i].initialEntryPriceSell)
-      {
-         g_pairs[i].initialEntryPriceSell = openPrice;
-      }
-      
-      // Set lastAvgPriceSell to entry price (Grid Loss reference)
-      if(g_pairs[i].lastAvgPriceSell == 0)
-      {
-         g_pairs[i].lastAvgPriceSell = openPrice;
-      }
-      
-      PrintFormat("[v2.2.3] Pair %d SELL: Restored EntryPrice=%.5f, LastAvgPrice=%.5f",
-                  i + 1, g_pairs[i].initialEntryPriceSell, g_pairs[i].lastAvgPriceSell);
+      g_pairs[i].lastProfitPriceBuy = openPrice;
    }
    
-   restoredSell++;
+   // v2.2.4: Restore lastProfitGridLotBuy for Compounding (use LARGEST lot = latest level)
+   double gridLot = PositionGetDouble(POSITION_VOLUME);
+   if(symbol == symbolA && gridLot > g_pairs[i].lastProfitGridLotBuyA)
+   {
+      g_pairs[i].lastProfitGridLotBuyA = gridLot;
+   }
+   else if(symbol == symbolB && gridLot > g_pairs[i].lastProfitGridLotBuyB)
+   {
+      g_pairs[i].lastProfitGridLotBuyB = gridLot;
+   }
+}
 ```
 
 ---
 
-#### Part D: เพิ่ม Grid Order Price Recovery
+#### Part D: เพิ่ม Grid Lot Recovery ใน SELL Grid Loss section
 
-**ปัญหา:** ถ้ามี Grid Order อยู่แล้ว, `lastAvgPrice` ควรใช้ราคาของ Grid Order ล่าสุด ไม่ใช่ Main Order
+**ไฟล์:** `public/docs/mql5/Harmony_Dream_EA.mq5`  
+**ตำแหน่ง:** หลังบรรทัด 1831 (ใน Grid Loss SELL recovery)
 
-**ไฟล์:** `public/docs/mql5/Harmony_Dream_EA.mq5`
-**ตำแหน่ง:** ในส่วน BUY Grid order recovery (บรรทัด ~1726-1733)
-
-แก้ไข:
 ```cpp
-   // v2.1.6: Count Grid orders individually (they have _GL or _GP in comment)
-   if(!isMainOrder)
+if(StringFind(comment, "_GL") >= 0)
+{
+   g_pairs[i].avgOrderCountSell++;
+   
+   // v2.2.3: Update lastAvgPriceSell to latest Grid Loss price (highest for SELL)
+   double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+   if(g_pairs[i].lastAvgPriceSell == 0 || openPrice > g_pairs[i].lastAvgPriceSell)
    {
-      g_pairs[i].orderCountBuy++;
-      if(StringFind(comment, "_GL") >= 0)
-      {
-         g_pairs[i].avgOrderCountBuy++;
-         
-         // v2.2.3: Update lastAvgPriceBuy to latest Grid Loss price
-         double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-         if(g_pairs[i].lastAvgPriceBuy == 0 || openPrice < g_pairs[i].lastAvgPriceBuy)
-         {
-            g_pairs[i].lastAvgPriceBuy = openPrice;
-         }
-      }
-      else if(StringFind(comment, "_GP") >= 0)
-      {
-         g_pairs[i].gridProfitCountBuy++;
-         
-         // v2.2.3: Update lastProfitPriceBuy to latest Grid Profit price
-         double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-         if(g_pairs[i].lastProfitPriceBuy == 0 || openPrice > g_pairs[i].lastProfitPriceBuy)
-         {
-            g_pairs[i].lastProfitPriceBuy = openPrice;
-         }
-      }
+      g_pairs[i].lastAvgPriceSell = openPrice;
    }
+   
+   // v2.2.4: Restore lastGridLotSell for Compounding (use LARGEST lot = latest level)
+   double gridLot = PositionGetDouble(POSITION_VOLUME);
+   if(symbol == symbolA && gridLot > g_pairs[i].lastGridLotSellA)
+   {
+      g_pairs[i].lastGridLotSellA = gridLot;
+   }
+   else if(symbol == symbolB && gridLot > g_pairs[i].lastGridLotSellB)
+   {
+      g_pairs[i].lastGridLotSellB = gridLot;
+   }
+}
 ```
 
-**ตำแหน่ง:** ในส่วน SELL Grid order recovery (บรรทัด ~1779-1787)
+---
 
-แก้ไข:
+#### Part E: เพิ่ม Grid Lot Recovery ใน SELL Grid Profit section
+
+**ไฟล์:** `public/docs/mql5/Harmony_Dream_EA.mq5`  
+**ตำแหน่ง:** หลังบรรทัด 1842 (ใน Grid Profit SELL recovery)
+
 ```cpp
-   // v2.1.6: Count Grid orders individually (they have _GL or _GP in comment)
-   if(!isMainOrderSell)
+else if(StringFind(comment, "_GP") >= 0)
+{
+   g_pairs[i].gridProfitCountSell++;
+   
+   // v2.2.3: Update lastProfitPriceSell to latest Grid Profit price (lowest for SELL)
+   double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+   if(g_pairs[i].lastProfitPriceSell == 0 || openPrice < g_pairs[i].lastProfitPriceSell)
    {
-      g_pairs[i].orderCountSell++;
-      if(StringFind(comment, "_GL") >= 0)
-      {
-         g_pairs[i].avgOrderCountSell++;
-         
-         // v2.2.3: Update lastAvgPriceSell to latest Grid Loss price
-         double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-         if(g_pairs[i].lastAvgPriceSell == 0 || openPrice > g_pairs[i].lastAvgPriceSell)
-         {
-            g_pairs[i].lastAvgPriceSell = openPrice;
-         }
-      }
-      else if(StringFind(comment, "_GP") >= 0)
-      {
-         g_pairs[i].gridProfitCountSell++;
-         
-         // v2.2.3: Update lastProfitPriceSell to latest Grid Profit price
-         double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-         if(g_pairs[i].lastProfitPriceSell == 0 || openPrice < g_pairs[i].lastProfitPriceSell)
-         {
-            g_pairs[i].lastProfitPriceSell = openPrice;
-         }
-      }
+      g_pairs[i].lastProfitPriceSell = openPrice;
    }
+   
+   // v2.2.4: Restore lastProfitGridLotSell for Compounding (use LARGEST lot = latest level)
+   double gridLot = PositionGetDouble(POSITION_VOLUME);
+   if(symbol == symbolA && gridLot > g_pairs[i].lastProfitGridLotSellA)
+   {
+      g_pairs[i].lastProfitGridLotSellA = gridLot;
+   }
+   else if(symbol == symbolB && gridLot > g_pairs[i].lastProfitGridLotSellB)
+   {
+      g_pairs[i].lastProfitGridLotSellB = gridLot;
+   }
+}
+```
+
+---
+
+#### Part F: เพิ่ม Main Order Lot as Initial Grid Lot
+
+**ปัญหา:** ถ้ามีเฉพาะ Main Order (ยังไม่มี Grid) ต้อง initialize `lastGridLot*` จาก Main Order lot
+
+**ไฟล์:** `public/docs/mql5/Harmony_Dream_EA.mq5`  
+**ตำแหน่ง:** หลังบรรทัด 1779 (หลัง restore EntryPrice for BUY)
+
+เพิ่มใน Main Order BUY recovery:
+```cpp
+// v2.2.4: Initialize Grid Lots from Main Order (for first Grid level)
+if(g_pairs[i].lastGridLotBuyA == 0)
+   g_pairs[i].lastGridLotBuyA = g_pairs[i].lotBuyA;
+if(g_pairs[i].lastGridLotBuyB == 0)
+   g_pairs[i].lastGridLotBuyB = g_pairs[i].lotBuyB;
+if(g_pairs[i].lastProfitGridLotBuyA == 0)
+   g_pairs[i].lastProfitGridLotBuyA = g_pairs[i].lotBuyA;
+if(g_pairs[i].lastProfitGridLotBuyB == 0)
+   g_pairs[i].lastProfitGridLotBuyB = g_pairs[i].lotBuyB;
+```
+
+**ตำแหน่ง:** หลัง SELL Main Order recovery (ใกล้บรรทัด 1870)
+
+```cpp
+// v2.2.4: Initialize Grid Lots from Main Order (for first Grid level)
+if(g_pairs[i].lastGridLotSellA == 0)
+   g_pairs[i].lastGridLotSellA = g_pairs[i].lotSellA;
+if(g_pairs[i].lastGridLotSellB == 0)
+   g_pairs[i].lastGridLotSellB = g_pairs[i].lotSellB;
+if(g_pairs[i].lastProfitGridLotSellA == 0)
+   g_pairs[i].lastProfitGridLotSellA = g_pairs[i].lotSellA;
+if(g_pairs[i].lastProfitGridLotSellB == 0)
+   g_pairs[i].lastProfitGridLotSellB = g_pairs[i].lotSellB;
+```
+
+---
+
+#### Part G: เพิ่ม Log สำหรับ Grid Lot Recovery
+
+**ตำแหน่ง:** ท้าย RestoreOpenPositions() ก่อน Print summary
+
+```cpp
+// v2.2.4: Log restored Grid Lots for Compounding
+for(int i = 0; i < MAX_PAIRS; i++)
+{
+   if(!g_pairs[i].enabled) continue;
+   
+   if(g_pairs[i].directionBuy == 1)
+   {
+      PrintFormat("[v2.2.4] Pair %d BUY GridLots: GL(A=%.2f,B=%.2f) GP(A=%.2f,B=%.2f)",
+                  i + 1, 
+                  g_pairs[i].lastGridLotBuyA, g_pairs[i].lastGridLotBuyB,
+                  g_pairs[i].lastProfitGridLotBuyA, g_pairs[i].lastProfitGridLotBuyB);
+   }
+   if(g_pairs[i].directionSell == 1)
+   {
+      PrintFormat("[v2.2.4] Pair %d SELL GridLots: GL(A=%.2f,B=%.2f) GP(A=%.2f,B=%.2f)",
+                  i + 1,
+                  g_pairs[i].lastGridLotSellA, g_pairs[i].lastGridLotSellB,
+                  g_pairs[i].lastProfitGridLotSellA, g_pairs[i].lastProfitGridLotSellB);
+   }
+}
 ```
 
 ---
@@ -189,57 +263,53 @@ RestoreOpenPositions() (บรรทัด 1596-1811)
 
 | ไฟล์ | ส่วนที่แก้ไข | บรรทัด | รายละเอียด |
 |------|-------------|--------|------------|
-| `Harmony_Dream_EA.mq5` | Version | 7, 10 | อัปเดตเป็น v2.23 |
-| `Harmony_Dream_EA.mq5` | `RestoreOpenPositions()` BUY | ~1741 | เพิ่ม restore `initialEntryPriceBuy`, `lastAvgPriceBuy` |
-| `Harmony_Dream_EA.mq5` | `RestoreOpenPositions()` SELL | ~1795 | เพิ่ม restore `initialEntryPriceSell`, `lastAvgPriceSell` |
-| `Harmony_Dream_EA.mq5` | Grid Order BUY Recovery | ~1726 | เพิ่ม restore `lastAvgPriceBuy`, `lastProfitPriceBuy` |
-| `Harmony_Dream_EA.mq5` | Grid Order SELL Recovery | ~1779 | เพิ่ม restore `lastAvgPriceSell`, `lastProfitPriceSell` |
+| `Harmony_Dream_EA.mq5` | Version | 7, 10 | อัปเดตเป็น v2.24 |
+| `Harmony_Dream_EA.mq5` | BUY GL Recovery | ~1737 | เพิ่ม restore `lastGridLotBuyA/B` |
+| `Harmony_Dream_EA.mq5` | BUY GP Recovery | ~1748 | เพิ่ม restore `lastProfitGridLotBuyA/B` |
+| `Harmony_Dream_EA.mq5` | BUY Main Recovery | ~1779 | Initialize grid lots จาก Main |
+| `Harmony_Dream_EA.mq5` | SELL GL Recovery | ~1831 | เพิ่ม restore `lastGridLotSellA/B` |
+| `Harmony_Dream_EA.mq5` | SELL GP Recovery | ~1842 | เพิ่ม restore `lastProfitGridLotSellA/B` |
+| `Harmony_Dream_EA.mq5` | SELL Main Recovery | ~1870 | Initialize grid lots จาก Main |
+| `Harmony_Dream_EA.mq5` | Summary Log | End | Log restored grid lots |
 
 ---
 
 ### ผลลัพธ์ที่คาดหวัง
 
-| สถานการณ์ | ก่อนแก้ไข | หลังแก้ไข v2.2.3 |
+| สถานการณ์ | ก่อนแก้ไข | หลังแก้ไข v2.2.4 |
 |-----------|----------|------------------|
-| EA Restart มี BUY order | `initialEntryPriceBuy = 0` | Restore จาก Main Order Price |
-| EA Restart มี Grid Loss | `lastAvgPriceBuy = currentPrice` | Restore จาก Grid Order Price ล่าสุด |
-| Grid Profit ทำงาน | ❌ return ทันที | ✅ ทำงานปกติ |
-| Grid Loss ทำงาน | ⚠️ รอราคาใหม่ | ✅ ต่อจากที่เดิม |
+| EA Restart มี GP#1 (0.2 lot) | `lastProfitGridLotBuyA = 0` → GP#2 = 0.2 | `lastProfitGridLotBuyA = 0.2` → GP#2 = 0.4 |
+| EA Restart มี GL#2 (0.4 lot) | `lastGridLotBuyA = 0` → GL#3 = 0.2 | `lastGridLotBuyA = 0.4` → GL#3 = 0.8 |
+| EA Restart มีเฉพาะ Main (0.1) | Grid lots = 0 → GP#1 = 0.1 | Grid lots = 0.1 → GP#1 = 0.2 |
 
 ---
 
-### Log Output หลัง Restart
-
-```text
-[v2.2.3] Pair 1 BUY: Restored EntryPrice=183.650, LastAvgPrice=183.650
-[v2.2.3] Pair 7 SELL: Restored EntryPrice=1.08500, LastAvgPrice=1.08200
-```
-
----
-
-### Recovery Logic สรุป
+### Recovery Logic สรุป (v2.2.4 Complete)
 
 ```text
 BUY Side:
-├── Main Order → initialEntryPriceBuy = POSITION_PRICE_OPEN
-│              → lastAvgPriceBuy = POSITION_PRICE_OPEN (ถ้ายังเป็น 0)
-├── Grid Loss  → lastAvgPriceBuy = MIN(current, openPrice) // ราคาต่ำสุด
-└── Grid Profit→ lastProfitPriceBuy = MAX(current, openPrice) // ราคาสูงสุด
-
-SELL Side:
-├── Main Order → initialEntryPriceSell = POSITION_PRICE_OPEN
-│              → lastAvgPriceSell = POSITION_PRICE_OPEN (ถ้ายังเป็น 0)
-├── Grid Loss  → lastAvgPriceSell = MAX(current, openPrice) // ราคาสูงสุด
-└── Grid Profit→ lastProfitPriceSell = MIN(current, openPrice) // ราคาต่ำสุด
+├── Main Order
+│   ├── initialEntryPriceBuy = POSITION_PRICE_OPEN (v2.2.3)
+│   ├── lastAvgPriceBuy = POSITION_PRICE_OPEN (v2.2.3)
+│   ├── lastGridLotBuyA/B = lotBuyA/B (v2.2.4 - NEW)
+│   └── lastProfitGridLotBuyA/B = lotBuyA/B (v2.2.4 - NEW)
+│
+├── Grid Loss Orders
+│   ├── lastAvgPriceBuy = MIN(price) (v2.2.3)
+│   └── lastGridLotBuyA/B = MAX(lot) (v2.2.4 - NEW)
+│
+└── Grid Profit Orders
+    ├── lastProfitPriceBuy = MAX(price) (v2.2.3)
+    └── lastProfitGridLotBuyA/B = MAX(lot) (v2.2.4 - NEW)
 ```
 
 ---
 
 ### Technical Notes
 
-- **ไม่แก้ไขเงื่อนไขการออก order** - แก้เฉพาะ recovery logic เท่านั้น
-- ใช้ `POSITION_PRICE_OPEN` จาก ticket เพื่อ restore ราคา
-- Grid Loss ใช้ราคา "ต่ำสุด" สำหรับ BUY (ราคาลง = ขาดทุน)
-- Grid Profit ใช้ราคา "สูงสุด" สำหรับ BUY (ราคาขึ้น = กำไร)
-- ทำงานร่วมกับ v2.2.2 Grid Trend Guard ได้ปกติ
+- ใช้ `POSITION_VOLUME` เพื่อ extract lot จาก Grid Order
+- ใช้ MAX(lot) เพื่อหา lot ล่าสุด (เพราะ Compounding = lot เพิ่มขึ้นเรื่อยๆ)
+- Initialize จาก Main Order lot ถ้ายังไม่มี Grid Order
+- ไม่แก้ไขเงื่อนไขการออก order - แก้เฉพาะ recovery logic เท่านั้น
+- ทำงานร่วมกับ v2.2.3 (Entry Price Recovery) ได้สมบูรณ์
 
