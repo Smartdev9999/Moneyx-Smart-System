@@ -1,53 +1,32 @@
 
-
-## แผนแก้ไข: Grid Lot Recovery v2.2.4
+## แผนแก้ไข: New Cycle Lot Reset Bug (v2.2.5)
 
 ---
 
 ### สรุปปัญหาที่พบ
 
-| ตัวแปร | Backtest | Live Trading (หลัง Restart) |
-|--------|----------|----------------------------|
-| `lastProfitGridLotBuyA/B` | อัปเดตหลัง open GP | **= 0** (ไม่ถูก restore) |
-| `lastProfitGridLotSellA/B` | อัปเดตหลัง open GP | **= 0** (ไม่ถูก restore) |
-| `lastGridLotBuyA/B` | อัปเดตหลัง open GL | **= 0** (ไม่ถูก restore) |
-| `lastGridLotSellA/B` | อัปเดตหลัง open GL | **= 0** (ไม่ถูก restore) |
-| **Compounding** | ทำงานปกติ | **ใช้ baseLot แทน!** |
-
----
-
-### ตัวอย่างจากรูปที่แนบ
-
-```text
-Settings:
-- Grid Lot Calculation Mode: ATR Trend Mode (CDC Trend + Compounding)
-- Lot Progression Mode: Compounding (prev × mult each level)
-- Trend-Aligned Side: Fixed Multiplier = 2.0
-
-Expected:
-Initial: 0.1 → GP#1: 0.2 (0.1 × 2.0) → GP#2: 0.4 (0.2 × 2.0)
-
-Actual (หลัง restart):
-Initial: 0.1 → GP#1: 0.1 (ใช้ baseLot!) → GP#2: 0.1 (ใช้ baseLot!)
-```
+| สถานการณ์ | ค่า `lotBuyA` | `NormalizeLot()` | เงื่อนไข `< minReasonableLot` | ผลลัพธ์ |
+|-----------|--------------|------------------|------------------------------|---------|
+| ก่อน close | 0.05 | 0.05 | 0.05 > 0.005 → skip | ✅ ถูกต้อง |
+| **หลัง close** | **0** | **0.01 (minLot)** | **0.01 > 0.005 → skip** | ❌ **ผิด!** |
+| **ที่ควรจะเป็น** | **0** | **→ recalculate** | **0.01 < 0.05 → trigger** | ✅ 0.05 |
 
 ---
 
 ### สาเหตุ
 
 ```text
-CalculateTrendBasedLots() (บรรทัด 6909-6951)
-├── ถ้า isGridOrder && Compounding:
-│   ├── ใช้ lastProfitGridLotBuyA/B สำหรับ Grid Profit
-│   └── ใช้ lastGridLotBuyA/B สำหรับ Grid Loss
+OpenBuySideTrade() (บรรทัด 7497-7560)
+├── baseLotA = g_pairs[pairIndex].lotBuyA  // = 0 หลัง close!
+├── if(InpGridLotScope == GRID_SCOPE_ALL)
+│   └── false (ผู้ใช้ตั้ง "Grid Orders Only")
 │
-└── ปัญหา: หลัง restart ค่าเหล่านี้ = 0 → fallback ไปใช้ initialLot!
-
-if(isProfitSide) {
-   if(isTrendAlignedA && g_pairs[pairIndex].lastProfitGridLotBuyA > 0)  // = 0 หลัง restart!
-      effectiveBaseLotA = g_pairs[pairIndex].lastProfitGridLotBuyA;
-   // ... ถ้า = 0 ก็จะใช้ initialLotA แทน!
-}
+├── else → NormalizeLot(symbolA, 0)  // = 0.01 (minLot)
+│
+├── minReasonableLot = InpBaseLot * 0.1 = 0.005
+│   └── 0.01 < 0.005? → FALSE!  // ไม่ trigger recalculation!
+│
+└── ใช้ lotA = 0.01 โดยตรง!
 ```
 
 ---
@@ -60,201 +39,72 @@ if(isProfitSide) {
 **บรรทัด:** 7, 10
 
 ```cpp
-#property version   "2.24"
-#property description "v2.2.4: Fix Grid Lot Recovery - Restore Last Grid Lots for Compounding"
+#property version   "2.25"
+#property description "v2.2.5: Fix New Cycle Lot - Recalculate Lots Before Opening New Trade"
 ```
 
 ---
 
-#### Part B: เพิ่ม Grid Lot Recovery ใน BUY Grid Loss section
+#### Part B: แก้ไข OpenBuySideTrade() - เพิ่ม Lot Recalculation
+
+**ปัญหา:** เมื่อ `lotBuyA = 0` (หลัง close), ต้อง recalculate ก่อนใช้งาน
 
 **ไฟล์:** `public/docs/mql5/Harmony_Dream_EA.mq5`  
-**ตำแหน่ง:** หลังบรรทัด 1737 (ใน Grid Loss BUY recovery)
+**ตำแหน่ง:** บรรทัด 7503-7506 (ก่อน get base lots)
 
+**แก้ไขจาก:**
 ```cpp
-if(StringFind(comment, "_GL") >= 0)
-{
-   g_pairs[i].avgOrderCountBuy++;
-   
-   // v2.2.3: Update lastAvgPriceBuy to latest Grid Loss price (lowest for BUY)
-   double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-   if(g_pairs[i].lastAvgPriceBuy == 0 || openPrice < g_pairs[i].lastAvgPriceBuy)
+   // v3.5.3: Get base lots
+   double baseLotA = g_pairs[pairIndex].lotBuyA;
+   double baseLotB = g_pairs[pairIndex].lotBuyB;
+   double lotA, lotB;
+```
+
+**เป็น:**
+```cpp
+   // v2.2.5: Recalculate lots if they were reset (after close)
+   if(g_pairs[pairIndex].lotBuyA == 0 || g_pairs[pairIndex].lotBuyB == 0)
    {
-      g_pairs[i].lastAvgPriceBuy = openPrice;
+      CalculateDollarNeutralLots(pairIndex);
+      PrintFormat("[v2.2.5] Pair %d BUY: Lots were 0 - Recalculated (A=%.2f B=%.2f)", 
+                  pairIndex + 1, g_pairs[pairIndex].lotBuyA, g_pairs[pairIndex].lotBuyB);
    }
    
-   // v2.2.4: Restore lastGridLotBuy for Compounding (use LARGEST lot = latest level)
-   double gridLot = PositionGetDouble(POSITION_VOLUME);
-   if(symbol == symbolA && gridLot > g_pairs[i].lastGridLotBuyA)
-   {
-      g_pairs[i].lastGridLotBuyA = gridLot;
-   }
-   else if(symbol == symbolB && gridLot > g_pairs[i].lastGridLotBuyB)
-   {
-      g_pairs[i].lastGridLotBuyB = gridLot;
-   }
-}
+   // v3.5.3: Get base lots (now guaranteed to be non-zero)
+   double baseLotA = g_pairs[pairIndex].lotBuyA;
+   double baseLotB = g_pairs[pairIndex].lotBuyB;
+   double lotA, lotB;
 ```
 
 ---
 
-#### Part C: เพิ่ม Grid Lot Recovery ใน BUY Grid Profit section
+#### Part C: แก้ไข OpenSellSideTrade() - เพิ่ม Lot Recalculation
 
 **ไฟล์:** `public/docs/mql5/Harmony_Dream_EA.mq5`  
-**ตำแหน่ง:** หลังบรรทัด 1748 (ใน Grid Profit BUY recovery)
+**ตำแหน่ง:** บรรทัด 7693-7697 (ก่อน get base lots)
 
+**แก้ไขจาก:**
 ```cpp
-else if(StringFind(comment, "_GP") >= 0)
-{
-   g_pairs[i].gridProfitCountBuy++;
-   
-   // v2.2.3: Update lastProfitPriceBuy to latest Grid Profit price (highest for BUY)
-   double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-   if(g_pairs[i].lastProfitPriceBuy == 0 || openPrice > g_pairs[i].lastProfitPriceBuy)
-   {
-      g_pairs[i].lastProfitPriceBuy = openPrice;
-   }
-   
-   // v2.2.4: Restore lastProfitGridLotBuy for Compounding (use LARGEST lot = latest level)
-   double gridLot = PositionGetDouble(POSITION_VOLUME);
-   if(symbol == symbolA && gridLot > g_pairs[i].lastProfitGridLotBuyA)
-   {
-      g_pairs[i].lastProfitGridLotBuyA = gridLot;
-   }
-   else if(symbol == symbolB && gridLot > g_pairs[i].lastProfitGridLotBuyB)
-   {
-      g_pairs[i].lastProfitGridLotBuyB = gridLot;
-   }
-}
+   // v3.5.3: Get base lots
+   double baseLotA = g_pairs[pairIndex].lotSellA;
+   double baseLotB = g_pairs[pairIndex].lotSellB;
+   double lotA, lotB;
 ```
 
----
-
-#### Part D: เพิ่ม Grid Lot Recovery ใน SELL Grid Loss section
-
-**ไฟล์:** `public/docs/mql5/Harmony_Dream_EA.mq5`  
-**ตำแหน่ง:** หลังบรรทัด 1831 (ใน Grid Loss SELL recovery)
-
+**เป็น:**
 ```cpp
-if(StringFind(comment, "_GL") >= 0)
-{
-   g_pairs[i].avgOrderCountSell++;
-   
-   // v2.2.3: Update lastAvgPriceSell to latest Grid Loss price (highest for SELL)
-   double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-   if(g_pairs[i].lastAvgPriceSell == 0 || openPrice > g_pairs[i].lastAvgPriceSell)
+   // v2.2.5: Recalculate lots if they were reset (after close)
+   if(g_pairs[pairIndex].lotSellA == 0 || g_pairs[pairIndex].lotSellB == 0)
    {
-      g_pairs[i].lastAvgPriceSell = openPrice;
+      CalculateDollarNeutralLots(pairIndex);
+      PrintFormat("[v2.2.5] Pair %d SELL: Lots were 0 - Recalculated (A=%.2f B=%.2f)", 
+                  pairIndex + 1, g_pairs[pairIndex].lotSellA, g_pairs[pairIndex].lotSellB);
    }
    
-   // v2.2.4: Restore lastGridLotSell for Compounding (use LARGEST lot = latest level)
-   double gridLot = PositionGetDouble(POSITION_VOLUME);
-   if(symbol == symbolA && gridLot > g_pairs[i].lastGridLotSellA)
-   {
-      g_pairs[i].lastGridLotSellA = gridLot;
-   }
-   else if(symbol == symbolB && gridLot > g_pairs[i].lastGridLotSellB)
-   {
-      g_pairs[i].lastGridLotSellB = gridLot;
-   }
-}
-```
-
----
-
-#### Part E: เพิ่ม Grid Lot Recovery ใน SELL Grid Profit section
-
-**ไฟล์:** `public/docs/mql5/Harmony_Dream_EA.mq5`  
-**ตำแหน่ง:** หลังบรรทัด 1842 (ใน Grid Profit SELL recovery)
-
-```cpp
-else if(StringFind(comment, "_GP") >= 0)
-{
-   g_pairs[i].gridProfitCountSell++;
-   
-   // v2.2.3: Update lastProfitPriceSell to latest Grid Profit price (lowest for SELL)
-   double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-   if(g_pairs[i].lastProfitPriceSell == 0 || openPrice < g_pairs[i].lastProfitPriceSell)
-   {
-      g_pairs[i].lastProfitPriceSell = openPrice;
-   }
-   
-   // v2.2.4: Restore lastProfitGridLotSell for Compounding (use LARGEST lot = latest level)
-   double gridLot = PositionGetDouble(POSITION_VOLUME);
-   if(symbol == symbolA && gridLot > g_pairs[i].lastProfitGridLotSellA)
-   {
-      g_pairs[i].lastProfitGridLotSellA = gridLot;
-   }
-   else if(symbol == symbolB && gridLot > g_pairs[i].lastProfitGridLotSellB)
-   {
-      g_pairs[i].lastProfitGridLotSellB = gridLot;
-   }
-}
-```
-
----
-
-#### Part F: เพิ่ม Main Order Lot as Initial Grid Lot
-
-**ปัญหา:** ถ้ามีเฉพาะ Main Order (ยังไม่มี Grid) ต้อง initialize `lastGridLot*` จาก Main Order lot
-
-**ไฟล์:** `public/docs/mql5/Harmony_Dream_EA.mq5`  
-**ตำแหน่ง:** หลังบรรทัด 1779 (หลัง restore EntryPrice for BUY)
-
-เพิ่มใน Main Order BUY recovery:
-```cpp
-// v2.2.4: Initialize Grid Lots from Main Order (for first Grid level)
-if(g_pairs[i].lastGridLotBuyA == 0)
-   g_pairs[i].lastGridLotBuyA = g_pairs[i].lotBuyA;
-if(g_pairs[i].lastGridLotBuyB == 0)
-   g_pairs[i].lastGridLotBuyB = g_pairs[i].lotBuyB;
-if(g_pairs[i].lastProfitGridLotBuyA == 0)
-   g_pairs[i].lastProfitGridLotBuyA = g_pairs[i].lotBuyA;
-if(g_pairs[i].lastProfitGridLotBuyB == 0)
-   g_pairs[i].lastProfitGridLotBuyB = g_pairs[i].lotBuyB;
-```
-
-**ตำแหน่ง:** หลัง SELL Main Order recovery (ใกล้บรรทัด 1870)
-
-```cpp
-// v2.2.4: Initialize Grid Lots from Main Order (for first Grid level)
-if(g_pairs[i].lastGridLotSellA == 0)
-   g_pairs[i].lastGridLotSellA = g_pairs[i].lotSellA;
-if(g_pairs[i].lastGridLotSellB == 0)
-   g_pairs[i].lastGridLotSellB = g_pairs[i].lotSellB;
-if(g_pairs[i].lastProfitGridLotSellA == 0)
-   g_pairs[i].lastProfitGridLotSellA = g_pairs[i].lotSellA;
-if(g_pairs[i].lastProfitGridLotSellB == 0)
-   g_pairs[i].lastProfitGridLotSellB = g_pairs[i].lotSellB;
-```
-
----
-
-#### Part G: เพิ่ม Log สำหรับ Grid Lot Recovery
-
-**ตำแหน่ง:** ท้าย RestoreOpenPositions() ก่อน Print summary
-
-```cpp
-// v2.2.4: Log restored Grid Lots for Compounding
-for(int i = 0; i < MAX_PAIRS; i++)
-{
-   if(!g_pairs[i].enabled) continue;
-   
-   if(g_pairs[i].directionBuy == 1)
-   {
-      PrintFormat("[v2.2.4] Pair %d BUY GridLots: GL(A=%.2f,B=%.2f) GP(A=%.2f,B=%.2f)",
-                  i + 1, 
-                  g_pairs[i].lastGridLotBuyA, g_pairs[i].lastGridLotBuyB,
-                  g_pairs[i].lastProfitGridLotBuyA, g_pairs[i].lastProfitGridLotBuyB);
-   }
-   if(g_pairs[i].directionSell == 1)
-   {
-      PrintFormat("[v2.2.4] Pair %d SELL GridLots: GL(A=%.2f,B=%.2f) GP(A=%.2f,B=%.2f)",
-                  i + 1,
-                  g_pairs[i].lastGridLotSellA, g_pairs[i].lastGridLotSellB,
-                  g_pairs[i].lastProfitGridLotSellA, g_pairs[i].lastProfitGridLotSellB);
-   }
-}
+   // v3.5.3: Get base lots (now guaranteed to be non-zero)
+   double baseLotA = g_pairs[pairIndex].lotSellA;
+   double baseLotB = g_pairs[pairIndex].lotSellB;
+   double lotA, lotB;
 ```
 
 ---
@@ -263,53 +113,63 @@ for(int i = 0; i < MAX_PAIRS; i++)
 
 | ไฟล์ | ส่วนที่แก้ไข | บรรทัด | รายละเอียด |
 |------|-------------|--------|------------|
-| `Harmony_Dream_EA.mq5` | Version | 7, 10 | อัปเดตเป็น v2.24 |
-| `Harmony_Dream_EA.mq5` | BUY GL Recovery | ~1737 | เพิ่ม restore `lastGridLotBuyA/B` |
-| `Harmony_Dream_EA.mq5` | BUY GP Recovery | ~1748 | เพิ่ม restore `lastProfitGridLotBuyA/B` |
-| `Harmony_Dream_EA.mq5` | BUY Main Recovery | ~1779 | Initialize grid lots จาก Main |
-| `Harmony_Dream_EA.mq5` | SELL GL Recovery | ~1831 | เพิ่ม restore `lastGridLotSellA/B` |
-| `Harmony_Dream_EA.mq5` | SELL GP Recovery | ~1842 | เพิ่ม restore `lastProfitGridLotSellA/B` |
-| `Harmony_Dream_EA.mq5` | SELL Main Recovery | ~1870 | Initialize grid lots จาก Main |
-| `Harmony_Dream_EA.mq5` | Summary Log | End | Log restored grid lots |
+| `Harmony_Dream_EA.mq5` | Version | 7, 10 | อัปเดตเป็น v2.25 |
+| `Harmony_Dream_EA.mq5` | `OpenBuySideTrade()` | ~7503 | เพิ่ม lot recalculation ก่อน open |
+| `Harmony_Dream_EA.mq5` | `OpenSellSideTrade()` | ~7693 | เพิ่ม lot recalculation ก่อน open |
 
 ---
 
 ### ผลลัพธ์ที่คาดหวัง
 
-| สถานการณ์ | ก่อนแก้ไข | หลังแก้ไข v2.2.4 |
+| สถานการณ์ | ก่อนแก้ไข | หลังแก้ไข v2.2.5 |
 |-----------|----------|------------------|
-| EA Restart มี GP#1 (0.2 lot) | `lastProfitGridLotBuyA = 0` → GP#2 = 0.2 | `lastProfitGridLotBuyA = 0.2` → GP#2 = 0.4 |
-| EA Restart มี GL#2 (0.4 lot) | `lastGridLotBuyA = 0` → GL#3 = 0.2 | `lastGridLotBuyA = 0.4` → GL#3 = 0.8 |
-| EA Restart มีเฉพาะ Main (0.1) | Grid lots = 0 → GP#1 = 0.1 | Grid lots = 0.1 → GP#1 = 0.2 |
+| เปิด trade ใหม่หลัง close | lot = 0.01 (minLot) | lot = 0.05 (Base Lot) |
+| Log output | ไม่มี warning | `[v2.2.5] Pair 7 BUY: Lots were 0 - Recalculated (A=0.05 B=0.05)` |
+| Compounding cycle ใหม่ | เริ่มจาก 0.01 | เริ่มจาก 0.05 ถูกต้อง |
 
 ---
 
-### Recovery Logic สรุป (v2.2.4 Complete)
+### Flow หลังแก้ไข
 
 ```text
-BUY Side:
-├── Main Order
-│   ├── initialEntryPriceBuy = POSITION_PRICE_OPEN (v2.2.3)
-│   ├── lastAvgPriceBuy = POSITION_PRICE_OPEN (v2.2.3)
-│   ├── lastGridLotBuyA/B = lotBuyA/B (v2.2.4 - NEW)
-│   └── lastProfitGridLotBuyA/B = lotBuyA/B (v2.2.4 - NEW)
+CloseBuySide()
+├── lotBuyA = 0
+├── lotBuyB = 0
+└── directionBuy = -1 (Ready)
+
+[ผ่านไประยะหนึ่ง - Signal ใหม่เข้า]
+
+OpenBuySideTrade()
+├── v2.2.5 CHECK: lotBuyA == 0?
+│   └── YES → CalculateDollarNeutralLots()
+│            → lotBuyA = 0.05
+│            → lotBuyB = 0.05 (or hedge ratio adjusted)
 │
-├── Grid Loss Orders
-│   ├── lastAvgPriceBuy = MIN(price) (v2.2.3)
-│   └── lastGridLotBuyA/B = MAX(lot) (v2.2.4 - NEW)
+├── baseLotA = 0.05 (not 0!)
+├── if(GRID_SCOPE_ALL) → CalculateTrendBasedLots()
+│   else → NormalizeLot(0.05) → 0.05 ✓
 │
-└── Grid Profit Orders
-    ├── lastProfitPriceBuy = MAX(price) (v2.2.3)
-    └── lastProfitGridLotBuyA/B = MAX(lot) (v2.2.4 - NEW)
+└── Open trade with 0.05 ✓
 ```
 
 ---
 
 ### Technical Notes
 
-- ใช้ `POSITION_VOLUME` เพื่อ extract lot จาก Grid Order
-- ใช้ MAX(lot) เพื่อหา lot ล่าสุด (เพราะ Compounding = lot เพิ่มขึ้นเรื่อยๆ)
-- Initialize จาก Main Order lot ถ้ายังไม่มี Grid Order
-- ไม่แก้ไขเงื่อนไขการออก order - แก้เฉพาะ recovery logic เท่านั้น
-- ทำงานร่วมกับ v2.2.3 (Entry Price Recovery) ได้สมบูรณ์
+- การแก้ไขนี้จะ **recalculate lots ก่อนเปิด trade ใหม่** ถ้าค่า lot เป็น 0
+- ใช้ `CalculateDollarNeutralLots()` เพื่อคำนวณ lot ใหม่ตาม hedge ratio และ Base Lot
+- ไม่แก้ไขเงื่อนไขการ reset lot ใน `CloseBuySide()` - เพียงแค่ทำให้มันถูก recalculate ก่อนใช้
+- ทำงานร่วมกับ v2.2.4 (Grid Lot Recovery) ได้สมบูรณ์
+- ทำงานได้กับทั้ง "Grid Orders Only" และ "Both Main & Grid Orders" scope
 
+---
+
+### ข้อสังเกตเพิ่มเติม
+
+จากรูปที่แนบมา ผู้ใช้ตั้ง:
+- `Apply to Scope: Grid Orders Only`
+- ซึ่งหมายความว่า Main Order ไม่ได้รับการคำนวณ lot จาก `CalculateTrendBasedLots()`
+- ดังนั้นมันใช้ `NormalizeLot(baseLotA)` โดยตรง
+- เมื่อ `baseLotA = 0` → ได้ 0.01 (minLot)
+
+การแก้ไขนี้ครอบคลุมทั้งสอง scope โดยการ recalculate lot ก่อนที่จะใช้งาน
