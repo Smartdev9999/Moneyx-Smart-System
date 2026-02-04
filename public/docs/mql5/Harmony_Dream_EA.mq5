@@ -4,10 +4,10 @@
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "2.23"
+#property version   "2.24"
 #property strict
 #property description "Harmony Dream - Pairs Trading Expert Advisor"
-#property description "v2.2.3: Fix Grid Recovery - Restore Entry Price from Positions"
+#property description "v2.2.4: Fix Grid Lot Recovery - Restore Last Grid Lots for Compounding"
 #property description "Full Hedging with Independent Buy/Sell Sides"
 #include <Trade/Trade.mqh>
 
@@ -1736,6 +1736,17 @@ void RestoreOpenPositions()
                     {
                        g_pairs[i].lastAvgPriceBuy = openPrice;
                     }
+                    
+                    // v2.2.4: Restore lastGridLotBuy for Compounding (use LARGEST lot = latest level)
+                    double gridLot = PositionGetDouble(POSITION_VOLUME);
+                    if(symbol == symbolA && gridLot > g_pairs[i].lastGridLotBuyA)
+                    {
+                       g_pairs[i].lastGridLotBuyA = gridLot;
+                    }
+                    else if(symbol == symbolB && gridLot > g_pairs[i].lastGridLotBuyB)
+                    {
+                       g_pairs[i].lastGridLotBuyB = gridLot;
+                    }
                  }
                  else if(StringFind(comment, "_GP") >= 0)
                  {
@@ -1746,6 +1757,17 @@ void RestoreOpenPositions()
                     if(g_pairs[i].lastProfitPriceBuy == 0 || openPrice > g_pairs[i].lastProfitPriceBuy)
                     {
                        g_pairs[i].lastProfitPriceBuy = openPrice;
+                    }
+                    
+                    // v2.2.4: Restore lastProfitGridLotBuy for Compounding (use LARGEST lot = latest level)
+                    double gridLot = PositionGetDouble(POSITION_VOLUME);
+                    if(symbol == symbolA && gridLot > g_pairs[i].lastProfitGridLotBuyA)
+                    {
+                       g_pairs[i].lastProfitGridLotBuyA = gridLot;
+                    }
+                    else if(symbol == symbolB && gridLot > g_pairs[i].lastProfitGridLotBuyB)
+                    {
+                       g_pairs[i].lastProfitGridLotBuyB = gridLot;
                     }
                  }
               }
@@ -1775,8 +1797,20 @@ void RestoreOpenPositions()
                     g_pairs[i].lastAvgPriceBuy = openPrice;
                  }
                  
-                 PrintFormat("[v2.2.3] Pair %d BUY: Restored EntryPrice=%.5f, LastAvgPrice=%.5f",
-                             i + 1, g_pairs[i].initialEntryPriceBuy, g_pairs[i].lastAvgPriceBuy);
+                 // v2.2.4: Initialize Grid Lots from Main Order (for first Grid level)
+                 if(g_pairs[i].lastGridLotBuyA == 0)
+                    g_pairs[i].lastGridLotBuyA = g_pairs[i].lotBuyA;
+                 if(g_pairs[i].lastGridLotBuyB == 0)
+                    g_pairs[i].lastGridLotBuyB = g_pairs[i].lotBuyB;
+                 if(g_pairs[i].lastProfitGridLotBuyA == 0)
+                    g_pairs[i].lastProfitGridLotBuyA = g_pairs[i].lotBuyA;
+                 if(g_pairs[i].lastProfitGridLotBuyB == 0)
+                    g_pairs[i].lastProfitGridLotBuyB = g_pairs[i].lotBuyB;
+                 
+                 PrintFormat("[v2.2.4] Pair %d BUY: EntryPrice=%.5f, LastAvgPrice=%.5f, GridLots GL(A=%.2f,B=%.2f) GP(A=%.2f,B=%.2f)",
+                             i + 1, g_pairs[i].initialEntryPriceBuy, g_pairs[i].lastAvgPriceBuy,
+                             g_pairs[i].lastGridLotBuyA, g_pairs[i].lastGridLotBuyB,
+                             g_pairs[i].lastProfitGridLotBuyA, g_pairs[i].lastProfitGridLotBuyB);
               }
               
               restoredBuy++;
@@ -1830,6 +1864,17 @@ void RestoreOpenPositions()
                     {
                        g_pairs[i].lastAvgPriceSell = openPrice;
                     }
+                    
+                    // v2.2.4: Restore lastGridLotSell for Compounding (use LARGEST lot = latest level)
+                    double gridLot = PositionGetDouble(POSITION_VOLUME);
+                    if(symbol == symbolA && gridLot > g_pairs[i].lastGridLotSellA)
+                    {
+                       g_pairs[i].lastGridLotSellA = gridLot;
+                    }
+                    else if(symbol == symbolB && gridLot > g_pairs[i].lastGridLotSellB)
+                    {
+                       g_pairs[i].lastGridLotSellB = gridLot;
+                    }
                  }
                  else if(StringFind(comment, "_GP") >= 0)
                  {
@@ -1840,6 +1885,17 @@ void RestoreOpenPositions()
                     if(g_pairs[i].lastProfitPriceSell == 0 || openPrice < g_pairs[i].lastProfitPriceSell)
                     {
                        g_pairs[i].lastProfitPriceSell = openPrice;
+                    }
+                    
+                    // v2.2.4: Restore lastProfitGridLotSell for Compounding (use LARGEST lot = latest level)
+                    double gridLot = PositionGetDouble(POSITION_VOLUME);
+                    if(symbol == symbolA && gridLot > g_pairs[i].lastProfitGridLotSellA)
+                    {
+                       g_pairs[i].lastProfitGridLotSellA = gridLot;
+                    }
+                    else if(symbol == symbolB && gridLot > g_pairs[i].lastProfitGridLotSellB)
+                    {
+                       g_pairs[i].lastProfitGridLotSellB = gridLot;
                     }
                  }
               }
@@ -1869,8 +1925,20 @@ void RestoreOpenPositions()
                     g_pairs[i].lastAvgPriceSell = openPrice;
                  }
                  
-                 PrintFormat("[v2.2.3] Pair %d SELL: Restored EntryPrice=%.5f, LastAvgPrice=%.5f",
-                             i + 1, g_pairs[i].initialEntryPriceSell, g_pairs[i].lastAvgPriceSell);
+                 // v2.2.4: Initialize Grid Lots from Main Order (for first Grid level)
+                 if(g_pairs[i].lastGridLotSellA == 0)
+                    g_pairs[i].lastGridLotSellA = g_pairs[i].lotSellA;
+                 if(g_pairs[i].lastGridLotSellB == 0)
+                    g_pairs[i].lastGridLotSellB = g_pairs[i].lotSellB;
+                 if(g_pairs[i].lastProfitGridLotSellA == 0)
+                    g_pairs[i].lastProfitGridLotSellA = g_pairs[i].lotSellA;
+                 if(g_pairs[i].lastProfitGridLotSellB == 0)
+                    g_pairs[i].lastProfitGridLotSellB = g_pairs[i].lotSellB;
+                 
+                 PrintFormat("[v2.2.4] Pair %d SELL: EntryPrice=%.5f, LastAvgPrice=%.5f, GridLots GL(A=%.2f,B=%.2f) GP(A=%.2f,B=%.2f)",
+                             i + 1, g_pairs[i].initialEntryPriceSell, g_pairs[i].lastAvgPriceSell,
+                             g_pairs[i].lastGridLotSellA, g_pairs[i].lastGridLotSellB,
+                             g_pairs[i].lastProfitGridLotSellA, g_pairs[i].lastProfitGridLotSellB);
               }
               
               restoredSell++;
