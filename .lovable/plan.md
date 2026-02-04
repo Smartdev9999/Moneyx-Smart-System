@@ -1,33 +1,29 @@
 
-## แผนดำเนินการ: Grid Trend Guard v2.2.2
+
+## แผนแก้ไข: Grid Recovery v2.2.3
 
 ---
 
-### สรุปสิ่งที่ต้องเพิ่ม
+### สรุปปัญหาที่พบ
 
-| ฟีเจอร์ใหม่ | รายละเอียด |
-|------------|-----------|
-| **Grid Trend Guard** | Block Grid ในฝั่งที่สวนกับ CDC Trend Direction |
-| **Enable/Disable Toggle** | สามารถเปิด-ปิดฟีเจอร์นี้ได้ |
-| **Positive Correlation Only** | ใช้กับ Positive Correlation เท่านั้น (ตามที่ต้องการ) |
+| ตัวแปร | Backtest | Live Trading (หลัง Restart) |
+|--------|----------|----------------------------|
+| `initialEntryPriceBuy/Sell` | ถูกตั้งค่าตอน open order | **= 0** (ไม่ถูก restore) |
+| `lastAvgPriceBuy/Sell` | อัปเดตต่อเนื่อง | **= 0** → reset เป็น currentPrice |
+| **Grid Profit** | ทำงานปกติ | **ไม่ทำงานเลย** (return ทันที) |
+| **Grid Loss** | ทำงานปกติ | ต้องรอราคาเคลื่อนที่ใหม่ |
 
 ---
 
-### Logic ที่ต้องการ
+### สาเหตุ
 
 ```text
-Positive Correlation + CDC Trend Filter:
-┌────────────────────────────────────────────────────────────┐
-│ Trend A = BULLISH, Trend B = BULLISH (Both UP)             │
-│ ─────────────────────────────────────────────────────────  │
-│   BUY Grid  → ✓ ALLOWED (ตามเทรน)                          │
-│   SELL Grid → ✗ BLOCKED (สวนเทรน) ← Grid Trend Guard!      │
-├────────────────────────────────────────────────────────────┤
-│ Trend A = BEARISH, Trend B = BEARISH (Both DOWN)           │
-│ ─────────────────────────────────────────────────────────  │
-│   BUY Grid  → ✗ BLOCKED (สวนเทรน) ← Grid Trend Guard!      │
-│   SELL Grid → ✓ ALLOWED (ตามเทรน)                          │
-└────────────────────────────────────────────────────────────┘
+RestoreOpenPositions() (บรรทัด 1596-1811)
+├── ✅ Restore tickets (ticketBuyA, ticketSellA, etc.)
+├── ✅ Restore lots (lotBuyA, lotSellA, etc.)
+├── ✅ Restore direction (directionBuy, directionSell)
+├── ❌ ไม่ restore initialEntryPriceBuy/Sell
+└── ❌ ไม่ restore lastAvgPriceBuy/Sell
 ```
 
 ---
@@ -40,135 +36,150 @@ Positive Correlation + CDC Trend Filter:
 **บรรทัด:** 7, 10
 
 ```cpp
-#property version   "2.22"
-#property description "v2.2.2: Add Grid Trend Guard - Block Grid Counter-Trend"
+#property version   "2.23"
+#property description "v2.2.3: Fix Grid Recovery - Restore Entry Price from Positions"
 ```
 
 ---
 
-#### Part B: เพิ่ม Input Parameter
+#### Part B: แก้ไข `RestoreOpenPositions()` เพิ่ม Entry Price Recovery
 
 **ไฟล์:** `public/docs/mql5/Harmony_Dream_EA.mq5`
-**ตำแหน่ง:** ใน group "=== Grid Trading Guard (v3.5.1) ===" (บรรทัด 396-399)
+**ตำแหน่ง:** หลังบรรทัด 1741 (หลัง `g_pairs[i].entryTimeBuy = ...`)
 
-เพิ่ม Input ใหม่:
+เพิ่มโค้ดสำหรับ BUY side:
 ```cpp
-input group "=== Grid Trading Guard (v3.5.1) ==="
-input double   InpGridMinCorrelation = 0.60;      // Grid: Minimum Correlation (ต่ำกว่านี้หยุด Grid)
-input double   InpGridMinZScore = 0.5;            // Grid: Minimum |Z-Score| (ต่ำกว่านี้หยุด Grid)
-input bool     InpGridPauseAffectsMain = true;    // Apply to Main Entry Too (เกณฑ์นี้ใช้กับ Order แรกด้วย)
-input bool     InpGridTrendGuard = true;          // Grid Trend Guard (Block Grid ที่สวนเทรน - Positive Corr Only)
-```
-
----
-
-#### Part C: สร้างฟังก์ชันใหม่ `CheckGridTrendDirection()`
-
-**ไฟล์:** `public/docs/mql5/Harmony_Dream_EA.mq5`
-**ตำแหน่ง:** หลัง `CheckCDCTrendConfirmation()` (ประมาณบรรทัด 5295)
-
-```cpp
-//+------------------------------------------------------------------+
-//| Check Grid Trend Direction Guard (v2.2.2)                          |
-//| Logic:                                                             |
-//|   - For Positive Correlation: Block Grid that goes AGAINST trend   |
-//|   - BUY Grid blocked when trend = BEARISH (Down)                   |
-//|   - SELL Grid blocked when trend = BULLISH (Up)                    |
-//|   - Returns TRUE if Grid is allowed                                |
-//|   - Returns FALSE if Grid should be blocked (counter-trend)        |
-//+------------------------------------------------------------------+
-bool CheckGridTrendDirection(int pairIndex, string side)
-{
-   // If Grid Trend Guard is disabled, always allow
-   if(!InpGridTrendGuard) return true;
+   g_pairs[i].entryTimeBuy = (datetime)PositionGetInteger(POSITION_TIME);
    
-   // Only apply to Positive Correlation
-   int corrType = g_pairs[pairIndex].correlationType;
-   if(corrType != 1) return true;  // Skip for Negative Correlation
-   
-   // If CDC Filter is disabled, skip this check
-   if(!InpUseCDCTrendFilter) return true;
-   
-   // Check if CDC data is ready
-   if(!g_pairs[pairIndex].cdcReadyA || !g_pairs[pairIndex].cdcReadyB)
-      return true;  // Allow during loading (don't block prematurely)
-   
-   string trendA = g_pairs[pairIndex].cdcTrendA;
-   string trendB = g_pairs[pairIndex].cdcTrendB;
-   
-   // If either trend is NEUTRAL, allow (can't determine direction)
-   if(trendA == "NEUTRAL" || trendB == "NEUTRAL")
-      return true;
-   
-   // For Positive Correlation: Both symbols should have SAME trend
-   // Determine the dominant trend direction
-   // If both are BULLISH → UP trend
-   // If both are BEARISH → DOWN trend
-   // If mismatch → CheckCDCTrendConfirmation already blocks, so allow here
-   
-   if(trendA != trendB)
-      return true;  // Mismatch handled by CheckCDCTrendConfirmation
-   
-   // trendA == trendB at this point
-   bool isBullish = (trendA == "BULLISH");
-   bool isBearish = (trendA == "BEARISH");
-   
-   // Grid Trend Guard Logic:
-   // BUY Grid → Block when BEARISH (Down trend)
-   // SELL Grid → Block when BULLISH (Up trend)
-   if(side == "BUY" && isBearish)
-      return false;  // BUY Grid blocked in DOWN trend
-   
-   if(side == "SELL" && isBullish)
-      return false;  // SELL Grid blocked in UP trend
-   
-   return true;  // Grid allowed
-}
-```
-
----
-
-#### Part D: เพิ่มการเรียก `CheckGridTrendDirection()` ใน `CheckGridTradingAllowed()`
-
-**ไฟล์:** `public/docs/mql5/Harmony_Dream_EA.mq5`
-**ตำแหน่ง:** ใน `CheckGridTradingAllowed()` หลัง CDC Block check (บรรทัด 5553-5558)
-
-เพิ่มเงื่อนไขที่ 4:
-```cpp
-   // === เงื่อนไข 3: CDC Trend Block (v3.5.2) ===
-   if(pauseReason == "" && InpUseCDCTrendFilter)
+   // v2.2.3: Restore entry price for Grid calculations
+   if(isMainOrder && symbol == symbolA)
    {
-      if(!CheckCDCTrendConfirmation(pairIndex, side))
-         pauseReason = "CDC BLOCK";
+      double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+      
+      // Set initialEntryPriceBuy if not set yet
+      if(g_pairs[i].initialEntryPriceBuy == 0 || openPrice < g_pairs[i].initialEntryPriceBuy)
+      {
+         g_pairs[i].initialEntryPriceBuy = openPrice;
+      }
+      
+      // Set lastAvgPriceBuy to entry price (Grid Loss reference)
+      if(g_pairs[i].lastAvgPriceBuy == 0)
+      {
+         g_pairs[i].lastAvgPriceBuy = openPrice;
+      }
+      
+      PrintFormat("[v2.2.3] Pair %d BUY: Restored EntryPrice=%.5f, LastAvgPrice=%.5f",
+                  i + 1, g_pairs[i].initialEntryPriceBuy, g_pairs[i].lastAvgPriceBuy);
    }
    
-   // === v2.2.2: Grid Trend Guard (Block Counter-Trend Grid) ===
-   if(pauseReason == "" && !CheckGridTrendDirection(pairIndex, side))
-   {
-      pauseReason = "TREND GUARD";
-   }
+   restoredBuy++;
 ```
 
 ---
 
-#### Part E: เพิ่มการเรียก `CheckGridTrendDirection()` ใน `CheckGridTradingAllowedCorrOnly()`
+#### Part C: เพิ่ม Entry Price Recovery สำหรับ SELL side
 
 **ไฟล์:** `public/docs/mql5/Harmony_Dream_EA.mq5`
-**ตำแหน่ง:** ใน `CheckGridTradingAllowedCorrOnly()` หลัง CDC Block check (บรรทัด 5707-5712)
+**ตำแหน่ง:** หลังบรรทัด 1795 (หลัง `g_pairs[i].entryTimeSell = ...`)
 
-เพิ่มเงื่อนไขเดียวกัน:
+เพิ่มโค้ดสำหรับ SELL side:
 ```cpp
-   // === เงื่อนไข 2: CDC Trend Block (v3.5.2) ===
-   if(pauseReason == "" && InpUseCDCTrendFilter)
+   g_pairs[i].entryTimeSell = (datetime)PositionGetInteger(POSITION_TIME);
+   
+   // v2.2.3: Restore entry price for Grid calculations
+   if(isMainOrderSell && symbol == symbolA)
    {
-      if(!CheckCDCTrendConfirmation(pairIndex, side))
-         pauseReason = "CDC BLOCK";
+      double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+      
+      // Set initialEntryPriceSell if not set yet
+      if(g_pairs[i].initialEntryPriceSell == 0 || openPrice > g_pairs[i].initialEntryPriceSell)
+      {
+         g_pairs[i].initialEntryPriceSell = openPrice;
+      }
+      
+      // Set lastAvgPriceSell to entry price (Grid Loss reference)
+      if(g_pairs[i].lastAvgPriceSell == 0)
+      {
+         g_pairs[i].lastAvgPriceSell = openPrice;
+      }
+      
+      PrintFormat("[v2.2.3] Pair %d SELL: Restored EntryPrice=%.5f, LastAvgPrice=%.5f",
+                  i + 1, g_pairs[i].initialEntryPriceSell, g_pairs[i].lastAvgPriceSell);
    }
    
-   // === v2.2.2: Grid Trend Guard (Block Counter-Trend Grid) ===
-   if(pauseReason == "" && !CheckGridTrendDirection(pairIndex, side))
+   restoredSell++;
+```
+
+---
+
+#### Part D: เพิ่ม Grid Order Price Recovery
+
+**ปัญหา:** ถ้ามี Grid Order อยู่แล้ว, `lastAvgPrice` ควรใช้ราคาของ Grid Order ล่าสุด ไม่ใช่ Main Order
+
+**ไฟล์:** `public/docs/mql5/Harmony_Dream_EA.mq5`
+**ตำแหน่ง:** ในส่วน BUY Grid order recovery (บรรทัด ~1726-1733)
+
+แก้ไข:
+```cpp
+   // v2.1.6: Count Grid orders individually (they have _GL or _GP in comment)
+   if(!isMainOrder)
    {
-      pauseReason = "TREND GUARD";
+      g_pairs[i].orderCountBuy++;
+      if(StringFind(comment, "_GL") >= 0)
+      {
+         g_pairs[i].avgOrderCountBuy++;
+         
+         // v2.2.3: Update lastAvgPriceBuy to latest Grid Loss price
+         double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+         if(g_pairs[i].lastAvgPriceBuy == 0 || openPrice < g_pairs[i].lastAvgPriceBuy)
+         {
+            g_pairs[i].lastAvgPriceBuy = openPrice;
+         }
+      }
+      else if(StringFind(comment, "_GP") >= 0)
+      {
+         g_pairs[i].gridProfitCountBuy++;
+         
+         // v2.2.3: Update lastProfitPriceBuy to latest Grid Profit price
+         double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+         if(g_pairs[i].lastProfitPriceBuy == 0 || openPrice > g_pairs[i].lastProfitPriceBuy)
+         {
+            g_pairs[i].lastProfitPriceBuy = openPrice;
+         }
+      }
+   }
+```
+
+**ตำแหน่ง:** ในส่วน SELL Grid order recovery (บรรทัด ~1779-1787)
+
+แก้ไข:
+```cpp
+   // v2.1.6: Count Grid orders individually (they have _GL or _GP in comment)
+   if(!isMainOrderSell)
+   {
+      g_pairs[i].orderCountSell++;
+      if(StringFind(comment, "_GL") >= 0)
+      {
+         g_pairs[i].avgOrderCountSell++;
+         
+         // v2.2.3: Update lastAvgPriceSell to latest Grid Loss price
+         double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+         if(g_pairs[i].lastAvgPriceSell == 0 || openPrice > g_pairs[i].lastAvgPriceSell)
+         {
+            g_pairs[i].lastAvgPriceSell = openPrice;
+         }
+      }
+      else if(StringFind(comment, "_GP") >= 0)
+      {
+         g_pairs[i].gridProfitCountSell++;
+         
+         // v2.2.3: Update lastProfitPriceSell to latest Grid Profit price
+         double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+         if(g_pairs[i].lastProfitPriceSell == 0 || openPrice < g_pairs[i].lastProfitPriceSell)
+         {
+            g_pairs[i].lastProfitPriceSell = openPrice;
+         }
+      }
    }
 ```
 
@@ -178,42 +189,57 @@ bool CheckGridTrendDirection(int pairIndex, string side)
 
 | ไฟล์ | ส่วนที่แก้ไข | บรรทัด | รายละเอียด |
 |------|-------------|--------|------------|
-| `Harmony_Dream_EA.mq5` | Version | 7, 10 | อัปเดตเป็น v2.22 |
-| `Harmony_Dream_EA.mq5` | Input Parameters | ~399 | เพิ่ม `InpGridTrendGuard` |
-| `Harmony_Dream_EA.mq5` | ฟังก์ชันใหม่ | หลัง 5295 | เพิ่ม `CheckGridTrendDirection()` |
-| `Harmony_Dream_EA.mq5` | `CheckGridTradingAllowed()` | ~5558 | เพิ่มการเรียก `CheckGridTrendDirection()` |
-| `Harmony_Dream_EA.mq5` | `CheckGridTradingAllowedCorrOnly()` | ~5712 | เพิ่มการเรียก `CheckGridTrendDirection()` |
+| `Harmony_Dream_EA.mq5` | Version | 7, 10 | อัปเดตเป็น v2.23 |
+| `Harmony_Dream_EA.mq5` | `RestoreOpenPositions()` BUY | ~1741 | เพิ่ม restore `initialEntryPriceBuy`, `lastAvgPriceBuy` |
+| `Harmony_Dream_EA.mq5` | `RestoreOpenPositions()` SELL | ~1795 | เพิ่ม restore `initialEntryPriceSell`, `lastAvgPriceSell` |
+| `Harmony_Dream_EA.mq5` | Grid Order BUY Recovery | ~1726 | เพิ่ม restore `lastAvgPriceBuy`, `lastProfitPriceBuy` |
+| `Harmony_Dream_EA.mq5` | Grid Order SELL Recovery | ~1779 | เพิ่ม restore `lastAvgPriceSell`, `lastProfitPriceSell` |
 
 ---
 
 ### ผลลัพธ์ที่คาดหวัง
 
-| สถานการณ์ | Trend | Grid BUY | Grid SELL |
-|-----------|-------|----------|-----------|
-| Positive Corr, Both UP | BULLISH | ✅ ALLOWED | ❌ TREND GUARD |
-| Positive Corr, Both DOWN | BEARISH | ❌ TREND GUARD | ✅ ALLOWED |
-| Positive Corr, Mismatch | - | ❌ CDC BLOCK | ❌ CDC BLOCK |
-| Negative Corr | - | ✅ (ไม่มีผล) | ✅ (ไม่มีผล) |
-| InpGridTrendGuard = false | - | ✅ (ปิดฟีเจอร์) | ✅ (ปิดฟีเจอร์) |
+| สถานการณ์ | ก่อนแก้ไข | หลังแก้ไข v2.2.3 |
+|-----------|----------|------------------|
+| EA Restart มี BUY order | `initialEntryPriceBuy = 0` | Restore จาก Main Order Price |
+| EA Restart มี Grid Loss | `lastAvgPriceBuy = currentPrice` | Restore จาก Grid Order Price ล่าสุด |
+| Grid Profit ทำงาน | ❌ return ทันที | ✅ ทำงานปกติ |
+| Grid Loss ทำงาน | ⚠️ รอราคาใหม่ | ✅ ต่อจากที่เดิม |
 
 ---
 
-### Log Output ที่จะเห็น
+### Log Output หลัง Restart
 
 ```text
-GRID PAUSE [CORR ONLY] [Pair 7 EURUSD/GBPUSD SELL]: TREND GUARD
-   → เมื่อ Pair 7 เป็นเทรนขาขึ้น SELL Grid จะหยุด
+[v2.2.3] Pair 1 BUY: Restored EntryPrice=183.650, LastAvgPrice=183.650
+[v2.2.3] Pair 7 SELL: Restored EntryPrice=1.08500, LastAvgPrice=1.08200
+```
 
-GRID RESUME [CORR ONLY] [Pair 7 EURUSD/GBPUSD SELL]: All conditions met
-   → เมื่อเทรนกลับเป็นขาลง SELL Grid กลับมาทำงาน
+---
+
+### Recovery Logic สรุป
+
+```text
+BUY Side:
+├── Main Order → initialEntryPriceBuy = POSITION_PRICE_OPEN
+│              → lastAvgPriceBuy = POSITION_PRICE_OPEN (ถ้ายังเป็น 0)
+├── Grid Loss  → lastAvgPriceBuy = MIN(current, openPrice) // ราคาต่ำสุด
+└── Grid Profit→ lastProfitPriceBuy = MAX(current, openPrice) // ราคาสูงสุด
+
+SELL Side:
+├── Main Order → initialEntryPriceSell = POSITION_PRICE_OPEN
+│              → lastAvgPriceSell = POSITION_PRICE_OPEN (ถ้ายังเป็น 0)
+├── Grid Loss  → lastAvgPriceSell = MAX(current, openPrice) // ราคาสูงสุด
+└── Grid Profit→ lastProfitPriceSell = MIN(current, openPrice) // ราคาต่ำสุด
 ```
 
 ---
 
 ### Technical Notes
 
-- ฟีเจอร์นี้ทำงานเฉพาะ **Positive Correlation** (ตามที่ต้องการ)
-- สามารถเปิด-ปิดได้ผ่าน `InpGridTrendGuard`
-- ไม่กระทบกับ Main Entry หรือกลยุทธ์อื่น
-- ใช้ระบบ log throttling จาก v2.2.1 (แสดงเฉพาะเมื่อ reason เปลี่ยน)
-- ทำงานร่วมกับทั้ง Z-Score mode และ Correlation Only mode
+- **ไม่แก้ไขเงื่อนไขการออก order** - แก้เฉพาะ recovery logic เท่านั้น
+- ใช้ `POSITION_PRICE_OPEN` จาก ticket เพื่อ restore ราคา
+- Grid Loss ใช้ราคา "ต่ำสุด" สำหรับ BUY (ราคาลง = ขาดทุน)
+- Grid Profit ใช้ราคา "สูงสุด" สำหรับ BUY (ราคาขึ้น = กำไร)
+- ทำงานร่วมกับ v2.2.2 Grid Trend Guard ได้ปกติ
+
