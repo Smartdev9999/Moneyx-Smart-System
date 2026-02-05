@@ -4,10 +4,10 @@
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
- #property version   "2.27"
+ #property version   "2.29"
 #property strict
 #property description "Harmony Dream - Pairs Trading Expert Advisor"
- #property description "v2.2.7: Fix Grid ATR - Use Separate Timeframes for Grid Loss/Profit"
+ #property description "v2.2.9: Add Progressive ATR Distance Mode for Grid"
 #property description "Full Hedging with Independent Buy/Sell Sides"
 #include <Trade/Trade.mqh>
 
@@ -206,6 +206,15 @@ enum ENUM_GRID_DISTANCE_MODE
 };
 
 //+------------------------------------------------------------------+
+//| GRID DISTANCE SCALING MODE (v2.2.9)                               |
+//+------------------------------------------------------------------+
+enum ENUM_GRID_DIST_SCALE
+{
+   GRID_SCALE_FIXED = 0,       // Fixed (Same Distance Every Level)
+   GRID_SCALE_PROGRESSIVE      // Progressive (Distance × Mult Each Level)
+};
+
+//+------------------------------------------------------------------+
 //| GRID LOT TYPE ENUM (v3.6.0)                                        |
 //+------------------------------------------------------------------+
 enum ENUM_GRID_LOT_TYPE
@@ -364,6 +373,7 @@ input ENUM_CORR_DROP_MODE InpCorrDropMode = CORR_DROP_CLOSE_PROFIT_ONLY;  // Cor
 input group "=== Grid Loss Side Settings (v1.6) ==="
 input bool     InpEnableGridLoss = true;              // Enable Grid Loss Side
 input ENUM_GRID_DISTANCE_MODE InpGridLossDistMode = GRID_DIST_ATR;  // Distance Mode
+input ENUM_GRID_DIST_SCALE    InpGridLossDistScale = GRID_SCALE_FIXED;  // v2.2.9: Distance Scaling Mode
 input ENUM_GRID_LOT_TYPE      InpGridLossLotType = GRID_LOT_TYPE_TREND_BASED;  // Lot Type
 input double   InpGridLossFixedPoints = 500;          // Fixed Points (if mode = Fixed Points)
 input double   InpGridLossFixedPips = 50;             // Fixed Pips (if mode = Fixed Pips)
@@ -380,6 +390,7 @@ input int      InpMaxGridLossOrders = 5;              // Max Grid Loss Orders (S
 input group "=== Grid Profit Side Settings (v1.6) ==="
 input bool     InpEnableGridProfit = false;           // Enable Grid Profit Side
 input ENUM_GRID_DISTANCE_MODE InpGridProfitDistMode = GRID_DIST_ATR;  // Distance Mode
+input ENUM_GRID_DIST_SCALE    InpGridProfitDistScale = GRID_SCALE_FIXED;  // v2.2.9: Distance Scaling Mode
 input ENUM_GRID_LOT_TYPE      InpGridProfitLotType = GRID_LOT_TYPE_TREND_BASED;  // Lot Type
 input double   InpGridProfitFixedPoints = 500;        // Fixed Points (if mode = Fixed Points)
 input double   InpGridProfitFixedPips = 50;           // Fixed Pips (if mode = Fixed Pips)
@@ -6396,8 +6407,14 @@ void CheckGridLossForSide(int pairIndex, string side)
    }
    else
    {
-      // ATR, Fixed Points, Fixed Pips - v1.6: Use symbol-specific ATR settings
+      // v2.2.9: Get current grid level for progressive calculation
+      int gridLevel = (side == "BUY") ? g_pairs[pairIndex].avgOrderCountBuy 
+                                      : g_pairs[pairIndex].avgOrderCountSell;
+      
+      // ATR, Fixed Points, Fixed Pips - v2.2.9: Use symbol-specific ATR settings with progressive scaling
       double gridDist = CalculateGridDistance(pairIndex, InpGridLossDistMode,
+                                               InpGridLossDistScale,  // v2.2.9
+                                               gridLevel,              // v2.2.9
                                                InpGridLossATRMultForex,
                                                InpGridLossATRMultGold,
                                                InpGridLossMinDistPips,
@@ -6554,8 +6571,14 @@ void CheckGridProfitForSide(int pairIndex, string side)
    }
    else
    {
-      // ATR, Fixed Points, Fixed Pips - v1.6: Use symbol-specific ATR settings
+      // v2.2.9: Get current grid level for progressive calculation
+      int gridLevel = (side == "BUY") ? g_pairs[pairIndex].gridProfitCountBuy 
+                                      : g_pairs[pairIndex].gridProfitCountSell;
+      
+      // ATR, Fixed Points, Fixed Pips - v2.2.9: Use symbol-specific ATR settings with progressive scaling
       double gridDist = CalculateGridDistance(pairIndex, InpGridProfitDistMode,
+                                               InpGridProfitDistScale,  // v2.2.9
+                                               gridLevel,                // v2.2.9
                                                InpGridProfitATRMultForex,
                                                InpGridProfitATRMultGold,
                                                InpGridProfitMinDistPips,
@@ -6683,9 +6706,11 @@ int GetTotalOrderCount(int pairIndex, string side)
 }
 
 //+------------------------------------------------------------------+
- //| Calculate Grid Distance (v2.2.7 - Separate ATR for Loss/Profit)    |
+//| Calculate Grid Distance (v2.2.9 - Progressive ATR Distance Mode)  |
 //+------------------------------------------------------------------+
 double CalculateGridDistance(int pairIndex, ENUM_GRID_DISTANCE_MODE mode, 
+                              ENUM_GRID_DIST_SCALE scaleMode,  // v2.2.9: NEW
+                              int gridLevel,                    // v2.2.9: NEW (0-based)
                               double atrMultForex, double atrMultGold, double minDistPips,
                               double fixedPoints, double fixedPips,
                                ENUM_TIMEFRAMES atrTimeframe, int atrPeriod,
@@ -6720,26 +6745,57 @@ double CalculateGridDistance(int pairIndex, ENUM_GRID_DISTANCE_MODE mode,
          
          // v1.6: Use symbol-specific ATR multiplier
          double mult = IsGoldPair(symbolA) ? atrMultGold : atrMultForex;
-         double distance = atr * mult;
+         
+         // v2.2.9: Apply Progressive Scaling
+         double baseDistance = atr * mult;
+         double finalDistance = baseDistance;
+         
+         if(scaleMode == GRID_SCALE_PROGRESSIVE && gridLevel > 0)
+         {
+            // Progressive formula: distance = base × mult^level
+            // Level 0: base (e.g., 100 pips)
+            // Level 1: base × mult (e.g., 300 pips)
+            // Level 2: base × mult² (e.g., 900 pips)
+            finalDistance = baseDistance * MathPow(mult, gridLevel);
+         }
          
          // v1.6: Apply minimum distance fallback
          double minDistance = minDistPips * pipSize;
          
-          // v2.2.7: Debug log to verify ATR values
+          // v2.2.9: Debug log with scaling info
           if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
           {
-             PrintFormat("[v2.2.7 GRID ATR] Pair %d %s: ATR=%.5f, Mult=%.1f, Distance=%.5f (%.1f pips), Min=%.5f",
-                         pairIndex + 1, isProfitSide ? "GP" : "GL",
-                         atr, mult, distance, distance / pipSize, minDistance);
+             string scaleStr = (scaleMode == GRID_SCALE_PROGRESSIVE) ? "PROG" : "FIXED";
+             PrintFormat("[v2.2.9 GRID ATR] Pair %d %s Lv%d [%s]: Base=%.1f pips, Final=%.1f pips, Min=%.1f",
+                         pairIndex + 1, isProfitSide ? "GP" : "GL", gridLevel, scaleStr,
+                         baseDistance / pipSize, finalDistance / pipSize, minDistPips);
           }
          
-         return MathMax(distance, minDistance);
+         return MathMax(finalDistance, minDistance);
       }
       case GRID_DIST_FIXED_POINTS:
-         return fixedPoints * point;
+      {
+         double baseDistance = fixedPoints * point;
+         double finalDistance = baseDistance;
+         if(scaleMode == GRID_SCALE_PROGRESSIVE && gridLevel > 0)
+         {
+            double mult = IsGoldPair(symbolA) ? atrMultGold : atrMultForex;
+            finalDistance = baseDistance * MathPow(mult, gridLevel);
+         }
+         return finalDistance;
+      }
          
       case GRID_DIST_FIXED_PIPS:
-         return fixedPips * pipSize;
+      {
+         double baseDistance = fixedPips * pipSize;
+         double finalDistance = baseDistance;
+         if(scaleMode == GRID_SCALE_PROGRESSIVE && gridLevel > 0)
+         {
+            double mult = IsGoldPair(symbolA) ? atrMultGold : atrMultForex;
+            finalDistance = baseDistance * MathPow(mult, gridLevel);
+         }
+         return finalDistance;
+      }
          
       case GRID_DIST_ZSCORE:
          // Z-Score mode uses level-based triggering, not price distance
