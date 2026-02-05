@@ -7259,14 +7259,8 @@ double CalculateGridDistance(int pairIndex, ENUM_GRID_DISTANCE_MODE mode,
          // v1.6: Apply minimum distance fallback
          double minDistance = minDistPips * pipSize;
          
-          // v2.2.9: Debug log with scaling info
-          if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
-          {
-             string scaleStr = (scaleMode == GRID_SCALE_PROGRESSIVE) ? "PROG" : "FIXED";
-             PrintFormat("[v2.2.9 GRID ATR] Pair %d %s Lv%d [%s]: Base=%.1f pips, Final=%.1f pips, Min=%.1f",
-                         pairIndex + 1, isProfitSide ? "GP" : "GL", gridLevel, scaleStr,
-                         baseDistance / pipSize, finalDistance / pipSize, minDistPips);
-          }
+          // v2.3.4 HF1: Removed debug log here to prevent excessive logging every tick
+          // ATR info is now only logged in UpdateATRCache() which runs once per H1 bar
          
          return MathMax(finalDistance, minDistance);
       }
@@ -9809,7 +9803,7 @@ void CreateDashboard()
    
    // v3.2.9 Hotfix: Increased header height and spacing to prevent overlap
    int buyWidth = 395;
-   int centerWidth = 390;
+   int centerWidth = 430;  // v2.3.4 HF1: Increased from 390 to 430 for longer pair names
    int sellWidth = 395;
    int headerHeight = 30;  // Main header height (increased)
    int colHeaderHeight = 20;  // Dedicated space for column headers with background (increased)
@@ -9874,12 +9868,12 @@ void CreateDashboard()
    CreateLabel(prefix + "COL_B_PL", buyStartX + 358, colLabelY, "P/L", COLOR_HEADER_TXT, 7, "Arial");
    
    // Center columns: Pair | Trend | C-% | Type | Total P/L
-   // v2.3.4: Shifted Trend column +20px right to prevent overlap with long pair names
+   // v2.3.4 HF1: Shifted columns +20px right to prevent overlap with long pair names (e.g. EURJPY.v-CADJPY.v)
    CreateLabel(prefix + "COL_C_PR", centerX + 10, colLabelY, "#.Pair", COLOR_HEADER_TXT, 7, "Arial");
-   CreateLabel(prefix + "COL_C_TRD", centerX + 175, colLabelY, "Trend", COLOR_HEADER_TXT, 7, "Arial");
-   CreateLabel(prefix + "COL_C_CR", centerX + 235, colLabelY, "C-%", COLOR_HEADER_TXT, 7, "Arial");
-   CreateLabel(prefix + "COL_C_TY", centerX + 285, colLabelY, "Type", COLOR_HEADER_TXT, 7, "Arial");
-   CreateLabel(prefix + "COL_C_TP", centerX + 345, colLabelY, "Tot P/L", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_C_TRD", centerX + 195, colLabelY, "Trend", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_C_CR", centerX + 255, colLabelY, "C-%", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_C_TY", centerX + 305, colLabelY, "Type", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_C_TP", centerX + 365, colLabelY, "Tot P/L", COLOR_HEADER_TXT, 7, "Arial");
    
    // Sell columns: P/L | Z | Status | Target | Tot | Ord | Lot | Closed | X
    CreateLabel(prefix + "COL_S_PL", sellStartX + 5, colLabelY, "P/L", COLOR_HEADER_TXT, 7, "Arial");
@@ -9965,12 +9959,12 @@ void CreatePairRow(string prefix, int idx, int buyX, int centerX, int sellX, int
    CreateLabel(prefix + "P" + idxStr + "_B_PL", buyX + 358, y + 3, "0", COLOR_TEXT, FONT_SIZE, "Arial");
    
    // === CENTER DATA ===
-   // v2.3.4: Shifted columns +20px right to match header
+   // v2.3.4 HF1: Shifted columns +20px right to match header and prevent overlap
    CreateLabel(prefix + "P" + idxStr + "_NAME", centerX + 10, y + 3, pairName, COLOR_TEXT, FONT_SIZE, "Arial Bold");
-   CreateLabel(prefix + "P" + idxStr + "_CDC", centerX + 175, y + 3, "-", COLOR_OFF, FONT_SIZE, "Arial Bold");
-   CreateLabel(prefix + "P" + idxStr + "_CORR", centerX + 235, y + 3, "0%", COLOR_TEXT, FONT_SIZE, "Arial");
-   CreateLabel(prefix + "P" + idxStr + "_TYPE", centerX + 285, y + 3, "Pos", COLOR_PROFIT, FONT_SIZE, "Arial");
-   CreateLabel(prefix + "P" + idxStr + "_TPL", centerX + 345, y + 3, "0", COLOR_TEXT, 9, "Arial Bold");
+   CreateLabel(prefix + "P" + idxStr + "_CDC", centerX + 195, y + 3, "-", COLOR_OFF, FONT_SIZE, "Arial Bold");
+   CreateLabel(prefix + "P" + idxStr + "_CORR", centerX + 255, y + 3, "0%", COLOR_TEXT, FONT_SIZE, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_TYPE", centerX + 305, y + 3, "Pos", COLOR_PROFIT, FONT_SIZE, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_TPL", centerX + 365, y + 3, "0", COLOR_TEXT, 9, "Arial Bold");
    
    // === SELL SIDE DATA ===
    CreateLabel(prefix + "P" + idxStr + "_S_PL", sellX + 5, y + 3, "0", COLOR_TEXT, FONT_SIZE, "Arial");
