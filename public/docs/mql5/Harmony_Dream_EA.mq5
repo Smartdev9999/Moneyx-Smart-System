@@ -9344,14 +9344,31 @@ void UpdatePairProfits()
          // v1.8.7: Get dynamic pair prefix for new comment format
          string pairPrefix = GetPairCommentPrefix(i);
          
-         // v1.8.7: Auto-recover missing tickets with NEW comment format
-         if(g_pairs[i].ticketSellA == 0 || g_pairs[i].ticketSellB == 0)
-         {
-            PrintFormat("[v1.8.7 WARN] Pair %d SELL: Missing ticket! A=%d B=%d - Attempting recovery...", 
-                        i + 1, g_pairs[i].ticketSellA, g_pairs[i].ticketSellB);
-            string sellComment = StringFormat("%s_SELL_%d", pairPrefix, i + 1);
-            RecoverMissingTickets(i, "SELL", sellComment);
-         }
+          // v2.3.5: Auto-recover missing tickets with Log Throttling (30 seconds)
+          if(g_pairs[i].ticketSellA == 0 || g_pairs[i].ticketSellB == 0)
+          {
+             datetime now = TimeCurrent();
+             bool shouldLogRecovery = (now - g_lastRecoveryLogTime[i] >= 30) || 
+                                      (g_lastRecoveryLogSide[i] != "SELL");
+             
+             if(shouldLogRecovery)
+             {
+                // v2.3.5: Show Orphan indicator if only one side exists
+                string orphanInfo = "";
+                if(g_pairs[i].ticketSellA == 0 && g_pairs[i].ticketSellB != 0)
+                   orphanInfo = " [ORPHAN: Symbol A missing]";
+                else if(g_pairs[i].ticketSellA != 0 && g_pairs[i].ticketSellB == 0)
+                   orphanInfo = " [ORPHAN: Symbol B missing]";
+                   
+                PrintFormat("[v2.3.5 WARN] Pair %d SELL: Missing ticket! A=%d B=%d%s", 
+                            i + 1, g_pairs[i].ticketSellA, g_pairs[i].ticketSellB, orphanInfo);
+                g_lastRecoveryLogTime[i] = now;
+                g_lastRecoveryLogSide[i] = "SELL";
+             }
+             
+             string sellComment = StringFormat("%s_SELL_%d", pairPrefix, i + 1);
+             RecoverMissingTickets(i, "SELL", sellComment);
+          }
          
          double profitA = GetPositionProfit(g_pairs[i].ticketSellA);
          double profitB = GetPositionProfit(g_pairs[i].ticketSellB);
