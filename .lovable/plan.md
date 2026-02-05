@@ -1,334 +1,137 @@
 
-## แผนแก้ไข v2.2.10 - Fix Progressive Mode + Add Correlation Type Filter
+## แผนแก้ไข Bug: Hedge Lot ไม่เท่า Main Lot (v2.3.1)
 
 ---
 
 ### สรุปปัญหาที่พบ
 
-| ปัญหา | สถานะ | ความรุนแรง |
-|-------|--------|-----------|
-| 1. Correlation Type Filter หายไป | ❌ ไม่มี Code | สูง |
-| 2. Progressive ATR Distance restore ผิดพลาด | ⚠️ Logic ไม่ครบ | สูง |
-| 3. Grid orders อาจเปิดถี่เกินไป | ⚠️ ขึ้นกับ Min Distance | ปานกลาง |
+| รายการ | ค่าที่ตั้ง | ค่าที่ได้จริง | สาเหตุ |
+|--------|-----------|--------------|--------|
+| EURJPY (Symbol A) | 0.16 | 0.16 ✓ | Base Lot |
+| AUDUSD (Symbol B) | 0.16 | 0.10 ✗ | Dollar-Neutral Formula |
+
+**สาเหตุหลัก:**
+1. `CalculateDollarNeutralLots()` ใช้สูตร `lotB = baseLot × beta × (pipA/pipB)` ทำให้ lot ต่างกัน
+2. ใน `OnInit` เรียก `CalculateDollarNeutralLots()` โดยไม่เช็ค `InpUseDollarNeutral`
+3. ไม่มีตัวเลือกให้ใช้ **Fixed Lot** (lot เท่ากันทั้งคู่) สำหรับ Main Order
 
 ---
 
-### Part A: อัปเดต Version
+### โซลูชัน: เพิ่ม Enum สำหรับ Main Order Lot Mode
+
+เพิ่มตัวเลือกให้ผู้ใช้เลือกระหว่าง:
+1. **Fixed Lot** (ใหม่): ทั้ง Symbol A และ B ใช้ Base Lot เท่ากัน (0.16 = 0.16)
+2. **Dollar-Neutral** (เดิม): คำนวณตาม Beta และ Pip Value
+
+---
+
+### การแก้ไขทั้งหมด
+
+#### Part A: อัปเดต Version
 
 **ไฟล์:** `public/docs/mql5/Harmony_Dream_EA.mq5`
 
 ```cpp
-#property version   "2.30"
-#property description "v2.3.0: Fix Progressive ATR Restore + Add Correlation Type Filter"
+#property version   "2.31"
+#property description "v2.3.1: Add Fixed Lot Mode for Main Order + Fix InpUseDollarNeutral Check"
 ```
 
 ---
 
-### Part B: เพิ่ม Correlation Type Filter Enum (v2.2.8 - หายไป)
+#### Part B: เพิ่ม Enum สำหรับ Main Order Lot Mode
 
-**ตำแหน่ง:** หลังบรรทัด 269 (หลัง `ENUM_ENTRY_MODE`)
+**ตำแหน่ง:** ใกล้กับ Enum อื่น ๆ (ประมาณบรรทัด 240)
 
 ```cpp
 //+------------------------------------------------------------------+
-//| CORRELATION TYPE FILTER ENUM (v2.2.8)                              |
+//| MAIN ORDER LOT MODE ENUM (v2.3.1)                                  |
 //+------------------------------------------------------------------+
-enum ENUM_CORR_TYPE_FILTER
+enum ENUM_MAIN_LOT_MODE
 {
-   CORR_FILTER_BOTH = 0,          // Both (Positive + Negative)
-   CORR_FILTER_POSITIVE_ONLY,     // Positive Only
-   CORR_FILTER_NEGATIVE_ONLY      // Negative Only
+   MAIN_LOT_FIXED = 0,          // Fixed (Same Lot for Both Symbols)
+   MAIN_LOT_DOLLAR_NEUTRAL      // Dollar-Neutral (Beta × Pip Ratio)
 };
 ```
 
 ---
 
-### Part C: เพิ่ม Input Parameter สำหรับ Correlation Filter
+#### Part C: เพิ่ม Input Parameter
 
-**ตำแหน่ง:** หลังบรรทัด 668 (ใน group "Entry Mode Settings")
+**ตำแหน่ง:** ใน group "Lot Sizing (Dollar-Neutral)" (บรรทัด 469)
 
 ```cpp
-input group "=== Entry Mode Settings (v1.8.8) ==="
-input ENUM_ENTRY_MODE InpEntryMode = ENTRY_MODE_ZSCORE;    // Entry Mode
-input ENUM_CORR_TYPE_FILTER InpCorrTypeFilter = CORR_FILTER_BOTH;  // v2.2.8: Correlation Type Filter
-input double   InpCorrOnlyPositiveThreshold = 0.60;        // Correlation Only: Positive Threshold (0.60 = 60%)
-input double   InpCorrOnlyNegativeThreshold = -0.60;       // Correlation Only: Negative Threshold (-0.60 = -60%)
+input group "=== Lot Sizing Settings (v2.3.1) ==="
+input ENUM_MAIN_LOT_MODE InpMainLotMode = MAIN_LOT_FIXED;  // v2.3.1: Main Order Lot Mode
+input bool     InpUseDollarNeutral = true;      // [DEPRECATED] Use Dollar-Neutral (use Mode above)
+input double   InpMaxMarginPercent = 50.0;      // Max Margin Usage (%)
 ```
 
 ---
 
-### Part D: เพิ่ม Helper Function `CheckCorrelationTypeFilter()`
+#### Part D: แก้ไข `CalculateDollarNeutralLots()` รองรับ Fixed Mode
 
-**ตำแหน่ง:** หลังฟังก์ชัน `CheckCorrelationOnlyEntry()`
+**บรรทัด:** 4888-4943
 
 ```cpp
-//+------------------------------------------------------------------+
-//| Check Correlation Type Filter (v2.2.8)                             |
-//| Returns: true = Pair's correlation type matches the filter         |
-//+------------------------------------------------------------------+
-bool CheckCorrelationTypeFilter(int pairIndex)
+void CalculateDollarNeutralLots(int pairIndex)
 {
-   int corrType = g_pairs[pairIndex].correlationType;
+   double baseLot = GetScaledBaseLot();
+   string symbolA = g_pairs[pairIndex].symbolA;
+   string symbolB = g_pairs[pairIndex].symbolB;
    
-   switch(InpCorrTypeFilter)
+   // v2.3.1: Check Main Lot Mode FIRST
+   if(InpMainLotMode == MAIN_LOT_FIXED)
    {
-      case CORR_FILTER_BOTH:
-         return true;  // Allow both types
-         
-      case CORR_FILTER_POSITIVE_ONLY:
-         return (corrType == 1);  // Only Positive Correlation
-         
-      case CORR_FILTER_NEGATIVE_ONLY:
-         return (corrType == -1);  // Only Negative Correlation
-         
-      default:
-         return true;
-   }
-}
-```
-
----
-
-### Part E: เพิ่ม Max Grid Level Tracking ใน PairInfo struct
-
-**ตำแหน่ง:** ประมาณบรรทัด 180 (ใน struct PairInfo)
-
-```cpp
-   // v2.3.0: Track max grid level for Progressive Mode restoration
-   int maxGridLossBuyLevel;
-   int maxGridLossSellLevel;
-   int maxGridProfitBuyLevel;
-   int maxGridProfitSellLevel;
-```
-
----
-
-### Part F: เพิ่ม Helper Function `ExtractGridLevelFromComment()`
-
-```cpp
-//+------------------------------------------------------------------+
-//| Extract Grid Level from Comment (v2.3.0)                           |
-//| Example: "_GL#3_" → returns 3, "_GP#2_" → returns 2               |
-//+------------------------------------------------------------------+
-int ExtractGridLevelFromComment(string comment, string prefix)
-{
-   int pos = StringFind(comment, prefix);
-   if(pos < 0) return 0;
-   
-   // Find the number after prefix (e.g., "_GL#" → find "3" in "_GL#3_")
-   int startPos = pos + StringLen(prefix);
-   string numStr = "";
-   
-   for(int k = startPos; k < StringLen(comment); k++)
-   {
-      ushort ch = StringGetCharacter(comment, k);
-      if(ch >= '0' && ch <= '9')
-         numStr += CharToString((uchar)ch);
-      else
-         break;
-   }
-   
-   return (StringLen(numStr) > 0) ? (int)StringToInteger(numStr) : 0;
-}
-```
-
----
-
-### Part G: แก้ไข RestoreOpenPositions() - ใช้ Grid Level สูงสุด
-
-**ตำแหน่ง:** บรรทัด 1740-1760 (ส่วน Grid Loss BUY)
-
-**แทนที่:**
-```cpp
-if(StringFind(comment, "_GL") >= 0)
-{
-   g_pairs[i].avgOrderCountBuy++;
-   
-   // v2.2.3: Update lastAvgPriceBuy to latest Grid Loss price (lowest for BUY)
-   double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-   if(g_pairs[i].lastAvgPriceBuy == 0 || openPrice < g_pairs[i].lastAvgPriceBuy)
-   {
-      g_pairs[i].lastAvgPriceBuy = openPrice;
-   }
-```
-
-**เป็น:**
-```cpp
-if(StringFind(comment, "_GL") >= 0)
-{
-   g_pairs[i].avgOrderCountBuy++;
-   
-   // v2.3.0: Extract grid level from comment for Progressive Mode
-   int extractedLevel = ExtractGridLevelFromComment(comment, "_GL#");
-   double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-   
-   // v2.3.0: For Progressive Mode, use HIGHEST level's price (not just lowest price)
-   if(extractedLevel > g_pairs[i].maxGridLossBuyLevel)
-   {
-      g_pairs[i].maxGridLossBuyLevel = extractedLevel;
-      g_pairs[i].lastAvgPriceBuy = openPrice;
+      // Fixed Mode: Same lot for both symbols
+      double lotA = NormalizeLot(symbolA, baseLot);
+      double lotB = NormalizeLot(symbolB, baseLot);
+      
+      g_pairs[pairIndex].lotBuyA = lotA;
+      g_pairs[pairIndex].lotBuyB = lotB;
+      g_pairs[pairIndex].lotSellA = lotA;
+      g_pairs[pairIndex].lotSellB = lotB;
       
       if(InpDebugMode)
       {
-         PrintFormat("[v2.3.0 RESTORE] Pair %d GL_BUY: Level %d price=%.5f (MaxLevel=%d)",
-                     i + 1, extractedLevel, openPrice, g_pairs[i].maxGridLossBuyLevel);
+         PrintFormat("[v2.3.1 FIXED LOT] Pair %d: A=%.2f B=%.2f (Both use BaseLot=%.4f)", 
+                     pairIndex + 1, lotA, lotB, baseLot);
       }
+      return;
    }
-   else if(g_pairs[i].lastAvgPriceBuy == 0 || openPrice < g_pairs[i].lastAvgPriceBuy)
-   {
-      // Fallback for old comment format or first restore
-      g_pairs[i].lastAvgPriceBuy = openPrice;
-   }
+   
+   // === Dollar-Neutral Mode (Original Logic) ===
+   double hedgeRatio = g_pairs[pairIndex].hedgeRatio;
+   double pipValueA = GetPipValue(symbolA);
+   double pipValueB = GetPipValue(symbolB);
+   
+   // ... (keep existing validation and calculation) ...
+}
 ```
 
 ---
 
-### Part H: แก้ไข RestoreOpenPositions() - Grid Profit BUY
+#### Part E: แก้ไข `OnInit` ให้เช็ค Mode ก่อน
 
-**ตำแหน่ง:** บรรทัด 1762-1783 (ส่วน Grid Profit BUY)
+**บรรทัด:** 1288-1306
 
-**แทนที่:**
 ```cpp
-else if(StringFind(comment, "_GP") >= 0)
+for(int i = 0; i < MAX_PAIRS; i++)
 {
-   g_pairs[i].gridProfitCountBuy++;
-   
-   // v2.2.3: Update lastProfitPriceBuy to latest Grid Profit price (highest for BUY)
-   double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-   if(g_pairs[i].lastProfitPriceBuy == 0 || openPrice > g_pairs[i].lastProfitPriceBuy)
+   if(g_pairs[i].enabled)
    {
-      g_pairs[i].lastProfitPriceBuy = openPrice;
-   }
-```
-
-**เป็น:**
-```cpp
-else if(StringFind(comment, "_GP") >= 0)
-{
-   g_pairs[i].gridProfitCountBuy++;
-   
-   // v2.3.0: Extract grid level from comment for Progressive Mode
-   int extractedLevel = ExtractGridLevelFromComment(comment, "_GP#");
-   double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-   
-   // v2.3.0: For Progressive Mode, use HIGHEST level's price
-   if(extractedLevel > g_pairs[i].maxGridProfitBuyLevel)
-   {
-      g_pairs[i].maxGridProfitBuyLevel = extractedLevel;
-      g_pairs[i].lastProfitPriceBuy = openPrice;
+      // v2.3.1: Always call this function - it now handles mode internally
+      CalculateDollarNeutralLots(i);
       
-      if(InpDebugMode)
-      {
-         PrintFormat("[v2.3.0 RESTORE] Pair %d GP_BUY: Level %d price=%.5f (MaxLevel=%d)",
-                     i + 1, extractedLevel, openPrice, g_pairs[i].maxGridProfitBuyLevel);
-      }
+      // Verify calculation succeeded...
    }
-   else if(g_pairs[i].lastProfitPriceBuy == 0 || openPrice > g_pairs[i].lastProfitPriceBuy)
-   {
-      // Fallback for old comment format
-      g_pairs[i].lastProfitPriceBuy = openPrice;
-   }
-```
-
----
-
-### Part I: แก้ไข RestoreOpenPositions() - Grid Loss SELL
-
-**ตำแหน่ง:** ประมาณบรรทัด 1860-1880 (ส่วน Grid Loss SELL)
-
-**เพิ่มเช่นเดียวกับ BUY แต่:**
-```cpp
-// v2.3.0: For SELL, Grid Loss is HIGHEST price
-if(extractedLevel > g_pairs[i].maxGridLossSellLevel)
-{
-   g_pairs[i].maxGridLossSellLevel = extractedLevel;
-   g_pairs[i].lastAvgPriceSell = openPrice;
-}
-else if(g_pairs[i].lastAvgPriceSell == 0 || openPrice > g_pairs[i].lastAvgPriceSell)
-{
-   // Fallback
-   g_pairs[i].lastAvgPriceSell = openPrice;
 }
 ```
 
 ---
 
-### Part J: แก้ไข RestoreOpenPositions() - Grid Profit SELL
+#### Part F: แก้ไข `OpenBuySideTrade()` และ `OpenSellSideTrade()`
 
-**ตำแหน่ง:** ประมาณบรรทัด 1880-1900 (ส่วน Grid Profit SELL)
-
-```cpp
-// v2.3.0: For SELL, Grid Profit is LOWEST price
-if(extractedLevel > g_pairs[i].maxGridProfitSellLevel)
-{
-   g_pairs[i].maxGridProfitSellLevel = extractedLevel;
-   g_pairs[i].lastProfitPriceSell = openPrice;
-}
-else if(g_pairs[i].lastProfitPriceSell == 0 || openPrice < g_pairs[i].lastProfitPriceSell)
-{
-   // Fallback
-   g_pairs[i].lastProfitPriceSell = openPrice;
-}
-```
-
----
-
-### Part K: เพิ่ม Correlation Type Filter ใน Entry Logic
-
-**ตำแหน่ง 1:** ใน `ENTRY_MODE_CORRELATION_ONLY` block (~บรรทัด 6013)
-
-```cpp
-if(InpEntryMode == ENTRY_MODE_CORRELATION_ONLY)
-{
-   bool debugLog = InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester);
-   
-   // v2.2.8: Check Correlation Type Filter FIRST
-   if(!CheckCorrelationTypeFilter(i))
-   {
-      if(debugLog)
-      {
-         string filterName = (InpCorrTypeFilter == CORR_FILTER_POSITIVE_ONLY) ? "Positive Only" : "Negative Only";
-         string corrTypeName = (g_pairs[i].correlationType == 1) ? "Positive" : "Negative";
-         PrintFormat("[CORR FILTER] Pair %d %s/%s: SKIP - %s filter blocked %s pair",
-                     i + 1, g_pairs[i].symbolA, g_pairs[i].symbolB, filterName, corrTypeName);
-      }
-      continue;
-   }
-   
-   // ... existing Correlation Only logic ...
-```
-
-**ตำแหน่ง 2:** ใน `ENTRY_MODE_ZSCORE` block (~บรรทัด 6185)
-
-```cpp
-// v2.2.8: Check Correlation Type Filter for Z-Score Mode
-if(!CheckCorrelationTypeFilter(i))
-{
-   if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
-   {
-      string filterName = (InpCorrTypeFilter == CORR_FILTER_POSITIVE_ONLY) ? "Positive Only" : "Negative Only";
-      string corrTypeName = (g_pairs[i].correlationType == 1) ? "Positive" : "Negative";
-      PrintFormat("[Z-SCORE] Pair %d %s/%s: SKIP - %s filter blocked %s pair",
-                  i + 1, g_pairs[i].symbolA, g_pairs[i].symbolB, filterName, corrTypeName);
-   }
-   continue;  // Skip this pair entirely
-}
-
-// === BUY SIDE ENTRY (Z-SCORE MODE) ===
-```
-
----
-
-### Part L: Reset Max Level ใน ResetPairState()
-
-**ตำแหน่ง:** ในฟังก์ชัน `ResetPairState()`
-
-```cpp
-   // v2.3.0: Reset max grid levels
-   g_pairs[index].maxGridLossBuyLevel = 0;
-   g_pairs[index].maxGridLossSellLevel = 0;
-   g_pairs[index].maxGridProfitBuyLevel = 0;
-   g_pairs[index].maxGridProfitSellLevel = 0;
-```
+ตรวจสอบว่าใช้ lot ที่คำนวณไว้แล้ว (ไม่ต้องแก้ เพราะใช้ `g_pairs[pairIndex].lotBuyA/B` อยู่แล้ว)
 
 ---
 
@@ -336,44 +139,45 @@ if(!CheckCorrelationTypeFilter(i))
 
 | ไฟล์ | ส่วนที่แก้ไข | รายละเอียด |
 |------|-------------|------------|
-| `Harmony_Dream_EA.mq5` | Version | อัปเดตเป็น v2.30 |
-| `Harmony_Dream_EA.mq5` | Enums | เพิ่ม `ENUM_CORR_TYPE_FILTER` |
-| `Harmony_Dream_EA.mq5` | Inputs | เพิ่ม `InpCorrTypeFilter` |
-| `Harmony_Dream_EA.mq5` | PairInfo struct | เพิ่ม `maxGridLoss/ProfitBuy/SellLevel` |
-| `Harmony_Dream_EA.mq5` | Helper Functions | เพิ่ม `CheckCorrelationTypeFilter()` และ `ExtractGridLevelFromComment()` |
-| `Harmony_Dream_EA.mq5` | `RestoreOpenPositions()` | ใช้ Grid Level สูงสุดในการ restore lastAvgPrice |
-| `Harmony_Dream_EA.mq5` | Entry Logic | เพิ่ม Correlation Type Filter check |
-| `Harmony_Dream_EA.mq5` | `ResetPairState()` | Reset max level |
+| `Harmony_Dream_EA.mq5` | Version | อัปเดตเป็น v2.31 |
+| `Harmony_Dream_EA.mq5` | Enums | เพิ่ม `ENUM_MAIN_LOT_MODE` |
+| `Harmony_Dream_EA.mq5` | Inputs | เพิ่ม `InpMainLotMode` |
+| `Harmony_Dream_EA.mq5` | `CalculateDollarNeutralLots()` | เพิ่ม Fixed Mode logic |
 
 ---
 
-### ผลที่คาดหวังหลังแก้ไข
+### ตัวอย่างการทำงานหลังแก้ไข
 
-| ปัญหา | ก่อนแก้ | หลังแก้ |
-|-------|---------|---------|
-| Correlation Type Filter | ไม่มี | มีตัวเลือก Both/Positive Only/Negative Only |
-| Progressive Mode Restore | ใช้ราคาต่ำ/สูงสุด | ใช้ราคาของ Grid Level สูงสุด |
-| Grid Distance หลัง restart | อาจคำนวณผิด | ตรงกับสถานะจริง |
-| Backtest/Live Parity | อาจต่างกัน | เหมือนกัน |
+**Settings:**
+- Base Lot = 0.16
+- Main Lot Mode = **Fixed**
 
----
+| Symbol | ก่อนแก้ไข | หลังแก้ไข |
+|--------|-----------|-----------|
+| EURJPY (A) | 0.16 | 0.16 ✓ |
+| AUDUSD (B) | 0.10 | 0.16 ✓ |
 
-### ตัวอย่างการทำงาน Progressive Mode หลังแก้ไข
+**Settings:**
+- Base Lot = 0.16
+- Main Lot Mode = **Dollar-Neutral**
 
-**สถานการณ์:** มี GL#1, GL#3 เปิดอยู่ (GL#2 ถูกปิดไปแล้ว)
-
-| ก่อน v2.3.0 | หลัง v2.3.0 |
-|-------------|-------------|
-| `avgOrderCountBuy = 2` | `avgOrderCountBuy = 2` |
-| `lastAvgPriceBuy = ราคา GL#1` (ต่ำสุด) | `lastAvgPriceBuy = ราคา GL#3` (Level สูงสุด) |
-| Distance ถัดไป = base × 2^2 | Distance ถัดไป = base × 2^2 |
-| **ปัญหา:** ระยะวัดจาก GL#1 | **แก้ไข:** ระยะวัดจาก GL#3 (ถูกต้อง) |
+| Symbol | ก่อนแก้ไข | หลังแก้ไข |
+|--------|-----------|-----------|
+| EURJPY (A) | 0.16 | 0.16 |
+| AUDUSD (B) | 0.10 | 0.10 (คำนวณตาม Beta) |
 
 ---
 
 ### หมายเหตุสำคัญ
 
-1. **Default = Both**: Correlation Type Filter ค่าเริ่มต้นเป็น "Both" เพื่อให้ระบบทำงานเหมือนเดิม
-2. **Backward Compatible**: ถ้า Comment ไม่มี Level number (format เก่า) จะ fallback ไปใช้ logic เดิม (ราคาต่ำ/สูงสุด)
-3. **Debug Logs**: มี log แจ้งเตือนเมื่อ Correlation Filter block คู่และเมื่อ restore Grid Level
-4. **Minimum Distance**: แนะนำให้เพิ่ม Minimum Grid Distance เป็น 30-50 pips สำหรับ Forex เพื่อลดความถี่ของ Grid orders
+1. **Default = Fixed**: ค่าเริ่มต้นเป็น "Fixed" เพื่อให้ lot เท่ากันทั้งคู่ตามที่ผู้ใช้ต้องการ
+2. **Backward Compatible**: ถ้าต้องการ Dollar-Neutral แบบเดิม ให้เลือก Mode เป็น "Dollar-Neutral"
+3. **DEPRECATED `InpUseDollarNeutral`**: ตัวแปรเดิมยังคงอยู่แต่ถูกแทนที่ด้วย `InpMainLotMode`
+4. **Grid Orders ไม่ได้รับผลกระทบ**: Grid ยังคงใช้ `InpGridLotMode` แยกต่างหาก
+
+---
+
+### ข้อควรระวัง
+
+- ถ้าใช้ **Fixed Lot** กับคู่ที่มี Pip Value ต่างกันมาก (เช่น XAUUSD vs XAUEUR) → ความเสี่ยงอาจไม่ Balance
+- แนะนำใช้ **Dollar-Neutral** สำหรับคู่ที่ Pip Value ต่างกันมากเพื่อ Hedge Risk ได้ดีกว่า
