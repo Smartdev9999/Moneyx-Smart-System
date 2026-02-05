@@ -4,10 +4,10 @@
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "2.26"
+ #property version   "2.27"
 #property strict
 #property description "Harmony Dream - Pairs Trading Expert Advisor"
-#property description "v2.2.6: Fix CDC Filter OFF - Allow Correlation Only Entry Without CDC"
+ #property description "v2.2.7: Fix Grid ATR - Use Separate Timeframes for Grid Loss/Profit"
 #property description "Full Hedging with Independent Buy/Sell Sides"
 #include <Trade/Trade.mqh>
 
@@ -6404,7 +6404,8 @@ void CheckGridLossForSide(int pairIndex, string side)
                                                InpGridLossFixedPoints,
                                                InpGridLossFixedPips,
                                                InpGridLossATRTimeframe,
-                                               InpGridLossATRPeriod);
+                                                InpGridLossATRPeriod,
+                                                false);  // v2.2.7: isProfitSide = false
       if(gridDist <= 0) return;
       
       CheckGridLossPrice(pairIndex, side, gridDist);
@@ -6561,7 +6562,8 @@ void CheckGridProfitForSide(int pairIndex, string side)
                                                InpGridProfitFixedPoints,
                                                InpGridProfitFixedPips,
                                                InpGridProfitATRTimeframe,
-                                               InpGridProfitATRPeriod);
+                                                InpGridProfitATRPeriod,
+                                                true);   // v2.2.7: isProfitSide = true
       if(gridDist <= 0) return;
       
       CheckGridProfitPrice(pairIndex, side, gridDist);
@@ -6681,12 +6683,13 @@ int GetTotalOrderCount(int pairIndex, string side)
 }
 
 //+------------------------------------------------------------------+
-//| Calculate Grid Distance (v1.6 - Symbol-Specific ATR + Min Dist)    |
+ //| Calculate Grid Distance (v2.2.7 - Separate ATR for Loss/Profit)    |
 //+------------------------------------------------------------------+
 double CalculateGridDistance(int pairIndex, ENUM_GRID_DISTANCE_MODE mode, 
                               double atrMultForex, double atrMultGold, double minDistPips,
                               double fixedPoints, double fixedPips,
-                              ENUM_TIMEFRAMES atrTimeframe, int atrPeriod)
+                               ENUM_TIMEFRAMES atrTimeframe, int atrPeriod,
+                               bool isProfitSide = false)  // v2.2.7: NEW parameter
 {
    string symbolA = g_pairs[pairIndex].symbolA;
    double point = SymbolInfoDouble(symbolA, SYMBOL_POINT);
@@ -6697,13 +6700,22 @@ double CalculateGridDistance(int pairIndex, ENUM_GRID_DISTANCE_MODE mode,
    {
       case GRID_DIST_ATR:
       {
-         // v2.1.6: Use cached ATR (updated once per new bar) for stable grid distance
-         double atr = g_pairs[pairIndex].cachedGridLossATR;
+          // v2.2.7: Use correct cached ATR based on side (Loss or Profit)
+          double atr;
+          if(isProfitSide)
+             atr = g_pairs[pairIndex].cachedGridProfitATR;
+          else
+             atr = g_pairs[pairIndex].cachedGridLossATR;
+          
          if(atr <= 0)
          {
             // Fallback: calculate if cache empty (first run)
             atr = CalculateSimplifiedATR(symbolA, atrTimeframe, atrPeriod);
-            g_pairs[pairIndex].cachedGridLossATR = atr;
+             // v2.2.7: Store to correct cache
+             if(isProfitSide)
+                g_pairs[pairIndex].cachedGridProfitATR = atr;
+             else
+                g_pairs[pairIndex].cachedGridLossATR = atr;
          }
          
          // v1.6: Use symbol-specific ATR multiplier
@@ -6713,7 +6725,13 @@ double CalculateGridDistance(int pairIndex, ENUM_GRID_DISTANCE_MODE mode,
          // v1.6: Apply minimum distance fallback
          double minDistance = minDistPips * pipSize;
          
-         // v2.1.6: Debug log removed from here - now only logs when cache updates (once per bar)
+          // v2.2.7: Debug log to verify ATR values
+          if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
+          {
+             PrintFormat("[v2.2.7 GRID ATR] Pair %d %s: ATR=%.5f, Mult=%.1f, Distance=%.5f (%.1f pips), Min=%.5f",
+                         pairIndex + 1, isProfitSide ? "GP" : "GL",
+                         atr, mult, distance, distance / pipSize, minDistance);
+          }
          
          return MathMax(distance, minDistance);
       }
@@ -6843,34 +6861,39 @@ double CalculateSimplifiedATR(string symbol, ENUM_TIMEFRAMES tf, int period)
 }
 
 //+------------------------------------------------------------------+
-//| v2.1.6: Update ATR Cache on New Bar                                |
+ //| v2.2.7: Update ATR Cache on New Bar (Use Smaller Timeframe)        |
 //+------------------------------------------------------------------+
 void UpdateATRCache(int pairIndex)
 {
    string symbolA = g_pairs[pairIndex].symbolA;
    
-   // Check if new bar formed (using Grid ATR timeframe)
-   datetime currentBar = iTime(symbolA, InpGridATRTimeframe, 0);
+    // v2.2.7: Check BOTH timeframes for new bar
+    // Use smaller timeframe to ensure more frequent updates
+    ENUM_TIMEFRAMES minTF = InpGridLossATRTimeframe;
+    if(InpGridProfitATRTimeframe < minTF)
+       minTF = InpGridProfitATRTimeframe;
+    
+    datetime currentBar = iTime(symbolA, minTF, 0);
    if(currentBar == g_pairs[pairIndex].lastATRBarTime)
       return;  // Same bar - use cached value
    
    // New bar - recalculate ATR
    g_pairs[pairIndex].lastATRBarTime = currentBar;
    
-   // Grid Loss ATR
+    // Grid Loss ATR (using Grid Loss timeframe)
    g_pairs[pairIndex].cachedGridLossATR = CalculateSimplifiedATR(
       symbolA, InpGridLossATRTimeframe, InpGridLossATRPeriod);
    
-   // Grid Profit ATR (may use different settings)
+    // Grid Profit ATR (using Grid Profit timeframe)
    g_pairs[pairIndex].cachedGridProfitATR = CalculateSimplifiedATR(
       symbolA, InpGridProfitATRTimeframe, InpGridProfitATRPeriod);
    
    if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
    {
-      PrintFormat("[v2.1.6 ATR CACHE] Pair %d (%s): GridLossATR=%.5f, GridProfitATR=%.5f",
-                  pairIndex + 1, symbolA, 
-                  g_pairs[pairIndex].cachedGridLossATR,
-                  g_pairs[pairIndex].cachedGridProfitATR);
+       PrintFormat("[v2.2.7 ATR CACHE] Pair %d (%s): GL_ATR(TF=%s)=%.5f, GP_ATR(TF=%s)=%.5f",
+                   pairIndex + 1, symbolA,
+                   EnumToString(InpGridLossATRTimeframe), g_pairs[pairIndex].cachedGridLossATR,
+                   EnumToString(InpGridProfitATRTimeframe), g_pairs[pairIndex].cachedGridProfitATR);
    }
 }
 
