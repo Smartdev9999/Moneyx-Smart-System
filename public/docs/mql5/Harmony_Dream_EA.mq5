@@ -4,10 +4,10 @@
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
- #property version   "2.32"
+#property version   "2.34"
 #property strict
 #property description "Harmony Dream - Pairs Trading Expert Advisor"
- #property description "v2.3.2: Auto Symbol Suffix Detection for Multi-Broker Support"
+#property description "v2.3.4: Auto-Detect Cent Account (USC) for Correct Scaling"
 #property description "Full Hedging with Independent Buy/Sell Sides"
 #include <Trade/Trade.mqh>
 
@@ -300,6 +300,13 @@ string g_detectedSuffix = "";      // Auto-detected broker suffix (e.g., ".v", "
 bool   g_suffixDetected = false;   // True if suffix was detected
 
 //+------------------------------------------------------------------+
+//| CENT ACCOUNT DETECTION (v2.3.4)                                    |
+//+------------------------------------------------------------------+
+bool   g_isCentAccount = false;       // True if Cent account detected (USC, USc, etc.)
+double g_centMultiplier = 1.0;        // 100 for Cent accounts, 1 for Standard
+string g_accountCurrency = "";        // Account currency (USD, USC, etc.)
+
+//+------------------------------------------------------------------+
 //| INPUT PARAMETERS                                                   |
 //+------------------------------------------------------------------+
 input group "=== Trading Settings ==="
@@ -319,6 +326,11 @@ input bool     InpEnableFixedScale = false;         // Enable Fixed Scale Accoun
 input double   InpFixedScaleAccount = 100000.0;     // Fixed Scale Account ($) - lock at this size
 input double   InpScaleMin = 0.1;                   // Minimum Scale Factor (safety limit)
 input double   InpScaleMax = 10.0;                  // Maximum Scale Factor (safety limit)
+
+input group "=== Cent Account Settings (v2.3.4) ==="
+input bool     InpAutoDetectCent = true;            // Auto Detect Cent Account (USC, USc, etc.)
+input bool     InpManualCentMode = false;           // Manual: Force Cent Account Mode
+input double   InpCentDivisor = 100.0;              // Cent Divisor (100 = standard cent)
 
 //+------------------------------------------------------------------+
 //| CORRELATION METHOD ENUM (v3.2.1)                                   |
@@ -1365,6 +1377,12 @@ int OnInit()
       g_detectedSuffix = InpManualSuffix;
       g_suffixDetected = true;
       PrintFormat("[v2.3.2] Using manual suffix: '%s'", g_detectedSuffix);
+   }
+   
+   // v2.3.4: Detect Cent Account BEFORE InitializeGroups (affects scaling)
+   if(InpAutoDetectCent || InpManualCentMode)
+   {
+      DetectCentAccount();
    }
    
    // v1.1: Initialize Group Target System (must be before InitializePairs)
@@ -4792,6 +4810,75 @@ double NormalizeLot(string symbol, double lot)
 //+------------------------------------------------------------------+
 //| Get Scale Factor (v1.6.5)                                          |
 //+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| v2.3.4: Detect Cent Account from Currency and Server Name          |
+//+------------------------------------------------------------------+
+void DetectCentAccount()
+{
+   g_accountCurrency = AccountInfoString(ACCOUNT_CURRENCY);
+   
+   // Method 1: Check currency suffix (USC, USc, EUc, etc.)
+   string upperCurrency = g_accountCurrency;
+   StringToUpper(upperCurrency);
+   
+   if(StringFind(upperCurrency, "USC") >= 0 ||  // US Cent
+      StringFind(upperCurrency, "EUC") >= 0 ||  // EU Cent
+      StringFind(upperCurrency, "GBC") >= 0 ||  // GB Pence
+      (StringLen(g_accountCurrency) > 2 && StringGetCharacter(g_accountCurrency, StringLen(g_accountCurrency) - 1) == 'c'))  // ends with 'c'
+   {
+      g_isCentAccount = true;
+      g_centMultiplier = InpCentDivisor;  // Default 100
+      PrintFormat("[v2.3.4] CENT ACCOUNT DETECTED via currency: %s (Multiplier: %.0f)",
+                  g_accountCurrency, g_centMultiplier);
+      return;
+   }
+   
+   // Method 2: Check broker server name for "cent" keyword
+   string serverName = AccountInfoString(ACCOUNT_SERVER);
+   string serverLower = serverName;
+   StringToLower(serverLower);
+   if(StringFind(serverLower, "cent") >= 0)
+   {
+      g_isCentAccount = true;
+      g_centMultiplier = InpCentDivisor;
+      PrintFormat("[v2.3.4] CENT ACCOUNT DETECTED via server: %s (Multiplier: %.0f)",
+                  serverName, g_centMultiplier);
+      return;
+   }
+   
+   // Method 3: Manual override
+   if(InpManualCentMode)
+   {
+      g_isCentAccount = true;
+      g_centMultiplier = InpCentDivisor;
+      PrintFormat("[v2.3.4] CENT ACCOUNT MODE FORCED via Input (Multiplier: %.0f)",
+                  g_centMultiplier);
+      return;
+   }
+   
+   // Standard account
+   g_isCentAccount = false;
+   g_centMultiplier = 1.0;
+   PrintFormat("[v2.3.4] Standard Account detected: %s", g_accountCurrency);
+}
+
+//+------------------------------------------------------------------+
+//| v2.3.4: Get Real Balance in USD (for correct scaling)              |
+//| Cent accounts: 10000 USC → 100 USD                                 |
+//+------------------------------------------------------------------+
+double GetRealBalanceUSD()
+{
+   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+   
+   if(g_isCentAccount && g_centMultiplier > 0)
+   {
+      // Convert Cent to USD for scaling calculation
+      return balance / g_centMultiplier;
+   }
+   
+   return balance;
+}
+
 double GetScaleFactor()
 {
    // If auto scaling disabled, return 1.0 (no scaling)
@@ -4806,7 +4893,8 @@ double GetScaleFactor()
    }
    else
    {
-      accountSize = AccountInfoDouble(ACCOUNT_BALANCE);  // Dynamic Mode
+      // v2.3.4: Use real USD balance for Cent accounts
+      accountSize = GetRealBalanceUSD();
    }
    
    if(accountSize <= 0) return 1.0;
@@ -9704,6 +9792,11 @@ void CreateDashboard()
                      : "Z(Close):";
    CreateLabel(prefix + "ZSCORE_LBL", PANEL_X + 160, PANEL_Y + 5, zModeLbl, COLOR_TEXT_WHITE, 8, "Arial");
    CreateLabel(prefix + "ZSCORE_AGO", PANEL_X + 210, PANEL_Y + 4, "Pending", clrYellow, 9, "Arial Bold");
+   
+   // v2.3.4: Account Type Indicator (Cent vs Standard)
+   string accTypeLabel = g_isCentAccount ? "[CENT]" : "[STD]";
+   color accTypeColor = g_isCentAccount ? clrOrange : clrLimeGreen;
+   CreateLabel(prefix + "ACC_TYPE", PANEL_X + 270, PANEL_Y + 4, accTypeLabel, accTypeColor, 9, "Arial Bold");
    
    // v3.7.4: EA Status Display (adjusted position - moved left by 50px)
    CreateLabel(prefix + "EA_STATUS_LBL", PANEL_X + PANEL_WIDTH - 210, PANEL_Y + 5, "Status:", COLOR_TEXT_WHITE, 8, "Arial");

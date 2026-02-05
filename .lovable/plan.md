@@ -1,5 +1,5 @@
 
-## แผนแก้ไข v2.3.4: รองรับบัญชี Cent Account (USC) - ฉบับแก้ไข
+## แผนแก้ไข v2.3.4: รองรับบัญชี Cent Account (USC) - ✅ สำเร็จ
 
 ---
 
@@ -19,24 +19,21 @@
 
 ---
 
-### โซลูชันแก้ไข
+### โซลูชันที่นำไปใช้ ✅
 
-#### 1. Auto-Detect Cent Account
+#### 1. Auto-Detect Cent Account ✅
 - ตรวจจับจาก Currency (USC, USc, EUc, etc.) และ Server name
 - เพิ่ม Flag `g_isCentAccount` และ `g_centMultiplier = 100`
 - แสดง [CENT] หรือ [STD] ใน Dashboard
 
-#### 2. นำเสนอ Scaled Targets ให้ถูกต้อง
-**NOT MULTIPLY** targets by 100
+#### 2. Target Logic ไม่เปลี่ยน ✅
+**ไม่คูณ** targets by 100 - ใช้ค่าตามที่ผู้ใช้ input โดยตรง
 ```cpp
-// ❌ ผิด
-return ConvertTargetToCent(scaledTarget);  // Target * 100
-
-// ✓ ถูก
+// ✓ ถูก - ไม่ต้องแปลง Target
 return ApplyScaleDollar(baseTarget);  // ใช้ Scale Factor ตามปกติ
 ```
 
-#### 3. แก้ Auto Scaling สำหรับ Cent
+#### 3. แก้ Auto Scaling สำหรับ Cent ✅
 ```cpp
 // GetRealBalanceUSD() - ทำให้ Scale Factor ถูกต้อง
 double GetRealBalanceUSD() {
@@ -54,28 +51,21 @@ double GetScaleFactor() {
    // 100 / 100000 = 0.001 ✓ ถูก
    return NormalizeDouble(MathMax(InpScaleMin, MathMin(InpScaleMax, factor)), 4);
 }
-
-// Target ไม่เปลี่ยน
-double GetScaledMiniGroupTarget(int miniIndex) {
-   double baseTarget = InpMini1Target;  // 500 USC หรือ 500 USD
-   return ApplyScaleDollar(baseTarget);  // ใช้ factor จาก GetScaleFactor()
-   // 500 × 0.001 = 0.5 USD (เทียบกับ 50 USC หรือ 0.5 USD) ✓
-}
 ```
 
 ---
 
-### การแก้ไขที่ต้องทำ
+### การแก้ไขที่ทำ ✅
 
-| ลำดับ | ส่วน | การแก้ไข |
-|------|------|---------|
-| 1 | Version | อัปเดต 2.34 |
-| 2 | Global Variables | เพิ่ม `g_isCentAccount`, `g_centMultiplier` |
-| 3 | Inputs | เพิ่ม `InpAutoDetectCent`, `InpManualCentMode` |
-| 4 | DetectCentAccount() | เรียกใน OnInit() เพื่อตรวจจับ |
-| 5 | GetRealBalanceUSD() | ทำให้ Auto Scaling ถูกต้อง |
-| 6 | GetScaleFactor() | ใช้ GetRealBalanceUSD() แทน ACCOUNT_BALANCE |
-| 7 | Dashboard | แสดง [CENT] หรือ [STD] |
+| ลำดับ | ส่วน | การแก้ไข | สถานะ |
+|------|------|---------|-------|
+| 1 | Version | อัปเดต 2.34 | ✅ |
+| 2 | Global Variables | เพิ่ม `g_isCentAccount`, `g_centMultiplier`, `g_accountCurrency` | ✅ |
+| 3 | Inputs | เพิ่ม `InpAutoDetectCent`, `InpManualCentMode`, `InpCentDivisor` | ✅ |
+| 4 | DetectCentAccount() | เรียกใน OnInit() เพื่อตรวจจับ | ✅ |
+| 5 | GetRealBalanceUSD() | ทำให้ Auto Scaling ถูกต้อง | ✅ |
+| 6 | GetScaleFactor() | ใช้ GetRealBalanceUSD() แทน ACCOUNT_BALANCE | ✅ |
+| 7 | Dashboard | แสดง [CENT] หรือ [STD] | ✅ |
 
 ---
 
@@ -114,4 +104,3 @@ double GetScaledMiniGroupTarget(int miniIndex) {
 2. **Scaling ต้องแปลง Balance**: การคำนวณ Scale Factor ต้องนำ Balance มาหารด้วย 100 สำหรับ Cent
 3. **Dashboard แสดง Native Unit**: ยังแสดงค่าเป็น USC หรือ USD ตามบัญชี
 4. **ไม่กระทบ Profit Comparison**: Profit จาก MT5 เป็น Native unit อยู่แล้ว
-
