@@ -8388,6 +8388,9 @@ bool CloseSellSide(int pairIndex)
       g_pairs[pairIndex].gridProfitZLevelSell = 0;
       // v3.6.0 HF4: Reset total grid lot
       g_pairs[pairIndex].avgTotalLotSell = 0;
+      // v2.3.0: Reset max grid levels (SELL)
+      g_pairs[pairIndex].maxGridLossSellLevel = 0;
+      g_pairs[pairIndex].maxGridProfitSellLevel = 0;
       
       // v3.6.0 HF3 Patch 3: Resume orphan detection
       g_orphanCheckPaused = false;
@@ -8601,6 +8604,9 @@ void ForceCloseBuySide(int pairIndex)
    g_pairs[pairIndex].entryZScoreBuy = 0;
    // v3.6.0 HF4: Reset total grid lot
    g_pairs[pairIndex].avgTotalLotBuy = 0;
+   // v2.3.0: Reset max grid levels (BUY)
+   g_pairs[pairIndex].maxGridLossBuyLevel = 0;
+   g_pairs[pairIndex].maxGridProfitBuyLevel = 0;
    
    PrintFormat("Pair %d BUY SIDE FORCE CLOSED (Orphan Recovery)", pairIndex + 1);
 }
