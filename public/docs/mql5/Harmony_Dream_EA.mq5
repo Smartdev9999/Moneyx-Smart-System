@@ -2537,6 +2537,12 @@ void SetupPair(int index, bool enabled, string symbolA, string symbolB)
    g_pairs[index].gridProfitZLevelBuy = 0;
    g_pairs[index].gridProfitZLevelSell = 0;
    
+   // v2.3.0: Reset max grid levels
+   g_pairs[index].maxGridLossBuyLevel = 0;
+   g_pairs[index].maxGridLossSellLevel = 0;
+   g_pairs[index].maxGridProfitBuyLevel = 0;
+   g_pairs[index].maxGridProfitSellLevel = 0;
+   
    // Combined
    g_pairs[index].totalPairProfit = 0;
    
@@ -8245,6 +8251,9 @@ bool CloseBuySide(int pairIndex)
       g_pairs[pairIndex].gridProfitZLevelBuy = 0;
       // v3.6.0 HF4: Reset total grid lot
       g_pairs[pairIndex].avgTotalLotBuy = 0;
+      // v2.3.0: Reset max grid levels (BUY)
+      g_pairs[pairIndex].maxGridLossBuyLevel = 0;
+      g_pairs[pairIndex].maxGridProfitBuyLevel = 0;
       
       // v3.6.0 HF3 Patch 3: Resume orphan detection
       g_orphanCheckPaused = false;
