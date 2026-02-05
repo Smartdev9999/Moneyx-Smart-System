@@ -4,10 +4,10 @@
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
- #property version   "2.31"
+ #property version   "2.32"
 #property strict
 #property description "Harmony Dream - Pairs Trading Expert Advisor"
- #property description "v2.3.1: Add Fixed Lot Mode for Main Order + Fix Lot Sizing"
+ #property description "v2.3.2: Auto Symbol Suffix Detection for Multi-Broker Support"
 #property description "Full Hedging with Independent Buy/Sell Sides"
 #include <Trade/Trade.mqh>
 
@@ -294,6 +294,12 @@ enum ENUM_MAIN_LOT_MODE
 };
 
 //+------------------------------------------------------------------+
+//| AUTO SYMBOL SUFFIX DETECTION (v2.3.2)                             |
+//+------------------------------------------------------------------+
+string g_detectedSuffix = "";      // Auto-detected broker suffix (e.g., ".v", ".i", "m")
+bool   g_suffixDetected = false;   // True if suffix was detected
+
+//+------------------------------------------------------------------+
 //| INPUT PARAMETERS                                                   |
 //+------------------------------------------------------------------+
 input group "=== Trading Settings ==="
@@ -301,7 +307,10 @@ input double   InpBaseLot = 0.1;                // Base Lot Size (Symbol A)
 input double   InpMaxLot = 10.0;                // Maximum Lot Size
 input int      InpMagicNumber = 999999;         // Magic Number
 input int      InpSlippage = 30;                // Slippage (points)
-// (Removed) Trading Timeframe - not needed, trades based on Z-Score/Corr thresholds
+
+input group "=== Symbol Settings (v2.3.2) ==="
+input bool     InpAutoDetectSuffix = true;      // Auto Detect Broker Symbol Suffix
+input string   InpManualSuffix = "";            // Manual Suffix (e.g., ".v", ".i") - Use if Auto fails
 
 input group "=== AUTO BALANCE SCALING (v1.6.5) ==="
 input bool     InpEnableAutoScaling = false;        // Enable Auto Balance Scaling
