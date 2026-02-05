@@ -1379,6 +1379,12 @@ int OnInit()
       PrintFormat("[v2.3.2] Using manual suffix: '%s'", g_detectedSuffix);
    }
    
+   // v2.3.4: Detect Cent Account BEFORE InitializeGroups (affects scaling)
+   if(InpAutoDetectCent || InpManualCentMode)
+   {
+      DetectCentAccount();
+   }
+   
    // v1.1: Initialize Group Target System (must be before InitializePairs)
    InitializeGroups();
    
