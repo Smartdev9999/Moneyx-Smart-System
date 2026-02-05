@@ -703,6 +703,9 @@ input string   InpLicenseServer = LICENSE_BASE_URL;    // License Server URL
 input int      InpLicenseCheckMinutes = 60;            // License Check Interval (minutes)
 input int      InpDataSyncMinutes = 5;                 // Data Sync Interval (minutes)
 
+input group "=== Orphan Detection (v2.3.6) ==="
+input int      InpOrphanGracePeriod = 10;       // Grace Period after Open (seconds)
+
 input group "=== News Filter ==="
 input bool     InpEnableNewsFilter = true;      // Enable News Filter
 input int      InpNewsBeforeMinutes = 30;       // Minutes Before News
