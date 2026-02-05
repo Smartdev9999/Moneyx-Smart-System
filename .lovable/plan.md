@@ -1,287 +1,317 @@
 
 
-## แผนแก้ไข: Grid ATR Separate Timeframe Bug (v2.2.7)
+## แผนอัปเดต Harmony Dream EA v2.2.8
 
 ---
 
-### สรุปปัญหาที่พบ (3 ข้อ)
+### ฟีเจอร์ใหม่ 2 รายการ
 
-| ปัญหา | ตำแหน่ง | สาเหตุ |
-|-------|---------|--------|
-| **1. ใช้ cached ATR ผิดตัว** | `CalculateGridDistance()` บรรทัด 6701 | ใช้ `cachedGridLossATR` สำหรับทั้ง Grid Loss และ Grid Profit! |
-| **2. Bar time check ผิด timeframe** | `UpdateATRCache()` บรรทัด 6853 | ใช้ `InpGridATRTimeframe` (D1) แทน `InpGridLossATRTimeframe` หรือ `InpGridProfitATRTimeframe` (M1) |
-| **3. ไม่แยก cache per side** | `CalculateGridDistance()` | ไม่มี parameter บอกว่ากำลังคำนวณสำหรับ Loss หรือ Profit side |
-
----
-
-### ตัวอย่างจากกรณีของผู้ใช้
-
-```text
-Settings:
-- Grid Loss ATR Timeframe: M1 (1 นาที)
-- Grid Profit ATR Timeframe: M1 (1 นาที)
-- ATR Multiplier Forex: 1.0
-- Minimum Grid Distance: 50 pips
-
-ปัญหา:
-- UpdateATRCache() check bar time ด้วย InpGridATRTimeframe = D1 (default)
-- ถ้าเป็น D1 bar เดิม → ไม่ update cache!
-- แม้ M1 bar ใหม่มาแล้วก็ไม่ update!
-
-ผลกระทบ:
-- ATR ที่ cache ไว้อาจเป็นค่าเก่ามากๆ (update แค่วันละครั้ง!)
-- หรือใช้ค่า fallback (Minimum Grid Distance = 50 pips)
-```
+| ฟีเจอร์ | คำอธิบาย |
+|---------|----------|
+| **1. Correlation Type Filter** | เลือกเทรดเฉพาะ Positive Only, Negative Only หรือ Both |
+| **2. Fast Backtest Chart Mode** | เปลี่ยน chart เป็น Candlestick สำหรับ Strategy Tester Visualization |
 
 ---
 
-### วิเคราะห์ระยะห่างที่เห็นจากรูป
-
-จากรูป GBPUSD:
-- Main Order: **BUY 0.1 @ 1.37056**
-- Grid Loss #1: **BUY 0.2 @ 1.36556** (ต่างกัน ~500 pips!)
-
-```text
-GBPUSD M1 ATR (14) ≈ 0.00010-0.00030 (10-30 pips)
-Expected Grid Distance = ATR × 1.0 = 10-30 pips
-
-Minimum Fallback = 50 pips
-
-Actual Distance = ~500 pips! (ผิดปกติมาก)
-```
-
-**สาเหตุ:** Cache ไม่ได้ update ตาม M1 timeframe ที่ตั้งไว้ และอาจใช้ค่า ATR เก่าจาก D1 หรือ cached value ที่ผิด
-
----
-
-### การแก้ไข
-
-#### Part A: อัปเดต Version
+### Part A: อัปเดต Version
 
 **ไฟล์:** `public/docs/mql5/Harmony_Dream_EA.mq5`  
 **บรรทัด:** 7, 10
 
 ```cpp
-#property version   "2.27"
-#property description "v2.2.7: Fix Grid ATR - Use Separate Timeframes for Grid Loss/Profit"
+#property version   "2.28"
+#property description "v2.2.8: Add Correlation Type Filter + Candlestick Chart Mode for Backtest"
 ```
 
 ---
 
-#### Part B: แก้ไข `CalculateGridDistance()` - เพิ่ม parameter และใช้ cached ATR ถูกตัว
+### Part B: เพิ่ม Enum สำหรับ Correlation Type Filter
 
 **ไฟล์:** `public/docs/mql5/Harmony_Dream_EA.mq5`  
-**ตำแหน่ง:** บรรทัด 6684-6731
+**ตำแหน่ง:** หลังบรรทัด 260 (หลัง ENUM_ENTRY_MODE)
 
-**แก้ไข function signature:**
 ```cpp
-// v2.2.7: Add isProfitSide parameter to select correct cached ATR
-double CalculateGridDistance(int pairIndex, ENUM_GRID_DISTANCE_MODE mode, 
-                              double atrMultForex, double atrMultGold, double minDistPips,
-                              double fixedPoints, double fixedPips,
-                              ENUM_TIMEFRAMES atrTimeframe, int atrPeriod,
-                              bool isProfitSide = false)  // v2.2.7: NEW parameter
+//+------------------------------------------------------------------+
+//| CORRELATION TYPE FILTER ENUM (v2.2.8)                              |
+//+------------------------------------------------------------------+
+enum ENUM_CORR_TYPE_FILTER
+{
+   CORR_FILTER_BOTH = 0,          // Both (Positive + Negative)
+   CORR_FILTER_POSITIVE_ONLY,     // Positive Only
+   CORR_FILTER_NEGATIVE_ONLY      // Negative Only
+};
 ```
 
-**แก้ไข ATR logic (บรรทัด 6698-6718):**
+---
+
+### Part C: เพิ่ม Enum สำหรับ Chart Mode (Backtest)
+
+**ไฟล์:** `public/docs/mql5/Harmony_Dream_EA.mq5`  
+**ตำแหน่ง:** หลัง ENUM_CORR_TYPE_FILTER
+
 ```cpp
-case GRID_DIST_ATR:
+//+------------------------------------------------------------------+
+//| BACKTEST CHART MODE ENUM (v2.2.8)                                  |
+//+------------------------------------------------------------------+
+enum ENUM_BACKTEST_CHART_MODE
 {
-   // v2.2.7: Use correct cached ATR based on side (Loss or Profit)
-   double atr;
-   if(isProfitSide)
-      atr = g_pairs[pairIndex].cachedGridProfitATR;
-   else
-      atr = g_pairs[pairIndex].cachedGridLossATR;
+   BACKTEST_CHART_DEFAULT = 0,    // Default (No Change)
+   BACKTEST_CHART_CANDLES,        // Candlestick
+   BACKTEST_CHART_BARS,           // Bars
+   BACKTEST_CHART_LINE            // Line
+};
+```
+
+---
+
+### Part D: เพิ่ม Input Parameters
+
+**ไฟล์:** `public/docs/mql5/Harmony_Dream_EA.mq5`  
+**ตำแหน่ง:** บรรทัด 657 (ใน group "Entry Mode Settings")
+
+```cpp
+input group "=== Entry Mode Settings (v1.8.8) ==="
+input ENUM_ENTRY_MODE InpEntryMode = ENTRY_MODE_ZSCORE;    // Entry Mode
+input ENUM_CORR_TYPE_FILTER InpCorrTypeFilter = CORR_FILTER_BOTH;  // v2.2.8: Correlation Type Filter
+input double   InpCorrOnlyPositiveThreshold = 0.60;        // Correlation Only: Positive Threshold (0.60 = 60%)
+input double   InpCorrOnlyNegativeThreshold = -0.60;       // Correlation Only: Negative Threshold (-0.60 = -60%)
+```
+
+**เพิ่มใน group "Fast Backtest Mode" (~บรรทัด 245):**
+```cpp
+input group "=== Fast Backtest Mode (v3.2.5) ==="
+input bool     InpFastBacktest = false;           // Enable Fast Backtest Mode
+input int      InpBacktestUiUpdateSec = 5;        // UI Update Interval (seconds) in Tester
+input bool     InpDisableDashboardInTester = false;  // Disable Dashboard in Tester
+input bool     InpDisableDebugInTester = true;    // Disable Debug Logs in Tester
+input bool     InpSkipADXChartInTester = true;    // Skip ADX Chart Rendering in Tester
+input bool     InpSkipATRInTester = false;        // Skip ATR Indicator in Tester
+input ENUM_BACKTEST_CHART_MODE InpBacktestChartMode = BACKTEST_CHART_CANDLES;  // v2.2.8: Backtest Chart Mode
+```
+
+---
+
+### Part E: สร้างฟังก์ชัน Helper - CheckCorrelationTypeFilter
+
+**ไฟล์:** `public/docs/mql5/Harmony_Dream_EA.mq5`  
+**ตำแหน่ง:** หลัง `CheckCorrelationOnlyEntry()` (~บรรทัด 5815)
+
+```cpp
+//+------------------------------------------------------------------+
+//| Check Correlation Type Filter (v2.2.8)                             |
+//| Returns: true = Pair's correlation type matches the filter         |
+//+------------------------------------------------------------------+
+bool CheckCorrelationTypeFilter(int pairIndex)
+{
+   int corrType = g_pairs[pairIndex].correlationType;
    
-   if(atr <= 0)
+   switch(InpCorrTypeFilter)
    {
-      // Fallback: calculate if cache empty (first run)
-      atr = CalculateSimplifiedATR(symbolA, atrTimeframe, atrPeriod);
-      // v2.2.7: Store to correct cache
-      if(isProfitSide)
-         g_pairs[pairIndex].cachedGridProfitATR = atr;
-      else
-         g_pairs[pairIndex].cachedGridLossATR = atr;
+      case CORR_FILTER_BOTH:
+         return true;  // Allow both types
+         
+      case CORR_FILTER_POSITIVE_ONLY:
+         return (corrType == 1);  // Only Positive Correlation
+         
+      case CORR_FILTER_NEGATIVE_ONLY:
+         return (corrType == -1);  // Only Negative Correlation
+         
+      default:
+         return true;
+   }
+}
+```
+
+---
+
+### Part F: เพิ่มฟังก์ชัน SetBacktestChartMode
+
+**ไฟล์:** `public/docs/mql5/Harmony_Dream_EA.mq5`  
+**ตำแหน่ง:** ก่อน OnInit()
+
+```cpp
+//+------------------------------------------------------------------+
+//| Set Chart Mode for Backtest Visualization (v2.2.8)                 |
+//+------------------------------------------------------------------+
+void SetBacktestChartMode()
+{
+   // Only apply in tester mode
+   if(!MQLInfoInteger(MQL_TESTER)) return;
+   
+   // Skip if default (no change)
+   if(InpBacktestChartMode == BACKTEST_CHART_DEFAULT) return;
+   
+   // Map to MT5 CHART_MODE values
+   ENUM_CHART_MODE chartMode;
+   switch(InpBacktestChartMode)
+   {
+      case BACKTEST_CHART_CANDLES:
+         chartMode = CHART_CANDLES;
+         break;
+      case BACKTEST_CHART_BARS:
+         chartMode = CHART_BARS;
+         break;
+      case BACKTEST_CHART_LINE:
+         chartMode = CHART_LINE;
+         break;
+      default:
+         return;
    }
    
-   // v1.6: Use symbol-specific ATR multiplier
-   double mult = IsGoldPair(symbolA) ? atrMultGold : atrMultForex;
-   double distance = atr * mult;
+   // Apply to current chart
+   ChartSetInteger(0, CHART_MODE, chartMode);
+   ChartRedraw(0);
    
-   // v1.6: Apply minimum distance fallback
-   double minDistance = minDistPips * pipSize;
-   
-   // v2.2.7: Debug log to verify ATR values
-   if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
-   {
-      PrintFormat("[v2.2.7 GRID ATR] Pair %d %s: ATR=%.5f, Mult=%.1f, Distance=%.5f (%.1f pips), Min=%.5f",
-                  pairIndex + 1, isProfitSide ? "GP" : "GL",
-                  atr, mult, distance, distance / pipSize, minDistance);
-   }
-   
-   return MathMax(distance, minDistance);
+   Print("[v2.2.8] Backtest Chart Mode set to: ", EnumToString(chartMode));
 }
 ```
 
 ---
 
-#### Part C: อัปเดต call sites สำหรับ Grid Loss
+### Part G: เรียก SetBacktestChartMode ใน OnInit
 
 **ไฟล์:** `public/docs/mql5/Harmony_Dream_EA.mq5`  
-**ตำแหน่ง:** บรรทัด 6400-6407
+**ตำแหน่ง:** บรรทัด ~1125 (หลังจาก tester mode detection)
 
 ```cpp
-// v2.2.7: Pass isProfitSide = false for Grid Loss
-double gridDist = CalculateGridDistance(pairIndex, InpGridLossDistMode,
-                                         InpGridLossATRMultForex,
-                                         InpGridLossATRMultGold,
-                                         InpGridLossMinDistPips,
-                                         InpGridLossFixedPoints,
-                                         InpGridLossFixedPips,
-                                         InpGridLossATRTimeframe,
-                                         InpGridLossATRPeriod,
-                                         false);  // v2.2.7: isProfitSide = false
+// Detect tester mode first
+g_isTesterMode = (bool)MQLInfoInteger(MQL_TESTER);
+
+// v2.2.8: Set chart mode for backtest visualization
+if(g_isTesterMode)
+{
+   SetBacktestChartMode();
+}
+
+// v3.2.5: Configure dashboard based on tester mode
+if(g_isTesterMode)
+{
 ```
 
 ---
 
-#### Part D: อัปเดต call sites สำหรับ Grid Profit
+### Part H: อัปเดต Correlation Only Mode Entry Logic
 
 **ไฟล์:** `public/docs/mql5/Harmony_Dream_EA.mq5`  
-**ตำแหน่ง:** บรรทัด 6557-6564
+**ตำแหน่ง:** บรรทัด ~6002-6027 (ใน `ENTRY_MODE_CORRELATION_ONLY` block)
 
 ```cpp
-// v2.2.7: Pass isProfitSide = true for Grid Profit
-double gridDist = CalculateGridDistance(pairIndex, InpGridProfitDistMode,
-                                         InpGridProfitATRMultForex,
-                                         InpGridProfitATRMultGold,
-                                         InpGridProfitMinDistPips,
-                                         InpGridProfitFixedPoints,
-                                         InpGridProfitFixedPips,
-                                         InpGridProfitATRTimeframe,
-                                         InpGridProfitATRPeriod,
-                                         true);  // v2.2.7: isProfitSide = true
+if(InpEntryMode == ENTRY_MODE_CORRELATION_ONLY)
+{
+   bool debugLog = InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester);
+   
+   // v2.2.8: Check Correlation Type Filter FIRST
+   if(!CheckCorrelationTypeFilter(i))
+   {
+      if(debugLog)
+      {
+         string filterName = (InpCorrTypeFilter == CORR_FILTER_POSITIVE_ONLY) ? "Positive Only" : "Negative Only";
+         string corrTypeName = (g_pairs[i].correlationType == 1) ? "Positive" : "Negative";
+         string reason = StringFormat("SKIP - Corr Type Filter (%s) blocked %s pair", filterName, corrTypeName);
+         datetime now = TimeCurrent();
+         if(g_firstAnalyzeRun || reason != g_pairs[i].lastBlockReason || 
+            now - g_pairs[i].lastBlockLogTime >= DEBUG_LOG_INTERVAL)
+         {
+            PrintFormat("[CORR ONLY] Pair %d %s/%s: %s",
+                        i + 1, g_pairs[i].symbolA, g_pairs[i].symbolB, reason);
+            g_pairs[i].lastBlockReason = reason;
+            g_pairs[i].lastBlockLogTime = now;
+         }
+      }
+      continue;
+   }
+   
+   // Step 1: Check Correlation Threshold
+   if(!CheckCorrelationOnlyEntry(i))
+   {
+   // ... existing code continues
 ```
 
 ---
 
-#### Part E: แก้ไข `UpdateATRCache()` - ใช้ timeframe ที่ถูกต้อง
+### Part I: อัปเดต Z-Score Mode Entry Logic
 
 **ไฟล์:** `public/docs/mql5/Harmony_Dream_EA.mq5`  
-**ตำแหน่ง:** บรรทัด 6848-6875
+**ตำแหน่ง:** บรรทัด ~6185-6190 (ก่อน BUY SIDE ENTRY Z-Score)
 
-**แก้ไขจาก:**
 ```cpp
-void UpdateATRCache(int pairIndex)
-{
-   string symbolA = g_pairs[pairIndex].symbolA;
-   
-   // Check if new bar formed (using Grid ATR timeframe)
-   datetime currentBar = iTime(symbolA, InpGridATRTimeframe, 0);
-   if(currentBar == g_pairs[pairIndex].lastATRBarTime)
-      return;  // Same bar - use cached value
-```
+// ================================================================
+// ORIGINAL Z-SCORE MODE (unchanged)
+// ================================================================
 
-**เป็น:**
-```cpp
-void UpdateATRCache(int pairIndex)
+// v2.2.8: Check Correlation Type Filter for Z-Score Mode
+if(!CheckCorrelationTypeFilter(i))
 {
-   string symbolA = g_pairs[pairIndex].symbolA;
-   
-   // v2.2.7: Check BOTH timeframes for new bar
-   // Use smaller timeframe to ensure more frequent updates
-   ENUM_TIMEFRAMES minTF = InpGridLossATRTimeframe;
-   if(InpGridProfitATRTimeframe < minTF)
-      minTF = InpGridProfitATRTimeframe;
-   
-   datetime currentBar = iTime(symbolA, minTF, 0);
-   if(currentBar == g_pairs[pairIndex].lastATRBarTime)
-      return;  // Same bar - use cached value
-   
-   // New bar - recalculate ATR
-   g_pairs[pairIndex].lastATRBarTime = currentBar;
-   
-   // Grid Loss ATR (using Grid Loss timeframe)
-   g_pairs[pairIndex].cachedGridLossATR = CalculateSimplifiedATR(
-      symbolA, InpGridLossATRTimeframe, InpGridLossATRPeriod);
-   
-   // Grid Profit ATR (using Grid Profit timeframe)
-   g_pairs[pairIndex].cachedGridProfitATR = CalculateSimplifiedATR(
-      symbolA, InpGridProfitATRTimeframe, InpGridProfitATRPeriod);
-   
    if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
    {
-      PrintFormat("[v2.2.7 ATR CACHE] Pair %d (%s): GL_ATR(TF=%s)=%.5f, GP_ATR(TF=%s)=%.5f",
-                  pairIndex + 1, symbolA,
-                  EnumToString(InpGridLossATRTimeframe), g_pairs[pairIndex].cachedGridLossATR,
-                  EnumToString(InpGridProfitATRTimeframe), g_pairs[pairIndex].cachedGridProfitATR);
+      string filterName = (InpCorrTypeFilter == CORR_FILTER_POSITIVE_ONLY) ? "Positive Only" : "Negative Only";
+      string corrTypeName = (g_pairs[i].correlationType == 1) ? "Positive" : "Negative";
+      string reason = StringFormat("SKIP - Corr Type Filter (%s) blocked %s pair", filterName, corrTypeName);
+      datetime now = TimeCurrent();
+      if(g_firstAnalyzeRun || reason != g_pairs[i].lastBlockReason || 
+         now - g_pairs[i].lastBlockLogTime >= DEBUG_LOG_INTERVAL)
+      {
+         PrintFormat("[Z-SCORE] Pair %d %s/%s: %s",
+                     i + 1, g_pairs[i].symbolA, g_pairs[i].symbolB, reason);
+         g_pairs[i].lastBlockReason = reason;
+         g_pairs[i].lastBlockLogTime = now;
+      }
    }
+   continue;  // Skip this pair entirely
 }
+
+// === BUY SIDE ENTRY (Z-SCORE MODE) ===
 ```
 
 ---
 
 ### สรุปไฟล์ที่แก้ไข
 
-| ไฟล์ | ส่วนที่แก้ไข | บรรทัด | รายละเอียด |
-|------|-------------|--------|------------|
-| `Harmony_Dream_EA.mq5` | Version | 7, 10 | อัปเดตเป็น v2.27 |
-| `Harmony_Dream_EA.mq5` | `CalculateGridDistance()` | ~6684-6731 | เพิ่ม `isProfitSide` parameter และใช้ cached ATR ถูกตัว |
-| `Harmony_Dream_EA.mq5` | Grid Loss call site | ~6400 | ส่ง `isProfitSide = false` |
-| `Harmony_Dream_EA.mq5` | Grid Profit call site | ~6557 | ส่ง `isProfitSide = true` |
-| `Harmony_Dream_EA.mq5` | `UpdateATRCache()` | ~6848-6875 | ใช้ smaller timeframe สำหรับ bar check และ log ปรับปรุง |
+| ไฟล์ | ส่วนที่แก้ไข | รายละเอียด |
+|------|-------------|------------|
+| `Harmony_Dream_EA.mq5` | Version | อัปเดตเป็น v2.28 |
+| `Harmony_Dream_EA.mq5` | Enums | เพิ่ม `ENUM_CORR_TYPE_FILTER` และ `ENUM_BACKTEST_CHART_MODE` |
+| `Harmony_Dream_EA.mq5` | Inputs | เพิ่ม `InpCorrTypeFilter` และ `InpBacktestChartMode` |
+| `Harmony_Dream_EA.mq5` | Functions | เพิ่ม `CheckCorrelationTypeFilter()` และ `SetBacktestChartMode()` |
+| `Harmony_Dream_EA.mq5` | OnInit | เรียก `SetBacktestChartMode()` |
+| `Harmony_Dream_EA.mq5` | Entry Logic | เพิ่ม filter check ใน Correlation Only และ Z-Score mode |
 
 ---
 
 ### ผลลัพธ์ที่คาดหวัง
 
-| สถานการณ์ | ก่อนแก้ไข | หลังแก้ไข v2.2.7 |
-|-----------|----------|------------------|
-| Grid Loss ATR (M1) | ใช้ cached value จาก D1 bar check | ใช้ M1 ATR update ทุก 1 นาที |
-| Grid Profit ATR (M1) | ใช้ cachedGridLossATR! | ใช้ cachedGridProfitATR ที่ถูกต้อง |
-| M1 ATR 14 × 1.0 | ~500 pips (ผิด) | ~10-30 pips (ถูกต้อง) |
+| ฟีเจอร์ | ค่าเริ่มต้น | พฤติกรรม |
+|---------|------------|----------|
+| **Correlation Type Filter** | Both | เทรดทุกคู่ (เหมือนเดิม) |
+| | Positive Only | เทรดเฉพาะ Positive Correlation pairs |
+| | Negative Only | เทรดเฉพาะ Negative Correlation pairs |
+| **Backtest Chart Mode** | Candlestick | แสดง chart แบบ candlestick ใน Strategy Tester |
+| | Bars | แสดง chart แบบ bars |
+| | Line | แสดง chart แบบ line |
+| | Default | ไม่เปลี่ยนแปลง |
 
 ---
 
-### ตัวอย่างการทำงานหลังแก้ไข
+### ตัวอย่างการใช้งาน Correlation Type Filter
 
 ```text
-Settings:
-- Grid Loss ATR TF: M1, Period: 14, Mult: 1.0
-- Grid Profit ATR TF: M1, Period: 14, Mult: 1.0
-- Minimum Distance: 50 pips
+ตัวอย่าง 1: ตั้ง "Positive Only"
+- Pair 1 (EURUSD/GBPUSD): Corr = +0.85 → Positive → เทรด
+- Pair 2 (EURUSD/USDCHF): Corr = -0.72 → Negative → ข้าม
+- Pair 3 (AUDUSD/NZDUSD): Corr = +0.91 → Positive → เทรด
 
-GBPUSD M1 ATR(14) ≈ 0.00015 = 15 pips
-
-Grid Loss Distance:
-- ATR = 0.00015
-- Distance = 0.00015 × 1.0 = 0.00015 = 15 pips
-- Min = 50 pips
-- Final = MAX(15, 50) = 50 pips ✓
-
-Grid Profit Distance:
-- Same calculation = 50 pips ✓
+ตัวอย่าง 2: ตั้ง "Negative Only"
+- Pair 1 (EURUSD/GBPUSD): Corr = +0.85 → Positive → ข้าม
+- Pair 2 (EURUSD/USDCHF): Corr = -0.72 → Negative → เทรด
+- Pair 3 (XAUUSD/USDX): Corr = -0.65 → Negative → เทรด
 ```
 
 ---
 
-### หมายเหตุสำคัญ
+### หมายเหตุ
 
-1. **Minimum Distance Fallback:** ถ้า ATR คำนวณได้น้อยกว่า Minimum Distance ระบบจะใช้ Minimum แทน (ตามที่ตั้งไว้ 50 pips)
-
-2. **ค่า ATR ที่เหมาะสม:** M1 ATR มักจะน้อยมาก (~10-30 pips สำหรับ GBPUSD) ดังนั้น:
-   - ถ้าต้องการ grid ใกล้กว่า 50 pips → ลด Minimum Distance
-   - ถ้าต้องการ grid ห่างกว่า → เพิ่ม ATR Multiplier หรือใช้ timeframe ใหญ่กว่า (H1, H4)
-
-3. **Debug Log:** หลังแก้ไข จะมี log แสดงค่า ATR และ Distance ที่คำนวณได้จริงเพื่อให้ตรวจสอบได้ง่าย
-
----
-
-### Technical Notes
-
-- ใช้ `isProfitSide` parameter เพื่อเลือก cached ATR ที่ถูกต้อง
-- Update cache ตาม smaller timeframe (M1 ถ้าตั้งไว้ทั้งสองฝั่ง) เพื่อให้ทันสมัยที่สุด
-- ไม่กระทบ Grid Lot calculation - แก้เฉพาะ Distance calculation เท่านั้น
-- ทำงานร่วมกับ v2.2.6 (CDC Filter Bypass) ได้สมบูรณ์
+- ทั้งสองฟีเจอร์ทำงานร่วมกับ v2.2.7 (Grid ATR Fix) ได้สมบูรณ์
+- Backtest Chart Mode จะเปลี่ยนแปลงเฉพาะใน Strategy Tester เท่านั้น ไม่กระทบ Live Trading
+- Correlation Type Filter ทำงานกับทั้ง Z-Score Mode และ Correlation Only Mode
+- มี Debug Log แจ้งเตือนเมื่อคู่ถูก skip เนื่องจาก filter
 
