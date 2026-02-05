@@ -1345,6 +1345,28 @@ int OnInit()
    g_trade.SetDeviationInPoints(InpSlippage);
    g_trade.SetTypeFilling(ORDER_FILLING_IOC);
    
+   // v2.3.2: Auto-detect broker symbol suffix BEFORE InitializePairs
+   if(InpAutoDetectSuffix)
+   {
+      g_detectedSuffix = DetectBrokerSuffix();
+      g_suffixDetected = (g_detectedSuffix != "");
+      
+      if(g_suffixDetected)
+      {
+         PrintFormat("[v2.3.2] Broker symbol suffix detected: '%s'", g_detectedSuffix);
+      }
+      else
+      {
+         Print("[v2.3.2] No broker suffix detected - using standard symbol names");
+      }
+   }
+   else if(InpManualSuffix != "")
+   {
+      g_detectedSuffix = InpManualSuffix;
+      g_suffixDetected = true;
+      PrintFormat("[v2.3.2] Using manual suffix: '%s'", g_detectedSuffix);
+   }
+   
    // v1.1: Initialize Group Target System (must be before InitializePairs)
    InitializeGroups();
    
