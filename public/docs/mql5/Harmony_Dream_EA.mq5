@@ -300,6 +300,13 @@ string g_detectedSuffix = "";      // Auto-detected broker suffix (e.g., ".v", "
 bool   g_suffixDetected = false;   // True if suffix was detected
 
 //+------------------------------------------------------------------+
+//| CENT ACCOUNT DETECTION (v2.3.4)                                    |
+//+------------------------------------------------------------------+
+bool   g_isCentAccount = false;       // True if Cent account detected (USC, USc, etc.)
+double g_centMultiplier = 1.0;        // 100 for Cent accounts, 1 for Standard
+string g_accountCurrency = "";        // Account currency (USD, USC, etc.)
+
+//+------------------------------------------------------------------+
 //| INPUT PARAMETERS                                                   |
 //+------------------------------------------------------------------+
 input group "=== Trading Settings ==="
