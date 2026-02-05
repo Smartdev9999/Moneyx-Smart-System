@@ -4,10 +4,10 @@
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
- #property version   "2.31"
+ #property version   "2.32"
 #property strict
 #property description "Harmony Dream - Pairs Trading Expert Advisor"
- #property description "v2.3.1: Add Fixed Lot Mode for Main Order + Fix Lot Sizing"
+ #property description "v2.3.2: Auto Symbol Suffix Detection for Multi-Broker Support"
 #property description "Full Hedging with Independent Buy/Sell Sides"
 #include <Trade/Trade.mqh>
 
@@ -294,6 +294,12 @@ enum ENUM_MAIN_LOT_MODE
 };
 
 //+------------------------------------------------------------------+
+//| AUTO SYMBOL SUFFIX DETECTION (v2.3.2)                             |
+//+------------------------------------------------------------------+
+string g_detectedSuffix = "";      // Auto-detected broker suffix (e.g., ".v", ".i", "m")
+bool   g_suffixDetected = false;   // True if suffix was detected
+
+//+------------------------------------------------------------------+
 //| INPUT PARAMETERS                                                   |
 //+------------------------------------------------------------------+
 input group "=== Trading Settings ==="
@@ -301,7 +307,10 @@ input double   InpBaseLot = 0.1;                // Base Lot Size (Symbol A)
 input double   InpMaxLot = 10.0;                // Maximum Lot Size
 input int      InpMagicNumber = 999999;         // Magic Number
 input int      InpSlippage = 30;                // Slippage (points)
-// (Removed) Trading Timeframe - not needed, trades based on Z-Score/Corr thresholds
+
+input group "=== Symbol Settings (v2.3.2) ==="
+input bool     InpAutoDetectSuffix = true;      // Auto Detect Broker Symbol Suffix
+input string   InpManualSuffix = "";            // Manual Suffix (e.g., ".v", ".i") - Use if Auto fails
 
 input group "=== AUTO BALANCE SCALING (v1.6.5) ==="
 input bool     InpEnableAutoScaling = false;        // Enable Auto Balance Scaling
@@ -1089,6 +1098,164 @@ string GetPairCommentPrefix(int pairIndex)
 }
 
 //+------------------------------------------------------------------+
+//| v2.3.2: Detect Broker Symbol Suffix from Chart Symbol             |
+//| Example: Chart = "XAUUSD.v" → Suffix = ".v"                       |
+//+------------------------------------------------------------------+
+string DetectBrokerSuffix()
+{
+   string chartSymbol = _Symbol;  // Symbol ที่ EA ถูก attach
+   
+   // List of known base symbols to check against
+   string baseSymbols[];
+   ArrayResize(baseSymbols, 31);
+   baseSymbols[0] = "XAUUSD"; baseSymbols[1] = "XAUEUR"; baseSymbols[2] = "XAGUSD";
+   baseSymbols[3] = "EURUSD"; baseSymbols[4] = "GBPUSD"; baseSymbols[5] = "AUDUSD";
+   baseSymbols[6] = "NZDUSD"; baseSymbols[7] = "USDCHF"; baseSymbols[8] = "USDJPY";
+   baseSymbols[9] = "USDCAD"; baseSymbols[10] = "EURJPY"; baseSymbols[11] = "EURGBP";
+   baseSymbols[12] = "EURCHF"; baseSymbols[13] = "EURAUD"; baseSymbols[14] = "EURNZD";
+   baseSymbols[15] = "EURCAD"; baseSymbols[16] = "GBPJPY"; baseSymbols[17] = "GBPCHF";
+   baseSymbols[18] = "GBPAUD"; baseSymbols[19] = "GBPNZD"; baseSymbols[20] = "GBPCAD";
+   baseSymbols[21] = "AUDJPY"; baseSymbols[22] = "AUDCHF"; baseSymbols[23] = "AUDNZD";
+   baseSymbols[24] = "AUDCAD"; baseSymbols[25] = "NZDJPY"; baseSymbols[26] = "NZDCHF";
+   baseSymbols[27] = "NZDCAD"; baseSymbols[28] = "CADJPY"; baseSymbols[29] = "CADCHF";
+   baseSymbols[30] = "CHFJPY";
+   
+   int count = ArraySize(baseSymbols);
+   for(int i = 0; i < count; i++)
+   {
+      // Check if chart symbol starts with base symbol
+      if(StringFind(chartSymbol, baseSymbols[i]) == 0)
+      {
+         // Extract suffix (everything after base symbol)
+         int baseLen = StringLen(baseSymbols[i]);
+         string suffix = StringSubstr(chartSymbol, baseLen);
+         
+         if(StringLen(suffix) > 0)
+         {
+            PrintFormat("[v2.3.2] Detected broker suffix: '%s' (from %s)", suffix, chartSymbol);
+            return suffix;
+         }
+      }
+   }
+   
+   // No suffix detected - try alternative method using dot position
+   int dotPos = StringFind(chartSymbol, ".");
+   if(dotPos > 0)
+   {
+      string suffix = StringSubstr(chartSymbol, dotPos);
+      PrintFormat("[v2.3.2] Detected dot-based suffix: '%s' (from %s)", suffix, chartSymbol);
+      return suffix;
+   }
+   
+   // Check for trailing letter suffix (e.g., "EURUSDm" → "m")
+   // Only if last char is lowercase and symbol length > 6
+   int len = StringLen(chartSymbol);
+   if(len > 6)
+   {
+      ushort lastChar = StringGetCharacter(chartSymbol, len - 1);
+      if(lastChar >= 'a' && lastChar <= 'z')
+      {
+         // Check if removing last char gives a valid base symbol
+         string potentialBase = StringSubstr(chartSymbol, 0, len - 1);
+         for(int i = 0; i < count; i++)
+         {
+            if(potentialBase == baseSymbols[i])
+            {
+               string suffix = StringSubstr(chartSymbol, len - 1);
+               PrintFormat("[v2.3.2] Detected letter suffix: '%s' (from %s)", suffix, chartSymbol);
+               return suffix;
+            }
+         }
+      }
+   }
+   
+   return "";  // No suffix detected
+}
+
+//+------------------------------------------------------------------+
+//| v2.3.2: Apply Detected Suffix to Symbol                           |
+//| Example: "EURJPY" + ".v" → "EURJPY.v"                             |
+//+------------------------------------------------------------------+
+string ApplySuffixToSymbol(string baseSymbol)
+{
+   // If suffix already present in input, don't add again
+   if(g_detectedSuffix != "" && StringFind(baseSymbol, g_detectedSuffix) >= 0)
+   {
+      return baseSymbol;
+   }
+   
+   // Apply suffix
+   return baseSymbol + g_detectedSuffix;
+}
+
+//+------------------------------------------------------------------+
+//| v2.3.2: Try Multiple Symbol Variants                              |
+//| Tries: original → with suffix → common variations                 |
+//+------------------------------------------------------------------+
+string TrySymbolVariants(string baseSymbol)
+{
+   // 1. Try original first (maybe user already included suffix)
+   if(SymbolSelect(baseSymbol, true))
+   {
+      return baseSymbol;
+   }
+   
+   // 2. Try with detected suffix
+   if(g_detectedSuffix != "")
+   {
+      string withSuffix = baseSymbol + g_detectedSuffix;
+      if(SymbolSelect(withSuffix, true))
+      {
+         return withSuffix;
+      }
+   }
+   
+   // 3. Try with manual suffix
+   if(InpManualSuffix != "")
+   {
+      string withManual = baseSymbol + InpManualSuffix;
+      if(SymbolSelect(withManual, true))
+      {
+         return withManual;
+      }
+   }
+   
+   // 4. Try common broker suffixes
+   string commonSuffixes[];
+   ArrayResize(commonSuffixes, 8);
+   commonSuffixes[0] = ".v"; commonSuffixes[1] = ".i"; commonSuffixes[2] = ".a";
+   commonSuffixes[3] = ".e"; commonSuffixes[4] = "m"; commonSuffixes[5] = "pro";
+   commonSuffixes[6] = ".raw"; commonSuffixes[7] = ".z";
+   
+   int count = ArraySize(commonSuffixes);
+   for(int i = 0; i < count; i++)
+   {
+      string trySymbol = baseSymbol + commonSuffixes[i];
+      if(SymbolSelect(trySymbol, true))
+      {
+         // Update detected suffix for future use
+         if(g_detectedSuffix == "")
+         {
+            g_detectedSuffix = commonSuffixes[i];
+            PrintFormat("[v2.3.2] Auto-discovered suffix '%s' from %s", commonSuffixes[i], trySymbol);
+         }
+         return trySymbol;
+      }
+   }
+   
+   // 5. Try uppercase version of symbol (some brokers use different case)
+   string upperSymbol = baseSymbol;
+   StringToUpper(upperSymbol);
+   if(upperSymbol != baseSymbol && SymbolSelect(upperSymbol, true))
+   {
+      return upperSymbol;
+   }
+   
+   // Failed to find any variant
+   return "";
+}
+
+//+------------------------------------------------------------------+
 //| v1.8.6: Get Total Lot for Pair from actual positions               |
 //+------------------------------------------------------------------+
 double GetTotalLotForPair(int pairIndex, bool isBuySide)
@@ -1177,6 +1344,28 @@ int OnInit()
    g_trade.SetExpertMagicNumber(InpMagicNumber);
    g_trade.SetDeviationInPoints(InpSlippage);
    g_trade.SetTypeFilling(ORDER_FILLING_IOC);
+   
+   // v2.3.2: Auto-detect broker symbol suffix BEFORE InitializePairs
+   if(InpAutoDetectSuffix)
+   {
+      g_detectedSuffix = DetectBrokerSuffix();
+      g_suffixDetected = (g_detectedSuffix != "");
+      
+      if(g_suffixDetected)
+      {
+         PrintFormat("[v2.3.2] Broker symbol suffix detected: '%s'", g_detectedSuffix);
+      }
+      else
+      {
+         Print("[v2.3.2] No broker suffix detected - using standard symbol names");
+      }
+   }
+   else if(InpManualSuffix != "")
+   {
+      g_detectedSuffix = InpManualSuffix;
+      g_suffixDetected = true;
+      PrintFormat("[v2.3.2] Using manual suffix: '%s'", g_detectedSuffix);
+   }
    
    // v1.1: Initialize Group Target System (must be before InitializePairs)
    InitializeGroups();
@@ -2568,22 +2757,38 @@ void SetupPair(int index, bool enabled, string symbolA, string symbolB)
       return;
    }
    
-   // Check if symbols are available
-   if(!SymbolSelect(symbolA, true))
+   // v2.3.2: Try symbol variants with auto-detected suffix
+   string finalSymbolA = TrySymbolVariants(symbolA);
+   string finalSymbolB = TrySymbolVariants(symbolB);
+   
+   if(finalSymbolA == "")
    {
-      PrintFormat("Pair %d: Symbol A '%s' not available", index + 1, symbolA);
+      PrintFormat("Pair %d: Symbol A '%s' not available (tried with suffix '%s')", 
+                  index + 1, symbolA, g_detectedSuffix);
       return;
    }
-   if(!SymbolSelect(symbolB, true))
+   if(finalSymbolB == "")
    {
-      PrintFormat("Pair %d: Symbol B '%s' not available", index + 1, symbolB);
+      PrintFormat("Pair %d: Symbol B '%s' not available (tried with suffix '%s')", 
+                  index + 1, symbolB, g_detectedSuffix);
       return;
    }
+   
+   // v2.3.2: Store the actual resolved symbol names
+   g_pairs[index].symbolA = finalSymbolA;
+   g_pairs[index].symbolB = finalSymbolB;
    
    // Enable pair
    g_pairs[index].enabled = true;
    g_pairs[index].dataValid = true;
    g_activePairs++;
+   
+   // v2.3.2: Log resolved symbols if different from input
+   if(InpDebugMode && (finalSymbolA != symbolA || finalSymbolB != symbolB))
+   {
+      PrintFormat("[v2.3.2] Pair %d: Resolved %s/%s → %s/%s", 
+                  index + 1, symbolA, symbolB, finalSymbolA, finalSymbolB);
+   }
 }
 
 //+------------------------------------------------------------------+
