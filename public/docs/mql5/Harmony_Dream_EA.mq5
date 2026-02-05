@@ -4,10 +4,10 @@
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
- #property version   "2.30"
+ #property version   "2.31"
 #property strict
 #property description "Harmony Dream - Pairs Trading Expert Advisor"
- #property description "v2.3.0: Fix Progressive ATR Restore + Add Correlation Type Filter"
+ #property description "v2.3.1: Add Fixed Lot Mode for Main Order + Fix Lot Sizing"
 #property description "Full Hedging with Independent Buy/Sell Sides"
 #include <Trade/Trade.mqh>
 
@@ -285,6 +285,15 @@ enum ENUM_CORR_TYPE_FILTER
 };
 
 //+------------------------------------------------------------------+
+//| MAIN ORDER LOT MODE ENUM (v2.3.1)                                  |
+//+------------------------------------------------------------------+
+enum ENUM_MAIN_LOT_MODE
+{
+   MAIN_LOT_FIXED = 0,          // Fixed (Same Lot for Both Symbols)
+   MAIN_LOT_DOLLAR_NEUTRAL      // Dollar-Neutral (Beta × Pip Ratio)
+};
+
+//+------------------------------------------------------------------+
 //| INPUT PARAMETERS                                                   |
 //+------------------------------------------------------------------+
 input group "=== Trading Settings ==="
@@ -467,7 +476,8 @@ input bool     InpSkipATRInTester = false;          // Skip ATR Indicator in Tes
 input bool     InpSkipADXChartInTester = true;      // Skip ADX Chart in Tester (v2.1.4 - Logic Still Works)
 
 input group "=== Lot Sizing (Dollar-Neutral) ==="
-input bool     InpUseDollarNeutral = true;      // Use Dollar-Neutral Sizing
+input ENUM_MAIN_LOT_MODE InpMainLotMode = MAIN_LOT_FIXED;  // v2.3.1: Main Order Lot Mode
+input bool     InpUseDollarNeutral = true;      // [DEPRECATED] Use Dollar-Neutral (use Mode above)
 input double   InpMaxMarginPercent = 50.0;      // Max Margin Usage (%)
 
 input group "=== Risk Management ==="
@@ -4889,11 +4899,31 @@ void CalculateDollarNeutralLots(int pairIndex)
 {
    // v1.6.5: Use scaled base lot
    double baseLot = GetScaledBaseLot();
-   double hedgeRatio = g_pairs[pairIndex].hedgeRatio;
-   
    string symbolA = g_pairs[pairIndex].symbolA;
    string symbolB = g_pairs[pairIndex].symbolB;
    
+   // v2.3.1: Check Main Lot Mode FIRST
+   if(InpMainLotMode == MAIN_LOT_FIXED)
+   {
+      // Fixed Mode: Same lot for both symbols
+      double lotA = NormalizeLot(symbolA, baseLot);
+      double lotB = NormalizeLot(symbolB, baseLot);
+      
+      g_pairs[pairIndex].lotBuyA = lotA;
+      g_pairs[pairIndex].lotBuyB = lotB;
+      g_pairs[pairIndex].lotSellA = lotA;
+      g_pairs[pairIndex].lotSellB = lotB;
+      
+      if(InpDebugMode)
+      {
+         PrintFormat("[v2.3.1 FIXED LOT] Pair %d %s/%s: A=%.2f B=%.2f (Both use BaseLot=%.4f)", 
+                     pairIndex + 1, symbolA, symbolB, lotA, lotB, baseLot);
+      }
+      return;
+   }
+   
+   // === Dollar-Neutral Mode (Original Logic) ===
+   double hedgeRatio = g_pairs[pairIndex].hedgeRatio;
    double pipValueA = GetPipValue(symbolA);
    double pipValueB = GetPipValue(symbolB);
    
