@@ -964,6 +964,10 @@ int    DEBUG_LOG_INTERVAL = 30;               // Log same reason every 30 second
 string g_lastGridPauseReason[MAX_PAIRS][2];    // [pairIndex][0=BUY, 1=SELL]
 datetime g_lastGridPauseLogTime[MAX_PAIRS][2]; // Last time grid pause was logged
 
+// === v2.3.5: Recovery Log Throttling (prevent log spam) ===
+datetime g_lastRecoveryLogTime[MAX_PAIRS];     // Per-pair throttling for recovery logs
+string   g_lastRecoveryLogSide[MAX_PAIRS];     // Track last logged side (BUY/SELL)
+
 //+------------------------------------------------------------------+
 //| v1.8.5: Initialize Theme Colors                                    |
 //+------------------------------------------------------------------+
