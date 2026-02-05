@@ -8856,12 +8856,14 @@ void CloseAveragingPositions(int pairIndex, string side)
 }
 
 //+------------------------------------------------------------------+
-//| Check for Orphan Positions (v3.6.0 HF3 - Skip when EA closing)     |
+//| Check for Orphan Positions (v2.3.6 - Grace Period + Debug Log)     |
 //+------------------------------------------------------------------+
 void CheckOrphanPositions()
 {
    // v3.6.0 HF3 Patch 3: Skip orphan check if EA is closing positions
    if(g_orphanCheckPaused) return;
+   
+   datetime now = TimeCurrent();
    
    for(int i = 0; i < MAX_PAIRS; i++)
    {
@@ -8870,6 +8872,13 @@ void CheckOrphanPositions()
       // === Check Buy Side ===
       if(g_pairs[i].directionBuy == 1)
       {
+         // v2.3.6: Skip orphan check during grace period after opening
+         if(g_pairs[i].entryTimeBuy > 0 && 
+            (now - g_pairs[i].entryTimeBuy) < InpOrphanGracePeriod)
+         {
+            continue;  // Skip this pair - too early to check
+         }
+         
          bool posAExists = VerifyPositionExists(g_pairs[i].ticketBuyA);
          bool posBExists = VerifyPositionExists(g_pairs[i].ticketBuyB);
          
@@ -8877,6 +8886,15 @@ void CheckOrphanPositions()
          if((g_pairs[i].ticketBuyA > 0 && !posAExists) || 
             (g_pairs[i].ticketBuyB > 0 && !posBExists))
          {
+            // v2.3.6: Detailed debug log before force close
+            PrintFormat("[v2.3.6 ORPHAN DEBUG] Pair %d BUY: ticketA=%d (exists=%s) ticketB=%d (exists=%s) | Entry: %s | Now: %s | Age: %d sec",
+                        i + 1, 
+                        g_pairs[i].ticketBuyA, posAExists ? "YES" : "NO",
+                        g_pairs[i].ticketBuyB, posBExists ? "YES" : "NO",
+                        TimeToString(g_pairs[i].entryTimeBuy, TIME_DATE|TIME_SECONDS),
+                        TimeToString(now, TIME_DATE|TIME_SECONDS),
+                        (int)(now - g_pairs[i].entryTimeBuy));
+            
             PrintFormat("ORPHAN DETECTED Pair %d BUY: A=%s B=%s - Force closing remaining",
                         i + 1, posAExists ? "OK" : "GONE", posBExists ? "OK" : "GONE");
             ForceCloseBuySide(i);
@@ -8886,12 +8904,28 @@ void CheckOrphanPositions()
       // === Check Sell Side ===
       if(g_pairs[i].directionSell == 1)
       {
+         // v2.3.6: Skip orphan check during grace period after opening
+         if(g_pairs[i].entryTimeSell > 0 && 
+            (now - g_pairs[i].entryTimeSell) < InpOrphanGracePeriod)
+         {
+            continue;  // Skip this pair - too early to check
+         }
+         
          bool posAExists = VerifyPositionExists(g_pairs[i].ticketSellA);
          bool posBExists = VerifyPositionExists(g_pairs[i].ticketSellB);
          
          if((g_pairs[i].ticketSellA > 0 && !posAExists) || 
             (g_pairs[i].ticketSellB > 0 && !posBExists))
          {
+            // v2.3.6: Detailed debug log before force close
+            PrintFormat("[v2.3.6 ORPHAN DEBUG] Pair %d SELL: ticketA=%d (exists=%s) ticketB=%d (exists=%s) | Entry: %s | Now: %s | Age: %d sec",
+                        i + 1, 
+                        g_pairs[i].ticketSellA, posAExists ? "YES" : "NO",
+                        g_pairs[i].ticketSellB, posBExists ? "YES" : "NO",
+                        TimeToString(g_pairs[i].entryTimeSell, TIME_DATE|TIME_SECONDS),
+                        TimeToString(now, TIME_DATE|TIME_SECONDS),
+                        (int)(now - g_pairs[i].entryTimeSell));
+            
             PrintFormat("ORPHAN DETECTED Pair %d SELL: A=%s B=%s - Force closing remaining",
                         i + 1, posAExists ? "OK" : "GONE", posBExists ? "OK" : "GONE");
             ForceCloseSellSide(i);
