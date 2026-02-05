@@ -6344,6 +6344,27 @@ void AnalyzeAllPairs()
       // ORIGINAL Z-SCORE MODE (unchanged)
       // ================================================================
       
+      // v2.2.8: Check Correlation Type Filter for Z-Score Mode
+      if(!CheckCorrelationTypeFilter(i))
+      {
+         if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
+         {
+            string filterName = (InpCorrTypeFilter == CORR_FILTER_POSITIVE_ONLY) ? "Positive Only" : "Negative Only";
+            string corrTypeName = (g_pairs[i].correlationType == 1) ? "Positive" : "Negative";
+            string reason = StringFormat("SKIP - %s filter blocked %s pair", filterName, corrTypeName);
+            datetime now = TimeCurrent();
+            if(g_firstAnalyzeRun || reason != g_pairs[i].lastBlockReason || 
+               now - g_pairs[i].lastBlockLogTime >= DEBUG_LOG_INTERVAL)
+            {
+               PrintFormat("[Z-SCORE FILTER] Pair %d %s/%s: %s",
+                           i + 1, g_pairs[i].symbolA, g_pairs[i].symbolB, reason);
+               g_pairs[i].lastBlockReason = reason;
+               g_pairs[i].lastBlockLogTime = now;
+            }
+         }
+         continue;  // Skip this pair entirely
+      }
+      
       // === BUY SIDE ENTRY (Z-SCORE MODE) ===
       // v2.2.0: Fixed continue bug + Added throttled debug logs
       if(g_pairs[i].directionBuy == -1 && g_pairs[i].orderCountBuy < g_pairs[i].maxOrderBuy)
