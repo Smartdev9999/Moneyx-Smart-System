@@ -1,106 +1,125 @@
 
-## แผนแก้ไข v2.3.4: รองรับบัญชี Cent Account (USC) - ✅ สำเร็จ
+## แผนแก้ไข v2.3.4 HF1: ปรับปรุง Dashboard Layout และลด Log ที่ไม่จำเป็น
 
 ---
 
-### ปัญหาที่แท้จริง
+### สรุปปัญหาจากรูปภาพ
 
-**หลักการของผู้ใช้:**
-- Input ค่า "500" บัญชี Dollar → หมายถึง กำไร 500 USD ต้องสะสม
-- Input ค่า "500" บัญชี Cent → หมายถึง กำไร 500 USC ต้องสะสม
-- ค่า Input ไม่ต้องแปลง เพราะมันคือหน่วยของแต่ละบัญชี
-
-**ปัญหาจริง:** Auto Scaling คำนวณผิด
-```
-บัญชี Cent (10,000 USC = $100):
-  Scale Factor = 10000 / 100000 = 0.1  ← ผิด! ต้อง 0.001
-  Mini Target = 500 × 0.1 = 50 USC     ← ผิด! ต้อง 5 USC (0.05 USD)
-```
+| ปัญหา | รายละเอียด |
+|-------|-----------|
+| **1. Log ATR วิ่งตลอดเวลา** | `[v2.2.9 GRID ATR] Pair X GL/GP Lv0 [PROG]` แสดงทุกครั้งที่มีการตรวจสอบ Grid |
+| **2. Trend ทับ Pair** | ชื่อ Pair ยาว (เช่น "EURJPY.v-CADJPY.v") ยังชนกับ Trend column |
 
 ---
 
-### โซลูชันที่นำไปใช้ ✅
+### สาเหตุ
 
-#### 1. Auto-Detect Cent Account ✅
-- ตรวจจับจาก Currency (USC, USc, EUc, etc.) และ Server name
-- เพิ่ม Flag `g_isCentAccount` และ `g_centMultiplier = 100`
-- แสดง [CENT] หรือ [STD] ใน Dashboard
+**ปัญหา 1 - Log ATR เยอะ:**
+- Function `CalculateGridDistance()` ถูกเรียกทุก Tick เพื่อตรวจสอบว่าควรเปิด Grid หรือไม่
+- แต่ Debug log แสดงทุกครั้งที่เรียก (ไม่ใช่แค่ตอน ATR Cache อัปเดต)
+- H1 Timeframe ไม่ควรต้อง Log ทุก Tick เพราะ ATR ไม่เปลี่ยนจนกว่าจะมี New Bar
 
-#### 2. Target Logic ไม่เปลี่ยน ✅
-**ไม่คูณ** targets by 100 - ใช้ค่าตามที่ผู้ใช้ input โดยตรง
+**ปัญหา 2 - Dashboard Layout:**
+- ปัจจุบัน centerWidth = 390px
+- Pair names อยู่ที่ centerX + 10
+- Trend column อยู่ที่ centerX + 175 (แค่ 165px จาก Pair)
+- ชื่อ Pair ยาว 20 ตัวอักษร ("EURJPY.v-CADJPY.v") ใช้พื้นที่ ~160px → ทับกัน
+
+---
+
+### โซลูชัน
+
+#### Part A: ลด Log ใน CalculateGridDistance()
+
+**บรรทัด 7262-7269:**
+
+**เปลี่ยนจาก:**
 ```cpp
-// ✓ ถูก - ไม่ต้องแปลง Target
-return ApplyScaleDollar(baseTarget);  // ใช้ Scale Factor ตามปกติ
-```
-
-#### 3. แก้ Auto Scaling สำหรับ Cent ✅
-```cpp
-// GetRealBalanceUSD() - ทำให้ Scale Factor ถูกต้อง
-double GetRealBalanceUSD() {
-   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
-   if(g_isCentAccount) {
-      return balance / 100;  // 10000 USC → 100 USD
-   }
-   return balance;
-}
-
-// GetScaleFactor() - ใช้ Normalized Balance
-double GetScaleFactor() {
-   double accountSize = GetRealBalanceUSD();  // ← ใช้ normalized balance
-   double factor = accountSize / InpBaseAccountSize;
-   // 100 / 100000 = 0.001 ✓ ถูก
-   return NormalizeDouble(MathMax(InpScaleMin, MathMin(InpScaleMax, factor)), 4);
+// v2.2.9: Debug log with scaling info
+if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
+{
+   string scaleStr = (scaleMode == GRID_SCALE_PROGRESSIVE) ? "PROG" : "FIXED";
+   PrintFormat("[v2.2.9 GRID ATR] Pair %d %s Lv%d [%s]: Base=%.1f pips...",
+               pairIndex + 1, isProfitSide ? "GP" : "GL", gridLevel, scaleStr, ...);
 }
 ```
 
----
+**เป็น (v2.3.4 HF1):**
+```cpp
+// v2.3.4 HF1: Only log ATR on NEW BAR (not every grid check)
+// This log is now in UpdateATRCache() which runs once per bar
+// Remove debug log here to prevent excessive logging every tick
+```
 
-### การแก้ไขที่ทำ ✅
-
-| ลำดับ | ส่วน | การแก้ไข | สถานะ |
-|------|------|---------|-------|
-| 1 | Version | อัปเดต 2.34 | ✅ |
-| 2 | Global Variables | เพิ่ม `g_isCentAccount`, `g_centMultiplier`, `g_accountCurrency` | ✅ |
-| 3 | Inputs | เพิ่ม `InpAutoDetectCent`, `InpManualCentMode`, `InpCentDivisor` | ✅ |
-| 4 | DetectCentAccount() | เรียกใน OnInit() เพื่อตรวจจับ | ✅ |
-| 5 | GetRealBalanceUSD() | ทำให้ Auto Scaling ถูกต้อง | ✅ |
-| 6 | GetScaleFactor() | ใช้ GetRealBalanceUSD() แทน ACCOUNT_BALANCE | ✅ |
-| 7 | Dashboard | แสดง [CENT] หรือ [STD] | ✅ |
+**หมายเหตุ:** Log ใน `UpdateATRCache()` (บรรทัด 7444-7450) ยังคงอยู่ → จะแสดงเฉพาะตอน ATR Cache อัปเดต (1 ครั้งต่อ Bar)
 
 ---
 
-### ตัวอย่างการทำงานที่ถูกต้อง
+#### Part B: ขยาย Dashboard Layout
 
-**บัญชี Cent (USC) - Balance 10,000 USC ($100), Base Size $100,000**
+**เพิ่ม centerWidth และขยับ Columns:**
 
-| รายการ | ก่อน | หลัง |
-|--------|------|------|
-| Detected | ❌ Standard | ✓ CENT |
-| Real Balance | 10000 USD ❌ | 100 USD ✓ |
-| Scale Factor | 10000/100000 = 0.1 ❌ | 100/100000 = 0.001 ✓ |
-| Target 500 | 500 × 0.1 = 50 ❌ | 500 × 0.001 = 0.5 ✓ |
-| Profit 50 USC | 50 >= 50 CLOSE ❌ | 50 >= 500 WAIT ✓ |
+| Column | ก่อน | หลัง | เปลี่ยนแปลง |
+|--------|------|------|-------------|
+| centerWidth | 390px | **430px** | +40px |
+| Pair | +10 | +10 | เท่าเดิม |
+| Trend | +175 | **+195** | +20px |
+| C-% | +235 | **+255** | +20px |
+| Type | +285 | **+305** | +20px |
+| Tot P/L | +345 | **+365** | +20px |
 
-**บัญชี Dollar - Balance $100, Base Size $100,000**
+**ไฟล์ที่แก้ไข:**
 
-| รายการ | ก่อน | หลัง |
-|--------|------|------|
-| Detected | Standard ✓ | STD ✓ |
-| Real Balance | 100 USD ✓ | 100 USD ✓ |
-| Scale Factor | 100/100000 = 0.001 ✓ | 100/100000 = 0.001 ✓ |
-| Target 500 | 500 × 0.001 = 0.5 ✓ | 500 × 0.001 = 0.5 ✓ |
+1. **บรรทัด 9812** - เพิ่ม centerWidth:
+```cpp
+int centerWidth = 430;  // v2.3.4 HF1: Increased from 390 to 430
+```
+
+2. **บรรทัด 9879-9882** - Header columns:
+```cpp
+CreateLabel(prefix + "COL_C_TRD", centerX + 195, colLabelY, "Trend", ...);
+CreateLabel(prefix + "COL_C_CR", centerX + 255, colLabelY, "C-%", ...);
+CreateLabel(prefix + "COL_C_TY", centerX + 305, colLabelY, "Type", ...);
+CreateLabel(prefix + "COL_C_TP", centerX + 365, colLabelY, "Tot P/L", ...);
+```
+
+3. **บรรทัด 9970-9973** - Data rows (CreatePairRow):
+```cpp
+CreateLabel(prefix + "P" + idxStr + "_CDC", centerX + 195, y + 3, "-", ...);
+CreateLabel(prefix + "P" + idxStr + "_CORR", centerX + 255, y + 3, "0%", ...);
+CreateLabel(prefix + "P" + idxStr + "_TYPE", centerX + 305, y + 3, "Pos", ...);
+CreateLabel(prefix + "P" + idxStr + "_TOTAL", centerX + 365, y + 3, "0.00", ...);
+```
+
+---
+
+### สรุปการแก้ไขทั้งหมด
+
+| ลำดับ | ส่วน | การแก้ไข |
+|------|------|---------|
+| 1 | `CalculateGridDistance()` | **ลบ** Debug log ออกเพื่อไม่ให้ Log ทุก Tick |
+| 2 | `centerWidth` | เพิ่มจาก 390 → 430 |
+| 3 | Header columns | ขยับ Trend, C-%, Type, Tot P/L ไปทางขวา +20px |
+| 4 | Data rows | ขยับ _CDC, _CORR, _TYPE, _TOTAL ตาม Header |
+
+---
+
+### ผลลัพธ์ที่คาดหวัง
+
+**Log หลังแก้ไข:**
+- ATR Log จะแสดงเฉพาะตอน New Bar (1 ครั้งต่อ H1 = 1 ครั้ง/ชั่วโมง)
+- ไม่มี Log วิ่งทุกวินาทีอีกต่อไป
+
+**Dashboard หลังแก้ไข:**
+```
+ Pair                      Trend   C-%   Type   Tot P/L
+ 1. EURJPY.v-CADJPY.v      Up      85%   Pos    +1.23
+```
+- ระยะห่างระหว่าง Pair name กับ Trend เพิ่มจาก 165px → 185px
+- ไม่มีข้อความทับกันอีก
 
 ---
 
 ### ไฟล์ที่แก้ไข
 
-- `public/docs/mql5/Harmony_Dream_EA.mq5` เท่านั้น
-
----
-
-### หมายเหตุสำคัญ
-
-1. **ไม่ต้องแปลง Target**: User input 500 = 500 USC (Cent) หรือ 500 USD (Standard)
-2. **Scaling ต้องแปลง Balance**: การคำนวณ Scale Factor ต้องนำ Balance มาหารด้วย 100 สำหรับ Cent
-3. **Dashboard แสดง Native Unit**: ยังแสดงค่าเป็น USC หรือ USD ตามบัญชี
-4. **ไม่กระทบ Profit Comparison**: Profit จาก MT5 เป็น Native unit อยู่แล้ว
+`public/docs/mql5/Harmony_Dream_EA.mq5` เท่านั้น
