@@ -9874,11 +9874,12 @@ void CreateDashboard()
    CreateLabel(prefix + "COL_B_PL", buyStartX + 358, colLabelY, "P/L", COLOR_HEADER_TXT, 7, "Arial");
    
    // Center columns: Pair | Trend | C-% | Type | Total P/L
+   // v2.3.4: Shifted Trend column +20px right to prevent overlap with long pair names
    CreateLabel(prefix + "COL_C_PR", centerX + 10, colLabelY, "#.Pair", COLOR_HEADER_TXT, 7, "Arial");
-   CreateLabel(prefix + "COL_C_TRD", centerX + 155, colLabelY, "Trend", COLOR_HEADER_TXT, 7, "Arial");
-   CreateLabel(prefix + "COL_C_CR", centerX + 215, colLabelY, "C-%", COLOR_HEADER_TXT, 7, "Arial");
-   CreateLabel(prefix + "COL_C_TY", centerX + 265, colLabelY, "Type", COLOR_HEADER_TXT, 7, "Arial");
-   CreateLabel(prefix + "COL_C_TP", centerX + 330, colLabelY, "Tot P/L", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_C_TRD", centerX + 175, colLabelY, "Trend", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_C_CR", centerX + 235, colLabelY, "C-%", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_C_TY", centerX + 285, colLabelY, "Type", COLOR_HEADER_TXT, 7, "Arial");
+   CreateLabel(prefix + "COL_C_TP", centerX + 345, colLabelY, "Tot P/L", COLOR_HEADER_TXT, 7, "Arial");
    
    // Sell columns: P/L | Z | Status | Target | Tot | Ord | Lot | Closed | X
    CreateLabel(prefix + "COL_S_PL", sellStartX + 5, colLabelY, "P/L", COLOR_HEADER_TXT, 7, "Arial");
