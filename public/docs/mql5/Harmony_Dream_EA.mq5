@@ -4,10 +4,10 @@
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
- #property version   "2.29"
+ #property version   "2.30"
 #property strict
 #property description "Harmony Dream - Pairs Trading Expert Advisor"
- #property description "v2.2.9: Add Progressive ATR Distance Mode for Grid"
+ #property description "v2.3.0: Fix Progressive ATR Restore + Add Correlation Type Filter"
 #property description "Full Hedging with Independent Buy/Sell Sides"
 #include <Trade/Trade.mqh>
 
@@ -169,6 +169,12 @@ struct PairInfo
    string         lastBlockReason;        // Last block reason logged (for spam prevention)
    datetime       lastBlockLogTime;       // Last time block was logged
    
+   // === v2.3.0: Track max grid level for Progressive Mode restoration ===
+   int            maxGridLossBuyLevel;
+   int            maxGridLossSellLevel;
+   int            maxGridProfitBuyLevel;
+   int            maxGridProfitSellLevel;
+   
    // === Combined ===
    double         totalPairProfit;   // profitBuy + profitSell
 };
@@ -266,6 +272,16 @@ enum ENUM_ENTRY_MODE
 {
    ENTRY_MODE_ZSCORE = 0,        // Z-Score Based (Original)
    ENTRY_MODE_CORRELATION_ONLY   // Correlation Only (No Z-Score)
+};
+
+//+------------------------------------------------------------------+
+//| CORRELATION TYPE FILTER ENUM (v2.2.8)                              |
+//+------------------------------------------------------------------+
+enum ENUM_CORR_TYPE_FILTER
+{
+   CORR_FILTER_BOTH = 0,          // Both (Positive + Negative)
+   CORR_FILTER_POSITIVE_ONLY,     // Positive Only
+   CORR_FILTER_NEGATIVE_ONLY      // Negative Only
 };
 
 //+------------------------------------------------------------------+
@@ -666,6 +682,7 @@ input ENUM_THEME_MODE InpThemeMode = THEME_DARK;    // Dashboard Theme
 
 input group "=== Entry Mode Settings (v1.8.8) ==="
 input ENUM_ENTRY_MODE InpEntryMode = ENTRY_MODE_ZSCORE;    // Entry Mode
+input ENUM_CORR_TYPE_FILTER InpCorrTypeFilter = CORR_FILTER_BOTH;  // v2.2.8: Correlation Type Filter
 input double   InpCorrOnlyPositiveThreshold = 0.60;        // Correlation Only: Positive Threshold (0.60 = 60%)
 input double   InpCorrOnlyNegativeThreshold = -0.60;       // Correlation Only: Negative Threshold (-0.60 = -60%)
 // v2.1.7: NEW - Option to skip filters for immediate entry
@@ -1741,10 +1758,25 @@ void RestoreOpenPositions()
                  {
                     g_pairs[i].avgOrderCountBuy++;
                     
-                    // v2.2.3: Update lastAvgPriceBuy to latest Grid Loss price (lowest for BUY)
+                    // v2.3.0: Extract grid level from comment for Progressive Mode
+                    int extractedLevel = ExtractGridLevelFromComment(comment, "_GL#");
                     double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-                    if(g_pairs[i].lastAvgPriceBuy == 0 || openPrice < g_pairs[i].lastAvgPriceBuy)
+                    
+                    // v2.3.0: For Progressive Mode, use HIGHEST level's price (not just lowest price)
+                    if(extractedLevel > g_pairs[i].maxGridLossBuyLevel)
                     {
+                       g_pairs[i].maxGridLossBuyLevel = extractedLevel;
+                       g_pairs[i].lastAvgPriceBuy = openPrice;
+                       
+                       if(InpDebugMode)
+                       {
+                          PrintFormat("[v2.3.0 RESTORE] Pair %d GL_BUY: Level %d price=%.5f (MaxLevel=%d)",
+                                      i + 1, extractedLevel, openPrice, g_pairs[i].maxGridLossBuyLevel);
+                       }
+                    }
+                    else if(g_pairs[i].lastAvgPriceBuy == 0 || openPrice < g_pairs[i].lastAvgPriceBuy)
+                    {
+                       // Fallback for old comment format or first restore
                        g_pairs[i].lastAvgPriceBuy = openPrice;
                     }
                     
@@ -1763,10 +1795,25 @@ void RestoreOpenPositions()
                  {
                     g_pairs[i].gridProfitCountBuy++;
                     
-                    // v2.2.3: Update lastProfitPriceBuy to latest Grid Profit price (highest for BUY)
+                    // v2.3.0: Extract grid level from comment for Progressive Mode
+                    int extractedLevel = ExtractGridLevelFromComment(comment, "_GP#");
                     double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-                    if(g_pairs[i].lastProfitPriceBuy == 0 || openPrice > g_pairs[i].lastProfitPriceBuy)
+                    
+                    // v2.3.0: For Progressive Mode, use HIGHEST level's price
+                    if(extractedLevel > g_pairs[i].maxGridProfitBuyLevel)
                     {
+                       g_pairs[i].maxGridProfitBuyLevel = extractedLevel;
+                       g_pairs[i].lastProfitPriceBuy = openPrice;
+                       
+                       if(InpDebugMode)
+                       {
+                          PrintFormat("[v2.3.0 RESTORE] Pair %d GP_BUY: Level %d price=%.5f (MaxLevel=%d)",
+                                      i + 1, extractedLevel, openPrice, g_pairs[i].maxGridProfitBuyLevel);
+                       }
+                    }
+                    else if(g_pairs[i].lastProfitPriceBuy == 0 || openPrice > g_pairs[i].lastProfitPriceBuy)
+                    {
+                       // Fallback for old comment format
                        g_pairs[i].lastProfitPriceBuy = openPrice;
                     }
                     
@@ -1869,10 +1916,25 @@ void RestoreOpenPositions()
                  {
                     g_pairs[i].avgOrderCountSell++;
                     
-                    // v2.2.3: Update lastAvgPriceSell to latest Grid Loss price (highest for SELL)
+                    // v2.3.0: Extract grid level from comment for Progressive Mode
+                    int extractedLevel = ExtractGridLevelFromComment(comment, "_GL#");
                     double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-                    if(g_pairs[i].lastAvgPriceSell == 0 || openPrice > g_pairs[i].lastAvgPriceSell)
+                    
+                    // v2.3.0: For SELL, Grid Loss is HIGHEST price - use highest level
+                    if(extractedLevel > g_pairs[i].maxGridLossSellLevel)
                     {
+                       g_pairs[i].maxGridLossSellLevel = extractedLevel;
+                       g_pairs[i].lastAvgPriceSell = openPrice;
+                       
+                       if(InpDebugMode)
+                       {
+                          PrintFormat("[v2.3.0 RESTORE] Pair %d GL_SELL: Level %d price=%.5f (MaxLevel=%d)",
+                                      i + 1, extractedLevel, openPrice, g_pairs[i].maxGridLossSellLevel);
+                       }
+                    }
+                    else if(g_pairs[i].lastAvgPriceSell == 0 || openPrice > g_pairs[i].lastAvgPriceSell)
+                    {
+                       // Fallback for old comment format
                        g_pairs[i].lastAvgPriceSell = openPrice;
                     }
                     
@@ -1891,10 +1953,25 @@ void RestoreOpenPositions()
                  {
                     g_pairs[i].gridProfitCountSell++;
                     
-                    // v2.2.3: Update lastProfitPriceSell to latest Grid Profit price (lowest for SELL)
+                    // v2.3.0: Extract grid level from comment for Progressive Mode
+                    int extractedLevel = ExtractGridLevelFromComment(comment, "_GP#");
                     double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-                    if(g_pairs[i].lastProfitPriceSell == 0 || openPrice < g_pairs[i].lastProfitPriceSell)
+                    
+                    // v2.3.0: For SELL, Grid Profit is LOWEST price - use highest level
+                    if(extractedLevel > g_pairs[i].maxGridProfitSellLevel)
                     {
+                       g_pairs[i].maxGridProfitSellLevel = extractedLevel;
+                       g_pairs[i].lastProfitPriceSell = openPrice;
+                       
+                       if(InpDebugMode)
+                       {
+                          PrintFormat("[v2.3.0 RESTORE] Pair %d GP_SELL: Level %d price=%.5f (MaxLevel=%d)",
+                                      i + 1, extractedLevel, openPrice, g_pairs[i].maxGridProfitSellLevel);
+                       }
+                    }
+                    else if(g_pairs[i].lastProfitPriceSell == 0 || openPrice < g_pairs[i].lastProfitPriceSell)
+                    {
+                       // Fallback for old comment format
                        g_pairs[i].lastProfitPriceSell = openPrice;
                     }
                     
@@ -2459,6 +2536,12 @@ void SetupPair(int index, bool enabled, string symbolA, string symbolB)
    g_pairs[index].initialEntryPriceSell = 0;
    g_pairs[index].gridProfitZLevelBuy = 0;
    g_pairs[index].gridProfitZLevelSell = 0;
+   
+   // v2.3.0: Reset max grid levels
+   g_pairs[index].maxGridLossBuyLevel = 0;
+   g_pairs[index].maxGridLossSellLevel = 0;
+   g_pairs[index].maxGridProfitBuyLevel = 0;
+   g_pairs[index].maxGridProfitSellLevel = 0;
    
    // Combined
    g_pairs[index].totalPairProfit = 0;
@@ -5826,6 +5909,55 @@ bool CheckCorrelationOnlyEntry(int pairIndex)
 }
 
 //+------------------------------------------------------------------+
+//| Check Correlation Type Filter (v2.2.8)                             |
+//| Returns: true = Pair's correlation type matches the filter         |
+//+------------------------------------------------------------------+
+bool CheckCorrelationTypeFilter(int pairIndex)
+{
+   int corrType = g_pairs[pairIndex].correlationType;
+   
+   switch(InpCorrTypeFilter)
+   {
+      case CORR_FILTER_BOTH:
+         return true;  // Allow both types
+         
+      case CORR_FILTER_POSITIVE_ONLY:
+         return (corrType == 1);  // Only Positive Correlation
+         
+      case CORR_FILTER_NEGATIVE_ONLY:
+         return (corrType == -1);  // Only Negative Correlation
+         
+      default:
+         return true;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Extract Grid Level from Comment (v2.3.0)                           |
+//| Example: "_GL#3_" → returns 3, "_GP#2_" → returns 2               |
+//+------------------------------------------------------------------+
+int ExtractGridLevelFromComment(string comment, string prefix)
+{
+   int pos = StringFind(comment, prefix);
+   if(pos < 0) return 0;
+   
+   // Find the number after prefix (e.g., "_GL#" → find "3" in "_GL#3_")
+   int startPos = pos + StringLen(prefix);
+   string numStr = "";
+   
+   for(int k = startPos; k < StringLen(comment); k++)
+   {
+      ushort ch = StringGetCharacter(comment, k);
+      if(ch >= '0' && ch <= '9')
+         numStr += CharToString((uchar)ch);
+      else
+         break;
+   }
+   
+   return (StringLen(numStr) > 0) ? (int)StringToInteger(numStr) : 0;
+}
+
+//+------------------------------------------------------------------+
 //| Determine Trade Direction for Correlation Only Mode (v1.8.8)       |
 //| Returns: "BUY" = Open BUY Side (Buy A + action on B)               |
 //|          "SELL" = Open SELL Side (Sell A + action on B)            |
@@ -6015,6 +6147,27 @@ void AnalyzeAllPairs()
          // v2.1.7: Debug flag
          bool debugLog = InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester);
          
+         // v2.2.8: Check Correlation Type Filter FIRST
+         if(!CheckCorrelationTypeFilter(i))
+         {
+            if(debugLog)
+            {
+               string filterName = (InpCorrTypeFilter == CORR_FILTER_POSITIVE_ONLY) ? "Positive Only" : "Negative Only";
+               string corrTypeName = (g_pairs[i].correlationType == 1) ? "Positive" : "Negative";
+               string reason = StringFormat("SKIP - %s filter blocked %s pair", filterName, corrTypeName);
+               datetime now = TimeCurrent();
+               if(g_firstAnalyzeRun || reason != g_pairs[i].lastBlockReason || 
+                  now - g_pairs[i].lastBlockLogTime >= DEBUG_LOG_INTERVAL)
+               {
+                  PrintFormat("[CORR FILTER] Pair %d %s/%s: %s",
+                              i + 1, g_pairs[i].symbolA, g_pairs[i].symbolB, reason);
+                  g_pairs[i].lastBlockReason = reason;
+                  g_pairs[i].lastBlockLogTime = now;
+               }
+            }
+            continue;
+         }
+         
          // Step 1: Check Correlation Threshold
          if(!CheckCorrelationOnlyEntry(i))
          {
@@ -6190,6 +6343,27 @@ void AnalyzeAllPairs()
       // ================================================================
       // ORIGINAL Z-SCORE MODE (unchanged)
       // ================================================================
+      
+      // v2.2.8: Check Correlation Type Filter for Z-Score Mode
+      if(!CheckCorrelationTypeFilter(i))
+      {
+         if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
+         {
+            string filterName = (InpCorrTypeFilter == CORR_FILTER_POSITIVE_ONLY) ? "Positive Only" : "Negative Only";
+            string corrTypeName = (g_pairs[i].correlationType == 1) ? "Positive" : "Negative";
+            string reason = StringFormat("SKIP - %s filter blocked %s pair", filterName, corrTypeName);
+            datetime now = TimeCurrent();
+            if(g_firstAnalyzeRun || reason != g_pairs[i].lastBlockReason || 
+               now - g_pairs[i].lastBlockLogTime >= DEBUG_LOG_INTERVAL)
+            {
+               PrintFormat("[Z-SCORE FILTER] Pair %d %s/%s: %s",
+                           i + 1, g_pairs[i].symbolA, g_pairs[i].symbolB, reason);
+               g_pairs[i].lastBlockReason = reason;
+               g_pairs[i].lastBlockLogTime = now;
+            }
+         }
+         continue;  // Skip this pair entirely
+      }
       
       // === BUY SIDE ENTRY (Z-SCORE MODE) ===
       // v2.2.0: Fixed continue bug + Added throttled debug logs
@@ -8119,6 +8293,9 @@ bool CloseBuySide(int pairIndex)
       g_pairs[pairIndex].gridProfitZLevelBuy = 0;
       // v3.6.0 HF4: Reset total grid lot
       g_pairs[pairIndex].avgTotalLotBuy = 0;
+      // v2.3.0: Reset max grid levels (BUY)
+      g_pairs[pairIndex].maxGridLossBuyLevel = 0;
+      g_pairs[pairIndex].maxGridProfitBuyLevel = 0;
       
       // v3.6.0 HF3 Patch 3: Resume orphan detection
       g_orphanCheckPaused = false;
@@ -8253,6 +8430,9 @@ bool CloseSellSide(int pairIndex)
       g_pairs[pairIndex].gridProfitZLevelSell = 0;
       // v3.6.0 HF4: Reset total grid lot
       g_pairs[pairIndex].avgTotalLotSell = 0;
+      // v2.3.0: Reset max grid levels (SELL)
+      g_pairs[pairIndex].maxGridLossSellLevel = 0;
+      g_pairs[pairIndex].maxGridProfitSellLevel = 0;
       
       // v3.6.0 HF3 Patch 3: Resume orphan detection
       g_orphanCheckPaused = false;
@@ -8466,6 +8646,9 @@ void ForceCloseBuySide(int pairIndex)
    g_pairs[pairIndex].entryZScoreBuy = 0;
    // v3.6.0 HF4: Reset total grid lot
    g_pairs[pairIndex].avgTotalLotBuy = 0;
+   // v2.3.0: Reset max grid levels (BUY)
+   g_pairs[pairIndex].maxGridLossBuyLevel = 0;
+   g_pairs[pairIndex].maxGridProfitBuyLevel = 0;
    
    PrintFormat("Pair %d BUY SIDE FORCE CLOSED (Orphan Recovery)", pairIndex + 1);
 }
@@ -8555,6 +8738,9 @@ void ForceCloseSellSide(int pairIndex)
    g_pairs[pairIndex].entryZScoreSell = 0;
    // v3.6.0 HF4: Reset total grid lot
    g_pairs[pairIndex].avgTotalLotSell = 0;
+   // v2.3.0: Reset max grid levels (SELL)
+   g_pairs[pairIndex].maxGridLossSellLevel = 0;
+   g_pairs[pairIndex].maxGridProfitSellLevel = 0;
    
    PrintFormat("Pair %d SELL SIDE FORCE CLOSED (Orphan Recovery)", pairIndex + 1);
 }
