@@ -4804,6 +4804,75 @@ double NormalizeLot(string symbol, double lot)
 //+------------------------------------------------------------------+
 //| Get Scale Factor (v1.6.5)                                          |
 //+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| v2.3.4: Detect Cent Account from Currency and Server Name          |
+//+------------------------------------------------------------------+
+void DetectCentAccount()
+{
+   g_accountCurrency = AccountInfoString(ACCOUNT_CURRENCY);
+   
+   // Method 1: Check currency suffix (USC, USc, EUc, etc.)
+   string upperCurrency = g_accountCurrency;
+   StringToUpper(upperCurrency);
+   
+   if(StringFind(upperCurrency, "USC") >= 0 ||  // US Cent
+      StringFind(upperCurrency, "EUC") >= 0 ||  // EU Cent
+      StringFind(upperCurrency, "GBC") >= 0 ||  // GB Pence
+      (StringLen(g_accountCurrency) > 2 && StringGetCharacter(g_accountCurrency, StringLen(g_accountCurrency) - 1) == 'c'))  // ends with 'c'
+   {
+      g_isCentAccount = true;
+      g_centMultiplier = InpCentDivisor;  // Default 100
+      PrintFormat("[v2.3.4] CENT ACCOUNT DETECTED via currency: %s (Multiplier: %.0f)",
+                  g_accountCurrency, g_centMultiplier);
+      return;
+   }
+   
+   // Method 2: Check broker server name for "cent" keyword
+   string serverName = AccountInfoString(ACCOUNT_SERVER);
+   string serverLower = serverName;
+   StringToLower(serverLower);
+   if(StringFind(serverLower, "cent") >= 0)
+   {
+      g_isCentAccount = true;
+      g_centMultiplier = InpCentDivisor;
+      PrintFormat("[v2.3.4] CENT ACCOUNT DETECTED via server: %s (Multiplier: %.0f)",
+                  serverName, g_centMultiplier);
+      return;
+   }
+   
+   // Method 3: Manual override
+   if(InpManualCentMode)
+   {
+      g_isCentAccount = true;
+      g_centMultiplier = InpCentDivisor;
+      PrintFormat("[v2.3.4] CENT ACCOUNT MODE FORCED via Input (Multiplier: %.0f)",
+                  g_centMultiplier);
+      return;
+   }
+   
+   // Standard account
+   g_isCentAccount = false;
+   g_centMultiplier = 1.0;
+   PrintFormat("[v2.3.4] Standard Account detected: %s", g_accountCurrency);
+}
+
+//+------------------------------------------------------------------+
+//| v2.3.4: Get Real Balance in USD (for correct scaling)              |
+//| Cent accounts: 10000 USC → 100 USD                                 |
+//+------------------------------------------------------------------+
+double GetRealBalanceUSD()
+{
+   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+   
+   if(g_isCentAccount && g_centMultiplier > 0)
+   {
+      // Convert Cent to USD for scaling calculation
+      return balance / g_centMultiplier;
+   }
+   
+   return balance;
+}
+
 double GetScaleFactor()
 {
    // If auto scaling disabled, return 1.0 (no scaling)
@@ -4818,7 +4887,8 @@ double GetScaleFactor()
    }
    else
    {
-      accountSize = AccountInfoDouble(ACCOUNT_BALANCE);  // Dynamic Mode
+      // v2.3.4: Use real USD balance for Cent accounts
+      accountSize = GetRealBalanceUSD();
    }
    
    if(accountSize <= 0) return 1.0;
