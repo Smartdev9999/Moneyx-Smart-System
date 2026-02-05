@@ -9803,7 +9803,7 @@ void CreateDashboard()
    
    // v3.2.9 Hotfix: Increased header height and spacing to prevent overlap
    int buyWidth = 395;
-   int centerWidth = 390;
+   int centerWidth = 430;  // v2.3.4 HF1: Increased from 390 to 430 for longer pair names
    int sellWidth = 395;
    int headerHeight = 30;  // Main header height (increased)
    int colHeaderHeight = 20;  // Dedicated space for column headers with background (increased)
