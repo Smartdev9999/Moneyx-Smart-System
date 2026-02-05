@@ -8738,6 +8738,9 @@ void ForceCloseSellSide(int pairIndex)
    g_pairs[pairIndex].entryZScoreSell = 0;
    // v3.6.0 HF4: Reset total grid lot
    g_pairs[pairIndex].avgTotalLotSell = 0;
+   // v2.3.0: Reset max grid levels (SELL)
+   g_pairs[pairIndex].maxGridLossSellLevel = 0;
+   g_pairs[pairIndex].maxGridProfitSellLevel = 0;
    
    PrintFormat("Pair %d SELL SIDE FORCE CLOSED (Orphan Recovery)", pairIndex + 1);
 }
