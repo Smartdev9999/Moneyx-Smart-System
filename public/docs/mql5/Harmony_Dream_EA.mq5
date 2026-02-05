@@ -1467,7 +1467,13 @@ int OnInit()
    // v3.7.2: Initialize CDC status tracking array
    ArrayResize(g_lastCDCStatus, MAX_PAIRS);
    for(int i = 0; i < MAX_PAIRS; i++)
+   {
       g_lastCDCStatus[i] = "";
+      
+      // v2.3.5: Initialize recovery log throttling arrays
+      g_lastRecoveryLogTime[i] = 0;
+      g_lastRecoveryLogSide[i] = "";
+   }
    
    // v3.7.1: Force initial CDC calculation and initialize per-symbol tracking
    if(InpUseCDCTrendFilter)
