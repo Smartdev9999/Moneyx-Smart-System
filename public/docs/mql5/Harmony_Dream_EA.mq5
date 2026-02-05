@@ -1098,6 +1098,164 @@ string GetPairCommentPrefix(int pairIndex)
 }
 
 //+------------------------------------------------------------------+
+//| v2.3.2: Detect Broker Symbol Suffix from Chart Symbol             |
+//| Example: Chart = "XAUUSD.v" → Suffix = ".v"                       |
+//+------------------------------------------------------------------+
+string DetectBrokerSuffix()
+{
+   string chartSymbol = _Symbol;  // Symbol ที่ EA ถูก attach
+   
+   // List of known base symbols to check against
+   string baseSymbols[];
+   ArrayResize(baseSymbols, 31);
+   baseSymbols[0] = "XAUUSD"; baseSymbols[1] = "XAUEUR"; baseSymbols[2] = "XAGUSD";
+   baseSymbols[3] = "EURUSD"; baseSymbols[4] = "GBPUSD"; baseSymbols[5] = "AUDUSD";
+   baseSymbols[6] = "NZDUSD"; baseSymbols[7] = "USDCHF"; baseSymbols[8] = "USDJPY";
+   baseSymbols[9] = "USDCAD"; baseSymbols[10] = "EURJPY"; baseSymbols[11] = "EURGBP";
+   baseSymbols[12] = "EURCHF"; baseSymbols[13] = "EURAUD"; baseSymbols[14] = "EURNZD";
+   baseSymbols[15] = "EURCAD"; baseSymbols[16] = "GBPJPY"; baseSymbols[17] = "GBPCHF";
+   baseSymbols[18] = "GBPAUD"; baseSymbols[19] = "GBPNZD"; baseSymbols[20] = "GBPCAD";
+   baseSymbols[21] = "AUDJPY"; baseSymbols[22] = "AUDCHF"; baseSymbols[23] = "AUDNZD";
+   baseSymbols[24] = "AUDCAD"; baseSymbols[25] = "NZDJPY"; baseSymbols[26] = "NZDCHF";
+   baseSymbols[27] = "NZDCAD"; baseSymbols[28] = "CADJPY"; baseSymbols[29] = "CADCHF";
+   baseSymbols[30] = "CHFJPY";
+   
+   int count = ArraySize(baseSymbols);
+   for(int i = 0; i < count; i++)
+   {
+      // Check if chart symbol starts with base symbol
+      if(StringFind(chartSymbol, baseSymbols[i]) == 0)
+      {
+         // Extract suffix (everything after base symbol)
+         int baseLen = StringLen(baseSymbols[i]);
+         string suffix = StringSubstr(chartSymbol, baseLen);
+         
+         if(StringLen(suffix) > 0)
+         {
+            PrintFormat("[v2.3.2] Detected broker suffix: '%s' (from %s)", suffix, chartSymbol);
+            return suffix;
+         }
+      }
+   }
+   
+   // No suffix detected - try alternative method using dot position
+   int dotPos = StringFind(chartSymbol, ".");
+   if(dotPos > 0)
+   {
+      string suffix = StringSubstr(chartSymbol, dotPos);
+      PrintFormat("[v2.3.2] Detected dot-based suffix: '%s' (from %s)", suffix, chartSymbol);
+      return suffix;
+   }
+   
+   // Check for trailing letter suffix (e.g., "EURUSDm" → "m")
+   // Only if last char is lowercase and symbol length > 6
+   int len = StringLen(chartSymbol);
+   if(len > 6)
+   {
+      ushort lastChar = StringGetCharacter(chartSymbol, len - 1);
+      if(lastChar >= 'a' && lastChar <= 'z')
+      {
+         // Check if removing last char gives a valid base symbol
+         string potentialBase = StringSubstr(chartSymbol, 0, len - 1);
+         for(int i = 0; i < count; i++)
+         {
+            if(potentialBase == baseSymbols[i])
+            {
+               string suffix = StringSubstr(chartSymbol, len - 1);
+               PrintFormat("[v2.3.2] Detected letter suffix: '%s' (from %s)", suffix, chartSymbol);
+               return suffix;
+            }
+         }
+      }
+   }
+   
+   return "";  // No suffix detected
+}
+
+//+------------------------------------------------------------------+
+//| v2.3.2: Apply Detected Suffix to Symbol                           |
+//| Example: "EURJPY" + ".v" → "EURJPY.v"                             |
+//+------------------------------------------------------------------+
+string ApplySuffixToSymbol(string baseSymbol)
+{
+   // If suffix already present in input, don't add again
+   if(g_detectedSuffix != "" && StringFind(baseSymbol, g_detectedSuffix) >= 0)
+   {
+      return baseSymbol;
+   }
+   
+   // Apply suffix
+   return baseSymbol + g_detectedSuffix;
+}
+
+//+------------------------------------------------------------------+
+//| v2.3.2: Try Multiple Symbol Variants                              |
+//| Tries: original → with suffix → common variations                 |
+//+------------------------------------------------------------------+
+string TrySymbolVariants(string baseSymbol)
+{
+   // 1. Try original first (maybe user already included suffix)
+   if(SymbolSelect(baseSymbol, true))
+   {
+      return baseSymbol;
+   }
+   
+   // 2. Try with detected suffix
+   if(g_detectedSuffix != "")
+   {
+      string withSuffix = baseSymbol + g_detectedSuffix;
+      if(SymbolSelect(withSuffix, true))
+      {
+         return withSuffix;
+      }
+   }
+   
+   // 3. Try with manual suffix
+   if(InpManualSuffix != "")
+   {
+      string withManual = baseSymbol + InpManualSuffix;
+      if(SymbolSelect(withManual, true))
+      {
+         return withManual;
+      }
+   }
+   
+   // 4. Try common broker suffixes
+   string commonSuffixes[];
+   ArrayResize(commonSuffixes, 8);
+   commonSuffixes[0] = ".v"; commonSuffixes[1] = ".i"; commonSuffixes[2] = ".a";
+   commonSuffixes[3] = ".e"; commonSuffixes[4] = "m"; commonSuffixes[5] = "pro";
+   commonSuffixes[6] = ".raw"; commonSuffixes[7] = ".z";
+   
+   int count = ArraySize(commonSuffixes);
+   for(int i = 0; i < count; i++)
+   {
+      string trySymbol = baseSymbol + commonSuffixes[i];
+      if(SymbolSelect(trySymbol, true))
+      {
+         // Update detected suffix for future use
+         if(g_detectedSuffix == "")
+         {
+            g_detectedSuffix = commonSuffixes[i];
+            PrintFormat("[v2.3.2] Auto-discovered suffix '%s' from %s", commonSuffixes[i], trySymbol);
+         }
+         return trySymbol;
+      }
+   }
+   
+   // 5. Try uppercase version of symbol (some brokers use different case)
+   string upperSymbol = baseSymbol;
+   StringToUpper(upperSymbol);
+   if(upperSymbol != baseSymbol && SymbolSelect(upperSymbol, true))
+   {
+      return upperSymbol;
+   }
+   
+   // Failed to find any variant
+   return "";
+}
+
+//+------------------------------------------------------------------+
 //| v1.8.6: Get Total Lot for Pair from actual positions               |
 //+------------------------------------------------------------------+
 double GetTotalLotForPair(int pairIndex, bool isBuySide)
