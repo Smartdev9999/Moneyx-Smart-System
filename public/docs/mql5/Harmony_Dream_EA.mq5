@@ -7259,14 +7259,8 @@ double CalculateGridDistance(int pairIndex, ENUM_GRID_DISTANCE_MODE mode,
          // v1.6: Apply minimum distance fallback
          double minDistance = minDistPips * pipSize;
          
-          // v2.2.9: Debug log with scaling info
-          if(InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester))
-          {
-             string scaleStr = (scaleMode == GRID_SCALE_PROGRESSIVE) ? "PROG" : "FIXED";
-             PrintFormat("[v2.2.9 GRID ATR] Pair %d %s Lv%d [%s]: Base=%.1f pips, Final=%.1f pips, Min=%.1f",
-                         pairIndex + 1, isProfitSide ? "GP" : "GL", gridLevel, scaleStr,
-                         baseDistance / pipSize, finalDistance / pipSize, minDistPips);
-          }
+          // v2.3.4 HF1: Removed debug log here to prevent excessive logging every tick
+          // ATR info is now only logged in UpdateATRCache() which runs once per H1 bar
          
          return MathMax(finalDistance, minDistance);
       }
