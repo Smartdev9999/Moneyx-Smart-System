@@ -4,10 +4,10 @@
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "2.34"
+#property version   "2.35"
 #property strict
 #property description "Harmony Dream - Pairs Trading Expert Advisor"
-#property description "v2.3.4: Auto-Detect Cent Account (USC) for Correct Scaling"
+#property description "v2.3.5: Orphan Prevention Guard + Log Throttling"
 #property description "Full Hedging with Independent Buy/Sell Sides"
 #include <Trade/Trade.mqh>
 
@@ -964,6 +964,10 @@ int    DEBUG_LOG_INTERVAL = 30;               // Log same reason every 30 second
 string g_lastGridPauseReason[MAX_PAIRS][2];    // [pairIndex][0=BUY, 1=SELL]
 datetime g_lastGridPauseLogTime[MAX_PAIRS][2]; // Last time grid pause was logged
 
+// === v2.3.5: Recovery Log Throttling (prevent log spam) ===
+datetime g_lastRecoveryLogTime[MAX_PAIRS];     // Per-pair throttling for recovery logs
+string   g_lastRecoveryLogSide[MAX_PAIRS];     // Track last logged side (BUY/SELL)
+
 //+------------------------------------------------------------------+
 //| v1.8.5: Initialize Theme Colors                                    |
 //+------------------------------------------------------------------+
@@ -1463,7 +1467,13 @@ int OnInit()
    // v3.7.2: Initialize CDC status tracking array
    ArrayResize(g_lastCDCStatus, MAX_PAIRS);
    for(int i = 0; i < MAX_PAIRS; i++)
+   {
       g_lastCDCStatus[i] = "";
+      
+      // v2.3.5: Initialize recovery log throttling arrays
+      g_lastRecoveryLogTime[i] = 0;
+      g_lastRecoveryLogSide[i] = "";
+   }
    
    // v3.7.1: Force initial CDC calculation and initialize per-symbol tracking
    if(InpUseCDCTrendFilter)
@@ -8190,13 +8200,22 @@ bool OpenBuySideTrade(int pairIndex)
    double askA = SymbolInfoDouble(symbolA, SYMBOL_ASK);
    if(g_trade.Buy(lotA, symbolA, askA, 0, 0, comment))
    {
+      Sleep(50);  // v2.3.5: Wait for server to process
       ticketA = g_trade.ResultOrder();
       
       // v1.3: Validate ticket was recorded - fallback scan if failed
       if(ticketA == 0)
       {
+         Sleep(100);  // v2.3.5: Wait longer for server response
          ticketA = FindPositionTicketBySymbolAndComment(symbolA, comment);
          PrintFormat("[v1.3 FALLBACK] BUY SymbolA ticket scan: found=%d", ticketA);
+      }
+      
+      // v2.3.5: CRITICAL - If still no ticket, abort completely to prevent orphan
+      if(ticketA == 0)
+      {
+         PrintFormat("[v2.3.5 ABORT] BUY on %s: Order sent but no ticket received! Aborting pair entry.", symbolA);
+         return false;
       }
    }
    else
@@ -8389,13 +8408,22 @@ bool OpenSellSideTrade(int pairIndex)
    double bidA = SymbolInfoDouble(symbolA, SYMBOL_BID);
    if(g_trade.Sell(lotA, symbolA, bidA, 0, 0, comment))
    {
+      Sleep(50);  // v2.3.5: Wait for server to process
       ticketA = g_trade.ResultOrder();
       
       // v1.3: Validate ticket was recorded - fallback scan if failed
       if(ticketA == 0)
       {
+         Sleep(100);  // v2.3.5: Wait longer for server response
          ticketA = FindPositionTicketBySymbolAndComment(symbolA, comment);
          PrintFormat("[v1.3 FALLBACK] SELL SymbolA ticket scan: found=%d", ticketA);
+      }
+      
+      // v2.3.5: CRITICAL - If still no ticket, abort completely to prevent orphan
+      if(ticketA == 0)
+      {
+         PrintFormat("[v2.3.5 ABORT] SELL on %s: Order sent but no ticket received! Aborting pair entry.", symbolA);
+         return false;
       }
    }
    else
@@ -9259,14 +9287,31 @@ void UpdatePairProfits()
          // v1.8.7: Get dynamic pair prefix for new comment format
          string pairPrefix = GetPairCommentPrefix(i);
          
-         // v1.8.7: Auto-recover missing tickets with NEW comment format
-         if(g_pairs[i].ticketBuyA == 0 || g_pairs[i].ticketBuyB == 0)
-         {
-            PrintFormat("[v1.8.7 WARN] Pair %d BUY: Missing ticket! A=%d B=%d - Attempting recovery...", 
-                        i + 1, g_pairs[i].ticketBuyA, g_pairs[i].ticketBuyB);
-            string buyComment = StringFormat("%s_BUY_%d", pairPrefix, i + 1);
-            RecoverMissingTickets(i, "BUY", buyComment);
-         }
+         // v2.3.5: Auto-recover missing tickets with Log Throttling (30 seconds)
+          if(g_pairs[i].ticketBuyA == 0 || g_pairs[i].ticketBuyB == 0)
+          {
+             datetime now = TimeCurrent();
+             bool shouldLogRecovery = (now - g_lastRecoveryLogTime[i] >= 30) || 
+                                      (g_lastRecoveryLogSide[i] != "BUY");
+             
+             if(shouldLogRecovery)
+             {
+                // v2.3.5: Show Orphan indicator if only one side exists
+                string orphanInfo = "";
+                if(g_pairs[i].ticketBuyA == 0 && g_pairs[i].ticketBuyB != 0)
+                   orphanInfo = " [ORPHAN: Symbol A missing]";
+                else if(g_pairs[i].ticketBuyA != 0 && g_pairs[i].ticketBuyB == 0)
+                   orphanInfo = " [ORPHAN: Symbol B missing]";
+                   
+                PrintFormat("[v2.3.5 WARN] Pair %d BUY: Missing ticket! A=%d B=%d%s", 
+                            i + 1, g_pairs[i].ticketBuyA, g_pairs[i].ticketBuyB, orphanInfo);
+                g_lastRecoveryLogTime[i] = now;
+                g_lastRecoveryLogSide[i] = "BUY";
+             }
+             
+             string buyComment = StringFormat("%s_BUY_%d", pairPrefix, i + 1);
+             RecoverMissingTickets(i, "BUY", buyComment);
+          }
          
          double profitA = GetPositionProfit(g_pairs[i].ticketBuyA);
          double profitB = GetPositionProfit(g_pairs[i].ticketBuyB);
@@ -9305,14 +9350,31 @@ void UpdatePairProfits()
          // v1.8.7: Get dynamic pair prefix for new comment format
          string pairPrefix = GetPairCommentPrefix(i);
          
-         // v1.8.7: Auto-recover missing tickets with NEW comment format
-         if(g_pairs[i].ticketSellA == 0 || g_pairs[i].ticketSellB == 0)
-         {
-            PrintFormat("[v1.8.7 WARN] Pair %d SELL: Missing ticket! A=%d B=%d - Attempting recovery...", 
-                        i + 1, g_pairs[i].ticketSellA, g_pairs[i].ticketSellB);
-            string sellComment = StringFormat("%s_SELL_%d", pairPrefix, i + 1);
-            RecoverMissingTickets(i, "SELL", sellComment);
-         }
+          // v2.3.5: Auto-recover missing tickets with Log Throttling (30 seconds)
+          if(g_pairs[i].ticketSellA == 0 || g_pairs[i].ticketSellB == 0)
+          {
+             datetime now = TimeCurrent();
+             bool shouldLogRecovery = (now - g_lastRecoveryLogTime[i] >= 30) || 
+                                      (g_lastRecoveryLogSide[i] != "SELL");
+             
+             if(shouldLogRecovery)
+             {
+                // v2.3.5: Show Orphan indicator if only one side exists
+                string orphanInfo = "";
+                if(g_pairs[i].ticketSellA == 0 && g_pairs[i].ticketSellB != 0)
+                   orphanInfo = " [ORPHAN: Symbol A missing]";
+                else if(g_pairs[i].ticketSellA != 0 && g_pairs[i].ticketSellB == 0)
+                   orphanInfo = " [ORPHAN: Symbol B missing]";
+                   
+                PrintFormat("[v2.3.5 WARN] Pair %d SELL: Missing ticket! A=%d B=%d%s", 
+                            i + 1, g_pairs[i].ticketSellA, g_pairs[i].ticketSellB, orphanInfo);
+                g_lastRecoveryLogTime[i] = now;
+                g_lastRecoveryLogSide[i] = "SELL";
+             }
+             
+             string sellComment = StringFormat("%s_SELL_%d", pairPrefix, i + 1);
+             RecoverMissingTickets(i, "SELL", sellComment);
+          }
          
          double profitA = GetPositionProfit(g_pairs[i].ticketSellA);
          double profitB = GetPositionProfit(g_pairs[i].ticketSellB);
@@ -10436,10 +10498,24 @@ void UpdateDashboard()
             buyBgColor = COLOR_OFF;
          }
          else if(g_pairs[i].directionBuy == 1)
-         {
-            buyStatus = "LONG";
-            buyBgColor = COLOR_PROFIT;
-         }
+          {
+             // v2.3.5: Show Orphan status if only one side exists
+             if(g_pairs[i].ticketBuyA == 0 && g_pairs[i].ticketBuyB != 0)
+             {
+                buyStatus = "ORPH-A";
+                buyBgColor = clrMagenta;
+             }
+             else if(g_pairs[i].ticketBuyA != 0 && g_pairs[i].ticketBuyB == 0)
+             {
+                buyStatus = "ORPH-B";
+                buyBgColor = clrMagenta;
+             }
+             else
+             {
+                buyStatus = "LONG";
+                buyBgColor = COLOR_PROFIT;
+             }
+          }
          else if(g_pairs[i].directionBuy == -1)
          {
             buyStatus = "On";
@@ -10481,10 +10557,24 @@ void UpdateDashboard()
             sellBgColor = COLOR_OFF;
          }
          else if(g_pairs[i].directionSell == 1)
-         {
-            sellStatus = "SHORT";
-            sellBgColor = COLOR_LOSS;
-         }
+          {
+             // v2.3.5: Show Orphan status if only one side exists
+             if(g_pairs[i].ticketSellA == 0 && g_pairs[i].ticketSellB != 0)
+             {
+                sellStatus = "ORPH-A";
+                sellBgColor = clrMagenta;
+             }
+             else if(g_pairs[i].ticketSellA != 0 && g_pairs[i].ticketSellB == 0)
+             {
+                sellStatus = "ORPH-B";
+                sellBgColor = clrMagenta;
+             }
+             else
+             {
+                sellStatus = "SHORT";
+                sellBgColor = COLOR_LOSS;
+             }
+          }
          else if(g_pairs[i].directionSell == -1)
          {
             sellStatus = "On";
