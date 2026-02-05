@@ -9793,6 +9793,11 @@ void CreateDashboard()
    CreateLabel(prefix + "ZSCORE_LBL", PANEL_X + 160, PANEL_Y + 5, zModeLbl, COLOR_TEXT_WHITE, 8, "Arial");
    CreateLabel(prefix + "ZSCORE_AGO", PANEL_X + 210, PANEL_Y + 4, "Pending", clrYellow, 9, "Arial Bold");
    
+   // v2.3.4: Account Type Indicator (Cent vs Standard)
+   string accTypeLabel = g_isCentAccount ? "[CENT]" : "[STD]";
+   color accTypeColor = g_isCentAccount ? clrOrange : clrLimeGreen;
+   CreateLabel(prefix + "ACC_TYPE", PANEL_X + 270, PANEL_Y + 4, accTypeLabel, accTypeColor, 9, "Arial Bold");
+   
    // v3.7.4: EA Status Display (adjusted position - moved left by 50px)
    CreateLabel(prefix + "EA_STATUS_LBL", PANEL_X + PANEL_WIDTH - 210, PANEL_Y + 5, "Status:", COLOR_TEXT_WHITE, 8, "Arial");
    CreateLabel(prefix + "EA_STATUS_VAL", PANEL_X + PANEL_WIDTH - 165, PANEL_Y + 4, "Working", clrLime, 9, "Arial Bold");
