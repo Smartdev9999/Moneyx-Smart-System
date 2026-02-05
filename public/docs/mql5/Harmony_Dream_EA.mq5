@@ -9965,10 +9965,11 @@ void CreatePairRow(string prefix, int idx, int buyX, int centerX, int sellX, int
    CreateLabel(prefix + "P" + idxStr + "_B_PL", buyX + 358, y + 3, "0", COLOR_TEXT, FONT_SIZE, "Arial");
    
    // === CENTER DATA ===
+   // v2.3.4: Shifted columns +20px right to match header
    CreateLabel(prefix + "P" + idxStr + "_NAME", centerX + 10, y + 3, pairName, COLOR_TEXT, FONT_SIZE, "Arial Bold");
-   CreateLabel(prefix + "P" + idxStr + "_CDC", centerX + 155, y + 3, "-", COLOR_OFF, FONT_SIZE, "Arial Bold");
-   CreateLabel(prefix + "P" + idxStr + "_CORR", centerX + 215, y + 3, "0%", COLOR_TEXT, FONT_SIZE, "Arial");
-   CreateLabel(prefix + "P" + idxStr + "_TYPE", centerX + 265, y + 3, "Pos", COLOR_PROFIT, FONT_SIZE, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_CDC", centerX + 175, y + 3, "-", COLOR_OFF, FONT_SIZE, "Arial Bold");
+   CreateLabel(prefix + "P" + idxStr + "_CORR", centerX + 235, y + 3, "0%", COLOR_TEXT, FONT_SIZE, "Arial");
+   CreateLabel(prefix + "P" + idxStr + "_TYPE", centerX + 285, y + 3, "Pos", COLOR_PROFIT, FONT_SIZE, "Arial");
    CreateLabel(prefix + "P" + idxStr + "_TPL", centerX + 330, y + 3, "0", COLOR_TEXT, 9, "Arial Bold");
    
    // === SELL SIDE DATA ===
