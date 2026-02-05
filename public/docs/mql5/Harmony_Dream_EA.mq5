@@ -10551,10 +10551,24 @@ void UpdateDashboard()
             sellBgColor = COLOR_OFF;
          }
          else if(g_pairs[i].directionSell == 1)
-         {
-            sellStatus = "SHORT";
-            sellBgColor = COLOR_LOSS;
-         }
+          {
+             // v2.3.5: Show Orphan status if only one side exists
+             if(g_pairs[i].ticketSellA == 0 && g_pairs[i].ticketSellB != 0)
+             {
+                sellStatus = "ORPH-A";
+                sellBgColor = clrMagenta;
+             }
+             else if(g_pairs[i].ticketSellA != 0 && g_pairs[i].ticketSellB == 0)
+             {
+                sellStatus = "ORPH-B";
+                sellBgColor = clrMagenta;
+             }
+             else
+             {
+                sellStatus = "SHORT";
+                sellBgColor = COLOR_LOSS;
+             }
+          }
          else if(g_pairs[i].directionSell == -1)
          {
             sellStatus = "On";
