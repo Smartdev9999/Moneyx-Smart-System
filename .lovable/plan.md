@@ -1,27 +1,25 @@
 
-## แผนแก้ไข Bug: Hedge Lot ไม่เท่า Main Lot (v2.3.1)
+
+## แผนเพิ่ม Auto Symbol Suffix Detection v2.3.2
 
 ---
 
-### สรุปปัญหาที่พบ
+### สรุปปัญหาจากรูปภาพ
 
-| รายการ | ค่าที่ตั้ง | ค่าที่ได้จริง | สาเหตุ |
-|--------|-----------|--------------|--------|
-| EURJPY (Symbol A) | 0.16 | 0.16 ✓ | Base Lot |
-| AUDUSD (Symbol B) | 0.16 | 0.10 ✗ | Dollar-Neutral Formula |
+```
+Pair 1: Symbol A 'EURJPY' not available
+Pair 2: Symbol A 'NZDJPY' not available
+Pair 3: Symbol A 'NZDJPY' not available
+...
+```
 
-**สาเหตุหลัก:**
-1. `CalculateDollarNeutralLots()` ใช้สูตร `lotB = baseLot × beta × (pipA/pipB)` ทำให้ lot ต่างกัน
-2. ใน `OnInit` เรียก `CalculateDollarNeutralLots()` โดยไม่เช็ค `InpUseDollarNeutral`
-3. ไม่มีตัวเลือกให้ใช้ **Fixed Lot** (lot เท่ากันทั้งคู่) สำหรับ Main Order
+**สาเหตุ:** EA ใช้ชื่อ Symbol มาตรฐาน (เช่น "EURJPY") แต่ Broker มี suffix พิเศษ (เช่น "EURJPY.v") ทำให้ `SymbolSelect()` return false และไม่ enable pair
 
 ---
 
-### โซลูชัน: เพิ่ม Enum สำหรับ Main Order Lot Mode
+### โซลูชัน: Auto Symbol Suffix Detection
 
-เพิ่มตัวเลือกให้ผู้ใช้เลือกระหว่าง:
-1. **Fixed Lot** (ใหม่): ทั้ง Symbol A และ B ใช้ Base Lot เท่ากัน (0.16 = 0.16)
-2. **Dollar-Neutral** (เดิม): คำนวณตาม Beta และ Pip Value
+เพิ่มระบบตรวจจับ Suffix อัตโนมัติจาก Chart Symbol ที่ EA รันอยู่ แล้วนำไปต่อท้าย Symbol ทุกตัว
 
 ---
 
@@ -29,109 +27,270 @@
 
 #### Part A: อัปเดต Version
 
-**ไฟล์:** `public/docs/mql5/Harmony_Dream_EA.mq5`
-
 ```cpp
-#property version   "2.31"
-#property description "v2.3.1: Add Fixed Lot Mode for Main Order + Fix InpUseDollarNeutral Check"
+#property version   "2.32"
+#property description "v2.3.2: Auto Symbol Suffix Detection for Multi-Broker Support"
 ```
 
 ---
 
-#### Part B: เพิ่ม Enum สำหรับ Main Order Lot Mode
+#### Part B: เพิ่ม Global Variable สำหรับ Detected Suffix
 
-**ตำแหน่ง:** ใกล้กับ Enum อื่น ๆ (ประมาณบรรทัด 240)
+**ตำแหน่ง:** หลัง Global Variables อื่น ๆ
 
 ```cpp
 //+------------------------------------------------------------------+
-//| MAIN ORDER LOT MODE ENUM (v2.3.1)                                  |
+//| AUTO SYMBOL SUFFIX DETECTION (v2.3.2)                              |
 //+------------------------------------------------------------------+
-enum ENUM_MAIN_LOT_MODE
-{
-   MAIN_LOT_FIXED = 0,          // Fixed (Same Lot for Both Symbols)
-   MAIN_LOT_DOLLAR_NEUTRAL      // Dollar-Neutral (Beta × Pip Ratio)
-};
+string g_detectedSuffix = "";      // Auto-detected broker suffix (e.g., ".v", ".i", "m")
+bool   g_suffixDetected = false;   // True if suffix was detected
 ```
 
 ---
 
-#### Part C: เพิ่ม Input Parameter
+#### Part C: เพิ่ม Input Parameter สำหรับเปิด/ปิด Auto Detection
 
-**ตำแหน่ง:** ใน group "Lot Sizing (Dollar-Neutral)" (บรรทัด 469)
+**ตำแหน่ง:** ใน group "General Settings"
 
 ```cpp
-input group "=== Lot Sizing Settings (v2.3.1) ==="
-input ENUM_MAIN_LOT_MODE InpMainLotMode = MAIN_LOT_FIXED;  // v2.3.1: Main Order Lot Mode
-input bool     InpUseDollarNeutral = true;      // [DEPRECATED] Use Dollar-Neutral (use Mode above)
-input double   InpMaxMarginPercent = 50.0;      // Max Margin Usage (%)
+input group "=== Symbol Settings (v2.3.2) ==="
+input bool     InpAutoDetectSuffix = true;      // Auto Detect Broker Symbol Suffix
+input string   InpManualSuffix = "";            // Manual Suffix (e.g., ".v", ".i") - Use if Auto fails
 ```
 
 ---
 
-#### Part D: แก้ไข `CalculateDollarNeutralLots()` รองรับ Fixed Mode
-
-**บรรทัด:** 4888-4943
+#### Part D: เพิ่มฟังก์ชัน `DetectBrokerSuffix()`
 
 ```cpp
-void CalculateDollarNeutralLots(int pairIndex)
+//+------------------------------------------------------------------+
+//| v2.3.2: Detect Broker Symbol Suffix from Chart Symbol              |
+//| Example: Chart = "XAUUSD.v" → Suffix = ".v"                        |
+//+------------------------------------------------------------------+
+string DetectBrokerSuffix()
 {
-   double baseLot = GetScaledBaseLot();
-   string symbolA = g_pairs[pairIndex].symbolA;
-   string symbolB = g_pairs[pairIndex].symbolB;
+   string chartSymbol = _Symbol;  // Symbol ที่ EA ถูก attach
    
-   // v2.3.1: Check Main Lot Mode FIRST
-   if(InpMainLotMode == MAIN_LOT_FIXED)
+   // List of known base symbols to check against
+   string baseSymbols[] = {
+      "XAUUSD", "XAUEUR", "XAGUSD",
+      "EURUSD", "GBPUSD", "AUDUSD", "NZDUSD", "USDCHF", "USDJPY", "USDCAD",
+      "EURJPY", "EURGBP", "EURCHF", "EURAUD", "EURNZD", "EURCAD",
+      "GBPJPY", "GBPCHF", "GBPAUD", "GBPNZD", "GBPCAD",
+      "AUDJPY", "AUDCHF", "AUDNZD", "AUDCAD",
+      "NZDJPY", "NZDCHF", "NZDCAD",
+      "CADJPY", "CADCHF", "CHFJPY"
+   };
+   
+   int count = ArraySize(baseSymbols);
+   for(int i = 0; i < count; i++)
    {
-      // Fixed Mode: Same lot for both symbols
-      double lotA = NormalizeLot(symbolA, baseLot);
-      double lotB = NormalizeLot(symbolB, baseLot);
-      
-      g_pairs[pairIndex].lotBuyA = lotA;
-      g_pairs[pairIndex].lotBuyB = lotB;
-      g_pairs[pairIndex].lotSellA = lotA;
-      g_pairs[pairIndex].lotSellB = lotB;
-      
-      if(InpDebugMode)
+      // Check if chart symbol starts with base symbol
+      if(StringFind(chartSymbol, baseSymbols[i]) == 0)
       {
-         PrintFormat("[v2.3.1 FIXED LOT] Pair %d: A=%.2f B=%.2f (Both use BaseLot=%.4f)", 
-                     pairIndex + 1, lotA, lotB, baseLot);
+         // Extract suffix (everything after base symbol)
+         int baseLen = StringLen(baseSymbols[i]);
+         string suffix = StringSubstr(chartSymbol, baseLen);
+         
+         if(StringLen(suffix) > 0)
+         {
+            PrintFormat("[v2.3.2] Detected broker suffix: '%s' (from %s)", suffix, chartSymbol);
+            return suffix;
+         }
       }
-      return;
    }
    
-   // === Dollar-Neutral Mode (Original Logic) ===
-   double hedgeRatio = g_pairs[pairIndex].hedgeRatio;
-   double pipValueA = GetPipValue(symbolA);
-   double pipValueB = GetPipValue(symbolB);
+   // No suffix detected - try alternative method using dot position
+   int dotPos = StringFind(chartSymbol, ".");
+   if(dotPos > 0)
+   {
+      string suffix = StringSubstr(chartSymbol, dotPos);
+      PrintFormat("[v2.3.2] Detected dot-based suffix: '%s' (from %s)", suffix, chartSymbol);
+      return suffix;
+   }
    
-   // ... (keep existing validation and calculation) ...
+   // Check for trailing letter suffix (e.g., "EURUSDm" → "m")
+   // Only if last char is lowercase and symbol length > 6
+   int len = StringLen(chartSymbol);
+   if(len > 6)
+   {
+      ushort lastChar = StringGetCharacter(chartSymbol, len - 1);
+      if(lastChar >= 'a' && lastChar <= 'z')
+      {
+         // Check if removing last char gives a valid base symbol
+         string potentialBase = StringSubstr(chartSymbol, 0, len - 1);
+         for(int i = 0; i < count; i++)
+         {
+            if(potentialBase == baseSymbols[i])
+            {
+               string suffix = StringSubstr(chartSymbol, len - 1);
+               PrintFormat("[v2.3.2] Detected letter suffix: '%s' (from %s)", suffix, chartSymbol);
+               return suffix;
+            }
+         }
+      }
+   }
+   
+   return "";  // No suffix detected
 }
 ```
 
 ---
 
-#### Part E: แก้ไข `OnInit` ให้เช็ค Mode ก่อน
-
-**บรรทัด:** 1288-1306
+#### Part E: เพิ่มฟังก์ชัน `ApplySuffixToSymbol()`
 
 ```cpp
-for(int i = 0; i < MAX_PAIRS; i++)
+//+------------------------------------------------------------------+
+//| v2.3.2: Apply Detected Suffix to Symbol                            |
+//| Example: "EURJPY" + ".v" → "EURJPY.v"                              |
+//+------------------------------------------------------------------+
+string ApplySuffixToSymbol(string baseSymbol)
 {
-   if(g_pairs[i].enabled)
+   // If suffix already present in input, don't add again
+   if(g_detectedSuffix != "" && StringFind(baseSymbol, g_detectedSuffix) >= 0)
    {
-      // v2.3.1: Always call this function - it now handles mode internally
-      CalculateDollarNeutralLots(i);
-      
-      // Verify calculation succeeded...
+      return baseSymbol;
    }
+   
+   // Apply suffix
+   return baseSymbol + g_detectedSuffix;
 }
 ```
 
 ---
 
-#### Part F: แก้ไข `OpenBuySideTrade()` และ `OpenSellSideTrade()`
+#### Part F: เพิ่มฟังก์ชัน `TrySymbolVariants()`
 
-ตรวจสอบว่าใช้ lot ที่คำนวณไว้แล้ว (ไม่ต้องแก้ เพราะใช้ `g_pairs[pairIndex].lotBuyA/B` อยู่แล้ว)
+```cpp
+//+------------------------------------------------------------------+
+//| v2.3.2: Try Multiple Symbol Variants                               |
+//| Tries: original → with suffix → common variations                  |
+//+------------------------------------------------------------------+
+string TrySymbolVariants(string baseSymbol)
+{
+   // 1. Try original first (maybe user already included suffix)
+   if(SymbolSelect(baseSymbol, true))
+   {
+      return baseSymbol;
+   }
+   
+   // 2. Try with detected suffix
+   string withSuffix = baseSymbol + g_detectedSuffix;
+   if(g_detectedSuffix != "" && SymbolSelect(withSuffix, true))
+   {
+      return withSuffix;
+   }
+   
+   // 3. Try with manual suffix
+   if(InpManualSuffix != "")
+   {
+      string withManual = baseSymbol + InpManualSuffix;
+      if(SymbolSelect(withManual, true))
+      {
+         return withManual;
+      }
+   }
+   
+   // 4. Try common broker suffixes
+   string commonSuffixes[] = {".v", ".i", ".a", ".e", "m", "pro", ".raw", ".z"};
+   int count = ArraySize(commonSuffixes);
+   for(int i = 0; i < count; i++)
+   {
+      string trySymbol = baseSymbol + commonSuffixes[i];
+      if(SymbolSelect(trySymbol, true))
+      {
+         // Update detected suffix for future use
+         if(g_detectedSuffix == "")
+         {
+            g_detectedSuffix = commonSuffixes[i];
+            PrintFormat("[v2.3.2] Auto-discovered suffix '%s' from %s", commonSuffixes[i], trySymbol);
+         }
+         return trySymbol;
+      }
+   }
+   
+   // 5. Try uppercase version of symbol (some brokers use different case)
+   string upperSymbol = baseSymbol;
+   StringToUpper(upperSymbol);
+   if(upperSymbol != baseSymbol && SymbolSelect(upperSymbol, true))
+   {
+      return upperSymbol;
+   }
+   
+   // Failed to find any variant
+   return "";
+}
+```
+
+---
+
+#### Part G: แก้ไข `OnInit()` เพื่อ Detect Suffix ก่อน Initialize Pairs
+
+**ตำแหน่ง:** ใน OnInit ก่อนเรียก InitializePairs()
+
+```cpp
+// v2.3.2: Auto-detect broker symbol suffix
+if(InpAutoDetectSuffix)
+{
+   g_detectedSuffix = DetectBrokerSuffix();
+   g_suffixDetected = (g_detectedSuffix != "");
+   
+   if(g_suffixDetected)
+   {
+      PrintFormat("[v2.3.2] Broker symbol suffix detected: '%s'", g_detectedSuffix);
+   }
+   else
+   {
+      Print("[v2.3.2] No broker suffix detected - using standard symbol names");
+   }
+}
+else if(InpManualSuffix != "")
+{
+   g_detectedSuffix = InpManualSuffix;
+   g_suffixDetected = true;
+   PrintFormat("[v2.3.2] Using manual suffix: '%s'", g_detectedSuffix);
+}
+```
+
+---
+
+#### Part H: แก้ไข `SetupPair()` ให้ใช้ TrySymbolVariants()
+
+**แก้ไขบรรทัด 2564-2587:**
+
+```cpp
+// v2.3.2: Try symbol variants with auto-detected suffix
+string finalSymbolA = TrySymbolVariants(symbolA);
+string finalSymbolB = TrySymbolVariants(symbolB);
+
+if(finalSymbolA == "")
+{
+   PrintFormat("Pair %d: Symbol A '%s' not available (tried with suffix '%s')", 
+               index + 1, symbolA, g_detectedSuffix);
+   return;
+}
+if(finalSymbolB == "")
+{
+   PrintFormat("Pair %d: Symbol B '%s' not available (tried with suffix '%s')", 
+               index + 1, symbolB, g_detectedSuffix);
+   return;
+}
+
+// v2.3.2: Store the actual resolved symbol names
+g_pairs[index].symbolA = finalSymbolA;
+g_pairs[index].symbolB = finalSymbolB;
+
+// Enable pair
+g_pairs[index].enabled = true;
+g_pairs[index].dataValid = true;
+g_activePairs++;
+
+if(InpDebugMode && finalSymbolA != symbolA)
+{
+   PrintFormat("[v2.3.2] Pair %d: Resolved %s/%s → %s/%s", 
+               index + 1, symbolA, symbolB, finalSymbolA, finalSymbolB);
+}
+```
 
 ---
 
@@ -139,45 +298,64 @@ for(int i = 0; i < MAX_PAIRS; i++)
 
 | ไฟล์ | ส่วนที่แก้ไข | รายละเอียด |
 |------|-------------|------------|
-| `Harmony_Dream_EA.mq5` | Version | อัปเดตเป็น v2.31 |
-| `Harmony_Dream_EA.mq5` | Enums | เพิ่ม `ENUM_MAIN_LOT_MODE` |
-| `Harmony_Dream_EA.mq5` | Inputs | เพิ่ม `InpMainLotMode` |
-| `Harmony_Dream_EA.mq5` | `CalculateDollarNeutralLots()` | เพิ่ม Fixed Mode logic |
+| `Harmony_Dream_EA.mq5` | Version | อัปเดตเป็น v2.32 |
+| `Harmony_Dream_EA.mq5` | Global Variables | เพิ่ม `g_detectedSuffix`, `g_suffixDetected` |
+| `Harmony_Dream_EA.mq5` | Inputs | เพิ่ม `InpAutoDetectSuffix`, `InpManualSuffix` |
+| `Harmony_Dream_EA.mq5` | Helper Functions | เพิ่ม `DetectBrokerSuffix()`, `ApplySuffixToSymbol()`, `TrySymbolVariants()` |
+| `Harmony_Dream_EA.mq5` | `OnInit()` | เรียก `DetectBrokerSuffix()` ก่อน `InitializePairs()` |
+| `Harmony_Dream_EA.mq5` | `SetupPair()` | ใช้ `TrySymbolVariants()` แทน `SymbolSelect()` ตรง ๆ |
 
 ---
 
-### ตัวอย่างการทำงานหลังแก้ไข
+### ตัวอย่างการทำงาน
 
-**Settings:**
-- Base Lot = 0.16
-- Main Lot Mode = **Fixed**
+**ก่อนแก้ไข (Broker มี .v suffix):**
+```
+Pair 1: Symbol A 'EURJPY' not available
+Pair 2: Symbol A 'NZDJPY' not available
+...
+All pairs failed to initialize!
+```
 
-| Symbol | ก่อนแก้ไข | หลังแก้ไข |
-|--------|-----------|-----------|
-| EURJPY (A) | 0.16 | 0.16 ✓ |
-| AUDUSD (B) | 0.10 | 0.16 ✓ |
+**หลังแก้ไข:**
+```
+[v2.3.2] Detected broker suffix: '.v' (from XAUUSD.v)
+[v2.3.2] Pair 1: Resolved EURJPY/AUDUSD → EURJPY.v/AUDUSD.v
+[v2.3.2] Pair 2: Resolved NZDJPY/CHFJPY → NZDJPY.v/CHFJPY.v
+v2.0: Group Target System initialized - 5 Groups x 6 Pairs
+```
 
-**Settings:**
-- Base Lot = 0.16
-- Main Lot Mode = **Dollar-Neutral**
+---
 
-| Symbol | ก่อนแก้ไข | หลังแก้ไข |
-|--------|-----------|-----------|
-| EURJPY (A) | 0.16 | 0.16 |
-| AUDUSD (B) | 0.10 | 0.10 (คำนวณตาม Beta) |
+### Suffix ที่รองรับ (Common Broker Suffixes)
+
+| Suffix | ตัวอย่าง Broker | หมายเหตุ |
+|--------|----------------|----------|
+| `.v` | Vantage, etc. | User's current broker |
+| `.i` | IC Markets (Standard) | |
+| `.a` | Axi | |
+| `.e` | Exness | |
+| `m` | XM Micro | ไม่มี dot |
+| `pro` | Various | |
+| `.raw` | IC Markets Raw Spread | |
+| `.z` | Some brokers | |
+
+---
+
+### การใช้งาน
+
+1. **Auto Mode (Default):** ใส่ EA บน Chart ใด ๆ (เช่น XAUUSD.v) → ระบบจะตรวจจับ ".v" และนำไปใช้กับทุก Symbol โดยอัตโนมัติ
+
+2. **Manual Mode:** ถ้า Auto ไม่ทำงาน → ตั้งค่า `Manual Suffix = ".v"` ใน Input
+
+3. **No Suffix:** ถ้า Broker ไม่มี suffix → ระบบจะใช้ชื่อ Symbol ปกติ
 
 ---
 
 ### หมายเหตุสำคัญ
 
-1. **Default = Fixed**: ค่าเริ่มต้นเป็น "Fixed" เพื่อให้ lot เท่ากันทั้งคู่ตามที่ผู้ใช้ต้องการ
-2. **Backward Compatible**: ถ้าต้องการ Dollar-Neutral แบบเดิม ให้เลือก Mode เป็น "Dollar-Neutral"
-3. **DEPRECATED `InpUseDollarNeutral`**: ตัวแปรเดิมยังคงอยู่แต่ถูกแทนที่ด้วย `InpMainLotMode`
-4. **Grid Orders ไม่ได้รับผลกระทบ**: Grid ยังคงใช้ `InpGridLotMode` แยกต่างหาก
+1. **ตรวจจับจาก Chart Symbol:** EA จะอ่านชื่อ Symbol ที่ถูก attach แล้วแยก suffix ออกมา
+2. **Fallback หลายชั้น:** ถ้าไม่พบ Symbol → ลอง suffix ที่ detect → ลอง suffix ที่กำหนดเอง → ลอง suffix ทั่วไป
+3. **ไม่กระทบ Backtest:** Backtest ใช้ Symbol ปกติอยู่แล้ว ถ้าไม่มี suffix ก็ไม่เพิ่ม
+4. **Order Comment ไม่เปลี่ยน:** ยังคงใช้ abbreviation เดิม (EU-GU) ไม่ได้ใช้ชื่อเต็มรวม suffix
 
----
-
-### ข้อควรระวัง
-
-- ถ้าใช้ **Fixed Lot** กับคู่ที่มี Pip Value ต่างกันมาก (เช่น XAUUSD vs XAUEUR) → ความเสี่ยงอาจไม่ Balance
-- แนะนำใช้ **Dollar-Neutral** สำหรับคู่ที่ Pip Value ต่างกันมากเพื่อ Hedge Risk ได้ดีกว่า
