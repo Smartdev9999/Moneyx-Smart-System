@@ -8935,12 +8935,31 @@ void CheckOrphanPositions()
 }
 
 //+------------------------------------------------------------------+
-//| Verify Position Exists (v3.3.2)                                    |
+//| Verify Position Exists (v2.3.6 - Retry Logic)                      |
 //+------------------------------------------------------------------+
 bool VerifyPositionExists(ulong ticket)
 {
    if(ticket == 0) return true;  // No ticket = no position expected
-   return PositionSelectByTicket(ticket);
+   
+   // v2.3.6: First attempt
+   if(PositionSelectByTicket(ticket))
+      return true;
+   
+   // First attempt failed - wait and retry
+   Sleep(50);
+   if(PositionSelectByTicket(ticket))
+      return true;
+   
+   // Second attempt failed - scan all positions
+   Sleep(50);
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong posTicket = PositionGetTicket(i);
+      if(posTicket == ticket)
+         return true;
+   }
+   
+   return false;  // Position really doesn't exist
 }
 
 //+------------------------------------------------------------------+
