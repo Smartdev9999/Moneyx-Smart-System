@@ -327,6 +327,11 @@ input double   InpFixedScaleAccount = 100000.0;     // Fixed Scale Account ($) -
 input double   InpScaleMin = 0.1;                   // Minimum Scale Factor (safety limit)
 input double   InpScaleMax = 10.0;                  // Maximum Scale Factor (safety limit)
 
+input group "=== Cent Account Settings (v2.3.4) ==="
+input bool     InpAutoDetectCent = true;            // Auto Detect Cent Account (USC, USc, etc.)
+input bool     InpManualCentMode = false;           // Manual: Force Cent Account Mode
+input double   InpCentDivisor = 100.0;              // Cent Divisor (100 = standard cent)
+
 //+------------------------------------------------------------------+
 //| CORRELATION METHOD ENUM (v3.2.1)                                   |
 //+------------------------------------------------------------------+
