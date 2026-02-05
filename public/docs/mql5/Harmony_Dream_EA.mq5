@@ -6147,6 +6147,27 @@ void AnalyzeAllPairs()
          // v2.1.7: Debug flag
          bool debugLog = InpDebugMode && (!g_isTesterMode || !InpDisableDebugInTester);
          
+         // v2.2.8: Check Correlation Type Filter FIRST
+         if(!CheckCorrelationTypeFilter(i))
+         {
+            if(debugLog)
+            {
+               string filterName = (InpCorrTypeFilter == CORR_FILTER_POSITIVE_ONLY) ? "Positive Only" : "Negative Only";
+               string corrTypeName = (g_pairs[i].correlationType == 1) ? "Positive" : "Negative";
+               string reason = StringFormat("SKIP - %s filter blocked %s pair", filterName, corrTypeName);
+               datetime now = TimeCurrent();
+               if(g_firstAnalyzeRun || reason != g_pairs[i].lastBlockReason || 
+                  now - g_pairs[i].lastBlockLogTime >= DEBUG_LOG_INTERVAL)
+               {
+                  PrintFormat("[CORR FILTER] Pair %d %s/%s: %s",
+                              i + 1, g_pairs[i].symbolA, g_pairs[i].symbolB, reason);
+                  g_pairs[i].lastBlockReason = reason;
+                  g_pairs[i].lastBlockLogTime = now;
+               }
+            }
+            continue;
+         }
+         
          // Step 1: Check Correlation Threshold
          if(!CheckCorrelationOnlyEntry(i))
          {
