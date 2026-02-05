@@ -7,7 +7,7 @@
 #property version   "2.35"
 #property strict
 #property description "Harmony Dream - Pairs Trading Expert Advisor"
-#property description "v2.3.4: Auto-Detect Cent Account (USC) for Correct Scaling"
+#property description "v2.3.5: Orphan Prevention Guard + Log Throttling"
 #property description "Full Hedging with Independent Buy/Sell Sides"
 #include <Trade/Trade.mqh>
 
