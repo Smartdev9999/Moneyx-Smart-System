@@ -1758,10 +1758,25 @@ void RestoreOpenPositions()
                  {
                     g_pairs[i].avgOrderCountBuy++;
                     
-                    // v2.2.3: Update lastAvgPriceBuy to latest Grid Loss price (lowest for BUY)
+                    // v2.3.0: Extract grid level from comment for Progressive Mode
+                    int extractedLevel = ExtractGridLevelFromComment(comment, "_GL#");
                     double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-                    if(g_pairs[i].lastAvgPriceBuy == 0 || openPrice < g_pairs[i].lastAvgPriceBuy)
+                    
+                    // v2.3.0: For Progressive Mode, use HIGHEST level's price (not just lowest price)
+                    if(extractedLevel > g_pairs[i].maxGridLossBuyLevel)
                     {
+                       g_pairs[i].maxGridLossBuyLevel = extractedLevel;
+                       g_pairs[i].lastAvgPriceBuy = openPrice;
+                       
+                       if(InpDebugMode)
+                       {
+                          PrintFormat("[v2.3.0 RESTORE] Pair %d GL_BUY: Level %d price=%.5f (MaxLevel=%d)",
+                                      i + 1, extractedLevel, openPrice, g_pairs[i].maxGridLossBuyLevel);
+                       }
+                    }
+                    else if(g_pairs[i].lastAvgPriceBuy == 0 || openPrice < g_pairs[i].lastAvgPriceBuy)
+                    {
+                       // Fallback for old comment format or first restore
                        g_pairs[i].lastAvgPriceBuy = openPrice;
                     }
                     
@@ -1780,10 +1795,25 @@ void RestoreOpenPositions()
                  {
                     g_pairs[i].gridProfitCountBuy++;
                     
-                    // v2.2.3: Update lastProfitPriceBuy to latest Grid Profit price (highest for BUY)
+                    // v2.3.0: Extract grid level from comment for Progressive Mode
+                    int extractedLevel = ExtractGridLevelFromComment(comment, "_GP#");
                     double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-                    if(g_pairs[i].lastProfitPriceBuy == 0 || openPrice > g_pairs[i].lastProfitPriceBuy)
+                    
+                    // v2.3.0: For Progressive Mode, use HIGHEST level's price
+                    if(extractedLevel > g_pairs[i].maxGridProfitBuyLevel)
                     {
+                       g_pairs[i].maxGridProfitBuyLevel = extractedLevel;
+                       g_pairs[i].lastProfitPriceBuy = openPrice;
+                       
+                       if(InpDebugMode)
+                       {
+                          PrintFormat("[v2.3.0 RESTORE] Pair %d GP_BUY: Level %d price=%.5f (MaxLevel=%d)",
+                                      i + 1, extractedLevel, openPrice, g_pairs[i].maxGridProfitBuyLevel);
+                       }
+                    }
+                    else if(g_pairs[i].lastProfitPriceBuy == 0 || openPrice > g_pairs[i].lastProfitPriceBuy)
+                    {
+                       // Fallback for old comment format
                        g_pairs[i].lastProfitPriceBuy = openPrice;
                     }
                     
