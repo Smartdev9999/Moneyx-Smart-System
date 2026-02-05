@@ -2757,22 +2757,38 @@ void SetupPair(int index, bool enabled, string symbolA, string symbolB)
       return;
    }
    
-   // Check if symbols are available
-   if(!SymbolSelect(symbolA, true))
+   // v2.3.2: Try symbol variants with auto-detected suffix
+   string finalSymbolA = TrySymbolVariants(symbolA);
+   string finalSymbolB = TrySymbolVariants(symbolB);
+   
+   if(finalSymbolA == "")
    {
-      PrintFormat("Pair %d: Symbol A '%s' not available", index + 1, symbolA);
+      PrintFormat("Pair %d: Symbol A '%s' not available (tried with suffix '%s')", 
+                  index + 1, symbolA, g_detectedSuffix);
       return;
    }
-   if(!SymbolSelect(symbolB, true))
+   if(finalSymbolB == "")
    {
-      PrintFormat("Pair %d: Symbol B '%s' not available", index + 1, symbolB);
+      PrintFormat("Pair %d: Symbol B '%s' not available (tried with suffix '%s')", 
+                  index + 1, symbolB, g_detectedSuffix);
       return;
    }
+   
+   // v2.3.2: Store the actual resolved symbol names
+   g_pairs[index].symbolA = finalSymbolA;
+   g_pairs[index].symbolB = finalSymbolB;
    
    // Enable pair
    g_pairs[index].enabled = true;
    g_pairs[index].dataValid = true;
    g_activePairs++;
+   
+   // v2.3.2: Log resolved symbols if different from input
+   if(InpDebugMode && (finalSymbolA != symbolA || finalSymbolB != symbolB))
+   {
+      PrintFormat("[v2.3.2] Pair %d: Resolved %s/%s → %s/%s", 
+                  index + 1, symbolA, symbolB, finalSymbolA, finalSymbolB);
+   }
 }
 
 //+------------------------------------------------------------------+
