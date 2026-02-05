@@ -4,10 +4,10 @@
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
- #property version   "2.29"
+ #property version   "2.30"
 #property strict
 #property description "Harmony Dream - Pairs Trading Expert Advisor"
- #property description "v2.2.9: Add Progressive ATR Distance Mode for Grid"
+ #property description "v2.3.0: Fix Progressive ATR Restore + Add Correlation Type Filter"
 #property description "Full Hedging with Independent Buy/Sell Sides"
 #include <Trade/Trade.mqh>
 
@@ -169,6 +169,12 @@ struct PairInfo
    string         lastBlockReason;        // Last block reason logged (for spam prevention)
    datetime       lastBlockLogTime;       // Last time block was logged
    
+   // === v2.3.0: Track max grid level for Progressive Mode restoration ===
+   int            maxGridLossBuyLevel;
+   int            maxGridLossSellLevel;
+   int            maxGridProfitBuyLevel;
+   int            maxGridProfitSellLevel;
+   
    // === Combined ===
    double         totalPairProfit;   // profitBuy + profitSell
 };
@@ -266,6 +272,16 @@ enum ENUM_ENTRY_MODE
 {
    ENTRY_MODE_ZSCORE = 0,        // Z-Score Based (Original)
    ENTRY_MODE_CORRELATION_ONLY   // Correlation Only (No Z-Score)
+};
+
+//+------------------------------------------------------------------+
+//| CORRELATION TYPE FILTER ENUM (v2.2.8)                              |
+//+------------------------------------------------------------------+
+enum ENUM_CORR_TYPE_FILTER
+{
+   CORR_FILTER_BOTH = 0,          // Both (Positive + Negative)
+   CORR_FILTER_POSITIVE_ONLY,     // Positive Only
+   CORR_FILTER_NEGATIVE_ONLY      // Negative Only
 };
 
 //+------------------------------------------------------------------+
@@ -666,6 +682,7 @@ input ENUM_THEME_MODE InpThemeMode = THEME_DARK;    // Dashboard Theme
 
 input group "=== Entry Mode Settings (v1.8.8) ==="
 input ENUM_ENTRY_MODE InpEntryMode = ENTRY_MODE_ZSCORE;    // Entry Mode
+input ENUM_CORR_TYPE_FILTER InpCorrTypeFilter = CORR_FILTER_BOTH;  // v2.2.8: Correlation Type Filter
 input double   InpCorrOnlyPositiveThreshold = 0.60;        // Correlation Only: Positive Threshold (0.60 = 60%)
 input double   InpCorrOnlyNegativeThreshold = -0.60;       // Correlation Only: Negative Threshold (-0.60 = -60%)
 // v2.1.7: NEW - Option to skip filters for immediate entry
