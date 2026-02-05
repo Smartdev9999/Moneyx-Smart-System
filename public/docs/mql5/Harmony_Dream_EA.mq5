@@ -4,7 +4,7 @@
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "2.34"
+#property version   "2.35"
 #property strict
 #property description "Harmony Dream - Pairs Trading Expert Advisor"
 #property description "v2.3.4: Auto-Detect Cent Account (USC) for Correct Scaling"
