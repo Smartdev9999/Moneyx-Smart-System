@@ -5843,6 +5843,55 @@ bool CheckCorrelationOnlyEntry(int pairIndex)
 }
 
 //+------------------------------------------------------------------+
+//| Check Correlation Type Filter (v2.2.8)                             |
+//| Returns: true = Pair's correlation type matches the filter         |
+//+------------------------------------------------------------------+
+bool CheckCorrelationTypeFilter(int pairIndex)
+{
+   int corrType = g_pairs[pairIndex].correlationType;
+   
+   switch(InpCorrTypeFilter)
+   {
+      case CORR_FILTER_BOTH:
+         return true;  // Allow both types
+         
+      case CORR_FILTER_POSITIVE_ONLY:
+         return (corrType == 1);  // Only Positive Correlation
+         
+      case CORR_FILTER_NEGATIVE_ONLY:
+         return (corrType == -1);  // Only Negative Correlation
+         
+      default:
+         return true;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Extract Grid Level from Comment (v2.3.0)                           |
+//| Example: "_GL#3_" → returns 3, "_GP#2_" → returns 2               |
+//+------------------------------------------------------------------+
+int ExtractGridLevelFromComment(string comment, string prefix)
+{
+   int pos = StringFind(comment, prefix);
+   if(pos < 0) return 0;
+   
+   // Find the number after prefix (e.g., "_GL#" → find "3" in "_GL#3_")
+   int startPos = pos + StringLen(prefix);
+   string numStr = "";
+   
+   for(int k = startPos; k < StringLen(comment); k++)
+   {
+      ushort ch = StringGetCharacter(comment, k);
+      if(ch >= '0' && ch <= '9')
+         numStr += CharToString((uchar)ch);
+      else
+         break;
+   }
+   
+   return (StringLen(numStr) > 0) ? (int)StringToInteger(numStr) : 0;
+}
+
+//+------------------------------------------------------------------+
 //| Determine Trade Direction for Correlation Only Mode (v1.8.8)       |
 //| Returns: "BUY" = Open BUY Side (Buy A + action on B)               |
 //|          "SELL" = Open SELL Side (Sell A + action on B)            |
