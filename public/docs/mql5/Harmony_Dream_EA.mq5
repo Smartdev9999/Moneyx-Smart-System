@@ -8402,13 +8402,22 @@ bool OpenSellSideTrade(int pairIndex)
    double bidA = SymbolInfoDouble(symbolA, SYMBOL_BID);
    if(g_trade.Sell(lotA, symbolA, bidA, 0, 0, comment))
    {
+      Sleep(50);  // v2.3.5: Wait for server to process
       ticketA = g_trade.ResultOrder();
       
       // v1.3: Validate ticket was recorded - fallback scan if failed
       if(ticketA == 0)
       {
+         Sleep(100);  // v2.3.5: Wait longer for server response
          ticketA = FindPositionTicketBySymbolAndComment(symbolA, comment);
          PrintFormat("[v1.3 FALLBACK] SELL SymbolA ticket scan: found=%d", ticketA);
+      }
+      
+      // v2.3.5: CRITICAL - If still no ticket, abort completely to prevent orphan
+      if(ticketA == 0)
+      {
+         PrintFormat("[v2.3.5 ABORT] SELL on %s: Order sent but no ticket received! Aborting pair entry.", symbolA);
+         return false;
       }
    }
    else
