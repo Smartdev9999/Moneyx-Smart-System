@@ -9970,7 +9970,7 @@ void CreatePairRow(string prefix, int idx, int buyX, int centerX, int sellX, int
    CreateLabel(prefix + "P" + idxStr + "_CDC", centerX + 175, y + 3, "-", COLOR_OFF, FONT_SIZE, "Arial Bold");
    CreateLabel(prefix + "P" + idxStr + "_CORR", centerX + 235, y + 3, "0%", COLOR_TEXT, FONT_SIZE, "Arial");
    CreateLabel(prefix + "P" + idxStr + "_TYPE", centerX + 285, y + 3, "Pos", COLOR_PROFIT, FONT_SIZE, "Arial");
-   CreateLabel(prefix + "P" + idxStr + "_TPL", centerX + 330, y + 3, "0", COLOR_TEXT, 9, "Arial Bold");
+   CreateLabel(prefix + "P" + idxStr + "_TPL", centerX + 345, y + 3, "0", COLOR_TEXT, 9, "Arial Bold");
    
    // === SELL SIDE DATA ===
    CreateLabel(prefix + "P" + idxStr + "_S_PL", sellX + 5, y + 3, "0", COLOR_TEXT, FONT_SIZE, "Arial");
