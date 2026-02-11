@@ -9378,14 +9378,16 @@ void ManageAllPositions()
       if(g_pairs[i].directionBuy == 1)
       {
          // v2.3.7: Check minimum holding time before exit
+         bool skipBuyExit = false;
          if(InpMinHoldingBars > 0 && g_pairs[i].entryTimeBuy > 0)
          {
             int holdingSeconds = (int)(TimeCurrent() - g_pairs[i].entryTimeBuy);
             int minSeconds = InpMinHoldingBars * PeriodSeconds();
             if(holdingSeconds < minSeconds)
-               goto SkipBuyExit;  // Skip exit check - not enough holding time
+               skipBuyExit = true;
          }
          
+         if(!skipBuyExit)
          {
             bool shouldCloseBuy = false;
             string closeReason = "";
@@ -9418,21 +9420,22 @@ void ManageAllPositions()
                CloseBuySide(i);
             }
          }
-         SkipBuyExit:;
       }
       
       // === Manage Sell Side ===
       if(g_pairs[i].directionSell == 1)
       {
          // v2.3.7: Check minimum holding time before exit
+         bool skipSellExit = false;
          if(InpMinHoldingBars > 0 && g_pairs[i].entryTimeSell > 0)
          {
             int holdingSeconds = (int)(TimeCurrent() - g_pairs[i].entryTimeSell);
             int minSeconds = InpMinHoldingBars * PeriodSeconds();
             if(holdingSeconds < minSeconds)
-               goto SkipSellExit;  // Skip exit check - not enough holding time
+               skipSellExit = true;
          }
          
+         if(!skipSellExit)
          {
             bool shouldCloseSell = false;
             string closeReason = "";
@@ -9465,7 +9468,6 @@ void ManageAllPositions()
                CloseSellSide(i);
             }
          }
-         SkipSellExit:;
       }
    }
 }
