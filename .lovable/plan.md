@@ -1,168 +1,190 @@
 
-## แผนแก้ไข v2.3.6: แก้ปัญหา Orphan Detection Trigger ผิดพลาดหลังเปิด Order
+
+## แผนแก้ไข v2.3.7: แก้ 3 ปัญหา - Rapid Open/Close + Total Floating Basket + Basket Reset
 
 ---
 
-### สรุปปัญหาจากรูปภาพ
+### ปัญหาที่ 1: EA เปิดปิดออเดอร์ซ้ำอย่างรวดเร็ว
 
-**Account History แสดง:**
-- `EC-CC_SELL_30` (eurchf.v): เปิด 17:11:22, ปิด 17:11:23 - **ปิดภายใน 1 วินาที!**
-- `EC-GC_SELL_28` (eurchf.v): เปิด 17:11:21, ปิด 17:11:23 - **ปิดภายใน 2 วินาที!**
-- `CC-GC_SELL_16` (eurchf.v): เปิด 17:11:20, ปิด 17:11:23 - **ปิดภายใน 3 วินาที!**
+**สาเหตุที่พบจากโค้ด:**
 
-**Trade Tab แสดง:**
-- มี Order B (cadchf.v) อยู่ แต่ไม่มี Order A (eurchf.v)
-
----
-
-### วิเคราะห์สาเหตุหลัก
-
-**Flow ที่เกิดขึ้น:**
+ผู้ใช้ตั้งค่า **Correlation Only** mode (ไม่ใช้ Z-Score) แต่ `CheckExitCondition()` (บรรทัด 9270-9312) ยังคงใช้ Z-Score exit logic:
 
 ```text
-1. OpenSellSideTrade() เปิด Order A (eurchf.v) สำเร็จ
-   → ticketSellA = 564403582 (ได้ ticket จริง)
-   
-2. OpenSellSideTrade() เปิด Order B (cadchf.v) สำเร็จ
-   → ticketSellB = 564403612
-   → directionSell = 1
-   
-3. Tick ถัดไป (1-2 วินาทีต่อมา)
-   → OnTick() เรียก CheckOrphanPositions()
-   
-4. CheckOrphanPositions() ตรวจสอบ:
-   → ticketSellA = 564403582 > 0 ✓
-   → PositionSelectByTicket(564403582) = FALSE! ❌
-   → สรุป: posAExists = false
-   
-5. เงื่อนไข Orphan ตรง:
-   if(ticketSellA > 0 && !posAExists) = TRUE!
-   
-6. ForceCloseSellSide() ถูกเรียก:
-   → ปิด Order A (eurchf.v) ที่มี ticket 564403582
-   → Reset ticketSellA = 0
-   → (Order B ยังอยู่ = Orphan!)
+InpExitMode = EXIT_ZSCORE_OR_PROFIT (default)
+
+CheckExitCondition() ทำ:
+  BUY exit → zScore > -InpExitZScore (-0.5)
+  SELL exit → zScore < InpExitZScore (0.5)
+
+ปัญหา: ในโหมด Correlation Only:
+  - Z-Score ยังถูกคำนวณและผันผวนรอบ 0
+  - เงื่อนไข zScore > -0.5 = TRUE เกือบตลอดเวลา!
+  - รวมกับ InpRequirePositiveProfit = true → ปิดทันทีที่มี profit เล็กน้อย
+  - แล้วเปิดใหม่ทันที เพราะ correlation ยังเกิน threshold
+  - วนลูปเปิด-ปิดไม่หยุด!
 ```
 
-**ทำไม `PositionSelectByTicket()` return FALSE?**
+นอกจากนี้ `InpMinHoldingBars` ถูกกำหนดเป็น Input (บรรทัด 416) แต่**ไม่มีโค้ดใช้จริง**ใน `ManageAllPositions()`
 
-สาเหตุที่เป็นไปได้:
-1. **Broker Delay**: Server ยังไม่ sync position data หลังเปิด order ใหม่
-2. **Hedging Account**: บาง Broker อาจใช้เวลาสร้าง Position จาก Order
-3. **Network Latency**: VPS อยู่ไกลจาก Server
+**วิธีแก้ไข:**
+
+**A. แก้ `CheckExitCondition()` ให้ skip Z-Score exit ใน Correlation Only mode:**
+```cpp
+bool CheckExitCondition(int pairIndex, string side, double zScore)
+{
+   // ...existing code...
+   
+   bool zScoreExit = false;
+   
+   // v2.3.7: Skip Z-Score exit in Correlation Only mode
+   if(InpEntryMode != ENTRY_MODE_CORRELATION_ONLY)
+   {
+      if(side == "BUY")
+         zScoreExit = (zScore > -InpExitZScore);
+      else
+         zScoreExit = (zScore < InpExitZScore);
+      
+      if(zScoreExit && InpRequirePositiveProfit && profit <= 0)
+         zScoreExit = false;
+   }
+   
+   // ...rest unchanged...
+}
+```
+
+**B. Implement `InpMinHoldingBars` ใน `ManageAllPositions()`:**
+```cpp
+// v2.3.7: Check minimum holding time before exit
+if(InpMinHoldingBars > 0 && g_pairs[i].entryTimeBuy > 0)
+{
+   int holdingSeconds = (int)(TimeCurrent() - g_pairs[i].entryTimeBuy);
+   int minSeconds = InpMinHoldingBars * PeriodSeconds();
+   if(holdingSeconds < minSeconds)
+      continue;  // Skip exit check
+}
+```
+
+**C. เพิ่ม Cooldown Period:**
+```cpp
+input group "=== Anti-Churn Protection (v2.3.7) ==="
+input int      InpCooldownSeconds = 60;     // Cooldown after close (seconds, 0=Disable)
+```
+
+เพิ่ม `lastClosedTimeBuy` / `lastClosedTimeSell` ใน PairInfo struct และบันทึกเวลาใน `CloseBuySide()` / `CloseSellSide()` จากนั้นเช็คใน entry logic ก่อนเปิดออเดอร์ใหม่
 
 ---
 
-### โซลูชัน
+### ปัญหาที่ 2: เพิ่ม Total Floating Profit บน Dashboard
 
-#### Part A: เพิ่ม Grace Period สำหรับ New Positions
+**สูตร:** `Tot Float = Basket (Closed Profit) + Floating P/L`
 
-ไม่ควรตรวจสอบ Orphan ทันทีหลังเปิด Order ใหม่ ต้องรอ X วินาที
+เมื่อ Tot Float >= Total Target และ `InpEnableTotalFloatingClose = true` → ปิดทั้งหมด
 
-**เพิ่ม Input Parameter:**
-```cpp
-input group "=== Orphan Detection (v2.3.6) ==="
-input int      InpOrphanGracePeriod = 10;    // Grace Period after Open (seconds)
+**Layout Dashboard เดิม (ฝั่งขวาของ BOX1):**
+```text
+y+22: Current P/L: [value]
+y+38: Total Target: [edit field]
 ```
 
-**แก้ไข CheckOrphanPositions():**
+**Layout ใหม่:**
+```text
+y+6:  Tot Float: [value]          ← ใหม่ (สีเขียว/แดง ตาม +/-)
+y+22: Basket:    [value]          ← ย้ายขึ้น (เดิมชื่อ Current P/L)
+y+38: Total Target: [edit field]  ← เหมือนเดิม
+```
+
+**Input Parameter ใหม่:**
 ```cpp
-void CheckOrphanPositions()
+input bool     InpEnableTotalFloatingClose = false;   // v2.3.7: Enable Total Floating Close
+```
+
+**Logic ใน `CheckTotalTarget()`:**
+```cpp
+// v2.3.7: Check Total Floating Profit (Basket + Floating)
+if(InpEnableTotalFloatingClose && InpTotalBasketTarget > 0)
 {
-   if(g_orphanCheckPaused) return;
+   double totalFloatingProfit = g_accumulatedBasketProfit + g_basketClosedProfit + g_basketFloatingProfit;
+   if(totalFloatingProfit >= InpTotalBasketTarget)
+   {
+      // Close ALL groups (same logic as existing Total Basket)
+   }
+}
+```
+
+---
+
+### ปัญหาที่ 3: Total Basket ไม่ Reset เมื่อปิดออเดอร์ Manual
+
+**สาเหตุ:** เมื่อปิดออเดอร์จากภายนอก (Manual close จาก MT5 Trade Tab):
+1. `CloseBuySide()`/`CloseSellSide()` ไม่ถูกเรียก
+2. `g_groups[g].closedProfit` และ `g_accumulatedBasketProfit` ไม่ถูก reset
+3. ค่า Basket เก่ายังค้างอยู่
+4. เมื่อเปิดออเดอร์ใหม่ → Basket เก่า + Floating ใหม่ อาจถึง Target → ปิดออเดอร์ใหม่ทิ้งทันที!
+
+**วิธีแก้ไข:**
+
+เพิ่มฟังก์ชัน `DetectExternalClosures()` เรียกใน `OnTick()` ก่อน `CheckOrphanPositions()`:
+
+```cpp
+void DetectExternalClosures()
+{
+   // นับ positions ที่ EA manage อยู่
+   int totalActive = 0;
+   for(int i = 0; i < MAX_PAIRS; i++)
+   {
+      if(!g_pairs[i].enabled) continue;
+      if(g_pairs[i].directionBuy == 1) totalActive++;
+      if(g_pairs[i].directionSell == 1) totalActive++;
+   }
    
-   datetime now = TimeCurrent();
-   
+   // ถ้า directionBuy/Sell == 1 แต่ position จริงไม่มี → reset pair
    for(int i = 0; i < MAX_PAIRS; i++)
    {
       if(!g_pairs[i].enabled) continue;
       
-      // === Check Buy Side ===
       if(g_pairs[i].directionBuy == 1)
       {
-         // v2.3.6: Skip orphan check during grace period after opening
-         if(g_pairs[i].entryTimeBuy > 0 && 
-            (now - g_pairs[i].entryTimeBuy) < InpOrphanGracePeriod)
+         bool aExists = (g_pairs[i].ticketBuyA == 0) || PositionSelectByTicket(g_pairs[i].ticketBuyA);
+         bool bExists = (g_pairs[i].ticketBuyB == 0) || PositionSelectByTicket(g_pairs[i].ticketBuyB);
+         if(!aExists && !bExists)
          {
-            continue;  // Skip this pair - too early to check
+            // ทั้ง A และ B หายไป → reset pair (ไม่สะสม profit เพราะไม่รู้ค่า)
+            g_pairs[i].directionBuy = -1;
+            g_pairs[i].ticketBuyA = 0;
+            g_pairs[i].ticketBuyB = 0;
+            g_pairs[i].profitBuy = 0;
+            // ... reset other fields ...
          }
-         
-         // Existing orphan detection logic...
       }
-      
-      // === Check Sell Side ===
-      if(g_pairs[i].directionSell == 1)
-      {
-         // v2.3.6: Skip orphan check during grace period after opening
-         if(g_pairs[i].entryTimeSell > 0 && 
-            (now - g_pairs[i].entryTimeSell) < InpOrphanGracePeriod)
-         {
-            continue;  // Skip this pair - too early to check
-         }
-         
-         // Existing orphan detection logic...
-      }
+      // Same for Sell side
    }
-}
-```
-
----
-
-#### Part B: เพิ่ม Position Verification Retry
-
-ก่อนสรุปว่า Position หายไป ให้ลอง select อีกครั้ง
-
-**แก้ไข VerifyPositionExists():**
-```cpp
-bool VerifyPositionExists(ulong ticket)
-{
-   if(ticket == 0) return true;  // No ticket = no position expected
    
-   // v2.3.6: Retry logic for newly opened positions
-   if(PositionSelectByTicket(ticket))
-      return true;
-      
-   // First attempt failed - wait and retry
-   Sleep(50);
-   if(PositionSelectByTicket(ticket))
-      return true;
-   
-   // Second attempt - try by order ticket
-   Sleep(50);
-   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   // ถ้าไม่มี position ของ EA เหลืออยู่เลย → reset ALL baskets
+   if(totalActive == 0 && (g_accumulatedBasketProfit != 0 || g_basketClosedProfit != 0))
    {
-      ulong posTicket = PositionGetTicket(i);
-      if(posTicket == ticket)
-         return true;
+      // Verify by scanning real positions
+      bool anyEAPosition = false;
+      for(int i = PositionsTotal() - 1; i >= 0; i--)
+      {
+         if(PositionGetTicket(i) > 0 && PositionSelectByTicket(PositionGetTicket(i)))
+         {
+            if(PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
+            {
+               anyEAPosition = true;
+               break;
+            }
+         }
+      }
+      
+      if(!anyEAPosition)
+      {
+         g_accumulatedBasketProfit = 0;
+         for(int g = 0; g < MAX_GROUPS; g++)
+            ResetGroupProfit(g);
+         PrintFormat("[v2.3.7] No EA positions - ALL baskets reset");
+      }
    }
-   
-   return false;  // Position really doesn't exist
-}
-```
-
----
-
-#### Part C: Log ก่อน Force Close (Debug)
-
-เพิ่ม detailed log เพื่อ debug ในอนาคต
-
-**แก้ไข CheckOrphanPositions():**
-```cpp
-if((g_pairs[i].ticketSellA > 0 && !posAExists) || 
-   (g_pairs[i].ticketSellB > 0 && !posBExists))
-{
-   // v2.3.6: Detailed log before force close
-   PrintFormat("[v2.3.6 ORPHAN DEBUG] Pair %d SELL: ticketA=%d (exists=%s) ticketB=%d (exists=%s) | Entry: %s | Now: %s | Age: %d sec",
-               i + 1, 
-               g_pairs[i].ticketSellA, posAExists ? "YES" : "NO",
-               g_pairs[i].ticketSellB, posBExists ? "YES" : "NO",
-               TimeToString(g_pairs[i].entryTimeSell, TIME_DATE|TIME_SECONDS),
-               TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS),
-               (int)(TimeCurrent() - g_pairs[i].entryTimeSell));
-   
-   PrintFormat("ORPHAN DETECTED Pair %d SELL: A=%s B=%s - Force closing remaining",
-               i + 1, posAExists ? "OK" : "GONE", posBExists ? "OK" : "GONE");
-   ForceCloseSellSide(i);
 }
 ```
 
@@ -172,59 +194,32 @@ if((g_pairs[i].ticketSellA > 0 && !posAExists) ||
 
 | ลำดับ | ส่วน | การแก้ไข |
 |------|------|---------|
-| 1 | Version | อัปเดตเป็น 2.36 |
-| 2 | Input Parameters | เพิ่ม `InpOrphanGracePeriod` (default 10 วินาที) |
-| 3 | `CheckOrphanPositions()` | เพิ่ม Grace Period check + Debug log |
-| 4 | `VerifyPositionExists()` | เพิ่ม Retry logic (Sleep + loop scan) |
+| 1 | Version | อัปเดตเป็น 2.37 |
+| 2 | PairInfo struct (~95) | เพิ่ม `lastClosedTimeBuy`, `lastClosedTimeSell` |
+| 3 | Input Parameters (~706-728) | เพิ่ม `InpCooldownSeconds`, `InpEnableTotalFloatingClose` |
+| 4 | `CheckExitCondition()` (~9270-9312) | Skip Z-Score exit ใน Correlation Only mode |
+| 5 | `ManageAllPositions()` (~9196, ~9231) | Implement `InpMinHoldingBars` check |
+| 6 | Entry Logic (~6708, ~6772) | เพิ่ม Cooldown check |
+| 7 | `CloseBuySide()` / `CloseSellSide()` (~8625, ~8760) | บันทึก `lastClosedTime` |
+| 8 | `CheckTotalTarget()` (~9617) | เพิ่ม Total Floating close logic |
+| 9 | Dashboard Create (~10175) | เพิ่ม "Tot Float:" row + จัดเลย์เอาต์ |
+| 10 | Dashboard Update (~10414) | แสดง Total Floating Profit |
+| 11 | `OnTick()` (~3154) | เรียก `DetectExternalClosures()` |
+| 12 | New Function | `DetectExternalClosures()` |
 
 ---
 
 ### ผลลัพธ์ที่คาดหวัง
 
-**ก่อนแก้ไข:**
-```
-17:11:21.xxx  Pair 28 SELL SIDE OPENED
-17:11:23.xxx  ORPHAN DETECTED Pair 28 SELL: A=GONE B=OK - Force closing remaining
-17:11:23.xxx  Pair 28 BUY SIDE FORCE CLOSED (Orphan Recovery)
-```
-→ Order A ถูกปิดภายใน 2 วินาที!
+**ปัญหา 1:** ในโหมด Correlation Only จะไม่มี Z-Score exit trigger อีก ออเดอร์จะปิดเมื่อถึง Profit Target หรือ Basket Target เท่านั้น + Cooldown ป้องกันเปิดซ้ำทันที
 
-**หลังแก้ไข:**
-```
-17:11:21.xxx  Pair 28 SELL SIDE OPENED
-17:11:23.xxx  [v2.3.6] Pair 28 SELL: Skipping orphan check (Age: 2 sec < Grace: 10 sec)
-... รอ 10 วินาที ...
-17:11:31.xxx  [v2.3.6 ORPHAN DEBUG] Pair 28 SELL: ticketA=564403582 (exists=YES) ticketB=564403612 (exists=YES)
-```
-→ ไม่มี False Positive! Position มีเวลา sync
+**ปัญหา 2:** Dashboard แสดง "Tot Float" = Basket + Floating เมื่อเปิด InpEnableTotalFloatingClose และถึง Target → ปิดทั้งหมด
 
----
-
-### บรรทัดที่แก้ไขหลัก
-
-| บรรทัด | ไฟล์ | การแก้ไข |
-|--------|------|---------|
-| ~650 | Harmony_Dream_EA.mq5 | เพิ่ม Input `InpOrphanGracePeriod` |
-| 8858-8897 | Harmony_Dream_EA.mq5 | เพิ่ม Grace Period check ใน `CheckOrphanPositions()` |
-| 8903-8907 | Harmony_Dream_EA.mq5 | เพิ่ม Retry logic ใน `VerifyPositionExists()` |
-
----
-
-### หมายเหตุ
-
-**ทำไม Broker ถึงให้ข้อมูลช้า?**
-
-1. **Hedging Mode**: Order → Deal → Position (3 ขั้นตอน) อาจใช้เวลา
-2. **VPS Location**: VPS อยู่ไกลจาก Trading Server
-3. **Market Hours**: ช่วงตลาดเปิด/ปิดอาจมี delay สูง
-4. **Server Load**: Broker มี traffic สูง
-
-**แนะนำ:**
-- เพิ่ม `InpOrphanGracePeriod` เป็น 15-30 วินาทีถ้ายังมีปัญหา
-- สังเกต Log เพื่อดูว่า Orphan Detection trigger เมื่อไหร่
+**ปัญหา 3:** เมื่อปิดออเดอร์ Manual ทั้งหมด → Basket auto-reset เป็น 0 เริ่มรอบใหม่สะอาด
 
 ---
 
 ### ไฟล์ที่แก้ไข
 
 `public/docs/mql5/Harmony_Dream_EA.mq5` เท่านั้น
+
