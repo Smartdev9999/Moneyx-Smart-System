@@ -4,10 +4,10 @@
 //|                                             MoneyX Trading        |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX Trading"
-#property version   "2.36"
+#property version   "2.37"
 #property strict
 #property description "Harmony Dream - Pairs Trading Expert Advisor"
-#property description "v2.3.6: Orphan Grace Period + Verify Retry"
+#property description "v2.3.7: Anti-Churn + Total Floating + Basket Reset"
 #property description "Full Hedging with Independent Buy/Sell Sides"
 #include <Trade/Trade.mqh>
 
@@ -172,11 +172,15 @@ struct PairInfo
    // === v2.3.0: Track max grid level for Progressive Mode restoration ===
    int            maxGridLossBuyLevel;
    int            maxGridLossSellLevel;
-   int            maxGridProfitBuyLevel;
-   int            maxGridProfitSellLevel;
-   
-   // === Combined ===
-   double         totalPairProfit;   // profitBuy + profitSell
+    int            maxGridProfitBuyLevel;
+    int            maxGridProfitSellLevel;
+    
+    // === v2.3.7: Anti-Churn Cooldown ===
+    datetime       lastClosedTimeBuy;     // Last close time for cooldown (BUY)
+    datetime       lastClosedTimeSell;    // Last close time for cooldown (SELL)
+    
+    // === Combined ===
+    double         totalPairProfit;   // profitBuy + profitSell
 };
 
 //+------------------------------------------------------------------+
@@ -706,6 +710,9 @@ input int      InpDataSyncMinutes = 5;                 // Data Sync Interval (mi
 input group "=== Orphan Detection (v2.3.6) ==="
 input int      InpOrphanGracePeriod = 10;       // Grace Period after Open (seconds)
 
+input group "=== Anti-Churn Protection (v2.3.7) ==="
+input int      InpCooldownSeconds = 60;              // Cooldown after close (seconds, 0=Disable)
+
 input group "=== News Filter ==="
 input bool     InpEnableNewsFilter = true;      // Enable News Filter
 input int      InpNewsBeforeMinutes = 30;       // Minutes Before News
@@ -726,6 +733,7 @@ input bool     InpCorrOnlySkipRSICheck = false;            // Correlation Only: 
 input group "=== Total Basket Target (v1.8.7) ==="
 input bool     InpEnableTotalBasket = false;        // Enable Total Basket Close (All Groups)
 input double   InpTotalBasketTarget = 500.0;        // Total Basket Target ($) - Close ALL when hit
+input bool     InpEnableTotalFloatingClose = false;  // v2.3.7: Enable Total Floating Close (Basket+Float)
 
 //+------------------------------------------------------------------+
 //| LICENSE STATUS ENUM (v3.6.5)                                       |
@@ -3150,6 +3158,9 @@ void OnTick()
    AnalyzeAllPairs();
    CheckAllGridLoss();    // v3.6.0: Grid Loss Side
    CheckAllGridProfit();  // v3.6.0: Grid Profit Side
+   
+   // v2.3.7: Detect external closures and reset baskets
+   DetectExternalClosures();
    
    // v3.3.2: Check for orphan positions before management
    CheckOrphanPositions();
@@ -6610,9 +6621,28 @@ void AnalyzeAllPairs()
          // Step 5: Open Trade based on determined direction
          if(direction == "BUY")
          {
-            if(g_pairs[i].directionBuy == -1 && g_pairs[i].orderCountBuy < g_pairs[i].maxOrderBuy)
-            {
-               if(OpenBuySideTrade(i))
+             if(g_pairs[i].directionBuy == -1 && g_pairs[i].orderCountBuy < g_pairs[i].maxOrderBuy)
+             {
+                // v2.3.7: Cooldown check
+                if(InpCooldownSeconds > 0 && g_pairs[i].lastClosedTimeBuy > 0 &&
+                   (TimeCurrent() - g_pairs[i].lastClosedTimeBuy) < InpCooldownSeconds)
+                {
+                   if(debugLog)
+                   {
+                      string reason = StringFormat("COOLDOWN BUY (%d/%d sec)", 
+                                      (int)(TimeCurrent() - g_pairs[i].lastClosedTimeBuy), InpCooldownSeconds);
+                      datetime now = TimeCurrent();
+                      if(g_firstAnalyzeRun || reason != g_pairs[i].lastBlockReason || 
+                         now - g_pairs[i].lastBlockLogTime >= DEBUG_LOG_INTERVAL)
+                      {
+                         PrintFormat("[CORR ONLY] Pair %d %s/%s: %s",
+                                     i + 1, g_pairs[i].symbolA, g_pairs[i].symbolB, reason);
+                         g_pairs[i].lastBlockReason = reason;
+                         g_pairs[i].lastBlockLogTime = now;
+                      }
+                   }
+                }
+                else if(OpenBuySideTrade(i))
                {
                   g_pairs[i].directionBuy = 1;
                   g_pairs[i].entryZScoreBuy = zScore;
@@ -6642,9 +6672,28 @@ void AnalyzeAllPairs()
          }
          else // direction == "SELL"
          {
-            if(g_pairs[i].directionSell == -1 && g_pairs[i].orderCountSell < g_pairs[i].maxOrderSell)
-            {
-               if(OpenSellSideTrade(i))
+             if(g_pairs[i].directionSell == -1 && g_pairs[i].orderCountSell < g_pairs[i].maxOrderSell)
+             {
+                // v2.3.7: Cooldown check
+                if(InpCooldownSeconds > 0 && g_pairs[i].lastClosedTimeSell > 0 &&
+                   (TimeCurrent() - g_pairs[i].lastClosedTimeSell) < InpCooldownSeconds)
+                {
+                   if(debugLog)
+                   {
+                      string reason = StringFormat("COOLDOWN SELL (%d/%d sec)", 
+                                      (int)(TimeCurrent() - g_pairs[i].lastClosedTimeSell), InpCooldownSeconds);
+                      datetime now = TimeCurrent();
+                      if(g_firstAnalyzeRun || reason != g_pairs[i].lastBlockReason || 
+                         now - g_pairs[i].lastBlockLogTime >= DEBUG_LOG_INTERVAL)
+                      {
+                         PrintFormat("[CORR ONLY] Pair %d %s/%s: %s",
+                                     i + 1, g_pairs[i].symbolA, g_pairs[i].symbolB, reason);
+                         g_pairs[i].lastBlockReason = reason;
+                         g_pairs[i].lastBlockLogTime = now;
+                      }
+                   }
+                }
+                else if(OpenSellSideTrade(i))
                {
                   g_pairs[i].directionSell = 1;
                   g_pairs[i].entryZScoreSell = zScore;
@@ -6707,8 +6756,17 @@ void AnalyzeAllPairs()
       {
          if(zScore < -InpEntryZScore)
          {
-            bool buyAllowed = true;
-            string buyBlockReason = "";
+             bool buyAllowed = true;
+             string buyBlockReason = "";
+             
+             // v2.3.7: Cooldown check
+             if(InpCooldownSeconds > 0 && g_pairs[i].lastClosedTimeBuy > 0 &&
+                (TimeCurrent() - g_pairs[i].lastClosedTimeBuy) < InpCooldownSeconds)
+             {
+                buyAllowed = false;
+                buyBlockReason = StringFormat("COOLDOWN BUY (%d/%d sec)", 
+                                (int)(TimeCurrent() - g_pairs[i].lastClosedTimeBuy), InpCooldownSeconds);
+             }
             
             // Check 1: Grid Guard (Optional)
             if(buyAllowed && InpGridPauseAffectsMain)
@@ -6771,8 +6829,17 @@ void AnalyzeAllPairs()
       {
          if(zScore > InpEntryZScore)
          {
-            bool sellAllowed = true;
-            string sellBlockReason = "";
+             bool sellAllowed = true;
+             string sellBlockReason = "";
+             
+             // v2.3.7: Cooldown check
+             if(InpCooldownSeconds > 0 && g_pairs[i].lastClosedTimeSell > 0 &&
+                (TimeCurrent() - g_pairs[i].lastClosedTimeSell) < InpCooldownSeconds)
+             {
+                sellAllowed = false;
+                sellBlockReason = StringFormat("COOLDOWN SELL (%d/%d sec)", 
+                                (int)(TimeCurrent() - g_pairs[i].lastClosedTimeSell), InpCooldownSeconds);
+             }
             
             // Check 1: Grid Guard (Optional)
             if(sellAllowed && InpGridPauseAffectsMain)
@@ -8644,6 +8711,8 @@ bool CloseBuySide(int pairIndex)
       // v2.3.0: Reset max grid levels (BUY)
       g_pairs[pairIndex].maxGridLossBuyLevel = 0;
       g_pairs[pairIndex].maxGridProfitBuyLevel = 0;
+      // v2.3.7: Record last close time for cooldown
+      g_pairs[pairIndex].lastClosedTimeBuy = TimeCurrent();
       
       // v3.6.0 HF3 Patch 3: Resume orphan detection
       g_orphanCheckPaused = false;
@@ -8852,6 +8921,117 @@ void CloseAveragingPositions(int pairIndex, string side)
       
       if(!foundAny) break;  // No more positions to close
       closeAttempts++;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| v2.3.7: Detect External Closures and Reset Baskets                 |
+//+------------------------------------------------------------------+
+void DetectExternalClosures()
+{
+   // Count total active positions managed by EA (internal state)
+   int totalActiveInternal = 0;
+   for(int i = 0; i < MAX_PAIRS; i++)
+   {
+      if(!g_pairs[i].enabled) continue;
+      if(g_pairs[i].directionBuy == 1) totalActiveInternal++;
+      if(g_pairs[i].directionSell == 1) totalActiveInternal++;
+   }
+   
+   // Check each pair: if direction == 1 but both positions are gone → reset pair
+   for(int i = 0; i < MAX_PAIRS; i++)
+   {
+      if(!g_pairs[i].enabled) continue;
+      
+      // === Check Buy Side ===
+      if(g_pairs[i].directionBuy == 1)
+      {
+         // v2.3.6: Respect grace period
+         if(g_pairs[i].entryTimeBuy > 0 && 
+            (TimeCurrent() - g_pairs[i].entryTimeBuy) < InpOrphanGracePeriod)
+            continue;
+         
+         bool aExists = (g_pairs[i].ticketBuyA == 0) || PositionSelectByTicket(g_pairs[i].ticketBuyA);
+         bool bExists = (g_pairs[i].ticketBuyB == 0) || PositionSelectByTicket(g_pairs[i].ticketBuyB);
+         if(!aExists && !bExists)
+         {
+            PrintFormat("[v2.3.7] Pair %d BUY: Both positions gone (external close) - Resetting pair", i + 1);
+            g_pairs[i].directionBuy = -1;
+            g_pairs[i].ticketBuyA = 0;
+            g_pairs[i].ticketBuyB = 0;
+            g_pairs[i].profitBuy = 0;
+            g_pairs[i].entryTimeBuy = 0;
+            g_pairs[i].orderCountBuy = 0;
+            g_pairs[i].lotBuyA = 0;
+            g_pairs[i].lotBuyB = 0;
+            g_pairs[i].avgOrderCountBuy = 0;
+            g_pairs[i].lastAvgPriceBuy = 0;
+            g_pairs[i].avgTotalLotBuy = 0;
+            g_pairs[i].lastClosedTimeBuy = TimeCurrent();
+            totalActiveInternal--;
+         }
+      }
+      
+      // === Check Sell Side ===
+      if(g_pairs[i].directionSell == 1)
+      {
+         // v2.3.6: Respect grace period
+         if(g_pairs[i].entryTimeSell > 0 && 
+            (TimeCurrent() - g_pairs[i].entryTimeSell) < InpOrphanGracePeriod)
+            continue;
+         
+         bool aExists = (g_pairs[i].ticketSellA == 0) || PositionSelectByTicket(g_pairs[i].ticketSellA);
+         bool bExists = (g_pairs[i].ticketSellB == 0) || PositionSelectByTicket(g_pairs[i].ticketSellB);
+         if(!aExists && !bExists)
+         {
+            PrintFormat("[v2.3.7] Pair %d SELL: Both positions gone (external close) - Resetting pair", i + 1);
+            g_pairs[i].directionSell = -1;
+            g_pairs[i].ticketSellA = 0;
+            g_pairs[i].ticketSellB = 0;
+            g_pairs[i].profitSell = 0;
+            g_pairs[i].entryTimeSell = 0;
+            g_pairs[i].orderCountSell = 0;
+            g_pairs[i].lotSellA = 0;
+            g_pairs[i].lotSellB = 0;
+            g_pairs[i].avgOrderCountSell = 0;
+            g_pairs[i].lastAvgPriceSell = 0;
+            g_pairs[i].avgTotalLotSell = 0;
+            g_pairs[i].lastClosedTimeSell = TimeCurrent();
+            totalActiveInternal--;
+         }
+      }
+   }
+   
+   // If no active positions remain but basket has accumulated profit → reset ALL baskets
+   if(totalActiveInternal <= 0 && (g_accumulatedBasketProfit != 0 || g_basketClosedProfit != 0))
+   {
+      // Verify by scanning real positions with our magic number
+      bool anyEAPosition = false;
+      for(int i = PositionsTotal() - 1; i >= 0; i--)
+      {
+         ulong ticket = PositionGetTicket(i);
+         if(ticket > 0 && PositionSelectByTicket(ticket))
+         {
+            if(PositionGetInteger(POSITION_MAGIC) == InpMagicNumber)
+            {
+               anyEAPosition = true;
+               break;
+            }
+         }
+      }
+      
+      if(!anyEAPosition)
+      {
+         PrintFormat("[v2.3.7] No EA positions found - Resetting ALL baskets");
+         PrintFormat("[v2.3.7] Before reset: Accumulated=$%.2f, ClosedProfit=$%.2f",
+                     g_accumulatedBasketProfit, g_basketClosedProfit);
+         
+         g_accumulatedBasketProfit = 0;
+         for(int g = 0; g < MAX_GROUPS; g++)
+            ResetGroupProfit(g);
+         
+         PrintFormat("[v2.3.7] ALL baskets reset - Ready for fresh cycle");
+      }
    }
 }
 
@@ -9142,6 +9322,8 @@ void ForceCloseSellSide(int pairIndex)
    // v2.3.0: Reset max grid levels (SELL)
    g_pairs[pairIndex].maxGridLossSellLevel = 0;
    g_pairs[pairIndex].maxGridProfitSellLevel = 0;
+   // v2.3.7: Record last close time for cooldown
+   g_pairs[pairIndex].lastClosedTimeSell = TimeCurrent();
    
    PrintFormat("Pair %d SELL SIDE FORCE CLOSED (Orphan Recovery)", pairIndex + 1);
 }
@@ -9195,71 +9377,95 @@ void ManageAllPositions()
       // === Manage Buy Side ===
       if(g_pairs[i].directionBuy == 1)
       {
-         bool shouldCloseBuy = false;
-         string closeReason = "";
-         
-         // Check exit conditions based on mode
-         if(CheckExitCondition(i, "BUY", zScore))
+         // v2.3.7: Check minimum holding time before exit
+         if(InpMinHoldingBars > 0 && g_pairs[i].entryTimeBuy > 0)
          {
-            shouldCloseBuy = true;
-            closeReason = "Exit Condition";
+            int holdingSeconds = (int)(TimeCurrent() - g_pairs[i].entryTimeBuy);
+            int minSeconds = InpMinHoldingBars * PeriodSeconds();
+            if(holdingSeconds < minSeconds)
+               goto SkipBuyExit;  // Skip exit check - not enough holding time
          }
          
-         // Check correlation drop
-         if(!shouldCloseBuy && MathAbs(g_pairs[i].correlation) < InpMinCorrelation)
          {
-            if(InpCorrDropMode == CORR_DROP_CLOSE_ALL)
+            bool shouldCloseBuy = false;
+            string closeReason = "";
+            
+            // Check exit conditions based on mode
+            if(CheckExitCondition(i, "BUY", zScore))
             {
                shouldCloseBuy = true;
-               closeReason = "Correlation Drop";
+               closeReason = "Exit Condition";
             }
-            else if(InpCorrDropMode == CORR_DROP_CLOSE_PROFIT_ONLY && g_pairs[i].profitBuy > 0)
+            
+            // Check correlation drop
+            if(!shouldCloseBuy && MathAbs(g_pairs[i].correlation) < InpMinCorrelation)
             {
-               shouldCloseBuy = true;
-               closeReason = "Corr Drop (Profit)";
+               if(InpCorrDropMode == CORR_DROP_CLOSE_ALL)
+               {
+                  shouldCloseBuy = true;
+                  closeReason = "Correlation Drop";
+               }
+               else if(InpCorrDropMode == CORR_DROP_CLOSE_PROFIT_ONLY && g_pairs[i].profitBuy > 0)
+               {
+                  shouldCloseBuy = true;
+                  closeReason = "Corr Drop (Profit)";
+               }
+            }
+            
+            if(shouldCloseBuy)
+            {
+               PrintFormat("Pair %d BUY: Closing - %s | Profit: %.2f", i + 1, closeReason, g_pairs[i].profitBuy);
+               CloseBuySide(i);
             }
          }
-         
-         if(shouldCloseBuy)
-         {
-            PrintFormat("Pair %d BUY: Closing - %s | Profit: %.2f", i + 1, closeReason, g_pairs[i].profitBuy);
-            CloseBuySide(i);
-         }
+         SkipBuyExit:;
       }
       
       // === Manage Sell Side ===
       if(g_pairs[i].directionSell == 1)
       {
-         bool shouldCloseSell = false;
-         string closeReason = "";
-         
-         // Check exit conditions based on mode
-         if(CheckExitCondition(i, "SELL", zScore))
+         // v2.3.7: Check minimum holding time before exit
+         if(InpMinHoldingBars > 0 && g_pairs[i].entryTimeSell > 0)
          {
-            shouldCloseSell = true;
-            closeReason = "Exit Condition";
+            int holdingSeconds = (int)(TimeCurrent() - g_pairs[i].entryTimeSell);
+            int minSeconds = InpMinHoldingBars * PeriodSeconds();
+            if(holdingSeconds < minSeconds)
+               goto SkipSellExit;  // Skip exit check - not enough holding time
          }
          
-         // Check correlation drop
-         if(!shouldCloseSell && MathAbs(g_pairs[i].correlation) < InpMinCorrelation)
          {
-            if(InpCorrDropMode == CORR_DROP_CLOSE_ALL)
+            bool shouldCloseSell = false;
+            string closeReason = "";
+            
+            // Check exit conditions based on mode
+            if(CheckExitCondition(i, "SELL", zScore))
             {
                shouldCloseSell = true;
-               closeReason = "Correlation Drop";
+               closeReason = "Exit Condition";
             }
-            else if(InpCorrDropMode == CORR_DROP_CLOSE_PROFIT_ONLY && g_pairs[i].profitSell > 0)
+            
+            // Check correlation drop
+            if(!shouldCloseSell && MathAbs(g_pairs[i].correlation) < InpMinCorrelation)
             {
-               shouldCloseSell = true;
-               closeReason = "Corr Drop (Profit)";
+               if(InpCorrDropMode == CORR_DROP_CLOSE_ALL)
+               {
+                  shouldCloseSell = true;
+                  closeReason = "Correlation Drop";
+               }
+               else if(InpCorrDropMode == CORR_DROP_CLOSE_PROFIT_ONLY && g_pairs[i].profitSell > 0)
+               {
+                  shouldCloseSell = true;
+                  closeReason = "Corr Drop (Profit)";
+               }
+            }
+            
+            if(shouldCloseSell)
+            {
+               PrintFormat("Pair %d SELL: Closing - %s | Profit: %.2f", i + 1, closeReason, g_pairs[i].profitSell);
+               CloseSellSide(i);
             }
          }
-         
-         if(shouldCloseSell)
-         {
-            PrintFormat("Pair %d SELL: Closing - %s | Profit: %.2f", i + 1, closeReason, g_pairs[i].profitSell);
-            CloseSellSide(i);
-         }
+         SkipSellExit:;
       }
    }
 }
@@ -9275,19 +9481,24 @@ bool CheckExitCondition(int pairIndex, string side, double zScore)
    // Z-Score exit for Buy: Z rises back above -ExitThreshold (toward 0)
    // Z-Score exit for Sell: Z falls back below +ExitThreshold (toward 0)
    bool zScoreExit = false;
-   if(side == "BUY")
-   {
-      zScoreExit = (zScore > -InpExitZScore);
-   }
-   else
-   {
-      zScoreExit = (zScore < InpExitZScore);
-   }
    
-   // Require positive profit for Z-Score exit if enabled
-   if(zScoreExit && InpRequirePositiveProfit && profit <= 0)
+   // v2.3.7: Skip Z-Score exit in Correlation Only mode
+   if(InpEntryMode != ENTRY_MODE_CORRELATION_ONLY)
    {
-      zScoreExit = false;
+      if(side == "BUY")
+      {
+         zScoreExit = (zScore > -InpExitZScore);
+      }
+      else
+      {
+         zScoreExit = (zScore < InpExitZScore);
+      }
+      
+      // Require positive profit for Z-Score exit if enabled
+      if(zScoreExit && InpRequirePositiveProfit && profit <= 0)
+      {
+         zScoreExit = false;
+      }
    }
    
    // Profit target exit
@@ -9614,47 +9825,68 @@ void CheckTotalTarget()
    g_basketTotalProfit = g_accumulatedBasketProfit + g_basketClosedProfit + g_basketFloatingProfit;
    
    // === v1.8.7: Check Total Basket Target (ALL GROUPS) ===
+   // v2.3.7: Also check Total Floating Close (Basket + Floating)
+   bool totalTargetHit = false;
+   string totalCloseReason = "";
+   
    if(InpEnableTotalBasket && InpTotalBasketTarget > 0)
    {
       if(g_basketTotalProfit >= InpTotalBasketTarget)
       {
-         PrintFormat(">>> TOTAL BASKET TARGET REACHED: $%.2f >= $%.2f <<<", 
+         totalTargetHit = true;
+         totalCloseReason = StringFormat("TOTAL BASKET TARGET REACHED: $%.2f >= $%.2f", 
                      g_basketTotalProfit, InpTotalBasketTarget);
-         PrintFormat(">>> Closing ALL Groups... <<<");
-         
-         g_orphanCheckPaused = true;
-         
-         // Close all groups
-         for(int grp = 0; grp < MAX_GROUPS; grp++)
-         {
-            g_groups[grp].closeMode = true;
-            
-            int startPairG = grp * PAIRS_PER_GROUP;
-            int endPairG = startPairG + PAIRS_PER_GROUP;
-            
-            for(int pi = startPairG; pi < endPairG && pi < MAX_PAIRS; pi++)
-            {
-               if(g_pairs[pi].directionBuy == 1)
-                  CloseBuySide(pi);
-               if(g_pairs[pi].directionSell == 1)
-                  CloseSellSide(pi);
-            }
-            
-            g_groups[grp].closeMode = false;
-            ResetGroupProfit(grp);
-         }
-         
-         // v1.8.7 HF2: Reset accumulated basket after closing all groups
-         g_accumulatedBasketProfit = 0;
-         PrintFormat(">>> TOTAL BASKET RESET: Accumulated = 0 <<<");
-         
-         g_orphanCheckPaused = false;
-         PrintFormat(">>> TOTAL BASKET CLOSE COMPLETE <<<");
-         return;  // Skip per-group checks after total basket close
       }
    }
    
-   // 2. Check each group's target independently
+   // v2.3.7: Total Floating Close (Basket Closed + Floating P/L)
+   if(!totalTargetHit && InpEnableTotalFloatingClose && InpTotalBasketTarget > 0)
+   {
+      double totalFloatingProfit = g_accumulatedBasketProfit + g_basketClosedProfit + g_basketFloatingProfit;
+      if(totalFloatingProfit >= InpTotalBasketTarget)
+      {
+         totalTargetHit = true;
+         totalCloseReason = StringFormat("TOTAL FLOATING TARGET REACHED: $%.2f >= $%.2f (Basket=$%.2f + Float=$%.2f)", 
+                     totalFloatingProfit, InpTotalBasketTarget,
+                     g_accumulatedBasketProfit + g_basketClosedProfit, g_basketFloatingProfit);
+      }
+   }
+   
+   if(totalTargetHit)
+   {
+      PrintFormat(">>> %s <<<", totalCloseReason);
+      PrintFormat(">>> Closing ALL Groups... <<<");
+      
+      g_orphanCheckPaused = true;
+      
+      // Close all groups
+      for(int grp = 0; grp < MAX_GROUPS; grp++)
+      {
+         g_groups[grp].closeMode = true;
+         
+         int startPairG = grp * PAIRS_PER_GROUP;
+         int endPairG = startPairG + PAIRS_PER_GROUP;
+         
+         for(int pi = startPairG; pi < endPairG && pi < MAX_PAIRS; pi++)
+         {
+            if(g_pairs[pi].directionBuy == 1)
+               CloseBuySide(pi);
+            if(g_pairs[pi].directionSell == 1)
+               CloseSellSide(pi);
+         }
+         
+         g_groups[grp].closeMode = false;
+         ResetGroupProfit(grp);
+      }
+      
+      // v1.8.7 HF2: Reset accumulated basket after closing all groups
+      g_accumulatedBasketProfit = 0;
+      PrintFormat(">>> TOTAL BASKET RESET: Accumulated = 0 <<<");
+      
+      g_orphanCheckPaused = false;
+      PrintFormat(">>> TOTAL BASKET CLOSE COMPLETE <<<");
+      return;  // Skip per-group checks after total basket close
+   }
    for(int g = 0; g < MAX_GROUPS; g++)
    {
       // v1.6.6: Get real-time scaled targets for this group
@@ -10172,8 +10404,12 @@ void CreateAccountSummary(string prefix, int y)
    CreateLabel(prefix + "L_MG", box1X + 10, y + 54, "Margin:", COLOR_TEXT_LABEL, 8, "Arial");
    CreateLabel(prefix + "V_MG", box1X + 80, y + 54, "0.00", COLOR_TEXT_LABEL, 9, "Arial");
    
-   CreateLabel(prefix + "L_TPL", box1X + 155, y + 22, "Current P/L:", COLOR_TEXT_LABEL, 8, "Arial");
-   CreateLabel(prefix + "V_TPL", box1X + 230, y + 22, "0.00", COLOR_PROFIT, 10, "Arial Bold");
+   // v2.3.7: Total Floating Profit (Basket + Floating P/L)
+   CreateLabel(prefix + "L_TFP", box1X + 155, y + 6, "Tot Float:", COLOR_TEXT_LABEL, 8, "Arial");
+   CreateLabel(prefix + "V_TFP", box1X + 225, y + 6, "0.00", COLOR_PROFIT, 9, "Arial Bold");
+   
+   CreateLabel(prefix + "L_TPL", box1X + 155, y + 22, "Basket:", COLOR_TEXT_LABEL, 8, "Arial");
+   CreateLabel(prefix + "V_TPL", box1X + 225, y + 22, "0.00", COLOR_PROFIT, 9, "Arial Bold");
    
    CreateLabel(prefix + "L_TTG", box1X + 155, y + 40, "Total Target:", COLOR_TEXT_LABEL, 8, "Arial");
    // v1.8.7 HF2: Show InpTotalBasketTarget value (user-defined)
@@ -10416,6 +10652,10 @@ void UpdateDashboard()
    double displayTarget = InpEnableTotalBasket ? InpTotalBasketTarget : g_totalTarget;
    double basketNeed = displayTarget - displayBasket;
    if(basketNeed < 0) basketNeed = 0;
+   
+   // v2.3.7: Total Floating Profit = Basket (Closed) + Floating P/L
+   double totalFloatingProfit = displayBasket + g_basketFloatingProfit;
+   UpdateLabel(prefix + "V_TFP", DoubleToString(totalFloatingProfit, 2), totalFloatingProfit >= 0 ? COLOR_PROFIT : COLOR_LOSS);
    
    // If Basket Target is enabled, show Basket (with accumulated); otherwise show Floating P/L
    if(displayTarget > 0)
