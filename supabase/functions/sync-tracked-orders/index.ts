@@ -46,7 +46,8 @@ serve(async (req) => {
       .from("tracked_ea_sessions")
       .select("id, account_number, broker")
       .eq("session_name", session_name)
-      .eq("account_number", account_number || "")
+      .order("created_at", { ascending: false })
+      .limit(1)
       .maybeSingle();
 
     if (existingSession) {
