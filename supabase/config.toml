@@ -32,3 +32,9 @@ verify_jwt = false
 
 [functions.reset-customer-password]
 verify_jwt = false
+
+[functions.sync-tracked-orders]
+verify_jwt = false
+
+[functions.analyze-ea-strategy]
+verify_jwt = false

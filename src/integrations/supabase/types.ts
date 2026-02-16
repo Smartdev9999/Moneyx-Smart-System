@@ -665,6 +665,143 @@ export type Database = {
         }
         Relationships: []
       }
+      tracked_ea_sessions: {
+        Row: {
+          account_number: string | null
+          broker: string | null
+          created_at: string
+          ea_magic_number: number
+          end_time: string | null
+          generated_ea_code: string | null
+          id: string
+          notes: string | null
+          session_name: string
+          start_time: string | null
+          status: string
+          strategy_prompt: string | null
+          strategy_summary: string | null
+          symbols: string[] | null
+          timeframe: string | null
+          total_orders: number | null
+        }
+        Insert: {
+          account_number?: string | null
+          broker?: string | null
+          created_at?: string
+          ea_magic_number?: number
+          end_time?: string | null
+          generated_ea_code?: string | null
+          id?: string
+          notes?: string | null
+          session_name: string
+          start_time?: string | null
+          status?: string
+          strategy_prompt?: string | null
+          strategy_summary?: string | null
+          symbols?: string[] | null
+          timeframe?: string | null
+          total_orders?: number | null
+        }
+        Update: {
+          account_number?: string | null
+          broker?: string | null
+          created_at?: string
+          ea_magic_number?: number
+          end_time?: string | null
+          generated_ea_code?: string | null
+          id?: string
+          notes?: string | null
+          session_name?: string
+          start_time?: string | null
+          status?: string
+          strategy_prompt?: string | null
+          strategy_summary?: string | null
+          symbols?: string[] | null
+          timeframe?: string | null
+          total_orders?: number | null
+        }
+        Relationships: []
+      }
+      tracked_orders: {
+        Row: {
+          close_price: number | null
+          close_time: string | null
+          comment: string | null
+          commission: number | null
+          created_at: string
+          event_type: string
+          holding_time_seconds: number | null
+          id: string
+          magic_number: number | null
+          market_data: Json | null
+          open_price: number | null
+          open_time: string | null
+          order_type: string
+          profit: number | null
+          session_id: string
+          sl: number | null
+          swap: number | null
+          symbol: string
+          ticket: number
+          tp: number | null
+          volume: number | null
+        }
+        Insert: {
+          close_price?: number | null
+          close_time?: string | null
+          comment?: string | null
+          commission?: number | null
+          created_at?: string
+          event_type?: string
+          holding_time_seconds?: number | null
+          id?: string
+          magic_number?: number | null
+          market_data?: Json | null
+          open_price?: number | null
+          open_time?: string | null
+          order_type: string
+          profit?: number | null
+          session_id: string
+          sl?: number | null
+          swap?: number | null
+          symbol: string
+          ticket: number
+          tp?: number | null
+          volume?: number | null
+        }
+        Update: {
+          close_price?: number | null
+          close_time?: string | null
+          comment?: string | null
+          commission?: number | null
+          created_at?: string
+          event_type?: string
+          holding_time_seconds?: number | null
+          id?: string
+          magic_number?: number | null
+          market_data?: Json | null
+          open_price?: number | null
+          open_time?: string | null
+          order_type?: string
+          profit?: number | null
+          session_id?: string
+          sl?: number | null
+          swap?: number | null
+          symbol?: string
+          ticket?: number
+          tp?: number | null
+          volume?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tracked_orders_session_id_fkey"
+            columns: ["session_id"]
+            isOneToOne: false
+            referencedRelation: "tracked_ea_sessions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       trade_history: {
         Row: {
           close_price: number | null

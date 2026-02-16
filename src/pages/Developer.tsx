@@ -23,6 +23,7 @@ import CodeBlock from '@/components/CodeBlock';
 import MQL5CodeTemplate from '@/components/MQL5CodeTemplate';
 import EconomicCalendar from '@/components/EconomicCalendar';
 import AIAnalysisCard from '@/components/AIAnalysisCard';
+import StrategyLab from '@/components/StrategyLab';
 import { 
   LogOut,
   Code2,
@@ -548,10 +549,10 @@ enum ENUM_BB_MA_TYPE
       {/* Main Content */}
       <main className="container py-8">
         <Tabs defaultValue="ea" value={activeTab} onValueChange={setActiveTab} className="space-y-6">
-          <TabsList className="grid w-full max-w-2xl grid-cols-4">
+           <TabsList className="grid w-full max-w-3xl grid-cols-5">
             <TabsTrigger value="ea" className="gap-2">
               <FileCode className="w-4 h-4" />
-              Expert Advisors
+              EA
             </TabsTrigger>
             <TabsTrigger value="indicators" className="gap-2">
               <TrendingUp className="w-4 h-4" />
@@ -564,6 +565,10 @@ enum ENUM_BB_MA_TYPE
             <TabsTrigger value="news" className="gap-2">
               <Newspaper className="w-4 h-4" />
               News
+            </TabsTrigger>
+            <TabsTrigger value="strategy-lab" className="gap-2">
+              <Sparkles className="w-4 h-4" />
+              Strategy Lab
             </TabsTrigger>
           </TabsList>
 
@@ -1100,6 +1105,11 @@ enum ENUM_BB_MA_TYPE
           {/* News Tab */}
           <TabsContent value="news" className="space-y-6">
             <EconomicCalendar />
+          </TabsContent>
+
+          {/* Strategy Lab Tab */}
+          <TabsContent value="strategy-lab" className="space-y-6">
+            <StrategyLab />
           </TabsContent>
         </Tabs>
       </main>
