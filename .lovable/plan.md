@@ -1,46 +1,48 @@
 
 
-## แผนปรับปรุง: ลบ API Key ออก - ใช้แค่ URL + ชื่อ Session
+## แก้ไขปัญหา Session ซ้ำ + ปรับปรุงการค้นหา Session
 
-### สิ่งที่จะเปลี่ยน
+### ปัญหาที่พบ
 
-ปรับให้ EA Tracker เชื่อมต่อได้ง่ายขึ้นโดยไม่ต้องใช้ API Key เพียงใส่ **URL** กับ **ชื่อ Session** เท่านั้น
+EA Tracker ส่งข้อมูลมาสำเร็จแล้ว แต่ระบบสร้าง session ใหม่แทนที่จะอัปเดต session เดิม เนื่องจาก:
+- Session เดิมมี `account_number = null` 
+- EA ส่ง `account_number = "2080636"` มาด้วย
+- Query ใช้ `.eq("account_number", "2080636")` จึงหา session เดิมไม่เจอ
 
-### ข้อดี
-- ตั้งค่าง่ายมาก แค่ใส่ URL + ชื่อ
-- ไม่ต้องจำหรือหา API Key
+### สิ่งที่จะแก้ไข
 
-### ข้อเสีย (ความปลอดภัย)
-- ใครก็ตามที่รู้ URL สามารถส่งข้อมูลปลอมเข้ามาได้
-- เนื่องจากระบบ Strategy Lab ใช้ภายในทีม Developer เท่านั้น ความเสี่ยงนี้ยอมรับได้
+#### 1. Edge Function: ปรับ Session Lookup Logic
 
----
+เปลี่ยนจากการค้นหาด้วย `session_name + account_number` เป็นค้นหาด้วย `session_name` อย่างเดียวก่อน แล้วค่อยอัปเดต `account_number` และ `broker` ทีหลัง
+
+#### 2. Database Cleanup: ลบ Session ซ้ำที่ว่าง
+
+ลบ session เดิมที่ไม่มีข้อมูล (`id: 5d747fa5-...`, account_number = null, total_orders = 0) ออก เหลือแค่ session ที่มีข้อมูลจริง
 
 ### ไฟล์ที่แก้ไข
 
 | ไฟล์ | การเปลี่ยนแปลง |
 |------|----------------|
-| `supabase/functions/sync-tracked-orders/index.ts` | ลบ API Key validation ออก ให้รับข้อมูลได้เลย |
-| `public/docs/mql5/EA_Strategy_Tracker.mq5` | ลบ InpAPIKey parameter, ลบ header x-api-key ออก |
-| `src/components/StrategyLab.tsx` | อัปเดตคำแนะนำการตั้งค่าให้บอกแค่ URL + ชื่อ Session |
-
----
+| `supabase/functions/sync-tracked-orders/index.ts` | ปรับ query ให้ค้นหา session ด้วยชื่ออย่างเดียว |
+| SQL Migration | ลบ session ซ้ำที่ว่างออก |
 
 ### รายละเอียดทางเทคนิค
 
-**Edge Function (`sync-tracked-orders`):**
-- ลบบล็อก API key validation (บรรทัด 16-30) ออกทั้งหมด
-- คงเหลือแค่ validation ว่า `session_name` ต้องมี
+**Edge Function - Session Lookup (เดิม):**
+```
+.eq("session_name", session_name)
+.eq("account_number", account_number || "")
+```
 
-**EA Tracker (MQL5):**
-- ลบ `input string InpAPIKey`
-- ลบ `"x-api-key: "` ออกจาก HTTP headers
-- ผู้ใช้ตั้งค่าแค่:
-  - `InpServerURL` = URL ของ backend function
-  - `InpSessionName` = ชื่อ session
+**Edge Function - Session Lookup (ใหม่):**
+```
+.eq("session_name", session_name)
+.order("created_at", { ascending: false })
+.limit(1)
+```
 
-**Dashboard:**
-- อัปเดตคำแนะนำการตั้งค่าให้แสดงแค่ 2 ขั้นตอน:
-  1. เพิ่ม URL ใน MT5 WebRequest
-  2. ใส่ชื่อ Session ให้ตรงกัน
+จากนั้นอัปเดต `account_number` และ `broker` ถ้ายังว่างอยู่
+
+**SQL Cleanup:**
+ลบ session ที่ซ้ำและไม่มีข้อมูล (id: 5d747fa5-998d-4d4a-a52a-c1947c769fb9)
 
