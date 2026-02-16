@@ -12,23 +12,6 @@ serve(async (req) => {
   }
 
   try {
-    // Validate API key
-    const apiKey = req.headers.get("x-api-key");
-    const expectedKey = Deno.env.get("EA_API_SECRET");
-    
-    if (!expectedKey || expectedKey.length < 16) {
-      console.error("EA_API_SECRET not configured or too short");
-      return new Response(JSON.stringify({ error: "Server not configured" }), {
-        status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-    
-    if (!apiKey || apiKey !== expectedKey) {
-      return new Response(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
     // Parse body - handle MQL5 quirks
     let rawBody = await req.text();
     rawBody = rawBody.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, "");
