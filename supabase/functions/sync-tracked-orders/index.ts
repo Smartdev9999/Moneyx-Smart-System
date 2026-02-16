@@ -111,9 +111,16 @@ serve(async (req) => {
         event_type: o.event_type || "open",
       }));
 
+      // Deduplicate: keep last occurrence per ticket+event_type
+      const deduped = new Map();
+      for (const row of orderRows) {
+        deduped.set(`${row.ticket}:${row.event_type}`, row);
+      }
+      const uniqueRows = [...deduped.values()];
+
       const { error: upsertErr } = await supabase
         .from("tracked_orders")
-        .upsert(orderRows, { onConflict: "session_id,ticket,event_type" });
+        .upsert(uniqueRows, { onConflict: "session_id,ticket,event_type" });
 
       if (upsertErr) {
         console.error("Upsert error:", upsertErr);
