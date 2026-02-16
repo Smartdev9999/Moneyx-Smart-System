@@ -84,7 +84,8 @@ serve(async (req) => {
       sessionId = newSession.id;
     }
 
-    console.log(`[sync-tracked-orders] Session: ${session_name}, Event: ${event || 'data'}, Account: ${account_number || 'N/A'}, Orders: ${orders?.length || 0}`);
+    const isHistory = event === "history" || (orders && orders.length > 0 && orders[0]?.event_type === "history");
+    console.log(`[sync-tracked-orders] Session: ${session_name}, Event: ${isHistory ? 'history' : (event || 'data')}, Account: ${account_number || 'N/A'}, Orders: ${orders?.length || 0}`);
 
     // Process orders
     if (orders && Array.isArray(orders) && orders.length > 0) {

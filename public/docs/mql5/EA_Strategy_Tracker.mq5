@@ -18,6 +18,12 @@ input string   InpServerURL       = "https://lkbhomsulgycxawwlnfh.supabase.co/fu
 input int      InpSendInterval    = 30;               // Send Interval (seconds)
 input int      InpOwnMagicNumber  = 999999;           // This Tracker's Magic (exclude self)
 
+//=== History Settings ===
+input group "=== History Settings ==="
+input bool     InpSendHistory      = true;    // Send Trade History on Start
+input int      InpHistoryDays      = 30;      // History Days to Pull
+input int      InpHistoryBatchSize = 50;      // Batch Size per Request
+
 //=== Market Data Collection ===
 input group "=== Market Data Collection ==="
 input bool     InpCollectRSI       = true;   // Collect RSI(14)
@@ -65,6 +71,13 @@ int OnInit()
    
    // Initial scan
    ScanPositions();
+   
+   // Send trade history on startup
+   if(InpSendHistory)
+   {
+      Print("[Tracker] Pulling trade history (", InpHistoryDays, " days)...");
+      SendTradeHistory();
+   }
    
    EventSetTimer(1);
    return INIT_SUCCEEDED;
@@ -499,6 +512,162 @@ void SendPendingData()
          g_positions[i].reported = true;
       }
    }
+}
+
+//+------------------------------------------------------------------+
+void SendTradeHistory()
+{
+   if(InpServerURL == "") return;
+   
+   datetime startDate = TimeCurrent() - InpHistoryDays * 86400;
+   datetime endDate = TimeCurrent();
+   
+   if(!HistorySelect(startDate, endDate))
+   {
+      Print("[Tracker] Failed to load deal history");
+      return;
+   }
+   
+   int totalDeals = HistoryDealsTotal();
+   if(totalDeals == 0)
+   {
+      Print("[Tracker] No history deals found");
+      return;
+   }
+   
+   // First pass: collect all DEAL_ENTRY_IN open prices by position ID
+   // so we can match them with close deals
+   struct DealEntry
+   {
+      ulong    positionId;
+      double   openPrice;
+      datetime openTime;
+   };
+   DealEntry openDeals[];
+   int openCount = 0;
+   
+   for(int i = 0; i < totalDeals; i++)
+   {
+      ulong dealTicket = HistoryDealGetTicket(i);
+      if(dealTicket == 0) continue;
+      
+      long entry = HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
+      if(entry != DEAL_ENTRY_IN) continue;
+      
+      long magic = HistoryDealGetInteger(dealTicket, DEAL_MAGIC);
+      if(magic == InpOwnMagicNumber) continue;
+      if(InpTrackMagicNumber != 0 && magic != InpTrackMagicNumber) continue;
+      
+      openCount++;
+      ArrayResize(openDeals, openCount);
+      openDeals[openCount - 1].positionId = HistoryDealGetInteger(dealTicket, DEAL_POSITION_ID);
+      openDeals[openCount - 1].openPrice  = HistoryDealGetDouble(dealTicket, DEAL_PRICE);
+      openDeals[openCount - 1].openTime   = (datetime)HistoryDealGetInteger(dealTicket, DEAL_TIME);
+   }
+   
+   // Second pass: collect close deals and match with open deals
+   string batchJSON = "";
+   int batchCount = 0;
+   int totalSent = 0;
+   
+   for(int i = 0; i < totalDeals; i++)
+   {
+      ulong dealTicket = HistoryDealGetTicket(i);
+      if(dealTicket == 0) continue;
+      
+      long entry = HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
+      if(entry != DEAL_ENTRY_OUT && entry != DEAL_ENTRY_INOUT) continue;
+      
+      long magic = HistoryDealGetInteger(dealTicket, DEAL_MAGIC);
+      if(magic == InpOwnMagicNumber) continue;
+      if(InpTrackMagicNumber != 0 && magic != InpTrackMagicNumber) continue;
+      
+      // Get deal details
+      string symbol    = HistoryDealGetString(dealTicket, DEAL_SYMBOL);
+      long   dealType  = HistoryDealGetInteger(dealTicket, DEAL_TYPE);
+      double volume    = HistoryDealGetDouble(dealTicket, DEAL_VOLUME);
+      double closePrice = HistoryDealGetDouble(dealTicket, DEAL_PRICE);
+      double profit    = HistoryDealGetDouble(dealTicket, DEAL_PROFIT);
+      double swap      = HistoryDealGetDouble(dealTicket, DEAL_SWAP);
+      double commission = HistoryDealGetDouble(dealTicket, DEAL_COMMISSION);
+      datetime closeTime = (datetime)HistoryDealGetInteger(dealTicket, DEAL_TIME);
+      string comment   = HistoryDealGetString(dealTicket, DEAL_COMMENT);
+      ulong  posId     = HistoryDealGetInteger(dealTicket, DEAL_POSITION_ID);
+      
+      // Find matching open deal
+      double openPrice = 0;
+      datetime openTime = 0;
+      for(int j = 0; j < openCount; j++)
+      {
+         if(openDeals[j].positionId == posId)
+         {
+            openPrice = openDeals[j].openPrice;
+            openTime  = openDeals[j].openTime;
+            break;
+         }
+      }
+      
+      int holdSeconds = (openTime > 0) ? (int)(closeTime - openTime) : 0;
+      // Original order type: if close deal is SELL, original was BUY and vice versa
+      string orderType = (dealType == DEAL_TYPE_SELL) ? "buy" : "sell";
+      
+      // Build order JSON
+      if(batchCount > 0) batchJSON += ",";
+      batchJSON += "{";
+      batchJSON += "\"ticket\":" + IntegerToString(posId) + ",";
+      batchJSON += "\"magic_number\":" + IntegerToString(magic) + ",";
+      batchJSON += "\"symbol\":\"" + symbol + "\",";
+      batchJSON += "\"order_type\":\"" + orderType + "\",";
+      batchJSON += "\"volume\":" + DoubleToString(volume, 2) + ",";
+      batchJSON += "\"open_price\":" + DoubleToString(openPrice, 5) + ",";
+      batchJSON += "\"close_price\":" + DoubleToString(closePrice, 5) + ",";
+      batchJSON += "\"sl\":0,\"tp\":0,";
+      batchJSON += "\"profit\":" + DoubleToString(profit, 2) + ",";
+      batchJSON += "\"swap\":" + DoubleToString(swap, 2) + ",";
+      batchJSON += "\"commission\":" + DoubleToString(commission, 2) + ",";
+      batchJSON += "\"open_time\":\"" + (openTime > 0 ? DateTimeToISO(openTime) : "") + "\",";
+      batchJSON += "\"close_time\":\"" + DateTimeToISO(closeTime) + "\",";
+      batchJSON += "\"holding_time_seconds\":" + IntegerToString(holdSeconds) + ",";
+      batchJSON += "\"comment\":\"" + comment + "\",";
+      batchJSON += "\"event_type\":\"history\",";
+      batchJSON += "\"market_data\":{}";
+      batchJSON += "}";
+      batchCount++;
+      
+      // Send batch when full
+      if(batchCount >= InpHistoryBatchSize)
+      {
+         SendHistoryBatch(batchJSON, batchCount);
+         totalSent += batchCount;
+         batchJSON = "";
+         batchCount = 0;
+         Sleep(500); // Avoid overwhelming server
+      }
+   }
+   
+   // Send remaining
+   if(batchCount > 0)
+   {
+      SendHistoryBatch(batchJSON, batchCount);
+      totalSent += batchCount;
+   }
+   
+   PrintFormat("[Tracker] History sent: %d closed trades from %d days", totalSent, InpHistoryDays);
+}
+
+//+------------------------------------------------------------------+
+void SendHistoryBatch(string ordersJSON, int count)
+{
+   string json = "{";
+   json += "\"session_name\":\"" + InpSessionName + "\",";
+   json += "\"account_number\":\"" + g_accountNumber + "\",";
+   json += "\"broker\":\"" + g_brokerName + "\",";
+   json += "\"magic_number\":" + IntegerToString(InpTrackMagicNumber) + ",";
+   json += "\"event\":\"history\",";
+   json += "\"orders\":[" + ordersJSON + "]}";
+   
+   SendHTTP(json);
+   PrintFormat("[Tracker] Sent history batch: %d orders", count);
 }
 
 //+------------------------------------------------------------------+
