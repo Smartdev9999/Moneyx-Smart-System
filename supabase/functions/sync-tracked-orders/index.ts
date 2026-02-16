@@ -61,13 +61,27 @@ serve(async (req) => {
     
     const { data: existingSession } = await supabase
       .from("tracked_ea_sessions")
-      .select("id")
+      .select("id, account_number, broker")
       .eq("session_name", session_name)
       .eq("account_number", account_number || "")
       .maybeSingle();
 
     if (existingSession) {
       sessionId = existingSession.id;
+      
+      // Update session with heartbeat + broker/account info if missing
+      const updateData: any = { last_heartbeat: new Date().toISOString() };
+      if (account_number && !existingSession.account_number) {
+        updateData.account_number = account_number;
+      }
+      if (broker && !existingSession.broker) {
+        updateData.broker = broker;
+      }
+      
+      await supabase
+        .from("tracked_ea_sessions")
+        .update(updateData)
+        .eq("id", sessionId);
     } else {
       const { data: newSession, error: createErr } = await supabase
         .from("tracked_ea_sessions")
@@ -77,6 +91,7 @@ serve(async (req) => {
           broker: broker || null,
           account_number: account_number || null,
           status: "tracking",
+          last_heartbeat: new Date().toISOString(),
         })
         .select("id")
         .single();
@@ -84,6 +99,8 @@ serve(async (req) => {
       if (createErr) throw createErr;
       sessionId = newSession.id;
     }
+
+    console.log(`[sync-tracked-orders] Session: ${session_name}, Event: ${event || 'data'}, Account: ${account_number || 'N/A'}, Orders: ${orders?.length || 0}`);
 
     // Process orders
     if (orders && Array.isArray(orders) && orders.length > 0) {
@@ -131,6 +148,7 @@ serve(async (req) => {
         .update({
           total_orders: orderStats?.length || 0,
           symbols: uniqueSymbols,
+          last_heartbeat: new Date().toISOString(),
         })
         .eq("id", sessionId);
     }

@@ -674,6 +674,7 @@ export type Database = {
           end_time: string | null
           generated_ea_code: string | null
           id: string
+          last_heartbeat: string | null
           notes: string | null
           session_name: string
           start_time: string | null
@@ -692,6 +693,7 @@ export type Database = {
           end_time?: string | null
           generated_ea_code?: string | null
           id?: string
+          last_heartbeat?: string | null
           notes?: string | null
           session_name: string
           start_time?: string | null
@@ -710,6 +712,7 @@ export type Database = {
           end_time?: string | null
           generated_ea_code?: string | null
           id?: string
+          last_heartbeat?: string | null
           notes?: string | null
           session_name?: string
           start_time?: string | null
