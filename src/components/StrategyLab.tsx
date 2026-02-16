@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
+import { ScrollArea } from '@/components/ui/scroll-area';
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '@/components/ui/table';
@@ -17,8 +18,9 @@ import {
 } from '@/components/ui/dialog';
 import {
   Plus, RefreshCw, Download, Brain, Sparkles, FileCode, ChevronDown,
-  ChevronRight, Activity, Clock, Target, TrendingUp, TrendingDown,
-  Trash2, Eye, Zap, Copy, Check,
+  ChevronRight, Activity, Clock, Target, TrendingUp,
+  Trash2, Eye, Copy, Check, Wifi, WifiOff, Radio,
+  CheckCircle2, Database, BarChart3,
 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 
@@ -39,6 +41,7 @@ interface Session {
   status: string;
   notes: string | null;
   created_at: string;
+  last_heartbeat: string | null;
 }
 
 interface TrackedOrder {
@@ -60,6 +63,7 @@ interface TrackedOrder {
   holding_time_seconds: number;
   event_type: string;
   market_data: any;
+  created_at: string;
 }
 
 const statusColors: Record<string, string> = {
@@ -68,6 +72,187 @@ const statusColors: Record<string, string> = {
   summarized: 'bg-purple-500/20 text-purple-400 border-purple-500',
   prompted: 'bg-orange-500/20 text-orange-400 border-orange-500',
   generated: 'bg-green-500/20 text-green-400 border-green-500',
+};
+
+type ConnectionStatus = 'not_connected' | 'online' | 'offline';
+
+const getConnectionStatus = (session: Session): ConnectionStatus => {
+  if (!session.account_number && !session.last_heartbeat) return 'not_connected';
+  if (!session.last_heartbeat) return 'not_connected';
+  const lastBeat = new Date(session.last_heartbeat).getTime();
+  const now = Date.now();
+  const diffMinutes = (now - lastBeat) / 60000;
+  return diffMinutes <= 5 ? 'online' : 'offline';
+};
+
+const ConnectionStatusCard = ({ session }: { session: Session }) => {
+  const status = getConnectionStatus(session);
+  const statusConfig = {
+    not_connected: { label: 'ยังไม่เชื่อมต่อ', color: 'text-muted-foreground', bg: 'bg-muted/50', icon: WifiOff, dot: 'bg-muted-foreground' },
+    online: { label: 'เชื่อมต่อแล้ว', color: 'text-green-400', bg: 'bg-green-500/10 border-green-500/30', icon: Wifi, dot: 'bg-green-500 animate-pulse' },
+    offline: { label: 'ออฟไลน์', color: 'text-red-400', bg: 'bg-red-500/10 border-red-500/30', icon: WifiOff, dot: 'bg-red-500' },
+  };
+  const cfg = statusConfig[status];
+  const Icon = cfg.icon;
+
+  const timeAgo = (dateStr: string | null) => {
+    if (!dateStr) return 'ไม่มีข้อมูล';
+    const diff = (Date.now() - new Date(dateStr).getTime()) / 1000;
+    if (diff < 60) return `${Math.round(diff)} วินาทีที่แล้ว`;
+    if (diff < 3600) return `${Math.round(diff / 60)} นาทีที่แล้ว`;
+    if (diff < 86400) return `${(diff / 3600).toFixed(1)} ชั่วโมงที่แล้ว`;
+    return `${(diff / 86400).toFixed(1)} วันที่แล้ว`;
+  };
+
+  return (
+    <Card className={`border ${cfg.bg}`}>
+      <CardContent className="pt-4 pb-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="relative">
+              <Icon className={`w-5 h-5 ${cfg.color}`} />
+              <span className={`absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full ${cfg.dot}`} />
+            </div>
+            <div>
+              <p className={`font-semibold text-sm ${cfg.color}`}>{cfg.label}</p>
+              <p className="text-xs text-muted-foreground">
+                Last Heartbeat: {timeAgo(session.last_heartbeat)}
+              </p>
+            </div>
+          </div>
+          <div className="flex gap-4 text-xs text-muted-foreground">
+            {session.broker && <span>Broker: <span className="text-foreground">{session.broker}</span></span>}
+            {session.account_number && <span>Account: <span className="text-foreground">#{session.account_number}</span></span>}
+            <span>Magic: <span className="text-foreground">{session.ea_magic_number || 'All'}</span></span>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+};
+
+const TrackingInfoCard = () => (
+  <Card>
+    <CardHeader className="pb-2">
+      <CardTitle className="text-sm flex items-center gap-2">
+        <Database className="w-4 h-4" />
+        Data Collection
+      </CardTitle>
+    </CardHeader>
+    <CardContent className="space-y-2 text-sm">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+        {[
+          { label: 'Order Events (Open / Close / Modify)', checked: true },
+          { label: 'Market Data: RSI, ATR, EMA(20,50), MACD, Bollinger', checked: true },
+          { label: 'Position Details: SL, TP, Volume, Holding Time', checked: true },
+          { label: 'Broker Info: Spread, Commission, Swap', checked: true },
+        ].map((item) => (
+          <div key={item.label} className="flex items-center gap-2 text-muted-foreground">
+            <CheckCircle2 className="w-3.5 h-3.5 text-green-400 shrink-0" />
+            <span className="text-xs">{item.label}</span>
+          </div>
+        ))}
+      </div>
+      <div className="border-t pt-2 mt-2">
+        <p className="text-xs text-muted-foreground">
+          💡 ยิ่งมีข้อมูลมากยิ่งวิเคราะห์ได้แม่นยำ — แนะนำเก็บอย่างน้อย <span className="text-foreground font-medium">50 orders</span> ก่อนสรุปกลยุทธ์
+        </p>
+      </div>
+    </CardContent>
+  </Card>
+);
+
+const LiveActivityFeed = ({ orders }: { orders: TrackedOrder[] }) => {
+  const recentOrders = orders.slice(0, 20);
+
+  const formatTime = (dateStr: string | null) => {
+    if (!dateStr) return '--:--:--';
+    return new Date(dateStr).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  };
+
+  const getMarketInfo = (md: any) => {
+    if (!md || typeof md !== 'object') return null;
+    const parts: string[] = [];
+    if (md.rsi != null) parts.push(`RSI: ${Number(md.rsi).toFixed(1)}`);
+    if (md.atr != null) parts.push(`ATR: ${Number(md.atr).toFixed(2)}`);
+    if (md.ema20 != null && md.ema50 != null) {
+      parts.push(Number(md.ema20) > Number(md.ema50) ? 'EMA20 > EMA50' : 'EMA20 < EMA50');
+    }
+    return parts.length > 0 ? parts.join(' | ') : null;
+  };
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm flex items-center justify-between">
+          <span className="flex items-center gap-2">
+            <Radio className="w-4 h-4 text-green-400" />
+            Live Activity Feed
+          </span>
+          <Badge variant="outline" className="text-xs">
+            <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse mr-1.5 inline-block" />
+            Auto-refresh
+          </Badge>
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        {recentOrders.length === 0 ? (
+          <div className="text-center py-6 text-muted-foreground text-sm">
+            <Radio className="w-8 h-8 mx-auto mb-2 opacity-30" />
+            <p>รอ EA Tracker ส่งข้อมูลเข้ามา...</p>
+          </div>
+        ) : (
+          <ScrollArea className="h-[280px]">
+            <div className="space-y-3">
+              {recentOrders.map((o) => {
+                const marketInfo = getMarketInfo(o.market_data);
+                const isOpen = o.event_type === 'open';
+                const isClose = o.event_type === 'close';
+
+                return (
+                  <div key={o.id} className="border-l-2 pl-3 py-1 border-muted-foreground/30">
+                    <div className="flex items-center gap-2 text-xs">
+                      <span className="text-muted-foreground font-mono">
+                        {formatTime(isOpen ? o.open_time : o.close_time || o.created_at)}
+                      </span>
+                      <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${
+                        isOpen ? 'text-blue-400 border-blue-500/50' :
+                        isClose ? 'text-orange-400 border-orange-500/50' :
+                        'text-yellow-400 border-yellow-500/50'
+                      }`}>
+                        {o.event_type.toUpperCase()}
+                      </Badge>
+                      <span className="font-medium">{o.symbol}</span>
+                      <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${
+                        o.order_type === 'buy' ? 'text-green-400' : 'text-red-400'
+                      }`}>
+                        {o.order_type.toUpperCase()}
+                      </Badge>
+                      <span className="text-muted-foreground">{o.volume}</span>
+                      <span className="text-muted-foreground">@</span>
+                      <span className="font-mono">
+                        {isClose ? o.close_price?.toFixed(2) : o.open_price?.toFixed(2)}
+                      </span>
+                      {isClose && o.profit !== 0 && (
+                        <span className={`font-mono font-medium ${o.profit > 0 ? 'text-green-400' : 'text-red-400'}`}>
+                          {o.profit > 0 ? '+' : ''}${o.profit.toFixed(2)}
+                        </span>
+                      )}
+                    </div>
+                    {marketInfo && (
+                      <p className="text-[10px] text-muted-foreground mt-0.5 ml-16">
+                        {marketInfo}
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </ScrollArea>
+        )}
+      </CardContent>
+    </Card>
+  );
 };
 
 const StrategyLab = () => {
@@ -110,7 +295,7 @@ const StrategyLab = () => {
         .from('tracked_orders' as any)
         .select('*')
         .eq('session_id', sessionId)
-        .order('open_time', { ascending: false });
+        .order('created_at', { ascending: false });
       if (error) throw error;
       setOrders((data as any[]) || []);
     } catch (err: any) {
@@ -119,12 +304,64 @@ const StrategyLab = () => {
   }, []);
 
   useEffect(() => { fetchSessions(); }, [fetchSessions]);
+
   useEffect(() => {
     if (selectedSession) {
       fetchOrders(selectedSession.id);
       setEditablePrompt(selectedSession.strategy_prompt || '');
     }
   }, [selectedSession, fetchOrders]);
+
+  // Realtime subscription for tracked_orders
+  useEffect(() => {
+    if (!selectedSession) return;
+
+    const channel = supabase
+      .channel(`tracked-orders-${selectedSession.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'tracked_orders',
+          filter: `session_id=eq.${selectedSession.id}`,
+        },
+        () => {
+          // Refetch orders and session on any change
+          fetchOrders(selectedSession.id);
+          // Also refresh the session to get updated stats
+          supabase
+            .from('tracked_ea_sessions' as any)
+            .select('*')
+            .eq('id', selectedSession.id)
+            .single()
+            .then(({ data }) => {
+              if (data) setSelectedSession(data as any);
+            });
+        }
+      )
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [selectedSession?.id, fetchOrders]);
+
+  // Auto-refresh session heartbeat every 30s
+  useEffect(() => {
+    if (!selectedSession) return;
+    const interval = setInterval(async () => {
+      const { data } = await supabase
+        .from('tracked_ea_sessions' as any)
+        .select('*')
+        .eq('id', selectedSession.id)
+        .single();
+      if (data) {
+        setSelectedSession(data as any);
+        // Also update in sessions list
+        setSessions(prev => prev.map(s => s.id === (data as any).id ? (data as any) : s));
+      }
+    }, 30000);
+    return () => clearInterval(interval);
+  }, [selectedSession?.id]);
 
   const handleCreateSession = async () => {
     if (!newSessionName.trim()) return;
@@ -185,7 +422,6 @@ const StrategyLab = () => {
 
       toast({ title: 'สำเร็จ!', description: `${action} เสร็จสิ้น` });
       
-      // Refresh session data
       const { data: updated } = await supabase
         .from('tracked_ea_sessions' as any)
         .select('*')
@@ -292,42 +528,51 @@ const StrategyLab = () => {
                 <p className="text-xs mt-1">ติดตั้ง EA Tracker บน MT5 เพื่อเริ่มเก็บข้อมูล</p>
               </div>
             ) : (
-              sessions.map((s) => (
-                <div
-                  key={s.id}
-                  onClick={() => setSelectedSession(s)}
-                  className={`p-3 rounded-lg border cursor-pointer transition-colors ${
-                    selectedSession?.id === s.id
-                      ? 'bg-primary/10 border-primary'
-                      : 'hover:bg-muted/50'
-                  }`}
-                >
-                  <div className="flex items-start justify-between">
-                    <div className="flex-1 min-w-0">
-                      <p className="font-medium text-sm truncate">{s.session_name}</p>
-                      <div className="flex items-center gap-2 mt-1">
-                        <Badge variant="outline" className={`text-xs ${statusColors[s.status] || ''}`}>
-                          {s.status}
-                        </Badge>
-                        <span className="text-xs text-muted-foreground">
-                          Magic: {s.ea_magic_number || 'All'}
-                        </span>
+              sessions.map((s) => {
+                const connStatus = getConnectionStatus(s);
+                return (
+                  <div
+                    key={s.id}
+                    onClick={() => setSelectedSession(s)}
+                    className={`p-3 rounded-lg border cursor-pointer transition-colors ${
+                      selectedSession?.id === s.id
+                        ? 'bg-primary/10 border-primary'
+                        : 'hover:bg-muted/50'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className={`w-2 h-2 rounded-full shrink-0 ${
+                            connStatus === 'online' ? 'bg-green-500 animate-pulse' :
+                            connStatus === 'offline' ? 'bg-red-500' : 'bg-muted-foreground'
+                          }`} />
+                          <p className="font-medium text-sm truncate">{s.session_name}</p>
+                        </div>
+                        <div className="flex items-center gap-2 mt-1 ml-4">
+                          <Badge variant="outline" className={`text-xs ${statusColors[s.status] || ''}`}>
+                            {s.status}
+                          </Badge>
+                          <span className="text-xs text-muted-foreground">
+                            Magic: {s.ea_magic_number || 'All'}
+                          </span>
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-1 ml-4">
+                          {s.total_orders} orders • {(s.symbols || []).join(', ') || 'N/A'}
+                        </p>
                       </div>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        {s.total_orders} orders • {(s.symbols || []).join(', ') || 'N/A'}
-                      </p>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 shrink-0"
+                        onClick={(e) => { e.stopPropagation(); handleDeleteSession(s.id); }}
+                      >
+                        <Trash2 className="w-3.5 h-3.5 text-muted-foreground" />
+                      </Button>
                     </div>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7 shrink-0"
-                      onClick={(e) => { e.stopPropagation(); handleDeleteSession(s.id); }}
-                    >
-                      <Trash2 className="w-3.5 h-3.5 text-muted-foreground" />
-                    </Button>
                   </div>
-                </div>
-              ))
+                );
+              })
             )}
           </CardContent>
         </Card>
@@ -345,6 +590,12 @@ const StrategyLab = () => {
           </Card>
         ) : (
           <>
+            {/* Connection Status */}
+            <ConnectionStatusCard session={selectedSession} />
+
+            {/* Tracking Info */}
+            <TrackingInfoCard />
+
             {/* Session Info */}
             <Card>
               <CardHeader className="pb-3">
@@ -395,7 +646,7 @@ const StrategyLab = () => {
                 </Card>
                 <Card className="p-3">
                   <div className="flex items-center gap-2 text-sm text-muted-foreground mb-1">
-                    <Activity className="w-4 h-4" /> Avg W/L
+                    <BarChart3 className="w-4 h-4" /> Avg W/L
                   </div>
                   <p className="text-sm">
                     <span className="text-green-400">${avgProfit.toFixed(2)}</span>
@@ -405,6 +656,9 @@ const StrategyLab = () => {
                 </Card>
               </div>
             )}
+
+            {/* Live Activity Feed */}
+            <LiveActivityFeed orders={orders} />
 
             {/* Action Buttons */}
             <Card>
