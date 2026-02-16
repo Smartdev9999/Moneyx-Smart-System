@@ -1,205 +1,114 @@
 
 
-## แผนสร้างระบบ EA Strategy Reverse-Engineering (EA Tracker)
+## แผนปรับปรุง Strategy Lab: Connection Status + Real-time Tracking Dashboard
 
 ---
 
-### ภาพรวมระบบ
+### ปัญหาปัจจุบัน
 
-ระบบนี้ประกอบด้วย 3 ส่วนหลัก:
-
-1. **EA Tracker (MQL5)** - ติดตั้งบน MT5 เดียวกับ EA ที่ต้องการวิเคราะห์ เก็บข้อมูลทุก Order
-2. **Backend (Database + Edge Functions)** - เก็บข้อมูลและวิเคราะห์กลยุทธ์ด้วย AI
-3. **Dashboard (Developer Page)** - Tab ใหม่ "Strategy Lab" สำหรับดูข้อมูลและสั่งวิเคราะห์
+1. EA Tracker ยังไม่ส่งข้อมูลเข้ามา (ไม่มี logs ใน edge function)
+2. Dashboard ไม่แสดงสถานะการเชื่อมต่อ - ผู้ใช้ไม่รู้ว่า EA เชื่อมต่อสำเร็จหรือไม่
+3. ไม่มีข้อมูลแสดงว่า Tracker กำลังเก็บข้อมูลอะไรบ้าง
 
 ---
 
-### ส่วนที่ 1: Database Tables
+### สิ่งที่จะเพิ่ม
 
-สร้าง 2 ตารางใหม่:
+#### 1. Connection Status Card (ด้านบนของ Session Detail)
 
-**`tracked_ea_sessions`** - เก็บข้อมูล EA ที่กำลัง track
-
-| Column | Type | Description |
-|--------|------|-------------|
-| id | uuid | Primary key |
-| session_name | text | ชื่อ session (เช่น "Gold EA Test #1") |
-| ea_magic_number | integer | Magic Number ของ EA ที่ track |
-| broker | text | ชื่อ Broker |
-| account_number | text | หมายเลขบัญชี |
-| symbols | text[] | Symbols ที่ EA เทรด |
-| timeframe | text | Timeframe หลัก |
-| start_time | timestamptz | เวลาเริ่ม track |
-| end_time | timestamptz | เวลาสิ้นสุด (null = ยังทำงาน) |
-| total_orders | integer | จำนวน orders ทั้งหมด |
-| strategy_summary | text | สรุปกลยุทธ์ (AI generated) |
-| strategy_prompt | text | Prompt สำหรับสร้าง EA (AI generated) |
-| generated_ea_code | text | โค้ด EA ที่สร้างแล้ว |
-| status | text | 'tracking', 'analyzing', 'summarized', 'prompted', 'generated' |
-| notes | text | บันทึกเพิ่มเติม |
-| created_at | timestamptz | |
-
-**`tracked_orders`** - เก็บรายละเอียดทุก Order
-
-| Column | Type | Description |
-|--------|------|-------------|
-| id | uuid | Primary key |
-| session_id | uuid | FK -> tracked_ea_sessions |
-| ticket | bigint | Order ticket |
-| magic_number | integer | Magic Number |
-| symbol | text | Symbol |
-| order_type | text | 'buy', 'sell', 'buy_limit', etc. |
-| volume | numeric | Lot size |
-| open_price | numeric | ราคาเปิด |
-| close_price | numeric | ราคาปิด |
-| sl | numeric | Stop Loss |
-| tp | numeric | Take Profit |
-| profit | numeric | Profit/Loss |
-| swap | numeric | Swap |
-| commission | numeric | Commission |
-| open_time | timestamptz | เวลาเปิด |
-| close_time | timestamptz | เวลาปิด |
-| comment | text | Order comment |
-| holding_time_seconds | integer | ระยะเวลาถือ |
-| market_data | jsonb | ข้อมูลตลาดตอนเปิด/ปิด (spread, ATR, RSI, EMA etc.) |
-| event_type | text | 'open', 'close', 'modify' |
-| created_at | timestamptz | |
-
-**RLS Policies:**
-- Developer/Admin สามารถ CRUD ได้ทั้งหมด
-
----
-
-### ส่วนที่ 2: EA Tracker (MQL5)
-
-ไฟล์: `public/docs/mql5/EA_Strategy_Tracker.mq5`
-
-EA นี้ทำหน้าที่:
-- **ตรวจจับทุก Position** ที่เปิด/ปิดโดย EA เป้าหมาย (filter by Magic Number หรือ All)
-- **เก็บข้อมูลตลาด** ณ เวลาที่เปิด/ปิด (Spread, ATR, RSI, EMA, Bollinger, MACD)
-- **ส่งข้อมูล** ไปยัง Backend ผ่าน Edge Function ทุกครั้งที่มี Event
-- **Track Order Modifications** (SL/TP changes)
-- **รองรับ Multiple Magic Numbers** หรือ track ทุก order ที่ไม่ใช่ของตัวเอง
-
-Input Parameters:
-```text
-=== Tracker Settings ===
-- InpTrackMagicNumber: Magic Number ที่จะ track (0 = track ทั้งหมด)
-- InpSessionName: ชื่อ Session
-- InpSendInterval: ความถี่ในการส่งข้อมูล (วินาที)
-
-=== Market Data Collection ===
-- InpCollectRSI: เก็บ RSI (true/false)
-- InpCollectEMA: เก็บ EMA (true/false)
-- InpCollectATR: เก็บ ATR (true/false)
-- InpCollectMACD: เก็บ MACD (true/false)
-- InpCollectBollinger: เก็บ Bollinger Bands (true/false)
-```
-
-ข้อมูลที่ส่ง per order:
-- Ticket, Symbol, Type, Volume, Prices, SL/TP
-- Open/Close Time, Holding Duration
-- Market snapshot: Spread, ATR(14), RSI(14), EMA(20), EMA(50), MACD, Bollinger
-
----
-
-### ส่วนที่ 3: Edge Function - `sync-tracked-orders`
-
-ไฟล์: `supabase/functions/sync-tracked-orders/index.ts`
-
-- รับข้อมูลจาก EA Tracker
-- Validate API Key (EA_API_SECRET)
-- Auto-create session ถ้ายังไม่มี
-- Upsert orders (based on session_id + ticket)
-- อัปเดต session stats (total_orders, symbols)
-
----
-
-### ส่วนที่ 4: Edge Function - `analyze-ea-strategy`
-
-ไฟล์: `supabase/functions/analyze-ea-strategy/index.ts`
-
-ใช้ Lovable AI (Gemini) วิเคราะห์กลยุทธ์จากข้อมูลที่เก็บ
-
-**Step 1: สรุปกลยุทธ์** (`action: "summarize"`)
-- ดึงข้อมูล orders ทั้งหมดของ session
-- วิเคราะห์: Entry patterns, Exit patterns, Position sizing, Time patterns, Market conditions
-- สร้างสรุปกลยุทธ์ภาษาไทย + อังกฤษ
-- บันทึกลง `strategy_summary`
-
-**Step 2: สร้าง Prompt** (`action: "generate_prompt"`)
-- ใช้ strategy_summary เป็นฐาน
-- สร้าง detailed prompt สำหรับเขียน EA
-- บันทึกลง `strategy_prompt`
-
-**Step 3: สร้าง EA Code** (`action: "generate_ea"`)
-- ใช้ strategy_prompt + MQL5 template
-- สร้าง compile-ready EA code
-- บันทึกลง `generated_ea_code`
-
----
-
-### ส่วนที่ 5: Dashboard - Tab "Strategy Lab"
-
-เพิ่ม Tab ใหม่ใน Developer page:
-
-**Layout:**
+แสดงสถานะการเชื่อมต่อระหว่าง EA Tracker กับ Backend:
 
 ```text
-[TabsList]
-EA | Indicators | AI Analysis | News | Strategy Lab (ใหม่)
-
-[Strategy Lab Tab Content]
-
-+-- Session List (Left Panel) --+-- Session Detail (Right Panel) --+
-|                                |                                   |
-| [+ New Session]                | Session: "Gold EA Test #1"        |
-|                                | Status: tracking | Magic: 12345   |
-| > Gold EA Test #1  (tracking)  | Orders: 156 | Duration: 5 days    |
-| > Scalper EA #2    (summarized)|                                   |
-| > Grid EA Test     (generated) | [Orders Table]                    |
-|                                | Ticket | Symbol | Type | Lot | ...|
-|                                | 12345  | XAUUSD | BUY  | 0.1 | ...|
-|                                |                                   |
-|                                | [Statistics Cards]                |
-|                                | Win Rate: 65% | Avg Hold: 2h     |
-|                                | Avg TP: 50pts | Avg SL: 30pts    |
-|                                |                                   |
-|                                | [Action Buttons]                  |
-|                                | [1. Summarize] [2. Gen Prompt]    |
-|                                | [3. Generate EA] [Download .mq5]  |
-|                                |                                   |
-|                                | [Strategy Summary] (expandable)   |
-|                                | [Generated Prompt] (expandable)   |
-|                                | [EA Code Preview] (expandable)    |
-+--------------------------------+-----------------------------------+
++-------------------------------------------------------+
+| Connection Status                                      |
+|                                                        |
+| [สถานะ: ยังไม่เชื่อมต่อ / เชื่อมต่อแล้ว / ออฟไลน์]     |
+| Last Heartbeat: 2 นาทีที่แล้ว                          |
+| Broker: XM  |  Account: #12345  |  Magic: All          |
+| EA Tracker Version: 1.0                                |
++-------------------------------------------------------+
 ```
 
-**ปุ่มทำงาน 3 ขั้นตอน:**
-1. **"สรุปกลยุทธ์"** - เรียก AI วิเคราะห์ orders -> แสดงสรุป
-2. **"สร้าง Prompt"** - สร้าง prompt จากสรุป -> แสดง prompt ที่แก้ไขได้
-3. **"สร้าง EA"** - สร้างโค้ด EA เต็มรูปแบบ -> Preview + Download
+- **ยังไม่เชื่อมต่อ** (สีเทา): ไม่เคยมีข้อมูลส่งเข้ามา (account_number = null)
+- **เชื่อมต่อแล้ว** (สีเขียว): มี account_number + มี orders หรือ last heartbeat ล่าสุด
+- **ออฟไลน์** (สีแดง): เคยเชื่อมต่อแต่ไม่มีข้อมูลใหม่เกิน 5 นาที
+
+#### 2. Tracking Info Card
+
+แสดงว่า Tracker กำลังเก็บข้อมูลอะไรบ้าง:
+
+```text
++-------------------------------------------------------+
+| Data Collection                                        |
+|                                                        |
+| [v] Order Events (Open / Close / Modify)               |
+| [v] Market Data: RSI, ATR, EMA(20,50), MACD, Bollinger |
+| [v] Position Details: SL, TP, Volume, Holding Time     |
+| [v] Broker Info: Spread, Commission, Swap              |
+|                                                        |
+| Tips: ยิ่งมีข้อมูลมากยิ่งวิเคราะห์ได้แม่นยำ            |
+| แนะนำเก็บอย่างน้อย 50 orders ก่อนสรุปกลยุทธ์          |
++-------------------------------------------------------+
+```
+
+#### 3. Real-time Order Feed
+
+เมื่อมี order ใหม่เข้ามา แสดง live feed:
+
+```text
++-------------------------------------------------------+
+| Live Activity Feed                     [Auto-refresh]  |
+|                                                        |
+| 14:32:05  OPEN  XAUUSD BUY 0.10 @ 2645.50            |
+|           RSI: 35.2 | ATR: 12.5 | EMA20 > EMA50      |
+|                                                        |
+| 14:28:12  CLOSE XAUUSD SELL 0.10 @ 2643.20  +$15.30  |
+|           Hold: 45m | SL hit                           |
+|                                                        |
+| 14:15:00  MODIFY XAUUSD BUY #12345 SL: 2640 -> 2642  |
++-------------------------------------------------------+
+```
+
+#### 4. Database: เพิ่ม last_heartbeat column
+
+เพิ่มคอลัมน์ `last_heartbeat` ใน `tracked_ea_sessions` เพื่อบันทึกเวลาล่าสุดที่ EA ส่งข้อมูลมา
+
+#### 5. Edge Function Update: บันทึก heartbeat
+
+อัปเดต `sync-tracked-orders` ให้บันทึก `last_heartbeat` ทุกครั้งที่รับข้อมูล + บันทึก broker/account_number ถ้ายังไม่มี
+
+#### 6. Auto-refresh + Realtime
+
+- ใช้ Supabase Realtime subscription บน `tracked_orders` table
+- เมื่อมี order ใหม่ dashboard อัปเดตทันทีโดยไม่ต้อง refresh
+- อัปเดต session info ทุก 30 วินาที
 
 ---
 
-### สรุปไฟล์ที่สร้าง/แก้ไข
+### ไฟล์ที่แก้ไข
 
 | ไฟล์ | การเปลี่ยนแปลง |
 |------|----------------|
-| SQL Migration | สร้าง `tracked_ea_sessions` + `tracked_orders` + RLS |
-| `public/docs/mql5/EA_Strategy_Tracker.mq5` | สร้างใหม่ - EA สำหรับ track orders |
-| `supabase/functions/sync-tracked-orders/index.ts` | สร้างใหม่ - รับข้อมูลจาก EA |
-| `supabase/functions/analyze-ea-strategy/index.ts` | สร้างใหม่ - AI วิเคราะห์กลยุทธ์ |
-| `supabase/config.toml` | เพิ่ม function configs |
-| `src/pages/Developer.tsx` | เพิ่ม Tab "Strategy Lab" + UI ทั้งหมด |
+| SQL Migration | เพิ่ม `last_heartbeat` column + enable realtime |
+| `supabase/functions/sync-tracked-orders/index.ts` | บันทึก heartbeat + broker/account info |
+| `src/components/StrategyLab.tsx` | เพิ่ม Connection Status, Tracking Info, Live Feed, Realtime subscription |
 
 ---
 
 ### ลำดับการพัฒนา
 
-1. สร้าง Database tables + RLS policies
-2. สร้าง Edge Functions (sync + analyze)
-3. สร้าง EA Tracker (MQL5)
-4. สร้าง UI Dashboard (Strategy Lab tab)
-5. เชื่อมต่อทุกส่วนเข้าด้วยกัน
+1. เพิ่ม `last_heartbeat` column ใน database
+2. อัปเดต edge function ให้บันทึก heartbeat
+3. เพิ่ม Connection Status Card + Tracking Info
+4. เพิ่ม Live Activity Feed พร้อม market data snapshot
+5. เพิ่ม Realtime subscription สำหรับ auto-update
+
+---
+
+### หมายเหตุสำคัญ
+
+จากการตรวจสอบ edge function logs พบว่า **EA Tracker ยังไม่เคยส่งข้อมูลมาถึง backend** กรุณาตรวจสอบ:
+1. ตั้งค่า `InpAPIKey` ใน EA Tracker ให้ตรงกับ EA_API_SECRET
+2. เพิ่ม URL `https://lkbhomsulgycxawwlnfh.supabase.co/functions/v1/sync-tracked-orders` ใน MT5 > Tools > Options > Expert Advisors > Allow WebRequest
+3. ตั้งค่า `InpSessionName` = "Latsamy investment" (ต้องตรงกับชื่อ session ที่สร้างไว้)
 
