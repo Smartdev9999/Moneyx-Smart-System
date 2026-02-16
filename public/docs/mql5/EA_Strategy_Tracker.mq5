@@ -15,7 +15,6 @@ input group "=== Tracker Settings ==="
 input string   InpSessionName     = "EA Test #1";    // Session Name
 input int      InpTrackMagicNumber = 0;               // Magic Number to Track (0=All)
 input string   InpServerURL       = "https://lkbhomsulgycxawwlnfh.supabase.co/functions/v1/sync-tracked-orders";
-input string   InpAPIKey          = "";                // API Key (EA_API_SECRET)
 input int      InpSendInterval    = 30;               // Send Interval (seconds)
 input int      InpOwnMagicNumber  = 999999;           // This Tracker's Magic (exclude self)
 
@@ -386,7 +385,7 @@ string DateTimeToISO(datetime dt)
 //+------------------------------------------------------------------+
 void SendOrderEvent(TrackedPosition &pos, string eventType)
 {
-   if(InpAPIKey == "" || InpServerURL == "") return;
+   if(InpServerURL == "") return;
    
    string marketData = GetMarketDataJSON(pos.symbol);
    long magic = 0;
@@ -419,7 +418,7 @@ void SendOrderEvent(TrackedPosition &pos, string eventType)
 void SendCloseEvent(TrackedPosition &pos, double closePrice, double profit,
                     double swap, double commission, datetime closeTime, string comment)
 {
-   if(InpAPIKey == "" || InpServerURL == "") return;
+   if(InpServerURL == "") return;
    
    string marketData = GetMarketDataJSON(pos.symbol);
    int holdSeconds = (int)(closeTime - pos.openTime);
@@ -464,8 +463,7 @@ void SendHTTP(string json)
    // Remove null terminator
    ArrayResize(data, ArraySize(data) - 1);
    
-   string headers = "Content-Type: application/json\r\n"
-                   + "x-api-key: " + InpAPIKey + "\r\n";
+   string headers = "Content-Type: application/json\r\n";
    
    int timeout = 5000;
    int res = WebRequest("POST", InpServerURL, headers, timeout, data, result, resultHeaders);
@@ -526,7 +524,7 @@ void UpdateDashboard()
    }
    
    info += "\nLast Send: " + (g_lastSendTime > 0 ? TimeToString(g_lastSendTime) : "Never") + "\n";
-   info += "API: " + (InpAPIKey != "" ? "Connected" : "NOT SET!");
+   info += "Server: " + (InpServerURL != "" ? "Connected" : "NOT SET!");
    
    Comment(info);
 }
