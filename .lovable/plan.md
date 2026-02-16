@@ -1,87 +1,18 @@
 
 
-## แผนปรับปรุง Strategy Lab: Connection Status + Real-time Tracking Dashboard
+## แผนปรับปรุง: ลบ API Key ออก - ใช้แค่ URL + ชื่อ Session
 
----
+### สิ่งที่จะเปลี่ยน
 
-### ปัญหาปัจจุบัน
+ปรับให้ EA Tracker เชื่อมต่อได้ง่ายขึ้นโดยไม่ต้องใช้ API Key เพียงใส่ **URL** กับ **ชื่อ Session** เท่านั้น
 
-1. EA Tracker ยังไม่ส่งข้อมูลเข้ามา (ไม่มี logs ใน edge function)
-2. Dashboard ไม่แสดงสถานะการเชื่อมต่อ - ผู้ใช้ไม่รู้ว่า EA เชื่อมต่อสำเร็จหรือไม่
-3. ไม่มีข้อมูลแสดงว่า Tracker กำลังเก็บข้อมูลอะไรบ้าง
+### ข้อดี
+- ตั้งค่าง่ายมาก แค่ใส่ URL + ชื่อ
+- ไม่ต้องจำหรือหา API Key
 
----
-
-### สิ่งที่จะเพิ่ม
-
-#### 1. Connection Status Card (ด้านบนของ Session Detail)
-
-แสดงสถานะการเชื่อมต่อระหว่าง EA Tracker กับ Backend:
-
-```text
-+-------------------------------------------------------+
-| Connection Status                                      |
-|                                                        |
-| [สถานะ: ยังไม่เชื่อมต่อ / เชื่อมต่อแล้ว / ออฟไลน์]     |
-| Last Heartbeat: 2 นาทีที่แล้ว                          |
-| Broker: XM  |  Account: #12345  |  Magic: All          |
-| EA Tracker Version: 1.0                                |
-+-------------------------------------------------------+
-```
-
-- **ยังไม่เชื่อมต่อ** (สีเทา): ไม่เคยมีข้อมูลส่งเข้ามา (account_number = null)
-- **เชื่อมต่อแล้ว** (สีเขียว): มี account_number + มี orders หรือ last heartbeat ล่าสุด
-- **ออฟไลน์** (สีแดง): เคยเชื่อมต่อแต่ไม่มีข้อมูลใหม่เกิน 5 นาที
-
-#### 2. Tracking Info Card
-
-แสดงว่า Tracker กำลังเก็บข้อมูลอะไรบ้าง:
-
-```text
-+-------------------------------------------------------+
-| Data Collection                                        |
-|                                                        |
-| [v] Order Events (Open / Close / Modify)               |
-| [v] Market Data: RSI, ATR, EMA(20,50), MACD, Bollinger |
-| [v] Position Details: SL, TP, Volume, Holding Time     |
-| [v] Broker Info: Spread, Commission, Swap              |
-|                                                        |
-| Tips: ยิ่งมีข้อมูลมากยิ่งวิเคราะห์ได้แม่นยำ            |
-| แนะนำเก็บอย่างน้อย 50 orders ก่อนสรุปกลยุทธ์          |
-+-------------------------------------------------------+
-```
-
-#### 3. Real-time Order Feed
-
-เมื่อมี order ใหม่เข้ามา แสดง live feed:
-
-```text
-+-------------------------------------------------------+
-| Live Activity Feed                     [Auto-refresh]  |
-|                                                        |
-| 14:32:05  OPEN  XAUUSD BUY 0.10 @ 2645.50            |
-|           RSI: 35.2 | ATR: 12.5 | EMA20 > EMA50      |
-|                                                        |
-| 14:28:12  CLOSE XAUUSD SELL 0.10 @ 2643.20  +$15.30  |
-|           Hold: 45m | SL hit                           |
-|                                                        |
-| 14:15:00  MODIFY XAUUSD BUY #12345 SL: 2640 -> 2642  |
-+-------------------------------------------------------+
-```
-
-#### 4. Database: เพิ่ม last_heartbeat column
-
-เพิ่มคอลัมน์ `last_heartbeat` ใน `tracked_ea_sessions` เพื่อบันทึกเวลาล่าสุดที่ EA ส่งข้อมูลมา
-
-#### 5. Edge Function Update: บันทึก heartbeat
-
-อัปเดต `sync-tracked-orders` ให้บันทึก `last_heartbeat` ทุกครั้งที่รับข้อมูล + บันทึก broker/account_number ถ้ายังไม่มี
-
-#### 6. Auto-refresh + Realtime
-
-- ใช้ Supabase Realtime subscription บน `tracked_orders` table
-- เมื่อมี order ใหม่ dashboard อัปเดตทันทีโดยไม่ต้อง refresh
-- อัปเดต session info ทุก 30 วินาที
+### ข้อเสีย (ความปลอดภัย)
+- ใครก็ตามที่รู้ URL สามารถส่งข้อมูลปลอมเข้ามาได้
+- เนื่องจากระบบ Strategy Lab ใช้ภายในทีม Developer เท่านั้น ความเสี่ยงนี้ยอมรับได้
 
 ---
 
@@ -89,26 +20,27 @@
 
 | ไฟล์ | การเปลี่ยนแปลง |
 |------|----------------|
-| SQL Migration | เพิ่ม `last_heartbeat` column + enable realtime |
-| `supabase/functions/sync-tracked-orders/index.ts` | บันทึก heartbeat + broker/account info |
-| `src/components/StrategyLab.tsx` | เพิ่ม Connection Status, Tracking Info, Live Feed, Realtime subscription |
+| `supabase/functions/sync-tracked-orders/index.ts` | ลบ API Key validation ออก ให้รับข้อมูลได้เลย |
+| `public/docs/mql5/EA_Strategy_Tracker.mq5` | ลบ InpAPIKey parameter, ลบ header x-api-key ออก |
+| `src/components/StrategyLab.tsx` | อัปเดตคำแนะนำการตั้งค่าให้บอกแค่ URL + ชื่อ Session |
 
 ---
 
-### ลำดับการพัฒนา
+### รายละเอียดทางเทคนิค
 
-1. เพิ่ม `last_heartbeat` column ใน database
-2. อัปเดต edge function ให้บันทึก heartbeat
-3. เพิ่ม Connection Status Card + Tracking Info
-4. เพิ่ม Live Activity Feed พร้อม market data snapshot
-5. เพิ่ม Realtime subscription สำหรับ auto-update
+**Edge Function (`sync-tracked-orders`):**
+- ลบบล็อก API key validation (บรรทัด 16-30) ออกทั้งหมด
+- คงเหลือแค่ validation ว่า `session_name` ต้องมี
 
----
+**EA Tracker (MQL5):**
+- ลบ `input string InpAPIKey`
+- ลบ `"x-api-key: "` ออกจาก HTTP headers
+- ผู้ใช้ตั้งค่าแค่:
+  - `InpServerURL` = URL ของ backend function
+  - `InpSessionName` = ชื่อ session
 
-### หมายเหตุสำคัญ
-
-จากการตรวจสอบ edge function logs พบว่า **EA Tracker ยังไม่เคยส่งข้อมูลมาถึง backend** กรุณาตรวจสอบ:
-1. ตั้งค่า `InpAPIKey` ใน EA Tracker ให้ตรงกับ EA_API_SECRET
-2. เพิ่ม URL `https://lkbhomsulgycxawwlnfh.supabase.co/functions/v1/sync-tracked-orders` ใน MT5 > Tools > Options > Expert Advisors > Allow WebRequest
-3. ตั้งค่า `InpSessionName` = "Latsamy investment" (ต้องตรงกับชื่อ session ที่สร้างไว้)
+**Dashboard:**
+- อัปเดตคำแนะนำการตั้งค่าให้แสดงแค่ 2 ขั้นตอน:
+  1. เพิ่ม URL ใน MT5 WebRequest
+  2. ใส่ชื่อ Session ให้ตรงกัน
 
