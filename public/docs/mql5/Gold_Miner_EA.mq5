@@ -610,10 +610,13 @@ void ManageTPSL()
       bool closeTP = false;
       bool closeSL = false;
 
-      //--- TP checks
-      if(UseTP_Dollar && plBuy >= TP_DollarAmount) closeTP = true;
-      if(UseTP_Points && bid >= avgBuy + TP_Points * point) closeTP = true;
-      if(UseTP_PercentBalance && plBuy >= balance * TP_PercentBalance / 100.0) closeTP = true;
+      //--- TP checks (skip basket TP when per-order trailing is active)
+      if(!EnablePerOrderTrailing)
+      {
+         if(UseTP_Dollar && plBuy >= TP_DollarAmount) closeTP = true;
+         if(UseTP_Points && bid >= avgBuy + TP_Points * point) closeTP = true;
+         if(UseTP_PercentBalance && plBuy >= balance * TP_PercentBalance / 100.0) closeTP = true;
+      }
 
       if(closeTP)
       {
@@ -664,10 +667,13 @@ void ManageTPSL()
       bool closeTP2 = false;
       bool closeSL2 = false;
 
-      //--- TP checks
-      if(UseTP_Dollar && plSell >= TP_DollarAmount) closeTP2 = true;
-      if(UseTP_Points && ask <= avgSell - TP_Points * point) closeTP2 = true;
-      if(UseTP_PercentBalance && plSell >= balance * TP_PercentBalance / 100.0) closeTP2 = true;
+      //--- TP checks (skip basket TP when per-order trailing is active)
+      if(!EnablePerOrderTrailing)
+      {
+         if(UseTP_Dollar && plSell >= TP_DollarAmount) closeTP2 = true;
+         if(UseTP_Points && ask <= avgSell - TP_Points * point) closeTP2 = true;
+         if(UseTP_PercentBalance && plSell >= balance * TP_PercentBalance / 100.0) closeTP2 = true;
+      }
 
       if(closeTP2)
       {
