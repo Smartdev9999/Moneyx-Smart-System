@@ -139,9 +139,9 @@ CTrade         trade;
 int            handleSMA;
 int            handleATR_Loss;
 int            handleATR_Profit;
-double         bufSMA[3];
-double         bufATR_Loss[3];
-double         bufATR_Profit[3];
+double         bufSMA[];
+double         bufATR_Loss[];
+double         bufATR_Profit[];
 datetime       lastBarTime;
 datetime       lastInitialCandleTime;
 bool           justClosedPositions;
@@ -1049,10 +1049,11 @@ double CalculateGridLot(int level, bool isLossSide)
 //+------------------------------------------------------------------+
 //| Parse semicolon-separated values                                   |
 //+------------------------------------------------------------------+
-double ParseCustomValue(string input, int index)
+double ParseCustomValue(string inputStr, int index)
 {
    string parts[];
-   int count = StringSplit(input, ';', parts);
+   ushort sep = StringGetCharacter(";", 0);
+   int count = StringSplit(inputStr, sep, parts);
    if(count <= 0) return 0;
 
    int idx = MathMin(index, count - 1);
