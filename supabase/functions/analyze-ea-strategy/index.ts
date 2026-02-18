@@ -246,14 +246,28 @@ EA Specification:
 ${session.strategy_prompt}
 
 Requirements:
-1. The code must compile without errors in MetaEditor
+1. The code MUST compile without errors in MetaEditor 5
 2. Include proper #property headers
 3. Include all input parameters with sensible defaults
 4. Implement OnInit(), OnDeinit(), OnTick() properly
 5. Include proper error handling and logging
-6. Use proper MQL5 trade functions (CTrade class)
+6. Use proper MQL5 trade functions (CTrade class from <Trade/Trade.mqh>)
 7. Include dashboard/comment display
 8. Follow MQL5 best practices
+
+CRITICAL MQL5 RULES TO AVOID COMPILATION ERRORS:
+- ALL variables MUST be declared before use. Do NOT use undeclared identifiers.
+- iATR(), iRSI(), iMACD(), iMA(), iBands() in MQL5 return HANDLES (int), NOT values. You must:
+  1. Create handle in OnInit(): int atrHandle = iATR(_Symbol, PERIOD_CURRENT, 14);
+  2. Copy values in OnTick(): double atrBuffer[]; ArraySetAsSeries(atrBuffer, true); CopyBuffer(atrHandle, 0, 0, 3, atrBuffer); double atrValue = atrBuffer[0];
+- NEVER call iATR(symbol, period, atrPeriod) with wrong parameter count. Check MQL5 docs for exact signatures.
+- When using switch/case statements, declare variables BEFORE the switch or use braces {} inside each case to create a scope. This avoids "initialization of variable skipped by case label" errors.
+- Use ENUM_DEAL_TYPE, ENUM_DEAL_ENTRY etc. with proper MQL5 syntax. Use HistoryDealGetInteger/Double/String functions.
+- HistoryDealGetInteger() returns long, cast to appropriate enum: (ENUM_DEAL_TYPE)HistoryDealGetInteger(ticket, DEAL_TYPE)
+- For position operations use PositionGetInteger, PositionGetDouble, PositionGetString.
+- Do NOT use StringFormat with wrong number of arguments.
+- All helper functions must be defined with correct parameter types and counts before being called.
+- Use MqlTradeRequest and OrderSend() or CTrade class methods properly.
 
 Output ONLY the MQL5 code, no explanations. Start with //+------------------------------------------------------------------+ header.`;
 
