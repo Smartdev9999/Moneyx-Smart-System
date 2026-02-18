@@ -1,59 +1,102 @@
 
 
-## บันทึก EA Code ที่สร้างเป็นไฟล์ใน `public/docs/mql5/`
+## สร้าง EA ใหม่: Gold Miner EA
 
 ### แนวคิด
 
-เมื่อ AI สร้าง EA code เสร็จ (generate_ea) จะบันทึกเป็นไฟล์จริงใน `public/docs/mql5/` ด้วย เพื่อให้ดูและแก้ไขได้ง่ายจาก file tree โดยไม่ต้อง download ทุกครั้ง และเมื่อแก้ไข prompt แล้วสร้างใหม่ ก็จะอัปเดตไฟล์เดิม (ชื่อเดียวกัน)
+สร้างไฟล์ `public/docs/mql5/Gold_Miner_EA.mq5` ที่เป็น EA สมบูรณ์พร้อม compile ตาม specification ที่ให้มา โดยเป็น Hybrid strategy สำหรับ XAUUSD ที่รวม Scalping + Trend Following + Counter-Trend + Grid/Martingale Recovery
 
-### สิ่งที่จะเปลี่ยน
+### สิ่งที่จะสร้าง
 
-| ไฟล์ | การเปลี่ยนแปลง |
-|------|----------------|
-| `supabase/functions/analyze-ea-strategy/index.ts` | เพิ่มการสร้าง/อัปเดตไฟล์ใน Storage หลัง generate_ea สำเร็จ และเพิ่ม action "update_code" สำหรับแก้ไข code แล้วบันทึกกลับ |
-| `src/components/StrategyLab.tsx` | เพิ่มปุ่ม "Save to Project" ที่เขียนไฟล์ลง `public/docs/mql5/` + แสดง link ไปดูไฟล์ + เพิ่มฟีเจอร์แก้ไข code ในหน้าเว็บแล้วบันทึก |
+| ไฟล์ | รายละเอียด |
+|------|-----------|
+| `public/docs/mql5/Gold_Miner_EA.mq5` | ไฟล์ EA หลักพร้อม compile |
 
-### รายละเอียดการทำงาน
+### โครงสร้าง EA
 
-**1. ตั้งชื่อไฟล์ตาม Session:**
-- ใช้ชื่อ session แปลงเป็นชื่อไฟล์: `Session_Name_EA.mq5`
-- เช่น session "Latsamy investment" จะได้ไฟล์ `Latsamy_investment_EA.mq5`
-- สร้างใหม่ครั้งแรก = ไฟล์ใหม่, สร้างซ้ำ = อัปเดตไฟล์เดิม
+EA จะถูกเขียนเป็นไฟล์เดียวที่รวมทุกอย่าง ตามรูปแบบของ project:
 
-**2. StrategyLab UI - เพิ่มฟีเจอร์:**
-- ปุ่ม **"Save to Project"** - บันทึก generated code เป็นไฟล์ `public/docs/mql5/{name}_EA.mq5`
-- ทำให้ code preview section สามารถ **แก้ไขได้** (editable textarea) พร้อมปุ่ม "Save" เพื่อบันทึกทั้งใน database และไฟล์
-- ปุ่ม **Download .mq5** ยังคงทำงานเหมือนเดิม
+1. **Header + Properties** - ชื่อ, version, copyright
+2. **Includes** - `<Trade/Trade.mqh>`
+3. **Custom Enum** - `ENUM_LOT_MODE` (FIXED_LOT, RISK_PERCENTAGE, RECOVERY_MARTINGALE)
+4. **Input Parameters** ทั้งหมดตาม spec:
+   - General Settings (MagicNumber, MaxSlippage, MaxOpenOrders, MaxDrawdown)
+   - Trading Time Filters (UTC hours/days)
+   - Lot Sizing & Money Management (3 modes + Recovery settings)
+   - Indicator Settings (RSI, EMA, ATR, MACD, Bollinger Bands)
+   - Entry Logic Thresholds
+   - Exit Logic Thresholds (Scalp, Breakeven, Trailing, MaxHolding)
+   - Grid/Recovery Settings
+5. **Global Variables**
+   - Indicator handles (int) สร้างใน OnInit
+   - Buffers (double arrays) สำหรับ CopyBuffer
+   - Order tracking structures
+6. **OnInit()** - สร้าง indicator handles ทั้งหมด
+7. **OnDeinit()** - ปล่อย handles
+8. **OnTick()** - Main logic loop
+9. **Helper Functions:**
+   - `CalculateIndicators()` - CopyBuffer ทุก indicator
+   - `CheckBuyEntry()` / `CheckSellEntry()` - ตรวจสอบ entry conditions
+   - `CalculateLotSize()` - 3 modes
+   - `ManageOpenPositions()` - Breakeven, Trailing, Time-based exit
+   - `CheckDrawdownExit()` - Emergency close all
+   - `ManageHedging()` - จัดการ opposing positions
+   - `ManageGridRecovery()` - Grid/Martingale logic
 
-**3. Edge Function - เพิ่ม action "update_code":**
-- รับ `session_id` + `code` (ที่แก้ไขแล้ว)
-- อัปเดต `generated_ea_code` ใน database
-- ให้ frontend จัดการเขียนไฟล์ลง project ผ่าน local save
+### หลักการสำคัญที่จะปฏิบัติตาม
+
+- **Indicator handles** สร้างใน OnInit เท่านั้น ไม่สร้างใน OnTick
+- **CopyBuffer** ใช้ดึงค่า indicator ทุกครั้งใน OnTick
+- **ArraySetAsSeries** ก่อน CopyBuffer เสมอ
+- **ไม่ใช้ switch/case** ที่ประกาศตัวแปรข้าม case โดยไม่มี braces
+- **CTrade class** สำหรับ order operations
+- **Internal SL/TP** - ไม่ set SL/TP ตอน OrderSend แต่จัดการเองใน OnTick
+- **ไม่ใช้ goto** ใช้ boolean flags แทน
 
 ### รายละเอียดทางเทคนิค
 
-**StrategyLab.tsx - การเขียนไฟล์:**
-
-เนื่องจากเป็น frontend app ไม่สามารถเขียนไฟล์ลง filesystem ได้โดยตรง วิธีที่เหมาะสมคือ:
-
-1. เมื่อ generate_ea สำเร็จ ระบบจะสร้างไฟล์ `.mq5` ไว้ใน project โดยอัตโนมัติ (ทำโดย Lovable เมื่อ implement)
-2. เพิ่ม **editable code editor** แทน read-only pre tag - ใช้ textarea ที่มี monospace font
-3. เพิ่มปุ่ม **"Save Changes"** ที่บันทึกกลับไป database (update generated_ea_code)
-4. ปุ่ม **"Download .mq5"** ยังคงสร้าง blob download เหมือนเดิม
-
-**Flow การทำงาน:**
+**Entry Logic Flow:**
 
 ```text
-กด "3. สร้าง EA"
-    → AI generate code
-    → บันทึกใน database (generated_ea_code)
-    → แสดง code ใน editable area
-    → ผู้ใช้แก้ไข code ได้
-    → กด "Save" → อัปเดต database
-    → กด "Download .mq5" → ดาวน์โหลดไฟล์
+OnTick()
+  → ตรวจสอบ new bar (ไม่คำนวณทุก tick)
+  → CalculateIndicators()
+  → CheckTimeFilter()
+  → CheckDrawdownExit()
+  → ManageOpenPositions() (Breakeven, Trailing, Time exit, Max loss)
+  → ManageHedging()
+  → CheckBuyEntry() → OpenBuy with CalculateLotSize()
+  → CheckSellEntry() → OpenSell with CalculateLotSize()
+  → ManageGridRecovery()
 ```
 
-**สิ่งที่จะสร้างเพิ่ม:**
-- ไฟล์ `public/docs/mql5/` จะถูกสร้างด้วย Lovable เมื่อ generate EA แต่ละ session (ไฟล์จะอยู่ใน project ให้ดูและแก้ไขได้)
-- ทุกครั้งที่ generate ใหม่จาก session เดิม ไฟล์จะถูก overwrite
+**Order Tracking Structure:**
+
+```text
+struct OrderInfo {
+    ulong ticket;
+    int type;           // 0=Buy, 1=Sell
+    double entryPrice;
+    double internalSL;
+    double internalTP;
+    datetime openTime;
+    double lotSize;
+    bool trailingActive;
+    int recoveryStep;
+};
+```
+
+**Lot Sizing - Recovery/Martingale:**
+- นับจำนวน consecutive losses ในทิศทางเดียวกัน
+- `recovery_lot = base_lot * pow(RecoveryMultiplier, consecutive_losses)`
+- จำกัดไม่เกิน `RecoveryMaxSteps`
+- จำกัดไม่เกิน `SymbolInfoDouble(SYMBOL_VOLUME_MAX)`
+
+**Indicator Handles ที่จะสร้าง:**
+- `iRSI(_Symbol, PERIOD_M15, RSIPeriod, RSIAppliedPrice)`
+- `iMA(_Symbol, PERIOD_M15, EMA_FastPeriod, 0, MODE_EMA, EMAAppliedPrice)`
+- `iMA(_Symbol, PERIOD_M15, EMA_SlowPeriod, 0, MODE_EMA, EMAAppliedPrice)`
+- `iATR(_Symbol, PERIOD_M15, ATRPeriod)`
+- `iMACD(_Symbol, PERIOD_M15, MACDFastPeriod, MACDSlowPeriod, MACDSignalPeriod, MACDAppliedPrice)`
+- `iBands(_Symbol, PERIOD_M15, BBPeriod, 0, BBDeviation, BBAppliedPrice)`
 
