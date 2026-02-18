@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                              Gold_Miner_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                                     Gold Miner EA v2.0 - SMA+Grid|
+//|                                     Gold Miner EA v2.1 - SMA+Grid|
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "2.00"
-#property description "Gold Miner EA v2.0 - SMA Entry + Grid Recovery + Average-Based Trailing"
+#property version   "2.10"
+#property description "Gold Miner EA v2.1 - SMA Entry + Grid Recovery + Per-Order & Average Trailing"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -118,12 +118,19 @@ input color          SLLineColor         = clrRed;            // SL Line Color
 
 //--- Trailing Stop (Average-Based)
 input group "=== Trailing Stop (Average-Based) ==="
-input bool     EnableTrailingStop   = true;    // Enable Trailing Stop
+input bool     EnableTrailingStop   = false;   // Enable Average-Based Trailing Stop
 input int      TrailingActivation   = 100;     // Trailing Activation (points from average)
 input int      TrailingStep         = 50;      // Trailing Step (points from current price)
 input int      BreakevenBuffer      = 10;      // Breakeven Buffer (points above/below average)
 input bool     EnableBreakeven      = true;    // Enable Breakeven
 input int      BreakevenActivation  = 50;      // Breakeven Activation (points from average)
+
+//--- Per-Order Trailing Stop (NEW)
+input group "=== Per-Order Trailing Stop ==="
+input bool     EnablePerOrderTrailing    = true;     // Enable Per-Order Trailing
+input int      PerOrder_Activation       = 100;      // Activation (points profit from open price)
+input int      PerOrder_Step             = 50;       // Trailing Step (points from current price)
+input int      PerOrder_BreakevenBuffer  = 10;       // Breakeven Buffer (points above/below open)
 
 //--- Dashboard
 input group "=== Dashboard ==="
@@ -144,6 +151,8 @@ double         bufATR_Loss[];
 double         bufATR_Profit[];
 datetime       lastBarTime;
 datetime       lastInitialCandleTime;
+datetime       lastGridLossCandleTime;
+datetime       lastGridProfitCandleTime;
 bool           justClosedPositions;
 double         g_trailingSL_Buy;
 double         g_trailingSL_Sell;
@@ -153,6 +162,8 @@ bool           g_breakevenDone_Buy;
 bool           g_breakevenDone_Sell;
 bool           g_eaStopped;
 double         g_accumulatedProfit;
+double         g_initialBuyPrice;   // track initial order price for grid fallback
+double         g_initialSellPrice;  // track initial order price for grid fallback
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                     |
@@ -194,6 +205,8 @@ int OnInit()
    //--- Init globals
    lastBarTime = 0;
    lastInitialCandleTime = 0;
+   lastGridLossCandleTime = 0;
+   lastGridProfitCandleTime = 0;
    justClosedPositions = false;
    g_trailingSL_Buy = 0;
    g_trailingSL_Sell = 0;
@@ -203,6 +216,8 @@ int OnInit()
    g_breakevenDone_Sell = false;
    g_eaStopped = false;
    g_accumulatedProfit = 0;
+   g_initialBuyPrice = 0;
+   g_initialSellPrice = 0;
 
    //--- Calculate accumulated profit from history
    if(UseAccumulateClose)
@@ -210,7 +225,10 @@ int OnInit()
       CalculateAccumulatedProfit();
    }
 
-   Print("Gold Miner EA v2.0 initialized successfully");
+   //--- Recover initial prices from existing positions
+   RecoverInitialPrices();
+
+   Print("Gold Miner EA v2.1 initialized successfully");
    return INIT_SUCCEEDED;
 }
 
@@ -228,7 +246,32 @@ void OnDeinit(const int reason)
    ObjectDelete(0, "GM_SLLine");
    ObjectsDeleteAll(0, "GM_Dash_");
 
-   Print("Gold Miner EA v2.0 deinitialized");
+   Print("Gold Miner EA v2.1 deinitialized");
+}
+
+//+------------------------------------------------------------------+
+//| Recover initial order prices from open positions                   |
+//+------------------------------------------------------------------+
+void RecoverInitialPrices()
+{
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+
+      string comment = PositionGetString(POSITION_COMMENT);
+      if(StringFind(comment, "GM_INIT") >= 0)
+      {
+         long posType = PositionGetInteger(POSITION_TYPE);
+         double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+         if(posType == POSITION_TYPE_BUY)
+            g_initialBuyPrice = openPrice;
+         else if(posType == POSITION_TYPE_SELL)
+            g_initialSellPrice = openPrice;
+      }
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -238,11 +281,15 @@ void OnTick()
 {
    if(g_eaStopped) return;
 
-   //--- Every tick: TP/SL management
+   //--- Every tick: TP/SL management (basket)
    ManageTPSL();
 
    //--- Every tick: Trailing Stop
-   if(EnableTrailingStop || EnableBreakeven)
+   if(EnablePerOrderTrailing)
+   {
+      ManagePerOrderTrailing();
+   }
+   else if(EnableTrailingStop || EnableBreakeven)
    {
       ManageTrailingStop();
    }
@@ -257,7 +304,6 @@ void OnTick()
    if(isNewBar)
    {
       lastBarTime = currentBarTime;
-      justClosedPositions = false;
 
       //--- Copy indicator buffers
       if(CopyBuffer(handleSMA, 0, 0, 3, bufSMA) < 3) return;
@@ -275,12 +321,12 @@ void OnTick()
 
       int totalPositions = buyCount + sellCount;
 
-      //--- Grid Loss management
-      if(hasInitialBuy && gridLossBuy < GridLoss_MaxTrades)
+      //--- Grid Loss management (check both sides independently)
+      if((hasInitialBuy || g_initialBuyPrice > 0) && gridLossBuy < GridLoss_MaxTrades && buyCount > 0)
       {
          CheckGridLoss(POSITION_TYPE_BUY, gridLossBuy);
       }
-      if(hasInitialSell && gridLossSell < GridLoss_MaxTrades)
+      if((hasInitialSell || g_initialSellPrice > 0) && gridLossSell < GridLoss_MaxTrades && sellCount > 0)
       {
          CheckGridLoss(POSITION_TYPE_SELL, gridLossSell);
       }
@@ -288,11 +334,11 @@ void OnTick()
       //--- Grid Profit management
       if(GridProfit_Enable)
       {
-         if(hasInitialBuy && gridProfitBuy < GridProfit_MaxTrades)
+         if((hasInitialBuy || g_initialBuyPrice > 0) && gridProfitBuy < GridProfit_MaxTrades && buyCount > 0)
          {
             CheckGridProfit(POSITION_TYPE_BUY, gridProfitBuy);
          }
-         if(hasInitialSell && gridProfitSell < GridProfit_MaxTrades)
+         if((hasInitialSell || g_initialSellPrice > 0) && gridProfitSell < GridProfit_MaxTrades && sellCount > 0)
          {
             CheckGridProfit(POSITION_TYPE_SELL, gridProfitSell);
          }
@@ -309,20 +355,48 @@ void OnTick()
 
          if(canOpen)
          {
-            if(currentPrice > smaValue)
+            //--- Check if auto re-entry or first time entry
+            bool shouldEnter = false;
+
+            if(justClosedPositions && EnableAutoReEntry)
             {
-               OpenOrder(ORDER_TYPE_BUY, InitialLotSize, "GM_INIT");
-               lastInitialCandleTime = currentBarTime;
-               ResetTrailingState();
+               // Re-entry: check SMA signal still valid
+               shouldEnter = true;
             }
-            else if(currentPrice < smaValue)
+            else if(!justClosedPositions)
             {
-               OpenOrder(ORDER_TYPE_SELL, InitialLotSize, "GM_INIT");
-               lastInitialCandleTime = currentBarTime;
-               ResetTrailingState();
+               // First time entry or new bar after reset
+               shouldEnter = true;
+            }
+
+            if(shouldEnter)
+            {
+               if(currentPrice > smaValue)
+               {
+                  if(OpenOrder(ORDER_TYPE_BUY, InitialLotSize, "GM_INIT"))
+                  {
+                     lastInitialCandleTime = currentBarTime;
+                     g_initialBuyPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+                     g_initialSellPrice = 0;
+                     ResetTrailingState();
+                  }
+               }
+               else if(currentPrice < smaValue)
+               {
+                  if(OpenOrder(ORDER_TYPE_SELL, InitialLotSize, "GM_INIT"))
+                  {
+                     lastInitialCandleTime = currentBarTime;
+                     g_initialSellPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+                     g_initialBuyPrice = 0;
+                     ResetTrailingState();
+                  }
+               }
             }
          }
       }
+
+      // Reset justClosed flag at end of new bar processing
+      justClosedPositions = false;
    }
 
    //--- Draw lines and dashboard every tick
@@ -515,10 +589,12 @@ void CloseAllPositions()
    }
    justClosedPositions = true;
    ResetTrailingState();
+   g_initialBuyPrice = 0;
+   g_initialSellPrice = 0;
 }
 
 //+------------------------------------------------------------------+
-//| Manage TP/SL                                                       |
+//| Manage TP/SL (Basket)                                              |
 //+------------------------------------------------------------------+
 void ManageTPSL()
 {
@@ -545,6 +621,7 @@ void ManageTPSL()
          double closedPL = plBuy;
          CloseAllSide(POSITION_TYPE_BUY);
          justClosedPositions = true;
+         g_initialBuyPrice = 0;
          ResetTrailingState();
          if(UseAccumulateClose) g_accumulatedProfit += closedPL;
          return;
@@ -570,6 +647,7 @@ void ManageTPSL()
             {
                CloseAllSide(POSITION_TYPE_BUY);
                justClosedPositions = true;
+               g_initialBuyPrice = 0;
                ResetTrailingState();
             }
             return;
@@ -597,6 +675,7 @@ void ManageTPSL()
          double closedPL = plSell;
          CloseAllSide(POSITION_TYPE_SELL);
          justClosedPositions = true;
+         g_initialSellPrice = 0;
          ResetTrailingState();
          if(UseAccumulateClose) g_accumulatedProfit += closedPL;
          return;
@@ -622,6 +701,7 @@ void ManageTPSL()
             {
                CloseAllSide(POSITION_TYPE_SELL);
                justClosedPositions = true;
+               g_initialSellPrice = 0;
                ResetTrailingState();
             }
             return;
@@ -629,15 +709,74 @@ void ManageTPSL()
       }
    }
 
-   //--- Accumulate Close (global target)
+   //--- Accumulate Close (global target) - does NOT stop EA, resets cycle
    if(UseAccumulateClose)
    {
       double totalPL = CalculateTotalFloatingPL();
       if(g_accumulatedProfit + totalPL >= AccumulateTarget)
       {
-         Print("ACCUMULATE TARGET HIT: ", g_accumulatedProfit + totalPL);
+         Print("ACCUMULATE TARGET HIT: ", g_accumulatedProfit + totalPL, " / ", AccumulateTarget);
          CloseAllPositions();
-         g_eaStopped = true;
+         g_accumulatedProfit = 0;  // Reset and start new cycle
+         Print("Accumulate cycle reset - starting new cycle");
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Manage Per-Order Trailing Stop (NEW)                               |
+//| Each order trails independently based on its own open price        |
+//+------------------------------------------------------------------+
+void ManagePerOrderTrailing()
+{
+   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+
+      long posType = PositionGetInteger(POSITION_TYPE);
+      double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+      double currentSL = PositionGetDouble(POSITION_SL);
+      double tp = PositionGetDouble(POSITION_TP);
+
+      if(posType == POSITION_TYPE_BUY)
+      {
+         double profitPoints = (bid - openPrice) / point;
+         double beLevel = NormalizeDouble(openPrice + PerOrder_BreakevenBuffer * point, digits);
+
+         if(profitPoints >= PerOrder_Activation)
+         {
+            double trailSL = NormalizeDouble(bid - PerOrder_Step * point, digits);
+            trailSL = MathMax(trailSL, beLevel); // never below breakeven
+
+            if(trailSL > currentSL || currentSL == 0)
+            {
+               trade.PositionModify(ticket, trailSL, tp);
+            }
+         }
+      }
+      else if(posType == POSITION_TYPE_SELL)
+      {
+         double profitPoints = (openPrice - ask) / point;
+         double beLevel = NormalizeDouble(openPrice - PerOrder_BreakevenBuffer * point, digits);
+
+         if(profitPoints >= PerOrder_Activation)
+         {
+            double trailSL = NormalizeDouble(ask + PerOrder_Step * point, digits);
+            trailSL = MathMin(trailSL, beLevel); // never above breakeven
+
+            if(currentSL == 0 || trailSL < currentSL)
+            {
+               trade.PositionModify(ticket, trailSL, tp);
+            }
+         }
       }
    }
 }
@@ -697,6 +836,7 @@ void ManageTrailingStop()
          double pl = CalculateFloatingPL(POSITION_TYPE_BUY);
          CloseAllSide(POSITION_TYPE_BUY);
          justClosedPositions = true;
+         g_initialBuyPrice = 0;
          if(UseAccumulateClose) g_accumulatedProfit += pl;
          ResetTrailingState();
          return;
@@ -755,6 +895,7 @@ void ManageTrailingStop()
          double pl = CalculateFloatingPL(POSITION_TYPE_SELL);
          CloseAllSide(POSITION_TYPE_SELL);
          justClosedPositions = true;
+         g_initialSellPrice = 0;
          if(UseAccumulateClose) g_accumulatedProfit += pl;
          ResetTrailingState();
          return;
@@ -843,6 +984,13 @@ void CheckGridLoss(ENUM_POSITION_TYPE side, int currentGridCount)
    if(currentGridCount >= GridLoss_MaxTrades) return;
    if(TotalOrderCount() >= MaxOpenOrders) return;
 
+   //--- OnlyNewCandle check
+   if(GridLoss_OnlyNewCandle)
+   {
+      datetime barTime = iTime(_Symbol, PERIOD_CURRENT, 0);
+      if(barTime == lastGridLossCandleTime) return;
+   }
+
    //--- Check signal filter
    if(GridLoss_OnlyInSignal)
    {
@@ -853,10 +1001,21 @@ void CheckGridLoss(ENUM_POSITION_TYPE side, int currentGridCount)
    }
 
    //--- Find the last order of this side (initial or grid loss)
+   //--- Uses initial price as fallback when per-order trailing closed grid orders
    double lastPrice = 0;
    datetime lastTime = 0;
    FindLastOrder(side, "GM_INIT", "GM_GL", lastPrice, lastTime);
-   if(lastPrice == 0) return;
+
+   //--- Fallback: use initial order price if no open order found
+   if(lastPrice == 0)
+   {
+      if(side == POSITION_TYPE_BUY && g_initialBuyPrice > 0)
+         lastPrice = g_initialBuyPrice;
+      else if(side == POSITION_TYPE_SELL && g_initialSellPrice > 0)
+         lastPrice = g_initialSellPrice;
+      else
+         return;
+   }
 
    //--- Check same candle restriction
    if(GridLoss_DontSameCandle)
@@ -887,7 +1046,10 @@ void CheckGridLoss(ENUM_POSITION_TYPE side, int currentGridCount)
       double lots = CalculateGridLot(currentGridCount, true);
       string comment = "GM_GL#" + IntegerToString(currentGridCount + 1);
       ENUM_ORDER_TYPE orderType = (side == POSITION_TYPE_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
-      OpenOrder(orderType, lots, comment);
+      if(OpenOrder(orderType, lots, comment))
+      {
+         lastGridLossCandleTime = iTime(_Symbol, PERIOD_CURRENT, 0);
+      }
    }
 }
 
@@ -899,11 +1061,28 @@ void CheckGridProfit(ENUM_POSITION_TYPE side, int currentGridCount)
    if(currentGridCount >= GridProfit_MaxTrades) return;
    if(TotalOrderCount() >= MaxOpenOrders) return;
 
+   //--- OnlyNewCandle check
+   if(GridProfit_OnlyNewCandle)
+   {
+      datetime barTime = iTime(_Symbol, PERIOD_CURRENT, 0);
+      if(barTime == lastGridProfitCandleTime) return;
+   }
+
    //--- Find the last order of this side (initial or grid profit)
    double lastPrice = 0;
    datetime lastTime = 0;
    FindLastOrder(side, "GM_INIT", "GM_GP", lastPrice, lastTime);
-   if(lastPrice == 0) return;
+
+   //--- Fallback: use initial order price
+   if(lastPrice == 0)
+   {
+      if(side == POSITION_TYPE_BUY && g_initialBuyPrice > 0)
+         lastPrice = g_initialBuyPrice;
+      else if(side == POSITION_TYPE_SELL && g_initialSellPrice > 0)
+         lastPrice = g_initialSellPrice;
+      else
+         return;
+   }
 
    //--- Calculate required distance
    double distance = GetGridDistance(currentGridCount, false);
@@ -927,7 +1106,10 @@ void CheckGridProfit(ENUM_POSITION_TYPE side, int currentGridCount)
       double lots = CalculateGridLot(currentGridCount, false);
       string comment = "GM_GP#" + IntegerToString(currentGridCount + 1);
       ENUM_ORDER_TYPE orderType = (side == POSITION_TYPE_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
-      OpenOrder(orderType, lots, comment);
+      if(OpenOrder(orderType, lots, comment))
+      {
+         lastGridProfitCandleTime = iTime(_Symbol, PERIOD_CURRENT, 0);
+      }
    }
 }
 
@@ -1226,11 +1408,11 @@ void DisplayDashboard()
    string smaDir = "";
    if(bufSMA[0] > 0)
    {
-      double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-      smaDir = (bid > bufSMA[0]) ? "BUY" : "SELL";
+      double bidPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+      smaDir = (bidPrice > bufSMA[0]) ? "BUY" : "SELL";
    }
 
-   DashLabel("GM_Dash_0", DashboardX, y, "=== Gold Miner EA v2.0 ===", DashboardColor); y += lineHeight;
+   DashLabel("GM_Dash_0", DashboardX, y, "=== Gold Miner EA v2.1 ===", DashboardColor); y += lineHeight;
    DashLabel("GM_Dash_1", DashboardX, y, "SMA(" + IntegerToString(SMA_Period) + "): " + DoubleToString(bufSMA[0], digits) + " | Signal: " + smaDir, DashboardColor); y += lineHeight;
    DashLabel("GM_Dash_2", DashboardX, y, "Buy: " + IntegerToString(buyCount) + " (GL:" + IntegerToString(glB) + " GP:" + IntegerToString(gpB) + ") | Sell: " + IntegerToString(sellCount) + " (GL:" + IntegerToString(glS) + " GP:" + IntegerToString(gpS) + ")", DashboardColor); y += lineHeight;
 
@@ -1256,12 +1438,18 @@ void DisplayDashboard()
 
    DashLabel("GM_Dash_5", DashboardX, y, "Total PL: $" + DoubleToString(totalPL, 2) + " | DD: " + DoubleToString(dd, 1) + "%", DashboardColor); y += lineHeight;
 
-   if(EnableTrailingStop)
+   //--- Trailing info
+   if(EnablePerOrderTrailing)
+   {
+      DashLabel("GM_Dash_6", DashboardX, y, "Per-Order Trailing: Active (Act:" + IntegerToString(PerOrder_Activation) + " Step:" + IntegerToString(PerOrder_Step) + ")", DashboardColor);
+      y += lineHeight;
+   }
+   else if(EnableTrailingStop)
    {
       string trailStatus = "";
       if(g_trailingActive_Buy) trailStatus += "Buy Trail: " + DoubleToString(g_trailingSL_Buy, digits) + " ";
       if(g_trailingActive_Sell) trailStatus += "Sell Trail: " + DoubleToString(g_trailingSL_Sell, digits);
-      if(trailStatus == "") trailStatus = "Trailing: Waiting...";
+      if(trailStatus == "") trailStatus = "Avg Trailing: Waiting...";
       DashLabel("GM_Dash_6", DashboardX, y, trailStatus, DashboardColor);
       y += lineHeight;
    }
@@ -1278,6 +1466,16 @@ void DisplayDashboard()
    else
    {
       ObjectDelete(0, "GM_Dash_7");
+   }
+
+   if(EnableAutoReEntry)
+   {
+      DashLabel("GM_Dash_8", DashboardX, y, "Auto Re-Entry: ON", DashboardColor);
+      y += lineHeight;
+   }
+   else
+   {
+      ObjectDelete(0, "GM_Dash_8");
    }
 }
 
