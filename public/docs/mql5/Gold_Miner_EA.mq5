@@ -281,10 +281,7 @@ void OnTick()
 {
    if(g_eaStopped) return;
 
-   //--- Every tick: TP/SL management (basket)
-   ManageTPSL();
-
-   //--- Every tick: Trailing Stop
+   //--- Every tick: Per-Order Trailing FIRST (set SL at broker before basket TP checks)
    if(EnablePerOrderTrailing)
    {
       ManagePerOrderTrailing();
@@ -293,6 +290,9 @@ void OnTick()
    {
       ManageTrailingStop();
    }
+
+   //--- Every tick: TP/SL management (basket) - runs AFTER trailing has set SL
+   ManageTPSL();
 
    //--- Every tick: Drawdown check
    CheckDrawdownExit();
@@ -724,8 +724,11 @@ void ManageTPSL()
 }
 
 //+------------------------------------------------------------------+
-//| Manage Per-Order Trailing Stop (NEW)                               |
+//| Manage Per-Order Trailing Stop                                     |
 //| Each order trails independently based on its own open price        |
+//| Logic: When profit >= Activation, set SL at breakeven (open+buffer)|
+//|        Then for every Step points price moves, SL moves with it    |
+//|        SL never moves backwards (only in profit direction)         |
 //+------------------------------------------------------------------+
 void ManagePerOrderTrailing()
 {
@@ -733,6 +736,8 @@ void ManagePerOrderTrailing()
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
    int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+   int stopLevel = (int)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   if(stopLevel < 1) stopLevel = 1; // safety minimum
 
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
@@ -753,12 +758,28 @@ void ManagePerOrderTrailing()
 
          if(profitPoints >= PerOrder_Activation)
          {
+            //--- Trail SL: distance Step points from current bid
             double trailSL = NormalizeDouble(bid - PerOrder_Step * point, digits);
-            trailSL = MathMax(trailSL, beLevel); // never below breakeven
 
+            //--- Never below breakeven level
+            trailSL = MathMax(trailSL, beLevel);
+
+            //--- Broker stop level check: SL must be at least stopLevel points from bid
+            double minAllowedSL = NormalizeDouble(bid - stopLevel * point, digits);
+            if(trailSL > minAllowedSL)
+               trailSL = minAllowedSL;
+
+            //--- SL must never move backwards (only up for BUY)
             if(trailSL > currentSL || currentSL == 0)
             {
-               trade.PositionModify(ticket, trailSL, tp);
+               if(trade.PositionModify(ticket, trailSL, tp))
+               {
+                  Print("PER-ORDER TRAIL BUY #", ticket, 
+                        " Open=", openPrice, 
+                        " Bid=", bid, 
+                        " Profit=", DoubleToString(profitPoints, 0), "pts",
+                        " SL: ", currentSL, " -> ", trailSL);
+               }
             }
          }
       }
@@ -769,12 +790,28 @@ void ManagePerOrderTrailing()
 
          if(profitPoints >= PerOrder_Activation)
          {
+            //--- Trail SL: distance Step points from current ask
             double trailSL = NormalizeDouble(ask + PerOrder_Step * point, digits);
-            trailSL = MathMin(trailSL, beLevel); // never above breakeven
 
+            //--- Never above breakeven level (for SELL, BE is below open)
+            trailSL = MathMin(trailSL, beLevel);
+
+            //--- Broker stop level check: SL must be at least stopLevel points from ask
+            double maxAllowedSL = NormalizeDouble(ask + stopLevel * point, digits);
+            if(trailSL < maxAllowedSL)
+               trailSL = maxAllowedSL;
+
+            //--- SL must never move backwards (only down for SELL)
             if(currentSL == 0 || trailSL < currentSL)
             {
-               trade.PositionModify(ticket, trailSL, tp);
+               if(trade.PositionModify(ticket, trailSL, tp))
+               {
+                  Print("PER-ORDER TRAIL SELL #", ticket, 
+                        " Open=", openPrice, 
+                        " Ask=", ask, 
+                        " Profit=", DoubleToString(profitPoints, 0), "pts",
+                        " SL: ", currentSL, " -> ", trailSL);
+               }
             }
          }
       }
