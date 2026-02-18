@@ -1,998 +1,1300 @@
 //+------------------------------------------------------------------+
 //|                                              Gold_Miner_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                                        https://moneyxsmart.com   |
+//|                                     Gold Miner EA v2.0 - SMA+Grid|
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
-#property link      "https://moneyxsmart.com"
-#property version   "1.00"
-#property description "Gold Miner EA - Hybrid Strategy for XAUUSD"
-#property description "Scalping + Trend Following + Counter-Trend + Grid/Martingale Recovery"
+#property link      "https://moneyxsmartsystem.lovable.app"
+#property version   "2.00"
+#property description "Gold Miner EA v2.0 - SMA Entry + Grid Recovery + Average-Based Trailing"
 #property strict
 
 #include <Trade/Trade.mqh>
 
-//+------------------------------------------------------------------+
-//| Custom Enumerations                                              |
-//+------------------------------------------------------------------+
+//--- Enums
 enum ENUM_LOT_MODE
-  {
-   FIXED_LOT,              // Fixed Lot Size
-   RISK_PERCENTAGE,        // Risk Percentage of Balance
-   RECOVERY_MARTINGALE     // Recovery/Martingale Strategy
-  };
+{
+   LOT_ADD     = 0,  // Add Lot
+   LOT_CUSTOM  = 1,  // Custom Lot
+   LOT_MULTIPLY= 2   // Multiply Lot
+};
+
+enum ENUM_GAP_TYPE
+{
+   GAP_FIXED   = 0,  // Fixed Points
+   GAP_CUSTOM  = 1,  // Custom Distance
+   GAP_ATR     = 2   // ATR-Based
+};
+
+enum ENUM_SL_ACTION
+{
+   SL_CLOSE_POSITIONS = 0,  // Close Positions (Stop Loss)
+   SL_CLOSE_ALL_STOP  = 1   // Close All & Stop EA
+};
 
 //+------------------------------------------------------------------+
-//| Input Parameters                                                 |
+//| Input Parameters                                                  |
 //+------------------------------------------------------------------+
-// --- General Settings ---
-input string                  _GeneralSettings         = "=== General Settings ===";
-input int                     MagicNumber              = 12345;
-input int                     MaxSlippagePoints        = 3;
-input int                     MaxOpenOrders            = 10;
-input double                  MaxAllowedDrawdownPct    = 25.0;
 
-// --- Trading Time Filters (UTC) ---
-input string                  _TimeFilterSettings      = "=== Trading Time Filters (UTC) ===";
-input bool                    EnableTimeFilter         = false;
-input int                     StartHourUTC             = 0;
-input int                     EndHourUTC               = 23;
-input int                     StartMinuteUTC           = 0;
-input int                     EndMinuteUTC             = 59;
-input bool                    AllowTradingMonday       = true;
-input bool                    AllowTradingTuesday      = true;
-input bool                    AllowTradingWednesday    = true;
-input bool                    AllowTradingThursday     = true;
-input bool                    AllowTradingFriday       = true;
-input bool                    AllowTradingSaturday     = false;
-input bool                    AllowTradingSunday       = false;
+//--- General Settings
+input group "=== General Settings ==="
+input int      MagicNumber        = 202500;    // Magic Number
+input int      MaxSlippage        = 30;        // Max Slippage (points)
+input int      MaxOpenOrders      = 20;        // Max Open Orders
+input double   MaxDrawdownPct     = 30.0;      // Max Drawdown % (emergency close)
 
-// --- Lot Sizing & Money Management ---
-input string                  _LotSizingSettings       = "=== Lot Sizing & Money Management ===";
-input ENUM_LOT_MODE           LotSizingMode            = FIXED_LOT;
-input double                  FixedLot                 = 0.01;
-input double                  RiskPercentage           = 1.0;
-input double                  RecoveryMultiplier       = 1.5;
-input int                     RecoveryMaxSteps         = 5;
-input double                  RecoveryFactorExponent   = 1.0;
+//--- SMA Indicator
+input group "=== SMA Indicator ==="
+input int               SMA_Period       = 20;              // SMA Period
+input ENUM_APPLIED_PRICE SMA_AppliedPrice = PRICE_CLOSE;    // SMA Applied Price
+input ENUM_TIMEFRAMES   SMA_Timeframe    = PERIOD_CURRENT;  // SMA Timeframe
+input bool              EnableAutoReEntry = true;            // Auto Re-Entry when signal persists
+input bool              DontOpenSameCandle= true;            // Don't Open in Same Initial Candle
 
-// --- Indicator Settings ---
-input string                  _IndicatorSettings       = "=== Indicator Settings ===";
-input int                     RSIPeriod                = 14;
-input ENUM_APPLIED_PRICE      RSIAppliedPrice          = PRICE_CLOSE;
-input int                     EMA_FastPeriod           = 20;
-input int                     EMA_SlowPeriod           = 50;
-input ENUM_APPLIED_PRICE      EMAAppliedPrice          = PRICE_CLOSE;
-input int                     ATRPeriod                = 14;
-input int                     MACDFastPeriod           = 12;
-input int                     MACDSlowPeriod           = 26;
-input int                     MACDSignalPeriod         = 9;
-input ENUM_APPLIED_PRICE      MACDAppliedPrice         = PRICE_CLOSE;
-input int                     BBPeriod                 = 20;
-input double                  BBDeviation              = 2.0;
-input ENUM_APPLIED_PRICE      BBAppliedPrice           = PRICE_CLOSE;
+//--- Initial Lot
+input group "=== Initial Lot ==="
+input double   InitialLotSize     = 0.01;     // Initial Lot Size
 
-// --- Entry Logic Thresholds ---
-input string                  _EntryLogicSettings      = "=== Entry Logic Thresholds ===";
-input double                  RSI_Buy_Min              = 45.0;
-input double                  RSI_Buy_Max              = 70.0;
-input double                  RSI_Sell_Min             = 30.0;
-input double                  RSI_Sell_Max             = 55.0;
-input double                  EMA_CrossoverTolerance   = 0.0001;
-input double                  MACD_CrossoverTolerance  = 0.00001;
-input double                  BB_PriceDistanceFromBand = 0.5;
-input int                     MinBarsSinceEntry        = 3;
+//--- Grid Loss Side
+input group "=== Grid Loss Side ==="
+input int            GridLoss_MaxTrades      = 5;          // Max Grid Loss Trades
+input ENUM_LOT_MODE  GridLoss_LotMode        = LOT_ADD;    // Grid Loss Lot Mode
+input string         GridLoss_CustomLots     = "0.01;0.02;0.03;0.04;0.05"; // Custom Lots (semicolon separated)
+input double         GridLoss_AddLotPerLevel = 0.4;        // Add Lot per Level (multiplied by InitialLot)
+input double         GridLoss_MultiplyFactor = 2.0;        // Multiply Factor (for Multiply mode)
+input ENUM_GAP_TYPE  GridLoss_GapType        = GAP_FIXED;  // Grid Loss Gap Type
+input int            GridLoss_Points         = 500;        // Grid Loss Distance (points)
+input string         GridLoss_CustomDistance  = "100;200;300;400;500"; // Custom Distance (points, semicolon)
+input ENUM_TIMEFRAMES GridLoss_ATR_TF        = PERIOD_H1;  // ATR Timeframe
+input int            GridLoss_ATR_Period     = 14;         // ATR Period
+input double         GridLoss_ATR_Multiplier = 1.5;        // ATR Multiplier
+input bool           GridLoss_OnlyInSignal   = false;      // Grid Only in Signal Direction
+input bool           GridLoss_OnlyNewCandle  = true;       // Grid Only on New Candle
+input bool           GridLoss_DontSameCandle = true;       // Don't Open Grid in Same Candle as Initial
 
-// --- Exit Logic Thresholds ---
-input string                  _ExitLogicSettings       = "=== Exit Logic Thresholds ===";
-input double                  ScalpProfitPoints        = 10.0;
-input double                  BreakevenPlusPoints      = 2.0;
-input double                  TrailingStopStartPoints  = 20.0;
-input double                  TrailingStopDistance      = 10.0;
-input double                  MaxHoldingTimeHours      = 24.0;
-input double                  MaxIndividualLossPoints  = 1000.0;
-input double                  HedgingProfitThreshold   = 5.0;
+//--- Grid Profit Side
+input group "=== Grid Profit Side ==="
+input bool           GridProfit_Enable       = true;       // Enable Profit Grid
+input int            GridProfit_MaxTrades    = 3;          // Max Grid Profit Trades
+input ENUM_LOT_MODE  GridProfit_LotMode      = LOT_ADD;    // Grid Profit Lot Mode
+input string         GridProfit_CustomLots   = "0.01;0.02;0.03"; // Custom Lots
+input double         GridProfit_AddLotPerLevel= 0.2;       // Add Lot per Level
+input double         GridProfit_MultiplyFactor= 1.5;       // Multiply Factor
+input ENUM_GAP_TYPE  GridProfit_GapType      = GAP_FIXED;  // Grid Profit Gap Type
+input int            GridProfit_Points       = 300;        // Grid Profit Distance (points)
+input string         GridProfit_CustomDistance= "100;200;500"; // Custom Distance
+input ENUM_TIMEFRAMES GridProfit_ATR_TF      = PERIOD_H1;  // ATR Timeframe
+input int            GridProfit_ATR_Period   = 14;         // ATR Period
+input double         GridProfit_ATR_Multiplier= 1.0;       // ATR Multiplier
+input bool           GridProfit_OnlyNewCandle= true;       // Grid Only on New Candle
 
-// --- Grid/Recovery Settings ---
-input string                  _GridRecoverySettings    = "=== Grid/Recovery Settings ===";
-input bool                    EnableRecoveryByGrid     = true;
-input int                     GridRecoveryDistancePips = 20;
-input int                     GridRecoveryMaxOrders    = 5;
-input double                  RecoveryProfitTargetPerc = 0.0;
+//--- Take Profit
+input group "=== Take Profit ==="
+input bool     UseTP_Dollar        = true;     // Use TP Fixed Dollar
+input double   TP_DollarAmount     = 100.0;    // TP Dollar Amount
+input bool     UseTP_Points        = false;    // Use TP in Points (from Average)
+input int      TP_Points           = 2000;     // TP Points from Average
+input bool     UseTP_PercentBalance = false;   // Use TP % of Balance
+input double   TP_PercentBalance   = 5.0;      // TP % of Balance
+input bool     UseAccumulateClose  = false;    // Use Accumulate Close
+input double   AccumulateTarget    = 20000.0;  // Accumulate Target ($)
+input bool     ShowAverageLine     = true;     // Show Average Price Line
+input bool     ShowTPLine          = true;     // Show TP Line
+input color    AverageLineColor    = clrYellow; // Average Line Color
+input color    TPLineColor         = clrLime;   // TP Line Color
 
-//+------------------------------------------------------------------+
-//| Order Tracking Structure                                         |
-//+------------------------------------------------------------------+
-struct OrderInfo
-  {
-   ulong             ticket;
-   int               type;           // 0=Buy, 1=Sell
-   double            entryPrice;
-   double            internalSL;
-   double            internalTP;
-   datetime          openTime;
-   double            lotSize;
-   bool              trailingActive;
-   int               recoveryStep;
-  };
+//--- Stop Loss
+input group "=== Stop Loss ==="
+input bool           EnableSL            = true;              // Enable Stop Loss
+input ENUM_SL_ACTION SL_ActionMode       = SL_CLOSE_POSITIONS;// SL Action Mode
+input bool           UseSL_Dollar        = true;              // Use SL Fixed Dollar
+input double         SL_DollarAmount     = 50.0;              // SL Dollar Amount
+input bool           UseSL_Points        = false;             // Use SL in Points (from Average)
+input int            SL_Points           = 1000;              // SL Points from Average
+input bool           UseSL_PercentBalance = false;            // Use SL % of Balance
+input double         SL_PercentBalance   = 3.0;               // SL % of Balance
+input bool           ShowSLLine          = true;              // Show SL Line
+input color          SLLineColor         = clrRed;            // SL Line Color
 
-//+------------------------------------------------------------------+
-//| Global Variables                                                 |
-//+------------------------------------------------------------------+
-CTrade            trade;
+//--- Trailing Stop (Average-Based)
+input group "=== Trailing Stop (Average-Based) ==="
+input bool     EnableTrailingStop   = true;    // Enable Trailing Stop
+input int      TrailingActivation   = 100;     // Trailing Activation (points from average)
+input int      TrailingStep         = 50;      // Trailing Step (points from current price)
+input int      BreakevenBuffer      = 10;      // Breakeven Buffer (points above/below average)
+input bool     EnableBreakeven      = true;    // Enable Breakeven
+input int      BreakevenActivation  = 50;      // Breakeven Activation (points from average)
 
-// Indicator handles
-int               hRSI;
-int               hEMA_Fast;
-int               hEMA_Slow;
-int               hATR;
-int               hMACD;
-int               hBands;
-
-// Indicator buffers
-double            bufRSI[];
-double            bufEMA_Fast[];
-double            bufEMA_Slow[];
-double            bufATR[];
-double            bufMACD_Main[];
-double            bufMACD_Signal[];
-double            bufBB_Upper[];
-double            bufBB_Middle[];
-double            bufBB_Lower[];
-
-// Current indicator values
-double            _RSI_Current, _RSI_Prev;
-double            _EMA_Fast_Current, _EMA_Fast_Prev;
-double            _EMA_Slow_Current, _EMA_Slow_Prev;
-double            _ATR_Current;
-double            _MACD_Main_Current, _MACD_Main_Prev;
-double            _MACD_Signal_Current, _MACD_Signal_Prev;
-double            _BB_Upper_Current, _BB_Middle_Current, _BB_Lower_Current;
-
-// Order tracking
-OrderInfo         g_orders[];
-int               g_totalOrders;
-datetime          g_lastBarTime;
-datetime          g_lastBuyBarTime;
-datetime          g_lastSellBarTime;
-
-// Recovery tracking
-int               g_consecutiveBuyLosses;
-int               g_consecutiveSellLosses;
+//--- Dashboard
+input group "=== Dashboard ==="
+input bool     ShowDashboard        = true;    // Show Dashboard
+input int      DashboardX           = 20;      // Dashboard X Position
+input int      DashboardY           = 30;      // Dashboard Y Position
+input color    DashboardColor       = clrWhite; // Dashboard Text Color
 
 //+------------------------------------------------------------------+
-//| Expert initialization function                                   |
+//| Global Variables                                                   |
+//+------------------------------------------------------------------+
+CTrade         trade;
+int            handleSMA;
+int            handleATR_Loss;
+int            handleATR_Profit;
+double         bufSMA[3];
+double         bufATR_Loss[3];
+double         bufATR_Profit[3];
+datetime       lastBarTime;
+datetime       lastInitialCandleTime;
+bool           justClosedPositions;
+double         g_trailingSL_Buy;
+double         g_trailingSL_Sell;
+bool           g_trailingActive_Buy;
+bool           g_trailingActive_Sell;
+bool           g_breakevenDone_Buy;
+bool           g_breakevenDone_Sell;
+bool           g_eaStopped;
+double         g_accumulatedProfit;
+
+//+------------------------------------------------------------------+
+//| Expert initialization function                                     |
 //+------------------------------------------------------------------+
 int OnInit()
-  {
+{
    trade.SetExpertMagicNumber(MagicNumber);
-   trade.SetDeviationInPoints(MaxSlippagePoints);
+   trade.SetDeviationInPoints(MaxSlippage);
    trade.SetTypeFilling(ORDER_FILLING_IOC);
 
-   // Create indicator handles
-   hRSI = iRSI(_Symbol, PERIOD_M15, RSIPeriod, RSIAppliedPrice);
-   hEMA_Fast = iMA(_Symbol, PERIOD_M15, EMA_FastPeriod, 0, MODE_EMA, EMAAppliedPrice);
-   hEMA_Slow = iMA(_Symbol, PERIOD_M15, EMA_SlowPeriod, 0, MODE_EMA, EMAAppliedPrice);
-   hATR = iATR(_Symbol, PERIOD_M15, ATRPeriod);
-   hMACD = iMACD(_Symbol, PERIOD_M15, MACDFastPeriod, MACDSlowPeriod, MACDSignalPeriod, MACDAppliedPrice);
-   hBands = iBands(_Symbol, PERIOD_M15, BBPeriod, 0, BBDeviation, BBAppliedPrice);
+   //--- SMA handle
+   handleSMA = iMA(_Symbol, SMA_Timeframe, SMA_Period, 0, MODE_SMA, SMA_AppliedPrice);
+   if(handleSMA == INVALID_HANDLE)
+   {
+      Print("ERROR: Failed to create SMA handle");
+      return INIT_FAILED;
+   }
 
-   if(hRSI == INVALID_HANDLE || hEMA_Fast == INVALID_HANDLE || hEMA_Slow == INVALID_HANDLE ||
-      hATR == INVALID_HANDLE || hMACD == INVALID_HANDLE || hBands == INVALID_HANDLE)
-     {
-      Print("Gold Miner EA: Failed to create indicator handles!");
-      return(INIT_FAILED);
-     }
+   //--- ATR handles for grid
+   handleATR_Loss = iATR(_Symbol, GridLoss_ATR_TF, GridLoss_ATR_Period);
+   if(handleATR_Loss == INVALID_HANDLE)
+   {
+      Print("ERROR: Failed to create ATR Loss handle");
+      return INIT_FAILED;
+   }
 
-   // Init arrays as series
-   ArraySetAsSeries(bufRSI, true);
-   ArraySetAsSeries(bufEMA_Fast, true);
-   ArraySetAsSeries(bufEMA_Slow, true);
-   ArraySetAsSeries(bufATR, true);
-   ArraySetAsSeries(bufMACD_Main, true);
-   ArraySetAsSeries(bufMACD_Signal, true);
-   ArraySetAsSeries(bufBB_Upper, true);
-   ArraySetAsSeries(bufBB_Middle, true);
-   ArraySetAsSeries(bufBB_Lower, true);
+   handleATR_Profit = iATR(_Symbol, GridProfit_ATR_TF, GridProfit_ATR_Period);
+   if(handleATR_Profit == INVALID_HANDLE)
+   {
+      Print("ERROR: Failed to create ATR Profit handle");
+      return INIT_FAILED;
+   }
 
-   g_lastBarTime = 0;
-   g_lastBuyBarTime = 0;
-   g_lastSellBarTime = 0;
-   g_consecutiveBuyLosses = 0;
-   g_consecutiveSellLosses = 0;
-   g_totalOrders = 0;
+   //--- Init arrays
+   ArraySetAsSeries(bufSMA, true);
+   ArraySetAsSeries(bufATR_Loss, true);
+   ArraySetAsSeries(bufATR_Profit, true);
 
-   Print("Gold Miner EA v1.00 initialized successfully on ", _Symbol);
-   return(INIT_SUCCEEDED);
-  }
+   //--- Init globals
+   lastBarTime = 0;
+   lastInitialCandleTime = 0;
+   justClosedPositions = false;
+   g_trailingSL_Buy = 0;
+   g_trailingSL_Sell = 0;
+   g_trailingActive_Buy = false;
+   g_trailingActive_Sell = false;
+   g_breakevenDone_Buy = false;
+   g_breakevenDone_Sell = false;
+   g_eaStopped = false;
+   g_accumulatedProfit = 0;
+
+   //--- Calculate accumulated profit from history
+   if(UseAccumulateClose)
+   {
+      CalculateAccumulatedProfit();
+   }
+
+   Print("Gold Miner EA v2.0 initialized successfully");
+   return INIT_SUCCEEDED;
+}
 
 //+------------------------------------------------------------------+
-//| Expert deinitialization function                                  |
+//| Expert deinitialization function                                    |
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
-  {
-   if(hRSI != INVALID_HANDLE)      IndicatorRelease(hRSI);
-   if(hEMA_Fast != INVALID_HANDLE) IndicatorRelease(hEMA_Fast);
-   if(hEMA_Slow != INVALID_HANDLE) IndicatorRelease(hEMA_Slow);
-   if(hATR != INVALID_HANDLE)      IndicatorRelease(hATR);
-   if(hMACD != INVALID_HANDLE)     IndicatorRelease(hMACD);
-   if(hBands != INVALID_HANDLE)    IndicatorRelease(hBands);
+{
+   if(handleSMA != INVALID_HANDLE) IndicatorRelease(handleSMA);
+   if(handleATR_Loss != INVALID_HANDLE) IndicatorRelease(handleATR_Loss);
+   if(handleATR_Profit != INVALID_HANDLE) IndicatorRelease(handleATR_Profit);
 
-   Print("Gold Miner EA deinitialized. Reason: ", reason);
-  }
+   ObjectDelete(0, "GM_AvgLine");
+   ObjectDelete(0, "GM_TPLine");
+   ObjectDelete(0, "GM_SLLine");
+   ObjectsDeleteAll(0, "GM_Dash_");
+
+   Print("Gold Miner EA v2.0 deinitialized");
+}
 
 //+------------------------------------------------------------------+
-//| Expert tick function                                             |
+//| Expert tick function                                               |
 //+------------------------------------------------------------------+
 void OnTick()
-  {
-   // Check for new bar - main logic runs once per bar
-   datetime currentBarTime = iTime(_Symbol, PERIOD_M15, 0);
-   bool isNewBar = (currentBarTime != g_lastBarTime);
+{
+   if(g_eaStopped) return;
 
-   // Always manage positions on every tick
-   ManageOpenPositions();
+   //--- Every tick: TP/SL management
+   ManageTPSL();
 
-   // Check drawdown on every tick
-   if(CheckDrawdownExit())
-      return;
+   //--- Every tick: Trailing Stop
+   if(EnableTrailingStop || EnableBreakeven)
+   {
+      ManageTrailingStop();
+   }
 
-   // Entry logic and grid only on new bar
-   if(!isNewBar)
-      return;
+   //--- Every tick: Drawdown check
+   CheckDrawdownExit();
 
-   g_lastBarTime = currentBarTime;
+   //--- New bar logic
+   datetime currentBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
+   bool isNewBar = (currentBarTime != lastBarTime);
 
-   // Calculate indicators
-   if(!CalculateIndicators())
-      return;
+   if(isNewBar)
+   {
+      lastBarTime = currentBarTime;
+      justClosedPositions = false;
 
-   // Check time filter
-   if(!CheckTimeFilter())
-      return;
+      //--- Copy indicator buffers
+      if(CopyBuffer(handleSMA, 0, 0, 3, bufSMA) < 3) return;
+      if(CopyBuffer(handleATR_Loss, 0, 0, 3, bufATR_Loss) < 3) return;
+      if(CopyBuffer(handleATR_Profit, 0, 0, 3, bufATR_Profit) < 3) return;
 
-   // Count current EA orders
-   int buyCount = 0, sellCount = 0;
-   CountMyOrders(buyCount, sellCount);
-   int totalCount = buyCount + sellCount;
+      double smaValue = bufSMA[0];
+      double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
 
-   // Manage hedging
-   ManageHedging(buyCount, sellCount);
+      int buyCount = 0, sellCount = 0;
+      int gridLossBuy = 0, gridLossSell = 0;
+      int gridProfitBuy = 0, gridProfitSell = 0;
+      bool hasInitialBuy = false, hasInitialSell = false;
+      CountPositions(buyCount, sellCount, gridLossBuy, gridLossSell, gridProfitBuy, gridProfitSell, hasInitialBuy, hasInitialSell);
 
-   // Check entries
-   if(totalCount < MaxOpenOrders)
-     {
-      bool canBuy = CheckBuyEntry(currentBarTime);
-      bool canSell = CheckSellEntry(currentBarTime);
+      int totalPositions = buyCount + sellCount;
 
-      if(canBuy && totalCount < MaxOpenOrders)
-        {
-         double lots = CalculateLotSize(0); // 0 = Buy
-         if(lots > 0)
-           {
-            double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-            if(trade.Buy(lots, _Symbol, ask, 0, 0, "GoldMiner_Buy"))
-              {
-               g_lastBuyBarTime = currentBarTime;
-               Print("Gold Miner: BUY opened, lots=", lots, " price=", ask);
-              }
-            else
-               Print("Gold Miner: BUY failed, error=", GetLastError());
-           }
-         totalCount++;
-        }
+      //--- Grid Loss management
+      if(hasInitialBuy && gridLossBuy < GridLoss_MaxTrades)
+      {
+         CheckGridLoss(POSITION_TYPE_BUY, gridLossBuy);
+      }
+      if(hasInitialSell && gridLossSell < GridLoss_MaxTrades)
+      {
+         CheckGridLoss(POSITION_TYPE_SELL, gridLossSell);
+      }
 
-      if(canSell && totalCount < MaxOpenOrders)
-        {
-         double lots = CalculateLotSize(1); // 1 = Sell
-         if(lots > 0)
-           {
-            double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-            if(trade.Sell(lots, _Symbol, bid, 0, 0, "GoldMiner_Sell"))
-              {
-               g_lastSellBarTime = currentBarTime;
-               Print("Gold Miner: SELL opened, lots=", lots, " price=", bid);
-              }
-            else
-               Print("Gold Miner: SELL failed, error=", GetLastError());
-           }
-        }
-     }
+      //--- Grid Profit management
+      if(GridProfit_Enable)
+      {
+         if(hasInitialBuy && gridProfitBuy < GridProfit_MaxTrades)
+         {
+            CheckGridProfit(POSITION_TYPE_BUY, gridProfitBuy);
+         }
+         if(hasInitialSell && gridProfitSell < GridProfit_MaxTrades)
+         {
+            CheckGridProfit(POSITION_TYPE_SELL, gridProfitSell);
+         }
+      }
 
-   // Grid/Recovery management
-   if(EnableRecoveryByGrid && LotSizingMode == RECOVERY_MARTINGALE)
-      ManageGridRecovery(buyCount, sellCount);
+      //--- Entry logic: no positions open
+      if(totalPositions == 0 && TotalOrderCount() < MaxOpenOrders)
+      {
+         bool canOpen = true;
+         if(DontOpenSameCandle && currentBarTime == lastInitialCandleTime)
+         {
+            canOpen = false;
+         }
 
-   // Display dashboard
-   DisplayDashboard(buyCount, sellCount);
-  }
+         if(canOpen)
+         {
+            if(currentPrice > smaValue)
+            {
+               OpenOrder(ORDER_TYPE_BUY, InitialLotSize, "GM_INIT");
+               lastInitialCandleTime = currentBarTime;
+               ResetTrailingState();
+            }
+            else if(currentPrice < smaValue)
+            {
+               OpenOrder(ORDER_TYPE_SELL, InitialLotSize, "GM_INIT");
+               lastInitialCandleTime = currentBarTime;
+               ResetTrailingState();
+            }
+         }
+      }
+   }
 
-//+------------------------------------------------------------------+
-//| Calculate all indicator values                                   |
-//+------------------------------------------------------------------+
-bool CalculateIndicators()
-  {
-   if(CopyBuffer(hRSI, 0, 0, 3, bufRSI) < 3)           return false;
-   if(CopyBuffer(hEMA_Fast, 0, 0, 3, bufEMA_Fast) < 3)  return false;
-   if(CopyBuffer(hEMA_Slow, 0, 0, 3, bufEMA_Slow) < 3)  return false;
-   if(CopyBuffer(hATR, 0, 0, 12, bufATR) < 12)           return false;
-   if(CopyBuffer(hMACD, 0, 0, 3, bufMACD_Main) < 3)      return false;
-   if(CopyBuffer(hMACD, 1, 0, 3, bufMACD_Signal) < 3)    return false;
-   if(CopyBuffer(hBands, 0, 0, 3, bufBB_Middle) < 3)     return false;
-   if(CopyBuffer(hBands, 1, 0, 3, bufBB_Upper) < 3)      return false;
-   if(CopyBuffer(hBands, 2, 0, 3, bufBB_Lower) < 3)      return false;
-
-   // Use bar index 1 (last closed bar) as current, index 2 as previous
-   _RSI_Current        = bufRSI[1];
-   _RSI_Prev           = bufRSI[2];
-   _EMA_Fast_Current   = bufEMA_Fast[1];
-   _EMA_Fast_Prev      = bufEMA_Fast[2];
-   _EMA_Slow_Current   = bufEMA_Slow[1];
-   _EMA_Slow_Prev      = bufEMA_Slow[2];
-   _ATR_Current        = bufATR[1];
-   _MACD_Main_Current  = bufMACD_Main[1];
-   _MACD_Main_Prev     = bufMACD_Main[2];
-   _MACD_Signal_Current= bufMACD_Signal[1];
-   _MACD_Signal_Prev   = bufMACD_Signal[2];
-   _BB_Upper_Current   = bufBB_Upper[1];
-   _BB_Middle_Current  = bufBB_Middle[1];
-   _BB_Lower_Current   = bufBB_Lower[1];
-
-   return true;
-  }
+   //--- Draw lines and dashboard every tick
+   DrawLines();
+   if(ShowDashboard) DisplayDashboard();
+}
 
 //+------------------------------------------------------------------+
-//| Check trading time filter                                        |
+//| Count positions by type and grid level                             |
 //+------------------------------------------------------------------+
-bool CheckTimeFilter()
-  {
-   if(!EnableTimeFilter)
-      return true;
-
-   MqlDateTime dt;
-   TimeToStruct(TimeGMT(), dt);
-
-   // Check day of week
-   bool dayAllowed = false;
-   if(dt.day_of_week == 1 && AllowTradingMonday)       dayAllowed = true;
-   if(dt.day_of_week == 2 && AllowTradingTuesday)      dayAllowed = true;
-   if(dt.day_of_week == 3 && AllowTradingWednesday)    dayAllowed = true;
-   if(dt.day_of_week == 4 && AllowTradingThursday)     dayAllowed = true;
-   if(dt.day_of_week == 5 && AllowTradingFriday)       dayAllowed = true;
-   if(dt.day_of_week == 6 && AllowTradingSaturday)     dayAllowed = true;
-   if(dt.day_of_week == 0 && AllowTradingSunday)       dayAllowed = true;
-
-   if(!dayAllowed)
-      return false;
-
-   // Check time window
-   int currentMinutes = dt.hour * 60 + dt.min;
-   int startMinutes   = StartHourUTC * 60 + StartMinuteUTC;
-   int endMinutes     = EndHourUTC * 60 + EndMinuteUTC;
-
-   if(startMinutes <= endMinutes)
-      return (currentMinutes >= startMinutes && currentMinutes <= endMinutes);
-   else
-      return (currentMinutes >= startMinutes || currentMinutes <= endMinutes);
-  }
-
-//+------------------------------------------------------------------+
-//| Check drawdown and emergency close all                           |
-//+------------------------------------------------------------------+
-bool CheckDrawdownExit()
-  {
-   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
-   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
-
-   if(balance <= 0)
-      return false;
-
-   double floatingPL = equity - balance;
-   if(floatingPL >= 0)
-      return false;
-
-   double drawdownPct = MathAbs(floatingPL) / balance * 100.0;
-
-   if(drawdownPct >= MaxAllowedDrawdownPct)
-     {
-      Print("Gold Miner: MAX DRAWDOWN reached (", DoubleToString(drawdownPct, 2),
-            "%). Closing ALL positions!");
-      CloseAllPositions();
-      return true;
-     }
-
-   return false;
-  }
-
-//+------------------------------------------------------------------+
-//| Close all EA positions                                           |
-//+------------------------------------------------------------------+
-void CloseAllPositions()
-  {
-   for(int i = PositionsTotal() - 1; i >= 0; i--)
-     {
-      ulong ticket = PositionGetTicket(i);
-      if(ticket == 0)
-         continue;
-      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber)
-         continue;
-      if(PositionGetString(POSITION_SYMBOL) != _Symbol)
-         continue;
-
-      trade.PositionClose(ticket);
-     }
-  }
-
-//+------------------------------------------------------------------+
-//| Count EA orders by type                                          |
-//+------------------------------------------------------------------+
-void CountMyOrders(int &buyCount, int &sellCount)
-  {
-   buyCount = 0;
-   sellCount = 0;
+void CountPositions(int &buyCount, int &sellCount,
+                    int &gridLossBuy, int &gridLossSell,
+                    int &gridProfitBuy, int &gridProfitSell,
+                    bool &hasInitialBuy, bool &hasInitialSell)
+{
+   buyCount = 0; sellCount = 0;
+   gridLossBuy = 0; gridLossSell = 0;
+   gridProfitBuy = 0; gridProfitSell = 0;
+   hasInitialBuy = false; hasInitialSell = false;
 
    for(int i = PositionsTotal() - 1; i >= 0; i--)
-     {
+   {
       ulong ticket = PositionGetTicket(i);
-      if(ticket == 0)
-         continue;
-      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber)
-         continue;
-      if(PositionGetString(POSITION_SYMBOL) != _Symbol)
-         continue;
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
 
+      string comment = PositionGetString(POSITION_COMMENT);
       long posType = PositionGetInteger(POSITION_TYPE);
+
       if(posType == POSITION_TYPE_BUY)
+      {
          buyCount++;
+         if(StringFind(comment, "GM_INIT") >= 0) hasInitialBuy = true;
+         if(StringFind(comment, "GM_GL") >= 0) gridLossBuy++;
+         if(StringFind(comment, "GM_GP") >= 0) gridProfitBuy++;
+      }
       else if(posType == POSITION_TYPE_SELL)
+      {
          sellCount++;
-     }
-  }
+         if(StringFind(comment, "GM_INIT") >= 0) hasInitialSell = true;
+         if(StringFind(comment, "GM_GL") >= 0) gridLossSell++;
+         if(StringFind(comment, "GM_GP") >= 0) gridProfitSell++;
+      }
+   }
+}
 
 //+------------------------------------------------------------------+
-//| Check BUY entry conditions                                       |
+//| Total order count for this EA                                      |
 //+------------------------------------------------------------------+
-bool CheckBuyEntry(datetime currentBarTime)
-  {
-   // Min bars since last buy entry
-   if(g_lastBuyBarTime > 0)
-     {
-      int barsSince = Bars(_Symbol, PERIOD_M15, g_lastBuyBarTime, currentBarTime) - 1;
-      if(barsSince < MinBarsSinceEntry)
-         return false;
-     }
-
-   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-
-   // Primary conditions - ALL must be true
-   bool rsiOk = (_RSI_Current >= RSI_Buy_Min && _RSI_Current <= RSI_Buy_Max);
-   bool emaCross = (_EMA_Fast_Prev < _EMA_Slow_Prev + EMA_CrossoverTolerance &&
-                    _EMA_Fast_Current > _EMA_Slow_Current - EMA_CrossoverTolerance);
-   bool priceAboveEMA = (bid > _EMA_Slow_Current);
-   bool macdOk = (_MACD_Main_Current > _MACD_Signal_Current);
-
-   if(!rsiOk || !emaCross || !priceAboveEMA || !macdOk)
-      return false;
-
-   // Secondary conditions - at least ONE must be true
-   bool macdZeroCross = (_MACD_Main_Prev < 0 && _MACD_Main_Current > 0);
-
-   bool bbReversal = (bid <= _BB_Lower_Current + BB_PriceDistanceFromBand && _RSI_Current < 40.0);
-
-   // ATR confirmation - current ATR above average of last 10 bars
-   double atrAvg = 0;
-   for(int k = 1; k <= 10; k++)
-      atrAvg += bufATR[k];
-   atrAvg /= 10.0;
-   bool atrConfirm = (_ATR_Current > atrAvg);
-
-   if(!macdZeroCross && !bbReversal && !atrConfirm)
-      return false;
-
-   return true;
-  }
+int TotalOrderCount()
+{
+   int count = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      count++;
+   }
+   return count;
+}
 
 //+------------------------------------------------------------------+
-//| Check SELL entry conditions                                      |
+//| Open order                                                         |
 //+------------------------------------------------------------------+
-bool CheckSellEntry(datetime currentBarTime)
-  {
-   // Min bars since last sell entry
-   if(g_lastSellBarTime > 0)
-     {
-      int barsSince = Bars(_Symbol, PERIOD_M15, g_lastSellBarTime, currentBarTime) - 1;
-      if(barsSince < MinBarsSinceEntry)
-         return false;
-     }
+bool OpenOrder(ENUM_ORDER_TYPE orderType, double lots, string comment)
+{
+   double price = (orderType == ORDER_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
 
-   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-
-   // Primary conditions - ALL must be true
-   bool rsiOk = (_RSI_Current >= RSI_Sell_Min && _RSI_Current <= RSI_Sell_Max);
-   bool emaCross = (_EMA_Fast_Prev > _EMA_Slow_Prev - EMA_CrossoverTolerance &&
-                    _EMA_Fast_Current < _EMA_Slow_Current + EMA_CrossoverTolerance);
-   bool priceBelowEMA = (ask < _EMA_Slow_Current);
-   bool macdOk = (_MACD_Main_Current < _MACD_Signal_Current);
-
-   if(!rsiOk || !emaCross || !priceBelowEMA || !macdOk)
-      return false;
-
-   // Secondary conditions - at least ONE must be true
-   bool macdZeroCross = (_MACD_Main_Prev > 0 && _MACD_Main_Current < 0);
-
-   bool bbReversal = (ask >= _BB_Upper_Current - BB_PriceDistanceFromBand && _RSI_Current > 60.0);
-
-   double atrAvg = 0;
-   for(int k = 1; k <= 10; k++)
-      atrAvg += bufATR[k];
-   atrAvg /= 10.0;
-   bool atrConfirm = (_ATR_Current > atrAvg);
-
-   if(!macdZeroCross && !bbReversal && !atrConfirm)
-      return false;
-
-   return true;
-  }
-
-//+------------------------------------------------------------------+
-//| Calculate lot size based on mode                                 |
-//+------------------------------------------------------------------+
-double CalculateLotSize(int direction)
-  {
-   double lots = FixedLot;
+   //--- Normalize lot
    double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
    double maxLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
    double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   lots = MathMax(minLot, MathMin(maxLot, NormalizeDouble(MathRound(lots / lotStep) * lotStep, 2)));
 
-   if(LotSizingMode == FIXED_LOT)
-     {
-      lots = FixedLot;
-     }
-   else if(LotSizingMode == RISK_PERCENTAGE)
-     {
-      double equity = AccountInfoDouble(ACCOUNT_EQUITY);
-      double dollarsToRisk = equity * (RiskPercentage / 100.0);
-      double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
-      double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+   if(orderType == ORDER_TYPE_BUY)
+   {
+      if(!trade.Buy(lots, _Symbol, price, 0, 0, comment))
+      {
+         Print("ERROR: Buy failed - ", trade.ResultRetcodeDescription());
+         return false;
+      }
+   }
+   else
+   {
+      if(!trade.Sell(lots, _Symbol, price, 0, 0, comment))
+      {
+         Print("ERROR: Sell failed - ", trade.ResultRetcodeDescription());
+         return false;
+      }
+   }
 
-      if(tickValue > 0 && tickSize > 0 && MaxIndividualLossPoints > 0)
-        {
-         double pointValue = tickValue / tickSize * _Point;
-         lots = dollarsToRisk / (MaxIndividualLossPoints * pointValue);
-        }
-     }
-   else if(LotSizingMode == RECOVERY_MARTINGALE)
-     {
-      int consecutiveLosses = (direction == 0) ? g_consecutiveBuyLosses : g_consecutiveSellLosses;
-
-      if(consecutiveLosses > RecoveryMaxSteps)
-         consecutiveLosses = 0; // Reset after max steps
-
-      lots = FixedLot * MathPow(RecoveryMultiplier, (double)consecutiveLosses);
-     }
-
-   // Normalize and clamp
-   lots = MathMax(minLot, lots);
-   lots = MathMin(maxLot, lots);
-
-   // Round to lot step
-   if(lotStep > 0)
-      lots = MathFloor(lots / lotStep) * lotStep;
-
-   lots = NormalizeDouble(lots, 2);
-
-   return lots;
-  }
+   Print("Order opened: ", comment, " Lots=", lots, " Price=", price);
+   return true;
+}
 
 //+------------------------------------------------------------------+
-//| Manage all open positions (SL, TP, Trailing, Time exit)          |
+//| Calculate Weighted Average Price for one side                      |
 //+------------------------------------------------------------------+
-void ManageOpenPositions()
-  {
-   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-   double point = _Point;
+double CalculateAveragePrice(ENUM_POSITION_TYPE side)
+{
+   double totalLots = 0;
+   double totalWeighted = 0;
 
    for(int i = PositionsTotal() - 1; i >= 0; i--)
-     {
+   {
       ulong ticket = PositionGetTicket(i);
-      if(ticket == 0)
-         continue;
-      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber)
-         continue;
-      if(PositionGetString(POSITION_SYMBOL) != _Symbol)
-         continue;
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if(PositionGetInteger(POSITION_TYPE) != side) continue;
 
-      long posType = PositionGetInteger(POSITION_TYPE);
-      double entryPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-      double posProfit = PositionGetDouble(POSITION_PROFIT);
-      double volume = PositionGetDouble(POSITION_VOLUME);
-      datetime openTime = (datetime)PositionGetInteger(POSITION_TIME);
-      double currentSL = PositionGetDouble(POSITION_SL);
+      double vol = PositionGetDouble(POSITION_VOLUME);
+      double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+      totalLots += vol;
+      totalWeighted += openPrice * vol;
+   }
 
-      double profitPoints = 0;
-      bool shouldClose = false;
-      string closeReason = "";
-
-      if(posType == POSITION_TYPE_BUY)
-        {
-         profitPoints = (bid - entryPrice) / point;
-
-         // Max individual loss check
-         if(profitPoints <= -MaxIndividualLossPoints)
-           {
-            shouldClose = true;
-            closeReason = "MaxLoss";
-           }
-
-         // Scalp profit target
-         if(!shouldClose && profitPoints >= ScalpProfitPoints)
-           {
-            // If trailing is not active yet, check if we should just scalp
-            if(profitPoints < TrailingStopStartPoints)
-              {
-               shouldClose = true;
-               closeReason = "ScalpTP";
-              }
-           }
-
-         // Breakeven logic
-         if(!shouldClose && profitPoints >= BreakevenPlusPoints)
-           {
-            double beLevel = entryPrice + BreakevenPlusPoints * point;
-            if(currentSL < entryPrice)
-              {
-               trade.PositionModify(ticket, beLevel, 0);
-              }
-           }
-
-         // Trailing stop logic
-         if(!shouldClose && profitPoints >= TrailingStopStartPoints)
-           {
-            double trailSL = bid - TrailingStopDistance * point;
-            if(trailSL > currentSL)
-              {
-               trade.PositionModify(ticket, trailSL, 0);
-              }
-           }
-        }
-      else if(posType == POSITION_TYPE_SELL)
-        {
-         profitPoints = (entryPrice - ask) / point;
-
-         // Max individual loss check
-         if(profitPoints <= -MaxIndividualLossPoints)
-           {
-            shouldClose = true;
-            closeReason = "MaxLoss";
-           }
-
-         // Scalp profit target
-         if(!shouldClose && profitPoints >= ScalpProfitPoints)
-           {
-            if(profitPoints < TrailingStopStartPoints)
-              {
-               shouldClose = true;
-               closeReason = "ScalpTP";
-              }
-           }
-
-         // Breakeven logic
-         if(!shouldClose && profitPoints >= BreakevenPlusPoints)
-           {
-            double beLevel = entryPrice - BreakevenPlusPoints * point;
-            if(currentSL > entryPrice || currentSL == 0)
-              {
-               trade.PositionModify(ticket, beLevel, 0);
-              }
-           }
-
-         // Trailing stop logic
-         if(!shouldClose && profitPoints >= TrailingStopStartPoints)
-           {
-            double trailSL = ask + TrailingStopDistance * point;
-            if(trailSL < currentSL || currentSL == 0)
-              {
-               trade.PositionModify(ticket, trailSL, 0);
-              }
-           }
-        }
-
-      // Time-based exit
-      if(!shouldClose && MaxHoldingTimeHours > 0)
-        {
-         double hoursHeld = (double)(TimeCurrent() - openTime) / 3600.0;
-         if(hoursHeld >= MaxHoldingTimeHours)
-           {
-            shouldClose = true;
-            closeReason = "TimeExit";
-           }
-        }
-
-      // Execute close if needed
-      if(shouldClose)
-        {
-         Print("Gold Miner: Closing ", (posType == POSITION_TYPE_BUY ? "BUY" : "SELL"),
-               " #", ticket, " Reason: ", closeReason,
-               " Profit: ", DoubleToString(posProfit, 2));
-
-         if(trade.PositionClose(ticket))
-           {
-            // Track for recovery
-            if(posProfit < 0)
-              {
-               if(posType == POSITION_TYPE_BUY)
-                  g_consecutiveBuyLosses++;
-               else
-                  g_consecutiveSellLosses++;
-              }
-            else
-              {
-               if(posType == POSITION_TYPE_BUY)
-                  g_consecutiveBuyLosses = 0;
-               else
-                  g_consecutiveSellLosses = 0;
-              }
-           }
-        }
-     }
-  }
+   if(totalLots > 0)
+      return totalWeighted / totalLots;
+   return 0;
+}
 
 //+------------------------------------------------------------------+
-//| Manage hedging - close opposing losers when one side profits     |
+//| Calculate total floating P/L for one side                          |
 //+------------------------------------------------------------------+
-void ManageHedging(int buyCount, int sellCount)
-  {
-   if(buyCount == 0 || sellCount == 0)
-      return;
-
-   double totalBuyProfit = 0;
-   double totalSellProfit = 0;
-
-   // Calculate total profit by direction
+double CalculateFloatingPL(ENUM_POSITION_TYPE side)
+{
+   double totalPL = 0;
    for(int i = PositionsTotal() - 1; i >= 0; i--)
-     {
+   {
       ulong ticket = PositionGetTicket(i);
-      if(ticket == 0)
-         continue;
-      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber)
-         continue;
-      if(PositionGetString(POSITION_SYMBOL) != _Symbol)
-         continue;
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if(PositionGetInteger(POSITION_TYPE) != side) continue;
 
-      long posType = PositionGetInteger(POSITION_TYPE);
-      double profit = PositionGetDouble(POSITION_PROFIT);
-
-      if(posType == POSITION_TYPE_BUY)
-         totalBuyProfit += profit;
-      else
-         totalSellProfit += profit;
-     }
-
-   double point = _Point;
-   double profitThresholdValue = HedgingProfitThreshold * point *
-                                  SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE) /
-                                  SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
-
-   // If buys are profitable and sells are losing, close oldest losing sell
-   if(totalBuyProfit > profitThresholdValue && totalSellProfit < 0)
-     {
-      CloseOldestLosingPosition(POSITION_TYPE_SELL);
-     }
-   // If sells are profitable and buys are losing, close oldest losing buy
-   else if(totalSellProfit > profitThresholdValue && totalBuyProfit < 0)
-     {
-      CloseOldestLosingPosition(POSITION_TYPE_BUY);
-     }
-  }
+      totalPL += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+   }
+   return totalPL;
+}
 
 //+------------------------------------------------------------------+
-//| Close the oldest losing position of a specific type              |
+//| Calculate total floating P/L for ALL positions                     |
 //+------------------------------------------------------------------+
-void CloseOldestLosingPosition(ENUM_POSITION_TYPE targetType)
-  {
-   ulong oldestTicket = 0;
-   datetime oldestTime = TimeCurrent();
-
+double CalculateTotalFloatingPL()
+{
+   double totalPL = 0;
    for(int i = PositionsTotal() - 1; i >= 0; i--)
-     {
+   {
       ulong ticket = PositionGetTicket(i);
-      if(ticket == 0)
-         continue;
-      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber)
-         continue;
-      if(PositionGetString(POSITION_SYMBOL) != _Symbol)
-         continue;
-
-      long posType = PositionGetInteger(POSITION_TYPE);
-      double profit = PositionGetDouble(POSITION_PROFIT);
-      datetime openTime = (datetime)PositionGetInteger(POSITION_TIME);
-
-      if(posType == targetType && profit < 0 && openTime < oldestTime)
-        {
-         oldestTime = openTime;
-         oldestTicket = ticket;
-        }
-     }
-
-   if(oldestTicket > 0)
-     {
-      Print("Gold Miner: Hedging - Closing oldest losing ",
-            (targetType == POSITION_TYPE_BUY ? "BUY" : "SELL"), " #", oldestTicket);
-      trade.PositionClose(oldestTicket);
-     }
-  }
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      totalPL += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+   }
+   return totalPL;
+}
 
 //+------------------------------------------------------------------+
-//| Grid/Martingale Recovery Management                              |
+//| Close all positions for one side                                   |
 //+------------------------------------------------------------------+
-void ManageGridRecovery(int buyCount, int sellCount)
-  {
-   if(!EnableRecoveryByGrid)
-      return;
-
-   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-   double point = _Point;
-   double gridDistance = GridRecoveryDistancePips * point * 10; // Convert pips to price
-
-   // Check if we should add recovery grid orders for buys
-   if(buyCount > 0 && buyCount < GridRecoveryMaxOrders)
-     {
-      double lowestBuyPrice = 999999;
-      double totalBuyProfit = 0;
-
-      for(int i = PositionsTotal() - 1; i >= 0; i--)
-        {
-         ulong ticket = PositionGetTicket(i);
-         if(ticket == 0)
-            continue;
-         if(PositionGetInteger(POSITION_MAGIC) != MagicNumber)
-            continue;
-         if(PositionGetString(POSITION_SYMBOL) != _Symbol)
-            continue;
-         if(PositionGetInteger(POSITION_TYPE) != POSITION_TYPE_BUY)
-            continue;
-
-         double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-         totalBuyProfit += PositionGetDouble(POSITION_PROFIT);
-
-         if(openPrice < lowestBuyPrice)
-            lowestBuyPrice = openPrice;
-        }
-
-      // Check recovery profit target
-      if(RecoveryProfitTargetPerc > 0 && totalBuyProfit > 0)
-        {
-         double targetProfit = AccountInfoDouble(ACCOUNT_EQUITY) * RecoveryProfitTargetPerc / 100.0;
-         if(totalBuyProfit >= targetProfit)
-           {
-            Print("Gold Miner: Recovery target hit for BUY grid. Closing all buys.");
-            CloseAllByType(POSITION_TYPE_BUY);
-            g_consecutiveBuyLosses = 0;
-            return;
-           }
-        }
-
-      // Add grid order if price dropped enough
-      if(totalBuyProfit < 0 && bid <= lowestBuyPrice - gridDistance)
-        {
-         double lots = CalculateLotSize(0);
-         if(lots > 0)
-           {
-            if(trade.Buy(lots, _Symbol, ask, 0, 0, "GoldMiner_Grid_Buy"))
-               Print("Gold Miner: Grid BUY added at ", ask, " lots=", lots);
-           }
-        }
-     }
-
-   // Check if we should add recovery grid orders for sells
-   if(sellCount > 0 && sellCount < GridRecoveryMaxOrders)
-     {
-      double highestSellPrice = 0;
-      double totalSellProfit = 0;
-
-      for(int i = PositionsTotal() - 1; i >= 0; i--)
-        {
-         ulong ticket = PositionGetTicket(i);
-         if(ticket == 0)
-            continue;
-         if(PositionGetInteger(POSITION_MAGIC) != MagicNumber)
-            continue;
-         if(PositionGetString(POSITION_SYMBOL) != _Symbol)
-            continue;
-         if(PositionGetInteger(POSITION_TYPE) != POSITION_TYPE_SELL)
-            continue;
-
-         double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-         totalSellProfit += PositionGetDouble(POSITION_PROFIT);
-
-         if(openPrice > highestSellPrice)
-            highestSellPrice = openPrice;
-        }
-
-      // Check recovery profit target
-      if(RecoveryProfitTargetPerc > 0 && totalSellProfit > 0)
-        {
-         double targetProfit = AccountInfoDouble(ACCOUNT_EQUITY) * RecoveryProfitTargetPerc / 100.0;
-         if(totalSellProfit >= targetProfit)
-           {
-            Print("Gold Miner: Recovery target hit for SELL grid. Closing all sells.");
-            CloseAllByType(POSITION_TYPE_SELL);
-            g_consecutiveSellLosses = 0;
-            return;
-           }
-        }
-
-      // Add grid order if price rose enough
-      if(totalSellProfit < 0 && ask >= highestSellPrice + gridDistance)
-        {
-         double lots = CalculateLotSize(1);
-         if(lots > 0)
-           {
-            if(trade.Sell(lots, _Symbol, bid, 0, 0, "GoldMiner_Grid_Sell"))
-               Print("Gold Miner: Grid SELL added at ", bid, " lots=", lots);
-           }
-        }
-     }
-  }
-
-//+------------------------------------------------------------------+
-//| Close all positions of a specific type                           |
-//+------------------------------------------------------------------+
-void CloseAllByType(ENUM_POSITION_TYPE targetType)
-  {
+void CloseAllSide(ENUM_POSITION_TYPE side)
+{
    for(int i = PositionsTotal() - 1; i >= 0; i--)
-     {
+   {
       ulong ticket = PositionGetTicket(i);
-      if(ticket == 0)
-         continue;
-      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber)
-         continue;
-      if(PositionGetString(POSITION_SYMBOL) != _Symbol)
-         continue;
-      if(PositionGetInteger(POSITION_TYPE) != targetType)
-         continue;
-
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if(PositionGetInteger(POSITION_TYPE) != side) continue;
       trade.PositionClose(ticket);
-     }
-  }
+   }
+}
 
 //+------------------------------------------------------------------+
-//| Display dashboard on chart                                       |
+//| Close ALL positions                                                |
 //+------------------------------------------------------------------+
-void DisplayDashboard(int buyCount, int sellCount)
-  {
-   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+void CloseAllPositions()
+{
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      trade.PositionClose(ticket);
+   }
+   justClosedPositions = true;
+   ResetTrailingState();
+}
+
+//+------------------------------------------------------------------+
+//| Manage TP/SL                                                       |
+//+------------------------------------------------------------------+
+void ManageTPSL()
+{
+   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
-   double floatingPL = equity - balance;
-   double drawdownPct = (balance > 0) ? MathAbs(MathMin(0, floatingPL)) / balance * 100.0 : 0;
 
-   string info = "";
-   info += "╔══════════════════════════════╗\n";
-   info += "║    GOLD MINER EA v1.00       ║\n";
-   info += "╠══════════════════════════════╣\n";
-   info += "║ Balance:  " + DoubleToString(balance, 2) + "\n";
-   info += "║ Equity:   " + DoubleToString(equity, 2) + "\n";
-   info += "║ Float PL: " + DoubleToString(floatingPL, 2) + "\n";
-   info += "║ Drawdown: " + DoubleToString(drawdownPct, 2) + "%\n";
-   info += "╠══════════════════════════════╣\n";
-   info += "║ BUY:  " + IntegerToString(buyCount) + "  SELL: " + IntegerToString(sellCount) + "\n";
-   info += "║ Max DD:   " + DoubleToString(MaxAllowedDrawdownPct, 1) + "%\n";
-   info += "║ Lot Mode: " + EnumToString(LotSizingMode) + "\n";
-   info += "╠══════════════════════════════╣\n";
-   info += "║ RSI:  " + DoubleToString(_RSI_Current, 2) + "\n";
-   info += "║ ATR:  " + DoubleToString(_ATR_Current, 5) + "\n";
-   info += "║ MACD: " + DoubleToString(_MACD_Main_Current, 5) + "\n";
-   info += "║ EMA Fast: " + DoubleToString(_EMA_Fast_Current, 5) + "\n";
-   info += "║ EMA Slow: " + DoubleToString(_EMA_Slow_Current, 5) + "\n";
-   info += "║ BB Upper: " + DoubleToString(_BB_Upper_Current, 5) + "\n";
-   info += "║ BB Lower: " + DoubleToString(_BB_Lower_Current, 5) + "\n";
-   info += "╠══════════════════════════════╣\n";
-   info += "║ Buy Losses:  " + IntegerToString(g_consecutiveBuyLosses) + "\n";
-   info += "║ Sell Losses: " + IntegerToString(g_consecutiveSellLosses) + "\n";
-   info += "╚══════════════════════════════╝\n";
+   //--- BUY side
+   double avgBuy = CalculateAveragePrice(POSITION_TYPE_BUY);
+   if(avgBuy > 0)
+   {
+      double plBuy = CalculateFloatingPL(POSITION_TYPE_BUY);
+      double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+      bool closeTP = false;
+      bool closeSL = false;
 
-   Comment(info);
-  }
+      //--- TP checks
+      if(UseTP_Dollar && plBuy >= TP_DollarAmount) closeTP = true;
+      if(UseTP_Points && bid >= avgBuy + TP_Points * point) closeTP = true;
+      if(UseTP_PercentBalance && plBuy >= balance * TP_PercentBalance / 100.0) closeTP = true;
+
+      if(closeTP)
+      {
+         Print("TP HIT (BUY): PL=", plBuy);
+         double closedPL = plBuy;
+         CloseAllSide(POSITION_TYPE_BUY);
+         justClosedPositions = true;
+         ResetTrailingState();
+         if(UseAccumulateClose) g_accumulatedProfit += closedPL;
+         return;
+      }
+
+      //--- SL checks
+      if(EnableSL)
+      {
+         if(UseSL_Dollar && plBuy <= -SL_DollarAmount) closeSL = true;
+         if(UseSL_Points && bid <= avgBuy - SL_Points * point) closeSL = true;
+         if(UseSL_PercentBalance && plBuy <= -(balance * SL_PercentBalance / 100.0)) closeSL = true;
+
+         if(closeSL)
+         {
+            Print("SL HIT (BUY): PL=", plBuy);
+            if(SL_ActionMode == SL_CLOSE_ALL_STOP)
+            {
+               CloseAllPositions();
+               g_eaStopped = true;
+               Print("EA STOPPED by SL Action");
+            }
+            else
+            {
+               CloseAllSide(POSITION_TYPE_BUY);
+               justClosedPositions = true;
+               ResetTrailingState();
+            }
+            return;
+         }
+      }
+   }
+
+   //--- SELL side
+   double avgSell = CalculateAveragePrice(POSITION_TYPE_SELL);
+   if(avgSell > 0)
+   {
+      double plSell = CalculateFloatingPL(POSITION_TYPE_SELL);
+      double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+      bool closeTP2 = false;
+      bool closeSL2 = false;
+
+      //--- TP checks
+      if(UseTP_Dollar && plSell >= TP_DollarAmount) closeTP2 = true;
+      if(UseTP_Points && ask <= avgSell - TP_Points * point) closeTP2 = true;
+      if(UseTP_PercentBalance && plSell >= balance * TP_PercentBalance / 100.0) closeTP2 = true;
+
+      if(closeTP2)
+      {
+         Print("TP HIT (SELL): PL=", plSell);
+         double closedPL = plSell;
+         CloseAllSide(POSITION_TYPE_SELL);
+         justClosedPositions = true;
+         ResetTrailingState();
+         if(UseAccumulateClose) g_accumulatedProfit += closedPL;
+         return;
+      }
+
+      //--- SL checks
+      if(EnableSL)
+      {
+         if(UseSL_Dollar && plSell <= -SL_DollarAmount) closeSL2 = true;
+         if(UseSL_Points && ask >= avgSell + SL_Points * point) closeSL2 = true;
+         if(UseSL_PercentBalance && plSell <= -(balance * SL_PercentBalance / 100.0)) closeSL2 = true;
+
+         if(closeSL2)
+         {
+            Print("SL HIT (SELL): PL=", plSell);
+            if(SL_ActionMode == SL_CLOSE_ALL_STOP)
+            {
+               CloseAllPositions();
+               g_eaStopped = true;
+               Print("EA STOPPED by SL Action");
+            }
+            else
+            {
+               CloseAllSide(POSITION_TYPE_SELL);
+               justClosedPositions = true;
+               ResetTrailingState();
+            }
+            return;
+         }
+      }
+   }
+
+   //--- Accumulate Close (global target)
+   if(UseAccumulateClose)
+   {
+      double totalPL = CalculateTotalFloatingPL();
+      if(g_accumulatedProfit + totalPL >= AccumulateTarget)
+      {
+         Print("ACCUMULATE TARGET HIT: ", g_accumulatedProfit + totalPL);
+         CloseAllPositions();
+         g_eaStopped = true;
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Manage Trailing Stop (Average-Based)                               |
+//+------------------------------------------------------------------+
+void ManageTrailingStop()
+{
+   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+
+   //--- BUY side
+   double avgBuy = CalculateAveragePrice(POSITION_TYPE_BUY);
+   if(avgBuy > 0)
+   {
+      double beLevel = avgBuy + BreakevenBuffer * point;
+
+      if(EnableTrailingStop)
+      {
+         double trailActivation = avgBuy + TrailingActivation * point;
+
+         if(bid >= trailActivation)
+         {
+            g_trailingActive_Buy = true;
+            double newSL = bid - TrailingStep * point;
+            newSL = MathMax(newSL, beLevel); // never below breakeven
+
+            if(newSL > g_trailingSL_Buy)
+            {
+               g_trailingSL_Buy = newSL;
+               ApplyTrailingSL(POSITION_TYPE_BUY, g_trailingSL_Buy);
+            }
+         }
+      }
+
+      if(EnableBreakeven && !g_breakevenDone_Buy)
+      {
+         double beActivation = avgBuy + BreakevenActivation * point;
+         if(bid >= beActivation)
+         {
+            g_breakevenDone_Buy = true;
+            if(g_trailingSL_Buy < beLevel)
+            {
+               g_trailingSL_Buy = beLevel;
+               ApplyTrailingSL(POSITION_TYPE_BUY, beLevel);
+               Print("BREAKEVEN BUY: SL moved to ", beLevel);
+            }
+         }
+      }
+
+      // Check if trailing SL hit
+      if(g_trailingActive_Buy && g_trailingSL_Buy > 0 && bid <= g_trailingSL_Buy)
+      {
+         Print("TRAILING SL HIT (BUY): SL=", g_trailingSL_Buy, " Bid=", bid);
+         double pl = CalculateFloatingPL(POSITION_TYPE_BUY);
+         CloseAllSide(POSITION_TYPE_BUY);
+         justClosedPositions = true;
+         if(UseAccumulateClose) g_accumulatedProfit += pl;
+         ResetTrailingState();
+         return;
+      }
+   }
+   else
+   {
+      g_trailingSL_Buy = 0;
+      g_trailingActive_Buy = false;
+      g_breakevenDone_Buy = false;
+   }
+
+   //--- SELL side
+   double avgSell = CalculateAveragePrice(POSITION_TYPE_SELL);
+   if(avgSell > 0)
+   {
+      double beLevelSell = avgSell - BreakevenBuffer * point;
+
+      if(EnableTrailingStop)
+      {
+         double trailActivationSell = avgSell - TrailingActivation * point;
+
+         if(ask <= trailActivationSell)
+         {
+            g_trailingActive_Sell = true;
+            double newSL = ask + TrailingStep * point;
+            newSL = MathMin(newSL, beLevelSell); // never above breakeven
+
+            if(g_trailingSL_Sell == 0 || newSL < g_trailingSL_Sell)
+            {
+               g_trailingSL_Sell = newSL;
+               ApplyTrailingSL(POSITION_TYPE_SELL, g_trailingSL_Sell);
+            }
+         }
+      }
+
+      if(EnableBreakeven && !g_breakevenDone_Sell)
+      {
+         double beActivationSell = avgSell - BreakevenActivation * point;
+         if(ask <= beActivationSell)
+         {
+            g_breakevenDone_Sell = true;
+            if(g_trailingSL_Sell == 0 || g_trailingSL_Sell > beLevelSell)
+            {
+               g_trailingSL_Sell = beLevelSell;
+               ApplyTrailingSL(POSITION_TYPE_SELL, beLevelSell);
+               Print("BREAKEVEN SELL: SL moved to ", beLevelSell);
+            }
+         }
+      }
+
+      // Check if trailing SL hit
+      if(g_trailingActive_Sell && g_trailingSL_Sell > 0 && ask >= g_trailingSL_Sell)
+      {
+         Print("TRAILING SL HIT (SELL): SL=", g_trailingSL_Sell, " Ask=", ask);
+         double pl = CalculateFloatingPL(POSITION_TYPE_SELL);
+         CloseAllSide(POSITION_TYPE_SELL);
+         justClosedPositions = true;
+         if(UseAccumulateClose) g_accumulatedProfit += pl;
+         ResetTrailingState();
+         return;
+      }
+   }
+   else
+   {
+      g_trailingSL_Sell = 0;
+      g_trailingActive_Sell = false;
+      g_breakevenDone_Sell = false;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Apply trailing SL to all positions of a side (modify broker SL)    |
+//+------------------------------------------------------------------+
+void ApplyTrailingSL(ENUM_POSITION_TYPE side, double slPrice)
+{
+   int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+   slPrice = NormalizeDouble(slPrice, digits);
+
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if(PositionGetInteger(POSITION_TYPE) != side) continue;
+
+      double currentSL = PositionGetDouble(POSITION_SL);
+      double tp = PositionGetDouble(POSITION_TP);
+
+      if(side == POSITION_TYPE_BUY)
+      {
+         if(currentSL == 0 || slPrice > currentSL)
+         {
+            trade.PositionModify(ticket, slPrice, tp);
+         }
+      }
+      else
+      {
+         if(currentSL == 0 || slPrice < currentSL)
+         {
+            trade.PositionModify(ticket, slPrice, tp);
+         }
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Reset trailing state                                               |
+//+------------------------------------------------------------------+
+void ResetTrailingState()
+{
+   g_trailingSL_Buy = 0;
+   g_trailingSL_Sell = 0;
+   g_trailingActive_Buy = false;
+   g_trailingActive_Sell = false;
+   g_breakevenDone_Buy = false;
+   g_breakevenDone_Sell = false;
+}
+
+//+------------------------------------------------------------------+
+//| Check Drawdown Exit                                                |
+//+------------------------------------------------------------------+
+void CheckDrawdownExit()
+{
+   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+   if(balance <= 0) return;
+
+   double dd = (balance - equity) / balance * 100.0;
+   if(dd >= MaxDrawdownPct)
+   {
+      Print("EMERGENCY: Drawdown ", dd, "% >= ", MaxDrawdownPct, "% - Closing all!");
+      CloseAllPositions();
+      g_eaStopped = true;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Check Grid Loss                                                    |
+//+------------------------------------------------------------------+
+void CheckGridLoss(ENUM_POSITION_TYPE side, int currentGridCount)
+{
+   if(currentGridCount >= GridLoss_MaxTrades) return;
+   if(TotalOrderCount() >= MaxOpenOrders) return;
+
+   //--- Check signal filter
+   if(GridLoss_OnlyInSignal)
+   {
+      double sma = bufSMA[0];
+      double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+      if(side == POSITION_TYPE_BUY && price < sma) return;
+      if(side == POSITION_TYPE_SELL && price > sma) return;
+   }
+
+   //--- Find the last order of this side (initial or grid loss)
+   double lastPrice = 0;
+   datetime lastTime = 0;
+   FindLastOrder(side, "GM_INIT", "GM_GL", lastPrice, lastTime);
+   if(lastPrice == 0) return;
+
+   //--- Check same candle restriction
+   if(GridLoss_DontSameCandle)
+   {
+      datetime barTime = iTime(_Symbol, PERIOD_CURRENT, 0);
+      if(lastTime >= barTime) return;
+   }
+
+   //--- Calculate required distance
+   double distance = GetGridDistance(currentGridCount, true);
+   if(distance <= 0) return;
+
+   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   double currentPrice = (side == POSITION_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
+
+   bool shouldOpen = false;
+   if(side == POSITION_TYPE_BUY && currentPrice <= lastPrice - distance * point)
+   {
+      shouldOpen = true;
+   }
+   else if(side == POSITION_TYPE_SELL && currentPrice >= lastPrice + distance * point)
+   {
+      shouldOpen = true;
+   }
+
+   if(shouldOpen)
+   {
+      double lots = CalculateGridLot(currentGridCount, true);
+      string comment = "GM_GL#" + IntegerToString(currentGridCount + 1);
+      ENUM_ORDER_TYPE orderType = (side == POSITION_TYPE_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+      OpenOrder(orderType, lots, comment);
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Check Grid Profit                                                  |
+//+------------------------------------------------------------------+
+void CheckGridProfit(ENUM_POSITION_TYPE side, int currentGridCount)
+{
+   if(currentGridCount >= GridProfit_MaxTrades) return;
+   if(TotalOrderCount() >= MaxOpenOrders) return;
+
+   //--- Find the last order of this side (initial or grid profit)
+   double lastPrice = 0;
+   datetime lastTime = 0;
+   FindLastOrder(side, "GM_INIT", "GM_GP", lastPrice, lastTime);
+   if(lastPrice == 0) return;
+
+   //--- Calculate required distance
+   double distance = GetGridDistance(currentGridCount, false);
+   if(distance <= 0) return;
+
+   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   double currentPrice = (side == POSITION_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
+
+   bool shouldOpen = false;
+   if(side == POSITION_TYPE_BUY && currentPrice >= lastPrice + distance * point)
+   {
+      shouldOpen = true;
+   }
+   else if(side == POSITION_TYPE_SELL && currentPrice <= lastPrice - distance * point)
+   {
+      shouldOpen = true;
+   }
+
+   if(shouldOpen)
+   {
+      double lots = CalculateGridLot(currentGridCount, false);
+      string comment = "GM_GP#" + IntegerToString(currentGridCount + 1);
+      ENUM_ORDER_TYPE orderType = (side == POSITION_TYPE_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+      OpenOrder(orderType, lots, comment);
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Find last order price for a side (matching comment prefixes)       |
+//+------------------------------------------------------------------+
+void FindLastOrder(ENUM_POSITION_TYPE side, string prefix1, string prefix2, double &outPrice, datetime &outTime)
+{
+   outPrice = 0;
+   outTime = 0;
+   datetime latestTime = 0;
+
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if(PositionGetInteger(POSITION_TYPE) != side) continue;
+
+      string comment = PositionGetString(POSITION_COMMENT);
+      if(StringFind(comment, prefix1) >= 0 || StringFind(comment, prefix2) >= 0)
+      {
+         datetime openTime = (datetime)PositionGetInteger(POSITION_TIME);
+         if(openTime > latestTime)
+         {
+            latestTime = openTime;
+            outPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+            outTime = openTime;
+         }
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Get grid distance in points                                        |
+//+------------------------------------------------------------------+
+double GetGridDistance(int level, bool isLossSide)
+{
+   if(isLossSide)
+   {
+      if(GridLoss_GapType == GAP_FIXED)
+      {
+         return (double)GridLoss_Points;
+      }
+      else if(GridLoss_GapType == GAP_CUSTOM)
+      {
+         return ParseCustomValue(GridLoss_CustomDistance, level);
+      }
+      else // ATR
+      {
+         if(bufATR_Loss[0] > 0)
+         {
+            double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+            return bufATR_Loss[0] * GridLoss_ATR_Multiplier / point;
+         }
+         return (double)GridLoss_Points;
+      }
+   }
+   else
+   {
+      if(GridProfit_GapType == GAP_FIXED)
+      {
+         return (double)GridProfit_Points;
+      }
+      else if(GridProfit_GapType == GAP_CUSTOM)
+      {
+         return ParseCustomValue(GridProfit_CustomDistance, level);
+      }
+      else // ATR
+      {
+         if(bufATR_Profit[0] > 0)
+         {
+            double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+            return bufATR_Profit[0] * GridProfit_ATR_Multiplier / point;
+         }
+         return (double)GridProfit_Points;
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Calculate grid lot size                                            |
+//+------------------------------------------------------------------+
+double CalculateGridLot(int level, bool isLossSide)
+{
+   if(isLossSide)
+   {
+      if(GridLoss_LotMode == LOT_ADD)
+      {
+         return InitialLotSize + InitialLotSize * GridLoss_AddLotPerLevel * (level + 1);
+      }
+      else if(GridLoss_LotMode == LOT_CUSTOM)
+      {
+         return ParseCustomValue(GridLoss_CustomLots, level);
+      }
+      else // MULTIPLY
+      {
+         return InitialLotSize * MathPow(GridLoss_MultiplyFactor, level + 1);
+      }
+   }
+   else
+   {
+      if(GridProfit_LotMode == LOT_ADD)
+      {
+         return InitialLotSize + InitialLotSize * GridProfit_AddLotPerLevel * (level + 1);
+      }
+      else if(GridProfit_LotMode == LOT_CUSTOM)
+      {
+         return ParseCustomValue(GridProfit_CustomLots, level);
+      }
+      else // MULTIPLY
+      {
+         return InitialLotSize * MathPow(GridProfit_MultiplyFactor, level + 1);
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Parse semicolon-separated values                                   |
+//+------------------------------------------------------------------+
+double ParseCustomValue(string input, int index)
+{
+   string parts[];
+   int count = StringSplit(input, ';', parts);
+   if(count <= 0) return 0;
+
+   int idx = MathMin(index, count - 1);
+   return StringToDouble(parts[idx]);
+}
+
+//+------------------------------------------------------------------+
+//| Calculate accumulated profit from trade history                    |
+//+------------------------------------------------------------------+
+void CalculateAccumulatedProfit()
+{
+   g_accumulatedProfit = 0;
+
+   if(!HistorySelect(0, TimeCurrent())) return;
+
+   int totalDeals = HistoryDealsTotal();
+   for(int i = 0; i < totalDeals; i++)
+   {
+      ulong dealTicket = HistoryDealGetTicket(i);
+      if(dealTicket == 0) continue;
+      if(HistoryDealGetInteger(dealTicket, DEAL_MAGIC) != MagicNumber) continue;
+      if(HistoryDealGetString(dealTicket, DEAL_SYMBOL) != _Symbol) continue;
+
+      long dealEntry = HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
+      if(dealEntry == DEAL_ENTRY_OUT || dealEntry == DEAL_ENTRY_INOUT)
+      {
+         g_accumulatedProfit += HistoryDealGetDouble(dealTicket, DEAL_PROFIT) + HistoryDealGetDouble(dealTicket, DEAL_SWAP);
+      }
+   }
+   Print("Accumulated profit from history: ", g_accumulatedProfit);
+}
+
+//+------------------------------------------------------------------+
+//| Draw chart lines                                                   |
+//+------------------------------------------------------------------+
+void DrawLines()
+{
+   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+
+   double avgBuy = CalculateAveragePrice(POSITION_TYPE_BUY);
+   double avgSell = CalculateAveragePrice(POSITION_TYPE_SELL);
+
+   double avgPrice = 0;
+   if(avgBuy > 0 && avgSell > 0)
+   {
+      avgPrice = (avgBuy + avgSell) / 2.0;
+   }
+   else if(avgBuy > 0)
+   {
+      avgPrice = avgBuy;
+   }
+   else if(avgSell > 0)
+   {
+      avgPrice = avgSell;
+   }
+
+   if(avgPrice > 0 && ShowAverageLine)
+   {
+      DrawHLine("GM_AvgLine", avgPrice, AverageLineColor, STYLE_SOLID, 2);
+   }
+   else
+   {
+      ObjectDelete(0, "GM_AvgLine");
+   }
+
+   //--- TP Line
+   if(ShowTPLine && UseTP_Points)
+   {
+      if(avgBuy > 0)
+      {
+         DrawHLine("GM_TPLine", avgBuy + TP_Points * point, TPLineColor, STYLE_DASH, 1);
+      }
+      else if(avgSell > 0)
+      {
+         DrawHLine("GM_TPLine", avgSell - TP_Points * point, TPLineColor, STYLE_DASH, 1);
+      }
+      else
+      {
+         ObjectDelete(0, "GM_TPLine");
+      }
+   }
+   else
+   {
+      ObjectDelete(0, "GM_TPLine");
+   }
+
+   //--- SL Line (show trailing SL if active, otherwise show SL Points)
+   if(ShowSLLine)
+   {
+      bool drawn = false;
+
+      if(g_trailingActive_Buy && g_trailingSL_Buy > 0)
+      {
+         DrawHLine("GM_SLLine", g_trailingSL_Buy, SLLineColor, STYLE_DASH, 1);
+         drawn = true;
+      }
+      else if(g_trailingActive_Sell && g_trailingSL_Sell > 0)
+      {
+         DrawHLine("GM_SLLine", g_trailingSL_Sell, SLLineColor, STYLE_DASH, 1);
+         drawn = true;
+      }
+
+      if(!drawn && UseSL_Points)
+      {
+         if(avgBuy > 0)
+         {
+            DrawHLine("GM_SLLine", avgBuy - SL_Points * point, SLLineColor, STYLE_DASH, 1);
+         }
+         else if(avgSell > 0)
+         {
+            DrawHLine("GM_SLLine", avgSell + SL_Points * point, SLLineColor, STYLE_DASH, 1);
+         }
+         else
+         {
+            ObjectDelete(0, "GM_SLLine");
+         }
+      }
+      else if(!drawn)
+      {
+         ObjectDelete(0, "GM_SLLine");
+      }
+   }
+   else
+   {
+      ObjectDelete(0, "GM_SLLine");
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Draw horizontal line                                               |
+//+------------------------------------------------------------------+
+void DrawHLine(string name, double price, color clr, ENUM_LINE_STYLE style, int width)
+{
+   if(ObjectFind(0, name) < 0)
+   {
+      ObjectCreate(0, name, OBJ_HLINE, 0, 0, price);
+   }
+   ObjectSetDouble(0, name, OBJPROP_PRICE, price);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
+   ObjectSetInteger(0, name, OBJPROP_STYLE, style);
+   ObjectSetInteger(0, name, OBJPROP_WIDTH, width);
+   ObjectSetInteger(0, name, OBJPROP_BACK, true);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+}
+
+//+------------------------------------------------------------------+
+//| Display Dashboard                                                  |
+//+------------------------------------------------------------------+
+void DisplayDashboard()
+{
+   int y = DashboardY;
+   int lineHeight = 18;
+
+   double avgBuy = CalculateAveragePrice(POSITION_TYPE_BUY);
+   double avgSell = CalculateAveragePrice(POSITION_TYPE_SELL);
+   double plBuy = CalculateFloatingPL(POSITION_TYPE_BUY);
+   double plSell = CalculateFloatingPL(POSITION_TYPE_SELL);
+   double totalPL = plBuy + plSell;
+   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+   double dd = (balance > 0) ? (balance - equity) / balance * 100.0 : 0;
+
+   int buyCount = 0, sellCount = 0;
+   int glB = 0, glS = 0, gpB = 0, gpS = 0;
+   bool ib = false, is2 = false;
+   CountPositions(buyCount, sellCount, glB, glS, gpB, gpS, ib, is2);
+
+   int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+
+   string smaDir = "";
+   if(bufSMA[0] > 0)
+   {
+      double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+      smaDir = (bid > bufSMA[0]) ? "BUY" : "SELL";
+   }
+
+   DashLabel("GM_Dash_0", DashboardX, y, "=== Gold Miner EA v2.0 ===", DashboardColor); y += lineHeight;
+   DashLabel("GM_Dash_1", DashboardX, y, "SMA(" + IntegerToString(SMA_Period) + "): " + DoubleToString(bufSMA[0], digits) + " | Signal: " + smaDir, DashboardColor); y += lineHeight;
+   DashLabel("GM_Dash_2", DashboardX, y, "Buy: " + IntegerToString(buyCount) + " (GL:" + IntegerToString(glB) + " GP:" + IntegerToString(gpB) + ") | Sell: " + IntegerToString(sellCount) + " (GL:" + IntegerToString(glS) + " GP:" + IntegerToString(gpS) + ")", DashboardColor); y += lineHeight;
+
+   if(avgBuy > 0)
+   {
+      DashLabel("GM_Dash_3", DashboardX, y, "Avg Buy: " + DoubleToString(avgBuy, digits) + " | PL: $" + DoubleToString(plBuy, 2), DashboardColor);
+      y += lineHeight;
+   }
+   else
+   {
+      ObjectDelete(0, "GM_Dash_3");
+   }
+
+   if(avgSell > 0)
+   {
+      DashLabel("GM_Dash_4", DashboardX, y, "Avg Sell: " + DoubleToString(avgSell, digits) + " | PL: $" + DoubleToString(plSell, 2), DashboardColor);
+      y += lineHeight;
+   }
+   else
+   {
+      ObjectDelete(0, "GM_Dash_4");
+   }
+
+   DashLabel("GM_Dash_5", DashboardX, y, "Total PL: $" + DoubleToString(totalPL, 2) + " | DD: " + DoubleToString(dd, 1) + "%", DashboardColor); y += lineHeight;
+
+   if(EnableTrailingStop)
+   {
+      string trailStatus = "";
+      if(g_trailingActive_Buy) trailStatus += "Buy Trail: " + DoubleToString(g_trailingSL_Buy, digits) + " ";
+      if(g_trailingActive_Sell) trailStatus += "Sell Trail: " + DoubleToString(g_trailingSL_Sell, digits);
+      if(trailStatus == "") trailStatus = "Trailing: Waiting...";
+      DashLabel("GM_Dash_6", DashboardX, y, trailStatus, DashboardColor);
+      y += lineHeight;
+   }
+   else
+   {
+      ObjectDelete(0, "GM_Dash_6");
+   }
+
+   if(UseAccumulateClose)
+   {
+      DashLabel("GM_Dash_7", DashboardX, y, "Accumulated: $" + DoubleToString(g_accumulatedProfit + totalPL, 2) + " / $" + DoubleToString(AccumulateTarget, 2), DashboardColor);
+      y += lineHeight;
+   }
+   else
+   {
+      ObjectDelete(0, "GM_Dash_7");
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Dashboard label helper                                             |
+//+------------------------------------------------------------------+
+void DashLabel(string name, int x, int y, string text, color clr)
+{
+   if(ObjectFind(0, name) < 0)
+   {
+      ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
+   }
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
+   ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+   ObjectSetString(0, name, OBJPROP_TEXT, text);
+   ObjectSetString(0, name, OBJPROP_FONT, "Consolas");
+   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, 10);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
+}
 //+------------------------------------------------------------------+
