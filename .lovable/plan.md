@@ -1,162 +1,138 @@
 
 
-## ปรับปรุง Gold Miner EA v2.0 - Trailing Stop แบบค่าเฉลี่ย
+## แก้ไข Gold Miner EA v2.0 - ปัญหาไม่ออกออเดอร์ + เพิ่ม Per-Order Trailing Stop
 
-### สรุปการเปลี่ยนแปลงทั้งหมด
+### ปัญหาที่พบ
 
-เขียน `public/docs/mql5/Gold_Miner_EA.mq5` ใหม่ทั้งหมดตามแผนที่ approve ไปแล้ว (SMA entry + Grid system) พร้อมอัปเดต Trailing Stop logic ตามที่อธิบายเพิ่มเติม
+**1. Auto Re-Entry ไม่ทำงาน (สาเหตุหลักที่ไม่ออกออเดอร์)**
+- `EnableAutoReEntry` ถูกประกาศเป็น input แต่ไม่เคยถูกใช้ในโค้ดเลย
+- Entry logic (บรรทัด 302) ตรวจสอบ `totalPositions == 0` เท่านั้น ทำให้เมื่อปิด position ไปแล้ว ถ้าสัญญาณยังอยู่ฝั่งเดิม ก็ไม่เปิดออเดอร์ใหม่
 
-### สิ่งที่จะเปลี่ยน
+**2. Trailing Stop ปิดทุก order ในฝั่งเดียวกัน**
+- เมื่อ trailing SL โดน hit จะเรียก `CloseAllSide()` ปิดทั้ง initial + grid ทั้งหมดในฝั่งนั้น
+- ผู้ใช้ต้องการ per-order trailing ที่ปิดเฉพาะ order ที่โดน trailing แต่ละตัว
+
+**3. GridLoss_OnlyNewCandle ไม่ถูกตรวจสอบ**
+- ประกาศ input ไว้แต่ไม่มีโค้ดตรวจสอบใน `CheckGridLoss()` ทำให้ grid อาจไม่เปิดออเดอร์ในบางกรณี
+
+**4. Grid ไม่เปิดซ้ำหลัง trailing close**
+- `FindLastOrder()` ค้นหาเฉพาะ position ที่ยังเปิดอยู่ ถ้า trailing ปิดไปแล้วจะหา reference price ไม่เจอ ทำให้ grid ไม่ออกออเดอร์ซ้ำ
+
+### สิ่งที่จะแก้ไข
 
 | ไฟล์ | รายละเอียด |
 |------|-----------|
-| `public/docs/mql5/Gold_Miner_EA.mq5` | เขียนใหม่ทั้งหมด ~1200 บรรทัด |
+| `public/docs/mql5/Gold_Miner_EA.mq5` | แก้ไขทั้งหมด |
 
-### Trailing Stop Logic ใหม่ (ใช้ค่าเฉลี่ย)
+### การเปลี่ยนแปลงหลัก
 
-**หลักการ:**
-- คำนวณ "ราคาเฉลี่ยถ่วงน้ำหนัก" (Weighted Average Price) ของทุก position ที่เปิดอยู่ในฝั่งเดียวกัน (Initial + Grid Loss + Grid Profit)
-- ใช้ค่าเฉลี่ยนี้เป็นจุดอ้างอิงสำหรับ Breakeven และ Trailing Stop
+**1. เพิ่ม Per-Order Trailing Stop Mode (ใหม่)**
 
-**ตัวอย่างจากที่อธิบาย:**
-
+Input parameters ใหม่:
 ```text
-Initial Buy @ 2000$, Grid #1 Buy @ 2002$
-Average Price = (2000 + 2002) / 2 = 2001
-
-ตั้งค่า:
-- TrailingActivation = 100 points (ราคาต้องห่างจาก average 100 points ถึงจะเริ่ม trail)
-- BreakevenBuffer = 10 points (กันหน้าไม้อยู่เหนือ average 10 points)
-
-Flow:
-1. Average = 2001
-2. Breakeven level = 2001 + 10 points = 2001.10
-3. เมื่อราคาขึ้นถึง 2001 + 100 points = 2002.00 → เริ่ม trailing
-4. Trailing SL จะตามราคาโดยห่าง TrailingStep points
-5. Trailing SL จะไม่ต่ำกว่า Breakeven level (2001.10)
+=== Per-Order Trailing Stop ===
+EnablePerOrderTrailing    = true      // เปิด/ปิด per-order trailing
+PerOrder_Activation       = 100       // Points กำไรจาก open price ของแต่ละ order ก่อนเริ่ม trail  
+PerOrder_Step             = 50        // Trailing step (points จากราคาปัจจุบัน)
+PerOrder_BreakevenBuffer  = 10        // กันหน้าไม้ (points เหนือ/ใต้ open price)
 ```
 
-**สำหรับ SELL (กลับด้าน):**
+หลักการทำงาน:
+- ทุก order (initial, grid loss, grid profit) มี trailing stop แยกกัน
+- คำนวณจาก open price ของแต่ละ order ไม่ใช่ average price
+- เมื่อ order ถูกปิดโดย trailing ออเดอร์อื่นยังคงเปิดอยู่
+- Grid สามารถเปิดซ้ำที่จุดเดิมได้หากเงื่อนไขเข้า
 
+ตัวอย่าง SELL:
 ```text
-Average = 2001
-Breakeven level = 2001 - 10 points = 2000.90
-เริ่ม trail เมื่อราคาลงถึง 2001 - 100 points = 2000.00
-Trailing SL ตามราคาขึ้น ห่าง TrailingStep points
-SL จะไม่สูงกว่า Breakeven level
+SELL Initial @ 2000, Grid #1 @ 2002, Grid #2 @ 2004
+ราคาลงมา → #2 กำไร 100 points → เริ่ม trail #2
+ราคาดีดกลับ → #2 โดนปิดโดย trailing
+ราคาขึ้นไปอีก ถึงระยะ grid → เปิด #2 ใหม่อีกรอบ
 ```
 
-### Input Parameters สำหรับ Trailing Stop
+**2. แก้ Auto Re-Entry**
+- เมื่อ `justClosedPositions == true` และไม่มี position เหลือ
+- ตรวจสอบสัญญาณ SMA ว่ายังอยู่ฝั่งเดิมหรือไม่
+- ถ้ายังอยู่ → เปิด initial order ใหม่ทันที (ในแท่งเทียนถัดไปถ้า DontOpenSameCandle เปิดอยู่)
 
-```text
-=== Trailing Stop (Average-Based) ===
-EnableTrailingStop      = true       // เปิด/ปิดระบบ trailing
-TrailingActivation      = 100        // Points จาก average ที่ต้องถึงก่อนเริ่ม trail
-TrailingStep            = 50         // ระยะห่างของ trailing SL จากราคาปัจจุบัน
-BreakevenBuffer         = 10         // Points เหนือ/ใต้ average สำหรับกันหน้าไม้
-EnableBreakeven         = true       // เปิด/ปิด breakeven
-BreakevenActivation     = 50         // Points จาก average ที่ต้องถึงก่อน move SL ไป breakeven
-```
+**3. แก้ Grid Re-Entry หลัง trailing close**
+- เปลี่ยน `FindLastOrder()` ให้ค้นหาจาก position ที่เปิดอยู่ + ใช้ initial order price เป็น fallback
+- Grid count จาก open positions เท่านั้น (ถูกต้องอยู่แล้ว) ทำให้เมื่อ order ถูกปิด count จะลดลงและเปิดได้ใหม่
+- ถ้าไม่เจอ reference order ของฝั่งนั้น ให้ใช้ initial order price เป็น base
 
-### โครงสร้าง EA ทั้งหมด (v2.0)
+**4. แก้ GridLoss_OnlyNewCandle**
+- เพิ่มการตรวจสอบ `GridLoss_OnlyNewCandle` ใน `CheckGridLoss()`
+- เพิ่มการตรวจสอบ `GridProfit_OnlyNewCandle` ใน `CheckGridProfit()`
 
-**1. Entry - SMA 20 เส้นเดียว:**
-- Price > SMA = Buy, Price < SMA = Sell
-- Auto re-entry เมื่อปิด position แล้วสัญญาณยังอยู่
-- ป้องกันเปิดซ้ำในแท่งเทียนเดียวกัน
-
-**2. Grid Loss Side:**
-- Max 5 levels
-- Lot Mode: Add Lot / Custom Lot / Multiply
-- Gap Type: Fixed / Custom Distance / ATR-Based
-- Only in Signal / Only New Candle options
-
-**3. Grid Profit Side:**
-- Max 3 levels
-- แยกตั้งค่าอิสระจาก Loss Side
-
-**4. Take Profit:**
-- Fixed Dollar / Points from Average / % of Balance
-- Accumulate Close (target สะสม)
-- แสดงเส้น Average (Yellow) + TP Line (Lime)
-
-**5. Stop Loss:**
-- Fixed Dollar / Points from Average / % of Balance
-- แสดงเส้น SL (Red)
-
-**6. Trailing Stop (ใหม่ - ค่าเฉลี่ย):**
-- คำนวณ Weighted Average Price ของทุก position ในฝั่งเดียวกัน
-- Breakeven: ย้าย SL ไป average + buffer เมื่อราคาถึง activation
-- Trailing: เริ่ม trail เมื่อราคาห่างจาก average ถึง activation, ตาม step
-- SL ไม่ถอยหลัง (move in profit direction only)
+**5. ตรวจสอบ Accumulate Close**
+- Logic ปัจจุบันถูกต้อง: สะสมกำไรจาก history + floating PL เทียบกับ target
+- เพิ่ม: เมื่อถึง target ให้ปิดทุก order แต่ไม่หยุด EA (เปลี่ยนจาก `g_eaStopped = true` เป็น reset แล้วเริ่มรอบใหม่)
 
 ### รายละเอียดทางเทคนิค
 
-**ฟังก์ชัน CalculateAveragePrice():**
+**Per-Order Trailing Logic:**
 
 ```text
-CalculateAveragePrice(int side) {
-    totalLots = 0
-    totalWeightedPrice = 0
-    for each position with MagicNumber on same Symbol & side:
-        totalLots += volume
-        totalWeightedPrice += openPrice * volume
-    if totalLots > 0:
-        return totalWeightedPrice / totalLots
-    return 0
+ManagePerOrderTrailing() {
+    for each open position with MagicNumber:
+        openPrice = position.openPrice
+        ticket = position.ticket
+        
+        if BUY:
+            profitPoints = (Bid - openPrice) / point
+            beLevel = openPrice + PerOrder_BreakevenBuffer * point
+            
+            if profitPoints >= PerOrder_Activation:
+                trailSL = Bid - PerOrder_Step * point
+                trailSL = max(trailSL, beLevel)
+                if trailSL > currentSL or currentSL == 0:
+                    trade.PositionModify(ticket, trailSL, 0)
+                    
+        if SELL:
+            profitPoints = (openPrice - Ask) / point
+            beLevel = openPrice - PerOrder_BreakevenBuffer * point
+            
+            if profitPoints >= PerOrder_Activation:
+                trailSL = Ask + PerOrder_Step * point
+                trailSL = min(trailSL, beLevel)
+                if trailSL < currentSL or currentSL == 0:
+                    trade.PositionModify(ticket, trailSL, 0)
 }
 ```
 
-**ฟังก์ชัน ManageTrailingStop():**
+**เมื่อ per-order trailing เปิดใช้:**
+- ไม่ต้อง check internal SL hit เพราะ broker จัดการปิดให้อัตโนมัติ
+- ไม่ใช้ `CloseAllSide()` - broker ปิดเฉพาะ order ที่ SL ถูก hit
+- Grid count จะลดลงอัตโนมัติเมื่อ position ถูกปิด → เปิดซ้ำได้
 
-```text
-ManageTrailingStop() {
-    avgBuy = CalculateAveragePrice(BUY)
-    avgSell = CalculateAveragePrice(SELL)
+**แก้ FindLastOrder ให้ใช้ reference จากฝั่ง grid ที่ถูกต้อง:**
+- Grid Loss: วัดจาก initial order หรือ grid loss ตัวล่าสุดที่ยังเปิดอยู่
+- Grid Profit: วัดจาก initial order หรือ grid profit ตัวล่าสุดที่ยังเปิดอยู่
+- ถ้าไม่มี grid order เหลือ → ใช้ initial order price เป็น reference (ทำงานได้ถูกอยู่แล้ว)
 
-    if avgBuy > 0 && EnableTrailingStop:
-        // BUY side
-        beLevel = avgBuy + BreakevenBuffer * point
-        trailActivation = avgBuy + TrailingActivation * point
-
-        if Bid >= trailActivation:
-            trailSL = Bid - TrailingStep * point
-            trailSL = max(trailSL, beLevel)  // ไม่ต่ำกว่า breakeven
-            // Apply to all BUY positions if trailSL > current SL
-
-        else if EnableBreakeven && Bid >= avgBuy + BreakevenActivation * point:
-            // Move SL to beLevel for all BUY positions
-
-    // Mirror logic for SELL side
-}
-```
-
-**OnTick Flow:**
+**OnTick Flow ใหม่:**
 
 ```text
 OnTick()
-  → ManageTPSL() (ทุก tick - check TP/SL conditions)
-  → ManageTrailingStop() (ทุก tick)
-  → CheckDrawdownExit()
-  → ถ้า new bar:
-     → CopyBuffer SMA + ATR
-     → CheckGridLoss()
-     → CheckGridProfit()
-     → ถ้าไม่มี position:
-        → Price > SMA = Buy
-        → Price < SMA = Sell
-     → ถ้า EnableAutoReEntry + เพิ่งปิด + สัญญาณยังอยู่ = เปิดใหม่
-  → DrawLines() (Average, TP, SL)
-  → DisplayDashboard()
+  -> ManageTPSL() (basket TP/SL ทุก tick)
+  -> if EnablePerOrderTrailing:
+       ManagePerOrderTrailing() (per-order trailing ทุก tick)
+  -> else if EnableTrailingStop:
+       ManageTrailingStop() (average-based trailing ทุก tick)
+  -> CheckDrawdownExit()
+  -> if new bar:
+     -> CopyBuffer SMA + ATR
+     -> Count positions
+     -> CheckGridLoss() (+ OnlyNewCandle check)
+     -> CheckGridProfit() (+ OnlyNewCandle check)
+     -> if no positions && (EnableAutoReEntry || first time):
+        -> Price > SMA = Buy
+        -> Price < SMA = Sell
+  -> DrawLines() + Dashboard
 ```
 
-**Chart Lines ที่จะวาด:**
-- เส้น Average Price (Yellow) - คำนวณจาก weighted average ของทุก position
-- เส้น TP (Lime) - average +/- TP points
-- เส้น SL (Red) - average +/- SL points / trailing SL level
-- เส้น SMA (DodgerBlue) - indicator value
-
-**Indicator Handles:**
-- `iMA` (SMA) - สำหรับ entry signal
-- `iATR` - สำหรับ grid distance (ATR mode เท่านั้น)
+**Accumulate Close แก้ไข:**
+- เมื่อถึง target: ปิดทุก order → reset `g_accumulatedProfit = 0` → เริ่มรอบใหม่
+- ไม่ set `g_eaStopped = true` เพื่อให้ EA ทำงานต่อได้
 
