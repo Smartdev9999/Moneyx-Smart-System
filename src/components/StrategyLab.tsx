@@ -268,6 +268,9 @@ const StrategyLab = () => {
   const [newMagicNumber, setNewMagicNumber] = useState('0');
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({});
   const [editablePrompt, setEditablePrompt] = useState('');
+  const [editableCode, setEditableCode] = useState('');
+  const [isCodeEditing, setIsCodeEditing] = useState(false);
+  const [savingCode, setSavingCode] = useState(false);
   const [copied, setCopied] = useState(false);
 
   const fetchSessions = useCallback(async () => {
@@ -309,6 +312,8 @@ const StrategyLab = () => {
     if (selectedSession) {
       fetchOrders(selectedSession.id);
       setEditablePrompt(selectedSession.strategy_prompt || '');
+      setEditableCode(selectedSession.generated_ea_code || '');
+      setIsCodeEditing(false);
     }
   }, [selectedSession, fetchOrders]);
 
@@ -430,6 +435,8 @@ const StrategyLab = () => {
       if (updated) {
         setSelectedSession(updated as any);
         setEditablePrompt((updated as any).strategy_prompt || '');
+        setEditableCode((updated as any).generated_ea_code || '');
+        if (action === 'generate_ea') setIsCodeEditing(false);
       }
       fetchSessions();
     } catch (err: any) {
@@ -455,9 +462,29 @@ const StrategyLab = () => {
     }
   };
 
+  const handleSaveCode = async () => {
+    if (!selectedSession || !editableCode.trim()) return;
+    setSavingCode(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('analyze-ea-strategy', {
+        body: { session_id: selectedSession.id, action: 'update_code', code: editableCode },
+      });
+      if (error) throw error;
+      if (data?.error) throw new Error(data.error);
+      toast({ title: 'บันทึก Code สำเร็จ' });
+      setSelectedSession({ ...selectedSession, generated_ea_code: editableCode, status: 'generated' });
+      setIsCodeEditing(false);
+    } catch (err: any) {
+      toast({ title: 'Error', description: err.message, variant: 'destructive' });
+    } finally {
+      setSavingCode(false);
+    }
+  };
+
   const handleDownloadEA = () => {
-    if (!selectedSession?.generated_ea_code) return;
-    const blob = new Blob([selectedSession.generated_ea_code], { type: 'text/plain' });
+    const codeToDownload = editableCode || selectedSession?.generated_ea_code;
+    if (!codeToDownload || !selectedSession) return;
+    const blob = new Blob([codeToDownload], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -782,22 +809,62 @@ const StrategyLab = () => {
                           {expandedSections['code'] ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
                           <FileCode className="w-4 h-4" />
                           Generated EA Code
+                          <Badge variant="outline" className="text-xs ml-2">แก้ไขได้</Badge>
                         </span>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={(e) => { e.stopPropagation(); handleCopyCode(selectedSession.generated_ea_code!); }}
-                        >
-                          {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-                        </Button>
+                        <div className="flex items-center gap-1">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={(e) => { e.stopPropagation(); handleCopyCode(editableCode || selectedSession.generated_ea_code!); }}
+                          >
+                            {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                          </Button>
+                        </div>
                       </CardTitle>
                     </CardHeader>
                   </CollapsibleTrigger>
                   <CollapsibleContent>
-                    <CardContent>
-                      <pre className="whitespace-pre-wrap text-xs leading-relaxed font-mono bg-muted/30 p-4 rounded-lg max-h-[500px] overflow-y-auto">
-                        {selectedSession.generated_ea_code}
-                      </pre>
+                    <CardContent className="space-y-3">
+                      {isCodeEditing ? (
+                        <Textarea
+                          value={editableCode}
+                          onChange={(e) => setEditableCode(e.target.value)}
+                          className="min-h-[500px] font-mono text-xs leading-relaxed"
+                        />
+                      ) : (
+                        <pre
+                          className="whitespace-pre-wrap text-xs leading-relaxed font-mono bg-muted/30 p-4 rounded-lg max-h-[500px] overflow-y-auto cursor-pointer hover:bg-muted/50 transition-colors"
+                          onClick={() => setIsCodeEditing(true)}
+                          title="คลิกเพื่อแก้ไข"
+                        >
+                          {editableCode || selectedSession.generated_ea_code}
+                        </pre>
+                      )}
+                      <div className="flex justify-between items-center">
+                        <p className="text-xs text-muted-foreground">
+                          {isCodeEditing ? '📝 กำลังแก้ไข — คลิก "บันทึก Code" เพื่อบันทึก' : '💡 คลิกที่ code เพื่อแก้ไข'}
+                        </p>
+                        <div className="flex gap-2">
+                          {isCodeEditing && (
+                            <>
+                              <Button variant="outline" size="sm" onClick={() => {
+                                setEditableCode(selectedSession.generated_ea_code || '');
+                                setIsCodeEditing(false);
+                              }}>
+                                ยกเลิก
+                              </Button>
+                              <Button size="sm" onClick={handleSaveCode} disabled={savingCode} className="gap-2">
+                                {savingCode ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+                                บันทึก Code
+                              </Button>
+                            </>
+                          )}
+                          <Button onClick={handleDownloadEA} variant="outline" size="sm" className="gap-2">
+                            <Download className="w-3 h-3" />
+                            Download .mq5
+                          </Button>
+                        </div>
+                      </div>
                     </CardContent>
                   </CollapsibleContent>
                 </Card>

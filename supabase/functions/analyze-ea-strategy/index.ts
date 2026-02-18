@@ -12,7 +12,8 @@ serve(async (req) => {
   }
 
   try {
-    const { session_id, action } = await req.json();
+    const body = await req.json();
+    const { session_id, action, code } = body;
     
     if (!session_id || !action) {
       return new Response(JSON.stringify({ error: "session_id and action required" }), {
@@ -309,8 +310,25 @@ Output ONLY the MQL5 code, no explanations. Start with //+----------------------
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
 
+    } else if (action === "update_code") {
+      if (!code) {
+        await supabase.from("tracked_ea_sessions").update({ status: session.status === "analyzing" ? "generated" : session.status }).eq("id", session_id);
+        return new Response(JSON.stringify({ error: "code is required" }), {
+          status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      await supabase.from("tracked_ea_sessions").update({
+        generated_ea_code: code,
+        status: "generated",
+      }).eq("id", session_id);
+
+      return new Response(JSON.stringify({ success: true }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+
     } else {
-      return new Response(JSON.stringify({ error: "Invalid action. Use: summarize, generate_prompt, generate_ea" }), {
+      return new Response(JSON.stringify({ error: "Invalid action. Use: summarize, generate_prompt, generate_ea, update_code" }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
