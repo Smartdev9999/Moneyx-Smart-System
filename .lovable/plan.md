@@ -1,102 +1,162 @@
 
 
-## สร้าง EA ใหม่: Gold Miner EA
+## ปรับปรุง Gold Miner EA v2.0 - Trailing Stop แบบค่าเฉลี่ย
 
-### แนวคิด
+### สรุปการเปลี่ยนแปลงทั้งหมด
 
-สร้างไฟล์ `public/docs/mql5/Gold_Miner_EA.mq5` ที่เป็น EA สมบูรณ์พร้อม compile ตาม specification ที่ให้มา โดยเป็น Hybrid strategy สำหรับ XAUUSD ที่รวม Scalping + Trend Following + Counter-Trend + Grid/Martingale Recovery
+เขียน `public/docs/mql5/Gold_Miner_EA.mq5` ใหม่ทั้งหมดตามแผนที่ approve ไปแล้ว (SMA entry + Grid system) พร้อมอัปเดต Trailing Stop logic ตามที่อธิบายเพิ่มเติม
 
-### สิ่งที่จะสร้าง
+### สิ่งที่จะเปลี่ยน
 
 | ไฟล์ | รายละเอียด |
 |------|-----------|
-| `public/docs/mql5/Gold_Miner_EA.mq5` | ไฟล์ EA หลักพร้อม compile |
+| `public/docs/mql5/Gold_Miner_EA.mq5` | เขียนใหม่ทั้งหมด ~1200 บรรทัด |
 
-### โครงสร้าง EA
+### Trailing Stop Logic ใหม่ (ใช้ค่าเฉลี่ย)
 
-EA จะถูกเขียนเป็นไฟล์เดียวที่รวมทุกอย่าง ตามรูปแบบของ project:
+**หลักการ:**
+- คำนวณ "ราคาเฉลี่ยถ่วงน้ำหนัก" (Weighted Average Price) ของทุก position ที่เปิดอยู่ในฝั่งเดียวกัน (Initial + Grid Loss + Grid Profit)
+- ใช้ค่าเฉลี่ยนี้เป็นจุดอ้างอิงสำหรับ Breakeven และ Trailing Stop
 
-1. **Header + Properties** - ชื่อ, version, copyright
-2. **Includes** - `<Trade/Trade.mqh>`
-3. **Custom Enum** - `ENUM_LOT_MODE` (FIXED_LOT, RISK_PERCENTAGE, RECOVERY_MARTINGALE)
-4. **Input Parameters** ทั้งหมดตาม spec:
-   - General Settings (MagicNumber, MaxSlippage, MaxOpenOrders, MaxDrawdown)
-   - Trading Time Filters (UTC hours/days)
-   - Lot Sizing & Money Management (3 modes + Recovery settings)
-   - Indicator Settings (RSI, EMA, ATR, MACD, Bollinger Bands)
-   - Entry Logic Thresholds
-   - Exit Logic Thresholds (Scalp, Breakeven, Trailing, MaxHolding)
-   - Grid/Recovery Settings
-5. **Global Variables**
-   - Indicator handles (int) สร้างใน OnInit
-   - Buffers (double arrays) สำหรับ CopyBuffer
-   - Order tracking structures
-6. **OnInit()** - สร้าง indicator handles ทั้งหมด
-7. **OnDeinit()** - ปล่อย handles
-8. **OnTick()** - Main logic loop
-9. **Helper Functions:**
-   - `CalculateIndicators()` - CopyBuffer ทุก indicator
-   - `CheckBuyEntry()` / `CheckSellEntry()` - ตรวจสอบ entry conditions
-   - `CalculateLotSize()` - 3 modes
-   - `ManageOpenPositions()` - Breakeven, Trailing, Time-based exit
-   - `CheckDrawdownExit()` - Emergency close all
-   - `ManageHedging()` - จัดการ opposing positions
-   - `ManageGridRecovery()` - Grid/Martingale logic
+**ตัวอย่างจากที่อธิบาย:**
 
-### หลักการสำคัญที่จะปฏิบัติตาม
+```text
+Initial Buy @ 2000$, Grid #1 Buy @ 2002$
+Average Price = (2000 + 2002) / 2 = 2001
 
-- **Indicator handles** สร้างใน OnInit เท่านั้น ไม่สร้างใน OnTick
-- **CopyBuffer** ใช้ดึงค่า indicator ทุกครั้งใน OnTick
-- **ArraySetAsSeries** ก่อน CopyBuffer เสมอ
-- **ไม่ใช้ switch/case** ที่ประกาศตัวแปรข้าม case โดยไม่มี braces
-- **CTrade class** สำหรับ order operations
-- **Internal SL/TP** - ไม่ set SL/TP ตอน OrderSend แต่จัดการเองใน OnTick
-- **ไม่ใช้ goto** ใช้ boolean flags แทน
+ตั้งค่า:
+- TrailingActivation = 100 points (ราคาต้องห่างจาก average 100 points ถึงจะเริ่ม trail)
+- BreakevenBuffer = 10 points (กันหน้าไม้อยู่เหนือ average 10 points)
+
+Flow:
+1. Average = 2001
+2. Breakeven level = 2001 + 10 points = 2001.10
+3. เมื่อราคาขึ้นถึง 2001 + 100 points = 2002.00 → เริ่ม trailing
+4. Trailing SL จะตามราคาโดยห่าง TrailingStep points
+5. Trailing SL จะไม่ต่ำกว่า Breakeven level (2001.10)
+```
+
+**สำหรับ SELL (กลับด้าน):**
+
+```text
+Average = 2001
+Breakeven level = 2001 - 10 points = 2000.90
+เริ่ม trail เมื่อราคาลงถึง 2001 - 100 points = 2000.00
+Trailing SL ตามราคาขึ้น ห่าง TrailingStep points
+SL จะไม่สูงกว่า Breakeven level
+```
+
+### Input Parameters สำหรับ Trailing Stop
+
+```text
+=== Trailing Stop (Average-Based) ===
+EnableTrailingStop      = true       // เปิด/ปิดระบบ trailing
+TrailingActivation      = 100        // Points จาก average ที่ต้องถึงก่อนเริ่ม trail
+TrailingStep            = 50         // ระยะห่างของ trailing SL จากราคาปัจจุบัน
+BreakevenBuffer         = 10         // Points เหนือ/ใต้ average สำหรับกันหน้าไม้
+EnableBreakeven         = true       // เปิด/ปิด breakeven
+BreakevenActivation     = 50         // Points จาก average ที่ต้องถึงก่อน move SL ไป breakeven
+```
+
+### โครงสร้าง EA ทั้งหมด (v2.0)
+
+**1. Entry - SMA 20 เส้นเดียว:**
+- Price > SMA = Buy, Price < SMA = Sell
+- Auto re-entry เมื่อปิด position แล้วสัญญาณยังอยู่
+- ป้องกันเปิดซ้ำในแท่งเทียนเดียวกัน
+
+**2. Grid Loss Side:**
+- Max 5 levels
+- Lot Mode: Add Lot / Custom Lot / Multiply
+- Gap Type: Fixed / Custom Distance / ATR-Based
+- Only in Signal / Only New Candle options
+
+**3. Grid Profit Side:**
+- Max 3 levels
+- แยกตั้งค่าอิสระจาก Loss Side
+
+**4. Take Profit:**
+- Fixed Dollar / Points from Average / % of Balance
+- Accumulate Close (target สะสม)
+- แสดงเส้น Average (Yellow) + TP Line (Lime)
+
+**5. Stop Loss:**
+- Fixed Dollar / Points from Average / % of Balance
+- แสดงเส้น SL (Red)
+
+**6. Trailing Stop (ใหม่ - ค่าเฉลี่ย):**
+- คำนวณ Weighted Average Price ของทุก position ในฝั่งเดียวกัน
+- Breakeven: ย้าย SL ไป average + buffer เมื่อราคาถึง activation
+- Trailing: เริ่ม trail เมื่อราคาห่างจาก average ถึง activation, ตาม step
+- SL ไม่ถอยหลัง (move in profit direction only)
 
 ### รายละเอียดทางเทคนิค
 
-**Entry Logic Flow:**
+**ฟังก์ชัน CalculateAveragePrice():**
+
+```text
+CalculateAveragePrice(int side) {
+    totalLots = 0
+    totalWeightedPrice = 0
+    for each position with MagicNumber on same Symbol & side:
+        totalLots += volume
+        totalWeightedPrice += openPrice * volume
+    if totalLots > 0:
+        return totalWeightedPrice / totalLots
+    return 0
+}
+```
+
+**ฟังก์ชัน ManageTrailingStop():**
+
+```text
+ManageTrailingStop() {
+    avgBuy = CalculateAveragePrice(BUY)
+    avgSell = CalculateAveragePrice(SELL)
+
+    if avgBuy > 0 && EnableTrailingStop:
+        // BUY side
+        beLevel = avgBuy + BreakevenBuffer * point
+        trailActivation = avgBuy + TrailingActivation * point
+
+        if Bid >= trailActivation:
+            trailSL = Bid - TrailingStep * point
+            trailSL = max(trailSL, beLevel)  // ไม่ต่ำกว่า breakeven
+            // Apply to all BUY positions if trailSL > current SL
+
+        else if EnableBreakeven && Bid >= avgBuy + BreakevenActivation * point:
+            // Move SL to beLevel for all BUY positions
+
+    // Mirror logic for SELL side
+}
+```
+
+**OnTick Flow:**
 
 ```text
 OnTick()
-  → ตรวจสอบ new bar (ไม่คำนวณทุก tick)
-  → CalculateIndicators()
-  → CheckTimeFilter()
+  → ManageTPSL() (ทุก tick - check TP/SL conditions)
+  → ManageTrailingStop() (ทุก tick)
   → CheckDrawdownExit()
-  → ManageOpenPositions() (Breakeven, Trailing, Time exit, Max loss)
-  → ManageHedging()
-  → CheckBuyEntry() → OpenBuy with CalculateLotSize()
-  → CheckSellEntry() → OpenSell with CalculateLotSize()
-  → ManageGridRecovery()
+  → ถ้า new bar:
+     → CopyBuffer SMA + ATR
+     → CheckGridLoss()
+     → CheckGridProfit()
+     → ถ้าไม่มี position:
+        → Price > SMA = Buy
+        → Price < SMA = Sell
+     → ถ้า EnableAutoReEntry + เพิ่งปิด + สัญญาณยังอยู่ = เปิดใหม่
+  → DrawLines() (Average, TP, SL)
+  → DisplayDashboard()
 ```
 
-**Order Tracking Structure:**
+**Chart Lines ที่จะวาด:**
+- เส้น Average Price (Yellow) - คำนวณจาก weighted average ของทุก position
+- เส้น TP (Lime) - average +/- TP points
+- เส้น SL (Red) - average +/- SL points / trailing SL level
+- เส้น SMA (DodgerBlue) - indicator value
 
-```text
-struct OrderInfo {
-    ulong ticket;
-    int type;           // 0=Buy, 1=Sell
-    double entryPrice;
-    double internalSL;
-    double internalTP;
-    datetime openTime;
-    double lotSize;
-    bool trailingActive;
-    int recoveryStep;
-};
-```
-
-**Lot Sizing - Recovery/Martingale:**
-- นับจำนวน consecutive losses ในทิศทางเดียวกัน
-- `recovery_lot = base_lot * pow(RecoveryMultiplier, consecutive_losses)`
-- จำกัดไม่เกิน `RecoveryMaxSteps`
-- จำกัดไม่เกิน `SymbolInfoDouble(SYMBOL_VOLUME_MAX)`
-
-**Indicator Handles ที่จะสร้าง:**
-- `iRSI(_Symbol, PERIOD_M15, RSIPeriod, RSIAppliedPrice)`
-- `iMA(_Symbol, PERIOD_M15, EMA_FastPeriod, 0, MODE_EMA, EMAAppliedPrice)`
-- `iMA(_Symbol, PERIOD_M15, EMA_SlowPeriod, 0, MODE_EMA, EMAAppliedPrice)`
-- `iATR(_Symbol, PERIOD_M15, ATRPeriod)`
-- `iMACD(_Symbol, PERIOD_M15, MACDFastPeriod, MACDSlowPeriod, MACDSignalPeriod, MACDAppliedPrice)`
-- `iBands(_Symbol, PERIOD_M15, BBPeriod, 0, BBDeviation, BBAppliedPrice)`
+**Indicator Handles:**
+- `iMA` (SMA) - สำหรับ entry signal
+- `iATR` - สำหรับ grid distance (ATR mode เท่านั้น)
 
