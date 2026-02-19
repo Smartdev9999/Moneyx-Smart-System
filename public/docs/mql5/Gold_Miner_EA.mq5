@@ -32,16 +32,24 @@ enum ENUM_SL_ACTION
    SL_CLOSE_ALL_STOP  = 1   // Close All & Stop EA
 };
 
+enum ENUM_TRADE_MODE
+{
+   TRADE_BUY_ONLY  = 0,  // Buy Only
+   TRADE_SELL_ONLY = 1,  // Sell Only
+   TRADE_BOTH      = 2   // Buy and Sell
+};
+
 //+------------------------------------------------------------------+
 //| Input Parameters                                                  |
 //+------------------------------------------------------------------+
 
 //--- General Settings
 input group "=== General Settings ==="
-input int      MagicNumber        = 202500;    // Magic Number
-input int      MaxSlippage        = 30;        // Max Slippage (points)
-input int      MaxOpenOrders      = 20;        // Max Open Orders
-input double   MaxDrawdownPct     = 30.0;      // Max Drawdown % (emergency close)
+input int              MagicNumber        = 202500;    // Magic Number
+input int              MaxSlippage        = 30;        // Max Slippage (points)
+input int              MaxOpenOrders      = 20;        // Max Open Orders
+input double           MaxDrawdownPct     = 30.0;      // Max Drawdown % (emergency close)
+input ENUM_TRADE_MODE  TradingMode        = TRADE_BOTH; // Trading Mode (Buy/Sell/Both)
 
 //--- SMA Indicator
 input group "=== SMA Indicator ==="
@@ -125,12 +133,15 @@ input int      BreakevenBuffer      = 10;      // Breakeven Buffer (points above
 input bool     EnableBreakeven      = true;    // Enable Breakeven
 input int      BreakevenActivation  = 50;      // Breakeven Activation (points from average)
 
-//--- Per-Order Trailing Stop (NEW)
+//--- Per-Order Trailing Stop (NEW - Standard Breakeven + Trailing)
 input group "=== Per-Order Trailing Stop ==="
 input bool     EnablePerOrderTrailing    = true;     // Enable Per-Order Trailing
-input int      PerOrder_Activation       = 100;      // Activation (points profit from open price)
-input int      PerOrder_Step             = 50;       // Trailing Step (points from current price)
-input int      PerOrder_BreakevenBuffer  = 10;       // Breakeven Buffer (points above/below open)
+input bool     InpEnableBreakeven        = true;     // Enable Breakeven
+input int      InpBreakevenTarget        = 200;      // Breakeven Target (profit points to activate)
+input int      InpBreakevenOffset        = 5;        // Breakeven Offset (points above/below open)
+input bool     InpEnableTrailing         = true;     // Enable Trailing
+input int      InpTrailingStop           = 200;      // Trailing Distance (points from current price)
+input int      InpTrailingStep           = 10;       // Trailing Step (min SL movement in points)
 
 //--- Dashboard
 input group "=== Dashboard ==="
@@ -371,7 +382,7 @@ void OnTick()
 
             if(shouldEnter)
             {
-               if(currentPrice > smaValue)
+               if(currentPrice > smaValue && (TradingMode == TRADE_BUY_ONLY || TradingMode == TRADE_BOTH))
                {
                   if(OpenOrder(ORDER_TYPE_BUY, InitialLotSize, "GM_INIT"))
                   {
@@ -381,7 +392,7 @@ void OnTick()
                      ResetTrailingState();
                   }
                }
-               else if(currentPrice < smaValue)
+               else if(currentPrice < smaValue && (TradingMode == TRADE_SELL_ONLY || TradingMode == TRADE_BOTH))
                {
                   if(OpenOrder(ORDER_TYPE_SELL, InitialLotSize, "GM_INIT"))
                   {
@@ -730,11 +741,10 @@ void ManageTPSL()
 }
 
 //+------------------------------------------------------------------+
-//| Manage Per-Order Trailing Stop                                     |
-//| Each order trails independently based on its own open price        |
-//| Logic: When profit >= Activation, set SL at breakeven (open+buffer)|
-//|        Then for every Step points price moves, SL moves with it    |
-//|        SL never moves backwards (only in profit direction)         |
+//| Manage Per-Order Trailing Stop (Standard Breakeven + Trailing)      |
+//| Step 1: Breakeven - lock in small profit when target reached        |
+//| Step 2: Trailing - SL follows price at fixed distance with step     |
+//| SL never moves backwards. Broker closes order when SL is hit.       |
 //+------------------------------------------------------------------+
 void ManagePerOrderTrailing()
 {
@@ -743,7 +753,7 @@ void ManagePerOrderTrailing()
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
    int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
    int stopLevel = (int)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
-   if(stopLevel < 1) stopLevel = 1; // safety minimum
+   if(stopLevel < 1) stopLevel = 1;
 
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
@@ -760,31 +770,52 @@ void ManagePerOrderTrailing()
       if(posType == POSITION_TYPE_BUY)
       {
          double profitPoints = (bid - openPrice) / point;
-         double beLevel = NormalizeDouble(openPrice + PerOrder_BreakevenBuffer * point, digits);
 
-         if(profitPoints >= PerOrder_Activation)
+         // ===== STEP 1: Breakeven =====
+         if(InpEnableBreakeven && profitPoints >= InpBreakevenTarget)
          {
-            //--- Trail SL: distance Step points from current bid
-            double trailSL = NormalizeDouble(bid - PerOrder_Step * point, digits);
-
-            //--- Never below breakeven level
-            trailSL = MathMax(trailSL, beLevel);
-
-            //--- Broker stop level check: SL must be at least stopLevel points from bid
-            double minAllowedSL = NormalizeDouble(bid - stopLevel * point, digits);
-            if(trailSL > minAllowedSL)
-               trailSL = minAllowedSL;
-
-            //--- SL must never move backwards (only up for BUY)
-            if(trailSL > currentSL || currentSL == 0)
+            double beLevel = NormalizeDouble(openPrice + InpBreakevenOffset * point, digits);
+            if(currentSL == 0 || currentSL < beLevel)
             {
-               if(trade.PositionModify(ticket, trailSL, tp))
+               // Broker stop level check
+               double minSL = NormalizeDouble(bid - stopLevel * point, digits);
+               double finalBE = MathMin(beLevel, minSL);
+               if(finalBE > currentSL || currentSL == 0)
                {
-                  Print("PER-ORDER TRAIL BUY #", ticket, 
-                        " Open=", openPrice, 
-                        " Bid=", bid, 
+                  if(trade.PositionModify(ticket, finalBE, tp))
+                  {
+                     Print("BREAKEVEN BUY #", ticket,
+                           " Open=", openPrice,
+                           " SL: ", currentSL, " -> ", finalBE);
+                     currentSL = finalBE; // update for trailing check below
+                  }
+               }
+            }
+         }
+
+         // ===== STEP 2: Trailing =====
+         if(InpEnableTrailing && profitPoints >= InpTrailingStop)
+         {
+            double newSL = NormalizeDouble(bid - InpTrailingStop * point, digits);
+
+            // Never below breakeven level
+            double beFloor = NormalizeDouble(openPrice + InpBreakevenOffset * point, digits);
+            if(newSL < beFloor) newSL = beFloor;
+
+            // Broker stop level check
+            double minSL = NormalizeDouble(bid - stopLevel * point, digits);
+            if(newSL > minSL) newSL = minSL;
+
+            // Must move at least TrailingStep points to modify
+            if(currentSL == 0 || newSL > currentSL + InpTrailingStep * point)
+            {
+               if(trade.PositionModify(ticket, newSL, tp))
+               {
+                  Print("TRAIL BUY #", ticket,
+                        " Open=", openPrice,
+                        " Bid=", bid,
                         " Profit=", DoubleToString(profitPoints, 0), "pts",
-                        " SL: ", currentSL, " -> ", trailSL);
+                        " SL: ", currentSL, " -> ", newSL);
                }
             }
          }
@@ -792,31 +823,52 @@ void ManagePerOrderTrailing()
       else if(posType == POSITION_TYPE_SELL)
       {
          double profitPoints = (openPrice - ask) / point;
-         double beLevel = NormalizeDouble(openPrice - PerOrder_BreakevenBuffer * point, digits);
 
-         if(profitPoints >= PerOrder_Activation)
+         // ===== STEP 1: Breakeven =====
+         if(InpEnableBreakeven && profitPoints >= InpBreakevenTarget)
          {
-            //--- Trail SL: distance Step points from current ask
-            double trailSL = NormalizeDouble(ask + PerOrder_Step * point, digits);
-
-            //--- Never above breakeven level (for SELL, BE is below open)
-            trailSL = MathMin(trailSL, beLevel);
-
-            //--- Broker stop level check: SL must be at least stopLevel points from ask
-            double maxAllowedSL = NormalizeDouble(ask + stopLevel * point, digits);
-            if(trailSL < maxAllowedSL)
-               trailSL = maxAllowedSL;
-
-            //--- SL must never move backwards (only down for SELL)
-            if(currentSL == 0 || trailSL < currentSL)
+            double beLevel = NormalizeDouble(openPrice - InpBreakevenOffset * point, digits);
+            if(currentSL == 0 || currentSL > beLevel)
             {
-               if(trade.PositionModify(ticket, trailSL, tp))
+               // Broker stop level check
+               double maxSL = NormalizeDouble(ask + stopLevel * point, digits);
+               double finalBE = MathMax(beLevel, maxSL);
+               if(currentSL == 0 || finalBE < currentSL)
                {
-                  Print("PER-ORDER TRAIL SELL #", ticket, 
-                        " Open=", openPrice, 
-                        " Ask=", ask, 
+                  if(trade.PositionModify(ticket, finalBE, tp))
+                  {
+                     Print("BREAKEVEN SELL #", ticket,
+                           " Open=", openPrice,
+                           " SL: ", currentSL, " -> ", finalBE);
+                     currentSL = finalBE;
+                  }
+               }
+            }
+         }
+
+         // ===== STEP 2: Trailing =====
+         if(InpEnableTrailing && profitPoints >= InpTrailingStop)
+         {
+            double newSL = NormalizeDouble(ask + InpTrailingStop * point, digits);
+
+            // Never above breakeven level (for SELL, BE is below open)
+            double beCeiling = NormalizeDouble(openPrice - InpBreakevenOffset * point, digits);
+            if(newSL > beCeiling) newSL = beCeiling;
+
+            // Broker stop level check
+            double maxSL = NormalizeDouble(ask + stopLevel * point, digits);
+            if(newSL < maxSL) newSL = maxSL;
+
+            // Must move at least TrailingStep points down to modify
+            if(currentSL == 0 || newSL < currentSL - InpTrailingStep * point)
+            {
+               if(trade.PositionModify(ticket, newSL, tp))
+               {
+                  Print("TRAIL SELL #", ticket,
+                        " Open=", openPrice,
+                        " Ask=", ask,
                         " Profit=", DoubleToString(profitPoints, 0), "pts",
-                        " SL: ", currentSL, " -> ", trailSL);
+                        " SL: ", currentSL, " -> ", newSL);
                }
             }
          }
@@ -1455,7 +1507,8 @@ void DisplayDashboard()
       smaDir = (bidPrice > bufSMA[0]) ? "BUY" : "SELL";
    }
 
-   DashLabel("GM_Dash_0", DashboardX, y, "=== Gold Miner EA v2.1 ===", DashboardColor); y += lineHeight;
+   string tradeModeStr = (TradingMode == TRADE_BUY_ONLY) ? "Buy Only" : (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Buy & Sell";
+   DashLabel("GM_Dash_0", DashboardX, y, "=== Gold Miner EA v2.1 === | Mode: " + tradeModeStr, DashboardColor); y += lineHeight;
    DashLabel("GM_Dash_1", DashboardX, y, "SMA(" + IntegerToString(SMA_Period) + "): " + DoubleToString(bufSMA[0], digits) + " | Signal: " + smaDir, DashboardColor); y += lineHeight;
    DashLabel("GM_Dash_2", DashboardX, y, "Buy: " + IntegerToString(buyCount) + " (GL:" + IntegerToString(glB) + " GP:" + IntegerToString(gpB) + ") | Sell: " + IntegerToString(sellCount) + " (GL:" + IntegerToString(glS) + " GP:" + IntegerToString(gpS) + ")", DashboardColor); y += lineHeight;
 
@@ -1484,7 +1537,9 @@ void DisplayDashboard()
    //--- Trailing info
    if(EnablePerOrderTrailing)
    {
-      DashLabel("GM_Dash_6", DashboardX, y, "Per-Order Trailing: Active (Act:" + IntegerToString(PerOrder_Activation) + " Step:" + IntegerToString(PerOrder_Step) + ")", DashboardColor);
+      string beInfo = InpEnableBreakeven ? "BE:" + IntegerToString(InpBreakevenTarget) + "/" + IntegerToString(InpBreakevenOffset) : "BE:OFF";
+      string trInfo = InpEnableTrailing ? "Trail:" + IntegerToString(InpTrailingStop) + "/" + IntegerToString(InpTrailingStep) : "Trail:OFF";
+      DashLabel("GM_Dash_6", DashboardX, y, "Per-Order: " + beInfo + " " + trInfo, DashboardColor);
       y += lineHeight;
    }
    else if(EnableTrailingStop)
