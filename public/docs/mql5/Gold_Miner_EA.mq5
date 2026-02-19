@@ -936,7 +936,7 @@ void ManageTrailingStop()
          Print("TRAILING SL HIT (BUY): SL=", g_trailingSL_Buy, " Bid=", bid);
          double pl = CalculateFloatingPL(POSITION_TYPE_BUY);
          CloseAllSide(POSITION_TYPE_BUY);
-         justClosedPositions = true;
+         justClosedBuy = true;
          g_initialBuyPrice = 0;
          if(UseAccumulateClose) g_accumulatedProfit += pl;
          ResetTrailingState();
@@ -995,7 +995,7 @@ void ManageTrailingStop()
          Print("TRAILING SL HIT (SELL): SL=", g_trailingSL_Sell, " Ask=", ask);
          double pl = CalculateFloatingPL(POSITION_TYPE_SELL);
          CloseAllSide(POSITION_TYPE_SELL);
-         justClosedPositions = true;
+         justClosedSell = true;
          g_initialSellPrice = 0;
          if(UseAccumulateClose) g_accumulatedProfit += pl;
          ResetTrailingState();
