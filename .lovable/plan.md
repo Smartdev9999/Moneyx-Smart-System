@@ -1,179 +1,135 @@
 
 
-## แก้ไข Per-Order Trailing Stop ใหม่ + เพิ่ม Trading Mode
+## แก้ Entry Logic ให้ BUY/SELL ทำงานแยกฝั่ง (Independent Side Entry)
 
-### ปัญหาที่ต้องแก้
+### สาเหตุของปัญหา
 
-1. **Per-Order Trailing ยังปิดออเดอร์ทันที** - Logic ไม่ตรงมาตรฐาน ไม่มี Breakeven แยก และไม่มี TrailingStep (minimum SL movement)
-2. **ออกออเดอร์แค่ฝั่ง BUY** - ไม่มี Trading Mode ให้เลือกฝั่ง
-3. **Accumulate ต้องทำงานแยกจาก Trailing** - ยืนยันว่า logic ปัจจุบันถูกแล้ว แต่ต้องชัดเจนว่า Accumulate เก็บสะสม closed profit + floating PL เมื่อรวมถึงเป้าจึงปิดทั้งหมด
+บรรทัด 359 ของ `Gold_Miner_EA.mq5`:
 
-### สิ่งที่จะเปลี่ยน
+```text
+if(totalPositions == 0 && TotalOrderCount() < MaxOpenOrders)
+```
+
+เงื่อนไข `totalPositions == 0` บังคับว่า **ต้องไม่มี position ใดเลย** ถึงจะเปิด initial ใหม่ได้ ดังนั้นเมื่อมี BUY grid อยู่ ระบบไม่สามารถเปิด SELL initial ได้แม้ว่า Signal จะเป็น SELL
+
+แต่ระบบ Grid, TP/SL, Trailing ทำงานแยกฝั่ง (per-side) อยู่แล้ว เพียงแค่ Entry ที่ยังไม่แยก
+
+### การแก้ไข
 
 | ไฟล์ | รายละเอียด |
 |------|-----------|
-| `public/docs/mql5/Gold_Miner_EA.mq5` | เขียน Trailing ใหม่ตามมาตรฐาน + เพิ่ม Trading Mode |
+| `public/docs/mql5/Gold_Miner_EA.mq5` | แก้ Entry logic ให้เช็คแต่ละฝั่งแยกกัน |
 
----
+### สิ่งที่จะเปลี่ยน
 
-### 1. เพิ่ม Trading Mode
+**1. แก้ Entry Logic (บรรทัด 358-406)**
 
-Input parameter ใหม่:
-
-```text
-enum ENUM_TRADE_MODE {
-   TRADE_BUY_ONLY  = 0,  // Buy Only
-   TRADE_SELL_ONLY = 1,  // Sell Only
-   TRADE_BOTH      = 2   // Buy and Sell
-};
-
-input ENUM_TRADE_MODE TradingMode = TRADE_BOTH;
-```
-
-แก้ entry logic (บรรทัด 374-393) ให้เช็ค TradingMode:
-- ก่อนเปิด BUY: ต้อง TradingMode == TRADE_BUY_ONLY หรือ TRADE_BOTH
-- ก่อนเปิด SELL: ต้อง TradingMode == TRADE_SELL_ONLY หรือ TRADE_BOTH
-
----
-
-### 2. เขียน Per-Order Trailing Stop ใหม่ตามมาตรฐาน
-
-**เปลี่ยน Input Parameters** (บรรทัด 128-133):
+เปลี่ยนจาก:
 
 ```text
-=== Per-Order Trailing Stop ===
-EnablePerOrderTrailing    = true      // เปิด/ปิด Per-Order Trailing
-InpEnableBreakeven        = true      // เปิด/ปิด Breakeven
-InpBreakevenTarget        = 200       // กำไรกี่ points จึงเริ่มกันหน้าทุน
-InpBreakevenOffset        = 5         // SL วางเหนือ/ใต้ราคาเปิดกี่ points
-InpEnableTrailing         = true      // เปิด/ปิด Trailing
-InpTrailingStop           = 200       // ระยะ Trailing จากราคาปัจจุบัน (points)
-InpTrailingStep           = 10        // ระยะขยับขั้นต่ำ (points) ก่อน modify SL
-```
-
-**Logic มาตรฐานที่ถูกต้อง (BUY order):**
-
-```text
-ManagePerOrderTrailing() {
-    for each position:
-        openPrice = position.openPrice
-        currentSL = position.SL
-        profitPoints = (bid - openPrice) / point
-
-        // ===== STEP 1: Breakeven =====
-        if InpEnableBreakeven:
-            if profitPoints >= InpBreakevenTarget:
-                beLevel = openPrice + InpBreakevenOffset * point
-                if currentSL == 0 || currentSL < beLevel:
-                    modify SL to beLevel
-                    // กันหน้าทุน: SL อยู่เหนือราคาเปิดเล็กน้อย
-
-        // ===== STEP 2: Trailing =====
-        if InpEnableTrailing:
-            if profitPoints >= InpTrailingStop:
-                newSL = bid - InpTrailingStop * point
-                // ต้องไม่ต่ำกว่า breakeven
-                newSL = max(newSL, openPrice + InpBreakevenOffset * point)
-                // ต้อง move อย่างน้อย Step points จึงจะ modify
-                if newSL > currentSL + InpTrailingStep * point:
-                    modify SL to newSL
+if(totalPositions == 0 && TotalOrderCount() < MaxOpenOrders)
+{
+   // check SMA -> open BUY or SELL
 }
 ```
 
-**ตัวอย่างตัวเลข (BUY):**
+เป็น:
 
 ```text
-ตั้งค่า: BreakevenTarget=200, BreakevenOffset=5, TrailingStop=200, TrailingStep=10
+bool canOpenMore = TotalOrderCount() < MaxOpenOrders;
+bool canOpenOnThisCandle = !(DontOpenSameCandle && currentBarTime == lastInitialCandleTime);
 
-เปิด BUY ที่ 2000.00
+// ===== BUY Entry (แยกฝั่ง) =====
+if(buyCount == 0 && g_initialBuyPrice == 0 && canOpenMore && canOpenOnThisCandle)
+{
+   if(currentPrice > smaValue && (TradingMode == TRADE_BUY_ONLY || TradingMode == TRADE_BOTH))
+   {
+      if(shouldEnter)  // re-entry or first time
+      {
+         OpenOrder(ORDER_TYPE_BUY, InitialLotSize, "GM_INIT");
+         g_initialBuyPrice = ask;
+         lastInitialCandleTime = currentBarTime;
+      }
+   }
+}
 
-1. ราคาขึ้นมา 200 points (Bid=2002.00)
-   -> Breakeven: ตั้ง SL = 2000.00 + 5pts = 2000.05 (กันหน้าทุน)
-   -> Trailing: newSL = 2002.00 - 200pts = 2000.00
-     แต่ max(2000.00, 2000.05) = 2000.05 ซึ่ง = currentSL แล้ว
-     -> ไม่ modify (ยังไม่ห่างพอ TrailingStep)
-
-2. ราคาขึ้นอีก (Bid=2002.10)
-   -> Trailing: newSL = 2002.10 - 200pts = 2000.10
-     2000.10 > 2000.05 + 10pts(0.10)? -> 2000.10 > 2000.15? NO
-     -> ไม่ modify (ขยับไม่ถึง step)
-
-3. ราคาขึ้นอีก (Bid=2002.20)
-   -> newSL = 2002.20 - 200pts = 2000.20
-     2000.20 > 2000.05 + 0.10 = 2000.15? YES
-     -> modify SL = 2000.20
-
-4. ราคาขึ้นต่อ (Bid=2002.40)
-   -> newSL = 2002.40 - 200pts = 2000.40
-     2000.40 > 2000.20 + 0.10 = 2000.30? YES
-     -> modify SL = 2000.40
-
-5. ราคาย่อลง (Bid=2002.30)
-   -> newSL = 2002.30 - 200pts = 2000.30
-     2000.30 > 2000.40? NO
-     -> ไม่ modify (SL ไม่ถอยหลัง!)
-
-6. ราคาลงถึง 2000.40 -> Broker ปิดออเดอร์อัตโนมัติ
+// ===== SELL Entry (แยกฝั่ง) =====
+if(sellCount == 0 && g_initialSellPrice == 0 && canOpenMore && canOpenOnThisCandle)
+{
+   if(currentPrice < smaValue && (TradingMode == TRADE_SELL_ONLY || TradingMode == TRADE_BOTH))
+   {
+      if(shouldEnter)  // re-entry or first time
+      {
+         OpenOrder(ORDER_TYPE_SELL, InitialLotSize, "GM_INIT");
+         g_initialSellPrice = bid;
+         lastInitialCandleTime = currentBarTime;
+      }
+   }
+}
 ```
 
-**SELL order - กลับด้าน:**
+**2. แก้ justClosedPositions ให้แยกฝั่ง**
+
+เพิ่มตัวแปร:
 
 ```text
-profitPoints = (openPrice - ask) / point
-beLevel = openPrice - InpBreakevenOffset * point
-newSL = ask + InpTrailingStop * point
-// SL ต้องไม่สูงกว่า beLevel
-newSL = min(newSL, beLevel)
-// ต้อง move อย่างน้อย Step points ลง
-if currentSL == 0 || newSL < currentSL - InpTrailingStep * point:
-    modify SL
+bool justClosedBuy = false;
+bool justClosedSell = false;
 ```
 
----
+แทนที่ `justClosedPositions` เดิม เพื่อให้แต่ละฝั่งรู้ว่าฝั่งตัวเองเพิ่งปิด (สำหรับ Auto Re-Entry)
 
-### 3. Accumulate ยืนยันหลักการ (ไม่เปลี่ยน logic)
+- `CloseAllSide(BUY)` -> ตั้ง `justClosedBuy = true`
+- `CloseAllSide(SELL)` -> ตั้ง `justClosedSell = true`
+- `CloseAllPositions()` -> ตั้งทั้ง `justClosedBuy = true` และ `justClosedSell = true`
 
-หลักการปัจจุบันที่ถูกต้องอยู่แล้ว:
-- เก็บสะสม closed profit จาก history (g_accumulatedProfit)
-- ทุก tick: เช็ค g_accumulatedProfit + floating PL >= AccumulateTarget
-- ถ้าถึงเป้า: ปิดทุก order -> reset g_accumulatedProfit = 0 -> เริ่มรอบใหม่
-- เมื่อไม่มี position เหลือ: Accumulate จะ reset อัตโนมัติ
-- Accumulate ทำงานแยกจาก trailing (trailing ปิดแต่ละ order, accumulate ปิดทั้ง basket)
+**3. shouldEnter logic แยกฝั่ง**
 
----
+```text
+// BUY side
+bool shouldEnterBuy = false;
+if(justClosedBuy && EnableAutoReEntry) shouldEnterBuy = true;
+else if(!justClosedBuy && buyCount == 0) shouldEnterBuy = true;
 
-### 4. Basket TP เมื่อ Per-Order Trailing เปิด
+// SELL side
+bool shouldEnterSell = false;
+if(justClosedSell && EnableAutoReEntry) shouldEnterSell = true;
+else if(!justClosedSell && sellCount == 0) shouldEnterSell = true;
+```
 
-ยังคงข้าม basket TP (UseTP_Dollar, UseTP_Points, UseTP_PercentBalance) เมื่อ EnablePerOrderTrailing = true ตามที่แก้ไขไปแล้ว เพราะแต่ละ order จัดการ exit เองผ่าน broker SL
+### ตัวอย่างการทำงานหลังแก้
 
-ข้อยกเว้น:
-- Accumulate Close ยังทำงานเป็น global basket target
-- Basket SL ยังเป็น emergency safety net
+```text
+ตั้งค่า: TradingMode = Buy and Sell, SMA Period = 20
 
----
+1. ราคาอยู่เหนือ SMA -> เปิด BUY Initial (GM_INIT)
+2. ราคาตกลงใต้ SMA -> BUY grid ทำงาน (GM_GL#1, #2...)
+   -> พร้อมกัน: SELL Initial เปิดได้! (เพราะ sellCount == 0)
+   -> SELL Initial เปิดที่ bid (GM_INIT)
+3. ราคาขึ้นกลับ -> SELL grid ทำงาน (GM_GL#1...)
+   -> BUY side TP/Trailing ทำงานปกติ
+4. BUY basket ถูกปิด (TP หรือ Trailing) -> g_initialBuyPrice = 0
+   -> SELL side ยังทำงานอยู่ ไม่ได้รับผลกระทบ
+5. ราคากลับมาเหนือ SMA -> BUY Initial เปิดใหม่ได้
+```
+
+### สิ่งที่ไม่เปลี่ยน
+
+- Grid Logic (CheckGridLoss, CheckGridProfit) - ทำงานแยกฝั่งอยู่แล้ว
+- ManageTPSL() - TP/SL แยกฝั่งอยู่แล้ว
+- ManagePerOrderTrailing() - ทำงานแยก order อยู่แล้ว
+- Accumulate Close - ยังเป็น global basket (รวมกำไรทั้ง BUY+SELL)
+- ResetTrailingState() - คงเดิม
 
 ### รายละเอียดทางเทคนิค
 
-**ไฟล์ที่แก้: `public/docs/mql5/Gold_Miner_EA.mq5`**
+**ไฟล์: `public/docs/mql5/Gold_Miner_EA.mq5`**
 
-**1. เพิ่ม enum ENUM_TRADE_MODE** (บรรทัด ~33)
-
-**2. เพิ่ม input TradingMode** ใน General Settings (บรรทัด ~43)
-
-**3. แก้ Input Per-Order Trailing** (บรรทัด 128-133):
-- เปลี่ยนชื่อ parameters ตามมาตรฐาน
-- เพิ่ม InpEnableBreakeven, InpBreakevenTarget, InpBreakevenOffset
-- เปลี่ยน PerOrder_Step เป็น InpTrailingStop (ระยะจากราคาปัจจุบัน)
-- เพิ่ม InpTrailingStep (minimum movement)
-
-**4. แก้ Entry Logic** (บรรทัด 374-393):
-- เพิ่มเช็ค TradingMode ก่อนเปิด BUY/SELL
-
-**5. เขียน ManagePerOrderTrailing() ใหม่** (บรรทัด 739-825):
-- Step 1: Breakeven check (แยกจาก trailing)
-- Step 2: Trailing check with TrailingStep minimum movement
-- Broker stop level check
-- SL never moves backwards
-
-**6. Dashboard** - เพิ่มแสดง Trading Mode
+1. **เพิ่มตัวแปร global** (บรรทัด ~183): เปลี่ยน `justClosedPositions` เป็น `justClosedBuy` + `justClosedSell`
+2. **แก้ Entry block** (บรรทัด 358-406): แยก BUY/SELL entry ด้วยเงื่อนไข per-side
+3. **แก้ CloseAllSide()** (บรรทัด ~570): ตั้ง flag เฉพาะฝั่ง
+4. **แก้ CloseAllPositions()** (บรรทัด ~591): ตั้ง flag ทั้งสองฝั่ง
+5. **แก้ ManageTPSL()** (บรรทัด 610-740): ใช้ justClosedBuy/Sell แทน justClosedPositions
+6. **แก้ reset flag** (บรรทัด ~410): Reset ทั้ง justClosedBuy/Sell เมื่อจบ new bar logic
+7. **Dashboard** - แสดงสถานะแต่ละฝั่ง (BUY cycle / SELL cycle)
 
