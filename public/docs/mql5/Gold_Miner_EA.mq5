@@ -334,6 +334,18 @@ void OnTick()
 
       int totalPositions = buyCount + sellCount;
 
+      //--- Auto-detect broker-closed positions (e.g. trailing SL hit by broker)
+      if(buyCount == 0 && g_initialBuyPrice != 0)
+      {
+         Print("BUY cycle ended (broker SL). Resetting g_initialBuyPrice.");
+         g_initialBuyPrice = 0;
+      }
+      if(sellCount == 0 && g_initialSellPrice != 0)
+      {
+         Print("SELL cycle ended (broker SL). Resetting g_initialSellPrice.");
+         g_initialSellPrice = 0;
+      }
+
       //--- Grid Loss management (check both sides independently)
       if((hasInitialBuy || g_initialBuyPrice > 0) && gridLossBuy < GridLoss_MaxTrades && buyCount > 0)
       {
