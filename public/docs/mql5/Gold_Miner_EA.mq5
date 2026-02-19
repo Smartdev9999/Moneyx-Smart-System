@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                              Gold_Miner_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                                     Gold Miner EA v2.1 - SMA+Grid|
+//|                                     Gold Miner EA v2.2 - SMA+Grid|
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "2.10"
-#property description "Gold Miner EA v2.1 - SMA Entry + Grid Recovery + Per-Order & Average Trailing"
+#property version   "2.20"
+#property description "Gold Miner EA v2.2 - Independent Side Entry + Standard Per-Order Trailing"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -164,7 +164,8 @@ datetime       lastBarTime;
 datetime       lastInitialCandleTime;
 datetime       lastGridLossCandleTime;
 datetime       lastGridProfitCandleTime;
-bool           justClosedPositions;
+bool           justClosedBuy;
+bool           justClosedSell;
 double         g_trailingSL_Buy;
 double         g_trailingSL_Sell;
 bool           g_trailingActive_Buy;
@@ -218,7 +219,8 @@ int OnInit()
    lastInitialCandleTime = 0;
    lastGridLossCandleTime = 0;
    lastGridProfitCandleTime = 0;
-   justClosedPositions = false;
+   justClosedBuy = false;
+   justClosedSell = false;
    g_trailingSL_Buy = 0;
    g_trailingSL_Sell = 0;
    g_trailingActive_Buy = false;
@@ -355,59 +357,57 @@ void OnTick()
          }
       }
 
-      //--- Entry logic: no positions open
-      if(totalPositions == 0 && TotalOrderCount() < MaxOpenOrders)
+      //--- Entry logic: Independent Side Entry (BUY and SELL checked separately)
+      bool canOpenMore = TotalOrderCount() < MaxOpenOrders;
+      bool canOpenOnThisCandle = !(DontOpenSameCandle && currentBarTime == lastInitialCandleTime);
+
+      //--- BUY side shouldEnter logic
+      bool shouldEnterBuy = false;
+      if(justClosedBuy && EnableAutoReEntry) shouldEnterBuy = true;
+      else if(!justClosedBuy && buyCount == 0) shouldEnterBuy = true;
+
+      //--- SELL side shouldEnter logic
+      bool shouldEnterSell = false;
+      if(justClosedSell && EnableAutoReEntry) shouldEnterSell = true;
+      else if(!justClosedSell && sellCount == 0) shouldEnterSell = true;
+
+      // ===== BUY Entry (independent) =====
+      if(buyCount == 0 && g_initialBuyPrice == 0 && canOpenMore && canOpenOnThisCandle)
       {
-         bool canOpen = true;
-         if(DontOpenSameCandle && currentBarTime == lastInitialCandleTime)
+         if(currentPrice > smaValue && (TradingMode == TRADE_BUY_ONLY || TradingMode == TRADE_BOTH))
          {
-            canOpen = false;
-         }
-
-         if(canOpen)
-         {
-            //--- Check if auto re-entry or first time entry
-            bool shouldEnter = false;
-
-            if(justClosedPositions && EnableAutoReEntry)
+            if(shouldEnterBuy)
             {
-               // Re-entry: check SMA signal still valid
-               shouldEnter = true;
-            }
-            else if(!justClosedPositions)
-            {
-               // First time entry or new bar after reset
-               shouldEnter = true;
-            }
-
-            if(shouldEnter)
-            {
-               if(currentPrice > smaValue && (TradingMode == TRADE_BUY_ONLY || TradingMode == TRADE_BOTH))
+               if(OpenOrder(ORDER_TYPE_BUY, InitialLotSize, "GM_INIT"))
                {
-                  if(OpenOrder(ORDER_TYPE_BUY, InitialLotSize, "GM_INIT"))
-                  {
-                     lastInitialCandleTime = currentBarTime;
-                     g_initialBuyPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-                     g_initialSellPrice = 0;
-                     ResetTrailingState();
-                  }
-               }
-               else if(currentPrice < smaValue && (TradingMode == TRADE_SELL_ONLY || TradingMode == TRADE_BOTH))
-               {
-                  if(OpenOrder(ORDER_TYPE_SELL, InitialLotSize, "GM_INIT"))
-                  {
-                     lastInitialCandleTime = currentBarTime;
-                     g_initialSellPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-                     g_initialBuyPrice = 0;
-                     ResetTrailingState();
-                  }
+                  g_initialBuyPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+                  lastInitialCandleTime = currentBarTime;
+                  ResetTrailingState();
                }
             }
          }
       }
 
-      // Reset justClosed flag at end of new bar processing
-      justClosedPositions = false;
+      // ===== SELL Entry (independent) =====
+      if(sellCount == 0 && g_initialSellPrice == 0 && canOpenMore && canOpenOnThisCandle)
+      {
+         if(currentPrice < smaValue && (TradingMode == TRADE_SELL_ONLY || TradingMode == TRADE_BOTH))
+         {
+            if(shouldEnterSell)
+            {
+               if(OpenOrder(ORDER_TYPE_SELL, InitialLotSize, "GM_INIT"))
+               {
+                  g_initialSellPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+                  lastInitialCandleTime = currentBarTime;
+                  ResetTrailingState();
+               }
+            }
+         }
+      }
+
+      // Reset justClosed flags at end of new bar processing
+      justClosedBuy = false;
+      justClosedSell = false;
    }
 
    //--- Draw lines and dashboard every tick
@@ -583,6 +583,11 @@ void CloseAllSide(ENUM_POSITION_TYPE side)
       if(PositionGetInteger(POSITION_TYPE) != side) continue;
       trade.PositionClose(ticket);
    }
+   // Set per-side close flag
+   if(side == POSITION_TYPE_BUY)
+      justClosedBuy = true;
+   else
+      justClosedSell = true;
 }
 
 //+------------------------------------------------------------------+
@@ -598,7 +603,8 @@ void CloseAllPositions()
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       trade.PositionClose(ticket);
    }
-   justClosedPositions = true;
+   justClosedBuy = true;
+   justClosedSell = true;
    ResetTrailingState();
    g_initialBuyPrice = 0;
    g_initialSellPrice = 0;
@@ -634,7 +640,7 @@ void ManageTPSL()
          Print("TP HIT (BUY): PL=", plBuy);
          double closedPL = plBuy;
          CloseAllSide(POSITION_TYPE_BUY);
-         justClosedPositions = true;
+         justClosedBuy = true;
          g_initialBuyPrice = 0;
          ResetTrailingState();
          if(UseAccumulateClose) g_accumulatedProfit += closedPL;
@@ -660,7 +666,7 @@ void ManageTPSL()
             else
             {
                CloseAllSide(POSITION_TYPE_BUY);
-               justClosedPositions = true;
+                justClosedBuy = true;
                g_initialBuyPrice = 0;
                ResetTrailingState();
             }
@@ -691,7 +697,7 @@ void ManageTPSL()
          Print("TP HIT (SELL): PL=", plSell);
          double closedPL = plSell;
          CloseAllSide(POSITION_TYPE_SELL);
-         justClosedPositions = true;
+         justClosedSell = true;
          g_initialSellPrice = 0;
          ResetTrailingState();
          if(UseAccumulateClose) g_accumulatedProfit += closedPL;
@@ -717,7 +723,7 @@ void ManageTPSL()
             else
             {
                CloseAllSide(POSITION_TYPE_SELL);
-               justClosedPositions = true;
+                justClosedSell = true;
                g_initialSellPrice = 0;
                ResetTrailingState();
             }
@@ -1508,9 +1514,12 @@ void DisplayDashboard()
    }
 
    string tradeModeStr = (TradingMode == TRADE_BUY_ONLY) ? "Buy Only" : (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Buy & Sell";
-   DashLabel("GM_Dash_0", DashboardX, y, "=== Gold Miner EA v2.1 === | Mode: " + tradeModeStr, DashboardColor); y += lineHeight;
+   DashLabel("GM_Dash_0", DashboardX, y, "=== Gold Miner EA v2.2 === | Mode: " + tradeModeStr, DashboardColor); y += lineHeight;
    DashLabel("GM_Dash_1", DashboardX, y, "SMA(" + IntegerToString(SMA_Period) + "): " + DoubleToString(bufSMA[0], digits) + " | Signal: " + smaDir, DashboardColor); y += lineHeight;
-   DashLabel("GM_Dash_2", DashboardX, y, "Buy: " + IntegerToString(buyCount) + " (GL:" + IntegerToString(glB) + " GP:" + IntegerToString(gpB) + ") | Sell: " + IntegerToString(sellCount) + " (GL:" + IntegerToString(glS) + " GP:" + IntegerToString(gpS) + ")", DashboardColor); y += lineHeight;
+    DashLabel("GM_Dash_2", DashboardX, y, "Buy: " + IntegerToString(buyCount) + " (GL:" + IntegerToString(glB) + " GP:" + IntegerToString(gpB) + ") | Sell: " + IntegerToString(sellCount) + " (GL:" + IntegerToString(glS) + " GP:" + IntegerToString(gpS) + ")", DashboardColor); y += lineHeight;
+   string buyCycle = (g_initialBuyPrice > 0) ? "Active@" + DoubleToString(g_initialBuyPrice, digits) : "Idle";
+   string sellCycle = (g_initialSellPrice > 0) ? "Active@" + DoubleToString(g_initialSellPrice, digits) : "Idle";
+   DashLabel("GM_Dash_2b", DashboardX, y, "BUY Cycle: " + buyCycle + " | SELL Cycle: " + sellCycle, DashboardColor); y += lineHeight;
 
    if(avgBuy > 0)
    {
