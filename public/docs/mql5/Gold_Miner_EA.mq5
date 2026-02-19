@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                              Gold_Miner_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                                     Gold Miner EA v2.2 - SMA+Grid|
+//|                                     Gold Miner EA v2.3 - SMA+Grid|
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "2.20"
-#property description "Gold Miner EA v2.2 - Independent Side Entry + Standard Per-Order Trailing"
+#property version   "2.30"
+#property description "Gold Miner EA v2.3 - Baseline Accumulate + Table Dashboard"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -176,6 +176,8 @@ bool           g_eaStopped;
 double         g_accumulatedProfit;
 double         g_initialBuyPrice;   // track initial order price for grid fallback
 double         g_initialSellPrice;  // track initial order price for grid fallback
+double         g_accumulateBaseline; // Total history profit at last cycle reset
+double         g_maxDD;             // Track max drawdown
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                     |
@@ -231,17 +233,22 @@ int OnInit()
    g_accumulatedProfit = 0;
    g_initialBuyPrice = 0;
    g_initialSellPrice = 0;
+   g_accumulateBaseline = 0;
+   g_maxDD = 0;
 
-   //--- Calculate accumulated profit from history
+   //--- Calculate baseline for accumulate (baseline = 0, accumulated = totalHistory)
    if(UseAccumulateClose)
    {
-      CalculateAccumulatedProfit();
+      double totalHistory = CalcTotalHistoryProfit();
+      g_accumulateBaseline = 0;
+      g_accumulatedProfit = totalHistory;
+      Print("Accumulate init: baseline=0, accumulated=", g_accumulatedProfit);
    }
 
    //--- Recover initial prices from existing positions
    RecoverInitialPrices();
 
-   Print("Gold Miner EA v2.1 initialized successfully");
+   Print("Gold Miner EA v2.3 initialized successfully");
    return INIT_SUCCEEDED;
 }
 
@@ -258,8 +265,9 @@ void OnDeinit(const int reason)
    ObjectDelete(0, "GM_TPLine");
    ObjectDelete(0, "GM_SLLine");
    ObjectsDeleteAll(0, "GM_Dash_");
+   ObjectsDeleteAll(0, "GM_TBL_");
 
-   Print("Gold Miner EA v2.1 deinitialized");
+   Print("Gold Miner EA v2.3 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -288,6 +296,30 @@ void RecoverInitialPrices()
 }
 
 //+------------------------------------------------------------------+
+//| CalcTotalHistoryProfit - sum all closed deal profit for this EA    |
+//+------------------------------------------------------------------+
+double CalcTotalHistoryProfit()
+{
+   double total = 0;
+   if(!HistorySelect(0, TimeCurrent())) return 0;
+   int totalDeals = HistoryDealsTotal();
+   for(int i = 0; i < totalDeals; i++)
+   {
+      ulong dealTicket = HistoryDealGetTicket(i);
+      if(dealTicket == 0) continue;
+      if(HistoryDealGetInteger(dealTicket, DEAL_MAGIC) != MagicNumber) continue;
+      if(HistoryDealGetString(dealTicket, DEAL_SYMBOL) != _Symbol) continue;
+      long dealEntry = HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
+      if(dealEntry == DEAL_ENTRY_OUT || dealEntry == DEAL_ENTRY_INOUT)
+      {
+         total += HistoryDealGetDouble(dealTicket, DEAL_PROFIT)
+                + HistoryDealGetDouble(dealTicket, DEAL_SWAP);
+      }
+   }
+   return total;
+}
+
+//+------------------------------------------------------------------+
 //| Expert tick function                                               |
 //+------------------------------------------------------------------+
 void OnTick()
@@ -309,6 +341,15 @@ void OnTick()
 
    //--- Every tick: Drawdown check
    CheckDrawdownExit();
+
+   //--- Track max drawdown
+   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+   if(balance > 0)
+   {
+      double dd = (balance - equity) / balance * 100.0;
+      if(dd > g_maxDD) g_maxDD = dd;
+   }
 
    //--- New bar logic
    datetime currentBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
@@ -582,6 +623,24 @@ double CalculateTotalFloatingPL()
 }
 
 //+------------------------------------------------------------------+
+//| Calculate total lots for one side                                  |
+//+------------------------------------------------------------------+
+double CalculateTotalLots(ENUM_POSITION_TYPE side)
+{
+   double totalLots = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if(PositionGetInteger(POSITION_TYPE) != side) continue;
+      totalLots += PositionGetDouble(POSITION_VOLUME);
+   }
+   return totalLots;
+}
+
+//+------------------------------------------------------------------+
 //| Close all positions for one side                                   |
 //+------------------------------------------------------------------+
 void CloseAllSide(ENUM_POSITION_TYPE side)
@@ -650,12 +709,11 @@ void ManageTPSL()
       if(closeTP)
       {
          Print("TP HIT (BUY): PL=", plBuy);
-         double closedPL = plBuy;
          CloseAllSide(POSITION_TYPE_BUY);
          justClosedBuy = true;
          g_initialBuyPrice = 0;
          ResetTrailingState();
-         if(UseAccumulateClose) g_accumulatedProfit += closedPL;
+         // No manual accumulate increment - baseline handles it
          return;
       }
 
@@ -707,12 +765,11 @@ void ManageTPSL()
       if(closeTP2)
       {
          Print("TP HIT (SELL): PL=", plSell);
-         double closedPL = plSell;
          CloseAllSide(POSITION_TYPE_SELL);
          justClosedSell = true;
          g_initialSellPrice = 0;
          ResetTrailingState();
-         if(UseAccumulateClose) g_accumulatedProfit += closedPL;
+         // No manual accumulate increment - baseline handles it
          return;
       }
 
@@ -744,16 +801,25 @@ void ManageTPSL()
       }
    }
 
-   //--- Accumulate Close (global target) - does NOT stop EA, resets cycle
+   //--- Accumulate Close (baseline method) - recalculate every tick from deal history
    if(UseAccumulateClose)
    {
-      double totalPL = CalculateTotalFloatingPL();
-      if(g_accumulatedProfit + totalPL >= AccumulateTarget)
+      double totalHistory = CalcTotalHistoryProfit();
+      g_accumulatedProfit = totalHistory - g_accumulateBaseline;
+
+      double totalFloating = CalculateTotalFloatingPL();
+      double accumTotal = g_accumulatedProfit + totalFloating;
+
+      if(accumTotal >= AccumulateTarget)
       {
-         Print("ACCUMULATE TARGET HIT: ", g_accumulatedProfit + totalPL, " / ", AccumulateTarget);
+         Print("ACCUMULATE TARGET HIT: ", accumTotal, " / ", AccumulateTarget);
          CloseAllPositions();
-         g_accumulatedProfit = 0;  // Reset and start new cycle
-         Print("Accumulate cycle reset - starting new cycle");
+         // Recalc after closing to include just-closed profit
+         Sleep(500);
+         double newHistory = CalcTotalHistoryProfit();
+         g_accumulateBaseline = newHistory;
+         g_accumulatedProfit = 0;
+         Print("Accumulate cycle reset. New baseline: ", newHistory);
       }
    }
 }
@@ -895,7 +961,7 @@ void ManagePerOrderTrailing()
 }
 
 //+------------------------------------------------------------------+
-//| Manage Trailing Stop (Average-Based)                               |
+//| Manage Average-Based Trailing Stop                                 |
 //+------------------------------------------------------------------+
 void ManageTrailingStop()
 {
@@ -946,11 +1012,10 @@ void ManageTrailingStop()
       if(g_trailingActive_Buy && g_trailingSL_Buy > 0 && bid <= g_trailingSL_Buy)
       {
          Print("TRAILING SL HIT (BUY): SL=", g_trailingSL_Buy, " Bid=", bid);
-         double pl = CalculateFloatingPL(POSITION_TYPE_BUY);
          CloseAllSide(POSITION_TYPE_BUY);
          justClosedBuy = true;
          g_initialBuyPrice = 0;
-         if(UseAccumulateClose) g_accumulatedProfit += pl;
+         // No manual accumulate increment - baseline handles it
          ResetTrailingState();
          return;
       }
@@ -1005,11 +1070,10 @@ void ManageTrailingStop()
       if(g_trailingActive_Sell && g_trailingSL_Sell > 0 && ask >= g_trailingSL_Sell)
       {
          Print("TRAILING SL HIT (SELL): SL=", g_trailingSL_Sell, " Ask=", ask);
-         double pl = CalculateFloatingPL(POSITION_TYPE_SELL);
          CloseAllSide(POSITION_TYPE_SELL);
          justClosedSell = true;
          g_initialSellPrice = 0;
-         if(UseAccumulateClose) g_accumulatedProfit += pl;
+         // No manual accumulate increment - baseline handles it
          ResetTrailingState();
          return;
       }
@@ -1356,32 +1420,6 @@ double ParseCustomValue(string inputStr, int index)
 }
 
 //+------------------------------------------------------------------+
-//| Calculate accumulated profit from trade history                    |
-//+------------------------------------------------------------------+
-void CalculateAccumulatedProfit()
-{
-   g_accumulatedProfit = 0;
-
-   if(!HistorySelect(0, TimeCurrent())) return;
-
-   int totalDeals = HistoryDealsTotal();
-   for(int i = 0; i < totalDeals; i++)
-   {
-      ulong dealTicket = HistoryDealGetTicket(i);
-      if(dealTicket == 0) continue;
-      if(HistoryDealGetInteger(dealTicket, DEAL_MAGIC) != MagicNumber) continue;
-      if(HistoryDealGetString(dealTicket, DEAL_SYMBOL) != _Symbol) continue;
-
-      long dealEntry = HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
-      if(dealEntry == DEAL_ENTRY_OUT || dealEntry == DEAL_ENTRY_INOUT)
-      {
-         g_accumulatedProfit += HistoryDealGetDouble(dealTicket, DEAL_PROFIT) + HistoryDealGetDouble(dealTicket, DEAL_SWAP);
-      }
-   }
-   Print("Accumulated profit from history: ", g_accumulatedProfit);
-}
-
-//+------------------------------------------------------------------+
 //| Draw chart lines                                                   |
 //+------------------------------------------------------------------+
 void DrawLines()
@@ -1495,21 +1533,105 @@ void DrawHLine(string name, double price, color clr, ENUM_LINE_STYLE style, int 
 }
 
 //+------------------------------------------------------------------+
-//| Display Dashboard                                                  |
+//| Dashboard Helper: Create Rectangle Label                           |
+//+------------------------------------------------------------------+
+void CreateDashRect(string name, int x, int y, int w, int h, color bgColor)
+{
+   if(ObjectFind(0, name) < 0)
+   {
+      ObjectCreate(0, name, OBJ_RECTANGLE_LABEL, 0, 0, 0);
+   }
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
+   ObjectSetInteger(0, name, OBJPROP_XSIZE, w);
+   ObjectSetInteger(0, name, OBJPROP_YSIZE, h);
+   ObjectSetInteger(0, name, OBJPROP_BGCOLOR, bgColor);
+   ObjectSetInteger(0, name, OBJPROP_BORDER_TYPE, BORDER_FLAT);
+   ObjectSetInteger(0, name, OBJPROP_BORDER_COLOR, bgColor);
+   ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+   ObjectSetInteger(0, name, OBJPROP_BACK, false);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+}
+
+//+------------------------------------------------------------------+
+//| Dashboard Helper: Create Text Label                                |
+//+------------------------------------------------------------------+
+void CreateDashText(string name, int x, int y, string text, color clr, int fontSize, string font)
+{
+   if(ObjectFind(0, name) < 0)
+   {
+      ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
+   }
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
+   ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+   ObjectSetString(0, name, OBJPROP_TEXT, text);
+   ObjectSetString(0, name, OBJPROP_FONT, font);
+   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, fontSize);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
+   ObjectSetInteger(0, name, OBJPROP_BACK, false);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+}
+
+//+------------------------------------------------------------------+
+//| Dashboard Helper: Draw one table row                               |
+//+------------------------------------------------------------------+
+void DrawTableRow(int rowIndex, string label, string value, color valueColor, color sectionColor)
+{
+   int x = DashboardX;
+   int y = DashboardY + 24 + rowIndex * 20;  // 24px header
+   int tableWidth = 340;
+   int rowHeight = 19;
+   int sectionBarWidth = 4;
+   int labelX = x + sectionBarWidth + 6;
+   int valueX = x + 180;
+
+   // Alternating row background
+   color rowBg = (rowIndex % 2 == 0) ? C'40,44,52' : C'35,39,46';
+
+   string rowName = "GM_TBL_R" + IntegerToString(rowIndex);
+   string secName = "GM_TBL_S" + IntegerToString(rowIndex);
+   string lblName = "GM_TBL_L" + IntegerToString(rowIndex);
+   string valName = "GM_TBL_V" + IntegerToString(rowIndex);
+
+   // Row background
+   CreateDashRect(rowName, x, y, tableWidth, rowHeight, rowBg);
+   // Section color bar
+   CreateDashRect(secName, x, y, sectionBarWidth, rowHeight, sectionColor);
+   // Label text
+   CreateDashText(lblName, labelX, y + 2, label, C'180,180,180', 9, "Consolas");
+   // Value text
+   CreateDashText(valName, valueX, y + 2, value, valueColor, 9, "Consolas");
+}
+
+//+------------------------------------------------------------------+
+//| Display Dashboard - Table Layout v2.3                              |
 //+------------------------------------------------------------------+
 void DisplayDashboard()
 {
-   int y = DashboardY;
-   int lineHeight = 18;
+   int tableWidth = 340;
+   int headerHeight = 22;
 
-   double avgBuy = CalculateAveragePrice(POSITION_TYPE_BUY);
-   double avgSell = CalculateAveragePrice(POSITION_TYPE_SELL);
+   // Colors
+   color COLOR_HEADER_BG     = C'180,130,50';
+   color COLOR_HEADER_TEXT   = clrWhite;
+   color COLOR_SECTION_DETAIL = clrGreen;
+   color COLOR_SECTION_ACCUM  = clrYellow;
+   color COLOR_SECTION_TRAIL  = clrMagenta;
+   color COLOR_SECTION_INFO   = clrDodgerBlue;
+   color COLOR_PROFIT         = clrLime;
+   color COLOR_LOSS           = clrOrangeRed;
+   color COLOR_TEXT           = clrWhite;
+
+   //--- Gather data
+   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
    double plBuy = CalculateFloatingPL(POSITION_TYPE_BUY);
    double plSell = CalculateFloatingPL(POSITION_TYPE_SELL);
    double totalPL = plBuy + plSell;
-   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
-   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
    double dd = (balance > 0) ? (balance - equity) / balance * 100.0 : 0;
+   double lotsBuy = CalculateTotalLots(POSITION_TYPE_BUY);
+   double lotsSell = CalculateTotalLots(POSITION_TYPE_SELL);
 
    int buyCount = 0, sellCount = 0;
    int glB = 0, glS = 0, gpB = 0, gpS = 0;
@@ -1522,84 +1644,84 @@ void DisplayDashboard()
    if(bufSMA[0] > 0)
    {
       double bidPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-      smaDir = (bidPrice > bufSMA[0]) ? "BUY" : "SELL";
+      smaDir = (bidPrice > bufSMA[0]) ? "BUY ▲" : "SELL ▼";
    }
 
-   string tradeModeStr = (TradingMode == TRADE_BUY_ONLY) ? "Buy Only" : (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Buy & Sell";
-   DashLabel("GM_Dash_0", DashboardX, y, "=== Gold Miner EA v2.2 === | Mode: " + tradeModeStr, DashboardColor); y += lineHeight;
-   DashLabel("GM_Dash_1", DashboardX, y, "SMA(" + IntegerToString(SMA_Period) + "): " + DoubleToString(bufSMA[0], digits) + " | Signal: " + smaDir, DashboardColor); y += lineHeight;
-    DashLabel("GM_Dash_2", DashboardX, y, "Buy: " + IntegerToString(buyCount) + " (GL:" + IntegerToString(glB) + " GP:" + IntegerToString(gpB) + ") | Sell: " + IntegerToString(sellCount) + " (GL:" + IntegerToString(glS) + " GP:" + IntegerToString(gpS) + ")", DashboardColor); y += lineHeight;
-   string buyCycle = (g_initialBuyPrice > 0) ? "Active@" + DoubleToString(g_initialBuyPrice, digits) : "Idle";
-   string sellCycle = (g_initialSellPrice > 0) ? "Active@" + DoubleToString(g_initialSellPrice, digits) : "Idle";
-   DashLabel("GM_Dash_2b", DashboardX, y, "BUY Cycle: " + buyCycle + " | SELL Cycle: " + sellCycle, DashboardColor); y += lineHeight;
+   string tradeModeStr = (TradingMode == TRADE_BUY_ONLY) ? "Buy Only" :
+                          (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
-   if(avgBuy > 0)
+   //--- Header
+   CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
+   CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, "Gold Miner EA v2.3", COLOR_HEADER_TEXT, 11, "Arial Bold");
+   CreateDashText("GM_TBL_HDR_M", DashboardX + 220, DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, 9, "Consolas");
+
+   //--- DETAIL Section
+   int row = 0;
+   DrawTableRow(row, "Balance",       "$" + DoubleToString(balance, 2),  COLOR_TEXT, COLOR_SECTION_DETAIL); row++;
+   DrawTableRow(row, "Equity",        "$" + DoubleToString(equity, 2),   COLOR_TEXT, COLOR_SECTION_DETAIL); row++;
+   DrawTableRow(row, "Floating P/L",  "$" + DoubleToString(totalPL, 2),  (totalPL >= 0 ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_DETAIL); row++;
+   DrawTableRow(row, "Signal (SMA" + IntegerToString(SMA_Period) + ")", smaDir, (smaDir == "BUY ▲" ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_DETAIL); row++;
+
+   // Buy position info
+   string buyInfo = "$" + DoubleToString(plBuy, 2) + "  " + DoubleToString(lotsBuy, 2) + "L  " + IntegerToString(buyCount) + "ord";
+   DrawTableRow(row, "Position BUY",  buyInfo, (plBuy >= 0 ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_DETAIL); row++;
+
+   // Sell position info
+   string sellInfo = "$" + DoubleToString(plSell, 2) + "  " + DoubleToString(lotsSell, 2) + "L  " + IntegerToString(sellCount) + "ord";
+   DrawTableRow(row, "Position SELL", sellInfo, (plSell >= 0 ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_DETAIL); row++;
+
+   DrawTableRow(row, "Current DD%",   DoubleToString(dd, 2) + "%",      (dd > 10 ? COLOR_LOSS : COLOR_TEXT), COLOR_SECTION_DETAIL); row++;
+   DrawTableRow(row, "Max DD%",       DoubleToString(g_maxDD, 2) + "%",  (g_maxDD > 15 ? COLOR_LOSS : COLOR_TEXT), COLOR_SECTION_DETAIL); row++;
+
+   //--- ACCUMULATE Section
+   if(UseAccumulateClose)
    {
-      DashLabel("GM_Dash_3", DashboardX, y, "Avg Buy: " + DoubleToString(avgBuy, digits) + " | PL: $" + DoubleToString(plBuy, 2), DashboardColor);
-      y += lineHeight;
-   }
-   else
-   {
-      ObjectDelete(0, "GM_Dash_3");
+      double accumClosed = g_accumulatedProfit;
+      double accumFloating = CalculateTotalFloatingPL();
+      double accumTotal = accumClosed + accumFloating;
+      double accumNeed = AccumulateTarget - accumTotal;
+      if(accumNeed < 0) accumNeed = 0;
+
+      DrawTableRow(row, "Accum. Closed",   "$" + DoubleToString(accumClosed, 2),   (accumClosed >= 0 ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_ACCUM); row++;
+      DrawTableRow(row, "Accum. Floating",  "$" + DoubleToString(accumFloating, 2), (accumFloating >= 0 ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_ACCUM); row++;
+
+      string accumTotalStr = "$" + DoubleToString(accumTotal, 2)
+                           + "  Tg:$" + DoubleToString(AccumulateTarget, 0)
+                           + "  Need:$" + DoubleToString(accumNeed, 0);
+      DrawTableRow(row, "Accum. Total",    accumTotalStr, (accumTotal >= 0 ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_ACCUM); row++;
    }
 
-   if(avgSell > 0)
-   {
-      DashLabel("GM_Dash_4", DashboardX, y, "Avg Sell: " + DoubleToString(avgSell, digits) + " | PL: $" + DoubleToString(plSell, 2), DashboardColor);
-      y += lineHeight;
-   }
-   else
-   {
-      ObjectDelete(0, "GM_Dash_4");
-   }
-
-   DashLabel("GM_Dash_5", DashboardX, y, "Total PL: $" + DoubleToString(totalPL, 2) + " | DD: " + DoubleToString(dd, 1) + "%", DashboardColor); y += lineHeight;
-
-   //--- Trailing info
+   //--- TRAILING Section
    if(EnablePerOrderTrailing)
    {
       string beInfo = InpEnableBreakeven ? "BE:" + IntegerToString(InpBreakevenTarget) + "/" + IntegerToString(InpBreakevenOffset) : "BE:OFF";
       string trInfo = InpEnableTrailing ? "Trail:" + IntegerToString(InpTrailingStop) + "/" + IntegerToString(InpTrailingStep) : "Trail:OFF";
-      DashLabel("GM_Dash_6", DashboardX, y, "Per-Order: " + beInfo + " " + trInfo, DashboardColor);
-      y += lineHeight;
+      DrawTableRow(row, "Per-Order",  beInfo + "  " + trInfo, COLOR_TEXT, COLOR_SECTION_TRAIL); row++;
    }
    else if(EnableTrailingStop)
    {
-      string trailStatus = "";
-      if(g_trailingActive_Buy) trailStatus += "Buy Trail: " + DoubleToString(g_trailingSL_Buy, digits) + " ";
-      if(g_trailingActive_Sell) trailStatus += "Sell Trail: " + DoubleToString(g_trailingSL_Sell, digits);
-      if(trailStatus == "") trailStatus = "Avg Trailing: Waiting...";
-      DashLabel("GM_Dash_6", DashboardX, y, trailStatus, DashboardColor);
-      y += lineHeight;
-   }
-   else
-   {
-      ObjectDelete(0, "GM_Dash_6");
+      string trailInfo = "";
+      if(g_trailingActive_Buy) trailInfo = "Buy SL:" + DoubleToString(g_trailingSL_Buy, digits);
+      else if(g_trailingActive_Sell) trailInfo = "Sell SL:" + DoubleToString(g_trailingSL_Sell, digits);
+      else trailInfo = "Waiting...";
+      DrawTableRow(row, "Avg Trailing",  trailInfo, COLOR_TEXT, COLOR_SECTION_TRAIL); row++;
    }
 
-   if(UseAccumulateClose)
-   {
-      DashLabel("GM_Dash_7", DashboardX, y, "Accumulated: $" + DoubleToString(g_accumulatedProfit + totalPL, 2) + " / $" + DoubleToString(AccumulateTarget, 2), DashboardColor);
-      y += lineHeight;
-   }
-   else
-   {
-      ObjectDelete(0, "GM_Dash_7");
-   }
+   //--- INFO Section
+   string buyCycle = (g_initialBuyPrice > 0) ? "Active@" + DoubleToString(g_initialBuyPrice, digits) : "Idle";
+   string sellCycle = (g_initialSellPrice > 0) ? "Active@" + DoubleToString(g_initialSellPrice, digits) : "Idle";
 
-   if(EnableAutoReEntry)
-   {
-      DashLabel("GM_Dash_8", DashboardX, y, "Auto Re-Entry: ON", DashboardColor);
-      y += lineHeight;
-   }
-   else
-   {
-      ObjectDelete(0, "GM_Dash_8");
-   }
+   DrawTableRow(row, "BUY Cycle",    buyCycle,  (g_initialBuyPrice > 0 ? COLOR_PROFIT : COLOR_TEXT), COLOR_SECTION_INFO); row++;
+   DrawTableRow(row, "SELL Cycle",   sellCycle, (g_initialSellPrice > 0 ? COLOR_LOSS : COLOR_TEXT), COLOR_SECTION_INFO); row++;
+   DrawTableRow(row, "Auto Re-Entry", (EnableAutoReEntry ? "ON" : "OFF"), (EnableAutoReEntry ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_INFO); row++;
+
+   //--- Bottom border
+   int bottomY = DashboardY + 24 + row * 20;
+   CreateDashRect("GM_TBL_BTM", DashboardX, bottomY, tableWidth, 2, COLOR_HEADER_BG);
 }
 
 //+------------------------------------------------------------------+
-//| Dashboard label helper                                             |
+//| Dashboard label helper (legacy - kept for compatibility)           |
 //+------------------------------------------------------------------+
 void DashLabel(string name, int x, int y, string text, color clr)
 {
