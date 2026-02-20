@@ -26,6 +26,12 @@ enum ENUM_GAP_TYPE
    GAP_ATR     = 2   // ATR-Based
 };
 
+enum ENUM_ATR_REF
+{
+   ATR_REF_INITIAL  = 0,  // From Initial Order (cumulative)
+   ATR_REF_DYNAMIC  = 1   // From Last Grid Order
+};
+
 enum ENUM_SL_ACTION
 {
    SL_CLOSE_POSITIONS = 0,  // Close Positions (Stop Loss)
