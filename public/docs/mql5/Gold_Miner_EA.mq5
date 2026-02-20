@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                              Gold_Miner_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                              Gold Miner EA v2.4 - SMA+Grid+ATR   |
+//|                              Gold Miner EA v2.5 - SMA+Grid+ATR   |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "2.40"
-#property description "Gold Miner EA v2.4 - ATR Initial/Dynamic Grid + Dashboard History"
+#property version   "2.50"
+#property description "Gold Miner EA v2.5 - Fix Unknown Closure Bug (SL guard + Trailing BE + Accumulate)"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -258,7 +258,7 @@ int OnInit()
    //--- Recover initial prices from existing positions
    RecoverInitialPrices();
 
-   Print("Gold Miner EA v2.4 initialized successfully");
+   Print("Gold Miner EA v2.5 initialized successfully");
    return INIT_SUCCEEDED;
 }
 
@@ -277,7 +277,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_Dash_");
    ObjectsDeleteAll(0, "GM_TBL_");
 
-   Print("Gold Miner EA v2.4 deinitialized");
+   Print("Gold Miner EA v2.5 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -795,26 +795,37 @@ void ManageTPSL()
          return;
       }
 
-      //--- SL checks
-      if(EnableSL)
+      //--- SL checks (ONLY when NOT using Per-Order Trailing - per-order trailing handles individual SL via broker)
+      if(EnableSL && !EnablePerOrderTrailing)
       {
-         if(UseSL_Dollar && plBuy <= -SL_DollarAmount) closeSL = true;
-         if(UseSL_Points && bid <= avgBuy - SL_Points * point) closeSL = true;
-         if(UseSL_PercentBalance && plBuy <= -(balance * SL_PercentBalance / 100.0)) closeSL = true;
+         if(UseSL_Dollar && plBuy <= -SL_DollarAmount)
+         {
+            Print("SL_BASKET_DOLLAR HIT (BUY): PL=", plBuy, " Limit=", -SL_DollarAmount);
+            closeSL = true;
+         }
+         if(UseSL_Points && bid <= avgBuy - SL_Points * point)
+         {
+            Print("SL_BASKET_POINTS HIT (BUY): BID=", bid, " Limit=", avgBuy - SL_Points * point);
+            closeSL = true;
+         }
+         if(UseSL_PercentBalance && plBuy <= -(balance * SL_PercentBalance / 100.0))
+         {
+            Print("SL_BASKET_PCT HIT (BUY): PL=", plBuy, " Limit=", -(balance * SL_PercentBalance / 100.0));
+            closeSL = true;
+         }
 
          if(closeSL)
          {
-            Print("SL HIT (BUY): PL=", plBuy);
             if(SL_ActionMode == SL_CLOSE_ALL_STOP)
             {
                CloseAllPositions();
                g_eaStopped = true;
-               Print("EA STOPPED by SL Action");
+               Print("EA STOPPED by SL Action (BUY)");
             }
             else
             {
                CloseAllSide(POSITION_TYPE_BUY);
-                justClosedBuy = true;
+               justClosedBuy = true;
                g_initialBuyPrice = 0;
                ResetTrailingState();
             }
@@ -851,26 +862,37 @@ void ManageTPSL()
          return;
       }
 
-      //--- SL checks
-      if(EnableSL)
+      //--- SL checks (ONLY when NOT using Per-Order Trailing - per-order trailing handles individual SL via broker)
+      if(EnableSL && !EnablePerOrderTrailing)
       {
-         if(UseSL_Dollar && plSell <= -SL_DollarAmount) closeSL2 = true;
-         if(UseSL_Points && ask >= avgSell + SL_Points * point) closeSL2 = true;
-         if(UseSL_PercentBalance && plSell <= -(balance * SL_PercentBalance / 100.0)) closeSL2 = true;
+         if(UseSL_Dollar && plSell <= -SL_DollarAmount)
+         {
+            Print("SL_BASKET_DOLLAR HIT (SELL): PL=", plSell, " Limit=", -SL_DollarAmount);
+            closeSL2 = true;
+         }
+         if(UseSL_Points && ask >= avgSell + SL_Points * point)
+         {
+            Print("SL_BASKET_POINTS HIT (SELL): ASK=", ask, " Limit=", avgSell + SL_Points * point);
+            closeSL2 = true;
+         }
+         if(UseSL_PercentBalance && plSell <= -(balance * SL_PercentBalance / 100.0))
+         {
+            Print("SL_BASKET_PCT HIT (SELL): PL=", plSell, " Limit=", -(balance * SL_PercentBalance / 100.0));
+            closeSL2 = true;
+         }
 
          if(closeSL2)
          {
-            Print("SL HIT (SELL): PL=", plSell);
             if(SL_ActionMode == SL_CLOSE_ALL_STOP)
             {
                CloseAllPositions();
                g_eaStopped = true;
-               Print("EA STOPPED by SL Action");
+               Print("EA STOPPED by SL Action (SELL)");
             }
             else
             {
                CloseAllSide(POSITION_TYPE_SELL);
-                justClosedSell = true;
+               justClosedSell = true;
                g_initialSellPrice = 0;
                ResetTrailingState();
             }
@@ -888,7 +910,7 @@ void ManageTPSL()
       double totalFloating = CalculateTotalFloatingPL();
       double accumTotal = g_accumulatedProfit + totalFloating;
 
-      if(accumTotal >= AccumulateTarget && accumTotal > 0)  // guard: never close on negative total
+      if(accumTotal >= AccumulateTarget && accumTotal > 0 && g_accumulatedProfit > 0)  // guard: only trigger with real closed profit, never on floating alone
       {
          Print("ACCUMULATE TARGET HIT: ", accumTotal, " / ", AccumulateTarget);
          CloseAllPositions();
@@ -1013,9 +1035,9 @@ void ManagePerOrderTrailing()
          {
             double newSL = NormalizeDouble(ask + InpTrailingStop * point, digits);
 
-            // Never above breakeven level (for SELL, BE is below open)
-            double beCeiling = NormalizeDouble(openPrice - InpBreakevenOffset * point, digits);
-            if(newSL > beCeiling) newSL = beCeiling;
+         // Never below breakeven level (for SELL, BE floor is below open price, SL moves downward)
+            double beFloor = NormalizeDouble(openPrice - InpBreakevenOffset * point, digits);
+            if(newSL < beFloor) newSL = beFloor;  // SELL: SL must not go below BE floor
 
             // Broker stop level check
             double maxSL = NormalizeDouble(ask + stopLevel * point, digits);
