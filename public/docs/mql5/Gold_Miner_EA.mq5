@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                              Gold_Miner_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                              Gold Miner EA v2.4 - SMA+Grid+ATR   |
+//|                              Gold Miner EA v2.5 - SMA+Grid+ATR   |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "2.40"
-#property description "Gold Miner EA v2.4 - ATR Initial/Dynamic Grid + Dashboard History"
+#property version   "2.50"
+#property description "Gold Miner EA v2.5 - Fix Unknown Closure Bug (SL guard + Trailing BE + Accumulate)"
 #property strict
 
 #include <Trade/Trade.mqh>
