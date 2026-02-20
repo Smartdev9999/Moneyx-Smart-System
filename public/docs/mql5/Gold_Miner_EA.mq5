@@ -1291,13 +1291,25 @@ void CheckGridProfit(ENUM_POSITION_TYPE side, int currentGridCount)
    double currentPrice = (side == POSITION_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
 
    bool shouldOpen = false;
-   if(side == POSITION_TYPE_BUY && currentPrice >= lastPrice + distance * point)
+
+   if(GridProfit_GapType == GAP_ATR && GridProfit_ATR_Reference == ATR_REF_INITIAL)
    {
-      shouldOpen = true;
+      // Initial mode: cumulative distance from initial price
+      double initialRef = (side == POSITION_TYPE_BUY) ? g_initialBuyPrice : g_initialSellPrice;
+      if(initialRef <= 0) return;
+      double totalDistance = distance * (currentGridCount + 1);
+      if(side == POSITION_TYPE_BUY)
+         shouldOpen = (currentPrice >= initialRef + totalDistance * point);
+      else
+         shouldOpen = (currentPrice <= initialRef - totalDistance * point);
    }
-   else if(side == POSITION_TYPE_SELL && currentPrice <= lastPrice - distance * point)
+   else
    {
-      shouldOpen = true;
+      // Dynamic mode (default): distance from last grid order
+      if(side == POSITION_TYPE_BUY && currentPrice >= lastPrice + distance * point)
+         shouldOpen = true;
+      else if(side == POSITION_TYPE_SELL && currentPrice <= lastPrice - distance * point)
+         shouldOpen = true;
    }
 
    if(shouldOpen)
