@@ -1265,7 +1265,7 @@ void CheckDrawdownExit()
          g_initialSellPrice = 0;
          justClosedBuy      = true;
          justClosedSell     = true;
-         g_accumulateBaseline = GetTotalHistoryProfit();
+         g_accumulateBaseline = CalcHistoryProfit(0);
          ResetTrailingState();
          Print("EA continues after DD close (StopEAOnDrawdown=false) - waiting for next signal");
       }
