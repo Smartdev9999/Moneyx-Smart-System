@@ -1035,9 +1035,9 @@ void ManagePerOrderTrailing()
          {
             double newSL = NormalizeDouble(ask + InpTrailingStop * point, digits);
 
-         // Never below breakeven level (for SELL, BE floor is below open price, SL moves downward)
-            double beFloor = NormalizeDouble(openPrice - InpBreakevenOffset * point, digits);
-            if(newSL < beFloor) newSL = beFloor;  // SELL: SL must not go below BE floor
+          // Never above breakeven ceiling (for SELL, BE ceiling is below open price, SL moves downward)
+             double beCeiling = NormalizeDouble(openPrice - InpBreakevenOffset * point, digits);
+             if(newSL > beCeiling) newSL = beCeiling;  // SELL: SL must not go above BE ceiling (would be a loss)
 
             // Broker stop level check
             double maxSL = NormalizeDouble(ask + stopLevel * point, digits);
