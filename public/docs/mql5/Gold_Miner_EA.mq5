@@ -1250,9 +1250,25 @@ void CheckDrawdownExit()
    double dd = (balance - equity) / balance * 100.0;
    if(dd >= MaxDrawdownPct)
    {
-      Print("EMERGENCY: Drawdown ", dd, "% >= ", MaxDrawdownPct, "% - Closing all!");
+      Print("EMERGENCY DD: ", DoubleToString(dd, 2), "% >= ", MaxDrawdownPct, "% - Closing all positions!");
       CloseAllPositions();
-      g_eaStopped = true;
+
+      if(StopEAOnDrawdown)
+      {
+         g_eaStopped = true;
+         Print("EA STOPPED by Max Drawdown (StopEAOnDrawdown=true)");
+      }
+      else
+      {
+         // Reset state so EA can re-enter on next valid signal
+         g_initialBuyPrice  = 0;
+         g_initialSellPrice = 0;
+         justClosedBuy      = true;
+         justClosedSell     = true;
+         g_accumulateBaseline = GetTotalHistoryProfit();
+         ResetTrailingState();
+         Print("EA continues after DD close (StopEAOnDrawdown=false) - waiting for next signal");
+      }
    }
 }
 
