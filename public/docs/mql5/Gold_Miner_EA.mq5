@@ -102,6 +102,8 @@ input string         GridProfit_CustomDistance= "100;200;500"; // Custom Distanc
 input ENUM_TIMEFRAMES GridProfit_ATR_TF      = PERIOD_H1;  // ATR Timeframe
 input int            GridProfit_ATR_Period   = 14;         // ATR Period
 input double         GridProfit_ATR_Multiplier= 1.0;       // ATR Multiplier
+input ENUM_ATR_REF   GridProfit_ATR_Reference = ATR_REF_DYNAMIC; // ATR Reference Point
+input int            GridProfit_MinGapPoints  = 100;             // Minimum Grid Gap (points)
 input bool           GridProfit_OnlyNewCandle= true;       // Grid Only on New Candle
 
 //--- Take Profit
