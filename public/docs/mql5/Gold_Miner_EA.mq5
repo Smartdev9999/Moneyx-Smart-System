@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                              Gold_Miner_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                              Gold Miner EA v2.5 - SMA+Grid+ATR   |
+//|                              Gold Miner EA v2.6 - SMA+Grid+ATR   |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "2.50"
-#property description "Gold Miner EA v2.5 - Fix Unknown Closure Bug (SL guard + Trailing BE + Accumulate)"
+#property version   "2.60"
+#property description "Gold Miner EA v2.6 - Fix SELL Per-Order Trailing Stop (BE ceiling guard)"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -1035,9 +1035,9 @@ void ManagePerOrderTrailing()
          {
             double newSL = NormalizeDouble(ask + InpTrailingStop * point, digits);
 
-         // Never below breakeven level (for SELL, BE floor is below open price, SL moves downward)
-            double beFloor = NormalizeDouble(openPrice - InpBreakevenOffset * point, digits);
-            if(newSL < beFloor) newSL = beFloor;  // SELL: SL must not go below BE floor
+          // Never above breakeven ceiling (for SELL, BE ceiling is below open price, SL moves downward)
+             double beCeiling = NormalizeDouble(openPrice - InpBreakevenOffset * point, digits);
+             if(newSL > beCeiling) newSL = beCeiling;  // SELL: SL must not go above BE ceiling (would be a loss)
 
             // Broker stop level check
             double maxSL = NormalizeDouble(ask + stopLevel * point, digits);
