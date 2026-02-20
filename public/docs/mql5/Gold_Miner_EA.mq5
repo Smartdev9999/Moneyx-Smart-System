@@ -258,7 +258,7 @@ int OnInit()
    //--- Recover initial prices from existing positions
    RecoverInitialPrices();
 
-   Print("Gold Miner EA v2.4 initialized successfully");
+   Print("Gold Miner EA v2.5 initialized successfully");
    return INIT_SUCCEEDED;
 }
 
