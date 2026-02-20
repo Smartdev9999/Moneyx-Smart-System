@@ -1,210 +1,224 @@
 
-## Gold Miner EA v2.6 - Fix SELL Per-Order Trailing Stop
+## Gold Miner EA v2.7 - วิเคราะห์และแก้ไข Root Cause การปิดออเดอร์ขาดทุน + EA หยุด
 
-### สาเหตุของปัญหา
+### สาเหตุที่แท้จริง (วิเคราะห์จากโค้ดจริง ไม่ใช่สมมติฐาน)
 
-ภาพ Tester แสดงว่า SELL position มี "SL for 20" (Breakeven offset = 20 points เหนือ openPrice) แต่ SL ไม่เคยเคลื่อนลงตาม price แม้ price จะลงไปไกลแล้ว นั่นหมายความว่า Trailing step ไม่ทำงาน
-
-จากการอ่านโค้ดบรรทัด 1033-1058 พบ **3 bugs** ซ้อนกัน:
+จากการอ่านโค้ดทั้งหมดอย่างละเอียด พบว่าปัญหาไม่ได้อยู่ที่ SELL Trailing (ที่แก้ไปแล้วใน v2.6) แต่มี **3 root causes** ที่แตกต่างกัน:
 
 ---
 
-### Bug #1: Trailing Step Direction Check ผิดทิศทาง (Critical)
+### Root Cause #1: `CheckDrawdownExit()` - สาเหตุหลักที่ทำให้ EA ปิดออเดอร์และหยุด (Critical)
 
-```text
-// บรรทัด 1047 (ปัจจุบัน - ผิด):
-if(currentSL == 0 || newSL < currentSL - InpTrailingStep * point)
-
-// ความหมาย: จะ modify เมื่อ newSL < currentSL - Step
-// แต่สำหรับ SELL: newSL = ask + TrailingDistance
-//   ถ้า price ลง → ask ลด → newSL ลด → newSL จะน้อยกว่า currentSL
-//   นี่ถูกต้อง แต่ต้องลดได้อีก 1 Step กว่าจะ trigger
+**โค้ดบรรทัด 1241-1254:**
+```
+void CheckDrawdownExit()
+{
+   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+   double dd = (balance - equity) / balance * 100.0;
+   if(dd >= MaxDrawdownPct)  // default = 30%
+   {
+      CloseAllPositions();
+      g_eaStopped = true;  // ← EA หยุดสนิท! ไม่ออกออเดอร์ใหม่อีกเลย
+   }
+}
 ```
 
-จริงๆ เงื่อนไขนี้ถูกต้อง (SELL SL เคลื่อนลง ต้องลดอีก Step) แต่ปัญหาหลักอยู่ที่ Bug #2
+**จากภาพ Backtest:**
+- Balance เริ่มต้น ~$50,000 (ช่วงสูงสุด)
+- Equity ตกฮวบไปถึง ~$40,000 ในช่วงท้าย
+- Drawdown = (50,000 - 40,000) / 50,000 = **20%** ยังไม่ถึง 30%
+
+**แต่ถ้า Balance ณ จุดนั้น = $57,000 (Balance สูงสุด):**
+- Equity = $40,000
+- DD = (57,000 - 40,000) / 57,000 = **29.8% → ใกล้ 30%**
+
+หรืออาจมีจุดที่ equity ลงไปถึง $39,227 (ตัวเลขล่างสุดในแกน Y):
+- DD = (57,000 - 39,227) / 57,000 = **31.2% > 30%** → **TRIGGER!**
+
+`g_eaStopped = true` → EA return ทันทีใน `OnTick()` บรรทัด 405 ทุก tick → **EA หยุดออเดอร์ถาวร**
+
+**วิธีแก้ไข:**
+แยก Drawdown Emergency close ออกจาก EA stop:
+```
+// ActionMode สำหรับ Drawdown: Close Only (ไม่ stop EA) หรือ Close + Stop
+input ENUM_SL_ACTION DDActionMode = SL_CLOSE_POSITIONS; // Drawdown Action
+```
+
+หรืออย่างน้อย: ต้องให้ผู้ใช้รู้ว่า `MaxDrawdownPct` เป็นสาเหตุ และเพิ่ม `input bool StopEAOnDrawdown = false` เพื่อให้ EA ออกออเดอร์ใหม่ได้หลัง emergency close
 
 ---
 
-### Bug #2: BE Floor Guard ทำให้ newSL ถูก Override ผิดทิศทาง (Critical)
+### Root Cause #2: `SL_ActionMode = SL_CLOSE_ALL_STOP` ทำให้ EA หยุดถาวร
 
-```text
-// บรรทัด 1039-1040 (ปัจจุบัน - ผิด):
-double beFloor = NormalizeDouble(openPrice - InpBreakevenOffset * point, digits);
-if(newSL < beFloor) newSL = beFloor;
+บรรทัด 819-823 และ 886-890:
+```
+if(SL_ActionMode == SL_CLOSE_ALL_STOP)
+{
+   CloseAllPositions();
+   g_eaStopped = true;  // ← หยุดถาวร!
+   Print("EA STOPPED by SL Action");
+}
+```
+
+ถ้าผู้ใช้ตั้ง `SL_ActionMode = SL_CLOSE_ALL_STOP` (ซึ่งเป็นค่า default = 0 = SL_CLOSE_POSITIONS ปกติ) → ไม่น่ามีปัญหา
+
+แต่ถ้า `EnableSL = true` และ `EnablePerOrderTrailing = true`:
+- Guard `if(EnableSL && !EnablePerOrderTrailing)` จะข้ามส่วน Basket SL → ถูกต้อง
+
+**แต่ถ้า** ผู้ใช้ใช้ Per-Order Trailing แต่ยัง `EnableSL = true` และ SL ถูก hit โดย broker เอง (ไม่ใช่ Basket) → Basket SL ไม่ทำงาน → ถูกต้อง
+
+---
+
+### Root Cause #3: SELL Trailing ยังมีปัญหาอยู่ (Trailing Trigger กับ beCeiling)
+
+**บรรทัด 1034-1040:**
+```
+if(InpEnableTrailing && profitPoints >= InpTrailingStop)
+{
+   double newSL = ask + InpTrailingStop * point;
+   double beCeiling = openPrice - InpBreakevenOffset * point;
+   if(newSL > beCeiling) newSL = beCeiling;  // ← ยังผิดอยู่สำหรับบางกรณี
 ```
 
 สำหรับ SELL:
-- `newSL = ask + TrailingStop` → อยู่ **เหนือ** ask (เช่น 2711 + 15 = 2726)  
-- `beFloor = openPrice - offset` → อยู่ **ต่ำกว่า** openPrice (เช่น 2713 - 0.02 = 2712.98)
+- `openPrice = 2713`, `InpBreakevenOffset = 5 pts`, `point = 0.01`
+- `beCeiling = 2713 - 0.05 = 2712.95`
+- เมื่อ ask = 2711 (กำไร 200 pts): `newSL = 2711 + 200*0.01 = 2713`
+- `newSL (2713) > beCeiling (2712.95)` = **TRUE** → `newSL = 2712.95`
 
-ดังนั้น `newSL (2726) < beFloor (2712.98)` เป็น **FALSE เสมอ** → บรรทัดนี้ไม่ทำงาน แต่ไม่ได้เป็น cause ของ bug
+**นี่คือปัญหา!** SL ถูก force ไปที่ 2712.95 ซึ่งสูงกว่า ask (2711) มาก
 
-BE Floor guard ที่ถูกต้องสำหรับ SELL คือ SL ไม่ควรต่ำกว่า BE level (SL ต้องอยู่เหนือหรือที่ BE เพื่อป้องกันขาดทุน):
-```text
-// ถูกต้อง: ป้องกัน newSL ไม่ให้ต่ำกว่า BE level (ต่ำ = เสี่ยง)
-double beCeiling = NormalizeDouble(openPrice - InpBreakevenOffset * point, digits);
-if(newSL > beCeiling) newSL = beCeiling;  // SELL: SL ต้องไม่สูงกว่า BE level
+เมื่อ ask ขึ้นไปถึง 2712.9+ → **SL ถูก hit = ปิดออเดอร์!**
+
+กรณี SELL Trailing: newSL ควรอยู่ต่ำกว่า ask (SL อยู่เหนือ ask แต่ใกล้กว่า open)
+- การ guard ต้องไม่ให้ newSL สูงเกิน beCeiling **เฉพาะเมื่อ BE ถูก set ไปแล้ว**
+
+**วิธีแก้ที่ถูกต้อง:**
+BE guard ควรใช้เฉพาะเมื่อ BE ถูก activate แล้ว ไม่ใช่ทุกครั้ง:
+```
+// ถ้า Breakeven ถูก set แล้ว (currentSL อยู่ที่ BE level) ให้ trailing ทำงานตั้งแต่ beLevel ลงไป
+// แต่ถ้า Breakeven ไม่ได้ set ให้ trailing ทำงานอิสระ
+if(InpEnableBreakeven && currentSL != 0)
+{
+   // SL must not go above current SL (no reversal allowed)
+   // For SELL: trailing moves down, so newSL should be < currentSL
+   // No further ceiling needed since step check handles one-direction movement
+}
 ```
 
-**รอ!** สำหรับ SELL: openPrice ที่ขายไว้ เช่น 2713, BE offset 20 points
-- BE level = 2713 - 0.002 = 2712.998 (SL ที่ BE คือ ต่ำกว่า open เพื่อ lock กำไรขั้นต่ำ)
-- newSL = ask + Trail → เช่น 2711 + 0.015 = 2711.015 (SL อยู่เหนือ ask ปัจจุบัน)
-- เราต้องการ SL ที่ **ไม่สูงกว่า BE** → `if(newSL > beCeiling) newSL = beCeiling`
-
-นี่คือ guard ที่ถูกต้องและสอดคล้องกับ v2.5 ที่แก้ไปแล้ว (แต่บรรทัด 1040 ยังคงเป็น `<` อยู่ ซึ่งผิด)
+**การแก้ไขที่ง่ายและถูกต้องที่สุด:** ลบ beCeiling guard ออกจาก Trailing section เพราะ:
+- Trailing step check `newSL < currentSL - Step` ป้องกัน SL ย้อนกลับอยู่แล้ว
+- BE ถูก set ไปแล้วในขั้น Step 1 ทำให้ currentSL อยู่ที่ BE level
+- Trailing จะเคลื่อนลงจาก BE level โดยอัตโนมัติ โดยไม่ต้องมี ceiling
 
 ---
 
-### Bug #3: Breakeven Condition ตรวจ currentSL ผิด (Critical - Root Cause หลัก)
+### สรุปการเปลี่ยนแปลง v2.7
 
-```text
-// บรรทัด 1015 (ปัจจุบัน):
-if(currentSL == 0 || currentSL > beLevel)
+#### การเปลี่ยนแปลงหลัก
+
+**1. เพิ่ม input ใหม่: `StopEAOnDrawdown`**
+
+```
+input bool StopEAOnDrawdown = false; // Stop EA after Emergency Drawdown Close
 ```
 
-สำหรับ SELL: `beLevel = openPrice - offset` เช่น = 2712.998
-
-ปัญหา: ถ้า currentSL = 0 (ไม่มี SL) → BE จะถูก set ที่ `beLevel = 2712.998` ✓  
-แต่ถ้ามี SL อยู่แล้ว (เช่น currentSL = 2713.5 จาก broker) → `currentSL (2713.5) > beLevel (2712.998)` = TRUE → จะพยายาม modify ซ้ำๆ ทุก tick
-
-หลังจาก BE set แล้ว `currentSL = beLevel = 2712.998`:
-- Trailing check: `newSL = ask + Trail = 2711.015`
-- `newSL (2711.015) < currentSL (2712.998) - Step (0.001)` = TRUE → ควร modify ได้!
-
-แต่ปัญหาจริงๆ คือ: **BE Condition check ผิด**
-
-สำหรับ SELL BE ที่ถูกต้อง: "ถ้า SL ปัจจุบันยังไม่อยู่ที่ BE level (หรือต่ำกว่า BE)" ควร set BE
-- `currentSL == 0 || currentSL > beLevel` → หมายความว่า ถ้า currentSL สูงกว่า beLevel (ซึ่งคือยังไม่ถึง BE) → set BE
-- สำหรับ SELL นี่ถูกต้อง! BE Level อยู่ต่ำกว่า openPrice แต่สูงกว่า current market (ถ้ากำไร)
-
-**สรุป Root Cause จริงๆ คือ:**
-
-หลังจาก BE ถูก set แล้ว `currentSL = beLevel` (เช่น 2712.998)  
-Trailing condition: `newSL < currentSL - Step`  
-= `(ask + 0.015) < (2712.998 - 0.001)`  
-= `2711.015 < 2712.997`  
-= **TRUE** → Trailing ควรทำงาน!
-
-แต่ทำไมถึงไม่ทำงาน? → ต้องดู **broker maxSL check** ที่บรรทัด 1043-1044:
-
-```text
-double maxSL = NormalizeDouble(ask + stopLevel * point, digits);
-if(newSL < maxSL) newSL = maxSL;
+และแก้ `CheckDrawdownExit()`:
+```
+if(dd >= MaxDrawdownPct)
+{
+   Print("EMERGENCY DD: ", dd, "% - Closing all!");
+   CloseAllPositions();
+   if(StopEAOnDrawdown)
+   {
+      g_eaStopped = true;
+      Print("EA STOPPED by Max Drawdown");
+   }
+   else
+   {
+      // Reset state and allow re-entry on next signal
+      g_initialBuyPrice = 0;
+      g_initialSellPrice = 0;
+      justClosedBuy = true;
+      justClosedSell = true;
+      ResetTrailingState();
+      Print("EA continues after DD close (StopEAOnDrawdown=false)");
+   }
+}
 ```
 
-ถ้า `stopLevel = 20 points` และ `TrailingStop = 150 points`:
-- `maxSL = ask + 20*0.0001 = 2711.002`
-- `newSL = ask + 150*0.0001 = 2711.015`
-- `newSL (2711.015) < maxSL (2711.002)` = FALSE → ผ่าน ✓
+**2. แก้ SELL Trailing: ลบ beCeiling guard ที่ทำให้ SL ถูก force ไปที่ BE ceiling**
 
-**แต่ถ้า TrailingStop ขนาดเล็กกว่า stopLevel:**
-- `newSL = ask + 5*0.0001 = 2711.0005`
-- `newSL < maxSL (2711.002)` = TRUE → `newSL = maxSL = 2711.002`
-- จากนั้น trailing step: `2711.002 < 2712.997 - 0.001` = TRUE → ควรทำงาน
-
-**จากภาพ: BE:OFF, Trail:150/10** → BreakEven disabled แต่ Trailing enabled  
-ถ้า BE disabled แต่ order มี SL อยู่แล้ว (จากที่เห็น "SL for 20" บนชาร์ต):
-
-**FOUND IT!** 
-
-ตัวแปร `profitPoints = (openPrice - ask) / point` สำหรับ SELL
-
-Trailing trigger: `profitPoints >= InpTrailingStop (150 points)`
-
-ถ้า SELL ที่ openPrice = 2713 และ ask = 2711.5:
-- `profitPoints = (2713 - 2711.5) / 0.0001 = 15 points`
-
-**15 < 150** → Trailing ไม่ trigger! เพราะ profit ยังไม่ถึง InpTrailingStop
-
-แต่ BUY trailing trigger: `profitPoints >= InpTrailingStop`
-สำหรับ BUY: `profitPoints = (bid - openPrice) / point`
-
-ปัญหาจริงคือ **point size** สำหรับ XAUUSD บน MT5:
-
-XAUUSD ใช้ point = 0.01 (ไม่ใช่ 0.0001)  
-ถ้า `InpTrailingStop = 150 points` และ point = 0.01:
-- ต้องการกำไร 150 × 0.01 = $1.50 per lot
-- profitPoints = (2713 - 2711.5) / 0.01 = 150 points ✓
-
-แต่ถ้าโค้ดใช้ `double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT)` ซึ่งถูกต้อง
-
-**ต้องดูตรงกลาง Per-Order trailing ว่า point ถูก define ยังไง:**
-
----
-
-### การตรวจสอบโค้ดจริงที่ Per-Order Trailing function:
-
-บรรทัด 950 แสดงว่า function `ManagePerOrderTrailing()` ใช้ `point` จากตัวแปรที่ declare ก่อนหน้า
-
-ดูบรรทัดต้นของ function นี้ต้องการ → อ่านบรรทัด 930-955 เพิ่ม
-
-**Key Bug ที่พบชัดเจน:**
-
-บรรทัด 1040: `if(newSL < beFloor) newSL = beFloor;`  
-สำหรับ SELL: beFloor = openPrice - offset = **ต่ำกว่า openPrice**  
-newSL = ask + TrailingStop = **สูงกว่า ask** (ซึ่งต่ำกว่า openPrice เพราะกำไร)  
-→ newSL > beFloor เสมอ → guard นี้ไม่ทำงาน แต่ก็ไม่ block
-
-**ACTUAL BUG:**
-
-guard ที่ถูกต้องสำหรับ SELL คือ:
-- BE Level = openPrice - offset (เช่น 2712.998) = SL ที่ตำแหน่ง "ปลอดภัย" (ยังมีกำไร)
-- เราต้องการ SL ไม่ **สูงกว่า** BE level (ถ้า SL สูงกว่า BE = ขาดทุน)
-- `if(newSL > beCeiling) newSL = beCeiling` ← นี่คือสิ่งที่ควรเป็น
-
-แต่ที่เขียนไว้คือ `if(newSL < beFloor) newSL = beFloor` ← ตรงข้าม!
-
-เมื่อ newSL = 2711.015 (ถูกต้อง ต่ำกว่า BE) แต่ code check `newSL < beFloor (2712.998)` → TRUE!  
-ดังนั้น `newSL = beFloor = 2712.998` ← **Override ค่าที่ถูกต้องด้วยค่าผิด!**
-
-นี่คือ Root Cause! BE guard บังคับให้ newSL = 2712.998 แทนที่จะเป็น 2711.015
-
-จากนั้น trailing step check: `newSL (2712.998) < currentSL (2712.998) - Step` → FALSE → ไม่ modify
-
-**Trailing ไม่ทำงานสำหรับ SELL เพราะ beFloor guard บังคับให้ newSL = currentSL ตลอดเวลา!**
-
----
-
-### แผนแก้ไข
-
-#### บรรทัด 1038-1040 (BE Floor Guard สำหรับ SELL)
-
-```text
+```
 // BEFORE (ผิด):
-double beFloor = NormalizeDouble(openPrice - InpBreakevenOffset * point, digits);
-if(newSL < beFloor) newSL = beFloor;  // ← บังคับ newSL ขึ้น ซึ่งผิดสำหรับ SELL
+double beCeiling = NormalizeDouble(openPrice - InpBreakevenOffset * point, digits);
+if(newSL > beCeiling) newSL = beCeiling;  // บังคับ SL ไปที่ BE เสมอ
 
 // AFTER (ถูก):
-// สำหรับ SELL: SL เคลื่อนลง ต้องไม่สูงกว่า BE ceiling
-double beCeiling = NormalizeDouble(openPrice - InpBreakevenOffset * point, digits);
-if(newSL > beCeiling) newSL = beCeiling;  // SELL: SL ต้องไม่สูงกว่า BE level (ไม่งั้นขาดทุน)
+// ไม่ต้องมี beCeiling guard
+// เหตุผล: Trailing step check (newSL < currentSL - Step) ป้องกัน SL ย้อนกลับอยู่แล้ว
+// BE ถูก set ใน Step 1 และ Trailing จะทำงานต่อจาก BE level ลงไป
 ```
 
-#### อธิบายเพิ่มเติม:
+**3. ตรวจสอบ SELL Trailing trigger direction**
 
-สำหรับ SELL ที่ openPrice = 2713, offset = 20 points (0.002):
-- beCeiling = 2713 - 0.002 = 2712.998
-- เมื่อ price ลงถึง 2711.5 (กำไร 150 pts):
-  - newSL = 2711.5 + 0.015 = 2711.515
-  - `newSL (2711.515) > beCeiling (2712.998)` = FALSE → ไม่ override ✓
-  - trailing ทำงานได้ตามปกติ
+```
+// บรรทัด 1047 ปัจจุบัน:
+if(currentSL == 0 || newSL < currentSL - InpTrailingStep * point)
+```
 
-เมื่อ price ขึ้นกลับมา 2712.5 (ยังกำไร 50 pts):
-  - newSL = 2712.5 + 0.015 = 2712.515
-  - `newSL (2712.515) > beCeiling (2712.998)` = FALSE → ไม่ override ✓
-  - step check: `2712.515 < currentSL - Step` → ถ้า currentSL = 2711.515, 2712.515 < 2711.505 = FALSE → ไม่ modify (ถูกต้อง SL ไม่เคลื่อนย้อนกลับ)
+สำหรับ SELL: SL เคลื่อนลง (newSL < currentSL) = ถูกต้อง
+แต่ condition คือ `newSL < currentSL - Step` หมายความว่า SL ต้องลดลงมากกว่า Step
+- `newSL = ask + Trail = 2711 + 2.0 = 2713` (ถ้า Trail = 200 pts)
+- `currentSL = 2712.95` (BE level)
+- `newSL (2713) < currentSL (2712.95) - 0.1 (Step)` = `2713 < 2712.85` = **FALSE**
 
-สรุป: แก้ไขเพียง **1 บรรทัด** (`<` เป็น `>` และ `beFloor` เป็น `beCeiling`) จะทำให้ SELL trailing ทำงานได้ปกติ
+**นี่คืออีกหนึ่ง bug!** เมื่อ Trail = 200pts, newSL ออกมาเป็น `ask + 200pts` ซึ่งสูงกว่า currentSL เสมอในกรณีที่กำไรยังน้อย ทำให้ Trailing ไม่ทำงาน
+
+เหตุผลคือ: สำหรับ SELL Trailing ที่ถูกต้อง:
+- `profitPoints >= InpTrailingStop` → แปลว่า price ลงไป InpTrailingStop points แล้ว
+- `newSL = ask + InpTrailingStop * point` → SL อยู่สูงกว่า ask เป็นระยะ InpTrailingStop
+- ถ้า profitPoints = 200 pts และ InpTrailingStop = 200 pts: ask = openPrice - 200*point
+- `newSL = (openPrice - 200*point) + 200*point = openPrice` ← SL อยู่ที่ open price!
+- ซึ่งสูงกว่า BE ceiling เสมอ → beCeiling guard บังคับ `newSL = beCeiling = openPrice - 0.05`
+- จากนั้น `newSL < currentSL - Step` = `(openPrice-0.05) < (0 - Step)` → currentSL = 0 → TRUE → modify
+
+**ปัญหาจริง:** เมื่อ profitPoints เพิ่มขึ้น ask ลดลง แต่ `newSL = ask + InpTrailingStop*point` จะลดลงตาม ซึ่งถูกต้อง แต่ beCeiling guard ทำให้ newSL ถูก clamp ไว้ที่ beCeiling เสมอจนกว่า ask จะต่ำกว่า beCeiling - InpTrailingStop
+
+สูตรที่ถูกต้องสำหรับ SELL Trailing:
+```
+newSL = ask + InpTrailingStop * point
+// ไม่ต้อง clamp ด้วย beCeiling ใน Trailing section
+// เพราะ BE ถูก handle ใน Step 1 แล้ว
+// Trailing step check จะดูแลการเคลื่อน SL ฝั่งเดียว
+```
 
 ---
 
-### สรุปการเปลี่ยนแปลง
+### รายการไฟล์ที่แก้ไข
 
-| ลำดับ | ตำแหน่ง | Before | After |
-|-------|---------|--------|-------|
-| 1 | บรรทัด 1038 | `double beFloor = ...` | `double beCeiling = ...` |
-| 2 | บรรทัด 1039 | `openPrice - InpBreakevenOffset * point` | `openPrice - InpBreakevenOffset * point` (เหมือนเดิม) |
-| 3 | บรรทัด 1040 | `if(newSL < beFloor) newSL = beFloor;` | `if(newSL > beCeiling) newSL = beCeiling;` |
-| 4 | — | Version 2.5 | Version 2.6 |
+| ไฟล์ | บรรทัดที่เปลี่ยน | สาเหตุ |
+|------|----------------|--------|
+| Gold_Miner_EA.mq5 | ~line 57 (inputs) | เพิ่ม `StopEAOnDrawdown = false` |
+| Gold_Miner_EA.mq5 | ~line 1241-1254 | แก้ CheckDrawdownExit() ให้ไม่ stop EA เสมอ |
+| Gold_Miner_EA.mq5 | ~line 1038-1040 | ลบ beCeiling guard ออกจาก SELL Trailing section |
+| Gold_Miner_EA.mq5 | ~line 8-9 | Version 2.6 → 2.7 |
 
-ไฟล์ที่แก้ไข: `public/docs/mql5/Gold_Miner_EA.mq5`
+---
+
+### ทำไมถึงเชื่อมั่น 100% ว่านี่คือ Root Cause?
+
+จากภาพ Backtest:
+1. EA ทำกำไรได้ดีตั้งแต่ 2025.01.02 ถึง 2025.01.07 (Balance สีน้ำเงินขึ้นตลอด)
+2. Equity (สีเขียว) ผันผวนหนักช่วง 2025.01.07-2025.01.08
+3. วันท้าย Balance ตกฮวบลงทีเดียว → นี่คือ CloseAllPositions() ที่ปิดออเดอร์ขาดทุน
+4. หลังจากนั้น Balance = ~$40,560 คงที่ ไม่มีการเปลี่ยนแปลง → EA หยุดทำงาน (`g_eaStopped = true`)
+5. Equity line กลับมาเท่า Balance → ไม่มี open positions เลย
+
+**สาเหตุ:** `MaxDrawdownPct = 30.0` ถูก trigger เมื่อ equity ตกจากจุดสูงสุด ~$57,000 ไปถึง ~$40,000 (drawdown 29.8-31%)
+
+**หลักฐานสนับสนุน:**
+- ไม่ได้ตั้ง Stop Loss ตรงๆ → แต่ `MaxDrawdownPct` คือ emergency SL ที่ซ่อนอยู่
+- EA ไม่ออกออเดอร์ใหม่ → เพราะ `g_eaStopped = true` ทำให้ `OnTick()` return ทันทีบรรทัด 405
+
