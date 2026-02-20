@@ -1360,6 +1360,8 @@ void FindLastOrder(ENUM_POSITION_TYPE side, string prefix1, string prefix2, doub
 //+------------------------------------------------------------------+
 double GetGridDistance(int level, bool isLossSide)
 {
+   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+
    if(isLossSide)
    {
       if(GridLoss_GapType == GAP_FIXED)
@@ -1370,12 +1372,15 @@ double GetGridDistance(int level, bool isLossSide)
       {
          return ParseCustomValue(GridLoss_CustomDistance, level);
       }
-      else // ATR
+      else // ATR - use index 1 (closed bar) to prevent repaint
       {
-         if(bufATR_Loss[0] > 0)
+         double atrVal = (ArraySize(bufATR_Loss) > 1 && bufATR_Loss[1] > 0) ? bufATR_Loss[1] : bufATR_Loss[0];
+         if(atrVal > 0)
          {
-            double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
-            return bufATR_Loss[0] * GridLoss_ATR_Multiplier / point;
+            double atrDistance = atrVal * GridLoss_ATR_Multiplier / point;
+            // Apply minimum gap to prevent too-tight grids on low ATR
+            atrDistance = MathMax(atrDistance, (double)GridLoss_MinGapPoints);
+            return atrDistance;
          }
          return (double)GridLoss_Points;
       }
@@ -1390,12 +1395,15 @@ double GetGridDistance(int level, bool isLossSide)
       {
          return ParseCustomValue(GridProfit_CustomDistance, level);
       }
-      else // ATR
+      else // ATR - use index 1 (closed bar) to prevent repaint
       {
-         if(bufATR_Profit[0] > 0)
+         double atrVal = (ArraySize(bufATR_Profit) > 1 && bufATR_Profit[1] > 0) ? bufATR_Profit[1] : bufATR_Profit[0];
+         if(atrVal > 0)
          {
-            double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
-            return bufATR_Profit[0] * GridProfit_ATR_Multiplier / point;
+            double atrDistance = atrVal * GridProfit_ATR_Multiplier / point;
+            // Apply minimum gap to prevent too-tight grids on low ATR
+            atrDistance = MathMax(atrDistance, (double)GridProfit_MinGapPoints);
+            return atrDistance;
          }
          return (double)GridProfit_Points;
       }
