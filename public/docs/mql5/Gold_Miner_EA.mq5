@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                              Gold_Miner_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                                     Gold Miner EA v2.3 - SMA+Grid|
+//|                              Gold Miner EA v2.4 - SMA+Grid+ATR   |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "2.30"
-#property description "Gold Miner EA v2.3 - Baseline Accumulate + Table Dashboard"
+#property version   "2.40"
+#property description "Gold Miner EA v2.4 - ATR Initial/Dynamic Grid + Dashboard History"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -24,6 +24,12 @@ enum ENUM_GAP_TYPE
    GAP_FIXED   = 0,  // Fixed Points
    GAP_CUSTOM  = 1,  // Custom Distance
    GAP_ATR     = 2   // ATR-Based
+};
+
+enum ENUM_ATR_REF
+{
+   ATR_REF_INITIAL  = 0,  // From Initial Order (cumulative)
+   ATR_REF_DYNAMIC  = 1   // From Last Grid Order
 };
 
 enum ENUM_SL_ACTION
@@ -76,6 +82,8 @@ input string         GridLoss_CustomDistance  = "100;200;300;400;500"; // Custom
 input ENUM_TIMEFRAMES GridLoss_ATR_TF        = PERIOD_H1;  // ATR Timeframe
 input int            GridLoss_ATR_Period     = 14;         // ATR Period
 input double         GridLoss_ATR_Multiplier = 1.5;        // ATR Multiplier
+input ENUM_ATR_REF   GridLoss_ATR_Reference  = ATR_REF_DYNAMIC; // ATR Reference Point
+input int            GridLoss_MinGapPoints   = 100;             // Minimum Grid Gap (points)
 input bool           GridLoss_OnlyInSignal   = false;      // Grid Only in Signal Direction
 input bool           GridLoss_OnlyNewCandle  = true;       // Grid Only on New Candle
 input bool           GridLoss_DontSameCandle = true;       // Don't Open Grid in Same Candle as Initial
@@ -94,6 +102,8 @@ input string         GridProfit_CustomDistance= "100;200;500"; // Custom Distanc
 input ENUM_TIMEFRAMES GridProfit_ATR_TF      = PERIOD_H1;  // ATR Timeframe
 input int            GridProfit_ATR_Period   = 14;         // ATR Period
 input double         GridProfit_ATR_Multiplier= 1.0;       // ATR Multiplier
+input ENUM_ATR_REF   GridProfit_ATR_Reference = ATR_REF_DYNAMIC; // ATR Reference Point
+input int            GridProfit_MinGapPoints  = 100;             // Minimum Grid Gap (points)
 input bool           GridProfit_OnlyNewCandle= true;       // Grid Only on New Candle
 
 //--- Take Profit
@@ -236,19 +246,19 @@ int OnInit()
    g_accumulateBaseline = 0;
    g_maxDD = 0;
 
-   //--- Calculate baseline for accumulate (baseline = 0, accumulated = totalHistory)
+   //--- Calculate baseline for accumulate (FRESH START: only new deals count)
    if(UseAccumulateClose)
    {
       double totalHistory = CalcTotalHistoryProfit();
-      g_accumulateBaseline = 0;
-      g_accumulatedProfit = totalHistory;
-      Print("Accumulate init: baseline=0, accumulated=", g_accumulatedProfit);
+      g_accumulateBaseline = totalHistory;  // start fresh each EA load
+      g_accumulatedProfit = 0;              // nothing accumulated yet
+      Print("Accumulate init: baseline=", g_accumulateBaseline, " accumulated=0 (fresh start)");
    }
 
    //--- Recover initial prices from existing positions
    RecoverInitialPrices();
 
-   Print("Gold Miner EA v2.3 initialized successfully");
+   Print("Gold Miner EA v2.4 initialized successfully");
    return INIT_SUCCEEDED;
 }
 
@@ -267,7 +277,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_Dash_");
    ObjectsDeleteAll(0, "GM_TBL_");
 
-   Print("Gold Miner EA v2.3 deinitialized");
+   Print("Gold Miner EA v2.4 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -320,8 +330,76 @@ double CalcTotalHistoryProfit()
 }
 
 //+------------------------------------------------------------------+
-//| Expert tick function                                               |
+//| CalcTotalClosedLots - sum all closed deal volumes for this EA      |
 //+------------------------------------------------------------------+
+double CalcTotalClosedLots()
+{
+   double total = 0;
+   if(!HistorySelect(0, TimeCurrent())) return 0;
+   int totalDeals = HistoryDealsTotal();
+   for(int i = 0; i < totalDeals; i++)
+   {
+      ulong dealTicket = HistoryDealGetTicket(i);
+      if(dealTicket == 0) continue;
+      if(HistoryDealGetInteger(dealTicket, DEAL_MAGIC) != MagicNumber) continue;
+      if(HistoryDealGetString(dealTicket, DEAL_SYMBOL) != _Symbol) continue;
+      long dealEntry = HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
+      if(dealEntry == DEAL_ENTRY_OUT || dealEntry == DEAL_ENTRY_INOUT)
+         total += HistoryDealGetDouble(dealTicket, DEAL_VOLUME);
+   }
+   return total;
+}
+
+//+------------------------------------------------------------------+
+//| CalcTotalClosedOrders - count closed deals for this EA             |
+//+------------------------------------------------------------------+
+int CalcTotalClosedOrders()
+{
+   int count = 0;
+   if(!HistorySelect(0, TimeCurrent())) return 0;
+   int totalDeals = HistoryDealsTotal();
+   for(int i = 0; i < totalDeals; i++)
+   {
+      ulong dealTicket = HistoryDealGetTicket(i);
+      if(dealTicket == 0) continue;
+      if(HistoryDealGetInteger(dealTicket, DEAL_MAGIC) != MagicNumber) continue;
+      if(HistoryDealGetString(dealTicket, DEAL_SYMBOL) != _Symbol) continue;
+      long dealEntry = HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
+      if(dealEntry == DEAL_ENTRY_OUT || dealEntry == DEAL_ENTRY_INOUT)
+         count++;
+   }
+   return count;
+}
+
+//+------------------------------------------------------------------+
+//| CalcMonthlyPL - sum profit for deals closed this calendar month    |
+//+------------------------------------------------------------------+
+double CalcMonthlyPL()
+{
+   MqlDateTime dt;
+   TimeToStruct(TimeCurrent(), dt);
+   dt.day = 1;
+   dt.hour = 0; dt.min = 0; dt.sec = 0;
+   datetime monthStart = StructToTime(dt);
+
+   double total = 0;
+   if(!HistorySelect(monthStart, TimeCurrent())) return 0;
+   int totalDeals = HistoryDealsTotal();
+   for(int i = 0; i < totalDeals; i++)
+   {
+      ulong dealTicket = HistoryDealGetTicket(i);
+      if(dealTicket == 0) continue;
+      if(HistoryDealGetInteger(dealTicket, DEAL_MAGIC) != MagicNumber) continue;
+      if(HistoryDealGetString(dealTicket, DEAL_SYMBOL) != _Symbol) continue;
+      long dealEntry = HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
+      if(dealEntry == DEAL_ENTRY_OUT || dealEntry == DEAL_ENTRY_INOUT)
+         total += HistoryDealGetDouble(dealTicket, DEAL_PROFIT)
+                + HistoryDealGetDouble(dealTicket, DEAL_SWAP);
+   }
+   return total;
+}
+
+
 void OnTick()
 {
    if(g_eaStopped) return;
@@ -810,7 +888,7 @@ void ManageTPSL()
       double totalFloating = CalculateTotalFloatingPL();
       double accumTotal = g_accumulatedProfit + totalFloating;
 
-      if(accumTotal >= AccumulateTarget)
+      if(accumTotal >= AccumulateTarget && accumTotal > 0)  // guard: never close on negative total
       {
          Print("ACCUMULATE TARGET HIT: ", accumTotal, " / ", AccumulateTarget);
          CloseAllPositions();
@@ -1209,13 +1287,25 @@ void CheckGridLoss(ENUM_POSITION_TYPE side, int currentGridCount)
    double currentPrice = (side == POSITION_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
 
    bool shouldOpen = false;
-   if(side == POSITION_TYPE_BUY && currentPrice <= lastPrice - distance * point)
+
+   if(GridLoss_GapType == GAP_ATR && GridLoss_ATR_Reference == ATR_REF_INITIAL)
    {
-      shouldOpen = true;
+      // Initial mode: cumulative distance from initial price
+      double initialRef = (side == POSITION_TYPE_BUY) ? g_initialBuyPrice : g_initialSellPrice;
+      if(initialRef <= 0) return;
+      double totalDistance = distance * (currentGridCount + 1);
+      if(side == POSITION_TYPE_BUY)
+         shouldOpen = (currentPrice <= initialRef - totalDistance * point);
+      else
+         shouldOpen = (currentPrice >= initialRef + totalDistance * point);
    }
-   else if(side == POSITION_TYPE_SELL && currentPrice >= lastPrice + distance * point)
+   else
    {
-      shouldOpen = true;
+      // Dynamic mode (default): distance from last grid order
+      if(side == POSITION_TYPE_BUY && currentPrice <= lastPrice - distance * point)
+         shouldOpen = true;
+      else if(side == POSITION_TYPE_SELL && currentPrice >= lastPrice + distance * point)
+         shouldOpen = true;
    }
 
    if(shouldOpen)
@@ -1269,13 +1359,25 @@ void CheckGridProfit(ENUM_POSITION_TYPE side, int currentGridCount)
    double currentPrice = (side == POSITION_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
 
    bool shouldOpen = false;
-   if(side == POSITION_TYPE_BUY && currentPrice >= lastPrice + distance * point)
+
+   if(GridProfit_GapType == GAP_ATR && GridProfit_ATR_Reference == ATR_REF_INITIAL)
    {
-      shouldOpen = true;
+      // Initial mode: cumulative distance from initial price
+      double initialRef = (side == POSITION_TYPE_BUY) ? g_initialBuyPrice : g_initialSellPrice;
+      if(initialRef <= 0) return;
+      double totalDistance = distance * (currentGridCount + 1);
+      if(side == POSITION_TYPE_BUY)
+         shouldOpen = (currentPrice >= initialRef + totalDistance * point);
+      else
+         shouldOpen = (currentPrice <= initialRef - totalDistance * point);
    }
-   else if(side == POSITION_TYPE_SELL && currentPrice <= lastPrice - distance * point)
+   else
    {
-      shouldOpen = true;
+      // Dynamic mode (default): distance from last grid order
+      if(side == POSITION_TYPE_BUY && currentPrice >= lastPrice + distance * point)
+         shouldOpen = true;
+      else if(side == POSITION_TYPE_SELL && currentPrice <= lastPrice - distance * point)
+         shouldOpen = true;
    }
 
    if(shouldOpen)
@@ -1326,6 +1428,8 @@ void FindLastOrder(ENUM_POSITION_TYPE side, string prefix1, string prefix2, doub
 //+------------------------------------------------------------------+
 double GetGridDistance(int level, bool isLossSide)
 {
+   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+
    if(isLossSide)
    {
       if(GridLoss_GapType == GAP_FIXED)
@@ -1336,12 +1440,15 @@ double GetGridDistance(int level, bool isLossSide)
       {
          return ParseCustomValue(GridLoss_CustomDistance, level);
       }
-      else // ATR
+      else // ATR - use index 1 (closed bar) to prevent repaint
       {
-         if(bufATR_Loss[0] > 0)
+         double atrVal = (ArraySize(bufATR_Loss) > 1 && bufATR_Loss[1] > 0) ? bufATR_Loss[1] : bufATR_Loss[0];
+         if(atrVal > 0)
          {
-            double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
-            return bufATR_Loss[0] * GridLoss_ATR_Multiplier / point;
+            double atrDistance = atrVal * GridLoss_ATR_Multiplier / point;
+            // Apply minimum gap to prevent too-tight grids on low ATR
+            atrDistance = MathMax(atrDistance, (double)GridLoss_MinGapPoints);
+            return atrDistance;
          }
          return (double)GridLoss_Points;
       }
@@ -1356,12 +1463,15 @@ double GetGridDistance(int level, bool isLossSide)
       {
          return ParseCustomValue(GridProfit_CustomDistance, level);
       }
-      else // ATR
+      else // ATR - use index 1 (closed bar) to prevent repaint
       {
-         if(bufATR_Profit[0] > 0)
+         double atrVal = (ArraySize(bufATR_Profit) > 1 && bufATR_Profit[1] > 0) ? bufATR_Profit[1] : bufATR_Profit[0];
+         if(atrVal > 0)
          {
-            double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
-            return bufATR_Profit[0] * GridProfit_ATR_Multiplier / point;
+            double atrDistance = atrVal * GridProfit_ATR_Multiplier / point;
+            // Apply minimum gap to prevent too-tight grids on low ATR
+            atrDistance = MathMax(atrDistance, (double)GridProfit_MinGapPoints);
+            return atrDistance;
          }
          return (double)GridProfit_Points;
       }
@@ -1652,7 +1762,7 @@ void DisplayDashboard()
 
    //--- Header
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
-   CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, "Gold Miner EA v2.3", COLOR_HEADER_TEXT, 11, "Arial Bold");
+   CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, "Gold Miner EA v2.4", COLOR_HEADER_TEXT, 11, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + 220, DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, 9, "Consolas");
 
    //--- DETAIL Section
@@ -1707,12 +1817,24 @@ void DisplayDashboard()
       DrawTableRow(row, "Avg Trailing",  trailInfo, COLOR_TEXT, COLOR_SECTION_TRAIL); row++;
    }
 
-   //--- INFO Section
-   string buyCycle = (g_initialBuyPrice > 0) ? "Active@" + DoubleToString(g_initialBuyPrice, digits) : "Idle";
-   string sellCycle = (g_initialSellPrice > 0) ? "Active@" + DoubleToString(g_initialSellPrice, digits) : "Idle";
+   //--- INFO Section (History metrics - removed BUY/SELL Cycle rows)
+   color COLOR_SECTION_HIST = C'50,100,180';  // distinct blue for history section
 
-   DrawTableRow(row, "BUY Cycle",    buyCycle,  (g_initialBuyPrice > 0 ? COLOR_PROFIT : COLOR_TEXT), COLOR_SECTION_INFO); row++;
-   DrawTableRow(row, "SELL Cycle",   sellCycle, (g_initialSellPrice > 0 ? COLOR_LOSS : COLOR_TEXT), COLOR_SECTION_INFO); row++;
+   // Current open lot total
+   double totalCurrentLots = CalculateTotalLots(POSITION_TYPE_BUY) + CalculateTotalLots(POSITION_TYPE_SELL);
+   DrawTableRow(row, "Total Cur. Lot",   DoubleToString(totalCurrentLots, 2) + " L", COLOR_TEXT, COLOR_SECTION_HIST); row++;
+
+   // History metrics (read from deal history)
+   double closedLots   = CalcTotalClosedLots();
+   int    closedOrders = CalcTotalClosedOrders();
+   double monthlyPL    = CalcMonthlyPL();
+   double totalPLHist  = CalcTotalHistoryProfit();
+
+   DrawTableRow(row, "Total Closed Lot", DoubleToString(closedLots, 2) + " L", COLOR_TEXT, COLOR_SECTION_HIST); row++;
+   DrawTableRow(row, "Total Closed Ord", IntegerToString(closedOrders) + " orders", COLOR_TEXT, COLOR_SECTION_HIST); row++;
+   DrawTableRow(row, "Monthly P/L",      "$" + DoubleToString(monthlyPL, 2), (monthlyPL >= 0 ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_HIST); row++;
+   DrawTableRow(row, "Total P/L",        "$" + DoubleToString(totalPLHist, 2), (totalPLHist >= 0 ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_HIST); row++;
+
    DrawTableRow(row, "Auto Re-Entry", (EnableAutoReEntry ? "ON" : "OFF"), (EnableAutoReEntry ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_INFO); row++;
 
    //--- Bottom border
