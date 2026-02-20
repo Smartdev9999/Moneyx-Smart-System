@@ -862,26 +862,37 @@ void ManageTPSL()
          return;
       }
 
-      //--- SL checks
-      if(EnableSL)
+      //--- SL checks (ONLY when NOT using Per-Order Trailing - per-order trailing handles individual SL via broker)
+      if(EnableSL && !EnablePerOrderTrailing)
       {
-         if(UseSL_Dollar && plSell <= -SL_DollarAmount) closeSL2 = true;
-         if(UseSL_Points && ask >= avgSell + SL_Points * point) closeSL2 = true;
-         if(UseSL_PercentBalance && plSell <= -(balance * SL_PercentBalance / 100.0)) closeSL2 = true;
+         if(UseSL_Dollar && plSell <= -SL_DollarAmount)
+         {
+            Print("SL_BASKET_DOLLAR HIT (SELL): PL=", plSell, " Limit=", -SL_DollarAmount);
+            closeSL2 = true;
+         }
+         if(UseSL_Points && ask >= avgSell + SL_Points * point)
+         {
+            Print("SL_BASKET_POINTS HIT (SELL): ASK=", ask, " Limit=", avgSell + SL_Points * point);
+            closeSL2 = true;
+         }
+         if(UseSL_PercentBalance && plSell <= -(balance * SL_PercentBalance / 100.0))
+         {
+            Print("SL_BASKET_PCT HIT (SELL): PL=", plSell, " Limit=", -(balance * SL_PercentBalance / 100.0));
+            closeSL2 = true;
+         }
 
          if(closeSL2)
          {
-            Print("SL HIT (SELL): PL=", plSell);
             if(SL_ActionMode == SL_CLOSE_ALL_STOP)
             {
                CloseAllPositions();
                g_eaStopped = true;
-               Print("EA STOPPED by SL Action");
+               Print("EA STOPPED by SL Action (SELL)");
             }
             else
             {
                CloseAllSide(POSITION_TYPE_SELL);
-                justClosedSell = true;
+               justClosedSell = true;
                g_initialSellPrice = 0;
                ResetTrailingState();
             }
