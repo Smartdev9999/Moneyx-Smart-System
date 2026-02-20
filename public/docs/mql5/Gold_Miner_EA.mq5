@@ -820,7 +820,7 @@ void ManageTPSL()
       double totalFloating = CalculateTotalFloatingPL();
       double accumTotal = g_accumulatedProfit + totalFloating;
 
-      if(accumTotal >= AccumulateTarget)
+      if(accumTotal >= AccumulateTarget && accumTotal > 0)  // guard: never close on negative total
       {
          Print("ACCUMULATE TARGET HIT: ", accumTotal, " / ", AccumulateTarget);
          CloseAllPositions();
