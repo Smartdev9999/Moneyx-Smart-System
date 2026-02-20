@@ -1817,12 +1817,24 @@ void DisplayDashboard()
       DrawTableRow(row, "Avg Trailing",  trailInfo, COLOR_TEXT, COLOR_SECTION_TRAIL); row++;
    }
 
-   //--- INFO Section
-   string buyCycle = (g_initialBuyPrice > 0) ? "Active@" + DoubleToString(g_initialBuyPrice, digits) : "Idle";
-   string sellCycle = (g_initialSellPrice > 0) ? "Active@" + DoubleToString(g_initialSellPrice, digits) : "Idle";
+   //--- INFO Section (History metrics - removed BUY/SELL Cycle rows)
+   color COLOR_SECTION_HIST = C'50,100,180';  // distinct blue for history section
 
-   DrawTableRow(row, "BUY Cycle",    buyCycle,  (g_initialBuyPrice > 0 ? COLOR_PROFIT : COLOR_TEXT), COLOR_SECTION_INFO); row++;
-   DrawTableRow(row, "SELL Cycle",   sellCycle, (g_initialSellPrice > 0 ? COLOR_LOSS : COLOR_TEXT), COLOR_SECTION_INFO); row++;
+   // Current open lot total
+   double totalCurrentLots = CalculateTotalLots(POSITION_TYPE_BUY) + CalculateTotalLots(POSITION_TYPE_SELL);
+   DrawTableRow(row, "Total Cur. Lot",   DoubleToString(totalCurrentLots, 2) + " L", COLOR_TEXT, COLOR_SECTION_HIST); row++;
+
+   // History metrics (read from deal history)
+   double closedLots   = CalcTotalClosedLots();
+   int    closedOrders = CalcTotalClosedOrders();
+   double monthlyPL    = CalcMonthlyPL();
+   double totalPLHist  = CalcTotalHistoryProfit();
+
+   DrawTableRow(row, "Total Closed Lot", DoubleToString(closedLots, 2) + " L", COLOR_TEXT, COLOR_SECTION_HIST); row++;
+   DrawTableRow(row, "Total Closed Ord", IntegerToString(closedOrders) + " orders", COLOR_TEXT, COLOR_SECTION_HIST); row++;
+   DrawTableRow(row, "Monthly P/L",      "$" + DoubleToString(monthlyPL, 2), (monthlyPL >= 0 ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_HIST); row++;
+   DrawTableRow(row, "Total P/L",        "$" + DoubleToString(totalPLHist, 2), (totalPLHist >= 0 ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_HIST); row++;
+
    DrawTableRow(row, "Auto Re-Entry", (EnableAutoReEntry ? "ON" : "OFF"), (EnableAutoReEntry ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_INFO); row++;
 
    //--- Bottom border
