@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                              Gold_Miner_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                              Gold Miner EA v2.6 - SMA+Grid+ATR   |
+//|                              Gold Miner EA v2.7 - SMA+Grid+ATR   |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "2.60"
-#property description "Gold Miner EA v2.6 - Fix SELL Per-Order Trailing Stop (BE ceiling guard)"
+#property version   "2.70"
+#property description "Gold Miner EA v2.7 - Fix CheckDrawdownExit stop + Fix SELL Trailing beCeiling guard"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -55,6 +55,7 @@ input int              MagicNumber        = 202500;    // Magic Number
 input int              MaxSlippage        = 30;        // Max Slippage (points)
 input int              MaxOpenOrders      = 20;        // Max Open Orders
 input double           MaxDrawdownPct     = 30.0;      // Max Drawdown % (emergency close)
+input bool             StopEAOnDrawdown   = false;     // Stop EA after Emergency Drawdown Close
 input ENUM_TRADE_MODE  TradingMode        = TRADE_BOTH; // Trading Mode (Buy/Sell/Both)
 
 //--- SMA Indicator
@@ -1030,21 +1031,23 @@ void ManagePerOrderTrailing()
             }
          }
 
-         // ===== STEP 2: Trailing =====
-         if(InpEnableTrailing && profitPoints >= InpTrailingStop)
-         {
-            double newSL = NormalizeDouble(ask + InpTrailingStop * point, digits);
+          // ===== STEP 2: Trailing =====
+          if(InpEnableTrailing && profitPoints >= InpTrailingStop)
+          {
+             double newSL = NormalizeDouble(ask + InpTrailingStop * point, digits);
 
-          // Never above breakeven ceiling (for SELL, BE ceiling is below open price, SL moves downward)
-             double beCeiling = NormalizeDouble(openPrice - InpBreakevenOffset * point, digits);
-             if(newSL > beCeiling) newSL = beCeiling;  // SELL: SL must not go above BE ceiling (would be a loss)
+             // NOTE v2.7: Removed beCeiling guard here.
+             // Reason: BE is already handled in Step 1. The trailing step check below
+             // (newSL < currentSL - Step) already prevents SL from moving backward.
+             // The old beCeiling guard was clamping newSL to openPrice level which
+             // caused SL to never move below BE when TrailingStop >= BE offset.
 
-            // Broker stop level check
-            double maxSL = NormalizeDouble(ask + stopLevel * point, digits);
-            if(newSL < maxSL) newSL = maxSL;
+             // Broker stop level check
+             double maxSL = NormalizeDouble(ask + stopLevel * point, digits);
+             if(newSL < maxSL) newSL = maxSL;
 
-            // Must move at least TrailingStep points down to modify
-            if(currentSL == 0 || newSL < currentSL - InpTrailingStep * point)
+             // Must move at least TrailingStep points down to modify
+             if(currentSL == 0 || newSL < currentSL - InpTrailingStep * point)
             {
                if(trade.PositionModify(ticket, newSL, tp))
                {
@@ -1247,9 +1250,25 @@ void CheckDrawdownExit()
    double dd = (balance - equity) / balance * 100.0;
    if(dd >= MaxDrawdownPct)
    {
-      Print("EMERGENCY: Drawdown ", dd, "% >= ", MaxDrawdownPct, "% - Closing all!");
+      Print("EMERGENCY DD: ", DoubleToString(dd, 2), "% >= ", MaxDrawdownPct, "% - Closing all positions!");
       CloseAllPositions();
-      g_eaStopped = true;
+
+      if(StopEAOnDrawdown)
+      {
+         g_eaStopped = true;
+         Print("EA STOPPED by Max Drawdown (StopEAOnDrawdown=true)");
+      }
+      else
+      {
+         // Reset state so EA can re-enter on next valid signal
+         g_initialBuyPrice  = 0;
+         g_initialSellPrice = 0;
+         justClosedBuy      = true;
+         justClosedSell     = true;
+         g_accumulateBaseline = GetTotalHistoryProfit();
+         ResetTrailingState();
+         Print("EA continues after DD close (StopEAOnDrawdown=false) - waiting for next signal");
+      }
    }
 }
 
