@@ -246,13 +246,13 @@ int OnInit()
    g_accumulateBaseline = 0;
    g_maxDD = 0;
 
-   //--- Calculate baseline for accumulate (baseline = 0, accumulated = totalHistory)
+   //--- Calculate baseline for accumulate (FRESH START: only new deals count)
    if(UseAccumulateClose)
    {
       double totalHistory = CalcTotalHistoryProfit();
-      g_accumulateBaseline = 0;
-      g_accumulatedProfit = totalHistory;
-      Print("Accumulate init: baseline=0, accumulated=", g_accumulatedProfit);
+      g_accumulateBaseline = totalHistory;  // start fresh each EA load
+      g_accumulatedProfit = 0;              // nothing accumulated yet
+      Print("Accumulate init: baseline=", g_accumulateBaseline, " accumulated=0 (fresh start)");
    }
 
    //--- Recover initial prices from existing positions
