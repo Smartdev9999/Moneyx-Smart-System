@@ -1031,21 +1031,23 @@ void ManagePerOrderTrailing()
             }
          }
 
-         // ===== STEP 2: Trailing =====
-         if(InpEnableTrailing && profitPoints >= InpTrailingStop)
-         {
-            double newSL = NormalizeDouble(ask + InpTrailingStop * point, digits);
+          // ===== STEP 2: Trailing =====
+          if(InpEnableTrailing && profitPoints >= InpTrailingStop)
+          {
+             double newSL = NormalizeDouble(ask + InpTrailingStop * point, digits);
 
-          // Never above breakeven ceiling (for SELL, BE ceiling is below open price, SL moves downward)
-             double beCeiling = NormalizeDouble(openPrice - InpBreakevenOffset * point, digits);
-             if(newSL > beCeiling) newSL = beCeiling;  // SELL: SL must not go above BE ceiling (would be a loss)
+             // NOTE v2.7: Removed beCeiling guard here.
+             // Reason: BE is already handled in Step 1. The trailing step check below
+             // (newSL < currentSL - Step) already prevents SL from moving backward.
+             // The old beCeiling guard was clamping newSL to openPrice level which
+             // caused SL to never move below BE when TrailingStop >= BE offset.
 
-            // Broker stop level check
-            double maxSL = NormalizeDouble(ask + stopLevel * point, digits);
-            if(newSL < maxSL) newSL = maxSL;
+             // Broker stop level check
+             double maxSL = NormalizeDouble(ask + stopLevel * point, digits);
+             if(newSL < maxSL) newSL = maxSL;
 
-            // Must move at least TrailingStep points down to modify
-            if(currentSL == 0 || newSL < currentSL - InpTrailingStep * point)
+             // Must move at least TrailingStep points down to modify
+             if(currentSL == 0 || newSL < currentSL - InpTrailingStep * point)
             {
                if(trade.PositionModify(ticket, newSL, tp))
                {
