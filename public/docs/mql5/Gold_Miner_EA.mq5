@@ -330,8 +330,76 @@ double CalcTotalHistoryProfit()
 }
 
 //+------------------------------------------------------------------+
-//| Expert tick function                                               |
+//| CalcTotalClosedLots - sum all closed deal volumes for this EA      |
 //+------------------------------------------------------------------+
+double CalcTotalClosedLots()
+{
+   double total = 0;
+   if(!HistorySelect(0, TimeCurrent())) return 0;
+   int totalDeals = HistoryDealsTotal();
+   for(int i = 0; i < totalDeals; i++)
+   {
+      ulong dealTicket = HistoryDealGetTicket(i);
+      if(dealTicket == 0) continue;
+      if(HistoryDealGetInteger(dealTicket, DEAL_MAGIC) != MagicNumber) continue;
+      if(HistoryDealGetString(dealTicket, DEAL_SYMBOL) != _Symbol) continue;
+      long dealEntry = HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
+      if(dealEntry == DEAL_ENTRY_OUT || dealEntry == DEAL_ENTRY_INOUT)
+         total += HistoryDealGetDouble(dealTicket, DEAL_VOLUME);
+   }
+   return total;
+}
+
+//+------------------------------------------------------------------+
+//| CalcTotalClosedOrders - count closed deals for this EA             |
+//+------------------------------------------------------------------+
+int CalcTotalClosedOrders()
+{
+   int count = 0;
+   if(!HistorySelect(0, TimeCurrent())) return 0;
+   int totalDeals = HistoryDealsTotal();
+   for(int i = 0; i < totalDeals; i++)
+   {
+      ulong dealTicket = HistoryDealGetTicket(i);
+      if(dealTicket == 0) continue;
+      if(HistoryDealGetInteger(dealTicket, DEAL_MAGIC) != MagicNumber) continue;
+      if(HistoryDealGetString(dealTicket, DEAL_SYMBOL) != _Symbol) continue;
+      long dealEntry = HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
+      if(dealEntry == DEAL_ENTRY_OUT || dealEntry == DEAL_ENTRY_INOUT)
+         count++;
+   }
+   return count;
+}
+
+//+------------------------------------------------------------------+
+//| CalcMonthlyPL - sum profit for deals closed this calendar month    |
+//+------------------------------------------------------------------+
+double CalcMonthlyPL()
+{
+   MqlDateTime dt;
+   TimeToStruct(TimeCurrent(), dt);
+   dt.day = 1;
+   dt.hour = 0; dt.min = 0; dt.sec = 0;
+   datetime monthStart = StructToTime(dt);
+
+   double total = 0;
+   if(!HistorySelect(monthStart, TimeCurrent())) return 0;
+   int totalDeals = HistoryDealsTotal();
+   for(int i = 0; i < totalDeals; i++)
+   {
+      ulong dealTicket = HistoryDealGetTicket(i);
+      if(dealTicket == 0) continue;
+      if(HistoryDealGetInteger(dealTicket, DEAL_MAGIC) != MagicNumber) continue;
+      if(HistoryDealGetString(dealTicket, DEAL_SYMBOL) != _Symbol) continue;
+      long dealEntry = HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
+      if(dealEntry == DEAL_ENTRY_OUT || dealEntry == DEAL_ENTRY_INOUT)
+         total += HistoryDealGetDouble(dealTicket, DEAL_PROFIT)
+                + HistoryDealGetDouble(dealTicket, DEAL_SWAP);
+   }
+   return total;
+}
+
+
 void OnTick()
 {
    if(g_eaStopped) return;
