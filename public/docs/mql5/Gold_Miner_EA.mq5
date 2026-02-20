@@ -277,7 +277,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_Dash_");
    ObjectsDeleteAll(0, "GM_TBL_");
 
-   Print("Gold Miner EA v2.3 deinitialized");
+   Print("Gold Miner EA v2.4 deinitialized");
 }
 
 //+------------------------------------------------------------------+
