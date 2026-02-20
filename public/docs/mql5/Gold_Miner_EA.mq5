@@ -55,6 +55,7 @@ input int              MagicNumber        = 202500;    // Magic Number
 input int              MaxSlippage        = 30;        // Max Slippage (points)
 input int              MaxOpenOrders      = 20;        // Max Open Orders
 input double           MaxDrawdownPct     = 30.0;      // Max Drawdown % (emergency close)
+input bool             StopEAOnDrawdown   = false;     // Stop EA after Emergency Drawdown Close
 input ENUM_TRADE_MODE  TradingMode        = TRADE_BOTH; // Trading Mode (Buy/Sell/Both)
 
 //--- SMA Indicator
