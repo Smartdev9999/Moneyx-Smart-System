@@ -1,177 +1,177 @@
 
+## Gold Miner EA v2.4 - Fix Accumulate + Dashboard + ATR Grid Mode
 
-## Gold Miner EA v2.3 - Accumulate Close Fix + Dashboard Redesign
+### Issue 1: Dashboard - Remove Cycle rows, Add History metrics
 
-### Problem 1: Accumulate ไม่นับ profit จาก Per-Order Trailing
+**Remove:**
+- "BUY Cycle" row (line 1714)
+- "SELL Cycle" row (line 1715)
 
-เมื่อ Per-Order Trailing ปิดออเดอร์ผ่าน broker SL ตัวแปร `g_accumulatedProfit` ไม่ได้ถูกอัพเดท เพราะ profit จะถูกบันทึกเข้า deal history แต่ EA ไม่ได้ตรวจจับ
+**Add new rows in INFO section:**
+- Total Current Lot (sum of all open position lots)
+- Total Closed Lot (from deal history)
+- Total Closed Orders (from deal history)
+- Monthly P/L (deals closed within current month)
+- Total P/L (all history profit)
 
-**วิธีแก้**: ใช้ระบบ "Baseline" - คำนวณ accumulated จาก deal history โดยอ้างอิงจุดเริ่มต้น cycle
+**New helper functions:**
 
 ```text
-Global Variable ใหม่:
-- g_accumulateBaseline (double) = total history profit ณ จุดที่ reset cycle
+double CalcTotalClosedLots()
+- Scan HistoryDealsTotal() filtered by MagicNumber + Symbol
+- Sum DEAL_VOLUME for DEAL_ENTRY_OUT / DEAL_ENTRY_INOUT
 
-การคำนวณ:
-g_accumulatedProfit = CalcTotalHistoryProfit() - g_accumulateBaseline
+int CalcTotalClosedOrders()
+- Count deals with DEAL_ENTRY_OUT / DEAL_ENTRY_INOUT
 
-เมื่อ Accumulate Target ถึง:
-- CloseAllPositions()
-- g_accumulateBaseline = CalcTotalHistoryProfit() (หลังปิดออเดอร์ทั้งหมด)
-- g_accumulatedProfit = 0
+double CalcMonthlyPL()
+- HistorySelect() from first day of current month to TimeCurrent()
+- Sum DEAL_PROFIT + DEAL_SWAP for matching deals
 ```
 
-### Problem 2: EA หยุดออกออเดอร์หลัง Accumulate Close
+### Issue 2: Accumulate Close - ปิดรวบทั้งที่ยังติดลบ + EA หยุดหลังปิด
 
-หลัง CloseAllPositions() ตัว justClosedBuy/justClosedSell ถูกตั้งค่า แต่ต้องรอ new bar ถึงจะเข้า entry logic
-ปัญหาคือ CalculateAccumulatedProfit() ใน OnInit อ่าน ALL history ทำให้ restart EA แล้วอาจ trigger accumulate close ซ้ำ
+**Root Cause:**
+OnInit sets `g_accumulateBaseline = 0` which means ALL past history counts as accumulated profit. If total history profit already exceeds AccumulateTarget, the EA closes everything immediately on the first tick.
 
-**วิธีแก้**: OnInit ต้อง set baseline ด้วย ไม่ใช่แค่คำนวณ accumulated
-
-### Problem 3: Dashboard ใหม่ แบบตาราง
-
-เปลี่ยนจาก text labels เป็นตาราง (Rectangle + Label) ใกล้เคียงกับ Moneyx Smart System dashboard
-
----
-
-### รายละเอียดทางเทคนิค
-
-**ไฟล์: `public/docs/mql5/Gold_Miner_EA.mq5`**
-
-#### 1. เพิ่ม Global Variable
+**Fix 1: OnInit baseline = totalHistory (fresh start each time EA loads)**
 
 ```text
-double g_accumulateBaseline;   // Total history profit at last cycle reset
-int    g_lastPositionCount;    // Track position count changes
-double g_maxDD;                // Track max drawdown
-```
-
-#### 2. แก้ OnInit - Accumulate Baseline
-
-```text
-// Calculate baseline for accumulate
+// Change OnInit (line 240-246):
 if(UseAccumulateClose)
 {
    double totalHistory = CalcTotalHistoryProfit();
-   // accumulated = totalHistory - baseline
-   // On fresh start, baseline = 0, so accumulated = totalHistory
-   g_accumulateBaseline = 0;
-   g_accumulatedProfit = totalHistory;
+   g_accumulateBaseline = totalHistory;  // <-- FIX: start fresh
+   g_accumulatedProfit = 0;              // <-- FIX: nothing accumulated yet
+   Print("Accumulate init: baseline=", g_accumulateBaseline, " accumulated=0 (fresh start)");
 }
 ```
 
-#### 3. แก้ ManageTPSL - Accumulate Logic ใหม่
+This way, only NEW closed deals (after EA starts) count toward the accumulate target.
 
-แทนที่จะพึ่ง manual increment ของ g_accumulatedProfit ในแต่ละ code path:
+**Fix 2: EA ไม่ออกออเดอร์หลัง Accumulate Close**
+
+The issue is `CloseAllPositions()` sets `justClosedBuy/Sell = true` and resets `g_initialBuyPrice/Sell = 0`. But the entry logic at line 428 requires `buyCount == 0 && g_initialBuyPrice == 0` which IS satisfied. The problem is `shouldEnterBuy` logic:
 
 ```text
-// Every tick: recalculate accumulated from deal history
-if(UseAccumulateClose)
+if(justClosedBuy && EnableAutoReEntry) shouldEnterBuy = true;
+else if(!justClosedBuy && buyCount == 0) shouldEnterBuy = true;
+```
+
+After accumulate close, `justClosedBuy = true`. If `EnableAutoReEntry = true`, `shouldEnterBuy = true` -- this should work. BUT `justClosedBuy` is reset to false at line 462 at end of new bar. The accumulate close happens in `ManageTPSL()` which runs BEFORE the new bar check. So when the next new bar comes, `justClosedBuy` is already false (reset on previous bar), and the entry check `!justClosedBuy && buyCount == 0` should be true.
+
+Actually the real issue is: after Accumulate Close, the EA has `g_initialBuyPrice = 0` and `g_initialSellPrice = 0` (set by `CloseAllPositions()`). The auto-detect block at line 379 only fires when `buyCount == 0 && g_initialBuyPrice != 0`, which won't trigger because initialPrice is already 0. So entry should work normally.
+
+Wait - the screenshots show Accum.Closed = $1478.33 which is ABOVE the $500 target, BUT the EA has 0 positions and is idle. Let me re-examine:
+
+The accumulate close with `Sleep(500)` at line 818 blocks the EA for 500ms. After that, it resets baseline. On the next tick, everything should be clean. The entry only runs on new bars. So after accumulate close, the EA waits for next new bar, then should enter normally.
+
+Potential issue: `justClosedBuy = true` and `justClosedSell = true` are set by `CloseAllPositions()` but the entry logic processes them and resets them in the SAME new bar cycle. If accumulate close happens mid-tick (not during new bar), the flags get set but then reset on the NEXT new bar before entry logic can use them properly.
+
+Actually looking more carefully - the flow is:
+1. ManageTPSL() -> Accumulate close -> CloseAllPositions() -> sets justClosedBuy/Sell = true, resets initialPrices = 0
+2. Next new bar: justClosedBuy is true, EnableAutoReEntry is true -> shouldEnterBuy = true
+3. Entry check: buyCount == 0 && g_initialBuyPrice == 0 && canOpenMore -> ALL TRUE
+4. Signal check: price > sma -> open BUY
+
+This should work. Unless the issue is that after the EA restarts (or after a long delay), the `g_accumulateBaseline` gets set wrong.
+
+**Additional safety: Add guard against negative accumulate total closing**
+
+```text
+// In ManageTPSL accumulate section:
+if(accumTotal >= AccumulateTarget && accumTotal > 0)  // <-- Add accumTotal > 0 guard
+```
+
+This prevents the unlikely case of a negative total triggering a close.
+
+### Issue 3: ATR Grid Mode - Initial vs Dynamic + Minimum Gap
+
+**Add new enum:**
+
+```text
+enum ENUM_ATR_REF
 {
-   double totalHistory = CalcTotalHistoryProfit();
-   g_accumulatedProfit = totalHistory - g_accumulateBaseline;
-   
-   double totalFloating = CalculateTotalFloatingPL();
-   double accumTotal = g_accumulatedProfit + totalFloating;
-   
-   if(accumTotal >= AccumulateTarget)
-   {
-      Print("ACCUMULATE TARGET HIT: ", accumTotal, " / ", AccumulateTarget);
-      CloseAllPositions();
-      // Recalc after closing to include just-closed profit
-      Sleep(500);
-      double newHistory = CalcTotalHistoryProfit();
-      g_accumulateBaseline = newHistory;
-      g_accumulatedProfit = 0;
-      Print("Accumulate cycle reset. New baseline: ", newHistory);
-   }
-}
+   ATR_REF_INITIAL  = 0,  // From Initial Order (cumulative)
+   ATR_REF_DYNAMIC  = 1   // From Last Grid Order
+};
 ```
 
-#### 4. ลบ manual accumulate increment
-
-ลบ `if(UseAccumulateClose) g_accumulatedProfit += closedPL;` จากทุกที่:
-- บรรทัด 658 (TP HIT BUY)
-- บรรทัด 715 (TP HIT SELL)
-- บรรทัด 953 (TRAILING SL HIT BUY)
-- บรรทัด 1012 (TRAILING SL HIT SELL)
-
-เพราะตอนนี้ใช้ระบบ baseline คำนวณจาก history โดยตรง
-
-#### 5. เพิ่ม CalcTotalHistoryProfit()
+**Add new inputs (Grid Loss + Grid Profit sections):**
 
 ```text
-double CalcTotalHistoryProfit()
+input ENUM_ATR_REF GridLoss_ATR_Reference = ATR_REF_DYNAMIC;  // ATR Reference Point
+input int          GridLoss_MinGapPoints  = 100;               // Minimum Grid Gap (points)
+
+input ENUM_ATR_REF GridProfit_ATR_Reference = ATR_REF_DYNAMIC; // ATR Reference Point
+input int          GridProfit_MinGapPoints  = 100;              // Minimum Grid Gap (points)
+```
+
+**Change GetGridDistance() to return ATR distance based on mode:**
+
+```text
+// ATR mode:
+double atrValue = bufATR[1];  // <-- Use index 1 (closed bar) to prevent repaint
+double atrDistance = atrValue * multiplier / point;
+
+// Apply minimum gap
+atrDistance = MathMax(atrDistance, (double)minGapPoints);
+
+return atrDistance;
+```
+
+**Change CheckGridLoss() and CheckGridProfit() for ATR_REF_INITIAL mode:**
+
+For Initial mode, distance is cumulative from initial price:
+
+```text
+NextPrice = InitialPrice +/- (ATR * Multiplier * OrderCount)
+```
+
+For Dynamic mode (current behavior), distance is from last order:
+
+```text
+NextPrice = LastOrderPrice +/- (ATR * Multiplier)
+```
+
+Implementation: Modify `CheckGridLoss()` and `CheckGridProfit()` to use initial price as reference when ATR_REF_INITIAL is selected, and multiply distance by (currentGridCount + 1).
+
+```text
+// In CheckGridLoss:
+double distance = GetGridDistance(currentGridCount, true);
+
+if(isATR_Initial_Mode)
 {
-   double total = 0;
-   if(!HistorySelect(0, TimeCurrent())) return 0;
-   int totalDeals = HistoryDealsTotal();
-   for(int i = 0; i < totalDeals; i++)
-   {
-      ulong dealTicket = HistoryDealGetTicket(i);
-      if(dealTicket == 0) continue;
-      if(HistoryDealGetInteger(dealTicket, DEAL_MAGIC) != MagicNumber) continue;
-      if(HistoryDealGetString(dealTicket, DEAL_SYMBOL) != _Symbol) continue;
-      long dealEntry = HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
-      if(dealEntry == DEAL_ENTRY_OUT || dealEntry == DEAL_ENTRY_INOUT)
-         total += HistoryDealGetDouble(dealTicket, DEAL_PROFIT) 
-                + HistoryDealGetDouble(dealTicket, DEAL_SWAP);
-   }
-   return total;
+   // Use initial price as reference, cumulative distance
+   double initialRef = (side == BUY) ? g_initialBuyPrice : g_initialSellPrice;
+   double totalDistance = distance * (currentGridCount + 1);
+   // Check if price moved totalDistance from initial
+   shouldOpen = (side == BUY) ? 
+      currentPrice <= initialRef - totalDistance * point :
+      currentPrice >= initialRef + totalDistance * point;
+}
+else
+{
+   // Current behavior: use lastPrice, single distance
+   shouldOpen = (side == BUY) ?
+      currentPrice <= lastPrice - distance * point :
+      currentPrice >= lastPrice + distance * point;
 }
 ```
 
-#### 6. Dashboard ใหม่ - Table Layout
+### Summary of Changes
 
-เปลี่ยน DisplayDashboard() ให้ใช้ Rectangle Label สร้างตาราง:
+| File | Changes |
+|------|---------|
+| `public/docs/mql5/Gold_Miner_EA.mq5` | All changes below |
 
-| Section | Rows |
-|---------|------|
-| Header (สีส้ม/ทอง) | "Gold Miner EA v2.3" |
-| DETAIL (สีเทาเข้ม) | Balance, Equity, Floating P/L, Signal (SMA), Position Buy P/L (lots, orders), Position Sell P/L (lots, orders), Current DD%, Max DD% |
-| ACCUMULATE (สีเทา) | Accum. Closed, Accum. Floating, Accum. Total (Tg:xxx Need:xxx) |
-| TRAILING (สีเทา) | Per-Order: BE/Trail settings |
-| INFO (สีเขียวเข้ม) | BUY Cycle status, SELL Cycle status, Auto Re-Entry, Mode |
+**Version bump:** v2.3 -> v2.4
 
-แต่ละแถวประกอบด้วย:
-- Rectangle background (สีสลับ dark/darker)
-- Label ซ้าย (ชื่อ field)
-- Label ขวา (ค่า, สีเขียว/แดง/ขาว)
-
-Section แบ่งด้วยสีแถบด้านซ้าย:
-- DETAIL = สีเขียว
-- ACCUMULATE = สีเหลือง  
-- INFO = สีฟ้า
-
-```text
-สีที่ใช้:
-COLOR_HEADER_BG    = C'180,130,50'   // Header background (gold)
-COLOR_ROW_DARK     = C'40,44,52'     // Row dark
-COLOR_ROW_DARKER   = C'35,39,46'     // Row darker (alternate)
-COLOR_SECTION_DETAIL = clrGreen      // Section indicator
-COLOR_SECTION_ACCUM  = clrYellow
-COLOR_SECTION_INFO   = clrDodgerBlue
-COLOR_TEXT_LABEL   = C'180,180,180'  // Label text
-COLOR_TEXT_VALUE   = clrWhite        // Value text
-COLOR_PROFIT       = clrLime         // Profit color
-COLOR_LOSS         = clrOrangeRed    // Loss color
-```
-
-#### 7. Dashboard Helper Functions ใหม่
-
-```text
-void CreateDashRect(string name, int x, int y, int w, int h, color bgColor)
-void CreateDashText(string name, int x, int y, string text, color clr, int fontSize, string font)
-void DrawTableRow(int rowIndex, string label, string value, color valueColor, color sectionColor)
-```
-
-### ลำดับการเปลี่ยนแปลง
-
-1. เพิ่ม global variables (g_accumulateBaseline, g_maxDD)
-2. เพิ่ม CalcTotalHistoryProfit() function
-3. แก้ OnInit - baseline setup
-4. แก้ ManageTPSL - accumulate ใช้ baseline
-5. ลบ manual g_accumulatedProfit increment (4 จุด)
-6. เขียน Dashboard ใหม่ทั้งหมด (DisplayDashboard + helpers)
-7. แก้ OnDeinit - cleanup objects ใหม่
-
+1. Add `ENUM_ATR_REF` enum
+2. Add 4 new input parameters (ATR Reference + Min Gap for Loss and Profit)
+3. Fix OnInit accumulate baseline (baseline = totalHistory, not 0)
+4. Add `CalcTotalClosedLots()`, `CalcTotalClosedOrders()`, `CalcMonthlyPL()` functions
+5. Modify `GetGridDistance()` to use ATR index 1 + min gap
+6. Modify `CheckGridLoss()` / `CheckGridProfit()` to support Initial reference mode
+7. Add `accumTotal > 0` guard in ManageTPSL accumulate check
+8. Update `DisplayDashboard()`: remove BUY/SELL Cycle rows, add 5 new history rows
