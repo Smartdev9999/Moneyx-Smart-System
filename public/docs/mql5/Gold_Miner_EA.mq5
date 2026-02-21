@@ -1974,7 +1974,7 @@ void DisplayDashboard()
 
    //--- Header
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
-   CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, "Gold Miner EA v2.4", COLOR_HEADER_TEXT, 11, "Arial Bold");
+   CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, "Gold Miner EA v2.8", COLOR_HEADER_TEXT, 11, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + 220, DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, 9, "Consolas");
 
    //--- DETAIL Section
