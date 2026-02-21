@@ -190,6 +190,51 @@ input int      DashboardX           = 20;      // Dashboard X Position
 input int      DashboardY           = 30;      // Dashboard Y Position
 input color    DashboardColor       = clrWhite; // Dashboard Text Color
 
+//--- License Settings
+input group "=== License Settings ==="
+input string   InpLicenseServer     = "https://lkbhomsulgycxawwlnfh.supabase.co";  // License Server URL
+input int      InpLicenseCheckMinutes = 60;    // License Check Interval (minutes)
+input int      InpDataSyncMinutes   = 5;       // Account Data Sync Interval (minutes)
+
+// ====== HARDCODED API SECRET - DO NOT MODIFY ======
+const string EA_API_SECRET = "moneyx-ea-secret-2024-secure-key-v1";
+
+//--- Time Filter
+input group "=== Time Filter ==="
+input bool     InpUseTimeFilter     = false;           // Use Time Filter
+input string   InpSession1          = "03:10-12:40";   // Tradable Session #1 [hh:mm-hh:mm]
+input string   InpSession2          = "15:10-22:00";   // Tradable Session #2 [hh:mm-hh:mm]
+input string   InpSession3          = "";              // Tradable Session #3 [hh:mm-hh:mm]
+input string   InpFridaySession1    = "03:10-12:40";   // Friday Session #1 [hh:mm-hh:mm]
+input string   InpFridaySession2    = "";              // Friday Session #2 [hh:mm-hh:mm]
+input string   InpFridaySession3    = "";              // Friday Session #3 [hh:mm-hh:mm]
+input bool     InpTradeMonday       = true;            // Monday
+input bool     InpTradeTuesday      = true;            // Tuesday
+input bool     InpTradeWednesday    = true;            // Wednesday
+input bool     InpTradeThursday     = true;            // Thursday
+input bool     InpTradeFriday       = true;            // Friday
+input bool     InpTradeSaturday     = false;           // Saturday
+input bool     InpTradeSunday       = false;           // Sunday
+
+//--- News Filter
+input group "=== News Filter ==="
+input bool     InpEnableNewsFilter   = false;          // Enable News Filter
+input bool     InpNewsUseChartCurrency = false;        // Current Chart Currencies to Filter News
+input string   InpNewsCurrencies     = "USD";          // Select Currency to Filter News (e.g. USD;EUR;GBP)
+input bool     InpFilterLowNews      = false;          // Filter Low Impact News
+input int      InpPauseBeforeLow     = 60;             // Pause Before a Low News (Min.)
+input int      InpPauseAfterLow      = 30;             // Pause After a Low News (Min.)
+input bool     InpFilterMedNews      = false;          // Filter Medium Impact News
+input int      InpPauseBeforeMed     = 60;             // Pause Before a Medium News (Min.)
+input int      InpPauseAfterMed      = 30;             // Pause After a Medium News (Min.)
+input bool     InpFilterHighNews     = true;           // Filter High Impact News
+input int      InpPauseBeforeHigh    = 240;            // Pause Before a High News (Min.)
+input int      InpPauseAfterHigh     = 240;            // Pause After a High News (Min.)
+input bool     InpFilterCustomNews   = true;           // Filter Custom News
+input string   InpCustomNewsKeywords = "PMI;Unemployment Claims;Non-Farm;FOMC;Fed Chair Powell";  // Put News Title - Separate by semicolon(;)
+input int      InpPauseBeforeCustom  = 300;            // Pause Before a Custom News (Min.)
+input int      InpPauseAfterCustom   = 300;            // Pause After a Custom News (Min.)
+
 //+------------------------------------------------------------------+
 //| Global Variables                                                   |
 //+------------------------------------------------------------------+
