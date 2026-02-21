@@ -264,6 +264,44 @@ double         g_initialSellPrice;  // track initial order price for grid fallba
 double         g_accumulateBaseline; // Total history profit at last cycle reset
 double         g_maxDD;             // Track max drawdown
 
+// License Verification Variables
+bool              g_isLicenseValid = false;
+bool              g_isTesterMode = false;
+ENUM_LICENSE_STATUS g_licenseStatus = LICENSE_ERROR;
+string            g_customerName = "";
+string            g_packageType = "";
+string            g_tradingSystem = "";
+datetime          g_expiryDate = 0;
+int               g_daysRemaining = 0;
+bool              g_isLifetime = false;
+string            g_lastLicenseError = "";
+datetime          g_lastLicenseCheck = 0;
+datetime          g_lastDataSync = 0;
+datetime          g_lastExpiryPopup = 0;
+string            g_licenseServerUrl = "";
+int               g_licenseCheckInterval = 60;
+int               g_dataSyncInterval = 5;
+
+// News Filter Variables
+NewsEvent g_newsEvents[];
+int g_newsEventCount = 0;
+datetime g_lastNewsRefresh = 0;
+bool g_isNewsPaused = false;
+string g_nextNewsTitle = "";
+datetime g_nextNewsTime = 0;
+string g_newsStatus = "OK";
+datetime g_lastGoodNewsTime = 0;
+bool g_usingCachedNews = false;
+string g_newsCacheFile = "GoldMinerNewsCache.txt";
+datetime g_lastFileCacheSave = 0;
+bool g_webRequestConfigured = true;
+datetime g_lastWebRequestCheck = 0;
+datetime g_lastWebRequestAlert = 0;
+int g_webRequestCheckInterval = 3600;
+bool g_forceNewsRefresh = false;
+bool g_lastPausedState = false;
+string g_lastPauseKey = "";
+datetime g_newsPauseEndTime = 0;
 //+------------------------------------------------------------------+
 //| Expert initialization function                                     |
 //+------------------------------------------------------------------+
