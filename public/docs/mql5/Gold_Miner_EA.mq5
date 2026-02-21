@@ -552,6 +552,28 @@ double CalcMonthlyPL()
 
 void OnTick()
 {
+   // === LICENSE CHECK ===
+   if(!g_isTesterMode)
+   {
+      if(!OnTickLicense())
+      {
+         return;
+      }
+   }
+   if(!g_isLicenseValid && !g_isTesterMode) return;
+
+   // === NEWS FILTER - Refresh hourly ===
+   RefreshNewsData();
+
+   // === NEWS PAUSE CHECK ===
+   if(IsNewsTimePaused())
+      return;
+
+   // === TIME FILTER CHECK ===
+   if(InpUseTimeFilter && !IsWithinTradingHours())
+      return;
+
+   // === ORIGINAL TRADING LOGIC (unchanged) ===
    if(g_eaStopped) return;
 
    //--- Every tick: Per-Order Trailing FIRST (set SL at broker before basket TP checks)
