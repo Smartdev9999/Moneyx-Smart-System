@@ -1,224 +1,332 @@
 
-## Gold Miner EA v2.7 - วิเคราะห์และแก้ไข Root Cause การปิดออเดอร์ขาดทุน + EA หยุด
 
-### สาเหตุที่แท้จริง (วิเคราะห์จากโค้ดจริง ไม่ใช่สมมติฐาน)
+## Gold Miner EA v2.8 - เพิ่ม License Check, News Filter, Time Filter
 
-จากการอ่านโค้ดทั้งหมดอย่างละเอียด พบว่าปัญหาไม่ได้อยู่ที่ SELL Trailing (ที่แก้ไปแล้วใน v2.6) แต่มี **3 root causes** ที่แตกต่างกัน:
+ใช้ **Moneyx Smart Gold System v5.34** (`src/pages/MT5EAGuide.tsx`) เป็นต้นแบบตรงตามที่ระบุ คัดลอก functions จากระบบเดิมนี้โดยตรง ไม่แตะต้องกลยุทธ์การเทรดหรือการออก/ปิดออเดอร์เดิม
 
 ---
 
-### Root Cause #1: `CheckDrawdownExit()` - สาเหตุหลักที่ทำให้ EA ปิดออเดอร์และหยุด (Critical)
+### ไฟล์ที่แก้ไข
 
-**โค้ดบรรทัด 1241-1254:**
+`public/docs/mql5/Gold_Miner_EA.mq5` (ไฟล์เดียว, version 2.70 -> 2.80)
+
+---
+
+### 1. เพิ่ม Enums + Structs (หลัง ENUM_TRADE_MODE)
+
+คัดลอกจาก v5.34 บรรทัด 108-117, 44-50, 819-827:
+
+```text
+// License Status
+enum ENUM_LICENSE_STATUS { LICENSE_VALID, LICENSE_EXPIRING_SOON, LICENSE_EXPIRED, LICENSE_NOT_FOUND, LICENSE_SUSPENDED, LICENSE_ERROR };
+
+// Sync Event Type
+enum ENUM_SYNC_EVENT { SYNC_SCHEDULED, SYNC_ORDER_OPEN, SYNC_ORDER_CLOSE };
+
+// News Event Structure
+struct NewsEvent { string title; string country; datetime time; string impact; bool isRelevant; };
 ```
-void CheckDrawdownExit()
+
+---
+
+### 2. เพิ่ม Input Parameters (3 groups ใหม่)
+
+คัดลอกจาก v5.34 แต่ปรับชื่อ header ให้ตรงกับ Gold Miner:
+
+**License Settings** (จาก v5.34 บรรทัด 449-456):
+```text
+input group "=== License Settings ==="
+input string   InpLicenseServer = "https://lkbhomsulgycxawwlnfh.supabase.co";
+input int      InpLicenseCheckMinutes = 60;
+input int      InpDataSyncMinutes = 5;
+const string EA_API_SECRET = "moneyx-ea-secret-2024-secure-key-v1";
+```
+
+**Time Filter** (จาก v5.34 บรรทัด 380-403, format "hh:mm-hh:mm"):
+```text
+input group "=== Time Filter ==="
+input bool     InpUseTimeFilter = false;
+input string   InpSession1 = "03:10-12:40";    // Session #1 [hh:mm-hh:mm]
+input string   InpSession2 = "15:10-22:00";    // Session #2 [hh:mm-hh:mm]
+input string   InpSession3 = "";               // Session #3 [hh:mm-hh:mm]
+input string   InpFridaySession1 = "03:10-12:40";
+input string   InpFridaySession2 = "";
+input string   InpFridaySession3 = "";
+input bool     InpTradeMonday = true;
+input bool     InpTradeTuesday = true;
+input bool     InpTradeWednesday = true;
+input bool     InpTradeThursday = true;
+input bool     InpTradeFriday = true;
+input bool     InpTradeSaturday = false;
+input bool     InpTradeSunday = false;
+```
+
+**News Filter** (จาก v5.34 บรรทัด 405-434, รวม Custom Keywords):
+```text
+input group "=== News Filter ==="
+input bool     InpEnableNewsFilter = false;
+input bool     InpNewsUseChartCurrency = false;
+input string   InpNewsCurrencies = "USD";
+input bool     InpFilterLowNews = false;
+input int      InpPauseBeforeLow = 60;
+input int      InpPauseAfterLow = 30;
+input bool     InpFilterMedNews = false;
+input int      InpPauseBeforeMed = 60;
+input int      InpPauseAfterMed = 30;
+input bool     InpFilterHighNews = true;
+input int      InpPauseBeforeHigh = 240;
+input int      InpPauseAfterHigh = 240;
+input bool     InpFilterCustomNews = true;
+input string   InpCustomNewsKeywords = "PMI;Unemployment Claims;Non-Farm;FOMC;Fed Chair Powell";
+input int      InpPauseBeforeCustom = 300;
+input int      InpPauseAfterCustom = 300;
+```
+
+---
+
+### 3. เพิ่ม Global Variables
+
+คัดลอกจาก v5.34 บรรทัด 462-478 (License) และ 818-858 (News):
+
+```text
+// License Globals
+bool              g_isLicenseValid = false;
+bool              g_isTesterMode = false;
+ENUM_LICENSE_STATUS g_licenseStatus = LICENSE_ERROR;
+string            g_customerName = "";
+string            g_packageType = "";
+string            g_tradingSystem = "";
+datetime          g_expiryDate = 0;
+int               g_daysRemaining = 0;
+bool              g_isLifetime = false;
+string            g_lastLicenseError = "";
+datetime          g_lastLicenseCheck = 0;
+datetime          g_lastDataSync = 0;
+datetime          g_lastExpiryPopup = 0;
+string            g_licenseServerUrl = "";
+int               g_licenseCheckInterval = 60;
+int               g_dataSyncInterval = 5;
+
+// News Filter Globals
+NewsEvent g_newsEvents[];
+int g_newsEventCount = 0;
+datetime g_lastNewsRefresh = 0;
+bool g_isNewsPaused = false;
+string g_nextNewsTitle = "";
+datetime g_nextNewsTime = 0;
+string g_newsStatus = "OK";
+datetime g_lastGoodNewsTime = 0;
+bool g_usingCachedNews = false;
+string g_newsCacheFile = "GoldMinerNewsCache.txt";
+datetime g_lastFileCacheSave = 0;
+bool g_webRequestConfigured = true;
+datetime g_lastWebRequestCheck = 0;
+datetime g_lastWebRequestAlert = 0;
+int g_webRequestCheckInterval = 3600;
+bool g_forceNewsRefresh = false;
+bool g_lastPausedState = false;
+string g_lastPauseKey = "";
+datetime g_newsPauseEndTime = 0;
+```
+
+---
+
+### 4. แก้ไข OnInit() - เพิ่ม guard ก่อน indicator handles
+
+เพิ่มที่ต้น `OnInit()` ก่อนบรรทัด `trade.SetExpertMagicNumber(...)`:
+
+```text
+// === Tester Mode Detection ===
+g_isTesterMode = IsTesterMode();
+
+if(g_isTesterMode)
 {
-   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
-   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
-   double dd = (balance - equity) / balance * 100.0;
-   if(dd >= MaxDrawdownPct)  // default = 30%
+   Print("GOLD MINER EA - TESTER MODE");
+   Print("License check skipped for backtesting");
+   g_isLicenseValid = true;
+   g_licenseStatus = LICENSE_VALID;
+}
+else
+{
+   Print("GOLD MINER EA - LIVE TRADING MODE");
+   if(!InitLicense(InpLicenseServer, InpLicenseCheckMinutes, InpDataSyncMinutes))
+      Print("License initialization failed: ", g_lastLicenseError);
+   ShowLicensePopup(g_licenseStatus);
+   if(g_isLicenseValid)
    {
-      CloseAllPositions();
-      g_eaStopped = true;  // ← EA หยุดสนิท! ไม่ออกออเดอร์ใหม่อีกเลย
+      Print("License Valid - Customer: ", g_customerName);
+      if(g_isLifetime) Print("License Type: LIFETIME");
+      else Print("Expiry: ", TimeToString(g_expiryDate, TIME_DATE), " (", g_daysRemaining, " days)");
    }
 }
 ```
 
-**จากภาพ Backtest:**
-- Balance เริ่มต้น ~$50,000 (ช่วงสูงสุด)
-- Equity ตกฮวบไปถึง ~$40,000 ในช่วงท้าย
-- Drawdown = (50,000 - 40,000) / 50,000 = **20%** ยังไม่ถึง 30%
+เพิ่มที่ท้าย `OnInit()` (ก่อน `return INIT_SUCCEEDED`):
 
-**แต่ถ้า Balance ณ จุดนั้น = $57,000 (Balance สูงสุด):**
-- Equity = $40,000
-- DD = (57,000 - 40,000) / 57,000 = **29.8% → ใกล้ 30%**
-
-หรืออาจมีจุดที่ equity ลงไปถึง $39,227 (ตัวเลขล่างสุดในแกน Y):
-- DD = (57,000 - 39,227) / 57,000 = **31.2% > 30%** → **TRIGGER!**
-
-`g_eaStopped = true` → EA return ทันทีใน `OnTick()` บรรทัด 405 ทุก tick → **EA หยุดออเดอร์ถาวร**
-
-**วิธีแก้ไข:**
-แยก Drawdown Emergency close ออกจาก EA stop:
-```
-// ActionMode สำหรับ Drawdown: Close Only (ไม่ stop EA) หรือ Close + Stop
-input ENUM_SL_ACTION DDActionMode = SL_CLOSE_POSITIONS; // Drawdown Action
-```
-
-หรืออย่างน้อย: ต้องให้ผู้ใช้รู้ว่า `MaxDrawdownPct` เป็นสาเหตุ และเพิ่ม `input bool StopEAOnDrawdown = false` เพื่อให้ EA ออกออเดอร์ใหม่ได้หลัง emergency close
-
----
-
-### Root Cause #2: `SL_ActionMode = SL_CLOSE_ALL_STOP` ทำให้ EA หยุดถาวร
-
-บรรทัด 819-823 และ 886-890:
-```
-if(SL_ActionMode == SL_CLOSE_ALL_STOP)
+```text
+// === News Filter Init ===
+if(InpEnableNewsFilter)
 {
-   CloseAllPositions();
-   g_eaStopped = true;  // ← หยุดถาวร!
-   Print("EA STOPPED by SL Action");
+   g_isNewsPaused = false;
+   g_newsStatus = "";
+   g_webRequestConfigured = true;
+   g_forceNewsRefresh = true;
+   LoadNewsCacheFromFile();
+   CheckWebRequestConfiguration();
+   RefreshNewsData();
 }
 ```
 
-ถ้าผู้ใช้ตั้ง `SL_ActionMode = SL_CLOSE_ALL_STOP` (ซึ่งเป็นค่า default = 0 = SL_CLOSE_POSITIONS ปกติ) → ไม่น่ามีปัญหา
-
-แต่ถ้า `EnableSL = true` และ `EnablePerOrderTrailing = true`:
-- Guard `if(EnableSL && !EnablePerOrderTrailing)` จะข้ามส่วน Basket SL → ถูกต้อง
-
-**แต่ถ้า** ผู้ใช้ใช้ Per-Order Trailing แต่ยัง `EnableSL = true` และ SL ถูก hit โดย broker เอง (ไม่ใช่ Basket) → Basket SL ไม่ทำงาน → ถูกต้อง
-
 ---
 
-### Root Cause #3: SELL Trailing ยังมีปัญหาอยู่ (Trailing Trigger กับ beCeiling)
+### 5. แก้ไข OnTick() - เพิ่ม guard ก่อน trading logic
 
-**บรรทัด 1034-1040:**
-```
-if(InpEnableTrailing && profitPoints >= InpTrailingStop)
+เพิ่มก่อนบรรทัด `if(g_eaStopped) return;`:
+
+```text
+// === LICENSE CHECK ===
+if(!g_isTesterMode)
 {
-   double newSL = ask + InpTrailingStop * point;
-   double beCeiling = openPrice - InpBreakevenOffset * point;
-   if(newSL > beCeiling) newSL = beCeiling;  // ← ยังผิดอยู่สำหรับบางกรณี
-```
-
-สำหรับ SELL:
-- `openPrice = 2713`, `InpBreakevenOffset = 5 pts`, `point = 0.01`
-- `beCeiling = 2713 - 0.05 = 2712.95`
-- เมื่อ ask = 2711 (กำไร 200 pts): `newSL = 2711 + 200*0.01 = 2713`
-- `newSL (2713) > beCeiling (2712.95)` = **TRUE** → `newSL = 2712.95`
-
-**นี่คือปัญหา!** SL ถูก force ไปที่ 2712.95 ซึ่งสูงกว่า ask (2711) มาก
-
-เมื่อ ask ขึ้นไปถึง 2712.9+ → **SL ถูก hit = ปิดออเดอร์!**
-
-กรณี SELL Trailing: newSL ควรอยู่ต่ำกว่า ask (SL อยู่เหนือ ask แต่ใกล้กว่า open)
-- การ guard ต้องไม่ให้ newSL สูงเกิน beCeiling **เฉพาะเมื่อ BE ถูก set ไปแล้ว**
-
-**วิธีแก้ที่ถูกต้อง:**
-BE guard ควรใช้เฉพาะเมื่อ BE ถูก activate แล้ว ไม่ใช่ทุกครั้ง:
-```
-// ถ้า Breakeven ถูก set แล้ว (currentSL อยู่ที่ BE level) ให้ trailing ทำงานตั้งแต่ beLevel ลงไป
-// แต่ถ้า Breakeven ไม่ได้ set ให้ trailing ทำงานอิสระ
-if(InpEnableBreakeven && currentSL != 0)
-{
-   // SL must not go above current SL (no reversal allowed)
-   // For SELL: trailing moves down, so newSL should be < currentSL
-   // No further ceiling needed since step check handles one-direction movement
-}
-```
-
-**การแก้ไขที่ง่ายและถูกต้องที่สุด:** ลบ beCeiling guard ออกจาก Trailing section เพราะ:
-- Trailing step check `newSL < currentSL - Step` ป้องกัน SL ย้อนกลับอยู่แล้ว
-- BE ถูก set ไปแล้วในขั้น Step 1 ทำให้ currentSL อยู่ที่ BE level
-- Trailing จะเคลื่อนลงจาก BE level โดยอัตโนมัติ โดยไม่ต้องมี ceiling
-
----
-
-### สรุปการเปลี่ยนแปลง v2.7
-
-#### การเปลี่ยนแปลงหลัก
-
-**1. เพิ่ม input ใหม่: `StopEAOnDrawdown`**
-
-```
-input bool StopEAOnDrawdown = false; // Stop EA after Emergency Drawdown Close
-```
-
-และแก้ `CheckDrawdownExit()`:
-```
-if(dd >= MaxDrawdownPct)
-{
-   Print("EMERGENCY DD: ", dd, "% - Closing all!");
-   CloseAllPositions();
-   if(StopEAOnDrawdown)
+   if(!OnTickLicense())
    {
-      g_eaStopped = true;
-      Print("EA STOPPED by Max Drawdown");
+      // License invalid - stop trading
+      return;
    }
-   else
+}
+if(!g_isLicenseValid && !g_isTesterMode) return;
+
+// === NEWS FILTER - Refresh hourly ===
+RefreshNewsData();
+
+// === NEWS PAUSE CHECK ===
+if(IsNewsTimePaused())
+   return;
+
+// === TIME FILTER CHECK ===
+if(InpUseTimeFilter && !IsWithinTradingHours())
+   return;
+```
+
+---
+
+### 6. เพิ่ม OnTradeTransaction()
+
+คัดลอกจาก v5.34 บรรทัด 1259-1367 แต่ตัดส่วน Hedge Mode ออก (Gold Miner ไม่มี Hedge):
+
+```text
+void OnTradeTransaction(const MqlTradeTransaction& trans,
+                        const MqlTradeRequest& request,
+                        const MqlTradeResult& result)
+{
+   if(!g_isLicenseValid) return;
+   if(MQLInfoInteger(MQL_TESTER) || MQLInfoInteger(MQL_OPTIMIZATION)) return;
+   
+   if(trans.type == TRADE_TRANSACTION_DEAL_ADD)
    {
-      // Reset state and allow re-entry on next signal
-      g_initialBuyPrice = 0;
-      g_initialSellPrice = 0;
-      justClosedBuy = true;
-      justClosedSell = true;
-      ResetTrailingState();
-      Print("EA continues after DD close (StopEAOnDrawdown=false)");
+      if(HistoryDealSelect(trans.deal))
+      {
+         ENUM_DEAL_ENTRY dealEntry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(trans.deal, DEAL_ENTRY);
+         long dealMagic = HistoryDealGetInteger(trans.deal, DEAL_MAGIC);
+         
+         if(dealMagic == MagicNumber || dealMagic == 0)
+         {
+            if(dealEntry == DEAL_ENTRY_IN)
+               SyncAccountDataWithEvent(SYNC_ORDER_OPEN);
+            else if(dealEntry == DEAL_ENTRY_OUT || dealEntry == DEAL_ENTRY_INOUT)
+               SyncAccountDataWithEvent(SYNC_ORDER_CLOSE);
+         }
+      }
    }
 }
 ```
 
-**2. แก้ SELL Trailing: ลบ beCeiling guard ที่ทำให้ SL ถูก force ไปที่ BE ceiling**
+---
 
-```
-// BEFORE (ผิด):
-double beCeiling = NormalizeDouble(openPrice - InpBreakevenOffset * point, digits);
-if(newSL > beCeiling) newSL = beCeiling;  // บังคับ SL ไปที่ BE เสมอ
+### 7. เพิ่ม Functions ใหม่ท้ายไฟล์ (ก่อน Dashboard section)
 
-// AFTER (ถูก):
-// ไม่ต้องมี beCeiling guard
-// เหตุผล: Trailing step check (newSL < currentSL - Step) ป้องกัน SL ย้อนกลับอยู่แล้ว
-// BE ถูก set ใน Step 1 และ Trailing จะทำงานต่อจาก BE level ลงไป
-```
+ทั้งหมดคัดลอกจาก v5.34 โดยตรง ปรับเฉพาะชื่อ EA:
 
-**3. ตรวจสอบ SELL Trailing trigger direction**
+| Function | แหล่งใน v5.34 | หมายเหตุ |
+|----------|---------------|----------|
+| `IsTesterMode()` | บรรทัด 863-869 | เหมือนเดิม |
+| `InitLicense()` | บรรทัด 874-902 | เหมือนเดิม |
+| `VerifyLicense()` | บรรทัด 907-924 | เหมือนเดิม |
+| `ParseVerifyResponse()` | บรรทัด 929-966 | เหมือนเดิม |
+| `SyncAccountData()` | บรรทัด 971-974 | wrapper |
+| `SyncAccountDataWithEvent()` | บรรทัด 979-1084 | เปลี่ยน ea_name เป็น "Gold Miner EA" |
+| `CalculatePortfolioStats()` | บรรทัด 1089-1170 (เดิมมีอยู่แล้วใน Licensed) | คัดลอกตรง |
+| `BuildTradeHistoryJson()` | บรรทัด 1174-1254 | เหมือนเดิม |
+| `OnTickLicense()` | บรรทัด 1373-1411 | เหมือนเดิม |
+| `ShowLicensePopup()` | บรรทัด 1416-1488 | เปลี่ยนชื่อ EA |
+| `SendLicenseRequest()` | บรรทัด 1493-1525 | เหมือนเดิม |
+| `JsonGetString()` | บรรทัด 1530-1568 | เหมือนเดิม |
+| `JsonGetInt()` | บรรทัด 1573-1579 | เหมือนเดิม |
+| `JsonGetBool()` | บรรทัด 1584-1588 | เหมือนเดิม |
+| `GetChartBaseCurrency()` | บรรทัด 7571-7579 | เหมือนเดิม |
+| `GetChartQuoteCurrency()` | บรรทัด 7584-7590 | เหมือนเดิม |
+| `IsCurrencyRelevant()` | บรรทัด 7595-7627 | เหมือนเดิม |
+| `IsCustomNewsMatch()` | บรรทัด 7632-7661 | เหมือนเดิม |
+| `ExtractJSONValue()` | บรรทัด 7728-7783 | เหมือนเดิม |
+| `CheckWebRequestConfiguration()` | บรรทัด 7857-7921 | เหมือนเดิม |
+| `ShowWebRequestSetupAlert()` | บรรทัด 7927-7961 | เปลี่ยนชื่อ EA |
+| `RefreshNewsData()` | บรรทัด 7967-8345 | เหมือนเดิม (ใช้ MoneyX API) |
+| `SaveNewsCacheToFile()` | บรรทัด 8350-8380 | เปลี่ยนชื่อ cache file |
+| `LoadNewsCacheFromFile()` | บรรทัด 8385-8434 | เปลี่ยนชื่อ cache file |
+| `GetNewsPauseDuration()` | บรรทัด 8441-8488 | เหมือนเดิม |
+| `IsEventRelevantNow()` | บรรทัด 8495-8514 | เหมือนเดิม |
+| `IsNewsTimePaused()` | บรรทัด 8519-8664 | เหมือนเดิม |
+| `GetNewsCountdownString()` | บรรทัด 8669-8691 | เหมือนเดิม |
+| `ParseTimeToMinutes()` | บรรทัด 11233-11249 | เหมือนเดิม |
+| `IsTimeInSession()` | บรรทัด 11254-11279 | เหมือนเดิม |
+| `IsTradableDay()` | บรรทัด 11284-11297 | เหมือนเดิม |
+| `IsWithinTradingHours()` | บรรทัด 11302-11352 | เหมือนเดิม (3 sessions + Friday) |
 
-```
-// บรรทัด 1047 ปัจจุบัน:
-if(currentSL == 0 || newSL < currentSL - InpTrailingStep * point)
-```
+---
 
-สำหรับ SELL: SL เคลื่อนลง (newSL < currentSL) = ถูกต้อง
-แต่ condition คือ `newSL < currentSL - Step` หมายความว่า SL ต้องลดลงมากกว่า Step
-- `newSL = ask + Trail = 2711 + 2.0 = 2713` (ถ้า Trail = 200 pts)
-- `currentSL = 2712.95` (BE level)
-- `newSL (2713) < currentSL (2712.95) - 0.1 (Step)` = `2713 < 2712.85` = **FALSE**
+### 8. Dashboard Update
 
-**นี่คืออีกหนึ่ง bug!** เมื่อ Trail = 200pts, newSL ออกมาเป็น `ask + 200pts` ซึ่งสูงกว่า currentSL เสมอในกรณีที่กำไรยังน้อย ทำให้ Trailing ไม่ทำงาน
+เพิ่มแสดงสถานะ 3 โมดูลบน Dashboard (ก่อนแถว "Auto Re-Entry"):
 
-เหตุผลคือ: สำหรับ SELL Trailing ที่ถูกต้อง:
-- `profitPoints >= InpTrailingStop` → แปลว่า price ลงไป InpTrailingStop points แล้ว
-- `newSL = ask + InpTrailingStop * point` → SL อยู่สูงกว่า ask เป็นระยะ InpTrailingStop
-- ถ้า profitPoints = 200 pts และ InpTrailingStop = 200 pts: ask = openPrice - 200*point
-- `newSL = (openPrice - 200*point) + 200*point = openPrice` ← SL อยู่ที่ open price!
-- ซึ่งสูงกว่า BE ceiling เสมอ → beCeiling guard บังคับ `newSL = beCeiling = openPrice - 0.05`
-- จากนั้น `newSL < currentSL - Step` = `(openPrice-0.05) < (0 - Step)` → currentSL = 0 → TRUE → modify
+```text
+// License Status
+DrawTableRow(row, "License", g_isTesterMode ? "TESTER" : 
+   (g_isLicenseValid ? (g_isLifetime ? "LIFETIME" : IntegerToString(g_daysRemaining) + " days") : "INVALID"),
+   g_isLicenseValid ? COLOR_PROFIT : COLOR_LOSS, COLOR_SECTION_INFO); row++;
 
-**ปัญหาจริง:** เมื่อ profitPoints เพิ่มขึ้น ask ลดลง แต่ `newSL = ask + InpTrailingStop*point` จะลดลงตาม ซึ่งถูกต้อง แต่ beCeiling guard ทำให้ newSL ถูก clamp ไว้ที่ beCeiling เสมอจนกว่า ask จะต่ำกว่า beCeiling - InpTrailingStop
+// Time Filter
+if(InpUseTimeFilter)
+{
+   DrawTableRow(row, "Time Filter", IsWithinTradingHours() ? "ACTIVE" : "PAUSED",
+      IsWithinTradingHours() ? COLOR_PROFIT : COLOR_LOSS, COLOR_SECTION_INFO); row++;
+}
 
-สูตรที่ถูกต้องสำหรับ SELL Trailing:
-```
-newSL = ask + InpTrailingStop * point
-// ไม่ต้อง clamp ด้วย beCeiling ใน Trailing section
-// เพราะ BE ถูก handle ใน Step 1 แล้ว
-// Trailing step check จะดูแลการเคลื่อน SL ฝั่งเดียว
+// News Filter
+if(InpEnableNewsFilter)
+{
+   DrawTableRow(row, "News", g_newsStatus,
+      g_isNewsPaused ? COLOR_LOSS : COLOR_PROFIT, COLOR_SECTION_INFO); row++;
+}
 ```
 
 ---
 
-### รายการไฟล์ที่แก้ไข
+### 9. สิ่งที่ไม่เปลี่ยนแปลง (รับประกัน 100%)
 
-| ไฟล์ | บรรทัดที่เปลี่ยน | สาเหตุ |
-|------|----------------|--------|
-| Gold_Miner_EA.mq5 | ~line 57 (inputs) | เพิ่ม `StopEAOnDrawdown = false` |
-| Gold_Miner_EA.mq5 | ~line 1241-1254 | แก้ CheckDrawdownExit() ให้ไม่ stop EA เสมอ |
-| Gold_Miner_EA.mq5 | ~line 1038-1040 | ลบ beCeiling guard ออกจาก SELL Trailing section |
-| Gold_Miner_EA.mq5 | ~line 8-9 | Version 2.6 → 2.7 |
+- SMA Signal Logic (BUY/SELL)
+- Grid Entry/Exit Logic (Loss + Profit sides)
+- TP/SL/Trailing/Breakeven Logic (Average-Based + Per-Order)
+- Accumulate Close Logic
+- Drawdown Exit Logic (CheckDrawdownExit)
+- ทุก function ที่เกี่ยวกับการเปิด/ปิดออเดอร์
+
+โค้ดใหม่ทำหน้าที่เป็น **guard gate** ที่ต้น OnTick() เท่านั้น: ถ้า License/Time/News ไม่ผ่าน จะ `return` ก่อนเข้า trading logic
 
 ---
 
-### ทำไมถึงเชื่อมั่น 100% ว่านี่คือ Root Cause?
+### 10. สรุป
 
-จากภาพ Backtest:
-1. EA ทำกำไรได้ดีตั้งแต่ 2025.01.02 ถึง 2025.01.07 (Balance สีน้ำเงินขึ้นตลอด)
-2. Equity (สีเขียว) ผันผวนหนักช่วง 2025.01.07-2025.01.08
-3. วันท้าย Balance ตกฮวบลงทีเดียว → นี่คือ CloseAllPositions() ที่ปิดออเดอร์ขาดทุน
-4. หลังจากนั้น Balance = ~$40,560 คงที่ ไม่มีการเปลี่ยนแปลง → EA หยุดทำงาน (`g_eaStopped = true`)
-5. Equity line กลับมาเท่า Balance → ไม่มี open positions เลย
-
-**สาเหตุ:** `MaxDrawdownPct = 30.0` ถูก trigger เมื่อ equity ตกจากจุดสูงสุด ~$57,000 ไปถึง ~$40,000 (drawdown 29.8-31%)
-
-**หลักฐานสนับสนุน:**
-- ไม่ได้ตั้ง Stop Loss ตรงๆ → แต่ `MaxDrawdownPct` คือ emergency SL ที่ซ่อนอยู่
-- EA ไม่ออกออเดอร์ใหม่ → เพราะ `g_eaStopped = true` ทำให้ `OnTick()` return ทันทีบรรทัด 405
+- Version: 2.70 -> 2.80
+- เพิ่มประมาณ ~800 บรรทัด (License ~250, News ~350, Time ~100, Sync ~100)
+- ทุก function คัดลอกจาก **Moneyx Smart Gold System v5.34** ตามที่ระบุ
+- ไม่แก้ไขบรรทัดเดิมใดๆ ในส่วน trading logic
 
