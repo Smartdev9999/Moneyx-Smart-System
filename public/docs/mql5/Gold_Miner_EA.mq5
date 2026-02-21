@@ -45,6 +45,35 @@ enum ENUM_TRADE_MODE
    TRADE_BOTH      = 2   // Buy and Sell
 };
 
+// License Status Enumeration
+enum ENUM_LICENSE_STATUS
+{
+   LICENSE_VALID,           // License Valid
+   LICENSE_EXPIRING_SOON,   // License Expiring Soon (within 7 days)
+   LICENSE_EXPIRED,         // License Expired
+   LICENSE_NOT_FOUND,       // Account Not Registered
+   LICENSE_SUSPENDED,       // License Suspended
+   LICENSE_ERROR            // Connection Error
+};
+
+// Sync Event Type (for real-time data sync)
+enum ENUM_SYNC_EVENT
+{
+   SYNC_SCHEDULED,          // Scheduled sync (daily)
+   SYNC_ORDER_OPEN,         // Order opened
+   SYNC_ORDER_CLOSE         // Order closed
+};
+
+// News Event Structure
+struct NewsEvent
+{
+   string   title;       // News title
+   string   country;     // Currency (e.g., USD, EUR)
+   datetime time;        // Event time
+   string   impact;      // "Low", "Medium", "High"
+   bool     isRelevant;  // Matches our filter criteria
+};
+
 //+------------------------------------------------------------------+
 //| Input Parameters                                                  |
 //+------------------------------------------------------------------+
