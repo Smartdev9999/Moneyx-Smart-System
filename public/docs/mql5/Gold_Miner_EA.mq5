@@ -2049,6 +2049,25 @@ void DisplayDashboard()
 
    DrawTableRow(row, "Auto Re-Entry", (EnableAutoReEntry ? "ON" : "OFF"), (EnableAutoReEntry ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_INFO); row++;
 
+   // License Status
+   DrawTableRow(row, "License", g_isTesterMode ? "TESTER" : 
+      (g_isLicenseValid ? (g_isLifetime ? "LIFETIME" : IntegerToString(g_daysRemaining) + " days") : "INVALID"),
+      g_isLicenseValid ? COLOR_PROFIT : COLOR_LOSS, COLOR_SECTION_INFO); row++;
+
+   // Time Filter
+   if(InpUseTimeFilter)
+   {
+      DrawTableRow(row, "Time Filter", IsWithinTradingHours() ? "ACTIVE" : "PAUSED",
+         IsWithinTradingHours() ? COLOR_PROFIT : COLOR_LOSS, COLOR_SECTION_INFO); row++;
+   }
+
+   // News Filter
+   if(InpEnableNewsFilter)
+   {
+      DrawTableRow(row, "News", g_newsStatus,
+         g_isNewsPaused ? COLOR_LOSS : COLOR_PROFIT, COLOR_SECTION_INFO); row++;
+   }
+
    //--- Bottom border
    int bottomY = DashboardY + 24 + row * 20;
    CreateDashRect("GM_TBL_BTM", DashboardX, bottomY, tableWidth, 2, COLOR_HEADER_BG);
