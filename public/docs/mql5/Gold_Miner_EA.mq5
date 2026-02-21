@@ -395,7 +395,20 @@ int OnInit()
    //--- Recover initial prices from existing positions
    RecoverInitialPrices();
 
-   Print("Gold Miner EA v2.5 initialized successfully");
+   Print("Gold Miner EA v2.8 initialized successfully");
+
+   // === News Filter Init ===
+   if(InpEnableNewsFilter)
+   {
+      g_isNewsPaused = false;
+      g_newsStatus = "";
+      g_webRequestConfigured = true;
+      g_forceNewsRefresh = true;
+      LoadNewsCacheFromFile();
+      CheckWebRequestConfiguration();
+      RefreshNewsData();
+   }
+
    return INIT_SUCCEEDED;
 }
 
