@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                              Gold_Miner_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                              Gold Miner EA v2.7 - SMA+Grid+ATR   |
+//|                     Gold Miner EA v2.8 - SMA+Grid+ATR+License    |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "2.70"
-#property description "Gold Miner EA v2.7 - Fix CheckDrawdownExit stop + Fix SELL Trailing beCeiling guard"
+#property version   "2.80"
+#property description "Gold Miner EA v2.8 - License Check + News Filter + Time Filter"
 #property strict
 
 #include <Trade/Trade.mqh>
