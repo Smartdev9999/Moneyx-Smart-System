@@ -307,6 +307,30 @@ datetime g_newsPauseEndTime = 0;
 //+------------------------------------------------------------------+
 int OnInit()
 {
+   // === Tester Mode Detection ===
+   g_isTesterMode = IsTesterMode();
+
+   if(g_isTesterMode)
+   {
+      Print("GOLD MINER EA - TESTER MODE");
+      Print("License check skipped for backtesting");
+      g_isLicenseValid = true;
+      g_licenseStatus = LICENSE_VALID;
+   }
+   else
+   {
+      Print("GOLD MINER EA - LIVE TRADING MODE");
+      if(!InitLicense(InpLicenseServer, InpLicenseCheckMinutes, InpDataSyncMinutes))
+         Print("License initialization failed: ", g_lastLicenseError);
+      ShowLicensePopup(g_licenseStatus);
+      if(g_isLicenseValid)
+      {
+         Print("License Valid - Customer: ", g_customerName);
+         if(g_isLifetime) Print("License Type: LIFETIME");
+         else Print("Expiry: ", TimeToString(g_expiryDate, TIME_DATE), " (", g_daysRemaining, " days)");
+      }
+   }
+
    trade.SetExpertMagicNumber(MagicNumber);
    trade.SetDeviationInPoints(MaxSlippage);
    trade.SetTypeFilling(ORDER_FILLING_IOC);
