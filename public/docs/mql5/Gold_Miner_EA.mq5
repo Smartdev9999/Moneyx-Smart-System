@@ -665,49 +665,52 @@ void OnTick()
          }
       }
 
-      //--- Entry logic: Independent Side Entry (BUY and SELL checked separately)
-      bool canOpenMore = TotalOrderCount() < MaxOpenOrders;
-      bool canOpenOnThisCandle = !(DontOpenSameCandle && currentBarTime == lastInitialCandleTime);
-
-      //--- BUY side shouldEnter logic
-      bool shouldEnterBuy = false;
-      if(justClosedBuy && EnableAutoReEntry) shouldEnterBuy = true;
-      else if(!justClosedBuy && buyCount == 0) shouldEnterBuy = true;
-
-      //--- SELL side shouldEnter logic
-      bool shouldEnterSell = false;
-      if(justClosedSell && EnableAutoReEntry) shouldEnterSell = true;
-      else if(!justClosedSell && sellCount == 0) shouldEnterSell = true;
-
-      // ===== BUY Entry (independent) =====
-      if(buyCount == 0 && g_initialBuyPrice == 0 && canOpenMore && canOpenOnThisCandle)
+      //--- Entry logic: Independent Side Entry - blocked by News/Time filter
+      if(!g_newOrderBlocked)
       {
-         if(currentPrice > smaValue && (TradingMode == TRADE_BUY_ONLY || TradingMode == TRADE_BOTH))
+         bool canOpenMore = TotalOrderCount() < MaxOpenOrders;
+         bool canOpenOnThisCandle = !(DontOpenSameCandle && currentBarTime == lastInitialCandleTime);
+
+         //--- BUY side shouldEnter logic
+         bool shouldEnterBuy = false;
+         if(justClosedBuy && EnableAutoReEntry) shouldEnterBuy = true;
+         else if(!justClosedBuy && buyCount == 0) shouldEnterBuy = true;
+
+         //--- SELL side shouldEnter logic
+         bool shouldEnterSell = false;
+         if(justClosedSell && EnableAutoReEntry) shouldEnterSell = true;
+         else if(!justClosedSell && sellCount == 0) shouldEnterSell = true;
+
+         // ===== BUY Entry (independent) =====
+         if(buyCount == 0 && g_initialBuyPrice == 0 && canOpenMore && canOpenOnThisCandle)
          {
-            if(shouldEnterBuy)
+            if(currentPrice > smaValue && (TradingMode == TRADE_BUY_ONLY || TradingMode == TRADE_BOTH))
             {
-               if(OpenOrder(ORDER_TYPE_BUY, InitialLotSize, "GM_INIT"))
+               if(shouldEnterBuy)
                {
-                  g_initialBuyPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-                  lastInitialCandleTime = currentBarTime;
-                  ResetTrailingState();
+                  if(OpenOrder(ORDER_TYPE_BUY, InitialLotSize, "GM_INIT"))
+                  {
+                     g_initialBuyPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+                     lastInitialCandleTime = currentBarTime;
+                     ResetTrailingState();
+                  }
                }
             }
          }
-      }
 
-      // ===== SELL Entry (independent) =====
-      if(sellCount == 0 && g_initialSellPrice == 0 && canOpenMore && canOpenOnThisCandle)
-      {
-         if(currentPrice < smaValue && (TradingMode == TRADE_SELL_ONLY || TradingMode == TRADE_BOTH))
+         // ===== SELL Entry (independent) =====
+         if(sellCount == 0 && g_initialSellPrice == 0 && canOpenMore && canOpenOnThisCandle)
          {
-            if(shouldEnterSell)
+            if(currentPrice < smaValue && (TradingMode == TRADE_SELL_ONLY || TradingMode == TRADE_BOTH))
             {
-               if(OpenOrder(ORDER_TYPE_SELL, InitialLotSize, "GM_INIT"))
+               if(shouldEnterSell)
                {
-                  g_initialSellPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-                  lastInitialCandleTime = currentBarTime;
-                  ResetTrailingState();
+                  if(OpenOrder(ORDER_TYPE_SELL, InitialLotSize, "GM_INIT"))
+                  {
+                     g_initialSellPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+                     lastInitialCandleTime = currentBarTime;
+                     ResetTrailingState();
+                  }
                }
             }
          }
