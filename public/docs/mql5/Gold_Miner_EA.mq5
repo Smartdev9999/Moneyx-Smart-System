@@ -1,7 +1,7 @@
 //+------------------------------------------------------------------+
 //|                                              Gold_Miner_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                     Gold Miner EA v2.8 - SMA+Grid+ATR+License    |
+//|                     Gold Miner EA v2.9 - SMA+Grid+ATR+License    |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
