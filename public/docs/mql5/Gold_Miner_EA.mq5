@@ -287,6 +287,7 @@ NewsEvent g_newsEvents[];
 int g_newsEventCount = 0;
 datetime g_lastNewsRefresh = 0;
 bool g_isNewsPaused = false;
+bool g_newOrderBlocked = false;  // true = News/Time filter blocks new entries only
 string g_nextNewsTitle = "";
 datetime g_nextNewsTime = 0;
 string g_newsStatus = "OK";
