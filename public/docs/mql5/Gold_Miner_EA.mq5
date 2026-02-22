@@ -399,7 +399,7 @@ int OnInit()
    //--- Recover initial prices from existing positions
    RecoverInitialPrices();
 
-   Print("Gold Miner EA v2.8 initialized successfully");
+   Print("Gold Miner EA v2.9 initialized successfully");
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
