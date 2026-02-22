@@ -639,18 +639,21 @@ void OnTick()
          g_initialSellPrice = 0;
       }
 
-      //--- Grid Loss management (check both sides independently)
-      if((hasInitialBuy || g_initialBuyPrice > 0) && gridLossBuy < GridLoss_MaxTrades && buyCount > 0)
+      //--- Grid Loss management (check both sides independently) - blocked by News/Time filter
+      if(!g_newOrderBlocked)
       {
-         CheckGridLoss(POSITION_TYPE_BUY, gridLossBuy);
-      }
-      if((hasInitialSell || g_initialSellPrice > 0) && gridLossSell < GridLoss_MaxTrades && sellCount > 0)
-      {
-         CheckGridLoss(POSITION_TYPE_SELL, gridLossSell);
+         if((hasInitialBuy || g_initialBuyPrice > 0) && gridLossBuy < GridLoss_MaxTrades && buyCount > 0)
+         {
+            CheckGridLoss(POSITION_TYPE_BUY, gridLossBuy);
+         }
+         if((hasInitialSell || g_initialSellPrice > 0) && gridLossSell < GridLoss_MaxTrades && sellCount > 0)
+         {
+            CheckGridLoss(POSITION_TYPE_SELL, gridLossSell);
+         }
       }
 
-      //--- Grid Profit management
-      if(GridProfit_Enable)
+      //--- Grid Profit management - blocked by News/Time filter
+      if(!g_newOrderBlocked && GridProfit_Enable)
       {
          if((hasInitialBuy || g_initialBuyPrice > 0) && gridProfitBuy < GridProfit_MaxTrades && buyCount > 0)
          {
