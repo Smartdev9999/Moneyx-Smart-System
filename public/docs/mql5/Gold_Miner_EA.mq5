@@ -5,8 +5,8 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "2.80"
-#property description "Gold Miner EA v2.8 - License Check + News Filter + Time Filter"
+#property version   "2.90"
+#property description "Gold Miner EA v2.9 - License Check + News Filter + Time Filter + Dashboard Controls"
 #property strict
 
 #include <Trade/Trade.mqh>
