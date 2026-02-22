@@ -2057,6 +2057,12 @@ void DisplayDashboard()
 
    DrawTableRow(row, "Auto Re-Entry", (EnableAutoReEntry ? "ON" : "OFF"), (EnableAutoReEntry ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_INFO); row++;
 
+   // New Order Blocked Status
+   if(g_newOrderBlocked)
+   {
+      DrawTableRow(row, "New Orders", "BLOCKED", COLOR_LOSS, COLOR_SECTION_INFO); row++;
+   }
+
    // License Status
    DrawTableRow(row, "License", g_isTesterMode ? "TESTER" : 
       (g_isLicenseValid ? (g_isLifetime ? "LIFETIME" : IntegerToString(g_daysRemaining) + " days") : "INVALID"),
