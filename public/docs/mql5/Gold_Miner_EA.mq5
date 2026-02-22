@@ -266,6 +266,7 @@ double         g_maxDD;             // Track max drawdown
 
 // Dashboard Control Variables (v2.9)
 bool           g_eaIsPaused = false;           // EA Pause State (manual)
+bool           g_atrChartHidden = false;       // ATR subwindow hidden flag (backtest)
 
 // License Verification Variables
 bool              g_isLicenseValid = false;
@@ -557,6 +558,24 @@ double CalcMonthlyPL()
 
 void OnTick()
 {
+   // === HIDE ATR CHART IN BACKTEST (v2.9) ===
+   if(!g_atrChartHidden && (MQLInfoInteger(MQL_TESTER) || MQLInfoInteger(MQL_VISUAL_MODE)))
+   {
+      int totalWindows = (int)ChartGetInteger(0, CHART_WINDOWS_TOTAL);
+      for(int sw = totalWindows - 1; sw > 0; sw--)
+      {
+         int indCount = ChartIndicatorsTotal(0, sw);
+         for(int j = 0; j < indCount; j++)
+         {
+            string indName = ChartIndicatorName(0, sw, j);
+            if(StringFind(indName, "ATR") >= 0)
+               ChartIndicatorDelete(0, sw, indName);
+         }
+      }
+      g_atrChartHidden = true;
+      ChartRedraw(0);
+   }
+
    // === LICENSE CHECK ===
    if(!g_isTesterMode)
    {
@@ -679,49 +698,67 @@ void OnTick()
          bool canOpenMore = TotalOrderCount() < MaxOpenOrders;
          bool canOpenOnThisCandle = !(DontOpenSameCandle && currentBarTime == lastInitialCandleTime);
 
-         //--- BUY side shouldEnter logic
+         //--- BUY side shouldEnter logic (v2.9 robust fix)
          bool shouldEnterBuy = false;
-         if(justClosedBuy && EnableAutoReEntry) shouldEnterBuy = true;
-         else if(!justClosedBuy && buyCount == 0) shouldEnterBuy = true;
+         if(buyCount == 0)
+         {
+            if(justClosedBuy && !EnableAutoReEntry)
+               shouldEnterBuy = false;  // 1-bar cooldown only
+            else
+               shouldEnterBuy = true;   // Ready to enter (auto re-entry or normal)
+         }
 
-         //--- SELL side shouldEnter logic
+         //--- SELL side shouldEnter logic (v2.9 robust fix)
          bool shouldEnterSell = false;
-         if(justClosedSell && EnableAutoReEntry) shouldEnterSell = true;
-         else if(!justClosedSell && sellCount == 0) shouldEnterSell = true;
-
-         // ===== BUY Entry (independent) =====
-         if(buyCount == 0 && g_initialBuyPrice == 0 && canOpenMore && canOpenOnThisCandle)
+         if(sellCount == 0)
          {
-            if(currentPrice > smaValue && (TradingMode == TRADE_BUY_ONLY || TradingMode == TRADE_BOTH))
-            {
-               if(shouldEnterBuy)
-               {
-                  if(OpenOrder(ORDER_TYPE_BUY, InitialLotSize, "GM_INIT"))
-                  {
-                     g_initialBuyPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-                     lastInitialCandleTime = currentBarTime;
-                     ResetTrailingState();
-                  }
-               }
-            }
+            if(justClosedSell && !EnableAutoReEntry)
+               shouldEnterSell = false;  // 1-bar cooldown only
+            else
+               shouldEnterSell = true;   // Ready to enter (auto re-entry or normal)
          }
 
-         // ===== SELL Entry (independent) =====
-         if(sellCount == 0 && g_initialSellPrice == 0 && canOpenMore && canOpenOnThisCandle)
-         {
-            if(currentPrice < smaValue && (TradingMode == TRADE_SELL_ONLY || TradingMode == TRADE_BOTH))
-            {
-               if(shouldEnterSell)
-               {
-                  if(OpenOrder(ORDER_TYPE_SELL, InitialLotSize, "GM_INIT"))
-                  {
-                     g_initialSellPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-                     lastInitialCandleTime = currentBarTime;
-                     ResetTrailingState();
-                  }
-               }
-            }
-         }
+          // ===== BUY Entry (independent) =====
+          if(buyCount == 0 && g_initialBuyPrice == 0 && canOpenMore && canOpenOnThisCandle)
+          {
+             if(currentPrice > smaValue && (TradingMode == TRADE_BUY_ONLY || TradingMode == TRADE_BOTH))
+             {
+                if(shouldEnterBuy)
+                {
+                   if(OpenOrder(ORDER_TYPE_BUY, InitialLotSize, "GM_INIT"))
+                   {
+                      g_initialBuyPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+                      lastInitialCandleTime = currentBarTime;
+                      ResetTrailingState();
+                   }
+                }
+             }
+             else if(shouldEnterBuy)
+             {
+                Print("BUY ENTRY SKIP: SMA signal not match (Price=", currentPrice, " SMA=", smaValue, ")");
+             }
+          }
+
+          // ===== SELL Entry (independent) =====
+          if(sellCount == 0 && g_initialSellPrice == 0 && canOpenMore && canOpenOnThisCandle)
+          {
+             if(currentPrice < smaValue && (TradingMode == TRADE_SELL_ONLY || TradingMode == TRADE_BOTH))
+             {
+                if(shouldEnterSell)
+                {
+                   if(OpenOrder(ORDER_TYPE_SELL, InitialLotSize, "GM_INIT"))
+                   {
+                      g_initialSellPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+                      lastInitialCandleTime = currentBarTime;
+                      ResetTrailingState();
+                   }
+                }
+             }
+             else if(shouldEnterSell)
+             {
+                Print("SELL ENTRY SKIP: SMA signal not match (Price=", currentPrice, " SMA=", smaValue, ")");
+             }
+          }
       }
 
       // Reset justClosed flags ONLY after entry logic has had a chance to use them
@@ -936,19 +973,20 @@ void CloseAllSide(ENUM_POSITION_TYPE side)
 //+------------------------------------------------------------------+
 void CloseAllPositions()
 {
+   bool hadBuy = false, hadSell = false;
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       ulong ticket = PositionGetTicket(i);
       if(ticket == 0) continue;
       if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) hadBuy = true;
+      else hadSell = true;
       trade.PositionClose(ticket);
    }
-   justClosedBuy = true;
-   justClosedSell = true;
+   if(hadBuy) { justClosedBuy = true; g_initialBuyPrice = 0; }
+   if(hadSell) { justClosedSell = true; g_initialSellPrice = 0; }
    ResetTrailingState();
-   g_initialBuyPrice = 0;
-   g_initialSellPrice = 0;
 }
 
 //+------------------------------------------------------------------+
