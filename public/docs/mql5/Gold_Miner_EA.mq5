@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                              Gold_Miner_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                     Gold Miner EA v2.8 - SMA+Grid+ATR+License    |
+//|                     Gold Miner EA v2.9 - SMA+Grid+ATR+License    |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "2.80"
-#property description "Gold Miner EA v2.8 - License Check + News Filter + Time Filter"
+#property version   "2.90"
+#property description "Gold Miner EA v2.9 - License Check + News Filter + Time Filter + Dashboard Controls"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -264,6 +264,9 @@ double         g_initialSellPrice;  // track initial order price for grid fallba
 double         g_accumulateBaseline; // Total history profit at last cycle reset
 double         g_maxDD;             // Track max drawdown
 
+// Dashboard Control Variables (v2.9)
+bool           g_eaIsPaused = false;           // EA Pause State (manual)
+
 // License Verification Variables
 bool              g_isLicenseValid = false;
 bool              g_isTesterMode = false;
@@ -396,7 +399,7 @@ int OnInit()
    //--- Recover initial prices from existing positions
    RecoverInitialPrices();
 
-   Print("Gold Miner EA v2.8 initialized successfully");
+   Print("Gold Miner EA v2.9 initialized successfully");
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -427,8 +430,9 @@ void OnDeinit(const int reason)
    ObjectDelete(0, "GM_SLLine");
    ObjectsDeleteAll(0, "GM_Dash_");
    ObjectsDeleteAll(0, "GM_TBL_");
+   ObjectsDeleteAll(0, "GM_Btn");
 
-   Print("Gold Miner EA v2.8 deinitialized");
+   Print("Gold Miner EA v2.9 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -566,8 +570,12 @@ void OnTick()
    // === NEWS FILTER - Refresh hourly ===
    RefreshNewsData();
 
-   // === Determine if new orders are blocked (News/Time) ===
+   // === Determine if new orders are blocked (News/Time/Pause) ===
    g_newOrderBlocked = false;
+
+   // Manual Pause check (v2.9)
+   if(g_eaIsPaused)
+      g_newOrderBlocked = true;
 
    if(IsNewsTimePaused())
       g_newOrderBlocked = true;
@@ -716,9 +724,13 @@ void OnTick()
          }
       }
 
-      // Reset justClosed flags at end of new bar processing
-      justClosedBuy = false;
-      justClosedSell = false;
+      // Reset justClosed flags ONLY after entry logic has had a chance to use them
+      // If g_newOrderBlocked = true, flags are preserved until filter clears
+      if(!g_newOrderBlocked)
+      {
+         justClosedBuy = false;
+         justClosedSell = false;
+      }
    }
 
    //--- Draw lines and dashboard every tick
@@ -1982,7 +1994,7 @@ void DisplayDashboard()
 
    //--- Header
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
-   CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, "Gold Miner EA v2.8", COLOR_HEADER_TEXT, 11, "Arial Bold");
+   CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, "Gold Miner EA v2.9", COLOR_HEADER_TEXT, 11, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + 220, DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, 9, "Consolas");
 
    //--- DETAIL Section
@@ -2057,11 +2069,31 @@ void DisplayDashboard()
 
    DrawTableRow(row, "Auto Re-Entry", (EnableAutoReEntry ? "ON" : "OFF"), (EnableAutoReEntry ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_INFO); row++;
 
-   // New Order Blocked Status
-   if(g_newOrderBlocked)
+   // System Status (v2.9)
+   string statusText = "Working";
+   color statusColor = COLOR_PROFIT;
+
+   if(g_licenseStatus == LICENSE_SUSPENDED || g_licenseStatus == LICENSE_EXPIRED)
    {
-      DrawTableRow(row, "New Orders", "BLOCKED", COLOR_LOSS, COLOR_SECTION_INFO); row++;
+      statusText = (g_licenseStatus == LICENSE_SUSPENDED) ? "SUSPENDED" : "EXPIRED";
+      statusColor = COLOR_LOSS;
    }
+   else if(!g_isLicenseValid && !g_isTesterMode)
+   {
+      statusText = "INVALID";
+      statusColor = COLOR_LOSS;
+   }
+   else if(g_eaIsPaused)
+   {
+      statusText = "PAUSED";
+      statusColor = COLOR_LOSS;
+   }
+   else if(g_newOrderBlocked)
+   {
+      statusText = "BLOCKED";
+      statusColor = clrYellow;
+   }
+   DrawTableRow(row, "System Status", statusText, statusColor, COLOR_SECTION_INFO); row++;
 
    // License Status
    DrawTableRow(row, "License", g_isTesterMode ? "TESTER" : 
@@ -2075,16 +2107,63 @@ void DisplayDashboard()
          IsWithinTradingHours() ? COLOR_PROFIT : COLOR_LOSS, COLOR_SECTION_INFO); row++;
    }
 
-   // News Filter
+   // News Filter with countdown (v2.9)
    if(InpEnableNewsFilter)
    {
-      DrawTableRow(row, "News", g_newsStatus,
-         g_isNewsPaused ? COLOR_LOSS : COLOR_PROFIT, COLOR_SECTION_INFO); row++;
+      string newsDisplay;
+      color newsColor;
+      
+      if(!g_webRequestConfigured)
+      {
+         newsDisplay = "WebRequest: NOT CONFIGURED!";
+         newsColor = COLOR_LOSS;
+      }
+      else if(g_isNewsPaused && StringLen(g_nextNewsTitle) > 0)
+      {
+         // Show news title + countdown timer
+         string truncTitle = g_nextNewsTitle;
+         if(StringLen(truncTitle) > 18)
+            truncTitle = StringSubstr(truncTitle, 0, 15) + "...";
+         string countdown = GetNewsCountdownString();
+         newsDisplay = truncTitle + " " + countdown;
+         newsColor = COLOR_LOSS;
+      }
+      else if(g_newsEventCount == 0)
+      {
+         newsDisplay = "0 events loaded";
+         newsColor = clrYellow;
+      }
+      else
+      {
+         newsDisplay = "No Important news";
+         newsColor = COLOR_PROFIT;
+      }
+      
+      DrawTableRow(row, "News Filter", newsDisplay, newsColor, COLOR_SECTION_INFO); row++;
    }
 
    //--- Bottom border
    int bottomY = DashboardY + 24 + row * 20;
    CreateDashRect("GM_TBL_BTM", DashboardX, bottomY, tableWidth, 2, COLOR_HEADER_BG);
+
+   //--- Control Buttons (v2.9) - below dashboard
+   int btnY = bottomY + 5;
+   int btnW = (tableWidth - 10) / 2;
+   int btnH = 22;
+
+   // Pause/Start button
+   string pauseText = g_eaIsPaused ? "▶ Start" : "⏸ Pause";
+   color pauseBg = g_eaIsPaused ? clrForestGreen : clrOrangeRed;
+   CreateDashButton("GM_BtnPause", DashboardX, btnY, tableWidth, btnH, pauseText, pauseBg, clrWhite);
+   btnY += btnH + 3;
+
+   // Close Buy / Close Sell
+   CreateDashButton("GM_BtnCloseBuy", DashboardX, btnY, btnW, btnH, "Close Buy", C'20,100,50', clrWhite);
+   CreateDashButton("GM_BtnCloseSell", DashboardX + btnW + 10, btnY, btnW, btnH, "Close Sell", C'180,50,30', clrWhite);
+   btnY += btnH + 3;
+
+   // Close All
+   CreateDashButton("GM_BtnCloseAll", DashboardX, btnY, tableWidth, btnH, "Close All", C'30,100,180', clrWhite);
 }
 
 //+------------------------------------------------------------------+
@@ -3702,5 +3781,90 @@ bool IsWithinTradingHours()
       return true;
    
    return false;
+}
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//| ============== CHART EVENT HANDLER (v2.9) ====================== |
+//+------------------------------------------------------------------+
+void OnChartEvent(const int id, const long &lparam, const double &dparam, const string &sparam)
+{
+   if(id == CHARTEVENT_OBJECT_CLICK)
+   {
+      if(sparam == "GM_BtnPause")
+      {
+         g_eaIsPaused = !g_eaIsPaused;
+         ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
+         Print("EA ", g_eaIsPaused ? "PAUSED" : "RESUMED", " by user");
+      }
+      else if(sparam == "GM_BtnCloseBuy")
+      {
+         ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
+         int result = MessageBox("Close all BUY orders?", "Confirm Close Buy", MB_YESNO | MB_ICONWARNING);
+         if(result == IDYES)
+            CloseAllPositionsByType(POSITION_TYPE_BUY);
+      }
+      else if(sparam == "GM_BtnCloseSell")
+      {
+         ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
+         int result = MessageBox("Close all SELL orders?", "Confirm Close Sell", MB_YESNO | MB_ICONWARNING);
+         if(result == IDYES)
+            CloseAllPositionsByType(POSITION_TYPE_SELL);
+      }
+      else if(sparam == "GM_BtnCloseAll")
+      {
+         ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
+         int result = MessageBox("Close ALL orders?", "Confirm Close All", MB_YESNO | MB_ICONWARNING);
+         if(result == IDYES)
+         {
+            CloseAllPositionsByType(POSITION_TYPE_BUY);
+            CloseAllPositionsByType(POSITION_TYPE_SELL);
+         }
+      }
+      ChartRedraw(0);
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Close all positions by type (BUY or SELL) - v2.9                   |
+//+------------------------------------------------------------------+
+void CloseAllPositionsByType(ENUM_POSITION_TYPE posType)
+{
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if(PositionGetInteger(POSITION_TYPE) != posType) continue;
+      
+      trade.PositionClose(ticket);
+   }
+   
+   string typeStr = (posType == POSITION_TYPE_BUY) ? "BUY" : "SELL";
+   Print("Closed all ", typeStr, " positions by user command");
+}
+
+//+------------------------------------------------------------------+
+//| Dashboard Helper: Create Button (v2.9)                             |
+//+------------------------------------------------------------------+
+void CreateDashButton(string name, int x, int y, int width, int height, string text, color bgColor, color textColor)
+{
+   if(ObjectFind(0, name) < 0)
+   {
+      ObjectCreate(0, name, OBJ_BUTTON, 0, 0, 0);
+   }
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
+   ObjectSetInteger(0, name, OBJPROP_XSIZE, width);
+   ObjectSetInteger(0, name, OBJPROP_YSIZE, height);
+   ObjectSetString(0, name, OBJPROP_TEXT, text);
+   ObjectSetInteger(0, name, OBJPROP_BGCOLOR, bgColor);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, textColor);
+   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, 9);
+   ObjectSetString(0, name, OBJPROP_FONT, "Arial Bold");
+   ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
 }
 //+------------------------------------------------------------------+
