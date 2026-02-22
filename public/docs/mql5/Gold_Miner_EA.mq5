@@ -267,6 +267,7 @@ double         g_maxDD;             // Track max drawdown
 // Dashboard Control Variables (v2.9)
 bool           g_eaIsPaused = false;           // EA Pause State (manual)
 bool           g_atrChartHidden = false;       // ATR subwindow hidden flag (backtest)
+int            g_atrHideAttempts = 0;          // ATR hide retry counter
 
 // License Verification Variables
 bool              g_isLicenseValid = false;
