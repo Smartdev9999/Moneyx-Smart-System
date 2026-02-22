@@ -558,6 +558,24 @@ double CalcMonthlyPL()
 
 void OnTick()
 {
+   // === HIDE ATR CHART IN BACKTEST (v2.9) ===
+   if(!g_atrChartHidden && (MQLInfoInteger(MQL_TESTER) || MQLInfoInteger(MQL_VISUAL_MODE)))
+   {
+      int totalWindows = (int)ChartGetInteger(0, CHART_WINDOWS_TOTAL);
+      for(int sw = totalWindows - 1; sw > 0; sw--)
+      {
+         int indCount = ChartIndicatorsTotal(0, sw);
+         for(int j = 0; j < indCount; j++)
+         {
+            string indName = ChartIndicatorName(0, sw, j);
+            if(StringFind(indName, "ATR") >= 0)
+               ChartIndicatorDelete(0, sw, indName);
+         }
+      }
+      g_atrChartHidden = true;
+      ChartRedraw(0);
+   }
+
    // === LICENSE CHECK ===
    if(!g_isTesterMode)
    {
