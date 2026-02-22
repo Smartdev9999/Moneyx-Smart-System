@@ -699,22 +699,26 @@ void OnTick()
                shouldEnterSell = true;   // Ready to enter (auto re-entry or normal)
          }
 
-         // ===== BUY Entry (independent) =====
-         if(buyCount == 0 && g_initialBuyPrice == 0 && canOpenMore && canOpenOnThisCandle)
-         {
-            if(currentPrice > smaValue && (TradingMode == TRADE_BUY_ONLY || TradingMode == TRADE_BOTH))
-            {
-               if(shouldEnterBuy)
-               {
-                  if(OpenOrder(ORDER_TYPE_BUY, InitialLotSize, "GM_INIT"))
-                  {
-                     g_initialBuyPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-                     lastInitialCandleTime = currentBarTime;
-                     ResetTrailingState();
-                  }
-               }
-            }
-         }
+          // ===== BUY Entry (independent) =====
+          if(buyCount == 0 && g_initialBuyPrice == 0 && canOpenMore && canOpenOnThisCandle)
+          {
+             if(currentPrice > smaValue && (TradingMode == TRADE_BUY_ONLY || TradingMode == TRADE_BOTH))
+             {
+                if(shouldEnterBuy)
+                {
+                   if(OpenOrder(ORDER_TYPE_BUY, InitialLotSize, "GM_INIT"))
+                   {
+                      g_initialBuyPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+                      lastInitialCandleTime = currentBarTime;
+                      ResetTrailingState();
+                   }
+                }
+             }
+             else if(shouldEnterBuy)
+             {
+                Print("BUY ENTRY SKIP: SMA signal not match (Price=", currentPrice, " SMA=", smaValue, ")");
+             }
+          }
 
          // ===== SELL Entry (independent) =====
          if(sellCount == 0 && g_initialSellPrice == 0 && canOpenMore && canOpenOnThisCandle)
