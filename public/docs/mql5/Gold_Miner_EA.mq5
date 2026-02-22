@@ -3783,3 +3783,88 @@ bool IsWithinTradingHours()
    return false;
 }
 //+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//| ============== CHART EVENT HANDLER (v2.9) ====================== |
+//+------------------------------------------------------------------+
+void OnChartEvent(const int id, const long &lparam, const double &dparam, const string &sparam)
+{
+   if(id == CHARTEVENT_OBJECT_CLICK)
+   {
+      if(sparam == "GM_BtnPause")
+      {
+         g_eaIsPaused = !g_eaIsPaused;
+         ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
+         Print("EA ", g_eaIsPaused ? "PAUSED" : "RESUMED", " by user");
+      }
+      else if(sparam == "GM_BtnCloseBuy")
+      {
+         ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
+         int result = MessageBox("Close all BUY orders?", "Confirm Close Buy", MB_YESNO | MB_ICONWARNING);
+         if(result == IDYES)
+            CloseAllPositionsByType(POSITION_TYPE_BUY);
+      }
+      else if(sparam == "GM_BtnCloseSell")
+      {
+         ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
+         int result = MessageBox("Close all SELL orders?", "Confirm Close Sell", MB_YESNO | MB_ICONWARNING);
+         if(result == IDYES)
+            CloseAllPositionsByType(POSITION_TYPE_SELL);
+      }
+      else if(sparam == "GM_BtnCloseAll")
+      {
+         ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
+         int result = MessageBox("Close ALL orders?", "Confirm Close All", MB_YESNO | MB_ICONWARNING);
+         if(result == IDYES)
+         {
+            CloseAllPositionsByType(POSITION_TYPE_BUY);
+            CloseAllPositionsByType(POSITION_TYPE_SELL);
+         }
+      }
+      ChartRedraw(0);
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Close all positions by type (BUY or SELL) - v2.9                   |
+//+------------------------------------------------------------------+
+void CloseAllPositionsByType(ENUM_POSITION_TYPE posType)
+{
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if(PositionGetInteger(POSITION_TYPE) != posType) continue;
+      
+      trade.PositionClose(ticket);
+   }
+   
+   string typeStr = (posType == POSITION_TYPE_BUY) ? "BUY" : "SELL";
+   Print("Closed all ", typeStr, " positions by user command");
+}
+
+//+------------------------------------------------------------------+
+//| Dashboard Helper: Create Button (v2.9)                             |
+//+------------------------------------------------------------------+
+void CreateDashButton(string name, int x, int y, int width, int height, string text, color bgColor, color textColor)
+{
+   if(ObjectFind(0, name) < 0)
+   {
+      ObjectCreate(0, name, OBJ_BUTTON, 0, 0, 0);
+   }
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
+   ObjectSetInteger(0, name, OBJPROP_XSIZE, width);
+   ObjectSetInteger(0, name, OBJPROP_YSIZE, height);
+   ObjectSetString(0, name, OBJPROP_TEXT, text);
+   ObjectSetInteger(0, name, OBJPROP_BGCOLOR, bgColor);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, textColor);
+   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, 9);
+   ObjectSetString(0, name, OBJPROP_FONT, "Arial Bold");
+   ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+}
+//+------------------------------------------------------------------+
