@@ -679,15 +679,25 @@ void OnTick()
          bool canOpenMore = TotalOrderCount() < MaxOpenOrders;
          bool canOpenOnThisCandle = !(DontOpenSameCandle && currentBarTime == lastInitialCandleTime);
 
-         //--- BUY side shouldEnter logic
+         //--- BUY side shouldEnter logic (v2.9 robust fix)
          bool shouldEnterBuy = false;
-         if(justClosedBuy && EnableAutoReEntry) shouldEnterBuy = true;
-         else if(!justClosedBuy && buyCount == 0) shouldEnterBuy = true;
+         if(buyCount == 0)
+         {
+            if(justClosedBuy && !EnableAutoReEntry)
+               shouldEnterBuy = false;  // 1-bar cooldown only
+            else
+               shouldEnterBuy = true;   // Ready to enter (auto re-entry or normal)
+         }
 
-         //--- SELL side shouldEnter logic
+         //--- SELL side shouldEnter logic (v2.9 robust fix)
          bool shouldEnterSell = false;
-         if(justClosedSell && EnableAutoReEntry) shouldEnterSell = true;
-         else if(!justClosedSell && sellCount == 0) shouldEnterSell = true;
+         if(sellCount == 0)
+         {
+            if(justClosedSell && !EnableAutoReEntry)
+               shouldEnterSell = false;  // 1-bar cooldown only
+            else
+               shouldEnterSell = true;   // Ready to enter (auto re-entry or normal)
+         }
 
          // ===== BUY Entry (independent) =====
          if(buyCount == 0 && g_initialBuyPrice == 0 && canOpenMore && canOpenOnThisCandle)
