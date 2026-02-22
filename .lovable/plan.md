@@ -1,98 +1,267 @@
 
 
-## แก้ไข News Filter และ Time Filter ให้หยุดเฉพาะการเปิดออเดอร์ใหม่
+## Gold Miner EA v2.9 - แก้ไข Time Filter Resume + เพิ่ม Dashboard Features
 
-### ปัญหาปัจจุบัน
+### ปัญหาที่พบ
 
-โค้ดใน `OnTick()` บรรทัด 568-574 ทำ `return` ทันทีเมื่อ News/Time filter ไม่ผ่าน ซึ่งหยุด **ทุกอย่าง** รวมถึง:
-- Per-Order Trailing / Breakeven
-- ManageTPSL() (Basket TP/SL)
-- CheckDrawdownExit()
-- Accumulate Close
-- Dashboard update
+1. **Time Filter ไม่ Resume**: หลังหมดช่วงเวลาที่หยุดเทรด ระบบไม่กลับมาเปิดออเดอร์ใหม่ ตรวจสอบพบว่า logic ใน `OnTick()` ถูกต้อง (flag `g_newOrderBlocked` ถูก reset เป็น `false` ทุก tick) แต่ปัญหาอยู่ที่ `justClosedBuy`/`justClosedSell` flags ถูก reset ไปแล้วระหว่างที่ filter ยังทำงาน ทำให้เมื่อ filter หยุด auto re-entry ไม่ทำงาน เพราะ `shouldEnterBuy` ต้องอาศัย `justClosedBuy = true` (กรณี `EnableAutoReEntry`)
 
-### สิ่งที่ต้องเปลี่ยน
+   แก้ไข: เลื่อน reset `justClosedBuy`/`justClosedSell` ให้ทำหลังจากได้ลอง entry จริงแล้ว (ภายใน `if(!g_newOrderBlocked)` block) และเพิ่ม fallback สำหรับกรณี `buyCount == 0` ให้ enter ได้แม้ `justClosed` เป็น `false`
 
-เปลี่ยนจาก "return ทันที" เป็น "ตั้ง flag แล้วใช้ flag บล็อกเฉพาะจุดเปิดออเดอร์ใหม่"
+2. **News Filter Dashboard**: ต้องแสดงข่าวที่ทำให้หยุด + countdown timer เหมือน v5.34
+3. **ปุ่ม Close Buy / Close Sell / Close All**: ยังไม่มี
+4. **System Status + Pause button**: ยังไม่มี
 
-### การแก้ไขในไฟล์ `public/docs/mql5/Gold_Miner_EA.mq5`
+---
 
-**1. เพิ่ม flag variable (global)**
+### ไฟล์ที่แก้ไข
 
-```
-bool g_newOrderBlocked = false;  // true = News/Time filter blocks new entries only
-```
+`public/docs/mql5/Gold_Miner_EA.mq5` (ไฟล์เดียว, version 2.80 -> 2.90)
 
-**2. แก้ OnTick() - ย้าย guard จาก return เป็น flag**
+---
 
-แทนที่บรรทัด 565-574 (ที่ return ทันที):
+### 1. แก้ไข Bug: Time Filter Resume
 
-```
-// === NEWS FILTER - Refresh hourly ===
-RefreshNewsData();
+ปัญหา: `justClosedBuy`/`justClosedSell` ถูก reset ทุก new bar (บรรทัด 720-721) แม้ระหว่างที่ `g_newOrderBlocked = true` ทำให้เมื่อ filter หยุด ระบบไม่พบว่าเพิ่งปิดออเดอร์ จึงไม่ auto re-entry
 
-// === Determine if new orders are blocked (News/Time) ===
-g_newOrderBlocked = false;
+แก้ไข: ย้าย reset flags เข้าไปอยู่ภายใน `if(!g_newOrderBlocked)` block หลังจากที่ entry logic ได้ทำงานแล้ว เพื่อให้ flags คงอยู่จนกว่าจะได้ลองเปิดออเดอร์จริง
 
-if(IsNewsTimePaused())
-   g_newOrderBlocked = true;
+```text
+// เดิม (บรรทัด 720-721):
+justClosedBuy = false;
+justClosedSell = false;
 
-if(InpUseTimeFilter && !IsWithinTradingHours())
-   g_newOrderBlocked = true;
-```
-
-ส่วน trailing, TP/SL, drawdown, dashboard ยังทำงานปกติทุก tick
-
-**3. ใช้ flag บล็อกเฉพาะจุดเปิดออเดอร์ใหม่ (3 จุด)**
-
-จุดที่ 1 - Grid Loss (บรรทัด ~640-648): เพิ่ม guard
-```
+// ใหม่: ย้ายเข้าไปใน if(!g_newOrderBlocked) block ท้ายสุด
 if(!g_newOrderBlocked)
 {
-   if((hasInitialBuy || ...) && gridLossBuy < GridLoss_MaxTrades && buyCount > 0)
-      CheckGridLoss(POSITION_TYPE_BUY, gridLossBuy);
-   if((hasInitialSell || ...) && gridLossSell < GridLoss_MaxTrades && sellCount > 0)
-      CheckGridLoss(POSITION_TYPE_SELL, gridLossSell);
+   // ... entry logic เดิม ...
+   
+   // Reset justClosed flags AFTER entry logic has had chance to use them
+   justClosedBuy = false;
+   justClosedSell = false;
 }
+// ถ้า g_newOrderBlocked = true, flags จะคงอยู่จนกว่า filter จะหยุด
 ```
 
-จุดที่ 2 - Grid Profit (บรรทัด ~651-661): เพิ่ม guard
+---
+
+### 2. เพิ่ม Global Variables ใหม่
+
+```text
+// Dashboard Control Variables (from v5.34)
+bool g_eaIsPaused = false;           // EA Pause State
+bool g_showConfirmDialog = false;    // Confirmation dialog visible
+string g_confirmAction = "";         // Pending action
 ```
-if(!g_newOrderBlocked && GridProfit_Enable)
+
+---
+
+### 3. เพิ่ม OnChartEvent() (ใหม่ - Gold Miner ยังไม่มี)
+
+คัดลอกจาก v5.34 เพื่อจัดการ button clicks:
+
+```text
+void OnChartEvent(const int id, const long &lparam, const double &dparam, const string &sparam)
 {
-   // ... เหมือนเดิม
+   if(id == CHARTEVENT_OBJECT_CLICK)
+   {
+      if(sparam == "GM_BtnPause")
+      {
+         g_eaIsPaused = !g_eaIsPaused;
+         ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
+         Print("EA ", g_eaIsPaused ? "PAUSED" : "RESUMED", " by user");
+      }
+      else if(sparam == "GM_BtnCloseBuy")
+      {
+         ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
+         ShowConfirmDialog("CLOSE_BUY", "Close all BUY orders?");
+      }
+      else if(sparam == "GM_BtnCloseSell")
+      {
+         ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
+         ShowConfirmDialog("CLOSE_SELL", "Close all SELL orders?");
+      }
+      else if(sparam == "GM_BtnCloseAll")
+      {
+         ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
+         ShowConfirmDialog("CLOSE_ALL", "Close ALL orders?");
+      }
+      else if(sparam == "GM_BtnConfirmYes")
+      {
+         ExecuteConfirmedAction();
+      }
+      else if(sparam == "GM_BtnConfirmNo")
+      {
+         HideConfirmDialog();
+      }
+      ChartRedraw(0);
+   }
 }
 ```
 
-จุดที่ 3 - Entry logic BUY/SELL (บรรทัด ~663-713): เพิ่ม guard
-```
-if(!g_newOrderBlocked)
+---
+
+### 4. เพิ่ม Pause Guard ใน OnTick()
+
+เพิ่มหลัง license check, ก่อน News/Time filter:
+
+```text
+// === EA PAUSE CHECK ===
+if(g_eaIsPaused)
 {
-   // BUY Entry + SELL Entry logic เหมือนเดิม
+   g_newOrderBlocked = true;
+   // แต่ยังคง run TP/SL, trailing, drawdown, dashboard
 }
 ```
 
-**4. Dashboard - เพิ่มแสดงสถานะ**
+---
 
-แสดง "NEW ORDERS BLOCKED" เมื่อ `g_newOrderBlocked = true` เพื่อให้ผู้ใช้เห็นว่า filter กำลังทำงาน
+### 5. เพิ่ม Functions สำหรับ Buttons (ท้ายไฟล์)
 
-### สิ่งที่ยังทำงานปกติเมื่อ News/Time filter บล็อก
+คัดลอกจาก v5.34:
 
-- ManagePerOrderTrailing() - trailing stop ทุก tick
-- ManageTrailingStop() - breakeven + trailing ทุก tick
-- ManageTPSL() - basket TP/SL ทุก tick
-- CheckDrawdownExit() - emergency drawdown ทุก tick
-- Accumulate Close (อยู่ใน ManageTPSL)
-- DrawLines() + DisplayDashboard() - UI ทุก tick
-- Auto-detect broker-closed positions - reset flags ปกติ
+| Function | หมายเหตุ |
+|----------|----------|
+| `CreateDashButton()` | สร้างปุ่มบน chart (OBJ_BUTTON) |
+| `ShowConfirmDialog()` | แสดง confirm dialog |
+| `HideConfirmDialog()` | ซ่อน confirm dialog |
+| `ExecuteConfirmedAction()` | ปิดออเดอร์ตาม action |
+| `CloseAllPositionsByType()` | ปิดออเดอร์ตาม type (BUY/SELL) - ใช้ชื่อใหม่เพราะ `CloseAllPositions()` มีอยู่แล้ว |
 
-### สิ่งที่ถูกบล็อก
+---
 
-- เปิดออเดอร์ Initial ใหม่ (BUY/SELL Entry)
-- เปิด Grid Loss ใหม่
-- เปิด Grid Profit ใหม่
+### 6. แก้ไข Dashboard - เพิ่มฟีเจอร์ใหม่
 
-### สรุป
+**6.1 News Filter Row - แสดง countdown timer**
 
-แก้ไขไฟล์เดียว: `public/docs/mql5/Gold_Miner_EA.mq5` - เปลี่ยน News/Time filter จาก "หยุดทุกอย่าง" เป็น "หยุดเฉพาะเปิดออเดอร์ใหม่" โดยใช้ flag `g_newOrderBlocked`
+แทนที่แถว News Filter ปัจจุบัน (บรรทัด 2079-2083) ด้วย logic จาก v5.34:
+
+```text
+if(InpEnableNewsFilter)
+{
+   string newsDisplay;
+   color newsColor;
+   
+   if(!g_webRequestConfigured)
+   {
+      newsDisplay = "WebRequest: NOT CONFIGURED!";
+      newsColor = COLOR_LOSS;
+   }
+   else if(g_isNewsPaused && StringLen(g_nextNewsTitle) > 0)
+   {
+      // แสดงชื่อข่าว + countdown
+      string truncTitle = g_nextNewsTitle;
+      if(StringLen(truncTitle) > 18)
+         truncTitle = StringSubstr(truncTitle, 0, 15) + "...";
+      string countdown = GetNewsCountdownString();
+      newsDisplay = truncTitle + " " + countdown;
+      newsColor = COLOR_LOSS;
+   }
+   else if(g_newsEventCount == 0)
+   {
+      newsDisplay = "0 events loaded";
+      newsColor = clrYellow;
+   }
+   else
+   {
+      newsDisplay = "No Important news";
+      newsColor = COLOR_PROFIT;
+   }
+   
+   DrawTableRow(row, "News Filter", newsDisplay, newsColor, COLOR_SECTION_INFO); row++;
+}
+```
+
+**6.2 System Status Row + Pause Button**
+
+เพิ่มก่อน header (หรือหลัง header row) เหมือน v5.34:
+
+```text
+// System Status
+string statusText = "Working";
+color statusColor = COLOR_PROFIT;
+
+if(g_licenseStatus == LICENSE_SUSPENDED || g_licenseStatus == LICENSE_EXPIRED)
+{
+   statusText = (g_licenseStatus == LICENSE_SUSPENDED) ? "SUSPENDED" : "EXPIRED";
+   statusColor = COLOR_LOSS;
+}
+else if(!g_isLicenseValid && !g_isTesterMode)
+{
+   statusText = "INVALID";
+   statusColor = COLOR_LOSS;
+}
+else if(g_eaIsPaused)
+{
+   statusText = "PAUSED";
+   statusColor = COLOR_LOSS;
+}
+else if(g_newOrderBlocked)
+{
+   statusText = "BLOCKED";
+   statusColor = clrYellow;
+}
+
+DrawTableRow(row, "System Status", statusText, statusColor, COLOR_SECTION_INFO); row++;
+
+// Pause Button (ข้างแถว System Status)
+CreateDashButton("GM_BtnPause", ...Pause/Start...);
+```
+
+**6.3 Close Buttons (ใต้ dashboard)**
+
+```text
+// ใต้ bottom border ของ dashboard
+int btnY = bottomY + 5;
+int btnW = (tableWidth - 10) / 2;
+int btnH = 25;
+
+CreateDashButton("GM_BtnCloseBuy", DashboardX, btnY, btnW, btnH, "Close Buy", clrForestGreen);
+CreateDashButton("GM_BtnCloseSell", DashboardX + btnW + 10, btnY, btnW, btnH, "Close Sell", clrOrangeRed);
+btnY += btnH + 3;
+CreateDashButton("GM_BtnCloseAll", DashboardX, btnY, tableWidth, btnH, "Close All", clrDodgerBlue);
+
+// Confirmation Dialog (hidden by default)
+CreateDashRect("GM_ConfirmBg", ...);
+CreateDashText("GM_ConfirmText", ...);
+CreateDashButton("GM_BtnConfirmYes", ...YES...);
+CreateDashButton("GM_BtnConfirmNo", ...NO...);
+HideConfirmDialog();
+```
+
+---
+
+### 7. แก้ไข OnDeinit() - Cleanup objects ใหม่
+
+เพิ่มลบ objects ของ buttons:
+
+```text
+ObjectsDeleteAll(0, "GM_Btn");
+ObjectsDeleteAll(0, "GM_Confirm");
+```
+
+---
+
+### 8. สิ่งที่ไม่เปลี่ยนแปลง (รับประกัน 100%)
+
+- SMA Signal Logic (BUY/SELL)
+- Grid Entry/Exit Logic
+- TP/SL/Trailing/Breakeven Logic
+- Accumulate Close Logic
+- Drawdown Exit Logic
+- License Module
+- News Filter core logic (IsNewsTimePaused, RefreshNewsData, etc.)
+- Time Filter core logic (IsWithinTradingHours, etc.)
+
+---
+
+### 9. สรุป
+
+- Version: 2.80 -> 2.90
+- แก้ bug: Time Filter resume ด้วยการย้าย justClosed reset เข้าไปใน entry block
+- เพิ่ม: News countdown timer บน Dashboard
+- เพิ่ม: System Status row + Pause/Start button
+- เพิ่ม: Close Buy / Close Sell / Close All buttons พร้อม Confirm dialog
+- เพิ่ม: OnChartEvent() สำหรับจัดการ button clicks
+- เพิ่มประมาณ ~200 บรรทัด
 
