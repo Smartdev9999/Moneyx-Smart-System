@@ -954,19 +954,20 @@ void CloseAllSide(ENUM_POSITION_TYPE side)
 //+------------------------------------------------------------------+
 void CloseAllPositions()
 {
+   bool hadBuy = false, hadSell = false;
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       ulong ticket = PositionGetTicket(i);
       if(ticket == 0) continue;
       if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) hadBuy = true;
+      else hadSell = true;
       trade.PositionClose(ticket);
    }
-   justClosedBuy = true;
-   justClosedSell = true;
+   if(hadBuy) { justClosedBuy = true; g_initialBuyPrice = 0; }
+   if(hadSell) { justClosedSell = true; g_initialSellPrice = 0; }
    ResetTrailingState();
-   g_initialBuyPrice = 0;
-   g_initialSellPrice = 0;
 }
 
 //+------------------------------------------------------------------+
