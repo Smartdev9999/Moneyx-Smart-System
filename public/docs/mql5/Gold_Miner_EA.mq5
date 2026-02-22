@@ -264,6 +264,9 @@ double         g_initialSellPrice;  // track initial order price for grid fallba
 double         g_accumulateBaseline; // Total history profit at last cycle reset
 double         g_maxDD;             // Track max drawdown
 
+// Dashboard Control Variables (v2.9)
+bool           g_eaIsPaused = false;           // EA Pause State (manual)
+
 // License Verification Variables
 bool              g_isLicenseValid = false;
 bool              g_isTesterMode = false;
