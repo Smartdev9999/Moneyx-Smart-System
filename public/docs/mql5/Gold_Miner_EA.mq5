@@ -562,19 +562,27 @@ void OnTick()
    // === HIDE ATR CHART IN BACKTEST (v2.9) ===
    if(!g_atrChartHidden && (MQLInfoInteger(MQL_TESTER) || MQLInfoInteger(MQL_VISUAL_MODE)))
    {
+      g_atrHideAttempts++;
       int totalWindows = (int)ChartGetInteger(0, CHART_WINDOWS_TOTAL);
+      bool found = false;
       for(int sw = totalWindows - 1; sw > 0; sw--)
       {
          int indCount = ChartIndicatorsTotal(0, sw);
-         for(int j = 0; j < indCount; j++)
+         for(int j = indCount - 1; j >= 0; j--)
          {
             string indName = ChartIndicatorName(0, sw, j);
             if(StringFind(indName, "ATR") >= 0)
+            {
                ChartIndicatorDelete(0, sw, indName);
+               found = true;
+            }
          }
       }
-      g_atrChartHidden = true;
-      ChartRedraw(0);
+      if(found || g_atrHideAttempts >= 50)
+      {
+         g_atrChartHidden = true;
+         ChartRedraw(0);
+      }
    }
 
    // === LICENSE CHECK ===
