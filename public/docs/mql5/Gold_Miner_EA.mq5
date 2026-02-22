@@ -430,8 +430,9 @@ void OnDeinit(const int reason)
    ObjectDelete(0, "GM_SLLine");
    ObjectsDeleteAll(0, "GM_Dash_");
    ObjectsDeleteAll(0, "GM_TBL_");
+   ObjectsDeleteAll(0, "GM_Btn");
 
-   Print("Gold Miner EA v2.8 deinitialized");
+   Print("Gold Miner EA v2.9 deinitialized");
 }
 
 //+------------------------------------------------------------------+
