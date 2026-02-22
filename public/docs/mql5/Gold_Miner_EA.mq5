@@ -570,8 +570,12 @@ void OnTick()
    // === NEWS FILTER - Refresh hourly ===
    RefreshNewsData();
 
-   // === Determine if new orders are blocked (News/Time) ===
+   // === Determine if new orders are blocked (News/Time/Pause) ===
    g_newOrderBlocked = false;
+
+   // Manual Pause check (v2.9)
+   if(g_eaIsPaused)
+      g_newOrderBlocked = true;
 
    if(IsNewsTimePaused())
       g_newOrderBlocked = true;
