@@ -2069,11 +2069,31 @@ void DisplayDashboard()
 
    DrawTableRow(row, "Auto Re-Entry", (EnableAutoReEntry ? "ON" : "OFF"), (EnableAutoReEntry ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_INFO); row++;
 
-   // New Order Blocked Status
-   if(g_newOrderBlocked)
+   // System Status (v2.9)
+   string statusText = "Working";
+   color statusColor = COLOR_PROFIT;
+
+   if(g_licenseStatus == LICENSE_SUSPENDED || g_licenseStatus == LICENSE_EXPIRED)
    {
-      DrawTableRow(row, "New Orders", "BLOCKED", COLOR_LOSS, COLOR_SECTION_INFO); row++;
+      statusText = (g_licenseStatus == LICENSE_SUSPENDED) ? "SUSPENDED" : "EXPIRED";
+      statusColor = COLOR_LOSS;
    }
+   else if(!g_isLicenseValid && !g_isTesterMode)
+   {
+      statusText = "INVALID";
+      statusColor = COLOR_LOSS;
+   }
+   else if(g_eaIsPaused)
+   {
+      statusText = "PAUSED";
+      statusColor = COLOR_LOSS;
+   }
+   else if(g_newOrderBlocked)
+   {
+      statusText = "BLOCKED";
+      statusColor = clrYellow;
+   }
+   DrawTableRow(row, "System Status", statusText, statusColor, COLOR_SECTION_INFO); row++;
 
    // License Status
    DrawTableRow(row, "License", g_isTesterMode ? "TESTER" : 
@@ -2087,16 +2107,63 @@ void DisplayDashboard()
          IsWithinTradingHours() ? COLOR_PROFIT : COLOR_LOSS, COLOR_SECTION_INFO); row++;
    }
 
-   // News Filter
+   // News Filter with countdown (v2.9)
    if(InpEnableNewsFilter)
    {
-      DrawTableRow(row, "News", g_newsStatus,
-         g_isNewsPaused ? COLOR_LOSS : COLOR_PROFIT, COLOR_SECTION_INFO); row++;
+      string newsDisplay;
+      color newsColor;
+      
+      if(!g_webRequestConfigured)
+      {
+         newsDisplay = "WebRequest: NOT CONFIGURED!";
+         newsColor = COLOR_LOSS;
+      }
+      else if(g_isNewsPaused && StringLen(g_nextNewsTitle) > 0)
+      {
+         // Show news title + countdown timer
+         string truncTitle = g_nextNewsTitle;
+         if(StringLen(truncTitle) > 18)
+            truncTitle = StringSubstr(truncTitle, 0, 15) + "...";
+         string countdown = GetNewsCountdownString();
+         newsDisplay = truncTitle + " " + countdown;
+         newsColor = COLOR_LOSS;
+      }
+      else if(g_newsEventCount == 0)
+      {
+         newsDisplay = "0 events loaded";
+         newsColor = clrYellow;
+      }
+      else
+      {
+         newsDisplay = "No Important news";
+         newsColor = COLOR_PROFIT;
+      }
+      
+      DrawTableRow(row, "News Filter", newsDisplay, newsColor, COLOR_SECTION_INFO); row++;
    }
 
    //--- Bottom border
    int bottomY = DashboardY + 24 + row * 20;
    CreateDashRect("GM_TBL_BTM", DashboardX, bottomY, tableWidth, 2, COLOR_HEADER_BG);
+
+   //--- Control Buttons (v2.9) - below dashboard
+   int btnY = bottomY + 5;
+   int btnW = (tableWidth - 10) / 2;
+   int btnH = 22;
+
+   // Pause/Start button
+   string pauseText = g_eaIsPaused ? "▶ Start" : "⏸ Pause";
+   color pauseBg = g_eaIsPaused ? clrForestGreen : clrOrangeRed;
+   CreateDashButton("GM_BtnPause", DashboardX, btnY, tableWidth, btnH, pauseText, pauseBg, clrWhite);
+   btnY += btnH + 3;
+
+   // Close Buy / Close Sell
+   CreateDashButton("GM_BtnCloseBuy", DashboardX, btnY, btnW, btnH, "Close Buy", C'20,100,50', clrWhite);
+   CreateDashButton("GM_BtnCloseSell", DashboardX + btnW + 10, btnY, btnW, btnH, "Close Sell", C'180,50,30', clrWhite);
+   btnY += btnH + 3;
+
+   // Close All
+   CreateDashButton("GM_BtnCloseAll", DashboardX, btnY, tableWidth, btnH, "Close All", C'30,100,180', clrWhite);
 }
 
 //+------------------------------------------------------------------+
