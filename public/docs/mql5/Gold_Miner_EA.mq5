@@ -566,13 +566,14 @@ void OnTick()
    // === NEWS FILTER - Refresh hourly ===
    RefreshNewsData();
 
-   // === NEWS PAUSE CHECK ===
-   if(IsNewsTimePaused())
-      return;
+   // === Determine if new orders are blocked (News/Time) ===
+   g_newOrderBlocked = false;
 
-   // === TIME FILTER CHECK ===
+   if(IsNewsTimePaused())
+      g_newOrderBlocked = true;
+
    if(InpUseTimeFilter && !IsWithinTradingHours())
-      return;
+      g_newOrderBlocked = true;
 
    // === ORIGINAL TRADING LOGIC (unchanged) ===
    if(g_eaStopped) return;
