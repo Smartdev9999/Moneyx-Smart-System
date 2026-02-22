@@ -720,22 +720,26 @@ void OnTick()
              }
           }
 
-         // ===== SELL Entry (independent) =====
-         if(sellCount == 0 && g_initialSellPrice == 0 && canOpenMore && canOpenOnThisCandle)
-         {
-            if(currentPrice < smaValue && (TradingMode == TRADE_SELL_ONLY || TradingMode == TRADE_BOTH))
-            {
-               if(shouldEnterSell)
-               {
-                  if(OpenOrder(ORDER_TYPE_SELL, InitialLotSize, "GM_INIT"))
-                  {
-                     g_initialSellPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-                     lastInitialCandleTime = currentBarTime;
-                     ResetTrailingState();
-                  }
-               }
-            }
-         }
+          // ===== SELL Entry (independent) =====
+          if(sellCount == 0 && g_initialSellPrice == 0 && canOpenMore && canOpenOnThisCandle)
+          {
+             if(currentPrice < smaValue && (TradingMode == TRADE_SELL_ONLY || TradingMode == TRADE_BOTH))
+             {
+                if(shouldEnterSell)
+                {
+                   if(OpenOrder(ORDER_TYPE_SELL, InitialLotSize, "GM_INIT"))
+                   {
+                      g_initialSellPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+                      lastInitialCandleTime = currentBarTime;
+                      ResetTrailingState();
+                   }
+                }
+             }
+             else if(shouldEnterSell)
+             {
+                Print("SELL ENTRY SKIP: SMA signal not match (Price=", currentPrice, " SMA=", smaValue, ")");
+             }
+          }
       }
 
       // Reset justClosed flags ONLY after entry logic has had a chance to use them
