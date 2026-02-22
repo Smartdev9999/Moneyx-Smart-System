@@ -287,6 +287,7 @@ NewsEvent g_newsEvents[];
 int g_newsEventCount = 0;
 datetime g_lastNewsRefresh = 0;
 bool g_isNewsPaused = false;
+bool g_newOrderBlocked = false;  // true = News/Time filter blocks new entries only
 string g_nextNewsTitle = "";
 datetime g_nextNewsTime = 0;
 string g_newsStatus = "OK";
@@ -565,13 +566,14 @@ void OnTick()
    // === NEWS FILTER - Refresh hourly ===
    RefreshNewsData();
 
-   // === NEWS PAUSE CHECK ===
-   if(IsNewsTimePaused())
-      return;
+   // === Determine if new orders are blocked (News/Time) ===
+   g_newOrderBlocked = false;
 
-   // === TIME FILTER CHECK ===
+   if(IsNewsTimePaused())
+      g_newOrderBlocked = true;
+
    if(InpUseTimeFilter && !IsWithinTradingHours())
-      return;
+      g_newOrderBlocked = true;
 
    // === ORIGINAL TRADING LOGIC (unchanged) ===
    if(g_eaStopped) return;
@@ -637,18 +639,21 @@ void OnTick()
          g_initialSellPrice = 0;
       }
 
-      //--- Grid Loss management (check both sides independently)
-      if((hasInitialBuy || g_initialBuyPrice > 0) && gridLossBuy < GridLoss_MaxTrades && buyCount > 0)
+      //--- Grid Loss management (check both sides independently) - blocked by News/Time filter
+      if(!g_newOrderBlocked)
       {
-         CheckGridLoss(POSITION_TYPE_BUY, gridLossBuy);
-      }
-      if((hasInitialSell || g_initialSellPrice > 0) && gridLossSell < GridLoss_MaxTrades && sellCount > 0)
-      {
-         CheckGridLoss(POSITION_TYPE_SELL, gridLossSell);
+         if((hasInitialBuy || g_initialBuyPrice > 0) && gridLossBuy < GridLoss_MaxTrades && buyCount > 0)
+         {
+            CheckGridLoss(POSITION_TYPE_BUY, gridLossBuy);
+         }
+         if((hasInitialSell || g_initialSellPrice > 0) && gridLossSell < GridLoss_MaxTrades && sellCount > 0)
+         {
+            CheckGridLoss(POSITION_TYPE_SELL, gridLossSell);
+         }
       }
 
-      //--- Grid Profit management
-      if(GridProfit_Enable)
+      //--- Grid Profit management - blocked by News/Time filter
+      if(!g_newOrderBlocked && GridProfit_Enable)
       {
          if((hasInitialBuy || g_initialBuyPrice > 0) && gridProfitBuy < GridProfit_MaxTrades && buyCount > 0)
          {
@@ -660,49 +665,52 @@ void OnTick()
          }
       }
 
-      //--- Entry logic: Independent Side Entry (BUY and SELL checked separately)
-      bool canOpenMore = TotalOrderCount() < MaxOpenOrders;
-      bool canOpenOnThisCandle = !(DontOpenSameCandle && currentBarTime == lastInitialCandleTime);
-
-      //--- BUY side shouldEnter logic
-      bool shouldEnterBuy = false;
-      if(justClosedBuy && EnableAutoReEntry) shouldEnterBuy = true;
-      else if(!justClosedBuy && buyCount == 0) shouldEnterBuy = true;
-
-      //--- SELL side shouldEnter logic
-      bool shouldEnterSell = false;
-      if(justClosedSell && EnableAutoReEntry) shouldEnterSell = true;
-      else if(!justClosedSell && sellCount == 0) shouldEnterSell = true;
-
-      // ===== BUY Entry (independent) =====
-      if(buyCount == 0 && g_initialBuyPrice == 0 && canOpenMore && canOpenOnThisCandle)
+      //--- Entry logic: Independent Side Entry - blocked by News/Time filter
+      if(!g_newOrderBlocked)
       {
-         if(currentPrice > smaValue && (TradingMode == TRADE_BUY_ONLY || TradingMode == TRADE_BOTH))
+         bool canOpenMore = TotalOrderCount() < MaxOpenOrders;
+         bool canOpenOnThisCandle = !(DontOpenSameCandle && currentBarTime == lastInitialCandleTime);
+
+         //--- BUY side shouldEnter logic
+         bool shouldEnterBuy = false;
+         if(justClosedBuy && EnableAutoReEntry) shouldEnterBuy = true;
+         else if(!justClosedBuy && buyCount == 0) shouldEnterBuy = true;
+
+         //--- SELL side shouldEnter logic
+         bool shouldEnterSell = false;
+         if(justClosedSell && EnableAutoReEntry) shouldEnterSell = true;
+         else if(!justClosedSell && sellCount == 0) shouldEnterSell = true;
+
+         // ===== BUY Entry (independent) =====
+         if(buyCount == 0 && g_initialBuyPrice == 0 && canOpenMore && canOpenOnThisCandle)
          {
-            if(shouldEnterBuy)
+            if(currentPrice > smaValue && (TradingMode == TRADE_BUY_ONLY || TradingMode == TRADE_BOTH))
             {
-               if(OpenOrder(ORDER_TYPE_BUY, InitialLotSize, "GM_INIT"))
+               if(shouldEnterBuy)
                {
-                  g_initialBuyPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-                  lastInitialCandleTime = currentBarTime;
-                  ResetTrailingState();
+                  if(OpenOrder(ORDER_TYPE_BUY, InitialLotSize, "GM_INIT"))
+                  {
+                     g_initialBuyPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+                     lastInitialCandleTime = currentBarTime;
+                     ResetTrailingState();
+                  }
                }
             }
          }
-      }
 
-      // ===== SELL Entry (independent) =====
-      if(sellCount == 0 && g_initialSellPrice == 0 && canOpenMore && canOpenOnThisCandle)
-      {
-         if(currentPrice < smaValue && (TradingMode == TRADE_SELL_ONLY || TradingMode == TRADE_BOTH))
+         // ===== SELL Entry (independent) =====
+         if(sellCount == 0 && g_initialSellPrice == 0 && canOpenMore && canOpenOnThisCandle)
          {
-            if(shouldEnterSell)
+            if(currentPrice < smaValue && (TradingMode == TRADE_SELL_ONLY || TradingMode == TRADE_BOTH))
             {
-               if(OpenOrder(ORDER_TYPE_SELL, InitialLotSize, "GM_INIT"))
+               if(shouldEnterSell)
                {
-                  g_initialSellPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-                  lastInitialCandleTime = currentBarTime;
-                  ResetTrailingState();
+                  if(OpenOrder(ORDER_TYPE_SELL, InitialLotSize, "GM_INIT"))
+                  {
+                     g_initialSellPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+                     lastInitialCandleTime = currentBarTime;
+                     ResetTrailingState();
+                  }
                }
             }
          }
@@ -2048,6 +2056,12 @@ void DisplayDashboard()
    DrawTableRow(row, "Total P/L",        "$" + DoubleToString(totalPLHist, 2), (totalPLHist >= 0 ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_HIST); row++;
 
    DrawTableRow(row, "Auto Re-Entry", (EnableAutoReEntry ? "ON" : "OFF"), (EnableAutoReEntry ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_INFO); row++;
+
+   // New Order Blocked Status
+   if(g_newOrderBlocked)
+   {
+      DrawTableRow(row, "New Orders", "BLOCKED", COLOR_LOSS, COLOR_SECTION_INFO); row++;
+   }
 
    // License Status
    DrawTableRow(row, "License", g_isTesterMode ? "TESTER" : 
