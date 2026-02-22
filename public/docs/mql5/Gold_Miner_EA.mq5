@@ -724,9 +724,13 @@ void OnTick()
          }
       }
 
-      // Reset justClosed flags at end of new bar processing
-      justClosedBuy = false;
-      justClosedSell = false;
+      // Reset justClosed flags ONLY after entry logic has had a chance to use them
+      // If g_newOrderBlocked = true, flags are preserved until filter clears
+      if(!g_newOrderBlocked)
+      {
+         justClosedBuy = false;
+         justClosedSell = false;
+      }
    }
 
    //--- Draw lines and dashboard every tick
