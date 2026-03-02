@@ -565,6 +565,33 @@ double CalcMonthlyPL()
    return total;
 }
 
+//+------------------------------------------------------------------+
+//| CalcDailyPL - sum profit for deals closed today                    |
+//+------------------------------------------------------------------+
+double CalcDailyPL()
+{
+   MqlDateTime dt;
+   TimeToStruct(TimeCurrent(), dt);
+   dt.hour = 0; dt.min = 0; dt.sec = 0;
+   datetime dayStart = StructToTime(dt);
+
+   double total = 0;
+   if(!HistorySelect(dayStart, TimeCurrent())) return 0;
+   int totalDeals = HistoryDealsTotal();
+   for(int i = 0; i < totalDeals; i++)
+   {
+      ulong dealTicket = HistoryDealGetTicket(i);
+      if(dealTicket == 0) continue;
+      if(HistoryDealGetInteger(dealTicket, DEAL_MAGIC) != MagicNumber) continue;
+      if(HistoryDealGetString(dealTicket, DEAL_SYMBOL) != _Symbol) continue;
+      long dealEntry = HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
+      if(dealEntry == DEAL_ENTRY_OUT || dealEntry == DEAL_ENTRY_INOUT)
+         total += HistoryDealGetDouble(dealTicket, DEAL_PROFIT)
+                + HistoryDealGetDouble(dealTicket, DEAL_SWAP);
+   }
+   return total;
+}
+
 
 void OnTick()
 {
