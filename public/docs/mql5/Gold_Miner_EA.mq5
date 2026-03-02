@@ -2183,6 +2183,16 @@ void DisplayDashboard()
 
    DrawTableRow(row, "Auto Re-Entry", (EnableAutoReEntry ? "ON" : "OFF"), (EnableAutoReEntry ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_INFO); row++;
 
+   // Daily Profit Pause status
+   if(InpEnableDailyProfitPause)
+   {
+      double dailyPL = CalcDailyPL();
+      string dpText = StringFormat("$%.2f / $%.2f", dailyPL, InpDailyProfitTarget);
+      color dpColor = g_dailyProfitPaused ? COLOR_LOSS : COLOR_PROFIT;
+      if(g_dailyProfitPaused) dpText = dpText + " PAUSED";
+      DrawTableRow(row, "Daily Profit", dpText, dpColor, COLOR_SECTION_INFO); row++;
+   }
+
    // System Status (v2.9)
    string statusText = "Working";
    color statusColor = COLOR_PROFIT;
