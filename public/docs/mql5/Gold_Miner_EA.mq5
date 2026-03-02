@@ -3957,6 +3957,18 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
             CloseAllPositionsByType(POSITION_TYPE_SELL);
          }
       }
+      else if(sparam == "GM_BtnResumeDaily")
+      {
+         ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
+         int result = MessageBox(
+            "Resume trading for today?\nDaily profit target was reached.",
+            "Confirm Resume", MB_YESNO | MB_ICONQUESTION);
+         if(result == IDYES)
+         {
+            g_dailyProfitPaused = false;
+            Print("DAILY PROFIT PAUSE: Manually resumed by user.");
+         }
+      }
       ChartRedraw(0);
    }
 }
