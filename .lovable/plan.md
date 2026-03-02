@@ -1,63 +1,66 @@
 
 
-## บันทึกกฎเหล็กการพัฒนา EA เข้าระบบ Memory
+## แก้ไข ATR Chart ไม่ถูกซ่อนใน Backtest
 
-### สิ่งที่จะทำ
+### สาเหตุ
 
-สร้าง Project Knowledge entry ใหม่เพื่อฝังกฎมาตรฐานการพัฒนา MQL5 EA ไว้ในระบบถาวร ทำให้ทุกการสนทนาในอนาคตจะรับรู้กฎนี้โดยอัตโนมัติ โดยไม่ต้องพูดซ้ำอีก
+โค้ดปัจจุบันพยายามลบ ATR subwindow เพียง **tick แรก** เท่านั้น (`g_atrChartHidden = true` ทันที) แต่ปัญหาคือ:
 
-### เนื้อหากฎเหล็กที่จะบันทึก
+1. ใน tick แรกของ Strategy Tester, ATR subwindow อาจยังไม่ถูกสร้างขึ้น (indicator ยังไม่ render)
+2. เมื่อ flag ถูกตั้งเป็น `true` แล้ว จะไม่ลองลบอีกเลย
+3. `iATR()` สร้าง 2 handles (`handleATR_Loss`, `handleATR_Profit`) ซึ่งอาจสร้าง subwindow แยกกัน
 
-**หัวข้อ**: `mql5-ea-development-rules`
+### ไฟล์ที่แก้ไข
 
-**เนื้อหา**:
+`public/docs/mql5/Gold_Miner_EA.mq5` (ไฟล์เดียว)
+
+### วิธีแก้ไข
+
+เปลี่ยนจาก "ลบครั้งเดียวแล้วหยุด" เป็น "ลองลบทุก tick จนกว่าจะลบสำเร็จหรือครบ 50 tick"
 
 ```text
-กฎเหล็กการพัฒนา MQL5 EA (บังคับทุกไฟล์ .mq5)
+// แก้ไข global variable
+bool g_atrChartHidden = false;
+int  g_atrHideAttempts = 0;        // เพิ่มตัวนับ
 
-เมื่อแก้ไขหรือเพิ่มฟีเจอร์ใน EA ใดก็ตาม:
-
-1. ห้ามแก้ไข Order Execution Logic
-   - ห้ามแตะ code ที่เกี่ยวกับการเปิด/ปิดออเดอร์ (OrderSend, trade.Buy, trade.Sell, trade.PositionClose)
-   - ยกเว้นกรณีที่ user ระบุชัดเจนว่าต้องการแก้ไขส่วนนี้โดยเฉพาะ
-
-2. ห้ามแก้ไข Trading Strategy Logic
-   - SMA/EMA signal conditions
-   - Grid entry/exit logic (ทั้ง Loss grid และ Profit grid)
-   - TP/SL/Trailing/Breakeven calculations
-   - Accumulate close / Basket close logic
-   - Drawdown exit logic
-   - Entry conditions (shouldEnterBuy/shouldEnterSell)
-   - ยกเว้น user ระบุชัดเจนว่าต้องการแก้ไขกลยุทธ์
-
-3. ห้ามแก้ไข Core Module Logic
-   - License verification module
-   - News filter core logic (IsNewsTimePaused, RefreshNewsData)
-   - Time filter core logic (IsWithinTradingHours)
-   - Data sync logic
-   - ยกเว้น user ระบุชัดเจนว่าต้องการแก้ไข module นั้น
-
-4. สิ่งที่ทำได้โดยไม่ต้องขออนุญาตพิเศษ
-   - เพิ่ม input parameters ใหม่
-   - เพิ่ม global variables ใหม่
-   - เพิ่ม/แก้ไข Dashboard display
-   - เพิ่ม/แก้ไข OnChartEvent buttons
-   - เพิ่ม helper functions ใหม่
-   - เพิ่ม guard conditions ที่ block entry (เช่น g_newOrderBlocked)
-   - แก้ไข OnDeinit cleanup
-
-5. ทุกครั้งที่แก้ไข EA ต้องระบุในแผนว่า
-   - "สิ่งที่ไม่เปลี่ยนแปลง" มีอะไรบ้าง
-   - ยืนยันว่าไม่กระทบ trading logic
-
-กฎนี้ใช้กับทุกไฟล์ .mq5 ใน public/docs/mql5/ และ docs/mql5/
+// แก้ไข logic ใน OnTick():
+if(!g_atrChartHidden && (MQLInfoInteger(MQL_TESTER) || MQLInfoInteger(MQL_VISUAL_MODE)))
+{
+   g_atrHideAttempts++;
+   int totalWindows = (int)ChartGetInteger(0, CHART_WINDOWS_TOTAL);
+   bool found = false;
+   for(int sw = totalWindows - 1; sw > 0; sw--)
+   {
+      int indCount = ChartIndicatorsTotal(0, sw);
+      for(int j = indCount - 1; j >= 0; j--)
+      {
+         string indName = ChartIndicatorName(0, sw, j);
+         if(StringFind(indName, "ATR") >= 0)
+         {
+            ChartIndicatorDelete(0, sw, indName);
+            found = true;
+         }
+      }
+   }
+   // หยุดเมื่อลบสำเร็จ หรือพยายามครบ 50 tick แล้ว
+   if(found || g_atrHideAttempts >= 50)
+   {
+      g_atrChartHidden = true;
+      ChartRedraw(0);
+   }
+}
 ```
 
-### วิธีดำเนินการ
+### สิ่งที่เปลี่ยน
 
-ผู้ใช้ต้องเพิ่ม Knowledge entry นี้ผ่าน **Project Settings -> Manage Knowledge** เนื่องจากระบบไม่สามารถเพิ่ม Knowledge โดยตรงผ่าน code ได้ แต่ผมจะสร้างไฟล์ `.lovable/rules.md` ไว้ใน project เพื่อให้ระบบอ่านกฎนี้ได้ทุกครั้งที่เริ่มสนทนาใหม่
+- เพิ่ม `g_atrHideAttempts` counter เพื่อลองลบซ้ำหลาย tick
+- เปลี่ยน inner loop ให้ iterate ย้อนกลับ (`j = indCount - 1; j >= 0; j--`) เพื่อป้องกัน index shift เมื่อลบ
+- ตั้ง `g_atrChartHidden = true` ก็ต่อเมื่อลบสำเร็จจริง หรือพยายามครบ 50 tick
 
-### รายละเอียดทางเทคนิค
+### สิ่งที่ไม่เปลี่ยนแปลง
 
-สร้างไฟล์: `.lovable/rules.md` -- ไฟล์นี้จะถูกอ่านโดยระบบอัตโนมัติทุกครั้ง ทำให้กฎเหล็กมีผลถาวรโดยไม่ต้องพูดซ้ำ
+- Trading logic ทั้งหมด (SMA, Grid, TP/SL, Trailing, Drawdown, Entry)
+- News/Time Filter logic
+- Dashboard + Buttons
+- License module
 
