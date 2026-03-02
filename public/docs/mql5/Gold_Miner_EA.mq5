@@ -647,6 +647,37 @@ void OnTick()
    if(InpUseTimeFilter && !IsWithinTradingHours())
       g_newOrderBlocked = true;
 
+   // === DAILY PROFIT PAUSE CHECK ===
+   if(InpEnableDailyProfitPause)
+   {
+      MqlDateTime dtNow;
+      TimeToStruct(TimeCurrent(), dtNow);
+      dtNow.hour = 0; dtNow.min = 0; dtNow.sec = 0;
+      datetime today = StructToTime(dtNow);
+
+      // Reset pause flag when new day starts
+      if(g_dailyProfitPauseDay != today)
+      {
+         g_dailyProfitPaused = false;
+         g_dailyProfitPauseDay = today;
+      }
+
+      // Check if daily target reached
+      if(!g_dailyProfitPaused)
+      {
+         double dailyPL = CalcDailyPL();
+         if(dailyPL >= InpDailyProfitTarget)
+         {
+            g_dailyProfitPaused = true;
+            Print("DAILY PROFIT PAUSE: Target $", DoubleToString(InpDailyProfitTarget, 2),
+                  " reached (PL=$", DoubleToString(dailyPL, 2), "). No new orders until tomorrow.");
+         }
+      }
+
+      if(g_dailyProfitPaused)
+         g_newOrderBlocked = true;
+   }
+
    // === ORIGINAL TRADING LOGIC (unchanged) ===
    if(g_eaStopped) return;
 
