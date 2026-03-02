@@ -2288,6 +2288,18 @@ void DisplayDashboard()
 
    // Close All
    CreateDashButton("GM_BtnCloseAll", DashboardX, btnY, tableWidth, btnH, "Close All", C'30,100,180', clrWhite);
+   btnY += btnH + 3;
+
+   // Resume Daily Profit button (only visible when paused)
+   if(InpEnableDailyProfitPause && g_dailyProfitPaused)
+   {
+      CreateDashButton("GM_BtnResumeDaily", DashboardX, btnY, tableWidth, btnH,
+                       "▶ Resume Daily", clrDarkGreen, clrWhite);
+   }
+   else
+   {
+      ObjectDelete(0, "GM_BtnResumeDaily");
+   }
 }
 
 //+------------------------------------------------------------------+
