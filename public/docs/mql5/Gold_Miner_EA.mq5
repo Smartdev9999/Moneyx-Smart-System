@@ -218,6 +218,11 @@ input bool     InpTradeSunday       = false;           // Sunday
 
 //--- News Filter
 input group "=== News Filter ==="
+//--- Daily Profit Pause
+input group "=== Daily Profit Pause ==="
+input bool     InpEnableDailyProfitPause = false;    // Enable Daily Profit Pause
+input double   InpDailyProfitTarget      = 100.0;    // Daily Profit Target ($)
+
 input bool     InpEnableNewsFilter   = false;          // Enable News Filter
 input bool     InpNewsUseChartCurrency = false;        // Current Chart Currencies to Filter News
 input string   InpNewsCurrencies     = "USD";          // Select Currency to Filter News (e.g. USD;EUR;GBP)
