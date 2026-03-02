@@ -274,6 +274,10 @@ bool           g_eaIsPaused = false;           // EA Pause State (manual)
 bool           g_atrChartHidden = false;       // ATR subwindow hidden flag (backtest)
 int            g_atrHideAttempts = 0;          // ATR hide retry counter
 
+// Daily Profit Pause Variables
+bool           g_dailyProfitPaused   = false;  // Daily profit target reached
+datetime       g_dailyProfitPauseDay = 0;      // Day when pause was triggered
+
 // License Verification Variables
 bool              g_isLicenseValid = false;
 bool              g_isTesterMode = false;
