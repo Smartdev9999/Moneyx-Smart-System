@@ -218,6 +218,11 @@ input bool     InpTradeSunday       = false;           // Sunday
 
 //--- News Filter
 input group "=== News Filter ==="
+//--- Daily Profit Pause
+input group "=== Daily Profit Pause ==="
+input bool     InpEnableDailyProfitPause = false;    // Enable Daily Profit Pause
+input double   InpDailyProfitTarget      = 100.0;    // Daily Profit Target ($)
+
 input bool     InpEnableNewsFilter   = false;          // Enable News Filter
 input bool     InpNewsUseChartCurrency = false;        // Current Chart Currencies to Filter News
 input string   InpNewsCurrencies     = "USD";          // Select Currency to Filter News (e.g. USD;EUR;GBP)
@@ -268,6 +273,10 @@ double         g_maxDD;             // Track max drawdown
 bool           g_eaIsPaused = false;           // EA Pause State (manual)
 bool           g_atrChartHidden = false;       // ATR subwindow hidden flag (backtest)
 int            g_atrHideAttempts = 0;          // ATR hide retry counter
+
+// Daily Profit Pause Variables
+bool           g_dailyProfitPaused   = false;  // Daily profit target reached
+datetime       g_dailyProfitPauseDay = 0;      // Day when pause was triggered
 
 // License Verification Variables
 bool              g_isLicenseValid = false;
@@ -556,6 +565,33 @@ double CalcMonthlyPL()
    return total;
 }
 
+//+------------------------------------------------------------------+
+//| CalcDailyPL - sum profit for deals closed today                    |
+//+------------------------------------------------------------------+
+double CalcDailyPL()
+{
+   MqlDateTime dt;
+   TimeToStruct(TimeCurrent(), dt);
+   dt.hour = 0; dt.min = 0; dt.sec = 0;
+   datetime dayStart = StructToTime(dt);
+
+   double total = 0;
+   if(!HistorySelect(dayStart, TimeCurrent())) return 0;
+   int totalDeals = HistoryDealsTotal();
+   for(int i = 0; i < totalDeals; i++)
+   {
+      ulong dealTicket = HistoryDealGetTicket(i);
+      if(dealTicket == 0) continue;
+      if(HistoryDealGetInteger(dealTicket, DEAL_MAGIC) != MagicNumber) continue;
+      if(HistoryDealGetString(dealTicket, DEAL_SYMBOL) != _Symbol) continue;
+      long dealEntry = HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
+      if(dealEntry == DEAL_ENTRY_OUT || dealEntry == DEAL_ENTRY_INOUT)
+         total += HistoryDealGetDouble(dealTicket, DEAL_PROFIT)
+                + HistoryDealGetDouble(dealTicket, DEAL_SWAP);
+   }
+   return total;
+}
+
 
 void OnTick()
 {
@@ -610,6 +646,37 @@ void OnTick()
 
    if(InpUseTimeFilter && !IsWithinTradingHours())
       g_newOrderBlocked = true;
+
+   // === DAILY PROFIT PAUSE CHECK ===
+   if(InpEnableDailyProfitPause)
+   {
+      MqlDateTime dtNow;
+      TimeToStruct(TimeCurrent(), dtNow);
+      dtNow.hour = 0; dtNow.min = 0; dtNow.sec = 0;
+      datetime today = StructToTime(dtNow);
+
+      // Reset pause flag when new day starts
+      if(g_dailyProfitPauseDay != today)
+      {
+         g_dailyProfitPaused = false;
+         g_dailyProfitPauseDay = today;
+      }
+
+      // Check if daily target reached
+      if(!g_dailyProfitPaused)
+      {
+         double dailyPL = CalcDailyPL();
+         if(dailyPL >= InpDailyProfitTarget)
+         {
+            g_dailyProfitPaused = true;
+            Print("DAILY PROFIT PAUSE: Target $", DoubleToString(InpDailyProfitTarget, 2),
+                  " reached (PL=$", DoubleToString(dailyPL, 2), "). No new orders until tomorrow.");
+         }
+      }
+
+      if(g_dailyProfitPaused)
+         g_newOrderBlocked = true;
+   }
 
    // === ORIGINAL TRADING LOGIC (unchanged) ===
    if(g_eaStopped) return;
@@ -2116,6 +2183,16 @@ void DisplayDashboard()
 
    DrawTableRow(row, "Auto Re-Entry", (EnableAutoReEntry ? "ON" : "OFF"), (EnableAutoReEntry ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_INFO); row++;
 
+   // Daily Profit Pause status
+   if(InpEnableDailyProfitPause)
+   {
+      double dailyPL = CalcDailyPL();
+      string dpText = StringFormat("$%.2f / $%.2f", dailyPL, InpDailyProfitTarget);
+      color dpColor = g_dailyProfitPaused ? COLOR_LOSS : COLOR_PROFIT;
+      if(g_dailyProfitPaused) dpText = dpText + " PAUSED";
+      DrawTableRow(row, "Daily Profit", dpText, dpColor, COLOR_SECTION_INFO); row++;
+   }
+
    // System Status (v2.9)
    string statusText = "Working";
    color statusColor = COLOR_PROFIT;
@@ -2211,6 +2288,18 @@ void DisplayDashboard()
 
    // Close All
    CreateDashButton("GM_BtnCloseAll", DashboardX, btnY, tableWidth, btnH, "Close All", C'30,100,180', clrWhite);
+   btnY += btnH + 3;
+
+   // Resume Daily Profit button (only visible when paused)
+   if(InpEnableDailyProfitPause && g_dailyProfitPaused)
+   {
+      CreateDashButton("GM_BtnResumeDaily", DashboardX, btnY, tableWidth, btnH,
+                       "▶ Resume Daily", clrDarkGreen, clrWhite);
+   }
+   else
+   {
+      ObjectDelete(0, "GM_BtnResumeDaily");
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -3866,6 +3955,18 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
          {
             CloseAllPositionsByType(POSITION_TYPE_BUY);
             CloseAllPositionsByType(POSITION_TYPE_SELL);
+         }
+      }
+      else if(sparam == "GM_BtnResumeDaily")
+      {
+         ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
+         int result = MessageBox(
+            "Resume trading for today?\nDaily profit target was reached.",
+            "Confirm Resume", MB_YESNO | MB_ICONQUESTION);
+         if(result == IDYES)
+         {
+            g_dailyProfitPaused = false;
+            Print("DAILY PROFIT PAUSE: Manually resumed by user.");
          }
       }
       ChartRedraw(0);
