@@ -146,10 +146,12 @@ input bool     UseTP_PercentBalance = false;   // Use TP % of Balance
 input double   TP_PercentBalance   = 5.0;      // TP % of Balance
 input bool     UseAccumulateClose  = false;    // Use Accumulate Close
 input double   AccumulateTarget    = 20000.0;  // Accumulate Target ($)
-input bool     ShowAverageLine     = true;     // Show Average Price Line
-input bool     ShowTPLine          = true;     // Show TP Line
-input color    AverageLineColor    = clrYellow; // Average Line Color
-input color    TPLineColor         = clrLime;   // TP Line Color
+input bool     ShowAverageLine     = true;          // Show Average Price Line
+input bool     ShowTPLine          = true;          // Show TP Line
+input color    AvgBuyLineColor     = clrDodgerBlue; // Average Buy Line Color
+input color    AvgSellLineColor    = clrOrangeRed;  // Average Sell Line Color
+input color    TPBuyLineColor      = clrLime;       // TP Buy Line Color
+input color    TPSellLineColor     = clrMagenta;    // TP Sell Line Color
 
 //--- Stop Loss
 input group "=== Stop Loss ==="
