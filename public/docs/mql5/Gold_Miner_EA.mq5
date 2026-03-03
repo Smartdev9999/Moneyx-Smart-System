@@ -1889,49 +1889,29 @@ void DrawLines()
    double avgBuy = CalculateAveragePrice(POSITION_TYPE_BUY);
    double avgSell = CalculateAveragePrice(POSITION_TYPE_SELL);
 
-   double avgPrice = 0;
-   if(avgBuy > 0 && avgSell > 0)
-   {
-      avgPrice = (avgBuy + avgSell) / 2.0;
-   }
-   else if(avgBuy > 0)
-   {
-      avgPrice = avgBuy;
-   }
-   else if(avgSell > 0)
-   {
-      avgPrice = avgSell;
-   }
-
-   if(avgPrice > 0 && ShowAverageLine)
-   {
-      DrawHLine("GM_AvgLine", avgPrice, AverageLineColor, STYLE_SOLID, 2);
-   }
+   //--- Average Buy Line
+   if(avgBuy > 0 && ShowAverageLine)
+      DrawHLine("GM_AvgBuyLine", avgBuy, AvgBuyLineColor, STYLE_SOLID, 2);
    else
-   {
-      ObjectDelete(0, "GM_AvgLine");
-   }
+      ObjectDelete(0, "GM_AvgBuyLine");
 
-   //--- TP Line
-   if(ShowTPLine && UseTP_Points)
-   {
-      if(avgBuy > 0)
-      {
-         DrawHLine("GM_TPLine", avgBuy + TP_Points * point, TPLineColor, STYLE_DASH, 1);
-      }
-      else if(avgSell > 0)
-      {
-         DrawHLine("GM_TPLine", avgSell - TP_Points * point, TPLineColor, STYLE_DASH, 1);
-      }
-      else
-      {
-         ObjectDelete(0, "GM_TPLine");
-      }
-   }
+   //--- Average Sell Line
+   if(avgSell > 0 && ShowAverageLine)
+      DrawHLine("GM_AvgSellLine", avgSell, AvgSellLineColor, STYLE_SOLID, 2);
    else
-   {
-      ObjectDelete(0, "GM_TPLine");
-   }
+      ObjectDelete(0, "GM_AvgSellLine");
+
+   //--- TP Buy Line
+   if(ShowTPLine && UseTP_Points && avgBuy > 0)
+      DrawHLine("GM_TPBuyLine", avgBuy + TP_Points * point, TPBuyLineColor, STYLE_DASH, 1);
+   else
+      ObjectDelete(0, "GM_TPBuyLine");
+
+   //--- TP Sell Line
+   if(ShowTPLine && UseTP_Points && avgSell > 0)
+      DrawHLine("GM_TPSellLine", avgSell - TP_Points * point, TPSellLineColor, STYLE_DASH, 1);
+   else
+      ObjectDelete(0, "GM_TPSellLine");
 
    //--- SL Line (show trailing SL if active, otherwise show SL Points)
    if(ShowSLLine)
