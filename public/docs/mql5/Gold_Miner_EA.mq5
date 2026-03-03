@@ -438,8 +438,10 @@ void OnDeinit(const int reason)
    if(handleATR_Loss != INVALID_HANDLE) IndicatorRelease(handleATR_Loss);
    if(handleATR_Profit != INVALID_HANDLE) IndicatorRelease(handleATR_Profit);
 
-   ObjectDelete(0, "GM_AvgLine");
-   ObjectDelete(0, "GM_TPLine");
+   ObjectDelete(0, "GM_AvgBuyLine");
+   ObjectDelete(0, "GM_AvgSellLine");
+   ObjectDelete(0, "GM_TPBuyLine");
+   ObjectDelete(0, "GM_TPSellLine");
    ObjectDelete(0, "GM_SLLine");
    ObjectsDeleteAll(0, "GM_Dash_");
    ObjectsDeleteAll(0, "GM_TBL_");
