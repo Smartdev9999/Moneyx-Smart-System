@@ -1,109 +1,66 @@
 
 
-## Gold Miner EA - แยกเส้น Average Price และ TP Line เป็น Buy / Sell
+## แก้ไข ATR Chart ไม่ถูกซ่อนใน Backtest
 
-### ปัญหาปัจจุบัน
+### สาเหตุ
 
-ตอนนี้ `DrawLines()` วาดเส้น Average Price เพียง 1 เส้น (`GM_AvgLine`) โดยเอา avgBuy กับ avgSell มาเฉลี่ยรวมกัน และ TP Line เพียง 1 เส้น (`GM_TPLine`) ทำให้เมื่อมีทั้ง BUY และ SELL พร้อมกัน มองไม่ออกว่าเส้นไหนเป็นฝั่งไหน
+โค้ดปัจจุบันพยายามลบ ATR subwindow เพียง **tick แรก** เท่านั้น (`g_atrChartHidden = true` ทันที) แต่ปัญหาคือ:
 
-### วิธีแก้ไข
-
-แยกเป็น 4 เส้น: Average Buy, Average Sell, TP Buy, TP Sell แต่ละเส้นมีสีแยกกัน
+1. ใน tick แรกของ Strategy Tester, ATR subwindow อาจยังไม่ถูกสร้างขึ้น (indicator ยังไม่ render)
+2. เมื่อ flag ถูกตั้งเป็น `true` แล้ว จะไม่ลองลบอีกเลย
+3. `iATR()` สร้าง 2 handles (`handleATR_Loss`, `handleATR_Profit`) ซึ่งอาจสร้าง subwindow แยกกัน
 
 ### ไฟล์ที่แก้ไข
 
 `public/docs/mql5/Gold_Miner_EA.mq5` (ไฟล์เดียว)
 
----
+### วิธีแก้ไข
 
-### 1. เปลี่ยน Input Parameters (บรรทัด 149-152)
-
-เปลี่ยนจาก 2 สี (Average + TP) เป็น 4 สี แยก Buy/Sell:
+เปลี่ยนจาก "ลบครั้งเดียวแล้วหยุด" เป็น "ลองลบทุก tick จนกว่าจะลบสำเร็จหรือครบ 50 tick"
 
 ```text
-input bool     ShowAverageLine     = true;      // Show Average Price Line
-input bool     ShowTPLine          = true;      // Show TP Line
-input color    AvgBuyLineColor     = clrDodgerBlue;  // Average Buy Line Color
-input color    AvgSellLineColor    = clrOrangeRed;   // Average Sell Line Color
-input color    TPBuyLineColor      = clrLime;        // TP Buy Line Color
-input color    TPSellLineColor     = clrMagenta;     // TP Sell Line Color
-```
+// แก้ไข global variable
+bool g_atrChartHidden = false;
+int  g_atrHideAttempts = 0;        // เพิ่มตัวนับ
 
-**หมายเหตุ**: ลบ `AverageLineColor` และ `TPLineColor` เดิมออก แทนที่ด้วย 4 ตัวใหม่
-
-### 2. แก้ไข DrawLines() (บรรทัด 1881-1930)
-
-เปลี่ยนจากเส้นรวม 1 เส้นเป็นแยก Buy/Sell:
-
-```text
-void DrawLines()
+// แก้ไข logic ใน OnTick():
+if(!g_atrChartHidden && (MQLInfoInteger(MQL_TESTER) || MQLInfoInteger(MQL_VISUAL_MODE)))
 {
-   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
-   double avgBuy = CalculateAveragePrice(POSITION_TYPE_BUY);
-   double avgSell = CalculateAveragePrice(POSITION_TYPE_SELL);
-
-   //--- Average Buy Line
-   if(avgBuy > 0 && ShowAverageLine)
-      DrawHLine("GM_AvgBuyLine", avgBuy, AvgBuyLineColor, STYLE_SOLID, 2);
-   else
-      ObjectDelete(0, "GM_AvgBuyLine");
-
-   //--- Average Sell Line
-   if(avgSell > 0 && ShowAverageLine)
-      DrawHLine("GM_AvgSellLine", avgSell, AvgSellLineColor, STYLE_SOLID, 2);
-   else
-      ObjectDelete(0, "GM_AvgSellLine");
-
-   //--- TP Buy Line
-   if(ShowTPLine && UseTP_Points && avgBuy > 0)
-      DrawHLine("GM_TPBuyLine", avgBuy + TP_Points * point, TPBuyLineColor, STYLE_DASH, 1);
-   else
-      ObjectDelete(0, "GM_TPBuyLine");
-
-   //--- TP Sell Line
-   if(ShowTPLine && UseTP_Points && avgSell > 0)
-      DrawHLine("GM_TPSellLine", avgSell - TP_Points * point, TPSellLineColor, STYLE_DASH, 1);
-   else
-      ObjectDelete(0, "GM_TPSellLine");
-
-   // ... SL Line logic remains unchanged ...
+   g_atrHideAttempts++;
+   int totalWindows = (int)ChartGetInteger(0, CHART_WINDOWS_TOTAL);
+   bool found = false;
+   for(int sw = totalWindows - 1; sw > 0; sw--)
+   {
+      int indCount = ChartIndicatorsTotal(0, sw);
+      for(int j = indCount - 1; j >= 0; j--)
+      {
+         string indName = ChartIndicatorName(0, sw, j);
+         if(StringFind(indName, "ATR") >= 0)
+         {
+            ChartIndicatorDelete(0, sw, indName);
+            found = true;
+         }
+      }
+   }
+   // หยุดเมื่อลบสำเร็จ หรือพยายามครบ 50 tick แล้ว
+   if(found || g_atrHideAttempts >= 50)
+   {
+      g_atrChartHidden = true;
+      ChartRedraw(0);
+   }
 }
 ```
 
-### 3. ลบ Object เก่าใน OnDeinit (เพิ่มชื่อใหม่)
+### สิ่งที่เปลี่ยน
 
-เปลี่ยนจากลบ `GM_AvgLine` / `GM_TPLine` เป็นลบชื่อใหม่:
+- เพิ่ม `g_atrHideAttempts` counter เพื่อลองลบซ้ำหลาย tick
+- เปลี่ยน inner loop ให้ iterate ย้อนกลับ (`j = indCount - 1; j >= 0; j--`) เพื่อป้องกัน index shift เมื่อลบ
+- ตั้ง `g_atrChartHidden = true` ก็ต่อเมื่อลบสำเร็จจริง หรือพยายามครบ 50 tick
 
-```text
-ObjectDelete(0, "GM_AvgBuyLine");
-ObjectDelete(0, "GM_AvgSellLine");
-ObjectDelete(0, "GM_TPBuyLine");
-ObjectDelete(0, "GM_TPSellLine");
-// ลบชื่อเดิม GM_AvgLine / GM_TPLine ออก
-```
+### สิ่งที่ไม่เปลี่ยนแปลง
 
-### 4. อัปเดตการอ้างอิง AverageLineColor / TPLineColor ที่อื่น
-
-ค้นหาทุกจุดที่ใช้ `AverageLineColor` หรือ `TPLineColor` เดิม (เช่นใน SL Line section ที่ใช้ avgBuy/avgSell) และอัปเดตให้ใช้ชื่อใหม่ตามฝั่ง
-
----
-
-### สรุปสีเส้น (ค่า default)
-
-| เส้น | สี | Style |
-|------|-----|-------|
-| Average Buy | DodgerBlue (ฟ้า) | Solid, หนา 2 |
-| Average Sell | OrangeRed (แดงส้ม) | Solid, หนา 2 |
-| TP Buy | Lime (เขียว) | Dash, หนา 1 |
-| TP Sell | Magenta (ชมพู) | Dash, หนา 1 |
-
-### สิ่งที่ไม่เปลี่ยนแปลง (ยืนยัน 100%)
-
-- Order Execution Logic (trade.Buy, trade.Sell, trade.PositionClose) -- ไม่แตะ
-- SMA Signal / Grid Entry-Exit / TP/SL calculations -- ไม่แตะ
-- Accumulate Close / Basket Close / Drawdown Exit -- ไม่แตะ
-- shouldEnterBuy / shouldEnterSell conditions -- ไม่แตะ
-- News Filter / Time Filter / License module -- ไม่แตะ
-- SL Line logic -- ไม่แตะ (ยังคงใช้ avgBuy/avgSell เดิม)
-- `CalculateAveragePrice()` function -- ไม่แตะ (ใช้งานตามเดิม)
+- Trading logic ทั้งหมด (SMA, Grid, TP/SL, Trailing, Drawdown, Entry)
+- News/Time Filter logic
+- Dashboard + Buttons
+- License module
 
