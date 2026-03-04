@@ -429,19 +429,28 @@ int OnInit()
       return INIT_FAILED;
    }
 
-   //--- ATR handles for grid
-   handleATR_Loss = iATR(_Symbol, GridLoss_ATR_TF, GridLoss_ATR_Period);
-   if(handleATR_Loss == INVALID_HANDLE)
+   //--- ATR handles for grid (skip in tester if InpSkipATRInTester)
+   if(g_isTesterMode && InpSkipATRInTester)
    {
-      Print("ERROR: Failed to create ATR Loss handle");
-      return INIT_FAILED;
+      handleATR_Loss = INVALID_HANDLE;
+      handleATR_Profit = INVALID_HANDLE;
+      Print("ATR indicator handles SKIPPED - using Simplified ATR for backtest speed");
    }
-
-   handleATR_Profit = iATR(_Symbol, GridProfit_ATR_TF, GridProfit_ATR_Period);
-   if(handleATR_Profit == INVALID_HANDLE)
+   else
    {
-      Print("ERROR: Failed to create ATR Profit handle");
-      return INIT_FAILED;
+      handleATR_Loss = iATR(_Symbol, GridLoss_ATR_TF, GridLoss_ATR_Period);
+      if(handleATR_Loss == INVALID_HANDLE)
+      {
+         Print("ERROR: Failed to create ATR Loss handle");
+         return INIT_FAILED;
+      }
+
+      handleATR_Profit = iATR(_Symbol, GridProfit_ATR_TF, GridProfit_ATR_Period);
+      if(handleATR_Profit == INVALID_HANDLE)
+      {
+         Print("ERROR: Failed to create ATR Profit handle");
+         return INIT_FAILED;
+      }
    }
 
    //--- Init arrays
