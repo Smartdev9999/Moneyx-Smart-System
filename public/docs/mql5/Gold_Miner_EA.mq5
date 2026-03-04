@@ -2963,8 +2963,11 @@ void CheckGridLossTF(int tfIdx, ENUM_POSITION_TYPE side, int currentGridCount)
       if(lastTime >= barTime) return;
    }
 
-   // Copy ATR buffer for grid distance calculation
-   if(CopyBuffer(handleATR_Loss, 0, 0, 3, bufATR_Loss) < 3) return;
+   // Copy ATR buffer for grid distance calculation (skip if using simplified ATR)
+   if(handleATR_Loss != INVALID_HANDLE)
+   {
+      if(CopyBuffer(handleATR_Loss, 0, 0, 3, bufATR_Loss) < 3) return;
+   }
 
    double distance = GetGridDistance(currentGridCount, true);
    if(distance <= 0) return;
