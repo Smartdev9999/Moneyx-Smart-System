@@ -2177,18 +2177,19 @@ void DisplayDashboard()
    int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
 
    string smaDir = "";
-   if(bufSMA[0] > 0)
+   if(EntryMode == ENTRY_SMA && ArraySize(bufSMA) > 0 && bufSMA[0] > 0)
    {
       double bidPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
       smaDir = (bidPrice > bufSMA[0]) ? "BUY ▲" : "SELL ▼";
    }
 
    string tradeModeStr = (TradingMode == TRADE_BUY_ONLY) ? "Buy Only" :
-                          (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
+                           (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v3.0 [SMA]" : "Gold Miner EA v3.0 [ZZ]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
-   CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, "Gold Miner EA v2.9", COLOR_HEADER_TEXT, 11, "Arial Bold");
+   CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, 11, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + 220, DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, 9, "Consolas");
 
    //--- DETAIL Section
@@ -2196,7 +2197,44 @@ void DisplayDashboard()
    DrawTableRow(row, "Balance",       "$" + DoubleToString(balance, 2),  COLOR_TEXT, COLOR_SECTION_DETAIL); row++;
    DrawTableRow(row, "Equity",        "$" + DoubleToString(equity, 2),   COLOR_TEXT, COLOR_SECTION_DETAIL); row++;
    DrawTableRow(row, "Floating P/L",  "$" + DoubleToString(totalPL, 2),  (totalPL >= 0 ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_DETAIL); row++;
-   DrawTableRow(row, "Signal (SMA" + IntegerToString(SMA_Period) + ")", smaDir, (smaDir == "BUY ▲" ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_DETAIL); row++;
+
+   if(EntryMode == ENTRY_SMA)
+   {
+      DrawTableRow(row, "Signal (SMA" + IntegerToString(SMA_Period) + ")", smaDir, (smaDir == "BUY ▲" ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_DETAIL); row++;
+   }
+   else
+   {
+      // ZigZag MTF info rows
+      color COLOR_SECTION_ZZ = clrDarkOrange;
+
+      // CDC Trend
+      if(InpUseCDCFilter)
+      {
+         color cdcColor = (g_cdcTrend == "BULLISH") ? COLOR_PROFIT : (g_cdcTrend == "BEARISH") ? COLOR_LOSS : clrYellow;
+         string cdcStatus = g_cdcReady ? g_cdcTrend : "LOADING";
+         if(!g_cdcReady) cdcColor = clrYellow;
+         DrawTableRow(row, "CDC Trend", cdcStatus, cdcColor, COLOR_SECTION_ZZ); row++;
+      }
+
+      // H4 Direction
+      color h4Color = (g_h4Direction == "BUY") ? COLOR_PROFIT : (g_h4Direction == "SELL") ? COLOR_LOSS : clrYellow;
+      DrawTableRow(row, "H4 Direction", g_h4Direction, h4Color, COLOR_SECTION_ZZ); row++;
+
+      // Per-TF status
+      for(int tf = 0; tf < g_activeTFCount; tf++)
+      {
+         if(g_tfStates[tf].tf == ZZ_ConfirmTF && !ZZ_UseConfirmTFEntry) continue;
+
+         int tfB2 = 0, tfS2 = 0, tGL2 = 0, tGLS2 = 0, tGP2 = 0, tGPS2 = 0;
+         bool tIB2 = false, tIS2 = false;
+         CountPositionsTF(tf, tfB2, tfS2, tGL2, tGLS2, tGP2, tGPS2, tIB2, tIS2);
+
+         string tfInfo = IntegerToString(tfB2) + "B/" + IntegerToString(tfS2) + "S";
+         if(!g_tfStates[tf].enabled) tfInfo = "OFF";
+         color tfColor2 = (tfB2 > 0 || tfS2 > 0) ? clrGold : COLOR_TEXT;
+         DrawTableRow(row, g_tfStates[tf].tfLabel, tfInfo, tfColor2, COLOR_SECTION_ZZ); row++;
+      }
+   }
 
    // Buy position info
    string buyInfo = "$" + DoubleToString(plBuy, 2) + "  " + DoubleToString(lotsBuy, 2) + "L  " + IntegerToString(buyCount) + "ord";
