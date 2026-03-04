@@ -1,47 +1,66 @@
 
 
-## วิเคราะห์ Bug: DetectZigZagSwing() ตรวจจับทิศทางผิด
+## แก้ไข ATR Chart ไม่ถูกซ่อนใน Backtest
 
-### ปัญหาที่พบ
+### สาเหตุ
 
-ฟังก์ชัน `DetectZigZagSwing()` (บรรทัด 2653-2685) มี **bug สำคัญ** ในวิธีระบุว่า swing point เป็น HIGH หรือ LOW:
+โค้ดปัจจุบันพยายามลบ ATR subwindow เพียง **tick แรก** เท่านั้น (`g_atrChartHidden = true` ทันที) แต่ปัญหาคือ:
 
-```text
-// โค้ดปัจจุบัน (ผิด)
-if(zzBuf[i] < price)   → return "LOW"
-else                    → return "HIGH"
-```
-
-มันเปรียบเทียบ swing point กับ **ราคาปัจจุบัน** ซึ่งผิดพลาด เช่น:
-- Swing HIGH ที่ 2650 แต่ราคาปัจจุบัน 2700 → ระบบบอกว่า "LOW" (ผิด!)
-- Swing LOW ที่ 2750 แต่ราคาร่วงมาอยู่ 2700 → ระบบบอกว่า "HIGH" (ผิด!)
-
-### วิธีแก้ที่ถูกต้อง
-
-ZigZag indicator มาตรฐานของ MT5 (`Examples\ZigZag`) มี **3 buffers**:
-- **Buffer 0**: ZigZag line (ทุกจุด รวมกัน)
-- **Buffer 1**: High Map (เฉพาะ Swing High, อื่นเป็น 0)
-- **Buffer 2**: Low Map (เฉพาะ Swing Low, อื่นเป็น 0)
-
-แก้ให้ใช้ **Buffer 1 และ 2 แยกกัน** แล้วหาว่าจุดไหนเกิดล่าสุด:
-
-```text
-// หา swing high ล่าสุดจาก buffer 1
-// หา swing low ล่าสุดจาก buffer 2
-// เปรียบเทียบ bar index → อันที่ใกล้กว่า (index น้อยกว่า) คือ swing ล่าสุด
-// ถ้า swing low ล่าสุด → return "LOW" (BUY direction)
-// ถ้า swing high ล่าสุด → return "HIGH" (SELL direction)
-```
+1. ใน tick แรกของ Strategy Tester, ATR subwindow อาจยังไม่ถูกสร้างขึ้น (indicator ยังไม่ render)
+2. เมื่อ flag ถูกตั้งเป็น `true` แล้ว จะไม่ลองลบอีกเลย
+3. `iATR()` สร้าง 2 handles (`handleATR_Loss`, `handleATR_Profit`) ซึ่งอาจสร้าง subwindow แยกกัน
 
 ### ไฟล์ที่แก้ไข
-`public/docs/mql5/Gold_Miner_EA.mq5` — แก้เฉพาะ `DetectZigZagSwing()` (~30 บรรทัด)
 
-### สิ่งที่ไม่เปลี่ยนแปลง (กฎเหล็ก)
-- Order Execution Logic — ไม่แตะ
-- Grid Entry/Exit Logic — ไม่แตะ
-- TP/SL/Trailing/Accumulate — ไม่แตะ
-- SMA Signal Logic — ไม่แตะ
-- CDC Filter Logic — ไม่แตะ
-- License / News / Time Filter — ไม่แตะ
-- OnTick flow / Entry conditions — ไม่แตะ (แก้แค่ฟังก์ชัน detection ที่ถูกเรียก)
+`public/docs/mql5/Gold_Miner_EA.mq5` (ไฟล์เดียว)
+
+### วิธีแก้ไข
+
+เปลี่ยนจาก "ลบครั้งเดียวแล้วหยุด" เป็น "ลองลบทุก tick จนกว่าจะลบสำเร็จหรือครบ 50 tick"
+
+```text
+// แก้ไข global variable
+bool g_atrChartHidden = false;
+int  g_atrHideAttempts = 0;        // เพิ่มตัวนับ
+
+// แก้ไข logic ใน OnTick():
+if(!g_atrChartHidden && (MQLInfoInteger(MQL_TESTER) || MQLInfoInteger(MQL_VISUAL_MODE)))
+{
+   g_atrHideAttempts++;
+   int totalWindows = (int)ChartGetInteger(0, CHART_WINDOWS_TOTAL);
+   bool found = false;
+   for(int sw = totalWindows - 1; sw > 0; sw--)
+   {
+      int indCount = ChartIndicatorsTotal(0, sw);
+      for(int j = indCount - 1; j >= 0; j--)
+      {
+         string indName = ChartIndicatorName(0, sw, j);
+         if(StringFind(indName, "ATR") >= 0)
+         {
+            ChartIndicatorDelete(0, sw, indName);
+            found = true;
+         }
+      }
+   }
+   // หยุดเมื่อลบสำเร็จ หรือพยายามครบ 50 tick แล้ว
+   if(found || g_atrHideAttempts >= 50)
+   {
+      g_atrChartHidden = true;
+      ChartRedraw(0);
+   }
+}
+```
+
+### สิ่งที่เปลี่ยน
+
+- เพิ่ม `g_atrHideAttempts` counter เพื่อลองลบซ้ำหลาย tick
+- เปลี่ยน inner loop ให้ iterate ย้อนกลับ (`j = indCount - 1; j >= 0; j--`) เพื่อป้องกัน index shift เมื่อลบ
+- ตั้ง `g_atrChartHidden = true` ก็ต่อเมื่อลบสำเร็จจริง หรือพยายามครบ 50 tick
+
+### สิ่งที่ไม่เปลี่ยนแปลง
+
+- Trading logic ทั้งหมด (SMA, Grid, TP/SL, Trailing, Drawdown, Entry)
+- News/Time Filter logic
+- Dashboard + Buttons
+- License module
 
