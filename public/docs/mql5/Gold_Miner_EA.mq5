@@ -199,6 +199,10 @@ input int      DashboardX           = 20;      // Dashboard X Position
 input int      DashboardY           = 30;      // Dashboard Y Position
 input color    DashboardColor       = clrWhite; // Dashboard Text Color
 
+//--- Backtest Optimization
+input group "=== Backtest Optimization ==="
+input bool     InpSkipATRInTester   = true;    // Skip ATR Indicator in Tester (use Simplified)
+
 //--- License Settings
 input group "=== License Settings ==="
 input string   InpLicenseServer     = "https://lkbhomsulgycxawwlnfh.supabase.co";  // License Server URL
@@ -425,19 +429,28 @@ int OnInit()
       return INIT_FAILED;
    }
 
-   //--- ATR handles for grid
-   handleATR_Loss = iATR(_Symbol, GridLoss_ATR_TF, GridLoss_ATR_Period);
-   if(handleATR_Loss == INVALID_HANDLE)
+   //--- ATR handles for grid (skip in tester if InpSkipATRInTester)
+   if(g_isTesterMode && InpSkipATRInTester)
    {
-      Print("ERROR: Failed to create ATR Loss handle");
-      return INIT_FAILED;
+      handleATR_Loss = INVALID_HANDLE;
+      handleATR_Profit = INVALID_HANDLE;
+      Print("ATR indicator handles SKIPPED - using Simplified ATR for backtest speed");
    }
-
-   handleATR_Profit = iATR(_Symbol, GridProfit_ATR_TF, GridProfit_ATR_Period);
-   if(handleATR_Profit == INVALID_HANDLE)
+   else
    {
-      Print("ERROR: Failed to create ATR Profit handle");
-      return INIT_FAILED;
+      handleATR_Loss = iATR(_Symbol, GridLoss_ATR_TF, GridLoss_ATR_Period);
+      if(handleATR_Loss == INVALID_HANDLE)
+      {
+         Print("ERROR: Failed to create ATR Loss handle");
+         return INIT_FAILED;
+      }
+
+      handleATR_Profit = iATR(_Symbol, GridProfit_ATR_TF, GridProfit_ATR_Period);
+      if(handleATR_Profit == INVALID_HANDLE)
+      {
+         Print("ERROR: Failed to create ATR Profit handle");
+         return INIT_FAILED;
+      }
    }
 
    //--- Init arrays
@@ -678,29 +691,38 @@ double CalcDailyPL()
 
 void OnTick()
 {
-   // === HIDE ATR CHART IN BACKTEST (v2.9) ===
+   // === HIDE ATR CHART IN BACKTEST (v2.9 / v3.0 simplified) ===
+   // When InpSkipATRInTester=true, no ATR handles exist so no subwindow is created.
+   // Fallback: if handles exist (InpSkipATRInTester=false), try to hide subwindow.
    if(!g_atrChartHidden && (MQLInfoInteger(MQL_TESTER) || MQLInfoInteger(MQL_VISUAL_MODE)))
    {
-      g_atrHideAttempts++;
-      int totalWindows = (int)ChartGetInteger(0, CHART_WINDOWS_TOTAL);
-      bool found = false;
-      for(int sw = totalWindows - 1; sw > 0; sw--)
+      if(g_isTesterMode && InpSkipATRInTester)
       {
-         int indCount = ChartIndicatorsTotal(0, sw);
-         for(int j = indCount - 1; j >= 0; j--)
+         g_atrChartHidden = true; // No ATR handle = no subwindow
+      }
+      else
+      {
+         g_atrHideAttempts++;
+         int totalWindows = (int)ChartGetInteger(0, CHART_WINDOWS_TOTAL);
+         bool found = false;
+         for(int sw = totalWindows - 1; sw > 0; sw--)
          {
-            string indName = ChartIndicatorName(0, sw, j);
-            if(StringFind(indName, "ATR") >= 0)
+            int indCount = ChartIndicatorsTotal(0, sw);
+            for(int j = indCount - 1; j >= 0; j--)
             {
-               ChartIndicatorDelete(0, sw, indName);
-               found = true;
+               string indName = ChartIndicatorName(0, sw, j);
+               if(StringFind(indName, "ATR") >= 0)
+               {
+                  ChartIndicatorDelete(0, sw, indName);
+                  found = true;
+               }
             }
          }
-      }
-      if(found || g_atrHideAttempts >= 50)
-      {
-         g_atrChartHidden = true;
-         ChartRedraw(0);
+         if(found || g_atrHideAttempts >= 50)
+         {
+            g_atrChartHidden = true;
+            ChartRedraw(0);
+         }
       }
    }
 
@@ -806,10 +828,16 @@ void OnTick()
       {
          lastBarTime = currentBarTime;
 
-         //--- Copy indicator buffers
-         if(CopyBuffer(handleSMA, 0, 0, 3, bufSMA) < 3) return;
-         if(CopyBuffer(handleATR_Loss, 0, 0, 3, bufATR_Loss) < 3) return;
-         if(CopyBuffer(handleATR_Profit, 0, 0, 3, bufATR_Profit) < 3) return;
+          //--- Copy indicator buffers
+          if(CopyBuffer(handleSMA, 0, 0, 3, bufSMA) < 3) return;
+          if(handleATR_Loss != INVALID_HANDLE)
+          {
+             if(CopyBuffer(handleATR_Loss, 0, 0, 3, bufATR_Loss) < 3) return;
+          }
+          if(handleATR_Profit != INVALID_HANDLE)
+          {
+             if(CopyBuffer(handleATR_Profit, 0, 0, 3, bufATR_Profit) < 3) return;
+          }
 
          double smaValue = bufSMA[0];
          double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
@@ -1870,6 +1898,35 @@ void FindLastOrder(ENUM_POSITION_TYPE side, string prefix1, string prefix2, doub
 }
 
 //+------------------------------------------------------------------+
+//| Simplified ATR Calculation (v3.0 - No Indicator Handle)            |
+//| Port from Multi_Currency_Statistical_EA for backtest optimization  |
+//+------------------------------------------------------------------+
+double CalculateSimplifiedATR(string symbol, ENUM_TIMEFRAMES tf, int period)
+{
+   double sum = 0;
+   int validBars = 0;
+   
+   for(int i = 1; i <= period; i++)
+   {
+      double high = iHigh(symbol, tf, i);
+      double low = iLow(symbol, tf, i);
+      double prevClose = iClose(symbol, tf, i + 1);
+      
+      if(high == 0 || low == 0 || prevClose == 0) continue;
+      
+      double tr1 = high - low;
+      double tr2 = MathAbs(high - prevClose);
+      double tr3 = MathAbs(low - prevClose);
+      
+      sum += MathMax(tr1, MathMax(tr2, tr3));
+      validBars++;
+   }
+   
+   if(validBars == 0) return 0;
+   return sum / validBars;
+}
+
+//+------------------------------------------------------------------+
 //| Get grid distance in points                                        |
 //+------------------------------------------------------------------+
 double GetGridDistance(int level, bool isLossSide)
@@ -1888,7 +1945,15 @@ double GetGridDistance(int level, bool isLossSide)
       }
       else // ATR - use index 1 (closed bar) to prevent repaint
       {
-         double atrVal = (ArraySize(bufATR_Loss) > 1 && bufATR_Loss[1] > 0) ? bufATR_Loss[1] : bufATR_Loss[0];
+         double atrVal = 0;
+         if(g_isTesterMode && InpSkipATRInTester)
+         {
+            atrVal = CalculateSimplifiedATR(_Symbol, GridLoss_ATR_TF, GridLoss_ATR_Period);
+         }
+         else
+         {
+            atrVal = (ArraySize(bufATR_Loss) > 1 && bufATR_Loss[1] > 0) ? bufATR_Loss[1] : bufATR_Loss[0];
+         }
          if(atrVal > 0)
          {
             double atrDistance = atrVal * GridLoss_ATR_Multiplier / point;
@@ -1911,7 +1976,15 @@ double GetGridDistance(int level, bool isLossSide)
       }
       else // ATR - use index 1 (closed bar) to prevent repaint
       {
-         double atrVal = (ArraySize(bufATR_Profit) > 1 && bufATR_Profit[1] > 0) ? bufATR_Profit[1] : bufATR_Profit[0];
+         double atrVal = 0;
+         if(g_isTesterMode && InpSkipATRInTester)
+         {
+            atrVal = CalculateSimplifiedATR(_Symbol, GridProfit_ATR_TF, GridProfit_ATR_Period);
+         }
+         else
+         {
+            atrVal = (ArraySize(bufATR_Profit) > 1 && bufATR_Profit[1] > 0) ? bufATR_Profit[1] : bufATR_Profit[0];
+         }
          if(atrVal > 0)
          {
             double atrDistance = atrVal * GridProfit_ATR_Multiplier / point;
@@ -2919,8 +2992,11 @@ void CheckGridLossTF(int tfIdx, ENUM_POSITION_TYPE side, int currentGridCount)
       if(lastTime >= barTime) return;
    }
 
-   // Copy ATR buffer for grid distance calculation
-   if(CopyBuffer(handleATR_Loss, 0, 0, 3, bufATR_Loss) < 3) return;
+   // Copy ATR buffer for grid distance calculation (skip if using simplified ATR)
+   if(handleATR_Loss != INVALID_HANDLE)
+   {
+      if(CopyBuffer(handleATR_Loss, 0, 0, 3, bufATR_Loss) < 3) return;
+   }
 
    double distance = GetGridDistance(currentGridCount, true);
    if(distance <= 0) return;
@@ -2988,7 +3064,10 @@ void CheckGridProfitTF(int tfIdx, ENUM_POSITION_TYPE side, int currentGridCount)
          return;
    }
 
-   if(CopyBuffer(handleATR_Profit, 0, 0, 3, bufATR_Profit) < 3) return;
+   if(handleATR_Profit != INVALID_HANDLE)
+   {
+      if(CopyBuffer(handleATR_Profit, 0, 0, 3, bufATR_Profit) < 3) return;
+   }
 
    double distance = GetGridDistance(currentGridCount, false);
    if(distance <= 0) return;

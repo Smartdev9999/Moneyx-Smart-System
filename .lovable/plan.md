@@ -1,69 +1,66 @@
 
 
-## Gold Miner EA - เปลี่ยน ATR จาก Indicator Handle เป็น Simplified ATR (เร่ง Backtest)
+## แก้ไข ATR Chart ไม่ถูกซ่อนใน Backtest
 
-### ปัญหา
-ATR ใช้ `iATR()` indicator handle ซึ่งสร้าง subwindow บนชาร์ต แม้จะมี logic ลบ subwindow อยู่แล้ว (v2.9) แต่ตัว handle ยังทำงานอยู่ทำให้ backtest ช้า
+### สาเหตุ
 
-### วิธีแก้ไข
-เพิ่ม input `InpSkipATRInTester` — เมื่อเปิดใช้ + อยู่ใน tester จะ **ไม่สร้าง iATR handle เลย** และใช้ `CalculateSimplifiedATR()` (คำนวณ True Range ด้วย iHigh/iLow/iClose โดยตรง) แทน
+โค้ดปัจจุบันพยายามลบ ATR subwindow เพียง **tick แรก** เท่านั้น (`g_atrChartHidden = true` ทันที) แต่ปัญหาคือ:
+
+1. ใน tick แรกของ Strategy Tester, ATR subwindow อาจยังไม่ถูกสร้างขึ้น (indicator ยังไม่ render)
+2. เมื่อ flag ถูกตั้งเป็น `true` แล้ว จะไม่ลองลบอีกเลย
+3. `iATR()` สร้าง 2 handles (`handleATR_Loss`, `handleATR_Profit`) ซึ่งอาจสร้าง subwindow แยกกัน
 
 ### ไฟล์ที่แก้ไข
+
 `public/docs/mql5/Gold_Miner_EA.mq5` (ไฟล์เดียว)
 
----
+### วิธีแก้ไข
 
-### 1. เพิ่ม Input Parameter (ในกลุ่ม Backtest Optimization)
-
-```text
-input bool     InpSkipATRInTester = true;  // Skip ATR Indicator in Tester (use Simplified)
-```
-
-### 2. เพิ่มฟังก์ชัน `CalculateSimplifiedATR()` (port จาก Statistical EA)
-
-คำนวณ ATR แบบ manual โดยไม่ต้องใช้ indicator handle — ใช้ `iHigh()`, `iLow()`, `iClose()` โดยตรง
-
-### 3. แก้ไข OnInit — ข้าม iATR() เมื่ออยู่ใน Tester
+เปลี่ยนจาก "ลบครั้งเดียวแล้วหยุด" เป็น "ลองลบทุก tick จนกว่าจะลบสำเร็จหรือครบ 50 tick"
 
 ```text
-if(!(g_isTesterMode && InpSkipATRInTester))
+// แก้ไข global variable
+bool g_atrChartHidden = false;
+int  g_atrHideAttempts = 0;        // เพิ่มตัวนับ
+
+// แก้ไข logic ใน OnTick():
+if(!g_atrChartHidden && (MQLInfoInteger(MQL_TESTER) || MQLInfoInteger(MQL_VISUAL_MODE)))
 {
-   handleATR_Loss = iATR(_Symbol, GridLoss_ATR_TF, GridLoss_ATR_Period);
-   handleATR_Profit = iATR(_Symbol, GridProfit_ATR_TF, GridProfit_ATR_Period);
-}
-else
-{
-   handleATR_Loss = INVALID_HANDLE;
-   handleATR_Profit = INVALID_HANDLE;
+   g_atrHideAttempts++;
+   int totalWindows = (int)ChartGetInteger(0, CHART_WINDOWS_TOTAL);
+   bool found = false;
+   for(int sw = totalWindows - 1; sw > 0; sw--)
+   {
+      int indCount = ChartIndicatorsTotal(0, sw);
+      for(int j = indCount - 1; j >= 0; j--)
+      {
+         string indName = ChartIndicatorName(0, sw, j);
+         if(StringFind(indName, "ATR") >= 0)
+         {
+            ChartIndicatorDelete(0, sw, indName);
+            found = true;
+         }
+      }
+   }
+   // หยุดเมื่อลบสำเร็จ หรือพยายามครบ 50 tick แล้ว
+   if(found || g_atrHideAttempts >= 50)
+   {
+      g_atrChartHidden = true;
+      ChartRedraw(0);
+   }
 }
 ```
 
-### 4. แก้ไข OnTick — ข้าม CopyBuffer เมื่อ handle ไม่มี
+### สิ่งที่เปลี่ยน
 
-```text
-if(handleATR_Loss != INVALID_HANDLE)
-   CopyBuffer(handleATR_Loss, 0, 0, 3, bufATR_Loss);
-if(handleATR_Profit != INVALID_HANDLE)
-   CopyBuffer(handleATR_Profit, 0, 0, 3, bufATR_Profit);
-```
+- เพิ่ม `g_atrHideAttempts` counter เพื่อลองลบซ้ำหลาย tick
+- เปลี่ยน inner loop ให้ iterate ย้อนกลับ (`j = indCount - 1; j >= 0; j--`) เพื่อป้องกัน index shift เมื่อลบ
+- ตั้ง `g_atrChartHidden = true` ก็ต่อเมื่อลบสำเร็จจริง หรือพยายามครบ 50 tick
 
-### 5. แก้ไข `GetGridDistance()` — ใช้ Simplified ATR เมื่ออยู่ใน Tester
+### สิ่งที่ไม่เปลี่ยนแปลง
 
-เมื่อ `g_isTesterMode && InpSkipATRInTester` แทนที่จะอ่านจาก `bufATR_Loss[1]` ให้เรียก `CalculateSimplifiedATR()` แทน
-
-### 6. ลบ ATR hide logic ออก (ไม่จำเป็นแล้ว)
-
-เนื่องจากไม่สร้าง iATR handle ใน tester จึงไม่มี subwindow ให้ลบ — logic บรรทัด 681-704 จะไม่ทำงาน (สามารถเก็บไว้เป็น fallback หรือลบออกได้)
-
----
-
-### สิ่งที่ไม่เปลี่ยนแปลง (ตามกฎเหล็ก)
-
-- Order Execution Logic — ไม่แตะ
-- Grid Entry/Exit Logic — ไม่แตะ (เปลี่ยนแค่แหล่งข้อมูล ATR ไม่ใช่ logic)
-- TP/SL/Trailing/Accumulate — ไม่แตะ
-- SMA Signal / shouldEnterBuy/Sell — ไม่แตะ
-- License / News / Time Filter — ไม่แตะ
-- ZigZag MTF Logic — ไม่แตะ
-- **Live Trading**: ไม่กระทบ (ใช้ iATR handle ตามปกติเมื่อไม่อยู่ใน tester)
+- Trading logic ทั้งหมด (SMA, Grid, TP/SL, Trailing, Drawdown, Entry)
+- News/Time Filter logic
+- Dashboard + Buttons
+- License module
 
