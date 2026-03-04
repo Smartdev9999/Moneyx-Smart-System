@@ -828,10 +828,16 @@ void OnTick()
       {
          lastBarTime = currentBarTime;
 
-         //--- Copy indicator buffers
-         if(CopyBuffer(handleSMA, 0, 0, 3, bufSMA) < 3) return;
-         if(CopyBuffer(handleATR_Loss, 0, 0, 3, bufATR_Loss) < 3) return;
-         if(CopyBuffer(handleATR_Profit, 0, 0, 3, bufATR_Profit) < 3) return;
+          //--- Copy indicator buffers
+          if(CopyBuffer(handleSMA, 0, 0, 3, bufSMA) < 3) return;
+          if(handleATR_Loss != INVALID_HANDLE)
+          {
+             if(CopyBuffer(handleATR_Loss, 0, 0, 3, bufATR_Loss) < 3) return;
+          }
+          if(handleATR_Profit != INVALID_HANDLE)
+          {
+             if(CopyBuffer(handleATR_Profit, 0, 0, 3, bufATR_Profit) < 3) return;
+          }
 
          double smaValue = bufSMA[0];
          double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
