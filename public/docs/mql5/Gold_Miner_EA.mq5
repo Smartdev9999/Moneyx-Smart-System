@@ -249,6 +249,25 @@ input string   InpCustomNewsKeywords = "PMI;Unemployment Claims;Non-Farm;FOMC;Fe
 input int      InpPauseBeforeCustom  = 300;            // Pause Before a Custom News (Min.)
 input int      InpPauseAfterCustom   = 300;            // Pause After a Custom News (Min.)
 
+//--- ZigZag Multi-Timeframe Settings
+input group "=== ZigZag Multi-Timeframe Settings ==="
+input int              ZZ_Depth            = 12;               // ZigZag Depth
+input int              ZZ_Deviation        = 5;                // ZigZag Deviation
+input int              ZZ_Backstep         = 3;                // ZigZag Backstep
+input ENUM_TIMEFRAMES  ZZ_ConfirmTF        = PERIOD_H4;        // Confirm Timeframe (H4)
+input bool             ZZ_UseM30           = true;             // Use M30 for Entry
+input bool             ZZ_UseM15           = true;             // Use M15 for Entry
+input bool             ZZ_UseM5            = false;            // Use M5 for Entry
+input bool             ZZ_UseConfirmTFEntry= false;            // Also Enter on Confirm TF directly
+
+//--- CDC Action Zone Trend Filter
+input group "=== CDC Action Zone Trend Filter ==="
+input bool             InpUseCDCFilter     = false;            // Enable CDC Trend Filter
+input ENUM_TIMEFRAMES  InpCDCTimeframe     = PERIOD_D1;        // CDC Timeframe
+input int              InpCDCFastPeriod    = 12;               // CDC Fast EMA Period
+input int              InpCDCSlowPeriod    = 26;               // CDC Slow EMA Period
+input bool             InpCDCRequireCross  = false;            // Require Crossover (not just position)
+
 //+------------------------------------------------------------------+
 //| Global Variables                                                   |
 //+------------------------------------------------------------------+
