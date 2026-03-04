@@ -345,6 +345,45 @@ bool g_forceNewsRefresh = false;
 bool g_lastPausedState = false;
 string g_lastPauseKey = "";
 datetime g_newsPauseEndTime = 0;
+
+// === ZigZag Multi-Timeframe State (v3.0) ===
+struct TFState
+{
+   ENUM_TIMEFRAMES tf;
+   string          tfLabel;
+   bool            enabled;
+   int             handleZZ;
+   double          lastSwingPrice;
+   string          lastSwingType;
+   datetime        lastSwingTime;
+   double          initialBuyPrice;
+   double          initialSellPrice;
+   datetime        lastInitialCandle;
+   datetime        lastGridLossCandle;
+   datetime        lastGridProfitCandle;
+   bool            justClosedBuy;
+   bool            justClosedSell;
+   double          trailSL_Buy;
+   double          trailSL_Sell;
+   bool            trailActive_Buy;
+   bool            trailActive_Sell;
+   bool            beDone_Buy;
+   bool            beDone_Sell;
+};
+
+#define MAX_SUB_TF 4
+TFState  g_tfStates[MAX_SUB_TF];
+int      g_activeTFCount = 0;
+int      g_h4TFIndex = -1;
+string   g_h4Direction = "NONE";
+datetime g_lastH4Bar = 0;
+
+// CDC Action Zone state
+string   g_cdcTrend = "NEUTRAL";
+double   g_cdcFast = 0;
+double   g_cdcSlow = 0;
+bool     g_cdcReady = false;
+datetime g_lastCdcCandle = 0;
 //+------------------------------------------------------------------+
 //| Expert initialization function                                     |
 //+------------------------------------------------------------------+
