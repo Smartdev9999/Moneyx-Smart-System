@@ -3035,7 +3035,10 @@ void CheckGridProfitTF(int tfIdx, ENUM_POSITION_TYPE side, int currentGridCount)
          return;
    }
 
-   if(CopyBuffer(handleATR_Profit, 0, 0, 3, bufATR_Profit) < 3) return;
+   if(handleATR_Profit != INVALID_HANDLE)
+   {
+      if(CopyBuffer(handleATR_Profit, 0, 0, 3, bufATR_Profit) < 3) return;
+   }
 
    double distance = GetGridDistance(currentGridCount, false);
    if(distance <= 0) return;
