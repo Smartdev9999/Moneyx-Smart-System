@@ -764,18 +764,22 @@ void OnTick()
    // === ORIGINAL TRADING LOGIC (unchanged) ===
    if(g_eaStopped) return;
 
-   //--- Every tick: Per-Order Trailing FIRST (set SL at broker before basket TP checks)
+   //--- Every tick: Per-Order Trailing (works for both modes - individual positions)
    if(EnablePerOrderTrailing)
    {
       ManagePerOrderTrailing();
    }
    else if(EnableTrailingStop || EnableBreakeven)
    {
-      ManageTrailingStop();
+      if(EntryMode == ENTRY_SMA)
+         ManageTrailingStop();
+      // ZigZag mode: per-TF trailing handled in OnTickZigZagMTF()
    }
 
-   //--- Every tick: TP/SL management (basket) - runs AFTER trailing has set SL
-   ManageTPSL();
+   //--- Every tick: TP/SL management
+   if(EntryMode == ENTRY_SMA)
+      ManageTPSL();
+   // ZigZag mode: per-TF TP/SL + shared accumulate handled in OnTickZigZagMTF()
 
    //--- Every tick: Drawdown check
    CheckDrawdownExit();
@@ -789,144 +793,157 @@ void OnTick()
       if(dd > g_maxDD) g_maxDD = dd;
    }
 
-   //--- New bar logic
-   datetime currentBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
-   bool isNewBar = (currentBarTime != lastBarTime);
-
-   if(isNewBar)
+   // ============================================================
+   // SMA MODE - Original Entry Logic (unchanged when ENTRY_SMA)
+   // ============================================================
+   if(EntryMode == ENTRY_SMA)
    {
-      lastBarTime = currentBarTime;
+      //--- New bar logic
+      datetime currentBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
+      bool isNewBar = (currentBarTime != lastBarTime);
 
-      //--- Copy indicator buffers
-      if(CopyBuffer(handleSMA, 0, 0, 3, bufSMA) < 3) return;
-      if(CopyBuffer(handleATR_Loss, 0, 0, 3, bufATR_Loss) < 3) return;
-      if(CopyBuffer(handleATR_Profit, 0, 0, 3, bufATR_Profit) < 3) return;
-
-      double smaValue = bufSMA[0];
-      double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-
-      int buyCount = 0, sellCount = 0;
-      int gridLossBuy = 0, gridLossSell = 0;
-      int gridProfitBuy = 0, gridProfitSell = 0;
-      bool hasInitialBuy = false, hasInitialSell = false;
-      CountPositions(buyCount, sellCount, gridLossBuy, gridLossSell, gridProfitBuy, gridProfitSell, hasInitialBuy, hasInitialSell);
-
-      int totalPositions = buyCount + sellCount;
-
-      //--- Auto-detect broker-closed positions (e.g. trailing SL hit by broker)
-      if(buyCount == 0 && g_initialBuyPrice != 0)
+      if(isNewBar)
       {
-         Print("BUY cycle ended (broker SL). Resetting g_initialBuyPrice.");
-         g_initialBuyPrice = 0;
-      }
-      if(sellCount == 0 && g_initialSellPrice != 0)
-      {
-         Print("SELL cycle ended (broker SL). Resetting g_initialSellPrice.");
-         g_initialSellPrice = 0;
-      }
+         lastBarTime = currentBarTime;
 
-      //--- Grid Loss management (check both sides independently) - blocked by News/Time filter
-      if(!g_newOrderBlocked)
-      {
-         if((hasInitialBuy || g_initialBuyPrice > 0) && gridLossBuy < GridLoss_MaxTrades && buyCount > 0)
-         {
-            CheckGridLoss(POSITION_TYPE_BUY, gridLossBuy);
-         }
-         if((hasInitialSell || g_initialSellPrice > 0) && gridLossSell < GridLoss_MaxTrades && sellCount > 0)
-         {
-            CheckGridLoss(POSITION_TYPE_SELL, gridLossSell);
-         }
-      }
+         //--- Copy indicator buffers
+         if(CopyBuffer(handleSMA, 0, 0, 3, bufSMA) < 3) return;
+         if(CopyBuffer(handleATR_Loss, 0, 0, 3, bufATR_Loss) < 3) return;
+         if(CopyBuffer(handleATR_Profit, 0, 0, 3, bufATR_Profit) < 3) return;
 
-      //--- Grid Profit management - blocked by News/Time filter
-      if(!g_newOrderBlocked && GridProfit_Enable)
-      {
-         if((hasInitialBuy || g_initialBuyPrice > 0) && gridProfitBuy < GridProfit_MaxTrades && buyCount > 0)
-         {
-            CheckGridProfit(POSITION_TYPE_BUY, gridProfitBuy);
-         }
-         if((hasInitialSell || g_initialSellPrice > 0) && gridProfitSell < GridProfit_MaxTrades && sellCount > 0)
-         {
-            CheckGridProfit(POSITION_TYPE_SELL, gridProfitSell);
-         }
-      }
+         double smaValue = bufSMA[0];
+         double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
 
-      //--- Entry logic: Independent Side Entry - blocked by News/Time filter
-      if(!g_newOrderBlocked)
-      {
-         bool canOpenMore = TotalOrderCount() < MaxOpenOrders;
-         bool canOpenOnThisCandle = !(DontOpenSameCandle && currentBarTime == lastInitialCandleTime);
+         int buyCount = 0, sellCount = 0;
+         int gridLossBuy = 0, gridLossSell = 0;
+         int gridProfitBuy = 0, gridProfitSell = 0;
+         bool hasInitialBuy = false, hasInitialSell = false;
+         CountPositions(buyCount, sellCount, gridLossBuy, gridLossSell, gridProfitBuy, gridProfitSell, hasInitialBuy, hasInitialSell);
 
-         //--- BUY side shouldEnter logic (v2.9 robust fix)
-         bool shouldEnterBuy = false;
-         if(buyCount == 0)
+         int totalPositions = buyCount + sellCount;
+
+         //--- Auto-detect broker-closed positions (e.g. trailing SL hit by broker)
+         if(buyCount == 0 && g_initialBuyPrice != 0)
          {
-            if(justClosedBuy && !EnableAutoReEntry)
-               shouldEnterBuy = false;  // 1-bar cooldown only
-            else
-               shouldEnterBuy = true;   // Ready to enter (auto re-entry or normal)
+            Print("BUY cycle ended (broker SL). Resetting g_initialBuyPrice.");
+            g_initialBuyPrice = 0;
+         }
+         if(sellCount == 0 && g_initialSellPrice != 0)
+         {
+            Print("SELL cycle ended (broker SL). Resetting g_initialSellPrice.");
+            g_initialSellPrice = 0;
          }
 
-         //--- SELL side shouldEnter logic (v2.9 robust fix)
-         bool shouldEnterSell = false;
-         if(sellCount == 0)
+         //--- Grid Loss management (check both sides independently) - blocked by News/Time filter
+         if(!g_newOrderBlocked)
          {
-            if(justClosedSell && !EnableAutoReEntry)
-               shouldEnterSell = false;  // 1-bar cooldown only
-            else
-               shouldEnterSell = true;   // Ready to enter (auto re-entry or normal)
+            if((hasInitialBuy || g_initialBuyPrice > 0) && gridLossBuy < GridLoss_MaxTrades && buyCount > 0)
+            {
+               CheckGridLoss(POSITION_TYPE_BUY, gridLossBuy);
+            }
+            if((hasInitialSell || g_initialSellPrice > 0) && gridLossSell < GridLoss_MaxTrades && sellCount > 0)
+            {
+               CheckGridLoss(POSITION_TYPE_SELL, gridLossSell);
+            }
          }
 
-          // ===== BUY Entry (independent) =====
-          if(buyCount == 0 && g_initialBuyPrice == 0 && canOpenMore && canOpenOnThisCandle)
-          {
-             if(currentPrice > smaValue && (TradingMode == TRADE_BUY_ONLY || TradingMode == TRADE_BOTH))
+         //--- Grid Profit management - blocked by News/Time filter
+         if(!g_newOrderBlocked && GridProfit_Enable)
+         {
+            if((hasInitialBuy || g_initialBuyPrice > 0) && gridProfitBuy < GridProfit_MaxTrades && buyCount > 0)
+            {
+               CheckGridProfit(POSITION_TYPE_BUY, gridProfitBuy);
+            }
+            if((hasInitialSell || g_initialSellPrice > 0) && gridProfitSell < GridProfit_MaxTrades && sellCount > 0)
+            {
+               CheckGridProfit(POSITION_TYPE_SELL, gridProfitSell);
+            }
+         }
+
+         //--- Entry logic: Independent Side Entry - blocked by News/Time filter
+         if(!g_newOrderBlocked)
+         {
+            bool canOpenMore = TotalOrderCount() < MaxOpenOrders;
+            bool canOpenOnThisCandle = !(DontOpenSameCandle && currentBarTime == lastInitialCandleTime);
+
+            //--- BUY side shouldEnter logic (v2.9 robust fix)
+            bool shouldEnterBuy = false;
+            if(buyCount == 0)
+            {
+               if(justClosedBuy && !EnableAutoReEntry)
+                  shouldEnterBuy = false;  // 1-bar cooldown only
+               else
+                  shouldEnterBuy = true;   // Ready to enter (auto re-entry or normal)
+            }
+
+            //--- SELL side shouldEnter logic (v2.9 robust fix)
+            bool shouldEnterSell = false;
+            if(sellCount == 0)
+            {
+               if(justClosedSell && !EnableAutoReEntry)
+                  shouldEnterSell = false;  // 1-bar cooldown only
+               else
+                  shouldEnterSell = true;   // Ready to enter (auto re-entry or normal)
+            }
+
+             // ===== BUY Entry (independent) =====
+             if(buyCount == 0 && g_initialBuyPrice == 0 && canOpenMore && canOpenOnThisCandle)
              {
-                if(shouldEnterBuy)
+                if(currentPrice > smaValue && (TradingMode == TRADE_BUY_ONLY || TradingMode == TRADE_BOTH))
                 {
-                   if(OpenOrder(ORDER_TYPE_BUY, InitialLotSize, "GM_INIT"))
+                   if(shouldEnterBuy)
                    {
-                      g_initialBuyPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-                      lastInitialCandleTime = currentBarTime;
-                      ResetTrailingState();
+                      if(OpenOrder(ORDER_TYPE_BUY, InitialLotSize, "GM_INIT"))
+                      {
+                         g_initialBuyPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+                         lastInitialCandleTime = currentBarTime;
+                         ResetTrailingState();
+                      }
                    }
                 }
-             }
-             else if(shouldEnterBuy)
-             {
-                Print("BUY ENTRY SKIP: SMA signal not match (Price=", currentPrice, " SMA=", smaValue, ")");
-             }
-          }
-
-          // ===== SELL Entry (independent) =====
-          if(sellCount == 0 && g_initialSellPrice == 0 && canOpenMore && canOpenOnThisCandle)
-          {
-             if(currentPrice < smaValue && (TradingMode == TRADE_SELL_ONLY || TradingMode == TRADE_BOTH))
-             {
-                if(shouldEnterSell)
+                else if(shouldEnterBuy)
                 {
-                   if(OpenOrder(ORDER_TYPE_SELL, InitialLotSize, "GM_INIT"))
-                   {
-                      g_initialSellPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-                      lastInitialCandleTime = currentBarTime;
-                      ResetTrailingState();
-                   }
+                   Print("BUY ENTRY SKIP: SMA signal not match (Price=", currentPrice, " SMA=", smaValue, ")");
                 }
              }
-             else if(shouldEnterSell)
-             {
-                Print("SELL ENTRY SKIP: SMA signal not match (Price=", currentPrice, " SMA=", smaValue, ")");
-             }
-          }
-      }
 
-      // Reset justClosed flags ONLY after entry logic has had a chance to use them
-      // If g_newOrderBlocked = true, flags are preserved until filter clears
-      if(!g_newOrderBlocked)
-      {
-         justClosedBuy = false;
-         justClosedSell = false;
+             // ===== SELL Entry (independent) =====
+             if(sellCount == 0 && g_initialSellPrice == 0 && canOpenMore && canOpenOnThisCandle)
+             {
+                if(currentPrice < smaValue && (TradingMode == TRADE_SELL_ONLY || TradingMode == TRADE_BOTH))
+                {
+                   if(shouldEnterSell)
+                   {
+                      if(OpenOrder(ORDER_TYPE_SELL, InitialLotSize, "GM_INIT"))
+                      {
+                         g_initialSellPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+                         lastInitialCandleTime = currentBarTime;
+                         ResetTrailingState();
+                      }
+                   }
+                }
+                else if(shouldEnterSell)
+                {
+                   Print("SELL ENTRY SKIP: SMA signal not match (Price=", currentPrice, " SMA=", smaValue, ")");
+                }
+             }
+         }
+
+         // Reset justClosed flags ONLY after entry logic has had a chance to use them
+         if(!g_newOrderBlocked)
+         {
+            justClosedBuy = false;
+            justClosedSell = false;
+         }
       }
+   } // end EntryMode == ENTRY_SMA
+
+   // ============================================================
+   // ZIGZAG MTF MODE - Multi-Timeframe Entry System (v3.0)
+   // ============================================================
+   if(EntryMode == ENTRY_ZIGZAG)
+   {
+      OnTickZigZagMTF();
    }
 
    //--- Draw lines and dashboard every tick
