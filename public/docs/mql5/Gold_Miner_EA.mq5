@@ -1898,6 +1898,35 @@ void FindLastOrder(ENUM_POSITION_TYPE side, string prefix1, string prefix2, doub
 }
 
 //+------------------------------------------------------------------+
+//| Simplified ATR Calculation (v3.0 - No Indicator Handle)            |
+//| Port from Multi_Currency_Statistical_EA for backtest optimization  |
+//+------------------------------------------------------------------+
+double CalculateSimplifiedATR(string symbol, ENUM_TIMEFRAMES tf, int period)
+{
+   double sum = 0;
+   int validBars = 0;
+   
+   for(int i = 1; i <= period; i++)
+   {
+      double high = iHigh(symbol, tf, i);
+      double low = iLow(symbol, tf, i);
+      double prevClose = iClose(symbol, tf, i + 1);
+      
+      if(high == 0 || low == 0 || prevClose == 0) continue;
+      
+      double tr1 = high - low;
+      double tr2 = MathAbs(high - prevClose);
+      double tr3 = MathAbs(low - prevClose);
+      
+      sum += MathMax(tr1, MathMax(tr2, tr3));
+      validBars++;
+   }
+   
+   if(validBars == 0) return 0;
+   return sum / validBars;
+}
+
+//+------------------------------------------------------------------+
 //| Get grid distance in points                                        |
 //+------------------------------------------------------------------+
 double GetGridDistance(int level, bool isLossSide)
