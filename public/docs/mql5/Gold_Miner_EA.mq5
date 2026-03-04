@@ -2440,6 +2440,1035 @@ void DashLabel(string name, int x, int y, string text, color clr)
 //+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
+//| ============== ZIGZAG MTF MODULE (v3.0) ======================== |
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//| Initialize ZigZag handles for enabled timeframes                   |
+//+------------------------------------------------------------------+
+void InitZigZagHandles()
+{
+   g_activeTFCount = 0;
+
+   // H4 (Confirm TF) - always created for direction detection
+   {
+      g_tfStates[g_activeTFCount].tf = ZZ_ConfirmTF;
+      g_tfStates[g_activeTFCount].tfLabel = "H4";
+      g_tfStates[g_activeTFCount].enabled = ZZ_UseConfirmTFEntry;
+      g_tfStates[g_activeTFCount].handleZZ = iCustom(_Symbol, ZZ_ConfirmTF, "Examples\\ZigZag", ZZ_Depth, ZZ_Deviation, ZZ_Backstep);
+      ResetTFState(g_activeTFCount);
+      g_h4TFIndex = g_activeTFCount;
+      if(g_tfStates[g_activeTFCount].handleZZ == INVALID_HANDLE)
+         Print("WARNING: ZigZag handle failed for ", EnumToString(ZZ_ConfirmTF));
+      else
+         Print("ZigZag handle OK for ", EnumToString(ZZ_ConfirmTF));
+      g_activeTFCount++;
+   }
+
+   // M30
+   if(ZZ_UseM30)
+   {
+      g_tfStates[g_activeTFCount].tf = PERIOD_M30;
+      g_tfStates[g_activeTFCount].tfLabel = "M30";
+      g_tfStates[g_activeTFCount].enabled = true;
+      g_tfStates[g_activeTFCount].handleZZ = iCustom(_Symbol, PERIOD_M30, "Examples\\ZigZag", ZZ_Depth, ZZ_Deviation, ZZ_Backstep);
+      ResetTFState(g_activeTFCount);
+      if(g_tfStates[g_activeTFCount].handleZZ == INVALID_HANDLE)
+         Print("WARNING: ZigZag handle failed for M30");
+      g_activeTFCount++;
+   }
+
+   // M15
+   if(ZZ_UseM15)
+   {
+      g_tfStates[g_activeTFCount].tf = PERIOD_M15;
+      g_tfStates[g_activeTFCount].tfLabel = "M15";
+      g_tfStates[g_activeTFCount].enabled = true;
+      g_tfStates[g_activeTFCount].handleZZ = iCustom(_Symbol, PERIOD_M15, "Examples\\ZigZag", ZZ_Depth, ZZ_Deviation, ZZ_Backstep);
+      ResetTFState(g_activeTFCount);
+      if(g_tfStates[g_activeTFCount].handleZZ == INVALID_HANDLE)
+         Print("WARNING: ZigZag handle failed for M15");
+      g_activeTFCount++;
+   }
+
+   // M5
+   if(ZZ_UseM5)
+   {
+      g_tfStates[g_activeTFCount].tf = PERIOD_M5;
+      g_tfStates[g_activeTFCount].tfLabel = "M5";
+      g_tfStates[g_activeTFCount].enabled = true;
+      g_tfStates[g_activeTFCount].handleZZ = iCustom(_Symbol, PERIOD_M5, "Examples\\ZigZag", ZZ_Depth, ZZ_Deviation, ZZ_Backstep);
+      ResetTFState(g_activeTFCount);
+      if(g_tfStates[g_activeTFCount].handleZZ == INVALID_HANDLE)
+         Print("WARNING: ZigZag handle failed for M5");
+      g_activeTFCount++;
+   }
+
+   Print("ZigZag MTF initialized: ", g_activeTFCount, " timeframes active");
+}
+
+//+------------------------------------------------------------------+
+//| Reset TFState to defaults                                          |
+//+------------------------------------------------------------------+
+void ResetTFState(int idx)
+{
+   g_tfStates[idx].lastSwingPrice = 0;
+   g_tfStates[idx].lastSwingType = "NONE";
+   g_tfStates[idx].lastSwingTime = 0;
+   g_tfStates[idx].initialBuyPrice = 0;
+   g_tfStates[idx].initialSellPrice = 0;
+   g_tfStates[idx].lastInitialCandle = 0;
+   g_tfStates[idx].lastGridLossCandle = 0;
+   g_tfStates[idx].lastGridProfitCandle = 0;
+   g_tfStates[idx].justClosedBuy = false;
+   g_tfStates[idx].justClosedSell = false;
+   g_tfStates[idx].trailSL_Buy = 0;
+   g_tfStates[idx].trailSL_Sell = 0;
+   g_tfStates[idx].trailActive_Buy = false;
+   g_tfStates[idx].trailActive_Sell = false;
+   g_tfStates[idx].beDone_Buy = false;
+   g_tfStates[idx].beDone_Sell = false;
+}
+
+//+------------------------------------------------------------------+
+//| Reset TF trailing state                                            |
+//+------------------------------------------------------------------+
+void ResetTrailingStateTF(int tfIdx)
+{
+   g_tfStates[tfIdx].trailSL_Buy = 0;
+   g_tfStates[tfIdx].trailSL_Sell = 0;
+   g_tfStates[tfIdx].trailActive_Buy = false;
+   g_tfStates[tfIdx].trailActive_Sell = false;
+   g_tfStates[tfIdx].beDone_Buy = false;
+   g_tfStates[tfIdx].beDone_Sell = false;
+}
+
+//+------------------------------------------------------------------+
+//| Recover TF initial prices from existing positions                  |
+//+------------------------------------------------------------------+
+void RecoverTFInitialPrices()
+{
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+
+      string comment = PositionGetString(POSITION_COMMENT);
+      long posType = PositionGetInteger(POSITION_TYPE);
+      double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+
+      for(int t = 0; t < g_activeTFCount; t++)
+      {
+         string prefix = "GM_" + g_tfStates[t].tfLabel + "_INIT";
+         if(StringFind(comment, prefix) >= 0)
+         {
+            if(posType == POSITION_TYPE_BUY)
+               g_tfStates[t].initialBuyPrice = openPrice;
+            else if(posType == POSITION_TYPE_SELL)
+               g_tfStates[t].initialSellPrice = openPrice;
+         }
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Detect latest ZigZag swing on a specific TF                        |
+//| Returns: "LOW" (buy signal), "HIGH" (sell signal), "NONE"          |
+//+------------------------------------------------------------------+
+string DetectZigZagSwing(int tfIndex)
+{
+   if(g_tfStates[tfIndex].handleZZ == INVALID_HANDLE) return "NONE";
+
+   double zzBuf[];
+   ArraySetAsSeries(zzBuf, true);
+   if(CopyBuffer(g_tfStates[tfIndex].handleZZ, 0, 0, 100, zzBuf) < 100)
+      return "NONE";
+
+   // Find first non-zero value (latest swing point) - skip bar 0 (forming)
+   for(int i = 1; i < 100; i++)
+   {
+      if(zzBuf[i] != 0.0)
+      {
+         double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+         if(zzBuf[i] < price)
+         {
+            g_tfStates[tfIndex].lastSwingPrice = zzBuf[i];
+            g_tfStates[tfIndex].lastSwingType = "LOW";
+            g_tfStates[tfIndex].lastSwingTime = iTime(_Symbol, g_tfStates[tfIndex].tf, i);
+            return "LOW";
+         }
+         else
+         {
+            g_tfStates[tfIndex].lastSwingPrice = zzBuf[i];
+            g_tfStates[tfIndex].lastSwingType = "HIGH";
+            g_tfStates[tfIndex].lastSwingTime = iTime(_Symbol, g_tfStates[tfIndex].tf, i);
+            return "HIGH";
+         }
+      }
+   }
+   return "NONE";
+}
+
+//+------------------------------------------------------------------+
+//| Calculate EMA for CDC (ported from Harmony Dream v3.5.0)           |
+//+------------------------------------------------------------------+
+void CalculateCDC_EMA_GM(double &src[], double &result[], int period, int size)
+{
+   if(size < period) return;
+
+   double multiplier = 2.0 / (period + 1);
+
+   // Initial SMA
+   double sum = 0;
+   for(int i = size - period; i < size; i++)
+      sum += src[i];
+   result[size - 1] = sum / period;
+
+   // EMA calculation from oldest to newest
+   for(int i = size - 2; i >= 0; i--)
+      result[i] = (src[i] - result[i + 1]) * multiplier + result[i + 1];
+}
+
+//+------------------------------------------------------------------+
+//| Update CDC Action Zone trend                                       |
+//+------------------------------------------------------------------+
+void UpdateCDC()
+{
+   if(!InpUseCDCFilter) return;
+
+   // Only recalculate on new CDC TF bar
+   datetime cdcBar = iTime(_Symbol, InpCDCTimeframe, 0);
+   if(cdcBar == g_lastCdcCandle && g_cdcReady) return;
+   g_lastCdcCandle = cdcBar;
+
+   int minBarsReq = InpCDCSlowPeriod + 10;
+   int barsNeeded = InpCDCSlowPeriod * 3 + 50;
+
+   double closeArr[], highArr[], lowArr[], openArr[];
+   ArraySetAsSeries(closeArr, true);
+   ArraySetAsSeries(highArr, true);
+   ArraySetAsSeries(lowArr, true);
+   ArraySetAsSeries(openArr, true);
+
+   int copied = CopyClose(_Symbol, InpCDCTimeframe, 0, barsNeeded, closeArr);
+   if(copied < minBarsReq) { g_cdcReady = false; return; }
+
+   int actualBars = MathMin(copied, barsNeeded);
+
+   int copiedH = CopyHigh(_Symbol, InpCDCTimeframe, 0, actualBars, highArr);
+   int copiedL = CopyLow(_Symbol, InpCDCTimeframe, 0, actualBars, lowArr);
+   int copiedO = CopyOpen(_Symbol, InpCDCTimeframe, 0, actualBars, openArr);
+   if(copiedH < actualBars || copiedL < actualBars || copiedO < actualBars)
+   {
+      g_cdcReady = false;
+      return;
+   }
+
+   // Calculate OHLC4
+   double ohlc4[];
+   ArrayResize(ohlc4, actualBars);
+   for(int i = 0; i < actualBars; i++)
+      ohlc4[i] = (openArr[i] + highArr[i] + lowArr[i] + closeArr[i]) / 4.0;
+
+   // AP (Smoothed OHLC4 with EMA2)
+   double ap[];
+   ArrayResize(ap, actualBars);
+   CalculateCDC_EMA_GM(ohlc4, ap, 2, actualBars);
+
+   // Fast & Slow EMA
+   double fast[], slow[];
+   ArrayResize(fast, actualBars);
+   ArrayResize(slow, actualBars);
+   CalculateCDC_EMA_GM(ap, fast, InpCDCFastPeriod, actualBars);
+   CalculateCDC_EMA_GM(ap, slow, InpCDCSlowPeriod, actualBars);
+
+   if(ArraySize(fast) < 2 || ArraySize(slow) < 2)
+   {
+      g_cdcReady = false;
+      return;
+   }
+
+   g_cdcFast = fast[0];
+   g_cdcSlow = slow[0];
+
+   if(g_cdcFast == 0 || g_cdcSlow == 0)
+   {
+      g_cdcReady = false;
+      return;
+   }
+
+   // Determine trend
+   if(InpCDCRequireCross)
+   {
+      double fastPrev = fast[1];
+      double slowPrev = slow[1];
+      bool crossUp = (fastPrev <= slowPrev && g_cdcFast > g_cdcSlow);
+      bool crossDown = (fastPrev >= slowPrev && g_cdcFast < g_cdcSlow);
+      if(crossUp) g_cdcTrend = "BULLISH";
+      else if(crossDown) g_cdcTrend = "BEARISH";
+      // else keep previous trend
+   }
+   else
+   {
+      if(g_cdcFast > g_cdcSlow) g_cdcTrend = "BULLISH";
+      else if(g_cdcFast < g_cdcSlow) g_cdcTrend = "BEARISH";
+      else g_cdcTrend = "NEUTRAL";
+   }
+
+   g_cdcReady = true;
+}
+
+//+------------------------------------------------------------------+
+//| Count positions for a specific TF (by comment prefix)              |
+//+------------------------------------------------------------------+
+void CountPositionsTF(int tfIdx, int &buyCount, int &sellCount,
+                      int &gridLossBuy, int &gridLossSell,
+                      int &gridProfitBuy, int &gridProfitSell,
+                      bool &hasInitialBuy, bool &hasInitialSell)
+{
+   buyCount = 0; sellCount = 0;
+   gridLossBuy = 0; gridLossSell = 0;
+   gridProfitBuy = 0; gridProfitSell = 0;
+   hasInitialBuy = false; hasInitialSell = false;
+
+   string prefix = "GM_" + g_tfStates[tfIdx].tfLabel + "_";
+
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+
+      string comment = PositionGetString(POSITION_COMMENT);
+      if(StringFind(comment, prefix) < 0) continue;
+
+      long posType = PositionGetInteger(POSITION_TYPE);
+
+      if(posType == POSITION_TYPE_BUY)
+      {
+         buyCount++;
+         if(StringFind(comment, prefix + "INIT") >= 0) hasInitialBuy = true;
+         if(StringFind(comment, prefix + "GL") >= 0) gridLossBuy++;
+         if(StringFind(comment, prefix + "GP") >= 0) gridProfitBuy++;
+      }
+      else if(posType == POSITION_TYPE_SELL)
+      {
+         sellCount++;
+         if(StringFind(comment, prefix + "INIT") >= 0) hasInitialSell = true;
+         if(StringFind(comment, prefix + "GL") >= 0) gridLossSell++;
+         if(StringFind(comment, prefix + "GP") >= 0) gridProfitSell++;
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Open order for a specific TF                                       |
+//+------------------------------------------------------------------+
+bool OpenOrderTF(int tfIdx, ENUM_ORDER_TYPE orderType, double lots, string suffix)
+{
+   string comment = "GM_" + g_tfStates[tfIdx].tfLabel + "_" + suffix;
+   return OpenOrder(orderType, lots, comment);
+}
+
+//+------------------------------------------------------------------+
+//| Calculate average price for a TF                                   |
+//+------------------------------------------------------------------+
+double CalculateAveragePriceTF(int tfIdx, ENUM_POSITION_TYPE side)
+{
+   string prefix = "GM_" + g_tfStates[tfIdx].tfLabel + "_";
+   double totalLots = 0;
+   double totalWeighted = 0;
+
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if(PositionGetInteger(POSITION_TYPE) != side) continue;
+      if(StringFind(PositionGetString(POSITION_COMMENT), prefix) < 0) continue;
+
+      double vol = PositionGetDouble(POSITION_VOLUME);
+      double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+      totalLots += vol;
+      totalWeighted += openPrice * vol;
+   }
+
+   if(totalLots > 0) return totalWeighted / totalLots;
+   return 0;
+}
+
+//+------------------------------------------------------------------+
+//| Calculate floating PL for a TF                                     |
+//+------------------------------------------------------------------+
+double CalculateFloatingPL_TF(int tfIdx, ENUM_POSITION_TYPE side)
+{
+   string prefix = "GM_" + g_tfStates[tfIdx].tfLabel + "_";
+   double totalPLtf = 0;
+
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if(PositionGetInteger(POSITION_TYPE) != side) continue;
+      if(StringFind(PositionGetString(POSITION_COMMENT), prefix) < 0) continue;
+
+      totalPLtf += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+   }
+   return totalPLtf;
+}
+
+//+------------------------------------------------------------------+
+//| Find last order for a TF (matching comment prefix)                 |
+//+------------------------------------------------------------------+
+void FindLastOrderTF(int tfIdx, ENUM_POSITION_TYPE side, string suffix1, string suffix2,
+                     double &outPrice, datetime &outTime)
+{
+   string prefix = "GM_" + g_tfStates[tfIdx].tfLabel + "_";
+   outPrice = 0;
+   outTime = 0;
+   datetime latestTime = 0;
+
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if(PositionGetInteger(POSITION_TYPE) != side) continue;
+
+      string comment = PositionGetString(POSITION_COMMENT);
+      if(StringFind(comment, prefix) < 0) continue;
+      if(StringFind(comment, prefix + suffix1) >= 0 || StringFind(comment, prefix + suffix2) >= 0)
+      {
+         datetime openTime = (datetime)PositionGetInteger(POSITION_TIME);
+         if(openTime > latestTime)
+         {
+            latestTime = openTime;
+            outPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+            outTime = openTime;
+         }
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Close all positions for one side of one TF                         |
+//+------------------------------------------------------------------+
+void CloseAllSideTF(int tfIdx, ENUM_POSITION_TYPE side)
+{
+   string prefix = "GM_" + g_tfStates[tfIdx].tfLabel + "_";
+
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if(PositionGetInteger(POSITION_TYPE) != side) continue;
+      if(StringFind(PositionGetString(POSITION_COMMENT), prefix) < 0) continue;
+      trade.PositionClose(ticket);
+   }
+
+   if(side == POSITION_TYPE_BUY)
+      g_tfStates[tfIdx].justClosedBuy = true;
+   else
+      g_tfStates[tfIdx].justClosedSell = true;
+}
+
+//+------------------------------------------------------------------+
+//| Check Grid Loss for a specific TF                                  |
+//+------------------------------------------------------------------+
+void CheckGridLossTF(int tfIdx, ENUM_POSITION_TYPE side, int currentGridCount)
+{
+   if(currentGridCount >= GridLoss_MaxTrades) return;
+   if(TotalOrderCount() >= MaxOpenOrders) return;
+
+   // OnlyNewCandle check (per-TF)
+   if(GridLoss_OnlyNewCandle)
+   {
+      datetime barTime = iTime(_Symbol, g_tfStates[tfIdx].tf, 0);
+      if(barTime == g_tfStates[tfIdx].lastGridLossCandle) return;
+   }
+
+   // Find last order for this TF
+   double lastPrice = 0;
+   datetime lastTime = 0;
+   FindLastOrderTF(tfIdx, side, "INIT", "GL", lastPrice, lastTime);
+
+   // Fallback to TF initial price
+   if(lastPrice == 0)
+   {
+      if(side == POSITION_TYPE_BUY && g_tfStates[tfIdx].initialBuyPrice > 0)
+         lastPrice = g_tfStates[tfIdx].initialBuyPrice;
+      else if(side == POSITION_TYPE_SELL && g_tfStates[tfIdx].initialSellPrice > 0)
+         lastPrice = g_tfStates[tfIdx].initialSellPrice;
+      else
+         return;
+   }
+
+   // Same candle restriction
+   if(GridLoss_DontSameCandle)
+   {
+      datetime barTime = iTime(_Symbol, g_tfStates[tfIdx].tf, 0);
+      if(lastTime >= barTime) return;
+   }
+
+   // Copy ATR buffer for grid distance calculation
+   if(CopyBuffer(handleATR_Loss, 0, 0, 3, bufATR_Loss) < 3) return;
+
+   double distance = GetGridDistance(currentGridCount, true);
+   if(distance <= 0) return;
+
+   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   double currentPrice = (side == POSITION_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
+
+   bool shouldOpen = false;
+
+   if(GridLoss_GapType == GAP_ATR && GridLoss_ATR_Reference == ATR_REF_INITIAL)
+   {
+      double initialRef = (side == POSITION_TYPE_BUY) ? g_tfStates[tfIdx].initialBuyPrice : g_tfStates[tfIdx].initialSellPrice;
+      if(initialRef <= 0) return;
+      double totalDistance = distance * (currentGridCount + 1);
+      if(side == POSITION_TYPE_BUY)
+         shouldOpen = (currentPrice <= initialRef - totalDistance * point);
+      else
+         shouldOpen = (currentPrice >= initialRef + totalDistance * point);
+   }
+   else
+   {
+      if(side == POSITION_TYPE_BUY && currentPrice <= lastPrice - distance * point)
+         shouldOpen = true;
+      else if(side == POSITION_TYPE_SELL && currentPrice >= lastPrice + distance * point)
+         shouldOpen = true;
+   }
+
+   if(shouldOpen)
+   {
+      double lots = CalculateGridLot(currentGridCount, true);
+      string suffix = "GL#" + IntegerToString(currentGridCount + 1);
+      ENUM_ORDER_TYPE orderType = (side == POSITION_TYPE_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+      if(OpenOrderTF(tfIdx, orderType, lots, suffix))
+      {
+         g_tfStates[tfIdx].lastGridLossCandle = iTime(_Symbol, g_tfStates[tfIdx].tf, 0);
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Check Grid Profit for a specific TF                                |
+//+------------------------------------------------------------------+
+void CheckGridProfitTF(int tfIdx, ENUM_POSITION_TYPE side, int currentGridCount)
+{
+   if(currentGridCount >= GridProfit_MaxTrades) return;
+   if(TotalOrderCount() >= MaxOpenOrders) return;
+
+   if(GridProfit_OnlyNewCandle)
+   {
+      datetime barTime = iTime(_Symbol, g_tfStates[tfIdx].tf, 0);
+      if(barTime == g_tfStates[tfIdx].lastGridProfitCandle) return;
+   }
+
+   double lastPrice = 0;
+   datetime lastTime = 0;
+   FindLastOrderTF(tfIdx, side, "INIT", "GP", lastPrice, lastTime);
+
+   if(lastPrice == 0)
+   {
+      if(side == POSITION_TYPE_BUY && g_tfStates[tfIdx].initialBuyPrice > 0)
+         lastPrice = g_tfStates[tfIdx].initialBuyPrice;
+      else if(side == POSITION_TYPE_SELL && g_tfStates[tfIdx].initialSellPrice > 0)
+         lastPrice = g_tfStates[tfIdx].initialSellPrice;
+      else
+         return;
+   }
+
+   if(CopyBuffer(handleATR_Profit, 0, 0, 3, bufATR_Profit) < 3) return;
+
+   double distance = GetGridDistance(currentGridCount, false);
+   if(distance <= 0) return;
+
+   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   double currentPrice = (side == POSITION_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
+
+   bool shouldOpen = false;
+
+   if(GridProfit_GapType == GAP_ATR && GridProfit_ATR_Reference == ATR_REF_INITIAL)
+   {
+      double initialRef = (side == POSITION_TYPE_BUY) ? g_tfStates[tfIdx].initialBuyPrice : g_tfStates[tfIdx].initialSellPrice;
+      if(initialRef <= 0) return;
+      double totalDistance = distance * (currentGridCount + 1);
+      if(side == POSITION_TYPE_BUY)
+         shouldOpen = (currentPrice >= initialRef + totalDistance * point);
+      else
+         shouldOpen = (currentPrice <= initialRef - totalDistance * point);
+   }
+   else
+   {
+      if(side == POSITION_TYPE_BUY && currentPrice >= lastPrice + distance * point)
+         shouldOpen = true;
+      else if(side == POSITION_TYPE_SELL && currentPrice <= lastPrice - distance * point)
+         shouldOpen = true;
+   }
+
+   if(shouldOpen)
+   {
+      double lots = CalculateGridLot(currentGridCount, false);
+      string suffix = "GP#" + IntegerToString(currentGridCount + 1);
+      ENUM_ORDER_TYPE orderType = (side == POSITION_TYPE_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+      if(OpenOrderTF(tfIdx, orderType, lots, suffix))
+      {
+         g_tfStates[tfIdx].lastGridProfitCandle = iTime(_Symbol, g_tfStates[tfIdx].tf, 0);
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Manage TP/SL for a specific TF (basket per-TF)                     |
+//+------------------------------------------------------------------+
+void ManageTPSL_TF(int tfIdx)
+{
+   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   double bal = AccountInfoDouble(ACCOUNT_BALANCE);
+
+   //--- BUY side
+   double avgBuy = CalculateAveragePriceTF(tfIdx, POSITION_TYPE_BUY);
+   if(avgBuy > 0)
+   {
+      double plBuy = CalculateFloatingPL_TF(tfIdx, POSITION_TYPE_BUY);
+      double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+      bool closeTP = false;
+      bool closeSL = false;
+
+      if(!EnablePerOrderTrailing)
+      {
+         if(UseTP_Dollar && plBuy >= TP_DollarAmount) closeTP = true;
+         if(UseTP_Points && bid >= avgBuy + TP_Points * point) closeTP = true;
+         if(UseTP_PercentBalance && plBuy >= bal * TP_PercentBalance / 100.0) closeTP = true;
+      }
+
+      if(closeTP)
+      {
+         Print("TP HIT (", g_tfStates[tfIdx].tfLabel, " BUY): PL=", plBuy);
+         CloseAllSideTF(tfIdx, POSITION_TYPE_BUY);
+         g_tfStates[tfIdx].initialBuyPrice = 0;
+         ResetTrailingStateTF(tfIdx);
+         return;
+      }
+
+      if(EnableSL && !EnablePerOrderTrailing)
+      {
+         if(UseSL_Dollar && plBuy <= -SL_DollarAmount) closeSL = true;
+         if(UseSL_Points && bid <= avgBuy - SL_Points * point) closeSL = true;
+         if(UseSL_PercentBalance && plBuy <= -(bal * SL_PercentBalance / 100.0)) closeSL = true;
+
+         if(closeSL)
+         {
+            if(SL_ActionMode == SL_CLOSE_ALL_STOP)
+            {
+               CloseAllPositions();
+               g_eaStopped = true;
+               Print("EA STOPPED by SL Action (", g_tfStates[tfIdx].tfLabel, " BUY)");
+            }
+            else
+            {
+               CloseAllSideTF(tfIdx, POSITION_TYPE_BUY);
+               g_tfStates[tfIdx].initialBuyPrice = 0;
+               ResetTrailingStateTF(tfIdx);
+            }
+            return;
+         }
+      }
+   }
+
+   //--- SELL side
+   double avgSell = CalculateAveragePriceTF(tfIdx, POSITION_TYPE_SELL);
+   if(avgSell > 0)
+   {
+      double plSell = CalculateFloatingPL_TF(tfIdx, POSITION_TYPE_SELL);
+      double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+      bool closeTP2 = false;
+      bool closeSL2 = false;
+
+      if(!EnablePerOrderTrailing)
+      {
+         if(UseTP_Dollar && plSell >= TP_DollarAmount) closeTP2 = true;
+         if(UseTP_Points && ask <= avgSell - TP_Points * point) closeTP2 = true;
+         if(UseTP_PercentBalance && plSell >= bal * TP_PercentBalance / 100.0) closeTP2 = true;
+      }
+
+      if(closeTP2)
+      {
+         Print("TP HIT (", g_tfStates[tfIdx].tfLabel, " SELL): PL=", plSell);
+         CloseAllSideTF(tfIdx, POSITION_TYPE_SELL);
+         g_tfStates[tfIdx].initialSellPrice = 0;
+         ResetTrailingStateTF(tfIdx);
+         return;
+      }
+
+      if(EnableSL && !EnablePerOrderTrailing)
+      {
+         if(UseSL_Dollar && plSell <= -SL_DollarAmount) closeSL2 = true;
+         if(UseSL_Points && ask >= avgSell + SL_Points * point) closeSL2 = true;
+         if(UseSL_PercentBalance && plSell <= -(bal * SL_PercentBalance / 100.0)) closeSL2 = true;
+
+         if(closeSL2)
+         {
+            if(SL_ActionMode == SL_CLOSE_ALL_STOP)
+            {
+               CloseAllPositions();
+               g_eaStopped = true;
+               Print("EA STOPPED by SL Action (", g_tfStates[tfIdx].tfLabel, " SELL)");
+            }
+            else
+            {
+               CloseAllSideTF(tfIdx, POSITION_TYPE_SELL);
+               g_tfStates[tfIdx].initialSellPrice = 0;
+               ResetTrailingStateTF(tfIdx);
+            }
+            return;
+         }
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Manage Average-Based Trailing Stop for a specific TF               |
+//+------------------------------------------------------------------+
+void ManageTrailingStop_TF(int tfIdx)
+{
+   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+
+   //--- BUY side
+   double avgBuy = CalculateAveragePriceTF(tfIdx, POSITION_TYPE_BUY);
+   if(avgBuy > 0)
+   {
+      double beLevel = avgBuy + BreakevenBuffer * point;
+
+      if(EnableTrailingStop)
+      {
+         double trailAct = avgBuy + TrailingActivation * point;
+         if(bid >= trailAct)
+         {
+            g_tfStates[tfIdx].trailActive_Buy = true;
+            double newSL = bid - TrailingStep * point;
+            newSL = MathMax(newSL, beLevel);
+            if(newSL > g_tfStates[tfIdx].trailSL_Buy)
+            {
+               g_tfStates[tfIdx].trailSL_Buy = newSL;
+               ApplyTrailingSL_TF(tfIdx, POSITION_TYPE_BUY, newSL);
+            }
+         }
+      }
+
+      if(EnableBreakeven && !g_tfStates[tfIdx].beDone_Buy)
+      {
+         double beAct = avgBuy + BreakevenActivation * point;
+         if(bid >= beAct)
+         {
+            g_tfStates[tfIdx].beDone_Buy = true;
+            if(g_tfStates[tfIdx].trailSL_Buy < beLevel)
+            {
+               g_tfStates[tfIdx].trailSL_Buy = beLevel;
+               ApplyTrailingSL_TF(tfIdx, POSITION_TYPE_BUY, beLevel);
+            }
+         }
+      }
+
+      if(g_tfStates[tfIdx].trailActive_Buy && g_tfStates[tfIdx].trailSL_Buy > 0 && bid <= g_tfStates[tfIdx].trailSL_Buy)
+      {
+         Print("TRAILING SL HIT (", g_tfStates[tfIdx].tfLabel, " BUY): SL=", g_tfStates[tfIdx].trailSL_Buy);
+         CloseAllSideTF(tfIdx, POSITION_TYPE_BUY);
+         g_tfStates[tfIdx].initialBuyPrice = 0;
+         ResetTrailingStateTF(tfIdx);
+         return;
+      }
+   }
+   else
+   {
+      g_tfStates[tfIdx].trailSL_Buy = 0;
+      g_tfStates[tfIdx].trailActive_Buy = false;
+      g_tfStates[tfIdx].beDone_Buy = false;
+   }
+
+   //--- SELL side
+   double avgSell = CalculateAveragePriceTF(tfIdx, POSITION_TYPE_SELL);
+   if(avgSell > 0)
+   {
+      double beLevelSell = avgSell - BreakevenBuffer * point;
+
+      if(EnableTrailingStop)
+      {
+         double trailActSell = avgSell - TrailingActivation * point;
+         if(ask <= trailActSell)
+         {
+            g_tfStates[tfIdx].trailActive_Sell = true;
+            double newSL = ask + TrailingStep * point;
+            newSL = MathMin(newSL, beLevelSell);
+            if(g_tfStates[tfIdx].trailSL_Sell == 0 || newSL < g_tfStates[tfIdx].trailSL_Sell)
+            {
+               g_tfStates[tfIdx].trailSL_Sell = newSL;
+               ApplyTrailingSL_TF(tfIdx, POSITION_TYPE_SELL, newSL);
+            }
+         }
+      }
+
+      if(EnableBreakeven && !g_tfStates[tfIdx].beDone_Sell)
+      {
+         double beActSell = avgSell - BreakevenActivation * point;
+         if(ask <= beActSell)
+         {
+            g_tfStates[tfIdx].beDone_Sell = true;
+            if(g_tfStates[tfIdx].trailSL_Sell == 0 || g_tfStates[tfIdx].trailSL_Sell > beLevelSell)
+            {
+               g_tfStates[tfIdx].trailSL_Sell = beLevelSell;
+               ApplyTrailingSL_TF(tfIdx, POSITION_TYPE_SELL, beLevelSell);
+            }
+         }
+      }
+
+      if(g_tfStates[tfIdx].trailActive_Sell && g_tfStates[tfIdx].trailSL_Sell > 0 && ask >= g_tfStates[tfIdx].trailSL_Sell)
+      {
+         Print("TRAILING SL HIT (", g_tfStates[tfIdx].tfLabel, " SELL): SL=", g_tfStates[tfIdx].trailSL_Sell);
+         CloseAllSideTF(tfIdx, POSITION_TYPE_SELL);
+         g_tfStates[tfIdx].initialSellPrice = 0;
+         ResetTrailingStateTF(tfIdx);
+         return;
+      }
+   }
+   else
+   {
+      g_tfStates[tfIdx].trailSL_Sell = 0;
+      g_tfStates[tfIdx].trailActive_Sell = false;
+      g_tfStates[tfIdx].beDone_Sell = false;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Apply trailing SL to positions of a TF side                        |
+//+------------------------------------------------------------------+
+void ApplyTrailingSL_TF(int tfIdx, ENUM_POSITION_TYPE side, double slPrice)
+{
+   string prefix = "GM_" + g_tfStates[tfIdx].tfLabel + "_";
+   int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+   slPrice = NormalizeDouble(slPrice, digits);
+
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if(PositionGetInteger(POSITION_TYPE) != side) continue;
+      if(StringFind(PositionGetString(POSITION_COMMENT), prefix) < 0) continue;
+
+      double currentSL = PositionGetDouble(POSITION_SL);
+      double tp = PositionGetDouble(POSITION_TP);
+
+      if(side == POSITION_TYPE_BUY)
+      {
+         if(currentSL == 0 || slPrice > currentSL)
+            trade.PositionModify(ticket, slPrice, tp);
+      }
+      else
+      {
+         if(currentSL == 0 || slPrice < currentSL)
+            trade.PositionModify(ticket, slPrice, tp);
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Manage Shared Accumulate Close (ZigZag mode)                       |
+//+------------------------------------------------------------------+
+void ManageAccumulateShared()
+{
+   if(!UseAccumulateClose) return;
+
+   double totalHistory = CalcTotalHistoryProfit();
+   g_accumulatedProfit = totalHistory - g_accumulateBaseline;
+
+   double totalFloating = CalculateTotalFloatingPL();
+   double accumTotal = g_accumulatedProfit + totalFloating;
+
+   if(accumTotal >= AccumulateTarget && accumTotal > 0 && g_accumulatedProfit > 0)
+   {
+      Print("ACCUMULATE TARGET HIT: ", accumTotal, " / ", AccumulateTarget);
+      CloseAllPositions();
+      Sleep(500);
+      double newHistory = CalcTotalHistoryProfit();
+      g_accumulateBaseline = newHistory;
+      g_accumulatedProfit = 0;
+
+      // Reset all TF states
+      for(int t = 0; t < g_activeTFCount; t++)
+      {
+         g_tfStates[t].initialBuyPrice = 0;
+         g_tfStates[t].initialSellPrice = 0;
+         ResetTrailingStateTF(t);
+      }
+
+      Print("Accumulate cycle reset (ZZ). New baseline: ", newHistory);
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Main ZigZag MTF OnTick Handler                                     |
+//+------------------------------------------------------------------+
+void OnTickZigZagMTF()
+{
+   // Step 1: Update CDC (if enabled)
+   if(InpUseCDCFilter) UpdateCDC();
+
+   // Step 2: Check H4 ZigZag direction (only on new H4 bar)
+   if(g_h4TFIndex >= 0)
+   {
+      datetime h4Bar = iTime(_Symbol, ZZ_ConfirmTF, 0);
+      if(h4Bar != g_lastH4Bar)
+      {
+         g_lastH4Bar = h4Bar;
+         string h4Swing = DetectZigZagSwing(g_h4TFIndex);
+         if(h4Swing == "LOW") g_h4Direction = "BUY";
+         else if(h4Swing == "HIGH") g_h4Direction = "SELL";
+         // else keep previous direction
+      }
+   }
+
+   // Step 3: Apply CDC filter to direction
+   string effectiveDirection = g_h4Direction;
+   if(InpUseCDCFilter && g_cdcReady)
+   {
+      if(effectiveDirection == "BUY" && g_cdcTrend == "BEARISH") effectiveDirection = "NONE";
+      if(effectiveDirection == "SELL" && g_cdcTrend == "BULLISH") effectiveDirection = "NONE";
+   }
+
+   // Step 4: Process each enabled sub-TF
+   for(int t = 0; t < g_activeTFCount; t++)
+   {
+      if(!g_tfStates[t].enabled) continue;
+
+      datetime tfBar = iTime(_Symbol, g_tfStates[t].tf, 0);
+
+      // Per-TF trailing (average-based, non per-order)
+      if(!EnablePerOrderTrailing && (EnableTrailingStop || EnableBreakeven))
+      {
+         ManageTrailingStop_TF(t);
+      }
+
+      // Per-TF TP/SL
+      ManageTPSL_TF(t);
+
+      // Count positions for this TF
+      int tfBuyCount = 0, tfSellCount = 0;
+      int tfGLBuy = 0, tfGLSell = 0, tfGPBuy = 0, tfGPSell = 0;
+      bool tfHasInitBuy = false, tfHasInitSell = false;
+      CountPositionsTF(t, tfBuyCount, tfSellCount, tfGLBuy, tfGLSell, tfGPBuy, tfGPSell, tfHasInitBuy, tfHasInitSell);
+
+      // Auto-detect broker-closed positions per TF
+      if(tfBuyCount == 0 && g_tfStates[t].initialBuyPrice != 0)
+      {
+         Print(g_tfStates[t].tfLabel, " BUY cycle ended (broker). Resetting.");
+         g_tfStates[t].initialBuyPrice = 0;
+      }
+      if(tfSellCount == 0 && g_tfStates[t].initialSellPrice != 0)
+      {
+         Print(g_tfStates[t].tfLabel, " SELL cycle ended (broker). Resetting.");
+         g_tfStates[t].initialSellPrice = 0;
+      }
+
+      // Grid management
+      if(!g_newOrderBlocked)
+      {
+         // Grid Loss
+         if((tfHasInitBuy || g_tfStates[t].initialBuyPrice > 0) && tfGLBuy < GridLoss_MaxTrades && tfBuyCount > 0)
+            CheckGridLossTF(t, POSITION_TYPE_BUY, tfGLBuy);
+         if((tfHasInitSell || g_tfStates[t].initialSellPrice > 0) && tfGLSell < GridLoss_MaxTrades && tfSellCount > 0)
+            CheckGridLossTF(t, POSITION_TYPE_SELL, tfGLSell);
+
+         // Grid Profit
+         if(GridProfit_Enable)
+         {
+            if((tfHasInitBuy || g_tfStates[t].initialBuyPrice > 0) && tfGPBuy < GridProfit_MaxTrades && tfBuyCount > 0)
+               CheckGridProfitTF(t, POSITION_TYPE_BUY, tfGPBuy);
+            if((tfHasInitSell || g_tfStates[t].initialSellPrice > 0) && tfGPSell < GridProfit_MaxTrades && tfSellCount > 0)
+               CheckGridProfitTF(t, POSITION_TYPE_SELL, tfGPSell);
+         }
+      }
+
+      // Entry check: sub-TF ZigZag must agree with H4 direction
+      if(!g_newOrderBlocked && effectiveDirection != "NONE")
+      {
+         bool canOpenMore = TotalOrderCount() < MaxOpenOrders;
+         bool canOpenThisCandle = !(DontOpenSameCandle && tfBar == g_tfStates[t].lastInitialCandle);
+
+         // Detect sub-TF swing
+         string subSwing = DetectZigZagSwing(t);
+
+         // BUY entry
+         if(effectiveDirection == "BUY" && subSwing == "LOW" && tfBuyCount == 0
+            && g_tfStates[t].initialBuyPrice == 0 && canOpenMore && canOpenThisCandle
+            && (TradingMode == TRADE_BUY_ONLY || TradingMode == TRADE_BOTH))
+         {
+            bool shouldEnter = true;
+            if(g_tfStates[t].justClosedBuy && !EnableAutoReEntry)
+               shouldEnter = false;
+
+            if(shouldEnter)
+            {
+               if(OpenOrderTF(t, ORDER_TYPE_BUY, InitialLotSize, "INIT"))
+               {
+                  g_tfStates[t].initialBuyPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+                  g_tfStates[t].lastInitialCandle = tfBar;
+                  ResetTrailingStateTF(t);
+                  Print(g_tfStates[t].tfLabel, " ZigZag BUY INIT at ", g_tfStates[t].initialBuyPrice);
+               }
+            }
+         }
+
+         // SELL entry
+         if(effectiveDirection == "SELL" && subSwing == "HIGH" && tfSellCount == 0
+            && g_tfStates[t].initialSellPrice == 0 && canOpenMore && canOpenThisCandle
+            && (TradingMode == TRADE_SELL_ONLY || TradingMode == TRADE_BOTH))
+         {
+            bool shouldEnter = true;
+            if(g_tfStates[t].justClosedSell && !EnableAutoReEntry)
+               shouldEnter = false;
+
+            if(shouldEnter)
+            {
+               if(OpenOrderTF(t, ORDER_TYPE_SELL, InitialLotSize, "INIT"))
+               {
+                  g_tfStates[t].initialSellPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+                  g_tfStates[t].lastInitialCandle = tfBar;
+                  ResetTrailingStateTF(t);
+                  Print(g_tfStates[t].tfLabel, " ZigZag SELL INIT at ", g_tfStates[t].initialSellPrice);
+               }
+            }
+         }
+      }
+
+      // Reset justClosed flags when not blocked
+      if(!g_newOrderBlocked)
+      {
+         g_tfStates[t].justClosedBuy = false;
+         g_tfStates[t].justClosedSell = false;
+      }
+   }
+
+   // Step 5: Shared Accumulate Close
+   ManageAccumulateShared();
+}
+
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
 //| ============== LICENSE MODULE (from v5.34) ===================== |
 //+------------------------------------------------------------------+
 
