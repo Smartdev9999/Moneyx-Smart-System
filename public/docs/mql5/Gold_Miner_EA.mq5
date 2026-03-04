@@ -691,29 +691,38 @@ double CalcDailyPL()
 
 void OnTick()
 {
-   // === HIDE ATR CHART IN BACKTEST (v2.9) ===
+   // === HIDE ATR CHART IN BACKTEST (v2.9 / v3.0 simplified) ===
+   // When InpSkipATRInTester=true, no ATR handles exist so no subwindow is created.
+   // Fallback: if handles exist (InpSkipATRInTester=false), try to hide subwindow.
    if(!g_atrChartHidden && (MQLInfoInteger(MQL_TESTER) || MQLInfoInteger(MQL_VISUAL_MODE)))
    {
-      g_atrHideAttempts++;
-      int totalWindows = (int)ChartGetInteger(0, CHART_WINDOWS_TOTAL);
-      bool found = false;
-      for(int sw = totalWindows - 1; sw > 0; sw--)
+      if(g_isTesterMode && InpSkipATRInTester)
       {
-         int indCount = ChartIndicatorsTotal(0, sw);
-         for(int j = indCount - 1; j >= 0; j--)
+         g_atrChartHidden = true; // No ATR handle = no subwindow
+      }
+      else
+      {
+         g_atrHideAttempts++;
+         int totalWindows = (int)ChartGetInteger(0, CHART_WINDOWS_TOTAL);
+         bool found = false;
+         for(int sw = totalWindows - 1; sw > 0; sw--)
          {
-            string indName = ChartIndicatorName(0, sw, j);
-            if(StringFind(indName, "ATR") >= 0)
+            int indCount = ChartIndicatorsTotal(0, sw);
+            for(int j = indCount - 1; j >= 0; j--)
             {
-               ChartIndicatorDelete(0, sw, indName);
-               found = true;
+               string indName = ChartIndicatorName(0, sw, j);
+               if(StringFind(indName, "ATR") >= 0)
+               {
+                  ChartIndicatorDelete(0, sw, indName);
+                  found = true;
+               }
             }
          }
-      }
-      if(found || g_atrHideAttempts >= 50)
-      {
-         g_atrChartHidden = true;
-         ChartRedraw(0);
+         if(found || g_atrHideAttempts >= 50)
+         {
+            g_atrChartHidden = true;
+            ChartRedraw(0);
+         }
       }
    }
 
