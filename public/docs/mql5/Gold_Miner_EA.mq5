@@ -477,7 +477,14 @@ int OnInit()
    //--- Recover initial prices from existing positions
    RecoverInitialPrices();
 
-   Print("Gold Miner EA v2.9 initialized successfully");
+   // === ZigZag MTF Init (v3.0) ===
+   if(EntryMode == ENTRY_ZIGZAG)
+   {
+      InitZigZagHandles();
+      RecoverTFInitialPrices();
+   }
+
+   Print("Gold Miner EA v3.0 initialized successfully");
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
