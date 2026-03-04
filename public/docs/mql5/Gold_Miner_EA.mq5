@@ -45,6 +45,12 @@ enum ENUM_TRADE_MODE
    TRADE_BOTH      = 2   // Buy and Sell
 };
 
+enum ENUM_ENTRY_MODE
+{
+   ENTRY_SMA      = 0,  // SMA Mode (Original)
+   ENTRY_ZIGZAG   = 1   // ZigZag Multi-Timeframe Mode
+};
+
 // License Status Enumeration
 enum ENUM_LICENSE_STATUS
 {
