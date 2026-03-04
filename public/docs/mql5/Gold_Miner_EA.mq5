@@ -199,6 +199,10 @@ input int      DashboardX           = 20;      // Dashboard X Position
 input int      DashboardY           = 30;      // Dashboard Y Position
 input color    DashboardColor       = clrWhite; // Dashboard Text Color
 
+//--- Backtest Optimization
+input group "=== Backtest Optimization ==="
+input bool     InpSkipATRInTester   = true;    // Skip ATR Indicator in Tester (use Simplified)
+
 //--- License Settings
 input group "=== License Settings ==="
 input string   InpLicenseServer     = "https://lkbhomsulgycxawwlnfh.supabase.co";  // License Server URL
