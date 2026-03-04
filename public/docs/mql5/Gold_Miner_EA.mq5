@@ -510,6 +510,13 @@ void OnDeinit(const int reason)
    if(handleATR_Loss != INVALID_HANDLE) IndicatorRelease(handleATR_Loss);
    if(handleATR_Profit != INVALID_HANDLE) IndicatorRelease(handleATR_Profit);
 
+   // Release ZigZag indicator handles
+   for(int zz = 0; zz < g_activeTFCount; zz++)
+   {
+      if(g_tfStates[zz].handleZZ != INVALID_HANDLE)
+         IndicatorRelease(g_tfStates[zz].handleZZ);
+   }
+
    ObjectDelete(0, "GM_AvgBuyLine");
    ObjectDelete(0, "GM_AvgSellLine");
    ObjectDelete(0, "GM_TPBuyLine");
@@ -519,7 +526,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_TBL_");
    ObjectsDeleteAll(0, "GM_Btn");
 
-   Print("Gold Miner EA v2.9 deinitialized");
+   Print("Gold Miner EA v3.0 deinitialized");
 }
 
 //+------------------------------------------------------------------+
