@@ -1916,7 +1916,15 @@ double GetGridDistance(int level, bool isLossSide)
       }
       else // ATR - use index 1 (closed bar) to prevent repaint
       {
-         double atrVal = (ArraySize(bufATR_Loss) > 1 && bufATR_Loss[1] > 0) ? bufATR_Loss[1] : bufATR_Loss[0];
+         double atrVal = 0;
+         if(g_isTesterMode && InpSkipATRInTester)
+         {
+            atrVal = CalculateSimplifiedATR(_Symbol, GridLoss_ATR_TF, GridLoss_ATR_Period);
+         }
+         else
+         {
+            atrVal = (ArraySize(bufATR_Loss) > 1 && bufATR_Loss[1] > 0) ? bufATR_Loss[1] : bufATR_Loss[0];
+         }
          if(atrVal > 0)
          {
             double atrDistance = atrVal * GridLoss_ATR_Multiplier / point;
@@ -1939,7 +1947,15 @@ double GetGridDistance(int level, bool isLossSide)
       }
       else // ATR - use index 1 (closed bar) to prevent repaint
       {
-         double atrVal = (ArraySize(bufATR_Profit) > 1 && bufATR_Profit[1] > 0) ? bufATR_Profit[1] : bufATR_Profit[0];
+         double atrVal = 0;
+         if(g_isTesterMode && InpSkipATRInTester)
+         {
+            atrVal = CalculateSimplifiedATR(_Symbol, GridProfit_ATR_TF, GridProfit_ATR_Period);
+         }
+         else
+         {
+            atrVal = (ArraySize(bufATR_Profit) > 1 && bufATR_Profit[1] > 0) ? bufATR_Profit[1] : bufATR_Profit[0];
+         }
          if(atrVal > 0)
          {
             double atrDistance = atrVal * GridProfit_ATR_Multiplier / point;
