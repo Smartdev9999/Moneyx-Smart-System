@@ -2654,32 +2654,37 @@ string DetectZigZagSwing(int tfIndex)
 {
    if(g_tfStates[tfIndex].handleZZ == INVALID_HANDLE) return "NONE";
 
-   double zzBuf[];
-   ArraySetAsSeries(zzBuf, true);
-   if(CopyBuffer(g_tfStates[tfIndex].handleZZ, 0, 0, 100, zzBuf) < 100)
-      return "NONE";
+   // Buffer 1 = High Map (Swing High points), Buffer 2 = Low Map (Swing Low points)
+   double zzHighMap[], zzLowMap[];
+   ArraySetAsSeries(zzHighMap, true);
+   ArraySetAsSeries(zzLowMap, true);
+   if(CopyBuffer(g_tfStates[tfIndex].handleZZ, 1, 0, 100, zzHighMap) < 100) return "NONE";
+   if(CopyBuffer(g_tfStates[tfIndex].handleZZ, 2, 0, 100, zzLowMap) < 100) return "NONE";
 
-   // Find first non-zero value (latest swing point) - skip bar 0 (forming)
+   // Find most recent Swing High and Swing Low bar indices (skip bar 0 = forming)
+   int lastHighBar = -1, lastLowBar = -1;
+   double lastHighPrice = 0, lastLowPrice = 0;
    for(int i = 1; i < 100; i++)
    {
-      if(zzBuf[i] != 0.0)
-      {
-         double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-         if(zzBuf[i] < price)
-         {
-            g_tfStates[tfIndex].lastSwingPrice = zzBuf[i];
-            g_tfStates[tfIndex].lastSwingType = "LOW";
-            g_tfStates[tfIndex].lastSwingTime = iTime(_Symbol, g_tfStates[tfIndex].tf, i);
-            return "LOW";
-         }
-         else
-         {
-            g_tfStates[tfIndex].lastSwingPrice = zzBuf[i];
-            g_tfStates[tfIndex].lastSwingType = "HIGH";
-            g_tfStates[tfIndex].lastSwingTime = iTime(_Symbol, g_tfStates[tfIndex].tf, i);
-            return "HIGH";
-         }
-      }
+      if(lastHighBar < 0 && zzHighMap[i] != 0.0) { lastHighBar = i; lastHighPrice = zzHighMap[i]; }
+      if(lastLowBar  < 0 && zzLowMap[i]  != 0.0) { lastLowBar  = i; lastLowPrice  = zzLowMap[i];  }
+      if(lastHighBar >= 0 && lastLowBar >= 0) break;
+   }
+
+   // Determine which swing is more recent (lower bar index = more recent)
+   if(lastLowBar >= 0 && (lastHighBar < 0 || lastLowBar < lastHighBar))
+   {
+      g_tfStates[tfIndex].lastSwingPrice = lastLowPrice;
+      g_tfStates[tfIndex].lastSwingType  = "LOW";
+      g_tfStates[tfIndex].lastSwingTime  = iTime(_Symbol, g_tfStates[tfIndex].tf, lastLowBar);
+      return "LOW";
+   }
+   else if(lastHighBar >= 0)
+   {
+      g_tfStates[tfIndex].lastSwingPrice = lastHighPrice;
+      g_tfStates[tfIndex].lastSwingType  = "HIGH";
+      g_tfStates[tfIndex].lastSwingTime  = iTime(_Symbol, g_tfStates[tfIndex].tf, lastHighBar);
+      return "HIGH";
    }
    return "NONE";
 }
