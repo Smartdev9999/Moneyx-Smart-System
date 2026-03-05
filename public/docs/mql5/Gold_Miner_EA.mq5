@@ -3564,7 +3564,11 @@ void OnTickZigZagMTF()
       }
    }
 
-   // Step 5: Shared Accumulate Close
+   // Step 5: Matching Close (ZigZag mode - new bar already confirmed)
+   if(UseMatchingClose)
+      ManageMatchingClose();
+
+   // Step 6: Shared Accumulate Close
    ManageAccumulateShared();
 }
 
