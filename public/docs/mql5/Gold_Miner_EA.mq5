@@ -306,6 +306,7 @@ double         g_initialBuyPrice;   // track initial order price for grid fallba
 double         g_initialSellPrice;  // track initial order price for grid fallback
 double         g_accumulateBaseline; // Total history profit at last cycle reset
 double         g_maxDD;             // Track max drawdown
+bool           g_hadPositions;      // Track if we had positions (for accumulate auto-reset)
 
 // Dashboard Control Variables (v2.9)
 bool           g_eaIsPaused = false;           // EA Pause State (manual)
@@ -483,6 +484,7 @@ int OnInit()
    g_initialSellPrice = 0;
    g_accumulateBaseline = 0;
    g_maxDD = 0;
+   g_hadPositions = (TotalOrderCount() > 0);  // detect if positions already exist on init
 
    //--- Calculate baseline for accumulate (FRESH START: only new deals count)
    if(UseAccumulateClose)
@@ -1356,6 +1358,18 @@ void ManageTPSL()
    //--- Accumulate Close (baseline method) - recalculate every tick from deal history
    if(UseAccumulateClose)
    {
+      //--- Auto-reset baseline when all positions are closed (cycle ended)
+      int currentCount = TotalOrderCount();
+      if(g_hadPositions && currentCount == 0)
+      {
+         g_accumulateBaseline = CalcTotalHistoryProfit();
+         g_accumulatedProfit = 0;
+         g_hadPositions = false;
+         Print("Accumulate auto-reset: no positions left. New baseline: ", g_accumulateBaseline);
+         return;
+      }
+      if(currentCount > 0) g_hadPositions = true;
+
       double totalHistory = CalcTotalHistoryProfit();
       g_accumulatedProfit = totalHistory - g_accumulateBaseline;
 
@@ -1371,6 +1385,7 @@ void ManageTPSL()
          double newHistory = CalcTotalHistoryProfit();
          g_accumulateBaseline = newHistory;
          g_accumulatedProfit = 0;
+         g_hadPositions = false;
          Print("Accumulate cycle reset. New baseline: ", newHistory);
       }
    }
@@ -3394,6 +3409,18 @@ void ManageAccumulateShared()
 {
    if(!UseAccumulateClose) return;
 
+   //--- Auto-reset baseline when all positions are closed (cycle ended)
+   int currentCount = TotalOrderCount();
+   if(g_hadPositions && currentCount == 0)
+   {
+      g_accumulateBaseline = CalcTotalHistoryProfit();
+      g_accumulatedProfit = 0;
+      g_hadPositions = false;
+      Print("Accumulate auto-reset (ZZ): no positions left. New baseline: ", g_accumulateBaseline);
+      return;
+   }
+   if(currentCount > 0) g_hadPositions = true;
+
    double totalHistory = CalcTotalHistoryProfit();
    g_accumulatedProfit = totalHistory - g_accumulateBaseline;
 
@@ -3408,6 +3435,7 @@ void ManageAccumulateShared()
       double newHistory = CalcTotalHistoryProfit();
       g_accumulateBaseline = newHistory;
       g_accumulatedProfit = 0;
+      g_hadPositions = false;
 
       // Reset all TF states
       for(int t = 0; t < g_activeTFCount; t++)
