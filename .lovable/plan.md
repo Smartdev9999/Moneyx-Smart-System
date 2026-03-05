@@ -1,66 +1,46 @@
 
 
-## แก้ไข ATR Chart ไม่ถูกซ่อนใน Backtest
+## แก้ไข Accumulate Close — Reset Baseline เมื่อไม่มี Order เหลือ
 
-### สาเหตุ
-
-โค้ดปัจจุบันพยายามลบ ATR subwindow เพียง **tick แรก** เท่านั้น (`g_atrChartHidden = true` ทันที) แต่ปัญหาคือ:
-
-1. ใน tick แรกของ Strategy Tester, ATR subwindow อาจยังไม่ถูกสร้างขึ้น (indicator ยังไม่ render)
-2. เมื่อ flag ถูกตั้งเป็น `true` แล้ว จะไม่ลองลบอีกเลย
-3. `iATR()` สร้าง 2 handles (`handleATR_Loss`, `handleATR_Profit`) ซึ่งอาจสร้าง subwindow แยกกัน
-
-### ไฟล์ที่แก้ไข
-
-`public/docs/mql5/Gold_Miner_EA.mq5` (ไฟล์เดียว)
+### ปัญหา
+`CalcTotalHistoryProfit()` รวมกำไรทุก deal ตั้งแต่ต้น ดังนั้น `g_accumulatedProfit = totalHistory - g_accumulateBaseline` จะยังจำกำไรจาก order ที่ปิดไปก่อนหน้า (เช่น ปิดจาก TP, Matching Close, หรือ manual) แม้ว่าจะไม่มี order เหลือแล้วก็ตาม เมื่อเปิด order ชุดใหม่ ระบบยังนับกำไรเก่าต่อ ทำให้อาจ trigger AccumulateTarget เร็วเกินไป
 
 ### วิธีแก้ไข
-
-เปลี่ยนจาก "ลบครั้งเดียวแล้วหยุด" เป็น "ลองลบทุก tick จนกว่าจะลบสำเร็จหรือครบ 50 tick"
+เพิ่ม global flag `g_hadPositions` เพื่อตรวจจับว่า "เคยมี order → ตอนนี้ไม่มีแล้ว" (transition to zero) แล้ว reset baseline ทันที:
 
 ```text
-// แก้ไข global variable
-bool g_atrChartHidden = false;
-int  g_atrHideAttempts = 0;        // เพิ่มตัวนับ
+// Global
+bool g_hadPositions = false;
 
-// แก้ไข logic ใน OnTick():
-if(!g_atrChartHidden && (MQLInfoInteger(MQL_TESTER) || MQLInfoInteger(MQL_VISUAL_MODE)))
+// ใน Accumulate logic (ทั้ง SMA และ ZigZag mode):
+int currentCount = TotalOrderCount();
+if(g_hadPositions && currentCount == 0)
 {
-   g_atrHideAttempts++;
-   int totalWindows = (int)ChartGetInteger(0, CHART_WINDOWS_TOTAL);
-   bool found = false;
-   for(int sw = totalWindows - 1; sw > 0; sw--)
-   {
-      int indCount = ChartIndicatorsTotal(0, sw);
-      for(int j = indCount - 1; j >= 0; j--)
-      {
-         string indName = ChartIndicatorName(0, sw, j);
-         if(StringFind(indName, "ATR") >= 0)
-         {
-            ChartIndicatorDelete(0, sw, indName);
-            found = true;
-         }
-      }
-   }
-   // หยุดเมื่อลบสำเร็จ หรือพยายามครบ 50 tick แล้ว
-   if(found || g_atrHideAttempts >= 50)
-   {
-      g_atrChartHidden = true;
-      ChartRedraw(0);
-   }
+   // ไม่มี order เหลือแล้ว → reset baseline เริ่มนับรอบใหม่
+   g_accumulateBaseline = CalcTotalHistoryProfit();
+   g_accumulatedProfit = 0;
+   g_hadPositions = false;
+   Print("Accumulate auto-reset: no positions left. New baseline: ", g_accumulateBaseline);
+   return;
 }
+if(currentCount > 0) g_hadPositions = true;
+
+// จากนั้นทำ accumulate logic ปกติ...
 ```
 
-### สิ่งที่เปลี่ยน
+แก้ 3 จุด:
+1. เพิ่ม `g_hadPositions` global variable + init ใน OnInit
+2. เพิ่ม reset logic ใน `ManageTPSL()` (SMA mode, ~บรรทัด 1357)
+3. เพิ่ม reset logic ใน `ManageAccumulateShared()` (ZigZag mode, ~บรรทัด 3395)
 
-- เพิ่ม `g_atrHideAttempts` counter เพื่อลองลบซ้ำหลาย tick
-- เปลี่ยน inner loop ให้ iterate ย้อนกลับ (`j = indCount - 1; j >= 0; j--`) เพื่อป้องกัน index shift เมื่อลบ
-- ตั้ง `g_atrChartHidden = true` ก็ต่อเมื่อลบสำเร็จจริง หรือพยายามครบ 50 tick
+### ไฟล์ที่แก้ไข
+`public/docs/mql5/Gold_Miner_EA.mq5` (ไฟล์เดียว)
 
-### สิ่งที่ไม่เปลี่ยนแปลง
-
-- Trading logic ทั้งหมด (SMA, Grid, TP/SL, Trailing, Drawdown, Entry)
-- News/Time Filter logic
-- Dashboard + Buttons
-- License module
+### สิ่งที่ไม่เปลี่ยนแปลง (กฎเหล็ก)
+- Order Execution Logic — ไม่แตะ
+- Grid Entry/Exit Logic — ไม่แตะ
+- TP/SL/Trailing/Accumulate calculation formula — ไม่แตะ (แก้แค่ timing ของ baseline reset)
+- SMA Signal / ZigZag MTF Signal — ไม่แตะ
+- License / News / Time Filter — ไม่แตะ
+- Matching Close Logic — ไม่แตะ
 
