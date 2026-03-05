@@ -3388,7 +3388,7 @@ void ManageAccumulateShared()
    double totalFloating = CalculateTotalFloatingPL();
    double accumTotal = g_accumulatedProfit + totalFloating;
 
-   if(accumTotal >= AccumulateTarget && accumTotal > 0 && g_accumulatedProfit > 0)
+   if(accumTotal >= AccumulateTarget && accumTotal > 0)  // trigger on total (closed + floating)
    {
       Print("ACCUMULATE TARGET HIT: ", accumTotal, " / ", AccumulateTarget);
       CloseAllPositions();
