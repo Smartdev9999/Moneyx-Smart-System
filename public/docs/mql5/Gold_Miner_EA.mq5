@@ -809,6 +809,18 @@ void OnTick()
       ManageTPSL();
    // ZigZag mode: per-TF TP/SL + shared accumulate handled in OnTickZigZagMTF()
 
+   //--- New bar only: Matching Close (pair profit vs loss orders)
+   {
+      datetime mcBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
+      static datetime s_lastMatchingBarTime = 0;
+      if(mcBarTime != s_lastMatchingBarTime)
+      {
+         s_lastMatchingBarTime = mcBarTime;
+         if(UseMatchingClose)
+            ManageMatchingClose();
+      }
+   }
+
    //--- Every tick: Drawdown check
    CheckDrawdownExit();
 
