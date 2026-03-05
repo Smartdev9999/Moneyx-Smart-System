@@ -1358,6 +1358,18 @@ void ManageTPSL()
    //--- Accumulate Close (baseline method) - recalculate every tick from deal history
    if(UseAccumulateClose)
    {
+      //--- Auto-reset baseline when all positions are closed (cycle ended)
+      int currentCount = TotalOrderCount();
+      if(g_hadPositions && currentCount == 0)
+      {
+         g_accumulateBaseline = CalcTotalHistoryProfit();
+         g_accumulatedProfit = 0;
+         g_hadPositions = false;
+         Print("Accumulate auto-reset: no positions left. New baseline: ", g_accumulateBaseline);
+         return;
+      }
+      if(currentCount > 0) g_hadPositions = true;
+
       double totalHistory = CalcTotalHistoryProfit();
       g_accumulatedProfit = totalHistory - g_accumulateBaseline;
 
@@ -1373,6 +1385,7 @@ void ManageTPSL()
          double newHistory = CalcTotalHistoryProfit();
          g_accumulateBaseline = newHistory;
          g_accumulatedProfit = 0;
+         g_hadPositions = false;
          Print("Accumulate cycle reset. New baseline: ", newHistory);
       }
    }
