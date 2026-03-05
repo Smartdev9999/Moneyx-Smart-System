@@ -272,6 +272,12 @@ input int              InpCDCFastPeriod    = 12;               // CDC Fast EMA P
 input int              InpCDCSlowPeriod    = 26;               // CDC Slow EMA Period
 input bool             InpCDCRequireCross  = false;            // Require Crossover (not just position)
 
+//--- Matching Close (Pair Profit vs Loss Orders)
+input group "=== Matching Close ==="
+input bool     UseMatchingClose       = false;    // Enable Matching Close
+input double   MatchingMinProfit      = 0.50;     // Min Net Profit per Match ($)
+input int      MatchingMaxLossOrders  = 3;        // Max Loss Orders per Match (1-3)
+
 //+------------------------------------------------------------------+
 //| Global Variables                                                   |
 //+------------------------------------------------------------------+
