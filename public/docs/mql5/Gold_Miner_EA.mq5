@@ -272,6 +272,12 @@ input int              InpCDCFastPeriod    = 12;               // CDC Fast EMA P
 input int              InpCDCSlowPeriod    = 26;               // CDC Slow EMA Period
 input bool             InpCDCRequireCross  = false;            // Require Crossover (not just position)
 
+//--- Matching Close (Pair Profit vs Loss Orders)
+input group "=== Matching Close ==="
+input bool     UseMatchingClose       = false;    // Enable Matching Close
+input double   MatchingMinProfit      = 0.50;     // Min Net Profit per Match ($)
+input int      MatchingMaxLossOrders  = 3;        // Max Loss Orders per Match (1-3)
+
 //+------------------------------------------------------------------+
 //| Global Variables                                                   |
 //+------------------------------------------------------------------+
@@ -802,6 +808,18 @@ void OnTick()
    if(EntryMode == ENTRY_SMA)
       ManageTPSL();
    // ZigZag mode: per-TF TP/SL + shared accumulate handled in OnTickZigZagMTF()
+
+   //--- New bar only: Matching Close (pair profit vs loss orders)
+   {
+      datetime mcBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
+      static datetime s_lastMatchingBarTime = 0;
+      if(mcBarTime != s_lastMatchingBarTime)
+      {
+         s_lastMatchingBarTime = mcBarTime;
+         if(UseMatchingClose)
+            ManageMatchingClose();
+      }
+   }
 
    //--- Every tick: Drawdown check
    CheckDrawdownExit();
@@ -1344,7 +1362,7 @@ void ManageTPSL()
       double totalFloating = CalculateTotalFloatingPL();
       double accumTotal = g_accumulatedProfit + totalFloating;
 
-      if(accumTotal >= AccumulateTarget && accumTotal > 0 && g_accumulatedProfit > 0)  // guard: only trigger with real closed profit, never on floating alone
+      if(accumTotal >= AccumulateTarget && accumTotal > 0)  // trigger on total (closed + floating)
       {
          Print("ACCUMULATE TARGET HIT: ", accumTotal, " / ", AccumulateTarget);
          CloseAllPositions();
@@ -3382,7 +3400,7 @@ void ManageAccumulateShared()
    double totalFloating = CalculateTotalFloatingPL();
    double accumTotal = g_accumulatedProfit + totalFloating;
 
-   if(accumTotal >= AccumulateTarget && accumTotal > 0 && g_accumulatedProfit > 0)
+   if(accumTotal >= AccumulateTarget && accumTotal > 0)  // trigger on total (closed + floating)
    {
       Print("ACCUMULATE TARGET HIT: ", accumTotal, " / ", AccumulateTarget);
       CloseAllPositions();
@@ -3546,7 +3564,11 @@ void OnTickZigZagMTF()
       }
    }
 
-   // Step 5: Shared Accumulate Close
+   // Step 5: Matching Close (ZigZag mode - new bar already confirmed)
+   if(UseMatchingClose)
+      ManageMatchingClose();
+
+   // Step 6: Shared Accumulate Close
    ManageAccumulateShared();
 }
 
@@ -5245,5 +5267,174 @@ void CreateDashButton(string name, int x, int y, int width, int height, string t
    ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
    ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
    ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+}
+
+//+------------------------------------------------------------------+
+//| Matching Close - Pair profitable orders with losing orders         |
+//| Close sets where net profit >= MatchingMinProfit                   |
+//| Runs once per new bar. Buy/Sell sides processed independently.     |
+//+------------------------------------------------------------------+
+void ManageMatchingClose()
+{
+   int maxLoss = MathMin(MathMax(MatchingMaxLossOrders, 1), 3);
+
+   // Process BUY side then SELL side
+   for(int side = 0; side < 2; side++)
+   {
+      ENUM_POSITION_TYPE posType = (side == 0) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
+
+      // Keep looping until no more matches found
+      bool matchFound = true;
+      while(matchFound)
+      {
+         matchFound = false;
+
+         // Collect profit and loss tickets for this side
+         ulong profitTickets[];
+         double profitValues[];
+         ulong lossTickets[];
+         double lossValues[];
+         int profitCount = 0, lossCount = 0;
+
+         for(int i = PositionsTotal() - 1; i >= 0; i--)
+         {
+            ulong ticket = PositionGetTicket(i);
+            if(ticket == 0) continue;
+            if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+            if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+            if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != posType) continue;
+
+            double pnl = PositionGetDouble(POSITION_PROFIT)
+                       + PositionGetDouble(POSITION_SWAP)
+                       + (2.0 * PositionGetDouble(POSITION_COMMISSION));  // round-trip commission estimate
+
+            if(pnl > 0)
+            {
+               ArrayResize(profitTickets, profitCount + 1);
+               ArrayResize(profitValues, profitCount + 1);
+               profitTickets[profitCount] = ticket;
+               profitValues[profitCount] = pnl;
+               profitCount++;
+            }
+            else if(pnl < 0)
+            {
+               ArrayResize(lossTickets, lossCount + 1);
+               ArrayResize(lossValues, lossCount + 1);
+               lossTickets[lossCount] = ticket;
+               lossValues[lossCount] = pnl;
+               lossCount++;
+            }
+         }
+
+         if(profitCount == 0 || lossCount == 0) break;
+
+         // Sort profit descending (biggest profit first)
+         for(int a = 0; a < profitCount - 1; a++)
+            for(int b = a + 1; b < profitCount; b++)
+               if(profitValues[b] > profitValues[a])
+               {
+                  double tmpV = profitValues[a]; profitValues[a] = profitValues[b]; profitValues[b] = tmpV;
+                  ulong tmpT = profitTickets[a]; profitTickets[a] = profitTickets[b]; profitTickets[b] = tmpT;
+               }
+
+         // Sort loss ascending by absolute value (smallest loss first = closest to 0)
+         for(int a = 0; a < lossCount - 1; a++)
+            for(int b = a + 1; b < lossCount; b++)
+               if(MathAbs(lossValues[b]) < MathAbs(lossValues[a]))
+               {
+                  double tmpV = lossValues[a]; lossValues[a] = lossValues[b]; lossValues[b] = tmpV;
+                  ulong tmpT = lossTickets[a]; lossTickets[a] = lossTickets[b]; lossTickets[b] = tmpT;
+               }
+
+         // For each profit order (biggest first), find best combination of loss orders
+         bool found = false;
+         for(int p = 0; p < profitCount && !found; p++)
+         {
+            double bestNet = -1;
+            int bestComboCount = 0;
+            int bestComboIdx[];
+
+            // Try combinations of 1 to maxLoss loss orders
+            // Greedy approach: add loss orders one by one (smallest loss first)
+            double cumLoss = 0;
+            int tempIdx[];
+            ArrayResize(tempIdx, 0);
+
+            for(int l = 0; l < lossCount && ArraySize(tempIdx) < maxLoss; l++)
+            {
+               double testNet = profitValues[p] + cumLoss + lossValues[l];
+               if(testNet >= MatchingMinProfit)
+               {
+                  // This combination works - include this loss order
+                  ArrayResize(tempIdx, ArraySize(tempIdx) + 1);
+                  tempIdx[ArraySize(tempIdx) - 1] = l;
+                  cumLoss += lossValues[l];
+
+                  double net = profitValues[p] + cumLoss;
+                  if(net >= MatchingMinProfit)
+                  {
+                     bestNet = net;
+                     bestComboCount = ArraySize(tempIdx);
+                     ArrayResize(bestComboIdx, bestComboCount);
+                     ArrayCopy(bestComboIdx, tempIdx);
+                     break;  // Found a valid combo with this profit order
+                  }
+               }
+               else
+               {
+                  // Adding this loss order would still leave net >= min? Add and continue
+                  double withThis = profitValues[p] + cumLoss + lossValues[l];
+                  if(withThis >= 0 && ArraySize(tempIdx) < maxLoss - 1)
+                  {
+                     // Add this loss order and try adding more
+                     ArrayResize(tempIdx, ArraySize(tempIdx) + 1);
+                     tempIdx[ArraySize(tempIdx) - 1] = l;
+                     cumLoss += lossValues[l];
+                  }
+               }
+            }
+
+            // If greedy didn't find, try individual pairs
+            if(bestComboCount == 0)
+            {
+               for(int l = 0; l < lossCount; l++)
+               {
+                  double net = profitValues[p] + lossValues[l];
+                  if(net >= MatchingMinProfit)
+                  {
+                     bestNet = net;
+                     bestComboCount = 1;
+                     ArrayResize(bestComboIdx, 1);
+                     bestComboIdx[0] = l;
+                     break;
+                  }
+               }
+            }
+
+            if(bestComboCount > 0)
+            {
+               // Close the profit order
+               string sideStr = (posType == POSITION_TYPE_BUY) ? "BUY" : "SELL";
+               Print("MATCHING CLOSE [", sideStr, "]: Profit ticket #", profitTickets[p],
+                     " ($", DoubleToString(profitValues[p], 2), ") matched with ", bestComboCount, " loss order(s). Net: $", DoubleToString(bestNet, 2));
+
+               trade.PositionClose(profitTickets[p]);
+
+               // Close the loss orders
+               for(int c = 0; c < bestComboCount; c++)
+               {
+                  int idx = bestComboIdx[c];
+                  Print("MATCHING CLOSE [", sideStr, "]: Closing loss ticket #", lossTickets[idx],
+                        " ($", DoubleToString(lossValues[idx], 2), ")");
+                  trade.PositionClose(lossTickets[idx]);
+               }
+
+               matchFound = true;  // Restart scan with remaining positions
+               found = true;
+               Sleep(100);  // Brief pause for broker to process
+            }
+         }
+      }
+   }
 }
 //+------------------------------------------------------------------+
