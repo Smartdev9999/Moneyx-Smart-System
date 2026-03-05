@@ -306,6 +306,7 @@ double         g_initialBuyPrice;   // track initial order price for grid fallba
 double         g_initialSellPrice;  // track initial order price for grid fallback
 double         g_accumulateBaseline; // Total history profit at last cycle reset
 double         g_maxDD;             // Track max drawdown
+bool           g_hadPositions;      // Track if we had positions (for accumulate auto-reset)
 
 // Dashboard Control Variables (v2.9)
 bool           g_eaIsPaused = false;           // EA Pause State (manual)
