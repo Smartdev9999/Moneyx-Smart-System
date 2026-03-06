@@ -5406,93 +5406,70 @@ void ManageMatchingClose()
          //--- Case 2: Has loss orders — multi-profit + oldest-loss matching
          else
          {
-            // Greedy: accumulate profits (biggest first), then try adding loss orders (oldest first)
-            // Goal: find a set where net >= MatchingMinProfit
+            // Strategy: accumulate profit orders (biggest first) and for each level
+            // of accumulated profit, greedily add loss orders (oldest first) up to maxLoss.
+            // When net >= MinProfit, close the entire set.
             bool found = false;
-
-            // Accumulate profit orders one by one
             double cumProfit = 0;
-            int usedProfitCount = 0;
 
             for(int p = 0; p < profitCount && !found; p++)
             {
                cumProfit += profitValues[p];
-               usedProfitCount = p + 1;
+               int usedProfitCount = p + 1;
 
-               // With current accumulated profit, try adding loss orders (oldest first)
+               // Try to greedily include loss orders (oldest first)
+               int closeLossIdx[];       // indices of loss orders to close
+               ArrayResize(closeLossIdx, 0);
                double cumLoss = 0;
-               int usedLossCount = 0;
+               int lossUsed = 0;
 
-               for(int l = 0; l < lossCount && usedLossCount < maxLoss; l++)
+               for(int l = 0; l < lossCount && lossUsed < maxLoss; l++)
                {
-                  double netWithThisLoss = cumProfit + cumLoss + lossValues[l];
-
-                  if(netWithThisLoss >= MatchingMinProfit)
+                  double netIfAdd = cumProfit + cumLoss + lossValues[l];
+                  if(netIfAdd >= MatchingMinProfit)
                   {
-                     // Including this loss order still meets threshold — add it and close
+                     // Adding this loss order still meets threshold — include it
+                     ArrayResize(closeLossIdx, lossUsed + 1);
+                     closeLossIdx[lossUsed] = l;
                      cumLoss += lossValues[l];
-                     usedLossCount++;
-
-                     double finalNet = cumProfit + cumLoss;
-                     Print("MATCHING CLOSE [", sideStr, "]: ", usedProfitCount, " profit + ",
-                           usedLossCount, " loss orders. Net: $", DoubleToString(finalNet, 2));
-
-                     // Close profit orders
-                     for(int cp = 0; cp < usedProfitCount; cp++)
-                     {
-                        Print("  Closing profit ticket #", profitTickets[cp],
-                              " ($", DoubleToString(profitValues[cp], 2), ")");
-                        trade.PositionClose(profitTickets[cp]);
-                     }
-                     // Close loss orders
-                     for(int cl = 0; cl <= l; cl++)
-                     {
-                        // Only close the ones we actually included
-                        if(cl < usedLossCount)
-                        {
-                           // We included loss orders 0..usedLossCount-1 but some may have been skipped
-                        }
-                     }
-                     // Actually close the loss orders we tracked
-                     {
-                        // Re-track: we added loss orders greedily, need to know which ones
-                        // Simpler approach: re-iterate and close
-                        double recheck = 0;
-                        int closedLoss = 0;
-                        for(int rl = 0; rl < lossCount && closedLoss < usedLossCount; rl++)
-                        {
-                           double testNet2 = cumProfit + recheck + lossValues[rl];
-                           if(testNet2 >= MatchingMinProfit || closedLoss < usedLossCount - 1)
-                           {
-                              Print("  Closing loss ticket #", lossTickets[rl],
-                                    " ($", DoubleToString(lossValues[rl], 2), ")");
-                              trade.PositionClose(lossTickets[rl]);
-                              recheck += lossValues[rl];
-                              closedLoss++;
-                           }
-                        }
-                     }
-
-                     matchFound = true;
-                     found = true;
-                     Sleep(100);
-                     break;
+                     lossUsed++;
+                     // Keep going to include more loss orders if possible (reduce more floating)
                   }
-                  else if(netWithThisLoss >= 0)
+                  else if(netIfAdd >= 0)
                   {
-                     // Still positive — add this loss and try more
+                     // Net still positive — include and try adding more
+                     ArrayResize(closeLossIdx, lossUsed + 1);
+                     closeLossIdx[lossUsed] = l;
                      cumLoss += lossValues[l];
-                     usedLossCount++;
+                     lossUsed++;
                   }
-                  // else: adding this loss makes it negative — skip
+                  // else: would go negative — skip this loss order
                }
 
-               // Check if profit-only (no loss added) already meets threshold
-               if(!found && usedLossCount == 0 && cumProfit >= MatchingMinProfit && lossCount > 0)
+               double finalNet = cumProfit + cumLoss;
+               if(finalNet >= MatchingMinProfit && lossUsed > 0)
                {
-                  // We have profit but also have loss orders — try to include at least 1 loss
-                  // (prioritize reducing floating loss over just taking profit)
-                  // Already handled above — if no loss could be added, just take profit
+                  // Found a valid combination — close all
+                  Print("MATCHING CLOSE [", sideStr, "]: ", usedProfitCount, " profit + ",
+                        lossUsed, " loss orders. Net: $", DoubleToString(finalNet, 2));
+
+                  for(int cp = 0; cp < usedProfitCount; cp++)
+                  {
+                     Print("  Closing profit #", profitTickets[cp],
+                           " ($", DoubleToString(profitValues[cp], 2), ")");
+                     trade.PositionClose(profitTickets[cp]);
+                  }
+                  for(int cl = 0; cl < lossUsed; cl++)
+                  {
+                     int idx = closeLossIdx[cl];
+                     Print("  Closing loss #", lossTickets[idx],
+                           " ($", DoubleToString(lossValues[idx], 2), ")");
+                     trade.PositionClose(lossTickets[idx]);
+                  }
+
+                  matchFound = true;
+                  found = true;
+                  Sleep(100);
                }
             }
 
