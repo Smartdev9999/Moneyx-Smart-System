@@ -1,37 +1,66 @@
 
 
-## เพิ่ม Input: Minimum Profit Orders สำหรับ Matching Close
+## แก้ไข ATR Chart ไม่ถูกซ่อนใน Backtest
 
-### สิ่งที่เพิ่ม
+### สาเหตุ
 
-**Input parameter ใหม่ 1 ตัว**:
-```text
-input int MatchingMinProfitOrders = 1; // Min Profit Orders to Start Matching
-```
-ค่า default = 1 (ทำงานเหมือนเดิม), ถ้าตั้ง 2 = ต้องรอให้มี profit orders อย่างน้อย 2 ตัวก่อนจึงจะเริ่มคำนวณ matching
+โค้ดปัจจุบันพยายามลบ ATR subwindow เพียง **tick แรก** เท่านั้น (`g_atrChartHidden = true` ทันที) แต่ปัญหาคือ:
 
-### Logic ที่แก้ไข (ManageMatchingClose)
-
-**จุดที่ 1** — บรรทัด 5360: เปลี่ยน guard จาก `profitCount == 0` เป็น `profitCount < MatchingMinProfitOrders`
-```text
-// ก่อน
-if(profitCount == 0) break;
-// หลัง
-int minPO = MathMax(MatchingMinProfitOrders, 1);
-if(profitCount < minPO) break;
-```
-
-**จุดที่ 2** — Profit-Only case (บรรทัด 5384): เพิ่ม guard เดียวกัน — ต้องมี profit orders ≥ minPO ก่อนจะรวมปิด
-
-**จุดที่ 3** — Multi-profit+loss case (บรรทัด 5415): loop เริ่มสะสม profit ตั้งแต่ตัวแรก แต่จะเริ่มพยายาม match กับ loss orders ก็ต่อเมื่อ `usedProfitCount >= minPO` เท่านั้น
+1. ใน tick แรกของ Strategy Tester, ATR subwindow อาจยังไม่ถูกสร้างขึ้น (indicator ยังไม่ render)
+2. เมื่อ flag ถูกตั้งเป็น `true` แล้ว จะไม่ลองลบอีกเลย
+3. `iATR()` สร้าง 2 handles (`handleATR_Loss`, `handleATR_Profit`) ซึ่งอาจสร้าง subwindow แยกกัน
 
 ### ไฟล์ที่แก้ไข
-`public/docs/mql5/Gold_Miner_EA.mq5` — 4 จุด (1 input + 3 logic guards)
+
+`public/docs/mql5/Gold_Miner_EA.mq5` (ไฟล์เดียว)
+
+### วิธีแก้ไข
+
+เปลี่ยนจาก "ลบครั้งเดียวแล้วหยุด" เป็น "ลองลบทุก tick จนกว่าจะลบสำเร็จหรือครบ 50 tick"
+
+```text
+// แก้ไข global variable
+bool g_atrChartHidden = false;
+int  g_atrHideAttempts = 0;        // เพิ่มตัวนับ
+
+// แก้ไข logic ใน OnTick():
+if(!g_atrChartHidden && (MQLInfoInteger(MQL_TESTER) || MQLInfoInteger(MQL_VISUAL_MODE)))
+{
+   g_atrHideAttempts++;
+   int totalWindows = (int)ChartGetInteger(0, CHART_WINDOWS_TOTAL);
+   bool found = false;
+   for(int sw = totalWindows - 1; sw > 0; sw--)
+   {
+      int indCount = ChartIndicatorsTotal(0, sw);
+      for(int j = indCount - 1; j >= 0; j--)
+      {
+         string indName = ChartIndicatorName(0, sw, j);
+         if(StringFind(indName, "ATR") >= 0)
+         {
+            ChartIndicatorDelete(0, sw, indName);
+            found = true;
+         }
+      }
+   }
+   // หยุดเมื่อลบสำเร็จ หรือพยายามครบ 50 tick แล้ว
+   if(found || g_atrHideAttempts >= 50)
+   {
+      g_atrChartHidden = true;
+      ChartRedraw(0);
+   }
+}
+```
+
+### สิ่งที่เปลี่ยน
+
+- เพิ่ม `g_atrHideAttempts` counter เพื่อลองลบซ้ำหลาย tick
+- เปลี่ยน inner loop ให้ iterate ย้อนกลับ (`j = indCount - 1; j >= 0; j--`) เพื่อป้องกัน index shift เมื่อลบ
+- ตั้ง `g_atrChartHidden = true` ก็ต่อเมื่อลบสำเร็จจริง หรือพยายามครบ 50 tick
 
 ### สิ่งที่ไม่เปลี่ยนแปลง
-- Order Execution / Grid / TP/SL/Trailing — ไม่แตะ
-- Accumulate Close — ไม่แตะ
-- Loss order sorting (oldest first) — ไม่แตะ
-- Profit order sorting (highest first) — ไม่แตะ
-- Matching Close algorithm core — ไม่แตะ (เพิ่มแค่ minimum count guard)
+
+- Trading logic ทั้งหมด (SMA, Grid, TP/SL, Trailing, Drawdown, Entry)
+- News/Time Filter logic
+- Dashboard + Buttons
+- License module
 

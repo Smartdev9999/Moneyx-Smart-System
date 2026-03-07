@@ -276,7 +276,8 @@ input bool             InpCDCRequireCross  = false;            // Require Crosso
 input group "=== Matching Close ==="
 input bool     UseMatchingClose       = false;    // Enable Matching Close
 input double   MatchingMinProfit      = 0.50;     // Min Net Profit per Match ($)
-input int      MatchingMaxLossOrders  = 3;        // Max Loss Orders per Match (1-3)
+input int      MatchingMaxLossOrders  = 3;        // Max Loss Orders per Match (1-10)
+input int      MatchingMinProfitOrders = 1;       // Min Profit Orders to Start Matching
 
 //+------------------------------------------------------------------+
 //| Global Variables                                                   |
@@ -5357,7 +5358,8 @@ void ManageMatchingClose()
             }
          }
 
-         if(profitCount == 0) break;  // No profit orders at all — nothing to do
+         int minPO = MathMax(MatchingMinProfitOrders, 1);
+         if(profitCount < minPO) break;  // Not enough profit orders — wait for more
 
          // Sort profit descending (biggest profit first)
          for(int a = 0; a < profitCount - 1; a++)
@@ -5381,8 +5383,9 @@ void ManageMatchingClose()
          string sideStr = (posType == POSITION_TYPE_BUY) ? "BUY" : "SELL";
 
          //--- Case 1: No loss orders — profit-only matching
-         if(lossCount == 0)
+          if(lossCount == 0)
          {
+            if(profitCount < minPO) break;  // Profit-only also needs minPO
             double totalProfit = 0;
             for(int p = 0; p < profitCount; p++)
                totalProfit += profitValues[p];
@@ -5412,12 +5415,15 @@ void ManageMatchingClose()
             bool found = false;
             double cumProfit = 0;
 
-            for(int p = 0; p < profitCount && !found; p++)
-            {
-               cumProfit += profitValues[p];
-               int usedProfitCount = p + 1;
+             for(int p = 0; p < profitCount && !found; p++)
+             {
+                cumProfit += profitValues[p];
+                int usedProfitCount = p + 1;
 
-               // Try to greedily include loss orders (oldest first)
+                // Must have at least minPO profit orders before trying to match
+                if(usedProfitCount < minPO) continue;
+
+                // Try to greedily include loss orders (oldest first)
                int closeLossIdx[];       // indices of loss orders to close
                ArrayResize(closeLossIdx, 0);
                double cumLoss = 0;
