@@ -276,7 +276,8 @@ input bool             InpCDCRequireCross  = false;            // Require Crosso
 input group "=== Matching Close ==="
 input bool     UseMatchingClose       = false;    // Enable Matching Close
 input double   MatchingMinProfit      = 0.50;     // Min Net Profit per Match ($)
-input int      MatchingMaxLossOrders  = 3;        // Max Loss Orders per Match (1-3)
+input int      MatchingMaxLossOrders  = 3;        // Max Loss Orders per Match (1-10)
+input int      MatchingMinProfitOrders = 1;       // Min Profit Orders to Start Matching
 
 //+------------------------------------------------------------------+
 //| Global Variables                                                   |
