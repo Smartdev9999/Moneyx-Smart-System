@@ -5415,12 +5415,15 @@ void ManageMatchingClose()
             bool found = false;
             double cumProfit = 0;
 
-            for(int p = 0; p < profitCount && !found; p++)
-            {
-               cumProfit += profitValues[p];
-               int usedProfitCount = p + 1;
+             for(int p = 0; p < profitCount && !found; p++)
+             {
+                cumProfit += profitValues[p];
+                int usedProfitCount = p + 1;
 
-               // Try to greedily include loss orders (oldest first)
+                // Must have at least minPO profit orders before trying to match
+                if(usedProfitCount < minPO) continue;
+
+                // Try to greedily include loss orders (oldest first)
                int closeLossIdx[];       // indices of loss orders to close
                ArrayResize(closeLossIdx, 0);
                double cumLoss = 0;
