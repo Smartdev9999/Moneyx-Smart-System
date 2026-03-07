@@ -5358,7 +5358,8 @@ void ManageMatchingClose()
             }
          }
 
-         if(profitCount == 0) break;  // No profit orders at all — nothing to do
+         int minPO = MathMax(MatchingMinProfitOrders, 1);
+         if(profitCount < minPO) break;  // Not enough profit orders — wait for more
 
          // Sort profit descending (biggest profit first)
          for(int a = 0; a < profitCount - 1; a++)
