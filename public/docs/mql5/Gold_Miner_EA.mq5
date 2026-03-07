@@ -5383,8 +5383,9 @@ void ManageMatchingClose()
          string sideStr = (posType == POSITION_TYPE_BUY) ? "BUY" : "SELL";
 
          //--- Case 1: No loss orders — profit-only matching
-         if(lossCount == 0)
+          if(lossCount == 0)
          {
+            if(profitCount < minPO) break;  // Profit-only also needs minPO
             double totalProfit = 0;
             for(int p = 0; p < profitCount; p++)
                totalProfit += profitValues[p];
