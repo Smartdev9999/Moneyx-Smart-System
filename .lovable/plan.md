@@ -1,113 +1,66 @@
 
 
-## แปลง Asset Miner EA เป็น Multi-Pair (5 คู่เงิน)
+## แก้ไข ATR Chart ไม่ถูกซ่อนใน Backtest
 
-### ขอบเขตงาน
+### สาเหตุ
 
-EA ปัจจุบัน (~5,500 บรรทัด) ทำงานกับ symbol เดียว (chart symbol) — ต้องรีสร้างโครงสร้างใหม่เพื่อรองรับ 5 คู่เงินที่ทำงานอิสระบน chart เดียวกัน
+โค้ดปัจจุบันพยายามลบ ATR subwindow เพียง **tick แรก** เท่านั้น (`g_atrChartHidden = true` ทันที) แต่ปัญหาคือ:
 
-### โครงสร้าง Input Parameters (จัดกลุ่มตาม Set)
-
-```text
-=== Set1 Settings ===
-  Set1_Enable        = true
-  Set1_Symbol        = "XAUUSD"
-  Set1_MagicOffset   = 1          (Magic = MagicNumber + offset)
-  Set1_InitialLot    = 0.01
-  --- Set1 Grid Loss ---
-  Set1_GridLoss_MaxTrades, Set1_GridLoss_LotMode, Set1_GridLoss_Points ...
-  --- Set1 Grid Profit ---
-  Set1_GridProfit_Enable, Set1_GridProfit_MaxTrades ...
-  --- Set1 Accumulate Close ---
-  Set1_UseAccumulateClose, Set1_AccumulateTarget
-  --- Set1 Matching Close ---
-  Set1_UseMatchingClose, Set1_MatchingMinProfit, Set1_MatchingMaxLossOrders, Set1_MatchingMinProfitOrders
-
-=== Set2 Settings === (เหมือน Set1 แต่ default symbol ต่างกัน)
-...
-=== Set3-5 Settings ===
-...
-=== Global Accumulate Close (รวม 5 คู่) ===
-  UseGlobalAccumulate = false
-  GlobalAccumulateTarget = 50000.0
-
-=== Shared Settings (ใช้ร่วมกันทุกคู่) ===
-  General, SMA, TP/SL, Trailing, Dashboard, License, Time/News Filter, ZigZag, CDC
-```
-
-### โครงสร้าง Data (Struct per Pair)
-
-```text
-struct PairState {
-   bool     enabled;
-   string   symbol;
-   int      magic;
-   int      handleSMA, handleATR_Loss, handleATR_Profit;
-   double   initialBuyPrice, initialSellPrice;
-   datetime lastBarTime, lastInitialCandle, lastGridLossCandle, lastGridProfitCandle;
-   bool     justClosedBuy, justClosedSell;
-   double   trailSL_Buy, trailSL_Sell;
-   bool     trailActive_Buy/Sell, beDone_Buy/Sell;
-   double   accumulatedProfit, accumulateBaseline;
-   bool     hadPositions;
-   // Grid/Accumulate/Matching settings (copied from inputs on init)
-   double   initialLot;
-   int      gridLossMax, gridProfitMax;
-   bool     useAccumulate, useMatching;
-   double   accumTarget, matchMinProfit;
-   int      matchMaxLoss, matchMinProfitOrders;
-   // ... (all per-pair settings)
-};
-PairState g_pairs[5];
-int g_pairCount = 0;
-```
-
-### Logic Flow (OnTick)
-
-```text
-OnTick():
-  1. License/News/Time checks (shared — once)
-  2. for each enabled pair:
-     a. Get symbol data (bid/ask/SMA/ATR) using pair's handles
-     b. Check new bar for THAT symbol
-     c. Run grid logic (loss/profit) for that pair
-     d. Run TP/SL for that pair
-     e. Run per-pair accumulate close
-     f. Run per-pair matching close
-     g. Run trailing/breakeven for that pair
-     h. Run drawdown check for that pair
-  3. Run global accumulate (if enabled) — sum floating P/L across all 5 pairs
-  4. Update dashboard (show all pairs)
-```
-
-### ฟังก์ชันที่ต้องแก้ไข
-
-ฟังก์ชันหลักทุกตัวต้องรับ parameter `int pairIdx` เพื่อระบุว่าทำงานกับคู่ไหน:
-- `TotalOrderCount(pairIdx)` — นับ orders ตาม magic + symbol ของ pair นั้น
-- `ManageTPSL(pairIdx)` — ใช้ settings ของ pair นั้น
-- `ManageMatchingClose(pairIdx)`
-- `ManageTrailingStop(pairIdx)` / `ManagePerOrderTrailing(pairIdx)`
-- `CheckDrawdownExit(pairIdx)`
-- `CalcTotalHistoryProfit(pairIdx)` — filter ด้วย magic + symbol
-- Grid entry functions — ใช้ pair's symbol + settings
-- Dashboard — แสดงทุก pair ในตาราง
-
-### ข้อจำกัดสำคัญ (MQL5)
-
-- **Input arrays ไม่ได้** — ต้องประกาศ input แยก 5 ชุด (Set1_, Set2_, ..., Set5_)
-- **Indicator handles ต้องระบุ symbol** — `iMA(Set1_Symbol, ...)`, `iATR(Set2_Symbol, ...)`
-- **PositionGetTicket ต้อง filter ทั้ง magic + symbol** — ป้องกัน cross-pair interference
-- **ไฟล์จะยาวมาก (~8,000-10,000 บรรทัด)** เนื่องจาก input 5 ชุด + struct + refactored functions
+1. ใน tick แรกของ Strategy Tester, ATR subwindow อาจยังไม่ถูกสร้างขึ้น (indicator ยังไม่ render)
+2. เมื่อ flag ถูกตั้งเป็น `true` แล้ว จะไม่ลองลบอีกเลย
+3. `iATR()` สร้าง 2 handles (`handleATR_Loss`, `handleATR_Profit`) ซึ่งอาจสร้าง subwindow แยกกัน
 
 ### ไฟล์ที่แก้ไข
-`public/docs/mql5/Asset_Miner_EA.mq5` — rewrite ขนาดใหญ่
 
-### สิ่งที่ไม่เปลี่ยนแปลง (กฎเหล็ก)
-- **Trading Strategy Logic** (SMA signal, ZigZag MTF, Grid entry/exit conditions) — logic เดิม 100% แค่ wrap ด้วย pairIdx
-- **Order Execution** (trade.Buy/Sell/PositionClose) — ไม่แตะ logic, เพิ่มแค่ symbol parameter
-- **License / News / Time Filter** — ยังทำงานแบบ shared (ไม่แก้ core)
-- **TP/SL/Trailing/Breakeven calculations** — formula เดิม, แค่อ่านค่าจาก PairState
+`public/docs/mql5/Gold_Miner_EA.mq5` (ไฟล์เดียว)
 
-### หมายเหตุ
-นี่เป็นการ refactor ขนาดใหญ่มาก (~5,500 → ~9,000+ บรรทัด) ควรทำเป็นขั้นตอน หากอนุมัติจะเริ่มจาก input parameters + struct → OnInit → OnTick loop → refactor functions ทีละกลุ่ม
+### วิธีแก้ไข
+
+เปลี่ยนจาก "ลบครั้งเดียวแล้วหยุด" เป็น "ลองลบทุก tick จนกว่าจะลบสำเร็จหรือครบ 50 tick"
+
+```text
+// แก้ไข global variable
+bool g_atrChartHidden = false;
+int  g_atrHideAttempts = 0;        // เพิ่มตัวนับ
+
+// แก้ไข logic ใน OnTick():
+if(!g_atrChartHidden && (MQLInfoInteger(MQL_TESTER) || MQLInfoInteger(MQL_VISUAL_MODE)))
+{
+   g_atrHideAttempts++;
+   int totalWindows = (int)ChartGetInteger(0, CHART_WINDOWS_TOTAL);
+   bool found = false;
+   for(int sw = totalWindows - 1; sw > 0; sw--)
+   {
+      int indCount = ChartIndicatorsTotal(0, sw);
+      for(int j = indCount - 1; j >= 0; j--)
+      {
+         string indName = ChartIndicatorName(0, sw, j);
+         if(StringFind(indName, "ATR") >= 0)
+         {
+            ChartIndicatorDelete(0, sw, indName);
+            found = true;
+         }
+      }
+   }
+   // หยุดเมื่อลบสำเร็จ หรือพยายามครบ 50 tick แล้ว
+   if(found || g_atrHideAttempts >= 50)
+   {
+      g_atrChartHidden = true;
+      ChartRedraw(0);
+   }
+}
+```
+
+### สิ่งที่เปลี่ยน
+
+- เพิ่ม `g_atrHideAttempts` counter เพื่อลองลบซ้ำหลาย tick
+- เปลี่ยน inner loop ให้ iterate ย้อนกลับ (`j = indCount - 1; j >= 0; j--`) เพื่อป้องกัน index shift เมื่อลบ
+- ตั้ง `g_atrChartHidden = true` ก็ต่อเมื่อลบสำเร็จจริง หรือพยายามครบ 50 tick
+
+### สิ่งที่ไม่เปลี่ยนแปลง
+
+- Trading logic ทั้งหมด (SMA, Grid, TP/SL, Trailing, Drawdown, Entry)
+- News/Time Filter logic
+- Dashboard + Buttons
+- License module
 
