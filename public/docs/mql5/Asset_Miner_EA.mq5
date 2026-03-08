@@ -3147,7 +3147,7 @@ void CreateDashButton(string name, int x, int y, int width, int height, string t
 }
 
 //+------------------------------------------------------------------+
-//| Dashboard - Multi-Pair Layout                                      |
+//| Dashboard - Multi-Pair Full Layout                                 |
 //+------------------------------------------------------------------+
 void DisplayDashboard()
 {
@@ -3159,28 +3159,78 @@ void DisplayDashboard()
    color COLOR_SECTION_PAIR = clrGold;
    color COLOR_SECTION_DETAIL = clrGreen;
    color COLOR_SECTION_ACCUM = clrYellow;
+   color COLOR_SECTION_TRAIL = C'100,180,255';
+   color COLOR_SECTION_HIST = C'180,140,255';
    color COLOR_SECTION_INFO = clrDodgerBlue;
    color COLOR_PROFIT = clrLime;
    color COLOR_LOSS = clrOrangeRed;
    color COLOR_TEXT = clrWhite;
+   color COLOR_WARN = clrYellow;
 
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
    double equity = AccountInfoDouble(ACCOUNT_EQUITY);
    double dd = (balance > 0) ? (balance - equity) / balance * 100.0 : 0;
 
+   // Header
+   string modeStr = (TradingMode == TRADE_BOTH) ? "Both" : ((TradingMode == TRADE_BUY_ONLY) ? "Buy Only" : "Sell Only");
    string headerText = (EntryMode == ENTRY_SMA) ? "Asset Miner v4.0 [SMA] Multi-Pair" : "Asset Miner v4.0 [ZZ] Multi-Pair";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerText, COLOR_HEADER_TEXT, 10, "Arial Bold");
+   CreateDashText("GM_TBL_HDR_M", DashboardX + tableWidth - 80, DashboardY + 3, modeStr, COLOR_HEADER_TEXT, 9, "Arial");
 
    int row = 0;
+
+   // === Section 1: Account Info ===
    DrawTableRow(row, "Balance", "$" + DoubleToString(balance, 2), COLOR_TEXT, COLOR_SECTION_DETAIL); row++;
    DrawTableRow(row, "Equity", "$" + DoubleToString(equity, 2), COLOR_TEXT, COLOR_SECTION_DETAIL); row++;
 
    double totalFloat = CalculateAllFloatingPL();
-   DrawTableRow(row, "Total Float P/L", "$" + DoubleToString(totalFloat, 2), (totalFloat >= 0 ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_DETAIL); row++;
-   DrawTableRow(row, "DD%", DoubleToString(dd, 2) + "% / Max " + DoubleToString(g_maxDD, 2) + "%", (dd > 10 ? COLOR_LOSS : COLOR_TEXT), COLOR_SECTION_DETAIL); row++;
+   DrawTableRow(row, "Floating P/L", "$" + DoubleToString(totalFloat, 2), (totalFloat >= 0 ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_DETAIL); row++;
 
-   // Per-pair summary
+   // Signal
+   if(EntryMode == ENTRY_SMA)
+   {
+      // Get SMA value from first enabled pair
+      string sigStr = "---";
+      for(int sp = 0; sp < 5; sp++)
+      {
+         if(g_pairs[sp].enabled && g_pairs[sp].handleSMA != INVALID_HANDLE)
+         {
+            double smaVal[1];
+            if(CopyBuffer(g_pairs[sp].handleSMA, 0, 0, 1, smaVal) > 0)
+            {
+               double bid = SymbolInfoDouble(g_pairs[sp].symbol, SYMBOL_BID);
+               sigStr = (bid > smaVal[0]) ? "BUY ▲" : "SELL ▼";
+            }
+            break;
+         }
+      }
+      DrawTableRow(row, "Signal (SMA" + IntegerToString(SMA_Period) + ")", sigStr,
+                   (StringFind(sigStr, "BUY") >= 0 ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_DETAIL); row++;
+   }
+   else
+   {
+      DrawTableRow(row, "Signal", "ZigZag MTF", clrCyan, COLOR_SECTION_DETAIL); row++;
+   }
+
+   // Total BUY/SELL aggregated
+   double buyPL = CalculateTotalFloatingPLSide(0);
+   double buyLots = CalculateTotalLotsAll(0);
+   int buyOrds = TotalOrderCountSide(0);
+   DrawTableRow(row, "Total BUY", "$" + DoubleToString(buyPL, 2) + "  " + DoubleToString(buyLots, 2) + "L  " + IntegerToString(buyOrds) + "ord",
+                (buyPL >= 0 ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_DETAIL); row++;
+
+   double sellPL = CalculateTotalFloatingPLSide(1);
+   double sellLots = CalculateTotalLotsAll(1);
+   int sellOrds = TotalOrderCountSide(1);
+   DrawTableRow(row, "Total SELL", "$" + DoubleToString(sellPL, 2) + "  " + DoubleToString(sellLots, 2) + "L  " + IntegerToString(sellOrds) + "ord",
+                (sellPL >= 0 ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_DETAIL); row++;
+
+   // DD
+   DrawTableRow(row, "Current DD%", DoubleToString(dd, 2) + "%", (dd > 10 ? COLOR_LOSS : COLOR_TEXT), COLOR_SECTION_DETAIL); row++;
+   DrawTableRow(row, "Max DD%", DoubleToString(g_maxDD, 2) + "%", (g_maxDD > 20 ? COLOR_LOSS : COLOR_TEXT), COLOR_SECTION_DETAIL); row++;
+
+   // === Section 2: Per-Pair Detail ===
    for(int p = 0; p < 5; p++)
    {
       if(!g_pairs[p].enabled) continue;
@@ -3188,32 +3238,113 @@ void DisplayDashboard()
       bool ib = false, is2 = false;
       CountPositionsPair(p, bc, sc, gl1, gl2, gp1, gp2, ib, is2);
       double pl = CalculateTotalFloatingPLPair(p);
+      double lots = CalculateTotalLotsPair(p, -1);
 
       string label = "P" + IntegerToString(p + 1) + " " + g_pairs[p].symbol;
-      string info = IntegerToString(bc) + "B/" + IntegerToString(sc) + "S  $" + DoubleToString(pl, 2);
+      string info = IntegerToString(bc) + "B/" + IntegerToString(sc) + "S " + DoubleToString(lots, 2) + "L $" + DoubleToString(pl, 2);
       DrawTableRow(row, label, info, (pl >= 0 ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_PAIR); row++;
    }
 
-   // Global accumulate info
-   if(UseGlobalAccumulate)
+   // === Section 3: Accumulate ===
+   bool hasAnyAccum = false;
+   for(int p = 0; p < 5; p++) { if(g_pairs[p].enabled && g_pairs[p].useAccumulate) { hasAnyAccum = true; break; } }
+
+   if(hasAnyAccum || UseGlobalAccumulate)
    {
-      double gAccum = g_globalAccumProfit + totalFloat;
-      DrawTableRow(row, "Global Accum", "$" + DoubleToString(gAccum, 2) + " / $" + DoubleToString(GlobalAccumulateTarget, 2),
-                   (gAccum >= 0 ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_ACCUM); row++;
+      // Per-pair accumulate
+      for(int p = 0; p < 5; p++)
+      {
+         if(!g_pairs[p].enabled || !g_pairs[p].useAccumulate) continue;
+         double accumClosed = g_pairs[p].accumulatedProfit;
+         double accumFloat = CalculateTotalFloatingPLPair(p);
+         double accumTotal = accumClosed + accumFloat;
+         double accumTarget = g_pairs[p].accumTarget;
+         double accumNeed = accumTarget - accumTotal;
+         string pLabel = "P" + IntegerToString(p + 1) + " Accum";
+         string pInfo = "$" + DoubleToString(accumTotal, 2) + " / $" + DoubleToString(accumTarget, 2);
+         if(accumNeed > 0) pInfo += " Need:$" + DoubleToString(accumNeed, 2);
+         DrawTableRow(row, pLabel, pInfo, (accumTotal >= 0 ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_ACCUM); row++;
+      }
+
+      // Global accumulate
+      if(UseGlobalAccumulate)
+      {
+         double gClosed = g_globalAccumProfit;
+         double gFloat = totalFloat;
+         double gTotal = gClosed + gFloat;
+         double gNeed = GlobalAccumulateTarget - gTotal;
+         string gInfo = "$" + DoubleToString(gTotal, 2) + " / $" + DoubleToString(GlobalAccumulateTarget, 2);
+         if(gNeed > 0) gInfo += " Need:$" + DoubleToString(gNeed, 2);
+         DrawTableRow(row, "Global Accum", gInfo, (gTotal >= 0 ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_ACCUM); row++;
+      }
    }
 
-   // News status
-   if(InpEnableNewsFilter)
+   // === Section 4: Trailing ===
+   if(EnablePerOrderTrailing)
    {
-      color newsColor = g_isNewsPaused ? COLOR_LOSS : COLOR_PROFIT;
-      string newsStr = g_isNewsPaused ? g_newsStatus : "No Important news";
-      DrawTableRow(row, "News Filter", newsStr, newsColor, COLOR_SECTION_INFO); row++;
+      string trailInfo = "";
+      if(InpEnableBreakeven)
+         trailInfo += "BE:" + IntegerToString(InpBreakevenTarget) + "/" + IntegerToString(InpBreakevenOffset);
+      if(InpEnableTrailing)
+      {
+         if(StringLen(trailInfo) > 0) trailInfo += "  ";
+         trailInfo += "Trail:" + IntegerToString(InpTrailingStop) + "/" + IntegerToString(InpTrailingStep);
+      }
+      DrawTableRow(row, "Per-Order", trailInfo, COLOR_TEXT, COLOR_SECTION_TRAIL); row++;
+   }
+   if(EnableTrailingStop || EnableBreakeven)
+   {
+      string avgTrailInfo = "";
+      if(EnableBreakeven)
+         avgTrailInfo += "AvgBE:" + IntegerToString(BreakevenActivation) + "/" + IntegerToString(BreakevenBuffer);
+      if(EnableTrailingStop)
+      {
+         if(StringLen(avgTrailInfo) > 0) avgTrailInfo += "  ";
+         avgTrailInfo += "AvgTrail:" + IntegerToString(TrailingActivation) + "/" + IntegerToString(TrailingStep);
+      }
+      DrawTableRow(row, "Avg Trail", avgTrailInfo, COLOR_TEXT, COLOR_SECTION_TRAIL); row++;
    }
 
-   // Status
-   string statusStr = g_eaIsPaused ? "PAUSED" : (g_newOrderBlocked ? "BLOCKED" : "ACTIVE");
-   color statusColor = g_eaIsPaused ? COLOR_LOSS : (g_newOrderBlocked ? clrYellow : COLOR_PROFIT);
-   DrawTableRow(row, "EA Status", statusStr, statusColor, COLOR_SECTION_INFO); row++;
+   // === Section 5: History ===
+   double totalCurLot = CalculateTotalLotsAll(-1);
+   DrawTableRow(row, "Total Cur. Lot", DoubleToString(totalCurLot, 2) + " L", COLOR_TEXT, COLOR_SECTION_HIST); row++;
+
+   double totalClosedLot = CalcTotalClosedLotsAll();
+   DrawTableRow(row, "Total Closed Lot", DoubleToString(totalClosedLot, 2) + " L", COLOR_TEXT, COLOR_SECTION_HIST); row++;
+
+   int totalClosedOrd = CalcTotalClosedOrdersAll();
+   DrawTableRow(row, "Total Closed Ord", IntegerToString(totalClosedOrd) + " orders", COLOR_TEXT, COLOR_SECTION_HIST); row++;
+
+   double monthlyPL = CalcMonthlyPLAll();
+   DrawTableRow(row, "Monthly P/L", "$" + DoubleToString(monthlyPL, 2), (monthlyPL >= 0 ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_HIST); row++;
+
+   double totalPL = CalcTotalHistoryProfitAll();
+   DrawTableRow(row, "Total P/L", "$" + DoubleToString(totalPL, 2), (totalPL >= 0 ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_HIST); row++;
+
+   // === Section 6: Status ===
+   // Auto Re-Entry
+   DrawTableRow(row, "Auto Re-Entry", (EnableAutoReEntry ? "ON" : "OFF"),
+                (EnableAutoReEntry ? COLOR_PROFIT : COLOR_WARN), COLOR_SECTION_INFO); row++;
+
+   // Daily Profit Pause
+   if(InpEnableDailyProfitPause)
+   {
+      double dailyPL = CalcDailyPLAll();
+      string dpStr = "$" + DoubleToString(dailyPL, 2) + " / $" + DoubleToString(InpDailyProfitTarget, 2);
+      if(g_dailyProfitPaused) dpStr += " PAUSED";
+      DrawTableRow(row, "Daily Profit", dpStr,
+                   (g_dailyProfitPaused ? COLOR_LOSS : (dailyPL >= 0 ? COLOR_PROFIT : COLOR_TEXT)), COLOR_SECTION_INFO); row++;
+   }
+
+   // System Status
+   string sysStr = "Working";
+   color sysColor = COLOR_PROFIT;
+   if(!g_isLicenseValid && !g_isTesterMode) { sysStr = "EXPIRED"; sysColor = COLOR_LOSS; }
+   else if(g_eaIsPaused) { sysStr = "PAUSED"; sysColor = COLOR_WARN; }
+   else if(g_eaStopped) { sysStr = "SUSPENDED"; sysColor = COLOR_LOSS; }
+   else if(g_dailyProfitPaused) { sysStr = "DAILY PAUSED"; sysColor = COLOR_WARN; }
+   else if(g_newOrderBlocked) { sysStr = "BLOCKED"; sysColor = COLOR_WARN; }
+   DrawTableRow(row, "System Status", sysStr, sysColor, COLOR_SECTION_INFO); row++;
 
    // License
    if(!g_isTesterMode)
@@ -3222,7 +3353,41 @@ void DisplayDashboard()
       DrawTableRow(row, "License", licStr, (g_isLicenseValid ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_INFO); row++;
    }
 
-   // Buttons
+   // Time Filter
+   if(InpUseTimeFilter)
+   {
+      bool inTime = IsWithinTradingHours();
+      DrawTableRow(row, "Time Filter", (inTime ? "ACTIVE" : "OUTSIDE HOURS"),
+                   (inTime ? COLOR_PROFIT : COLOR_WARN), COLOR_SECTION_INFO); row++;
+   }
+
+   // News Filter with countdown
+   if(InpEnableNewsFilter)
+   {
+      string newsStr;
+      color newsColor;
+      if(g_isNewsPaused)
+      {
+         newsStr = g_newsStatus;
+         if(g_newsPauseEndTime > 0 && g_newsPauseEndTime > TimeCurrent())
+         {
+            int secsLeft = (int)(g_newsPauseEndTime - TimeCurrent());
+            int minsLeft = secsLeft / 60;
+            newsStr += " (" + IntegerToString(minsLeft) + "m left)";
+         }
+         newsColor = COLOR_LOSS;
+      }
+      else
+      {
+         newsStr = "No Important news";
+         if(g_newsEventCount > 0)
+            newsStr += " (" + IntegerToString(g_newsEventCount) + " events)";
+         newsColor = COLOR_PROFIT;
+      }
+      DrawTableRow(row, "News Filter", newsStr, newsColor, COLOR_SECTION_INFO); row++;
+   }
+
+   // === Buttons ===
    int btnY = DashboardY + 24 + row * 20 + 5;
    int btnW = (tableWidth - 10) / 2;
    int btnH = 22;
@@ -3237,6 +3402,17 @@ void DisplayDashboard()
    btnY += btnH + 3;
 
    CreateDashButton("GM_BtnCloseAll", DashboardX, btnY, tableWidth, btnH, "Close All Pairs", C'30,100,180', clrWhite);
+   btnY += btnH + 3;
+
+   // Resume Daily button (only when daily profit paused)
+   if(InpEnableDailyProfitPause && g_dailyProfitPaused)
+   {
+      CreateDashButton("GM_BtnResumeDaily", DashboardX, btnY, tableWidth, btnH, "▶ Resume Daily", clrForestGreen, clrWhite);
+   }
+   else
+   {
+      ObjectDelete(0, "GM_BtnResumeDaily");
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -3281,6 +3457,13 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
          ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
          int result = MessageBox("Close ALL orders (all pairs)?", "Confirm", MB_YESNO | MB_ICONWARNING);
          if(result == IDYES) CloseAllPositionsAll();
+      }
+      else if(sparam == "GM_BtnResumeDaily")
+      {
+         ObjectSetInteger(0, sparam, OBJPROP_STATE, false);
+         g_dailyProfitPaused = false;
+         g_newOrderBlocked = false;
+         Print("DAILY PROFIT PAUSE: Resumed by user");
       }
       ChartRedraw(0);
    }
