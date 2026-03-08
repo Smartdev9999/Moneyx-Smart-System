@@ -1029,6 +1029,105 @@ double CalcDailyPLAll()
    return total;
 }
 
+double CalcTotalClosedLotsAll()
+{
+   double total = 0;
+   for(int p = 0; p < 5; p++)
+   {
+      if(g_pairs[p].enabled) total += CalcTotalClosedLotsPair(p);
+   }
+   return total;
+}
+
+int CalcTotalClosedOrdersAll()
+{
+   int total = 0;
+   for(int p = 0; p < 5; p++)
+   {
+      if(g_pairs[p].enabled) total += CalcTotalClosedOrdersPair(p);
+   }
+   return total;
+}
+
+double CalcMonthlyPLAll()
+{
+   double total = 0;
+   for(int p = 0; p < 5; p++)
+   {
+      if(g_pairs[p].enabled) total += CalcMonthlyPLPair(p);
+   }
+   return total;
+}
+
+double CalculateTotalLotsPair(int p, int side)
+{
+   double totalLots = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != g_pairs[p].magic) continue;
+      if(PositionGetString(POSITION_SYMBOL) != g_pairs[p].symbol) continue;
+      long posType = PositionGetInteger(POSITION_TYPE);
+      if(side == 0 && posType == POSITION_TYPE_BUY) totalLots += PositionGetDouble(POSITION_VOLUME);
+      else if(side == 1 && posType == POSITION_TYPE_SELL) totalLots += PositionGetDouble(POSITION_VOLUME);
+      else if(side == -1) totalLots += PositionGetDouble(POSITION_VOLUME);
+   }
+   return totalLots;
+}
+
+double CalculateTotalLotsAll(int side)
+{
+   double total = 0;
+   for(int p = 0; p < 5; p++)
+   {
+      if(g_pairs[p].enabled) total += CalculateTotalLotsPair(p, side);
+   }
+   return total;
+}
+
+double CalculateTotalFloatingPLSide(int side)
+{
+   double total = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      long magic = PositionGetInteger(POSITION_MAGIC);
+      bool isOurs = false;
+      for(int pp = 0; pp < 5; pp++)
+      {
+         if(g_pairs[pp].enabled && magic == g_pairs[pp].magic) { isOurs = true; break; }
+      }
+      if(!isOurs) continue;
+      long posType = PositionGetInteger(POSITION_TYPE);
+      if(side == 0 && posType == POSITION_TYPE_BUY) total += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+      else if(side == 1 && posType == POSITION_TYPE_SELL) total += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+   }
+   return total;
+}
+
+int TotalOrderCountSide(int side)
+{
+   int count = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      long magic = PositionGetInteger(POSITION_MAGIC);
+      bool isOurs = false;
+      for(int pp = 0; pp < 5; pp++)
+      {
+         if(g_pairs[pp].enabled && magic == g_pairs[pp].magic) { isOurs = true; break; }
+      }
+      if(!isOurs) continue;
+      long posType = PositionGetInteger(POSITION_TYPE);
+      if(side == 0 && posType == POSITION_TYPE_BUY) count++;
+      else if(side == 1 && posType == POSITION_TYPE_SELL) count++;
+   }
+   return count;
+}
+
 void CountPositionsPair(int p, int &buyCount, int &sellCount,
                         int &gridLossBuy, int &gridLossSell,
                         int &gridProfitBuy, int &gridProfitSell,
