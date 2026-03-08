@@ -699,6 +699,11 @@ void RecoverTFInitialPricesPair(int p);
 void DisplayDashboard();
 void DrawLinesPair(int p);
 double CalcDailyPLAll();
+double CalcTotalClosedLotsAll();
+int CalcTotalClosedOrdersAll();
+double CalcMonthlyPLAll();
+double CalculateTotalLotsPair(int p, int side);
+double CalculateTotalLotsAll(int side);
 bool SyncAccountData();
 bool SyncAccountDataWithEvent(ENUM_SYNC_EVENT eventType);
 
