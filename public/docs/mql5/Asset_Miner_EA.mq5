@@ -413,7 +413,7 @@ int OnInit()
    }
    else
    {
-      Print("GOLD MINER EA - LIVE TRADING MODE");
+      Print("ASSET MINER EA - LIVE TRADING MODE");
       if(!InitLicense(InpLicenseServer, InpLicenseCheckMinutes, InpDataSyncMinutes))
          Print("License initialization failed: ", g_lastLicenseError);
       ShowLicensePopup(g_licenseStatus);
