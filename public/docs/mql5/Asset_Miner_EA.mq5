@@ -406,7 +406,7 @@ int OnInit()
 
    if(g_isTesterMode)
    {
-      Print("GOLD MINER EA - TESTER MODE");
+      Print("ASSET MINER EA - TESTER MODE");
       Print("License check skipped for backtesting");
       g_isLicenseValid = true;
       g_licenseStatus = LICENSE_VALID;
