@@ -3791,7 +3791,7 @@ bool SyncAccountDataWithEvent(ENUM_SYNC_EVENT eventType)
    json += "\"loss_trades\":" + IntegerToString(lossTrades) + ",";
    json += "\"total_trades\":" + IntegerToString(totalTrades) + ",";
    json += "\"event_type\":\"" + eventTypeStr + "\",";
-   json += "\"ea_name\":\"Gold Miner EA\",";
+   json += "\"ea_name\":\"Asset Miner EA\",";
    json += "\"ea_status\":\"" + eaStatus + "\",";
    json += "\"currency\":\"" + accountCurrency + "\",";
    json += "\"account_type\":\"" + accountTypeStr + "\"";
