@@ -506,7 +506,7 @@ int OnInit()
       RecoverTFInitialPrices();
    }
 
-   Print("Gold Miner EA v3.0 initialized successfully");
+   Print("Asset Miner EA v3.0 initialized successfully");
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
