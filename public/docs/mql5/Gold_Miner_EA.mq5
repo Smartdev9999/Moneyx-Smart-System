@@ -2252,13 +2252,17 @@ void CreateDashText(string name, int x, int y, string text, color clr, int fontS
 //+------------------------------------------------------------------+
 void DrawTableRow(int rowIndex, string label, string value, color valueColor, color sectionColor)
 {
+   double sc = MathMax(0.8, MathMin(1.5, DashboardScale));
    int x = DashboardX;
-   int y = DashboardY + 24 + rowIndex * 20;  // 24px header
-   int tableWidth = 340;
-   int rowHeight = 19;
-   int sectionBarWidth = 4;
-   int labelX = x + sectionBarWidth + 6;
-   int valueX = x + 180;
+   int rowH = (int)(20 * sc);
+   int y = DashboardY + (int)(24 * sc) + rowIndex * rowH;
+   int tblW = (int)(340 * sc);
+   int rH = (int)(19 * sc);
+   int sectionBarWidth = (int)(4 * sc);
+   int labelX = x + sectionBarWidth + (int)(6 * sc);
+   int valueX = x + (int)(180 * sc);
+   int fSize = (int)(9 * sc);
+   if(fSize < 7) fSize = 7;
 
    // Alternating row background
    color rowBg = (rowIndex % 2 == 0) ? C'40,44,52' : C'35,39,46';
@@ -2269,13 +2273,13 @@ void DrawTableRow(int rowIndex, string label, string value, color valueColor, co
    string valName = "GM_TBL_V" + IntegerToString(rowIndex);
 
    // Row background
-   CreateDashRect(rowName, x, y, tableWidth, rowHeight, rowBg);
+   CreateDashRect(rowName, x, y, tblW, rH, rowBg);
    // Section color bar
-   CreateDashRect(secName, x, y, sectionBarWidth, rowHeight, sectionColor);
+   CreateDashRect(secName, x, y, sectionBarWidth, rH, sectionColor);
    // Label text
-   CreateDashText(lblName, labelX, y + 2, label, C'180,180,180', 9, "Consolas");
+   CreateDashText(lblName, labelX, y + 2, label, C'180,180,180', fSize, "Consolas");
    // Value text
-   CreateDashText(valName, valueX, y + 2, value, valueColor, 9, "Consolas");
+   CreateDashText(valName, valueX, y + 2, value, valueColor, fSize, "Consolas");
 }
 
 //+------------------------------------------------------------------+
