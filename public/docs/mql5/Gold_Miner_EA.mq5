@@ -2418,8 +2418,21 @@ void DisplayDashboard()
    string sellInfo = "$" + DoubleToString(plSell, 2) + "  " + DoubleToString(lotsSell, 2) + "L  " + IntegerToString(sellCount) + "ord";
    DrawTableRow(row, "Position SELL", sellInfo, (plSell >= 0 ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_DETAIL); row++;
 
-   DrawTableRow(row, "Current DD%",   DoubleToString(dd, 2) + "%",      (dd > 10 ? COLOR_LOSS : COLOR_TEXT), COLOR_SECTION_DETAIL); row++;
-   DrawTableRow(row, "Max DD%",       DoubleToString(g_maxDD, 2) + "%",  (g_maxDD > 15 ? COLOR_LOSS : COLOR_TEXT), COLOR_SECTION_DETAIL); row++;
+   if(DrawdownMode == DD_FIXED_DOLLAR)
+   {
+      double ddDollar = balance - equity;
+      DrawTableRow(row, "Current DD",   "$" + DoubleToString(ddDollar, 2) + " / $" + DoubleToString(MaxDrawdownDollar, 2),
+                   (ddDollar > MaxDrawdownDollar * 0.5 ? COLOR_LOSS : COLOR_TEXT), COLOR_SECTION_DETAIL); row++;
+      DrawTableRow(row, "Max DD",       "$" + DoubleToString(g_maxDD / 100.0 * balance, 2),
+                   (g_maxDD > 15 ? COLOR_LOSS : COLOR_TEXT), COLOR_SECTION_DETAIL); row++;
+   }
+   else
+   {
+      DrawTableRow(row, "Current DD%",   DoubleToString(dd, 2) + "% / " + DoubleToString(MaxDrawdownPct, 1) + "%",
+                   (dd > 10 ? COLOR_LOSS : COLOR_TEXT), COLOR_SECTION_DETAIL); row++;
+      DrawTableRow(row, "Max DD%",       DoubleToString(g_maxDD, 2) + "%",
+                   (g_maxDD > 15 ? COLOR_LOSS : COLOR_TEXT), COLOR_SECTION_DETAIL); row++;
+   }
 
    //--- ACCUMULATE Section
    if(UseAccumulateClose)
