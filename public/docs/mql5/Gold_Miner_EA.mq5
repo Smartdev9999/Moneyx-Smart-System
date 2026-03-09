@@ -2542,13 +2542,14 @@ void DisplayDashboard()
    }
 
    //--- Bottom border
-   int bottomY = DashboardY + 24 + row * 20;
+   int rowH_sc = (int)(20 * sc);
+   int bottomY = DashboardY + (int)(24 * sc) + row * rowH_sc;
    CreateDashRect("GM_TBL_BTM", DashboardX, bottomY, tableWidth, 2, COLOR_HEADER_BG);
 
    //--- Control Buttons (v2.9) - below dashboard
    int btnY = bottomY + 5;
    int btnW = (tableWidth - 10) / 2;
-   int btnH = 22;
+   int btnH = (int)(22 * sc);
 
    // Pause/Start button
    string pauseText = g_eaIsPaused ? "▶ Start" : "⏸ Pause";
