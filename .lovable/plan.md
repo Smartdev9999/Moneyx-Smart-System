@@ -1,66 +1,70 @@
 
 
-## แก้ไข ATR Chart ไม่ถูกซ่อนใน Backtest
+## เพิ่มระบบ Rebate + Dashboard ปรับขนาดได้ ใน Gold Miner EA
 
-### สาเหตุ
+### สิ่งที่ต้องเพิ่ม
 
-โค้ดปัจจุบันพยายามลบ ATR subwindow เพียง **tick แรก** เท่านั้น (`g_atrChartHidden = true` ทันที) แต่ปัญหาคือ:
-
-1. ใน tick แรกของ Strategy Tester, ATR subwindow อาจยังไม่ถูกสร้างขึ้น (indicator ยังไม่ render)
-2. เมื่อ flag ถูกตั้งเป็น `true` แล้ว จะไม่ลองลบอีกเลย
-3. `iATR()` สร้าง 2 handles (`handleATR_Loss`, `handleATR_Profit`) ซึ่งอาจสร้าง subwindow แยกกัน
-
-### ไฟล์ที่แก้ไข
-
-`public/docs/mql5/Gold_Miner_EA.mq5` (ไฟล์เดียว)
-
-### วิธีแก้ไข
-
-เปลี่ยนจาก "ลบครั้งเดียวแล้วหยุด" เป็น "ลองลบทุก tick จนกว่าจะลบสำเร็จหรือครบ 50 tick"
-
+**1. Input Parameters ใหม่:**
 ```text
-// แก้ไข global variable
-bool g_atrChartHidden = false;
-int  g_atrHideAttempts = 0;        // เพิ่มตัวนับ
+=== Rebate Settings ===
+input double   InpRebatePerLot = 4.5;   // Rebate per Lot ($)
 
-// แก้ไข logic ใน OnTick():
-if(!g_atrChartHidden && (MQLInfoInteger(MQL_TESTER) || MQLInfoInteger(MQL_VISUAL_MODE)))
-{
-   g_atrHideAttempts++;
-   int totalWindows = (int)ChartGetInteger(0, CHART_WINDOWS_TOTAL);
-   bool found = false;
-   for(int sw = totalWindows - 1; sw > 0; sw--)
-   {
-      int indCount = ChartIndicatorsTotal(0, sw);
-      for(int j = indCount - 1; j >= 0; j--)
-      {
-         string indName = ChartIndicatorName(0, sw, j);
-         if(StringFind(indName, "ATR") >= 0)
-         {
-            ChartIndicatorDelete(0, sw, indName);
-            found = true;
-         }
-      }
-   }
-   // หยุดเมื่อลบสำเร็จ หรือพยายามครบ 50 tick แล้ว
-   if(found || g_atrHideAttempts >= 50)
-   {
-      g_atrChartHidden = true;
-      ChartRedraw(0);
-   }
-}
+=== Dashboard ===
+input double   DashboardScale = 1.0;    // Dashboard Scale (0.8-1.5)
 ```
 
-### สิ่งที่เปลี่ยน
+**2. Helper Functions ใหม่:**
+- `CalcDailyClosedLots()` — คำนวณ lot ที่ปิดไปวันนี้ (filter by today's date)
+- ใช้ Logic เหมือน `CalcTotalClosedLots()` แต่ใส่ date filter เหมือน `CalcDailyPL()`
 
-- เพิ่ม `g_atrHideAttempts` counter เพื่อลองลบซ้ำหลาย tick
-- เปลี่ยน inner loop ให้ iterate ย้อนกลับ (`j = indCount - 1; j >= 0; j--`) เพื่อป้องกัน index shift เมื่อลบ
-- ตั้ง `g_atrChartHidden = true` ก็ต่อเมื่อลบสำเร็จจริง หรือพยายามครบ 50 tick
+**3. Dashboard แถวใหม่ (History Section):**
+| แถว | ค่าที่แสดง |
+|-----|----------|
+| Daily Closed Lot | `CalcDailyClosedLots()` L |
+| Daily Rebate | Daily Lot × InpRebatePerLot |
+| Total Rebate | Total Closed Lot × InpRebatePerLot |
+
+**4. Dashboard Scale (ปรับขนาด):**
+- เพิ่ม `DashboardScale` input (default 1.0)
+- คูณ scale เข้ากับ: `tableWidth`, `headerHeight`, font size, row height, button size
+- ใช้ `int(value * DashboardScale)` ทุกจุดที่เกี่ยวกับ dimension
+
+### Layout Dashboard หลังแก้ไข
+```text
+┌──────────────────────────────────────┐
+│ Gold Miner EA v3.0 [SMA]  Mode: Both │
+├──────────────────────────────────────┤
+│ Balance          $102,798.57         │
+│ Equity           $102,778.29         │
+│ Floating P/L     $-20.28            │
+│ ...existing rows...                  │
+├── History ───────────────────────────┤
+│ Total Cur. Lot   0.14 L             │
+│ Total Closed Lot 5300.58 L          │
+│ Daily Closed Lot 12.50 L         ← NEW
+│ Daily Rebate     $56.25          ← NEW
+│ Total Rebate     $23,852.61      ← NEW
+│ Total Closed Ord 2837 orders        │
+│ Monthly P/L      $13,839.84         │
+│ Total P/L        $133,939.84        │
+├──────────────────────────────────────┤
+```
+
+### ไฟล์ที่แก้ไข
+`public/docs/mql5/Gold_Miner_EA.mq5`
+
+### การแก้ไขหลัก
+1. **Lines ~196-200**: เพิ่ม `DashboardScale` input
+2. **Lines ~232-238**: เพิ่ม `InpRebatePerLot` input ใน group ใหม่
+3. **Lines ~620-640**: เพิ่ม function `CalcDailyClosedLots()`
+4. **Lines ~2255-2260**: ใช้ scale กับ tableWidth, headerHeight
+5. **Lines ~2396-2410**: เพิ่ม 3 แถว (Daily Closed Lot, Daily Rebate, Total Rebate)
+6. **DrawTableRow / CreateDashButton**: ปรับ font size และ row height ตาม scale
 
 ### สิ่งที่ไม่เปลี่ยนแปลง
-
-- Trading logic ทั้งหมด (SMA, Grid, TP/SL, Trailing, Drawdown, Entry)
-- News/Time Filter logic
-- Dashboard + Buttons
-- License module
+- Trading Strategy Logic (SMA, ZigZag, Grid entry/exit)
+- Order Execution (trade.Buy/Sell/PositionClose)
+- TP/SL/Trailing/Breakeven calculations
+- License / News / Time Filter core logic
+- Accumulate / Matching Close logic
 
