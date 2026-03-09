@@ -95,7 +95,9 @@ input group "=== General Settings ==="
 input int              MagicNumber        = 202500;    // Magic Number
 input int              MaxSlippage        = 30;        // Max Slippage (points)
 input int              MaxOpenOrders      = 20;        // Max Open Orders
-input double           MaxDrawdownPct     = 30.0;      // Max Drawdown % (emergency close)
+input ENUM_DD_MODE     DrawdownMode       = DD_PERCENT; // Drawdown Mode (% or Fixed $)
+input double           MaxDrawdownPct     = 30.0;      // Max Drawdown % (when mode = %)
+input double           MaxDrawdownDollar  = 5000.0;    // Max Drawdown $ (when mode = Fixed $)
 input bool             StopEAOnDrawdown   = false;     // Stop EA after Emergency Drawdown Close
 input ENUM_TRADE_MODE  TradingMode        = TRADE_BOTH; // Trading Mode (Buy/Sell/Both)
 input ENUM_ENTRY_MODE  EntryMode          = ENTRY_SMA;  // Entry Mode (SMA=Original, ZigZag=MTF)
