@@ -1754,9 +1754,28 @@ void CheckDrawdownExit()
    if(balance <= 0) return;
 
    double dd = (balance - equity) / balance * 100.0;
-   if(dd >= MaxDrawdownPct)
+   double ddDollar = balance - equity;
+   
+   bool ddTriggered = false;
+   if(DrawdownMode == DD_PERCENT)
    {
-      Print("EMERGENCY DD: ", DoubleToString(dd, 2), "% >= ", MaxDrawdownPct, "% - Closing all positions!");
+      if(dd >= MaxDrawdownPct)
+      {
+         ddTriggered = true;
+         Print("EMERGENCY DD: ", DoubleToString(dd, 2), "% >= ", MaxDrawdownPct, "% - Closing all positions!");
+      }
+   }
+   else // DD_FIXED_DOLLAR
+   {
+      if(ddDollar >= MaxDrawdownDollar)
+      {
+         ddTriggered = true;
+         Print("EMERGENCY DD: $", DoubleToString(ddDollar, 2), " >= $", DoubleToString(MaxDrawdownDollar, 2), " - Closing all positions!");
+      }
+   }
+   
+   if(ddTriggered)
+   {
       CloseAllPositions();
 
       if(StopEAOnDrawdown)
