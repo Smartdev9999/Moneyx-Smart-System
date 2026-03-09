@@ -198,6 +198,11 @@ input bool     ShowDashboard        = true;    // Show Dashboard
 input int      DashboardX           = 20;      // Dashboard X Position
 input int      DashboardY           = 30;      // Dashboard Y Position
 input color    DashboardColor       = clrWhite; // Dashboard Text Color
+input double   DashboardScale       = 1.0;     // Dashboard Scale (0.8-1.5)
+
+//--- Rebate Settings
+input group "=== Rebate Settings ==="
+input double   InpRebatePerLot      = 4.5;     // Rebate per Lot ($)
 
 //--- Backtest Optimization
 input group "=== Backtest Optimization ==="
@@ -607,6 +612,32 @@ double CalcTotalClosedLots()
 {
    double total = 0;
    if(!HistorySelect(0, TimeCurrent())) return 0;
+   int totalDeals = HistoryDealsTotal();
+   for(int i = 0; i < totalDeals; i++)
+   {
+      ulong dealTicket = HistoryDealGetTicket(i);
+      if(dealTicket == 0) continue;
+      if(HistoryDealGetInteger(dealTicket, DEAL_MAGIC) != MagicNumber) continue;
+      if(HistoryDealGetString(dealTicket, DEAL_SYMBOL) != _Symbol) continue;
+      long dealEntry = HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
+      if(dealEntry == DEAL_ENTRY_OUT || dealEntry == DEAL_ENTRY_INOUT)
+         total += HistoryDealGetDouble(dealTicket, DEAL_VOLUME);
+   }
+   return total;
+}
+
+//+------------------------------------------------------------------+
+//| CalcDailyClosedLots - sum closed deal volumes for today             |
+//+------------------------------------------------------------------+
+double CalcDailyClosedLots()
+{
+   MqlDateTime dt;
+   TimeToStruct(TimeCurrent(), dt);
+   dt.hour = 0; dt.min = 0; dt.sec = 0;
+   datetime dayStart = StructToTime(dt);
+
+   double total = 0;
+   if(!HistorySelect(dayStart, TimeCurrent())) return 0;
    int totalDeals = HistoryDealsTotal();
    for(int i = 0; i < totalDeals; i++)
    {
@@ -2221,13 +2252,17 @@ void CreateDashText(string name, int x, int y, string text, color clr, int fontS
 //+------------------------------------------------------------------+
 void DrawTableRow(int rowIndex, string label, string value, color valueColor, color sectionColor)
 {
+   double sc = MathMax(0.8, MathMin(1.5, DashboardScale));
    int x = DashboardX;
-   int y = DashboardY + 24 + rowIndex * 20;  // 24px header
-   int tableWidth = 340;
-   int rowHeight = 19;
-   int sectionBarWidth = 4;
-   int labelX = x + sectionBarWidth + 6;
-   int valueX = x + 180;
+   int rowH = (int)(20 * sc);
+   int y = DashboardY + (int)(24 * sc) + rowIndex * rowH;
+   int tblW = (int)(340 * sc);
+   int rH = (int)(19 * sc);
+   int sectionBarWidth = (int)(4 * sc);
+   int labelX = x + sectionBarWidth + (int)(6 * sc);
+   int valueX = x + (int)(180 * sc);
+   int fSize = (int)(9 * sc);
+   if(fSize < 7) fSize = 7;
 
    // Alternating row background
    color rowBg = (rowIndex % 2 == 0) ? C'40,44,52' : C'35,39,46';
@@ -2238,13 +2273,13 @@ void DrawTableRow(int rowIndex, string label, string value, color valueColor, co
    string valName = "GM_TBL_V" + IntegerToString(rowIndex);
 
    // Row background
-   CreateDashRect(rowName, x, y, tableWidth, rowHeight, rowBg);
+   CreateDashRect(rowName, x, y, tblW, rH, rowBg);
    // Section color bar
-   CreateDashRect(secName, x, y, sectionBarWidth, rowHeight, sectionColor);
+   CreateDashRect(secName, x, y, sectionBarWidth, rH, sectionColor);
    // Label text
-   CreateDashText(lblName, labelX, y + 2, label, C'180,180,180', 9, "Consolas");
+   CreateDashText(lblName, labelX, y + 2, label, C'180,180,180', fSize, "Consolas");
    // Value text
-   CreateDashText(valName, valueX, y + 2, value, valueColor, 9, "Consolas");
+   CreateDashText(valName, valueX, y + 2, value, valueColor, fSize, "Consolas");
 }
 
 //+------------------------------------------------------------------+
@@ -2252,8 +2287,13 @@ void DrawTableRow(int rowIndex, string label, string value, color valueColor, co
 //+------------------------------------------------------------------+
 void DisplayDashboard()
 {
-   int tableWidth = 340;
-   int headerHeight = 22;
+   double sc = MathMax(0.8, MathMin(1.5, DashboardScale));
+   int tableWidth = (int)(340 * sc);
+   int headerHeight = (int)(22 * sc);
+   int headerFontSize = (int)(11 * sc);
+   if(headerFontSize < 8) headerFontSize = 8;
+   int subFontSize = (int)(9 * sc);
+   if(subFontSize < 7) subFontSize = 7;
 
    // Colors
    color COLOR_HEADER_BG     = C'180,130,50';
@@ -2296,8 +2336,8 @@ void DisplayDashboard()
    //--- Header
    string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v3.0 [SMA]" : "Gold Miner EA v3.0 [ZZ]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
-   CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, 11, "Arial Bold");
-   CreateDashText("GM_TBL_HDR_M", DashboardX + 220, DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, 9, "Consolas");
+   CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
+   CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
 
    //--- DETAIL Section
    int row = 0;
@@ -2402,6 +2442,16 @@ void DisplayDashboard()
    double totalPLHist  = CalcTotalHistoryProfit();
 
    DrawTableRow(row, "Total Closed Lot", DoubleToString(closedLots, 2) + " L", COLOR_TEXT, COLOR_SECTION_HIST); row++;
+
+   // Rebate metrics
+   double dailyClosedLots = CalcDailyClosedLots();
+   double dailyRebate     = dailyClosedLots * InpRebatePerLot;
+   double totalRebate     = closedLots * InpRebatePerLot;
+   color  COLOR_SECTION_REBATE = C'180,150,50';  // gold for rebate section
+   DrawTableRow(row, "Daily Closed Lot", DoubleToString(dailyClosedLots, 2) + " L", COLOR_TEXT, COLOR_SECTION_REBATE); row++;
+   DrawTableRow(row, "Daily Rebate",     "$" + DoubleToString(dailyRebate, 2), COLOR_PROFIT, COLOR_SECTION_REBATE); row++;
+   DrawTableRow(row, "Total Rebate",     "$" + DoubleToString(totalRebate, 2), COLOR_PROFIT, COLOR_SECTION_REBATE); row++;
+
    DrawTableRow(row, "Total Closed Ord", IntegerToString(closedOrders) + " orders", COLOR_TEXT, COLOR_SECTION_HIST); row++;
    DrawTableRow(row, "Monthly P/L",      "$" + DoubleToString(monthlyPL, 2), (monthlyPL >= 0 ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_HIST); row++;
    DrawTableRow(row, "Total P/L",        "$" + DoubleToString(totalPLHist, 2), (totalPLHist >= 0 ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_HIST); row++;
@@ -2492,13 +2542,14 @@ void DisplayDashboard()
    }
 
    //--- Bottom border
-   int bottomY = DashboardY + 24 + row * 20;
+   int rowH_sc = (int)(20 * sc);
+   int bottomY = DashboardY + (int)(24 * sc) + row * rowH_sc;
    CreateDashRect("GM_TBL_BTM", DashboardX, bottomY, tableWidth, 2, COLOR_HEADER_BG);
 
    //--- Control Buttons (v2.9) - below dashboard
    int btnY = bottomY + 5;
    int btnW = (tableWidth - 10) / 2;
-   int btnH = 22;
+   int btnH = (int)(22 * sc);
 
    // Pause/Start button
    string pauseText = g_eaIsPaused ? "▶ Start" : "⏸ Pause";
