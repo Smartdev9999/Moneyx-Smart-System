@@ -62,6 +62,12 @@ enum ENUM_LICENSE_STATUS
    LICENSE_ERROR            // Connection Error
 };
 
+enum ENUM_DD_MODE
+{
+   DD_PERCENT       = 0,  // Percent (%)
+   DD_FIXED_DOLLAR  = 1   // Fixed Dollar ($)
+};
+
 // Sync Event Type (for real-time data sync)
 enum ENUM_SYNC_EVENT
 {
