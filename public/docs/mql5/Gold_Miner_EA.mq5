@@ -2287,8 +2287,13 @@ void DrawTableRow(int rowIndex, string label, string value, color valueColor, co
 //+------------------------------------------------------------------+
 void DisplayDashboard()
 {
-   int tableWidth = 340;
-   int headerHeight = 22;
+   double sc = MathMax(0.8, MathMin(1.5, DashboardScale));
+   int tableWidth = (int)(340 * sc);
+   int headerHeight = (int)(22 * sc);
+   int headerFontSize = (int)(11 * sc);
+   if(headerFontSize < 8) headerFontSize = 8;
+   int subFontSize = (int)(9 * sc);
+   if(subFontSize < 7) subFontSize = 7;
 
    // Colors
    color COLOR_HEADER_BG     = C'180,130,50';
