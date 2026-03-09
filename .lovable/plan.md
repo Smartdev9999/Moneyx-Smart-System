@@ -1,6 +1,22 @@
+## เพิ่มระบบ Rebate + Dashboard ปรับขนาดได้ ใน Gold Miner EA
 
+### สิ่งที่เพิ่ม/แก้ไข
 
-## แก้ไข ATR Chart ไม่ถูกซ่อนใน Backtest
+1. **Input ใหม่**: `InpRebatePerLot` (default 4.5), `DashboardScale` (default 1.0, range 0.8-1.5)
+2. **Function ใหม่**: `CalcDailyClosedLots()` — คำนวณ lot ปิดวันนี้
+3. **Dashboard แถวใหม่**: Daily Closed Lot, Daily Rebate, Total Rebate (section สีทอง)
+4. **Dashboard Scale**: ทุก dimension (width, height, font size) คูณด้วย DashboardScale
+
+### สิ่งที่ไม่เปลี่ยนแปลง
+
+- Trading Strategy Logic (SMA, ZigZag, Grid entry/exit)
+- Order Execution (trade.Buy/Sell/PositionClose)
+- TP/SL/Trailing/Breakeven calculations
+- License / News / Time Filter core logic
+- Accumulate / Matching Close logic
+- Dashboard buttons functionality (Pause, Close Buy/Sell/All, Resume Daily)
+
+### แก้ไข ATR Chart ไม่ถูกซ่อนใน Backtest
 
 ### สาเหตุ
 
@@ -63,4 +79,3 @@ if(!g_atrChartHidden && (MQLInfoInteger(MQL_TESTER) || MQLInfoInteger(MQL_VISUAL
 - News/Time Filter logic
 - Dashboard + Buttons
 - License module
-
