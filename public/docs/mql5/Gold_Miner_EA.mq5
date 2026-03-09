@@ -62,6 +62,12 @@ enum ENUM_LICENSE_STATUS
    LICENSE_ERROR            // Connection Error
 };
 
+enum ENUM_DD_MODE
+{
+   DD_PERCENT       = 0,  // Percent (%)
+   DD_FIXED_DOLLAR  = 1   // Fixed Dollar ($)
+};
+
 // Sync Event Type (for real-time data sync)
 enum ENUM_SYNC_EVENT
 {
@@ -89,7 +95,9 @@ input group "=== General Settings ==="
 input int              MagicNumber        = 202500;    // Magic Number
 input int              MaxSlippage        = 30;        // Max Slippage (points)
 input int              MaxOpenOrders      = 20;        // Max Open Orders
-input double           MaxDrawdownPct     = 30.0;      // Max Drawdown % (emergency close)
+input ENUM_DD_MODE     DrawdownMode       = DD_PERCENT; // Drawdown Mode (% or Fixed $)
+input double           MaxDrawdownPct     = 30.0;      // Max Drawdown % (when mode = %)
+input double           MaxDrawdownDollar  = 5000.0;    // Max Drawdown $ (when mode = Fixed $)
 input bool             StopEAOnDrawdown   = false;     // Stop EA after Emergency Drawdown Close
 input ENUM_TRADE_MODE  TradingMode        = TRADE_BOTH; // Trading Mode (Buy/Sell/Both)
 input ENUM_ENTRY_MODE  EntryMode          = ENTRY_SMA;  // Entry Mode (SMA=Original, ZigZag=MTF)
@@ -1746,9 +1754,28 @@ void CheckDrawdownExit()
    if(balance <= 0) return;
 
    double dd = (balance - equity) / balance * 100.0;
-   if(dd >= MaxDrawdownPct)
+   double ddDollar = balance - equity;
+   
+   bool ddTriggered = false;
+   if(DrawdownMode == DD_PERCENT)
    {
-      Print("EMERGENCY DD: ", DoubleToString(dd, 2), "% >= ", MaxDrawdownPct, "% - Closing all positions!");
+      if(dd >= MaxDrawdownPct)
+      {
+         ddTriggered = true;
+         Print("EMERGENCY DD: ", DoubleToString(dd, 2), "% >= ", MaxDrawdownPct, "% - Closing all positions!");
+      }
+   }
+   else // DD_FIXED_DOLLAR
+   {
+      if(ddDollar >= MaxDrawdownDollar)
+      {
+         ddTriggered = true;
+         Print("EMERGENCY DD: $", DoubleToString(ddDollar, 2), " >= $", DoubleToString(MaxDrawdownDollar, 2), " - Closing all positions!");
+      }
+   }
+   
+   if(ddTriggered)
+   {
       CloseAllPositions();
 
       if(StopEAOnDrawdown)
@@ -2391,8 +2418,21 @@ void DisplayDashboard()
    string sellInfo = "$" + DoubleToString(plSell, 2) + "  " + DoubleToString(lotsSell, 2) + "L  " + IntegerToString(sellCount) + "ord";
    DrawTableRow(row, "Position SELL", sellInfo, (plSell >= 0 ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_DETAIL); row++;
 
-   DrawTableRow(row, "Current DD%",   DoubleToString(dd, 2) + "%",      (dd > 10 ? COLOR_LOSS : COLOR_TEXT), COLOR_SECTION_DETAIL); row++;
-   DrawTableRow(row, "Max DD%",       DoubleToString(g_maxDD, 2) + "%",  (g_maxDD > 15 ? COLOR_LOSS : COLOR_TEXT), COLOR_SECTION_DETAIL); row++;
+   if(DrawdownMode == DD_FIXED_DOLLAR)
+   {
+      double ddDollar = balance - equity;
+      DrawTableRow(row, "Current DD",   "$" + DoubleToString(ddDollar, 2) + " / $" + DoubleToString(MaxDrawdownDollar, 2),
+                   (ddDollar > MaxDrawdownDollar * 0.5 ? COLOR_LOSS : COLOR_TEXT), COLOR_SECTION_DETAIL); row++;
+      DrawTableRow(row, "Max DD",       "$" + DoubleToString(g_maxDD / 100.0 * balance, 2),
+                   (g_maxDD > 15 ? COLOR_LOSS : COLOR_TEXT), COLOR_SECTION_DETAIL); row++;
+   }
+   else
+   {
+      DrawTableRow(row, "Current DD%",   DoubleToString(dd, 2) + "% / " + DoubleToString(MaxDrawdownPct, 1) + "%",
+                   (dd > 10 ? COLOR_LOSS : COLOR_TEXT), COLOR_SECTION_DETAIL); row++;
+      DrawTableRow(row, "Max DD%",       DoubleToString(g_maxDD, 2) + "%",
+                   (g_maxDD > 15 ? COLOR_LOSS : COLOR_TEXT), COLOR_SECTION_DETAIL); row++;
+   }
 
    //--- ACCUMULATE Section
    if(UseAccumulateClose)
