@@ -1,81 +1,38 @@
-## เพิ่มระบบ Rebate + Dashboard ปรับขนาดได้ ใน Gold Miner EA
+
+
+## เพิ่มระบบ Max Drawdown แบบ Fix Dollar ใน Gold Miner EA
 
 ### สิ่งที่เพิ่ม/แก้ไข
 
-1. **Input ใหม่**: `InpRebatePerLot` (default 4.5), `DashboardScale` (default 1.0, range 0.8-1.5)
-2. **Function ใหม่**: `CalcDailyClosedLots()` — คำนวณ lot ปิดวันนี้
-3. **Dashboard แถวใหม่**: Daily Closed Lot, Daily Rebate, Total Rebate (section สีทอง)
-4. **Dashboard Scale**: ทุก dimension (width, height, font size) คูณด้วย DashboardScale
-
-### สิ่งที่ไม่เปลี่ยนแปลง
-
-- Trading Strategy Logic (SMA, ZigZag, Grid entry/exit)
-- Order Execution (trade.Buy/Sell/PositionClose)
-- TP/SL/Trailing/Breakeven calculations
-- License / News / Time Filter core logic
-- Accumulate / Matching Close logic
-- Dashboard buttons functionality (Pause, Close Buy/Sell/All, Resume Daily)
-
-### แก้ไข ATR Chart ไม่ถูกซ่อนใน Backtest
-
-### สาเหตุ
-
-โค้ดปัจจุบันพยายามลบ ATR subwindow เพียง **tick แรก** เท่านั้น (`g_atrChartHidden = true` ทันที) แต่ปัญหาคือ:
-
-1. ใน tick แรกของ Strategy Tester, ATR subwindow อาจยังไม่ถูกสร้างขึ้น (indicator ยังไม่ render)
-2. เมื่อ flag ถูกตั้งเป็น `true` แล้ว จะไม่ลองลบอีกเลย
-3. `iATR()` สร้าง 2 handles (`handleATR_Loss`, `handleATR_Profit`) ซึ่งอาจสร้าง subwindow แยกกัน
-
-### ไฟล์ที่แก้ไข
-
-`public/docs/mql5/Gold_Miner_EA.mq5` (ไฟล์เดียว)
-
-### วิธีแก้ไข
-
-เปลี่ยนจาก "ลบครั้งเดียวแล้วหยุด" เป็น "ลองลบทุก tick จนกว่าจะลบสำเร็จหรือครบ 50 tick"
-
+**1. Enum ใหม่สำหรับเลือกโหมด:**
 ```text
-// แก้ไข global variable
-bool g_atrChartHidden = false;
-int  g_atrHideAttempts = 0;        // เพิ่มตัวนับ
-
-// แก้ไข logic ใน OnTick():
-if(!g_atrChartHidden && (MQLInfoInteger(MQL_TESTER) || MQLInfoInteger(MQL_VISUAL_MODE)))
-{
-   g_atrHideAttempts++;
-   int totalWindows = (int)ChartGetInteger(0, CHART_WINDOWS_TOTAL);
-   bool found = false;
-   for(int sw = totalWindows - 1; sw > 0; sw--)
-   {
-      int indCount = ChartIndicatorsTotal(0, sw);
-      for(int j = indCount - 1; j >= 0; j--)
-      {
-         string indName = ChartIndicatorName(0, sw, j);
-         if(StringFind(indName, "ATR") >= 0)
-         {
-            ChartIndicatorDelete(0, sw, indName);
-            found = true;
-         }
-      }
-   }
-   // หยุดเมื่อลบสำเร็จ หรือพยายามครบ 50 tick แล้ว
-   if(found || g_atrHideAttempts >= 50)
-   {
-      g_atrChartHidden = true;
-      ChartRedraw(0);
-   }
-}
+enum ENUM_DD_MODE { DD_PERCENT, DD_FIXED_DOLLAR };
 ```
 
-### สิ่งที่เปลี่ยน
+**2. Input Parameters ใหม่ (General Settings group):**
+```text
+input ENUM_DD_MODE    DrawdownMode       = DD_PERCENT;  // Drawdown Mode (% or Fixed $)
+input double          MaxDrawdownDollar  = 5000.0;      // Max Drawdown $ (fixed dollar)
+```
+- `MaxDrawdownPct` คงเดิม (ใช้เมื่อ mode = DD_PERCENT)
+- `MaxDrawdownDollar` ใช้เมื่อ mode = DD_FIXED_DOLLAR
 
-- เพิ่ม `g_atrHideAttempts` counter เพื่อลองลบซ้ำหลาย tick
-- เปลี่ยน inner loop ให้ iterate ย้อนกลับ (`j = indCount - 1; j >= 0; j--`) เพื่อป้องกัน index shift เมื่อลบ
-- ตั้ง `g_atrChartHidden = true` ก็ต่อเมื่อลบสำเร็จจริง หรือพยายามครบ 50 tick
+**3. แก้ไข `CheckDrawdownExit()` (~line 1742-1770):**
+- เพิ่ม branch ตาม `DrawdownMode`:
+  - `DD_PERCENT`: logic เดิม `(balance - equity) / balance * 100 >= MaxDrawdownPct`
+  - `DD_FIXED_DOLLAR`: `(balance - equity) >= MaxDrawdownDollar`
+- Print message ปรับตาม mode ที่ใช้
+
+**4. Dashboard แถว Current DD% / Max DD%:**
+- ถ้า mode = DD_FIXED_DOLLAR → แสดงเพิ่ม `$xxx / $MaxDrawdownDollar` แทน `xx% / MaxDrawdownPct%`
+
+### ไฟล์ที่แก้ไข
+`public/docs/mql5/Gold_Miner_EA.mq5`
 
 ### สิ่งที่ไม่เปลี่ยนแปลง
+- Trading Strategy Logic (SMA, ZigZag, Grid entry/exit)
+- Order Execution
+- TP/SL/Trailing/Breakeven/Accumulate/Matching Close logic
+- License / News / Time Filter core logic
+- Dashboard buttons
 
-- Trading logic ทั้งหมด (SMA, Grid, TP/SL, Trailing, Drawdown, Entry)
-- News/Time Filter logic
-- Dashboard + Buttons
-- License module
