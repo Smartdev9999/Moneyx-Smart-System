@@ -198,6 +198,11 @@ input bool     ShowDashboard        = true;    // Show Dashboard
 input int      DashboardX           = 20;      // Dashboard X Position
 input int      DashboardY           = 30;      // Dashboard Y Position
 input color    DashboardColor       = clrWhite; // Dashboard Text Color
+input double   DashboardScale       = 1.0;     // Dashboard Scale (0.8-1.5)
+
+//--- Rebate Settings
+input group "=== Rebate Settings ==="
+input double   InpRebatePerLot      = 4.5;     // Rebate per Lot ($)
 
 //--- Backtest Optimization
 input group "=== Backtest Optimization ==="
