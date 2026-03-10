@@ -1,34 +1,18 @@
+## เพิ่มระบบ Max Drawdown แบบ Fix Dollar ใน Gold Miner EA
 
+### สิ่งที่เพิ่ม/แก้ไข
 
-## แก้ไข License Error 401 ใน Asset Miner EA
-
-### สาเหตุ
-ที่ line 3761 ใน `Asset_Miner_EA.mq5` ใช้ header ผิด:
-```text
-ปัจจุบัน (ผิด): "Apikey: xxx\r\nAuthorization: Bearer xxx"
-ที่ถูกต้อง:       "x-api-key: xxx\r\n"
-```
-
-Edge function `verify-license` ตรวจสอบ API key จาก header `x-api-key` เท่านั้น ทำให้ Asset Miner ส่ง key ผิด header → ได้ 401 Unauthorized
-
-EA ตัวอื่น (Gold Miner, Harmony Dream, MoneyX Harmony Flow) ใช้ `x-api-key` ถูกต้องทั้งหมด
-
-### การแก้ไข
-**ไฟล์:** `public/docs/mql5/Asset_Miner_EA.mq5` line 3761
-
-เปลี่ยนจาก:
-```cpp
-string headers = "Content-Type: application/json\r\nApikey: " + EA_API_SECRET + "\r\nAuthorization: Bearer " + EA_API_SECRET;
-```
-เป็น:
-```cpp
-string headers = "Content-Type: application/json\r\nx-api-key: " + EA_API_SECRET + "\r\n";
-```
+1. **Enum ใหม่**: `ENUM_DD_MODE` (`DD_PERCENT`, `DD_FIXED_DOLLAR`)
+2. **Input ใหม่**: `DrawdownMode` (เลือก % หรือ $), `MaxDrawdownDollar` (default 5000.0)
+3. **CheckDrawdownExit()**: เพิ่ม branch ตาม DrawdownMode — ใช้ % หรือ fixed $ ในการตรวจสอบ
+4. **Dashboard**: แสดง Current DD และ Max DD ตาม mode ที่เลือก (% หรือ $)
 
 ### สิ่งที่ไม่เปลี่ยนแปลง
-- Trading Strategy Logic (SMA, ZigZag, Grid entry/exit)
-- Order Execution, TP/SL/Trailing/Breakeven
-- License verification logic flow
-- Dashboard, Rebate, Drawdown features
-- News/Time Filter
 
+- Trading Strategy Logic (SMA, ZigZag, Grid entry/exit)
+- Order Execution (trade.Buy/Sell/PositionClose)
+- TP/SL/Trailing/Breakeven calculations
+- License / News / Time Filter core logic
+- Accumulate / Matching Close logic
+- Dashboard buttons functionality
+- Rebate calculation system (from previous update)

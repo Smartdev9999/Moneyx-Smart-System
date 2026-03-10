@@ -3758,7 +3758,7 @@ int SendLicenseRequest(string url, string jsonData, string &response)
    string resultHeaders;
    StringToCharArray(jsonData, postData, 0, WHOLE_ARRAY, CP_UTF8);
    ArrayResize(postData, ArraySize(postData) - 1);
-   string headers = "Content-Type: application/json\r\nApikey: " + EA_API_SECRET + "\r\nAuthorization: Bearer " + EA_API_SECRET;
+   string headers = "Content-Type: application/json\r\nx-api-key: " + EA_API_SECRET + "\r\n";
    int result = WebRequest("POST", url, headers, 10000, postData, resultData, resultHeaders);
    if(result == -1) { response = ""; return -1; }
    response = CharArrayToString(resultData, 0, WHOLE_ARRAY, CP_UTF8);
