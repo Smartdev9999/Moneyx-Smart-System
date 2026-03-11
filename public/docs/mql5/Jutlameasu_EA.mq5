@@ -716,8 +716,8 @@ void OnTick()
       }
    }
 
-   // STATE 3: Check if cycle ended (all positions closed by TP or SL)
-   if(totalPositions == 0 && g_cycleActive)
+   // STATE 3: Check if cycle ended (all positions AND pending orders gone)
+   if(totalPositions == 0 && totalPending == 0 && g_cycleActive)
    {
       // Cycle ended - determine if it was TP or SL
       // Check last closed deal
