@@ -554,13 +554,18 @@ void StartNewCycle()
    // Buy TP/SL ตรวจกับ Bid → ใช้ค่าตรงๆ
    // Sell TP/SL ตรวจกับ Ask (= Bid + spread) → ต้อง +spreadComp เพื่อให้ trigger พร้อมกัน
    double spreadComp = InpSpreadCompensation * point;
-   double crossUp   = g_buyEntryLevel + zonePrice;     // จุด cross-over ด้านบน
-   double crossDown = g_sellEntryLevel - zonePrice;     // จุด cross-over ด้านล่าง
+
+   // Custom TP/SL Distance: ถ้าเปิดใช้ → ใช้ค่า InpTPDistance/InpSLDistance แทน zonePrice
+   double tpDist = InpUseCustomTPSL ? (InpTPDistance * point) : zonePrice;
+   double slDist = InpUseCustomTPSL ? (InpSLDistance * point) : zonePrice;
+
+   double crossUp   = g_buyEntryLevel + tpDist;      // จุด cross-over ด้านบน (TP Buy)
+   double crossDown = g_sellEntryLevel - tpDist;      // จุด cross-over ด้านล่าง (TP Sell)
 
    g_buyTP  = NormalizeDouble(crossUp, digits);                    // Bid >= crossUp
-   g_buySL  = NormalizeDouble(crossDown, digits);                  // Bid <= crossDown
-   g_sellSL = NormalizeDouble(crossUp + spreadComp, digits);       // Ask >= crossUp+spread → Bid >= crossUp ✓
-   g_sellTP = NormalizeDouble(crossDown + spreadComp, digits);     // Ask <= crossDown+spread → Bid <= crossDown ✓
+   g_buySL  = NormalizeDouble(g_buyEntryLevel - slDist, digits);   // Bid <= Buy Entry - SL dist
+   g_sellSL = NormalizeDouble(g_sellEntryLevel + slDist + spreadComp, digits);  // Ask >= Sell Entry + SL dist
+   g_sellTP = NormalizeDouble(crossDown + spreadComp, digits);     // Ask <= crossDown+spread
 
    // Reset lot and level
    g_currentLot = InpInitialLot;
