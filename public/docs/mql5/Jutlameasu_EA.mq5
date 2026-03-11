@@ -579,18 +579,18 @@ void StartNewCycle()
    {
        Print("WARNING: Buy Stop level ", g_buyEntryLevel, " <= Ask ", ask, " - adjusting");
        g_buyEntryLevel = NormalizeDouble(ask + 10 * point, digits);
-       // Recalculate crossUp and TP/SL
-       double crossUp_adj = g_buyEntryLevel + zonePrice;
+       // Recalculate crossUp and TP/SL using tpDist/slDist
+       double crossUp_adj = g_buyEntryLevel + tpDist;
        g_buyTP  = NormalizeDouble(crossUp_adj, digits);
-       g_sellSL = NormalizeDouble(crossUp_adj + spreadComp, digits);
+       g_sellSL = NormalizeDouble(g_sellEntryLevel + slDist + spreadComp, digits);
    }
    if(g_sellEntryLevel >= bid)
    {
       Print("WARNING: Sell Stop level ", g_sellEntryLevel, " >= Bid ", bid, " - adjusting");
       g_sellEntryLevel = NormalizeDouble(bid - 10 * point, digits);
-      // Recalculate crossDown and TP/SL
-      double crossDown_adj = g_sellEntryLevel - zonePrice;
-      g_buySL  = NormalizeDouble(crossDown_adj, digits);
+      // Recalculate crossDown and TP/SL using tpDist/slDist
+      double crossDown_adj = g_sellEntryLevel - tpDist;
+      g_buySL  = NormalizeDouble(g_buyEntryLevel - slDist, digits);
       g_sellTP = NormalizeDouble(crossDown_adj + spreadComp, digits);
    }
 
