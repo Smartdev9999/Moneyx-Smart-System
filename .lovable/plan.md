@@ -1,18 +1,14 @@
-## เพิ่มระบบ Max Drawdown แบบ Fix Dollar ใน Gold Miner EA
+## เพิ่ม Entry Mode แบบ Instant (ไม่ใช้ Indicator) ใน Gold Miner EA
 
-### สิ่งที่เพิ่ม/แก้ไข
-
-1. **Enum ใหม่**: `ENUM_DD_MODE` (`DD_PERCENT`, `DD_FIXED_DOLLAR`)
-2. **Input ใหม่**: `DrawdownMode` (เลือก % หรือ $), `MaxDrawdownDollar` (default 5000.0)
-3. **CheckDrawdownExit()**: เพิ่ม branch ตาม DrawdownMode — ใช้ % หรือ fixed $ ในการตรวจสอบ
-4. **Dashboard**: แสดง Current DD และ Max DD ตาม mode ที่เลือก (% หรือ $)
+### สิ่งที่เพิ่ม
+1. **Enum**: `ENTRY_INSTANT = 2` ใน `ENUM_ENTRY_MODE`
+2. **Instant Entry Block**: เปิด BUY+SELL ทันทีเมื่อฝั่งนั้นว่าง (buyCount==0 / sellCount==0) โดยไม่ต้องรอสัญญาณ SMA/ZigZag
+3. **Guard ยังคงใช้เหมือนเดิม**: g_newOrderBlocked, g_eaStopped, MaxOpenOrders, DontOpenSameCandle, TradingMode
 
 ### สิ่งที่ไม่เปลี่ยนแปลง
-
-- Trading Strategy Logic (SMA, ZigZag, Grid entry/exit)
+- Trading Strategy Logic (SMA signal, ZigZag signal)
 - Order Execution (trade.Buy/Sell/PositionClose)
-- TP/SL/Trailing/Breakeven calculations
+- TP/SL/Trailing/Breakeven/Grid calculations
 - License / News / Time Filter core logic
-- Accumulate / Matching Close logic
-- Dashboard buttons functionality
-- Rebate calculation system (from previous update)
+- Accumulate / Matching Close / Drawdown exit logic
+- Dashboard / Rebate system
