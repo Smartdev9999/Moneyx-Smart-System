@@ -726,6 +726,15 @@ void OnTick()
       if(g_currentLevel < InpMaxLevel) PlaceNextPendingOrder("BUY");
    }
 
+   // STATE 2.5: Position closed (TP/SL hit) but opposite pending still exists
+   // → Delete remaining pending orders to allow cycle reset
+   if(totalPositions == 0 && totalPending > 0 && g_cycleActive)
+   {
+      Print("Jutlameasu: All positions closed (TP/SL hit), cleaning remaining pending orders for cycle reset");
+      DeleteAllPendingOrders();
+      return; // Next tick → STATE 3 will detect cycle end and reset
+   }
+
    // STATE 3: Check if cycle ended (all positions AND pending orders gone)
    // Double-check with stored tickets to avoid timing issues in backtester
    bool buyStopExists = (g_buyStopTicket > 0 && OrderSelect(g_buyStopTicket));
