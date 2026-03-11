@@ -1,24 +1,70 @@
-## สร้าง EA ใหม่: Jutlameasu - Cross-Over TP/SL Hedging System
 
-### สิ่งที่สร้าง
-- **`public/docs/mql5/Jutlameasu_EA.mq5`** — EA สมบูรณ์พร้อม compile
 
-### Core Logic
-1. คำนวณ Mid Price → วาง Buy Stop + Sell Stop ที่ ±Zone/2
-2. TP/SL แบบ Cross-Over: Buy TP = Sell SL, Sell TP = Buy SL
-3. เมื่อ Pending ถูกกระตุ้น → วาง Pending ฝั่งตรงข้ามด้วย Lot x2 (Martingale)
-4. เมื่อ TP hit → รีเซ็ต cycle ใหม่ด้วย Lot เริ่มต้น
-5. Max Martingale Level + Drawdown Protection
+## แผนรวม: เพิ่ม 2 ฟีเจอร์ให้ Jutlameasu EA
 
-### Modules ที่รวมอยู่
-- License verification (x-api-key header)
-- Data Sync (trade history)
-- News Filter
-- Time Filter
-- Dashboard (table layout with buttons)
-- OnChartEvent (Pause/Resume, Close All, New Cycle)
+**ไฟล์:** `public/docs/mql5/Jutlameasu_EA.mq5`
 
-### สิ่งที่ไม่เปลี่ยนแปลง (ไฟล์อื่น)
-- Gold_Miner_EA.mq5 — ไม่แตะ
-- ไฟล์ EA อื่นทั้งหมด — ไม่แตะ
-- Backend Edge Functions — ไม่แตะ
+---
+
+### ฟีเจอร์ 1: Custom TP/SL Distance (แยก TP/SL ออกจาก Zone)
+
+**ปัญหา:** ตอนนี้ TP/SL ใช้ `InpZonePoints` เดียวกับ Entry → ถ้า Zone แคบ, TP/SL ก็แคบตาม
+
+**เพิ่ม Input Parameters:**
+```cpp
+input group "=== TP/SL Distance Settings ==="
+input bool     InpUseCustomTPSL     = false;    // Use Custom TP/SL Distance
+input double   InpTPDistance         = 1500;     // TP Distance from Entry (points)
+input double   InpSLDistance         = 1500;     // SL Distance from Entry (points)
+```
+
+**แก้ไข `StartNewCycle()` — คำนวณ crossUp/crossDown:**
+```cpp
+double tpDist = InpUseCustomTPSL ? (InpTPDistance * point) : zonePrice;
+double slDist = InpUseCustomTPSL ? (InpSLDistance * point) : zonePrice;
+
+double crossUp   = g_buyEntryLevel + tpDist;      // TP ด้านบน
+double crossDown = g_sellEntryLevel - tpDist;      // TP ด้านล่าง
+
+g_buyTP  = NormalizeDouble(crossUp, digits);
+g_buySL  = NormalizeDouble(g_buyEntryLevel - slDist, digits);
+g_sellSL = NormalizeDouble(g_sellEntryLevel + slDist + spreadComp, digits);
+g_sellTP = NormalizeDouble(crossDown + spreadComp, digits);
+```
+
+**อัปเดต Adjustment section + Dashboard** ให้ใช้ `tpDist/slDist` แทน `zonePrice` ด้วย
+
+---
+
+### ฟีเจอร์ 2: Accumulate Close (ปิดทั้งหมดเมื่อกำไรรวมถึงเป้า)
+
+**เพิ่ม Input Parameters:**
+```cpp
+input group "=== Accumulate Close ==="
+input bool     InpUseAccumulate     = false;    // Enable Accumulate Close
+input int      InpAccMinOrders      = 4;        // Minimum Orders to Activate
+input double   InpAccTarget         = 5.0;      // Accumulate Target ($)
+```
+
+**เพิ่มฟังก์ชัน `CheckAccumulateClose()`:**
+- นับ positions ที่มี MagicNumber ตรง
+- ถ้าจำนวน < `InpAccMinOrders` → return
+- คำนวณ floating P/L รวม (ใช้ `CalculateTotalFloatingPL()` ที่มีอยู่แล้ว)
+- ถ้า P/L >= `InpAccTarget` → `CloseAllPositions()` + `DeleteAllPendingOrders()` + รีเซ็ต cycle
+
+**เรียกใน `OnTick()` — หลัง `CheckDrawdownExit()` (line ~694):**
+```cpp
+if(InpUseAccumulate) CheckAccumulateClose();
+```
+
+**อัปเดต Dashboard** เพิ่มแสดง: `Acc: ON | Min:4 | Target:$5.00 | Float:$2.30`
+
+---
+
+### สิ่งที่ไม่เปลี่ยนแปลง
+- Order Execution Logic (BuyStop, SellStop, PlaceNextPendingOrder)
+- STATE 1-4 flow logic, Martingale level/lot calculation
+- Spread Compensation logic (ยังคง +spreadComp ให้ Sell)
+- License / News / Time Filter / Data Sync
+- OnChartEvent buttons / Drawdown Protection
+
