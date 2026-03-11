@@ -68,6 +68,14 @@ input int      DashboardY           = 30;      // Dashboard Y Position
 input color    DashboardColor       = clrWhite; // Dashboard Text Color
 input double   DashboardScale       = 1.0;     // Dashboard Scale (0.8-1.5)
 
+//--- Rebate Settings
+input group "=== Rebate Settings ==="
+input double   InpRebatePerLot      = 4.5;     // Rebate per Lot ($)
+
+//--- Spread Compensation
+input group "=== Spread Compensation ==="
+input double   InpSpreadCompensation = 65;      // Spread Compensation (points) for TP/SL
+
 //--- License Settings
 input group "=== License Settings ==="
 input string   InpLicenseServer     = "https://lkbhomsulgycxawwlnfh.supabase.co";
@@ -529,11 +537,13 @@ void StartNewCycle()
    g_buyEntryLevel  = NormalizeDouble(g_midPrice + zonePrice / 2.0, digits);
    g_sellEntryLevel = NormalizeDouble(g_midPrice - zonePrice / 2.0, digits);
 
-   // Cross-Over TP/SL
-   g_buyTP  = NormalizeDouble(g_buyEntryLevel + zonePrice, digits);    // Buy TP = Entry + Zone
-   g_buySL  = NormalizeDouble(g_sellEntryLevel - zonePrice, digits);   // Buy SL = Sell Entry - Zone
-   g_sellTP = NormalizeDouble(g_sellEntryLevel - zonePrice, digits);   // Sell TP = Sell Entry - Zone = Buy SL
-   g_sellSL = NormalizeDouble(g_buyEntryLevel + zonePrice, digits);    // Sell SL = Buy Entry + Zone = Buy TP
+   // Cross-Over TP/SL with Spread Compensation
+   // ขยาย TP/SL ออกเพิ่ม InpSpreadCompensation points เพื่อให้ทั้งสองฝั่งปิดพร้อมกัน
+   double spreadComp = InpSpreadCompensation * point;
+   g_buyTP  = NormalizeDouble(g_buyEntryLevel + zonePrice + spreadComp, digits);
+   g_buySL  = NormalizeDouble(g_sellEntryLevel - zonePrice - spreadComp, digits);
+   g_sellTP = NormalizeDouble(g_sellEntryLevel - zonePrice - spreadComp, digits);
+   g_sellSL = NormalizeDouble(g_buyEntryLevel + zonePrice + spreadComp, digits);
 
    // Reset lot and level
    g_currentLot = InpInitialLot;
@@ -545,18 +555,18 @@ void StartNewCycle()
    // Ensure levels are valid (Buy Stop must be above Ask, Sell Stop must be below Bid)
    if(g_buyEntryLevel <= ask)
    {
-      Print("WARNING: Buy Stop level ", g_buyEntryLevel, " <= Ask ", ask, " - adjusting");
-      g_buyEntryLevel = NormalizeDouble(ask + 10 * point, digits);
-      // Recalculate TP/SL
-      g_buyTP = NormalizeDouble(g_buyEntryLevel + zonePrice, digits);
-      g_sellSL = g_buyTP;
+       Print("WARNING: Buy Stop level ", g_buyEntryLevel, " <= Ask ", ask, " - adjusting");
+       g_buyEntryLevel = NormalizeDouble(ask + 10 * point, digits);
+       // Recalculate TP/SL with spread compensation
+       g_buyTP = NormalizeDouble(g_buyEntryLevel + zonePrice + spreadComp, digits);
+       g_sellSL = g_buyTP;
    }
    if(g_sellEntryLevel >= bid)
    {
       Print("WARNING: Sell Stop level ", g_sellEntryLevel, " >= Bid ", bid, " - adjusting");
       g_sellEntryLevel = NormalizeDouble(bid - 10 * point, digits);
-      g_sellTP = NormalizeDouble(g_sellEntryLevel - zonePrice, digits);
-      g_buySL = g_sellTP;
+       g_sellTP = NormalizeDouble(g_sellEntryLevel - zonePrice - spreadComp, digits);
+       g_buySL = g_sellTP;
    }
 
    // Place Buy Stop
@@ -970,7 +980,80 @@ double CalcDailyPL()
 }
 
 //+------------------------------------------------------------------+
-//| Dashboard Helper: Create Rectangle Label                           |
+//| CalcDailyClosedLots - sum closed deal volumes for today             |
+//+------------------------------------------------------------------+
+double CalcDailyClosedLots()
+{
+   MqlDateTime dt;
+   TimeToStruct(TimeCurrent(), dt);
+   dt.hour = 0; dt.min = 0; dt.sec = 0;
+   datetime dayStart = StructToTime(dt);
+
+   double total = 0;
+   if(!HistorySelect(dayStart, TimeCurrent())) return 0;
+   int totalDeals = HistoryDealsTotal();
+   for(int i = 0; i < totalDeals; i++)
+   {
+      ulong dealTicket = HistoryDealGetTicket(i);
+      if(dealTicket == 0) continue;
+      if(HistoryDealGetInteger(dealTicket, DEAL_MAGIC) != MagicNumber) continue;
+      if(HistoryDealGetString(dealTicket, DEAL_SYMBOL) != _Symbol) continue;
+      long dealEntry = HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
+      if(dealEntry == DEAL_ENTRY_OUT || dealEntry == DEAL_ENTRY_INOUT)
+         total += HistoryDealGetDouble(dealTicket, DEAL_VOLUME);
+   }
+   return total;
+}
+
+//+------------------------------------------------------------------+
+//| CalcTotalClosedOrders - count closed deals for this EA             |
+//+------------------------------------------------------------------+
+int CalcTotalClosedOrders()
+{
+   int count = 0;
+   if(!HistorySelect(0, TimeCurrent())) return 0;
+   int totalDeals = HistoryDealsTotal();
+   for(int i = 0; i < totalDeals; i++)
+   {
+      ulong dealTicket = HistoryDealGetTicket(i);
+      if(dealTicket == 0) continue;
+      if(HistoryDealGetInteger(dealTicket, DEAL_MAGIC) != MagicNumber) continue;
+      if(HistoryDealGetString(dealTicket, DEAL_SYMBOL) != _Symbol) continue;
+      long dealEntry = HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
+      if(dealEntry == DEAL_ENTRY_OUT || dealEntry == DEAL_ENTRY_INOUT)
+         count++;
+   }
+   return count;
+}
+
+//+------------------------------------------------------------------+
+//| CalcMonthlyPL - sum profit for deals closed this calendar month    |
+//+------------------------------------------------------------------+
+double CalcMonthlyPL()
+{
+   MqlDateTime dt;
+   TimeToStruct(TimeCurrent(), dt);
+   dt.day = 1;
+   dt.hour = 0; dt.min = 0; dt.sec = 0;
+   datetime monthStart = StructToTime(dt);
+
+   double total = 0;
+   if(!HistorySelect(monthStart, TimeCurrent())) return 0;
+   int totalDeals = HistoryDealsTotal();
+   for(int i = 0; i < totalDeals; i++)
+   {
+      ulong dealTicket = HistoryDealGetTicket(i);
+      if(dealTicket == 0) continue;
+      if(HistoryDealGetInteger(dealTicket, DEAL_MAGIC) != MagicNumber) continue;
+      if(HistoryDealGetString(dealTicket, DEAL_SYMBOL) != _Symbol) continue;
+      long dealEntry = HistoryDealGetInteger(dealTicket, DEAL_ENTRY);
+      if(dealEntry == DEAL_ENTRY_OUT || dealEntry == DEAL_ENTRY_INOUT)
+         total += HistoryDealGetDouble(dealTicket, DEAL_PROFIT)
+                + HistoryDealGetDouble(dealTicket, DEAL_SWAP);
+   }
+   return total;
+}
+
 //+------------------------------------------------------------------+
 void CreateDashRect(string name, int x, int y, int w, int h, color bgColor)
 {
@@ -1140,12 +1223,35 @@ void DisplayDashboard()
    DrawTableRow(row, "Max DD%",       DoubleToString(g_maxDD, 2) + "%",
                 (g_maxDD > 15 ? COLOR_LOSS : COLOR_TEXT), COLOR_SECTION_INFO); row++;
 
-   DrawTableRow(row, "Daily P/L",     "$" + DoubleToString(dailyPL, 2),
-                (dailyPL >= 0 ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_INFO); row++;
-   DrawTableRow(row, "Total P/L",     "$" + DoubleToString(totalHistoryPL, 2),
-                (totalHistoryPL >= 0 ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_INFO); row++;
    DrawTableRow(row, "Cycles (W/T)",  IntegerToString(g_winCycles) + " / " + IntegerToString(g_totalCycles),
                 COLOR_TEXT, COLOR_SECTION_INFO); row++;
+
+   // === HISTORY SECTION ===
+   color COLOR_SECTION_HIST   = C'40,60,100';
+   color COLOR_SECTION_REBATE = C'100,80,30';
+
+   double totalCurLot = lotsBuy + lotsSell;
+   double closedLots = CalcTotalClosedLots();
+   double dailyClosedLots = CalcDailyClosedLots();
+   int    closedOrders = CalcTotalClosedOrders();
+   double monthlyPL = CalcMonthlyPL();
+
+   DrawTableRow(row, "Total Cur. Lot",   DoubleToString(totalCurLot, 2) + " L", COLOR_TEXT, COLOR_SECTION_HIST); row++;
+   DrawTableRow(row, "Total Closed Lot", DoubleToString(closedLots, 2) + " L", COLOR_TEXT, COLOR_SECTION_HIST); row++;
+   DrawTableRow(row, "Daily Closed Lot", DoubleToString(dailyClosedLots, 2) + " L", COLOR_TEXT, COLOR_SECTION_HIST); row++;
+
+   double dailyRebate = dailyClosedLots * InpRebatePerLot;
+   double totalRebate = closedLots * InpRebatePerLot;
+   DrawTableRow(row, "Daily Rebate",     "$" + DoubleToString(dailyRebate, 2), COLOR_PROFIT, COLOR_SECTION_REBATE); row++;
+   DrawTableRow(row, "Total Rebate",     "$" + DoubleToString(totalRebate, 2), COLOR_PROFIT, COLOR_SECTION_REBATE); row++;
+
+   DrawTableRow(row, "Total Closed Ord", IntegerToString(closedOrders) + " orders", COLOR_TEXT, COLOR_SECTION_HIST); row++;
+   DrawTableRow(row, "Monthly P/L",      "$" + DoubleToString(monthlyPL, 2),
+                (monthlyPL >= 0 ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_HIST); row++;
+   DrawTableRow(row, "Daily P/L",        "$" + DoubleToString(dailyPL, 2),
+                (dailyPL >= 0 ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_HIST); row++;
+   DrawTableRow(row, "Total P/L",        "$" + DoubleToString(totalHistoryPL, 2),
+                (totalHistoryPL >= 0 ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_HIST); row++;
 
    // === NEWS/TIME STATUS ===
    string licStr = g_isLicenseValid ? "VALID" : "INVALID";
