@@ -671,8 +671,8 @@ void OnTick()
    int totalPositions = buyCount + sellCount;
    int totalPending = buyStopCount + sellStopCount;
 
-   // STATE 1: No positions, no pending → Start new cycle
-   if(totalPositions == 0 && totalPending == 0 && !g_newOrderBlocked)
+   // STATE 1: No positions, no pending, no active cycle → Start new cycle
+   if(totalPositions == 0 && totalPending == 0 && !g_cycleActive && !g_newOrderBlocked)
    {
       StartNewCycle();
       if(ShowDashboard) DisplayDashboard();
