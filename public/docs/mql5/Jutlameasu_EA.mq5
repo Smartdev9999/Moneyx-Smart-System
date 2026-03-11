@@ -1223,12 +1223,35 @@ void DisplayDashboard()
    DrawTableRow(row, "Max DD%",       DoubleToString(g_maxDD, 2) + "%",
                 (g_maxDD > 15 ? COLOR_LOSS : COLOR_TEXT), COLOR_SECTION_INFO); row++;
 
-   DrawTableRow(row, "Daily P/L",     "$" + DoubleToString(dailyPL, 2),
-                (dailyPL >= 0 ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_INFO); row++;
-   DrawTableRow(row, "Total P/L",     "$" + DoubleToString(totalHistoryPL, 2),
-                (totalHistoryPL >= 0 ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_INFO); row++;
    DrawTableRow(row, "Cycles (W/T)",  IntegerToString(g_winCycles) + " / " + IntegerToString(g_totalCycles),
                 COLOR_TEXT, COLOR_SECTION_INFO); row++;
+
+   // === HISTORY SECTION ===
+   color COLOR_SECTION_HIST   = C'40,60,100';
+   color COLOR_SECTION_REBATE = C'100,80,30';
+
+   double totalCurLot = lotsBuy + lotsSell;
+   double closedLots = CalcTotalClosedLots();
+   double dailyClosedLots = CalcDailyClosedLots();
+   int    closedOrders = CalcTotalClosedOrders();
+   double monthlyPL = CalcMonthlyPL();
+
+   DrawTableRow(row, "Total Cur. Lot",   DoubleToString(totalCurLot, 2) + " L", COLOR_TEXT, COLOR_SECTION_HIST); row++;
+   DrawTableRow(row, "Total Closed Lot", DoubleToString(closedLots, 2) + " L", COLOR_TEXT, COLOR_SECTION_HIST); row++;
+   DrawTableRow(row, "Daily Closed Lot", DoubleToString(dailyClosedLots, 2) + " L", COLOR_TEXT, COLOR_SECTION_HIST); row++;
+
+   double dailyRebate = dailyClosedLots * InpRebatePerLot;
+   double totalRebate = closedLots * InpRebatePerLot;
+   DrawTableRow(row, "Daily Rebate",     "$" + DoubleToString(dailyRebate, 2), COLOR_PROFIT, COLOR_SECTION_REBATE); row++;
+   DrawTableRow(row, "Total Rebate",     "$" + DoubleToString(totalRebate, 2), COLOR_PROFIT, COLOR_SECTION_REBATE); row++;
+
+   DrawTableRow(row, "Total Closed Ord", IntegerToString(closedOrders) + " orders", COLOR_TEXT, COLOR_SECTION_HIST); row++;
+   DrawTableRow(row, "Monthly P/L",      "$" + DoubleToString(monthlyPL, 2),
+                (monthlyPL >= 0 ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_HIST); row++;
+   DrawTableRow(row, "Daily P/L",        "$" + DoubleToString(dailyPL, 2),
+                (dailyPL >= 0 ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_HIST); row++;
+   DrawTableRow(row, "Total P/L",        "$" + DoubleToString(totalHistoryPL, 2),
+                (totalHistoryPL >= 0 ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_HIST); row++;
 
    // === NEWS/TIME STATUS ===
    string licStr = g_isLicenseValid ? "VALID" : "INVALID";
