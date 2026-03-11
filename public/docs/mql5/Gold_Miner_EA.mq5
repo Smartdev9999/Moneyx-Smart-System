@@ -1041,8 +1041,16 @@ void OnTick()
    {
       if(!g_eaStopped && !g_newOrderBlocked)
       {
-         bool canOpenMore = TotalOrderCount() < MaxOpenOrders;
+         datetime currentBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
          bool canOpenOnThisCandle = !(DontOpenSameCandle && currentBarTime == lastInitialCandleTime);
+
+         int buyCount = 0, sellCount = 0;
+         int gridLossBuy = 0, gridLossSell = 0;
+         int gridProfitBuy = 0, gridProfitSell = 0;
+         bool hasInitialBuy = false, hasInitialSell = false;
+         CountPositions(buyCount, sellCount, gridLossBuy, gridLossSell, gridProfitBuy, gridProfitSell, hasInitialBuy, hasInitialSell);
+
+         bool canOpenMore = TotalOrderCount() < MaxOpenOrders;
 
          // ===== BUY Entry (instant) =====
          if(buyCount == 0 && g_initialBuyPrice == 0 && canOpenMore && canOpenOnThisCandle)
