@@ -55,6 +55,18 @@ input double   InpLotMultiplier    = 2.0;      // Lot Multiplier (Martingale)
 input int      InpMaxLevel         = 8;        // Max Martingale Levels
 input bool     InpResetOnProfit    = true;     // Reset Lot on TP Hit
 
+//--- TP/SL Distance Settings
+input group "=== TP/SL Distance Settings ==="
+input bool     InpUseCustomTPSL     = false;    // Use Custom TP/SL Distance (false=Zone)
+input double   InpTPDistance         = 1500;     // TP Distance from Entry (points)
+input double   InpSLDistance         = 1500;     // SL Distance from Entry (points)
+
+//--- Accumulate Close
+input group "=== Accumulate Close ==="
+input bool     InpUseAccumulate     = false;    // Enable Accumulate Close
+input int      InpAccMinOrders      = 4;        // Minimum Orders to Activate
+input double   InpAccTarget         = 5.0;      // Accumulate Target ($)
+
 //--- Drawdown Protection
 input group "=== Drawdown Protection ==="
 input bool     InpUseDrawdownExit  = false;    // Enable Drawdown Protection
