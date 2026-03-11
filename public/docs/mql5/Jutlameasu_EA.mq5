@@ -57,6 +57,7 @@ input bool     InpResetOnProfit    = true;     // Reset Lot on TP Hit
 
 //--- Drawdown Protection
 input group "=== Drawdown Protection ==="
+input bool     InpUseDrawdownExit  = false;    // Enable Drawdown Protection
 input double   InpMaxDrawdownPct   = 50.0;     // Max Drawdown % (emergency close all)
 input bool     InpStopOnDrawdown   = true;     // Stop EA after Drawdown Close
 
@@ -855,6 +856,7 @@ void CheckDrawdownExit()
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
    double equity = AccountInfoDouble(ACCOUNT_EQUITY);
    if(balance <= 0) return;
+   if(!InpUseDrawdownExit) return;
 
    double dd = (balance - equity) / balance * 100.0;
 
