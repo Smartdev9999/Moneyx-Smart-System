@@ -565,8 +565,8 @@ void StartNewCycle()
    {
       Print("WARNING: Sell Stop level ", g_sellEntryLevel, " >= Bid ", bid, " - adjusting");
       g_sellEntryLevel = NormalizeDouble(bid - 10 * point, digits);
-      g_sellTP = NormalizeDouble(g_sellEntryLevel - zonePrice, digits);
-      g_buySL = g_sellTP;
+       g_sellTP = NormalizeDouble(g_sellEntryLevel - zonePrice - spreadComp, digits);
+       g_buySL = g_sellTP;
    }
 
    // Place Buy Stop
