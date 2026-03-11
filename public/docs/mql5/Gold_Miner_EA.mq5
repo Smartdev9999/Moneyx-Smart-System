@@ -48,7 +48,8 @@ enum ENUM_TRADE_MODE
 enum ENUM_ENTRY_MODE
 {
    ENTRY_SMA      = 0,  // SMA Mode (Original)
-   ENTRY_ZIGZAG   = 1   // ZigZag Multi-Timeframe Mode
+   ENTRY_ZIGZAG   = 1,  // ZigZag Multi-Timeframe Mode
+   ENTRY_INSTANT  = 2   // Instant Mode (No Indicator)
 };
 
 // License Status Enumeration
@@ -735,6 +736,46 @@ double CalcDailyPL()
    }
    return total;
 }
+
+   // ============================================================
+   // INSTANT MODE - No Indicator, Open Both Sides Immediately
+   // ============================================================
+   if(EntryMode == ENTRY_INSTANT)
+   {
+      if(!g_eaStopped && !g_newOrderBlocked)
+      {
+         bool canOpenMore = TotalOrderCount() < MaxOpenOrders;
+         bool canOpenOnThisCandle = !(DontOpenSameCandle && currentBarTime == lastInitialCandleTime);
+
+         // ===== BUY Entry (instant) =====
+         if(buyCount == 0 && g_initialBuyPrice == 0 && canOpenMore && canOpenOnThisCandle)
+         {
+            if(TradingMode == TRADE_BUY_ONLY || TradingMode == TRADE_BOTH)
+            {
+               if(OpenOrder(ORDER_TYPE_BUY, InitialLotSize, "GM_INIT"))
+               {
+                  g_initialBuyPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+                  lastInitialCandleTime = currentBarTime;
+                  ResetTrailingState();
+               }
+            }
+         }
+
+         // ===== SELL Entry (instant) =====
+         if(sellCount == 0 && g_initialSellPrice == 0 && canOpenMore && canOpenOnThisCandle)
+         {
+            if(TradingMode == TRADE_SELL_ONLY || TradingMode == TRADE_BOTH)
+            {
+               if(OpenOrder(ORDER_TYPE_SELL, InitialLotSize, "GM_INIT"))
+               {
+                  g_initialSellPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+                  lastInitialCandleTime = currentBarTime;
+                  ResetTrailingState();
+               }
+            }
+         }
+      }
+   }
 
 
 void OnTick()
