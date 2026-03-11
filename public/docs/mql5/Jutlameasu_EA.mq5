@@ -426,6 +426,24 @@ void DeleteAllPendingOrders()
 }
 
 //+------------------------------------------------------------------+
+//| Delete pending orders by specific type for this EA                 |
+//+------------------------------------------------------------------+
+void DeletePendingByType(ENUM_ORDER_TYPE orderType)
+{
+   for(int i = OrdersTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = OrderGetTicket(i);
+      if(ticket == 0) continue;
+      if(OrderGetInteger(ORDER_MAGIC) != MagicNumber) continue;
+      if(OrderGetString(ORDER_SYMBOL) != _Symbol) continue;
+      if((ENUM_ORDER_TYPE)OrderGetInteger(ORDER_TYPE) != orderType) continue;
+      trade.OrderDelete(ticket);
+      if(orderType == ORDER_TYPE_BUY_STOP) g_buyStopTicket = 0;
+      if(orderType == ORDER_TYPE_SELL_STOP) g_sellStopTicket = 0;
+   }
+}
+
+//+------------------------------------------------------------------+
 //| Close all positions for this EA                                    |
 //+------------------------------------------------------------------+
 void CloseAllPositions()
