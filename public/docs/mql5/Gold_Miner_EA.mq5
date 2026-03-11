@@ -841,7 +841,7 @@ void OnTick()
    }
    else if(EnableTrailingStop || EnableBreakeven)
    {
-      if(EntryMode == ENTRY_SMA)
+      if(EntryMode == ENTRY_SMA || EntryMode == ENTRY_INSTANT)
          ManageTrailingStop();
       // ZigZag mode: per-TF trailing handled in OnTickZigZagMTF()
    }
