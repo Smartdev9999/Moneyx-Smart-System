@@ -1221,6 +1221,8 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
             g_currentLevel = 0;
             g_currentLot = InpInitialLot;
             g_lastActivatedSide = "";
+            g_expectedBuyCount = 0;
+            g_expectedSellCount = 0;
             g_eaStopped = false;
             StartNewCycle();
             Print("New cycle started by user command");
