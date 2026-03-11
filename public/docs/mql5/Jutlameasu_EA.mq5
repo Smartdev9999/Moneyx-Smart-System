@@ -686,34 +686,26 @@ void OnTick()
    if(buyCount > 0 && g_lastActivatedSide != "BUY")
    {
       g_lastActivatedSide = "BUY";
-      Print("BUY STOP ACTIVATED at level ", g_currentLevel);
+      g_currentLevel++;
+      g_currentLot = InpInitialLot * MathPow(InpLotMultiplier, g_currentLevel);
+      Print("BUY STOP ACTIVATED → Level ", g_currentLevel, " Lot ", g_currentLot);
 
-      // If there's still a Sell Stop pending, leave it for the cross-over
-      // When the Buy hits SL, it means price went to Sell TP area
-      // The Sell Stop should already be placed
-      
-      // Check if we need to place a new Sell Stop for the next level
-      if(sellStopCount == 0 && g_currentLevel < InpMaxLevel)
-      {
-         // Increase level and lot for next reversal
-         g_currentLevel++;
-         g_currentLot = InpInitialLot * MathPow(InpLotMultiplier, g_currentLevel);
-         PlaceNextPendingOrder("SELL");
-      }
+      // Delete old Sell Stop (original lot) and replace with Martingale lot
+      if(sellStopCount > 0) DeletePendingByType(ORDER_TYPE_SELL_STOP);
+      if(g_currentLevel < InpMaxLevel) PlaceNextPendingOrder("SELL");
    }
 
    // Check if Sell Stop was triggered (we have a SELL position)
    if(sellCount > 0 && g_lastActivatedSide != "SELL")
    {
       g_lastActivatedSide = "SELL";
-      Print("SELL STOP ACTIVATED at level ", g_currentLevel);
+      g_currentLevel++;
+      g_currentLot = InpInitialLot * MathPow(InpLotMultiplier, g_currentLevel);
+      Print("SELL STOP ACTIVATED → Level ", g_currentLevel, " Lot ", g_currentLot);
 
-      if(buyStopCount == 0 && g_currentLevel < InpMaxLevel)
-      {
-         g_currentLevel++;
-         g_currentLot = InpInitialLot * MathPow(InpLotMultiplier, g_currentLevel);
-         PlaceNextPendingOrder("BUY");
-      }
+      // Delete old Buy Stop (original lot) and replace with Martingale lot
+      if(buyStopCount > 0) DeletePendingByType(ORDER_TYPE_BUY_STOP);
+      if(g_currentLevel < InpMaxLevel) PlaceNextPendingOrder("BUY");
    }
 
    // STATE 3: Check if cycle ended (all positions AND pending orders gone)
