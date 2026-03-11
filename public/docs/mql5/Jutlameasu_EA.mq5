@@ -539,6 +539,8 @@ void StartNewCycle()
    g_currentLot = InpInitialLot;
    g_currentLevel = 0;
    g_lastActivatedSide = "";
+   g_expectedBuyCount = 0;
+   g_expectedSellCount = 0;
 
    // Ensure levels are valid (Buy Stop must be above Ask, Sell Stop must be below Bid)
    if(g_buyEntryLevel <= ask)
