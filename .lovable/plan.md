@@ -1,24 +1,20 @@
-## สร้าง EA ใหม่: Jutlameasu - Cross-Over TP/SL Hedging System
+## เพิ่ม 2 ฟีเจอร์ให้ Jutlameasu EA v1.0
 
-### สิ่งที่สร้าง
-- **`public/docs/mql5/Jutlameasu_EA.mq5`** — EA สมบูรณ์พร้อม compile
+### ฟีเจอร์ 1: Custom TP/SL Distance
+- **Input ใหม่:** `InpUseCustomTPSL`, `InpTPDistance`, `InpSLDistance`
+- แยก TP/SL distance ออกจาก Zone → สามารถตั้งกรอบ TP/SL กว้างกว่า Entry Zone ได้
+- อัปเดต `StartNewCycle()` ใช้ `tpDist/slDist` แทน `zonePrice` ในการคำนวณ cross-over levels
+- Dashboard แสดง Buy SL / Sell SL แยก + โหมด TP/SL Distance
 
-### Core Logic
-1. คำนวณ Mid Price → วาง Buy Stop + Sell Stop ที่ ±Zone/2
-2. TP/SL แบบ Cross-Over: Buy TP = Sell SL, Sell TP = Buy SL
-3. เมื่อ Pending ถูกกระตุ้น → วาง Pending ฝั่งตรงข้ามด้วย Lot x2 (Martingale)
-4. เมื่อ TP hit → รีเซ็ต cycle ใหม่ด้วย Lot เริ่มต้น
-5. Max Martingale Level + Drawdown Protection
+### ฟีเจอร์ 2: Accumulate Close
+- **Input ใหม่:** `InpUseAccumulate`, `InpAccMinOrders`, `InpAccTarget`
+- เมื่อจำนวน positions >= MinOrders และ floating P/L >= Target → ปิดทั้งหมด + รีเซ็ต cycle
+- ฟังก์ชัน `CheckAccumulateClose()` เรียกใน `OnTick()` หลัง `CheckDrawdownExit()`
+- Dashboard แสดง Accumulate status + target + floating P/L
 
-### Modules ที่รวมอยู่
-- License verification (x-api-key header)
-- Data Sync (trade history)
-- News Filter
-- Time Filter
-- Dashboard (table layout with buttons)
-- OnChartEvent (Pause/Resume, Close All, New Cycle)
-
-### สิ่งที่ไม่เปลี่ยนแปลง (ไฟล์อื่น)
-- Gold_Miner_EA.mq5 — ไม่แตะ
-- ไฟล์ EA อื่นทั้งหมด — ไม่แตะ
-- Backend Edge Functions — ไม่แตะ
+### สิ่งที่ไม่เปลี่ยนแปลง
+- Order Execution Logic (BuyStop, SellStop, PlaceNextPendingOrder)
+- STATE 1-4 flow logic, Martingale level/lot calculation
+- Spread Compensation logic
+- License / News / Time Filter / Data Sync
+- OnChartEvent buttons / Drawdown Protection
