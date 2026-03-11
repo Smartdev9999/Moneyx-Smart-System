@@ -847,7 +847,7 @@ void OnTick()
    }
 
    //--- Every tick: TP/SL management
-   if(EntryMode == ENTRY_SMA)
+   if(EntryMode == ENTRY_SMA || EntryMode == ENTRY_INSTANT)
       ManageTPSL();
    // ZigZag mode: per-TF TP/SL + shared accumulate handled in OnTickZigZagMTF()
 
