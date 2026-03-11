@@ -140,6 +140,10 @@ int            g_lossCycles;         // Cycles lost (max level reached)
 ulong          g_buyStopTicket;      // Current Buy Stop pending order ticket
 ulong          g_sellStopTicket;     // Current Sell Stop pending order ticket
 
+// Expected position counts for activation detection
+int            g_expectedBuyCount  = 0;
+int            g_expectedSellCount = 0;
+
 // License Variables
 bool              g_isLicenseValid = false;
 bool              g_isTesterMode = false;
