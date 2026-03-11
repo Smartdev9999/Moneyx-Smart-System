@@ -68,6 +68,14 @@ input int      DashboardY           = 30;      // Dashboard Y Position
 input color    DashboardColor       = clrWhite; // Dashboard Text Color
 input double   DashboardScale       = 1.0;     // Dashboard Scale (0.8-1.5)
 
+//--- Rebate Settings
+input group "=== Rebate Settings ==="
+input double   InpRebatePerLot      = 4.5;     // Rebate per Lot ($)
+
+//--- Spread Compensation
+input group "=== Spread Compensation ==="
+input double   InpSpreadCompensation = 65;      // Spread Compensation (points) for TP/SL
+
 //--- License Settings
 input group "=== License Settings ==="
 input string   InpLicenseServer     = "https://lkbhomsulgycxawwlnfh.supabase.co";
