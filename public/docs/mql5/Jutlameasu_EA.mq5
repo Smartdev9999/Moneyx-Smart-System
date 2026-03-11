@@ -851,6 +851,8 @@ void CheckDrawdownExit()
       g_currentLevel = 0;
       g_currentLot = InpInitialLot;
       g_lastActivatedSide = "";
+      g_expectedBuyCount = 0;
+      g_expectedSellCount = 0;
 
       if(InpStopOnDrawdown)
       {
