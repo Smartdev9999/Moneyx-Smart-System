@@ -1039,17 +1039,47 @@ void OnTick()
    // ============================================================
    if(EntryMode == ENTRY_INSTANT)
    {
+      datetime currentBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
+      bool isNewBar = (currentBarTime != lastBarTime);
+      
+      if(isNewBar)
+      {
+         lastBarTime = currentBarTime;
+      }
+      
+      int buyCount = 0, sellCount = 0;
+      int gridLossBuy = 0, gridLossSell = 0;
+      int gridProfitBuy = 0, gridProfitSell = 0;
+      bool hasInitialBuy = false, hasInitialSell = false;
+      CountPositions(buyCount, sellCount, gridLossBuy, gridLossSell, 
+                     gridProfitBuy, gridProfitSell, hasInitialBuy, hasInitialSell);
+
+      // Auto-detect broker-closed positions
+      if(buyCount == 0 && g_initialBuyPrice != 0) { g_initialBuyPrice = 0; }
+      if(sellCount == 0 && g_initialSellPrice != 0) { g_initialSellPrice = 0; }
+
+      // Grid Loss management
+      if(!g_newOrderBlocked)
+      {
+         if((hasInitialBuy || g_initialBuyPrice > 0) && gridLossBuy < GridLoss_MaxTrades && buyCount > 0)
+            CheckGridLoss(POSITION_TYPE_BUY, gridLossBuy);
+         if((hasInitialSell || g_initialSellPrice > 0) && gridLossSell < GridLoss_MaxTrades && sellCount > 0)
+            CheckGridLoss(POSITION_TYPE_SELL, gridLossSell);
+      }
+
+      // Grid Profit management
+      if(!g_newOrderBlocked && GridProfit_Enable)
+      {
+         if((hasInitialBuy || g_initialBuyPrice > 0) && gridProfitBuy < GridProfit_MaxTrades && buyCount > 0)
+            CheckGridProfit(POSITION_TYPE_BUY, gridProfitBuy);
+         if((hasInitialSell || g_initialSellPrice > 0) && gridProfitSell < GridProfit_MaxTrades && sellCount > 0)
+            CheckGridProfit(POSITION_TYPE_SELL, gridProfitSell);
+      }
+
+      // Entry logic
       if(!g_eaStopped && !g_newOrderBlocked)
       {
-         datetime currentBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
          bool canOpenOnThisCandle = !(DontOpenSameCandle && currentBarTime == lastInitialCandleTime);
-
-         int buyCount = 0, sellCount = 0;
-         int gridLossBuy = 0, gridLossSell = 0;
-         int gridProfitBuy = 0, gridProfitSell = 0;
-         bool hasInitialBuy = false, hasInitialSell = false;
-         CountPositions(buyCount, sellCount, gridLossBuy, gridLossSell, gridProfitBuy, gridProfitSell, hasInitialBuy, hasInitialSell);
-
          bool canOpenMore = TotalOrderCount() < MaxOpenOrders;
 
          // ===== BUY Entry (instant) =====
@@ -1079,6 +1109,13 @@ void OnTick()
                }
             }
          }
+      }
+
+      // Reset justClosed flags
+      if(!g_newOrderBlocked)
+      {
+         justClosedBuy = false;
+         justClosedSell = false;
       }
    }
 
