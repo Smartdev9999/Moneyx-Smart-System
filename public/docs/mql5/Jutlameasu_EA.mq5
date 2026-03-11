@@ -706,36 +706,40 @@ void OnTick()
    // STATE 2: Check if a pending order was activated (position exists but was pending before)
    // Detect: We had a pending, now we have a position → the pending was triggered
    
-   // Check if Buy Stop was triggered (we have a BUY position)
-   if(buyCount > 0 && g_lastActivatedSide != "BUY")
+   // Check if Buy Stop was triggered (new BUY position appeared)
+   if(buyCount > g_expectedBuyCount)
    {
+      g_expectedBuyCount = buyCount;
       g_lastActivatedSide = "BUY";
       g_currentLevel++;
       g_currentLot = InpInitialLot * MathPow(InpLotMultiplier, g_currentLevel);
-      Print("BUY STOP ACTIVATED → Level ", g_currentLevel, " Lot ", g_currentLot);
+      Print("BUY STOP ACTIVATED → Level ", g_currentLevel, " Lot ", g_currentLot,
+            " expectedBuy=", g_expectedBuyCount, " expectedSell=", g_expectedSellCount);
 
       // Delete old Sell Stop (original lot) and replace with Martingale lot
       if(sellStopCount > 0) DeletePendingByType(ORDER_TYPE_SELL_STOP);
       if(g_currentLevel < InpMaxLevel) PlaceNextPendingOrder("SELL");
       
       if(ShowDashboard) DisplayDashboard();
-      return;  // Prevent Sell check from double-firing in same tick
+      return;
    }
 
-   // Check if Sell Stop was triggered (we have a SELL position)
-   if(sellCount > 0 && g_lastActivatedSide != "SELL")
+   // Check if Sell Stop was triggered (new SELL position appeared)
+   if(sellCount > g_expectedSellCount)
    {
+      g_expectedSellCount = sellCount;
       g_lastActivatedSide = "SELL";
       g_currentLevel++;
       g_currentLot = InpInitialLot * MathPow(InpLotMultiplier, g_currentLevel);
-      Print("SELL STOP ACTIVATED → Level ", g_currentLevel, " Lot ", g_currentLot);
+      Print("SELL STOP ACTIVATED → Level ", g_currentLevel, " Lot ", g_currentLot,
+            " expectedBuy=", g_expectedBuyCount, " expectedSell=", g_expectedSellCount);
 
       // Delete old Buy Stop (original lot) and replace with Martingale lot
       if(buyStopCount > 0) DeletePendingByType(ORDER_TYPE_BUY_STOP);
       if(g_currentLevel < InpMaxLevel) PlaceNextPendingOrder("BUY");
       
       if(ShowDashboard) DisplayDashboard();
-      return;  // Prevent double processing
+      return;
    }
 
    // STATE 2.5: Position closed (TP/SL hit) but opposite pending still exists
