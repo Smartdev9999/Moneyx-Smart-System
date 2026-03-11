@@ -710,6 +710,9 @@ void OnTick()
    // === DRAWDOWN CHECK ===
    CheckDrawdownExit();
 
+   // === ACCUMULATE CLOSE CHECK ===
+   if(InpUseAccumulate) CheckAccumulateClose();
+
    // === Track max drawdown ===
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
    double equity = AccountInfoDouble(ACCOUNT_EQUITY);
