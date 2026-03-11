@@ -1303,6 +1303,18 @@ void DisplayDashboard()
    DrawTableRow(row, "Cycles (W/T)",  IntegerToString(g_winCycles) + " / " + IntegerToString(g_totalCycles),
                 COLOR_TEXT, COLOR_SECTION_INFO); row++;
 
+   // === ACCUMULATE CLOSE SECTION ===
+   if(InpUseAccumulate)
+   {
+      color COLOR_SECTION_ACC = C'120,60,120';
+      int totalPos = buyCount + sellCount;
+      string accStatus = (totalPos >= InpAccMinOrders) ? "ACTIVE" : "WAIT (" + IntegerToString(totalPos) + "/" + IntegerToString(InpAccMinOrders) + ")";
+      color accStatusColor = (totalPos >= InpAccMinOrders) ? COLOR_PROFIT : clrYellow;
+      DrawTableRow(row, "Accumulate",    accStatus, accStatusColor, COLOR_SECTION_ACC); row++;
+      DrawTableRow(row, "Acc Target",    "$" + DoubleToString(InpAccTarget, 2) + " | Float: $" + DoubleToString(totalPL, 2),
+                   (totalPL >= InpAccTarget ? COLOR_PROFIT : COLOR_TEXT), COLOR_SECTION_ACC); row++;
+   }
+
    // === HISTORY SECTION ===
    color COLOR_SECTION_HIST   = C'40,60,100';
    color COLOR_SECTION_REBATE = C'100,80,30';
