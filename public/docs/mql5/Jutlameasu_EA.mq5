@@ -55,6 +55,18 @@ input double   InpLotMultiplier    = 2.0;      // Lot Multiplier (Martingale)
 input int      InpMaxLevel         = 8;        // Max Martingale Levels
 input bool     InpResetOnProfit    = true;     // Reset Lot on TP Hit
 
+//--- TP/SL Distance Settings
+input group "=== TP/SL Distance Settings ==="
+input bool     InpUseCustomTPSL     = false;    // Use Custom TP/SL Distance (false=Zone)
+input double   InpTPDistance         = 1500;     // TP Distance from Entry (points)
+input double   InpSLDistance         = 1500;     // SL Distance from Entry (points)
+
+//--- Accumulate Close
+input group "=== Accumulate Close ==="
+input bool     InpUseAccumulate     = false;    // Enable Accumulate Close
+input int      InpAccMinOrders      = 4;        // Minimum Orders to Activate
+input double   InpAccTarget         = 5.0;      // Accumulate Target ($)
+
 //--- Drawdown Protection
 input group "=== Drawdown Protection ==="
 input bool     InpUseDrawdownExit  = false;    // Enable Drawdown Protection
@@ -542,13 +554,18 @@ void StartNewCycle()
    // Buy TP/SL ตรวจกับ Bid → ใช้ค่าตรงๆ
    // Sell TP/SL ตรวจกับ Ask (= Bid + spread) → ต้อง +spreadComp เพื่อให้ trigger พร้อมกัน
    double spreadComp = InpSpreadCompensation * point;
-   double crossUp   = g_buyEntryLevel + zonePrice;     // จุด cross-over ด้านบน
-   double crossDown = g_sellEntryLevel - zonePrice;     // จุด cross-over ด้านล่าง
+
+   // Custom TP/SL Distance: ถ้าเปิดใช้ → ใช้ค่า InpTPDistance/InpSLDistance แทน zonePrice
+   double tpDist = InpUseCustomTPSL ? (InpTPDistance * point) : zonePrice;
+   double slDist = InpUseCustomTPSL ? (InpSLDistance * point) : zonePrice;
+
+   double crossUp   = g_buyEntryLevel + tpDist;      // จุด cross-over ด้านบน (TP Buy)
+   double crossDown = g_sellEntryLevel - tpDist;      // จุด cross-over ด้านล่าง (TP Sell)
 
    g_buyTP  = NormalizeDouble(crossUp, digits);                    // Bid >= crossUp
-   g_buySL  = NormalizeDouble(crossDown, digits);                  // Bid <= crossDown
-   g_sellSL = NormalizeDouble(crossUp + spreadComp, digits);       // Ask >= crossUp+spread → Bid >= crossUp ✓
-   g_sellTP = NormalizeDouble(crossDown + spreadComp, digits);     // Ask <= crossDown+spread → Bid <= crossDown ✓
+   g_buySL  = NormalizeDouble(g_buyEntryLevel - slDist, digits);   // Bid <= Buy Entry - SL dist
+   g_sellSL = NormalizeDouble(g_sellEntryLevel + slDist + spreadComp, digits);  // Ask >= Sell Entry + SL dist
+   g_sellTP = NormalizeDouble(crossDown + spreadComp, digits);     // Ask <= crossDown+spread
 
    // Reset lot and level
    g_currentLot = InpInitialLot;
@@ -562,18 +579,18 @@ void StartNewCycle()
    {
        Print("WARNING: Buy Stop level ", g_buyEntryLevel, " <= Ask ", ask, " - adjusting");
        g_buyEntryLevel = NormalizeDouble(ask + 10 * point, digits);
-       // Recalculate crossUp and TP/SL
-       double crossUp_adj = g_buyEntryLevel + zonePrice;
+       // Recalculate crossUp and TP/SL using tpDist/slDist
+       double crossUp_adj = g_buyEntryLevel + tpDist;
        g_buyTP  = NormalizeDouble(crossUp_adj, digits);
-       g_sellSL = NormalizeDouble(crossUp_adj + spreadComp, digits);
+       g_sellSL = NormalizeDouble(g_sellEntryLevel + slDist + spreadComp, digits);
    }
    if(g_sellEntryLevel >= bid)
    {
       Print("WARNING: Sell Stop level ", g_sellEntryLevel, " >= Bid ", bid, " - adjusting");
       g_sellEntryLevel = NormalizeDouble(bid - 10 * point, digits);
-      // Recalculate crossDown and TP/SL
-      double crossDown_adj = g_sellEntryLevel - zonePrice;
-      g_buySL  = NormalizeDouble(crossDown_adj, digits);
+      // Recalculate crossDown and TP/SL using tpDist/slDist
+      double crossDown_adj = g_sellEntryLevel - tpDist;
+      g_buySL  = NormalizeDouble(g_buyEntryLevel - slDist, digits);
       g_sellTP = NormalizeDouble(crossDown_adj + spreadComp, digits);
    }
 
@@ -692,6 +709,9 @@ void OnTick()
 
    // === DRAWDOWN CHECK ===
    CheckDrawdownExit();
+
+   // === ACCUMULATE CLOSE CHECK ===
+   if(InpUseAccumulate) CheckAccumulateClose();
 
    // === Track max drawdown ===
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
@@ -878,6 +898,47 @@ void CheckDrawdownExit()
          g_eaStopped = true;
          Print("EA STOPPED by Max Drawdown");
       }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Check Accumulate Close - close all when floating P/L hits target  |
+//+------------------------------------------------------------------+
+void CheckAccumulateClose()
+{
+   if(!InpUseAccumulate) return;
+
+   // Count positions with our magic number
+   int posCount = 0;
+   double totalPL = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      posCount++;
+      totalPL += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+   }
+
+   // Check conditions: minimum orders met AND floating P/L >= target
+   if(posCount >= InpAccMinOrders && totalPL >= InpAccTarget)
+   {
+      Print("ACCUMULATE CLOSE: ", posCount, " positions, Float P/L=$", DoubleToString(totalPL, 2),
+            " >= Target $", DoubleToString(InpAccTarget, 2), " → Closing ALL!");
+      CloseAllPositions();
+      DeleteAllPendingOrders();
+
+      // Reset cycle
+      g_cycleActive = false;
+      g_currentLevel = 0;
+      g_currentLot = InpInitialLot;
+      g_lastActivatedSide = "";
+      g_expectedBuyCount = 0;
+      g_expectedSellCount = 0;
+      g_totalCycles++;
+      g_winCycles++;
+      Print("ACCUMULATE CLOSE: Cycle completed successfully");
    }
 }
 
@@ -1201,7 +1262,14 @@ void DisplayDashboard()
    DrawTableRow(row, "Buy Entry",     DoubleToString(g_buyEntryLevel, digits), clrDodgerBlue, COLOR_SECTION_ZONE); row++;
    DrawTableRow(row, "Sell Entry",    DoubleToString(g_sellEntryLevel, digits), clrOrangeRed, COLOR_SECTION_ZONE); row++;
    DrawTableRow(row, "Buy TP / Sell SL", DoubleToString(g_buyTP, digits), COLOR_PROFIT, COLOR_SECTION_ZONE); row++;
+   DrawTableRow(row, "Buy SL",          DoubleToString(g_buySL, digits), COLOR_LOSS, COLOR_SECTION_ZONE); row++;
    DrawTableRow(row, "Sell TP / Buy SL", DoubleToString(g_sellTP, digits), COLOR_LOSS, COLOR_SECTION_ZONE); row++;
+   DrawTableRow(row, "Sell SL",          DoubleToString(g_sellSL, digits), COLOR_LOSS, COLOR_SECTION_ZONE); row++;
+
+   // TP/SL Distance mode
+   string tpslMode = InpUseCustomTPSL ? ("Custom TP:" + DoubleToString(InpTPDistance, 0) + " SL:" + DoubleToString(InpSLDistance, 0))
+                                      : ("Zone " + DoubleToString(InpZonePoints, 0) + " pts");
+   DrawTableRow(row, "TP/SL Dist",     tpslMode, clrCyan, COLOR_SECTION_ZONE); row++;
 
    // === TRADE SECTION ===
    DrawTableRow(row, "Balance",       "$" + DoubleToString(balance, 2), COLOR_TEXT, COLOR_SECTION_TRADE); row++;
@@ -1234,6 +1302,18 @@ void DisplayDashboard()
 
    DrawTableRow(row, "Cycles (W/T)",  IntegerToString(g_winCycles) + " / " + IntegerToString(g_totalCycles),
                 COLOR_TEXT, COLOR_SECTION_INFO); row++;
+
+   // === ACCUMULATE CLOSE SECTION ===
+   if(InpUseAccumulate)
+   {
+      color COLOR_SECTION_ACC = C'120,60,120';
+      int totalPos = buyCount + sellCount;
+      string accStatus = (totalPos >= InpAccMinOrders) ? "ACTIVE" : "WAIT (" + IntegerToString(totalPos) + "/" + IntegerToString(InpAccMinOrders) + ")";
+      color accStatusColor = (totalPos >= InpAccMinOrders) ? COLOR_PROFIT : clrYellow;
+      DrawTableRow(row, "Accumulate",    accStatus, accStatusColor, COLOR_SECTION_ACC); row++;
+      DrawTableRow(row, "Acc Target",    "$" + DoubleToString(InpAccTarget, 2) + " | Float: $" + DoubleToString(totalPL, 2),
+                   (totalPL >= InpAccTarget ? COLOR_PROFIT : COLOR_TEXT), COLOR_SECTION_ACC); row++;
+   }
 
    // === HISTORY SECTION ===
    color COLOR_SECTION_HIST   = C'40,60,100';
