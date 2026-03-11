@@ -538,12 +538,16 @@ void StartNewCycle()
    g_sellEntryLevel = NormalizeDouble(g_midPrice - zonePrice / 2.0, digits);
 
    // Cross-Over TP/SL with Spread Compensation
-   // ขยาย TP/SL ออกเพิ่ม InpSpreadCompensation points เพื่อให้ทั้งสองฝั่งปิดพร้อมกัน
+   // Buy TP/SL ตรวจกับ Bid → ใช้ค่าตรงๆ
+   // Sell TP/SL ตรวจกับ Ask (= Bid + spread) → ต้อง +spreadComp เพื่อให้ trigger พร้อมกัน
    double spreadComp = InpSpreadCompensation * point;
-   g_buyTP  = NormalizeDouble(g_buyEntryLevel + zonePrice + spreadComp, digits);
-   g_buySL  = NormalizeDouble(g_sellEntryLevel - zonePrice - spreadComp, digits);
-   g_sellTP = NormalizeDouble(g_sellEntryLevel - zonePrice - spreadComp, digits);
-   g_sellSL = NormalizeDouble(g_buyEntryLevel + zonePrice + spreadComp, digits);
+   double crossUp   = g_buyEntryLevel + zonePrice;     // จุด cross-over ด้านบน
+   double crossDown = g_sellEntryLevel - zonePrice;     // จุด cross-over ด้านล่าง
+
+   g_buyTP  = NormalizeDouble(crossUp, digits);                    // Bid >= crossUp
+   g_buySL  = NormalizeDouble(crossDown, digits);                  // Bid <= crossDown
+   g_sellSL = NormalizeDouble(crossUp + spreadComp, digits);       // Ask >= crossUp+spread → Bid >= crossUp ✓
+   g_sellTP = NormalizeDouble(crossDown + spreadComp, digits);     // Ask <= crossDown+spread → Bid <= crossDown ✓
 
    // Reset lot and level
    g_currentLot = InpInitialLot;
