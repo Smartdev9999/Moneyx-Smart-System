@@ -1,14 +1,15 @@
-## เพิ่ม Entry Mode แบบ Instant (ไม่ใช้ Indicator) ใน Gold Miner EA
+## แก้ไข Grid ไม่ทำงานใน Instant Mode - Gold Miner EA
 
-### สิ่งที่เพิ่ม
-1. **Enum**: `ENTRY_INSTANT = 2` ใน `ENUM_ENTRY_MODE`
-2. **Instant Entry Block**: เปิด BUY+SELL ทันทีเมื่อฝั่งนั้นว่าง (buyCount==0 / sellCount==0) โดยไม่ต้องรอสัญญาณ SMA/ZigZag
-3. **Guard ยังคงใช้เหมือนเดิม**: g_newOrderBlocked, g_eaStopped, MaxOpenOrders, DontOpenSameCandle, TradingMode
+### สิ่งที่แก้ไข
+1. **Line 844**: เพิ่ม `ENTRY_INSTANT` ให้ ManageTrailingStop ทำงาน
+2. **Line 850**: เพิ่ม `ENTRY_INSTANT` ให้ ManageTPSL ทำงาน
+3. **ENTRY_INSTANT block**: เพิ่ม Grid Loss, Grid Profit, auto-detect broker-closed, justClosed reset
 
 ### สิ่งที่ไม่เปลี่ยนแปลง
 - Trading Strategy Logic (SMA signal, ZigZag signal)
 - Order Execution (trade.Buy/Sell/PositionClose)
-- TP/SL/Trailing/Breakeven/Grid calculations
+- Grid calculation logic (CheckGridLoss, CheckGridProfit functions)
+- TP/SL/Trailing/Breakeven calculation functions
 - License / News / Time Filter core logic
 - Accumulate / Matching Close / Drawdown exit logic
 - Dashboard / Rebate system
