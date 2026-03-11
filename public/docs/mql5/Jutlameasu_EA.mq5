@@ -781,6 +781,8 @@ void OnTick()
       g_lastActivatedSide = "";
       g_currentLevel = 0;
       g_currentLot = InpInitialLot;
+      g_expectedBuyCount = 0;
+      g_expectedSellCount = 0;
 
       // Don't start new cycle immediately if blocked
       if(!g_newOrderBlocked)
