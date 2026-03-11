@@ -1,24 +1,31 @@
-## สร้าง EA ใหม่: Jutlameasu - Cross-Over TP/SL Hedging System
 
-### สิ่งที่สร้าง
-- **`public/docs/mql5/Jutlameasu_EA.mq5`** — EA สมบูรณ์พร้อม compile
 
-### Core Logic
-1. คำนวณ Mid Price → วาง Buy Stop + Sell Stop ที่ ±Zone/2
-2. TP/SL แบบ Cross-Over: Buy TP = Sell SL, Sell TP = Buy SL
-3. เมื่อ Pending ถูกกระตุ้น → วาง Pending ฝั่งตรงข้ามด้วย Lot x2 (Martingale)
-4. เมื่อ TP hit → รีเซ็ต cycle ใหม่ด้วย Lot เริ่มต้น
-5. Max Martingale Level + Drawdown Protection
+## แก้ไข Pending Orders ขยับตามราคาตลอดเวลา - Jutlameasu EA
 
-### Modules ที่รวมอยู่
-- License verification (x-api-key header)
-- Data Sync (trade history)
-- News Filter
-- Time Filter
-- Dashboard (table layout with buttons)
-- OnChartEvent (Pause/Resume, Close All, New Cycle)
+### สาเหตุ
+**Line 720:** `if(totalPositions == 0 && g_cycleActive)` — เงื่อนไขนี้ตรวจแค่ว่าไม่มี Position แต่ **ไม่ได้เช็คว่ายังมี Pending Orders อยู่หรือไม่**
 
-### สิ่งที่ไม่เปลี่ยนแปลง (ไฟล์อื่น)
-- Gold_Miner_EA.mq5 — ไม่แตะ
-- ไฟล์ EA อื่นทั้งหมด — ไม่แตะ
-- Backend Edge Functions — ไม่แตะ
+ผลคือทุก Tick ที่ยังไม่มี Position ถูกเปิด (Pending ยังไม่โดนกระตุ้น):
+1. STATE 3 ถูกเรียก → `DeleteAllPendingOrders()` ลบ Pending เดิม
+2. `StartNewCycle()` ถูกเรียก → คำนวณ `g_midPrice` ใหม่จากราคาปัจจุบัน → วาง Pending ใหม่
+3. Tick ถัดไปก็ทำซ้ำอีก → Pending ขยับตามราคาตลอด
+
+### การแก้ไข
+**ไฟล์:** `public/docs/mql5/Jutlameasu_EA.mq5`
+
+**Line 720:** เพิ่มเงื่อนไข `totalPending == 0` เพื่อให้ STATE 3 ทำงานเฉพาะเมื่อทั้ง Position และ Pending Orders หมดแล้วจริงๆ (หมายความว่า cycle จบแล้ว):
+
+```cpp
+// STATE 3: Check if cycle ended (all positions AND pending orders gone)
+if(totalPositions == 0 && totalPending == 0 && g_cycleActive)
+```
+
+**เพิ่ม STATE เสริม:** กรณีมี Pending แต่ไม่มี Position (รอ Pending ถูกกระตุ้น) → ไม่ทำอะไร ปล่อยให้ Pending คงที่
+
+### สิ่งที่ไม่เปลี่ยนแปลง
+- StartNewCycle logic, PlaceNextPendingOrder, Cross-Over TP/SL calculation
+- License / News / Time Filter
+- Dashboard, DrawChartLines
+- Martingale lot calculation
+- CheckDrawdownExit, RecoverState
+
