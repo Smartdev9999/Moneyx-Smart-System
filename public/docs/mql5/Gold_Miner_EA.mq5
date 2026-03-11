@@ -48,7 +48,8 @@ enum ENUM_TRADE_MODE
 enum ENUM_ENTRY_MODE
 {
    ENTRY_SMA      = 0,  // SMA Mode (Original)
-   ENTRY_ZIGZAG   = 1   // ZigZag Multi-Timeframe Mode
+   ENTRY_ZIGZAG   = 1,  // ZigZag Multi-Timeframe Mode
+   ENTRY_INSTANT  = 2   // Instant Mode (No Indicator)
 };
 
 // License Status Enumeration
