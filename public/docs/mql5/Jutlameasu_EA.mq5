@@ -902,6 +902,47 @@ void CheckDrawdownExit()
 }
 
 //+------------------------------------------------------------------+
+//| Check Accumulate Close - close all when floating P/L hits target  |
+//+------------------------------------------------------------------+
+void CheckAccumulateClose()
+{
+   if(!InpUseAccumulate) return;
+
+   // Count positions with our magic number
+   int posCount = 0;
+   double totalPL = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      posCount++;
+      totalPL += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+   }
+
+   // Check conditions: minimum orders met AND floating P/L >= target
+   if(posCount >= InpAccMinOrders && totalPL >= InpAccTarget)
+   {
+      Print("ACCUMULATE CLOSE: ", posCount, " positions, Float P/L=$", DoubleToString(totalPL, 2),
+            " >= Target $", DoubleToString(InpAccTarget, 2), " → Closing ALL!");
+      CloseAllPositions();
+      DeleteAllPendingOrders();
+
+      // Reset cycle
+      g_cycleActive = false;
+      g_currentLevel = 0;
+      g_currentLot = InpInitialLot;
+      g_lastActivatedSide = "";
+      g_expectedBuyCount = 0;
+      g_expectedSellCount = 0;
+      g_totalCycles++;
+      g_winCycles++;
+      Print("ACCUMULATE CLOSE: Cycle completed successfully");
+   }
+}
+
+//+------------------------------------------------------------------+
 //| Draw chart lines for price levels                                  |
 //+------------------------------------------------------------------+
 void DrawChartLines()
