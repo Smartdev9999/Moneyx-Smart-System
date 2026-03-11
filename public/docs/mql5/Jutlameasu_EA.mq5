@@ -856,6 +856,7 @@ void CheckDrawdownExit()
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
    double equity = AccountInfoDouble(ACCOUNT_EQUITY);
    if(balance <= 0) return;
+   if(!InpUseDrawdownExit) return;
 
    double dd = (balance - equity) / balance * 100.0;
 
