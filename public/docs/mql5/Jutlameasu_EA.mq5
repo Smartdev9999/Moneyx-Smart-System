@@ -555,11 +555,11 @@ void StartNewCycle()
    // Ensure levels are valid (Buy Stop must be above Ask, Sell Stop must be below Bid)
    if(g_buyEntryLevel <= ask)
    {
-      Print("WARNING: Buy Stop level ", g_buyEntryLevel, " <= Ask ", ask, " - adjusting");
-      g_buyEntryLevel = NormalizeDouble(ask + 10 * point, digits);
-      // Recalculate TP/SL
-      g_buyTP = NormalizeDouble(g_buyEntryLevel + zonePrice, digits);
-      g_sellSL = g_buyTP;
+       Print("WARNING: Buy Stop level ", g_buyEntryLevel, " <= Ask ", ask, " - adjusting");
+       g_buyEntryLevel = NormalizeDouble(ask + 10 * point, digits);
+       // Recalculate TP/SL with spread compensation
+       g_buyTP = NormalizeDouble(g_buyEntryLevel + zonePrice + spreadComp, digits);
+       g_sellSL = g_buyTP;
    }
    if(g_sellEntryLevel >= bid)
    {
