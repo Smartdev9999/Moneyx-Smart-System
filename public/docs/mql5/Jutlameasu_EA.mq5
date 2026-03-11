@@ -711,6 +711,9 @@ void OnTick()
       // Delete old Sell Stop (original lot) and replace with Martingale lot
       if(sellStopCount > 0) DeletePendingByType(ORDER_TYPE_SELL_STOP);
       if(g_currentLevel < InpMaxLevel) PlaceNextPendingOrder("SELL");
+      
+      if(ShowDashboard) DisplayDashboard();
+      return;  // Prevent Sell check from double-firing in same tick
    }
 
    // Check if Sell Stop was triggered (we have a SELL position)
@@ -724,6 +727,9 @@ void OnTick()
       // Delete old Buy Stop (original lot) and replace with Martingale lot
       if(buyStopCount > 0) DeletePendingByType(ORDER_TYPE_BUY_STOP);
       if(g_currentLevel < InpMaxLevel) PlaceNextPendingOrder("BUY");
+      
+      if(ShowDashboard) DisplayDashboard();
+      return;  // Prevent double processing
    }
 
    // STATE 2.5: Position closed (TP/SL hit) but opposite pending still exists
