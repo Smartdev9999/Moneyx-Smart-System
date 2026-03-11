@@ -671,8 +671,8 @@ void OnTick()
    int totalPositions = buyCount + sellCount;
    int totalPending = buyStopCount + sellStopCount;
 
-   // STATE 1: No positions, no pending → Start new cycle
-   if(totalPositions == 0 && totalPending == 0 && !g_newOrderBlocked)
+   // STATE 1: No positions, no pending, no active cycle → Start new cycle
+   if(totalPositions == 0 && totalPending == 0 && !g_cycleActive && !g_newOrderBlocked)
    {
       StartNewCycle();
       if(ShowDashboard) DisplayDashboard();
@@ -717,14 +717,18 @@ void OnTick()
    }
 
    // STATE 3: Check if cycle ended (all positions AND pending orders gone)
-   if(totalPositions == 0 && totalPending == 0 && g_cycleActive)
+   // Double-check with stored tickets to avoid timing issues in backtester
+   bool buyStopExists = (g_buyStopTicket > 0 && OrderSelect(g_buyStopTicket));
+   bool sellStopExists = (g_sellStopTicket > 0 && OrderSelect(g_sellStopTicket));
+   
+   if(totalPositions == 0 && totalPending == 0 && !buyStopExists && !sellStopExists && g_cycleActive)
    {
       // Cycle ended - determine if it was TP or SL
-      // Check last closed deal
       bool wasTP = CheckLastDealWasTP();
       
-      // Clean up any remaining pending orders
-      DeleteAllPendingOrders();
+      // Clear stored tickets (no need to delete - they're already gone)
+      g_buyStopTicket = 0;
+      g_sellStopTicket = 0;
 
       g_totalCycles++;
       if(wasTP)
