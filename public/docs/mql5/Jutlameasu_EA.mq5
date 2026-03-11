@@ -1262,7 +1262,14 @@ void DisplayDashboard()
    DrawTableRow(row, "Buy Entry",     DoubleToString(g_buyEntryLevel, digits), clrDodgerBlue, COLOR_SECTION_ZONE); row++;
    DrawTableRow(row, "Sell Entry",    DoubleToString(g_sellEntryLevel, digits), clrOrangeRed, COLOR_SECTION_ZONE); row++;
    DrawTableRow(row, "Buy TP / Sell SL", DoubleToString(g_buyTP, digits), COLOR_PROFIT, COLOR_SECTION_ZONE); row++;
+   DrawTableRow(row, "Buy SL",          DoubleToString(g_buySL, digits), COLOR_LOSS, COLOR_SECTION_ZONE); row++;
    DrawTableRow(row, "Sell TP / Buy SL", DoubleToString(g_sellTP, digits), COLOR_LOSS, COLOR_SECTION_ZONE); row++;
+   DrawTableRow(row, "Sell SL",          DoubleToString(g_sellSL, digits), COLOR_LOSS, COLOR_SECTION_ZONE); row++;
+
+   // TP/SL Distance mode
+   string tpslMode = InpUseCustomTPSL ? ("Custom TP:" + DoubleToString(InpTPDistance, 0) + " SL:" + DoubleToString(InpSLDistance, 0))
+                                      : ("Zone " + DoubleToString(InpZonePoints, 0) + " pts");
+   DrawTableRow(row, "TP/SL Dist",     tpslMode, clrCyan, COLOR_SECTION_ZONE); row++;
 
    // === TRADE SECTION ===
    DrawTableRow(row, "Balance",       "$" + DoubleToString(balance, 2), COLOR_TEXT, COLOR_SECTION_TRADE); row++;
