@@ -727,8 +727,8 @@ void OnTick()
    }
 
    // STATE 2.5: Position closed (TP/SL hit) but opposite pending still exists
-   // → Delete remaining pending orders to allow cycle reset
-   if(totalPositions == 0 && totalPending > 0 && g_cycleActive)
+   // Only trigger if a side was previously activated (not at cycle start)
+   if(totalPositions == 0 && totalPending > 0 && g_cycleActive && g_lastActivatedSide != "")
    {
       Print("Jutlameasu: All positions closed (TP/SL hit), cleaning remaining pending orders for cycle reset");
       DeleteAllPendingOrders();
