@@ -3275,6 +3275,18 @@ void CheckGridLossTF(int tfIdx, ENUM_POSITION_TYPE side, int currentGridCount)
    if(shouldOpen)
    {
       double lots = CalculateGridLot(currentGridCount, true);
+      
+      //--- Ensure lot continues from max existing lot after matching close
+      double maxExisting = FindMaxLotOnSide(side);
+      if(maxExisting > 0 && lots <= maxExisting)
+      {
+         if(GridLoss_LotMode == LOT_MULTIPLY)
+            lots = maxExisting * GridLoss_MultiplyFactor;
+         else if(GridLoss_LotMode == LOT_ADD)
+            lots = maxExisting + InitialLotSize * GridLoss_AddLotPerLevel;
+         // LOT_CUSTOM: keep level-based calculation
+      }
+      
       string suffix = "GL#" + IntegerToString(currentGridCount + 1);
       ENUM_ORDER_TYPE orderType = (side == POSITION_TYPE_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
       if(OpenOrderTF(tfIdx, orderType, lots, suffix))
