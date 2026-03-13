@@ -929,6 +929,23 @@ void OnTick()
    // === ACCUMULATE CLOSE CHECK ===
    if(InpUseAccumulate) CheckAccumulateClose();
 
+   // === GRID PROFIT CHECK ===
+   if(!g_newOrderBlocked && InpGP_Enable && g_cycleActive)
+   {
+      int gpBuy = 0, gpSell = 0;
+      CountGPPositions(gpBuy, gpSell);
+      g_gpBuyCount = gpBuy;
+      g_gpSellCount = gpSell;
+
+      int bCnt = 0, sCnt = 0;
+      CountMyPositions(bCnt, sCnt);
+
+      if(bCnt > 0 && gpBuy < InpGP_MaxTrades)
+         CheckGridProfit(POSITION_TYPE_BUY, gpBuy);
+      if(sCnt > 0 && gpSell < InpGP_MaxTrades)
+         CheckGridProfit(POSITION_TYPE_SELL, gpSell);
+   }
+
    // === Track max drawdown ===
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
    double equity = AccountInfoDouble(ACCOUNT_EQUITY);
