@@ -1560,6 +1560,17 @@ void DisplayDashboard()
                    (totalPL >= InpAccTarget ? COLOR_PROFIT : COLOR_TEXT), COLOR_SECTION_ACC); row++;
    }
 
+   // === GRID PROFIT SECTION ===
+   if(InpGP_Enable)
+   {
+      color COLOR_SECTION_GP = C'60,120,80';
+      string gpStatus = "ON | B:" + IntegerToString(g_gpBuyCount) + " S:" + IntegerToString(g_gpSellCount)
+                       + " | Max:" + IntegerToString(InpGP_MaxTrades);
+      DrawTableRow(row, "Grid Profit",   gpStatus, COLOR_PROFIT, COLOR_SECTION_GP); row++;
+      DrawTableRow(row, "GP Dist",       IntegerToString(InpGP_Points) + "pts | Mult:" + DoubleToString(InpGP_LotMultiplier, 1),
+                   COLOR_TEXT, COLOR_SECTION_GP); row++;
+   }
+
    // === HISTORY SECTION ===
    color COLOR_SECTION_HIST   = C'40,60,100';
    color COLOR_SECTION_REBATE = C'100,80,30';
