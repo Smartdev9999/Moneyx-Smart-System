@@ -563,6 +563,32 @@ void CountGPPositions(int &gpBuy, int &gpSell)
 }
 
 //+------------------------------------------------------------------+
+//| Find lot of the most recently opened position on a side           |
+//+------------------------------------------------------------------+
+double FindLastActivatedLot(ENUM_POSITION_TYPE side)
+{
+   double lastLot = 0;
+   datetime lastTime = 0;
+
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if(PositionGetInteger(POSITION_TYPE) != side) continue;
+
+      datetime openTime = (datetime)PositionGetInteger(POSITION_TIME);
+      if(openTime > lastTime)
+      {
+         lastTime = openTime;
+         lastLot = PositionGetDouble(POSITION_VOLUME);
+      }
+   }
+   return lastLot;
+}
+
+//+------------------------------------------------------------------+
 //| Find the open price of the last GP order or the initial order      |
 //+------------------------------------------------------------------+
 double FindLastGPOrInitialPrice(ENUM_POSITION_TYPE side)
