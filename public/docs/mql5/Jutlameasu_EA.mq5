@@ -1038,7 +1038,15 @@ void OnTick()
       g_expectedSellCount = sellCount;
       g_lastActivatedSide = "SELL";
       g_currentLevel++;
-      g_currentLot = InpInitialLot * MathPow(InpLotMultiplier, g_currentLevel);
+      if(InpGP_Enable)
+      {
+         double lastLot = FindLastActivatedLot(POSITION_TYPE_SELL);
+         g_currentLot = NormalizeLot(lastLot * InpLotMultiplier);
+      }
+      else
+      {
+         g_currentLot = InpInitialLot * MathPow(InpLotMultiplier, g_currentLevel);
+      }
       Print("SELL STOP ACTIVATED → Level ", g_currentLevel, " Lot ", g_currentLot,
             " expectedBuy=", g_expectedBuyCount, " expectedSell=", g_expectedSellCount);
 
