@@ -1057,6 +1057,9 @@ void OnTick()
       g_currentLot = InpInitialLot;
       g_expectedBuyCount = 0;
       g_expectedSellCount = 0;
+      g_gpBuyCount = 0;
+      g_gpSellCount = 0;
+      g_lastGPCandleTime = 0;
 
       // Don't start new cycle immediately if blocked
       if(!g_newOrderBlocked)
