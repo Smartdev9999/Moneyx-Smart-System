@@ -1131,6 +1131,9 @@ void CheckDrawdownExit()
       g_lastActivatedSide = "";
       g_expectedBuyCount = 0;
       g_expectedSellCount = 0;
+      g_gpBuyCount = 0;
+      g_gpSellCount = 0;
+      g_lastGPCandleTime = 0;
 
       if(InpStopOnDrawdown)
       {
