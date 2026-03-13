@@ -319,6 +319,15 @@ void RecoverState()
       Print("Recovering state: Positions B=", buyCount, " S=", sellCount,
             " Pending BS=", buyStopCount, " SS=", sellStopCount);
 
+      // Recover GP counts
+      CountGPPositions(g_gpBuyCount, g_gpSellCount);
+      if(g_gpBuyCount > 0 || g_gpSellCount > 0)
+         Print("Recovered GP positions: Buy=", g_gpBuyCount, " Sell=", g_gpSellCount);
+
+      // Set expected counts to include GP positions
+      g_expectedBuyCount = buyCount;
+      g_expectedSellCount = sellCount;
+
       // Try to recover price levels from existing positions
       if(buyCount > 0)
       {
