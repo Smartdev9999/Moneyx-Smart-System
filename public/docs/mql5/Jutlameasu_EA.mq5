@@ -1663,6 +1663,9 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
             g_lastActivatedSide = "";
             g_expectedBuyCount = 0;
             g_expectedSellCount = 0;
+            g_gpBuyCount = 0;
+            g_gpSellCount = 0;
+            g_lastGPCandleTime = 0;
             g_eaStopped = false;
             StartNewCycle();
             Print("New cycle started by user command");
