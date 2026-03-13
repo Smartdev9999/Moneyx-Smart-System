@@ -563,6 +563,32 @@ void CountGPPositions(int &gpBuy, int &gpSell)
 }
 
 //+------------------------------------------------------------------+
+//| Find lot of the most recently opened position on a side           |
+//+------------------------------------------------------------------+
+double FindLastActivatedLot(ENUM_POSITION_TYPE side)
+{
+   double lastLot = 0;
+   datetime lastTime = 0;
+
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if(PositionGetInteger(POSITION_TYPE) != side) continue;
+
+      datetime openTime = (datetime)PositionGetInteger(POSITION_TIME);
+      if(openTime > lastTime)
+      {
+         lastTime = openTime;
+         lastLot = PositionGetDouble(POSITION_VOLUME);
+      }
+   }
+   return lastLot;
+}
+
+//+------------------------------------------------------------------+
 //| Find the open price of the last GP order or the initial order      |
 //+------------------------------------------------------------------+
 double FindLastGPOrInitialPrice(ENUM_POSITION_TYPE side)
@@ -986,7 +1012,15 @@ void OnTick()
       g_expectedBuyCount = buyCount;
       g_lastActivatedSide = "BUY";
       g_currentLevel++;
-      g_currentLot = InpInitialLot * MathPow(InpLotMultiplier, g_currentLevel);
+      if(InpGP_Enable)
+      {
+         double lastLot = FindLastActivatedLot(POSITION_TYPE_BUY);
+         g_currentLot = NormalizeLot(lastLot * InpLotMultiplier);
+      }
+      else
+      {
+         g_currentLot = InpInitialLot * MathPow(InpLotMultiplier, g_currentLevel);
+      }
       Print("BUY STOP ACTIVATED → Level ", g_currentLevel, " Lot ", g_currentLot,
             " expectedBuy=", g_expectedBuyCount, " expectedSell=", g_expectedSellCount);
 
@@ -1004,7 +1038,15 @@ void OnTick()
       g_expectedSellCount = sellCount;
       g_lastActivatedSide = "SELL";
       g_currentLevel++;
-      g_currentLot = InpInitialLot * MathPow(InpLotMultiplier, g_currentLevel);
+      if(InpGP_Enable)
+      {
+         double lastLot = FindLastActivatedLot(POSITION_TYPE_SELL);
+         g_currentLot = NormalizeLot(lastLot * InpLotMultiplier);
+      }
+      else
+      {
+         g_currentLot = InpInitialLot * MathPow(InpLotMultiplier, g_currentLevel);
+      }
       Print("SELL STOP ACTIVATED → Level ", g_currentLevel, " Lot ", g_currentLot,
             " expectedBuy=", g_expectedBuyCount, " expectedSell=", g_expectedSellCount);
 
