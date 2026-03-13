@@ -173,6 +173,11 @@ ulong          g_sellStopTicket;     // Current Sell Stop pending order ticket
 int            g_expectedBuyCount  = 0;
 int            g_expectedSellCount = 0;
 
+// Grid Profit tracking
+datetime       g_lastGPCandleTime = 0;
+int            g_gpBuyCount = 0;
+int            g_gpSellCount = 0;
+
 // License Variables
 bool              g_isLicenseValid = false;
 bool              g_isTesterMode = false;
