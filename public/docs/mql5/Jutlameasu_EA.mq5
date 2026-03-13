@@ -67,6 +67,14 @@ input bool     InpUseAccumulate     = false;    // Enable Accumulate Close
 input int      InpAccMinOrders      = 4;        // Minimum Orders to Activate
 input double   InpAccTarget         = 5.0;      // Accumulate Target ($)
 
+//--- Grid Profit Side
+input group "=== Grid Profit Side ==="
+input bool     InpGP_Enable         = false;    // Enable Grid Profit
+input int      InpGP_MaxTrades      = 3;        // Max GP Trades per Side
+input double   InpGP_LotMultiplier  = 2.0;      // GP Lot Multiplier (from previous lot)
+input int      InpGP_Points         = 500;      // GP Distance (points)
+input bool     InpGP_OnlyNewCandle  = true;     // GP Only on New Candle
+
 //--- Drawdown Protection
 input group "=== Drawdown Protection ==="
 input bool     InpUseDrawdownExit  = false;    // Enable Drawdown Protection
