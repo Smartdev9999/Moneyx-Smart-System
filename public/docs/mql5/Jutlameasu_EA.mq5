@@ -67,6 +67,14 @@ input bool     InpUseAccumulate     = false;    // Enable Accumulate Close
 input int      InpAccMinOrders      = 4;        // Minimum Orders to Activate
 input double   InpAccTarget         = 5.0;      // Accumulate Target ($)
 
+//--- Grid Profit Side
+input group "=== Grid Profit Side ==="
+input bool     InpGP_Enable         = false;    // Enable Grid Profit
+input int      InpGP_MaxTrades      = 3;        // Max GP Trades per Side
+input double   InpGP_LotMultiplier  = 2.0;      // GP Lot Multiplier (from previous lot)
+input int      InpGP_Points         = 500;      // GP Distance (points)
+input bool     InpGP_OnlyNewCandle  = true;     // GP Only on New Candle
+
 //--- Drawdown Protection
 input group "=== Drawdown Protection ==="
 input bool     InpUseDrawdownExit  = false;    // Enable Drawdown Protection
@@ -164,6 +172,11 @@ ulong          g_sellStopTicket;     // Current Sell Stop pending order ticket
 // Expected position counts for activation detection
 int            g_expectedBuyCount  = 0;
 int            g_expectedSellCount = 0;
+
+// Grid Profit tracking
+datetime       g_lastGPCandleTime = 0;
+int            g_gpBuyCount = 0;
+int            g_gpSellCount = 0;
 
 // License Variables
 bool              g_isLicenseValid = false;
@@ -305,6 +318,15 @@ void RecoverState()
       g_cycleActive = true;
       Print("Recovering state: Positions B=", buyCount, " S=", sellCount,
             " Pending BS=", buyStopCount, " SS=", sellStopCount);
+
+      // Recover GP counts
+      CountGPPositions(g_gpBuyCount, g_gpSellCount);
+      if(g_gpBuyCount > 0 || g_gpSellCount > 0)
+         Print("Recovered GP positions: Buy=", g_gpBuyCount, " Sell=", g_gpSellCount);
+
+      // Set expected counts to include GP positions
+      g_expectedBuyCount = buyCount;
+      g_expectedSellCount = sellCount;
 
       // Try to recover price levels from existing positions
       if(buyCount > 0)
@@ -519,6 +541,200 @@ double CalculateTotalLots(ENUM_POSITION_TYPE side)
 }
 
 //+------------------------------------------------------------------+
+//| Count GP positions by side (comment contains "JM_GP")             |
+//+------------------------------------------------------------------+
+void CountGPPositions(int &gpBuy, int &gpSell)
+{
+   gpBuy = 0;
+   gpSell = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      string comment = PositionGetString(POSITION_COMMENT);
+      if(StringFind(comment, "JM_GP") >= 0)
+      {
+         if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) gpBuy++;
+         else if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_SELL) gpSell++;
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Find the open price of the last GP order or the initial order      |
+//+------------------------------------------------------------------+
+double FindLastGPOrInitialPrice(ENUM_POSITION_TYPE side)
+{
+   double lastGPPrice = 0;
+   int    lastGPNum   = -1;
+   double initialPrice = 0;
+
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if(PositionGetInteger(POSITION_TYPE) != side) continue;
+
+      string comment = PositionGetString(POSITION_COMMENT);
+      double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+
+      int gpPos = StringFind(comment, "JM_GP#");
+      if(gpPos >= 0)
+      {
+         string numStr = StringSubstr(comment, gpPos + 6);
+         int gpNum = (int)StringToInteger(numStr);
+         if(gpNum > lastGPNum)
+         {
+            lastGPNum = gpNum;
+            lastGPPrice = openPrice;
+         }
+      }
+      else
+      {
+         // Initial order (JM_BS or JM_SS)
+         if(initialPrice == 0) initialPrice = openPrice;
+      }
+   }
+
+   return (lastGPPrice > 0) ? lastGPPrice : initialPrice;
+}
+
+//+------------------------------------------------------------------+
+//| Calculate GP lot size                                              |
+//+------------------------------------------------------------------+
+double CalculateGPLot(ENUM_POSITION_TYPE side, int currentGPCount)
+{
+   // Find the last position lot on this side (GP or initial)
+   double lastLot = 0;
+   int    lastGPNum = -1;
+   double initialLot = 0;
+
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if(PositionGetInteger(POSITION_TYPE) != side) continue;
+
+      string comment = PositionGetString(POSITION_COMMENT);
+      double vol = PositionGetDouble(POSITION_VOLUME);
+
+      int gpPos = StringFind(comment, "JM_GP#");
+      if(gpPos >= 0)
+      {
+         string numStr = StringSubstr(comment, gpPos + 6);
+         int gpNum = (int)StringToInteger(numStr);
+         if(gpNum > lastGPNum)
+         {
+            lastGPNum = gpNum;
+            lastLot = vol;
+         }
+      }
+      else
+      {
+         initialLot = vol;
+      }
+   }
+
+   double baseLot = (lastLot > 0) ? lastLot : initialLot;
+   if(baseLot <= 0) baseLot = InpInitialLot;
+
+   return baseLot * InpGP_LotMultiplier;
+}
+
+//+------------------------------------------------------------------+
+//| Check Grid Profit conditions and open GP order                     |
+//+------------------------------------------------------------------+
+void CheckGridProfit(ENUM_POSITION_TYPE side, int currentGPCount)
+{
+   if(currentGPCount >= InpGP_MaxTrades) return;
+
+   // OnlyNewCandle check
+   if(InpGP_OnlyNewCandle)
+   {
+      datetime barTime = iTime(_Symbol, PERIOD_CURRENT, 0);
+      if(barTime == g_lastGPCandleTime) return;
+   }
+
+   // Find last order price (GP or initial)
+   double lastPrice = FindLastGPOrInitialPrice(side);
+   if(lastPrice == 0) return;
+
+   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   double currentPrice = (side == POSITION_TYPE_BUY) ?
+      SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
+
+   // Check distance condition
+   bool shouldOpen = false;
+   if(side == POSITION_TYPE_BUY && currentPrice >= lastPrice + InpGP_Points * point)
+      shouldOpen = true;
+   else if(side == POSITION_TYPE_SELL && currentPrice <= lastPrice - InpGP_Points * point)
+      shouldOpen = true;
+
+   if(shouldOpen)
+   {
+      double lots = NormalizeLot(CalculateGPLot(side, currentGPCount));
+      string comment = "JM_GP#" + IntegerToString(currentGPCount + 1);
+
+      bool success = false;
+      if(side == POSITION_TYPE_BUY)
+         success = trade.Buy(lots, _Symbol, 0, 0, 0, comment);
+      else
+         success = trade.Sell(lots, _Symbol, 0, 0, 0, comment);
+
+      if(success)
+      {
+         Print("GP ORDER OPENED: ", comment, " Side=", (side == POSITION_TYPE_BUY ? "BUY" : "SELL"),
+               " Lot=", lots, " Price=", currentPrice);
+
+         g_lastGPCandleTime = iTime(_Symbol, PERIOD_CURRENT, 0);
+
+         // Update expected counts so STATE 2 doesn't misfire
+         if(side == POSITION_TYPE_BUY)
+            g_expectedBuyCount++;
+         else
+            g_expectedSellCount++;
+
+         // Modify opposite pending stop with new lot
+         ModifyOppositePendingAfterGP(side);
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Modify opposite pending stop after GP order opens                  |
+//| Formula: newLot = sum(all positions on GP side) × InpLotMultiplier |
+//+------------------------------------------------------------------+
+void ModifyOppositePendingAfterGP(ENUM_POSITION_TYPE gpSide)
+{
+   if(gpSide == POSITION_TYPE_BUY)
+   {
+      double totalBuyLots = CalculateTotalLots(POSITION_TYPE_BUY);
+      double newSellLot = NormalizeLot(totalBuyLots * InpLotMultiplier);
+
+      DeletePendingByType(ORDER_TYPE_SELL_STOP);
+      g_currentLot = newSellLot;
+      PlaceNextPendingOrder("SELL");
+      Print("GP: Updated Sell Stop lot to ", newSellLot, " (totalBuyLots=", totalBuyLots, " × ", InpLotMultiplier, ")");
+   }
+   else
+   {
+      double totalSellLots = CalculateTotalLots(POSITION_TYPE_SELL);
+      double newBuyLot = NormalizeLot(totalSellLots * InpLotMultiplier);
+
+      DeletePendingByType(ORDER_TYPE_BUY_STOP);
+      g_currentLot = newBuyLot;
+      PlaceNextPendingOrder("BUY");
+      Print("GP: Updated Buy Stop lot to ", newBuyLot, " (totalSellLots=", totalSellLots, " × ", InpLotMultiplier, ")");
+   }
+}
+
+//+------------------------------------------------------------------+
 //| Normalize lot size                                                 |
 //+------------------------------------------------------------------+
 double NormalizeLot(double lots)
@@ -573,6 +789,9 @@ void StartNewCycle()
    g_lastActivatedSide = "";
    g_expectedBuyCount = 0;
    g_expectedSellCount = 0;
+   g_gpBuyCount = 0;
+   g_gpSellCount = 0;
+   g_lastGPCandleTime = 0;
 
    // Ensure levels are valid (Buy Stop must be above Ask, Sell Stop must be below Bid)
    if(g_buyEntryLevel <= ask)
@@ -713,6 +932,23 @@ void OnTick()
    // === ACCUMULATE CLOSE CHECK ===
    if(InpUseAccumulate) CheckAccumulateClose();
 
+   // === GRID PROFIT CHECK ===
+   if(!g_newOrderBlocked && InpGP_Enable && g_cycleActive)
+   {
+      int gpBuy = 0, gpSell = 0;
+      CountGPPositions(gpBuy, gpSell);
+      g_gpBuyCount = gpBuy;
+      g_gpSellCount = gpSell;
+
+      int bCnt = 0, sCnt = 0;
+      CountMyPositions(bCnt, sCnt);
+
+      if(bCnt > 0 && gpBuy < InpGP_MaxTrades)
+         CheckGridProfit(POSITION_TYPE_BUY, gpBuy);
+      if(sCnt > 0 && gpSell < InpGP_MaxTrades)
+         CheckGridProfit(POSITION_TYPE_SELL, gpSell);
+   }
+
    // === Track max drawdown ===
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
    double equity = AccountInfoDouble(ACCOUNT_EQUITY);
@@ -821,6 +1057,9 @@ void OnTick()
       g_currentLot = InpInitialLot;
       g_expectedBuyCount = 0;
       g_expectedSellCount = 0;
+      g_gpBuyCount = 0;
+      g_gpSellCount = 0;
+      g_lastGPCandleTime = 0;
 
       // Don't start new cycle immediately if blocked
       if(!g_newOrderBlocked)
@@ -892,6 +1131,9 @@ void CheckDrawdownExit()
       g_lastActivatedSide = "";
       g_expectedBuyCount = 0;
       g_expectedSellCount = 0;
+      g_gpBuyCount = 0;
+      g_gpSellCount = 0;
+      g_lastGPCandleTime = 0;
 
       if(InpStopOnDrawdown)
       {
@@ -936,6 +1178,9 @@ void CheckAccumulateClose()
       g_lastActivatedSide = "";
       g_expectedBuyCount = 0;
       g_expectedSellCount = 0;
+      g_gpBuyCount = 0;
+      g_gpSellCount = 0;
+      g_lastGPCandleTime = 0;
       g_totalCycles++;
       g_winCycles++;
       Print("ACCUMULATE CLOSE: Cycle completed successfully");
@@ -1315,6 +1560,17 @@ void DisplayDashboard()
                    (totalPL >= InpAccTarget ? COLOR_PROFIT : COLOR_TEXT), COLOR_SECTION_ACC); row++;
    }
 
+   // === GRID PROFIT SECTION ===
+   if(InpGP_Enable)
+   {
+      color COLOR_SECTION_GP = C'60,120,80';
+      string gpStatus = "ON | B:" + IntegerToString(g_gpBuyCount) + " S:" + IntegerToString(g_gpSellCount)
+                       + " | Max:" + IntegerToString(InpGP_MaxTrades);
+      DrawTableRow(row, "Grid Profit",   gpStatus, COLOR_PROFIT, COLOR_SECTION_GP); row++;
+      DrawTableRow(row, "GP Dist",       IntegerToString(InpGP_Points) + "pts | Mult:" + DoubleToString(InpGP_LotMultiplier, 1),
+                   COLOR_TEXT, COLOR_SECTION_GP); row++;
+   }
+
    // === HISTORY SECTION ===
    color COLOR_SECTION_HIST   = C'40,60,100';
    color COLOR_SECTION_REBATE = C'100,80,30';
@@ -1418,6 +1674,9 @@ void OnChartEvent(const int id, const long &lparam, const double &dparam, const 
             g_lastActivatedSide = "";
             g_expectedBuyCount = 0;
             g_expectedSellCount = 0;
+            g_gpBuyCount = 0;
+            g_gpSellCount = 0;
+            g_lastGPCandleTime = 0;
             g_eaStopped = false;
             StartNewCycle();
             Print("New cycle started by user command");
