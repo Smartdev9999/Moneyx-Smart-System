@@ -851,17 +851,9 @@ void OnTick()
       ManageTPSL();
    // ZigZag mode: per-TF TP/SL + shared accumulate handled in OnTickZigZagMTF()
 
-   //--- New bar only: Matching Close (pair profit vs loss orders)
-   {
-      datetime mcBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
-      static datetime s_lastMatchingBarTime = 0;
-      if(mcBarTime != s_lastMatchingBarTime)
-      {
-         s_lastMatchingBarTime = mcBarTime;
-         if(UseMatchingClose)
-            ManageMatchingClose();
-      }
-   }
+   //--- Every tick: Matching Close (pair profit vs loss orders)
+   if(UseMatchingClose)
+      ManageMatchingClose();
 
    //--- Every tick: Drawdown check
    CheckDrawdownExit();
@@ -5627,80 +5619,63 @@ void ManageMatchingClose()
             else
                break;  // Not enough profit
          }
-         //--- Case 2: Has loss orders — multi-profit + oldest-loss matching
+         //--- Case 2: Has loss orders — Budget-based matching
+         //    Step 1: Sum ALL profit orders
+         //    Step 2: budget = totalProfit - MinProfit
+         //    Step 3: Scan losses oldest-first, skip if too heavy, include if fits budget
+         //    Step 4: Close all profit + matched losses
          else
          {
-            // Strategy: accumulate profit orders (biggest first) and for each level
-            // of accumulated profit, greedily add loss orders (oldest first) up to maxLoss.
-            // When net >= MinProfit, close the entire set.
-            bool found = false;
-            double cumProfit = 0;
+            double totalProfit = 0;
+            for(int p = 0; p < profitCount; p++)
+               totalProfit += profitValues[p];
 
-             for(int p = 0; p < profitCount && !found; p++)
-             {
-                cumProfit += profitValues[p];
-                int usedProfitCount = p + 1;
+            double budget = totalProfit - MatchingMinProfit;
+            if(budget <= 0) break;  // Not enough profit even for MinProfit
 
-                // Must have at least minPO profit orders before trying to match
-                if(usedProfitCount < minPO) continue;
+            int closeLossIdx[];
+            ArrayResize(closeLossIdx, 0);
+            double cumLoss = 0;
+            int lossUsed = 0;
 
-                // Try to greedily include loss orders (oldest first)
-               int closeLossIdx[];       // indices of loss orders to close
-               ArrayResize(closeLossIdx, 0);
-               double cumLoss = 0;
-               int lossUsed = 0;
-
-               for(int l = 0; l < lossCount && lossUsed < maxLoss; l++)
+            for(int l = 0; l < lossCount && lossUsed < maxLoss; l++)
+            {
+               double absLoss = MathAbs(lossValues[l]);
+               if(cumLoss + absLoss <= budget)
                {
-                  double netIfAdd = cumProfit + cumLoss + lossValues[l];
-                  if(netIfAdd >= MatchingMinProfit)
-                  {
-                     // Adding this loss order still meets threshold — include it
-                     ArrayResize(closeLossIdx, lossUsed + 1);
-                     closeLossIdx[lossUsed] = l;
-                     cumLoss += lossValues[l];
-                     lossUsed++;
-                     // Keep going to include more loss orders if possible (reduce more floating)
-                  }
-                  else if(netIfAdd >= 0)
-                  {
-                     // Net still positive — include and try adding more
-                     ArrayResize(closeLossIdx, lossUsed + 1);
-                     closeLossIdx[lossUsed] = l;
-                     cumLoss += lossValues[l];
-                     lossUsed++;
-                  }
-                  // else: would go negative — skip this loss order
+                  ArrayResize(closeLossIdx, lossUsed + 1);
+                  closeLossIdx[lossUsed] = l;
+                  cumLoss += absLoss;
+                  lossUsed++;
                }
-
-               double finalNet = cumProfit + cumLoss;
-               if(finalNet >= MatchingMinProfit && lossUsed > 0)
-               {
-                  // Found a valid combination — close all
-                  Print("MATCHING CLOSE [", sideStr, "]: ", usedProfitCount, " profit + ",
-                        lossUsed, " loss orders. Net: $", DoubleToString(finalNet, 2));
-
-                  for(int cp = 0; cp < usedProfitCount; cp++)
-                  {
-                     Print("  Closing profit #", profitTickets[cp],
-                           " ($", DoubleToString(profitValues[cp], 2), ")");
-                     trade.PositionClose(profitTickets[cp]);
-                  }
-                  for(int cl = 0; cl < lossUsed; cl++)
-                  {
-                     int idx = closeLossIdx[cl];
-                     Print("  Closing loss #", lossTickets[idx],
-                           " ($", DoubleToString(lossValues[idx], 2), ")");
-                     trade.PositionClose(lossTickets[idx]);
-                  }
-
-                  matchFound = true;
-                  found = true;
-                  Sleep(100);
-               }
+               // else: this loss is too heavy — skip to next (possibly lighter) one
             }
 
-            if(!found) break;
+            if(lossUsed > 0)
+            {
+               double finalNet = totalProfit - cumLoss;
+               Print("MATCHING CLOSE [", sideStr, "]: ", profitCount, " profit + ",
+                     lossUsed, " loss orders. Net: $", DoubleToString(finalNet, 2),
+                     " (budget: $", DoubleToString(budget, 2), ")");
+
+               for(int cp = 0; cp < profitCount; cp++)
+               {
+                  Print("  Closing profit #", profitTickets[cp],
+                        " ($", DoubleToString(profitValues[cp], 2), ")");
+                  trade.PositionClose(profitTickets[cp]);
+               }
+               for(int cl = 0; cl < lossUsed; cl++)
+               {
+                  int idx = closeLossIdx[cl];
+                  Print("  Closing loss #", lossTickets[idx],
+                        " ($", DoubleToString(lossValues[idx], 2), ")");
+                  trade.PositionClose(lossTickets[idx]);
+               }
+
+               matchFound = true;
+               Sleep(100);
+            }
+            else break;
          }
       }
    }
