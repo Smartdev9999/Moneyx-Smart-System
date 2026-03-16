@@ -901,6 +901,26 @@ void OnTick()
          g_newOrderBlocked = true;
    }
 
+   // === SQUEEZE FILTER CHECK ===
+   g_squeezeBlocked = false;
+   if(InpUseSqueezeFilter)
+   {
+      UpdateSqueezeState();
+      if(InpSqueeze_BlockOnExpansion)
+      {
+         int expCount = 0;
+         for(int sq = 0; sq < 3; sq++)
+         {
+            if(g_squeeze[sq].state == 2) expCount++;
+         }
+         if(expCount >= InpSqueeze_MinTFExpansion)
+         {
+            g_squeezeBlocked = true;
+            g_newOrderBlocked = true;
+         }
+      }
+   }
+
    // === ORIGINAL TRADING LOGIC (unchanged) ===
    if(g_eaStopped) return;
 
