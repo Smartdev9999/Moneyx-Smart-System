@@ -425,6 +425,20 @@ double   g_cdcFast = 0;
 double   g_cdcSlow = 0;
 bool     g_cdcReady = false;
 datetime g_lastCdcCandle = 0;
+
+// === Volatility Squeeze Filter State ===
+struct SqueezeState
+{
+   ENUM_TIMEFRAMES tf;
+   string          tfLabel;
+   int             handleBB;       // iBands handle
+   int             handleATR;      // iATR handle for KC
+   int             handleEMA;      // iMA handle for KC center
+   int             state;          // 0=Normal, 1=Squeeze, 2=Expansion
+   double          intensity;      // BB_Width / KC_Width
+};
+SqueezeState g_squeeze[3];
+bool         g_squeezeBlocked = false;  // true when expansion detected
 //+------------------------------------------------------------------+
 //| Expert initialization function                                     |
 //+------------------------------------------------------------------+
