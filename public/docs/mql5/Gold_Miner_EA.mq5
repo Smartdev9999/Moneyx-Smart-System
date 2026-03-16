@@ -549,6 +549,39 @@ int OnInit()
       RecoverTFInitialPrices();
    }
 
+   // === Squeeze Filter Init ===
+   if(InpUseSqueezeFilter)
+   {
+      ENUM_TIMEFRAMES sqTFs[3];
+      sqTFs[0] = InpSqueeze_TF1;
+      sqTFs[1] = InpSqueeze_TF2;
+      sqTFs[2] = InpSqueeze_TF3;
+      string sqLabels[3];
+      sqLabels[0] = TimeframeToString(InpSqueeze_TF1);
+      sqLabels[1] = TimeframeToString(InpSqueeze_TF2);
+      sqLabels[2] = TimeframeToString(InpSqueeze_TF3);
+
+      for(int sq = 0; sq < 3; sq++)
+      {
+         g_squeeze[sq].tf = sqTFs[sq];
+         g_squeeze[sq].tfLabel = sqLabels[sq];
+         g_squeeze[sq].state = 0;
+         g_squeeze[sq].intensity = 1.0;
+
+         g_squeeze[sq].handleBB = iBands(_Symbol, sqTFs[sq], InpSqueeze_BB_Period, 0, InpSqueeze_BB_Mult, PRICE_CLOSE);
+         g_squeeze[sq].handleEMA = iMA(_Symbol, sqTFs[sq], InpSqueeze_KC_Period, 0, MODE_EMA, PRICE_CLOSE);
+         g_squeeze[sq].handleATR = iATR(_Symbol, sqTFs[sq], InpSqueeze_ATR_Period);
+
+         if(g_squeeze[sq].handleBB == INVALID_HANDLE ||
+            g_squeeze[sq].handleEMA == INVALID_HANDLE ||
+            g_squeeze[sq].handleATR == INVALID_HANDLE)
+         {
+            Print("WARNING: Squeeze Filter handle creation failed for TF ", sqLabels[sq]);
+         }
+      }
+      Print("Squeeze Filter initialized: ", sqLabels[0], " / ", sqLabels[1], " / ", sqLabels[2]);
+   }
+
    Print("Gold Miner EA v3.0 initialized successfully");
 
    // === News Filter Init ===
