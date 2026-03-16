@@ -293,6 +293,21 @@ input double   MatchingMinProfit      = 0.50;     // Min Net Profit per Match ($
 input int      MatchingMaxLossOrders  = 3;        // Max Loss Orders per Match (1-10)
 input int      MatchingMinProfitOrders = 1;       // Min Profit Orders to Start Matching
 
+//--- Volatility Squeeze Filter (BB vs KC)
+input group "=== Volatility Squeeze Filter ==="
+input bool             InpUseSqueezeFilter      = false;          // Enable Squeeze Filter
+input ENUM_TIMEFRAMES  InpSqueeze_TF1           = PERIOD_M5;      // Timeframe 1
+input ENUM_TIMEFRAMES  InpSqueeze_TF2           = PERIOD_H1;      // Timeframe 2
+input ENUM_TIMEFRAMES  InpSqueeze_TF3           = PERIOD_H4;      // Timeframe 3
+input int              InpSqueeze_BB_Period     = 20;              // BB Period
+input double           InpSqueeze_BB_Mult       = 2.0;            // BB Multiplier
+input int              InpSqueeze_KC_Period     = 20;              // KC Period (EMA)
+input double           InpSqueeze_KC_Mult       = 1.5;            // KC Multiplier (ATR)
+input int              InpSqueeze_ATR_Period    = 14;              // ATR Period for KC
+input double           InpSqueeze_ExpThreshold  = 1.5;            // Expansion Threshold (Intensity ratio)
+input bool             InpSqueeze_BlockOnExpansion = true;         // Block New Orders on Expansion
+input int              InpSqueeze_MinTFExpansion = 1;              // Min TFs in Expansion to Block (1-3)
+
 //+------------------------------------------------------------------+
 //| Global Variables                                                   |
 //+------------------------------------------------------------------+
