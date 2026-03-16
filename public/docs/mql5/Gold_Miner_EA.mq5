@@ -2781,6 +2781,37 @@ void DisplayDashboard()
       DrawTableRow(row, "News Filter", newsDisplay, newsColor, COLOR_SECTION_INFO); row++;
    }
 
+   //--- Squeeze Filter Section
+   if(InpUseSqueezeFilter)
+   {
+      DrawTableRow(row, "--- SQUEEZE ---", "", clrGray, COLOR_SECTION_INFO); row++;
+      for(int sq = 0; sq < 3; sq++)
+      {
+         string stateStr;
+         color stateClr;
+         if(g_squeeze[sq].state == 1)      { stateStr = "SQUEEZE";   stateClr = clrRed;        }
+         else if(g_squeeze[sq].state == 2)  { stateStr = "EXPANSION"; stateClr = clrDodgerBlue; }
+         else                               { stateStr = "NORMAL";    stateClr = clrLime;       }
+
+         // Build intensity bar (10 chars)
+         int barLen = (int)MathMin(10, MathMax(0, (int)(g_squeeze[sq].intensity * 5.0)));
+         string bar = "|";
+         for(int b = 0; b < 10; b++)
+         {
+            if(b < barLen) bar += "#";
+            else bar += ".";
+         }
+         bar += "|";
+
+         string sqVal = StringFormat("%s  %.2f %s", stateStr, g_squeeze[sq].intensity, bar);
+         DrawTableRow(row, g_squeeze[sq].tfLabel, sqVal, stateClr, COLOR_SECTION_INFO); row++;
+      }
+
+      string sqBlock = g_squeezeBlocked ? "BLOCKED" : "OK";
+      color sqBlockClr = g_squeezeBlocked ? clrRed : clrLime;
+      DrawTableRow(row, "Squeeze Status", sqBlock, sqBlockClr, COLOR_SECTION_INFO); row++;
+   }
+
    //--- Bottom border
    int rowH_sc = (int)(20 * sc);
    int bottomY = DashboardY + (int)(24 * sc) + row * rowH_sc;
