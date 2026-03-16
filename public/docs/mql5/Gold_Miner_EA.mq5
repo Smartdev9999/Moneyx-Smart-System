@@ -293,6 +293,21 @@ input double   MatchingMinProfit      = 0.50;     // Min Net Profit per Match ($
 input int      MatchingMaxLossOrders  = 3;        // Max Loss Orders per Match (1-10)
 input int      MatchingMinProfitOrders = 1;       // Min Profit Orders to Start Matching
 
+//--- Volatility Squeeze Filter (BB vs KC)
+input group "=== Volatility Squeeze Filter ==="
+input bool             InpUseSqueezeFilter      = false;          // Enable Squeeze Filter
+input ENUM_TIMEFRAMES  InpSqueeze_TF1           = PERIOD_M5;      // Timeframe 1
+input ENUM_TIMEFRAMES  InpSqueeze_TF2           = PERIOD_H1;      // Timeframe 2
+input ENUM_TIMEFRAMES  InpSqueeze_TF3           = PERIOD_H4;      // Timeframe 3
+input int              InpSqueeze_BB_Period     = 20;              // BB Period
+input double           InpSqueeze_BB_Mult       = 2.0;            // BB Multiplier
+input int              InpSqueeze_KC_Period     = 20;              // KC Period (EMA)
+input double           InpSqueeze_KC_Mult       = 1.5;            // KC Multiplier (ATR)
+input int              InpSqueeze_ATR_Period    = 14;              // ATR Period for KC
+input double           InpSqueeze_ExpThreshold  = 1.5;            // Expansion Threshold (Intensity ratio)
+input bool             InpSqueeze_BlockOnExpansion = true;         // Block New Orders on Expansion
+input int              InpSqueeze_MinTFExpansion = 1;              // Min TFs in Expansion to Block (1-3)
+
 //+------------------------------------------------------------------+
 //| Global Variables                                                   |
 //+------------------------------------------------------------------+
@@ -410,6 +425,20 @@ double   g_cdcFast = 0;
 double   g_cdcSlow = 0;
 bool     g_cdcReady = false;
 datetime g_lastCdcCandle = 0;
+
+// === Volatility Squeeze Filter State ===
+struct SqueezeState
+{
+   ENUM_TIMEFRAMES tf;
+   string          tfLabel;
+   int             handleBB;       // iBands handle
+   int             handleATR;      // iATR handle for KC
+   int             handleEMA;      // iMA handle for KC center
+   int             state;          // 0=Normal, 1=Squeeze, 2=Expansion
+   double          intensity;      // BB_Width / KC_Width
+};
+SqueezeState g_squeeze[3];
+bool         g_squeezeBlocked = false;  // true when expansion detected
 //+------------------------------------------------------------------+
 //| Expert initialization function                                     |
 //+------------------------------------------------------------------+
@@ -520,6 +549,39 @@ int OnInit()
       RecoverTFInitialPrices();
    }
 
+   // === Squeeze Filter Init ===
+   if(InpUseSqueezeFilter)
+   {
+      ENUM_TIMEFRAMES sqTFs[3];
+      sqTFs[0] = InpSqueeze_TF1;
+      sqTFs[1] = InpSqueeze_TF2;
+      sqTFs[2] = InpSqueeze_TF3;
+      string sqLabels[3];
+      sqLabels[0] = TimeframeToString(InpSqueeze_TF1);
+      sqLabels[1] = TimeframeToString(InpSqueeze_TF2);
+      sqLabels[2] = TimeframeToString(InpSqueeze_TF3);
+
+      for(int sq = 0; sq < 3; sq++)
+      {
+         g_squeeze[sq].tf = sqTFs[sq];
+         g_squeeze[sq].tfLabel = sqLabels[sq];
+         g_squeeze[sq].state = 0;
+         g_squeeze[sq].intensity = 1.0;
+
+         g_squeeze[sq].handleBB = iBands(_Symbol, sqTFs[sq], InpSqueeze_BB_Period, 0, InpSqueeze_BB_Mult, PRICE_CLOSE);
+         g_squeeze[sq].handleEMA = iMA(_Symbol, sqTFs[sq], InpSqueeze_KC_Period, 0, MODE_EMA, PRICE_CLOSE);
+         g_squeeze[sq].handleATR = iATR(_Symbol, sqTFs[sq], InpSqueeze_ATR_Period);
+
+         if(g_squeeze[sq].handleBB == INVALID_HANDLE ||
+            g_squeeze[sq].handleEMA == INVALID_HANDLE ||
+            g_squeeze[sq].handleATR == INVALID_HANDLE)
+         {
+            Print("WARNING: Squeeze Filter handle creation failed for TF ", sqLabels[sq]);
+         }
+      }
+      Print("Squeeze Filter initialized: ", sqLabels[0], " / ", sqLabels[1], " / ", sqLabels[2]);
+   }
+
    Print("Gold Miner EA v3.0 initialized successfully");
 
    // === News Filter Init ===
@@ -551,6 +613,14 @@ void OnDeinit(const int reason)
    {
       if(g_tfStates[zz].handleZZ != INVALID_HANDLE)
          IndicatorRelease(g_tfStates[zz].handleZZ);
+   }
+
+   // Release Squeeze Filter handles
+   for(int sq = 0; sq < 3; sq++)
+   {
+      if(g_squeeze[sq].handleBB != INVALID_HANDLE) IndicatorRelease(g_squeeze[sq].handleBB);
+      if(g_squeeze[sq].handleEMA != INVALID_HANDLE) IndicatorRelease(g_squeeze[sq].handleEMA);
+      if(g_squeeze[sq].handleATR != INVALID_HANDLE) IndicatorRelease(g_squeeze[sq].handleATR);
    }
 
    ObjectDelete(0, "GM_AvgBuyLine");
@@ -829,6 +899,26 @@ void OnTick()
 
       if(g_dailyProfitPaused)
          g_newOrderBlocked = true;
+   }
+
+   // === SQUEEZE FILTER CHECK ===
+   g_squeezeBlocked = false;
+   if(InpUseSqueezeFilter)
+   {
+      UpdateSqueezeState();
+      if(InpSqueeze_BlockOnExpansion)
+      {
+         int expCount = 0;
+         for(int sq = 0; sq < 3; sq++)
+         {
+            if(g_squeeze[sq].state == 2) expCount++;
+         }
+         if(expCount >= InpSqueeze_MinTFExpansion)
+         {
+            g_squeezeBlocked = true;
+            g_newOrderBlocked = true;
+         }
+      }
    }
 
    // === ORIGINAL TRADING LOGIC (unchanged) ===
@@ -2689,6 +2779,37 @@ void DisplayDashboard()
       }
       
       DrawTableRow(row, "News Filter", newsDisplay, newsColor, COLOR_SECTION_INFO); row++;
+   }
+
+   //--- Squeeze Filter Section
+   if(InpUseSqueezeFilter)
+   {
+      DrawTableRow(row, "--- SQUEEZE ---", "", clrGray, COLOR_SECTION_INFO); row++;
+      for(int sq = 0; sq < 3; sq++)
+      {
+         string stateStr;
+         color stateClr;
+         if(g_squeeze[sq].state == 1)      { stateStr = "SQUEEZE";   stateClr = clrRed;        }
+         else if(g_squeeze[sq].state == 2)  { stateStr = "EXPANSION"; stateClr = clrDodgerBlue; }
+         else                               { stateStr = "NORMAL";    stateClr = clrLime;       }
+
+         // Build intensity bar (10 chars)
+         int barLen = (int)MathMin(10, MathMax(0, (int)(g_squeeze[sq].intensity * 5.0)));
+         string bar = "|";
+         for(int b = 0; b < 10; b++)
+         {
+            if(b < barLen) bar += "#";
+            else bar += ".";
+         }
+         bar += "|";
+
+         string sqVal = StringFormat("%s  %.2f %s", stateStr, g_squeeze[sq].intensity, bar);
+         DrawTableRow(row, g_squeeze[sq].tfLabel, sqVal, stateClr, COLOR_SECTION_INFO); row++;
+      }
+
+      string sqBlock = g_squeezeBlocked ? "BLOCKED" : "OK";
+      color sqBlockClr = g_squeezeBlocked ? clrRed : clrLime;
+      DrawTableRow(row, "Squeeze Status", sqBlock, sqBlockClr, COLOR_SECTION_INFO); row++;
    }
 
    //--- Bottom border
@@ -5678,6 +5799,88 @@ void ManageMatchingClose()
             else break;
          }
       }
+   }
+}
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//| Volatility Squeeze Filter - Update State for all 3 TFs            |
+//+------------------------------------------------------------------+
+void UpdateSqueezeState()
+{
+   for(int sq = 0; sq < 3; sq++)
+   {
+      if(g_squeeze[sq].handleBB == INVALID_HANDLE ||
+         g_squeeze[sq].handleEMA == INVALID_HANDLE ||
+         g_squeeze[sq].handleATR == INVALID_HANDLE)
+      {
+         g_squeeze[sq].state = 0;
+         g_squeeze[sq].intensity = 1.0;
+         continue;
+      }
+
+      double bbUpper[], bbLower[], emaVal[], atrVal[];
+      ArraySetAsSeries(bbUpper, true);
+      ArraySetAsSeries(bbLower, true);
+      ArraySetAsSeries(emaVal, true);
+      ArraySetAsSeries(atrVal, true);
+
+      // BB: buffer 1 = Upper, buffer 2 = Lower
+      if(CopyBuffer(g_squeeze[sq].handleBB, 1, 0, 1, bbUpper) < 1) continue;
+      if(CopyBuffer(g_squeeze[sq].handleBB, 2, 0, 1, bbLower) < 1) continue;
+      if(CopyBuffer(g_squeeze[sq].handleEMA, 0, 0, 1, emaVal) < 1) continue;
+      if(CopyBuffer(g_squeeze[sq].handleATR, 0, 0, 1, atrVal) < 1) continue;
+
+      double upperBB = bbUpper[0];
+      double lowerBB = bbLower[0];
+      double ema     = emaVal[0];
+      double atr     = atrVal[0];
+
+      // Keltner Channel bands
+      double upperKC = ema + InpSqueeze_KC_Mult * atr;
+      double lowerKC = ema - InpSqueeze_KC_Mult * atr;
+
+      double bbWidth = upperBB - lowerBB;
+      double kcWidth = upperKC - lowerKC;
+
+      if(kcWidth <= 0)
+      {
+         g_squeeze[sq].state = 0;
+         g_squeeze[sq].intensity = 1.0;
+         continue;
+      }
+
+      double intensity = bbWidth / kcWidth;
+      g_squeeze[sq].intensity = intensity;
+
+      // Squeeze: BB is INSIDE KC
+      if(upperBB < upperKC && lowerBB > lowerKC)
+         g_squeeze[sq].state = 1;  // SQUEEZE
+      // Expansion: intensity exceeds threshold
+      else if(intensity > InpSqueeze_ExpThreshold)
+         g_squeeze[sq].state = 2;  // EXPANSION
+      else
+         g_squeeze[sq].state = 0;  // NORMAL
+   }
+}
+
+//+------------------------------------------------------------------+
+//| TimeframeToString - Convert ENUM_TIMEFRAMES to readable label      |
+//+------------------------------------------------------------------+
+string TimeframeToString(ENUM_TIMEFRAMES tf)
+{
+   switch(tf)
+   {
+      case PERIOD_M1:  return "M1";
+      case PERIOD_M5:  return "M5";
+      case PERIOD_M15: return "M15";
+      case PERIOD_M30: return "M30";
+      case PERIOD_H1:  return "H1";
+      case PERIOD_H4:  return "H4";
+      case PERIOD_D1:  return "D1";
+      case PERIOD_W1:  return "W1";
+      case PERIOD_MN1: return "MN";
+      default:         return EnumToString(tf);
    }
 }
 //+------------------------------------------------------------------+
