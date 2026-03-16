@@ -615,6 +615,14 @@ void OnDeinit(const int reason)
          IndicatorRelease(g_tfStates[zz].handleZZ);
    }
 
+   // Release Squeeze Filter handles
+   for(int sq = 0; sq < 3; sq++)
+   {
+      if(g_squeeze[sq].handleBB != INVALID_HANDLE) IndicatorRelease(g_squeeze[sq].handleBB);
+      if(g_squeeze[sq].handleEMA != INVALID_HANDLE) IndicatorRelease(g_squeeze[sq].handleEMA);
+      if(g_squeeze[sq].handleATR != INVALID_HANDLE) IndicatorRelease(g_squeeze[sq].handleATR);
+   }
+
    ObjectDelete(0, "GM_AvgBuyLine");
    ObjectDelete(0, "GM_AvgSellLine");
    ObjectDelete(0, "GM_TPBuyLine");
