@@ -2750,4 +2750,81 @@ bool IsWithinTradingHours()
    if(StringLen(InpSession1) < 5 && StringLen(InpSession2) < 5 && StringLen(InpSession3) < 5) return true;
    return false;
 }
+
+//+------------------------------------------------------------------+
+//| Volatility Squeeze Filter - Update State for 2 TFs               |
+//+------------------------------------------------------------------+
+void UpdateSqueezeState()
+{
+   for(int sq = 0; sq < 2; sq++)
+   {
+      if(g_squeeze[sq].handleBB == INVALID_HANDLE ||
+         g_squeeze[sq].handleEMA == INVALID_HANDLE ||
+         g_squeeze[sq].handleATR == INVALID_HANDLE)
+      {
+         g_squeeze[sq].state = 0;
+         g_squeeze[sq].intensity = 1.0;
+         continue;
+      }
+
+      double bbUpper[], bbLower[], emaVal[], atrVal[];
+      ArraySetAsSeries(bbUpper, true);
+      ArraySetAsSeries(bbLower, true);
+      ArraySetAsSeries(emaVal, true);
+      ArraySetAsSeries(atrVal, true);
+
+      if(CopyBuffer(g_squeeze[sq].handleBB, 1, 0, 1, bbUpper) < 1) continue;
+      if(CopyBuffer(g_squeeze[sq].handleBB, 2, 0, 1, bbLower) < 1) continue;
+      if(CopyBuffer(g_squeeze[sq].handleEMA, 0, 0, 1, emaVal) < 1) continue;
+      if(CopyBuffer(g_squeeze[sq].handleATR, 0, 0, 1, atrVal) < 1) continue;
+
+      double upperBB = bbUpper[0];
+      double lowerBB = bbLower[0];
+      double ema     = emaVal[0];
+      double atr     = atrVal[0];
+
+      double upperKC = ema + InpSqueeze_KC_Mult * atr;
+      double lowerKC = ema - InpSqueeze_KC_Mult * atr;
+
+      double bbWidth = upperBB - lowerBB;
+      double kcWidth = upperKC - lowerKC;
+
+      if(kcWidth <= 0)
+      {
+         g_squeeze[sq].state = 0;
+         g_squeeze[sq].intensity = 1.0;
+         continue;
+      }
+
+      double intensity = bbWidth / kcWidth;
+      g_squeeze[sq].intensity = intensity;
+
+      if(upperBB < upperKC && lowerBB > lowerKC)
+         g_squeeze[sq].state = 1;  // SQUEEZE
+      else if(intensity > InpSqueeze_ExpThreshold)
+         g_squeeze[sq].state = 2;  // EXPANSION
+      else
+         g_squeeze[sq].state = 0;  // NORMAL
+   }
+}
+
+//+------------------------------------------------------------------+
+//| TimeframeToStringSQ - Convert ENUM_TIMEFRAMES to label            |
+//+------------------------------------------------------------------+
+string TimeframeToStringSQ(ENUM_TIMEFRAMES tf)
+{
+   switch(tf)
+   {
+      case PERIOD_M1:  return "M1";
+      case PERIOD_M5:  return "M5";
+      case PERIOD_M15: return "M15";
+      case PERIOD_M30: return "M30";
+      case PERIOD_H1:  return "H1";
+      case PERIOD_H4:  return "H4";
+      case PERIOD_D1:  return "D1";
+      case PERIOD_W1:  return "W1";
+      case PERIOD_MN1: return "MN";
+      default:         return EnumToString(tf);
+   }
+}
 //+------------------------------------------------------------------+
