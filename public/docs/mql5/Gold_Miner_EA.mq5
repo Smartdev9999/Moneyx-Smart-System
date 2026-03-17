@@ -1203,7 +1203,7 @@ void OnTick()
          }
 
          // ===== SELL Entry (instant) =====
-         if(sellCount == 0 && g_initialSellPrice == 0 && canOpenMore && canOpenOnThisCandle)
+         if(!g_squeezeSellBlocked && sellCount == 0 && g_initialSellPrice == 0 && canOpenMore && canOpenOnThisCandle)
          {
             if(TradingMode == TRADE_SELL_ONLY || TradingMode == TRADE_BOTH)
             {
