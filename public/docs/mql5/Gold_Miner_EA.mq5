@@ -307,6 +307,7 @@ input int              InpSqueeze_ATR_Period    = 14;              // ATR Period
 input double           InpSqueeze_ExpThreshold  = 1.5;            // Expansion Threshold (Intensity ratio)
 input bool             InpSqueeze_BlockOnExpansion = true;         // Block New Orders on Expansion
 input int              InpSqueeze_MinTFExpansion = 1;              // Min TFs in Expansion to Block (1-3)
+input bool             InpSqueeze_DirectionalBlock = false;        // Directional Block (block counter-trend only)
 
 //+------------------------------------------------------------------+
 //| Global Variables                                                   |
