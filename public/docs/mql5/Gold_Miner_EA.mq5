@@ -2831,8 +2831,12 @@ void DisplayDashboard()
          DrawTableRow(row, g_squeeze[sq].tfLabel, sqVal, stateClr, COLOR_SECTION_INFO); row++;
       }
 
-      string sqBlock = g_squeezeBlocked ? "BLOCKED" : "OK";
-      color sqBlockClr = g_squeezeBlocked ? clrRed : clrLime;
+      string sqBlock;
+      color sqBlockClr;
+      if(g_squeezeBlocked)             { sqBlock = "BLOCKED ALL"; sqBlockClr = clrRed;    }
+      else if(g_squeezeBuyBlocked)     { sqBlock = "BUY BLOCKED"; sqBlockClr = clrOrange;  }
+      else if(g_squeezeSellBlocked)    { sqBlock = "SELL BLOCKED"; sqBlockClr = clrOrange; }
+      else                             { sqBlock = "OK";           sqBlockClr = clrLime;   }
       DrawTableRow(row, "Squeeze Status", sqBlock, sqBlockClr, COLOR_SECTION_INFO); row++;
    }
 
