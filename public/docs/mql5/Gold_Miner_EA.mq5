@@ -1176,9 +1176,9 @@ void OnTick()
       // Grid Profit management
       if(!g_newOrderBlocked && GridProfit_Enable)
       {
-         if((hasInitialBuy || g_initialBuyPrice > 0) && gridProfitBuy < GridProfit_MaxTrades && buyCount > 0)
+         if(!g_squeezeBuyBlocked && (hasInitialBuy || g_initialBuyPrice > 0) && gridProfitBuy < GridProfit_MaxTrades && buyCount > 0)
             CheckGridProfit(POSITION_TYPE_BUY, gridProfitBuy);
-         if((hasInitialSell || g_initialSellPrice > 0) && gridProfitSell < GridProfit_MaxTrades && sellCount > 0)
+         if(!g_squeezeSellBlocked && (hasInitialSell || g_initialSellPrice > 0) && gridProfitSell < GridProfit_MaxTrades && sellCount > 0)
             CheckGridProfit(POSITION_TYPE_SELL, gridProfitSell);
       }
 
