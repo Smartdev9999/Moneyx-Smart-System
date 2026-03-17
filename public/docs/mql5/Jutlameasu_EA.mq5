@@ -141,6 +141,19 @@ input string   InpCustomNewsKeywords = "PMI;Unemployment Claims;Non-Farm;FOMC;Fe
 input int      InpPauseBeforeCustom  = 300;
 input int      InpPauseAfterCustom   = 300;
 
+//--- Volatility Squeeze Filter
+input group "=== Volatility Squeeze Filter ==="
+input bool             InpUseSqueezeFilter      = false;    // Enable Squeeze Filter
+input ENUM_TIMEFRAMES  InpSqueeze_TF1           = PERIOD_M15; // Squeeze TF1
+input ENUM_TIMEFRAMES  InpSqueeze_TF2           = PERIOD_H1;  // Squeeze TF2
+input int              InpSqueeze_BB_Period     = 20;        // BB Period
+input double           InpSqueeze_BB_Mult       = 2.0;       // BB Multiplier
+input int              InpSqueeze_KC_Period     = 20;        // KC EMA Period
+input double           InpSqueeze_KC_Mult       = 1.5;       // KC ATR Multiplier
+input int              InpSqueeze_ATR_Period    = 14;        // ATR Period
+input double           InpSqueeze_ExpThreshold  = 1.5;       // Expansion Threshold (intensity)
+input int              InpSqueeze_MinTFExpansion = 1;         // Min TFs in Expansion to ALLOW (1-2)
+
 //+------------------------------------------------------------------+
 //| Global Variables                                                   |
 //+------------------------------------------------------------------+
