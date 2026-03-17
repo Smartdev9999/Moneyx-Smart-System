@@ -3876,9 +3876,9 @@ void OnTickZigZagMTF()
       if(!g_newOrderBlocked)
       {
          // Grid Loss
-         if((tfHasInitBuy || g_tfStates[t].initialBuyPrice > 0) && tfGLBuy < GridLoss_MaxTrades && tfBuyCount > 0)
+         if(!g_squeezeBuyBlocked && (tfHasInitBuy || g_tfStates[t].initialBuyPrice > 0) && tfGLBuy < GridLoss_MaxTrades && tfBuyCount > 0)
             CheckGridLossTF(t, POSITION_TYPE_BUY, tfGLBuy);
-         if((tfHasInitSell || g_tfStates[t].initialSellPrice > 0) && tfGLSell < GridLoss_MaxTrades && tfSellCount > 0)
+         if(!g_squeezeSellBlocked && (tfHasInitSell || g_tfStates[t].initialSellPrice > 0) && tfGLSell < GridLoss_MaxTrades && tfSellCount > 0)
             CheckGridLossTF(t, POSITION_TYPE_SELL, tfGLSell);
 
          // Grid Profit
