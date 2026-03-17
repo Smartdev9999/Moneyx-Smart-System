@@ -3901,7 +3901,7 @@ void OnTickZigZagMTF()
          string subSwing = DetectZigZagSwing(t);
 
          // BUY entry
-         if(effectiveDirection == "BUY" && subSwing == "LOW" && tfBuyCount == 0
+         if(!g_squeezeBuyBlocked && effectiveDirection == "BUY" && subSwing == "LOW" && tfBuyCount == 0
             && g_tfStates[t].initialBuyPrice == 0 && canOpenMore && canOpenThisCandle
             && (TradingMode == TRADE_BUY_ONLY || TradingMode == TRADE_BOTH))
          {
