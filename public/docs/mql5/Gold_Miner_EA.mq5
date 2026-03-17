@@ -3922,7 +3922,7 @@ void OnTickZigZagMTF()
          }
 
          // SELL entry
-         if(effectiveDirection == "SELL" && subSwing == "HIGH" && tfSellCount == 0
+         if(!g_squeezeSellBlocked && effectiveDirection == "SELL" && subSwing == "HIGH" && tfSellCount == 0
             && g_tfStates[t].initialSellPrice == 0 && canOpenMore && canOpenThisCandle
             && (TradingMode == TRADE_SELL_ONLY || TradingMode == TRADE_BOTH))
          {
