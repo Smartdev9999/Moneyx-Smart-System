@@ -35,4 +35,13 @@
 - "สิ่งที่ไม่เปลี่ยนแปลง" มีอะไรบ้าง
 - ยืนยันว่าไม่กระทบ trading logic
 
+## 6. ทุกครั้งที่แก้ไข EA ต้องอัปเดต Version
+- เพิ่ม minor version ทุกครั้ง เช่น v4.0 → v4.1 → v4.2 (นับขึ้นไปเรื่อยๆ)
+- อัปเดตทุกจุดที่เกี่ยวข้อง:
+  - `#property version` (เช่น "4.00" → "4.10")
+  - `#property description` (เช่น "v4.0" → "v4.1")
+  - Header comment block (ชื่อไฟล์ + version)
+  - Dashboard display ที่แสดง version บนชาร์ต
+- ห้ามลืมอัปเดต version เด็ดขาด — ใช้เป็นตัวติดตามการเปลี่ยนแปลง
+
 **กฎนี้ใช้กับทุกไฟล์ .mq5 ใน `public/docs/mql5/` และ `docs/mql5/`**

@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v4.0 - MTF ZigZag+CDC+Grid+License  |
+//|                Gold Miner EA v4.1 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "4.00"
-#property description "Gold Miner EA v4.0 - MTF ZigZag Entry + CDC Filter + License + News + Time Filter"
+#property version   "4.10"
+#property description "Gold Miner EA v4.1 - MTF ZigZag Entry + CDC Filter + Directional Squeeze + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -307,6 +307,7 @@ input int              InpSqueeze_ATR_Period    = 14;              // ATR Period
 input double           InpSqueeze_ExpThreshold  = 1.5;            // Expansion Threshold (Intensity ratio)
 input bool             InpSqueeze_BlockOnExpansion = true;         // Block New Orders on Expansion
 input int              InpSqueeze_MinTFExpansion = 1;              // Min TFs in Expansion to Block (1-3)
+input bool             InpSqueeze_DirectionalBlock = false;        // Directional Block (block counter-trend only)
 
 //+------------------------------------------------------------------+
 //| Global Variables                                                   |
@@ -436,9 +437,12 @@ struct SqueezeState
    int             handleEMA;      // iMA handle for KC center
    int             state;          // 0=Normal, 1=Squeeze, 2=Expansion
    double          intensity;      // BB_Width / KC_Width
+   int             direction;      // 1=Bullish, -1=Bearish, 0=Neutral (Close vs EMA)
 };
 SqueezeState g_squeeze[3];
-bool         g_squeezeBlocked = false;  // true when expansion detected
+bool         g_squeezeBlocked = false;     // true when expansion detected (all block)
+bool         g_squeezeBuyBlocked  = false;  // directional: block BUY only
+bool         g_squeezeSellBlocked = false;  // directional: block SELL only
 //+------------------------------------------------------------------+
 //| Expert initialization function                                     |
 //+------------------------------------------------------------------+
@@ -582,7 +586,7 @@ int OnInit()
       Print("Squeeze Filter initialized: ", sqLabels[0], " / ", sqLabels[1], " / ", sqLabels[2]);
    }
 
-   Print("Gold Miner EA v3.0 initialized successfully");
+   Print("Gold Miner EA v4.1 initialized successfully");
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -632,7 +636,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_TBL_");
    ObjectsDeleteAll(0, "GM_Btn");
 
-   Print("Gold Miner EA v3.0 deinitialized");
+   Print("Gold Miner EA v4.1 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -903,20 +907,40 @@ void OnTick()
 
    // === SQUEEZE FILTER CHECK ===
    g_squeezeBlocked = false;
+   g_squeezeBuyBlocked = false;
+   g_squeezeSellBlocked = false;
    if(InpUseSqueezeFilter)
    {
       UpdateSqueezeState();
       if(InpSqueeze_BlockOnExpansion)
       {
          int expCount = 0;
-         for(int sq = 0; sq < 3; sq++)
+         int bestDir = 0;          // direction of highest-TF expansion
+         for(int sq = 2; sq >= 0; sq--)  // scan from highest TF first
          {
-            if(g_squeeze[sq].state == 2) expCount++;
+            if(g_squeeze[sq].state == 2)
+            {
+               expCount++;
+               if(bestDir == 0) bestDir = g_squeeze[sq].direction;  // use highest TF direction
+            }
          }
          if(expCount >= InpSqueeze_MinTFExpansion)
          {
-            g_squeezeBlocked = true;
-            g_newOrderBlocked = true;
+            if(InpSqueeze_DirectionalBlock && bestDir != 0)
+            {
+               // Directional: block counter-trend only
+               if(bestDir == 1)  // Bullish expansion → block SELL
+                  g_squeezeSellBlocked = true;
+               else              // Bearish expansion → block BUY
+                  g_squeezeBuyBlocked = true;
+               // Do NOT set g_newOrderBlocked → trend-following side can still open
+            }
+            else
+            {
+               // Original behavior: block everything
+               g_squeezeBlocked = true;
+               g_newOrderBlocked = true;
+            }
          }
       }
    }
@@ -1004,27 +1028,27 @@ void OnTick()
             g_initialSellPrice = 0;
          }
 
-         //--- Grid Loss management (check both sides independently) - blocked by News/Time filter
+         //--- Grid Loss management (check both sides independently) - blocked by News/Time/Squeeze filter
          if(!g_newOrderBlocked)
          {
-            if((hasInitialBuy || g_initialBuyPrice > 0) && gridLossBuy < GridLoss_MaxTrades && buyCount > 0)
+            if(!g_squeezeBuyBlocked && (hasInitialBuy || g_initialBuyPrice > 0) && gridLossBuy < GridLoss_MaxTrades && buyCount > 0)
             {
                CheckGridLoss(POSITION_TYPE_BUY, gridLossBuy);
             }
-            if((hasInitialSell || g_initialSellPrice > 0) && gridLossSell < GridLoss_MaxTrades && sellCount > 0)
+            if(!g_squeezeSellBlocked && (hasInitialSell || g_initialSellPrice > 0) && gridLossSell < GridLoss_MaxTrades && sellCount > 0)
             {
                CheckGridLoss(POSITION_TYPE_SELL, gridLossSell);
             }
          }
 
-         //--- Grid Profit management - blocked by News/Time filter
+         //--- Grid Profit management - blocked by News/Time/Squeeze filter
          if(!g_newOrderBlocked && GridProfit_Enable)
          {
-            if((hasInitialBuy || g_initialBuyPrice > 0) && gridProfitBuy < GridProfit_MaxTrades && buyCount > 0)
+            if(!g_squeezeBuyBlocked && (hasInitialBuy || g_initialBuyPrice > 0) && gridProfitBuy < GridProfit_MaxTrades && buyCount > 0)
             {
                CheckGridProfit(POSITION_TYPE_BUY, gridProfitBuy);
             }
-            if((hasInitialSell || g_initialSellPrice > 0) && gridProfitSell < GridProfit_MaxTrades && sellCount > 0)
+            if(!g_squeezeSellBlocked && (hasInitialSell || g_initialSellPrice > 0) && gridProfitSell < GridProfit_MaxTrades && sellCount > 0)
             {
                CheckGridProfit(POSITION_TYPE_SELL, gridProfitSell);
             }
@@ -1057,7 +1081,7 @@ void OnTick()
             }
 
              // ===== BUY Entry (independent) =====
-             if(buyCount == 0 && g_initialBuyPrice == 0 && canOpenMore && canOpenOnThisCandle)
+             if(!g_squeezeBuyBlocked && buyCount == 0 && g_initialBuyPrice == 0 && canOpenMore && canOpenOnThisCandle)
              {
                 if(currentPrice > smaValue && (TradingMode == TRADE_BUY_ONLY || TradingMode == TRADE_BOTH))
                 {
@@ -1078,7 +1102,7 @@ void OnTick()
              }
 
              // ===== SELL Entry (independent) =====
-             if(sellCount == 0 && g_initialSellPrice == 0 && canOpenMore && canOpenOnThisCandle)
+             if(!g_squeezeSellBlocked && sellCount == 0 && g_initialSellPrice == 0 && canOpenMore && canOpenOnThisCandle)
              {
                 if(currentPrice < smaValue && (TradingMode == TRADE_SELL_ONLY || TradingMode == TRADE_BOTH))
                 {
@@ -1143,18 +1167,18 @@ void OnTick()
       // Grid Loss management
       if(!g_newOrderBlocked)
       {
-         if((hasInitialBuy || g_initialBuyPrice > 0) && gridLossBuy < GridLoss_MaxTrades && buyCount > 0)
+         if(!g_squeezeBuyBlocked && (hasInitialBuy || g_initialBuyPrice > 0) && gridLossBuy < GridLoss_MaxTrades && buyCount > 0)
             CheckGridLoss(POSITION_TYPE_BUY, gridLossBuy);
-         if((hasInitialSell || g_initialSellPrice > 0) && gridLossSell < GridLoss_MaxTrades && sellCount > 0)
+         if(!g_squeezeSellBlocked && (hasInitialSell || g_initialSellPrice > 0) && gridLossSell < GridLoss_MaxTrades && sellCount > 0)
             CheckGridLoss(POSITION_TYPE_SELL, gridLossSell);
       }
 
       // Grid Profit management
       if(!g_newOrderBlocked && GridProfit_Enable)
       {
-         if((hasInitialBuy || g_initialBuyPrice > 0) && gridProfitBuy < GridProfit_MaxTrades && buyCount > 0)
+         if(!g_squeezeBuyBlocked && (hasInitialBuy || g_initialBuyPrice > 0) && gridProfitBuy < GridProfit_MaxTrades && buyCount > 0)
             CheckGridProfit(POSITION_TYPE_BUY, gridProfitBuy);
-         if((hasInitialSell || g_initialSellPrice > 0) && gridProfitSell < GridProfit_MaxTrades && sellCount > 0)
+         if(!g_squeezeSellBlocked && (hasInitialSell || g_initialSellPrice > 0) && gridProfitSell < GridProfit_MaxTrades && sellCount > 0)
             CheckGridProfit(POSITION_TYPE_SELL, gridProfitSell);
       }
 
@@ -1165,7 +1189,7 @@ void OnTick()
          bool canOpenMore = TotalOrderCount() < MaxOpenOrders;
 
          // ===== BUY Entry (instant) =====
-         if(buyCount == 0 && g_initialBuyPrice == 0 && canOpenMore && canOpenOnThisCandle)
+         if(!g_squeezeBuyBlocked && buyCount == 0 && g_initialBuyPrice == 0 && canOpenMore && canOpenOnThisCandle)
          {
             if(TradingMode == TRADE_BUY_ONLY || TradingMode == TRADE_BOTH)
             {
@@ -1179,7 +1203,7 @@ void OnTick()
          }
 
          // ===== SELL Entry (instant) =====
-         if(sellCount == 0 && g_initialSellPrice == 0 && canOpenMore && canOpenOnThisCandle)
+         if(!g_squeezeSellBlocked && sellCount == 0 && g_initialSellPrice == 0 && canOpenMore && canOpenOnThisCandle)
          {
             if(TradingMode == TRADE_SELL_ONLY || TradingMode == TRADE_BOTH)
             {
@@ -2561,7 +2585,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v3.0 [SMA]" : "Gold Miner EA v3.0 [ZZ]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v4.1 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v4.1 [ZZ]" : "Gold Miner EA v4.1 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -2807,8 +2831,12 @@ void DisplayDashboard()
          DrawTableRow(row, g_squeeze[sq].tfLabel, sqVal, stateClr, COLOR_SECTION_INFO); row++;
       }
 
-      string sqBlock = g_squeezeBlocked ? "BLOCKED" : "OK";
-      color sqBlockClr = g_squeezeBlocked ? clrRed : clrLime;
+      string sqBlock;
+      color sqBlockClr;
+      if(g_squeezeBlocked)             { sqBlock = "BLOCKED ALL"; sqBlockClr = clrRed;    }
+      else if(g_squeezeBuyBlocked)     { sqBlock = "BUY BLOCKED"; sqBlockClr = clrOrange;  }
+      else if(g_squeezeSellBlocked)    { sqBlock = "SELL BLOCKED"; sqBlockClr = clrOrange; }
+      else                             { sqBlock = "OK";           sqBlockClr = clrLime;   }
       DrawTableRow(row, "Squeeze Status", sqBlock, sqBlockClr, COLOR_SECTION_INFO); row++;
    }
 
@@ -3852,17 +3880,17 @@ void OnTickZigZagMTF()
       if(!g_newOrderBlocked)
       {
          // Grid Loss
-         if((tfHasInitBuy || g_tfStates[t].initialBuyPrice > 0) && tfGLBuy < GridLoss_MaxTrades && tfBuyCount > 0)
+         if(!g_squeezeBuyBlocked && (tfHasInitBuy || g_tfStates[t].initialBuyPrice > 0) && tfGLBuy < GridLoss_MaxTrades && tfBuyCount > 0)
             CheckGridLossTF(t, POSITION_TYPE_BUY, tfGLBuy);
-         if((tfHasInitSell || g_tfStates[t].initialSellPrice > 0) && tfGLSell < GridLoss_MaxTrades && tfSellCount > 0)
+         if(!g_squeezeSellBlocked && (tfHasInitSell || g_tfStates[t].initialSellPrice > 0) && tfGLSell < GridLoss_MaxTrades && tfSellCount > 0)
             CheckGridLossTF(t, POSITION_TYPE_SELL, tfGLSell);
 
          // Grid Profit
          if(GridProfit_Enable)
          {
-            if((tfHasInitBuy || g_tfStates[t].initialBuyPrice > 0) && tfGPBuy < GridProfit_MaxTrades && tfBuyCount > 0)
+            if(!g_squeezeBuyBlocked && (tfHasInitBuy || g_tfStates[t].initialBuyPrice > 0) && tfGPBuy < GridProfit_MaxTrades && tfBuyCount > 0)
                CheckGridProfitTF(t, POSITION_TYPE_BUY, tfGPBuy);
-            if((tfHasInitSell || g_tfStates[t].initialSellPrice > 0) && tfGPSell < GridProfit_MaxTrades && tfSellCount > 0)
+            if(!g_squeezeSellBlocked && (tfHasInitSell || g_tfStates[t].initialSellPrice > 0) && tfGPSell < GridProfit_MaxTrades && tfSellCount > 0)
                CheckGridProfitTF(t, POSITION_TYPE_SELL, tfGPSell);
          }
       }
@@ -3877,7 +3905,7 @@ void OnTickZigZagMTF()
          string subSwing = DetectZigZagSwing(t);
 
          // BUY entry
-         if(effectiveDirection == "BUY" && subSwing == "LOW" && tfBuyCount == 0
+         if(!g_squeezeBuyBlocked && effectiveDirection == "BUY" && subSwing == "LOW" && tfBuyCount == 0
             && g_tfStates[t].initialBuyPrice == 0 && canOpenMore && canOpenThisCandle
             && (TradingMode == TRADE_BUY_ONLY || TradingMode == TRADE_BOTH))
          {
@@ -3898,7 +3926,7 @@ void OnTickZigZagMTF()
          }
 
          // SELL entry
-         if(effectiveDirection == "SELL" && subSwing == "HIGH" && tfSellCount == 0
+         if(!g_squeezeSellBlocked && effectiveDirection == "SELL" && subSwing == "HIGH" && tfSellCount == 0
             && g_tfStates[t].initialSellPrice == 0 && canOpenMore && canOpenThisCandle
             && (TradingMode == TRADE_SELL_ONLY || TradingMode == TRADE_BOTH))
          {
@@ -5861,6 +5889,17 @@ void UpdateSqueezeState()
          g_squeeze[sq].state = 2;  // EXPANSION
       else
          g_squeeze[sq].state = 0;  // NORMAL
+
+      // Direction: Close vs EMA (for directional block)
+      g_squeeze[sq].direction = 0;
+      if(g_squeeze[sq].state == 2)
+      {
+         double closePrice = iClose(_Symbol, g_squeeze[sq].tf, 0);
+         if(closePrice > ema)
+            g_squeeze[sq].direction = 1;   // Bullish
+         else if(closePrice < ema)
+            g_squeeze[sq].direction = -1;  // Bearish
+      }
    }
 }
 
