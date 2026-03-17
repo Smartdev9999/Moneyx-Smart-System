@@ -437,9 +437,12 @@ struct SqueezeState
    int             handleEMA;      // iMA handle for KC center
    int             state;          // 0=Normal, 1=Squeeze, 2=Expansion
    double          intensity;      // BB_Width / KC_Width
+   int             direction;      // 1=Bullish, -1=Bearish, 0=Neutral (Close vs EMA)
 };
 SqueezeState g_squeeze[3];
-bool         g_squeezeBlocked = false;  // true when expansion detected
+bool         g_squeezeBlocked = false;     // true when expansion detected (all block)
+bool         g_squeezeBuyBlocked  = false;  // directional: block BUY only
+bool         g_squeezeSellBlocked = false;  // directional: block SELL only
 //+------------------------------------------------------------------+
 //| Expert initialization function                                     |
 //+------------------------------------------------------------------+
