@@ -1028,14 +1028,14 @@ void OnTick()
             g_initialSellPrice = 0;
          }
 
-         //--- Grid Loss management (check both sides independently) - blocked by News/Time filter
+         //--- Grid Loss management (check both sides independently) - blocked by News/Time/Squeeze filter
          if(!g_newOrderBlocked)
          {
-            if((hasInitialBuy || g_initialBuyPrice > 0) && gridLossBuy < GridLoss_MaxTrades && buyCount > 0)
+            if(!g_squeezeBuyBlocked && (hasInitialBuy || g_initialBuyPrice > 0) && gridLossBuy < GridLoss_MaxTrades && buyCount > 0)
             {
                CheckGridLoss(POSITION_TYPE_BUY, gridLossBuy);
             }
-            if((hasInitialSell || g_initialSellPrice > 0) && gridLossSell < GridLoss_MaxTrades && sellCount > 0)
+            if(!g_squeezeSellBlocked && (hasInitialSell || g_initialSellPrice > 0) && gridLossSell < GridLoss_MaxTrades && sellCount > 0)
             {
                CheckGridLoss(POSITION_TYPE_SELL, gridLossSell);
             }
