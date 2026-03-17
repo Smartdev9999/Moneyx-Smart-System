@@ -345,6 +345,18 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "JM_TBL_");
    ObjectsDeleteAll(0, "JM_Btn");
    ObjectsDeleteAll(0, "JM_Line_");
+
+   // Release Squeeze indicator handles
+   if(InpUseSqueezeFilter)
+   {
+      for(int i = 0; i < 2; i++)
+      {
+         if(g_squeeze[i].handleBB  != INVALID_HANDLE) IndicatorRelease(g_squeeze[i].handleBB);
+         if(g_squeeze[i].handleEMA != INVALID_HANDLE) IndicatorRelease(g_squeeze[i].handleEMA);
+         if(g_squeeze[i].handleATR != INVALID_HANDLE) IndicatorRelease(g_squeeze[i].handleATR);
+      }
+   }
+
    Print("Jutlameasu EA v1.0 deinitialized");
 }
 
