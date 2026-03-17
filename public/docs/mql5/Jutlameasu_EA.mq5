@@ -309,7 +309,28 @@ int OnInit()
       g_forceNewsRefresh = true;
       LoadNewsCacheFromFile();
       CheckWebRequestConfiguration();
-      RefreshNewsData();
+       RefreshNewsData();
+   }
+
+   // Squeeze Filter Init
+   if(InpUseSqueezeFilter)
+   {
+      ENUM_TIMEFRAMES sqTFs[2];
+      sqTFs[0] = InpSqueeze_TF1;
+      sqTFs[1] = InpSqueeze_TF2;
+      for(int i = 0; i < 2; i++)
+      {
+         g_squeeze[i].tf = sqTFs[i];
+         g_squeeze[i].tfLabel = TimeframeToStringSQ(sqTFs[i]);
+         g_squeeze[i].handleBB  = iBands(_Symbol, sqTFs[i], InpSqueeze_BB_Period, 0, InpSqueeze_BB_Mult, PRICE_CLOSE);
+         g_squeeze[i].handleEMA = iMA(_Symbol, sqTFs[i], InpSqueeze_KC_Period, 0, MODE_EMA, PRICE_CLOSE);
+         g_squeeze[i].handleATR = iATR(_Symbol, sqTFs[i], InpSqueeze_ATR_Period);
+         g_squeeze[i].state = 0;
+         g_squeeze[i].intensity = 1.0;
+         if(g_squeeze[i].handleBB == INVALID_HANDLE || g_squeeze[i].handleEMA == INVALID_HANDLE || g_squeeze[i].handleATR == INVALID_HANDLE)
+            Print("WARNING: Squeeze indicator handle failed for TF ", g_squeeze[i].tfLabel);
+      }
+      Print("Squeeze Filter initialized: TF1=", g_squeeze[0].tfLabel, " TF2=", g_squeeze[1].tfLabel);
    }
 
    Print("Jutlameasu EA v1.0 initialized successfully");
