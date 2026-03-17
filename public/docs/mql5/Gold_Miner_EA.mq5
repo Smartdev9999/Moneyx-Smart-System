@@ -1189,7 +1189,7 @@ void OnTick()
          bool canOpenMore = TotalOrderCount() < MaxOpenOrders;
 
          // ===== BUY Entry (instant) =====
-         if(buyCount == 0 && g_initialBuyPrice == 0 && canOpenMore && canOpenOnThisCandle)
+         if(!g_squeezeBuyBlocked && buyCount == 0 && g_initialBuyPrice == 0 && canOpenMore && canOpenOnThisCandle)
          {
             if(TradingMode == TRADE_BUY_ONLY || TradingMode == TRADE_BOTH)
             {
