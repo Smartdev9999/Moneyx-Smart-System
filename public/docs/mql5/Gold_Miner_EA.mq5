@@ -907,20 +907,40 @@ void OnTick()
 
    // === SQUEEZE FILTER CHECK ===
    g_squeezeBlocked = false;
+   g_squeezeBuyBlocked = false;
+   g_squeezeSellBlocked = false;
    if(InpUseSqueezeFilter)
    {
       UpdateSqueezeState();
       if(InpSqueeze_BlockOnExpansion)
       {
          int expCount = 0;
-         for(int sq = 0; sq < 3; sq++)
+         int bestDir = 0;          // direction of highest-TF expansion
+         for(int sq = 2; sq >= 0; sq--)  // scan from highest TF first
          {
-            if(g_squeeze[sq].state == 2) expCount++;
+            if(g_squeeze[sq].state == 2)
+            {
+               expCount++;
+               if(bestDir == 0) bestDir = g_squeeze[sq].direction;  // use highest TF direction
+            }
          }
          if(expCount >= InpSqueeze_MinTFExpansion)
          {
-            g_squeezeBlocked = true;
-            g_newOrderBlocked = true;
+            if(InpSqueeze_DirectionalBlock && bestDir != 0)
+            {
+               // Directional: block counter-trend only
+               if(bestDir == 1)  // Bullish expansion → block SELL
+                  g_squeezeSellBlocked = true;
+               else              // Bearish expansion → block BUY
+                  g_squeezeBuyBlocked = true;
+               // Do NOT set g_newOrderBlocked → trend-following side can still open
+            }
+            else
+            {
+               // Original behavior: block everything
+               g_squeezeBlocked = true;
+               g_newOrderBlocked = true;
+            }
          }
       }
    }
