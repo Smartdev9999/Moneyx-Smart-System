@@ -3884,9 +3884,9 @@ void OnTickZigZagMTF()
          // Grid Profit
          if(GridProfit_Enable)
          {
-            if((tfHasInitBuy || g_tfStates[t].initialBuyPrice > 0) && tfGPBuy < GridProfit_MaxTrades && tfBuyCount > 0)
+            if(!g_squeezeBuyBlocked && (tfHasInitBuy || g_tfStates[t].initialBuyPrice > 0) && tfGPBuy < GridProfit_MaxTrades && tfBuyCount > 0)
                CheckGridProfitTF(t, POSITION_TYPE_BUY, tfGPBuy);
-            if((tfHasInitSell || g_tfStates[t].initialSellPrice > 0) && tfGPSell < GridProfit_MaxTrades && tfSellCount > 0)
+            if(!g_squeezeSellBlocked && (tfHasInitSell || g_tfStates[t].initialSellPrice > 0) && tfGPSell < GridProfit_MaxTrades && tfSellCount > 0)
                CheckGridProfitTF(t, POSITION_TYPE_SELL, tfGPSell);
          }
       }
