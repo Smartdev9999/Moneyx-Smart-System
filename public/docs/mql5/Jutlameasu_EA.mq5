@@ -1733,6 +1733,36 @@ void DisplayDashboard()
                    g_isNewsPaused ? COLOR_LOSS : COLOR_PROFIT, COLOR_SECTION_NEWS); row++;
    }
 
+   // === SQUEEZE FILTER SECTION ===
+   if(InpUseSqueezeFilter)
+   {
+      color COLOR_SECTION_SQ = C'80,80,160';
+      color COLOR_SQUEEZE    = clrOrangeRed;
+      color COLOR_NORMAL     = clrLime;
+      color COLOR_EXPANSION  = clrDodgerBlue;
+
+      for(int sq = 0; sq < 2; sq++)
+      {
+         string stateStr = "NORMAL";
+         color  stateClr = COLOR_NORMAL;
+         if(g_squeeze[sq].state == 1)      { stateStr = "SQUEEZE";   stateClr = COLOR_SQUEEZE; }
+         else if(g_squeeze[sq].state == 2) { stateStr = "EXPANSION"; stateClr = COLOR_EXPANSION; }
+
+         // Intensity bar
+         int barLen = (int)MathMin(g_squeeze[sq].intensity * 5, 10);
+         string bar = "";
+         for(int b = 0; b < barLen; b++) bar += "#";
+         for(int b = barLen; b < 10; b++) bar += ".";
+
+         string sqInfo = stateStr + " " + DoubleToString(g_squeeze[sq].intensity, 2) + " |" + bar + "|";
+         DrawTableRow(row, g_squeeze[sq].tfLabel + " Squeeze", sqInfo, stateClr, COLOR_SECTION_SQ); row++;
+      }
+
+      string sqStatus = g_squeezeBlocked ? "BLOCKED (No Expansion)" : "ALLOWED (Expansion)";
+      color  sqStClr  = g_squeezeBlocked ? COLOR_SQUEEZE : COLOR_EXPANSION;
+      DrawTableRow(row, "Squeeze Status", sqStatus, sqStClr, COLOR_SECTION_SQ); row++;
+   }
+
    // Buttons
    int btnY = DashboardY + (int)(24 * sc) + row * (int)(20 * sc) + 5;
    int btnW = (int)(85 * sc);
