@@ -1010,6 +1010,21 @@ void OnTick()
    if(IsNewsTimePaused()) g_newOrderBlocked = true;
    if(InpUseTimeFilter && !IsWithinTradingHours()) g_newOrderBlocked = true;
 
+   // === SQUEEZE FILTER CHECK ===
+   g_squeezeBlocked = false;
+   if(InpUseSqueezeFilter)
+   {
+      UpdateSqueezeState();
+      int expCount = 0;
+      for(int sq = 0; sq < 2; sq++)
+      {
+         if(g_squeeze[sq].state == 2) expCount++;
+      }
+      // Jutlameasu: BLOCK when NOT enough Expansion (opposite of Gold Miner)
+      g_squeezeBlocked = (expCount < InpSqueeze_MinTFExpansion);
+      if(g_squeezeBlocked) g_newOrderBlocked = true;
+   }
+
    if(g_eaStopped) return;
 
    // === DRAWDOWN CHECK ===
