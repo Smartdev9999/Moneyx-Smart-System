@@ -5889,6 +5889,17 @@ void UpdateSqueezeState()
          g_squeeze[sq].state = 2;  // EXPANSION
       else
          g_squeeze[sq].state = 0;  // NORMAL
+
+      // Direction: Close vs EMA (for directional block)
+      g_squeeze[sq].direction = 0;
+      if(g_squeeze[sq].state == 2)
+      {
+         double closePrice = iClose(_Symbol, g_squeeze[sq].tf, 0);
+         if(closePrice > ema)
+            g_squeeze[sq].direction = 1;   // Bullish
+         else if(closePrice < ema)
+            g_squeeze[sq].direction = -1;  // Bearish
+      }
    }
 }
 
