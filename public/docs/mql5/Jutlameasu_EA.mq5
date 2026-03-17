@@ -231,6 +231,20 @@ bool g_lastPausedState = false;
 string g_lastPauseKey = "";
 datetime g_newsPauseEndTime = 0;
 
+// Squeeze Filter Variables
+struct SqueezeState
+{
+   ENUM_TIMEFRAMES tf;
+   string          tfLabel;
+   int             handleBB;
+   int             handleATR;
+   int             handleEMA;
+   int             state;      // 0=Normal, 1=Squeeze, 2=Expansion
+   double          intensity;
+};
+SqueezeState g_squeeze[2];
+bool g_squeezeBlocked = false;
+
 //+------------------------------------------------------------------+
 //| Expert initialization function                                     |
 //+------------------------------------------------------------------+
