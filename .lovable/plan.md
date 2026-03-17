@@ -1,27 +1,24 @@
-## เพิ่ม Volatility Squeeze Filter ใน Jutlameasu EA (2 Timeframes)
+## สรุปงานทั้งหมด
 
-### แนวคิด — ตรงข้ามกับ Gold Miner
-- **Gold Miner**: เทรดเฉพาะ Squeeze/Normal → block เมื่อ Expansion
-- **Jutlameasu**: เทรดเฉพาะ **Expansion** → block เมื่อ Squeeze/Normal
+### งานที่ 1: Jutlameasu EA — Volatility Squeeze Filter ✅
+- เสร็จแล้ว — เพิ่ม Squeeze Filter (2 TFs) แบบ block เมื่อไม่มี Expansion
 
-### สิ่งที่เพิ่ม/แก้ไข
-1. **Input Parameters** — `InpUseSqueezeFilter`, TF1/TF2, BB Period/Mult, KC Period/Mult, ATR Period, ExpThreshold, MinTFExpansion
-2. **Global Variables** — `SqueezeState g_squeeze[2]`, `g_squeezeBlocked`
-3. **OnInit** — สร้าง iBands/iMA/iATR handles สำหรับ 2 TF
-4. **OnDeinit** — IndicatorRelease() สำหรับ 6 handles (2 TF × 3 indicators)
-5. **UpdateSqueezeState()** — คำนวณ BB Width vs KC Width → Intensity → State
-6. **OnTick** — Squeeze check: block เมื่อ Expansion ไม่ถึง threshold
-7. **Dashboard** — เพิ่ม Squeeze section แสดง State/Intensity/Bar สำหรับแต่ละ TF
-8. **TimeframeToStringSQ()** — helper แปลง ENUM_TIMEFRAMES
+### งานที่ 2: Gold Miner SQ EA — Directional Squeeze Block ✅
+- เพิ่ม `InpSqueeze_DirectionalBlock` input (bool)
+- เพิ่ม `g_squeezeBuyBlocked` / `g_squeezeSellBlocked` globals
+- เพิ่ม `direction` field ใน SqueezeState struct (Close vs EMA → 1=Bull, -1=Bear)
+- แก้ OnTick squeeze check: ถ้า directional on → block เฉพาะฝั่งสวนเทรนด์
+- แทรก directional block checks ในทุก entry point (SMA, Instant, ZigZag + Grid)
+- อัปเดต Dashboard แสดง BUY BLOCKED / SELL BLOCKED / OK
+- Version bump: v4.0 → v4.1
 
-### Logic
-- SQUEEZE (สีแดง): BB อยู่ภายใน KC → BLOCK
-- NORMAL (สีเขียว): BB ≈ KC → BLOCK
-- EXPANSION (สีฟ้า): BB ทะลุ KC → ALLOW
+### งานที่ 3: เพิ่มกฎ Version Bumping ใน rules.md ✅
+- เพิ่มหัวข้อ #6: ทุกครั้งที่แก้ไข EA ต้องเพิ่ม minor version
+- อัปเดตทุกจุด: `#property version`, `#property description`, header comment, Dashboard
 
-### สิ่งที่ไม่เปลี่ยนแปลง
-- Order Execution Logic (trade.BuyStop, trade.SellStop, trade.PositionClose)
-- Trading Strategy Logic (Cross-Over TP/SL, Martingale, Grid Profit, Accumulate Close)
+### สิ่งที่ไม่เปลี่ยนแปลงใน Gold Miner (งาน #2)
+- Order Execution Logic (OpenOrder, CheckGridLoss, CheckGridProfit)
+- Trading Strategy Logic (SMA/ZigZag/Instant signals, Grid calculations, TP/SL/Trailing)
 - Core Module Logic (License, News filter, Time filter, Data sync)
-- StartNewCycle / PlaceNextPendingOrder logic
-- Dashboard layout เดิม (เพิ่มแถวใหม่ต่อท้าย)
+- Matching Close / Accumulate / Drawdown logic
+- เมื่อ `InpSqueeze_DirectionalBlock = false` → behavior เหมือนเดิม 100%
