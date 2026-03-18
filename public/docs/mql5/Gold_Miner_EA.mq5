@@ -114,6 +114,7 @@ input bool              DontOpenSameCandle= true;            // Don't Open in Sa
 //--- Initial Lot
 input group "=== Initial Lot ==="
 input double   InitialLotSize     = 0.01;     // Initial Lot Size
+input double   InpMaxLotSize      = 0.0;      // Max Lot Size (0=No Limit)
 
 //--- Grid Loss Side
 input group "=== Grid Loss Side ==="
