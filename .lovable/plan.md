@@ -16,9 +16,15 @@
 - เพิ่มหัวข้อ #6: ทุกครั้งที่แก้ไข EA ต้องเพิ่ม minor version
 - อัปเดตทุกจุด: `#property version`, `#property description`, header comment, Dashboard
 
-### สิ่งที่ไม่เปลี่ยนแปลงใน Gold Miner (งาน #2)
-- Order Execution Logic (OpenOrder, CheckGridLoss, CheckGridProfit)
+### งานที่ 4: Gold Miner SQ EA — Max Lot Size ✅
+- เพิ่ม `InpMaxLotSize` input (double, 0=No Limit)
+- แก้ OpenOrder() → cap maxLot ด้วย InpMaxLotSize ก่อน normalize
+- ครอบคลุมทุกออเดอร์ (Initial, Grid Loss, Grid Profit) ผ่านจุดเดียว
+- Version bump: v4.1 → v4.2
+
+### สิ่งที่ไม่เปลี่ยนแปลงใน Gold Miner (งาน #4)
+- Order Execution Logic (trade.Buy/Sell ไม่เปลี่ยน — แค่ cap ค่า lot ก่อนส่ง)
 - Trading Strategy Logic (SMA/ZigZag/Instant signals, Grid calculations, TP/SL/Trailing)
-- Core Module Logic (License, News filter, Time filter, Data sync)
+- Core Module Logic (License, News filter, Time filter, Data sync, Squeeze filter)
 - Matching Close / Accumulate / Drawdown logic
-- เมื่อ `InpSqueeze_DirectionalBlock = false` → behavior เหมือนเดิม 100%
+- เมื่อ `InpMaxLotSize = 0` → behavior เหมือนเดิม 100%
