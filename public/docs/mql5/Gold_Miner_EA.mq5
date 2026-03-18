@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v4.1 - MTF ZigZag+CDC+Grid+License  |
+//|                Gold Miner EA v4.2 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "4.10"
-#property description "Gold Miner EA v4.1 - MTF ZigZag Entry + CDC Filter + Directional Squeeze + License"
+#property version   "4.20"
+#property description "Gold Miner EA v4.2 - MTF ZigZag Entry + CDC Filter + Directional Squeeze + MaxLot + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -114,6 +114,7 @@ input bool              DontOpenSameCandle= true;            // Don't Open in Sa
 //--- Initial Lot
 input group "=== Initial Lot ==="
 input double   InitialLotSize     = 0.01;     // Initial Lot Size
+input double   InpMaxLotSize      = 0.0;      // Max Lot Size (0=No Limit)
 
 //--- Grid Loss Side
 input group "=== Grid Loss Side ==="
@@ -586,7 +587,7 @@ int OnInit()
       Print("Squeeze Filter initialized: ", sqLabels[0], " / ", sqLabels[1], " / ", sqLabels[2]);
    }
 
-   Print("Gold Miner EA v4.1 initialized successfully");
+   Print("Gold Miner EA v4.2 initialized successfully");
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -636,7 +637,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_TBL_");
    ObjectsDeleteAll(0, "GM_Btn");
 
-   Print("Gold Miner EA v4.1 deinitialized");
+   Print("Gold Miner EA v4.2 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -1296,6 +1297,7 @@ bool OpenOrder(ENUM_ORDER_TYPE orderType, double lots, string comment)
    //--- Normalize lot
    double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
    double maxLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+   if(InpMaxLotSize > 0) maxLot = MathMin(maxLot, InpMaxLotSize);
    double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
    lots = MathMax(minLot, MathMin(maxLot, NormalizeDouble(MathRound(lots / lotStep) * lotStep, 2)));
 
@@ -2585,7 +2587,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v4.1 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v4.1 [ZZ]" : "Gold Miner EA v4.1 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v4.2 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v4.2 [ZZ]" : "Gold Miner EA v4.2 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
