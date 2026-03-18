@@ -1297,6 +1297,7 @@ bool OpenOrder(ENUM_ORDER_TYPE orderType, double lots, string comment)
    //--- Normalize lot
    double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
    double maxLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+   if(InpMaxLotSize > 0) maxLot = MathMin(maxLot, InpMaxLotSize);
    double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
    lots = MathMax(minLot, MathMin(maxLot, NormalizeDouble(MathRound(lots / lotStep) * lotStep, 2)));
 
