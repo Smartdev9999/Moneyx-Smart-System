@@ -5,8 +5,8 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "4.20"
-#property description "Gold Miner EA v4.2 - MTF ZigZag Entry + CDC Filter + Directional Squeeze + MaxLot + License"
+#property version   "4.30"
+#property description "Gold Miner EA v4.3 - MTF ZigZag Entry + CDC Filter + Directional Squeeze + MaxLot + MatchingThreshold + License"
 #property strict
 
 #include <Trade/Trade.mqh>
