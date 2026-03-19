@@ -22,9 +22,15 @@
 - ครอบคลุมทุกออเดอร์ (Initial, Grid Loss, Grid Profit) ผ่านจุดเดียว
 - Version bump: v4.1 → v4.2
 
-### สิ่งที่ไม่เปลี่ยนแปลงใน Gold Miner (งาน #4)
-- Order Execution Logic (trade.Buy/Sell ไม่เปลี่ยน — แค่ cap ค่า lot ก่อนส่ง)
+### งานที่ 5: Gold Miner SQ EA — Matching Close Min Total Orders ✅
+- เพิ่ม `MatchingMinTotalOrders` input (int, 0=Always)
+- เพิ่ม guard condition ใน ManageMatchingClose() → เช็ค totalSideOrders ก่อนเข้า matching logic
+- เมื่อออเดอร์ฝั่งเดียวกันยังไม่ถึงเกณฑ์ → ปล่อยให้ TP ทำงานปกติ
+- Version bump: v4.2 → v4.3
+
+### สิ่งที่ไม่เปลี่ยนแปลงใน Gold Miner (งาน #5)
+- Order Execution Logic (trade.Buy/Sell/PositionClose ไม่เปลี่ยน)
 - Trading Strategy Logic (SMA/ZigZag/Instant signals, Grid calculations, TP/SL/Trailing)
 - Core Module Logic (License, News filter, Time filter, Data sync, Squeeze filter)
-- Matching Close / Accumulate / Drawdown logic
-- เมื่อ `InpMaxLotSize = 0` → behavior เหมือนเดิม 100%
+- Matching Close internal logic (Budget-based, sorting, pairing — ไม่เปลี่ยน แค่เพิ่ม guard condition)
+- เมื่อ `MatchingMinTotalOrders = 0` → behavior เหมือนเดิม 100%
