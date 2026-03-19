@@ -588,7 +588,7 @@ int OnInit()
       Print("Squeeze Filter initialized: ", sqLabels[0], " / ", sqLabels[1], " / ", sqLabels[2]);
    }
 
-   Print("Gold Miner EA v4.2 initialized successfully");
+   Print("Gold Miner EA v4.3 initialized successfully");
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
