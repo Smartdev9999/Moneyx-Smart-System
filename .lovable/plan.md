@@ -1,38 +1,36 @@
+## สรุปงานทั้งหมด
 
+### งานที่ 1: Jutlameasu EA — Volatility Squeeze Filter ✅
+- เสร็จแล้ว — เพิ่ม Squeeze Filter (2 TFs) แบบ block เมื่อไม่มี Expansion
 
-## เพิ่ม Minimum Orders Threshold สำหรับ Matching Close (v4.2 → v4.3)
+### งานที่ 2: Gold Miner SQ EA — Directional Squeeze Block ✅
+- เพิ่ม `InpSqueeze_DirectionalBlock` input (bool)
+- เพิ่ม `g_squeezeBuyBlocked` / `g_squeezeSellBlocked` globals
+- เพิ่ม `direction` field ใน SqueezeState struct (Close vs EMA → 1=Bull, -1=Bear)
+- แก้ OnTick squeeze check: ถ้า directional on → block เฉพาะฝั่งสวนเทรนด์
+- แทรก directional block checks ในทุก entry point (SMA, Instant, ZigZag + Grid)
+- อัปเดต Dashboard แสดง BUY BLOCKED / SELL BLOCKED / OK
+- Version bump: v4.0 → v4.1
 
-### แนวคิด
-เพิ่ม input parameter ใหม่เพื่อกำหนดจำนวนออเดอร์ขั้นต่ำในฝั่งเดียวกันก่อนที่ Matching Close จะเริ่มทำงาน เช่น ตั้งไว้ 10 → ถ้ามีออเดอร์ BUY รวม 8 ตัว ระบบจะปิดด้วย TP ตามปกติ แต่พอถึง 10 ตัวขึ้นไป Matching Close จะเริ่มจับคู่ปิด
+### งานที่ 3: เพิ่มกฎ Version Bumping ใน rules.md ✅
+- เพิ่มหัวข้อ #6: ทุกครั้งที่แก้ไข EA ต้องเพิ่ม minor version
+- อัปเดตทุกจุด: `#property version`, `#property description`, header comment, Dashboard
 
-### การแก้ไข
+### งานที่ 4: Gold Miner SQ EA — Max Lot Size ✅
+- เพิ่ม `InpMaxLotSize` input (double, 0=No Limit)
+- แก้ OpenOrder() → cap maxLot ด้วย InpMaxLotSize ก่อน normalize
+- ครอบคลุมทุกออเดอร์ (Initial, Grid Loss, Grid Profit) ผ่านจุดเดียว
+- Version bump: v4.1 → v4.2
 
-**ไฟล์:** `public/docs/mql5/Gold_Miner_EA.mq5`
+### งานที่ 5: Gold Miner SQ EA — Matching Close Min Total Orders ✅
+- เพิ่ม `MatchingMinTotalOrders` input (int, 0=Always)
+- เพิ่ม guard condition ใน ManageMatchingClose() → เช็ค totalSideOrders ก่อนเข้า matching logic
+- เมื่อออเดอร์ฝั่งเดียวกันยังไม่ถึงเกณฑ์ → ปล่อยให้ TP ทำงานปกติ
+- Version bump: v4.2 → v4.3
 
-#### 1. Input Parameter ใหม่ (หลัง line 294 ในกลุ่ม Matching Close)
-```cpp
-input int      MatchingMinTotalOrders  = 0;   // Min Total Orders to Activate (0=Always)
-```
-ค่า 0 = ทำงานทันทีเหมือนเดิม, ค่า > 0 = ต้องมีออเดอร์ฝั่งเดียวกันถึงจำนวนนี้ก่อน
-
-#### 2. แก้ ManageMatchingClose() (~line 5691 หลังนับ profitCount + lossCount)
-หลังจากนับ profitCount และ lossCount เสร็จ เพิ่มเช็ค:
-```cpp
-int totalSideOrders = profitCount + lossCount;
-if(MatchingMinTotalOrders > 0 && totalSideOrders < MatchingMinTotalOrders)
-   break;  // ออเดอร์ยังไม่ถึงเกณฑ์ — ปล่อยให้ TP ทำงานปกติ
-```
-
-#### 3. Version bump: v4.2 → v4.3
-- `#property version "4.30"`
-- `#property description` → v4.3
-- Header comment → v4.3
-- Dashboard display → v4.3
-
-### สิ่งที่ไม่เปลี่ยนแปลง
+### สิ่งที่ไม่เปลี่ยนแปลงใน Gold Miner (งาน #5)
 - Order Execution Logic (trade.Buy/Sell/PositionClose ไม่เปลี่ยน)
 - Trading Strategy Logic (SMA/ZigZag/Instant signals, Grid calculations, TP/SL/Trailing)
 - Core Module Logic (License, News filter, Time filter, Data sync, Squeeze filter)
-- Matching Close internal logic (Budget-based, sorting, pairing — ไม่เปลี่ยน แค่เพิ่ม guard condition ก่อนเข้า)
+- Matching Close internal logic (Budget-based, sorting, pairing — ไม่เปลี่ยน แค่เพิ่ม guard condition)
 - เมื่อ `MatchingMinTotalOrders = 0` → behavior เหมือนเดิม 100%
-

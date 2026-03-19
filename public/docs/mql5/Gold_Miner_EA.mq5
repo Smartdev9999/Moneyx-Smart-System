@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v4.2 - MTF ZigZag+CDC+Grid+License  |
+//|                Gold Miner EA v4.3 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "4.20"
-#property description "Gold Miner EA v4.2 - MTF ZigZag Entry + CDC Filter + Directional Squeeze + MaxLot + License"
+#property version   "4.30"
+#property description "Gold Miner EA v4.3 - MTF ZigZag Entry + CDC Filter + Directional Squeeze + MaxLot + MatchingThreshold + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -293,6 +293,7 @@ input bool     UseMatchingClose       = false;    // Enable Matching Close
 input double   MatchingMinProfit      = 0.50;     // Min Net Profit per Match ($)
 input int      MatchingMaxLossOrders  = 3;        // Max Loss Orders per Match (1-10)
 input int      MatchingMinProfitOrders = 1;       // Min Profit Orders to Start Matching
+input int      MatchingMinTotalOrders  = 0;        // Min Total Orders to Activate (0=Always)
 
 //--- Volatility Squeeze Filter (BB vs KC)
 input group "=== Volatility Squeeze Filter ==="
@@ -587,7 +588,7 @@ int OnInit()
       Print("Squeeze Filter initialized: ", sqLabels[0], " / ", sqLabels[1], " / ", sqLabels[2]);
    }
 
-   Print("Gold Miner EA v4.2 initialized successfully");
+   Print("Gold Miner EA v4.3 initialized successfully");
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -637,7 +638,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_TBL_");
    ObjectsDeleteAll(0, "GM_Btn");
 
-   Print("Gold Miner EA v4.2 deinitialized");
+   Print("Gold Miner EA v4.3 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -2587,7 +2588,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v4.2 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v4.2 [ZZ]" : "Gold Miner EA v4.2 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v4.3 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v4.3 [ZZ]" : "Gold Miner EA v4.3 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -5721,6 +5722,11 @@ void ManageMatchingClose()
                lossCount++;
             }
          }
+
+         // --- Minimum Total Orders Threshold ---
+         int totalSideOrders = profitCount + lossCount;
+         if(MatchingMinTotalOrders > 0 && totalSideOrders < MatchingMinTotalOrders)
+            break;  // ออเดอร์ยังไม่ถึงเกณฑ์ — ปล่อยให้ TP ทำงานปกติ
 
          int minPO = MathMax(MatchingMinProfitOrders, 1);
          if(profitCount < minPO) break;  // Not enough profit orders — wait for more
