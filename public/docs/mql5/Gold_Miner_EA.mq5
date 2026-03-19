@@ -293,6 +293,7 @@ input bool     UseMatchingClose       = false;    // Enable Matching Close
 input double   MatchingMinProfit      = 0.50;     // Min Net Profit per Match ($)
 input int      MatchingMaxLossOrders  = 3;        // Max Loss Orders per Match (1-10)
 input int      MatchingMinProfitOrders = 1;       // Min Profit Orders to Start Matching
+input int      MatchingMinTotalOrders  = 0;        // Min Total Orders to Activate (0=Always)
 
 //--- Volatility Squeeze Filter (BB vs KC)
 input group "=== Volatility Squeeze Filter ==="
