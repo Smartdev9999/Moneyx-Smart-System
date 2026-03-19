@@ -5723,6 +5723,11 @@ void ManageMatchingClose()
             }
          }
 
+         // --- Minimum Total Orders Threshold ---
+         int totalSideOrders = profitCount + lossCount;
+         if(MatchingMinTotalOrders > 0 && totalSideOrders < MatchingMinTotalOrders)
+            break;  // ออเดอร์ยังไม่ถึงเกณฑ์ — ปล่อยให้ TP ทำงานปกติ
+
          int minPO = MathMax(MatchingMinProfitOrders, 1);
          if(profitCount < minPO) break;  // Not enough profit orders — wait for more
 
