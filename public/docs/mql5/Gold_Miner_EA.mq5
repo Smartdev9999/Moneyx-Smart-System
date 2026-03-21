@@ -317,6 +317,7 @@ input bool     InpHedge_Enable              = false;   // Enable Hedging Mode (r
 input double   InpHedge_MatchMinProfit      = 5.0;     // Min Profit for Hedge Matching ($)
 input int      InpHedge_MatchMinProfitOrders = 2;      // Min Profit Orders for Hedge Grid Matching
 input double   InpHedge_PartialMinProfit    = 5.0;     // Min Profit for Partial Close ($)
+input int      InpHedge_PartialMinProfitOrders = 3;    // Min Profit Orders for Partial Close (0=Always)
 
 //+------------------------------------------------------------------+
 //| Global Variables                                                   |
