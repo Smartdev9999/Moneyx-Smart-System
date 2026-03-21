@@ -6347,7 +6347,13 @@ void ManageHedgeGridMode(int idx)
       else if(GridLoss_LotMode == LOT_ADD)
          nextLot = InitialLotSize + (GridLoss_AddLotPerLevel * InitialLotSize) * nextLevel;
 
-      // Check grid distance (simplified - use fixed points)
+      // Cooldown to prevent rapid-fire orders
+      if(TimeCurrent() - g_lastHedgeGridTime < 5) return;
+
+      // Check grid distance using proper ATR/Custom calculation
+      double requiredGap = GetGridDistance(currentGridCount + 1, true);
+      if(requiredGap <= 0) return;
+
       double lastPrice = 0;
       if(PositionSelectByTicket(g_hedgeSets[idx].hedgeTicket))
          lastPrice = PositionGetDouble(POSITION_PRICE_OPEN);
@@ -6383,7 +6389,7 @@ void ManageHedgeGridMode(int idx)
                            : SymbolInfoDouble(_Symbol, SYMBOL_BID);
       double distance = MathAbs(currentPrice - lastPrice) / point;
 
-      if(distance >= GridLoss_Points)
+      if(distance >= requiredGap)
       {
          ENUM_ORDER_TYPE orderType = (g_hedgeSets[idx].hedgeSide == POSITION_TYPE_BUY)
                                     ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
@@ -6391,8 +6397,10 @@ void ManageHedgeGridMode(int idx)
 
          if(OpenOrder(orderType, nextLot, comment))
          {
+            g_lastHedgeGridTime = TimeCurrent();
             Print("HEDGE GRID Set#", idx + 1, " opened grid L", currentGridCount + 1,
-                  " lots=", DoubleToString(nextLot, 2));
+                  " lots=", DoubleToString(nextLot, 2),
+                  " gap=", DoubleToString(distance, 0), "/", DoubleToString(requiredGap, 0));
          }
       }
    }
