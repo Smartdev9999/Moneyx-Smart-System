@@ -2629,6 +2629,12 @@ void DrawTableRow(int rowIndex, string label, string value, color valueColor, co
 //+------------------------------------------------------------------+
 void DisplayDashboard()
 {
+   // Clean all table objects before redraw to prevent stale rows
+   ObjectsDeleteAll(0, "GM_TBL_R");
+   ObjectsDeleteAll(0, "GM_TBL_S");
+   ObjectsDeleteAll(0, "GM_TBL_L");
+   ObjectsDeleteAll(0, "GM_TBL_V");
+   
    double sc = MathMax(0.8, MathMin(1.5, DashboardScale));
    int tableWidth = (int)(340 * sc);
    int headerHeight = (int)(22 * sc);
