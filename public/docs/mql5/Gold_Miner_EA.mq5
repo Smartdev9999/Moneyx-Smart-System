@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v4.9 - MTF ZigZag+CDC+Grid+License  |
+//|                Gold Miner EA v5.0 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "4.90"
-#property description "Gold Miner EA v4.9 - MTF ZigZag + CDC + Squeeze + Counter-Trend Hedging + License"
+#property version   "5.00"
+#property description "Gold Miner EA v5.0 - MTF ZigZag + CDC + Squeeze + Counter-Trend Hedging + License"
 #property strict
 
 #include <Trade/Trade.mqh>
