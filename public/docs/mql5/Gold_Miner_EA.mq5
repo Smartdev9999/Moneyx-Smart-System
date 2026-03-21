@@ -1393,6 +1393,9 @@ double CalculateAveragePrice(ENUM_POSITION_TYPE side)
       if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       if(PositionGetInteger(POSITION_TYPE) != side) continue;
+      
+      // Skip hedge orders — basket TP/SL must not include hedge positions
+      if(IsHedgeComment(PositionGetString(POSITION_COMMENT))) continue;
 
       double vol = PositionGetDouble(POSITION_VOLUME);
       double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
