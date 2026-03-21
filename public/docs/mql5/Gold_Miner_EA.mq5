@@ -6080,6 +6080,7 @@ void ManageHedgeSets()
 
 //+------------------------------------------------------------------+
 //| Scenario 1: Hedge in profit + expansion ended → match with losses  |
+//| Now uses boundTickets[] for set-specific isolation                  |
 //+------------------------------------------------------------------+
 void ManageHedgeMatchingClose(int idx)
 {
@@ -6091,21 +6092,17 @@ void ManageHedgeMatchingClose(int idx)
    double budget = hedgeProfit - InpHedge_MatchMinProfit;
    if(budget <= 0) return;
 
-   // Collect loss orders on the counter side (oldest first)
+   // Collect loss orders ONLY from this set's boundTickets (oldest first)
    ulong lossTickets[];
    double lossValues[];
    datetime lossTimes[];
    int lossCount = 0;
 
-   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   for(int b = 0; b < g_hedgeSets[idx].boundTicketCount; b++)
    {
-      ulong ticket = PositionGetTicket(i);
-      if(ticket == 0) continue;
-      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
-      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      ulong ticket = g_hedgeSets[idx].boundTickets[b];
+      if(!PositionSelectByTicket(ticket)) continue;
       if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != g_hedgeSets[idx].counterSide) continue;
-      string comment = PositionGetString(POSITION_COMMENT);
-      if(IsHedgeComment(comment)) continue;
 
       double pnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
       if(pnl >= 0) continue;  // only loss orders
@@ -6157,15 +6154,18 @@ void ManageHedgeMatchingClose(int idx)
       // Close hedge order
       trade.PositionClose(g_hedgeSets[idx].hedgeTicket);
 
-      // Close matched losses
+      // Close matched losses + remove from boundTickets
       for(int cl = 0; cl < lossUsed; cl++)
       {
          int li = closeLossIdx[cl];
          trade.PositionClose(lossTickets[li]);
+         RemoveBoundTicket(idx, lossTickets[li]);
       }
 
       // Deactivate hedge set
       g_hedgeSets[idx].active = false;
+      g_hedgeSets[idx].boundTicketCount = 0;
+      ArrayResize(g_hedgeSets[idx].boundTickets, 0);
       g_hedgeSetCount--;
       Sleep(100);
    }
@@ -6175,15 +6175,29 @@ void ManageHedgeMatchingClose(int idx)
       Print("HEDGE CLOSE (no matchable losses) Set#", idx + 1,
             ": profit $", DoubleToString(hedgeProfit, 2));
       trade.PositionClose(g_hedgeSets[idx].hedgeTicket);
-      g_hedgeSets[idx].active = false;
-      g_hedgeSetCount--;
+
+      // Enter grid mode to continue recovery if bound tickets remain
+      if(g_hedgeSets[idx].boundTicketCount > 0)
+      {
+         // Still have bound orders → continue as grid for recovery
+         g_hedgeSets[idx].gridMode = true;
+         g_hedgeSets[idx].gridLevel = 0;
+         Print("HEDGE Set#", idx + 1, " closed but bound orders remain. Entering Grid Mode.");
+      }
+      else
+      {
+         g_hedgeSets[idx].active = false;
+         g_hedgeSets[idx].boundTicketCount = 0;
+         ArrayResize(g_hedgeSets[idx].boundTickets, 0);
+         g_hedgeSetCount--;
+      }
       Sleep(100);
    }
 }
 
 //+------------------------------------------------------------------+
 //| Scenario 2: Hedge in loss + original orders may have profit        |
-//| Use partial close to reduce hedge using original order profits     |
+//| Use partial close to reduce hedge using bound order profits        |
 //+------------------------------------------------------------------+
 void ManageHedgePartialClose(int idx)
 {
@@ -6194,33 +6208,26 @@ void ManageHedgePartialClose(int idx)
    if(hedgePnL >= 0) return;  // not in loss → handled by ManageHedgeMatchingClose
    if(hedgeLots <= 0) return;
 
-   // Check if original orders still exist
-   double counterLots = 0, counterPL = 0;
-   int counterCount = CountNormalOrders(g_hedgeSets[idx].counterSide, counterLots, counterPL);
-
-   if(counterCount == 0)
+   // Check if bound orders still exist
+   if(g_hedgeSets[idx].boundTicketCount == 0)
    {
-      // No original orders left → enter grid mode
-      Print("HEDGE Set#", idx + 1, " no original orders left. Entering Grid Mode.");
+      // No bound orders left → enter grid mode
+      Print("HEDGE Set#", idx + 1, " no bound orders left. Entering Grid Mode.");
       g_hedgeSets[idx].gridMode = true;
       g_hedgeSets[idx].gridLevel = CalculateEquivGridLevel(hedgeLots);
       return;
    }
 
-   // Find profitable original orders (scan from newest/closest to hedge)
+   // Find profitable orders ONLY from this set's boundTickets
    ulong profitTickets[];
    double profitValues[];
    int profitCount = 0;
 
-   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   for(int b = 0; b < g_hedgeSets[idx].boundTicketCount; b++)
    {
-      ulong ticket = PositionGetTicket(i);
-      if(ticket == 0) continue;
-      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
-      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      ulong ticket = g_hedgeSets[idx].boundTickets[b];
+      if(!PositionSelectByTicket(ticket)) continue;
       if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != g_hedgeSets[idx].counterSide) continue;
-      string comment = PositionGetString(POSITION_COMMENT);
-      if(IsHedgeComment(comment)) continue;
 
       double pnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
       if(pnl <= 0) continue;
@@ -6232,7 +6239,7 @@ void ManageHedgePartialClose(int idx)
       profitCount++;
    }
 
-   if(profitCount == 0) return;  // no profitable orders to use
+   if(profitCount == 0) return;  // no profitable bound orders to use
 
    // Guard: require minimum number of profitable counter-orders before starting partial close
    if(InpHedge_PartialMinProfitOrders > 0 && profitCount < InpHedge_PartialMinProfitOrders) return;
@@ -6261,10 +6268,11 @@ void ManageHedgePartialClose(int idx)
          DoubleToString(totalProfit, 2), " → close ", DoubleToString(closeLots, 2),
          " lots of hedge (current ", DoubleToString(hedgeLots, 2), " lots)");
 
-   // Close all profitable original orders
+   // Close all profitable bound orders + remove from boundTickets
    for(int p = 0; p < profitCount; p++)
    {
       trade.PositionClose(profitTickets[p]);
+      RemoveBoundTicket(idx, profitTickets[p]);
       Sleep(50);
    }
 
@@ -6276,6 +6284,8 @@ void ManageHedgePartialClose(int idx)
    {
       trade.PositionClose(g_hedgeSets[idx].hedgeTicket);
       g_hedgeSets[idx].active = false;
+      g_hedgeSets[idx].boundTicketCount = 0;
+      ArrayResize(g_hedgeSets[idx].boundTickets, 0);
       g_hedgeSetCount--;
       Print("HEDGE Set#", idx + 1, " fully closed via batch partial close.");
    }
