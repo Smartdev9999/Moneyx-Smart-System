@@ -471,6 +471,7 @@ struct HedgeSet
 };
 HedgeSet g_hedgeSets[MAX_HEDGE_SETS];
 int      g_hedgeSetCount = 0;
+datetime g_lastHedgeGridTime = 0;  // cooldown timer for hedge grid orders
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                     |
