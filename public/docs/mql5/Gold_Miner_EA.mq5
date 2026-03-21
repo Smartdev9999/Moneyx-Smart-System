@@ -2951,6 +2951,7 @@ void DisplayDashboard()
 
             string hedgeInfo = sideStr + " " + DoubleToString(g_hedgeSets[h].hedgeLots, 2) + "L";
             hedgeInfo += " PnL:$" + DoubleToString(hedgePnL, 2);
+            hedgeInfo += " B:" + IntegerToString(g_hedgeSets[h].boundTicketCount);
             if(g_hedgeSets[h].gridMode)
                hedgeInfo += " Grid:L" + IntegerToString(g_hedgeSets[h].gridLevel);
 
