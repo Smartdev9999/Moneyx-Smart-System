@@ -58,3 +58,8 @@
 - DirectionalBlock logic (ยังทำงานเหมือนเดิม)
 - Accumulate/Drawdown logic (ปิดทุก order รวม hedge)
 - เมื่อ `InpHedge_Enable = false` → behavior เหมือน v4.3 100%
+
+### งานที่ 8: Gold Miner SQ EA — Fix Hedge Lot Cap by MaxLotSize ✅
+- แก้ `OpenOrder()`: ข้าม `InpMaxLotSize` cap สำหรับ Hedge orders (`IsHedgeComment`)
+- ออเดอร์ปกติ (GM_INIT, GM_GL, GM_GP) ยังถูก cap เหมือนเดิม
+- Version bump: v4.5 → v4.6
