@@ -6385,12 +6385,22 @@ void ManageHedgeGridMode(int idx)
       if(lastPrice <= 0) return;
 
       double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
-      double currentPrice = (g_hedgeSets[idx].hedgeSide == POSITION_TYPE_BUY)
-                           ? SymbolInfoDouble(_Symbol, SYMBOL_ASK)
-                           : SymbolInfoDouble(_Symbol, SYMBOL_BID);
-      double distance = MathAbs(currentPrice - lastPrice) / point;
+      // Directional distance: only trigger when price moves AGAINST the hedge (losing direction)
+      // Hedge SELL → grid opens when price goes UP (Bid > lastPrice)
+      // Hedge BUY  → grid opens when price goes DOWN (Ask < lastPrice)
+      double distance = 0;
+      if(g_hedgeSets[idx].hedgeSide == POSITION_TYPE_SELL)
+      {
+         double currentBid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+         distance = (currentBid - lastPrice) / point;  // positive = price went up
+      }
+      else // BUY hedge
+      {
+         double currentAsk = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+         distance = (lastPrice - currentAsk) / point;  // positive = price went down
+      }
 
-      if(distance >= requiredGap)
+      if(distance >= requiredGap && distance > 0)
       {
          ENUM_ORDER_TYPE orderType = (g_hedgeSets[idx].hedgeSide == POSITION_TYPE_BUY)
                                     ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
