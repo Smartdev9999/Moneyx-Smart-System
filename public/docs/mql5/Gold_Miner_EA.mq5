@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v4.6 - MTF ZigZag+CDC+Grid+License  |
+//|                Gold Miner EA v4.7 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "4.60"
-#property description "Gold Miner EA v4.6 - MTF ZigZag + CDC + Squeeze + Counter-Trend Hedging + License"
+#property version   "4.70"
+#property description "Gold Miner EA v4.7 - MTF ZigZag + CDC + Squeeze + Counter-Trend Hedging + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -471,6 +471,7 @@ struct HedgeSet
 };
 HedgeSet g_hedgeSets[MAX_HEDGE_SETS];
 int      g_hedgeSetCount = 0;
+datetime g_lastHedgeGridTime = 0;  // cooldown timer for hedge grid orders
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                     |
@@ -630,7 +631,7 @@ int OnInit()
    }
    g_hedgeSetCount = 0;
 
-   Print("Gold Miner EA v4.6 initialized successfully");
+   Print("Gold Miner EA v4.7 initialized successfully");
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -682,7 +683,7 @@ void OnDeinit(const int reason)
 
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
-   Print("Gold Miner EA v4.6 deinitialized");
+   Print("Gold Miner EA v4.7 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -2667,7 +2668,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v4.6 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v4.6 [ZZ]" : "Gold Miner EA v4.6 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v4.7 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v4.7 [ZZ]" : "Gold Miner EA v4.7 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -6346,7 +6347,13 @@ void ManageHedgeGridMode(int idx)
       else if(GridLoss_LotMode == LOT_ADD)
          nextLot = InitialLotSize + (GridLoss_AddLotPerLevel * InitialLotSize) * nextLevel;
 
-      // Check grid distance (simplified - use fixed points)
+      // Cooldown to prevent rapid-fire orders
+      if(TimeCurrent() - g_lastHedgeGridTime < 5) return;
+
+      // Check grid distance using proper ATR/Custom calculation
+      double requiredGap = GetGridDistance(currentGridCount + 1, true);
+      if(requiredGap <= 0) return;
+
       double lastPrice = 0;
       if(PositionSelectByTicket(g_hedgeSets[idx].hedgeTicket))
          lastPrice = PositionGetDouble(POSITION_PRICE_OPEN);
@@ -6382,7 +6389,7 @@ void ManageHedgeGridMode(int idx)
                            : SymbolInfoDouble(_Symbol, SYMBOL_BID);
       double distance = MathAbs(currentPrice - lastPrice) / point;
 
-      if(distance >= GridLoss_Points)
+      if(distance >= requiredGap)
       {
          ENUM_ORDER_TYPE orderType = (g_hedgeSets[idx].hedgeSide == POSITION_TYPE_BUY)
                                     ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
@@ -6390,8 +6397,10 @@ void ManageHedgeGridMode(int idx)
 
          if(OpenOrder(orderType, nextLot, comment))
          {
+            g_lastHedgeGridTime = TimeCurrent();
             Print("HEDGE GRID Set#", idx + 1, " opened grid L", currentGridCount + 1,
-                  " lots=", DoubleToString(nextLot, 2));
+                  " lots=", DoubleToString(nextLot, 2),
+                  " gap=", DoubleToString(distance, 0), "/", DoubleToString(requiredGap, 0));
          }
       }
    }
