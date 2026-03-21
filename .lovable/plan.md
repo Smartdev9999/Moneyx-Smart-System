@@ -86,3 +86,23 @@
 - รวมกำไรทุก profitable orders → คำนวณ closeLots รวม → ปิดทีเดียว
 - Guard `InpHedge_PartialMinProfitOrders` ยังเป็นกฎเหล็ก
 - Version bump: v4.9 → v5.0
+
+### งานที่ 13: Gold Miner SQ EA — Hedge Set Isolation System ✅
+- เพิ่ม `boundTickets[]` + `boundTicketCount` ใน HedgeSet struct
+- เพิ่ม helper functions: `IsTicketBound()`, `CountUnboundOrders()`, `RemoveBoundTicket()`, `RefreshBoundTickets()`
+- แก้ `CheckAndOpenHedge()`: ใช้ `CountUnboundOrders()` แทน `CountNormalOrders()` + ผูก tickets เข้า set
+- ลบ `HedgeExistsForSide()` → อนุญาตหลาย set ฝั่งเดียวกัน (ใช้ unbound check แทน)
+- แก้ `ManageHedgeSets()`: เพิ่ม `RefreshBoundTickets()` ทุก tick + ใช้ `boundTicketCount == 0` เช็ค grid mode
+- แก้ `ManageHedgeMatchingClose()`: สแกนเฉพาะ `boundTickets[]` แทน global scan
+- แก้ `ManageHedgePartialClose()`: สแกนเฉพาะ `boundTickets[]` แทน global scan
+- อัปเดต Dashboard แสดง bound ticket count (B:N)
+- Version bump: v5.0 → v5.1
+
+### สิ่งที่ไม่เปลี่ยนแปลงใน Gold Miner (งาน #13)
+- Order Execution Logic (trade.Buy/Sell/PositionClose)
+- Trading Strategy Logic (SMA/ZigZag/Instant, Grid entry/exit, TP/SL/Trailing)
+- Core Module Logic (License, News filter, Time filter, Data sync)
+- Normal Matching Close logic
+- Hedge Grid order opening/distance logic
+- Accumulate/Drawdown close logic
+- DirectionalBlock logic
