@@ -632,7 +632,7 @@ int OnInit()
    }
    g_hedgeSetCount = 0;
 
-   Print("Gold Miner EA v4.8 initialized successfully");
+   Print("Gold Miner EA v4.9 initialized successfully");
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
