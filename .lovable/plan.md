@@ -69,3 +69,9 @@
 - เพิ่ม `g_lastHedgeGridTime` cooldown 5 วินาทีป้องกันออก order รัว
 - เพิ่ม Print log แสดง gap/requiredGap เพื่อ debug
 - Version bump: v4.6 → v4.7
+
+### งานที่ 10: Gold Miner SQ EA — Fix Hedge Grid รัว + Min Profit Orders ✅
+- แก้ `ManageHedgeGridMode()`: ใช้ Directional Distance แทน `MathAbs` — Sell Hedge grid เปิดเมื่อราคาขึ้นเท่านั้น, Buy Hedge เมื่อราคาลงเท่านั้น
+- เพิ่ม `InpHedge_PartialMinProfitOrders` input (int, default 3) — ขั้นต่ำออเดอร์บวกก่อนเริ่ม Hedge Partial Close
+- เพิ่ม guard ใน `ManageHedgePartialClose()`: ต้องมี profitCount >= InpHedge_PartialMinProfitOrders
+- Version bump: v4.7 → v4.8
