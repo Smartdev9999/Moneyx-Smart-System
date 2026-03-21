@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v4.9 - MTF ZigZag+CDC+Grid+License  |
+//|                Gold Miner EA v5.0 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "4.90"
-#property description "Gold Miner EA v4.9 - MTF ZigZag + CDC + Squeeze + Counter-Trend Hedging + License"
+#property version   "5.00"
+#property description "Gold Miner EA v5.0 - MTF ZigZag + CDC + Squeeze + Counter-Trend Hedging + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -632,7 +632,7 @@ int OnInit()
    }
    g_hedgeSetCount = 0;
 
-   Print("Gold Miner EA v4.9 initialized successfully");
+   Print("Gold Miner EA v5.0 initialized successfully");
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -684,7 +684,7 @@ void OnDeinit(const int reason)
 
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
-   Print("Gold Miner EA v4.9 deinitialized");
+   Print("Gold Miner EA v5.0 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -2669,7 +2669,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v4.9 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v4.9 [ZZ]" : "Gold Miner EA v4.9 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v5.0 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v5.0 [ZZ]" : "Gold Miner EA v5.0 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -6148,50 +6148,51 @@ void ManageHedgePartialClose(int idx)
    double hedgeLossPerLot = MathAbs(hedgePnL) / hedgeLots;
    if(hedgeLossPerLot <= 0) return;
 
-   // Process each profitable original order
+   // === BATCH MODE: aggregate all profitable orders ===
+   double totalProfit = 0;
+   for(int p = 0; p < profitCount; p++)
+      totalProfit += profitValues[p];
+
+   // Calculate total hedge lots that can be covered by combined profit
+   double closeLots = (totalProfit - InpHedge_PartialMinProfit) / hedgeLossPerLot;
+   if(closeLots <= 0) return;
+
+   // Normalize lot
+   double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   closeLots = MathMax(minLot, MathMin(hedgeLots, NormalizeDouble(MathFloor(closeLots / lotStep) * lotStep, 2)));
+
+   if(closeLots < minLot) return;
+
+   Print("HEDGE PARTIAL CLOSE (BATCH) Set#", idx + 1, ": ", profitCount, " profit orders total $",
+         DoubleToString(totalProfit, 2), " → close ", DoubleToString(closeLots, 2),
+         " lots of hedge (current ", DoubleToString(hedgeLots, 2), " lots)");
+
+   // Close all profitable original orders
    for(int p = 0; p < profitCount; p++)
    {
-      if(!PositionSelectByTicket(g_hedgeSets[idx].hedgeTicket)) break;
-      hedgeLots = PositionGetDouble(POSITION_VOLUME);
-      if(hedgeLots <= 0) break;
-
-      double orderProfit = profitValues[p];
-
-      // Calculate how many lots of hedge can be covered by this profit
-      double closeLots = (orderProfit - InpHedge_PartialMinProfit) / hedgeLossPerLot;
-      if(closeLots <= 0) continue;
-
-      // Normalize lot
-      double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
-      double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
-      closeLots = MathMax(minLot, MathMin(hedgeLots, NormalizeDouble(MathFloor(closeLots / lotStep) * lotStep, 2)));
-
-      if(closeLots < minLot) continue;
-
-      Print("HEDGE PARTIAL CLOSE Set#", idx + 1, ": using order profit $",
-            DoubleToString(orderProfit, 2), " to close ", DoubleToString(closeLots, 2),
-            " lots of hedge");
-
-      // Close the profitable original order
       trade.PositionClose(profitTickets[p]);
-
-      // Partial close hedge
-      if(closeLots >= hedgeLots)
-      {
-         trade.PositionClose(g_hedgeSets[idx].hedgeTicket);
-         g_hedgeSets[idx].active = false;
-         g_hedgeSetCount--;
-         Print("HEDGE Set#", idx + 1, " fully closed via partial close.");
-      }
-      else
-      {
-         trade.PositionClosePartial(g_hedgeSets[idx].hedgeTicket, closeLots);
-         g_hedgeSets[idx].hedgeLots = hedgeLots - closeLots;
-      }
-
-      Sleep(100);
-      break;  // process one order per tick to avoid stale data
+      Sleep(50);
    }
+
+   // Partial close (or full close) hedge
+   if(!PositionSelectByTicket(g_hedgeSets[idx].hedgeTicket)) return;
+   hedgeLots = PositionGetDouble(POSITION_VOLUME);
+
+   if(closeLots >= hedgeLots)
+   {
+      trade.PositionClose(g_hedgeSets[idx].hedgeTicket);
+      g_hedgeSets[idx].active = false;
+      g_hedgeSetCount--;
+      Print("HEDGE Set#", idx + 1, " fully closed via batch partial close.");
+   }
+   else
+   {
+      trade.PositionClosePartial(g_hedgeSets[idx].hedgeTicket, closeLots);
+      g_hedgeSets[idx].hedgeLots = hedgeLots - closeLots;
+      Print("HEDGE Set#", idx + 1, " reduced to ", DoubleToString(hedgeLots - closeLots, 2), " lots");
+   }
+   Sleep(100);
 }
 
 //+------------------------------------------------------------------+

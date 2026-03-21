@@ -1,49 +1,88 @@
+## สรุปงานทั้งหมด
 
+### งานที่ 1: Jutlameasu EA — Volatility Squeeze Filter ✅
+- เสร็จแล้ว — เพิ่ม Squeeze Filter (2 TFs) แบบ block เมื่อไม่มี Expansion
 
-## Fix: Hedge Partial Close ปิดแค่ 1 order ต่อ tick — ปรับเป็น Batch (v4.9 → v5.0)
+### งานที่ 2: Gold Miner SQ EA — Directional Squeeze Block ✅
+- เพิ่ม `InpSqueeze_DirectionalBlock` input (bool)
+- เพิ่ม `g_squeezeBuyBlocked` / `g_squeezeSellBlocked` globals
+- เพิ่ม `direction` field ใน SqueezeState struct (Close vs EMA → 1=Bull, -1=Bear)
+- แก้ OnTick squeeze check: ถ้า directional on → block เฉพาะฝั่งสวนเทรนด์
+- แทรก directional block checks ในทุก entry point (SMA, Instant, ZigZag + Grid)
+- อัปเดต Dashboard แสดง BUY BLOCKED / SELL BLOCKED / OK
+- Version bump: v4.0 → v4.1
 
-### วิเคราะห์สาเหตุ
+### งานที่ 3: เพิ่มกฎ Version Bumping ใน rules.md ✅
+- เพิ่มหัวข้อ #6: ทุกครั้งที่แก้ไข EA ต้องเพิ่ม minor version
+- อัปเดตทุกจุด: `#property version`, `#property description`, header comment, Dashboard
 
-**Line 6193** ใน `ManageHedgePartialClose()` มี `break;` ที่ทำให้ปิดได้แค่ **1 order ต่อ tick**:
+### งานที่ 4: Gold Miner SQ EA — Max Lot Size ✅
+- เพิ่ม `InpMaxLotSize` input (double, 0=No Limit)
+- แก้ OpenOrder() → cap maxLot ด้วย InpMaxLotSize ก่อน normalize
+- ครอบคลุมทุกออเดอร์ (Initial, Grid Loss, Grid Profit) ผ่านจุดเดียว
+- Version bump: v4.1 → v4.2
 
-```text
-วงจรที่เกิด:
-1. profitCount = 3 → ผ่าน guard → ปิด 1 buy + partial hedge → break
-2. tick ถัดไป: profitCount = 2 → guard fail (< 3) → ไม่ปิด
-3. Grid buy ใหม่เปิด → profitable → profitCount = 3 → ปิดอีก 1 → drop เหลือ 2
-4. วนซ้ำ → ปิดได้แค่ 1 order ต่อรอบ
-```
+### งานที่ 5: Gold Miner SQ EA — Matching Close Min Total Orders ✅
+- เพิ่ม `MatchingMinTotalOrders` input (int, 0=Always)
+- เพิ่ม guard condition ใน ManageMatchingClose() → เช็ค totalSideOrders ก่อนเข้า matching logic
+- เมื่อออเดอร์ฝั่งเดียวกันยังไม่ถึงเกณฑ์ → ปล่อยให้ TP ทำงานปกติ
+- Version bump: v4.2 → v4.3
 
-ผู้ใช้ต้องการ: เมื่อมี ≥ 3 profitable orders → **ใช้กำไรรวมทั้งหมดมาซอย hedge ทีเดียว** (batch) เหมือน ManageHedgeMatchingClose ที่ทำแบบ batch อยู่แล้ว
+### งานที่ 6: Gold Miner SQ EA — Counter-Trend Hedging Mode ✅
+- เพิ่ม Input group: `InpHedge_Enable`, `InpHedge_MatchMinProfit`, `InpHedge_MatchMinProfitOrders`, `InpHedge_PartialMinProfit`
+- เพิ่ม `HedgeSet` struct รองรับ 4 ชุดพร้อมกัน (Multi-Hedge)
+- เพิ่ม `CheckAndOpenHedge()`: เปิด Hedge เมื่อ Expansion + มี orders ติดฝั่งสวนเทรน
+- เพิ่ม `ManageHedgeSets()`: วนจัดการทุก Hedge set ทุก tick
+- เพิ่ม `ManageHedgeMatchingClose()`: Scenario 1 — Hedge กำไร + Normal → ปิดคู่กับ loss เก่าสุด
+- เพิ่ม `ManageHedgePartialClose()`: Scenario 2 — Hedge ขาดทุน + original orders บวก → partial close
+- เพิ่ม `ManageHedgeGridMode()`: เมื่อ original orders หมด → แปลง Hedge เป็น Grid
+- แก้ `ManageMatchingClose()`: ข้าม orders ที่เป็น GM_HEDGE / GM_HG
+- แก้ `CloseAllPositions()`: reset Hedge sets ทั้งหมด
+- อัปเดต Dashboard แสดง Hedge Mode section
+- Version bump: v4.3 → v4.4
 
-### การแก้ไข
+### งานที่ 7: Gold Miner SQ EA — Fix Hedge Isolation Bugs ✅
+- แก้ `CountPositions()`: ข้าม hedge orders → ฝั่งถูกเทรนออกออเดอร์ได้ปกติ
+- แก้ `CalculateAveragePrice()`: ข้าม hedge orders → basket TP/SL ไม่รวม hedge
+- แก้ `CalculateFloatingPL()`: ข้าม hedge orders → floating PL คำนวณเฉพาะ normal orders
+- แก้ `CloseAllSide()`: ข้าม hedge orders → basket close ไม่ปิด hedge (ให้ hedge system จัดการเอง)
+- Hedge orders ไม่มี TP/SL → ปิดเฉพาะผ่าน Hedge Matching/Partial Close system
+- Version bump: v4.4 → v4.5
 
-**ไฟล์:** `public/docs/mql5/Gold_Miner_EA.mq5`
+### สิ่งที่ไม่เปลี่ยนแปลงใน Gold Miner (งาน #7)
+- Order Execution Logic (trade.Buy/Sell/PositionClose ใช้ OpenOrder ที่มีอยู่)
+- Trading Strategy Logic (SMA/ZigZag/Instant signals, Grid calculations, TP/SL/Trailing)
+- Core Module Logic (License, News filter, Time filter, Data sync)
+- Matching Close ปกติ (มี skip hedge อยู่แล้ว)
+- Hedge system logic (CheckAndOpenHedge, ManageHedgeSets — ไม่เปลี่ยน)
+- DirectionalBlock logic (ยังทำงานเหมือนเดิม)
+- Accumulate/Drawdown logic (ปิดทุก order รวม hedge)
+- เมื่อ `InpHedge_Enable = false` → behavior เหมือน v4.3 100%
 
-#### 1. แก้ ManageHedgePartialClose() ให้เป็น Batch Mode
+### งานที่ 8: Gold Miner SQ EA — Fix Hedge Lot Cap by MaxLotSize ✅
+- แก้ `OpenOrder()`: ข้าม `InpMaxLotSize` cap สำหรับ Hedge orders (`IsHedgeComment`)
+- ออเดอร์ปกติ (GM_INIT, GM_GL, GM_GP) ยังถูก cap เหมือนเดิม
+- Version bump: v4.5 → v4.6
 
-**แทนที่ loop 1-per-tick (line 6147-6194) → batch approach:**
+### งานที่ 9: Gold Miner SQ EA — Fix Hedge Grid Rapid-Fire Orders ✅
+- แก้ `ManageHedgeGridMode()`: ใช้ `GetGridDistance()` แทน `GridLoss_Points` ตรงๆ
+- เพิ่ม `g_lastHedgeGridTime` cooldown 5 วินาทีป้องกันออก order รัว
+- เพิ่ม Print log แสดง gap/requiredGap เพื่อ debug
+- Version bump: v4.6 → v4.7
 
-```text
-เดิม:
-  for each profitOrder:
-    close 1 profitable order + partial hedge
-    break;  ← ปิดแค่ 1
+### งานที่ 10: Gold Miner SQ EA — Fix Hedge Grid รัว + Min Profit Orders ✅
+- แก้ `ManageHedgeGridMode()`: ใช้ Directional Distance แทน `MathAbs` — Sell Hedge grid เปิดเมื่อราคาขึ้นเท่านั้น, Buy Hedge เมื่อราคาลงเท่านั้น
+- เพิ่ม `InpHedge_PartialMinProfitOrders` input (int, default 3) — ขั้นต่ำออเดอร์บวกก่อนเริ่ม Hedge Partial Close
+- เพิ่ม guard ใน `ManageHedgePartialClose()`: ต้องมี profitCount >= InpHedge_PartialMinProfitOrders
+- Version bump: v4.7 → v4.8
 
-ใหม่:
-  1. คำนวณ totalProfit = รวมกำไรทุก profitable orders
-  2. closeLots = (totalProfit - InpHedge_PartialMinProfit) / hedgeLossPerLot
-  3. ปิด profitable orders ทั้งหมด
-  4. Partial close hedge ด้วย closeLots รวม
-```
+### งานที่ 11: Gold Miner SQ EA — Unify Hedge Grid Min Profit Orders ✅
+- แก้ `ManageHedgeGridMode()`: เปลี่ยนจาก `InpHedge_MatchMinProfitOrders` เป็น `InpHedge_PartialMinProfitOrders`
+- ทำให้ Hedge Partial Close + Hedge Grid Matching ใช้ input ตัวเดียวกัน
+- Version bump: v4.8 → v4.9
 
-**ผล:** เมื่อมี 3+ profitable orders → ใช้กำไร **ทั้ง 3+** orders รวมกันมาคำนวณ → ซอย hedge ได้ทีละเยอะ → ลด hedge เร็วขึ้นมาก
-
-#### 2. Version bump: v4.9 → v5.0
-
-### สิ่งที่ไม่เปลี่ยนแปลง
-- Guard condition `profitCount < InpHedge_PartialMinProfitOrders` ยังคงเป็นกฎเหล็ก
-- ManageHedgeMatchingClose (Scenario 1), ManageHedgeGridMode logic
-- Normal Matching Close, Trading logic, Grid logic ทั้งหมด
-- เมื่อ `InpHedge_PartialMinProfitOrders = 0` → ทำงานเหมือนเดิม
-
+### งานที่ 12: Gold Miner SQ EA — Hedge Partial Close Batch Mode ✅
+- แก้ `ManageHedgePartialClose()`: เปลี่ยนจาก 1-per-tick (break) เป็น Batch mode
+- รวมกำไรทุก profitable orders → คำนวณ closeLots รวม → ปิดทีเดียว
+- Guard `InpHedge_PartialMinProfitOrders` ยังเป็นกฎเหล็ก
+- Version bump: v4.9 → v5.0
