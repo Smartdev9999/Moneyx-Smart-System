@@ -991,6 +991,13 @@ void OnTick()
       }
    }
 
+   // === COUNTER-TREND HEDGING CHECK ===
+   if(InpHedge_Enable && InpUseSqueezeFilter)
+   {
+      CheckAndOpenHedge();
+      ManageHedgeSets();
+   }
+
    // === ORIGINAL TRADING LOGIC (unchanged) ===
    if(g_eaStopped) return;
 
