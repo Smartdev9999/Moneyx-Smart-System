@@ -28,9 +28,24 @@
 - เมื่อออเดอร์ฝั่งเดียวกันยังไม่ถึงเกณฑ์ → ปล่อยให้ TP ทำงานปกติ
 - Version bump: v4.2 → v4.3
 
-### สิ่งที่ไม่เปลี่ยนแปลงใน Gold Miner (งาน #5)
-- Order Execution Logic (trade.Buy/Sell/PositionClose ไม่เปลี่ยน)
+### งานที่ 6: Gold Miner SQ EA — Counter-Trend Hedging Mode ✅
+- เพิ่ม Input group: `InpHedge_Enable`, `InpHedge_MatchMinProfit`, `InpHedge_MatchMinProfitOrders`, `InpHedge_PartialMinProfit`
+- เพิ่ม `HedgeSet` struct รองรับ 4 ชุดพร้อมกัน (Multi-Hedge)
+- เพิ่ม `CheckAndOpenHedge()`: เปิด Hedge เมื่อ Expansion + มี orders ติดฝั่งสวนเทรน
+- เพิ่ม `ManageHedgeSets()`: วนจัดการทุก Hedge set ทุก tick
+- เพิ่ม `ManageHedgeMatchingClose()`: Scenario 1 — Hedge กำไร + Normal → ปิดคู่กับ loss เก่าสุด
+- เพิ่ม `ManageHedgePartialClose()`: Scenario 2 — Hedge ขาดทุน + original orders บวก → partial close
+- เพิ่ม `ManageHedgeGridMode()`: เมื่อ original orders หมด → แปลง Hedge เป็น Grid
+- แก้ `ManageMatchingClose()`: ข้าม orders ที่เป็น GM_HEDGE / GM_HG
+- แก้ `CloseAllPositions()`: reset Hedge sets ทั้งหมด
+- อัปเดต Dashboard แสดง Hedge Mode section
+- Version bump: v4.3 → v4.4
+
+### สิ่งที่ไม่เปลี่ยนแปลงใน Gold Miner (งาน #6)
+- Order Execution Logic (trade.Buy/Sell/PositionClose ใช้ OpenOrder ที่มีอยู่)
 - Trading Strategy Logic (SMA/ZigZag/Instant signals, Grid calculations, TP/SL/Trailing)
-- Core Module Logic (License, News filter, Time filter, Data sync, Squeeze filter)
-- Matching Close internal logic (Budget-based, sorting, pairing — ไม่เปลี่ยน แค่เพิ่ม guard condition)
-- เมื่อ `MatchingMinTotalOrders = 0` → behavior เหมือนเดิม 100%
+- Core Module Logic (License, News filter, Time filter, Data sync)
+- Matching Close ปกติ (แยกกัน ไม่กวนกัน — เพิ่มแค่ skip hedge orders)
+- DirectionalBlock logic (ยังทำงานเหมือนเดิม)
+- Accumulate/Drawdown logic (ปิดทุก order รวม hedge)
+- เมื่อ `InpHedge_Enable = false` → behavior เหมือน v4.3 100%
