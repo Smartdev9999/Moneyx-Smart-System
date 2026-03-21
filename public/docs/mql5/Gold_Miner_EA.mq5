@@ -1421,6 +1421,9 @@ double CalculateFloatingPL(ENUM_POSITION_TYPE side)
       if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       if(PositionGetInteger(POSITION_TYPE) != side) continue;
+      
+      // Skip hedge orders — floating PL calculation must exclude hedge positions
+      if(IsHedgeComment(PositionGetString(POSITION_COMMENT))) continue;
 
       totalPL += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
    }
