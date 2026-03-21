@@ -6015,6 +6015,9 @@ void ManageHedgeSets()
    {
       if(!g_hedgeSets[h].active) continue;
 
+      // Refresh bound tickets — remove any that were closed externally
+      RefreshBoundTickets(h);
+
       // Verify hedge ticket still exists
       bool hedgeExists = false;
       if(g_hedgeSets[h].hedgeTicket > 0 && PositionSelectByTicket(g_hedgeSets[h].hedgeTicket))
@@ -6028,6 +6031,8 @@ void ManageHedgeSets()
          // Hedge was closed externally (accumulate close, manual, etc.)
          Print("HEDGE Set#", h + 1, " ticket no longer exists. Deactivating.");
          g_hedgeSets[h].active = false;
+         g_hedgeSets[h].boundTicketCount = 0;
+         ArrayResize(g_hedgeSets[h].boundTickets, 0);
          g_hedgeSetCount--;
          continue;
       }
@@ -6061,13 +6066,11 @@ void ManageHedgeSets()
       }
       else
       {
-         // Still in expansion - also check if original orders are gone
-         double counterLots = 0, counterPL = 0;
-         int counterCount = CountNormalOrders(g_hedgeSets[h].counterSide, counterLots, counterPL);
-         if(counterCount == 0 && hedgeExists)
+         // Still in expansion - check if bound orders are all gone
+         if(g_hedgeSets[h].boundTicketCount == 0 && hedgeExists)
          {
-            // Original orders all gone but hedge remains → enter grid mode
-            Print("HEDGE Set#", h + 1, " original orders cleared. Entering Grid Mode.");
+            // All bound orders gone but hedge remains → enter grid mode
+            Print("HEDGE Set#", h + 1, " all bound orders cleared. Entering Grid Mode.");
             g_hedgeSets[h].gridMode = true;
             g_hedgeSets[h].gridLevel = CalculateEquivGridLevel(g_hedgeSets[h].hedgeLots);
          }
