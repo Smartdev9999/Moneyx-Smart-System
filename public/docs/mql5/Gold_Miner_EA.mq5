@@ -615,7 +615,22 @@ int OnInit()
       Print("Squeeze Filter initialized: ", sqLabels[0], " / ", sqLabels[1], " / ", sqLabels[2]);
    }
 
-   Print("Gold Miner EA v4.3 initialized successfully");
+   // === Counter-Trend Hedging Init ===
+   for(int h = 0; h < MAX_HEDGE_SETS; h++)
+   {
+      g_hedgeSets[h].active = false;
+      g_hedgeSets[h].hedgeTicket = 0;
+      g_hedgeSets[h].hedgeLots = 0;
+      g_hedgeSets[h].originalTotalLots = 0;
+      g_hedgeSets[h].gridMode = false;
+      g_hedgeSets[h].gridLevel = 0;
+      g_hedgeSets[h].gridTicketCount = 0;
+      ArrayResize(g_hedgeSets[h].gridTickets, 0);
+      g_hedgeSets[h].commentPrefix = "GM_HEDGE_" + IntegerToString(h + 1);
+   }
+   g_hedgeSetCount = 0;
+
+   Print("Gold Miner EA v4.4 initialized successfully");
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
