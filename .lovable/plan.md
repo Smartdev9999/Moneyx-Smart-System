@@ -80,3 +80,9 @@
 - แก้ `ManageHedgeGridMode()`: เปลี่ยนจาก `InpHedge_MatchMinProfitOrders` เป็น `InpHedge_PartialMinProfitOrders`
 - ทำให้ Hedge Partial Close + Hedge Grid Matching ใช้ input ตัวเดียวกัน
 - Version bump: v4.8 → v4.9
+
+### งานที่ 12: Gold Miner SQ EA — Hedge Partial Close Batch Mode ✅
+- แก้ `ManageHedgePartialClose()`: เปลี่ยนจาก 1-per-tick (break) เป็น Batch mode
+- รวมกำไรทุก profitable orders → คำนวณ closeLots รวม → ปิดทีเดียว
+- Guard `InpHedge_PartialMinProfitOrders` ยังเป็นกฎเหล็ก
+- Version bump: v4.9 → v5.0
