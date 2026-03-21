@@ -6141,6 +6141,9 @@ void ManageHedgePartialClose(int idx)
 
    if(profitCount == 0) return;  // no profitable orders to use
 
+   // Guard: require minimum number of profitable counter-orders before starting partial close
+   if(InpHedge_PartialMinProfitOrders > 0 && profitCount < InpHedge_PartialMinProfitOrders) return;
+
    // Calculate hedge loss per lot
    double hedgeLossPerLot = MathAbs(hedgePnL) / hedgeLots;
    if(hedgeLossPerLot <= 0) return;
