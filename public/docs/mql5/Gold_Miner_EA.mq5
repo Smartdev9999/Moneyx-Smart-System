@@ -1303,6 +1303,10 @@ void CountPositions(int &buyCount, int &sellCount,
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
 
       string comment = PositionGetString(POSITION_COMMENT);
+      
+      // Skip hedge orders — they are managed by the Hedge system separately
+      if(IsHedgeComment(comment)) continue;
+      
       long posType = PositionGetInteger(POSITION_TYPE);
 
       if(posType == POSITION_TYPE_BUY)
