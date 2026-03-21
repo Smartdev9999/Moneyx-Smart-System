@@ -1495,6 +1495,19 @@ void CloseAllPositions()
    if(hadBuy) { justClosedBuy = true; g_initialBuyPrice = 0; }
    if(hadSell) { justClosedSell = true; g_initialSellPrice = 0; }
    ResetTrailingState();
+
+   // Reset all hedge sets when closing everything
+   for(int h = 0; h < MAX_HEDGE_SETS; h++)
+   {
+      g_hedgeSets[h].active = false;
+      g_hedgeSets[h].hedgeTicket = 0;
+      g_hedgeSets[h].hedgeLots = 0;
+      g_hedgeSets[h].gridMode = false;
+      g_hedgeSets[h].gridLevel = 0;
+      g_hedgeSets[h].gridTicketCount = 0;
+      ArrayResize(g_hedgeSets[h].gridTickets, 0);
+   }
+   g_hedgeSetCount = 0;
 }
 
 //+------------------------------------------------------------------+
