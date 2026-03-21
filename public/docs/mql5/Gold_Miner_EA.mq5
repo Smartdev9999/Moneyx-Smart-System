@@ -5796,6 +5796,10 @@ void ManageMatchingClose()
             if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
             if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != posType) continue;
 
+            // Skip hedge orders — managed separately
+            string mcComment = PositionGetString(POSITION_COMMENT);
+            if(StringFind(mcComment, "GM_HEDGE") >= 0 || StringFind(mcComment, "GM_HG") >= 0) continue;
+
             double pnl = PositionGetDouble(POSITION_PROFIT)
                        + PositionGetDouble(POSITION_SWAP)
                        + (2.0 * PositionGetDouble(POSITION_COMMISSION));
