@@ -41,11 +41,20 @@
 - อัปเดต Dashboard แสดง Hedge Mode section
 - Version bump: v4.3 → v4.4
 
-### สิ่งที่ไม่เปลี่ยนแปลงใน Gold Miner (งาน #6)
+### งานที่ 7: Gold Miner SQ EA — Fix Hedge Isolation Bugs ✅
+- แก้ `CountPositions()`: ข้าม hedge orders → ฝั่งถูกเทรนออกออเดอร์ได้ปกติ
+- แก้ `CalculateAveragePrice()`: ข้าม hedge orders → basket TP/SL ไม่รวม hedge
+- แก้ `CalculateFloatingPL()`: ข้าม hedge orders → floating PL คำนวณเฉพาะ normal orders
+- แก้ `CloseAllSide()`: ข้าม hedge orders → basket close ไม่ปิด hedge (ให้ hedge system จัดการเอง)
+- Hedge orders ไม่มี TP/SL → ปิดเฉพาะผ่าน Hedge Matching/Partial Close system
+- Version bump: v4.4 → v4.5
+
+### สิ่งที่ไม่เปลี่ยนแปลงใน Gold Miner (งาน #7)
 - Order Execution Logic (trade.Buy/Sell/PositionClose ใช้ OpenOrder ที่มีอยู่)
 - Trading Strategy Logic (SMA/ZigZag/Instant signals, Grid calculations, TP/SL/Trailing)
 - Core Module Logic (License, News filter, Time filter, Data sync)
-- Matching Close ปกติ (แยกกัน ไม่กวนกัน — เพิ่มแค่ skip hedge orders)
+- Matching Close ปกติ (มี skip hedge อยู่แล้ว)
+- Hedge system logic (CheckAndOpenHedge, ManageHedgeSets — ไม่เปลี่ยน)
 - DirectionalBlock logic (ยังทำงานเหมือนเดิม)
 - Accumulate/Drawdown logic (ปิดทุก order รวม hedge)
 - เมื่อ `InpHedge_Enable = false` → behavior เหมือน v4.3 100%
