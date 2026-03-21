@@ -1,65 +1,48 @@
-## สรุปงานทั้งหมด
 
-### งานที่ 1: Jutlameasu EA — Volatility Squeeze Filter ✅
-- เสร็จแล้ว — เพิ่ม Squeeze Filter (2 TFs) แบบ block เมื่อไม่มี Expansion
 
-### งานที่ 2: Gold Miner SQ EA — Directional Squeeze Block ✅
-- เพิ่ม `InpSqueeze_DirectionalBlock` input (bool)
-- เพิ่ม `g_squeezeBuyBlocked` / `g_squeezeSellBlocked` globals
-- เพิ่ม `direction` field ใน SqueezeState struct (Close vs EMA → 1=Bull, -1=Bear)
-- แก้ OnTick squeeze check: ถ้า directional on → block เฉพาะฝั่งสวนเทรนด์
-- แทรก directional block checks ในทุก entry point (SMA, Instant, ZigZag + Grid)
-- อัปเดต Dashboard แสดง BUY BLOCKED / SELL BLOCKED / OK
-- Version bump: v4.0 → v4.1
+## Fix: Hedge Grid ออกออเดอร์รัวในจุดเดียวกัน — Gold Miner SQ EA (v4.6 → v4.7)
 
-### งานที่ 3: เพิ่มกฎ Version Bumping ใน rules.md ✅
-- เพิ่มหัวข้อ #6: ทุกครั้งที่แก้ไข EA ต้องเพิ่ม minor version
-- อัปเดตทุกจุด: `#property version`, `#property description`, header comment, Dashboard
+### สาเหตุ
 
-### งานที่ 4: Gold Miner SQ EA — Max Lot Size ✅
-- เพิ่ม `InpMaxLotSize` input (double, 0=No Limit)
-- แก้ OpenOrder() → cap maxLot ด้วย InpMaxLotSize ก่อน normalize
-- ครอบคลุมทุกออเดอร์ (Initial, Grid Loss, Grid Profit) ผ่านจุดเดียว
-- Version bump: v4.1 → v4.2
+**Line 6385** ใน `ManageHedgeGridMode()` ใช้ `GridLoss_Points` (ค่า raw จาก input) ตรงๆ แทนที่จะเรียก `GetGridDistance()` ที่คำนวณ ATR-based / Custom distance
 
-### งานที่ 5: Gold Miner SQ EA — Matching Close Min Total Orders ✅
-- เพิ่ม `MatchingMinTotalOrders` input (int, 0=Always)
-- เพิ่ม guard condition ใน ManageMatchingClose() → เช็ค totalSideOrders ก่อนเข้า matching logic
-- เมื่อออเดอร์ฝั่งเดียวกันยังไม่ถึงเกณฑ์ → ปล่อยให้ TP ทำงานปกติ
-- Version bump: v4.2 → v4.3
+```text
+ปัจจุบัน (ผิด):
+   if(distance >= GridLoss_Points)    ← ใช้ค่า fixed เสมอ
 
-### งานที่ 6: Gold Miner SQ EA — Counter-Trend Hedging Mode ✅
-- เพิ่ม Input group: `InpHedge_Enable`, `InpHedge_MatchMinProfit`, `InpHedge_MatchMinProfitOrders`, `InpHedge_PartialMinProfit`
-- เพิ่ม `HedgeSet` struct รองรับ 4 ชุดพร้อมกัน (Multi-Hedge)
-- เพิ่ม `CheckAndOpenHedge()`: เปิด Hedge เมื่อ Expansion + มี orders ติดฝั่งสวนเทรน
-- เพิ่ม `ManageHedgeSets()`: วนจัดการทุก Hedge set ทุก tick
-- เพิ่ม `ManageHedgeMatchingClose()`: Scenario 1 — Hedge กำไร + Normal → ปิดคู่กับ loss เก่าสุด
-- เพิ่ม `ManageHedgePartialClose()`: Scenario 2 — Hedge ขาดทุน + original orders บวก → partial close
-- เพิ่ม `ManageHedgeGridMode()`: เมื่อ original orders หมด → แปลง Hedge เป็น Grid
-- แก้ `ManageMatchingClose()`: ข้าม orders ที่เป็น GM_HEDGE / GM_HG
-- แก้ `CloseAllPositions()`: reset Hedge sets ทั้งหมด
-- อัปเดต Dashboard แสดง Hedge Mode section
-- Version bump: v4.3 → v4.4
+ควรเป็น:
+   if(distance >= GetGridDistance(currentGridCount+1, true))  ← ใช้ระบบเดียวกับ grid ปกติ
+```
 
-### งานที่ 7: Gold Miner SQ EA — Fix Hedge Isolation Bugs ✅
-- แก้ `CountPositions()`: ข้าม hedge orders → ฝั่งถูกเทรนออกออเดอร์ได้ปกติ
-- แก้ `CalculateAveragePrice()`: ข้าม hedge orders → basket TP/SL ไม่รวม hedge
-- แก้ `CalculateFloatingPL()`: ข้าม hedge orders → floating PL คำนวณเฉพาะ normal orders
-- แก้ `CloseAllSide()`: ข้าม hedge orders → basket close ไม่ปิด hedge (ให้ hedge system จัดการเอง)
-- Hedge orders ไม่มี TP/SL → ปิดเฉพาะผ่าน Hedge Matching/Partial Close system
-- Version bump: v4.4 → v4.5
+ถ้าผู้ใช้ตั้ง `GridLoss_GapType = ATR` → `GetGridDistance()` จะคืนค่า ATR × Multiplier ซึ่งอาจเป็นหลายพัน points แต่ `GridLoss_Points` (fallback) อาจเป็นแค่ 500 points → ทำให้เงื่อนไข distance ผ่านทุก tick → ออกออเดอร์รัวๆ
 
-### สิ่งที่ไม่เปลี่ยนแปลงใน Gold Miner (งาน #7)
-- Order Execution Logic (trade.Buy/Sell/PositionClose ใช้ OpenOrder ที่มีอยู่)
-- Trading Strategy Logic (SMA/ZigZag/Instant signals, Grid calculations, TP/SL/Trailing)
-- Core Module Logic (License, News filter, Time filter, Data sync)
-- Matching Close ปกติ (มี skip hedge อยู่แล้ว)
-- Hedge system logic (CheckAndOpenHedge, ManageHedgeSets — ไม่เปลี่ยน)
-- DirectionalBlock logic (ยังทำงานเหมือนเดิม)
-- Accumulate/Drawdown logic (ปิดทุก order รวม hedge)
-- เมื่อ `InpHedge_Enable = false` → behavior เหมือน v4.3 100%
+**ปัญหาที่ 2**: ไม่มี cooldown หลังเปิด grid order → tick ถัดไปยังไม่ทันเห็น order ใหม่ → เปิดซ้ำอีก
 
-### งานที่ 8: Gold Miner SQ EA — Fix Hedge Lot Cap by MaxLotSize ✅
-- แก้ `OpenOrder()`: ข้าม `InpMaxLotSize` cap สำหรับ Hedge orders (`IsHedgeComment`)
-- ออเดอร์ปกติ (GM_INIT, GM_GL, GM_GP) ยังถูก cap เหมือนเดิม
-- Version bump: v4.5 → v4.6
+### การแก้ไข
+
+**ไฟล์:** `public/docs/mql5/Gold_Miner_EA.mq5`
+
+#### 1. แก้ ManageHedgeGridMode() — ใช้ GetGridDistance() แทน GridLoss_Points
+```cpp
+// Line 6385: เปลี่ยนจาก
+if(distance >= GridLoss_Points)
+// เป็น
+double requiredGap = GetGridDistance(currentGridCount + 1, true);
+if(distance >= requiredGap)
+```
+
+#### 2. เพิ่ม Cooldown ป้องกันออก order รัว
+เพิ่ม `datetime g_lastHedgeGridTime = 0;` ใน globals แล้วเช็คก่อนเปิด:
+```cpp
+if(TimeCurrent() - g_lastHedgeGridTime < 5) return;  // 5 seconds cooldown
+// ... open order ...
+g_lastHedgeGridTime = TimeCurrent();
+```
+
+#### 3. Version bump: v4.6 → v4.7
+
+### สิ่งที่ไม่เปลี่ยนแปลง
+- Hedge matching/partial close logic
+- Normal grid logic, Matching Close, TP/SL
+- ทุก module อื่น (License, News, Time, Squeeze, DirectionalBlock)
+
