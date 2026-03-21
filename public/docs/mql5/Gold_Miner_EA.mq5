@@ -311,6 +311,13 @@ input bool             InpSqueeze_BlockOnExpansion = true;         // Block New 
 input int              InpSqueeze_MinTFExpansion = 1;              // Min TFs in Expansion to Block (1-3)
 input bool             InpSqueeze_DirectionalBlock = false;        // Directional Block (block counter-trend only)
 
+//--- Counter-Trend Hedging
+input group "=== Counter-Trend Hedging ==="
+input bool     InpHedge_Enable              = false;   // Enable Hedging Mode (requires Squeeze Filter)
+input double   InpHedge_MatchMinProfit      = 5.0;     // Min Profit for Hedge Matching ($)
+input int      InpHedge_MatchMinProfitOrders = 2;      // Min Profit Orders for Hedge Grid Matching
+input double   InpHedge_PartialMinProfit    = 5.0;     // Min Profit for Partial Close ($)
+
 //+------------------------------------------------------------------+
 //| Global Variables                                                   |
 //+------------------------------------------------------------------+
