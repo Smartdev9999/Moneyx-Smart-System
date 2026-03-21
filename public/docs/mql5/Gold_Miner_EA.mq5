@@ -452,6 +452,26 @@ SqueezeState g_squeeze[3];
 bool         g_squeezeBlocked = false;     // true when expansion detected (all block)
 bool         g_squeezeBuyBlocked  = false;  // directional: block BUY only
 bool         g_squeezeSellBlocked = false;  // directional: block SELL only
+
+// === Counter-Trend Hedging State ===
+#define MAX_HEDGE_SETS 4
+struct HedgeSet
+{
+   bool     active;           // is this hedge set active?
+   ulong    hedgeTicket;      // main hedge order ticket
+   ENUM_POSITION_TYPE hedgeSide;  // BUY or SELL (hedge direction)
+   double   hedgeLots;        // current remaining hedge lots
+   double   originalTotalLots; // original total lots when hedge opened
+   ENUM_POSITION_TYPE counterSide; // the side being hedged (opposite of hedgeSide)
+   bool     gridMode;         // true = original orders gone, hedge running as grid
+   int      gridLevel;        // current grid level in grid mode
+   ulong    gridTickets[];    // tickets of hedge grid orders
+   int      gridTicketCount;  // count of grid tickets
+   string   commentPrefix;    // "GM_HEDGE_1", "GM_HEDGE_2", etc.
+};
+HedgeSet g_hedgeSets[MAX_HEDGE_SETS];
+int      g_hedgeSetCount = 0;
+
 //+------------------------------------------------------------------+
 //| Expert initialization function                                     |
 //+------------------------------------------------------------------+
