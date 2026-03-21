@@ -456,6 +456,7 @@ bool         g_squeezeSellBlocked = false;  // directional: block SELL only
 
 // === Counter-Trend Hedging State ===
 #define MAX_HEDGE_SETS 4
+#define MAX_BOUND_TICKETS 50
 struct HedgeSet
 {
    bool     active;           // is this hedge set active?
@@ -469,6 +470,8 @@ struct HedgeSet
    ulong    gridTickets[];    // tickets of hedge grid orders
    int      gridTicketCount;  // count of grid tickets
    string   commentPrefix;    // "GM_HEDGE_1", "GM_HEDGE_2", etc.
+   ulong    boundTickets[];   // tickets of counter-side orders bound to this set
+   int      boundTicketCount; // count of bound tickets
 };
 HedgeSet g_hedgeSets[MAX_HEDGE_SETS];
 int      g_hedgeSetCount = 0;
