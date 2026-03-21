@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v4.5 - MTF ZigZag+CDC+Grid+License  |
+//|                Gold Miner EA v4.6 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "4.50"
-#property description "Gold Miner EA v4.5 - MTF ZigZag + CDC + Squeeze + Counter-Trend Hedging + License"
+#property version   "4.60"
+#property description "Gold Miner EA v4.6 - MTF ZigZag + CDC + Squeeze + Counter-Trend Hedging + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -630,7 +630,7 @@ int OnInit()
    }
    g_hedgeSetCount = 0;
 
-   Print("Gold Miner EA v4.5 initialized successfully");
+   Print("Gold Miner EA v4.6 initialized successfully");
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -682,7 +682,7 @@ void OnDeinit(const int reason)
 
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
-   Print("Gold Miner EA v4.5 deinitialized");
+   Print("Gold Miner EA v4.6 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -1353,7 +1353,8 @@ bool OpenOrder(ENUM_ORDER_TYPE orderType, double lots, string comment)
    //--- Normalize lot
    double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
    double maxLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
-   if(InpMaxLotSize > 0) maxLot = MathMin(maxLot, InpMaxLotSize);
+    // Don't apply user MaxLotSize cap for hedge orders — hedge must match exact counter-side volume
+    if(InpMaxLotSize > 0 && !IsHedgeComment(comment)) maxLot = MathMin(maxLot, InpMaxLotSize);
    double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
    lots = MathMax(minLot, MathMin(maxLot, NormalizeDouble(MathRound(lots / lotStep) * lotStep, 2)));
 
@@ -2666,7 +2667,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v4.5 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v4.5 [ZZ]" : "Gold Miner EA v4.5 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v4.6 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v4.6 [ZZ]" : "Gold Miner EA v4.6 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");

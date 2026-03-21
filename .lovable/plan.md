@@ -1,39 +1,65 @@
+## สรุปงานทั้งหมด
 
+### งานที่ 1: Jutlameasu EA — Volatility Squeeze Filter ✅
+- เสร็จแล้ว — เพิ่ม Squeeze Filter (2 TFs) แบบ block เมื่อไม่มี Expansion
 
-## Fix: Hedge Lot ถูก Cap โดย InpMaxLotSize — Gold Miner SQ EA (v4.5 → v4.6)
+### งานที่ 2: Gold Miner SQ EA — Directional Squeeze Block ✅
+- เพิ่ม `InpSqueeze_DirectionalBlock` input (bool)
+- เพิ่ม `g_squeezeBuyBlocked` / `g_squeezeSellBlocked` globals
+- เพิ่ม `direction` field ใน SqueezeState struct (Close vs EMA → 1=Bull, -1=Bear)
+- แก้ OnTick squeeze check: ถ้า directional on → block เฉพาะฝั่งสวนเทรนด์
+- แทรก directional block checks ในทุก entry point (SMA, Instant, ZigZag + Grid)
+- อัปเดต Dashboard แสดง BUY BLOCKED / SELL BLOCKED / OK
+- Version bump: v4.0 → v4.1
 
-### ปัญหา
-Sell orders รวม 1.21 lot แต่ Hedge Buy เปิดได้แค่ 1.00 lot เพราะ `OpenOrder()` (line 1356) ใช้ `InpMaxLotSize` cap ทุก order รวมถึง Hedge
+### งานที่ 3: เพิ่มกฎ Version Bumping ใน rules.md ✅
+- เพิ่มหัวข้อ #6: ทุกครั้งที่แก้ไข EA ต้องเพิ่ม minor version
+- อัปเดตทุกจุด: `#property version`, `#property description`, header comment, Dashboard
 
-```text
-OpenOrder() line 1356:
-if(InpMaxLotSize > 0) maxLot = MathMin(maxLot, InpMaxLotSize);
-→ InpMaxLotSize = 1.0 → hedge 1.21 ถูกตัดเหลือ 1.00
-```
+### งานที่ 4: Gold Miner SQ EA — Max Lot Size ✅
+- เพิ่ม `InpMaxLotSize` input (double, 0=No Limit)
+- แก้ OpenOrder() → cap maxLot ด้วย InpMaxLotSize ก่อน normalize
+- ครอบคลุมทุกออเดอร์ (Initial, Grid Loss, Grid Profit) ผ่านจุดเดียว
+- Version bump: v4.1 → v4.2
 
-### แก้ไข
+### งานที่ 5: Gold Miner SQ EA — Matching Close Min Total Orders ✅
+- เพิ่ม `MatchingMinTotalOrders` input (int, 0=Always)
+- เพิ่ม guard condition ใน ManageMatchingClose() → เช็ค totalSideOrders ก่อนเข้า matching logic
+- เมื่อออเดอร์ฝั่งเดียวกันยังไม่ถึงเกณฑ์ → ปล่อยให้ TP ทำงานปกติ
+- Version bump: v4.2 → v4.3
 
-**ไฟล์:** `public/docs/mql5/Gold_Miner_EA.mq5`
+### งานที่ 6: Gold Miner SQ EA — Counter-Trend Hedging Mode ✅
+- เพิ่ม Input group: `InpHedge_Enable`, `InpHedge_MatchMinProfit`, `InpHedge_MatchMinProfitOrders`, `InpHedge_PartialMinProfit`
+- เพิ่ม `HedgeSet` struct รองรับ 4 ชุดพร้อมกัน (Multi-Hedge)
+- เพิ่ม `CheckAndOpenHedge()`: เปิด Hedge เมื่อ Expansion + มี orders ติดฝั่งสวนเทรน
+- เพิ่ม `ManageHedgeSets()`: วนจัดการทุก Hedge set ทุก tick
+- เพิ่ม `ManageHedgeMatchingClose()`: Scenario 1 — Hedge กำไร + Normal → ปิดคู่กับ loss เก่าสุด
+- เพิ่ม `ManageHedgePartialClose()`: Scenario 2 — Hedge ขาดทุน + original orders บวก → partial close
+- เพิ่ม `ManageHedgeGridMode()`: เมื่อ original orders หมด → แปลง Hedge เป็น Grid
+- แก้ `ManageMatchingClose()`: ข้าม orders ที่เป็น GM_HEDGE / GM_HG
+- แก้ `CloseAllPositions()`: reset Hedge sets ทั้งหมด
+- อัปเดต Dashboard แสดง Hedge Mode section
+- Version bump: v4.3 → v4.4
 
-#### 1. แก้ OpenOrder() — ข้าม MaxLotSize สำหรับ Hedge orders
-เพิ่ม check comment ว่าเป็น hedge หรือไม่ → ถ้าใช่ไม่ต้อง cap:
+### งานที่ 7: Gold Miner SQ EA — Fix Hedge Isolation Bugs ✅
+- แก้ `CountPositions()`: ข้าม hedge orders → ฝั่งถูกเทรนออกออเดอร์ได้ปกติ
+- แก้ `CalculateAveragePrice()`: ข้าม hedge orders → basket TP/SL ไม่รวม hedge
+- แก้ `CalculateFloatingPL()`: ข้าม hedge orders → floating PL คำนวณเฉพาะ normal orders
+- แก้ `CloseAllSide()`: ข้าม hedge orders → basket close ไม่ปิด hedge (ให้ hedge system จัดการเอง)
+- Hedge orders ไม่มี TP/SL → ปิดเฉพาะผ่าน Hedge Matching/Partial Close system
+- Version bump: v4.4 → v4.5
 
-```cpp
-bool OpenOrder(ENUM_ORDER_TYPE orderType, double lots, string comment)
-{
-   ...
-   double maxLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
-   // Don't apply user MaxLotSize cap for hedge orders — hedge must match exact counter-side volume
-   if(InpMaxLotSize > 0 && !IsHedgeComment(comment))
-      maxLot = MathMin(maxLot, InpMaxLotSize);
-   ...
-}
-```
+### สิ่งที่ไม่เปลี่ยนแปลงใน Gold Miner (งาน #7)
+- Order Execution Logic (trade.Buy/Sell/PositionClose ใช้ OpenOrder ที่มีอยู่)
+- Trading Strategy Logic (SMA/ZigZag/Instant signals, Grid calculations, TP/SL/Trailing)
+- Core Module Logic (License, News filter, Time filter, Data sync)
+- Matching Close ปกติ (มี skip hedge อยู่แล้ว)
+- Hedge system logic (CheckAndOpenHedge, ManageHedgeSets — ไม่เปลี่ยน)
+- DirectionalBlock logic (ยังทำงานเหมือนเดิม)
+- Accumulate/Drawdown logic (ปิดทุก order รวม hedge)
+- เมื่อ `InpHedge_Enable = false` → behavior เหมือน v4.3 100%
 
-#### 2. Version bump: v4.5 → v4.6
-- `#property version "4.60"`, description, header, Dashboard
-
-### สิ่งที่ไม่เปลี่ยนแปลง
-- ออเดอร์ปกติ (GM_INIT, GM_GL, GM_GP) ยังถูก cap ด้วย InpMaxLotSize เหมือนเดิม
-- Trading logic, Hedge system logic, Matching Close ทุกอย่างไม่เปลี่ยน
-
+### งานที่ 8: Gold Miner SQ EA — Fix Hedge Lot Cap by MaxLotSize ✅
+- แก้ `OpenOrder()`: ข้าม `InpMaxLotSize` cap สำหรับ Hedge orders (`IsHedgeComment`)
+- ออเดอร์ปกติ (GM_INIT, GM_GL, GM_GP) ยังถูก cap เหมือนเดิม
+- Version bump: v4.5 → v4.6
