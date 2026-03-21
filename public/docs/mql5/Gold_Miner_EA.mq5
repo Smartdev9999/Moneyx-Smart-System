@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v4.8 - MTF ZigZag+CDC+Grid+License  |
+//|                Gold Miner EA v4.9 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "4.80"
-#property description "Gold Miner EA v4.8 - MTF ZigZag + CDC + Squeeze + Counter-Trend Hedging + License"
+#property version   "4.90"
+#property description "Gold Miner EA v4.9 - MTF ZigZag + CDC + Squeeze + Counter-Trend Hedging + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -632,7 +632,7 @@ int OnInit()
    }
    g_hedgeSetCount = 0;
 
-   Print("Gold Miner EA v4.8 initialized successfully");
+   Print("Gold Miner EA v4.9 initialized successfully");
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -684,7 +684,7 @@ void OnDeinit(const int reason)
 
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
-   Print("Gold Miner EA v4.8 deinitialized");
+   Print("Gold Miner EA v4.9 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -2669,7 +2669,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v4.8 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v4.8 [ZZ]" : "Gold Miner EA v4.8 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v4.9 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v4.9 [ZZ]" : "Gold Miner EA v4.9 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -6264,7 +6264,7 @@ void ManageHedgeGridMode(int idx)
    }
 
    // If hedge grid profits can cover main hedge loss → partial close
-   if(mainHedgeExists && mainHedgePnL < 0 && gridProfitCount >= InpHedge_MatchMinProfitOrders)
+   if(mainHedgeExists && mainHedgePnL < 0 && gridProfitCount >= InpHedge_PartialMinProfitOrders)
    {
       double hedgeLossPerLot = MathAbs(mainHedgePnL) / g_hedgeSets[idx].hedgeLots;
       double budget = gridTotalProfit - InpHedge_MatchMinProfit;
