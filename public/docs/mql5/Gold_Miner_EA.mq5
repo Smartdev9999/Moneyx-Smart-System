@@ -5785,7 +5785,7 @@ void CreateDashButton(string name, int x, int y, int width, int height, string t
 }
 
 //+------------------------------------------------------------------+
-//| ============== COUNTER-TREND HEDGING MODULE (v4.5) ============= |
+//| ============== COUNTER-TREND HEDGING MODULE (v5.1) ============= |
 //+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
@@ -5821,16 +5821,80 @@ int CountNormalOrders(ENUM_POSITION_TYPE side, double &totalLots, double &totalP
 }
 
 //+------------------------------------------------------------------+
-//| Check if hedge set already exists for a given side                 |
+//| Check if a ticket is bound to ANY active hedge set                 |
 //+------------------------------------------------------------------+
-bool HedgeExistsForSide(ENUM_POSITION_TYPE hedgeSide)
+bool IsTicketBound(ulong ticket)
 {
    for(int h = 0; h < MAX_HEDGE_SETS; h++)
    {
-      if(g_hedgeSets[h].active && g_hedgeSets[h].hedgeSide == hedgeSide)
-         return true;
+      if(!g_hedgeSets[h].active) continue;
+      for(int b = 0; b < g_hedgeSets[h].boundTicketCount; b++)
+      {
+         if(g_hedgeSets[h].boundTickets[b] == ticket)
+            return true;
+      }
    }
    return false;
+}
+
+//+------------------------------------------------------------------+
+//| Count unbound orders (not tied to any hedge set) for a side        |
+//+------------------------------------------------------------------+
+int CountUnboundOrders(ENUM_POSITION_TYPE side, double &totalLots, double &totalPL)
+{
+   int count = 0;
+   totalLots = 0;
+   totalPL = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
+      string comment = PositionGetString(POSITION_COMMENT);
+      if(IsHedgeComment(comment)) continue;
+      if(IsTicketBound(ticket)) continue;  // skip tickets already bound to a set
+      count++;
+      totalLots += PositionGetDouble(POSITION_VOLUME);
+      totalPL += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+   }
+   return count;
+}
+
+//+------------------------------------------------------------------+
+//| Remove a bound ticket from a hedge set (when order closed)         |
+//+------------------------------------------------------------------+
+void RemoveBoundTicket(int idx, ulong ticket)
+{
+   for(int b = 0; b < g_hedgeSets[idx].boundTicketCount; b++)
+   {
+      if(g_hedgeSets[idx].boundTickets[b] == ticket)
+      {
+         // Shift remaining tickets down
+         for(int j = b; j < g_hedgeSets[idx].boundTicketCount - 1; j++)
+            g_hedgeSets[idx].boundTickets[j] = g_hedgeSets[idx].boundTickets[j + 1];
+         g_hedgeSets[idx].boundTicketCount--;
+         ArrayResize(g_hedgeSets[idx].boundTickets, g_hedgeSets[idx].boundTicketCount);
+         return;
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Refresh bound tickets — remove tickets that no longer exist        |
+//+------------------------------------------------------------------+
+void RefreshBoundTickets(int idx)
+{
+   for(int b = g_hedgeSets[idx].boundTicketCount - 1; b >= 0; b--)
+   {
+      ulong ticket = g_hedgeSets[idx].boundTickets[b];
+      if(!PositionSelectByTicket(ticket))
+      {
+         // Position closed externally → remove from bound list
+         RemoveBoundTicket(idx, ticket);
+      }
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -5847,6 +5911,7 @@ int FindFreeHedgeSlot()
 
 //+------------------------------------------------------------------+
 //| Check expansion and open hedge if needed                           |
+//| Now supports multiple hedge sets on same side (unbound orders)     |
 //+------------------------------------------------------------------+
 void CheckAndOpenHedge()
 {
@@ -5869,12 +5934,9 @@ void CheckAndOpenHedge()
    ENUM_POSITION_TYPE counterSide = (bestDir == -1) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
    ENUM_POSITION_TYPE hedgeSide   = (bestDir == -1) ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
 
-   // Don't open duplicate hedge for same side
-   if(HedgeExistsForSide(hedgeSide)) return;
-
-   // Count stuck orders on counter side (non-hedge only)
+   // Count UNBOUND stuck orders on counter side (not already assigned to another hedge set)
    double counterLots = 0, counterPL = 0;
-   int counterCount = CountNormalOrders(counterSide, counterLots, counterPL);
+   int counterCount = CountUnboundOrders(counterSide, counterLots, counterPL);
    if(counterCount == 0 || counterLots <= 0) return;
 
    // Find free slot
@@ -5903,6 +5965,7 @@ void CheckAndOpenHedge()
       g_hedgeSets[slot].commentPrefix = comment;
 
       // Find the hedge ticket we just opened
+      g_hedgeSets[slot].hedgeTicket = 0;
       for(int i = PositionsTotal() - 1; i >= 0; i--)
       {
          ulong ticket = PositionGetTicket(i);
@@ -5916,10 +5979,30 @@ void CheckAndOpenHedge()
          }
       }
 
+      // === BIND unbound counter-side tickets to this hedge set ===
+      g_hedgeSets[slot].boundTicketCount = 0;
+      ArrayResize(g_hedgeSets[slot].boundTickets, 0);
+      for(int i = PositionsTotal() - 1; i >= 0; i--)
+      {
+         ulong ticket = PositionGetTicket(i);
+         if(ticket == 0) continue;
+         if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+         if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+         if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != counterSide) continue;
+         string cmt = PositionGetString(POSITION_COMMENT);
+         if(IsHedgeComment(cmt)) continue;
+         if(IsTicketBound(ticket)) continue;  // already bound to another set
+
+         int bc = g_hedgeSets[slot].boundTicketCount;
+         ArrayResize(g_hedgeSets[slot].boundTickets, bc + 1);
+         g_hedgeSets[slot].boundTickets[bc] = ticket;
+         g_hedgeSets[slot].boundTicketCount = bc + 1;
+      }
+
       g_hedgeSetCount++;
       string sideStr = (hedgeSide == POSITION_TYPE_BUY) ? "BUY" : "SELL";
       Print("HEDGE OPENED: Set#", slot + 1, " ", sideStr, " ", DoubleToString(counterLots, 2),
-            " lots to cover ", counterCount, " stuck orders");
+            " lots to cover ", counterCount, " stuck orders (bound ", g_hedgeSets[slot].boundTicketCount, " tickets)");
    }
 }
 
