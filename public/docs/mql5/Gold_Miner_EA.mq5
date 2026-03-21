@@ -2962,6 +2962,16 @@ void DisplayDashboard()
       }
    }
 
+   //--- Cleanup stale rows from previous tick (prevents flicker)
+   for(int r = row; r < g_lastDashboardRowCount; r++)
+   {
+      ObjectDelete(0, "GM_TBL_R" + IntegerToString(r));
+      ObjectDelete(0, "GM_TBL_S" + IntegerToString(r));
+      ObjectDelete(0, "GM_TBL_L" + IntegerToString(r));
+      ObjectDelete(0, "GM_TBL_V" + IntegerToString(r));
+   }
+   g_lastDashboardRowCount = row;
+
    //--- Bottom border
    int rowH_sc = (int)(20 * sc);
    int bottomY = DashboardY + (int)(24 * sc) + row * rowH_sc;
