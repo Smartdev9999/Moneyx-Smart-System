@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v4.4 - MTF ZigZag+CDC+Grid+License  |
+//|                Gold Miner EA v4.5 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "4.40"
-#property description "Gold Miner EA v4.4 - MTF ZigZag + CDC + Squeeze + Counter-Trend Hedging + License"
+#property version   "4.50"
+#property description "Gold Miner EA v4.5 - MTF ZigZag + CDC + Squeeze + Counter-Trend Hedging + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -630,7 +630,7 @@ int OnInit()
    }
    g_hedgeSetCount = 0;
 
-   Print("Gold Miner EA v4.4 initialized successfully");
+   Print("Gold Miner EA v4.5 initialized successfully");
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -682,7 +682,7 @@ void OnDeinit(const int reason)
 
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
-   Print("Gold Miner EA v4.4 deinitialized");
+   Print("Gold Miner EA v4.5 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -1303,6 +1303,10 @@ void CountPositions(int &buyCount, int &sellCount,
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
 
       string comment = PositionGetString(POSITION_COMMENT);
+      
+      // Skip hedge orders — they are managed by the Hedge system separately
+      if(IsHedgeComment(comment)) continue;
+      
       long posType = PositionGetInteger(POSITION_TYPE);
 
       if(posType == POSITION_TYPE_BUY)
@@ -1389,6 +1393,9 @@ double CalculateAveragePrice(ENUM_POSITION_TYPE side)
       if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       if(PositionGetInteger(POSITION_TYPE) != side) continue;
+      
+      // Skip hedge orders — basket TP/SL must not include hedge positions
+      if(IsHedgeComment(PositionGetString(POSITION_COMMENT))) continue;
 
       double vol = PositionGetDouble(POSITION_VOLUME);
       double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
@@ -1414,6 +1421,9 @@ double CalculateFloatingPL(ENUM_POSITION_TYPE side)
       if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       if(PositionGetInteger(POSITION_TYPE) != side) continue;
+      
+      // Skip hedge orders — floating PL calculation must exclude hedge positions
+      if(IsHedgeComment(PositionGetString(POSITION_COMMENT))) continue;
 
       totalPL += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
    }
@@ -1467,6 +1477,10 @@ void CloseAllSide(ENUM_POSITION_TYPE side)
       if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       if(PositionGetInteger(POSITION_TYPE) != side) continue;
+      
+      // Skip hedge orders — let the Hedge system manage their lifecycle
+      if(IsHedgeComment(PositionGetString(POSITION_COMMENT))) continue;
+      
       trade.PositionClose(ticket);
    }
    // Set per-side close flag
@@ -2652,7 +2666,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v4.4 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v4.4 [ZZ]" : "Gold Miner EA v4.4 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v4.5 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v4.5 [ZZ]" : "Gold Miner EA v4.5 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -5761,7 +5775,7 @@ void CreateDashButton(string name, int x, int y, int width, int height, string t
 }
 
 //+------------------------------------------------------------------+
-//| ============== COUNTER-TREND HEDGING MODULE (v4.4) ============= |
+//| ============== COUNTER-TREND HEDGING MODULE (v4.5) ============= |
 //+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
