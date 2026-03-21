@@ -2956,6 +2956,7 @@ void DisplayDashboard()
             color hedgeClr = (hedgePnL >= 0) ? clrLime : clrOrangeRed;
             DrawTableRow(row, setLabel, hedgeInfo, hedgeClr, COLOR_SECTION_HEDGE); row++;
          }
+      }
    }
 
    //--- Bottom border
