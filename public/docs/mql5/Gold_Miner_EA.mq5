@@ -2630,11 +2630,7 @@ void DrawTableRow(int rowIndex, string label, string value, color valueColor, co
 //+------------------------------------------------------------------+
 void DisplayDashboard()
 {
-   // Clean all table objects before redraw to prevent stale rows
-   ObjectsDeleteAll(0, "GM_TBL_R");
-   ObjectsDeleteAll(0, "GM_TBL_S");
-   ObjectsDeleteAll(0, "GM_TBL_L");
-   ObjectsDeleteAll(0, "GM_TBL_V");
+   // Stale row cleanup moved to end of function (prevents flicker)
    
    double sc = MathMax(0.8, MathMin(1.5, DashboardScale));
    int tableWidth = (int)(340 * sc);
