@@ -1,31 +1,32 @@
 
 
-## ปรับ Dashboard Hedge Section — ซ่อนเมื่อไม่มี Hedge Active
+## Fix: Dashboard Hedge Objects ค้างหลังปิด Hedge — Gold Miner SQ EA
+
+### สาเหตุ
+
+Dashboard ใช้ `DrawTableRow(rowIndex, ...)` ซึ่งสร้าง chart objects ชื่อ `GM_TBL_R12`, `GM_TBL_L12` ฯลฯ ตาม row index เมื่อ Hedge active → สร้าง objects ที่ row 12-13 (ตัวอย่าง) เมื่อ Hedge ปิด → row count ลดลง แต่ **objects เก่าไม่ถูกลบ** → ค้างอยู่บนหน้าจอ
 
 ### การแก้ไข
 
-**ไฟล์:** `public/docs/mql5/Gold_Miner_EA.mq5` (line 2934-2966)
+**ไฟล์:** `public/docs/mql5/Gold_Miner_EA.mq5`
 
-#### 1. ลบ "STANDBY" row — ไม่แสดงอะไรเลยเมื่อไม่มี Hedge active
+#### 1. เพิ่ม cleanup ต้น `DisplayDashboard()` — ลบ objects ทั้งหมดก่อนวาดใหม่
 
-เปลี่ยนจาก:
+เพิ่มที่ต้นฟังก์ชัน `DisplayDashboard()` (หลัง line 2632):
 ```cpp
-if(!anyActive)
-{
-   DrawTableRow(row, "Hedge Mode", "STANDBY", clrGray, C'130,50,180'); row++;
-}
+// Clean all table objects before redraw to prevent stale rows
+ObjectsDeleteAll(0, "GM_TBL_R");
+ObjectsDeleteAll(0, "GM_TBL_S");
+ObjectsDeleteAll(0, "GM_TBL_L");
+ObjectsDeleteAll(0, "GM_TBL_V");
 ```
-เป็น: **ลบออกทั้งบล็อก** — เมื่อไม่มี active hedge set → ไม่แสดง section นี้เลย
 
-#### 2. เพิ่ม validation ก่อนแสดง Hedge Set
+วิธีนี้จะลบทุก row objects แล้ววาดใหม่ทุก tick → ไม่มี objects ค้างจาก row ที่ไม่ได้ใช้แล้ว
 
-ในลูปที่แสดง Hedge Set → เพิ่มเงื่อนไขเช็คว่า hedge ticket ยังมี position อยู่จริง:
-```cpp
-if(g_hedgeSets[h].active && PositionSelectByTicket(g_hedgeSets[h].hedgeTicket))
-```
-ป้องกันกรณี `active = true` แต่ position ถูกปิดไปแล้ว (ยังไม่ทัน deactivate)
+#### 2. อัปเดต version header เป็น v5.1 (ถ้ายังเป็น v5.0)
 
 ### สิ่งที่ไม่เปลี่ยนแปลง
-- Hedge logic ทั้งหมด (เปลี่ยนแค่ Dashboard display)
-- เมื่อมี active hedge → แสดงข้อมูลเหมือนเดิม
+- Hedge logic ทั้งหมด
+- Dashboard layout / สี / ตำแหน่ง
+- Header, buttons, bottom border objects
 
