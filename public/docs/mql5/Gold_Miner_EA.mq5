@@ -632,10 +632,12 @@ int OnInit()
       g_hedgeSets[h].gridTicketCount = 0;
       ArrayResize(g_hedgeSets[h].gridTickets, 0);
       g_hedgeSets[h].commentPrefix = "GM_HEDGE_" + IntegerToString(h + 1);
+      g_hedgeSets[h].boundTicketCount = 0;
+      ArrayResize(g_hedgeSets[h].boundTickets, 0);
    }
    g_hedgeSetCount = 0;
 
-   Print("Gold Miner EA v5.0 initialized successfully");
+   Print("Gold Miner EA v5.1 initialized successfully");
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
