@@ -75,3 +75,8 @@
 - เพิ่ม `InpHedge_PartialMinProfitOrders` input (int, default 3) — ขั้นต่ำออเดอร์บวกก่อนเริ่ม Hedge Partial Close
 - เพิ่ม guard ใน `ManageHedgePartialClose()`: ต้องมี profitCount >= InpHedge_PartialMinProfitOrders
 - Version bump: v4.7 → v4.8
+
+### งานที่ 11: Gold Miner SQ EA — Unify Hedge Grid Min Profit Orders ✅
+- แก้ `ManageHedgeGridMode()`: เปลี่ยนจาก `InpHedge_MatchMinProfitOrders` เป็น `InpHedge_PartialMinProfitOrders`
+- ทำให้ Hedge Partial Close + Hedge Grid Matching ใช้ input ตัวเดียวกัน
+- Version bump: v4.8 → v4.9
