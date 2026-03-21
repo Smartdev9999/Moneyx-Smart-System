@@ -63,3 +63,9 @@
 - แก้ `OpenOrder()`: ข้าม `InpMaxLotSize` cap สำหรับ Hedge orders (`IsHedgeComment`)
 - ออเดอร์ปกติ (GM_INIT, GM_GL, GM_GP) ยังถูก cap เหมือนเดิม
 - Version bump: v4.5 → v4.6
+
+### งานที่ 9: Gold Miner SQ EA — Fix Hedge Grid Rapid-Fire Orders ✅
+- แก้ `ManageHedgeGridMode()`: ใช้ `GetGridDistance()` แทน `GridLoss_Points` ตรงๆ
+- เพิ่ม `g_lastHedgeGridTime` cooldown 5 วินาทีป้องกันออก order รัว
+- เพิ่ม Print log แสดง gap/requiredGap เพื่อ debug
+- Version bump: v4.6 → v4.7
