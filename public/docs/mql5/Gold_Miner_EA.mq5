@@ -476,6 +476,7 @@ struct HedgeSet
 HedgeSet g_hedgeSets[MAX_HEDGE_SETS];
 int      g_hedgeSetCount = 0;
 datetime g_lastHedgeGridTime = 0;  // cooldown timer for hedge grid orders
+int      g_lastDashboardRowCount = 0;  // track previous tick row count for stale cleanup
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                     |
@@ -2629,11 +2630,7 @@ void DrawTableRow(int rowIndex, string label, string value, color valueColor, co
 //+------------------------------------------------------------------+
 void DisplayDashboard()
 {
-   // Clean all table objects before redraw to prevent stale rows
-   ObjectsDeleteAll(0, "GM_TBL_R");
-   ObjectsDeleteAll(0, "GM_TBL_S");
-   ObjectsDeleteAll(0, "GM_TBL_L");
-   ObjectsDeleteAll(0, "GM_TBL_V");
+   // Stale row cleanup moved to end of function (prevents flicker)
    
    double sc = MathMax(0.8, MathMin(1.5, DashboardScale));
    int tableWidth = (int)(340 * sc);
@@ -2964,6 +2961,16 @@ void DisplayDashboard()
          }
       }
    }
+
+   //--- Cleanup stale rows from previous tick (prevents flicker)
+   for(int r = row; r < g_lastDashboardRowCount; r++)
+   {
+      ObjectDelete(0, "GM_TBL_R" + IntegerToString(r));
+      ObjectDelete(0, "GM_TBL_S" + IntegerToString(r));
+      ObjectDelete(0, "GM_TBL_L" + IntegerToString(r));
+      ObjectDelete(0, "GM_TBL_V" + IntegerToString(r));
+   }
+   g_lastDashboardRowCount = row;
 
    //--- Bottom border
    int rowH_sc = (int)(20 * sc);
