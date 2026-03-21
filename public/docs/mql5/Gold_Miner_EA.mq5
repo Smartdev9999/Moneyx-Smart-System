@@ -1477,6 +1477,10 @@ void CloseAllSide(ENUM_POSITION_TYPE side)
       if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       if(PositionGetInteger(POSITION_TYPE) != side) continue;
+      
+      // Skip hedge orders — let the Hedge system manage their lifecycle
+      if(IsHedgeComment(PositionGetString(POSITION_COMMENT))) continue;
+      
       trade.PositionClose(ticket);
    }
    // Set per-side close flag
