@@ -476,6 +476,7 @@ struct HedgeSet
 HedgeSet g_hedgeSets[MAX_HEDGE_SETS];
 int      g_hedgeSetCount = 0;
 datetime g_lastHedgeGridTime = 0;  // cooldown timer for hedge grid orders
+int      g_lastDashboardRowCount = 0;  // track previous tick row count for stale cleanup
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                     |
