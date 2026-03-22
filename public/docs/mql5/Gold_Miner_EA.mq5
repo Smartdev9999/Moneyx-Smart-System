@@ -6404,11 +6404,27 @@ void ManageHedgeMatchingClose(int idx)
          }
       }
 
-      // Deactivate hedge set
-      g_hedgeSets[idx].active = false;
-      g_hedgeSets[idx].boundTicketCount = 0;
-      ArrayResize(g_hedgeSets[idx].boundTickets, 0);
-      g_hedgeSetCount--;
+      // v5.12: Check if bound orders remain after matching
+      RefreshBoundTickets(idx);
+      
+      if(g_hedgeSets[idx].boundTicketCount > 0)
+      {
+         // Orders still bound → enter Grid Mode for recovery
+         g_hedgeSets[idx].gridMode = true;
+         g_hedgeSets[idx].hedgeTicket = 0;  // hedge order already closed
+         g_hedgeSets[idx].gridLevel = CalculateEquivGridLevel(
+            CalculateRemainingBoundLots(idx));
+         Print("HEDGE Set#", idx+1, " matched ", lossUsed, " losses but ", 
+               g_hedgeSets[idx].boundTicketCount, 
+               " bound orders remain. Entering Grid Recovery Mode.");
+      }
+      else
+      {
+         g_hedgeSets[idx].active = false;
+         g_hedgeSets[idx].boundTicketCount = 0;
+         ArrayResize(g_hedgeSets[idx].boundTickets, 0);
+         g_hedgeSetCount--;
+      }
       Sleep(100);
    }
    else
