@@ -5940,8 +5940,8 @@ int CountNormalOrders(ENUM_POSITION_TYPE side, double &totalLots, double &totalP
       if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
-      string comment = PositionGetString(POSITION_COMMENT);
-      if(IsHedgeComment(comment)) continue;
+       string comment = PositionGetString(POSITION_COMMENT);
+       if(IsHedgeComment(comment) || IsHedgeTicket(ticket)) continue;
       count++;
       totalLots += PositionGetDouble(POSITION_VOLUME);
       totalPL += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
