@@ -1,33 +1,29 @@
 
 
-## Fix: Order ค้างหลัง Hedge Matching Close + Dashboard PnL (v5.11 → v5.12)
+## Fix: Grid Recovery ไม่เปิด Order + Cycle Recycling + Dashboard Styling (v5.12 → v5.13)
 
 ### สิ่งที่แก้ไข
 
 **ไฟล์:** `public/docs/mql5/Gold_Miner_EA.mq5`
 
-#### 1. ManageHedgeMatchingClose() — เช็ค bound orders หลัง matching สำเร็จ
-- หลัง matching close สำเร็จ เพิ่ม `RefreshBoundTickets()` แล้วเช็คว่ายังมี bound orders เหลือ
-- ถ้ายังเหลือ → เข้า Grid Recovery Mode (`gridMode=true`, `hedgeTicket=0`)
-- ถ้าหมด → deactivate set ตามปกติ
+#### 1. Grid Recovery — เปิด Order แรกที่ราคาตลาดทันที
+- เมื่อ `hedgeTicket == 0` (recovery mode) และไม่มี grid order → เปิด order แรกที่ market price โดยไม่ต้องเช็ค distance
+- แก้ปัญหา reference price จาก bound orders ที่อยู่คนละโซนราคา → distance ติดลบ → ไม่มีทางเปิด order ได้
 
-#### 2. เพิ่มฟังก์ชัน `CalculateRemainingBoundLots()` + `ManageGridRecoveryMode()`
-- Recovery mode: ใช้ grid orders สร้างกำไรเพื่อ matching close กับ bound orders ที่เหลือ
-- เปิด grid orders ฝั่ง hedge เดิม, ใช้ budget matching กับ bound losses
-- ปิด set เมื่อ bound orders หมด
+#### 2. Cycle Recycling — `FindLowestFreeCycle()`
+- เพิ่มฟังก์ชันใหม่ที่สแกน cycle 0-6 หา slot แรกที่ว่าง (ไม่มี active hedge set หรือ open orders)
+- แทนที่ linear increment `g_currentCycleIndex++` ด้วย `FindLowestFreeCycle()` ใน 6 จุด
+- ทำให้ cycle กลับไป A/B/C ได้เมื่อ slot เก่าว่างแล้ว
 
-#### 3. ManageHedgeGridMode() — รองรับ hedgeTicket = 0
-- เมื่อ main hedge ถูกปิดแล้ว → ส่งต่อให้ ManageGridRecoveryMode()
+#### 3. Dashboard Styling — สว่างขึ้น + ใหญ่ขึ้น
+- `colW`: 68 → 90 (กว้างขึ้น)
+- `rowH`: 32 → 36 (สูงขึ้น)
+- `fSize` min: 7 → 8 (ตัวอักษรใหญ่ขึ้น)
+- สีพื้นหลัง row สว่างขึ้น: `C'55,60,72'` / `C'45,50,62'`
+- Header สว่างขึ้น: `C'80,40,120'`
+- Group accent colors สว่างขึ้นทั้งหมด
 
-#### 4. ซ่อน Cycle Details จาก Dashboard หลัก
-- ลบ Hedge #1-#16 details, คงแสดงเฉพาะ Cycle label + Set count
-
-#### 5. เพิ่ม PnL ใน Hedge Cycle Monitor
-- แต่ละ cell แสดง 2 บรรทัด: info + PnL (สีเขียว/แดง)
-- เพิ่ม bound order count (B:x) และ grid mode indicator (*)
-- ปรับ rowH จาก 18 → 32 เพื่อรองรับ 2 บรรทัด
-
-#### 6. Version bump: v5.11 → v5.12
+#### 4. Version bump: v5.12 → v5.13
 
 ### สิ่งที่ไม่เปลี่ยนแปลง
 - Order Execution Logic (trade.Buy/Sell/PositionClose)
@@ -35,3 +31,4 @@
 - Core Module Logic (License, News filter, Time filter, Data sync)
 - Hedge Guards (cycle-aware, squeeze directional block)
 - Normal Matching Close logic
+- Dashboard หลัก (ข้อมูลอื่นๆ)
