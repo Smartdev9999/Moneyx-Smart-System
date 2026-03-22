@@ -6701,11 +6701,15 @@ void ManageGridRecoveryMode(int idx)
       }
    }
    
-   // === v5.15: Matching close logic depends on hedge state ===
-   if(gridProfitCount >= InpHedge_PartialMinProfitOrders)
-   {
-      double budget = gridTotalProfit - InpHedge_MatchMinProfit;
-      if(budget > 0)
+    // === v5.16: Matching close only during Normal/Squeeze (not during expansion) ===
+    bool isExpansionLocal = false;
+    for(int sq = 0; sq < 3; sq++)
+       if(g_squeeze[sq].state == 2) { isExpansionLocal = true; break; }
+    
+    if(!isExpansionLocal && gridProfitCount >= InpHedge_PartialMinProfitOrders)
+    {
+       double budget = gridTotalProfit - InpHedge_MatchMinProfit;
+       if(budget > 0)
       {
          if(hedgeStillOpen)
          {
