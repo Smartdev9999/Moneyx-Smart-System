@@ -6190,9 +6190,9 @@ void CheckAndOpenHedge()
          if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
          if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
          if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != counterSide) continue;
-         string cmt = PositionGetString(POSITION_COMMENT);
-         if(IsHedgeComment(cmt)) continue;
-         if(IsTicketBound(ticket)) continue;  // already bound to another set
+          string cmt = PositionGetString(POSITION_COMMENT);
+          if(IsHedgeComment(cmt) || IsHedgeTicket(ticket)) continue;
+          if(IsTicketBound(ticket)) continue;  // already bound to another set
 
          int bc = g_hedgeSets[slot].boundTicketCount;
          ArrayResize(g_hedgeSets[slot].boundTickets, bc + 1);
