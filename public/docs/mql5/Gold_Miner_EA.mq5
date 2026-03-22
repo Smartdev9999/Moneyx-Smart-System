@@ -6254,14 +6254,48 @@ void ManageHedgeSets()
          g_hedgeSets[h].hedgeLots = PositionGetDouble(POSITION_VOLUME);
       }
 
+      // v5.17: Reset hedgeTicket when position is gone (regardless of gridMode)
+      if(!hedgeExists && g_hedgeSets[h].hedgeTicket > 0)
+      {
+         g_hedgeSets[h].hedgeTicket = 0;
+      }
+
+      // v5.17: Full cleanup — hedge gone + bound empty → check if grid orders remain
+      if(!hedgeExists && g_hedgeSets[h].boundTicketCount == 0)
+      {
+         bool hasGridOrders = false;
+         string gridPrefix = "GM_HG" + IntegerToString(h+1);
+         for(int i = PositionsTotal()-1; i >= 0; i--)
+         {
+            ulong t = PositionGetTicket(i);
+            if(t == 0) continue;
+            if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+            if(StringFind(PositionGetString(POSITION_COMMENT), gridPrefix) >= 0)
+            { hasGridOrders = true; break; }
+         }
+         
+         if(!hasGridOrders)
+         {
+            Print("HEDGE Set#", h+1, " fully cleared (hedge+bound+grid all gone). Deactivating.");
+            g_hedgeSets[h].active = false;
+            g_hedgeSets[h].gridMode = false;
+            g_hedgeSets[h].hedgeTicket = 0;
+            g_hedgeSets[h].boundTicketCount = 0;
+            ArrayResize(g_hedgeSets[h].boundTickets, 0);
+            g_hedgeSetCount = MathMax(0, g_hedgeSetCount - 1);
+            continue;
+         }
+      }
+
       if(!hedgeExists && !g_hedgeSets[h].gridMode)
       {
          // Hedge was closed externally (accumulate close, manual, etc.)
          Print("HEDGE Set#", h + 1, " ticket no longer exists. Deactivating.");
          g_hedgeSets[h].active = false;
+         g_hedgeSets[h].hedgeTicket = 0;
          g_hedgeSets[h].boundTicketCount = 0;
          ArrayResize(g_hedgeSets[h].boundTickets, 0);
-         g_hedgeSetCount--;
+         g_hedgeSetCount = MathMax(0, g_hedgeSetCount - 1);
          continue;
       }
 
