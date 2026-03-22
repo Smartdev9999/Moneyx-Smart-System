@@ -6711,7 +6711,7 @@ void ManageGridRecoveryMode(int idx)
       }
       g_hedgeSets[idx].active = false;
       g_hedgeSets[idx].gridMode = false;
-      g_hedgeSetCount--;
+      g_hedgeSetCount = MathMax(0, g_hedgeSetCount - 1);
       Print("HEDGE Set#", idx + 1, " grid recovery complete. All cleared.");
       return;
    }
