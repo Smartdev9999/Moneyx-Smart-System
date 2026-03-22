@@ -7306,7 +7306,7 @@ void DisplayHedgeCycleDashboard()
    int totalW = colW * 7 + (int)(6 * sc);  // 7 columns + padding
    int headerH = (int)(22 * sc);
    int colHeaderH = (int)(20 * sc);
-   int rowH = (int)(18 * sc);
+   int rowH = (int)(32 * sc);        // v5.12: taller rows for 2-line display (info + PnL)
    int fSizeH = (int)(10 * sc);
    if(fSizeH < 7) fSizeH = 7;
    int fSize = (int)(8 * sc);
