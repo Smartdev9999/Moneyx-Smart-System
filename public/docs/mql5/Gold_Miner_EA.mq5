@@ -6827,15 +6827,22 @@ void ManageHedgeGridMode(int idx)
       return;
    }
    
-   // Verify main hedge ticket
-   bool mainHedgeExists = false;
-   double mainHedgePnL = 0;
-   if(g_hedgeSets[idx].hedgeTicket > 0 && PositionSelectByTicket(g_hedgeSets[idx].hedgeTicket))
-   {
-      mainHedgeExists = true;
-      mainHedgePnL = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
-      g_hedgeSets[idx].hedgeLots = PositionGetDouble(POSITION_VOLUME);
-   }
+    // Verify main hedge ticket
+    bool mainHedgeExists = false;
+    double mainHedgePnL = 0;
+    if(g_hedgeSets[idx].hedgeTicket > 0 && PositionSelectByTicket(g_hedgeSets[idx].hedgeTicket))
+    {
+       mainHedgeExists = true;
+       mainHedgePnL = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+       g_hedgeSets[idx].hedgeLots = PositionGetDouble(POSITION_VOLUME);
+    }
+    else if(g_hedgeSets[idx].hedgeTicket > 0)
+    {
+       // v5.14: Hedge ticket invalid (closed externally or via matching close) → enter recovery
+       g_hedgeSets[idx].hedgeTicket = 0;
+       ManageGridRecoveryMode(idx);
+       return;
+    }
 
    // Count hedge grid orders
    int gridProfitCount = 0;
