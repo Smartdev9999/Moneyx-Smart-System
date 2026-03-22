@@ -1,38 +1,57 @@
 
 
+## Fix: Basket TP ปิด Order ที่ Bound กับ Hedge — ต้อง Skip Orders ที่อยู่ในระบบ Hedge (v5.6 → v5.7)
 
-## Fix: Hedge System Guards + Dashboard Improvements (v5.5 → v5.6)
+### สาเหตุ
 
-### สิ่งที่แก้ไข
+เมื่อเกิด Hedge แล้ว order ฝั่ง Buy (ตัวอย่าง) ถูกผูกเข้า `boundTickets[]` ของ hedge set แต่:
+
+1. **`CalculateAveragePrice()`** (line 1477) — skip เฉพาะ `IsHedgeComment()` แต่ **ไม่ skip order ที่ bound** → Average Price ยังรวม order เหล่านี้
+2. **`CalculateFloatingPL()`** (line 1507) — เหมือนกัน ไม่ skip bound orders → P/L รวม order ที่ควรจัดการโดย hedge system
+3. **`CloseAllSide()`** (line 1564) — skip เฉพาะ hedge comment → ปิด bound orders ทิ้ง → hedge set เสียหาย
+4. **`ManageTPSL()`** (line 1628) — ใช้ค่าจาก (1) และ (2) → เมื่อราคาดีดกลับ TP Hit → ปิด bound buy orders → hedge ซอยไม่ได้
+
+**ผล:** กราฟดีดกลับ → TP Hit (BUY) → ปิด Buy orders ที่ผูกกับ hedge → hedge sell ค้างโดยไม่มี counter orders
+
+### การแก้ไข
 
 **ไฟล์:** `public/docs/mql5/Gold_Miner_EA.mq5`
 
-#### 1. Normal Matching Close — skip bound tickets
-- เพิ่ม `IsTicketBound(ticket)` guard ใน `ManageMatchingClose()` ป้องกัน normal matching ปิด order ที่ reserve ไว้ให้ hedge system
+#### 1. แก้ `CalculateAveragePrice()` — skip bound orders (line 1491)
 
-#### 2. Hedge Lot Calculation — ใช้ Unbound Counter Lots
-- เปลี่ยนจาก `CalculateNetHedgeLots()` เป็นสแกน counter-side orders ที่ไม่ bound + ไม่ใช่ hedge order → hedge lot ครบถ้วน
+```text
+เพิ่มหลัง IsHedgeComment check:
+  ulong ticket = PositionGetTicket(i);
+  if(IsTicketBound(ticket)) continue;  // managed by hedge system
+```
 
-#### 3. hasCounterOrders Guard — filter unbound non-hedge only
-- เพิ่ม filter ใน Guard 1: skip hedge comments + bound tickets → hedge เปิดเฉพาะเมื่อมี order ฝั่งผิดที่ยังไม่ถูก protect
+#### 2. แก้ `CalculateFloatingPL()` — skip bound orders (line 1519)
 
-#### 4. Expansion Guard for ALL hedge closing
-- Grid Mode, Partial Close, Matching Close ทั้งหมดถูก guard ด้วย `!isExpansion`
-- ระหว่าง expansion: เช็คเฉพาะ bound orders หมดหรือยัง → flag gridMode (ไม่ execute)
+```text
+เพิ่มหลัง IsHedgeComment check:
+  if(IsTicketBound(ticket)) continue;
+```
 
-#### 5. Expansion Direction Label
-- Dashboard แสดง "EXPANSION ▲ BUY" หรือ "EXPANSION ▼ SELL" แทน "EXPANSION" เฉยๆ
+#### 3. แก้ `CloseAllSide()` — skip bound orders (line 1575)
 
-#### 6. Dashboard Default Values
-- DashboardX: 50, DashboardY: 60, DashboardWidth: 400, HedgeDashY: 65
+```text
+เพิ่มหลัง IsHedgeComment check:
+  if(IsTicketBound(ticket)) continue;
+```
 
-#### 7. Version bump: v5.5 → v5.6
+#### 4. แก้ `CalculateAveragePriceTF()` (line ~3477) — skip bound + hedge
+
+ตรวจสอบว่ามี `IsHedgeComment` + `IsTicketBound` skip เหมือนกัน (TF-based version)
+
+#### 5. แก้ `CloseAllSideTF()` (line ~3561) — skip bound orders
+
+เพิ่ม `IsTicketBound(ticket) continue` เหมือน `CloseAllSide()`
+
+#### 6. Version bump: v5.6 → v5.7
 
 ### สิ่งที่ไม่เปลี่ยนแปลง
-- Order Execution Logic (trade.Buy/Sell/PositionClose)
-- Trading Strategy Logic (SMA/ZigZag/Instant, Grid entry/exit, TP/SL/Trailing)
-- Core Module Logic (License, News filter, Time filter, Data sync)
-- Net Lot Calculation, Hedge Guards, Cross-Set Matching
-- Hedge Partial/Matching Close, Grid Mode logic (เพิ่มแค่ expansion guard)
-- Normal Matching Close logic (เพิ่มแค่ bound ticket guard)
-- Hedge Cycle Monitor dashboard
+- Hedge logic ทั้งหมด (Partial/Matching/Grid Close)
+- Normal Matching Close logic
+- Trading Strategy Logic
+- Dashboard / Hedge Cycle Monitor
+
