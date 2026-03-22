@@ -7295,6 +7295,50 @@ string TimeframeToString(ENUM_TIMEFRAMES tf)
 //+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
+//| v5.13: Find lowest free cycle index (0-6) for recycling           |
+//+------------------------------------------------------------------+
+int FindLowestFreeCycle()
+{
+   for(int c = 0; c < 7; c++)
+   {
+      // Check if any active hedge set uses this cycle
+      bool cycleInUse = false;
+      for(int h = 0; h < MAX_HEDGE_SETS; h++)
+      {
+         if(g_hedgeSets[h].active && g_hedgeSets[h].cycleIndex == c)
+         {
+            cycleInUse = true;
+            break;
+         }
+      }
+      if(cycleInUse) continue;
+      
+      // Check if any open order belongs to this cycle (by comment suffix)
+      string suffixes[] = {"_A", "_B", "_C", "_D", "_E", "_F", "_G"};
+      bool hasOrders = false;
+      for(int i = PositionsTotal() - 1; i >= 0; i--)
+      {
+         ulong ticket = PositionGetTicket(i);
+         if(ticket == 0) continue;
+         if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+         if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+         string cmt = PositionGetString(POSITION_COMMENT);
+         if(StringLen(cmt) >= 2)
+         {
+            string tail = StringSubstr(cmt, StringLen(cmt) - 2);
+            if(tail == suffixes[c])
+            {
+               hasOrders = true;
+               break;
+            }
+         }
+      }
+      if(!hasOrders) return c;
+   }
+   return g_currentCycleIndex;  // all slots in use → stay at current
+}
+
+//+------------------------------------------------------------------+
 //| v5.10: Hedge Cycle Monitor Dashboard — 7-column display           |
 //| Shows Groups A-G with H1-H4 status for each group                |
 //+------------------------------------------------------------------+
@@ -7304,29 +7348,29 @@ void DisplayHedgeCycleDashboard()
    int x = HedgeDashX;
    int y = HedgeDashY;
    
-   // Layout dimensions — 7 columns
-   int colW = (int)(68 * sc);        // narrower columns for 7 groups
-   int totalW = colW * 7 + (int)(6 * sc);  // 7 columns + padding
-   int headerH = (int)(22 * sc);
-   int colHeaderH = (int)(20 * sc);
-   int rowH = (int)(32 * sc);        // v5.12: taller rows for 2-line display (info + PnL)
+   // v5.13: Layout dimensions — wider columns, taller rows, better readability
+   int colW = (int)(90 * sc);        // wider columns for data visibility
+   int totalW = colW * 7 + (int)(6 * sc);
+   int headerH = (int)(24 * sc);
+   int colHeaderH = (int)(22 * sc);
+   int rowH = (int)(36 * sc);        // taller rows for 2-line display
    int fSizeH = (int)(10 * sc);
-   if(fSizeH < 7) fSizeH = 7;
-   int fSize = (int)(8 * sc);
-   if(fSize < 7) fSize = 7;
+   if(fSizeH < 8) fSizeH = 8;
+   int fSize = (int)(9 * sc);
+   if(fSize < 8) fSize = 8;
    int objCount = 0;
    
-   // Colors
-   color COLOR_BG_HEADER  = C'60,20,90';       // Purple header
-   color COLOR_BG_COL_HDR = C'35,39,46';       // Column header bg
-   color COLOR_BG_ROW1    = C'40,44,52';        // Alternating row 1
-   color COLOR_BG_ROW2    = C'35,39,46';        // Alternating row 2
+   // v5.13: Brighter colors for better visibility on dark backgrounds
+   color COLOR_BG_HEADER  = C'80,40,120';        // Brighter purple header
+   color COLOR_BG_COL_HDR = C'50,55,68';          // Brighter column header
+   color COLOR_BG_ROW1    = C'55,60,72';           // Brighter alternating row 1
+   color COLOR_BG_ROW2    = C'45,50,62';           // Brighter alternating row 2
    color COLOR_TEXT_WHITE  = clrWhite;
-   color COLOR_OFF         = C'80,80,80';        // Grey for OFF
-   color COLOR_STANDBY     = C'200,180,50';      // Yellow for STANDBY
+   color COLOR_OFF         = C'100,100,100';       // Brighter grey for OFF
+   color COLOR_STANDBY     = C'220,200,60';        // Brighter yellow for STANDBY
    color COLOR_PROFIT      = clrLime;
-   color COLOR_LOSS        = C'255,80,80';
-   color COLOR_NEUTRAL     = C'120,120,120';     // Grey for ---
+   color COLOR_LOSS        = C'255,90,90';
+   color COLOR_NEUTRAL     = C'140,140,140';       // Brighter grey for ---
    
    // Group column accent colors — 7 groups
    color groupColors[7];
