@@ -6082,12 +6082,25 @@ void CheckAndOpenHedge()
    if(g_hedgeSetCount > 0 && bestDir == g_lastHedgeExpansionDir)
       return;  // expansion ทิศเดิม → ไม่เปิด hedge ใหม่
 
-   // === v5.2: Net Lot Calculation ===
-   ENUM_POSITION_TYPE calcHedgeSide, calcCounterSide;
-   double netLots = CalculateNetHedgeLots(calcHedgeSide, calcCounterSide);
-   if(netLots <= 0) return;
+   // === v5.6: Unbound Counter Lots Calculation ===
+   // Calculate lots from counter-side orders that are NOT already bound to a hedge set
+   // and NOT hedge orders themselves — this is the true unprotected exposure
+   double unboundCounterLots = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != counterSide) continue;
+      string cmt = PositionGetString(POSITION_COMMENT);
+      if(StringFind(cmt, "GM_HEDGE") >= 0 || StringFind(cmt, "GM_HG") >= 0) continue;
+      if(IsTicketBound(ticket)) continue;
+      unboundCounterLots += PositionGetDouble(POSITION_VOLUME);
+   }
+   if(unboundCounterLots <= 0) return;
 
-   double hedgeLots = netLots;
+   double hedgeLots = NormalizeDouble(unboundCounterLots, 2);
 
    // Find free slot
    int slot = FindFreeHedgeSlot();
