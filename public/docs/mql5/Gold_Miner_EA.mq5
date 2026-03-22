@@ -2995,7 +2995,17 @@ void DisplayDashboard()
          string stateStr;
          color stateClr;
          if(g_squeeze[sq].state == 1)      { stateStr = "SQUEEZE";   stateClr = clrRed;        }
-         else if(g_squeeze[sq].state == 2)  { stateStr = "EXPANSION"; stateClr = clrDodgerBlue; }
+         else if(g_squeeze[sq].state == 2)
+         {
+            // v5.6: Show expansion direction
+            if(g_squeeze[sq].direction == 1)
+               stateStr = "EXPANSION ▲ BUY";
+            else if(g_squeeze[sq].direction == -1)
+               stateStr = "EXPANSION ▼ SELL";
+            else
+               stateStr = "EXPANSION";
+            stateClr = clrDodgerBlue;
+         }
          else                               { stateStr = "NORMAL";    stateClr = clrLime;       }
 
          // Build intensity bar (10 chars)
