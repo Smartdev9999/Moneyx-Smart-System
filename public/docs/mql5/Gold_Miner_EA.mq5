@@ -6073,6 +6073,12 @@ void CheckAndOpenHedge()
    ENUM_POSITION_TYPE counterSide = (bestDir == -1) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
    ENUM_POSITION_TYPE hedgeSide   = (bestDir == -1) ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
 
+   // === v5.11 Guard: Hedge ต้องสอดคล้องกับ Squeeze Directional Block ===
+   // ถ้า SELL ถูก block (expansion BUY) → ห้ามเปิด SELL hedge
+   // ถ้า BUY ถูก block (expansion SELL) → ห้ามเปิด BUY hedge
+   if(g_squeezeSellBlocked && hedgeSide == POSITION_TYPE_SELL) return;
+   if(g_squeezeBuyBlocked  && hedgeSide == POSITION_TYPE_BUY)  return;
+
    // === v5.3 Guard 1: ต้องมี order ฝั่ง counterSide (ฝั่งที่ติดผิดทาง) จริงๆ ===
    bool hasCounterOrders = false;
    for(int i = PositionsTotal() - 1; i >= 0; i--)
