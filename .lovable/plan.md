@@ -1,32 +1,31 @@
 
 
-## Fix: H2-H4 Net Lot Calculation + Partial Close Orphan Bug (v5.17 → v5.18)
+
+## Fix: Dashboard แสดงข้อมูล Stale + PnL เฉพาะ Hedge Order (v5.18 → v5.19)
 
 ### สิ่งที่แก้ไข
 
 **ไฟล์:** `public/docs/mql5/Gold_Miner_EA.mq5`
 
-#### 1. H2-H4 Net Imbalance Calculation (แทน unboundCounterLots)
-- คำนวณ `cycleBuyLots` vs `cycleSellLots` รวมทุก order ใน cycle (normal + hedge + grid)
-- ใช้ `IsBelongsToCycle()` เช็คว่า order อยู่ใน cycle ไหน
-- `hedgeLots = MathAbs(buyLots - sellLots)` → ล็อค net exposure เป็น 0 ทุก level
+#### 1. Reset `hedgeLots = 0` เมื่อ hedge position หายไป (line 6315)
+- ป้องกัน dashboard แสดง lot ค่าเก่าหลัง order ปิด
 
-#### 2. เพิ่ม `IsBelongsToCycle()` helper function
-- เช็ค bound tickets, hedge tickets, grid tickets ของ sets ใน cycle นั้น
-- Unbound normal orders → belongs to current active cycle
+#### 2. Dashboard แสดงสถานะจริงตาม hedgeTicket (line 7752-7790)
+- `hedgeTicket > 0` + position exists → แสดง volume จริงจาก `POSITION_VOLUME`
+- `gridMode = true` → แสดง "REC" (Recovery)
+- `boundTicketCount > 0` → แสดง "H1:-- S"
+- ไม่มีอะไรเลย → แสดง "CLR"
 
-#### 3. ManageHedgePartialClose — ป้องกัน Orphan Orders
-- เมื่อ hedge ถูกปิดหมด (`closeLots >= hedgeLots`) → เช็ค boundTicketCount
-- ถ้ายังมี bound orders → เข้า Grid Recovery (gridMode = true)
-- ถ้าไม่มี → deactivate set ตามปกติ
+#### 3. PnL แสดงเฉพาะ Hedge Order เท่านั้น
+- ลบ loop grid tickets PnL และ bound orders PnL ออก
+- เหลือแค่ hedgeTicket PnL
 
-#### 4. Version bump: v5.17 → v5.18
+#### 4. Version bump: v5.18 → v5.19
 
 ### สิ่งที่ไม่เปลี่ยนแปลง
 - Order Execution Logic (trade.Buy/Sell/PositionClose)
 - Trading Strategy Logic (SMA/ZigZag/Instant, Grid entry/exit, TP/SL/Trailing)
 - Core Module Logic (License, News filter, Time filter, Data sync)
-- Normal Matching Close logic
-- Dashboard / Hedge Cycle Monitor
-- Grid Recovery lot calculation + direction logic
-- Hedge Guards 1-3 (hasCounterOrders, same-direction, alternate-direction)
+- Hedge/Grid Recovery logic ทั้งหมด
+- Hedge Guards, Normal Matching Close logic
+- Dashboard layout/styling
