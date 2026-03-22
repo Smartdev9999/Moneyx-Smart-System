@@ -1579,6 +1579,7 @@ void CloseAllPositions()
       ArrayResize(g_hedgeSets[h].boundTickets, 0);
    }
    g_hedgeSetCount = 0;
+   g_currentCycleIndex = 0;  // Reset cycle labeling
 }
 
 //+------------------------------------------------------------------+
