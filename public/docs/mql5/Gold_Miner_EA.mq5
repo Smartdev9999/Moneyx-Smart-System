@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|               Gold Miner EA v5.10 - MTF ZigZag+CDC+Grid+License  |
+//|               Gold Miner EA v5.11 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "5.100"
-#property description "Gold Miner EA v5.10 - MTF ZigZag + CDC + Squeeze + Net Hedge + 7 Cycle Groups + 16 Hedge Slots + License"
+#property version   "5.110"
+#property description "Gold Miner EA v5.11 - MTF ZigZag + CDC + Squeeze + Net Hedge + 7 Cycle Groups + 16 Hedge Slots + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -694,7 +694,7 @@ int OnInit()
     g_lastHedgeExpansionDir = 0;
     g_cycleHedged = false;
 
-   Print("Gold Miner EA v5.10 initialized successfully");
+   Print("Gold Miner EA v5.11 initialized successfully");
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -747,7 +747,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
    ObjectsDeleteAll(0, "GM_HC_");   // v5.5: hedge cycle monitor objects
 
-   Print("Gold Miner EA v5.10 deinitialized");
+   Print("Gold Miner EA v5.11 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -2779,7 +2779,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v5.10 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v5.10 [ZZ]" : "Gold Miner EA v5.10 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v5.11 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v5.11 [ZZ]" : "Gold Miner EA v5.11 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -6072,6 +6072,12 @@ void CheckAndOpenHedge()
    // Bullish expansion → hedge SELL orders stuck (open BUY hedge)
    ENUM_POSITION_TYPE counterSide = (bestDir == -1) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
    ENUM_POSITION_TYPE hedgeSide   = (bestDir == -1) ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
+
+   // === v5.11 Guard: Hedge ต้องสอดคล้องกับ Squeeze Directional Block ===
+   // ถ้า SELL ถูก block (expansion BUY) → ห้ามเปิด SELL hedge
+   // ถ้า BUY ถูก block (expansion SELL) → ห้ามเปิด BUY hedge
+   if(g_squeezeSellBlocked && hedgeSide == POSITION_TYPE_SELL) return;
+   if(g_squeezeBuyBlocked  && hedgeSide == POSITION_TYPE_BUY)  return;
 
    // === v5.3 Guard 1: ต้องมี order ฝั่ง counterSide (ฝั่งที่ติดผิดทาง) จริงๆ ===
    bool hasCounterOrders = false;
