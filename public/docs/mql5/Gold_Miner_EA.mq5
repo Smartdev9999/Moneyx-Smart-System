@@ -5981,8 +5981,8 @@ int CountUnboundOrders(ENUM_POSITION_TYPE side, double &totalLots, double &total
       if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
-      string comment = PositionGetString(POSITION_COMMENT);
-      if(IsHedgeComment(comment)) continue;
+       string comment = PositionGetString(POSITION_COMMENT);
+       if(IsHedgeComment(comment) || IsHedgeTicket(ticket)) continue;
       if(IsTicketBound(ticket)) continue;  // skip tickets already bound to a set
       count++;
       totalLots += PositionGetDouble(POSITION_VOLUME);
