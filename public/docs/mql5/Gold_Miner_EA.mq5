@@ -1577,10 +1577,10 @@ void CloseAllSide(ENUM_POSITION_TYPE side)
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       if(PositionGetInteger(POSITION_TYPE) != side) continue;
       
-      // Skip hedge orders — let the Hedge system manage their lifecycle
-      if(IsHedgeComment(PositionGetString(POSITION_COMMENT))) continue;
-      // v5.7: Skip orders bound to hedge sets — let hedge system manage
-      if(IsTicketBound(ticket)) continue;
+       // Skip hedge orders — let the Hedge system manage their lifecycle
+       if(IsHedgeComment(PositionGetString(POSITION_COMMENT)) || IsHedgeTicket(ticket)) continue;
+       // v5.7: Skip orders bound to hedge sets — let hedge system manage
+       if(IsTicketBound(ticket)) continue;
       
       trade.PositionClose(ticket);
    }
