@@ -747,7 +747,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
    ObjectsDeleteAll(0, "GM_HC_");   // v5.5: hedge cycle monitor objects
 
-   Print("Gold Miner EA v5.16 deinitialized");
+   Print("Gold Miner EA v5.17 deinitialized");
 }
 
 //+------------------------------------------------------------------+
