@@ -7234,6 +7234,6 @@ void DisplayHedgeCycleDashboard()
    CreateDashRect(btmBorder, x, bottomY, totalW, (int)(2 * sc), COLOR_BG_HEADER);
    objCount++;
    
-   // Cleanup: no stale objects needed since layout is fixed (always 4x4 grid)
+   // Cleanup: no stale objects needed since layout is fixed (always 7x4 grid)
 }
 //+------------------------------------------------------------------+
