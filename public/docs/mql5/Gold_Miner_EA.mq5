@@ -2186,6 +2186,8 @@ double FindMaxLotOnSide(ENUM_POSITION_TYPE side)
       if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
+      // v5.8: Skip orders bound to hedge sets
+      if(IsTicketBound(ticket)) continue;
       string comment = PositionGetString(POSITION_COMMENT);
       if(StringFind(comment, "GM_GL") >= 0 || StringFind(comment, "GM_INIT") >= 0)
       {
