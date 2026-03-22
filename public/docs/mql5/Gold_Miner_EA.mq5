@@ -210,6 +210,7 @@ input int      DashboardY           = 60;      // Dashboard Y Position
 input color    DashboardColor       = clrWhite; // Dashboard Text Color
 input double   DashboardScale       = 1.0;     // Dashboard Scale (0.8-1.5)
 input int      DashboardWidth       = 400;     // Dashboard Table Width (300-500)
+input int      HedgeDashWidth       = 500;     // Hedge Dashboard Width (400-700)
 input int      HedgeDashX           = 10;      // Hedge Dashboard X Position
 input int      HedgeDashY           = 65;      // Hedge Dashboard Y Position
 
