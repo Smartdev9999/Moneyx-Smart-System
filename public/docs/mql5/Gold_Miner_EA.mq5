@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v5.5 - MTF ZigZag+CDC+Grid+License  |
+//|                Gold Miner EA v5.6 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "5.50"
-#property description "Gold Miner EA v5.5 - MTF ZigZag + CDC + Squeeze + Net Hedge + Cycle Label + Hedge Monitor + License"
+#property version   "5.60"
+#property description "Gold Miner EA v5.6 - MTF ZigZag + CDC + Squeeze + Net Hedge + Cycle Label + Hedge Monitor + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -205,13 +205,13 @@ input int      InpTrailingStep           = 10;       // Trailing Step (min SL mo
 //--- Dashboard
 input group "=== Dashboard ==="
 input bool     ShowDashboard        = true;    // Show Dashboard
-input int      DashboardX           = 20;      // Dashboard X Position
-input int      DashboardY           = 30;      // Dashboard Y Position
+input int      DashboardX           = 50;      // Dashboard X Position
+input int      DashboardY           = 60;      // Dashboard Y Position
 input color    DashboardColor       = clrWhite; // Dashboard Text Color
 input double   DashboardScale       = 1.0;     // Dashboard Scale (0.8-1.5)
-input int      DashboardWidth       = 340;     // Dashboard Table Width (300-500)
+input int      DashboardWidth       = 400;     // Dashboard Table Width (300-500)
 input int      HedgeDashX           = 10;      // Hedge Dashboard X Position
-input int      HedgeDashY           = 500;     // Hedge Dashboard Y Position
+input int      HedgeDashY           = 65;      // Hedge Dashboard Y Position
 
 //--- Rebate Settings
 input group "=== Rebate Settings ==="
@@ -747,7 +747,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
    ObjectsDeleteAll(0, "GM_HC_");   // v5.5: hedge cycle monitor objects
 
-   Print("Gold Miner EA v5.5 deinitialized");
+   Print("Gold Miner EA v5.6 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -2995,7 +2995,17 @@ void DisplayDashboard()
          string stateStr;
          color stateClr;
          if(g_squeeze[sq].state == 1)      { stateStr = "SQUEEZE";   stateClr = clrRed;        }
-         else if(g_squeeze[sq].state == 2)  { stateStr = "EXPANSION"; stateClr = clrDodgerBlue; }
+         else if(g_squeeze[sq].state == 2)
+         {
+            // v5.6: Show expansion direction
+            if(g_squeeze[sq].direction == 1)
+               stateStr = "EXPANSION ▲ BUY";
+            else if(g_squeeze[sq].direction == -1)
+               stateStr = "EXPANSION ▼ SELL";
+            else
+               stateStr = "EXPANSION";
+            stateClr = clrDodgerBlue;
+         }
          else                               { stateStr = "NORMAL";    stateClr = clrLime;       }
 
          // Build intensity bar (10 chars)
@@ -6051,6 +6061,10 @@ void CheckAndOpenHedge()
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) == counterSide)
       {
+         // v5.6: Only count unbound, non-hedge orders as counter orders
+         string cmt = PositionGetString(POSITION_COMMENT);
+         if(StringFind(cmt, "GM_HEDGE") >= 0 || StringFind(cmt, "GM_HG") >= 0) continue;
+         if(IsTicketBound(ticket)) continue;
          hasCounterOrders = true;
          break;
       }
@@ -6068,12 +6082,25 @@ void CheckAndOpenHedge()
    if(g_hedgeSetCount > 0 && bestDir == g_lastHedgeExpansionDir)
       return;  // expansion ทิศเดิม → ไม่เปิด hedge ใหม่
 
-   // === v5.2: Net Lot Calculation ===
-   ENUM_POSITION_TYPE calcHedgeSide, calcCounterSide;
-   double netLots = CalculateNetHedgeLots(calcHedgeSide, calcCounterSide);
-   if(netLots <= 0) return;
+   // === v5.6: Unbound Counter Lots Calculation ===
+   // Calculate lots from counter-side orders that are NOT already bound to a hedge set
+   // and NOT hedge orders themselves — this is the true unprotected exposure
+   double unboundCounterLots = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != counterSide) continue;
+      string cmt = PositionGetString(POSITION_COMMENT);
+      if(StringFind(cmt, "GM_HEDGE") >= 0 || StringFind(cmt, "GM_HG") >= 0) continue;
+      if(IsTicketBound(ticket)) continue;
+      unboundCounterLots += PositionGetDouble(POSITION_VOLUME);
+   }
+   if(unboundCounterLots <= 0) return;
 
-   double hedgeLots = netLots;
+   double hedgeLots = NormalizeDouble(unboundCounterLots, 2);
 
    // Find free slot
    int slot = FindFreeHedgeSlot();
@@ -6204,29 +6231,34 @@ void ManageHedgeSets()
          }
       }
 
-      if(g_hedgeSets[h].gridMode)
+      // === v5.6: ALL hedge closing actions ONLY during Normal/Squeeze ===
+      if(!isExpansion)
       {
-         ManageHedgeGridMode(h);
-      }
-      else if(!isExpansion)
-      {
-         // Expansion ended → check scenarios
-         double hedgePnL = 0;
-         if(hedgeExists)
-            hedgePnL = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
-
-         if(hedgePnL > 0)
-            ManageHedgeMatchingClose(h);  // Scenario 1: hedge in profit
+         if(g_hedgeSets[h].gridMode)
+         {
+            ManageHedgeGridMode(h);
+         }
          else
-            ManageHedgePartialClose(h);   // Scenario 2: hedge in loss, check original orders
+         {
+            // Normal/Squeeze → check scenarios
+            double hedgePnL = 0;
+            if(hedgeExists)
+               hedgePnL = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+
+            if(hedgePnL > 0)
+               ManageHedgeMatchingClose(h);  // Scenario 1: hedge in profit
+            else
+               ManageHedgePartialClose(h);   // Scenario 2: hedge in loss, check original orders
+         }
       }
       else
       {
-         // Still in expansion - check if bound orders are all gone
-         if(g_hedgeSets[h].boundTicketCount == 0 && hedgeExists)
+         // Still in expansion - only check if bound orders are all gone → flag gridMode
+         // But do NOT execute any closing actions during expansion
+         if(g_hedgeSets[h].boundTicketCount == 0 && hedgeExists && !g_hedgeSets[h].gridMode)
          {
-            // All bound orders gone but hedge remains → enter grid mode
-            Print("HEDGE Set#", h + 1, " all bound orders cleared. Entering Grid Mode.");
+            // All bound orders gone but hedge remains → flag grid mode (will execute when expansion ends)
+            Print("HEDGE Set#", h + 1, " all bound orders cleared. Flagging Grid Mode (will execute after expansion).");
             g_hedgeSets[h].gridMode = true;
             g_hedgeSets[h].gridLevel = CalculateEquivGridLevel(g_hedgeSets[h].hedgeLots);
          }
@@ -6745,6 +6777,8 @@ void ManageMatchingClose()
             // Skip hedge orders — managed separately
             string mcComment = PositionGetString(POSITION_COMMENT);
             if(StringFind(mcComment, "GM_HEDGE") >= 0 || StringFind(mcComment, "GM_HG") >= 0) continue;
+            // v5.6: Skip orders bound to hedge sets — reserved for hedge system
+            if(IsTicketBound(ticket)) continue;
 
             double pnl = PositionGetDouble(POSITION_PROFIT)
                        + PositionGetDouble(POSITION_SWAP)
