@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|               Gold Miner EA v5.18 - MTF ZigZag+CDC+Grid+License  |
+//|               Gold Miner EA v5.19 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "5.180"
-#property description "Gold Miner EA v5.18 - MTF ZigZag + CDC + Squeeze + Net Hedge + Stalled Recovery + 10 Cycles + License"
+#property version   "5.190"
+#property description "Gold Miner EA v5.19 - MTF ZigZag + CDC + Squeeze + Net Hedge + Stalled Recovery + 10 Cycles + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -694,7 +694,7 @@ int OnInit()
     g_lastHedgeExpansionDir = 0;
     g_cycleHedged = false;
 
-   Print("Gold Miner EA v5.18 initialized successfully");
+   Print("Gold Miner EA v5.19 initialized successfully");
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -747,7 +747,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
    ObjectsDeleteAll(0, "GM_HC_");   // v5.5: hedge cycle monitor objects
 
-   Print("Gold Miner EA v5.18 deinitialized");
+   Print("Gold Miner EA v5.19 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -2781,7 +2781,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v5.18 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v5.18 [ZZ]" : "Gold Miner EA v5.18 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v5.19 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v5.19 [ZZ]" : "Gold Miner EA v5.19 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -6312,6 +6312,7 @@ void ManageHedgeSets()
       if(!hedgeExists && g_hedgeSets[h].hedgeTicket > 0)
       {
          g_hedgeSets[h].hedgeTicket = 0;
+         g_hedgeSets[h].hedgeLots = 0;  // v5.19: Reset stale lot data
       }
 
       // v5.17: Full cleanup — hedge gone + bound empty → check if grid orders remain
@@ -7749,36 +7750,42 @@ void DisplayHedgeCycleDashboard()
                {
                   if(g_hedgeSets[h].active && g_hedgeSets[h].cycleIndex == g && g_hedgeSets[h].hedgeNumber == hedgeNum)
                   {
-                     found = true;
-                     string side = (g_hedgeSets[h].hedgeSide == POSITION_TYPE_BUY) ? "B" : "S";
-                     
-                     // Calculate PnL for this hedge
-                     double pnl = 0;
-                     if(g_hedgeSets[h].hedgeTicket > 0 && PositionSelectByTicket(g_hedgeSets[h].hedgeTicket))
-                        pnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
-                     
-                     // Add grid tickets PnL
-                     for(int gt = 0; gt < g_hedgeSets[h].gridTicketCount; gt++)
-                     {
-                        if(PositionSelectByTicket(g_hedgeSets[h].gridTickets[gt]))
-                           pnl += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
-                     }
-                     
-                     // Add bound orders PnL
-                     for(int bt = 0; bt < g_hedgeSets[h].boundTicketCount; bt++)
-                     {
-                        if(PositionSelectByTicket(g_hedgeSets[h].boundTickets[bt]))
-                           pnl += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
-                     }
-                     
-                     string modeStr = g_hedgeSets[h].gridMode ? "*" : "";
-                     cellText = "H" + IntegerToString(hedgeNum) + ":" + side + modeStr + " " + 
-                                DoubleToString(g_hedgeSets[h].hedgeLots, 2) + "L";
-                     cellText += " B:" + IntegerToString(g_hedgeSets[h].boundTicketCount);
-                     
-                     plText = "$" + DoubleToString(pnl, 2);
-                     cellColor = (pnl >= 0) ? COLOR_PROFIT : COLOR_LOSS;
-                     plColor = (pnl >= 0) ? COLOR_PROFIT : COLOR_LOSS;
+                      found = true;
+                      string side = (g_hedgeSets[h].hedgeSide == POSITION_TYPE_BUY) ? "B" : "S";
+                      
+                      // v5.19: PnL shows ONLY the hedge order itself
+                      double pnl = 0;
+                      if(g_hedgeSets[h].hedgeTicket > 0 && PositionSelectByTicket(g_hedgeSets[h].hedgeTicket))
+                         pnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+                      
+                      // v5.19: Display real-time status based on actual hedge position
+                      string modeStr = g_hedgeSets[h].gridMode ? "*" : "";
+                      if(g_hedgeSets[h].hedgeTicket > 0 && PositionSelectByTicket(g_hedgeSets[h].hedgeTicket))
+                      {
+                         // Hedge still open → show real volume from position
+                         double realVol = PositionGetDouble(POSITION_VOLUME);
+                         cellText = "H" + IntegerToString(hedgeNum) + ":" + side + modeStr + " " + 
+                                    DoubleToString(realVol, 2) + "L";
+                      }
+                      else if(g_hedgeSets[h].gridMode)
+                      {
+                         // Hedge closed, recovery mode active
+                         cellText = "H" + IntegerToString(hedgeNum) + ":REC";
+                      }
+                      else if(g_hedgeSets[h].boundTicketCount > 0)
+                      {
+                         // Hedge closed, bound orders remain but no grid
+                         cellText = "H" + IntegerToString(hedgeNum) + ":-- " + side;
+                      }
+                      else
+                      {
+                         cellText = "H" + IntegerToString(hedgeNum) + ": CLR";
+                      }
+                      cellText += " B:" + IntegerToString(g_hedgeSets[h].boundTicketCount);
+                      
+                      plText = "$" + DoubleToString(pnl, 2);
+                      cellColor = (pnl >= 0) ? COLOR_PROFIT : COLOR_LOSS;
+                      plColor = (pnl >= 0) ? COLOR_PROFIT : COLOR_LOSS;
                      break;
                   }
                }
