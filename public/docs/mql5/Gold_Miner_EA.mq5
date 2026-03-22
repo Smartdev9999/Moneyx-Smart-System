@@ -6625,14 +6625,29 @@ void ManageHedgePartialClose(int idx)
    if(!PositionSelectByTicket(g_hedgeSets[idx].hedgeTicket)) return;
    hedgeLots = PositionGetDouble(POSITION_VOLUME);
 
-   if(closeLots >= hedgeLots)
+    if(closeLots >= hedgeLots)
    {
       trade.PositionClose(g_hedgeSets[idx].hedgeTicket);
-      g_hedgeSets[idx].active = false;
-      g_hedgeSets[idx].boundTicketCount = 0;
-      ArrayResize(g_hedgeSets[idx].boundTickets, 0);
-       g_hedgeSetCount = MathMax(0, g_hedgeSetCount - 1);
-      Print("HEDGE Set#", idx + 1, " fully closed via batch partial close.");
+      g_hedgeSets[idx].hedgeTicket = 0;
+      RefreshBoundTickets(idx);
+      
+      if(g_hedgeSets[idx].boundTicketCount > 0)
+      {
+         // v5.18: Bound orders remain → enter Grid Recovery instead of deactivating
+         g_hedgeSets[idx].gridMode = true;
+         g_hedgeSets[idx].gridLevel = CalculateEquivGridLevel(
+            CalculateRemainingBoundLots(idx));
+         Print("HEDGE Set#", idx + 1, " hedge fully closed via partial close but ",
+               g_hedgeSets[idx].boundTicketCount, " bound orders remain. Entering Grid Recovery.");
+      }
+      else
+      {
+         g_hedgeSets[idx].active = false;
+         g_hedgeSets[idx].boundTicketCount = 0;
+         ArrayResize(g_hedgeSets[idx].boundTickets, 0);
+         g_hedgeSetCount = MathMax(0, g_hedgeSetCount - 1);
+         Print("HEDGE Set#", idx + 1, " fully closed via batch partial close.");
+      }
    }
    else
    {
