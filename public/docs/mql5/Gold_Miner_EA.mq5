@@ -694,7 +694,7 @@ int OnInit()
     g_lastHedgeExpansionDir = 0;
     g_cycleHedged = false;
 
-   Print("Gold Miner EA v5.11 initialized successfully");
+   Print("Gold Miner EA v5.12 initialized successfully");
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
