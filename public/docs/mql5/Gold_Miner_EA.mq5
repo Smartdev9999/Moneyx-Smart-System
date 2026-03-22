@@ -475,6 +475,8 @@ struct HedgeSet
    string   commentPrefix;    // "GM_HEDGE_1", "GM_HEDGE_2", etc.
    ulong    boundTickets[];   // tickets of counter-side orders bound to this set
    int      boundTicketCount; // count of bound tickets
+   int      cycleIndex;       // v5.5: cycle index when created (0=A, 1=B, 2=C, 3=D)
+   int      hedgeNumber;      // v5.5: hedge number within cycle (1=H1, 2=H2, 3=H3, 4=H4)
 };
 HedgeSet g_hedgeSets[MAX_HEDGE_SETS];
 int      g_hedgeSetCount = 0;
