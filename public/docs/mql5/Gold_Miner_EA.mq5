@@ -5907,6 +5907,227 @@ void CreateDashButton(string name, int x, int y, int width, int height, string t
 //+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| v5.21: Restore hedge sets from existing positions on EA restart    |
+//| Scans open positions for GM_HEDGE_ and GM_HG comments to rebuild  |
+//| g_hedgeSets[], g_hedgeSetCount, g_currentCycleIndex                |
+//+------------------------------------------------------------------+
+void RestoreHedgeSets()
+{
+   Print("=== v5.21 RestoreHedgeSets: Scanning existing positions... ===");
+   
+   // Pass 1: Find hedge orders (GM_HEDGE_{N}) → rebuild sets
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      
+      string cmt = PositionGetString(POSITION_COMMENT);
+      if(StringFind(cmt, "GM_HEDGE_") < 0) continue;
+      
+      // Extract slot number from "GM_HEDGE_N"
+      int prefixLen = StringLen("GM_HEDGE_");
+      string slotStr = StringSubstr(cmt, prefixLen);
+      // Remove any suffix after the number (e.g. "_A" cycle suffix)
+      int underscorePos = StringFind(slotStr, "_");
+      if(underscorePos > 0) slotStr = StringSubstr(slotStr, 0, underscorePos);
+      int slotNum = (int)StringToInteger(slotStr);
+      if(slotNum < 1 || slotNum > MAX_HEDGE_SETS) continue;
+      int slot = slotNum - 1;
+      
+      if(g_hedgeSets[slot].active) continue;  // already restored
+      
+      ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+      double vol = PositionGetDouble(POSITION_VOLUME);
+      
+      g_hedgeSets[slot].active = true;
+      g_hedgeSets[slot].hedgeTicket = ticket;
+      g_hedgeSets[slot].hedgeSide = posType;
+      g_hedgeSets[slot].counterSide = (posType == POSITION_TYPE_BUY) ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
+      g_hedgeSets[slot].hedgeLots = vol;
+      g_hedgeSets[slot].originalTotalLots = vol;
+      g_hedgeSets[slot].gridMode = false;
+      g_hedgeSets[slot].gridLevel = 0;
+      g_hedgeSets[slot].commentPrefix = "GM_HEDGE_" + IntegerToString(slotNum);
+      g_hedgeSets[slot].boundTicketCount = 0;
+      ArrayResize(g_hedgeSets[slot].boundTickets, 0);
+      
+      // Extract cycle index from comment suffix (e.g. "GM_HEDGE_1" with suffix "_A" in order)
+      // Cycle suffix may be in the comment or we detect from other orders later
+      g_hedgeSets[slot].cycleIndex = 0;
+      g_hedgeSets[slot].hedgeNumber = 1;
+      
+      g_hedgeSetCount++;
+      Print("RESTORE: Set#", slotNum, " hedge ticket=", ticket, 
+            " side=", (posType == POSITION_TYPE_BUY ? "BUY" : "SELL"),
+            " lots=", DoubleToString(vol, 2));
+   }
+   
+   // Pass 2: Find grid recovery orders (GM_HG{N}_GL) → set gridMode
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      
+      string cmt = PositionGetString(POSITION_COMMENT);
+      if(StringFind(cmt, "GM_HG") < 0) continue;
+      
+      // Extract slot number from "GM_HG{N}_GL..." or "GM_HG{N}_..."
+      int hgPos = StringFind(cmt, "GM_HG");
+      string afterHG = StringSubstr(cmt, hgPos + 5);  // after "GM_HG"
+      int numEnd = 0;
+      while(numEnd < StringLen(afterHG) && afterHG[numEnd] >= '0' && afterHG[numEnd] <= '9')
+         numEnd++;
+      if(numEnd == 0) continue;
+      int slotNum = (int)StringToInteger(StringSubstr(afterHG, 0, numEnd));
+      if(slotNum < 1 || slotNum > MAX_HEDGE_SETS) continue;
+      int slot = slotNum - 1;
+      
+      // If set not active yet (hedge was already closed), activate as grid-only
+      if(!g_hedgeSets[slot].active)
+      {
+         ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+         g_hedgeSets[slot].active = true;
+         g_hedgeSets[slot].hedgeTicket = 0;  // hedge already closed
+         g_hedgeSets[slot].hedgeSide = posType;  // grid side = recovery direction
+         g_hedgeSets[slot].counterSide = (posType == POSITION_TYPE_BUY) ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
+         g_hedgeSets[slot].hedgeLots = 0;
+         g_hedgeSets[slot].originalTotalLots = 0;
+         g_hedgeSets[slot].commentPrefix = "GM_HEDGE_" + IntegerToString(slotNum);
+         g_hedgeSets[slot].cycleIndex = 0;
+         g_hedgeSets[slot].hedgeNumber = 1;
+         g_hedgeSets[slot].boundTicketCount = 0;
+         ArrayResize(g_hedgeSets[slot].boundTickets, 0);
+         g_hedgeSetCount++;
+      }
+      
+      g_hedgeSets[slot].gridMode = true;
+      
+      // Track grid tickets
+      int gc = g_hedgeSets[slot].gridTicketCount;
+      ArrayResize(g_hedgeSets[slot].gridTickets, gc + 1);
+      g_hedgeSets[slot].gridTickets[gc] = ticket;
+      g_hedgeSets[slot].gridTicketCount = gc + 1;
+      
+      Print("RESTORE: Set#", slotNum, " grid ticket=", ticket, " gridMode=true");
+   }
+   
+   // Pass 3: Bind counter-side orders to active hedge sets
+   for(int h = 0; h < MAX_HEDGE_SETS; h++)
+   {
+      if(!g_hedgeSets[h].active) continue;
+      
+      for(int i = PositionsTotal() - 1; i >= 0; i--)
+      {
+         ulong ticket = PositionGetTicket(i);
+         if(ticket == 0) continue;
+         if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+         if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+         if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != g_hedgeSets[h].counterSide) continue;
+         
+         string cmt = PositionGetString(POSITION_COMMENT);
+         // Skip hedge/grid orders
+         if(StringFind(cmt, "GM_HEDGE") >= 0 || StringFind(cmt, "GM_HG") >= 0) continue;
+         // Skip already bound
+         if(IsTicketBound(ticket)) continue;
+         
+         int bc = g_hedgeSets[h].boundTicketCount;
+         ArrayResize(g_hedgeSets[h].boundTickets, bc + 1);
+         g_hedgeSets[h].boundTickets[bc] = ticket;
+         g_hedgeSets[h].boundTicketCount = bc + 1;
+      }
+      
+      // Calculate grid level from remaining bound + hedge lots
+      if(g_hedgeSets[h].gridMode)
+      {
+         double totalLots = g_hedgeSets[h].hedgeLots;
+         for(int b = 0; b < g_hedgeSets[h].boundTicketCount; b++)
+         {
+            if(PositionSelectByTicket(g_hedgeSets[h].boundTickets[b]))
+               totalLots += PositionGetDouble(POSITION_VOLUME);
+         }
+         g_hedgeSets[h].gridLevel = CalculateEquivGridLevel(totalLots);
+      }
+      
+      Print("RESTORE: Set#", h+1, " bound=", g_hedgeSets[h].boundTicketCount,
+            " gridMode=", g_hedgeSets[h].gridMode, " gridLevel=", g_hedgeSets[h].gridLevel);
+   }
+   
+   // Pass 4: Restore cycle index from order comment suffixes
+   int maxCycleFound = -1;
+   string suffixes[] = {"_A", "_B", "_C", "_D", "_E", "_F", "_G", "_H", "_I", "_J"};
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      string cmt = PositionGetString(POSITION_COMMENT);
+      if(StringLen(cmt) >= 2)
+      {
+         string tail = StringSubstr(cmt, StringLen(cmt) - 2);
+         for(int c = 0; c < 10; c++)
+         {
+            if(tail == suffixes[c])
+            {
+               // Assign cycle to matching active sets
+               for(int h = 0; h < MAX_HEDGE_SETS; h++)
+               {
+                  if(!g_hedgeSets[h].active) continue;
+                  // Check if this order is bound to or is the hedge of this set
+                  if(g_hedgeSets[h].hedgeTicket == ticket)
+                  {
+                     g_hedgeSets[h].cycleIndex = c;
+                  }
+                  for(int b = 0; b < g_hedgeSets[h].boundTicketCount; b++)
+                  {
+                     if(g_hedgeSets[h].boundTickets[b] == ticket)
+                     {
+                        g_hedgeSets[h].cycleIndex = c;
+                        break;
+                     }
+                  }
+               }
+               if(c > maxCycleFound) maxCycleFound = c;
+               break;
+            }
+         }
+      }
+   }
+   
+   // Set current cycle index using FindLowestFreeCycle
+   if(g_hedgeSetCount > 0)
+   {
+      g_currentCycleIndex = FindLowestFreeCycle();
+      g_cycleHedged = false;
+      Print("RESTORE: Cycle restored. Active sets=", g_hedgeSetCount, 
+            " Current cycle=", CharToString((char)('A' + g_currentCycleIndex)));
+   }
+   else
+   {
+      Print("RESTORE: No hedge sets to restore.");
+   }
+   
+   // Determine hedge numbers within each cycle
+   for(int c = 0; c < 10; c++)
+   {
+      int numInCycle = 0;
+      for(int h = 0; h < MAX_HEDGE_SETS; h++)
+      {
+         if(g_hedgeSets[h].active && g_hedgeSets[h].cycleIndex == c)
+         {
+            numInCycle++;
+            g_hedgeSets[h].hedgeNumber = numInCycle;
+         }
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
 //| Check if a comment belongs to a hedge order                        |
 //+------------------------------------------------------------------+
 bool IsHedgeComment(string comment)
