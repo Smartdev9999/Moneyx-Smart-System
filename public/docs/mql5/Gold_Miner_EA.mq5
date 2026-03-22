@@ -4174,7 +4174,7 @@ void OnTickZigZagMTF()
             if(shouldEnter)
             {
                 // v5.4: Increment cycle only when THIS cycle was hedged
-                if(g_cycleHedged && g_currentCycleIndex < 3) { g_currentCycleIndex++; g_cycleHedged = false; }
+                 if(g_cycleHedged && g_currentCycleIndex < 6) { g_currentCycleIndex++; g_cycleHedged = false; }
                if(OpenOrderTF(t, ORDER_TYPE_BUY, InitialLotSize, "INIT"))
                {
                   g_tfStates[t].initialBuyPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
