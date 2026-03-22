@@ -7601,8 +7601,8 @@ void DisplayHedgeCycleDashboard()
             
             CreateDashRect(cellBg, colX, rowY, colW, rowH, rowBg);
             
-            string cellText = "";
-            string plText = "";
+             string cellText = " ";
+             string plText = " ";
             color cellColor = COLOR_NEUTRAL;
             color plColor = COLOR_NEUTRAL;
             
