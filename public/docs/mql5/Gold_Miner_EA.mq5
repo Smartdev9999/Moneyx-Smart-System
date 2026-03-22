@@ -6312,6 +6312,7 @@ void ManageHedgeSets()
       if(!hedgeExists && g_hedgeSets[h].hedgeTicket > 0)
       {
          g_hedgeSets[h].hedgeTicket = 0;
+         g_hedgeSets[h].hedgeLots = 0;  // v5.19: Reset stale lot data
       }
 
       // v5.17: Full cleanup — hedge gone + bound empty → check if grid orders remain
