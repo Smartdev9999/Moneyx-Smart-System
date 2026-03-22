@@ -6231,29 +6231,34 @@ void ManageHedgeSets()
          }
       }
 
-      if(g_hedgeSets[h].gridMode)
+      // === v5.6: ALL hedge closing actions ONLY during Normal/Squeeze ===
+      if(!isExpansion)
       {
-         ManageHedgeGridMode(h);
-      }
-      else if(!isExpansion)
-      {
-         // Expansion ended → check scenarios
-         double hedgePnL = 0;
-         if(hedgeExists)
-            hedgePnL = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
-
-         if(hedgePnL > 0)
-            ManageHedgeMatchingClose(h);  // Scenario 1: hedge in profit
+         if(g_hedgeSets[h].gridMode)
+         {
+            ManageHedgeGridMode(h);
+         }
          else
-            ManageHedgePartialClose(h);   // Scenario 2: hedge in loss, check original orders
+         {
+            // Normal/Squeeze → check scenarios
+            double hedgePnL = 0;
+            if(hedgeExists)
+               hedgePnL = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+
+            if(hedgePnL > 0)
+               ManageHedgeMatchingClose(h);  // Scenario 1: hedge in profit
+            else
+               ManageHedgePartialClose(h);   // Scenario 2: hedge in loss, check original orders
+         }
       }
       else
       {
-         // Still in expansion - check if bound orders are all gone
-         if(g_hedgeSets[h].boundTicketCount == 0 && hedgeExists)
+         // Still in expansion - only check if bound orders are all gone → flag gridMode
+         // But do NOT execute any closing actions during expansion
+         if(g_hedgeSets[h].boundTicketCount == 0 && hedgeExists && !g_hedgeSets[h].gridMode)
          {
-            // All bound orders gone but hedge remains → enter grid mode
-            Print("HEDGE Set#", h + 1, " all bound orders cleared. Entering Grid Mode.");
+            // All bound orders gone but hedge remains → flag grid mode (will execute when expansion ends)
+            Print("HEDGE Set#", h + 1, " all bound orders cleared. Flagging Grid Mode (will execute after expansion).");
             g_hedgeSets[h].gridMode = true;
             g_hedgeSets[h].gridLevel = CalculateEquivGridLevel(g_hedgeSets[h].hedgeLots);
          }
