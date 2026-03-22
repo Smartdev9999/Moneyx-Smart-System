@@ -685,10 +685,11 @@ int OnInit()
       ArrayResize(g_hedgeSets[h].boundTickets, 0);
    }
    g_hedgeSetCount = 0;
-   g_currentCycleIndex = 0;
-   g_lastHedgeExpansionDir = 0;
+    g_currentCycleIndex = 0;
+    g_lastHedgeExpansionDir = 0;
+    g_cycleHedged = false;
 
-   Print("Gold Miner EA v5.3 initialized successfully");
+   Print("Gold Miner EA v5.4 initialized successfully");
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
