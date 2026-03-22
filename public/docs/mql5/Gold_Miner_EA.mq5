@@ -7839,9 +7839,9 @@ void DisplayHedgeCycleDashboard()
    int y = HedgeDashY;
    
    // v5.21: Use HedgeDashWidth input for adjustable width
+   int groupsPerRow = 5;
    int dashW = (int)MathMax(400, MathMin(700, HedgeDashWidth));
    int colW = (int)(dashW * sc / groupsPerRow);
-   int groupsPerRow = 5;
    int totalW = colW * groupsPerRow + (int)(6 * sc);
    int headerH = (int)(24 * sc);
    int colHeaderH = (int)(22 * sc);
