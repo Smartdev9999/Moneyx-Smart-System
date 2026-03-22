@@ -6261,10 +6261,14 @@ void ManageHedgeSets()
       // === v5.6: ALL hedge closing actions ONLY during Normal/Squeeze ===
       if(!isExpansion)
       {
-         if(g_hedgeSets[h].gridMode)
-         {
-            ManageHedgeGridMode(h);
-         }
+          if(g_hedgeSets[h].gridMode && g_hedgeSets[h].hedgeTicket == 0)
+          {
+             ManageHedgeGridMode(h);     // hedge closed → normal recovery
+          }
+          else if(g_hedgeSets[h].gridMode && g_hedgeSets[h].hedgeTicket > 0)
+          {
+             ManageGridRecoveryMode(h);  // v5.15: hedge still open → counter-side recovery
+          }
          else
          {
             // Normal/Squeeze → check scenarios
