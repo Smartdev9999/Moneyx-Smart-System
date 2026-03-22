@@ -1,27 +1,26 @@
 
 
-## Fix: Grid Loss ไม่ออกออเดอร์ใน Cycle B เมื่อมี Cycle A ถูก Hedge — Skip Bound Orders (v5.7 → v5.8)
+
+## Fix: Hedge Guards ต้องเป็น Cycle-Aware — HedgeC1 ไม่เปิดเพราะ Guards เช็คแบบ Global (v5.8 → v5.9)
 
 ### สิ่งที่แก้ไข
 
 **ไฟล์:** `public/docs/mql5/Gold_Miner_EA.mq5`
 
-#### 1. `CountPositions()` — เพิ่ม `IsTicketBound(ticket) continue`
-- Grid count (GL/GP/INIT) ไม่รวม order ที่ผูกกับ hedge set → Cycle B นับแยกจาก Cycle A
+#### 1. Guard 2 — เพิ่ม `cycleIndex == g_currentCycleIndex`
+- เช็คเฉพาะ hedge ใน cycle เดียวกัน → HedgeA1 BUY ไม่ block HedgeC1 BUY
 
-#### 2. `FindLastOrder()` — เพิ่ม skip hedge + bound
-- หา last order price จากเฉพาะ order ที่ไม่ถูกผูก → ระยะ grid ถูกต้องสำหรับ cycle ปัจจุบัน
+#### 2. Guard 3 — เปลี่ยนจาก `g_lastHedgeExpansionDir` เป็นสแกน hedge ใน cycle ปัจจุบัน
+- H2+ ต้องเปลี่ยนทิศจาก H1 **ภายใน cycle เดียวกัน** เท่านั้น
 
-#### 3. `FindMaxLotOnSide()` — เพิ่ม `IsTicketBound(ticket) continue`
-- Max lot คำนวณจาก order ที่ active ใน cycle ปัจจุบันเท่านั้น
-
-#### 4. Version bump: v5.7 → v5.8
+#### 3. Version bump: v5.8 → v5.9
 
 ### สิ่งที่ไม่เปลี่ยนแปลง
 - Order Execution Logic (trade.Buy/Sell/PositionClose)
 - Trading Strategy Logic (SMA/ZigZag/Instant, Grid entry/exit, TP/SL/Trailing)
 - Core Module Logic (License, News filter, Time filter, Data sync)
-- Hedge logic ทั้งหมด (Partial/Matching/Grid Close)
-- Grid Profit / Grid Loss calculation formula
-- Normal Matching Close logic
+- Guard 1 (hasCounterOrders) — ยังเช็คแบบ global ถูกต้องแล้ว
+- Hedge Partial/Matching/Grid Close logic
+- Net Lot / Unbound Counter Lots calculation
 - Dashboard / Hedge Cycle Monitor
+- Cycle increment logic (g_cycleHedged)
