@@ -2679,11 +2679,11 @@ void DrawTableRow(int rowIndex, string label, string value, color valueColor, co
    int x = DashboardX;
    int rowH = (int)(20 * sc);
    int y = DashboardY + (int)(24 * sc) + rowIndex * rowH;
-   int tblW = (int)(340 * sc);
-   int rH = (int)(19 * sc);
-   int sectionBarWidth = (int)(4 * sc);
-   int labelX = x + sectionBarWidth + (int)(6 * sc);
-   int valueX = x + (int)(180 * sc);
+    int tblW = (int)(DashboardWidth * sc);
+    int rH = (int)(19 * sc);
+    int sectionBarWidth = (int)(4 * sc);
+    int labelX = x + sectionBarWidth + (int)(6 * sc);
+    int valueX = x + (int)((DashboardWidth * 0.53) * sc);
    int fSize = (int)(9 * sc);
    if(fSize < 7) fSize = 7;
 
