@@ -6492,7 +6492,7 @@ void ManageHedgeMatchingClose(int idx)
          g_hedgeSets[idx].active = false;
          g_hedgeSets[idx].boundTicketCount = 0;
          ArrayResize(g_hedgeSets[idx].boundTickets, 0);
-         g_hedgeSetCount--;
+          g_hedgeSetCount = MathMax(0, g_hedgeSetCount - 1);
       }
       Sleep(100);
    }
