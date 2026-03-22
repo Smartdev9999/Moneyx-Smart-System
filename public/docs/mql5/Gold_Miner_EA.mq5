@@ -482,6 +482,7 @@ struct HedgeSet
 HedgeSet g_hedgeSets[MAX_HEDGE_SETS];
 int      g_hedgeSetCount = 0;
 datetime g_lastHedgeGridTime = 0;  // cooldown timer for hedge grid orders
+datetime g_lastHedgeOpenTime = 0;  // v5.22: cooldown timer to prevent rapid hedge opening
 int      g_lastDashboardRowCount = 0;  // track previous tick row count for stale cleanup
 int      g_currentCycleIndex = 0;      // Cycle labeling: 0=A .. 9=J
 int      g_lastHedgeExpansionDir = 0;  // Track last hedge expansion direction: -1=bearish, +1=bullish, 0=none
