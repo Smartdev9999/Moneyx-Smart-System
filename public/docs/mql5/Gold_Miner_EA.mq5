@@ -7000,8 +7000,13 @@ void ManageHedgeGridMode(int idx)
       }
    }
 
-   // If hedge grid profits can cover main hedge loss → partial close
-   if(mainHedgeExists && mainHedgePnL < 0 && gridProfitCount >= InpHedge_PartialMinProfitOrders)
+    // v5.16: Matching close only during Normal/Squeeze
+    bool isExpansionLocal2 = false;
+    for(int sq = 0; sq < 3; sq++)
+       if(g_squeeze[sq].state == 2) { isExpansionLocal2 = true; break; }
+    
+    // If hedge grid profits can cover main hedge loss → partial close
+    if(!isExpansionLocal2 && mainHedgeExists && mainHedgePnL < 0 && gridProfitCount >= InpHedge_PartialMinProfitOrders)
    {
       double hedgeLossPerLot = MathAbs(mainHedgePnL) / g_hedgeSets[idx].hedgeLots;
       double budget = gridTotalProfit - InpHedge_MatchMinProfit;
