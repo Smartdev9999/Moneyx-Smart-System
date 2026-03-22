@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v5.6 - MTF ZigZag+CDC+Grid+License  |
+//|                Gold Miner EA v5.7 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "5.60"
-#property description "Gold Miner EA v5.6 - MTF ZigZag + CDC + Squeeze + Net Hedge + Cycle Label + Hedge Monitor + License"
+#property version   "5.70"
+#property description "Gold Miner EA v5.7 - MTF ZigZag + CDC + Squeeze + Net Hedge + Cycle Label + Hedge Monitor + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -747,7 +747,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
    ObjectsDeleteAll(0, "GM_HC_");   // v5.5: hedge cycle monitor objects
 
-   Print("Gold Miner EA v5.6 deinitialized");
+   Print("Gold Miner EA v5.7 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -1489,6 +1489,8 @@ double CalculateAveragePrice(ENUM_POSITION_TYPE side)
       
       // Skip hedge orders — basket TP/SL must not include hedge positions
       if(IsHedgeComment(PositionGetString(POSITION_COMMENT))) continue;
+      // v5.7: Skip orders bound to hedge sets — managed by hedge system
+      if(IsTicketBound(ticket)) continue;
 
       double vol = PositionGetDouble(POSITION_VOLUME);
       double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
@@ -1517,6 +1519,8 @@ double CalculateFloatingPL(ENUM_POSITION_TYPE side)
       
       // Skip hedge orders — floating PL calculation must exclude hedge positions
       if(IsHedgeComment(PositionGetString(POSITION_COMMENT))) continue;
+      // v5.7: Skip orders bound to hedge sets
+      if(IsTicketBound(ticket)) continue;
 
       totalPL += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
    }
@@ -1573,6 +1577,8 @@ void CloseAllSide(ENUM_POSITION_TYPE side)
       
       // Skip hedge orders — let the Hedge system manage their lifecycle
       if(IsHedgeComment(PositionGetString(POSITION_COMMENT))) continue;
+      // v5.7: Skip orders bound to hedge sets — let hedge system manage
+      if(IsTicketBound(ticket)) continue;
       
       trade.PositionClose(ticket);
    }
@@ -3488,6 +3494,9 @@ double CalculateAveragePriceTF(int tfIdx, ENUM_POSITION_TYPE side)
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       if(PositionGetInteger(POSITION_TYPE) != side) continue;
       if(StringFind(PositionGetString(POSITION_COMMENT), prefix) < 0) continue;
+      // v5.7: Skip hedge and bound orders
+      if(IsHedgeComment(PositionGetString(POSITION_COMMENT))) continue;
+      if(IsTicketBound(ticket)) continue;
 
       double vol = PositionGetDouble(POSITION_VOLUME);
       double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
@@ -3515,6 +3524,9 @@ double CalculateFloatingPL_TF(int tfIdx, ENUM_POSITION_TYPE side)
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       if(PositionGetInteger(POSITION_TYPE) != side) continue;
       if(StringFind(PositionGetString(POSITION_COMMENT), prefix) < 0) continue;
+      // v5.7: Skip hedge and bound orders
+      if(IsHedgeComment(PositionGetString(POSITION_COMMENT))) continue;
+      if(IsTicketBound(ticket)) continue;
 
       totalPLtf += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
    }
@@ -3570,6 +3582,9 @@ void CloseAllSideTF(int tfIdx, ENUM_POSITION_TYPE side)
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       if(PositionGetInteger(POSITION_TYPE) != side) continue;
       if(StringFind(PositionGetString(POSITION_COMMENT), prefix) < 0) continue;
+      // v5.7: Skip hedge and bound orders
+      if(IsHedgeComment(PositionGetString(POSITION_COMMENT))) continue;
+      if(IsTicketBound(ticket)) continue;
       trade.PositionClose(ticket);
    }
 
