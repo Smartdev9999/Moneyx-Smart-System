@@ -6516,6 +6516,7 @@ void CheckAndOpenHedge()
       }
 
        g_hedgeSetCount++;
+       g_lastHedgeOpenTime = TimeCurrent();  // v5.22: set cooldown
        
         // === v5.3: Track expansion direction for hedge sequence ===
         g_lastHedgeExpansionDir = bestDir;
