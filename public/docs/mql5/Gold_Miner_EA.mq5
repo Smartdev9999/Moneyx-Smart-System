@@ -5926,6 +5926,52 @@ bool IsHedgeTicket(ulong ticket)
 }
 
 //+------------------------------------------------------------------+
+//| v5.18: Check if a ticket belongs to a specific cycle               |
+//| Checks: bound tickets, hedge tickets, grid tickets of sets in cycle|
+//| Also: unbound normal orders belong to current active cycle         |
+//+------------------------------------------------------------------+
+bool IsBelongsToCycle(ulong ticket, int cycleIdx)
+{
+   // Check if ticket is a hedge ticket or bound ticket of any set in this cycle
+   for(int h = 0; h < MAX_HEDGE_SETS; h++)
+   {
+      if(!g_hedgeSets[h].active) continue;
+      if(g_hedgeSets[h].cycleIndex != cycleIdx) continue;
+      
+      // Is it the hedge ticket itself?
+      if(g_hedgeSets[h].hedgeTicket == ticket) return true;
+      
+      // Is it a bound ticket?
+      for(int b = 0; b < g_hedgeSets[h].boundTicketCount; b++)
+      {
+         if(g_hedgeSets[h].boundTickets[b] == ticket) return true;
+      }
+      
+      // Is it a grid recovery ticket (GM_HG{slot})?
+      if(PositionSelectByTicket(ticket))
+      {
+         string cmt = PositionGetString(POSITION_COMMENT);
+         string prefix = "GM_HG" + IntegerToString(h + 1);
+         if(StringFind(cmt, prefix) >= 0) return true;
+      }
+   }
+   
+   // Unbound normal order → belongs to current active cycle
+   if(cycleIdx == g_currentCycleIndex)
+   {
+      if(PositionSelectByTicket(ticket))
+      {
+         string cmt = PositionGetString(POSITION_COMMENT);
+         // Not a hedge/grid order AND not bound to any set → belongs to current cycle
+         if(StringFind(cmt, "GM_HEDGE") < 0 && StringFind(cmt, "GM_HG") < 0 && !IsTicketBound(ticket))
+            return true;
+      }
+   }
+   
+   return false;
+}
+
+//+------------------------------------------------------------------+
 //| Count normal (non-hedge) orders for a specific side                |
 //+------------------------------------------------------------------+
 int CountNormalOrders(ENUM_POSITION_TYPE side, double &totalLots, double &totalPL)
