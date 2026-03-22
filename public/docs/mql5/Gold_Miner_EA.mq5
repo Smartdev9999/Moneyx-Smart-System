@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v5.9 - MTF ZigZag+CDC+Grid+License  |
+//|               Gold Miner EA v5.10 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "5.90"
-#property description "Gold Miner EA v5.9 - MTF ZigZag + CDC + Squeeze + Net Hedge + Cycle Label + Hedge Monitor + License"
+#property version   "5.100"
+#property description "Gold Miner EA v5.10 - MTF ZigZag + CDC + Squeeze + Net Hedge + 7 Cycle Groups + 16 Hedge Slots + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -458,7 +458,7 @@ bool         g_squeezeBuyBlocked  = false;  // directional: block BUY only
 bool         g_squeezeSellBlocked = false;  // directional: block SELL only
 
 // === Counter-Trend Hedging State ===
-#define MAX_HEDGE_SETS 4
+#define MAX_HEDGE_SETS 16
 #define MAX_BOUND_TICKETS 50
 struct HedgeSet
 {
@@ -694,7 +694,7 @@ int OnInit()
     g_lastHedgeExpansionDir = 0;
     g_cycleHedged = false;
 
-   Print("Gold Miner EA v5.9 initialized successfully");
+   Print("Gold Miner EA v5.10 initialized successfully");
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -747,7 +747,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
    ObjectsDeleteAll(0, "GM_HC_");   // v5.5: hedge cycle monitor objects
 
-   Print("Gold Miner EA v5.9 deinitialized");
+   Print("Gold Miner EA v5.10 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -1224,7 +1224,7 @@ void OnTick()
                    if(shouldEnterBuy)
                    {
                         // v5.4: Increment cycle only when THIS cycle was hedged
-                        if(g_cycleHedged && g_currentCycleIndex < 3) { g_currentCycleIndex++; g_cycleHedged = false; }
+                         if(g_cycleHedged && g_currentCycleIndex < 6) { g_currentCycleIndex++; g_cycleHedged = false; }
                        if(OpenOrder(ORDER_TYPE_BUY, InitialLotSize, "GM_INIT" + GetCycleSuffix()))
                       {
                          g_initialBuyPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
@@ -1247,7 +1247,7 @@ void OnTick()
                    if(shouldEnterSell)
                    {
                         // v5.4: Increment cycle only when THIS cycle was hedged
-                        if(g_cycleHedged && g_currentCycleIndex < 3) { g_currentCycleIndex++; g_cycleHedged = false; }
+                         if(g_cycleHedged && g_currentCycleIndex < 6) { g_currentCycleIndex++; g_cycleHedged = false; }
                        if(OpenOrder(ORDER_TYPE_SELL, InitialLotSize, "GM_INIT" + GetCycleSuffix()))
                       {
                          g_initialSellPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
@@ -1334,7 +1334,7 @@ void OnTick()
             if(TradingMode == TRADE_BUY_ONLY || TradingMode == TRADE_BOTH)
             {
                 // v5.4: Increment cycle only when THIS cycle was hedged
-                if(g_cycleHedged && g_currentCycleIndex < 3) { g_currentCycleIndex++; g_cycleHedged = false; }
+                 if(g_cycleHedged && g_currentCycleIndex < 6) { g_currentCycleIndex++; g_cycleHedged = false; }
                if(OpenOrder(ORDER_TYPE_BUY, InitialLotSize, "GM_INIT" + GetCycleSuffix()))
                {
                   g_initialBuyPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
@@ -1350,7 +1350,7 @@ void OnTick()
             if(TradingMode == TRADE_SELL_ONLY || TradingMode == TRADE_BOTH)
             {
                 // v5.4: Increment cycle only when THIS cycle was hedged
-                if(g_cycleHedged && g_currentCycleIndex < 3) { g_currentCycleIndex++; g_cycleHedged = false; }
+                 if(g_cycleHedged && g_currentCycleIndex < 6) { g_currentCycleIndex++; g_cycleHedged = false; }
                if(OpenOrder(ORDER_TYPE_SELL, InitialLotSize, "GM_INIT" + GetCycleSuffix()))
                {
                   g_initialSellPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
@@ -2779,7 +2779,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v5.9 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v5.9 [ZZ]" : "Gold Miner EA v5.9 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v5.10 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v5.10 [ZZ]" : "Gold Miner EA v5.10 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -4174,7 +4174,7 @@ void OnTickZigZagMTF()
             if(shouldEnter)
             {
                 // v5.4: Increment cycle only when THIS cycle was hedged
-                if(g_cycleHedged && g_currentCycleIndex < 3) { g_currentCycleIndex++; g_cycleHedged = false; }
+                 if(g_cycleHedged && g_currentCycleIndex < 6) { g_currentCycleIndex++; g_cycleHedged = false; }
                if(OpenOrderTF(t, ORDER_TYPE_BUY, InitialLotSize, "INIT"))
                {
                   g_tfStates[t].initialBuyPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
@@ -4197,7 +4197,7 @@ void OnTickZigZagMTF()
             if(shouldEnter)
             {
                 // v5.4: Increment cycle only when THIS cycle was hedged
-                if(g_cycleHedged && g_currentCycleIndex < 3) { g_currentCycleIndex++; g_cycleHedged = false; }
+                if(g_cycleHedged && g_currentCycleIndex < 6) { g_currentCycleIndex++; g_cycleHedged = false; }
                if(OpenOrderTF(t, ORDER_TYPE_SELL, InitialLotSize, "INIT"))
                {
                   g_tfStates[t].initialSellPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
@@ -7044,8 +7044,8 @@ string TimeframeToString(ENUM_TIMEFRAMES tf)
 //+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
-//| v5.5: Hedge Cycle Monitor Dashboard — 4-column display            |
-//| Shows Groups A-D with H1-H4 status for each group                |
+//| v5.10: Hedge Cycle Monitor Dashboard — 7-column display           |
+//| Shows Groups A-G with H1-H4 status for each group                |
 //+------------------------------------------------------------------+
 void DisplayHedgeCycleDashboard()
 {
@@ -7053,9 +7053,9 @@ void DisplayHedgeCycleDashboard()
    int x = HedgeDashX;
    int y = HedgeDashY;
    
-   // Layout dimensions
-   int colW = (int)(110 * sc);       // column width
-   int totalW = colW * 4 + (int)(6 * sc);  // 4 columns + padding
+   // Layout dimensions — 7 columns
+   int colW = (int)(68 * sc);        // narrower columns for 7 groups
+   int totalW = colW * 7 + (int)(6 * sc);  // 7 columns + padding
    int headerH = (int)(22 * sc);
    int colHeaderH = (int)(20 * sc);
    int rowH = (int)(18 * sc);
@@ -7077,35 +7077,40 @@ void DisplayHedgeCycleDashboard()
    color COLOR_LOSS        = C'255,80,80';
    color COLOR_NEUTRAL     = C'120,120,120';     // Grey for ---
    
-   // Group column accent colors
-   color groupColors[4];
+   // Group column accent colors — 7 groups
+   color groupColors[7];
    groupColors[0] = C'70,130,220';   // A = Blue
    groupColors[1] = C'50,180,100';   // B = Green
    groupColors[2] = C'220,150,50';   // C = Orange
    groupColors[3] = C'200,70,70';    // D = Red
+   groupColors[4] = C'100,200,220';  // E = Cyan
+   groupColors[5] = C'220,100,180';  // F = Pink
+   groupColors[6] = C'160,160,180';  // G = Silver
    
-   string groupNames[4];
-   groupNames[0] = "Group A";
-   groupNames[1] = "Group B";
-   groupNames[2] = "Group C";
-   groupNames[3] = "Group D";
+   string groupNames[7];
+   groupNames[0] = "Grp A";
+   groupNames[1] = "Grp B";
+   groupNames[2] = "Grp C";
+   groupNames[3] = "Grp D";
+   groupNames[4] = "Grp E";
+   groupNames[5] = "Grp F";
+   groupNames[6] = "Grp G";
    
    // === Determine group statuses ===
-   // Check if each group (cycle) has ever had a hedge
-   bool groupHasHedge[4];
+   bool groupHasHedge[7];
    ArrayInitialize(groupHasHedge, false);
    for(int h = 0; h < MAX_HEDGE_SETS; h++)
    {
-      if(g_hedgeSets[h].active)
+      if(g_hedgeSets[h].active && g_hedgeSets[h].cycleIndex < 7)
          groupHasHedge[g_hedgeSets[h].cycleIndex] = true;
    }
    
    // Group status: 0=OFF, 1=STANDBY, 2=ACTIVE (has hedge data)
-   int groupStatus[4];
+   int groupStatus[7];
    groupStatus[0] = 1;  // Group A always STANDBY or ACTIVE
    if(groupHasHedge[0]) groupStatus[0] = 2;
    
-   for(int g = 1; g < 4; g++)
+   for(int g = 1; g < 7; g++)
    {
       if(groupHasHedge[g])
          groupStatus[g] = 2;  // Has hedge → ACTIVE
@@ -7126,13 +7131,13 @@ void DisplayHedgeCycleDashboard()
    int curY = y + headerH;
    
    // === COLUMN HEADERS ===
-   for(int g = 0; g < 4; g++)
+   for(int g = 0; g < 7; g++)
    {
       int colX = x + g * colW;
       string colBg = "GM_HC_CH_BG" + IntegerToString(g);
       string colTxt = "GM_HC_CH_TXT" + IntegerToString(g);
       CreateDashRect(colBg, colX, curY, colW, colHeaderH, groupColors[g]);
-      CreateDashText(colTxt, colX + (int)(6 * sc), curY + (int)(3 * sc), 
+      CreateDashText(colTxt, colX + (int)(4 * sc), curY + (int)(3 * sc), 
                      groupNames[g], COLOR_TEXT_WHITE, fSize, "Consolas");
       objCount += 2;
    }
@@ -7144,7 +7149,7 @@ void DisplayHedgeCycleDashboard()
       int rowY = curY + row * rowH;
       color rowBg = (row % 2 == 0) ? COLOR_BG_ROW1 : COLOR_BG_ROW2;
       
-      for(int g = 0; g < 4; g++)
+      for(int g = 0; g < 7; g++)
       {
          int colX = x + g * colW;
          string cellBg = "GM_HC_R" + IntegerToString(row) + "C" + IntegerToString(g) + "_BG";
@@ -7229,6 +7234,6 @@ void DisplayHedgeCycleDashboard()
    CreateDashRect(btmBorder, x, bottomY, totalW, (int)(2 * sc), COLOR_BG_HEADER);
    objCount++;
    
-   // Cleanup: no stale objects needed since layout is fixed (always 4x4 grid)
+   // Cleanup: no stale objects needed since layout is fixed (always 7x4 grid)
 }
 //+------------------------------------------------------------------+
