@@ -3044,39 +3044,14 @@ void DisplayDashboard()
       DrawTableRow(row, "Squeeze Status", sqBlock, sqBlockClr, COLOR_SECTION_INFO); row++;
    }
 
-   //--- Counter-Trend Hedging Section
+   //--- Counter-Trend Hedging Section (v5.12: simplified — details in Hedge Cycle Monitor)
    if(InpHedge_Enable)
    {
-      color COLOR_SECTION_HEDGE = C'130,50,180';  // purple for hedge section
-      
-      // Show current cycle label
+      color COLOR_SECTION_HEDGE = C'130,50,180';
       string cycleLabel = "Cycle: " + CharToString((char)('A' + g_currentCycleIndex));
       if(g_hedgeSetCount > 0)
          cycleLabel += " (Sets:" + IntegerToString(g_hedgeSetCount) + ")";
-      DrawTableRow(row, "Cycle", cycleLabel, clrGold, COLOR_SECTION_HEDGE); row++;
-      
-      bool anyActive = false;
-      for(int h = 0; h < MAX_HEDGE_SETS; h++)
-      {
-         if(g_hedgeSets[h].active && PositionSelectByTicket(g_hedgeSets[h].hedgeTicket))
-         {
-            anyActive = true;
-            string setLabel = "Hedge #" + IntegerToString(h + 1);
-            string sideStr = (g_hedgeSets[h].hedgeSide == POSITION_TYPE_BUY) ? "BUY" : "SELL";
-
-            // Get hedge PnL
-            double hedgePnL = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
-
-            string hedgeInfo = sideStr + " " + DoubleToString(g_hedgeSets[h].hedgeLots, 2) + "L";
-            hedgeInfo += " PnL:$" + DoubleToString(hedgePnL, 2);
-            hedgeInfo += " B:" + IntegerToString(g_hedgeSets[h].boundTicketCount);
-            if(g_hedgeSets[h].gridMode)
-               hedgeInfo += " Grid:L" + IntegerToString(g_hedgeSets[h].gridLevel);
-
-            color hedgeClr = (hedgePnL >= 0) ? clrLime : clrOrangeRed;
-            DrawTableRow(row, setLabel, hedgeInfo, hedgeClr, COLOR_SECTION_HEDGE); row++;
-         }
-      }
+      DrawTableRow(row, "Hedge", cycleLabel, clrGold, COLOR_SECTION_HEDGE); row++;
    }
 
    //--- Cleanup stale rows from previous tick (prevents flicker)
