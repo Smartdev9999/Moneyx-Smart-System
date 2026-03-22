@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|               Gold Miner EA v5.16 - MTF ZigZag+CDC+Grid+License  |
+//|               Gold Miner EA v5.17 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "5.160"
-#property description "Gold Miner EA v5.16 - MTF ZigZag + CDC + Squeeze + Net Hedge + Stalled Recovery + 10 Cycles + License"
+#property version   "5.170"
+#property description "Gold Miner EA v5.17 - MTF ZigZag + CDC + Squeeze + Net Hedge + Stalled Recovery + 10 Cycles + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -694,7 +694,7 @@ int OnInit()
     g_lastHedgeExpansionDir = 0;
     g_cycleHedged = false;
 
-   Print("Gold Miner EA v5.16 initialized successfully");
+   Print("Gold Miner EA v5.17 initialized successfully");
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -747,7 +747,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
    ObjectsDeleteAll(0, "GM_HC_");   // v5.5: hedge cycle monitor objects
 
-   Print("Gold Miner EA v5.16 deinitialized");
+   Print("Gold Miner EA v5.17 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -2781,7 +2781,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v5.16 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v5.16 [ZZ]" : "Gold Miner EA v5.16 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v5.17 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v5.17 [ZZ]" : "Gold Miner EA v5.17 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -6165,18 +6165,36 @@ void CheckAndOpenHedge()
        }
        g_hedgeSets[slot].hedgeNumber = hedgeNumInCycle + 1;
 
-      // Find the hedge ticket we just opened
+      // v5.17: Find hedge ticket via trade.ResultDeal() first (broker-proof)
       g_hedgeSets[slot].hedgeTicket = 0;
-      for(int i = PositionsTotal() - 1; i >= 0; i--)
+      ulong dealId = trade.ResultDeal();
+      if(dealId > 0)
       {
-         ulong ticket = PositionGetTicket(i);
-         if(ticket == 0) continue;
-         if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
-         if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
-         if(PositionGetString(POSITION_COMMENT) == comment)
+         if(HistoryDealSelect(dealId))
          {
-            g_hedgeSets[slot].hedgeTicket = ticket;
-            break;
+            long posId = HistoryDealGetInteger(dealId, DEAL_POSITION_ID);
+            if(posId > 0)
+            {
+               g_hedgeSets[slot].hedgeTicket = (ulong)posId;
+               Print("HEDGE Set#", slot+1, " ticket via ResultDeal: ", g_hedgeSets[slot].hedgeTicket);
+            }
+         }
+      }
+      // Fallback: scan by comment if trade result failed
+      if(g_hedgeSets[slot].hedgeTicket == 0)
+      {
+         for(int i = PositionsTotal() - 1; i >= 0; i--)
+         {
+            ulong ticket = PositionGetTicket(i);
+            if(ticket == 0) continue;
+            if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+            if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+            if(PositionGetString(POSITION_COMMENT) == comment)
+            {
+               g_hedgeSets[slot].hedgeTicket = ticket;
+               Print("HEDGE Set#", slot+1, " ticket via comment scan: ", ticket);
+               break;
+            }
          }
       }
 
@@ -6236,14 +6254,48 @@ void ManageHedgeSets()
          g_hedgeSets[h].hedgeLots = PositionGetDouble(POSITION_VOLUME);
       }
 
+      // v5.17: Reset hedgeTicket when position is gone (regardless of gridMode)
+      if(!hedgeExists && g_hedgeSets[h].hedgeTicket > 0)
+      {
+         g_hedgeSets[h].hedgeTicket = 0;
+      }
+
+      // v5.17: Full cleanup — hedge gone + bound empty → check if grid orders remain
+      if(!hedgeExists && g_hedgeSets[h].boundTicketCount == 0)
+      {
+         bool hasGridOrders = false;
+         string gridPrefix = "GM_HG" + IntegerToString(h+1);
+         for(int i = PositionsTotal()-1; i >= 0; i--)
+         {
+            ulong t = PositionGetTicket(i);
+            if(t == 0) continue;
+            if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+            if(StringFind(PositionGetString(POSITION_COMMENT), gridPrefix) >= 0)
+            { hasGridOrders = true; break; }
+         }
+         
+         if(!hasGridOrders)
+         {
+            Print("HEDGE Set#", h+1, " fully cleared (hedge+bound+grid all gone). Deactivating.");
+            g_hedgeSets[h].active = false;
+            g_hedgeSets[h].gridMode = false;
+            g_hedgeSets[h].hedgeTicket = 0;
+            g_hedgeSets[h].boundTicketCount = 0;
+            ArrayResize(g_hedgeSets[h].boundTickets, 0);
+            g_hedgeSetCount = MathMax(0, g_hedgeSetCount - 1);
+            continue;
+         }
+      }
+
       if(!hedgeExists && !g_hedgeSets[h].gridMode)
       {
          // Hedge was closed externally (accumulate close, manual, etc.)
          Print("HEDGE Set#", h + 1, " ticket no longer exists. Deactivating.");
          g_hedgeSets[h].active = false;
+         g_hedgeSets[h].hedgeTicket = 0;
          g_hedgeSets[h].boundTicketCount = 0;
          ArrayResize(g_hedgeSets[h].boundTickets, 0);
-         g_hedgeSetCount--;
+         g_hedgeSetCount = MathMax(0, g_hedgeSetCount - 1);
          continue;
       }
 
@@ -6413,7 +6465,7 @@ void ManageHedgeMatchingClose(int idx)
          g_hedgeSets[idx].active = false;
          g_hedgeSets[idx].boundTicketCount = 0;
          ArrayResize(g_hedgeSets[idx].boundTickets, 0);
-         g_hedgeSetCount--;
+          g_hedgeSetCount = MathMax(0, g_hedgeSetCount - 1);
       }
       Sleep(100);
    }
@@ -6440,7 +6492,7 @@ void ManageHedgeMatchingClose(int idx)
          g_hedgeSets[idx].active = false;
          g_hedgeSets[idx].boundTicketCount = 0;
          ArrayResize(g_hedgeSets[idx].boundTickets, 0);
-         g_hedgeSetCount--;
+          g_hedgeSetCount = MathMax(0, g_hedgeSetCount - 1);
       }
       Sleep(100);
    }
@@ -6571,7 +6623,7 @@ void ManageHedgePartialClose(int idx)
       g_hedgeSets[idx].active = false;
       g_hedgeSets[idx].boundTicketCount = 0;
       ArrayResize(g_hedgeSets[idx].boundTickets, 0);
-      g_hedgeSetCount--;
+       g_hedgeSetCount = MathMax(0, g_hedgeSetCount - 1);
       Print("HEDGE Set#", idx + 1, " fully closed via batch partial close.");
    }
    else
@@ -6659,7 +6711,7 @@ void ManageGridRecoveryMode(int idx)
       }
       g_hedgeSets[idx].active = false;
       g_hedgeSets[idx].gridMode = false;
-      g_hedgeSetCount--;
+      g_hedgeSetCount = MathMax(0, g_hedgeSetCount - 1);
       Print("HEDGE Set#", idx + 1, " grid recovery complete. All cleared.");
       return;
    }
@@ -6826,7 +6878,7 @@ void ManageGridRecoveryMode(int idx)
                {
                   g_hedgeSets[idx].active = false;
                   g_hedgeSets[idx].gridMode = false;
-                  g_hedgeSetCount--;
+                   g_hedgeSetCount = MathMax(0, g_hedgeSetCount - 1);
                   Print("HEDGE Set#", idx + 1, " fully recovered via grid recovery.");
                }
                Sleep(100);
@@ -7033,7 +7085,7 @@ void ManageHedgeGridMode(int idx)
             {
                trade.PositionClose(g_hedgeSets[idx].hedgeTicket);
                g_hedgeSets[idx].active = false;
-               g_hedgeSetCount--;
+                g_hedgeSetCount = MathMax(0, g_hedgeSetCount - 1);
                Print("HEDGE Set#", idx + 1, " fully recovered via grid mode.");
             }
             else
@@ -7063,7 +7115,7 @@ void ManageHedgeGridMode(int idx)
             trade.PositionClose(ticket);
       }
       g_hedgeSets[idx].active = false;
-      g_hedgeSetCount--;
+       g_hedgeSetCount = MathMax(0, g_hedgeSetCount - 1);
       Print("HEDGE Set#", idx + 1, " grid mode complete. All cleaned up.");
       return;
    }
