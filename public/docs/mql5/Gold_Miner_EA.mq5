@@ -6777,6 +6777,8 @@ void ManageMatchingClose()
             // Skip hedge orders — managed separately
             string mcComment = PositionGetString(POSITION_COMMENT);
             if(StringFind(mcComment, "GM_HEDGE") >= 0 || StringFind(mcComment, "GM_HG") >= 0) continue;
+            // v5.6: Skip orders bound to hedge sets — reserved for hedge system
+            if(IsTicketBound(ticket)) continue;
 
             double pnl = PositionGetDouble(POSITION_PROFIT)
                        + PositionGetDouble(POSITION_SWAP)
