@@ -1371,6 +1371,7 @@ void OnTick()
 
    DrawLines();
    if(ShowDashboard) DisplayDashboard();
+   if(ShowDashboard && InpHedge_Enable) DisplayHedgeCycleDashboard();
 }
 
 //+------------------------------------------------------------------+
