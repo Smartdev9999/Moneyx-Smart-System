@@ -7106,11 +7106,11 @@ void DisplayHedgeCycleDashboard()
    }
    
    // Group status: 0=OFF, 1=STANDBY, 2=ACTIVE (has hedge data)
-   int groupStatus[4];
+   int groupStatus[7];
    groupStatus[0] = 1;  // Group A always STANDBY or ACTIVE
    if(groupHasHedge[0]) groupStatus[0] = 2;
    
-   for(int g = 1; g < 4; g++)
+   for(int g = 1; g < 7; g++)
    {
       if(groupHasHedge[g])
          groupStatus[g] = 2;  // Has hedge → ACTIVE
