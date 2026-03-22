@@ -6383,6 +6383,21 @@ void CheckAndOpenHedge()
    if(lastDirInCycle != 0 && bestDir == lastDirInCycle)
       return;  // cycle นี้มี hedge ทิศนี้แล้ว → ต้องเปลี่ยนทิศก่อน (H2)
 
+   // === v5.22 Guard 4: H2+ ต้องรอให้ bound orders ของ hedges ก่อนหน้าใน cycle ถูกปิดหมดก่อน ===
+   // H2 เปิดได้เมื่อ: expansion เปลี่ยนทิศ + bound orders ฝั่งเดิมถูกเคลียร์หมด
+   // เหลือแค่ H1 hedge + grid loss orders → H2 lot = net imbalance ที่เหลือ
+   for(int h4 = 0; h4 < MAX_HEDGE_SETS; h4++)
+   {
+      if(!g_hedgeSets[h4].active) continue;
+      if(g_hedgeSets[h4].cycleIndex != g_currentCycleIndex) continue;
+      if(g_hedgeSets[h4].boundTicketCount > 0)
+      {
+         Print("HEDGE Guard4: Set#", h4+1, " still has ", g_hedgeSets[h4].boundTicketCount,
+               " bound orders. Wait for clear before opening next hedge level.");
+         return;  // ยังมี bound orders ค้าง → ห้ามเปิด hedge ใหม่
+      }
+   }
+
     // === v5.18: Net Imbalance Calculation for H1-H4 ===
    // Calculate total Buy lots vs Sell lots for ALL orders in current cycle
    // Including: normal orders, hedge orders, grid recovery orders
