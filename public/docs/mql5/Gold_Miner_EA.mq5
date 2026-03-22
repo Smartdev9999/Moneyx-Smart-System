@@ -7131,13 +7131,13 @@ void DisplayHedgeCycleDashboard()
    int curY = y + headerH;
    
    // === COLUMN HEADERS ===
-   for(int g = 0; g < 4; g++)
+   for(int g = 0; g < 7; g++)
    {
       int colX = x + g * colW;
       string colBg = "GM_HC_CH_BG" + IntegerToString(g);
       string colTxt = "GM_HC_CH_TXT" + IntegerToString(g);
       CreateDashRect(colBg, colX, curY, colW, colHeaderH, groupColors[g]);
-      CreateDashText(colTxt, colX + (int)(6 * sc), curY + (int)(3 * sc), 
+      CreateDashText(colTxt, colX + (int)(4 * sc), curY + (int)(3 * sc), 
                      groupNames[g], COLOR_TEXT_WHITE, fSize, "Consolas");
       objCount += 2;
    }
