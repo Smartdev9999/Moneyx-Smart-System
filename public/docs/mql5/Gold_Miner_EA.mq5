@@ -7391,7 +7391,7 @@ void DisplayHedgeCycleDashboard()
    }
    curY += colHeaderH;
    
-   // === H1-H4 ROWS ===
+   // === H1-H4 ROWS (v5.12: 2-line display with PnL) ===
    for(int row = 0; row < 4; row++)
    {
       int rowY = curY + row * rowH;
@@ -7402,32 +7402,27 @@ void DisplayHedgeCycleDashboard()
          int colX = x + g * colW;
          string cellBg = "GM_HC_R" + IntegerToString(row) + "C" + IntegerToString(g) + "_BG";
          string cellTxt = "GM_HC_R" + IntegerToString(row) + "C" + IntegerToString(g) + "_TX";
+         string cellPL  = "GM_HC_R" + IntegerToString(row) + "C" + IntegerToString(g) + "_PL";
          
          CreateDashRect(cellBg, colX, rowY, colW, rowH, rowBg);
          
          string cellText = "";
+         string plText = "";
          color cellColor = COLOR_NEUTRAL;
+         color plColor = COLOR_NEUTRAL;
          
          if(groupStatus[g] == 0)
          {
-            // OFF — show only on first row
             if(row == 0)
             {
                cellText = "  OFF";
                cellColor = COLOR_OFF;
             }
-            else
-            {
-               cellText = "";
-               cellColor = COLOR_OFF;
-            }
          }
          else
          {
-            // STANDBY or ACTIVE — check for hedge data
-            int hedgeNum = row + 1;  // H1, H2, H3, H4
+            int hedgeNum = row + 1;
             
-            // Find hedge set matching this group + hedge number
             bool found = false;
             for(int h = 0; h < MAX_HEDGE_SETS; h++)
             {
@@ -7438,7 +7433,7 @@ void DisplayHedgeCycleDashboard()
                   
                   // Calculate PnL for this hedge
                   double pnl = 0;
-                  if(PositionSelectByTicket(g_hedgeSets[h].hedgeTicket))
+                  if(g_hedgeSets[h].hedgeTicket > 0 && PositionSelectByTicket(g_hedgeSets[h].hedgeTicket))
                      pnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
                   
                   // Add grid tickets PnL
@@ -7448,9 +7443,21 @@ void DisplayHedgeCycleDashboard()
                         pnl += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
                   }
                   
-                  cellText = "H" + IntegerToString(hedgeNum) + ":" + side + " " + 
+                  // Add bound orders PnL
+                  for(int bt = 0; bt < g_hedgeSets[h].boundTicketCount; bt++)
+                  {
+                     if(PositionSelectByTicket(g_hedgeSets[h].boundTickets[bt]))
+                        pnl += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+                  }
+                  
+                  string modeStr = g_hedgeSets[h].gridMode ? "*" : "";
+                  cellText = "H" + IntegerToString(hedgeNum) + ":" + side + modeStr + " " + 
                              DoubleToString(g_hedgeSets[h].hedgeLots, 2) + "L";
+                  cellText += " B:" + IntegerToString(g_hedgeSets[h].boundTicketCount);
+                  
+                  plText = "$" + DoubleToString(pnl, 2);
                   cellColor = (pnl >= 0) ? COLOR_PROFIT : COLOR_LOSS;
+                  plColor = (pnl >= 0) ? COLOR_PROFIT : COLOR_LOSS;
                   break;
                }
             }
@@ -7472,7 +7479,9 @@ void DisplayHedgeCycleDashboard()
          
          CreateDashText(cellTxt, colX + (int)(4 * sc), rowY + (int)(2 * sc), 
                         cellText, cellColor, fSize, "Consolas");
-         objCount += 2;
+         CreateDashText(cellPL, colX + (int)(4 * sc), rowY + (int)(16 * sc), 
+                        plText, plColor, fSize, "Consolas");
+         objCount += 3;
       }
    }
    
