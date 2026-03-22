@@ -6316,6 +6316,9 @@ int FindFreeHedgeSlot()
 //+------------------------------------------------------------------+
 void CheckAndOpenHedge()
 {
+   // === v5.22: Cooldown — prevent rapid-fire hedge opening ===
+   if(TimeCurrent() - g_lastHedgeOpenTime < 60) return;
+
    // Determine expansion direction
    int expCount = 0;
    int bestDir = 0;
