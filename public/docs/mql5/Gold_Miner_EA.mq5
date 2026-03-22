@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v5.4 - MTF ZigZag+CDC+Grid+License  |
+//|                Gold Miner EA v5.5 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "5.40"
-#property description "Gold Miner EA v5.4 - MTF ZigZag + CDC + Squeeze + Net Hedge + Cycle Label + License"
+#property version   "5.50"
+#property description "Gold Miner EA v5.5 - MTF ZigZag + CDC + Squeeze + Net Hedge + Cycle Label + Hedge Monitor + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -210,6 +210,8 @@ input int      DashboardY           = 30;      // Dashboard Y Position
 input color    DashboardColor       = clrWhite; // Dashboard Text Color
 input double   DashboardScale       = 1.0;     // Dashboard Scale (0.8-1.5)
 input int      DashboardWidth       = 340;     // Dashboard Table Width (300-500)
+input int      HedgeDashX           = 10;      // Hedge Dashboard X Position
+input int      HedgeDashY           = 500;     // Hedge Dashboard Y Position
 
 //--- Rebate Settings
 input group "=== Rebate Settings ==="
@@ -473,6 +475,8 @@ struct HedgeSet
    string   commentPrefix;    // "GM_HEDGE_1", "GM_HEDGE_2", etc.
    ulong    boundTickets[];   // tickets of counter-side orders bound to this set
    int      boundTicketCount; // count of bound tickets
+   int      cycleIndex;       // v5.5: cycle index when created (0=A, 1=B, 2=C, 3=D)
+   int      hedgeNumber;      // v5.5: hedge number within cycle (1=H1, 2=H2, 3=H3, 4=H4)
 };
 HedgeSet g_hedgeSets[MAX_HEDGE_SETS];
 int      g_hedgeSetCount = 0;
@@ -481,6 +485,7 @@ int      g_lastDashboardRowCount = 0;  // track previous tick row count for stal
 int      g_currentCycleIndex = 0;      // Cycle labeling: 0=A, 1=B, 2=C, 3=D
 int      g_lastHedgeExpansionDir = 0;  // Track last hedge expansion direction: -1=bearish, +1=bullish, 0=none
 bool     g_cycleHedged = false;        // v5.4: Track if CURRENT cycle was hedged (for cycle increment)
+int      g_lastHedgeDashObjCount = 0;  // v5.5: stale object cleanup for hedge cycle dashboard
 
 //+------------------------------------------------------------------+
 //| Get Cycle Suffix for order comments (_A, _B, _C, _D)              |
@@ -740,8 +745,9 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_Btn");
 
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
+   ObjectsDeleteAll(0, "GM_HC_");   // v5.5: hedge cycle monitor objects
 
-   Print("Gold Miner EA v5.3 deinitialized");
+   Print("Gold Miner EA v5.5 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -1365,6 +1371,7 @@ void OnTick()
 
    DrawLines();
    if(ShowDashboard) DisplayDashboard();
+   if(ShowDashboard && InpHedge_Enable) DisplayHedgeCycleDashboard();
 }
 
 //+------------------------------------------------------------------+
@@ -6091,7 +6098,18 @@ void CheckAndOpenHedge()
       g_hedgeSets[slot].gridLevel = 0;
       g_hedgeSets[slot].gridTicketCount = 0;
       ArrayResize(g_hedgeSets[slot].gridTickets, 0);
-      g_hedgeSets[slot].commentPrefix = comment;
+       g_hedgeSets[slot].commentPrefix = comment;
+       
+       // === v5.5: Set cycle tracking fields ===
+       g_hedgeSets[slot].cycleIndex = g_currentCycleIndex;
+       // Count existing hedges in this cycle to determine hedge number
+       int hedgeNumInCycle = 0;
+       for(int hc = 0; hc < MAX_HEDGE_SETS; hc++)
+       {
+          if(hc != slot && g_hedgeSets[hc].active && g_hedgeSets[hc].cycleIndex == g_currentCycleIndex)
+             hedgeNumInCycle++;
+       }
+       g_hedgeSets[slot].hedgeNumber = hedgeNumInCycle + 1;
 
       // Find the hedge ticket we just opened
       g_hedgeSets[slot].hedgeTicket = 0;
@@ -6958,5 +6976,195 @@ string TimeframeToString(ENUM_TIMEFRAMES tf)
       case PERIOD_MN1: return "MN";
       default:         return EnumToString(tf);
    }
+}
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//| v5.5: Hedge Cycle Monitor Dashboard — 4-column display            |
+//| Shows Groups A-D with H1-H4 status for each group                |
+//+------------------------------------------------------------------+
+void DisplayHedgeCycleDashboard()
+{
+   double sc = MathMax(0.8, MathMin(1.5, DashboardScale));
+   int x = HedgeDashX;
+   int y = HedgeDashY;
+   
+   // Layout dimensions
+   int colW = (int)(110 * sc);       // column width
+   int totalW = colW * 4 + (int)(6 * sc);  // 4 columns + padding
+   int headerH = (int)(22 * sc);
+   int colHeaderH = (int)(20 * sc);
+   int rowH = (int)(18 * sc);
+   int fSizeH = (int)(10 * sc);
+   if(fSizeH < 7) fSizeH = 7;
+   int fSize = (int)(8 * sc);
+   if(fSize < 7) fSize = 7;
+   int objCount = 0;
+   
+   // Colors
+   color COLOR_BG_HEADER  = C'60,20,90';       // Purple header
+   color COLOR_BG_COL_HDR = C'35,39,46';       // Column header bg
+   color COLOR_BG_ROW1    = C'40,44,52';        // Alternating row 1
+   color COLOR_BG_ROW2    = C'35,39,46';        // Alternating row 2
+   color COLOR_TEXT_WHITE  = clrWhite;
+   color COLOR_OFF         = C'80,80,80';        // Grey for OFF
+   color COLOR_STANDBY     = C'200,180,50';      // Yellow for STANDBY
+   color COLOR_PROFIT      = clrLime;
+   color COLOR_LOSS        = C'255,80,80';
+   color COLOR_NEUTRAL     = C'120,120,120';     // Grey for ---
+   
+   // Group column accent colors
+   color groupColors[4];
+   groupColors[0] = C'70,130,220';   // A = Blue
+   groupColors[1] = C'50,180,100';   // B = Green
+   groupColors[2] = C'220,150,50';   // C = Orange
+   groupColors[3] = C'200,70,70';    // D = Red
+   
+   string groupNames[4];
+   groupNames[0] = "Group A";
+   groupNames[1] = "Group B";
+   groupNames[2] = "Group C";
+   groupNames[3] = "Group D";
+   
+   // === Determine group statuses ===
+   // Check if each group (cycle) has ever had a hedge
+   bool groupHasHedge[4];
+   ArrayInitialize(groupHasHedge, false);
+   for(int h = 0; h < MAX_HEDGE_SETS; h++)
+   {
+      if(g_hedgeSets[h].active)
+         groupHasHedge[g_hedgeSets[h].cycleIndex] = true;
+   }
+   
+   // Group status: 0=OFF, 1=STANDBY, 2=ACTIVE (has hedge data)
+   int groupStatus[4];
+   groupStatus[0] = 1;  // Group A always STANDBY or ACTIVE
+   if(groupHasHedge[0]) groupStatus[0] = 2;
+   
+   for(int g = 1; g < 4; g++)
+   {
+      if(groupHasHedge[g])
+         groupStatus[g] = 2;  // Has hedge → ACTIVE
+      else if(groupHasHedge[g - 1])
+         groupStatus[g] = 1;  // Prev group hedged → STANDBY
+      else
+         groupStatus[g] = 0;  // OFF
+   }
+   
+   // === HEADER: "HEDGE CYCLE MONITOR" ===
+   string hdrBg = "GM_HC_HDR_BG";
+   string hdrTxt = "GM_HC_HDR_TXT";
+   CreateDashRect(hdrBg, x, y, totalW, headerH, COLOR_BG_HEADER);
+   CreateDashText(hdrTxt, x + (int)(8 * sc), y + (int)(3 * sc), 
+                  "HEDGE CYCLE MONITOR", COLOR_TEXT_WHITE, fSizeH, "Consolas");
+   objCount += 2;
+   
+   int curY = y + headerH;
+   
+   // === COLUMN HEADERS ===
+   for(int g = 0; g < 4; g++)
+   {
+      int colX = x + g * colW;
+      string colBg = "GM_HC_CH_BG" + IntegerToString(g);
+      string colTxt = "GM_HC_CH_TXT" + IntegerToString(g);
+      CreateDashRect(colBg, colX, curY, colW, colHeaderH, groupColors[g]);
+      CreateDashText(colTxt, colX + (int)(6 * sc), curY + (int)(3 * sc), 
+                     groupNames[g], COLOR_TEXT_WHITE, fSize, "Consolas");
+      objCount += 2;
+   }
+   curY += colHeaderH;
+   
+   // === H1-H4 ROWS ===
+   for(int row = 0; row < 4; row++)
+   {
+      int rowY = curY + row * rowH;
+      color rowBg = (row % 2 == 0) ? COLOR_BG_ROW1 : COLOR_BG_ROW2;
+      
+      for(int g = 0; g < 4; g++)
+      {
+         int colX = x + g * colW;
+         string cellBg = "GM_HC_R" + IntegerToString(row) + "C" + IntegerToString(g) + "_BG";
+         string cellTxt = "GM_HC_R" + IntegerToString(row) + "C" + IntegerToString(g) + "_TX";
+         
+         CreateDashRect(cellBg, colX, rowY, colW, rowH, rowBg);
+         
+         string cellText = "";
+         color cellColor = COLOR_NEUTRAL;
+         
+         if(groupStatus[g] == 0)
+         {
+            // OFF — show only on first row
+            if(row == 0)
+            {
+               cellText = "  OFF";
+               cellColor = COLOR_OFF;
+            }
+            else
+            {
+               cellText = "";
+               cellColor = COLOR_OFF;
+            }
+         }
+         else
+         {
+            // STANDBY or ACTIVE — check for hedge data
+            int hedgeNum = row + 1;  // H1, H2, H3, H4
+            
+            // Find hedge set matching this group + hedge number
+            bool found = false;
+            for(int h = 0; h < MAX_HEDGE_SETS; h++)
+            {
+               if(g_hedgeSets[h].active && g_hedgeSets[h].cycleIndex == g && g_hedgeSets[h].hedgeNumber == hedgeNum)
+               {
+                  found = true;
+                  string side = (g_hedgeSets[h].hedgeSide == POSITION_TYPE_BUY) ? "B" : "S";
+                  
+                  // Calculate PnL for this hedge
+                  double pnl = 0;
+                  if(PositionSelectByTicket(g_hedgeSets[h].hedgeTicket))
+                     pnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+                  
+                  // Add grid tickets PnL
+                  for(int gt = 0; gt < g_hedgeSets[h].gridTicketCount; gt++)
+                  {
+                     if(PositionSelectByTicket(g_hedgeSets[h].gridTickets[gt]))
+                        pnl += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+                  }
+                  
+                  cellText = "H" + IntegerToString(hedgeNum) + ":" + side + " " + 
+                             DoubleToString(g_hedgeSets[h].hedgeLots, 2) + "L";
+                  cellColor = (pnl >= 0) ? COLOR_PROFIT : COLOR_LOSS;
+                  break;
+               }
+            }
+            
+            if(!found)
+            {
+               if(row == 0 && groupStatus[g] == 1)
+               {
+                  cellText = "  STANDBY";
+                  cellColor = COLOR_STANDBY;
+               }
+               else
+               {
+                  cellText = "H" + IntegerToString(hedgeNum) + ": ---";
+                  cellColor = COLOR_NEUTRAL;
+               }
+            }
+         }
+         
+         CreateDashText(cellTxt, colX + (int)(4 * sc), rowY + (int)(2 * sc), 
+                        cellText, cellColor, fSize, "Consolas");
+         objCount += 2;
+      }
+   }
+   
+   // === BOTTOM BORDER ===
+   int bottomY = curY + 4 * rowH;
+   string btmBorder = "GM_HC_BTM";
+   CreateDashRect(btmBorder, x, bottomY, totalW, (int)(2 * sc), COLOR_BG_HEADER);
+   objCount++;
+   
+   // Cleanup: no stale objects needed since layout is fixed (always 4x4 grid)
 }
 //+------------------------------------------------------------------+
