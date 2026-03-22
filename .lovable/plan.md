@@ -1,30 +1,26 @@
 
 
-## Fix: Stalled Hedge Recovery + IsHedgeTicket + Counter-Side Grid (v5.14 → v5.15)
+
+## Fix: Dashboard "Label" Bug + Recovery Grid Blocked During Expansion (v5.15 → v5.16)
 
 ### สิ่งที่แก้ไข
 
 **ไฟล์:** `public/docs/mql5/Gold_Miner_EA.mq5`
 
-#### 1. Stalled Hedge Detection ใน ManageHedgePartialClose()
-- เมื่อไม่มี profit orders (profitCount==0) + hedge+bound ติดลบทั้งหมด → เข้า gridMode ทันที
-- คำนวณ gridLevel จาก totalLots (hedge + bound) ด้วย CalculateEquivGridLevel()
+#### 1. Dashboard "Label" Bug
+- เปลี่ยน empty string `""` เป็น space `" "` ใน cellText/plText เมื่อ groupStatus == 0
+- ป้องกัน MQL5 OBJ_LABEL แสดง "Label" เป็นค่าเริ่มต้น
 
-#### 2. ManageGridRecoveryMode() — รองรับ 2 สถานะ
-- `hedgeTicket > 0`: grid เปิดฝั่ง counter-side (ตรงข้าม hedge) สร้าง profit ไป partial close hedge
-- `hedgeTicket == 0`: grid เปิดฝั่ง same-side (เหมือนเดิม) match bound orders
-- Lot calculation ใช้ total remaining (hedge+bound) ผ่าน CalculateEquivGridLevel()
-- Grid limit ขยายเป็น equivLevel + 5 (จาก +3)
+#### 2. Recovery Grid Decoupled จาก Expansion Guard
+- ย้าย `ManageHedgeGridMode()` และ `ManageGridRecoveryMode()` ออกจาก `if(!isExpansion)` block
+- Grid recovery เปิด orders ได้ทุกสถานะตลาด
+- เพิ่ม expansion guard ภายใน ManageGridRecoveryMode() และ ManageHedgeGridMode() สำหรับ matching close เท่านั้น
 
-#### 3. ManageHedgeSets() Routing — แยก gridMode + hedge ยังอยู่
-- `gridMode && hedgeTicket == 0` → ManageHedgeGridMode() (เดิม)
-- `gridMode && hedgeTicket > 0` → ManageGridRecoveryMode() (ใหม่ v5.15)
+#### 3. Group Status Logic — Non-Sequential Groups
+- เปลี่ยนจากเช็ค `groupHasHedge[g-1]` เป็น `g_hedgeSetCount > 0`
+- STANDBY แสดงเมื่อมี hedge ใดๆ active (ไม่ใช่แค่ group ก่อนหน้า)
 
-#### 4. IsHedgeTicket() Helper — จับ hedge order ที่ไม่มี comment
-- สแกน g_hedgeSets[].hedgeTicket เทียบกับ ticket
-- เพิ่มใน 12 จุดที่ใช้ IsHedgeComment: CountPositions, CalculateAveragePrice, CalculateFloatingPL, CloseAllSide, FindMaxLotOnSide, FindLastOrder, CalculateAveragePriceTF, CalculateFloatingPL_TF, CloseAllSideTF, CountNormalOrders, CountUnboundOrders, CheckAndOpenHedge
-
-#### 5. Version bump: v5.14 → v5.15
+#### 4. Version bump: v5.15 → v5.16
 
 ### สิ่งที่ไม่เปลี่ยนแปลง
 - Order Execution Logic (trade.Buy/Sell/PositionClose)
@@ -32,4 +28,4 @@
 - Core Module Logic (License, News filter, Time filter, Data sync)
 - Hedge Guards (cycle-aware, squeeze directional block)
 - Normal Matching Close logic
-- Dashboard หลัก (ข้อมูลอื่นๆ)
+- Grid Recovery lot calculation + direction logic
