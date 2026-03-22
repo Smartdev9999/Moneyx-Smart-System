@@ -480,6 +480,7 @@ datetime g_lastHedgeGridTime = 0;  // cooldown timer for hedge grid orders
 int      g_lastDashboardRowCount = 0;  // track previous tick row count for stale cleanup
 int      g_currentCycleIndex = 0;      // Cycle labeling: 0=A, 1=B, 2=C, 3=D
 int      g_lastHedgeExpansionDir = 0;  // Track last hedge expansion direction: -1=bearish, +1=bullish, 0=none
+bool     g_cycleHedged = false;        // v5.4: Track if CURRENT cycle was hedged (for cycle increment)
 
 //+------------------------------------------------------------------+
 //| Get Cycle Suffix for order comments (_A, _B, _C, _D)              |
