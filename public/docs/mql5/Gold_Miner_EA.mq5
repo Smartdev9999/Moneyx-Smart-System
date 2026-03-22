@@ -6258,37 +6258,32 @@ void ManageHedgeSets()
          }
       }
 
-      // === v5.6: ALL hedge closing actions ONLY during Normal/Squeeze ===
-      if(!isExpansion)
+      // === v5.16: Grid Recovery can OPEN orders anytime, closing restricted to Normal/Squeeze ===
+      if(g_hedgeSets[h].gridMode && g_hedgeSets[h].hedgeTicket == 0)
       {
-          if(g_hedgeSets[h].gridMode && g_hedgeSets[h].hedgeTicket == 0)
-          {
-             ManageHedgeGridMode(h);     // hedge closed → normal recovery
-          }
-          else if(g_hedgeSets[h].gridMode && g_hedgeSets[h].hedgeTicket > 0)
-          {
-             ManageGridRecoveryMode(h);  // v5.15: hedge still open → counter-side recovery
-          }
-         else
-         {
-            // Normal/Squeeze → check scenarios
-            double hedgePnL = 0;
-            if(hedgeExists)
-               hedgePnL = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+         ManageHedgeGridMode(h);     // hedge closed → recovery (internal expansion guard for closing)
+      }
+      else if(g_hedgeSets[h].gridMode && g_hedgeSets[h].hedgeTicket > 0)
+      {
+         ManageGridRecoveryMode(h);  // hedge still open → counter-side recovery (internal expansion guard for closing)
+      }
+      else if(!isExpansion)
+      {
+         // Normal/Squeeze → check scenarios
+         double hedgePnL = 0;
+         if(hedgeExists)
+            hedgePnL = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
 
-            if(hedgePnL > 0)
-               ManageHedgeMatchingClose(h);  // Scenario 1: hedge in profit
-            else
-               ManageHedgePartialClose(h);   // Scenario 2: hedge in loss, check original orders
-         }
+         if(hedgePnL > 0)
+            ManageHedgeMatchingClose(h);  // Scenario 1: hedge in profit
+         else
+            ManageHedgePartialClose(h);   // Scenario 2: hedge in loss, check original orders
       }
       else
       {
          // Still in expansion - only check if bound orders are all gone → flag gridMode
-         // But do NOT execute any closing actions during expansion
          if(g_hedgeSets[h].boundTicketCount == 0 && hedgeExists && !g_hedgeSets[h].gridMode)
          {
-            // All bound orders gone but hedge remains → flag grid mode (will execute when expansion ends)
             Print("HEDGE Set#", h + 1, " all bound orders cleared. Flagging Grid Mode (will execute after expansion).");
             g_hedgeSets[h].gridMode = true;
             g_hedgeSets[h].gridLevel = CalculateEquivGridLevel(g_hedgeSets[h].hedgeLots);
