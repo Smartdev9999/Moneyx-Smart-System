@@ -699,7 +699,7 @@ int OnInit()
    // === v5.21: Restore hedge sets from existing positions ===
    RestoreHedgeSets();
 
-   Print("Gold Miner EA v5.21 initialized successfully");
+   Print("Gold Miner EA v5.22 initialized successfully");
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
