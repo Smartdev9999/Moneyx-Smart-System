@@ -7983,30 +7983,31 @@ void DisplayHedgeCycleDashboard()
                       if(g_hedgeSets[h].hedgeTicket > 0 && PositionSelectByTicket(g_hedgeSets[h].hedgeTicket))
                          pnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
                       
-                      // v5.19: Display real-time status based on actual hedge position
-                      string modeStr = g_hedgeSets[h].gridMode ? "*" : "";
-                      if(g_hedgeSets[h].hedgeTicket > 0 && PositionSelectByTicket(g_hedgeSets[h].hedgeTicket))
-                      {
-                         // Hedge still open → show real volume from position
-                         double realVol = PositionGetDouble(POSITION_VOLUME);
-                         cellText = "H" + IntegerToString(hedgeNum) + ":" + side + modeStr + " " + 
-                                    DoubleToString(realVol, 2) + "L";
-                      }
-                      else if(g_hedgeSets[h].gridMode)
-                      {
-                         // Hedge closed, recovery mode active
-                         cellText = "H" + IntegerToString(hedgeNum) + ":REC";
-                      }
-                      else if(g_hedgeSets[h].boundTicketCount > 0)
-                      {
-                         // Hedge closed, bound orders remain but no grid
-                         cellText = "H" + IntegerToString(hedgeNum) + ":-- " + side;
-                      }
-                      else
-                      {
-                         cellText = "H" + IntegerToString(hedgeNum) + ": CLR";
-                      }
-                      cellText += " B:" + IntegerToString(g_hedgeSets[h].boundTicketCount);
+                       // v5.21: Display with explicit side indicators + BD: prefix
+                       string modeStr = g_hedgeSets[h].gridMode ? "*" : "";
+                       if(g_hedgeSets[h].hedgeTicket > 0 && PositionSelectByTicket(g_hedgeSets[h].hedgeTicket))
+                       {
+                          // Hedge still open → show real volume from position
+                          double realVol = PositionGetDouble(POSITION_VOLUME);
+                          cellText = "H" + IntegerToString(hedgeNum) + ":" + side + modeStr + " " + 
+                                     DoubleToString(realVol, 2) + "L";
+                       }
+                       else if(g_hedgeSets[h].gridMode)
+                       {
+                          // Hedge closed, recovery mode active → show side
+                          cellText = "H" + IntegerToString(hedgeNum) + ":REC(" + side + ")";
+                       }
+                       else if(g_hedgeSets[h].boundTicketCount > 0)
+                       {
+                          // Hedge closed, bound orders remain but no grid → show side
+                          cellText = "H" + IntegerToString(hedgeNum) + ":--(" + side + ")";
+                       }
+                       else
+                       {
+                          cellText = "H" + IntegerToString(hedgeNum) + ":CLR";
+                       }
+                       // v5.21: "BD:" prefix to distinguish from Buy
+                       cellText += " BD:" + IntegerToString(g_hedgeSets[h].boundTicketCount);
                       
                       plText = "$" + DoubleToString(pnl, 2);
                       cellColor = (pnl >= 0) ? COLOR_PROFIT : COLOR_LOSS;
