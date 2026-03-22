@@ -1592,8 +1592,9 @@ void CloseAllPositions()
       ArrayResize(g_hedgeSets[h].boundTickets, 0);
    }
    g_hedgeSetCount = 0;
-   g_currentCycleIndex = 0;  // Reset cycle labeling
-   g_lastHedgeExpansionDir = 0;  // Reset hedge expansion direction
+    g_currentCycleIndex = 0;  // Reset cycle labeling
+    g_lastHedgeExpansionDir = 0;  // Reset hedge expansion direction
+    g_cycleHedged = false;  // v5.4: Reset cycle hedged flag
 }
 
 //+------------------------------------------------------------------+
