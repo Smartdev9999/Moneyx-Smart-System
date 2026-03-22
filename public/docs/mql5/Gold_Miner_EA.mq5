@@ -5966,7 +5966,8 @@ int FindFreeHedgeSlot()
 
 //+------------------------------------------------------------------+
 //| Check expansion and open hedge if needed                           |
-//| Now supports multiple hedge sets on same side (unbound orders)     |
+//| v5.2: Uses Net Lot calculation (totalBuy - totalSell) for hedge   |
+//| size. Supports multiple hedge sets. Increments cycle on hedge.    |
 //+------------------------------------------------------------------+
 void CheckAndOpenHedge()
 {
@@ -5989,10 +5990,23 @@ void CheckAndOpenHedge()
    ENUM_POSITION_TYPE counterSide = (bestDir == -1) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
    ENUM_POSITION_TYPE hedgeSide   = (bestDir == -1) ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
 
-   // Count UNBOUND stuck orders on counter side (not already assigned to another hedge set)
+   // === v5.2: Net Lot Calculation ===
+   // Calculate hedge lots as |totalBuyLots - totalSellLots| across ALL positions
+   ENUM_POSITION_TYPE calcHedgeSide, calcCounterSide;
+   double netLots = CalculateNetHedgeLots(calcHedgeSide, calcCounterSide);
+   
+   // Verify expansion direction matches net lot imbalance direction
+   // If expansion says "hedge with SELL" but net calc says "hedge with BUY", 
+   // use expansion direction but still use net lots for size
+   if(netLots <= 0) return;
+   
+   // Check that there are actually unbound orders to hedge on the counter side
    double counterLots = 0, counterPL = 0;
    int counterCount = CountUnboundOrders(counterSide, counterLots, counterPL);
-   if(counterCount == 0 || counterLots <= 0) return;
+   if(counterCount == 0 && netLots <= 0) return;
+
+   // Use the larger of: unbound counter lots or net imbalance
+   double hedgeLots = netLots;
 
    // Find free slot
    int slot = FindFreeHedgeSlot();
@@ -6006,13 +6020,13 @@ void CheckAndOpenHedge()
    ENUM_ORDER_TYPE orderType = (hedgeSide == POSITION_TYPE_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
    string comment = "GM_HEDGE_" + IntegerToString(slot + 1);
 
-   if(OpenOrder(orderType, counterLots, comment))
+   if(OpenOrder(orderType, hedgeLots, comment))
    {
       g_hedgeSets[slot].active = true;
       g_hedgeSets[slot].hedgeSide = hedgeSide;
       g_hedgeSets[slot].counterSide = counterSide;
-      g_hedgeSets[slot].hedgeLots = counterLots;
-      g_hedgeSets[slot].originalTotalLots = counterLots;
+      g_hedgeSets[slot].hedgeLots = hedgeLots;
+      g_hedgeSets[slot].originalTotalLots = hedgeLots;
       g_hedgeSets[slot].gridMode = false;
       g_hedgeSets[slot].gridLevel = 0;
       g_hedgeSets[slot].gridTicketCount = 0;
@@ -6055,9 +6069,15 @@ void CheckAndOpenHedge()
       }
 
       g_hedgeSetCount++;
+      
+      // === v5.2: Increment cycle index after hedge opens ===
+      if(g_currentCycleIndex < 3)  // Max 4 cycles (A, B, C, D)
+         g_currentCycleIndex++;
+      
       string sideStr = (hedgeSide == POSITION_TYPE_BUY) ? "BUY" : "SELL";
-      Print("HEDGE OPENED: Set#", slot + 1, " ", sideStr, " ", DoubleToString(counterLots, 2),
-            " lots to cover ", counterCount, " stuck orders (bound ", g_hedgeSets[slot].boundTicketCount, " tickets)");
+      Print("HEDGE OPENED: Set#", slot + 1, " ", sideStr, " ", DoubleToString(hedgeLots, 2),
+            " lots (NetLot calc) bound ", g_hedgeSets[slot].boundTicketCount, 
+            " tickets. Cycle now: ", CharToString((char)('A' + g_currentCycleIndex)));
    }
 }
 
