@@ -210,6 +210,8 @@ input int      DashboardY           = 30;      // Dashboard Y Position
 input color    DashboardColor       = clrWhite; // Dashboard Text Color
 input double   DashboardScale       = 1.0;     // Dashboard Scale (0.8-1.5)
 input int      DashboardWidth       = 340;     // Dashboard Table Width (300-500)
+input int      HedgeDashX           = 10;      // Hedge Dashboard X Position
+input int      HedgeDashY           = 500;     // Hedge Dashboard Y Position
 
 //--- Rebate Settings
 input group "=== Rebate Settings ==="
