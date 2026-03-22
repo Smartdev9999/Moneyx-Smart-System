@@ -6155,7 +6155,7 @@ void ManageHedgeSets()
 
 //+------------------------------------------------------------------+
 //| Scenario 1: Hedge in profit + expansion ended → match with losses  |
-//| Now uses boundTickets[] for set-specific isolation                  |
+//| v5.2: Cross-set global scan — oldest loss orders first (any set)   |
 //+------------------------------------------------------------------+
 void ManageHedgeMatchingClose(int idx)
 {
@@ -6167,17 +6167,30 @@ void ManageHedgeMatchingClose(int idx)
    double budget = hedgeProfit - InpHedge_MatchMinProfit;
    if(budget <= 0) return;
 
-   // Collect loss orders ONLY from this set's boundTickets (oldest first)
+   // === v5.2: Collect ALL loss orders on counter-side (cross-set, global) ===
    ulong lossTickets[];
    double lossValues[];
    datetime lossTimes[];
    int lossCount = 0;
 
-   for(int b = 0; b < g_hedgeSets[idx].boundTicketCount; b++)
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
-      ulong ticket = g_hedgeSets[idx].boundTickets[b];
-      if(!PositionSelectByTicket(ticket)) continue;
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != g_hedgeSets[idx].counterSide) continue;
+      
+      string cmt = PositionGetString(POSITION_COMMENT);
+      // Include hedge orders AND normal orders — close oldest regardless of type
+      // But skip other hedge MAIN orders (GM_HEDGE_) — only match grid hedge + normal
+      if(StringFind(cmt, "GM_HEDGE_") >= 0)
+      {
+         // This is a main hedge order — check if it belongs to a different set
+         // Only include if it's a hedge order from another set that's in loss
+         bool isThisSetHedge = (ticket == g_hedgeSets[idx].hedgeTicket);
+         if(isThisSetHedge) continue;  // skip our own hedge
+      }
 
       double pnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
       if(pnl >= 0) continue;  // only loss orders
@@ -6222,19 +6235,24 @@ void ManageHedgeMatchingClose(int idx)
    if(lossUsed > 0)
    {
       double finalNet = hedgeProfit - cumLoss;
-      Print("HEDGE MATCHING Set#", idx + 1, ": hedge profit $", DoubleToString(hedgeProfit, 2),
+      Print("HEDGE MATCHING (CROSS-SET) Set#", idx + 1, ": hedge profit $", DoubleToString(hedgeProfit, 2),
             " covers ", lossUsed, " losses ($", DoubleToString(cumLoss, 2),
             ") net: $", DoubleToString(finalNet, 2));
 
       // Close hedge order
       trade.PositionClose(g_hedgeSets[idx].hedgeTicket);
 
-      // Close matched losses + remove from boundTickets
+      // Close matched losses + remove from ALL sets' boundTickets
       for(int cl = 0; cl < lossUsed; cl++)
       {
          int li = closeLossIdx[cl];
          trade.PositionClose(lossTickets[li]);
-         RemoveBoundTicket(idx, lossTickets[li]);
+         // Remove from any set that has this ticket bound
+         for(int h = 0; h < MAX_HEDGE_SETS; h++)
+         {
+            if(g_hedgeSets[h].active)
+               RemoveBoundTicket(h, lossTickets[li]);
+         }
       }
 
       // Deactivate hedge set
@@ -6254,7 +6272,6 @@ void ManageHedgeMatchingClose(int idx)
       // Enter grid mode to continue recovery if bound tickets remain
       if(g_hedgeSets[idx].boundTicketCount > 0)
       {
-         // Still have bound orders → continue as grid for recovery
          g_hedgeSets[idx].gridMode = true;
          g_hedgeSets[idx].gridLevel = 0;
          Print("HEDGE Set#", idx + 1, " closed but bound orders remain. Entering Grid Mode.");
