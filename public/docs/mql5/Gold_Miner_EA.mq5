@@ -6110,10 +6110,13 @@ void CheckAndOpenHedge()
          g_hedgeSets[slot].boundTicketCount = bc + 1;
       }
 
-      g_hedgeSetCount++;
-      
-       // === v5.3: Track expansion direction for hedge sequence ===
-       g_lastHedgeExpansionDir = bestDir;
+       g_hedgeSetCount++;
+       
+        // === v5.3: Track expansion direction for hedge sequence ===
+        g_lastHedgeExpansionDir = bestDir;
+        
+        // === v5.4: Mark current cycle as hedged → next INIT will increment cycle ===
+        g_cycleHedged = true;
        
        string sideStr = (hedgeSide == POSITION_TYPE_BUY) ? "BUY" : "SELL";
        Print("HEDGE OPENED: Set#", slot + 1, " ", sideStr, " ", DoubleToString(hedgeLots, 2),
