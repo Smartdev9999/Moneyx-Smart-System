@@ -6404,18 +6404,22 @@ void ManageHedgeMatchingClose(int idx)
    }
    else
    {
-      // No losses can be matched → just close the profitable hedge
-      Print("HEDGE CLOSE (no matchable losses) Set#", idx + 1,
-            ": profit $", DoubleToString(hedgeProfit, 2));
-      trade.PositionClose(g_hedgeSets[idx].hedgeTicket);
+       // No losses can be matched → just close the profitable hedge
+       Print("HEDGE CLOSE (no matchable losses) Set#", idx + 1,
+             ": profit $", DoubleToString(hedgeProfit, 2));
+       trade.PositionClose(g_hedgeSets[idx].hedgeTicket);
+       g_hedgeSets[idx].hedgeTicket = 0;  // v5.14: MUST reset so grid recovery mode triggers
 
-      // Enter grid mode to continue recovery if bound tickets remain
-      if(g_hedgeSets[idx].boundTicketCount > 0)
-      {
-         g_hedgeSets[idx].gridMode = true;
-         g_hedgeSets[idx].gridLevel = 0;
-         Print("HEDGE Set#", idx + 1, " closed but bound orders remain. Entering Grid Mode.");
-      }
+       // Enter grid mode to continue recovery if bound tickets remain
+       if(g_hedgeSets[idx].boundTicketCount > 0)
+       {
+          g_hedgeSets[idx].gridMode = true;
+          g_hedgeSets[idx].gridLevel = CalculateEquivGridLevel(
+             CalculateRemainingBoundLots(idx));
+          Print("HEDGE Set#", idx + 1, " closed but ", g_hedgeSets[idx].boundTicketCount,
+                " bound orders remain. Entering Grid Recovery Mode (gridLevel=",
+                g_hedgeSets[idx].gridLevel, ").");
+       }
       else
       {
          g_hedgeSets[idx].active = false;
