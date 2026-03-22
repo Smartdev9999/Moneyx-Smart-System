@@ -6109,25 +6109,33 @@ void CheckAndOpenHedge()
    if(lastDirInCycle != 0 && bestDir == lastDirInCycle)
       return;  // cycle นี้มี hedge ทิศนี้แล้ว → ต้องเปลี่ยนทิศก่อน (H2)
 
-   // === v5.6: Unbound Counter Lots Calculation ===
-   // Calculate lots from counter-side orders that are NOT already bound to a hedge set
-   // and NOT hedge orders themselves — this is the true unprotected exposure
-   double unboundCounterLots = 0;
+    // === v5.18: Net Imbalance Calculation for H1-H4 ===
+   // Calculate total Buy lots vs Sell lots for ALL orders in current cycle
+   // Including: normal orders, hedge orders, grid recovery orders
+   // H1: locks initial exposure; H2-H4: locks remaining imbalance after partial closes
+   double cycleBuyLots = 0, cycleSellLots = 0;
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       ulong ticket = PositionGetTicket(i);
       if(ticket == 0) continue;
       if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
-      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != counterSide) continue;
-      string cmt = PositionGetString(POSITION_COMMENT);
-      if(StringFind(cmt, "GM_HEDGE") >= 0 || StringFind(cmt, "GM_HG") >= 0) continue;
-      if(IsTicketBound(ticket)) continue;
-      unboundCounterLots += PositionGetDouble(POSITION_VOLUME);
+      
+      // Check if this ticket belongs to current cycle
+      if(!IsBelongsToCycle(ticket, g_currentCycleIndex)) continue;
+      
+      ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+      double vol = PositionGetDouble(POSITION_VOLUME);
+      if(posType == POSITION_TYPE_BUY)
+         cycleBuyLots += vol;
+      else
+         cycleSellLots += vol;
    }
-   if(unboundCounterLots <= 0) return;
-
-   double hedgeLots = NormalizeDouble(unboundCounterLots, 2);
+   
+   double imbalance = MathAbs(cycleBuyLots - cycleSellLots);
+   if(imbalance <= 0) return;  // balanced → no hedge needed
+   
+   double hedgeLots = NormalizeDouble(imbalance, 2);
 
    // Find free slot
    int slot = FindFreeHedgeSlot();
