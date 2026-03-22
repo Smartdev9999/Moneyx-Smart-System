@@ -458,7 +458,7 @@ bool         g_squeezeBuyBlocked  = false;  // directional: block BUY only
 bool         g_squeezeSellBlocked = false;  // directional: block SELL only
 
 // === Counter-Trend Hedging State ===
-#define MAX_HEDGE_SETS 16
+#define MAX_HEDGE_SETS 20
 #define MAX_BOUND_TICKETS 50
 struct HedgeSet
 {
