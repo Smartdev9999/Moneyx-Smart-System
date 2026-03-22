@@ -1050,12 +1050,30 @@ void OnTick()
       }
    }
 
-   // === COUNTER-TREND HEDGING CHECK ===
-   if(InpHedge_Enable && InpUseSqueezeFilter)
-   {
-      CheckAndOpenHedge();
-      ManageHedgeSets();
-   }
+    // === COUNTER-TREND HEDGING CHECK ===
+    if(InpHedge_Enable && InpUseSqueezeFilter)
+    {
+       CheckAndOpenHedge();
+       ManageHedgeSets();
+    }
+    
+    // === v5.4: Reset cycle to A when no positions exist for this EA ===
+    {
+       int myPositions = 0;
+       for(int i = PositionsTotal() - 1; i >= 0; i--)
+       {
+          ulong ticket = PositionGetTicket(i);
+          if(PositionSelectByTicket(ticket) && PositionGetInteger(POSITION_MAGIC) == MagicNumber
+             && PositionGetString(POSITION_SYMBOL) == _Symbol)
+             myPositions++;
+       }
+       if(myPositions == 0 && (g_currentCycleIndex > 0 || g_cycleHedged))
+       {
+          g_currentCycleIndex = 0;
+          g_cycleHedged = false;
+          g_lastHedgeExpansionDir = 0;
+       }
+    }
 
    // === ORIGINAL TRADING LOGIC (unchanged) ===
    if(g_eaStopped) return;
