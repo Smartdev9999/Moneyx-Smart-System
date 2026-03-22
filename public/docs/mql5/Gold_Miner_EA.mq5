@@ -7149,7 +7149,7 @@ void DisplayHedgeCycleDashboard()
       int rowY = curY + row * rowH;
       color rowBg = (row % 2 == 0) ? COLOR_BG_ROW1 : COLOR_BG_ROW2;
       
-      for(int g = 0; g < 4; g++)
+      for(int g = 0; g < 7; g++)
       {
          int colX = x + g * colW;
          string cellBg = "GM_HC_R" + IntegerToString(row) + "C" + IntegerToString(g) + "_BG";
