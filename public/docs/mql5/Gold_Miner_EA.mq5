@@ -7115,7 +7115,7 @@ void ManageHedgeGridMode(int idx)
             trade.PositionClose(ticket);
       }
       g_hedgeSets[idx].active = false;
-      g_hedgeSetCount--;
+       g_hedgeSetCount = MathMax(0, g_hedgeSetCount - 1);
       Print("HEDGE Set#", idx + 1, " grid mode complete. All cleaned up.");
       return;
    }
