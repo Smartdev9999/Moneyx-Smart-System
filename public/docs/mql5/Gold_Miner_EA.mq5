@@ -7750,36 +7750,42 @@ void DisplayHedgeCycleDashboard()
                {
                   if(g_hedgeSets[h].active && g_hedgeSets[h].cycleIndex == g && g_hedgeSets[h].hedgeNumber == hedgeNum)
                   {
-                     found = true;
-                     string side = (g_hedgeSets[h].hedgeSide == POSITION_TYPE_BUY) ? "B" : "S";
-                     
-                     // Calculate PnL for this hedge
-                     double pnl = 0;
-                     if(g_hedgeSets[h].hedgeTicket > 0 && PositionSelectByTicket(g_hedgeSets[h].hedgeTicket))
-                        pnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
-                     
-                     // Add grid tickets PnL
-                     for(int gt = 0; gt < g_hedgeSets[h].gridTicketCount; gt++)
-                     {
-                        if(PositionSelectByTicket(g_hedgeSets[h].gridTickets[gt]))
-                           pnl += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
-                     }
-                     
-                     // Add bound orders PnL
-                     for(int bt = 0; bt < g_hedgeSets[h].boundTicketCount; bt++)
-                     {
-                        if(PositionSelectByTicket(g_hedgeSets[h].boundTickets[bt]))
-                           pnl += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
-                     }
-                     
-                     string modeStr = g_hedgeSets[h].gridMode ? "*" : "";
-                     cellText = "H" + IntegerToString(hedgeNum) + ":" + side + modeStr + " " + 
-                                DoubleToString(g_hedgeSets[h].hedgeLots, 2) + "L";
-                     cellText += " B:" + IntegerToString(g_hedgeSets[h].boundTicketCount);
-                     
-                     plText = "$" + DoubleToString(pnl, 2);
-                     cellColor = (pnl >= 0) ? COLOR_PROFIT : COLOR_LOSS;
-                     plColor = (pnl >= 0) ? COLOR_PROFIT : COLOR_LOSS;
+                      found = true;
+                      string side = (g_hedgeSets[h].hedgeSide == POSITION_TYPE_BUY) ? "B" : "S";
+                      
+                      // v5.19: PnL shows ONLY the hedge order itself
+                      double pnl = 0;
+                      if(g_hedgeSets[h].hedgeTicket > 0 && PositionSelectByTicket(g_hedgeSets[h].hedgeTicket))
+                         pnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+                      
+                      // v5.19: Display real-time status based on actual hedge position
+                      string modeStr = g_hedgeSets[h].gridMode ? "*" : "";
+                      if(g_hedgeSets[h].hedgeTicket > 0 && PositionSelectByTicket(g_hedgeSets[h].hedgeTicket))
+                      {
+                         // Hedge still open → show real volume from position
+                         double realVol = PositionGetDouble(POSITION_VOLUME);
+                         cellText = "H" + IntegerToString(hedgeNum) + ":" + side + modeStr + " " + 
+                                    DoubleToString(realVol, 2) + "L";
+                      }
+                      else if(g_hedgeSets[h].gridMode)
+                      {
+                         // Hedge closed, recovery mode active
+                         cellText = "H" + IntegerToString(hedgeNum) + ":REC";
+                      }
+                      else if(g_hedgeSets[h].boundTicketCount > 0)
+                      {
+                         // Hedge closed, bound orders remain but no grid
+                         cellText = "H" + IntegerToString(hedgeNum) + ":-- " + side;
+                      }
+                      else
+                      {
+                         cellText = "H" + IntegerToString(hedgeNum) + ": CLR";
+                      }
+                      cellText += " B:" + IntegerToString(g_hedgeSets[h].boundTicketCount);
+                      
+                      plText = "$" + DoubleToString(pnl, 2);
+                      cellColor = (pnl >= 0) ? COLOR_PROFIT : COLOR_LOSS;
+                      plColor = (pnl >= 0) ? COLOR_PROFIT : COLOR_LOSS;
                      break;
                   }
                }
