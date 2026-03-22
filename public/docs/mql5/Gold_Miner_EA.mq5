@@ -1519,6 +1519,8 @@ double CalculateFloatingPL(ENUM_POSITION_TYPE side)
       
       // Skip hedge orders — floating PL calculation must exclude hedge positions
       if(IsHedgeComment(PositionGetString(POSITION_COMMENT))) continue;
+      // v5.7: Skip orders bound to hedge sets
+      if(IsTicketBound(ticket)) continue;
 
       totalPL += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
    }
