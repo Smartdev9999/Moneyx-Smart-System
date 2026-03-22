@@ -205,13 +205,13 @@ input int      InpTrailingStep           = 10;       // Trailing Step (min SL mo
 //--- Dashboard
 input group "=== Dashboard ==="
 input bool     ShowDashboard        = true;    // Show Dashboard
-input int      DashboardX           = 20;      // Dashboard X Position
-input int      DashboardY           = 30;      // Dashboard Y Position
+input int      DashboardX           = 50;      // Dashboard X Position
+input int      DashboardY           = 60;      // Dashboard Y Position
 input color    DashboardColor       = clrWhite; // Dashboard Text Color
 input double   DashboardScale       = 1.0;     // Dashboard Scale (0.8-1.5)
-input int      DashboardWidth       = 340;     // Dashboard Table Width (300-500)
+input int      DashboardWidth       = 400;     // Dashboard Table Width (300-500)
 input int      HedgeDashX           = 10;      // Hedge Dashboard X Position
-input int      HedgeDashY           = 500;     // Hedge Dashboard Y Position
+input int      HedgeDashY           = 65;      // Hedge Dashboard Y Position
 
 //--- Rebate Settings
 input group "=== Rebate Settings ==="
