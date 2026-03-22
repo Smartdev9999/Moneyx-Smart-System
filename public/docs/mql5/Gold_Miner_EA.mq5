@@ -1224,7 +1224,7 @@ void OnTick()
                    if(shouldEnterBuy)
                    {
                         // v5.4: Increment cycle only when THIS cycle was hedged
-                        if(g_cycleHedged && g_currentCycleIndex < 3) { g_currentCycleIndex++; g_cycleHedged = false; }
+                         if(g_cycleHedged && g_currentCycleIndex < 6) { g_currentCycleIndex++; g_cycleHedged = false; }
                        if(OpenOrder(ORDER_TYPE_BUY, InitialLotSize, "GM_INIT" + GetCycleSuffix()))
                       {
                          g_initialBuyPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
