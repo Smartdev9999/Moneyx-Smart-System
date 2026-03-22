@@ -1,20 +1,30 @@
 
 
-## Fix: Dashboard กระพริบ — เปลี่ยนจาก Delete All เป็น Delete Stale Rows Only (v5.1)
+## เพิ่มทิศทาง Expansion (Buy/Sell) บน Dashboard — Gold Miner SQ EA
 
-### สิ่งที่แก้ไข
+### การแก้ไข
 
-**ไฟล์:** `public/docs/mql5/Gold_Miner_EA.mq5`
+**ไฟล์:** `public/docs/mql5/Gold_Miner_EA.mq5` (line 2911)
 
-1. เพิ่ม `g_lastDashboardRowCount` global variable
-2. ลบ `ObjectsDeleteAll` 4 บรรทัดออกจากต้น `DisplayDashboard()` → แทนด้วย comment
-3. เพิ่ม stale row cleanup loop ท้าย function (ก่อน bottom border) — ลบเฉพาะ rows ที่เกินจาก tick ก่อนหน้า
+#### แก้ไข Dashboard Squeeze Section — แสดงทิศทางเมื่อ Expansion
 
-### ผลลัพธ์
-- Dashboard ไม่กระพริบ (rows ที่ใช้อยู่ถูก update ทับ ไม่ถูกลบแล้วสร้างใหม่)
-- Hedge rows ที่ไม่ active จะถูกลบเฉพาะเมื่อ row count ลดลง
+เปลี่ยน line 2911 จาก:
+```cpp
+else if(g_squeeze[sq].state == 2)  { stateStr = "EXPANSION"; stateClr = clrDodgerBlue; }
+```
+เป็น:
+```cpp
+else if(g_squeeze[sq].state == 2)
+{
+   if(g_squeeze[sq].direction == 1)       { stateStr = "EXPANSION BUY";  stateClr = clrDodgerBlue; }
+   else if(g_squeeze[sq].direction == -1) { stateStr = "EXPANSION SELL"; stateClr = clrOrangeRed;  }
+   else                                   { stateStr = "EXPANSION";      stateClr = clrDodgerBlue; }
+}
+```
+
+**ผล:** เมื่อ TF ใดเป็น Expansion จะแสดง `EXPANSION BUY` (สีฟ้า) หรือ `EXPANSION SELL` (สีแดงส้ม) ตาม `direction` ที่คำนวณจาก Close vs EMA อยู่แล้วใน `UpdateSqueezeState()`
 
 ### สิ่งที่ไม่เปลี่ยนแปลง
-- Hedge logic ทั้งหมด
-- Dashboard content, layout, สี
-- Trading logic ทั้งหมด
+- Trading logic, Hedge logic, Squeeze filter logic ทั้งหมด
+- `direction` field คำนวณอยู่แล้ว — ใช้ค่าที่มีอยู่เท่านั้น
+
