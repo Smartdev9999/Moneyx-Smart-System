@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|               Gold Miner EA v5.21 - MTF ZigZag+CDC+Grid+License  |
+//|               Gold Miner EA v5.22 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "5.210"
-#property description "Gold Miner EA v5.21 - MTF ZigZag + CDC + Squeeze + Net Hedge + Restore + 10 Cycles + License"
+#property version   "5.220"
+#property description "Gold Miner EA v5.22 - MTF ZigZag + CDC + Squeeze + Net Hedge + Restore + 10 Cycles + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -482,6 +482,7 @@ struct HedgeSet
 HedgeSet g_hedgeSets[MAX_HEDGE_SETS];
 int      g_hedgeSetCount = 0;
 datetime g_lastHedgeGridTime = 0;  // cooldown timer for hedge grid orders
+datetime g_lastHedgeOpenTime = 0;  // v5.22: cooldown timer to prevent rapid hedge opening
 int      g_lastDashboardRowCount = 0;  // track previous tick row count for stale cleanup
 int      g_currentCycleIndex = 0;      // Cycle labeling: 0=A .. 9=J
 int      g_lastHedgeExpansionDir = 0;  // Track last hedge expansion direction: -1=bearish, +1=bullish, 0=none
@@ -698,7 +699,7 @@ int OnInit()
    // === v5.21: Restore hedge sets from existing positions ===
    RestoreHedgeSets();
 
-   Print("Gold Miner EA v5.21 initialized successfully");
+   Print("Gold Miner EA v5.22 initialized successfully");
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -751,7 +752,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
    ObjectsDeleteAll(0, "GM_HC_");   // v5.5: hedge cycle monitor objects
 
-   Print("Gold Miner EA v5.21 deinitialized");
+   Print("Gold Miner EA v5.22 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -2784,7 +2785,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v5.21 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v5.21 [ZZ]" : "Gold Miner EA v5.21 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v5.22 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v5.22 [ZZ]" : "Gold Miner EA v5.22 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -6315,6 +6316,9 @@ int FindFreeHedgeSlot()
 //+------------------------------------------------------------------+
 void CheckAndOpenHedge()
 {
+   // === v5.22: Cooldown — prevent rapid-fire hedge opening ===
+   if(TimeCurrent() - g_lastHedgeOpenTime < 60) return;
+
    // Determine expansion direction
    int expCount = 0;
    int bestDir = 0;
@@ -6378,6 +6382,21 @@ void CheckAndOpenHedge()
    }
    if(lastDirInCycle != 0 && bestDir == lastDirInCycle)
       return;  // cycle นี้มี hedge ทิศนี้แล้ว → ต้องเปลี่ยนทิศก่อน (H2)
+
+   // === v5.22 Guard 4: H2+ ต้องรอให้ bound orders ของ hedges ก่อนหน้าใน cycle ถูกปิดหมดก่อน ===
+   // H2 เปิดได้เมื่อ: expansion เปลี่ยนทิศ + bound orders ฝั่งเดิมถูกเคลียร์หมด
+   // เหลือแค่ H1 hedge + grid loss orders → H2 lot = net imbalance ที่เหลือ
+   for(int h4 = 0; h4 < MAX_HEDGE_SETS; h4++)
+   {
+      if(!g_hedgeSets[h4].active) continue;
+      if(g_hedgeSets[h4].cycleIndex != g_currentCycleIndex) continue;
+      if(g_hedgeSets[h4].boundTicketCount > 0)
+      {
+         Print("HEDGE Guard4: Set#", h4+1, " still has ", g_hedgeSets[h4].boundTicketCount,
+               " bound orders. Wait for clear before opening next hedge level.");
+         return;  // ยังมี bound orders ค้าง → ห้ามเปิด hedge ใหม่
+      }
+   }
 
     // === v5.18: Net Imbalance Calculation for H1-H4 ===
    // Calculate total Buy lots vs Sell lots for ALL orders in current cycle
@@ -6497,6 +6516,7 @@ void CheckAndOpenHedge()
       }
 
        g_hedgeSetCount++;
+       g_lastHedgeOpenTime = TimeCurrent();  // v5.22: set cooldown
        
         // === v5.3: Track expansion direction for hedge sequence ===
         g_lastHedgeExpansionDir = bestDir;
