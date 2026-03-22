@@ -2240,7 +2240,7 @@ void CheckGridLoss(ENUM_POSITION_TYPE side, int currentGridCount)
          // LOT_CUSTOM: keep level-based calculation
       }
       
-      string comment = "GM_GL#" + IntegerToString(currentGridCount + 1);
+      string comment = "GM_GL#" + IntegerToString(currentGridCount + 1) + GetCycleSuffix();
       ENUM_ORDER_TYPE orderType = (side == POSITION_TYPE_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
       if(OpenOrder(orderType, lots, comment))
       {
