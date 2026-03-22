@@ -2389,6 +2389,9 @@ void FindLastOrder(ENUM_POSITION_TYPE side, string prefix1, string prefix2, doub
       if(PositionGetInteger(POSITION_TYPE) != side) continue;
 
       string comment = PositionGetString(POSITION_COMMENT);
+      // v5.8: Skip hedge and bound orders — use only current cycle orders
+      if(IsHedgeComment(comment)) continue;
+      if(IsTicketBound(ticket)) continue;
       if(StringFind(comment, prefix1) >= 0 || StringFind(comment, prefix2) >= 0)
       {
          datetime openTime = (datetime)PositionGetInteger(POSITION_TIME);
