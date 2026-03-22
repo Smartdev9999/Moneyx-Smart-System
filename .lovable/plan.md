@@ -1,36 +1,31 @@
 
 
-
-## Fix: Hedge Guard + Cycle Labeling — Gold Miner SQ EA (v5.2 → v5.3)
+## Fix: Cycle Labeling + Dashboard Width — Gold Miner SQ EA (v5.3 → v5.4)
 
 ### สิ่งที่แก้ไข
 
 **ไฟล์:** `public/docs/mql5/Gold_Miner_EA.mq5`
 
-#### 1. Guard 1: ต้องมี order ฝั่ง counterSide จริง
-- สแกนทุก position (รวม bound) ว่ามี counterSide อยู่หรือไม่
-- `if(!hasCounterOrders) return;` → ไม่มี order ติดฝั่งผิด → ไม่ hedge
+#### 1. Cycle ไม่เปลี่ยนเมื่อไม่โดน Hedge
+- เพิ่ม `g_cycleHedged` flag — track ว่า cycle ปัจจุบันถูก hedge หรือยัง
+- แก้ 6 จุด INIT order: `if(g_cycleHedged && ...) { increment; g_cycleHedged = false; }`
+- `CheckAndOpenHedge()` สำเร็จ → `g_cycleHedged = true`
+- Reset ใน `CloseAllPositions()`, `OnInit`, และเมื่อไม่มี position
 
-#### 2. Guard 2: ห้ามเปิด hedge ซ้ำทิศเดียวกัน
-- เช็คทุก active hedge set → ถ้ามี hedgeSide เดียวกันอยู่แล้ว → return
+#### 2. Reset Cycle เมื่อไม่มี Order
+- เพิ่มใน OnTick: สแกน positions ถ้า myPositions == 0 → reset cycle A, clear flags
 
-#### 3. Guard 3: Hedge #2+ ต้อง expansion เปลี่ยนทิศ
-- เพิ่ม `g_lastHedgeExpansionDir` global
-- `if(g_hedgeSetCount > 0 && bestDir == g_lastHedgeExpansionDir) return;`
+#### 3. Dashboard Width ปรับได้
+- เพิ่ม `input int DashboardWidth = 340` (300-500)
+- `DrawTableRow()` + `DisplayDashboard()` ใช้ DashboardWidth แทน hardcode 340
+- valueX คำนวณจาก `DashboardWidth * 0.53`
 
-#### 4. Cycle Labeling แก้ไข
-- ลบ `g_currentCycleIndex++` จาก `CheckAndOpenHedge()`
-- ย้ายไปใส่ก่อน INIT order ทุกจุด (SMA, Instant, ZigZag)
-- เงื่อนไข: `if(g_hedgeSetCount > 0 && g_currentCycleIndex < 3) g_currentCycleIndex++`
-- Cycle increment เฉพาะเมื่อมี hedge active อยู่ → order ใหม่เป็น cycle ถัดไป
-
-#### 5. Version bump: v5.2 → v5.3
+#### 4. Version bump: v5.3 → v5.4
 
 ### สิ่งที่ไม่เปลี่ยนแปลง
 - Order Execution Logic (trade.Buy/Sell/PositionClose)
 - Trading Strategy Logic (SMA/ZigZag/Instant, Grid entry/exit, TP/SL/Trailing)
 - Core Module Logic (License, News filter, Time filter, Data sync)
-- Net Lot Calculation (`CalculateNetHedgeLots`)
+- Net Lot Calculation, Hedge Guards, Cross-Set Matching
 - Hedge Partial/Matching Close, Grid Mode logic
 - Normal Matching Close logic
-- `boundTickets[]` tracking
