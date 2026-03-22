@@ -7350,8 +7350,9 @@ int FindLowestFreeCycle()
 }
 
 //+------------------------------------------------------------------+
-//| v5.10: Hedge Cycle Monitor Dashboard — 7-column display           |
-//| Shows Groups A-G with H1-H4 status for each group                |
+//| v5.14: Hedge Cycle Monitor Dashboard — 10-column display (A-J)    |
+//| Shows Groups A-J with H1-H4 status for each group                |
+//| Layout: 2 rows of 5 groups each for better readability            |
 //+------------------------------------------------------------------+
 void DisplayHedgeCycleDashboard()
 {
@@ -7359,9 +7360,10 @@ void DisplayHedgeCycleDashboard()
    int x = HedgeDashX;
    int y = HedgeDashY;
    
-   // v5.13: Layout dimensions — wider columns, taller rows, better readability
+   // v5.14: Layout for 10 groups — 2 rows of 5
    int colW = (int)(90 * sc);        // wider columns for data visibility
-   int totalW = colW * 7 + (int)(6 * sc);
+   int groupsPerRow = 5;
+   int totalW = colW * groupsPerRow + (int)(6 * sc);
    int headerH = (int)(24 * sc);
    int colHeaderH = (int)(22 * sc);
    int rowH = (int)(36 * sc);        // taller rows for 2-line display
@@ -7383,40 +7385,40 @@ void DisplayHedgeCycleDashboard()
    color COLOR_LOSS        = C'255,90,90';
    color COLOR_NEUTRAL     = C'140,140,140';       // Brighter grey for ---
    
-   // Group column accent colors — 7 groups
-   color groupColors[7];
-   groupColors[0] = C'90,150,235';   // A = Blue (brighter)
-   groupColors[1] = C'60,200,120';   // B = Green (brighter)
-   groupColors[2] = C'235,170,60';   // C = Orange (brighter)
-   groupColors[3] = C'220,85,85';    // D = Red (brighter)
-   groupColors[4] = C'110,215,235';  // E = Cyan (brighter)
-   groupColors[5] = C'235,110,195';  // F = Pink (brighter)
-   groupColors[6] = C'175,175,195';  // G = Silver (brighter)
+   // Group column accent colors — 10 groups
+   color groupColors[10];
+   groupColors[0] = C'90,150,235';   // A = Blue
+   groupColors[1] = C'60,200,120';   // B = Green
+   groupColors[2] = C'235,170,60';   // C = Orange
+   groupColors[3] = C'220,85,85';    // D = Red
+   groupColors[4] = C'110,215,235';  // E = Cyan
+   groupColors[5] = C'235,110,195';  // F = Pink
+   groupColors[6] = C'175,175,195';  // G = Silver
+   groupColors[7] = C'180,130,235';  // H = Purple
+   groupColors[8] = C'235,210,80';   // I = Gold
+   groupColors[9] = C'100,220,180';  // J = Teal
    
-   string groupNames[7];
-   groupNames[0] = "Grp A";
-   groupNames[1] = "Grp B";
-   groupNames[2] = "Grp C";
-   groupNames[3] = "Grp D";
-   groupNames[4] = "Grp E";
-   groupNames[5] = "Grp F";
-   groupNames[6] = "Grp G";
+   string groupNames[10];
+   groupNames[0] = "Grp A"; groupNames[1] = "Grp B"; groupNames[2] = "Grp C";
+   groupNames[3] = "Grp D"; groupNames[4] = "Grp E"; groupNames[5] = "Grp F";
+   groupNames[6] = "Grp G"; groupNames[7] = "Grp H"; groupNames[8] = "Grp I";
+   groupNames[9] = "Grp J";
    
    // === Determine group statuses ===
-   bool groupHasHedge[7];
+   bool groupHasHedge[10];
    ArrayInitialize(groupHasHedge, false);
    for(int h = 0; h < MAX_HEDGE_SETS; h++)
    {
-      if(g_hedgeSets[h].active && g_hedgeSets[h].cycleIndex < 7)
+      if(g_hedgeSets[h].active && g_hedgeSets[h].cycleIndex < 10)
          groupHasHedge[g_hedgeSets[h].cycleIndex] = true;
    }
    
    // Group status: 0=OFF, 1=STANDBY, 2=ACTIVE (has hedge data)
-   int groupStatus[7];
+   int groupStatus[10];
    groupStatus[0] = 1;  // Group A always STANDBY or ACTIVE
    if(groupHasHedge[0]) groupStatus[0] = 2;
    
-   for(int g = 1; g < 7; g++)
+   for(int g = 1; g < 10; g++)
    {
       if(groupHasHedge[g])
          groupStatus[g] = 2;  // Has hedge → ACTIVE
@@ -7431,124 +7433,136 @@ void DisplayHedgeCycleDashboard()
    string hdrTxt = "GM_HC_HDR_TXT";
    CreateDashRect(hdrBg, x, y, totalW, headerH, COLOR_BG_HEADER);
    CreateDashText(hdrTxt, x + (int)(8 * sc), y + (int)(3 * sc), 
-                  "HEDGE CYCLE MONITOR", COLOR_TEXT_WHITE, fSizeH, "Consolas");
+                  "HEDGE CYCLE MONITOR (A-J)", COLOR_TEXT_WHITE, fSizeH, "Consolas");
    objCount += 2;
    
    int curY = y + headerH;
    
-   // === COLUMN HEADERS ===
-   for(int g = 0; g < 7; g++)
+   // === Draw 2 sets of 5 groups each ===
+   for(int setIdx = 0; setIdx < 2; setIdx++)
    {
-      int colX = x + g * colW;
-      string colBg = "GM_HC_CH_BG" + IntegerToString(g);
-      string colTxt = "GM_HC_CH_TXT" + IntegerToString(g);
-      CreateDashRect(colBg, colX, curY, colW, colHeaderH, groupColors[g]);
-      CreateDashText(colTxt, colX + (int)(4 * sc), curY + (int)(3 * sc), 
-                     groupNames[g], COLOR_TEXT_WHITE, fSize, "Consolas");
-      objCount += 2;
-   }
-   curY += colHeaderH;
-   
-   // === H1-H4 ROWS (v5.12: 2-line display with PnL) ===
-   for(int row = 0; row < 4; row++)
-   {
-      int rowY = curY + row * rowH;
-      color rowBg = (row % 2 == 0) ? COLOR_BG_ROW1 : COLOR_BG_ROW2;
+      int gStart = setIdx * groupsPerRow;  // 0 or 5
+      int gEnd = gStart + groupsPerRow;    // 5 or 10
       
-      for(int g = 0; g < 7; g++)
+      // === COLUMN HEADERS for this set ===
+      for(int g = gStart; g < gEnd; g++)
       {
-         int colX = x + g * colW;
-         string cellBg = "GM_HC_R" + IntegerToString(row) + "C" + IntegerToString(g) + "_BG";
-         string cellTxt = "GM_HC_R" + IntegerToString(row) + "C" + IntegerToString(g) + "_TX";
-         string cellPL  = "GM_HC_R" + IntegerToString(row) + "C" + IntegerToString(g) + "_PL";
-         
-         CreateDashRect(cellBg, colX, rowY, colW, rowH, rowBg);
-         
-         string cellText = "";
-         string plText = "";
-         color cellColor = COLOR_NEUTRAL;
-         color plColor = COLOR_NEUTRAL;
-         
-         if(groupStatus[g] == 0)
-         {
-            if(row == 0)
-            {
-               cellText = "  OFF";
-               cellColor = COLOR_OFF;
-            }
-         }
-         else
-         {
-            int hedgeNum = row + 1;
-            
-            bool found = false;
-            for(int h = 0; h < MAX_HEDGE_SETS; h++)
-            {
-               if(g_hedgeSets[h].active && g_hedgeSets[h].cycleIndex == g && g_hedgeSets[h].hedgeNumber == hedgeNum)
-               {
-                  found = true;
-                  string side = (g_hedgeSets[h].hedgeSide == POSITION_TYPE_BUY) ? "B" : "S";
-                  
-                  // Calculate PnL for this hedge
-                  double pnl = 0;
-                  if(g_hedgeSets[h].hedgeTicket > 0 && PositionSelectByTicket(g_hedgeSets[h].hedgeTicket))
-                     pnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
-                  
-                  // Add grid tickets PnL
-                  for(int gt = 0; gt < g_hedgeSets[h].gridTicketCount; gt++)
-                  {
-                     if(PositionSelectByTicket(g_hedgeSets[h].gridTickets[gt]))
-                        pnl += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
-                  }
-                  
-                  // Add bound orders PnL
-                  for(int bt = 0; bt < g_hedgeSets[h].boundTicketCount; bt++)
-                  {
-                     if(PositionSelectByTicket(g_hedgeSets[h].boundTickets[bt]))
-                        pnl += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
-                  }
-                  
-                  string modeStr = g_hedgeSets[h].gridMode ? "*" : "";
-                  cellText = "H" + IntegerToString(hedgeNum) + ":" + side + modeStr + " " + 
-                             DoubleToString(g_hedgeSets[h].hedgeLots, 2) + "L";
-                  cellText += " B:" + IntegerToString(g_hedgeSets[h].boundTicketCount);
-                  
-                  plText = "$" + DoubleToString(pnl, 2);
-                  cellColor = (pnl >= 0) ? COLOR_PROFIT : COLOR_LOSS;
-                  plColor = (pnl >= 0) ? COLOR_PROFIT : COLOR_LOSS;
-                  break;
-               }
-            }
-            
-            if(!found)
-            {
-               if(row == 0 && groupStatus[g] == 1)
-               {
-                  cellText = "  STANDBY";
-                  cellColor = COLOR_STANDBY;
-               }
-               else
-               {
-                  cellText = "H" + IntegerToString(hedgeNum) + ": ---";
-                  cellColor = COLOR_NEUTRAL;
-               }
-            }
-         }
-         
-         CreateDashText(cellTxt, colX + (int)(4 * sc), rowY + (int)(2 * sc), 
-                        cellText, cellColor, fSize, "Consolas");
-         CreateDashText(cellPL, colX + (int)(4 * sc), rowY + (int)(16 * sc), 
-                        plText, plColor, fSize, "Consolas");
-         objCount += 3;
+         int colIdx = g - gStart;
+         int colX = x + colIdx * colW;
+         string colBg = "GM_HC_CH_BG" + IntegerToString(g);
+         string colTxt = "GM_HC_CH_TXT" + IntegerToString(g);
+         CreateDashRect(colBg, colX, curY, colW, colHeaderH, groupColors[g]);
+         CreateDashText(colTxt, colX + (int)(4 * sc), curY + (int)(3 * sc), 
+                        groupNames[g], COLOR_TEXT_WHITE, fSize, "Consolas");
+         objCount += 2;
       }
+      curY += colHeaderH;
+      
+      // === H1-H4 ROWS ===
+      for(int row = 0; row < 4; row++)
+      {
+         int rowY = curY + row * rowH;
+         color rowBg = (row % 2 == 0) ? COLOR_BG_ROW1 : COLOR_BG_ROW2;
+         
+         for(int g = gStart; g < gEnd; g++)
+         {
+            int colIdx = g - gStart;
+            int colX = x + colIdx * colW;
+            string cellBg = "GM_HC_R" + IntegerToString(row) + "C" + IntegerToString(g) + "_BG";
+            string cellTxt = "GM_HC_R" + IntegerToString(row) + "C" + IntegerToString(g) + "_TX";
+            string cellPL  = "GM_HC_R" + IntegerToString(row) + "C" + IntegerToString(g) + "_PL";
+            
+            CreateDashRect(cellBg, colX, rowY, colW, rowH, rowBg);
+            
+            string cellText = "";
+            string plText = "";
+            color cellColor = COLOR_NEUTRAL;
+            color plColor = COLOR_NEUTRAL;
+            
+            if(groupStatus[g] == 0)
+            {
+               if(row == 0)
+               {
+                  cellText = "  OFF";
+                  cellColor = COLOR_OFF;
+               }
+            }
+            else
+            {
+               int hedgeNum = row + 1;
+               
+               bool found = false;
+               for(int h = 0; h < MAX_HEDGE_SETS; h++)
+               {
+                  if(g_hedgeSets[h].active && g_hedgeSets[h].cycleIndex == g && g_hedgeSets[h].hedgeNumber == hedgeNum)
+                  {
+                     found = true;
+                     string side = (g_hedgeSets[h].hedgeSide == POSITION_TYPE_BUY) ? "B" : "S";
+                     
+                     // Calculate PnL for this hedge
+                     double pnl = 0;
+                     if(g_hedgeSets[h].hedgeTicket > 0 && PositionSelectByTicket(g_hedgeSets[h].hedgeTicket))
+                        pnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+                     
+                     // Add grid tickets PnL
+                     for(int gt = 0; gt < g_hedgeSets[h].gridTicketCount; gt++)
+                     {
+                        if(PositionSelectByTicket(g_hedgeSets[h].gridTickets[gt]))
+                           pnl += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+                     }
+                     
+                     // Add bound orders PnL
+                     for(int bt = 0; bt < g_hedgeSets[h].boundTicketCount; bt++)
+                     {
+                        if(PositionSelectByTicket(g_hedgeSets[h].boundTickets[bt]))
+                           pnl += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+                     }
+                     
+                     string modeStr = g_hedgeSets[h].gridMode ? "*" : "";
+                     cellText = "H" + IntegerToString(hedgeNum) + ":" + side + modeStr + " " + 
+                                DoubleToString(g_hedgeSets[h].hedgeLots, 2) + "L";
+                     cellText += " B:" + IntegerToString(g_hedgeSets[h].boundTicketCount);
+                     
+                     plText = "$" + DoubleToString(pnl, 2);
+                     cellColor = (pnl >= 0) ? COLOR_PROFIT : COLOR_LOSS;
+                     plColor = (pnl >= 0) ? COLOR_PROFIT : COLOR_LOSS;
+                     break;
+                  }
+               }
+               
+               if(!found)
+               {
+                  if(row == 0 && groupStatus[g] == 1)
+                  {
+                     cellText = "  STANDBY";
+                     cellColor = COLOR_STANDBY;
+                  }
+                  else
+                  {
+                     cellText = "H" + IntegerToString(hedgeNum) + ": ---";
+                     cellColor = COLOR_NEUTRAL;
+                  }
+               }
+            }
+            
+            CreateDashText(cellTxt, colX + (int)(4 * sc), rowY + (int)(2 * sc), 
+                           cellText, cellColor, fSize, "Consolas");
+            CreateDashText(cellPL, colX + (int)(4 * sc), rowY + (int)(16 * sc), 
+                           plText, plColor, fSize, "Consolas");
+            objCount += 3;
+         }
+      }
+      curY += 4 * rowH;
+      
+      // Add small gap between the two rows of groups
+      if(setIdx == 0) curY += (int)(4 * sc);
    }
    
    // === BOTTOM BORDER ===
-   int bottomY = curY + 4 * rowH;
    string btmBorder = "GM_HC_BTM";
-   CreateDashRect(btmBorder, x, bottomY, totalW, (int)(2 * sc), COLOR_BG_HEADER);
+   CreateDashRect(btmBorder, x, curY, totalW, (int)(2 * sc), COLOR_BG_HEADER);
    objCount++;
    
-   // Cleanup: no stale objects needed since layout is fixed (always 7x4 grid)
+   // Cleanup: layout is fixed (always 10 groups x 4 rows in 2 sets)
 }
 //+------------------------------------------------------------------+
