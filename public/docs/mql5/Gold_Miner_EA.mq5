@@ -6165,18 +6165,36 @@ void CheckAndOpenHedge()
        }
        g_hedgeSets[slot].hedgeNumber = hedgeNumInCycle + 1;
 
-      // Find the hedge ticket we just opened
+      // v5.17: Find hedge ticket via trade.ResultDeal() first (broker-proof)
       g_hedgeSets[slot].hedgeTicket = 0;
-      for(int i = PositionsTotal() - 1; i >= 0; i--)
+      ulong dealId = trade.ResultDeal();
+      if(dealId > 0)
       {
-         ulong ticket = PositionGetTicket(i);
-         if(ticket == 0) continue;
-         if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
-         if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
-         if(PositionGetString(POSITION_COMMENT) == comment)
+         if(HistoryDealSelect(dealId))
          {
-            g_hedgeSets[slot].hedgeTicket = ticket;
-            break;
+            long posId = HistoryDealGetInteger(dealId, DEAL_POSITION_ID);
+            if(posId > 0)
+            {
+               g_hedgeSets[slot].hedgeTicket = (ulong)posId;
+               Print("HEDGE Set#", slot+1, " ticket via ResultDeal: ", g_hedgeSets[slot].hedgeTicket);
+            }
+         }
+      }
+      // Fallback: scan by comment if trade result failed
+      if(g_hedgeSets[slot].hedgeTicket == 0)
+      {
+         for(int i = PositionsTotal() - 1; i >= 0; i--)
+         {
+            ulong ticket = PositionGetTicket(i);
+            if(ticket == 0) continue;
+            if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+            if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+            if(PositionGetString(POSITION_COMMENT) == comment)
+            {
+               g_hedgeSets[slot].hedgeTicket = ticket;
+               Print("HEDGE Set#", slot+1, " ticket via comment scan: ", ticket);
+               break;
+            }
          }
       }
 
