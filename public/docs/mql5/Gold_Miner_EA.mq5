@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v5.3 - MTF ZigZag+CDC+Grid+License  |
+//|                Gold Miner EA v5.4 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "5.30"
-#property description "Gold Miner EA v5.3 - MTF ZigZag + CDC + Squeeze + Net Hedge + Cycle Label + License"
+#property version   "5.40"
+#property description "Gold Miner EA v5.4 - MTF ZigZag + CDC + Squeeze + Net Hedge + Cycle Label + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -209,6 +209,7 @@ input int      DashboardX           = 20;      // Dashboard X Position
 input int      DashboardY           = 30;      // Dashboard Y Position
 input color    DashboardColor       = clrWhite; // Dashboard Text Color
 input double   DashboardScale       = 1.0;     // Dashboard Scale (0.8-1.5)
+input int      DashboardWidth       = 340;     // Dashboard Table Width (300-500)
 
 //--- Rebate Settings
 input group "=== Rebate Settings ==="
@@ -479,6 +480,7 @@ datetime g_lastHedgeGridTime = 0;  // cooldown timer for hedge grid orders
 int      g_lastDashboardRowCount = 0;  // track previous tick row count for stale cleanup
 int      g_currentCycleIndex = 0;      // Cycle labeling: 0=A, 1=B, 2=C, 3=D
 int      g_lastHedgeExpansionDir = 0;  // Track last hedge expansion direction: -1=bearish, +1=bullish, 0=none
+bool     g_cycleHedged = false;        // v5.4: Track if CURRENT cycle was hedged (for cycle increment)
 
 //+------------------------------------------------------------------+
 //| Get Cycle Suffix for order comments (_A, _B, _C, _D)              |
@@ -683,10 +685,11 @@ int OnInit()
       ArrayResize(g_hedgeSets[h].boundTickets, 0);
    }
    g_hedgeSetCount = 0;
-   g_currentCycleIndex = 0;
-   g_lastHedgeExpansionDir = 0;
+    g_currentCycleIndex = 0;
+    g_lastHedgeExpansionDir = 0;
+    g_cycleHedged = false;
 
-   Print("Gold Miner EA v5.3 initialized successfully");
+   Print("Gold Miner EA v5.4 initialized successfully");
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -1047,12 +1050,30 @@ void OnTick()
       }
    }
 
-   // === COUNTER-TREND HEDGING CHECK ===
-   if(InpHedge_Enable && InpUseSqueezeFilter)
-   {
-      CheckAndOpenHedge();
-      ManageHedgeSets();
-   }
+    // === COUNTER-TREND HEDGING CHECK ===
+    if(InpHedge_Enable && InpUseSqueezeFilter)
+    {
+       CheckAndOpenHedge();
+       ManageHedgeSets();
+    }
+    
+    // === v5.4: Reset cycle to A when no positions exist for this EA ===
+    {
+       int myPositions = 0;
+       for(int i = PositionsTotal() - 1; i >= 0; i--)
+       {
+          ulong ticket = PositionGetTicket(i);
+          if(PositionSelectByTicket(ticket) && PositionGetInteger(POSITION_MAGIC) == MagicNumber
+             && PositionGetString(POSITION_SYMBOL) == _Symbol)
+             myPositions++;
+       }
+       if(myPositions == 0 && (g_currentCycleIndex > 0 || g_cycleHedged))
+       {
+          g_currentCycleIndex = 0;
+          g_cycleHedged = false;
+          g_lastHedgeExpansionDir = 0;
+       }
+    }
 
    // === ORIGINAL TRADING LOGIC (unchanged) ===
    if(g_eaStopped) return;
@@ -1196,8 +1217,8 @@ void OnTick()
                 {
                    if(shouldEnterBuy)
                    {
-                       // v5.3: Increment cycle only when hedge is active
-                       if(g_hedgeSetCount > 0 && g_currentCycleIndex < 3) g_currentCycleIndex++;
+                        // v5.4: Increment cycle only when THIS cycle was hedged
+                        if(g_cycleHedged && g_currentCycleIndex < 3) { g_currentCycleIndex++; g_cycleHedged = false; }
                        if(OpenOrder(ORDER_TYPE_BUY, InitialLotSize, "GM_INIT" + GetCycleSuffix()))
                       {
                          g_initialBuyPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
@@ -1219,8 +1240,8 @@ void OnTick()
                 {
                    if(shouldEnterSell)
                    {
-                       // v5.3: Increment cycle only when hedge is active
-                       if(g_hedgeSetCount > 0 && g_currentCycleIndex < 3) g_currentCycleIndex++;
+                        // v5.4: Increment cycle only when THIS cycle was hedged
+                        if(g_cycleHedged && g_currentCycleIndex < 3) { g_currentCycleIndex++; g_cycleHedged = false; }
                        if(OpenOrder(ORDER_TYPE_SELL, InitialLotSize, "GM_INIT" + GetCycleSuffix()))
                       {
                          g_initialSellPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
@@ -1306,8 +1327,8 @@ void OnTick()
          {
             if(TradingMode == TRADE_BUY_ONLY || TradingMode == TRADE_BOTH)
             {
-               // v5.3: Increment cycle only when hedge is active
-               if(g_hedgeSetCount > 0 && g_currentCycleIndex < 3) g_currentCycleIndex++;
+                // v5.4: Increment cycle only when THIS cycle was hedged
+                if(g_cycleHedged && g_currentCycleIndex < 3) { g_currentCycleIndex++; g_cycleHedged = false; }
                if(OpenOrder(ORDER_TYPE_BUY, InitialLotSize, "GM_INIT" + GetCycleSuffix()))
                {
                   g_initialBuyPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
@@ -1322,8 +1343,8 @@ void OnTick()
          {
             if(TradingMode == TRADE_SELL_ONLY || TradingMode == TRADE_BOTH)
             {
-               // v5.3: Increment cycle only when hedge is active
-               if(g_hedgeSetCount > 0 && g_currentCycleIndex < 3) g_currentCycleIndex++;
+                // v5.4: Increment cycle only when THIS cycle was hedged
+                if(g_cycleHedged && g_currentCycleIndex < 3) { g_currentCycleIndex++; g_cycleHedged = false; }
                if(OpenOrder(ORDER_TYPE_SELL, InitialLotSize, "GM_INIT" + GetCycleSuffix()))
                {
                   g_initialSellPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
@@ -1589,8 +1610,9 @@ void CloseAllPositions()
       ArrayResize(g_hedgeSets[h].boundTickets, 0);
    }
    g_hedgeSetCount = 0;
-   g_currentCycleIndex = 0;  // Reset cycle labeling
-   g_lastHedgeExpansionDir = 0;  // Reset hedge expansion direction
+    g_currentCycleIndex = 0;  // Reset cycle labeling
+    g_lastHedgeExpansionDir = 0;  // Reset hedge expansion direction
+    g_cycleHedged = false;  // v5.4: Reset cycle hedged flag
 }
 
 //+------------------------------------------------------------------+
@@ -2657,11 +2679,11 @@ void DrawTableRow(int rowIndex, string label, string value, color valueColor, co
    int x = DashboardX;
    int rowH = (int)(20 * sc);
    int y = DashboardY + (int)(24 * sc) + rowIndex * rowH;
-   int tblW = (int)(340 * sc);
-   int rH = (int)(19 * sc);
-   int sectionBarWidth = (int)(4 * sc);
-   int labelX = x + sectionBarWidth + (int)(6 * sc);
-   int valueX = x + (int)(180 * sc);
+    int tblW = (int)(DashboardWidth * sc);
+    int rH = (int)(19 * sc);
+    int sectionBarWidth = (int)(4 * sc);
+    int labelX = x + sectionBarWidth + (int)(6 * sc);
+    int valueX = x + (int)((DashboardWidth * 0.53) * sc);
    int fSize = (int)(9 * sc);
    if(fSize < 7) fSize = 7;
 
@@ -2691,7 +2713,7 @@ void DisplayDashboard()
    // Stale row cleanup moved to end of function (prevents flicker)
    
    double sc = MathMax(0.8, MathMin(1.5, DashboardScale));
-   int tableWidth = (int)(340 * sc);
+   int tableWidth = (int)(DashboardWidth * sc);
    int headerHeight = (int)(22 * sc);
    int headerFontSize = (int)(11 * sc);
    if(headerFontSize < 8) headerFontSize = 8;
@@ -4112,8 +4134,8 @@ void OnTickZigZagMTF()
 
             if(shouldEnter)
             {
-               // v5.3: Increment cycle only when hedge is active
-               if(g_hedgeSetCount > 0 && g_currentCycleIndex < 3) g_currentCycleIndex++;
+                // v5.4: Increment cycle only when THIS cycle was hedged
+                if(g_cycleHedged && g_currentCycleIndex < 3) { g_currentCycleIndex++; g_cycleHedged = false; }
                if(OpenOrderTF(t, ORDER_TYPE_BUY, InitialLotSize, "INIT"))
                {
                   g_tfStates[t].initialBuyPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
@@ -4135,8 +4157,8 @@ void OnTickZigZagMTF()
 
             if(shouldEnter)
             {
-               // v5.3: Increment cycle only when hedge is active
-               if(g_hedgeSetCount > 0 && g_currentCycleIndex < 3) g_currentCycleIndex++;
+                // v5.4: Increment cycle only when THIS cycle was hedged
+                if(g_cycleHedged && g_currentCycleIndex < 3) { g_currentCycleIndex++; g_cycleHedged = false; }
                if(OpenOrderTF(t, ORDER_TYPE_SELL, InitialLotSize, "INIT"))
                {
                   g_tfStates[t].initialSellPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
@@ -6106,10 +6128,13 @@ void CheckAndOpenHedge()
          g_hedgeSets[slot].boundTicketCount = bc + 1;
       }
 
-      g_hedgeSetCount++;
-      
-       // === v5.3: Track expansion direction for hedge sequence ===
-       g_lastHedgeExpansionDir = bestDir;
+       g_hedgeSetCount++;
+       
+        // === v5.3: Track expansion direction for hedge sequence ===
+        g_lastHedgeExpansionDir = bestDir;
+        
+        // === v5.4: Mark current cycle as hedged → next INIT will increment cycle ===
+        g_cycleHedged = true;
        
        string sideStr = (hedgeSide == POSITION_TYPE_BUY) ? "BUY" : "SELL";
        Print("HEDGE OPENED: Set#", slot + 1, " ", sideStr, " ", DoubleToString(hedgeLots, 2),
