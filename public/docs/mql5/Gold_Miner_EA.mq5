@@ -1489,10 +1489,10 @@ double CalculateAveragePrice(ENUM_POSITION_TYPE side)
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       if(PositionGetInteger(POSITION_TYPE) != side) continue;
       
-      // Skip hedge orders — basket TP/SL must not include hedge positions
-      if(IsHedgeComment(PositionGetString(POSITION_COMMENT))) continue;
-      // v5.7: Skip orders bound to hedge sets — managed by hedge system
-      if(IsTicketBound(ticket)) continue;
+       // Skip hedge orders — basket TP/SL must not include hedge positions
+       if(IsHedgeComment(PositionGetString(POSITION_COMMENT)) || IsHedgeTicket(ticket)) continue;
+       // v5.7: Skip orders bound to hedge sets — managed by hedge system
+       if(IsTicketBound(ticket)) continue;
 
       double vol = PositionGetDouble(POSITION_VOLUME);
       double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
