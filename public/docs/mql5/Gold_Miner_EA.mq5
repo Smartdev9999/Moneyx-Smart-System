@@ -477,6 +477,51 @@ HedgeSet g_hedgeSets[MAX_HEDGE_SETS];
 int      g_hedgeSetCount = 0;
 datetime g_lastHedgeGridTime = 0;  // cooldown timer for hedge grid orders
 int      g_lastDashboardRowCount = 0;  // track previous tick row count for stale cleanup
+int      g_currentCycleIndex = 0;      // Cycle labeling: 0=A, 1=B, 2=C, 3=D
+
+//+------------------------------------------------------------------+
+//| Get Cycle Suffix for order comments (_A, _B, _C, _D)              |
+//+------------------------------------------------------------------+
+string GetCycleSuffix()
+{
+   return "_" + CharToString((char)('A' + g_currentCycleIndex));
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Net Hedge Lots — |totalBuyLots - totalSellLots|          |
+//| Scans ALL positions (normal + hedge + grid hedge) for this EA     |
+//+------------------------------------------------------------------+
+double CalculateNetHedgeLots(ENUM_POSITION_TYPE &hedgeSide, ENUM_POSITION_TYPE &counterSide)
+{
+   double totalBuyLots = 0, totalSellLots = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      ENUM_POSITION_TYPE pType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+      double vol = PositionGetDouble(POSITION_VOLUME);
+      if(pType == POSITION_TYPE_BUY)
+         totalBuyLots += vol;
+      else
+         totalSellLots += vol;
+   }
+   double netLots = MathAbs(totalBuyLots - totalSellLots);
+   if(totalBuyLots > totalSellLots)
+   {
+      // More buy lots → hedge with SELL, counter = BUY
+      hedgeSide = POSITION_TYPE_SELL;
+      counterSide = POSITION_TYPE_BUY;
+   }
+   else
+   {
+      // More sell lots → hedge with BUY, counter = SELL
+      hedgeSide = POSITION_TYPE_BUY;
+      counterSide = POSITION_TYPE_SELL;
+   }
+   return netLots;
+}
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                     |
