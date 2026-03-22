@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|               Gold Miner EA v5.11 - MTF ZigZag+CDC+Grid+License  |
+//|               Gold Miner EA v5.12 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "5.110"
-#property description "Gold Miner EA v5.11 - MTF ZigZag + CDC + Squeeze + Net Hedge + 7 Cycle Groups + 16 Hedge Slots + License"
+#property version   "5.120"
+#property description "Gold Miner EA v5.12 - MTF ZigZag + CDC + Squeeze + Net Hedge + Grid Recovery + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -694,7 +694,7 @@ int OnInit()
     g_lastHedgeExpansionDir = 0;
     g_cycleHedged = false;
 
-   Print("Gold Miner EA v5.11 initialized successfully");
+   Print("Gold Miner EA v5.12 initialized successfully");
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -747,7 +747,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
    ObjectsDeleteAll(0, "GM_HC_");   // v5.5: hedge cycle monitor objects
 
-   Print("Gold Miner EA v5.11 deinitialized");
+   Print("Gold Miner EA v5.12 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -2779,7 +2779,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v5.11 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v5.11 [ZZ]" : "Gold Miner EA v5.11 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v5.12 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v5.12 [ZZ]" : "Gold Miner EA v5.12 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -3044,39 +3044,14 @@ void DisplayDashboard()
       DrawTableRow(row, "Squeeze Status", sqBlock, sqBlockClr, COLOR_SECTION_INFO); row++;
    }
 
-   //--- Counter-Trend Hedging Section
+   //--- Counter-Trend Hedging Section (v5.12: simplified — details in Hedge Cycle Monitor)
    if(InpHedge_Enable)
    {
-      color COLOR_SECTION_HEDGE = C'130,50,180';  // purple for hedge section
-      
-      // Show current cycle label
+      color COLOR_SECTION_HEDGE = C'130,50,180';
       string cycleLabel = "Cycle: " + CharToString((char)('A' + g_currentCycleIndex));
       if(g_hedgeSetCount > 0)
          cycleLabel += " (Sets:" + IntegerToString(g_hedgeSetCount) + ")";
-      DrawTableRow(row, "Cycle", cycleLabel, clrGold, COLOR_SECTION_HEDGE); row++;
-      
-      bool anyActive = false;
-      for(int h = 0; h < MAX_HEDGE_SETS; h++)
-      {
-         if(g_hedgeSets[h].active && PositionSelectByTicket(g_hedgeSets[h].hedgeTicket))
-         {
-            anyActive = true;
-            string setLabel = "Hedge #" + IntegerToString(h + 1);
-            string sideStr = (g_hedgeSets[h].hedgeSide == POSITION_TYPE_BUY) ? "BUY" : "SELL";
-
-            // Get hedge PnL
-            double hedgePnL = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
-
-            string hedgeInfo = sideStr + " " + DoubleToString(g_hedgeSets[h].hedgeLots, 2) + "L";
-            hedgeInfo += " PnL:$" + DoubleToString(hedgePnL, 2);
-            hedgeInfo += " B:" + IntegerToString(g_hedgeSets[h].boundTicketCount);
-            if(g_hedgeSets[h].gridMode)
-               hedgeInfo += " Grid:L" + IntegerToString(g_hedgeSets[h].gridLevel);
-
-            color hedgeClr = (hedgePnL >= 0) ? clrLime : clrOrangeRed;
-            DrawTableRow(row, setLabel, hedgeInfo, hedgeClr, COLOR_SECTION_HEDGE); row++;
-         }
-      }
+      DrawTableRow(row, "Hedge", cycleLabel, clrGold, COLOR_SECTION_HEDGE); row++;
    }
 
    //--- Cleanup stale rows from previous tick (prevents flicker)
@@ -6404,11 +6379,27 @@ void ManageHedgeMatchingClose(int idx)
          }
       }
 
-      // Deactivate hedge set
-      g_hedgeSets[idx].active = false;
-      g_hedgeSets[idx].boundTicketCount = 0;
-      ArrayResize(g_hedgeSets[idx].boundTickets, 0);
-      g_hedgeSetCount--;
+      // v5.12: Check if bound orders remain after matching
+      RefreshBoundTickets(idx);
+      
+      if(g_hedgeSets[idx].boundTicketCount > 0)
+      {
+         // Orders still bound → enter Grid Mode for recovery
+         g_hedgeSets[idx].gridMode = true;
+         g_hedgeSets[idx].hedgeTicket = 0;  // hedge order already closed
+         g_hedgeSets[idx].gridLevel = CalculateEquivGridLevel(
+            CalculateRemainingBoundLots(idx));
+         Print("HEDGE Set#", idx+1, " matched ", lossUsed, " losses but ", 
+               g_hedgeSets[idx].boundTicketCount, 
+               " bound orders remain. Entering Grid Recovery Mode.");
+      }
+      else
+      {
+         g_hedgeSets[idx].active = false;
+         g_hedgeSets[idx].boundTicketCount = 0;
+         ArrayResize(g_hedgeSets[idx].boundTickets, 0);
+         g_hedgeSetCount--;
+      }
       Sleep(100);
    }
    else
@@ -6574,10 +6565,261 @@ int CalculateEquivGridLevel(double remainingLots)
 }
 
 //+------------------------------------------------------------------+
+//| v5.12: Calculate remaining lots in bound orders of a hedge set     |
+//+------------------------------------------------------------------+
+double CalculateRemainingBoundLots(int idx)
+{
+   double totalLots = 0;
+   for(int i = 0; i < g_hedgeSets[idx].boundTicketCount; i++)
+   {
+      if(PositionSelectByTicket(g_hedgeSets[idx].boundTickets[i]))
+         totalLots += PositionGetDouble(POSITION_VOLUME);
+   }
+   return totalLots;
+}
+
+//+------------------------------------------------------------------+
+//| v5.12: Grid Recovery Mode — hedge closed, bound orders remain      |
+//| Opens grid orders on hedge's original side to generate profit      |
+//| that matches against remaining bound orders (loss side)            |
+//+------------------------------------------------------------------+
+void ManageGridRecoveryMode(int idx)
+{
+   // Refresh bound tickets
+   RefreshBoundTickets(idx);
+   
+   if(g_hedgeSets[idx].boundTicketCount == 0)
+   {
+      // All bound orders gone → clean up grid orders and deactivate
+      for(int i = PositionsTotal() - 1; i >= 0; i--)
+      {
+         ulong ticket = PositionGetTicket(i);
+         if(ticket == 0) continue;
+         if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+         if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+         string comment = PositionGetString(POSITION_COMMENT);
+         string prefix = "GM_HG" + IntegerToString(idx + 1);
+         if(StringFind(comment, prefix) >= 0)
+            trade.PositionClose(ticket);
+      }
+      g_hedgeSets[idx].active = false;
+      g_hedgeSetCount--;
+      Print("HEDGE Set#", idx + 1, " grid recovery complete. All bound orders cleared.");
+      return;
+   }
+   
+   // Collect grid order profits for this set
+   int gridProfitCount = 0;
+   double gridTotalProfit = 0;
+   ulong gridProfitTickets[];
+   double gridProfitValues[];
+   
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      string comment = PositionGetString(POSITION_COMMENT);
+      string prefix = "GM_HG" + IntegerToString(idx + 1);
+      if(StringFind(comment, prefix) < 0) continue;
+      
+      double pnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+      if(pnl > 0)
+      {
+         ArrayResize(gridProfitTickets, gridProfitCount + 1);
+         ArrayResize(gridProfitValues, gridProfitCount + 1);
+         gridProfitTickets[gridProfitCount] = ticket;
+         gridProfitValues[gridProfitCount] = pnl;
+         gridTotalProfit += pnl;
+         gridProfitCount++;
+      }
+   }
+   
+   // Try matching grid profits against bound order losses
+   if(gridProfitCount >= InpHedge_PartialMinProfitOrders)
+   {
+      double budget = gridTotalProfit - InpHedge_MatchMinProfit;
+      if(budget > 0)
+      {
+         // Collect bound order losses
+         ulong lossTickets[];
+         double lossValues[];
+         datetime lossTimes[];
+         int lossCount = 0;
+         
+         for(int b = 0; b < g_hedgeSets[idx].boundTicketCount; b++)
+         {
+            ulong bt = g_hedgeSets[idx].boundTickets[b];
+            if(!PositionSelectByTicket(bt)) continue;
+            double pnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+            if(pnl >= 0) continue;
+            
+            ArrayResize(lossTickets, lossCount + 1);
+            ArrayResize(lossValues, lossCount + 1);
+            ArrayResize(lossTimes, lossCount + 1);
+            lossTickets[lossCount] = bt;
+            lossValues[lossCount] = pnl;
+            lossTimes[lossCount] = (datetime)PositionGetInteger(POSITION_TIME);
+            lossCount++;
+         }
+         
+         // Sort by time ascending (oldest first)
+         for(int a = 0; a < lossCount - 1; a++)
+            for(int b2 = a + 1; b2 < lossCount; b2++)
+               if(lossTimes[b2] < lossTimes[a])
+               {
+                  double tmpV = lossValues[a]; lossValues[a] = lossValues[b2]; lossValues[b2] = tmpV;
+                  ulong tmpT = lossTickets[a]; lossTickets[a] = lossTickets[b2]; lossTickets[b2] = tmpT;
+                  datetime tmpD = lossTimes[a]; lossTimes[a] = lossTimes[b2]; lossTimes[b2] = tmpD;
+               }
+         
+         // Budget matching
+         double cumLoss = 0;
+         int closeIdx[];
+         int lossUsed = 0;
+         for(int l = 0; l < lossCount; l++)
+         {
+            double absLoss = MathAbs(lossValues[l]);
+            if(cumLoss + absLoss <= budget)
+            {
+               ArrayResize(closeIdx, lossUsed + 1);
+               closeIdx[lossUsed] = l;
+               cumLoss += absLoss;
+               lossUsed++;
+            }
+         }
+         
+         if(lossUsed > 0)
+         {
+            Print("GRID RECOVERY MATCH Set#", idx + 1, ": grid profit $",
+                  DoubleToString(gridTotalProfit, 2), " covers ", lossUsed,
+                  " bound losses ($", DoubleToString(cumLoss, 2), ")");
+            
+            // Close grid profit orders
+            for(int gp = 0; gp < gridProfitCount; gp++)
+               trade.PositionClose(gridProfitTickets[gp]);
+            
+            // Close matched bound losses
+            for(int cl = 0; cl < lossUsed; cl++)
+            {
+               int li = closeIdx[cl];
+               trade.PositionClose(lossTickets[li]);
+               RemoveBoundTicket(idx, lossTickets[li]);
+            }
+            
+            // Recheck
+            RefreshBoundTickets(idx);
+            if(g_hedgeSets[idx].boundTicketCount == 0)
+            {
+               g_hedgeSets[idx].active = false;
+               g_hedgeSetCount--;
+               Print("HEDGE Set#", idx + 1, " fully recovered via grid recovery.");
+            }
+            Sleep(100);
+            return;
+         }
+      }
+   }
+   
+   // Open next grid order if needed
+   if(g_newOrderBlocked) return;
+   
+   int currentGridCount = 0;
+   double lastGridPrice = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      string comment = PositionGetString(POSITION_COMMENT);
+      string prefix = "GM_HG" + IntegerToString(idx + 1);
+      if(StringFind(comment, prefix) >= 0)
+      {
+         currentGridCount++;
+         double gPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+         if(g_hedgeSets[idx].hedgeSide == POSITION_TYPE_BUY)
+         {
+            if(gPrice < lastGridPrice || lastGridPrice == 0) lastGridPrice = gPrice;
+         }
+         else
+         {
+            if(gPrice > lastGridPrice || lastGridPrice == 0) lastGridPrice = gPrice;
+         }
+      }
+   }
+   
+   // Use bound order's last price as reference if no grid orders yet
+   if(lastGridPrice <= 0)
+   {
+      for(int b = 0; b < g_hedgeSets[idx].boundTicketCount; b++)
+      {
+         if(PositionSelectByTicket(g_hedgeSets[idx].boundTickets[b]))
+         {
+            lastGridPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+            break;
+         }
+      }
+   }
+   if(lastGridPrice <= 0) return;
+   
+   if(currentGridCount < GridLoss_MaxTrades && currentGridCount <= g_hedgeSets[idx].gridLevel + 3)
+   {
+      int nextLevel = g_hedgeSets[idx].gridLevel + currentGridCount + 1;
+      double nextLot = InitialLotSize;
+      if(GridLoss_LotMode == LOT_MULTIPLY)
+         nextLot = InitialLotSize * MathPow(GridLoss_MultiplyFactor, nextLevel);
+      else if(GridLoss_LotMode == LOT_ADD)
+         nextLot = InitialLotSize + (GridLoss_AddLotPerLevel * InitialLotSize) * nextLevel;
+      
+      if(TimeCurrent() - g_lastHedgeGridTime < 5) return;
+      
+      double requiredGap = GetGridDistance(currentGridCount + 1, true);
+      if(requiredGap <= 0) return;
+      
+      double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+      double distance = 0;
+      if(g_hedgeSets[idx].hedgeSide == POSITION_TYPE_SELL)
+      {
+         double currentBid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+         distance = (currentBid - lastGridPrice) / point;
+      }
+      else
+      {
+         double currentAsk = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+         distance = (lastGridPrice - currentAsk) / point;
+      }
+      
+      if(distance >= requiredGap && distance > 0)
+      {
+         ENUM_ORDER_TYPE orderType = (g_hedgeSets[idx].hedgeSide == POSITION_TYPE_BUY)
+                                    ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+         string comment = "GM_HG" + IntegerToString(idx + 1) + "_GL" + IntegerToString(currentGridCount + 1);
+         
+         if(OpenOrder(orderType, nextLot, comment))
+         {
+            g_lastHedgeGridTime = TimeCurrent();
+            Print("GRID RECOVERY Set#", idx + 1, " opened grid L", currentGridCount + 1,
+                  " lots=", DoubleToString(nextLot, 2),
+                  " gap=", DoubleToString(distance, 0), "/", DoubleToString(requiredGap, 0));
+         }
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
 //| Hedge Grid Mode: original orders gone, manage hedge recovery       |
 //+------------------------------------------------------------------+
 void ManageHedgeGridMode(int idx)
 {
+   // v5.12: If main hedge is closed but bound orders remain → use grid recovery mode
+   if(g_hedgeSets[idx].hedgeTicket == 0)
+   {
+      ManageGridRecoveryMode(idx);
+      return;
+   }
+   
    // Verify main hedge ticket
    bool mainHedgeExists = false;
    double mainHedgePnL = 0;
@@ -7064,7 +7306,7 @@ void DisplayHedgeCycleDashboard()
    int totalW = colW * 7 + (int)(6 * sc);  // 7 columns + padding
    int headerH = (int)(22 * sc);
    int colHeaderH = (int)(20 * sc);
-   int rowH = (int)(18 * sc);
+   int rowH = (int)(32 * sc);        // v5.12: taller rows for 2-line display (info + PnL)
    int fSizeH = (int)(10 * sc);
    if(fSizeH < 7) fSizeH = 7;
    int fSize = (int)(8 * sc);
@@ -7149,7 +7391,7 @@ void DisplayHedgeCycleDashboard()
    }
    curY += colHeaderH;
    
-   // === H1-H4 ROWS ===
+   // === H1-H4 ROWS (v5.12: 2-line display with PnL) ===
    for(int row = 0; row < 4; row++)
    {
       int rowY = curY + row * rowH;
@@ -7160,32 +7402,27 @@ void DisplayHedgeCycleDashboard()
          int colX = x + g * colW;
          string cellBg = "GM_HC_R" + IntegerToString(row) + "C" + IntegerToString(g) + "_BG";
          string cellTxt = "GM_HC_R" + IntegerToString(row) + "C" + IntegerToString(g) + "_TX";
+         string cellPL  = "GM_HC_R" + IntegerToString(row) + "C" + IntegerToString(g) + "_PL";
          
          CreateDashRect(cellBg, colX, rowY, colW, rowH, rowBg);
          
          string cellText = "";
+         string plText = "";
          color cellColor = COLOR_NEUTRAL;
+         color plColor = COLOR_NEUTRAL;
          
          if(groupStatus[g] == 0)
          {
-            // OFF — show only on first row
             if(row == 0)
             {
                cellText = "  OFF";
                cellColor = COLOR_OFF;
             }
-            else
-            {
-               cellText = "";
-               cellColor = COLOR_OFF;
-            }
          }
          else
          {
-            // STANDBY or ACTIVE — check for hedge data
-            int hedgeNum = row + 1;  // H1, H2, H3, H4
+            int hedgeNum = row + 1;
             
-            // Find hedge set matching this group + hedge number
             bool found = false;
             for(int h = 0; h < MAX_HEDGE_SETS; h++)
             {
@@ -7196,7 +7433,7 @@ void DisplayHedgeCycleDashboard()
                   
                   // Calculate PnL for this hedge
                   double pnl = 0;
-                  if(PositionSelectByTicket(g_hedgeSets[h].hedgeTicket))
+                  if(g_hedgeSets[h].hedgeTicket > 0 && PositionSelectByTicket(g_hedgeSets[h].hedgeTicket))
                      pnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
                   
                   // Add grid tickets PnL
@@ -7206,9 +7443,21 @@ void DisplayHedgeCycleDashboard()
                         pnl += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
                   }
                   
-                  cellText = "H" + IntegerToString(hedgeNum) + ":" + side + " " + 
+                  // Add bound orders PnL
+                  for(int bt = 0; bt < g_hedgeSets[h].boundTicketCount; bt++)
+                  {
+                     if(PositionSelectByTicket(g_hedgeSets[h].boundTickets[bt]))
+                        pnl += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+                  }
+                  
+                  string modeStr = g_hedgeSets[h].gridMode ? "*" : "";
+                  cellText = "H" + IntegerToString(hedgeNum) + ":" + side + modeStr + " " + 
                              DoubleToString(g_hedgeSets[h].hedgeLots, 2) + "L";
+                  cellText += " B:" + IntegerToString(g_hedgeSets[h].boundTicketCount);
+                  
+                  plText = "$" + DoubleToString(pnl, 2);
                   cellColor = (pnl >= 0) ? COLOR_PROFIT : COLOR_LOSS;
+                  plColor = (pnl >= 0) ? COLOR_PROFIT : COLOR_LOSS;
                   break;
                }
             }
@@ -7230,7 +7479,9 @@ void DisplayHedgeCycleDashboard()
          
          CreateDashText(cellTxt, colX + (int)(4 * sc), rowY + (int)(2 * sc), 
                         cellText, cellColor, fSize, "Consolas");
-         objCount += 2;
+         CreateDashText(cellPL, colX + (int)(4 * sc), rowY + (int)(16 * sc), 
+                        plText, plColor, fSize, "Consolas");
+         objCount += 3;
       }
    }
    
