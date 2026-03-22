@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|               Gold Miner EA v5.15 - MTF ZigZag+CDC+Grid+License  |
+//|               Gold Miner EA v5.16 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "5.150"
-#property description "Gold Miner EA v5.15 - MTF ZigZag + CDC + Squeeze + Net Hedge + Stalled Recovery + 10 Cycles + License"
+#property version   "5.160"
+#property description "Gold Miner EA v5.16 - MTF ZigZag + CDC + Squeeze + Net Hedge + Stalled Recovery + 10 Cycles + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -694,7 +694,7 @@ int OnInit()
     g_lastHedgeExpansionDir = 0;
     g_cycleHedged = false;
 
-   Print("Gold Miner EA v5.15 initialized successfully");
+   Print("Gold Miner EA v5.16 initialized successfully");
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -747,7 +747,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
    ObjectsDeleteAll(0, "GM_HC_");   // v5.5: hedge cycle monitor objects
 
-   Print("Gold Miner EA v5.15 deinitialized");
+   Print("Gold Miner EA v5.16 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -2781,7 +2781,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v5.15 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v5.15 [ZZ]" : "Gold Miner EA v5.15 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v5.16 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v5.16 [ZZ]" : "Gold Miner EA v5.16 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -6258,37 +6258,32 @@ void ManageHedgeSets()
          }
       }
 
-      // === v5.6: ALL hedge closing actions ONLY during Normal/Squeeze ===
-      if(!isExpansion)
+      // === v5.16: Grid Recovery can OPEN orders anytime, closing restricted to Normal/Squeeze ===
+      if(g_hedgeSets[h].gridMode && g_hedgeSets[h].hedgeTicket == 0)
       {
-          if(g_hedgeSets[h].gridMode && g_hedgeSets[h].hedgeTicket == 0)
-          {
-             ManageHedgeGridMode(h);     // hedge closed → normal recovery
-          }
-          else if(g_hedgeSets[h].gridMode && g_hedgeSets[h].hedgeTicket > 0)
-          {
-             ManageGridRecoveryMode(h);  // v5.15: hedge still open → counter-side recovery
-          }
-         else
-         {
-            // Normal/Squeeze → check scenarios
-            double hedgePnL = 0;
-            if(hedgeExists)
-               hedgePnL = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+         ManageHedgeGridMode(h);     // hedge closed → recovery (internal expansion guard for closing)
+      }
+      else if(g_hedgeSets[h].gridMode && g_hedgeSets[h].hedgeTicket > 0)
+      {
+         ManageGridRecoveryMode(h);  // hedge still open → counter-side recovery (internal expansion guard for closing)
+      }
+      else if(!isExpansion)
+      {
+         // Normal/Squeeze → check scenarios
+         double hedgePnL = 0;
+         if(hedgeExists)
+            hedgePnL = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
 
-            if(hedgePnL > 0)
-               ManageHedgeMatchingClose(h);  // Scenario 1: hedge in profit
-            else
-               ManageHedgePartialClose(h);   // Scenario 2: hedge in loss, check original orders
-         }
+         if(hedgePnL > 0)
+            ManageHedgeMatchingClose(h);  // Scenario 1: hedge in profit
+         else
+            ManageHedgePartialClose(h);   // Scenario 2: hedge in loss, check original orders
       }
       else
       {
          // Still in expansion - only check if bound orders are all gone → flag gridMode
-         // But do NOT execute any closing actions during expansion
          if(g_hedgeSets[h].boundTicketCount == 0 && hedgeExists && !g_hedgeSets[h].gridMode)
          {
-            // All bound orders gone but hedge remains → flag grid mode (will execute when expansion ends)
             Print("HEDGE Set#", h + 1, " all bound orders cleared. Flagging Grid Mode (will execute after expansion).");
             g_hedgeSets[h].gridMode = true;
             g_hedgeSets[h].gridLevel = CalculateEquivGridLevel(g_hedgeSets[h].hedgeLots);
@@ -6706,11 +6701,15 @@ void ManageGridRecoveryMode(int idx)
       }
    }
    
-   // === v5.15: Matching close logic depends on hedge state ===
-   if(gridProfitCount >= InpHedge_PartialMinProfitOrders)
-   {
-      double budget = gridTotalProfit - InpHedge_MatchMinProfit;
-      if(budget > 0)
+    // === v5.16: Matching close only during Normal/Squeeze (not during expansion) ===
+    bool isExpansionLocal = false;
+    for(int sq = 0; sq < 3; sq++)
+       if(g_squeeze[sq].state == 2) { isExpansionLocal = true; break; }
+    
+    if(!isExpansionLocal && gridProfitCount >= InpHedge_PartialMinProfitOrders)
+    {
+       double budget = gridTotalProfit - InpHedge_MatchMinProfit;
+       if(budget > 0)
       {
          if(hedgeStillOpen)
          {
@@ -7001,8 +7000,13 @@ void ManageHedgeGridMode(int idx)
       }
    }
 
-   // If hedge grid profits can cover main hedge loss → partial close
-   if(mainHedgeExists && mainHedgePnL < 0 && gridProfitCount >= InpHedge_PartialMinProfitOrders)
+    // v5.16: Matching close only during Normal/Squeeze
+    bool isExpansionLocal2 = false;
+    for(int sq = 0; sq < 3; sq++)
+       if(g_squeeze[sq].state == 2) { isExpansionLocal2 = true; break; }
+    
+    // If hedge grid profits can cover main hedge loss → partial close
+    if(!isExpansionLocal2 && mainHedgeExists && mainHedgePnL < 0 && gridProfitCount >= InpHedge_PartialMinProfitOrders)
    {
       double hedgeLossPerLot = MathAbs(mainHedgePnL) / g_hedgeSets[idx].hedgeLots;
       double budget = gridTotalProfit - InpHedge_MatchMinProfit;
@@ -7546,15 +7550,15 @@ void DisplayHedgeCycleDashboard()
    groupStatus[0] = 1;  // Group A always STANDBY or ACTIVE
    if(groupHasHedge[0]) groupStatus[0] = 2;
    
-   for(int g = 1; g < 10; g++)
-   {
-      if(groupHasHedge[g])
-         groupStatus[g] = 2;  // Has hedge → ACTIVE
-      else if(groupHasHedge[g - 1])
-         groupStatus[g] = 1;  // Prev group hedged → STANDBY
-      else
-         groupStatus[g] = 0;  // OFF
-   }
+    for(int g = 1; g < 10; g++)
+    {
+       if(groupHasHedge[g])
+          groupStatus[g] = 2;  // Has hedge → ACTIVE
+       else if(g_hedgeSetCount > 0)
+          groupStatus[g] = 1;  // Any hedge active → STANDBY
+       else
+          groupStatus[g] = 0;  // OFF
+    }
    
    // === HEADER: "HEDGE CYCLE MONITOR" ===
    string hdrBg = "GM_HC_HDR_BG";
@@ -7602,8 +7606,8 @@ void DisplayHedgeCycleDashboard()
             
             CreateDashRect(cellBg, colX, rowY, colW, rowH, rowBg);
             
-            string cellText = "";
-            string plText = "";
+             string cellText = " ";
+             string plText = " ";
             color cellColor = COLOR_NEUTRAL;
             color plColor = COLOR_NEUTRAL;
             
