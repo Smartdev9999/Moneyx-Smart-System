@@ -1,27 +1,30 @@
 
 
-## Fix: Grid Recovery ไม่ออก Order ชุด E + เพิ่ม Group H/I/J (v5.13 → v5.14)
+## Fix: Stalled Hedge Recovery + IsHedgeTicket + Counter-Side Grid (v5.14 → v5.15)
 
 ### สิ่งที่แก้ไข
 
 **ไฟล์:** `public/docs/mql5/Gold_Miner_EA.mq5`
 
-#### 1. Grid Recovery — hedgeTicket = 0 ทุก path
-- `ManageHedgeMatchingClose()`: เพิ่ม `hedgeTicket = 0` หลัง `trade.PositionClose()` ในกรณี no matchable losses
-- `ManageHedgeGridMode()`: เพิ่ม fallback เมื่อ hedgeTicket > 0 แต่ position ไม่ valid → set hedgeTicket = 0 → เข้า ManageGridRecoveryMode()
-- คำนวณ gridLevel จาก `CalculateRemainingBoundLots()` แทน hardcode 0
+#### 1. Stalled Hedge Detection ใน ManageHedgePartialClose()
+- เมื่อไม่มี profit orders (profitCount==0) + hedge+bound ติดลบทั้งหมด → เข้า gridMode ทันที
+- คำนวณ gridLevel จาก totalLots (hedge + bound) ด้วย CalculateEquivGridLevel()
 
-#### 2. ขยายเป็น 10 Groups (A-J) + 20 Hedge Slots
-- `MAX_HEDGE_SETS`: 16 → 20
-- `FindLowestFreeCycle()`: scan 0-9 แทน 0-6, suffixes เพิ่ม "_H", "_I", "_J"
-- `GetCycleSuffix()`: ใช้ `CharToString('A' + index)` รองรับอัตโนมัติ
+#### 2. ManageGridRecoveryMode() — รองรับ 2 สถานะ
+- `hedgeTicket > 0`: grid เปิดฝั่ง counter-side (ตรงข้าม hedge) สร้าง profit ไป partial close hedge
+- `hedgeTicket == 0`: grid เปิดฝั่ง same-side (เหมือนเดิม) match bound orders
+- Lot calculation ใช้ total remaining (hedge+bound) ผ่าน CalculateEquivGridLevel()
+- Grid limit ขยายเป็น equivLevel + 5 (จาก +3)
 
-#### 3. Dashboard — 10 คอลัมน์แบบ 2 แถว (5+5)
-- Groups A-E แถวบน, F-J แถวล่าง
-- เพิ่มสี Group H (Purple), I (Gold), J (Teal)
-- คง layout 4 rows (H1-H4) ต่อ set
+#### 3. ManageHedgeSets() Routing — แยก gridMode + hedge ยังอยู่
+- `gridMode && hedgeTicket == 0` → ManageHedgeGridMode() (เดิม)
+- `gridMode && hedgeTicket > 0` → ManageGridRecoveryMode() (ใหม่ v5.15)
 
-#### 4. Version bump: v5.13 → v5.14
+#### 4. IsHedgeTicket() Helper — จับ hedge order ที่ไม่มี comment
+- สแกน g_hedgeSets[].hedgeTicket เทียบกับ ticket
+- เพิ่มใน 12 จุดที่ใช้ IsHedgeComment: CountPositions, CalculateAveragePrice, CalculateFloatingPL, CloseAllSide, FindMaxLotOnSide, FindLastOrder, CalculateAveragePriceTF, CalculateFloatingPL_TF, CloseAllSideTF, CountNormalOrders, CountUnboundOrders, CheckAndOpenHedge
+
+#### 5. Version bump: v5.14 → v5.15
 
 ### สิ่งที่ไม่เปลี่ยนแปลง
 - Order Execution Logic (trade.Buy/Sell/PositionClose)
