@@ -7374,13 +7374,13 @@ void DisplayHedgeCycleDashboard()
    
    // Group column accent colors — 7 groups
    color groupColors[7];
-   groupColors[0] = C'70,130,220';   // A = Blue
-   groupColors[1] = C'50,180,100';   // B = Green
-   groupColors[2] = C'220,150,50';   // C = Orange
-   groupColors[3] = C'200,70,70';    // D = Red
-   groupColors[4] = C'100,200,220';  // E = Cyan
-   groupColors[5] = C'220,100,180';  // F = Pink
-   groupColors[6] = C'160,160,180';  // G = Silver
+   groupColors[0] = C'90,150,235';   // A = Blue (brighter)
+   groupColors[1] = C'60,200,120';   // B = Green (brighter)
+   groupColors[2] = C'235,170,60';   // C = Orange (brighter)
+   groupColors[3] = C'220,85,85';    // D = Red (brighter)
+   groupColors[4] = C'110,215,235';  // E = Cyan (brighter)
+   groupColors[5] = C'235,110,195';  // F = Pink (brighter)
+   groupColors[6] = C'175,175,195';  // G = Silver (brighter)
    
    string groupNames[7];
    groupNames[0] = "Grp A";
