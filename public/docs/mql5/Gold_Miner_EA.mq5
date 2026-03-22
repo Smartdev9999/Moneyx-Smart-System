@@ -6496,7 +6496,32 @@ void ManageHedgePartialClose(int idx)
       profitCount++;
    }
 
-   if(profitCount == 0) return;  // no profitable counter-side orders
+   if(profitCount == 0)
+   {
+      // v5.15: Stalled hedge — both hedge + bound all in loss → enter grid recovery
+      // Recovery grid opens counter-side to generate profit for partial close
+      if(g_hedgeSets[idx].boundTicketCount > 0 && !g_hedgeSets[idx].gridMode)
+      {
+         bool allBoundInLoss = true;
+         for(int b = 0; b < g_hedgeSets[idx].boundTicketCount; b++)
+         {
+            if(PositionSelectByTicket(g_hedgeSets[idx].boundTickets[b]))
+            {
+               double bpnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+               if(bpnl > 0) { allBoundInLoss = false; break; }
+            }
+         }
+         if(allBoundInLoss)
+         {
+            g_hedgeSets[idx].gridMode = true;
+            double totalLots = hedgeLots + CalculateRemainingBoundLots(idx);
+            g_hedgeSets[idx].gridLevel = CalculateEquivGridLevel(totalLots);
+            Print("HEDGE Set#", idx+1, " STALLED: hedge + bound all in loss. ",
+                  "Total=", DoubleToString(totalLots,2), "L. Entering Grid Recovery.");
+         }
+      }
+      return;  // no profitable counter-side orders
+   }
 
    // Guard: require minimum number of profitable orders before starting partial close
    if(InpHedge_PartialMinProfitOrders > 0 && profitCount < InpHedge_PartialMinProfitOrders) return;
