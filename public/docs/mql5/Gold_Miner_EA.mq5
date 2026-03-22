@@ -7545,15 +7545,15 @@ void DisplayHedgeCycleDashboard()
    groupStatus[0] = 1;  // Group A always STANDBY or ACTIVE
    if(groupHasHedge[0]) groupStatus[0] = 2;
    
-   for(int g = 1; g < 10; g++)
-   {
-      if(groupHasHedge[g])
-         groupStatus[g] = 2;  // Has hedge → ACTIVE
-      else if(groupHasHedge[g - 1])
-         groupStatus[g] = 1;  // Prev group hedged → STANDBY
-      else
-         groupStatus[g] = 0;  // OFF
-   }
+    for(int g = 1; g < 10; g++)
+    {
+       if(groupHasHedge[g])
+          groupStatus[g] = 2;  // Has hedge → ACTIVE
+       else if(g_hedgeSetCount > 0)
+          groupStatus[g] = 1;  // Any hedge active → STANDBY
+       else
+          groupStatus[g] = 0;  // OFF
+    }
    
    // === HEADER: "HEDGE CYCLE MONITOR" ===
    string hdrBg = "GM_HC_HDR_BG";
