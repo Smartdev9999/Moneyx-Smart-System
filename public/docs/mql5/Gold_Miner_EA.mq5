@@ -1300,7 +1300,7 @@ void OnTick()
          {
             if(TradingMode == TRADE_BUY_ONLY || TradingMode == TRADE_BOTH)
             {
-               if(OpenOrder(ORDER_TYPE_BUY, InitialLotSize, "GM_INIT"))
+               if(OpenOrder(ORDER_TYPE_BUY, InitialLotSize, "GM_INIT" + GetCycleSuffix()))
                {
                   g_initialBuyPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
                   lastInitialCandleTime = currentBarTime;
