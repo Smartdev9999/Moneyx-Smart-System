@@ -6096,7 +6096,18 @@ void CheckAndOpenHedge()
       g_hedgeSets[slot].gridLevel = 0;
       g_hedgeSets[slot].gridTicketCount = 0;
       ArrayResize(g_hedgeSets[slot].gridTickets, 0);
-      g_hedgeSets[slot].commentPrefix = comment;
+       g_hedgeSets[slot].commentPrefix = comment;
+       
+       // === v5.5: Set cycle tracking fields ===
+       g_hedgeSets[slot].cycleIndex = g_currentCycleIndex;
+       // Count existing hedges in this cycle to determine hedge number
+       int hedgeNumInCycle = 0;
+       for(int hc = 0; hc < MAX_HEDGE_SETS; hc++)
+       {
+          if(hc != slot && g_hedgeSets[hc].active && g_hedgeSets[hc].cycleIndex == g_currentCycleIndex)
+             hedgeNumInCycle++;
+       }
+       g_hedgeSets[slot].hedgeNumber = hedgeNumInCycle + 1;
 
       // Find the hedge ticket we just opened
       g_hedgeSets[slot].hedgeTicket = 0;
