@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v5.8 - MTF ZigZag+CDC+Grid+License  |
+//|                Gold Miner EA v5.9 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "5.80"
-#property description "Gold Miner EA v5.8 - MTF ZigZag + CDC + Squeeze + Net Hedge + Cycle Label + Hedge Monitor + License"
+#property version   "5.90"
+#property description "Gold Miner EA v5.9 - MTF ZigZag + CDC + Squeeze + Net Hedge + Cycle Label + Hedge Monitor + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -694,7 +694,7 @@ int OnInit()
     g_lastHedgeExpansionDir = 0;
     g_cycleHedged = false;
 
-   Print("Gold Miner EA v5.8 initialized successfully");
+   Print("Gold Miner EA v5.9 initialized successfully");
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -747,7 +747,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
    ObjectsDeleteAll(0, "GM_HC_");   // v5.5: hedge cycle monitor objects
 
-   Print("Gold Miner EA v5.8 deinitialized");
+   Print("Gold Miner EA v5.9 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -2779,7 +2779,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v5.8 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v5.8 [ZZ]" : "Gold Miner EA v5.8 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v5.9 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v5.9 [ZZ]" : "Gold Miner EA v5.9 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -6093,16 +6093,24 @@ void CheckAndOpenHedge()
    }
    if(!hasCounterOrders) return;  // ไม่มี order ติดฝั่งผิด → ไม่ต้อง hedge
 
-   // === v5.3 Guard 2: ห้ามเปิด hedge ซ้ำทิศเดียวกันถ้ามี active set อยู่แล้ว ===
+   // === v5.9 Guard 2: ห้ามเปิด hedge ซ้ำทิศเดียวกัน ภายใน cycle เดียวกัน ===
    for(int h = 0; h < MAX_HEDGE_SETS; h++)
    {
-      if(g_hedgeSets[h].active && g_hedgeSets[h].hedgeSide == hedgeSide)
-         return;  // มี hedge ฝั่งนี้อยู่แล้ว
+      if(g_hedgeSets[h].active 
+         && g_hedgeSets[h].hedgeSide == hedgeSide
+         && g_hedgeSets[h].cycleIndex == g_currentCycleIndex)  // เช็คเฉพาะ cycle เดียวกัน
+         return;  // cycle นี้มี hedge ฝั่งนี้อยู่แล้ว
    }
 
-   // === v5.3 Guard 3: Hedge #2+ ต้อง expansion เปลี่ยนทิศจากครั้งก่อน ===
-   if(g_hedgeSetCount > 0 && bestDir == g_lastHedgeExpansionDir)
-      return;  // expansion ทิศเดิม → ไม่เปิด hedge ใหม่
+   // === v5.9 Guard 3: Hedge #2+ ภายใน cycle เดียวกัน ต้องเปลี่ยนทิศ ===
+   int lastDirInCycle = 0;
+   for(int h = 0; h < MAX_HEDGE_SETS; h++)
+   {
+      if(g_hedgeSets[h].active && g_hedgeSets[h].cycleIndex == g_currentCycleIndex)
+         lastDirInCycle = (g_hedgeSets[h].hedgeSide == POSITION_TYPE_BUY) ? 1 : -1;
+   }
+   if(lastDirInCycle != 0 && bestDir == lastDirInCycle)
+      return;  // cycle นี้มี hedge ทิศนี้แล้ว → ต้องเปลี่ยนทิศก่อน (H2)
 
    // === v5.6: Unbound Counter Lots Calculation ===
    // Calculate lots from counter-side orders that are NOT already bound to a hedge set
