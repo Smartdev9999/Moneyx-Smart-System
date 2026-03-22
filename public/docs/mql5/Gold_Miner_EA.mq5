@@ -7044,8 +7044,8 @@ string TimeframeToString(ENUM_TIMEFRAMES tf)
 //+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
-//| v5.5: Hedge Cycle Monitor Dashboard — 4-column display            |
-//| Shows Groups A-D with H1-H4 status for each group                |
+//| v5.10: Hedge Cycle Monitor Dashboard — 7-column display           |
+//| Shows Groups A-G with H1-H4 status for each group                |
 //+------------------------------------------------------------------+
 void DisplayHedgeCycleDashboard()
 {
@@ -7053,9 +7053,9 @@ void DisplayHedgeCycleDashboard()
    int x = HedgeDashX;
    int y = HedgeDashY;
    
-   // Layout dimensions
-   int colW = (int)(110 * sc);       // column width
-   int totalW = colW * 4 + (int)(6 * sc);  // 4 columns + padding
+   // Layout dimensions — 7 columns
+   int colW = (int)(68 * sc);        // narrower columns for 7 groups
+   int totalW = colW * 7 + (int)(6 * sc);  // 7 columns + padding
    int headerH = (int)(22 * sc);
    int colHeaderH = (int)(20 * sc);
    int rowH = (int)(18 * sc);
@@ -7077,26 +7077,31 @@ void DisplayHedgeCycleDashboard()
    color COLOR_LOSS        = C'255,80,80';
    color COLOR_NEUTRAL     = C'120,120,120';     // Grey for ---
    
-   // Group column accent colors
-   color groupColors[4];
+   // Group column accent colors — 7 groups
+   color groupColors[7];
    groupColors[0] = C'70,130,220';   // A = Blue
    groupColors[1] = C'50,180,100';   // B = Green
    groupColors[2] = C'220,150,50';   // C = Orange
    groupColors[3] = C'200,70,70';    // D = Red
+   groupColors[4] = C'100,200,220';  // E = Cyan
+   groupColors[5] = C'220,100,180';  // F = Pink
+   groupColors[6] = C'160,160,180';  // G = Silver
    
-   string groupNames[4];
-   groupNames[0] = "Group A";
-   groupNames[1] = "Group B";
-   groupNames[2] = "Group C";
-   groupNames[3] = "Group D";
+   string groupNames[7];
+   groupNames[0] = "Grp A";
+   groupNames[1] = "Grp B";
+   groupNames[2] = "Grp C";
+   groupNames[3] = "Grp D";
+   groupNames[4] = "Grp E";
+   groupNames[5] = "Grp F";
+   groupNames[6] = "Grp G";
    
    // === Determine group statuses ===
-   // Check if each group (cycle) has ever had a hedge
-   bool groupHasHedge[4];
+   bool groupHasHedge[7];
    ArrayInitialize(groupHasHedge, false);
    for(int h = 0; h < MAX_HEDGE_SETS; h++)
    {
-      if(g_hedgeSets[h].active)
+      if(g_hedgeSets[h].active && g_hedgeSets[h].cycleIndex < 7)
          groupHasHedge[g_hedgeSets[h].cycleIndex] = true;
    }
    
