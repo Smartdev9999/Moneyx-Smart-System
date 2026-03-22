@@ -6096,15 +6096,15 @@ void CheckAndOpenHedge()
 
       g_hedgeSetCount++;
       
-      // === v5.2: Increment cycle index after hedge opens ===
-      if(g_currentCycleIndex < 3)  // Max 4 cycles (A, B, C, D)
-         g_currentCycleIndex++;
-      
-      string sideStr = (hedgeSide == POSITION_TYPE_BUY) ? "BUY" : "SELL";
-      Print("HEDGE OPENED: Set#", slot + 1, " ", sideStr, " ", DoubleToString(hedgeLots, 2),
-            " lots (NetLot calc) bound ", g_hedgeSets[slot].boundTicketCount, 
-            " tickets. Cycle now: ", CharToString((char)('A' + g_currentCycleIndex)));
-   }
+       // === v5.3: Track expansion direction for hedge sequence ===
+       g_lastHedgeExpansionDir = bestDir;
+       
+       string sideStr = (hedgeSide == POSITION_TYPE_BUY) ? "BUY" : "SELL";
+       Print("HEDGE OPENED: Set#", slot + 1, " ", sideStr, " ", DoubleToString(hedgeLots, 2),
+             " lots (NetLot calc) bound ", g_hedgeSets[slot].boundTicketCount, 
+             " tickets. Cycle: ", CharToString((char)('A' + g_currentCycleIndex)),
+             " ExpDir: ", bestDir);
+    }
 }
 
 //+------------------------------------------------------------------+
