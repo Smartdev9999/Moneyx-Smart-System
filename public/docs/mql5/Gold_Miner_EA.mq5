@@ -5,8 +5,8 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "5.190"
-#property description "Gold Miner EA v5.19 - MTF ZigZag + CDC + Squeeze + Net Hedge + Stalled Recovery + 10 Cycles + License"
+#property version   "5.200"
+#property description "Gold Miner EA v5.20 - MTF ZigZag + CDC + Squeeze + Net Hedge + Stalled Recovery + 10 Cycles + License"
 #property strict
 
 #include <Trade/Trade.mqh>
