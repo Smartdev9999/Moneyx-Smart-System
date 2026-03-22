@@ -1398,6 +1398,8 @@ void CountPositions(int &buyCount, int &sellCount,
       
       // Skip hedge orders — they are managed by the Hedge system separately
       if(IsHedgeComment(comment)) continue;
+      // v5.8: Skip orders bound to hedge sets — don't count for normal grid
+      if(IsTicketBound(ticket)) continue;
       
       long posType = PositionGetInteger(POSITION_TYPE);
 
