@@ -7306,11 +7306,11 @@ string TimeframeToString(ENUM_TIMEFRAMES tf)
 //+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
-//| v5.13: Find lowest free cycle index (0-6) for recycling           |
+//| v5.14: Find lowest free cycle index (0-9) for recycling           |
 //+------------------------------------------------------------------+
 int FindLowestFreeCycle()
 {
-   for(int c = 0; c < 7; c++)
+   for(int c = 0; c < 10; c++)
    {
       // Check if any active hedge set uses this cycle
       bool cycleInUse = false;
@@ -7325,7 +7325,7 @@ int FindLowestFreeCycle()
       if(cycleInUse) continue;
       
       // Check if any open order belongs to this cycle (by comment suffix)
-      string suffixes[] = {"_A", "_B", "_C", "_D", "_E", "_F", "_G"};
+      string suffixes[] = {"_A", "_B", "_C", "_D", "_E", "_F", "_G", "_H", "_I", "_J"};
       bool hasOrders = false;
       for(int i = PositionsTotal() - 1; i >= 0; i--)
       {
