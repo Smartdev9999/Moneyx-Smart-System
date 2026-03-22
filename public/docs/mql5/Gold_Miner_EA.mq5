@@ -5910,6 +5910,20 @@ bool IsHedgeComment(string comment)
 }
 
 //+------------------------------------------------------------------+
+//| v5.15: Check if ticket is a main hedge order (by ticket lookup)    |
+//| Catches hedge orders even when broker strips/modifies comment      |
+//+------------------------------------------------------------------+
+bool IsHedgeTicket(ulong ticket)
+{
+   for(int h = 0; h < MAX_HEDGE_SETS; h++)
+   {
+      if(g_hedgeSets[h].active && g_hedgeSets[h].hedgeTicket == ticket)
+         return true;
+   }
+   return false;
+}
+
+//+------------------------------------------------------------------+
 //| Count normal (non-hedge) orders for a specific side                |
 //+------------------------------------------------------------------+
 int CountNormalOrders(ENUM_POSITION_TYPE side, double &totalLots, double &totalPL)
