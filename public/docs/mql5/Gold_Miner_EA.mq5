@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|               Gold Miner EA v5.12 - MTF ZigZag+CDC+Grid+License  |
+//|               Gold Miner EA v5.13 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "5.120"
-#property description "Gold Miner EA v5.12 - MTF ZigZag + CDC + Squeeze + Net Hedge + Grid Recovery + License"
+#property version   "5.130"
+#property description "Gold Miner EA v5.13 - MTF ZigZag + CDC + Squeeze + Net Hedge + Grid Recovery + Cycle Recycle + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -694,7 +694,7 @@ int OnInit()
     g_lastHedgeExpansionDir = 0;
     g_cycleHedged = false;
 
-   Print("Gold Miner EA v5.12 initialized successfully");
+   Print("Gold Miner EA v5.13 initialized successfully");
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -747,7 +747,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
    ObjectsDeleteAll(0, "GM_HC_");   // v5.5: hedge cycle monitor objects
 
-   Print("Gold Miner EA v5.12 deinitialized");
+   Print("Gold Miner EA v5.13 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -1224,7 +1224,7 @@ void OnTick()
                    if(shouldEnterBuy)
                    {
                         // v5.4: Increment cycle only when THIS cycle was hedged
-                         if(g_cycleHedged && g_currentCycleIndex < 6) { g_currentCycleIndex++; g_cycleHedged = false; }
+                          if(g_cycleHedged) { g_currentCycleIndex = FindLowestFreeCycle(); g_cycleHedged = false; }
                        if(OpenOrder(ORDER_TYPE_BUY, InitialLotSize, "GM_INIT" + GetCycleSuffix()))
                       {
                          g_initialBuyPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
@@ -1247,7 +1247,7 @@ void OnTick()
                    if(shouldEnterSell)
                    {
                         // v5.4: Increment cycle only when THIS cycle was hedged
-                         if(g_cycleHedged && g_currentCycleIndex < 6) { g_currentCycleIndex++; g_cycleHedged = false; }
+                          if(g_cycleHedged) { g_currentCycleIndex = FindLowestFreeCycle(); g_cycleHedged = false; }
                        if(OpenOrder(ORDER_TYPE_SELL, InitialLotSize, "GM_INIT" + GetCycleSuffix()))
                       {
                          g_initialSellPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
@@ -1334,7 +1334,7 @@ void OnTick()
             if(TradingMode == TRADE_BUY_ONLY || TradingMode == TRADE_BOTH)
             {
                 // v5.4: Increment cycle only when THIS cycle was hedged
-                 if(g_cycleHedged && g_currentCycleIndex < 6) { g_currentCycleIndex++; g_cycleHedged = false; }
+                  if(g_cycleHedged) { g_currentCycleIndex = FindLowestFreeCycle(); g_cycleHedged = false; }
                if(OpenOrder(ORDER_TYPE_BUY, InitialLotSize, "GM_INIT" + GetCycleSuffix()))
                {
                   g_initialBuyPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
@@ -1350,7 +1350,7 @@ void OnTick()
             if(TradingMode == TRADE_SELL_ONLY || TradingMode == TRADE_BOTH)
             {
                 // v5.4: Increment cycle only when THIS cycle was hedged
-                 if(g_cycleHedged && g_currentCycleIndex < 6) { g_currentCycleIndex++; g_cycleHedged = false; }
+                  if(g_cycleHedged) { g_currentCycleIndex = FindLowestFreeCycle(); g_cycleHedged = false; }
                if(OpenOrder(ORDER_TYPE_SELL, InitialLotSize, "GM_INIT" + GetCycleSuffix()))
                {
                   g_initialSellPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
@@ -2779,7 +2779,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v5.12 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v5.12 [ZZ]" : "Gold Miner EA v5.12 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v5.13 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v5.13 [ZZ]" : "Gold Miner EA v5.13 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -4149,7 +4149,7 @@ void OnTickZigZagMTF()
             if(shouldEnter)
             {
                 // v5.4: Increment cycle only when THIS cycle was hedged
-                 if(g_cycleHedged && g_currentCycleIndex < 6) { g_currentCycleIndex++; g_cycleHedged = false; }
+                  if(g_cycleHedged) { g_currentCycleIndex = FindLowestFreeCycle(); g_cycleHedged = false; }
                if(OpenOrderTF(t, ORDER_TYPE_BUY, InitialLotSize, "INIT"))
                {
                   g_tfStates[t].initialBuyPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
@@ -4172,7 +4172,7 @@ void OnTickZigZagMTF()
             if(shouldEnter)
             {
                 // v5.4: Increment cycle only when THIS cycle was hedged
-                if(g_cycleHedged && g_currentCycleIndex < 6) { g_currentCycleIndex++; g_cycleHedged = false; }
+                if(g_cycleHedged) { g_currentCycleIndex = FindLowestFreeCycle(); g_cycleHedged = false; }
                if(OpenOrderTF(t, ORDER_TYPE_SELL, InitialLotSize, "INIT"))
                {
                   g_tfStates[t].initialSellPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
@@ -6750,19 +6750,22 @@ void ManageGridRecoveryMode(int idx)
       }
    }
    
-   // Use bound order's last price as reference if no grid orders yet
-   if(lastGridPrice <= 0)
-   {
-      for(int b = 0; b < g_hedgeSets[idx].boundTicketCount; b++)
-      {
-         if(PositionSelectByTicket(g_hedgeSets[idx].boundTickets[b]))
-         {
-            lastGridPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-            break;
-         }
-      }
-   }
-   if(lastGridPrice <= 0) return;
+    // v5.13: If recovery mode (hedgeTicket=0) and no grid orders yet → open first grid at market
+    if(lastGridPrice <= 0 && currentGridCount == 0 && g_hedgeSets[idx].hedgeTicket == 0)
+    {
+       if(g_newOrderBlocked) return;
+       double nextLot = InitialLotSize;
+       string comment = "GM_HG" + IntegerToString(idx + 1) + "_GL1";
+       ENUM_ORDER_TYPE orderType = (g_hedgeSets[idx].hedgeSide == POSITION_TYPE_BUY)
+                                  ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+       if(OpenOrder(orderType, nextLot, comment))
+       {
+          g_lastHedgeGridTime = TimeCurrent();
+          Print("GRID RECOVERY Set#", idx + 1, " opened FIRST grid order at market, lots=", DoubleToString(nextLot, 2));
+       }
+       return;
+    }
+    if(lastGridPrice <= 0) return;
    
    if(currentGridCount < GridLoss_MaxTrades && currentGridCount <= g_hedgeSets[idx].gridLevel + 3)
    {
@@ -7292,6 +7295,50 @@ string TimeframeToString(ENUM_TIMEFRAMES tf)
 //+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
+//| v5.13: Find lowest free cycle index (0-6) for recycling           |
+//+------------------------------------------------------------------+
+int FindLowestFreeCycle()
+{
+   for(int c = 0; c < 7; c++)
+   {
+      // Check if any active hedge set uses this cycle
+      bool cycleInUse = false;
+      for(int h = 0; h < MAX_HEDGE_SETS; h++)
+      {
+         if(g_hedgeSets[h].active && g_hedgeSets[h].cycleIndex == c)
+         {
+            cycleInUse = true;
+            break;
+         }
+      }
+      if(cycleInUse) continue;
+      
+      // Check if any open order belongs to this cycle (by comment suffix)
+      string suffixes[] = {"_A", "_B", "_C", "_D", "_E", "_F", "_G"};
+      bool hasOrders = false;
+      for(int i = PositionsTotal() - 1; i >= 0; i--)
+      {
+         ulong ticket = PositionGetTicket(i);
+         if(ticket == 0) continue;
+         if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+         if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+         string cmt = PositionGetString(POSITION_COMMENT);
+         if(StringLen(cmt) >= 2)
+         {
+            string tail = StringSubstr(cmt, StringLen(cmt) - 2);
+            if(tail == suffixes[c])
+            {
+               hasOrders = true;
+               break;
+            }
+         }
+      }
+      if(!hasOrders) return c;
+   }
+   return g_currentCycleIndex;  // all slots in use → stay at current
+}
+
+//+------------------------------------------------------------------+
 //| v5.10: Hedge Cycle Monitor Dashboard — 7-column display           |
 //| Shows Groups A-G with H1-H4 status for each group                |
 //+------------------------------------------------------------------+
@@ -7301,39 +7348,39 @@ void DisplayHedgeCycleDashboard()
    int x = HedgeDashX;
    int y = HedgeDashY;
    
-   // Layout dimensions — 7 columns
-   int colW = (int)(68 * sc);        // narrower columns for 7 groups
-   int totalW = colW * 7 + (int)(6 * sc);  // 7 columns + padding
-   int headerH = (int)(22 * sc);
-   int colHeaderH = (int)(20 * sc);
-   int rowH = (int)(32 * sc);        // v5.12: taller rows for 2-line display (info + PnL)
+   // v5.13: Layout dimensions — wider columns, taller rows, better readability
+   int colW = (int)(90 * sc);        // wider columns for data visibility
+   int totalW = colW * 7 + (int)(6 * sc);
+   int headerH = (int)(24 * sc);
+   int colHeaderH = (int)(22 * sc);
+   int rowH = (int)(36 * sc);        // taller rows for 2-line display
    int fSizeH = (int)(10 * sc);
-   if(fSizeH < 7) fSizeH = 7;
-   int fSize = (int)(8 * sc);
-   if(fSize < 7) fSize = 7;
+   if(fSizeH < 8) fSizeH = 8;
+   int fSize = (int)(9 * sc);
+   if(fSize < 8) fSize = 8;
    int objCount = 0;
    
-   // Colors
-   color COLOR_BG_HEADER  = C'60,20,90';       // Purple header
-   color COLOR_BG_COL_HDR = C'35,39,46';       // Column header bg
-   color COLOR_BG_ROW1    = C'40,44,52';        // Alternating row 1
-   color COLOR_BG_ROW2    = C'35,39,46';        // Alternating row 2
+   // v5.13: Brighter colors for better visibility on dark backgrounds
+   color COLOR_BG_HEADER  = C'80,40,120';        // Brighter purple header
+   color COLOR_BG_COL_HDR = C'50,55,68';          // Brighter column header
+   color COLOR_BG_ROW1    = C'55,60,72';           // Brighter alternating row 1
+   color COLOR_BG_ROW2    = C'45,50,62';           // Brighter alternating row 2
    color COLOR_TEXT_WHITE  = clrWhite;
-   color COLOR_OFF         = C'80,80,80';        // Grey for OFF
-   color COLOR_STANDBY     = C'200,180,50';      // Yellow for STANDBY
+   color COLOR_OFF         = C'100,100,100';       // Brighter grey for OFF
+   color COLOR_STANDBY     = C'220,200,60';        // Brighter yellow for STANDBY
    color COLOR_PROFIT      = clrLime;
-   color COLOR_LOSS        = C'255,80,80';
-   color COLOR_NEUTRAL     = C'120,120,120';     // Grey for ---
+   color COLOR_LOSS        = C'255,90,90';
+   color COLOR_NEUTRAL     = C'140,140,140';       // Brighter grey for ---
    
    // Group column accent colors — 7 groups
    color groupColors[7];
-   groupColors[0] = C'70,130,220';   // A = Blue
-   groupColors[1] = C'50,180,100';   // B = Green
-   groupColors[2] = C'220,150,50';   // C = Orange
-   groupColors[3] = C'200,70,70';    // D = Red
-   groupColors[4] = C'100,200,220';  // E = Cyan
-   groupColors[5] = C'220,100,180';  // F = Pink
-   groupColors[6] = C'160,160,180';  // G = Silver
+   groupColors[0] = C'90,150,235';   // A = Blue (brighter)
+   groupColors[1] = C'60,200,120';   // B = Green (brighter)
+   groupColors[2] = C'235,170,60';   // C = Orange (brighter)
+   groupColors[3] = C'220,85,85';    // D = Red (brighter)
+   groupColors[4] = C'110,215,235';  // E = Cyan (brighter)
+   groupColors[5] = C'235,110,195';  // F = Pink (brighter)
+   groupColors[6] = C'175,175,195';  // G = Silver (brighter)
    
    string groupNames[7];
    groupNames[0] = "Grp A";
