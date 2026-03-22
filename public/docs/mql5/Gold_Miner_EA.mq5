@@ -6750,19 +6750,22 @@ void ManageGridRecoveryMode(int idx)
       }
    }
    
-   // Use bound order's last price as reference if no grid orders yet
-   if(lastGridPrice <= 0)
-   {
-      for(int b = 0; b < g_hedgeSets[idx].boundTicketCount; b++)
-      {
-         if(PositionSelectByTicket(g_hedgeSets[idx].boundTickets[b]))
-         {
-            lastGridPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-            break;
-         }
-      }
-   }
-   if(lastGridPrice <= 0) return;
+    // v5.13: If recovery mode (hedgeTicket=0) and no grid orders yet → open first grid at market
+    if(lastGridPrice <= 0 && currentGridCount == 0 && g_hedgeSets[idx].hedgeTicket == 0)
+    {
+       if(g_newOrderBlocked) return;
+       double nextLot = InitialLotSize;
+       string comment = "GM_HG" + IntegerToString(idx + 1) + "_GL1";
+       ENUM_ORDER_TYPE orderType = (g_hedgeSets[idx].hedgeSide == POSITION_TYPE_BUY)
+                                  ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+       if(OpenOrder(orderType, nextLot, comment))
+       {
+          g_lastHedgeGridTime = TimeCurrent();
+          Print("GRID RECOVERY Set#", idx + 1, " opened FIRST grid order at market, lots=", DoubleToString(nextLot, 2));
+       }
+       return;
+    }
+    if(lastGridPrice <= 0) return;
    
    if(currentGridCount < GridLoss_MaxTrades && currentGridCount <= g_hedgeSets[idx].gridLevel + 3)
    {
