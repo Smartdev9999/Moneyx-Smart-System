@@ -3566,9 +3566,9 @@ void CloseAllSideTF(int tfIdx, ENUM_POSITION_TYPE side)
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       if(PositionGetInteger(POSITION_TYPE) != side) continue;
       if(StringFind(PositionGetString(POSITION_COMMENT), prefix) < 0) continue;
-      // v5.7: Skip hedge and bound orders
-      if(IsHedgeComment(PositionGetString(POSITION_COMMENT))) continue;
-      if(IsTicketBound(ticket)) continue;
+       // v5.7: Skip hedge and bound orders
+       if(IsHedgeComment(PositionGetString(POSITION_COMMENT)) || IsHedgeTicket(ticket)) continue;
+       if(IsTicketBound(ticket)) continue;
       trade.PositionClose(ticket);
    }
 
