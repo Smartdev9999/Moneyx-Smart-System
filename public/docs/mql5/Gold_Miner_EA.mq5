@@ -2985,6 +2985,13 @@ void DisplayDashboard()
    if(InpHedge_Enable)
    {
       color COLOR_SECTION_HEDGE = C'130,50,180';  // purple for hedge section
+      
+      // Show current cycle label
+      string cycleLabel = "Cycle: " + CharToString((char)('A' + g_currentCycleIndex));
+      if(g_hedgeSetCount > 0)
+         cycleLabel += " (Sets:" + IntegerToString(g_hedgeSetCount) + ")";
+      DrawTableRow(row, "Cycle", cycleLabel, clrGold, COLOR_SECTION_HEDGE); row++;
+      
       bool anyActive = false;
       for(int h = 0; h < MAX_HEDGE_SETS; h++)
       {
