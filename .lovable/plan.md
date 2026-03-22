@@ -1,35 +1,92 @@
 
 
-## เพิ่ม Hedge Cycle Dashboard — Gold Miner SQ EA (v5.4 → v5.5)
+## Fix: Hedge System Guards + Dashboard Improvements (v5.5 → v5.6)
 
-### สิ่งที่แก้ไข
+### ปัญหา 5 จุดที่ต้องแก้
 
 **ไฟล์:** `public/docs/mql5/Gold_Miner_EA.mq5`
 
-#### 1. HedgeSet struct เพิ่ม 2 fields
-- `cycleIndex` — เก็บ cycle (0=A, 1=B...) ตอนสร้าง set
-- `hedgeNumber` — เก็บลำดับ hedge ภายใน cycle (1=H1, 2=H2...)
+---
 
-#### 2. CheckAndOpenHedge() — tag cycle/hedge number
-- เมื่อเปิด hedge สำเร็จ → set `cycleIndex = g_currentCycleIndex`
-- นับ hedge ที่มี cycleIndex เดียวกัน → กำหนด `hedgeNumber`
+#### 1. ห้าม Normal Matching Close ปิด Order ที่ Bound กับ Hedge Set
 
-#### 3. DisplayHedgeCycleDashboard() — ฟังก์ชันใหม่
-- ตาราง 4 คอลัมน์ (Group A-D) × 4 แถว (H1-H4)
-- Group A = STANDBY เสมอ, B/C/D = OFF จนกว่า group ก่อนหน้ามี hedge
-- แสดง Side + Lots + PnL สีเขียว/แดงตามกำไร
-- Object prefix `GM_HC_` แยกจาก dashboard หลัก
+**Line 6747:** เพิ่ม `IsTicketBound(ticket)` check หลัง hedge comment check:
+```cpp
+if(IsTicketBound(ticket)) continue;  // reserved for hedge system
+```
 
-#### 4. Input Parameters ใหม่
-- `HedgeDashX` (default 10), `HedgeDashY` (default 500)
+#### 2. Hedge Lot Calculation — ใช้ Unbound Counter Lots แทน Global Net
 
-#### 5. Version bump: v5.4 → v5.5
+**Line 6071-6076:** เปลี่ยนจาก `CalculateNetHedgeLots()` เป็น:
+```text
+double unboundCounterLots = 0;
+for(all positions):
+  if type == counterSide && !IsHedgeComment(cmt) && !IsTicketBound(ticket):
+    unboundCounterLots += volume;
+if(unboundCounterLots <= 0) return;
+hedgeLots = unboundCounterLots;
+```
+
+#### 3. Guard hasCounterOrders — เช็คเฉพาะ Unbound Non-Hedge Orders
+
+**Line 6046-6057:** เพิ่ม filter:
+```cpp
+string cmt = PositionGetString(POSITION_COMMENT);
+if(IsHedgeComment(cmt)) continue;
+if(IsTicketBound(ticket)) continue;
+```
+
+#### 4. ห้าม Hedge Partial/Matching/Grid Close ทำงานระหว่าง Expansion
+
+**Line 6207-6233:** ปัจจุบัน `gridMode` ทำงานทุก tick ไม่สน expansion, Partial/Matching ถูก guard แล้วด้วย `!isExpansion` — แต่ Grid Mode ยังไม่ถูก guard
+
+แก้ให้ Grid Mode ก็ต้องอยู่ในเงื่อนไข `!isExpansion` เหมือนกัน:
+```text
+เดิม:
+  if(gridMode)
+    ManageHedgeGridMode(h);        ← ทำงานแม้ expansion
+  else if(!isExpansion)
+    ManageHedgePartialClose/MatchingClose
+
+ใหม่:
+  if(!isExpansion)
+  {
+    if(gridMode)
+      ManageHedgeGridMode(h);
+    else
+      // Partial/Matching Close
+  }
+  else
+  {
+    // expansion: เช็คเฉพาะ bound orders หมดหรือยัง → flag gridMode
+  }
+```
+
+**ผล:** ทุกการปิด order ของ hedge system จะเกิดขึ้นเฉพาะตอน Normal/Squeeze เท่านั้น
+
+#### 5. เพิ่ม Expansion Direction Label บน Dashboard
+
+**Line 2997-3012:** เมื่อ state == EXPANSION เพิ่ม direction arrow:
+```text
+"EXPANSION ▲ BUY  3.49 |#########|"   (direction == 1)
+"EXPANSION ▼ SELL 3.49 |#########|"   (direction == -1)
+```
+
+#### 6. Dashboard Default Values
+
+```text
+DashboardX:    20 → 50
+DashboardY:    30 → 60
+DashboardWidth: 340 → 400
+HedgeDashY:    500 → 65
+```
+
+### Version bump: v5.5 → v5.6
 
 ### สิ่งที่ไม่เปลี่ยนแปลง
 - Order Execution Logic (trade.Buy/Sell/PositionClose)
 - Trading Strategy Logic (SMA/ZigZag/Instant, Grid entry/exit, TP/SL/Trailing)
 - Core Module Logic (License, News filter, Time filter, Data sync)
-- Net Lot Calculation, Hedge Guards, Cross-Set Matching
-- Hedge Partial/Matching Close, Grid Mode logic
-- Normal Matching Close logic
-- Dashboard หลัก (ยังคงแสดงเหมือนเดิม)
+- Normal Matching Close logic (เพิ่มแค่ guard skip bound tickets)
+- Hedge Cycle Monitor dashboard
+
