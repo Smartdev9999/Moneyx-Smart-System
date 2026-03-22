@@ -1219,6 +1219,8 @@ void OnTick()
                 {
                    if(shouldEnterSell)
                    {
+                       // v5.3: Increment cycle only when hedge is active
+                       if(g_hedgeSetCount > 0 && g_currentCycleIndex < 3) g_currentCycleIndex++;
                        if(OpenOrder(ORDER_TYPE_SELL, InitialLotSize, "GM_INIT" + GetCycleSuffix()))
                       {
                          g_initialSellPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
