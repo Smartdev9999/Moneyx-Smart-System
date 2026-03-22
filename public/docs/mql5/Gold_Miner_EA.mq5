@@ -1306,6 +1306,8 @@ void OnTick()
          {
             if(TradingMode == TRADE_BUY_ONLY || TradingMode == TRADE_BOTH)
             {
+               // v5.3: Increment cycle only when hedge is active
+               if(g_hedgeSetCount > 0 && g_currentCycleIndex < 3) g_currentCycleIndex++;
                if(OpenOrder(ORDER_TYPE_BUY, InitialLotSize, "GM_INIT" + GetCycleSuffix()))
                {
                   g_initialBuyPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
