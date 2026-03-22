@@ -6093,16 +6093,24 @@ void CheckAndOpenHedge()
    }
    if(!hasCounterOrders) return;  // ไม่มี order ติดฝั่งผิด → ไม่ต้อง hedge
 
-   // === v5.3 Guard 2: ห้ามเปิด hedge ซ้ำทิศเดียวกันถ้ามี active set อยู่แล้ว ===
+   // === v5.9 Guard 2: ห้ามเปิด hedge ซ้ำทิศเดียวกัน ภายใน cycle เดียวกัน ===
    for(int h = 0; h < MAX_HEDGE_SETS; h++)
    {
-      if(g_hedgeSets[h].active && g_hedgeSets[h].hedgeSide == hedgeSide)
-         return;  // มี hedge ฝั่งนี้อยู่แล้ว
+      if(g_hedgeSets[h].active 
+         && g_hedgeSets[h].hedgeSide == hedgeSide
+         && g_hedgeSets[h].cycleIndex == g_currentCycleIndex)  // เช็คเฉพาะ cycle เดียวกัน
+         return;  // cycle นี้มี hedge ฝั่งนี้อยู่แล้ว
    }
 
-   // === v5.3 Guard 3: Hedge #2+ ต้อง expansion เปลี่ยนทิศจากครั้งก่อน ===
-   if(g_hedgeSetCount > 0 && bestDir == g_lastHedgeExpansionDir)
-      return;  // expansion ทิศเดิม → ไม่เปิด hedge ใหม่
+   // === v5.9 Guard 3: Hedge #2+ ภายใน cycle เดียวกัน ต้องเปลี่ยนทิศ ===
+   int lastDirInCycle = 0;
+   for(int h = 0; h < MAX_HEDGE_SETS; h++)
+   {
+      if(g_hedgeSets[h].active && g_hedgeSets[h].cycleIndex == g_currentCycleIndex)
+         lastDirInCycle = (g_hedgeSets[h].hedgeSide == POSITION_TYPE_BUY) ? 1 : -1;
+   }
+   if(lastDirInCycle != 0 && bestDir == lastDirInCycle)
+      return;  // cycle นี้มี hedge ทิศนี้แล้ว → ต้องเปลี่ยนทิศก่อน (H2)
 
    // === v5.6: Unbound Counter Lots Calculation ===
    // Calculate lots from counter-side orders that are NOT already bound to a hedge set
