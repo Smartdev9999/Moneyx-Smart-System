@@ -1519,10 +1519,10 @@ double CalculateFloatingPL(ENUM_POSITION_TYPE side)
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       if(PositionGetInteger(POSITION_TYPE) != side) continue;
       
-      // Skip hedge orders — floating PL calculation must exclude hedge positions
-      if(IsHedgeComment(PositionGetString(POSITION_COMMENT))) continue;
-      // v5.7: Skip orders bound to hedge sets
-      if(IsTicketBound(ticket)) continue;
+       // Skip hedge orders — floating PL calculation must exclude hedge positions
+       if(IsHedgeComment(PositionGetString(POSITION_COMMENT)) || IsHedgeTicket(ticket)) continue;
+       // v5.7: Skip orders bound to hedge sets
+       if(IsTicketBound(ticket)) continue;
 
       totalPL += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
    }
