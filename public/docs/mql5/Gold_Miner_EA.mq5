@@ -6000,22 +6000,38 @@ void CheckAndOpenHedge()
    ENUM_POSITION_TYPE counterSide = (bestDir == -1) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
    ENUM_POSITION_TYPE hedgeSide   = (bestDir == -1) ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
 
+   // === v5.3 Guard 1: ต้องมี order ฝั่ง counterSide (ฝั่งที่ติดผิดทาง) จริงๆ ===
+   bool hasCounterOrders = false;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) == counterSide)
+      {
+         hasCounterOrders = true;
+         break;
+      }
+   }
+   if(!hasCounterOrders) return;  // ไม่มี order ติดฝั่งผิด → ไม่ต้อง hedge
+
+   // === v5.3 Guard 2: ห้ามเปิด hedge ซ้ำทิศเดียวกันถ้ามี active set อยู่แล้ว ===
+   for(int h = 0; h < MAX_HEDGE_SETS; h++)
+   {
+      if(g_hedgeSets[h].active && g_hedgeSets[h].hedgeSide == hedgeSide)
+         return;  // มี hedge ฝั่งนี้อยู่แล้ว
+   }
+
+   // === v5.3 Guard 3: Hedge #2+ ต้อง expansion เปลี่ยนทิศจากครั้งก่อน ===
+   if(g_hedgeSetCount > 0 && bestDir == g_lastHedgeExpansionDir)
+      return;  // expansion ทิศเดิม → ไม่เปิด hedge ใหม่
+
    // === v5.2: Net Lot Calculation ===
-   // Calculate hedge lots as |totalBuyLots - totalSellLots| across ALL positions
    ENUM_POSITION_TYPE calcHedgeSide, calcCounterSide;
    double netLots = CalculateNetHedgeLots(calcHedgeSide, calcCounterSide);
-   
-   // Verify expansion direction matches net lot imbalance direction
-   // If expansion says "hedge with SELL" but net calc says "hedge with BUY", 
-   // use expansion direction but still use net lots for size
    if(netLots <= 0) return;
-   
-   // Check that there are actually unbound orders to hedge on the counter side
-   double counterLots = 0, counterPL = 0;
-   int counterCount = CountUnboundOrders(counterSide, counterLots, counterPL);
-   if(counterCount == 0 && netLots <= 0) return;
 
-   // Use the larger of: unbound counter lots or net imbalance
    double hedgeLots = netLots;
 
    // Find free slot
