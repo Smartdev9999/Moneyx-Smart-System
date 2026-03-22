@@ -6061,6 +6061,10 @@ void CheckAndOpenHedge()
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) == counterSide)
       {
+         // v5.6: Only count unbound, non-hedge orders as counter orders
+         string cmt = PositionGetString(POSITION_COMMENT);
+         if(StringFind(cmt, "GM_HEDGE") >= 0 || StringFind(cmt, "GM_HG") >= 0) continue;
+         if(IsTicketBound(ticket)) continue;
          hasCounterOrders = true;
          break;
       }
