@@ -514,6 +514,13 @@ string GetCommentPrefix()
    return "GM" + IntegerToString(g_cycleGeneration);
 }
 
+// Get prefix for a specific generation
+string GenPrefix(int gen)
+{
+   if(gen == 0) return "GM";
+   return "GM" + IntegerToString(gen);
+}
+
 // Match comment from any GM generation with a suffix (e.g. "_INIT", "_GL", "_GP")
 bool MatchGMSuffix(string comment, string suffix)
 {
