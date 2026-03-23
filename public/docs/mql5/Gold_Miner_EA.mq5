@@ -6235,62 +6235,79 @@ void ManageHedgePartialClose(int idx)
    }
 
    // Find profitable orders ONLY from this set's boundTickets
-   ulong profitTickets[];
-   double profitValues[];
-   int profitCount = 0;
+    ulong profitTickets[];
+    double profitValues[];
+    datetime profitTimes[];
+    int profitCount = 0;
 
-   for(int b = 0; b < g_hedgeSets[idx].boundTicketCount; b++)
-   {
-      ulong ticket = g_hedgeSets[idx].boundTickets[b];
-      if(!PositionSelectByTicket(ticket)) continue;
-      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != g_hedgeSets[idx].counterSide) continue;
+    for(int b = 0; b < g_hedgeSets[idx].boundTicketCount; b++)
+    {
+       ulong ticket = g_hedgeSets[idx].boundTickets[b];
+       if(!PositionSelectByTicket(ticket)) continue;
+       if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != g_hedgeSets[idx].counterSide) continue;
 
-      double pnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
-      if(pnl <= 0) continue;
+       double pnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+       if(pnl <= 0) continue;
 
-      ArrayResize(profitTickets, profitCount + 1);
-      ArrayResize(profitValues, profitCount + 1);
-      profitTickets[profitCount] = ticket;
-      profitValues[profitCount] = pnl;
-      profitCount++;
-   }
+       ArrayResize(profitTickets, profitCount + 1);
+       ArrayResize(profitValues, profitCount + 1);
+       ArrayResize(profitTimes, profitCount + 1);
+       profitTickets[profitCount] = ticket;
+       profitValues[profitCount] = pnl;
+       profitTimes[profitCount] = (datetime)PositionGetInteger(POSITION_TIME);
+       profitCount++;
+    }
 
-   if(profitCount == 0) return;  // no profitable bound orders to use
+    if(profitCount == 0) return;  // no profitable bound orders to use
 
-   // Guard: require minimum number of profitable counter-orders before starting partial close
-   if(InpHedge_PartialMinProfitOrders > 0 && profitCount < InpHedge_PartialMinProfitOrders) return;
+    // Guard: require minimum number of profitable counter-orders before starting partial close
+    int minOrders = MathMax(InpHedge_PartialMinProfitOrders, 1);
+    if(profitCount < minOrders) return;
 
-   // Calculate hedge loss per lot
-   double hedgeLossPerLot = MathAbs(hedgePnL) / hedgeLots;
-   if(hedgeLossPerLot <= 0) return;
+    // Sort by open time descending (newest first) to pick N newest
+    for(int a = 0; a < profitCount - 1; a++)
+       for(int b2 = a + 1; b2 < profitCount; b2++)
+          if(profitTimes[b2] > profitTimes[a])
+          {
+             datetime tmpT = profitTimes[a]; profitTimes[a] = profitTimes[b2]; profitTimes[b2] = tmpT;
+             double tmpV = profitValues[a]; profitValues[a] = profitValues[b2]; profitValues[b2] = tmpV;
+             ulong tmpK = profitTickets[a]; profitTickets[a] = profitTickets[b2]; profitTickets[b2] = tmpK;
+          }
 
-   // === BATCH MODE: aggregate all profitable orders ===
-   double totalProfit = 0;
-   for(int p = 0; p < profitCount; p++)
-      totalProfit += profitValues[p];
+    // Take only N newest profitable orders (not all)
+    int closeCount = minOrders;
 
-   // Calculate total hedge lots that can be covered by combined profit
-   double closeLots = (totalProfit - InpHedge_PartialMinProfit) / hedgeLossPerLot;
-   if(closeLots <= 0) return;
+    // Calculate hedge loss per lot
+    double hedgeLossPerLot = MathAbs(hedgePnL) / hedgeLots;
+    if(hedgeLossPerLot <= 0) return;
 
-   // Normalize lot
-   double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
-   double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
-   closeLots = MathMax(minLot, MathMin(hedgeLots, NormalizeDouble(MathFloor(closeLots / lotStep) * lotStep, 2)));
+    // === BATCH MODE: aggregate only N newest profitable orders ===
+    double totalProfit = 0;
+    for(int p = 0; p < closeCount; p++)
+       totalProfit += profitValues[p];
 
-   if(closeLots < minLot) return;
+    // Calculate total hedge lots that can be covered by combined profit
+    double closeLots = (totalProfit - InpHedge_PartialMinProfit) / hedgeLossPerLot;
+    if(closeLots <= 0) return;
 
-   Print("HEDGE PARTIAL CLOSE (BATCH) Set#", idx + 1, ": ", profitCount, " profit orders total $",
-         DoubleToString(totalProfit, 2), " → close ", DoubleToString(closeLots, 2),
-         " lots of hedge (current ", DoubleToString(hedgeLots, 2), " lots)");
+    // Normalize lot
+    double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+    double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+    closeLots = MathMax(minLot, MathMin(hedgeLots, NormalizeDouble(MathFloor(closeLots / lotStep) * lotStep, 2)));
 
-   // Close all profitable bound orders + remove from boundTickets
-   for(int p = 0; p < profitCount; p++)
-   {
-      trade.PositionClose(profitTickets[p]);
-      RemoveBoundTicket(idx, profitTickets[p]);
-      Sleep(50);
-   }
+    if(closeLots < minLot) return;
+
+    Print("HEDGE PARTIAL CLOSE (BATCH) Set#", idx + 1, ": ", closeCount, "/", profitCount, " newest profit orders total $",
+          DoubleToString(totalProfit, 2), " → close ", DoubleToString(closeLots, 2),
+          " lots of hedge (current ", DoubleToString(hedgeLots, 2), " lots)");
+
+    // Close only N newest profitable bound orders + remove from boundTickets
+    for(int p = 0; p < closeCount; p++)
+    {
+       trade.PositionClose(profitTickets[p]);
+       RemoveBoundTicket(idx, profitTickets[p]);
+       Sleep(50);
+    }
 
    // Partial close (or full close) hedge
    if(!PositionSelectByTicket(g_hedgeSets[idx].hedgeTicket)) return;
