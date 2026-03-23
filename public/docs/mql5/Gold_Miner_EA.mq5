@@ -321,6 +321,9 @@ input int      InpHedge_PartialMinProfitOrders = 3;    // Min Profit Orders for 
 input int      InpHedge_MaxSets              = 10;    // Max Active Hedge Sets (1-10)
 input int      InpHedge_BoundAvgTPPoints     = 0;     // Bound Avg TP Points (0=Disabled)
 input int      InpHedge_MinTFConfirm         = 1;     // Min TF Expansion to Confirm Hedge (1-3)
+input bool     InpHedge_ReverseEnable        = false;  // Enable Reverse Hedge (lock on direction change)
+input int      InpHedge_ReverseMinTFConfirm  = 2;     // Min TF Expansion to Confirm Reverse Hedge (1-3)
+input double   InpHedge_ReverseMatchMinProfit = 0.50;  // Reverse Match Min Profit to Keep ($)
 
 input group "=== Orphan Recovery Grid ==="
 input bool     InpOrphan_Enable              = true;   // Enable Orphan Recovery Grid
