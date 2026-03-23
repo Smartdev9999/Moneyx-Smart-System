@@ -1364,6 +1364,23 @@ bool OpenOrder(ENUM_ORDER_TYPE orderType, double lots, string comment)
     // Don't apply user MaxLotSize cap for hedge orders — hedge must match exact counter-side volume
     if(InpMaxLotSize > 0 && !IsHedgeComment(comment)) maxLot = MathMin(maxLot, InpMaxLotSize);
    double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   
+   // Lot cap: when hedge set has bound orders, limit new orders to not exceed hedge coverage
+   if(!IsHedgeComment(comment))
+   {
+      ENUM_POSITION_TYPE posSide = (orderType == ORDER_TYPE_BUY) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
+      double lotCap = GetHedgeLotCap(posSide);
+      if(lotCap >= 0)  // hedge set exists for this side
+      {
+         if(lotCap < minLot)
+         {
+            Print("LOT CAP: Cannot open ", comment, " — bound+new would exceed hedge coverage (allowed=", DoubleToString(lotCap, 2), ")");
+            return false;
+         }
+         maxLot = MathMin(maxLot, lotCap);
+      }
+   }
+   
    lots = MathMax(minLot, MathMin(maxLot, NormalizeDouble(MathRound(lots / lotStep) * lotStep, 2)));
 
    if(orderType == ORDER_TYPE_BUY)
