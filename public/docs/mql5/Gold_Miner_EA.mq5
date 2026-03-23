@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v5.5 - MTF ZigZag+CDC+Grid+License  |
+//|                Gold Miner EA v5.6 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "5.50"
-#property description "Gold Miner EA v5.5 - MTF ZigZag + CDC + Squeeze + AvgTP + License"
+#property version   "5.60"
+#property description "Gold Miner EA v5.6 - MTF ZigZag + CDC + Squeeze + AvgTP + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -640,7 +640,7 @@ int OnInit()
    }
    g_hedgeSetCount = 0;
 
-   Print("Gold Miner EA v5.5 initialized successfully");
+   Print("Gold Miner EA v5.6 initialized successfully");
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -692,7 +692,7 @@ void OnDeinit(const int reason)
 
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
-   Print("Gold Miner EA v5.5 deinitialized");
+   Print("Gold Miner EA v5.6 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -2701,7 +2701,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v5.5 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v5.5 [ZZ]" : "Gold Miner EA v5.5 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v5.6 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v5.6 [ZZ]" : "Gold Miner EA v5.6 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -6146,18 +6146,23 @@ void ManageHedgeSets()
             continue;
          }
 
-         // NEW: Average TP check (ซอย hedge ด้วยกำไร bound orders)
-         if(ManageHedgeBoundAvgTP(h)) continue;
-
          // Expansion ended → check scenarios
          double hedgePnL = 0;
          if(hedgeExists)
             hedgePnL = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
 
+         // Matching Close FIRST (hedge is profitable → close + match losses)
          if(hedgePnL > 0)
-            ManageHedgeMatchingClose(h);  // Scenario 1: hedge in profit
-         else
-            ManageHedgePartialClose(h);   // Scenario 2: hedge in loss, check original orders
+         {
+            ManageHedgeMatchingClose(h);
+            continue;
+         }
+
+         // Average TP SECOND (hedge is in loss → try avg TP on bounds)
+         if(ManageHedgeBoundAvgTP(h)) continue;
+
+         // Partial Close LAST
+         ManageHedgePartialClose(h);
       }
       else
       {
@@ -6402,30 +6407,22 @@ void ManageHedgeMatchingClose(int idx)
       g_hedgeSetCount--;
       Sleep(100);
    }
-   else
-   {
-      // No losses can be matched → just close the profitable hedge
-      Print("HEDGE CLOSE (no matchable losses) Set#", idx + 1,
-            ": profit $", DoubleToString(hedgeProfit, 2));
-      trade.PositionClose(g_hedgeSets[idx].hedgeTicket);
+    else
+    {
+       // No losses can be matched → close hedge + release all bound orders to normal
+       Print("HEDGE CLOSE (no matchable losses) Set#", idx + 1,
+             ": profit $", DoubleToString(hedgeProfit, 2),
+             " | Releasing ", g_hedgeSets[idx].boundTicketCount, " bound orders to normal trading");
+       trade.PositionClose(g_hedgeSets[idx].hedgeTicket);
 
-      // Enter grid mode to continue recovery if bound tickets remain
-      if(g_hedgeSets[idx].boundTicketCount > 0)
-      {
-         // Still have bound orders → continue as grid for recovery
-         g_hedgeSets[idx].gridMode = true;
-         g_hedgeSets[idx].gridLevel = 0;
-         Print("HEDGE Set#", idx + 1, " closed but bound orders remain. Entering Grid Mode.");
-      }
-      else
-      {
-         g_hedgeSets[idx].active = false;
-         g_hedgeSets[idx].boundTicketCount = 0;
-         ArrayResize(g_hedgeSets[idx].boundTickets, 0);
-         g_hedgeSetCount--;
-      }
-      Sleep(100);
-   }
+       // Release all bound orders → they return to normal trading system
+       g_hedgeSets[idx].active = false;
+       g_hedgeSets[idx].boundTicketCount = 0;
+       ArrayResize(g_hedgeSets[idx].boundTickets, 0);
+       g_hedgeSets[idx].gridMode = false;
+       g_hedgeSetCount--;
+       Sleep(100);
+    }
 }
 
 //+------------------------------------------------------------------+
