@@ -6012,6 +6012,16 @@ void CheckAndOpenHedge()
    if(counterCount == 0 || counterLots <= 0) return;
 
    // Find free slot
+   // Check max active sets limit
+   int activeSetCount = 0;
+   for(int h = 0; h < MAX_HEDGE_SETS; h++)
+      if(g_hedgeSets[h].active) activeSetCount++;
+   if(activeSetCount >= InpHedge_MaxSets)
+   {
+      Print("HEDGE: Max active sets reached (", activeSetCount, "/", InpHedge_MaxSets, ") - skip");
+      return;
+   }
+
    int slot = FindFreeHedgeSlot();
    if(slot < 0)
    {
