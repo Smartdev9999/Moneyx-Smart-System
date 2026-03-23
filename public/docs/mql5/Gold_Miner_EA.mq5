@@ -3110,8 +3110,17 @@ void DisplayDashboard()
        if(g_hedgeOrphanWarning)
        {
           DrawTableRow(row, "⚠ WARNING", "ORPHAN GRID ORDERS DETECTED", clrRed, COLOR_SECTION_HEDGE); row++;
-       }
-    }
+        }
+        // Reverse Hedge status
+        if(g_reverseHedgeActive && PositionSelectByTicket(g_reverseHedgeTicket))
+        {
+           double rPnL = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+           string rSide = (g_reverseHedgeSide == POSITION_TYPE_BUY) ? "BUY" : "SELL";
+           string rInfo = "REVERSE " + rSide + " " + DoubleToString(g_reverseHedgeLots, 2) + "L PnL:$" + DoubleToString(rPnL, 2);
+           color rClr = (rPnL >= 0) ? clrLime : clrOrangeRed;
+           DrawTableRow(row, "Rev.Hedge", rInfo, rClr, COLOR_SECTION_HEDGE); row++;
+        }
+     }
 
      // === Orphan Recovery Status ===
      color COLOR_SECTION_ORPHAN = C'130,50,180';  // purple for orphan section
