@@ -3509,7 +3509,7 @@ double CalculateFloatingPL_TF(int tfIdx, ENUM_POSITION_TYPE side)
 void FindLastOrderTF(int tfIdx, ENUM_POSITION_TYPE side, string suffix1, string suffix2,
                      double &outPrice, datetime &outTime)
 {
-   string prefix = "GM_" + g_tfStates[tfIdx].tfLabel + "_";
+   string tfLabel = g_tfStates[tfIdx].tfLabel;
    outPrice = 0;
    outTime = 0;
    datetime latestTime = 0;
@@ -3523,8 +3523,8 @@ void FindLastOrderTF(int tfIdx, ENUM_POSITION_TYPE side, string suffix1, string 
       if(PositionGetInteger(POSITION_TYPE) != side) continue;
 
       string comment = PositionGetString(POSITION_COMMENT);
-      if(StringFind(comment, prefix) < 0) continue;
-      if(StringFind(comment, prefix + suffix1) >= 0 || StringFind(comment, prefix + suffix2) >= 0)
+      if(!MatchTFPrefix(comment, tfLabel)) continue;
+      if(StringFind(comment, suffix1) >= 0 || StringFind(comment, suffix2) >= 0)
       {
          datetime openTime = (datetime)PositionGetInteger(POSITION_TIME);
          if(openTime > latestTime)
