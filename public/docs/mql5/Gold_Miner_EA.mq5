@@ -3486,7 +3486,7 @@ double CalculateAveragePriceTF(int tfIdx, ENUM_POSITION_TYPE side)
 //+------------------------------------------------------------------+
 double CalculateFloatingPL_TF(int tfIdx, ENUM_POSITION_TYPE side)
 {
-   string prefix = "GM_" + g_tfStates[tfIdx].tfLabel + "_";
+   string tfLabel = g_tfStates[tfIdx].tfLabel;
    double totalPLtf = 0;
 
    for(int i = PositionsTotal() - 1; i >= 0; i--)
@@ -3496,7 +3496,7 @@ double CalculateFloatingPL_TF(int tfIdx, ENUM_POSITION_TYPE side)
       if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       if(PositionGetInteger(POSITION_TYPE) != side) continue;
-      if(StringFind(PositionGetString(POSITION_COMMENT), prefix) < 0) continue;
+      if(!MatchTFPrefix(PositionGetString(POSITION_COMMENT), tfLabel)) continue;
 
       totalPLtf += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
    }
