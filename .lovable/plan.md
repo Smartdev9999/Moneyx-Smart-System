@@ -1,30 +1,32 @@
 
 
-## เพิ่มทิศทาง Expansion (Buy/Sell) บน Dashboard — Gold Miner SQ EA
+## ปรับระบบ Hedging ให้ Bound Orders แยกจากระบบปกติสมบูรณ์ — Gold Miner SQ EA (v5.1 → v5.2)
 
-### การแก้ไข
+### สิ่งที่แก้ไข
 
-**ไฟล์:** `public/docs/mql5/Gold_Miner_EA.mq5` (line 2911)
+**ไฟล์:** `public/docs/mql5/Gold_Miner_EA.mq5`
 
-#### แก้ไข Dashboard Squeeze Section — แสดงทิศทางเมื่อ Expansion
+#### กลุ่ม 1: เพิ่ม `IsTicketBound(ticket) continue` ใน 4 ฟังก์ชัน
+- `CalculateAveragePrice()` — ไม่นับ bound orders ในการคำนวณ avg price
+- `CalculateFloatingPL()` — ไม่นับ bound orders ใน floating PL
+- `CloseAllSide()` — ไม่ปิด bound orders ผ่าน basket TP/SL
+- `ManageMatchingClose()` — ไม่ใช้ bound orders ใน matching close ปกติ
 
-เปลี่ยน line 2911 จาก:
-```cpp
-else if(g_squeeze[sq].state == 2)  { stateStr = "EXPANSION"; stateClr = clrDodgerBlue; }
-```
-เป็น:
-```cpp
-else if(g_squeeze[sq].state == 2)
-{
-   if(g_squeeze[sq].direction == 1)       { stateStr = "EXPANSION BUY";  stateClr = clrDodgerBlue; }
-   else if(g_squeeze[sq].direction == -1) { stateStr = "EXPANSION SELL"; stateClr = clrOrangeRed;  }
-   else                                   { stateStr = "EXPANSION";      stateClr = clrDodgerBlue; }
-}
-```
+#### กลุ่ม 2: ManageHedgePartialClose ปิดเฉพาะ N orders ใหม่สุด
+- เรียงตาม open time (newest first)
+- ปิดเฉพาะ `InpHedge_PartialMinProfitOrders` orders ไม่ใช่ทั้งหมด
+- bound orders เก่ายังอยู่ → รอกำไรรอบถัดไป
 
-**ผล:** เมื่อ TF ใดเป็น Expansion จะแสดง `EXPANSION BUY` (สีฟ้า) หรือ `EXPANSION SELL` (สีแดงส้ม) ตาม `direction` ที่คำนวณจาก Close vs EMA อยู่แล้วใน `UpdateSqueezeState()`
+#### กลุ่ม 3: GetHedgeLotCap + Lot Cap ใน OpenOrder
+- `GetHedgeLotCap(side)` → คำนวณ `hedgeLots - boundLots`
+- `OpenOrder()` → cap lot ไม่ให้เกิน allowedLots, block ถ้า ≤ 0
+
+#### Version bump: v5.1 → v5.2
 
 ### สิ่งที่ไม่เปลี่ยนแปลง
-- Trading logic, Hedge logic, Squeeze filter logic ทั้งหมด
-- `direction` field คำนวณอยู่แล้ว — ใช้ค่าที่มีอยู่เท่านั้น
-
+- Order Execution Logic (trade.Buy/Sell/PositionClose)
+- Trading Strategy Logic (SMA/ZigZag/Instant, Grid entry/exit, TP/SL calculations)
+- Core Module Logic (License, News filter, Time filter, Data sync, Squeeze)
+- Hedge Grid distance/direction logic
+- ManageHedgeMatchingClose (Scenario 1) logic
+- Accumulate/Drawdown close logic
