@@ -3413,7 +3413,7 @@ void CountPositionsTF(int tfIdx, int &buyCount, int &sellCount,
    gridProfitBuy = 0; gridProfitSell = 0;
    hasInitialBuy = false; hasInitialSell = false;
 
-   string prefix = "GM_" + g_tfStates[tfIdx].tfLabel + "_";
+   string tfLabel = g_tfStates[tfIdx].tfLabel;
 
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
@@ -3423,23 +3423,23 @@ void CountPositionsTF(int tfIdx, int &buyCount, int &sellCount,
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
 
       string comment = PositionGetString(POSITION_COMMENT);
-      if(StringFind(comment, prefix) < 0) continue;
+      if(!MatchTFPrefix(comment, tfLabel)) continue;
 
       long posType = PositionGetInteger(POSITION_TYPE);
 
       if(posType == POSITION_TYPE_BUY)
       {
          buyCount++;
-         if(StringFind(comment, prefix + "INIT") >= 0) hasInitialBuy = true;
-         if(StringFind(comment, prefix + "GL") >= 0) gridLossBuy++;
-         if(StringFind(comment, prefix + "GP") >= 0) gridProfitBuy++;
+         if(StringFind(comment, "INIT") >= 0) hasInitialBuy = true;
+         if(StringFind(comment, "GL") >= 0) gridLossBuy++;
+         if(StringFind(comment, "GP") >= 0) gridProfitBuy++;
       }
       else if(posType == POSITION_TYPE_SELL)
       {
          sellCount++;
-         if(StringFind(comment, prefix + "INIT") >= 0) hasInitialSell = true;
-         if(StringFind(comment, prefix + "GL") >= 0) gridLossSell++;
-         if(StringFind(comment, prefix + "GP") >= 0) gridProfitSell++;
+         if(StringFind(comment, "INIT") >= 0) hasInitialSell = true;
+         if(StringFind(comment, "GL") >= 0) gridLossSell++;
+         if(StringFind(comment, "GP") >= 0) gridProfitSell++;
       }
    }
 }
