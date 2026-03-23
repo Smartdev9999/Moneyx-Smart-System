@@ -5896,6 +5896,10 @@ double GetHedgeLotCap(ENUM_POSITION_TYPE side)
       double hedgeLots = g_hedgeSets[h].hedgeLots;
       double allowed = hedgeLots - boundLots;
 
+      // If bound orders already cover or exceed hedge volume,
+      // skip this set — new orders are independent cycle, no cap needed
+      if(allowed <= 0) continue;
+
       if(minCap < 0)
          minCap = allowed;
       else
