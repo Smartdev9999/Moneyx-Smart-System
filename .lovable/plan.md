@@ -1,32 +1,25 @@
 
 
-## ปรับระบบ Hedging ให้ Bound Orders แยกจากระบบปกติสมบูรณ์ — Gold Miner SQ EA (v5.1 → v5.2)
+## Fix New Cycle Block + Max Hedge Sets — Gold Miner SQ EA (v5.2 → v5.3)
 
 ### สิ่งที่แก้ไข
 
 **ไฟล์:** `public/docs/mql5/Gold_Miner_EA.mq5`
 
-#### กลุ่ม 1: เพิ่ม `IsTicketBound(ticket) continue` ใน 4 ฟังก์ชัน
-- `CalculateAveragePrice()` — ไม่นับ bound orders ในการคำนวณ avg price
-- `CalculateFloatingPL()` — ไม่นับ bound orders ใน floating PL
-- `CloseAllSide()` — ไม่ปิด bound orders ผ่าน basket TP/SL
-- `ManageMatchingClose()` — ไม่ใช้ bound orders ใน matching close ปกติ
+#### 1. Fix GetHedgeLotCap() — ไม่ block new cycle
+- เมื่อ `allowed <= 0` (bound lots ≥ hedge lots) → `continue` skip set นี้แทนที่จะ cap = 0
+- Order ใหม่เป็น independent cycle → ไม่ต้อง cap
 
-#### กลุ่ม 2: ManageHedgePartialClose ปิดเฉพาะ N orders ใหม่สุด
-- เรียงตาม open time (newest first)
-- ปิดเฉพาะ `InpHedge_PartialMinProfitOrders` orders ไม่ใช่ทั้งหมด
-- bound orders เก่ายังอยู่ → รอกำไรรอบถัดไป
+#### 2. เพิ่ม InpHedge_MaxSets input
+- `input int InpHedge_MaxSets = 10` — จำกัดจำนวน hedge sets สูงสุด
+- Guard ใน `CheckAndOpenHedge()` → block เมื่อ active sets ≥ limit
 
-#### กลุ่ม 3: GetHedgeLotCap + Lot Cap ใน OpenOrder
-- `GetHedgeLotCap(side)` → คำนวณ `hedgeLots - boundLots`
-- `OpenOrder()` → cap lot ไม่ให้เกิน allowedLots, block ถ้า ≤ 0
-
-#### Version bump: v5.1 → v5.2
+#### 3. Version bump: v5.2 → v5.3
 
 ### สิ่งที่ไม่เปลี่ยนแปลง
 - Order Execution Logic (trade.Buy/Sell/PositionClose)
-- Trading Strategy Logic (SMA/ZigZag/Instant, Grid entry/exit, TP/SL calculations)
+- Trading Strategy Logic (SMA/ZigZag/Instant, Grid entry/exit, TP/SL)
 - Core Module Logic (License, News filter, Time filter, Data sync, Squeeze)
-- Hedge Grid distance/direction logic
-- ManageHedgeMatchingClose (Scenario 1) logic
+- Hedge Matching/Partial Close/Grid Mode logic
+- Bound ticket management
 - Accumulate/Drawdown close logic
