@@ -6835,7 +6835,8 @@ void ManageHedgeGridMode(int idx)
             if(closeLots >= g_hedgeSets[idx].hedgeLots)
             {
                trade.PositionClose(g_hedgeSets[idx].hedgeTicket);
-               g_hedgeSets[idx].active = false;
+                CloseAllHedgeGridOrders(idx);
+                g_hedgeSets[idx].active = false;
                g_hedgeSetCount--;
                Print("HEDGE Set#", idx + 1, " fully recovered via grid mode.");
             }
