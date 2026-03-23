@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v5.1 - MTF ZigZag+CDC+Grid+License  |
+//|                Gold Miner EA v5.2 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "5.10"
-#property description "Gold Miner EA v5.1 - MTF ZigZag + CDC + Squeeze + Hedge Set Isolation + License"
+#property version   "5.20"
+#property description "Gold Miner EA v5.2 - MTF ZigZag + CDC + Squeeze + Hedge Set Isolation + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -638,7 +638,7 @@ int OnInit()
    }
    g_hedgeSetCount = 0;
 
-   Print("Gold Miner EA v5.1 initialized successfully");
+   Print("Gold Miner EA v5.2 initialized successfully");
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -690,7 +690,7 @@ void OnDeinit(const int reason)
 
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
-   Print("Gold Miner EA v5.1 deinitialized");
+   Print("Gold Miner EA v5.2 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -1364,6 +1364,23 @@ bool OpenOrder(ENUM_ORDER_TYPE orderType, double lots, string comment)
     // Don't apply user MaxLotSize cap for hedge orders — hedge must match exact counter-side volume
     if(InpMaxLotSize > 0 && !IsHedgeComment(comment)) maxLot = MathMin(maxLot, InpMaxLotSize);
    double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   
+   // Lot cap: when hedge set has bound orders, limit new orders to not exceed hedge coverage
+   if(!IsHedgeComment(comment))
+   {
+      ENUM_POSITION_TYPE posSide = (orderType == ORDER_TYPE_BUY) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
+      double lotCap = GetHedgeLotCap(posSide);
+      if(lotCap >= 0)  // hedge set exists for this side
+      {
+         if(lotCap < minLot)
+         {
+            Print("LOT CAP: Cannot open ", comment, " — bound+new would exceed hedge coverage (allowed=", DoubleToString(lotCap, 2), ")");
+            return false;
+         }
+         maxLot = MathMin(maxLot, lotCap);
+      }
+   }
+   
    lots = MathMax(minLot, MathMin(maxLot, NormalizeDouble(MathRound(lots / lotStep) * lotStep, 2)));
 
    if(orderType == ORDER_TYPE_BUY)
@@ -1405,6 +1422,7 @@ double CalculateAveragePrice(ENUM_POSITION_TYPE side)
       
       // Skip hedge orders — basket TP/SL must not include hedge positions
       if(IsHedgeComment(PositionGetString(POSITION_COMMENT))) continue;
+      if(IsTicketBound(ticket)) continue;  // bound orders managed by Hedge system only
 
       double vol = PositionGetDouble(POSITION_VOLUME);
       double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
@@ -1433,6 +1451,7 @@ double CalculateFloatingPL(ENUM_POSITION_TYPE side)
       
       // Skip hedge orders — floating PL calculation must exclude hedge positions
       if(IsHedgeComment(PositionGetString(POSITION_COMMENT))) continue;
+      if(IsTicketBound(ticket)) continue;  // bound orders managed by Hedge system only
 
       totalPL += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
    }
@@ -1489,6 +1508,7 @@ void CloseAllSide(ENUM_POSITION_TYPE side)
       
       // Skip hedge orders — let the Hedge system manage their lifecycle
       if(IsHedgeComment(PositionGetString(POSITION_COMMENT))) continue;
+      if(IsTicketBound(ticket)) continue;  // bound orders managed by Hedge system only
       
       trade.PositionClose(ticket);
    }
@@ -2679,7 +2699,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v5.0 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v5.0 [ZZ]" : "Gold Miner EA v5.0 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v5.2 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v5.2 [ZZ]" : "Gold Miner EA v5.2 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -5798,7 +5818,7 @@ void CreateDashButton(string name, int x, int y, int width, int height, string t
 }
 
 //+------------------------------------------------------------------+
-//| ============== COUNTER-TREND HEDGING MODULE (v5.1) ============= |
+//| ============== COUNTER-TREND HEDGING MODULE (v5.2) ============= |
 //+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
@@ -5849,6 +5869,40 @@ bool IsTicketBound(ulong ticket)
    }
    return false;
 }
+
+//+------------------------------------------------------------------+
+//| Get lot cap for new orders when hedge set has bound orders          |
+//| Returns -1 if no hedge set exists for this side (no cap)           |
+//| Returns allowedLots = hedgeLots - remainingBoundLots               |
+//+------------------------------------------------------------------+
+double GetHedgeLotCap(ENUM_POSITION_TYPE side)
+{
+   double minCap = -1;  // -1 means no cap
+   for(int h = 0; h < MAX_HEDGE_SETS; h++)
+   {
+      if(!g_hedgeSets[h].active) continue;
+      if(g_hedgeSets[h].counterSide != side) continue;
+
+      // This hedge set has bound orders on this side
+      double boundLots = 0;
+      for(int b = 0; b < g_hedgeSets[h].boundTicketCount; b++)
+      {
+         ulong ticket = g_hedgeSets[h].boundTickets[b];
+         if(!PositionSelectByTicket(ticket)) continue;
+         boundLots += PositionGetDouble(POSITION_VOLUME);
+      }
+
+      double hedgeLots = g_hedgeSets[h].hedgeLots;
+      double allowed = hedgeLots - boundLots;
+
+      if(minCap < 0)
+         minCap = allowed;
+      else
+         minCap = MathMin(minCap, allowed);
+   }
+   return minCap;
+}
+
 
 //+------------------------------------------------------------------+
 //| Count unbound orders (not tied to any hedge set) for a side        |
@@ -6232,62 +6286,79 @@ void ManageHedgePartialClose(int idx)
    }
 
    // Find profitable orders ONLY from this set's boundTickets
-   ulong profitTickets[];
-   double profitValues[];
-   int profitCount = 0;
+    ulong profitTickets[];
+    double profitValues[];
+    datetime profitTimes[];
+    int profitCount = 0;
 
-   for(int b = 0; b < g_hedgeSets[idx].boundTicketCount; b++)
-   {
-      ulong ticket = g_hedgeSets[idx].boundTickets[b];
-      if(!PositionSelectByTicket(ticket)) continue;
-      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != g_hedgeSets[idx].counterSide) continue;
+    for(int b = 0; b < g_hedgeSets[idx].boundTicketCount; b++)
+    {
+       ulong ticket = g_hedgeSets[idx].boundTickets[b];
+       if(!PositionSelectByTicket(ticket)) continue;
+       if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != g_hedgeSets[idx].counterSide) continue;
 
-      double pnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
-      if(pnl <= 0) continue;
+       double pnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+       if(pnl <= 0) continue;
 
-      ArrayResize(profitTickets, profitCount + 1);
-      ArrayResize(profitValues, profitCount + 1);
-      profitTickets[profitCount] = ticket;
-      profitValues[profitCount] = pnl;
-      profitCount++;
-   }
+       ArrayResize(profitTickets, profitCount + 1);
+       ArrayResize(profitValues, profitCount + 1);
+       ArrayResize(profitTimes, profitCount + 1);
+       profitTickets[profitCount] = ticket;
+       profitValues[profitCount] = pnl;
+       profitTimes[profitCount] = (datetime)PositionGetInteger(POSITION_TIME);
+       profitCount++;
+    }
 
-   if(profitCount == 0) return;  // no profitable bound orders to use
+    if(profitCount == 0) return;  // no profitable bound orders to use
 
-   // Guard: require minimum number of profitable counter-orders before starting partial close
-   if(InpHedge_PartialMinProfitOrders > 0 && profitCount < InpHedge_PartialMinProfitOrders) return;
+    // Guard: require minimum number of profitable counter-orders before starting partial close
+    int minOrders = MathMax(InpHedge_PartialMinProfitOrders, 1);
+    if(profitCount < minOrders) return;
 
-   // Calculate hedge loss per lot
-   double hedgeLossPerLot = MathAbs(hedgePnL) / hedgeLots;
-   if(hedgeLossPerLot <= 0) return;
+    // Sort by open time descending (newest first) to pick N newest
+    for(int a = 0; a < profitCount - 1; a++)
+       for(int b2 = a + 1; b2 < profitCount; b2++)
+          if(profitTimes[b2] > profitTimes[a])
+          {
+             datetime tmpT = profitTimes[a]; profitTimes[a] = profitTimes[b2]; profitTimes[b2] = tmpT;
+             double tmpV = profitValues[a]; profitValues[a] = profitValues[b2]; profitValues[b2] = tmpV;
+             ulong tmpK = profitTickets[a]; profitTickets[a] = profitTickets[b2]; profitTickets[b2] = tmpK;
+          }
 
-   // === BATCH MODE: aggregate all profitable orders ===
-   double totalProfit = 0;
-   for(int p = 0; p < profitCount; p++)
-      totalProfit += profitValues[p];
+    // Take only N newest profitable orders (not all)
+    int closeCount = minOrders;
 
-   // Calculate total hedge lots that can be covered by combined profit
-   double closeLots = (totalProfit - InpHedge_PartialMinProfit) / hedgeLossPerLot;
-   if(closeLots <= 0) return;
+    // Calculate hedge loss per lot
+    double hedgeLossPerLot = MathAbs(hedgePnL) / hedgeLots;
+    if(hedgeLossPerLot <= 0) return;
 
-   // Normalize lot
-   double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
-   double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
-   closeLots = MathMax(minLot, MathMin(hedgeLots, NormalizeDouble(MathFloor(closeLots / lotStep) * lotStep, 2)));
+    // === BATCH MODE: aggregate only N newest profitable orders ===
+    double totalProfit = 0;
+    for(int p = 0; p < closeCount; p++)
+       totalProfit += profitValues[p];
 
-   if(closeLots < minLot) return;
+    // Calculate total hedge lots that can be covered by combined profit
+    double closeLots = (totalProfit - InpHedge_PartialMinProfit) / hedgeLossPerLot;
+    if(closeLots <= 0) return;
 
-   Print("HEDGE PARTIAL CLOSE (BATCH) Set#", idx + 1, ": ", profitCount, " profit orders total $",
-         DoubleToString(totalProfit, 2), " → close ", DoubleToString(closeLots, 2),
-         " lots of hedge (current ", DoubleToString(hedgeLots, 2), " lots)");
+    // Normalize lot
+    double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+    double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+    closeLots = MathMax(minLot, MathMin(hedgeLots, NormalizeDouble(MathFloor(closeLots / lotStep) * lotStep, 2)));
 
-   // Close all profitable bound orders + remove from boundTickets
-   for(int p = 0; p < profitCount; p++)
-   {
-      trade.PositionClose(profitTickets[p]);
-      RemoveBoundTicket(idx, profitTickets[p]);
-      Sleep(50);
-   }
+    if(closeLots < minLot) return;
+
+    Print("HEDGE PARTIAL CLOSE (BATCH) Set#", idx + 1, ": ", closeCount, "/", profitCount, " newest profit orders total $",
+          DoubleToString(totalProfit, 2), " → close ", DoubleToString(closeLots, 2),
+          " lots of hedge (current ", DoubleToString(hedgeLots, 2), " lots)");
+
+    // Close only N newest profitable bound orders + remove from boundTickets
+    for(int p = 0; p < closeCount; p++)
+    {
+       trade.PositionClose(profitTickets[p]);
+       RemoveBoundTicket(idx, profitTickets[p]);
+       Sleep(50);
+    }
 
    // Partial close (or full close) hedge
    if(!PositionSelectByTicket(g_hedgeSets[idx].hedgeTicket)) return;
@@ -6576,6 +6647,7 @@ void ManageMatchingClose()
             // Skip hedge orders — managed separately
             string mcComment = PositionGetString(POSITION_COMMENT);
             if(StringFind(mcComment, "GM_HEDGE") >= 0 || StringFind(mcComment, "GM_HG") >= 0) continue;
+            if(IsTicketBound(ticket)) continue;  // bound orders managed by Hedge system only
 
             double pnl = PositionGetDouble(POSITION_PROFIT)
                        + PositionGetDouble(POSITION_SWAP)
