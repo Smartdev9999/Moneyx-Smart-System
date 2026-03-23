@@ -3236,8 +3236,8 @@ void RecoverTFInitialPrices()
 
       for(int t = 0; t < g_activeTFCount; t++)
       {
-         string prefix = "GM_" + g_tfStates[t].tfLabel + "_INIT";
-         if(StringFind(comment, prefix) >= 0)
+          string prefix = "_" + g_tfStates[t].tfLabel + "_INIT";
+          if(MatchTFPrefix(comment, g_tfStates[t].tfLabel) && StringFind(comment, "INIT") >= 0)
          {
             if(posType == POSITION_TYPE_BUY)
                g_tfStates[t].initialBuyPrice = openPrice;
