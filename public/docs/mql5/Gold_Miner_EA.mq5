@@ -6060,7 +6060,7 @@ void CheckAndOpenHedge()
       }
    }
 
-   if(expCount < InpSqueeze_MinTFExpansion || bestDir == 0) return;
+   if(expCount < InpHedge_MinTFConfirm || bestDir == 0) return;
 
    // Bearish expansion → hedge BUY orders stuck (open SELL hedge)
    // Bullish expansion → hedge SELL orders stuck (open BUY hedge)
