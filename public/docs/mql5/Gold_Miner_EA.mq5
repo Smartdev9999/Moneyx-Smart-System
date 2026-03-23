@@ -1405,6 +1405,7 @@ double CalculateAveragePrice(ENUM_POSITION_TYPE side)
       
       // Skip hedge orders — basket TP/SL must not include hedge positions
       if(IsHedgeComment(PositionGetString(POSITION_COMMENT))) continue;
+      if(IsTicketBound(ticket)) continue;  // bound orders managed by Hedge system only
 
       double vol = PositionGetDouble(POSITION_VOLUME);
       double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
