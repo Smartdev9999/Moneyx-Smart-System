@@ -318,6 +318,7 @@ input double   InpHedge_MatchMinProfit      = 5.0;     // Min Profit for Hedge M
 input int      InpHedge_MatchMinProfitOrders = 2;      // Min Profit Orders for Hedge Grid Matching
 input double   InpHedge_PartialMinProfit    = 5.0;     // Min Profit for Partial Close ($)
 input int      InpHedge_PartialMinProfitOrders = 3;    // Min Profit Orders for Partial Close (0=Always)
+input int      InpHedge_MaxSets              = 10;    // Max Active Hedge Sets (1-10)
 
 //+------------------------------------------------------------------+
 //| Global Variables                                                   |
