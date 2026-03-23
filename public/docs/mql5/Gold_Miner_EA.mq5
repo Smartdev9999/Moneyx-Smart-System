@@ -1321,6 +1321,9 @@ void CountPositions(int &buyCount, int &sellCount,
       // Skip hedge orders — they are managed by the Hedge system separately
       if(IsHedgeComment(comment)) continue;
       
+      // Skip bound orders — managed by Hedge system, not normal trading cycle
+      if(IsTicketBound(ticket)) continue;
+      
       long posType = PositionGetInteger(POSITION_TYPE);
 
       if(posType == POSITION_TYPE_BUY)
