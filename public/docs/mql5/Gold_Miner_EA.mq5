@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v5.8 - MTF ZigZag+CDC+Grid+License  |
+//|                Gold Miner EA v5.9 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "5.80"
-#property description "Gold Miner EA v5.8 - MTF ZigZag + CDC + Squeeze + AvgTP + License"
+#property version   "5.90"
+#property description "Gold Miner EA v5.9 - MTF ZigZag + CDC + Squeeze + AvgTP + GenComment + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -474,12 +474,54 @@ struct HedgeSet
    string   commentPrefix;    // "GM_HEDGE_1", "GM_HEDGE_2", etc.
    ulong    boundTickets[];   // tickets of counter-side orders bound to this set
    int      boundTicketCount; // count of bound tickets
+   int      boundGeneration;  // cycle generation of bound orders
 };
 HedgeSet g_hedgeSets[MAX_HEDGE_SETS];
 int      g_hedgeSetCount = 0;
 datetime g_lastHedgeGridTime = 0;  // cooldown timer for hedge grid orders
 int      g_lastDashboardRowCount = 0;  // track previous tick row count for stale cleanup
 bool     g_hedgeOrphanWarning = false;  // orphan hedge grid orders detected
+int      g_cycleGeneration = 0;  // incremented each time a hedge opens — changes comment prefix
+
+//+------------------------------------------------------------------+
+//| Comment Generation Helpers                                         |
+//+------------------------------------------------------------------+
+string GetCommentPrefix()
+{
+   if(g_cycleGeneration == 0) return "GM";
+   return "GM" + IntegerToString(g_cycleGeneration);
+}
+
+// Match comment from any GM generation with a suffix (e.g. "_INIT", "_GL", "_GP")
+bool MatchGMSuffix(string comment, string suffix)
+{
+   if(StringFind(comment, "GM") != 0) return false;
+   return StringFind(comment, suffix) >= 0;
+}
+
+// Match comment that belongs to any GM generation for a specific TF
+bool MatchTFPrefix(string comment, string tfLabel)
+{
+   if(StringFind(comment, "GM") != 0) return false;
+   string tfToken = "_" + tfLabel + "_";
+   return StringFind(comment, tfToken) >= 0;
+}
+
+// Extract cycle generation number from comment
+// GM_INIT → 0, GM1_INIT → 1, GM2_INIT → 2
+int ExtractGeneration(string comment)
+{
+   if(StringFind(comment, "GM") != 0) return -1;
+   int pos = 2;  // after "GM"
+   while(pos < StringLen(comment))
+   {
+      ushort ch = StringGetCharacter(comment, pos);
+      if(ch >= '0' && ch <= '9') pos++;
+      else break;
+   }
+   if(pos == 2) return 0;  // "GM_" = gen 0
+   return (int)StringToInteger(StringSubstr(comment, 2, pos - 2));
+}
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                     |
@@ -635,16 +677,17 @@ int OnInit()
       g_hedgeSets[h].gridLevel = 0;
       g_hedgeSets[h].gridTicketCount = 0;
       ArrayResize(g_hedgeSets[h].gridTickets, 0);
-      g_hedgeSets[h].commentPrefix = "GM_HEDGE_" + IntegerToString(h + 1);
-      g_hedgeSets[h].boundTicketCount = 0;
-      ArrayResize(g_hedgeSets[h].boundTickets, 0);
-   }
-   g_hedgeSetCount = 0;
+       g_hedgeSets[h].commentPrefix = "GM_HEDGE_" + IntegerToString(h + 1);
+       g_hedgeSets[h].boundTicketCount = 0;
+       ArrayResize(g_hedgeSets[h].boundTickets, 0);
+       g_hedgeSets[h].boundGeneration = 0;
+    }
+    g_hedgeSetCount = 0;
 
    // === Recover Hedge Sets from existing positions (crash/restart recovery) ===
    RecoverHedgeSets();
 
-   Print("Gold Miner EA v5.8 initialized successfully");
+   Print("Gold Miner EA v5.9 initialized successfully | CycleGen=", g_cycleGeneration);
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -696,7 +739,7 @@ void OnDeinit(const int reason)
 
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
-   Print("Gold Miner EA v5.8 deinitialized");
+   Print("Gold Miner EA v5.9 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -712,7 +755,7 @@ void RecoverInitialPrices()
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
 
       string comment = PositionGetString(POSITION_COMMENT);
-      if(StringFind(comment, "GM_INIT") >= 0)
+      if(MatchGMSuffix(comment, "_INIT"))
       {
          long posType = PositionGetInteger(POSITION_TYPE);
          double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
@@ -1154,7 +1197,7 @@ void OnTick()
                 {
                    if(shouldEnterBuy)
                    {
-                      if(OpenOrder(ORDER_TYPE_BUY, InitialLotSize, "GM_INIT"))
+                       if(OpenOrder(ORDER_TYPE_BUY, InitialLotSize, GetCommentPrefix() + "_INIT"))
                       {
                          g_initialBuyPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
                          lastInitialCandleTime = currentBarTime;
@@ -1175,7 +1218,7 @@ void OnTick()
                 {
                    if(shouldEnterSell)
                    {
-                      if(OpenOrder(ORDER_TYPE_SELL, InitialLotSize, "GM_INIT"))
+                       if(OpenOrder(ORDER_TYPE_SELL, InitialLotSize, GetCommentPrefix() + "_INIT"))
                       {
                          g_initialSellPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
                          lastInitialCandleTime = currentBarTime;
@@ -1260,7 +1303,7 @@ void OnTick()
          {
             if(TradingMode == TRADE_BUY_ONLY || TradingMode == TRADE_BOTH)
             {
-               if(OpenOrder(ORDER_TYPE_BUY, InitialLotSize, "GM_INIT"))
+               if(OpenOrder(ORDER_TYPE_BUY, InitialLotSize, GetCommentPrefix() + "_INIT"))
                {
                   g_initialBuyPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
                   lastInitialCandleTime = currentBarTime;
@@ -1274,7 +1317,7 @@ void OnTick()
          {
             if(TradingMode == TRADE_SELL_ONLY || TradingMode == TRADE_BOTH)
             {
-               if(OpenOrder(ORDER_TYPE_SELL, InitialLotSize, "GM_INIT"))
+               if(OpenOrder(ORDER_TYPE_SELL, InitialLotSize, GetCommentPrefix() + "_INIT"))
                {
                   g_initialSellPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
                   lastInitialCandleTime = currentBarTime;
@@ -1329,16 +1372,16 @@ void CountPositions(int &buyCount, int &sellCount,
       if(posType == POSITION_TYPE_BUY)
       {
          buyCount++;
-         if(StringFind(comment, "GM_INIT") >= 0) hasInitialBuy = true;
-         if(StringFind(comment, "GM_GL") >= 0) gridLossBuy++;
-         if(StringFind(comment, "GM_GP") >= 0) gridProfitBuy++;
+         if(MatchGMSuffix(comment, "_INIT")) hasInitialBuy = true;
+         if(MatchGMSuffix(comment, "_GL")) gridLossBuy++;
+         if(MatchGMSuffix(comment, "_GP")) gridProfitBuy++;
       }
       else if(posType == POSITION_TYPE_SELL)
       {
          sellCount++;
-         if(StringFind(comment, "GM_INIT") >= 0) hasInitialSell = true;
-         if(StringFind(comment, "GM_GL") >= 0) gridLossSell++;
-         if(StringFind(comment, "GM_GP") >= 0) gridProfitSell++;
+         if(MatchGMSuffix(comment, "_INIT")) hasInitialSell = true;
+         if(MatchGMSuffix(comment, "_GL")) gridLossSell++;
+         if(MatchGMSuffix(comment, "_GP")) gridProfitSell++;
       }
    }
 }
@@ -2120,8 +2163,10 @@ double FindMaxLotOnSide(ENUM_POSITION_TYPE side)
       if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
+      if(IsTicketBound(ticket)) continue;
       string comment = PositionGetString(POSITION_COMMENT);
-      if(StringFind(comment, "GM_GL") >= 0 || StringFind(comment, "GM_INIT") >= 0)
+      if(IsHedgeComment(comment)) continue;
+      if(MatchGMSuffix(comment, "_GL") || MatchGMSuffix(comment, "_INIT"))
       {
          double lot = PositionGetDouble(POSITION_VOLUME);
          if(lot > maxLot) maxLot = lot;
@@ -2158,7 +2203,7 @@ void CheckGridLoss(ENUM_POSITION_TYPE side, int currentGridCount)
    //--- Uses initial price as fallback when per-order trailing closed grid orders
    double lastPrice = 0;
    datetime lastTime = 0;
-   FindLastOrder(side, "GM_INIT", "GM_GL", lastPrice, lastTime);
+   FindLastOrder(side, "_INIT", "_GL", lastPrice, lastTime);
 
    //--- Fallback: use initial order price if no open order found
    if(lastPrice == 0)
@@ -2222,7 +2267,7 @@ void CheckGridLoss(ENUM_POSITION_TYPE side, int currentGridCount)
          // LOT_CUSTOM: keep level-based calculation
       }
       
-      string comment = "GM_GL#" + IntegerToString(currentGridCount + 1);
+      string comment = GetCommentPrefix() + "_GL#" + IntegerToString(currentGridCount + 1);
       ENUM_ORDER_TYPE orderType = (side == POSITION_TYPE_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
       if(OpenOrder(orderType, lots, comment))
       {
@@ -2249,7 +2294,7 @@ void CheckGridProfit(ENUM_POSITION_TYPE side, int currentGridCount)
    //--- Find the last order of this side (initial or grid profit)
    double lastPrice = 0;
    datetime lastTime = 0;
-   FindLastOrder(side, "GM_INIT", "GM_GP", lastPrice, lastTime);
+   FindLastOrder(side, "_INIT", "_GP", lastPrice, lastTime);
 
    //--- Fallback: use initial order price
    if(lastPrice == 0)
@@ -2294,7 +2339,7 @@ void CheckGridProfit(ENUM_POSITION_TYPE side, int currentGridCount)
    if(shouldOpen)
    {
       double lots = CalculateGridLot(currentGridCount, false);
-      string comment = "GM_GP#" + IntegerToString(currentGridCount + 1);
+      string comment = GetCommentPrefix() + "_GP#" + IntegerToString(currentGridCount + 1);
       ENUM_ORDER_TYPE orderType = (side == POSITION_TYPE_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
       if(OpenOrder(orderType, lots, comment))
       {
@@ -2306,7 +2351,7 @@ void CheckGridProfit(ENUM_POSITION_TYPE side, int currentGridCount)
 //+------------------------------------------------------------------+
 //| Find last order price for a side (matching comment prefixes)       |
 //+------------------------------------------------------------------+
-void FindLastOrder(ENUM_POSITION_TYPE side, string prefix1, string prefix2, double &outPrice, datetime &outTime)
+void FindLastOrder(ENUM_POSITION_TYPE side, string suffix1, string suffix2, double &outPrice, datetime &outTime)
 {
    outPrice = 0;
    outTime = 0;
@@ -2319,9 +2364,11 @@ void FindLastOrder(ENUM_POSITION_TYPE side, string prefix1, string prefix2, doub
       if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       if(PositionGetInteger(POSITION_TYPE) != side) continue;
+      if(IsTicketBound(ticket)) continue;
 
       string comment = PositionGetString(POSITION_COMMENT);
-      if(StringFind(comment, prefix1) >= 0 || StringFind(comment, prefix2) >= 0)
+      if(IsHedgeComment(comment)) continue;
+      if(MatchGMSuffix(comment, suffix1) || MatchGMSuffix(comment, suffix2))
       {
          datetime openTime = (datetime)PositionGetInteger(POSITION_TIME);
          if(openTime > latestTime)
@@ -2708,7 +2755,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v5.8 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v5.8 [ZZ]" : "Gold Miner EA v5.8 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v5.9 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v5.9 [ZZ]" : "Gold Miner EA v5.9 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -3189,8 +3236,8 @@ void RecoverTFInitialPrices()
 
       for(int t = 0; t < g_activeTFCount; t++)
       {
-         string prefix = "GM_" + g_tfStates[t].tfLabel + "_INIT";
-         if(StringFind(comment, prefix) >= 0)
+          string prefix = "_" + g_tfStates[t].tfLabel + "_INIT";
+          if(MatchTFPrefix(comment, g_tfStates[t].tfLabel) && StringFind(comment, "INIT") >= 0)
          {
             if(posType == POSITION_TYPE_BUY)
                g_tfStates[t].initialBuyPrice = openPrice;
@@ -3366,7 +3413,7 @@ void CountPositionsTF(int tfIdx, int &buyCount, int &sellCount,
    gridProfitBuy = 0; gridProfitSell = 0;
    hasInitialBuy = false; hasInitialSell = false;
 
-   string prefix = "GM_" + g_tfStates[tfIdx].tfLabel + "_";
+   string tfLabel = g_tfStates[tfIdx].tfLabel;
 
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
@@ -3376,23 +3423,23 @@ void CountPositionsTF(int tfIdx, int &buyCount, int &sellCount,
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
 
       string comment = PositionGetString(POSITION_COMMENT);
-      if(StringFind(comment, prefix) < 0) continue;
+      if(!MatchTFPrefix(comment, tfLabel)) continue;
 
       long posType = PositionGetInteger(POSITION_TYPE);
 
       if(posType == POSITION_TYPE_BUY)
       {
          buyCount++;
-         if(StringFind(comment, prefix + "INIT") >= 0) hasInitialBuy = true;
-         if(StringFind(comment, prefix + "GL") >= 0) gridLossBuy++;
-         if(StringFind(comment, prefix + "GP") >= 0) gridProfitBuy++;
+         if(StringFind(comment, "INIT") >= 0) hasInitialBuy = true;
+         if(StringFind(comment, "GL") >= 0) gridLossBuy++;
+         if(StringFind(comment, "GP") >= 0) gridProfitBuy++;
       }
       else if(posType == POSITION_TYPE_SELL)
       {
          sellCount++;
-         if(StringFind(comment, prefix + "INIT") >= 0) hasInitialSell = true;
-         if(StringFind(comment, prefix + "GL") >= 0) gridLossSell++;
-         if(StringFind(comment, prefix + "GP") >= 0) gridProfitSell++;
+         if(StringFind(comment, "INIT") >= 0) hasInitialSell = true;
+         if(StringFind(comment, "GL") >= 0) gridLossSell++;
+         if(StringFind(comment, "GP") >= 0) gridProfitSell++;
       }
    }
 }
@@ -3402,7 +3449,7 @@ void CountPositionsTF(int tfIdx, int &buyCount, int &sellCount,
 //+------------------------------------------------------------------+
 bool OpenOrderTF(int tfIdx, ENUM_ORDER_TYPE orderType, double lots, string suffix)
 {
-   string comment = "GM_" + g_tfStates[tfIdx].tfLabel + "_" + suffix;
+   string comment = GetCommentPrefix() + "_" + g_tfStates[tfIdx].tfLabel + "_" + suffix;
    return OpenOrder(orderType, lots, comment);
 }
 
@@ -3411,7 +3458,7 @@ bool OpenOrderTF(int tfIdx, ENUM_ORDER_TYPE orderType, double lots, string suffi
 //+------------------------------------------------------------------+
 double CalculateAveragePriceTF(int tfIdx, ENUM_POSITION_TYPE side)
 {
-   string prefix = "GM_" + g_tfStates[tfIdx].tfLabel + "_";
+   string tfLabel = g_tfStates[tfIdx].tfLabel;
    double totalLots = 0;
    double totalWeighted = 0;
 
@@ -3422,7 +3469,7 @@ double CalculateAveragePriceTF(int tfIdx, ENUM_POSITION_TYPE side)
       if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       if(PositionGetInteger(POSITION_TYPE) != side) continue;
-      if(StringFind(PositionGetString(POSITION_COMMENT), prefix) < 0) continue;
+      if(!MatchTFPrefix(PositionGetString(POSITION_COMMENT), tfLabel)) continue;
 
       double vol = PositionGetDouble(POSITION_VOLUME);
       double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
@@ -3439,7 +3486,7 @@ double CalculateAveragePriceTF(int tfIdx, ENUM_POSITION_TYPE side)
 //+------------------------------------------------------------------+
 double CalculateFloatingPL_TF(int tfIdx, ENUM_POSITION_TYPE side)
 {
-   string prefix = "GM_" + g_tfStates[tfIdx].tfLabel + "_";
+   string tfLabel = g_tfStates[tfIdx].tfLabel;
    double totalPLtf = 0;
 
    for(int i = PositionsTotal() - 1; i >= 0; i--)
@@ -3449,7 +3496,7 @@ double CalculateFloatingPL_TF(int tfIdx, ENUM_POSITION_TYPE side)
       if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       if(PositionGetInteger(POSITION_TYPE) != side) continue;
-      if(StringFind(PositionGetString(POSITION_COMMENT), prefix) < 0) continue;
+      if(!MatchTFPrefix(PositionGetString(POSITION_COMMENT), tfLabel)) continue;
 
       totalPLtf += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
    }
@@ -3462,7 +3509,7 @@ double CalculateFloatingPL_TF(int tfIdx, ENUM_POSITION_TYPE side)
 void FindLastOrderTF(int tfIdx, ENUM_POSITION_TYPE side, string suffix1, string suffix2,
                      double &outPrice, datetime &outTime)
 {
-   string prefix = "GM_" + g_tfStates[tfIdx].tfLabel + "_";
+   string tfLabel = g_tfStates[tfIdx].tfLabel;
    outPrice = 0;
    outTime = 0;
    datetime latestTime = 0;
@@ -3476,8 +3523,8 @@ void FindLastOrderTF(int tfIdx, ENUM_POSITION_TYPE side, string suffix1, string 
       if(PositionGetInteger(POSITION_TYPE) != side) continue;
 
       string comment = PositionGetString(POSITION_COMMENT);
-      if(StringFind(comment, prefix) < 0) continue;
-      if(StringFind(comment, prefix + suffix1) >= 0 || StringFind(comment, prefix + suffix2) >= 0)
+      if(!MatchTFPrefix(comment, tfLabel)) continue;
+      if(StringFind(comment, suffix1) >= 0 || StringFind(comment, suffix2) >= 0)
       {
          datetime openTime = (datetime)PositionGetInteger(POSITION_TIME);
          if(openTime > latestTime)
@@ -3495,7 +3542,7 @@ void FindLastOrderTF(int tfIdx, ENUM_POSITION_TYPE side, string suffix1, string 
 //+------------------------------------------------------------------+
 void CloseAllSideTF(int tfIdx, ENUM_POSITION_TYPE side)
 {
-   string prefix = "GM_" + g_tfStates[tfIdx].tfLabel + "_";
+   string tfLabel = g_tfStates[tfIdx].tfLabel;
 
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
@@ -3504,7 +3551,7 @@ void CloseAllSideTF(int tfIdx, ENUM_POSITION_TYPE side)
       if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       if(PositionGetInteger(POSITION_TYPE) != side) continue;
-      if(StringFind(PositionGetString(POSITION_COMMENT), prefix) < 0) continue;
+      if(!MatchTFPrefix(PositionGetString(POSITION_COMMENT), tfLabel)) continue;
       trade.PositionClose(ticket);
    }
 
@@ -3907,7 +3954,7 @@ void ManageTrailingStop_TF(int tfIdx)
 //+------------------------------------------------------------------+
 void ApplyTrailingSL_TF(int tfIdx, ENUM_POSITION_TYPE side, double slPrice)
 {
-   string prefix = "GM_" + g_tfStates[tfIdx].tfLabel + "_";
+   string tfLabel = g_tfStates[tfIdx].tfLabel;
    int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
    slPrice = NormalizeDouble(slPrice, digits);
 
@@ -3918,7 +3965,7 @@ void ApplyTrailingSL_TF(int tfIdx, ENUM_POSITION_TYPE side, double slPrice)
       if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       if(PositionGetInteger(POSITION_TYPE) != side) continue;
-      if(StringFind(PositionGetString(POSITION_COMMENT), prefix) < 0) continue;
+      if(!MatchTFPrefix(PositionGetString(POSITION_COMMENT), tfLabel)) continue;
 
       double currentSL = PositionGetDouble(POSITION_SL);
       double tp = PositionGetDouble(POSITION_TP);
@@ -6092,13 +6139,21 @@ void CheckAndOpenHedge()
          ArrayResize(g_hedgeSets[slot].boundTickets, bc + 1);
          g_hedgeSets[slot].boundTickets[bc] = ticket;
          g_hedgeSets[slot].boundTicketCount = bc + 1;
-      }
+       }
 
-      g_hedgeSetCount++;
-      string sideStr = (hedgeSide == POSITION_TYPE_BUY) ? "BUY" : "SELL";
-      Print("HEDGE OPENED: Set#", slot + 1, " ", sideStr, " ", DoubleToString(counterLots, 2),
-            " lots to cover ", counterCount, " stuck orders (bound ", g_hedgeSets[slot].boundTicketCount, " tickets)");
-   }
+       // Store bound generation BEFORE incrementing
+       g_hedgeSets[slot].boundGeneration = g_cycleGeneration;
+
+       // Increment cycle generation — new orders will use new prefix (GM1_, GM2_, etc.)
+       g_cycleGeneration++;
+       Print("CYCLE GENERATION incremented to ", g_cycleGeneration, " — new orders use prefix: ", GetCommentPrefix());
+
+       g_hedgeSetCount++;
+       string sideStr = (hedgeSide == POSITION_TYPE_BUY) ? "BUY" : "SELL";
+       Print("HEDGE OPENED: Set#", slot + 1, " ", sideStr, " ", DoubleToString(counterLots, 2),
+             " lots to cover ", counterCount, " stuck orders (bound ", g_hedgeSets[slot].boundTicketCount,
+             " tickets, boundGen=", g_hedgeSets[slot].boundGeneration, ")");
+    }
 }
 
 //+------------------------------------------------------------------+
@@ -6135,6 +6190,21 @@ void RecoverHedgeSets()
 {
    int recovered = 0;
    
+   // Step 0: Determine current cycle generation from existing positions
+   int maxGen = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      string cmt = PositionGetString(POSITION_COMMENT);
+      int gen = ExtractGeneration(cmt);
+      if(gen > maxGen) maxGen = gen;
+   }
+   g_cycleGeneration = maxGen;
+   Print("RECOVER: Detected cycle generation = ", g_cycleGeneration);
+   
    // Step 1: Find main hedge positions (GM_HEDGE_N) and rebuild sets
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
@@ -6168,12 +6238,16 @@ void RecoverHedgeSets()
       }
    }
    
-   // Step 2: Rebind counter-side unbound orders to recovered sets
+   // Step 2: Rebind counter-side orders — ONLY bind orders from OLDER generations
    for(int h = 0; h < MAX_HEDGE_SETS; h++)
    {
       if(!g_hedgeSets[h].active) continue;
       g_hedgeSets[h].boundTicketCount = 0;
       ArrayResize(g_hedgeSets[h].boundTickets, 0);
+      
+      // Determine bound generation: orders from generations BEFORE the current one
+      // If hedge exists, bound orders were from a previous gen
+      int boundGen = -1;  // will be set to the oldest non-current gen found
       
       for(int i = PositionsTotal() - 1; i >= 0; i--)
       {
@@ -6186,11 +6260,20 @@ void RecoverHedgeSets()
          if(IsHedgeComment(cmt)) continue;
          if(IsTicketBound(ticket)) continue;
          
+         // Only bind orders from older generations (not current cycle)
+         int orderGen = ExtractGeneration(cmt);
+         if(orderGen < 0) continue;  // not our comment format
+         if(orderGen >= g_cycleGeneration) continue;  // skip current gen — it's an independent new cycle
+         
          int bc = g_hedgeSets[h].boundTicketCount;
          ArrayResize(g_hedgeSets[h].boundTickets, bc + 1);
          g_hedgeSets[h].boundTickets[bc] = ticket;
          g_hedgeSets[h].boundTicketCount = bc + 1;
+         
+         if(boundGen < 0 || orderGen < boundGen) boundGen = orderGen;
       }
+      
+      g_hedgeSets[h].boundGeneration = (boundGen >= 0) ? boundGen : 0;
       
       // Check if bounds are empty → enter grid mode
       if(g_hedgeSets[h].boundTicketCount == 0)
@@ -6215,7 +6298,8 @@ void RecoverHedgeSets()
          }
       }
       
-      Print("RECOVER: Set#", h + 1, " bound ", g_hedgeSets[h].boundTicketCount, " counter-side orders");
+      Print("RECOVER: Set#", h + 1, " bound ", g_hedgeSets[h].boundTicketCount,
+            " counter-side orders (boundGen=", g_hedgeSets[h].boundGeneration, ")");
    }
    
    // Step 3: Clean up orphan GM_HG orders that have no active main hedge
@@ -6248,7 +6332,8 @@ void RecoverHedgeSets()
    }
    
    if(recovered > 0 || orphansClosed > 0)
-      Print("RECOVER COMPLETE: ", recovered, " sets recovered, ", orphansClosed, " orphan grid orders closed");
+      Print("RECOVER COMPLETE: ", recovered, " sets recovered, ", orphansClosed,
+            " orphan grid orders closed, cycleGen=", g_cycleGeneration);
 }
 
 //+------------------------------------------------------------------+
