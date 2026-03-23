@@ -6146,18 +6146,23 @@ void ManageHedgeSets()
             continue;
          }
 
-         // NEW: Average TP check (ซอย hedge ด้วยกำไร bound orders)
-         if(ManageHedgeBoundAvgTP(h)) continue;
-
          // Expansion ended → check scenarios
          double hedgePnL = 0;
          if(hedgeExists)
             hedgePnL = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
 
+         // Matching Close FIRST (hedge is profitable → close + match losses)
          if(hedgePnL > 0)
-            ManageHedgeMatchingClose(h);  // Scenario 1: hedge in profit
-         else
-            ManageHedgePartialClose(h);   // Scenario 2: hedge in loss, check original orders
+         {
+            ManageHedgeMatchingClose(h);
+            continue;
+         }
+
+         // Average TP SECOND (hedge is in loss → try avg TP on bounds)
+         if(ManageHedgeBoundAvgTP(h)) continue;
+
+         // Partial Close LAST
+         ManageHedgePartialClose(h);
       }
       else
       {
