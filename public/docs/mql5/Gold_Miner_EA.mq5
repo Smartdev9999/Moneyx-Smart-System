@@ -322,6 +322,10 @@ input int      InpHedge_MaxSets              = 10;    // Max Active Hedge Sets (
 input int      InpHedge_BoundAvgTPPoints     = 0;     // Bound Avg TP Points (0=Disabled)
 input int      InpHedge_MinTFConfirm         = 1;     // Min TF Expansion to Confirm Hedge (1-3)
 
+input group "=== Orphan Recovery Grid ==="
+input bool     InpOrphan_Enable              = true;   // Enable Orphan Recovery Grid
+input int      InpOrphan_ScanIntervalMin     = 15;     // Scan Interval (Minutes)
+
 //+------------------------------------------------------------------+
 //| Global Variables                                                   |
 //+------------------------------------------------------------------+
