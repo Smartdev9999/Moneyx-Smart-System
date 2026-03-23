@@ -3954,7 +3954,7 @@ void ManageTrailingStop_TF(int tfIdx)
 //+------------------------------------------------------------------+
 void ApplyTrailingSL_TF(int tfIdx, ENUM_POSITION_TYPE side, double slPrice)
 {
-   string prefix = "GM_" + g_tfStates[tfIdx].tfLabel + "_";
+   string tfLabel = g_tfStates[tfIdx].tfLabel;
    int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
    slPrice = NormalizeDouble(slPrice, digits);
 
@@ -3965,7 +3965,7 @@ void ApplyTrailingSL_TF(int tfIdx, ENUM_POSITION_TYPE side, double slPrice)
       if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       if(PositionGetInteger(POSITION_TYPE) != side) continue;
-      if(StringFind(PositionGetString(POSITION_COMMENT), prefix) < 0) continue;
+      if(!MatchTFPrefix(PositionGetString(POSITION_COMMENT), tfLabel)) continue;
 
       double currentSL = PositionGetDouble(POSITION_SL);
       double tp = PositionGetDouble(POSITION_TP);
