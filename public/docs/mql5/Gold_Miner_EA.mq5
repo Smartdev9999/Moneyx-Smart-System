@@ -6302,6 +6302,7 @@ void ManageHedgeSets()
       {
          // Hedge was closed externally (accumulate close, manual, etc.)
          Print("HEDGE Set#", h + 1, " ticket no longer exists. Deactivating.");
+         CloseAllHedgeGridOrders(h);
          g_hedgeSets[h].active = false;
          g_hedgeSets[h].boundTicketCount = 0;
          ArrayResize(g_hedgeSets[h].boundTickets, 0);
