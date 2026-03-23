@@ -1,48 +1,49 @@
 
 
-## เพิ่ม Hedge Average Bound TP Points — Gold Miner SQ EA (v5.4 → v5.5)
+## เพิ่ม Hedge Average Bound TP — ซอย Hedge (ไม่ปิดทั้งชุด) — Gold Miner SQ EA (v5.4 → v5.5)
 
-### แนวคิด
+### แนวคิดที่ถูกต้อง
 
-เพิ่มระบบ "Average TP" สำหรับ bound orders ของแต่ละ hedge set — คำนวณราคาเฉลี่ยถ่วงน้ำหนักของ bound orders แล้วเมื่อราคาปัจจุบันวิ่งถึง avg ± TP points → ปิด bound orders + hedge ทั้งชุดพร้อมกัน
-
-ทำงานร่วมกับ Matching Close: ถ้า matching close ไม่สามารถทำงานได้ (order ไม่ครบเงื่อนไข) → Average TP จะเป็นทางออกอีกทางหนึ่ง
+เมื่อ bound orders ถึง Average TP → **ปิด bound orders + ซอย hedge ตามกำไร** (เหมือน Partial Close) ไม่ใช่ปิด hedge ทั้งหมด → เมื่อ bound orders หมด → เข้า Grid Mode ต่อ
 
 ### การแก้ไข
 
 **ไฟล์:** `public/docs/mql5/Gold_Miner_EA.mq5`
 
-#### 1. เพิ่ม Input (line 321 หลัง InpHedge_MaxSets)
+#### 1. เพิ่ม Input (หลัง InpHedge_MaxSets ~line 321)
 ```cpp
-input int      InpHedge_BoundAvgTPPoints    = 0;      // Bound Avg TP Points (0=Disabled)
+input int InpHedge_BoundAvgTPPoints = 0; // Bound Avg TP Points (0=Disabled)
 ```
 
-#### 2. เพิ่มฟังก์ชัน `ManageHedgeBoundAvgTP(int idx)`
+#### 2. เพิ่มฟังก์ชัน `ManageHedgeBoundAvgTP(int idx)` — return bool
 
 Logic:
-1. Guard: `InpHedge_BoundAvgTPPoints <= 0` → return
-2. Guard: `isExpansion` → return (ทำงานเฉพาะ Normal เหมือนระบบอื่น)
-3. คำนวณ weighted average price ของ bound orders ทั้งหมด (lots × open price / total lots)
-4. คำนวณ TP level:
-   - ถ้า bound orders เป็น **BUY** (counterSide = BUY) → `tpPrice = avgPrice + TPPoints * _Point`
-   - ถ้า bound orders เป็น **SELL** (counterSide = SELL) → `tpPrice = avgPrice - TPPoints * _Point`
-5. เช็คว่าราคาถึง TP หรือยัง:
-   - BUY bound: `Bid >= tpPrice`
-   - SELL bound: `Ask <= tpPrice`
-6. ถ้าถึง → ปิด bound orders ทั้งหมด + ปิด hedge order → deactivate set
+1. Guard: `InpHedge_BoundAvgTPPoints <= 0` → return false
+2. Guard: `boundTicketCount == 0` → return false
+3. คำนวณ weighted avg price ของ bound orders (lots × openPrice / totalLots)
+4. เช็คว่าราคาถึง avg ± TP points หรือยัง
+5. ถ้าถึง:
+   - คำนวณ `totalProfit` จาก bound orders ที่เป็นบวก
+   - คำนวณ `closeLots = totalProfit / hedgeLossPerLot` (เหมือน Partial Close)
+   - ปิด bound orders ที่เป็นบวกทั้งหมด + `RemoveBoundTicket`
+   - **Partial close hedge** ด้วย closeLots (ซอย ไม่ปิดทั้งหมด)
+   - ถ้า closeLots ≥ hedgeLots → ปิด hedge ทั้งหมด + deactivate set
+   - ถ้า closeLots < hedgeLots → ซอย hedge ลด lot → bound orders ที่เหลือยังทำงานต่อ
+   - ถ้า boundTicketCount == 0 หลังปิด → เข้า Grid Mode
+6. return true (ทำงานแล้ว)
 
-#### 3. เรียกใน `ManageHedgeSets()` (line 6137)
-
-เพิ่มเรียก `ManageHedgeBoundAvgTP(h)` ใน branch `!isExpansion` **ก่อน** matching/partial close:
+#### 3. เรียกใน `ManageHedgeSets()` (line 6137) — branch `!isExpansion`
 
 ```text
 else if(!isExpansion)
 {
-   // Check bound orders avg TP first
-   if(g_hedgeSets[h].boundTicketCount == 0 && hedgeExists) { gridMode... }
+   // Check bound orders gone → grid mode
+   if(g_hedgeSets[h].boundTicketCount == 0 && hedgeExists) {
+      gridMode = true; gridLevel = CalculateEquivGridLevel(...); continue;
+   }
    
-   // NEW: Average TP check
-   if(ManageHedgeBoundAvgTP(h)) continue;  // closed entire set
+   // NEW: Average TP check (ซอย hedge ด้วยกำไร bound orders)
+   if(ManageHedgeBoundAvgTP(h)) continue;
    
    if(hedgePnL > 0) ManageHedgeMatchingClose(h);
    else ManageHedgePartialClose(h);
@@ -52,9 +53,9 @@ else if(!isExpansion)
 #### 4. Version bump: v5.4 → v5.5
 
 ### ผลลัพธ์
-- `InpHedge_BoundAvgTPPoints = 0` → ปิดระบบนี้ (ทำงานเหมือนเดิม)
-- `InpHedge_BoundAvgTPPoints = 500` → เมื่อราคาวิ่งบวก 500 points จาก avg price ของ bound orders → ปิดทั้งชุด
-- ทำงานร่วมกับ matching close: ถ้า avg TP ไม่ถึง → matching/partial close ยังทำงานตามปกติ
+- Average TP ถึง → ปิด bound orders ที่บวก → ซอย hedge ลดขนาด → bound ที่เหลือทำงานต่อ
+- bound หมด → Grid Mode → Hedge Grid orders ออกมาซอย hedge ที่เหลือจนหมด
+- ทำงานร่วมกับ Matching Close และ Partial Close ได้ (Average TP เช็คก่อน)
 
 ### สิ่งที่ไม่เปลี่ยนแปลง
 - Order Execution Logic (trade.Buy/Sell/PositionClose)
