@@ -1491,6 +1491,7 @@ void CloseAllSide(ENUM_POSITION_TYPE side)
       
       // Skip hedge orders — let the Hedge system manage their lifecycle
       if(IsHedgeComment(PositionGetString(POSITION_COMMENT))) continue;
+      if(IsTicketBound(ticket)) continue;  // bound orders managed by Hedge system only
       
       trade.PositionClose(ticket);
    }
