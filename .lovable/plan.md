@@ -1,44 +1,41 @@
 
 
-## เพิ่ม Comment Generation System แยก Bound Orders จาก New Cycle — Gold Miner SQ EA (v5.8 → v5.9)
+## เพิ่ม Input กำหนดจำนวน TF Expansion สำหรับ Hedge Entry — Gold Miner SQ EA (v5.9 → v6.0)
 
-### สิ่งที่แก้ไข
+### ปัญหา
+
+ปัจจุบัน `CheckAndOpenHedge()` (line 6062) ใช้ `InpSqueeze_MinTFExpansion` ซึ่งเป็นค่าเดียวกับที่ใช้บล็อก entry ปกติ → เมื่อ expansion เกิดแค่ 1 TF ก็เปิด hedge ทันที → โดนหลอกบ่อย
+
+### การแก้ไข
 
 **ไฟล์:** `public/docs/mql5/Gold_Miner_EA.mq5`
 
-#### 1. เพิ่ม Global `g_cycleGeneration` + Helper Functions
-- `GetCommentPrefix()`: return "GM", "GM1", "GM2"... ตาม generation
-- `MatchGMSuffix()`: match comment จากทุก generation ด้วย suffix
-- `MatchTFPrefix()`: match TF comment จากทุก generation
-- `ExtractGeneration()`: แยก generation number จาก comment
+#### 1. เพิ่ม Input (หลัง InpHedge_BoundAvgTPPoints ~line 322)
+```cpp
+input int      InpHedge_MinTFConfirm        = 1;      // Min TF Expansion to Confirm Hedge (1-3)
+```
 
-#### 2. เพิ่ม `boundGeneration` ใน HedgeSet struct
+#### 2. แก้ `CheckAndOpenHedge()` line 6062
 
-#### 3. แก้ทุกจุดสร้าง Comment → ใช้ `GetCommentPrefix()`
-- SMA Entry: `GetCommentPrefix() + "_INIT"`
-- Instant Entry: `GetCommentPrefix() + "_INIT"`
-- Grid Loss: `GetCommentPrefix() + "_GL#N"`
-- Grid Profit: `GetCommentPrefix() + "_GP#N"`
-- ZigZag TF: `GetCommentPrefix() + "_" + tfLabel + "_" + suffix`
+```text
+เดิม:
+  if(expCount < InpSqueeze_MinTFExpansion || bestDir == 0) return;
 
-#### 4. แก้ทุกจุด Scan/Match Comment → ใช้ helpers
-- CountPositions, FindMaxLotOnSide, FindLastOrder
-- CountPositionsTF, CalculateAveragePriceTF, CalculateFloatingPL_TF
-- FindLastOrderTF, CloseAllSideTF, ApplyTrailingSL_TF
-- RecoverInitialPrices, RecoverTFInitialPrices
+ใหม่:
+  if(expCount < InpHedge_MinTFConfirm || bestDir == 0) return;
+```
 
-#### 5. CheckAndOpenHedge → increment `g_cycleGeneration`
-- Store `boundGeneration` ก่อน increment
+**ผล:**
+- `InpHedge_MinTFConfirm = 1` → เหมือนเดิม (expansion 1 TF ก็เปิด hedge)
+- `InpHedge_MinTFConfirm = 2` → ต้องมี 2 TF เป็น expansion ถึงจะเปิด hedge
+- `InpHedge_MinTFConfirm = 3` → ต้องครบ 3 TF ถึงเปิด (เข้มงวดสุด)
 
-#### 6. RecoverHedgeSets → gen-aware rebind
-- Step 0: Scan positions หา max generation → set `g_cycleGeneration`
-- Step 2: Bind เฉพาะ orders ที่ gen < g_cycleGeneration
-
-#### 7. Version bump: v5.8 → v5.9
+#### 3. Version bump: v5.9 → v6.0
 
 ### สิ่งที่ไม่เปลี่ยนแปลง
 - Order Execution Logic (trade.Buy/Sell/PositionClose)
 - Trading Strategy Logic (SMA/ZigZag/Instant, Grid entry/exit, TP/SL)
 - Core Module Logic (License, News filter, Time filter, Data sync)
 - Hedge system logic ทั้งหมด (Matching/Partial/AvgTP/Grid)
-- Squeeze filter logic
+- Squeeze filter logic สำหรับ entry ปกติ (ยังใช้ InpSqueeze_MinTFExpansion เหมือนเดิม)
+
