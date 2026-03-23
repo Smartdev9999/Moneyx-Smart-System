@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.0 - MTF ZigZag+CDC+Grid+License  |
+//|                Gold Miner EA v6.1 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.00"
-#property description "Gold Miner EA v6.0 - MTF ZigZag + CDC + Squeeze + AvgTP + GenComment + License"
+#property version   "6.10"
+#property description "Gold Miner EA v6.1 - MTF ZigZag + CDC + Squeeze + AvgTP + GenComment + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -688,7 +688,7 @@ int OnInit()
    // === Recover Hedge Sets from existing positions (crash/restart recovery) ===
    RecoverHedgeSets();
 
-   Print("Gold Miner EA v6.0 initialized successfully | CycleGen=", g_cycleGeneration);
+   Print("Gold Miner EA v6.1 initialized successfully | CycleGen=", g_cycleGeneration);
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -740,7 +740,7 @@ void OnDeinit(const int reason)
 
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
-   Print("Gold Miner EA v6.0 deinitialized");
+   Print("Gold Miner EA v6.1 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -1125,7 +1125,14 @@ void OnTick()
          bool hasInitialBuy = false, hasInitialSell = false;
          CountPositions(buyCount, sellCount, gridLossBuy, gridLossSell, gridProfitBuy, gridProfitSell, hasInitialBuy, hasInitialSell);
 
-         int totalPositions = buyCount + sellCount;
+          int totalPositions = buyCount + sellCount;
+
+          //--- Reset cycle generation when all positions cleared (standalone check)
+          if(g_hadPositions && totalPositions == 0 && g_hedgeSetCount == 0 && g_cycleGeneration > 0)
+          {
+             g_cycleGeneration = 0;
+             Print("CYCLE GENERATION reset to 0 — all positions cleared");
+          }
 
          //--- Auto-detect broker-closed positions (e.g. trailing SL hit by broker)
          if(buyCount == 0 && g_initialBuyPrice != 0)
@@ -1755,14 +1762,20 @@ void ManageTPSL()
    {
       //--- Auto-reset baseline when all positions are closed (cycle ended)
       int currentCount = TotalOrderCount();
-      if(g_hadPositions && currentCount == 0)
-      {
-         g_accumulateBaseline = CalcTotalHistoryProfit();
-         g_accumulatedProfit = 0;
-         g_hadPositions = false;
-         Print("Accumulate auto-reset: no positions left. New baseline: ", g_accumulateBaseline);
-         return;
-      }
+       if(g_hadPositions && currentCount == 0)
+       {
+          // Reset cycle generation — no positions left, start fresh
+          if(g_hedgeSetCount == 0 && g_cycleGeneration > 0)
+          {
+             g_cycleGeneration = 0;
+             Print("CYCLE GENERATION reset to 0 — all positions cleared (accumulate reset)");
+          }
+          g_accumulateBaseline = CalcTotalHistoryProfit();
+          g_accumulatedProfit = 0;
+          g_hadPositions = false;
+          Print("Accumulate auto-reset: no positions left. New baseline: ", g_accumulateBaseline);
+          return;
+       }
       if(currentCount > 0) g_hadPositions = true;
 
       double totalHistory = CalcTotalHistoryProfit();
@@ -2756,7 +2769,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.0 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.0 [ZZ]" : "Gold Miner EA v6.0 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.1 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.1 [ZZ]" : "Gold Miner EA v6.1 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -3993,8 +4006,14 @@ void ManageAccumulateShared()
 
    //--- Auto-reset baseline when all positions are closed (cycle ended)
    int currentCount = TotalOrderCount();
-   if(g_hadPositions && currentCount == 0)
+    if(g_hadPositions && currentCount == 0)
    {
+      // Reset cycle generation — no positions left, start fresh
+      if(g_hedgeSetCount == 0 && g_cycleGeneration > 0)
+      {
+         g_cycleGeneration = 0;
+         Print("CYCLE GENERATION reset to 0 — all positions cleared (ZZ accumulate reset)");
+      }
       g_accumulateBaseline = CalcTotalHistoryProfit();
       g_accumulatedProfit = 0;
       g_hadPositions = false;
