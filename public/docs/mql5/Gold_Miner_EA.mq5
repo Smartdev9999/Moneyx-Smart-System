@@ -3458,7 +3458,7 @@ bool OpenOrderTF(int tfIdx, ENUM_ORDER_TYPE orderType, double lots, string suffi
 //+------------------------------------------------------------------+
 double CalculateAveragePriceTF(int tfIdx, ENUM_POSITION_TYPE side)
 {
-   string prefix = "GM_" + g_tfStates[tfIdx].tfLabel + "_";
+   string tfLabel = g_tfStates[tfIdx].tfLabel;
    double totalLots = 0;
    double totalWeighted = 0;
 
@@ -3469,7 +3469,7 @@ double CalculateAveragePriceTF(int tfIdx, ENUM_POSITION_TYPE side)
       if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       if(PositionGetInteger(POSITION_TYPE) != side) continue;
-      if(StringFind(PositionGetString(POSITION_COMMENT), prefix) < 0) continue;
+      if(!MatchTFPrefix(PositionGetString(POSITION_COMMENT), tfLabel)) continue;
 
       double vol = PositionGetDouble(POSITION_VOLUME);
       double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
