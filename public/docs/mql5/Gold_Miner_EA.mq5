@@ -490,6 +490,7 @@ int      g_cycleGeneration = 0;  // incremented each time a hedge opens — chan
 
 // === Orphan Recovery System ===
 datetime g_lastOrphanScanTime = 0;
+datetime g_lastOrphanGridCandleTime = 0;  // Track candle time for orphan grid (OnlyNewCandle)
 
 struct OrphanGenGroup {
    int    generation;       // e.g. 0 for "GM_GL"
