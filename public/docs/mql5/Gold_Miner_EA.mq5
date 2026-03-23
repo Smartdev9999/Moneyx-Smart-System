@@ -6174,6 +6174,144 @@ void ManageHedgeSets()
 }
 
 //+------------------------------------------------------------------+
+//| Average TP for Bound Orders — close profitable bounds + partial   |
+//| close hedge proportionally (shred, not full close)                 |
+//+------------------------------------------------------------------+
+bool ManageHedgeBoundAvgTP(int idx)
+{
+   if(InpHedge_BoundAvgTPPoints <= 0) return false;
+   if(g_hedgeSets[idx].boundTicketCount == 0) return false;
+   if(!g_hedgeSets[idx].active) return false;
+
+   // Calculate weighted average price of bound orders
+   double totalWeighted = 0;
+   double totalLots = 0;
+   ENUM_POSITION_TYPE boundSide = g_hedgeSets[idx].counterSide;
+
+   for(int b = 0; b < g_hedgeSets[idx].boundTicketCount; b++)
+   {
+      ulong ticket = g_hedgeSets[idx].boundTickets[b];
+      if(!PositionSelectByTicket(ticket)) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != boundSide) continue;
+
+      double lots = PositionGetDouble(POSITION_VOLUME);
+      double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+      totalWeighted += lots * openPrice;
+      totalLots += lots;
+   }
+
+   if(totalLots <= 0) return false;
+
+   double avgPrice = totalWeighted / totalLots;
+   double tpDistance = InpHedge_BoundAvgTPPoints * _Point;
+
+   // Check if price reached avg TP
+   bool tpReached = false;
+   if(boundSide == POSITION_TYPE_BUY)
+      tpReached = (SymbolInfoDouble(_Symbol, SYMBOL_BID) >= avgPrice + tpDistance);
+   else
+      tpReached = (SymbolInfoDouble(_Symbol, SYMBOL_ASK) <= avgPrice - tpDistance);
+
+   if(!tpReached) return false;
+
+   // TP reached → collect profitable bound orders
+   ulong profitTickets[];
+   double profitValues[];
+   int profitCount = 0;
+   double totalProfit = 0;
+
+   for(int b = 0; b < g_hedgeSets[idx].boundTicketCount; b++)
+   {
+      ulong ticket = g_hedgeSets[idx].boundTickets[b];
+      if(!PositionSelectByTicket(ticket)) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != boundSide) continue;
+
+      double pnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+      if(pnl <= 0) continue;
+
+      ArrayResize(profitTickets, profitCount + 1);
+      ArrayResize(profitValues, profitCount + 1);
+      profitTickets[profitCount] = ticket;
+      profitValues[profitCount] = pnl;
+      totalProfit += pnl;
+      profitCount++;
+   }
+
+   if(profitCount == 0 || totalProfit <= 0) return false;
+
+   // Get hedge info for partial close
+   if(!PositionSelectByTicket(g_hedgeSets[idx].hedgeTicket)) return false;
+   double hedgePnL = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+   double hedgeLots = PositionGetDouble(POSITION_VOLUME);
+   if(hedgeLots <= 0) return false;
+
+   double hedgeLossPerLot = (hedgePnL < 0) ? (MathAbs(hedgePnL) / hedgeLots) : 0;
+
+   Print("HEDGE AVG TP Set#", idx + 1, ": avgPrice=", DoubleToString(avgPrice, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)),
+         " target=", InpHedge_BoundAvgTPPoints, "pts, profitOrders=", profitCount,
+         " totalProfit=$", DoubleToString(totalProfit, 2));
+
+   // Close all profitable bound orders
+   for(int p = 0; p < profitCount; p++)
+   {
+      trade.PositionClose(profitTickets[p]);
+      RemoveBoundTicket(idx, profitTickets[p]);
+      Sleep(50);
+   }
+
+   // Partial close hedge with profit (shred, not full close)
+   if(hedgeLossPerLot > 0)
+   {
+      double closeLots = totalProfit / hedgeLossPerLot;
+      double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+      double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+      closeLots = MathMax(minLot, MathMin(hedgeLots, NormalizeDouble(MathFloor(closeLots / lotStep) * lotStep, 2)));
+
+      if(closeLots >= minLot)
+      {
+         if(!PositionSelectByTicket(g_hedgeSets[idx].hedgeTicket)) return true;
+         hedgeLots = PositionGetDouble(POSITION_VOLUME);
+
+         if(closeLots >= hedgeLots)
+         {
+            trade.PositionClose(g_hedgeSets[idx].hedgeTicket);
+            g_hedgeSets[idx].active = false;
+            g_hedgeSets[idx].boundTicketCount = 0;
+            ArrayResize(g_hedgeSets[idx].boundTickets, 0);
+            g_hedgeSetCount--;
+            Print("HEDGE Set#", idx + 1, " fully closed via Avg TP.");
+         }
+         else
+         {
+            trade.PositionClosePartial(g_hedgeSets[idx].hedgeTicket, closeLots);
+            g_hedgeSets[idx].hedgeLots = hedgeLots - closeLots;
+            Print("HEDGE Set#", idx + 1, " reduced to ", DoubleToString(hedgeLots - closeLots, 2), " lots via Avg TP");
+         }
+         Sleep(100);
+      }
+   }
+   else
+   {
+      // Hedge is not in loss → just close profitable bounds, hedge stays
+      Print("HEDGE AVG TP Set#", idx + 1, ": hedge not in loss, bounds closed only.");
+   }
+
+   // Check if bound orders all gone → enter grid mode
+   if(g_hedgeSets[idx].active && g_hedgeSets[idx].boundTicketCount == 0)
+   {
+      if(PositionSelectByTicket(g_hedgeSets[idx].hedgeTicket))
+      {
+         hedgeLots = PositionGetDouble(POSITION_VOLUME);
+         Print("HEDGE Set#", idx + 1, " all bounds cleared via Avg TP. Entering Grid Mode.");
+         g_hedgeSets[idx].gridMode = true;
+         g_hedgeSets[idx].gridLevel = CalculateEquivGridLevel(hedgeLots);
+      }
+   }
+
+   return true;
+}
+
+//+------------------------------------------------------------------+
 //| Scenario 1: Hedge in profit + expansion ended → match with losses  |
 //| Now uses boundTickets[] for set-specific isolation                  |
 //+------------------------------------------------------------------+
