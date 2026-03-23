@@ -1,22 +1,26 @@
 
 
-## เพิ่ม Input กำหนดจำนวน TF Expansion สำหรับ Hedge Entry — Gold Miner SQ EA (v5.9 → v6.0)
+
+## รีเซ็ต Comment Generation เมื่อ Order เคลียร์หมด — Gold Miner SQ EA (v6.0 → v6.1)
 
 ### สิ่งที่แก้ไข
 
 **ไฟล์:** `public/docs/mql5/Gold_Miner_EA.mq5`
 
-#### 1. เพิ่ม Input `InpHedge_MinTFConfirm` (line 323)
-- กำหนดจำนวน TF ที่ต้องเป็น Expansion ก่อนเปิด Hedge (1-3)
+#### 1. เพิ่ม standalone reset หลัง CountPositions (line 1128)
+- เมื่อ totalPositions == 0 && g_hedgeSetCount == 0 → reset g_cycleGeneration = 0
 
-#### 2. แก้ `CheckAndOpenHedge()` (line 6063)
-- เปลี่ยนจาก `InpSqueeze_MinTFExpansion` → `InpHedge_MinTFConfirm`
+#### 2. เพิ่ม reset ใน Accumulate reset (SMA mode, line 1765)
+- ก่อน reset baseline → reset g_cycleGeneration = 0
 
-#### 3. Version bump: v5.9 → v6.0
+#### 3. เพิ่ม reset ใน Accumulate reset (ZigZag mode, line 4009)
+- ก่อน reset baseline → reset g_cycleGeneration = 0
+
+#### 4. Version bump: v6.0 → v6.1
 
 ### สิ่งที่ไม่เปลี่ยนแปลง
 - Order Execution Logic (trade.Buy/Sell/PositionClose)
 - Trading Strategy Logic (SMA/ZigZag/Instant, Grid entry/exit, TP/SL)
 - Core Module Logic (License, News filter, Time filter, Data sync)
-- Hedge system logic ทั้งหมด (Matching/Partial/AvgTP/Grid)
-- Squeeze filter logic สำหรับ entry ปกติ (ยังใช้ InpSqueeze_MinTFExpansion เหมือนเดิม)
+- Hedge system logic ทั้งหมด
+- Comment Generation logic ตอน hedge เปิด (ยัง increment ตามปกติ)
