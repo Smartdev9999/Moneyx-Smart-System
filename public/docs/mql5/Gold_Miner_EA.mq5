@@ -6862,6 +6862,10 @@ void ManageHedgeSets()
    // Detect orphan hedge grid orders every tick
    DetectOrphanHedgeOrders();
    
+   // Reverse Hedge management
+   ManageReverseHedge();
+   CheckAndOpenReverseHedge();
+   
    for(int h = 0; h < MAX_HEDGE_SETS; h++)
    {
       if(!g_hedgeSets[h].active) continue;
