@@ -1197,7 +1197,7 @@ void OnTick()
                 {
                    if(shouldEnterBuy)
                    {
-                      if(OpenOrder(ORDER_TYPE_BUY, InitialLotSize, "GM_INIT"))
+                       if(OpenOrder(ORDER_TYPE_BUY, InitialLotSize, GetCommentPrefix() + "_INIT"))
                       {
                          g_initialBuyPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
                          lastInitialCandleTime = currentBarTime;
