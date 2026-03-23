@@ -6407,30 +6407,22 @@ void ManageHedgeMatchingClose(int idx)
       g_hedgeSetCount--;
       Sleep(100);
    }
-   else
-   {
-      // No losses can be matched → just close the profitable hedge
-      Print("HEDGE CLOSE (no matchable losses) Set#", idx + 1,
-            ": profit $", DoubleToString(hedgeProfit, 2));
-      trade.PositionClose(g_hedgeSets[idx].hedgeTicket);
+    else
+    {
+       // No losses can be matched → close hedge + release all bound orders to normal
+       Print("HEDGE CLOSE (no matchable losses) Set#", idx + 1,
+             ": profit $", DoubleToString(hedgeProfit, 2),
+             " | Releasing ", g_hedgeSets[idx].boundTicketCount, " bound orders to normal trading");
+       trade.PositionClose(g_hedgeSets[idx].hedgeTicket);
 
-      // Enter grid mode to continue recovery if bound tickets remain
-      if(g_hedgeSets[idx].boundTicketCount > 0)
-      {
-         // Still have bound orders → continue as grid for recovery
-         g_hedgeSets[idx].gridMode = true;
-         g_hedgeSets[idx].gridLevel = 0;
-         Print("HEDGE Set#", idx + 1, " closed but bound orders remain. Entering Grid Mode.");
-      }
-      else
-      {
-         g_hedgeSets[idx].active = false;
-         g_hedgeSets[idx].boundTicketCount = 0;
-         ArrayResize(g_hedgeSets[idx].boundTickets, 0);
-         g_hedgeSetCount--;
-      }
-      Sleep(100);
-   }
+       // Release all bound orders → they return to normal trading system
+       g_hedgeSets[idx].active = false;
+       g_hedgeSets[idx].boundTicketCount = 0;
+       ArrayResize(g_hedgeSets[idx].boundTickets, 0);
+       g_hedgeSets[idx].gridMode = false;
+       g_hedgeSetCount--;
+       Sleep(100);
+    }
 }
 
 //+------------------------------------------------------------------+
