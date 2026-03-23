@@ -5854,6 +5854,40 @@ bool IsTicketBound(ulong ticket)
 }
 
 //+------------------------------------------------------------------+
+//| Get lot cap for new orders when hedge set has bound orders          |
+//| Returns -1 if no hedge set exists for this side (no cap)           |
+//| Returns allowedLots = hedgeLots - remainingBoundLots               |
+//+------------------------------------------------------------------+
+double GetHedgeLotCap(ENUM_POSITION_TYPE side)
+{
+   double minCap = -1;  // -1 means no cap
+   for(int h = 0; h < MAX_HEDGE_SETS; h++)
+   {
+      if(!g_hedgeSets[h].active) continue;
+      if(g_hedgeSets[h].counterSide != side) continue;
+
+      // This hedge set has bound orders on this side
+      double boundLots = 0;
+      for(int b = 0; b < g_hedgeSets[h].boundTicketCount; b++)
+      {
+         ulong ticket = g_hedgeSets[h].boundTickets[b];
+         if(!PositionSelectByTicket(ticket)) continue;
+         boundLots += PositionGetDouble(POSITION_VOLUME);
+      }
+
+      double hedgeLots = g_hedgeSets[h].hedgeLots;
+      double allowed = hedgeLots - boundLots;
+
+      if(minCap < 0)
+         minCap = allowed;
+      else
+         minCap = MathMin(minCap, allowed);
+   }
+   return minCap;
+}
+
+
+//+------------------------------------------------------------------+
 //| Count unbound orders (not tied to any hedge set) for a side        |
 //+------------------------------------------------------------------+
 int CountUnboundOrders(ENUM_POSITION_TYPE side, double &totalLots, double &totalPL)
