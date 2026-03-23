@@ -2203,7 +2203,7 @@ void CheckGridLoss(ENUM_POSITION_TYPE side, int currentGridCount)
    //--- Uses initial price as fallback when per-order trailing closed grid orders
    double lastPrice = 0;
    datetime lastTime = 0;
-   FindLastOrder(side, "GM_INIT", "GM_GL", lastPrice, lastTime);
+   FindLastOrder(side, "_INIT", "_GL", lastPrice, lastTime);
 
    //--- Fallback: use initial order price if no open order found
    if(lastPrice == 0)
