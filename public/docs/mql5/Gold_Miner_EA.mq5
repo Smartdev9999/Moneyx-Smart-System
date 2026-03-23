@@ -3102,10 +3102,11 @@ void DisplayDashboard()
        }
     }
 
-    // === Orphan Recovery Status ===
-    if(InpOrphan_Enable && g_activeOrphanGroupCount > 0)
-    {
-       DrawTableRow(row, "ORPHAN RECOVERY", IntegerToString(g_activeOrphanGroupCount) + " group(s)", clrYellow, COLOR_SECTION_HEDGE); row++;
+     // === Orphan Recovery Status ===
+     color COLOR_SECTION_ORPHAN = C'130,50,180';  // purple for orphan section
+     if(InpOrphan_Enable && g_activeOrphanGroupCount > 0)
+     {
+        DrawTableRow(row, "ORPHAN RECOVERY", IntegerToString(g_activeOrphanGroupCount) + " group(s)", clrYellow, COLOR_SECTION_ORPHAN); row++;
        for(int og = 0; og < MAX_ORPHAN_GROUPS; og++)
        {
           if(!g_orphanGroups[og].active) continue;
