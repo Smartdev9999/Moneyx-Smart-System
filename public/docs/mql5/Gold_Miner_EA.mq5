@@ -488,6 +488,23 @@ int      g_lastDashboardRowCount = 0;  // track previous tick row count for stal
 bool     g_hedgeOrphanWarning = false;  // orphan hedge grid orders detected
 int      g_cycleGeneration = 0;  // incremented each time a hedge opens — changes comment prefix
 
+// === Orphan Recovery System ===
+datetime g_lastOrphanScanTime = 0;
+
+struct OrphanGenGroup {
+   int    generation;       // e.g. 0 for "GM_GL"
+   bool   active;
+   int    buyCount;         // orphan buy orders of this gen
+   int    sellCount;        // orphan sell orders of this gen
+   int    gridLossBuyCount;
+   int    gridLossSellCount;
+   int    maxGridLevelBuy;
+   int    maxGridLevelSell;
+};
+#define MAX_ORPHAN_GROUPS 5
+OrphanGenGroup g_orphanGroups[MAX_ORPHAN_GROUPS];
+int g_activeOrphanGroupCount = 0;
+
 //+------------------------------------------------------------------+
 //| Comment Generation Helpers                                         |
 //+------------------------------------------------------------------+
