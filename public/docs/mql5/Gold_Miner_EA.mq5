@@ -6470,7 +6470,8 @@ bool ManageHedgeBoundAvgTP(int idx)
          if(closeLots >= hedgeLots)
          {
             trade.PositionClose(g_hedgeSets[idx].hedgeTicket);
-            g_hedgeSets[idx].active = false;
+             CloseAllHedgeGridOrders(idx);
+             g_hedgeSets[idx].active = false;
             g_hedgeSets[idx].boundTicketCount = 0;
             ArrayResize(g_hedgeSets[idx].boundTickets, 0);
             g_hedgeSetCount--;
