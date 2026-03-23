@@ -2294,7 +2294,7 @@ void CheckGridProfit(ENUM_POSITION_TYPE side, int currentGridCount)
    //--- Find the last order of this side (initial or grid profit)
    double lastPrice = 0;
    datetime lastTime = 0;
-   FindLastOrder(side, "GM_INIT", "GM_GP", lastPrice, lastTime);
+   FindLastOrder(side, "_INIT", "_GP", lastPrice, lastTime);
 
    //--- Fallback: use initial order price
    if(lastPrice == 0)
