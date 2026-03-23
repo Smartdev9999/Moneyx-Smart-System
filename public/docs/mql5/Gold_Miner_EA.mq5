@@ -1084,6 +1084,18 @@ void OnTick()
       ManageHedgeSets();
    }
 
+   // === ORPHAN RECOVERY GRID ===
+   if(InpOrphan_Enable)
+   {
+      datetime now = TimeCurrent();
+      if(now - g_lastOrphanScanTime >= InpOrphan_ScanIntervalMin * 60)
+      {
+         ScanOrphanGenerations();
+         g_lastOrphanScanTime = now;
+      }
+      ManageOrphanGrid();
+   }
+
    // === ORIGINAL TRADING LOGIC (unchanged) ===
    if(g_eaStopped) return;
 
