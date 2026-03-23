@@ -6190,6 +6190,21 @@ void RecoverHedgeSets()
 {
    int recovered = 0;
    
+   // Step 0: Determine current cycle generation from existing positions
+   int maxGen = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      string cmt = PositionGetString(POSITION_COMMENT);
+      int gen = ExtractGeneration(cmt);
+      if(gen > maxGen) maxGen = gen;
+   }
+   g_cycleGeneration = maxGen;
+   Print("RECOVER: Detected cycle generation = ", g_cycleGeneration);
+   
    // Step 1: Find main hedge positions (GM_HEDGE_N) and rebuild sets
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
@@ -6223,12 +6238,16 @@ void RecoverHedgeSets()
       }
    }
    
-   // Step 2: Rebind counter-side unbound orders to recovered sets
+   // Step 2: Rebind counter-side orders — ONLY bind orders from OLDER generations
    for(int h = 0; h < MAX_HEDGE_SETS; h++)
    {
       if(!g_hedgeSets[h].active) continue;
       g_hedgeSets[h].boundTicketCount = 0;
       ArrayResize(g_hedgeSets[h].boundTickets, 0);
+      
+      // Determine bound generation: orders from generations BEFORE the current one
+      // If hedge exists, bound orders were from a previous gen
+      int boundGen = -1;  // will be set to the oldest non-current gen found
       
       for(int i = PositionsTotal() - 1; i >= 0; i--)
       {
@@ -6241,11 +6260,20 @@ void RecoverHedgeSets()
          if(IsHedgeComment(cmt)) continue;
          if(IsTicketBound(ticket)) continue;
          
+         // Only bind orders from older generations (not current cycle)
+         int orderGen = ExtractGeneration(cmt);
+         if(orderGen < 0) continue;  // not our comment format
+         if(orderGen >= g_cycleGeneration) continue;  // skip current gen — it's an independent new cycle
+         
          int bc = g_hedgeSets[h].boundTicketCount;
          ArrayResize(g_hedgeSets[h].boundTickets, bc + 1);
          g_hedgeSets[h].boundTickets[bc] = ticket;
          g_hedgeSets[h].boundTicketCount = bc + 1;
+         
+         if(boundGen < 0 || orderGen < boundGen) boundGen = orderGen;
       }
+      
+      g_hedgeSets[h].boundGeneration = (boundGen >= 0) ? boundGen : 0;
       
       // Check if bounds are empty → enter grid mode
       if(g_hedgeSets[h].boundTicketCount == 0)
@@ -6270,7 +6298,8 @@ void RecoverHedgeSets()
          }
       }
       
-      Print("RECOVER: Set#", h + 1, " bound ", g_hedgeSets[h].boundTicketCount, " counter-side orders");
+      Print("RECOVER: Set#", h + 1, " bound ", g_hedgeSets[h].boundTicketCount,
+            " counter-side orders (boundGen=", g_hedgeSets[h].boundGeneration, ")");
    }
    
    // Step 3: Clean up orphan GM_HG orders that have no active main hedge
@@ -6303,7 +6332,8 @@ void RecoverHedgeSets()
    }
    
    if(recovered > 0 || orphansClosed > 0)
-      Print("RECOVER COMPLETE: ", recovered, " sets recovered, ", orphansClosed, " orphan grid orders closed");
+      Print("RECOVER COMPLETE: ", recovered, " sets recovered, ", orphansClosed,
+            " orphan grid orders closed, cycleGen=", g_cycleGeneration);
 }
 
 //+------------------------------------------------------------------+
