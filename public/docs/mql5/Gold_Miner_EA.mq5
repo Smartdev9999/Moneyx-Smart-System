@@ -474,12 +474,54 @@ struct HedgeSet
    string   commentPrefix;    // "GM_HEDGE_1", "GM_HEDGE_2", etc.
    ulong    boundTickets[];   // tickets of counter-side orders bound to this set
    int      boundTicketCount; // count of bound tickets
+   int      boundGeneration;  // cycle generation of bound orders
 };
 HedgeSet g_hedgeSets[MAX_HEDGE_SETS];
 int      g_hedgeSetCount = 0;
 datetime g_lastHedgeGridTime = 0;  // cooldown timer for hedge grid orders
 int      g_lastDashboardRowCount = 0;  // track previous tick row count for stale cleanup
 bool     g_hedgeOrphanWarning = false;  // orphan hedge grid orders detected
+int      g_cycleGeneration = 0;  // incremented each time a hedge opens — changes comment prefix
+
+//+------------------------------------------------------------------+
+//| Comment Generation Helpers                                         |
+//+------------------------------------------------------------------+
+string GetCommentPrefix()
+{
+   if(g_cycleGeneration == 0) return "GM";
+   return "GM" + IntegerToString(g_cycleGeneration);
+}
+
+// Match comment from any GM generation with a suffix (e.g. "_INIT", "_GL", "_GP")
+bool MatchGMSuffix(string comment, string suffix)
+{
+   if(StringFind(comment, "GM") != 0) return false;
+   return StringFind(comment, suffix) >= 0;
+}
+
+// Match comment that belongs to any GM generation for a specific TF
+bool MatchTFPrefix(string comment, string tfLabel)
+{
+   if(StringFind(comment, "GM") != 0) return false;
+   string tfToken = "_" + tfLabel + "_";
+   return StringFind(comment, tfToken) >= 0;
+}
+
+// Extract cycle generation number from comment
+// GM_INIT → 0, GM1_INIT → 1, GM2_INIT → 2
+int ExtractGeneration(string comment)
+{
+   if(StringFind(comment, "GM") != 0) return -1;
+   int pos = 2;  // after "GM"
+   while(pos < StringLen(comment))
+   {
+      ushort ch = StringGetCharacter(comment, pos);
+      if(ch >= '0' && ch <= '9') pos++;
+      else break;
+   }
+   if(pos == 2) return 0;  // "GM_" = gen 0
+   return (int)StringToInteger(StringSubstr(comment, 2, pos - 2));
+}
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                     |
