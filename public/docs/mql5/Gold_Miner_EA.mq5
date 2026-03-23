@@ -2990,8 +2990,13 @@ void DisplayDashboard()
             color hedgeClr = (hedgePnL >= 0) ? clrLime : clrOrangeRed;
             DrawTableRow(row, setLabel, hedgeInfo, hedgeClr, COLOR_SECTION_HEDGE); row++;
          }
-      }
-   }
+       }
+       // Orphan warning
+       if(g_hedgeOrphanWarning)
+       {
+          DrawTableRow(row, "⚠ WARNING", "ORPHAN GRID ORDERS DETECTED", clrRed, COLOR_SECTION_HEDGE); row++;
+       }
+    }
 
    //--- Cleanup stale rows from previous tick (prevents flicker)
    for(int r = row; r < g_lastDashboardRowCount; r++)
