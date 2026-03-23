@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v5.2 - MTF ZigZag+CDC+Grid+License  |
+//|                Gold Miner EA v5.3 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "5.20"
-#property description "Gold Miner EA v5.2 - MTF ZigZag + CDC + Squeeze + Hedge Set Isolation + License"
+#property version   "5.30"
+#property description "Gold Miner EA v5.3 - MTF ZigZag + CDC + Squeeze + MaxSets + LotCap Fix + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -318,6 +318,7 @@ input double   InpHedge_MatchMinProfit      = 5.0;     // Min Profit for Hedge M
 input int      InpHedge_MatchMinProfitOrders = 2;      // Min Profit Orders for Hedge Grid Matching
 input double   InpHedge_PartialMinProfit    = 5.0;     // Min Profit for Partial Close ($)
 input int      InpHedge_PartialMinProfitOrders = 3;    // Min Profit Orders for Partial Close (0=Always)
+input int      InpHedge_MaxSets              = 10;    // Max Active Hedge Sets (1-10)
 
 //+------------------------------------------------------------------+
 //| Global Variables                                                   |
@@ -638,7 +639,7 @@ int OnInit()
    }
    g_hedgeSetCount = 0;
 
-   Print("Gold Miner EA v5.2 initialized successfully");
+   Print("Gold Miner EA v5.3 initialized successfully");
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -690,7 +691,7 @@ void OnDeinit(const int reason)
 
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
-   Print("Gold Miner EA v5.2 deinitialized");
+   Print("Gold Miner EA v5.3 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -2699,7 +2700,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v5.2 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v5.2 [ZZ]" : "Gold Miner EA v5.2 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v5.3 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v5.3 [ZZ]" : "Gold Miner EA v5.3 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -5895,6 +5896,10 @@ double GetHedgeLotCap(ENUM_POSITION_TYPE side)
       double hedgeLots = g_hedgeSets[h].hedgeLots;
       double allowed = hedgeLots - boundLots;
 
+      // If bound orders already cover or exceed hedge volume,
+      // skip this set — new orders are independent cycle, no cap needed
+      if(allowed <= 0) continue;
+
       if(minCap < 0)
          minCap = allowed;
       else
@@ -6007,6 +6012,16 @@ void CheckAndOpenHedge()
    if(counterCount == 0 || counterLots <= 0) return;
 
    // Find free slot
+   // Check max active sets limit
+   int activeSetCount = 0;
+   for(int h = 0; h < MAX_HEDGE_SETS; h++)
+      if(g_hedgeSets[h].active) activeSetCount++;
+   if(activeSetCount >= InpHedge_MaxSets)
+   {
+      Print("HEDGE: Max active sets reached (", activeSetCount, "/", InpHedge_MaxSets, ") - skip");
+      return;
+   }
+
    int slot = FindFreeHedgeSlot();
    if(slot < 0)
    {
