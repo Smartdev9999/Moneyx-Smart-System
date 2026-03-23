@@ -1,30 +1,27 @@
 
 
 
-## เพิ่ม Hedge Average Bound TP — Gold Miner SQ EA (v5.4 → v5.5)
+## Fix: Hedge ไม่ปิดเมื่อ Normal ทั้งที่กำไร — Gold Miner SQ EA (v5.5 → v5.6)
 
 ### สิ่งที่แก้ไข
 
 **ไฟล์:** `public/docs/mql5/Gold_Miner_EA.mq5`
 
-#### 1. เพิ่ม Input: InpHedge_BoundAvgTPPoints
-- `input int InpHedge_BoundAvgTPPoints = 0` — Average TP Points สำหรับ bound orders (0=ปิด)
+#### 1. เปลี่ยนลำดับใน ManageHedgeSets() — Matching Close ก่อน Average TP
+- Hedge กำไร → ManageHedgeMatchingClose ทำงานก่อน (ปิด hedge + match losses)
+- Hedge ขาดทุน → ManageHedgeBoundAvgTP → ManageHedgePartialClose
 
-#### 2. เพิ่มฟังก์ชัน ManageHedgeBoundAvgTP(int idx)
-- คำนวณ weighted avg price ของ bound orders
-- เมื่อราคาถึง avg ± TP points → ปิด bound orders ที่บวก → ซอย hedge ตามกำไร
-- ถ้า bound หมด → เข้า Grid Mode
+#### 2. แก้ "no matchable losses" fallback — Release bound orders แทน Grid Mode
+- เมื่อ hedge ถูกปิดแล้ว → bound orders กลับเป็น order ปกติ
+- ไม่เข้า Grid Mode ทั้งที่ hedge ไม่มีแล้ว
 
-#### 3. แก้ ManageHedgeSets() — เพิ่ม Grid Mode transition ใน Normal state
-- เมื่อ bound orders = 0 + hedge ยังอยู่ → เข้า Grid Mode ได้ทั้งใน Normal และ Expansion
-- เรียก ManageHedgeBoundAvgTP() ก่อน Matching/Partial Close
-
-#### 4. Version bump: v5.4 → v5.5
+#### 3. Version bump: v5.5 → v5.6
 
 ### สิ่งที่ไม่เปลี่ยนแปลง
 - Order Execution Logic (trade.Buy/Sell/PositionClose)
 - Trading Strategy Logic (SMA/ZigZag/Instant, Grid entry/exit, TP/SL)
 - Core Module Logic (License, News filter, Time filter, Data sync)
-- ManageHedgeMatchingClose, ManageHedgePartialClose, ManageHedgeGridMode logic
+- ManageHedgePartialClose, ManageHedgeGridMode logic
+- ManageHedgeBoundAvgTP logic (เปลี่ยนแค่ลำดับเรียก)
 - Bound ticket management, Lot Cap
 - Accumulate/Drawdown close logic
