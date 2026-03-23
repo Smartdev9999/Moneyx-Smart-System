@@ -3102,6 +3102,22 @@ void DisplayDashboard()
        }
     }
 
+    // === Orphan Recovery Status ===
+    if(InpOrphan_Enable && g_activeOrphanGroupCount > 0)
+    {
+       DrawTableRow(row, "ORPHAN RECOVERY", IntegerToString(g_activeOrphanGroupCount) + " group(s)", clrYellow, COLOR_SECTION_HEDGE); row++;
+       for(int og = 0; og < MAX_ORPHAN_GROUPS; og++)
+       {
+          if(!g_orphanGroups[og].active) continue;
+          string genLabel = "Gen" + IntegerToString(g_orphanGroups[og].generation) + " (" + GenPrefix(g_orphanGroups[og].generation) + ")";
+          string info = "B:" + IntegerToString(g_orphanGroups[og].buyCount) +
+                        " S:" + IntegerToString(g_orphanGroups[og].sellCount) +
+                        " GL_B:" + IntegerToString(g_orphanGroups[og].gridLossBuyCount) + "/" + IntegerToString(GridLoss_MaxTrades) +
+                        " GL_S:" + IntegerToString(g_orphanGroups[og].gridLossSellCount) + "/" + IntegerToString(GridLoss_MaxTrades);
+          DrawTableRow(row, genLabel, info, clrOrange, COLOR_SECTION_HEDGE); row++;
+       }
+    }
+
    //--- Cleanup stale rows from previous tick (prevents flicker)
    for(int r = row; r < g_lastDashboardRowCount; r++)
    {
