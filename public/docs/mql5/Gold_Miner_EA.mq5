@@ -3115,7 +3115,7 @@ void DisplayDashboard()
                         " S:" + IntegerToString(g_orphanGroups[og].sellCount) +
                         " GL_B:" + IntegerToString(g_orphanGroups[og].gridLossBuyCount) + "/" + IntegerToString(GridLoss_MaxTrades) +
                         " GL_S:" + IntegerToString(g_orphanGroups[og].gridLossSellCount) + "/" + IntegerToString(GridLoss_MaxTrades);
-          DrawTableRow(row, genLabel, info, clrOrange, COLOR_SECTION_HEDGE); row++;
+          DrawTableRow(row, genLabel, info, clrOrange, COLOR_SECTION_ORPHAN); row++;
        }
     }
 
