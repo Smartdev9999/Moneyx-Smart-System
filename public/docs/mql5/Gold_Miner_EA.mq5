@@ -491,6 +491,13 @@ int      g_lastDashboardRowCount = 0;  // track previous tick row count for stal
 bool     g_hedgeOrphanWarning = false;  // orphan hedge grid orders detected
 int      g_cycleGeneration = 0;  // incremented each time a hedge opens — changes comment prefix
 
+// === Reverse Hedge State ===
+bool     g_reverseHedgeActive = false;
+ulong    g_reverseHedgeTicket = 0;
+double   g_reverseHedgeLots = 0;
+ENUM_POSITION_TYPE g_reverseHedgeSide = POSITION_TYPE_BUY;  // side of the reverse hedge order
+int      g_reverseForSetIndex = -1;  // which hedge set triggered this reverse
+
 // === Orphan Recovery System ===
 datetime g_lastOrphanScanTime = 0;
 datetime g_lastOrphanGridCandleTime = 0;  // Track candle time for orphan grid (OnlyNewCandle)
