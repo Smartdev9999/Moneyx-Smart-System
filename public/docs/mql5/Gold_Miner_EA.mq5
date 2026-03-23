@@ -6137,6 +6137,18 @@ void ManageHedgeSets()
       }
       else if(!isExpansion)
       {
+         // Bound orders all gone → enter grid mode
+         if(g_hedgeSets[h].boundTicketCount == 0 && hedgeExists)
+         {
+            Print("HEDGE Set#", h + 1, " all bound orders cleared (Normal). Entering Grid Mode.");
+            g_hedgeSets[h].gridMode = true;
+            g_hedgeSets[h].gridLevel = CalculateEquivGridLevel(g_hedgeSets[h].hedgeLots);
+            continue;
+         }
+
+         // NEW: Average TP check (ซอย hedge ด้วยกำไร bound orders)
+         if(ManageHedgeBoundAvgTP(h)) continue;
+
          // Expansion ended → check scenarios
          double hedgePnL = 0;
          if(hedgeExists)
