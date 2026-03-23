@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v5.6 - MTF ZigZag+CDC+Grid+License  |
+//|                Gold Miner EA v5.7 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "5.60"
-#property description "Gold Miner EA v5.6 - MTF ZigZag + CDC + Squeeze + AvgTP + License"
+#property version   "5.70"
+#property description "Gold Miner EA v5.7 - MTF ZigZag + CDC + Squeeze + AvgTP + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -479,6 +479,7 @@ HedgeSet g_hedgeSets[MAX_HEDGE_SETS];
 int      g_hedgeSetCount = 0;
 datetime g_lastHedgeGridTime = 0;  // cooldown timer for hedge grid orders
 int      g_lastDashboardRowCount = 0;  // track previous tick row count for stale cleanup
+bool     g_hedgeOrphanWarning = false;  // orphan hedge grid orders detected
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                     |
@@ -640,7 +641,10 @@ int OnInit()
    }
    g_hedgeSetCount = 0;
 
-   Print("Gold Miner EA v5.6 initialized successfully");
+   // === Recover Hedge Sets from existing positions (crash/restart recovery) ===
+   RecoverHedgeSets();
+
+   Print("Gold Miner EA v5.7 initialized successfully");
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -2986,8 +2990,13 @@ void DisplayDashboard()
             color hedgeClr = (hedgePnL >= 0) ? clrLime : clrOrangeRed;
             DrawTableRow(row, setLabel, hedgeInfo, hedgeClr, COLOR_SECTION_HEDGE); row++;
          }
-      }
-   }
+       }
+       // Orphan warning
+       if(g_hedgeOrphanWarning)
+       {
+          DrawTableRow(row, "⚠ WARNING", "ORPHAN GRID ORDERS DETECTED", clrRed, COLOR_SECTION_HEDGE); row++;
+       }
+    }
 
    //--- Cleanup stale rows from previous tick (prevents flicker)
    for(int r = row; r < g_lastDashboardRowCount; r++)
@@ -6090,10 +6099,195 @@ void CheckAndOpenHedge()
 }
 
 //+------------------------------------------------------------------+
+//| Close all hedge grid orders for a given set (cleanup before deact) |
+//+------------------------------------------------------------------+
+void CloseAllHedgeGridOrders(int idx)
+{
+   string prefix = "GM_HG" + IntegerToString(idx + 1);
+   int closed = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      string comment = PositionGetString(POSITION_COMMENT);
+      if(StringFind(comment, prefix) >= 0)
+      {
+         trade.PositionClose(ticket);
+         closed++;
+         Sleep(50);
+      }
+   }
+   if(closed > 0)
+      Print("HEDGE CLEANUP Set#", idx + 1, ": closed ", closed, " orphan grid orders (", prefix, ")");
+   g_hedgeSets[idx].gridTicketCount = 0;
+   ArrayResize(g_hedgeSets[idx].gridTickets, 0);
+}
+
+//+------------------------------------------------------------------+
+//| Recover hedge sets from existing positions on init                 |
+//+------------------------------------------------------------------+
+void RecoverHedgeSets()
+{
+   int recovered = 0;
+   
+   // Step 1: Find main hedge positions (GM_HEDGE_N) and rebuild sets
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      
+      string comment = PositionGetString(POSITION_COMMENT);
+      // Check for GM_HEDGE_1, GM_HEDGE_2, etc.
+      for(int h = 0; h < MAX_HEDGE_SETS; h++)
+      {
+         string hedgePrefix = "GM_HEDGE_" + IntegerToString(h + 1);
+         if(StringFind(comment, hedgePrefix) >= 0 && !g_hedgeSets[h].active)
+         {
+            g_hedgeSets[h].active = true;
+            g_hedgeSets[h].hedgeTicket = ticket;
+            g_hedgeSets[h].hedgeSide = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+            g_hedgeSets[h].hedgeLots = PositionGetDouble(POSITION_VOLUME);
+            g_hedgeSets[h].counterSide = (g_hedgeSets[h].hedgeSide == POSITION_TYPE_BUY) 
+                                         ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
+            g_hedgeSets[h].gridMode = false;
+            g_hedgeSets[h].gridLevel = 0;
+            g_hedgeSetCount++;
+            recovered++;
+            Print("RECOVER: Rebuilt Hedge Set#", h + 1, " from ticket ", ticket, 
+                  " side=", (g_hedgeSets[h].hedgeSide == POSITION_TYPE_BUY ? "BUY" : "SELL"),
+                  " lots=", DoubleToString(g_hedgeSets[h].hedgeLots, 2));
+            break;
+         }
+      }
+   }
+   
+   // Step 2: Rebind counter-side unbound orders to recovered sets
+   for(int h = 0; h < MAX_HEDGE_SETS; h++)
+   {
+      if(!g_hedgeSets[h].active) continue;
+      g_hedgeSets[h].boundTicketCount = 0;
+      ArrayResize(g_hedgeSets[h].boundTickets, 0);
+      
+      for(int i = PositionsTotal() - 1; i >= 0; i--)
+      {
+         ulong ticket = PositionGetTicket(i);
+         if(ticket == 0) continue;
+         if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+         if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+         if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != g_hedgeSets[h].counterSide) continue;
+         string cmt = PositionGetString(POSITION_COMMENT);
+         if(IsHedgeComment(cmt)) continue;
+         if(IsTicketBound(ticket)) continue;
+         
+         int bc = g_hedgeSets[h].boundTicketCount;
+         ArrayResize(g_hedgeSets[h].boundTickets, bc + 1);
+         g_hedgeSets[h].boundTickets[bc] = ticket;
+         g_hedgeSets[h].boundTicketCount = bc + 1;
+      }
+      
+      // Check if bounds are empty → enter grid mode
+      if(g_hedgeSets[h].boundTicketCount == 0)
+      {
+         // Check if grid orders exist
+         string gridPrefix = "GM_HG" + IntegerToString(h + 1);
+         bool hasGridOrders = false;
+         for(int i = PositionsTotal() - 1; i >= 0; i--)
+         {
+            ulong ticket = PositionGetTicket(i);
+            if(ticket == 0) continue;
+            if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+            if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+            if(StringFind(PositionGetString(POSITION_COMMENT), gridPrefix) >= 0)
+            { hasGridOrders = true; break; }
+         }
+         if(hasGridOrders)
+         {
+            g_hedgeSets[h].gridMode = true;
+            g_hedgeSets[h].gridLevel = CalculateEquivGridLevel(g_hedgeSets[h].hedgeLots);
+            Print("RECOVER: Set#", h + 1, " entering Grid Mode (no bound orders, grid orders exist)");
+         }
+      }
+      
+      Print("RECOVER: Set#", h + 1, " bound ", g_hedgeSets[h].boundTicketCount, " counter-side orders");
+   }
+   
+   // Step 3: Clean up orphan GM_HG orders that have no active main hedge
+   int orphansClosed = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      string comment = PositionGetString(POSITION_COMMENT);
+      if(StringFind(comment, "GM_HG") < 0) continue;
+      
+      // Find which set this belongs to
+      bool belongsToActive = false;
+      for(int h = 0; h < MAX_HEDGE_SETS; h++)
+      {
+         string prefix = "GM_HG" + IntegerToString(h + 1);
+         if(StringFind(comment, prefix) >= 0 && g_hedgeSets[h].active)
+         { belongsToActive = true; break; }
+      }
+      
+      if(!belongsToActive)
+      {
+         Print("RECOVER: Closing orphan grid order ticket ", ticket, " comment=", comment);
+         trade.PositionClose(ticket);
+         orphansClosed++;
+         Sleep(50);
+      }
+   }
+   
+   if(recovered > 0 || orphansClosed > 0)
+      Print("RECOVER COMPLETE: ", recovered, " sets recovered, ", orphansClosed, " orphan grid orders closed");
+}
+
+//+------------------------------------------------------------------+
+//| Detect orphan hedge grid orders and set warning flag               |
+//+------------------------------------------------------------------+
+void DetectOrphanHedgeOrders()
+{
+   g_hedgeOrphanWarning = false;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      string comment = PositionGetString(POSITION_COMMENT);
+      if(StringFind(comment, "GM_HG") < 0) continue;
+      
+      bool belongsToActive = false;
+      for(int h = 0; h < MAX_HEDGE_SETS; h++)
+      {
+         string prefix = "GM_HG" + IntegerToString(h + 1);
+         if(StringFind(comment, prefix) >= 0 && g_hedgeSets[h].active)
+         { belongsToActive = true; break; }
+      }
+      
+      if(!belongsToActive)
+      {
+         g_hedgeOrphanWarning = true;
+         Print("WARNING: Orphan hedge grid order detected! ticket=", ticket, " comment=", comment);
+         return;
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
 //| Manage all active hedge sets                                       |
 //+------------------------------------------------------------------+
 void ManageHedgeSets()
 {
+   // Detect orphan hedge grid orders every tick
+   DetectOrphanHedgeOrders();
+   
    for(int h = 0; h < MAX_HEDGE_SETS; h++)
    {
       if(!g_hedgeSets[h].active) continue;
@@ -6113,6 +6307,7 @@ void ManageHedgeSets()
       {
          // Hedge was closed externally (accumulate close, manual, etc.)
          Print("HEDGE Set#", h + 1, " ticket no longer exists. Deactivating.");
+         CloseAllHedgeGridOrders(h);
          g_hedgeSets[h].active = false;
          g_hedgeSets[h].boundTicketCount = 0;
          ArrayResize(g_hedgeSets[h].boundTickets, 0);
@@ -6280,7 +6475,8 @@ bool ManageHedgeBoundAvgTP(int idx)
          if(closeLots >= hedgeLots)
          {
             trade.PositionClose(g_hedgeSets[idx].hedgeTicket);
-            g_hedgeSets[idx].active = false;
+             CloseAllHedgeGridOrders(idx);
+             g_hedgeSets[idx].active = false;
             g_hedgeSets[idx].boundTicketCount = 0;
             ArrayResize(g_hedgeSets[idx].boundTickets, 0);
             g_hedgeSetCount--;
@@ -6401,7 +6597,8 @@ void ManageHedgeMatchingClose(int idx)
       }
 
       // Deactivate hedge set
-      g_hedgeSets[idx].active = false;
+       CloseAllHedgeGridOrders(idx);
+       g_hedgeSets[idx].active = false;
       g_hedgeSets[idx].boundTicketCount = 0;
       ArrayResize(g_hedgeSets[idx].boundTickets, 0);
       g_hedgeSetCount--;
@@ -6416,7 +6613,8 @@ void ManageHedgeMatchingClose(int idx)
        trade.PositionClose(g_hedgeSets[idx].hedgeTicket);
 
        // Release all bound orders → they return to normal trading system
-       g_hedgeSets[idx].active = false;
+        CloseAllHedgeGridOrders(idx);
+        g_hedgeSets[idx].active = false;
        g_hedgeSets[idx].boundTicketCount = 0;
        ArrayResize(g_hedgeSets[idx].boundTickets, 0);
        g_hedgeSets[idx].gridMode = false;
@@ -6530,7 +6728,8 @@ void ManageHedgePartialClose(int idx)
    if(closeLots >= hedgeLots)
    {
       trade.PositionClose(g_hedgeSets[idx].hedgeTicket);
-      g_hedgeSets[idx].active = false;
+       CloseAllHedgeGridOrders(idx);
+       g_hedgeSets[idx].active = false;
       g_hedgeSets[idx].boundTicketCount = 0;
       ArrayResize(g_hedgeSets[idx].boundTickets, 0);
       g_hedgeSetCount--;
@@ -6641,7 +6840,8 @@ void ManageHedgeGridMode(int idx)
             if(closeLots >= g_hedgeSets[idx].hedgeLots)
             {
                trade.PositionClose(g_hedgeSets[idx].hedgeTicket);
-               g_hedgeSets[idx].active = false;
+                CloseAllHedgeGridOrders(idx);
+                g_hedgeSets[idx].active = false;
                g_hedgeSetCount--;
                Print("HEDGE Set#", idx + 1, " fully recovered via grid mode.");
             }
