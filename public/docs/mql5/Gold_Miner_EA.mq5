@@ -641,7 +641,10 @@ int OnInit()
    }
    g_hedgeSetCount = 0;
 
-   Print("Gold Miner EA v5.6 initialized successfully");
+   // === Recover Hedge Sets from existing positions (crash/restart recovery) ===
+   RecoverHedgeSets();
+
+   Print("Gold Miner EA v5.7 initialized successfully");
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
