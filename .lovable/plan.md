@@ -1,33 +1,42 @@
 
 
-## Fix: Orphan Hedge Grid Orders + Recovery System — Gold Miner SQ EA (v5.6 → v5.7)
+## Fix: Order Buy ชุดใหม่ไม่ออก เมื่อมี Hedge Set Active — Gold Miner SQ EA (v5.7 → v5.8)
 
-### สิ่งที่แก้ไข
+### วิเคราะห์สาเหตุ
+
+**ปัญหาอยู่ที่ `CountPositions()` (line 1302)**
+
+`CountPositions()` skip เฉพาะ `IsHedgeComment()` (GM_HEDGE_N, GM_HG) แต่ **ไม่ skip `IsTicketBound()`** → bound orders ที่เป็น BUY ยังถูกนับรวมใน `buyCount`
+
+**Flow ที่เกิดปัญหา:**
+1. มี Hedge Set 1: SELL hedge, counterSide=BUY → bound orders เป็นฝั่ง BUY
+2. `CountPositions()` นับ bound BUY orders → `buyCount = 10` (ตัวอย่าง)
+3. Entry logic เช็ค `buyCount == 0` (line 1151) → **false** → ไม่เปิด Buy ใหม่
+
+ทั้งที่ bound orders ถูกจัดการโดยระบบ Hedge แยกออกไปแล้ว ระบบปกติไม่ควรนับ → ควรเห็น `buyCount = 0` → เปิด Buy ชุดใหม่ได้
+
+### การแก้ไข
 
 **ไฟล์:** `public/docs/mql5/Gold_Miner_EA.mq5`
 
-#### 1. เพิ่ม `CloseAllHedgeGridOrders(int idx)` — ปิด GM_HG grid orders ก่อน deactivate
-- เรียกก่อนทุกจุดที่ set ถูก deactivate (6 จุด)
-- ManageHedgeMatchingClose (matched + no matchable), ManageHedgeBoundAvgTP, ManageHedgePartialClose, ManageHedgeSets (external close), ManageHedgeGridMode (full recovery)
+#### 1. เพิ่ม `IsTicketBound` skip ใน `CountPositions()` (line 1322)
 
-#### 2. เพิ่ม `RecoverHedgeSets()` — กู้ set จาก comment ตอน OnInit
-- สแกน GM_HEDGE_N → rebuild active set
-- Rebind counter-side unbound orders
-- ตรวจ orphan GM_HG → ปิดทิ้ง
-- รองรับ EA restart/TF change/crash
+```cpp
+// Skip hedge orders — they are managed by the Hedge system separately
+if(IsHedgeComment(comment)) continue;
 
-#### 3. เพิ่ม `DetectOrphanHedgeOrders()` — แจ้งเตือนบน Dashboard
-- ทุก tick สแกน GM_HG ที่ไม่มี active set ดูแล
-- Dashboard แสดง "⚠ ORPHAN GRID ORDERS DETECTED" สีแดง
-- ไม่บล็อกการเทรด
+// Skip bound orders — managed by Hedge system, not normal trading cycle
+if(IsTicketBound(ticket)) continue;
+```
 
-#### 4. Version bump: v5.6 → v5.7
+**ผล:** Bound orders จะไม่ถูกนับใน buyCount/sellCount → ระบบปกติเห็น buyCount=0 → เปิด Buy ชุดใหม่ได้ตามปกติ
+
+#### 2. Version bump: v5.7 → v5.8
 
 ### สิ่งที่ไม่เปลี่ยนแปลง
 - Order Execution Logic (trade.Buy/Sell/PositionClose)
 - Trading Strategy Logic (SMA/ZigZag/Instant, Grid entry/exit, TP/SL)
 - Core Module Logic (License, News filter, Time filter, Data sync)
-- ManageHedgeMatchingClose, ManageHedgePartialClose, ManageHedgeBoundAvgTP logic (เพิ่มแค่ cleanup ก่อน deactivate)
-- ManageHedgeGridMode logic
-- Bound ticket management, Lot Cap
-- Accumulate/Drawdown close logic
+- Hedge system logic ทั้งหมด (Matching/Partial/AvgTP/Grid)
+- Squeeze filter logic
+
