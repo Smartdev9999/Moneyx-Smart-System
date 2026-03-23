@@ -6139,13 +6139,21 @@ void CheckAndOpenHedge()
          ArrayResize(g_hedgeSets[slot].boundTickets, bc + 1);
          g_hedgeSets[slot].boundTickets[bc] = ticket;
          g_hedgeSets[slot].boundTicketCount = bc + 1;
-      }
+       }
 
-      g_hedgeSetCount++;
-      string sideStr = (hedgeSide == POSITION_TYPE_BUY) ? "BUY" : "SELL";
-      Print("HEDGE OPENED: Set#", slot + 1, " ", sideStr, " ", DoubleToString(counterLots, 2),
-            " lots to cover ", counterCount, " stuck orders (bound ", g_hedgeSets[slot].boundTicketCount, " tickets)");
-   }
+       // Store bound generation BEFORE incrementing
+       g_hedgeSets[slot].boundGeneration = g_cycleGeneration;
+
+       // Increment cycle generation — new orders will use new prefix (GM1_, GM2_, etc.)
+       g_cycleGeneration++;
+       Print("CYCLE GENERATION incremented to ", g_cycleGeneration, " — new orders use prefix: ", GetCommentPrefix());
+
+       g_hedgeSetCount++;
+       string sideStr = (hedgeSide == POSITION_TYPE_BUY) ? "BUY" : "SELL";
+       Print("HEDGE OPENED: Set#", slot + 1, " ", sideStr, " ", DoubleToString(counterLots, 2),
+             " lots to cover ", counterCount, " stuck orders (bound ", g_hedgeSets[slot].boundTicketCount,
+             " tickets, boundGen=", g_hedgeSets[slot].boundGeneration, ")");
+    }
 }
 
 //+------------------------------------------------------------------+
