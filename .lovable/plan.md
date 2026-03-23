@@ -1,25 +1,30 @@
 
 
-## Fix New Cycle Block + Max Hedge Sets — Gold Miner SQ EA (v5.2 → v5.3)
+
+## เพิ่ม Hedge Average Bound TP — Gold Miner SQ EA (v5.4 → v5.5)
 
 ### สิ่งที่แก้ไข
 
 **ไฟล์:** `public/docs/mql5/Gold_Miner_EA.mq5`
 
-#### 1. Fix GetHedgeLotCap() — ไม่ block new cycle
-- เมื่อ `allowed <= 0` (bound lots ≥ hedge lots) → `continue` skip set นี้แทนที่จะ cap = 0
-- Order ใหม่เป็น independent cycle → ไม่ต้อง cap
+#### 1. เพิ่ม Input: InpHedge_BoundAvgTPPoints
+- `input int InpHedge_BoundAvgTPPoints = 0` — Average TP Points สำหรับ bound orders (0=ปิด)
 
-#### 2. เพิ่ม InpHedge_MaxSets input
-- `input int InpHedge_MaxSets = 10` — จำกัดจำนวน hedge sets สูงสุด
-- Guard ใน `CheckAndOpenHedge()` → block เมื่อ active sets ≥ limit
+#### 2. เพิ่มฟังก์ชัน ManageHedgeBoundAvgTP(int idx)
+- คำนวณ weighted avg price ของ bound orders
+- เมื่อราคาถึง avg ± TP points → ปิด bound orders ที่บวก → ซอย hedge ตามกำไร
+- ถ้า bound หมด → เข้า Grid Mode
 
-#### 3. Version bump: v5.2 → v5.3
+#### 3. แก้ ManageHedgeSets() — เพิ่ม Grid Mode transition ใน Normal state
+- เมื่อ bound orders = 0 + hedge ยังอยู่ → เข้า Grid Mode ได้ทั้งใน Normal และ Expansion
+- เรียก ManageHedgeBoundAvgTP() ก่อน Matching/Partial Close
+
+#### 4. Version bump: v5.4 → v5.5
 
 ### สิ่งที่ไม่เปลี่ยนแปลง
 - Order Execution Logic (trade.Buy/Sell/PositionClose)
 - Trading Strategy Logic (SMA/ZigZag/Instant, Grid entry/exit, TP/SL)
-- Core Module Logic (License, News filter, Time filter, Data sync, Squeeze)
-- Hedge Matching/Partial Close/Grid Mode logic
-- Bound ticket management
+- Core Module Logic (License, News filter, Time filter, Data sync)
+- ManageHedgeMatchingClose, ManageHedgePartialClose, ManageHedgeGridMode logic
+- Bound ticket management, Lot Cap
 - Accumulate/Drawdown close logic
