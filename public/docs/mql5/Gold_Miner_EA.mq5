@@ -6433,6 +6433,40 @@ void RecoverHedgeSets()
       }
    }
    
+   // Step 4: Recover Reverse Hedge state
+   g_reverseHedgeActive = false;
+   g_reverseHedgeTicket = 0;
+   g_reverseHedgeLots = 0;
+   g_reverseForSetIndex = -1;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      string cmt = PositionGetString(POSITION_COMMENT);
+      if(StringFind(cmt, "GM_RHEDGE") >= 0)
+      {
+         g_reverseHedgeActive = true;
+         g_reverseHedgeTicket = ticket;
+         g_reverseHedgeLots = PositionGetDouble(POSITION_VOLUME);
+         g_reverseHedgeSide = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+         // Find which hedge set this relates to
+         for(int h = 0; h < MAX_HEDGE_SETS; h++)
+         {
+            if(g_hedgeSets[h].active)
+            {
+               g_reverseForSetIndex = h;
+               break;
+            }
+         }
+         Print("RECOVER: Rebuilt Reverse Hedge ticket=", ticket, 
+               " side=", (g_reverseHedgeSide == POSITION_TYPE_BUY ? "BUY" : "SELL"),
+               " lots=", DoubleToString(g_reverseHedgeLots, 2));
+         break;
+      }
+   }
+   
    if(recovered > 0 || orphansClosed > 0)
       Print("RECOVER COMPLETE: ", recovered, " sets recovered, ", orphansClosed,
             " orphan grid orders closed, cycleGen=", g_cycleGeneration);
