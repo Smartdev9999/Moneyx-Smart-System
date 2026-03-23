@@ -1,42 +1,61 @@
 
 
-## เพิ่มระบบ Orphan Recovery Grid — Gold Miner SQ EA (v6.1 → v6.2)
+## Fix: Orphan Recovery Grid ไม่เช็ค OnlyNewCandle — Gold Miner SQ EA (v6.2 → v6.3)
 
-### สิ่งที่แก้ไข
+### ปัญหา
+
+`ManageOrphanGrid()` (line 6687) ไม่มีการเช็ค `GridLoss_OnlyNewCandle` → ออก grid ทุก tick ที่ราคาถึง → order ออกถี่เกินไปในแท่งเดียว
+
+ในขณะที่ `CheckGridLoss()` ปกติ (line 2241) มีการเช็ค:
+```cpp
+if(GridLoss_OnlyNewCandle) {
+   datetime barTime = iTime(_Symbol, PERIOD_CURRENT, 0);
+   if(barTime == lastGridLossCandleTime) return;
+}
+```
+
+### การแก้ไข
 
 **ไฟล์:** `public/docs/mql5/Gold_Miner_EA.mq5`
 
-#### 1. เพิ่ม Input Parameters
-- `InpOrphan_Enable` (default: true) — เปิด/ปิดระบบ Orphan Recovery
-- `InpOrphan_ScanIntervalMin` (default: 15) — ความถี่ในการสแกน (นาที)
+#### 1. เพิ่ม Global Variable สำหรับ track orphan grid candle time
 
-#### 2. เพิ่ม OrphanGenGroup struct + global variables
-- `g_orphanGroups[5]` — ติดตาม orphan generation สูงสุด 5 กลุ่ม
-- `g_activeOrphanGroupCount` — จำนวน orphan groups ที่ active
-- `g_lastOrphanScanTime` — timestamp ของการสแกนครั้งล่าสุด
+```cpp
+datetime g_lastOrphanGridCandleTime = 0;  // Track candle time for orphan grid
+```
 
-#### 3. เพิ่ม Helper Functions
-- `GenPrefix(int gen)` — สร้าง prefix ตาม generation (0→"GM", 1→"GM1")
-- `CountOrphanPositions()` — นับ orders เฉพาะ generation ที่กำหนด
-- `FindLastOrphanOrder()` — หา order ล่าสุดของ orphan gen
-- `FindMaxLotOrphan()` — หา max lot ของ orphan gen
+#### 2. เพิ่ม OnlyNewCandle check ใน `ManageOrphanGrid()` (หลัง line 6703)
 
-#### 4. เพิ่ม Core Functions
-- `ScanOrphanGenerations()` — สแกนทุก 15 นาทีหา orders จาก gen เก่าที่ไม่ bound
-- `ManageOrphanGrid()` — ออก grid loss orders ให้ orphan groups (ใช้ comment ของ gen เก่า)
+```cpp
+// OnlyNewCandle check — same rule as normal grid
+if(GridLoss_OnlyNewCandle)
+{
+   datetime barTime = iTime(_Symbol, PERIOD_CURRENT, 0);
+   if(barTime == g_lastOrphanGridCandleTime) return;
+}
+```
 
-#### 5. เรียกใน OnTick หลัง ManageHedgeSets
-- Scan ทุก 15 นาที + Manage ทุก tick
+#### 3. Update `g_lastOrphanGridCandleTime` เมื่อเปิด order สำเร็จ
 
-#### 6. Dashboard แสดง Orphan Recovery Status
-- แสดง active orphan groups พร้อมจำนวน orders + grid level
+ทั้ง BUY side (line 6770) และ SELL side (~line 6810) หลัง `OpenOrder()` สำเร็จ:
+```cpp
+if(OpenOrder(...))
+{
+   g_lastOrphanGridCandleTime = iTime(_Symbol, PERIOD_CURRENT, 0);
+   Print("ORPHAN GRID: Opened ...");
+}
+```
 
-#### 7. Version bump: v6.1 → v6.2
+#### 4. Version bump: v6.2 → v6.3
+
+### ผลลัพธ์
+- `GridLoss_OnlyNewCandle = true` → Orphan grid ออกได้สูงสุด 1 order ต่อแท่งเทียน (เหมือน grid ปกติ)
+- `GridLoss_OnlyNewCandle = false` → ทำงานเหมือนเดิม (ออกทุก tick ที่ถึงระยะ)
 
 ### สิ่งที่ไม่เปลี่ยนแปลง
 - Order Execution Logic (trade.Buy/Sell/PositionClose)
 - Trading Strategy Logic (SMA/ZigZag/Instant, Grid entry/exit, TP/SL)
 - Core Module Logic (License, News filter, Time filter, Data sync)
-- Hedge system logic ทั้งหมด (Matching/Partial/AvgTP/Grid)
-- Comment Generation logic สำหรับ cycle ปัจจุบัน
-- Squeeze filter logic
+- Hedge system logic ทั้งหมด
+- Orphan scan/recovery logic อื่นๆ (ScanOrphanGenerations, CountOrphanPositions)
+
