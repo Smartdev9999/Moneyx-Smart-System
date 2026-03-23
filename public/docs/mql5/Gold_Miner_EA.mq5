@@ -1372,16 +1372,16 @@ void CountPositions(int &buyCount, int &sellCount,
       if(posType == POSITION_TYPE_BUY)
       {
          buyCount++;
-         if(StringFind(comment, "GM_INIT") >= 0) hasInitialBuy = true;
-         if(StringFind(comment, "GM_GL") >= 0) gridLossBuy++;
-         if(StringFind(comment, "GM_GP") >= 0) gridProfitBuy++;
+         if(MatchGMSuffix(comment, "_INIT")) hasInitialBuy = true;
+         if(MatchGMSuffix(comment, "_GL")) gridLossBuy++;
+         if(MatchGMSuffix(comment, "_GP")) gridProfitBuy++;
       }
       else if(posType == POSITION_TYPE_SELL)
       {
          sellCount++;
-         if(StringFind(comment, "GM_INIT") >= 0) hasInitialSell = true;
-         if(StringFind(comment, "GM_GL") >= 0) gridLossSell++;
-         if(StringFind(comment, "GM_GP") >= 0) gridProfitSell++;
+         if(MatchGMSuffix(comment, "_INIT")) hasInitialSell = true;
+         if(MatchGMSuffix(comment, "_GL")) gridLossSell++;
+         if(MatchGMSuffix(comment, "_GP")) gridProfitSell++;
       }
    }
 }
