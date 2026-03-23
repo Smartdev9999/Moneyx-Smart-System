@@ -6775,11 +6775,12 @@ void ManageOrphanGrid()
                      }
                      
                      string comment = prefix + "_GL#" + IntegerToString(nextLevel);
-                     if(OpenOrder(ORDER_TYPE_BUY, lots, comment))
-                     {
-                        Print("ORPHAN GRID: Opened BUY ", prefix, "_GL#", nextLevel,
-                              " lots=", DoubleToString(lots, 2), " for Gen", gen);
-                     }
+                      if(OpenOrder(ORDER_TYPE_BUY, lots, comment))
+                      {
+                         g_lastOrphanGridCandleTime = iTime(_Symbol, PERIOD_CURRENT, 0);
+                         Print("ORPHAN GRID: Opened BUY ", prefix, "_GL#", nextLevel,
+                               " lots=", DoubleToString(lots, 2), " for Gen", gen);
+                      }
                   }
                }
             }
