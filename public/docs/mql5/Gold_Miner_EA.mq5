@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v5.7 - MTF ZigZag+CDC+Grid+License  |
+//|                Gold Miner EA v5.8 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "5.70"
-#property description "Gold Miner EA v5.7 - MTF ZigZag + CDC + Squeeze + AvgTP + License"
+#property version   "5.80"
+#property description "Gold Miner EA v5.8 - MTF ZigZag + CDC + Squeeze + AvgTP + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -644,7 +644,7 @@ int OnInit()
    // === Recover Hedge Sets from existing positions (crash/restart recovery) ===
    RecoverHedgeSets();
 
-   Print("Gold Miner EA v5.7 initialized successfully");
+   Print("Gold Miner EA v5.8 initialized successfully");
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -696,7 +696,7 @@ void OnDeinit(const int reason)
 
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
-   Print("Gold Miner EA v5.6 deinitialized");
+   Print("Gold Miner EA v5.8 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -1320,6 +1320,9 @@ void CountPositions(int &buyCount, int &sellCount,
       
       // Skip hedge orders — they are managed by the Hedge system separately
       if(IsHedgeComment(comment)) continue;
+      
+      // Skip bound orders — managed by Hedge system, not normal trading cycle
+      if(IsTicketBound(ticket)) continue;
       
       long posType = PositionGetInteger(POSITION_TYPE);
 
@@ -2705,7 +2708,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v5.6 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v5.6 [ZZ]" : "Gold Miner EA v5.6 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v5.8 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v5.8 [ZZ]" : "Gold Miner EA v5.8 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
