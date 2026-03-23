@@ -6703,6 +6703,13 @@ void ManageOrphanGrid()
    }
    if(isExpansion) return;
    
+   // OnlyNewCandle check — same rule as normal grid
+   if(GridLoss_OnlyNewCandle)
+   {
+      datetime barTime = iTime(_Symbol, PERIOD_CURRENT, 0);
+      if(barTime == g_lastOrphanGridCandleTime) return;
+   }
+    
    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
    
    for(int g = 0; g < MAX_ORPHAN_GROUPS; g++)
