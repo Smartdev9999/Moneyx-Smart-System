@@ -644,7 +644,7 @@ int OnInit()
    // === Recover Hedge Sets from existing positions (crash/restart recovery) ===
    RecoverHedgeSets();
 
-   Print("Gold Miner EA v5.7 initialized successfully");
+   Print("Gold Miner EA v5.8 initialized successfully");
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
