@@ -2339,7 +2339,7 @@ void CheckGridProfit(ENUM_POSITION_TYPE side, int currentGridCount)
    if(shouldOpen)
    {
       double lots = CalculateGridLot(currentGridCount, false);
-      string comment = "GM_GP#" + IntegerToString(currentGridCount + 1);
+      string comment = GetCommentPrefix() + "_GP#" + IntegerToString(currentGridCount + 1);
       ENUM_ORDER_TYPE orderType = (side == POSITION_TYPE_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
       if(OpenOrder(orderType, lots, comment))
       {
