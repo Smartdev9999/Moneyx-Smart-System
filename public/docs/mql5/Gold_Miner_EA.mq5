@@ -3449,7 +3449,7 @@ void CountPositionsTF(int tfIdx, int &buyCount, int &sellCount,
 //+------------------------------------------------------------------+
 bool OpenOrderTF(int tfIdx, ENUM_ORDER_TYPE orderType, double lots, string suffix)
 {
-   string comment = "GM_" + g_tfStates[tfIdx].tfLabel + "_" + suffix;
+   string comment = GetCommentPrefix() + "_" + g_tfStates[tfIdx].tfLabel + "_" + suffix;
    return OpenOrder(orderType, lots, comment);
 }
 
