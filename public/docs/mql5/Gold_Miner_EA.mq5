@@ -1125,7 +1125,14 @@ void OnTick()
          bool hasInitialBuy = false, hasInitialSell = false;
          CountPositions(buyCount, sellCount, gridLossBuy, gridLossSell, gridProfitBuy, gridProfitSell, hasInitialBuy, hasInitialSell);
 
-         int totalPositions = buyCount + sellCount;
+          int totalPositions = buyCount + sellCount;
+
+          //--- Reset cycle generation when all positions cleared (standalone check)
+          if(g_hadPositions && totalPositions == 0 && g_hedgeSetCount == 0 && g_cycleGeneration > 0)
+          {
+             g_cycleGeneration = 0;
+             Print("CYCLE GENERATION reset to 0 — all positions cleared");
+          }
 
          //--- Auto-detect broker-closed positions (e.g. trailing SL hit by broker)
          if(buyCount == 0 && g_initialBuyPrice != 0)
