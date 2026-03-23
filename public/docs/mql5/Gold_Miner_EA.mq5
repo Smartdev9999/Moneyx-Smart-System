@@ -2163,8 +2163,10 @@ double FindMaxLotOnSide(ENUM_POSITION_TYPE side)
       if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
+      if(IsTicketBound(ticket)) continue;
       string comment = PositionGetString(POSITION_COMMENT);
-      if(StringFind(comment, "GM_GL") >= 0 || StringFind(comment, "GM_INIT") >= 0)
+      if(IsHedgeComment(comment)) continue;
+      if(MatchGMSuffix(comment, "_GL") || MatchGMSuffix(comment, "_INIT"))
       {
          double lot = PositionGetDouble(POSITION_VOLUME);
          if(lot > maxLot) maxLot = lot;
