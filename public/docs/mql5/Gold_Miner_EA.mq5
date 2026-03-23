@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.2 - MTF ZigZag+CDC+Grid+License  |
+//|                Gold Miner EA v6.3 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.20"
-#property description "Gold Miner EA v6.2 - MTF ZigZag + CDC + Squeeze + AvgTP + OrphanRecovery + License"
+#property version   "6.30"
+#property description "Gold Miner EA v6.3 - MTF ZigZag + CDC + Squeeze + AvgTP + OrphanRecovery + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -490,6 +490,7 @@ int      g_cycleGeneration = 0;  // incremented each time a hedge opens — chan
 
 // === Orphan Recovery System ===
 datetime g_lastOrphanScanTime = 0;
+datetime g_lastOrphanGridCandleTime = 0;  // Track candle time for orphan grid (OnlyNewCandle)
 
 struct OrphanGenGroup {
    int    generation;       // e.g. 0 for "GM_GL"
@@ -716,7 +717,7 @@ int OnInit()
    // === Recover Hedge Sets from existing positions (crash/restart recovery) ===
    RecoverHedgeSets();
 
-   Print("Gold Miner EA v6.2 initialized successfully | CycleGen=", g_cycleGeneration);
+   Print("Gold Miner EA v6.3 initialized successfully | CycleGen=", g_cycleGeneration);
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -768,7 +769,7 @@ void OnDeinit(const int reason)
 
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
-   Print("Gold Miner EA v6.2 deinitialized");
+   Print("Gold Miner EA v6.3 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -2809,7 +2810,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.2 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.2 [ZZ]" : "Gold Miner EA v6.2 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.3 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.3 [ZZ]" : "Gold Miner EA v6.3 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -6702,6 +6703,13 @@ void ManageOrphanGrid()
    }
    if(isExpansion) return;
    
+   // OnlyNewCandle check — same rule as normal grid
+   if(GridLoss_OnlyNewCandle)
+   {
+      datetime barTime = iTime(_Symbol, PERIOD_CURRENT, 0);
+      if(barTime == g_lastOrphanGridCandleTime) return;
+   }
+    
    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
    
    for(int g = 0; g < MAX_ORPHAN_GROUPS; g++)
@@ -6767,11 +6775,12 @@ void ManageOrphanGrid()
                      }
                      
                      string comment = prefix + "_GL#" + IntegerToString(nextLevel);
-                     if(OpenOrder(ORDER_TYPE_BUY, lots, comment))
-                     {
-                        Print("ORPHAN GRID: Opened BUY ", prefix, "_GL#", nextLevel,
-                              " lots=", DoubleToString(lots, 2), " for Gen", gen);
-                     }
+                      if(OpenOrder(ORDER_TYPE_BUY, lots, comment))
+                      {
+                         g_lastOrphanGridCandleTime = iTime(_Symbol, PERIOD_CURRENT, 0);
+                         Print("ORPHAN GRID: Opened BUY ", prefix, "_GL#", nextLevel,
+                               " lots=", DoubleToString(lots, 2), " for Gen", gen);
+                      }
                   }
                }
             }
@@ -6810,11 +6819,12 @@ void ManageOrphanGrid()
                      }
                      
                      string comment = prefix + "_GL#" + IntegerToString(nextLevel);
-                     if(OpenOrder(ORDER_TYPE_SELL, lots, comment))
-                     {
-                        Print("ORPHAN GRID: Opened SELL ", prefix, "_GL#", nextLevel,
-                              " lots=", DoubleToString(lots, 2), " for Gen", gen);
-                     }
+                      if(OpenOrder(ORDER_TYPE_SELL, lots, comment))
+                      {
+                         g_lastOrphanGridCandleTime = iTime(_Symbol, PERIOD_CURRENT, 0);
+                         Print("ORPHAN GRID: Opened SELL ", prefix, "_GL#", nextLevel,
+                               " lots=", DoubleToString(lots, 2), " for Gen", gen);
+                      }
                   }
                }
             }
