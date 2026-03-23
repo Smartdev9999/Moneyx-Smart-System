@@ -3102,10 +3102,11 @@ void DisplayDashboard()
        }
     }
 
-    // === Orphan Recovery Status ===
-    if(InpOrphan_Enable && g_activeOrphanGroupCount > 0)
-    {
-       DrawTableRow(row, "ORPHAN RECOVERY", IntegerToString(g_activeOrphanGroupCount) + " group(s)", clrYellow, COLOR_SECTION_HEDGE); row++;
+     // === Orphan Recovery Status ===
+     color COLOR_SECTION_ORPHAN = C'130,50,180';  // purple for orphan section
+     if(InpOrphan_Enable && g_activeOrphanGroupCount > 0)
+     {
+        DrawTableRow(row, "ORPHAN RECOVERY", IntegerToString(g_activeOrphanGroupCount) + " group(s)", clrYellow, COLOR_SECTION_ORPHAN); row++;
        for(int og = 0; og < MAX_ORPHAN_GROUPS; og++)
        {
           if(!g_orphanGroups[og].active) continue;
@@ -3114,7 +3115,7 @@ void DisplayDashboard()
                         " S:" + IntegerToString(g_orphanGroups[og].sellCount) +
                         " GL_B:" + IntegerToString(g_orphanGroups[og].gridLossBuyCount) + "/" + IntegerToString(GridLoss_MaxTrades) +
                         " GL_S:" + IntegerToString(g_orphanGroups[og].gridLossSellCount) + "/" + IntegerToString(GridLoss_MaxTrades);
-          DrawTableRow(row, genLabel, info, clrOrange, COLOR_SECTION_HEDGE); row++;
+          DrawTableRow(row, genLabel, info, clrOrange, COLOR_SECTION_ORPHAN); row++;
        }
     }
 
