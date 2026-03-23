@@ -6608,7 +6608,8 @@ void ManageHedgeMatchingClose(int idx)
        trade.PositionClose(g_hedgeSets[idx].hedgeTicket);
 
        // Release all bound orders → they return to normal trading system
-       g_hedgeSets[idx].active = false;
+        CloseAllHedgeGridOrders(idx);
+        g_hedgeSets[idx].active = false;
        g_hedgeSets[idx].boundTicketCount = 0;
        ArrayResize(g_hedgeSets[idx].boundTickets, 0);
        g_hedgeSets[idx].gridMode = false;
