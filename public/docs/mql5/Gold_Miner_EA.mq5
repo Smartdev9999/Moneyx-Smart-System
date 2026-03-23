@@ -5973,9 +5973,14 @@ void CreateDashButton(string name, int x, int y, int width, int height, string t
 //+------------------------------------------------------------------+
 //| Check if a comment belongs to a hedge order                        |
 //+------------------------------------------------------------------+
+bool IsReverseHedgeComment(string comment)
+{
+   return (StringFind(comment, "GM_RHEDGE") >= 0);
+}
+
 bool IsHedgeComment(string comment)
 {
-   return (StringFind(comment, "GM_HEDGE") >= 0 || StringFind(comment, "GM_HG") >= 0);
+   return (StringFind(comment, "GM_HEDGE") >= 0 || StringFind(comment, "GM_HG") >= 0 || IsReverseHedgeComment(comment));
 }
 
 //+------------------------------------------------------------------+
