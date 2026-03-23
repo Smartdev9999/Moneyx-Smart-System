@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.1 - MTF ZigZag+CDC+Grid+License  |
+//|                Gold Miner EA v6.2 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.10"
-#property description "Gold Miner EA v6.1 - MTF ZigZag + CDC + Squeeze + AvgTP + GenComment + License"
+#property version   "6.20"
+#property description "Gold Miner EA v6.2 - MTF ZigZag + CDC + Squeeze + AvgTP + OrphanRecovery + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -322,6 +322,10 @@ input int      InpHedge_MaxSets              = 10;    // Max Active Hedge Sets (
 input int      InpHedge_BoundAvgTPPoints     = 0;     // Bound Avg TP Points (0=Disabled)
 input int      InpHedge_MinTFConfirm         = 1;     // Min TF Expansion to Confirm Hedge (1-3)
 
+input group "=== Orphan Recovery Grid ==="
+input bool     InpOrphan_Enable              = true;   // Enable Orphan Recovery Grid
+input int      InpOrphan_ScanIntervalMin     = 15;     // Scan Interval (Minutes)
+
 //+------------------------------------------------------------------+
 //| Global Variables                                                   |
 //+------------------------------------------------------------------+
@@ -484,6 +488,23 @@ int      g_lastDashboardRowCount = 0;  // track previous tick row count for stal
 bool     g_hedgeOrphanWarning = false;  // orphan hedge grid orders detected
 int      g_cycleGeneration = 0;  // incremented each time a hedge opens — changes comment prefix
 
+// === Orphan Recovery System ===
+datetime g_lastOrphanScanTime = 0;
+
+struct OrphanGenGroup {
+   int    generation;       // e.g. 0 for "GM_GL"
+   bool   active;
+   int    buyCount;         // orphan buy orders of this gen
+   int    sellCount;        // orphan sell orders of this gen
+   int    gridLossBuyCount;
+   int    gridLossSellCount;
+   int    maxGridLevelBuy;
+   int    maxGridLevelSell;
+};
+#define MAX_ORPHAN_GROUPS 5
+OrphanGenGroup g_orphanGroups[MAX_ORPHAN_GROUPS];
+int g_activeOrphanGroupCount = 0;
+
 //+------------------------------------------------------------------+
 //| Comment Generation Helpers                                         |
 //+------------------------------------------------------------------+
@@ -491,6 +512,13 @@ string GetCommentPrefix()
 {
    if(g_cycleGeneration == 0) return "GM";
    return "GM" + IntegerToString(g_cycleGeneration);
+}
+
+// Get prefix for a specific generation
+string GenPrefix(int gen)
+{
+   if(gen == 0) return "GM";
+   return "GM" + IntegerToString(gen);
 }
 
 // Match comment from any GM generation with a suffix (e.g. "_INIT", "_GL", "_GP")
@@ -688,7 +716,7 @@ int OnInit()
    // === Recover Hedge Sets from existing positions (crash/restart recovery) ===
    RecoverHedgeSets();
 
-   Print("Gold Miner EA v6.1 initialized successfully | CycleGen=", g_cycleGeneration);
+   Print("Gold Miner EA v6.2 initialized successfully | CycleGen=", g_cycleGeneration);
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -740,7 +768,7 @@ void OnDeinit(const int reason)
 
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
-   Print("Gold Miner EA v6.1 deinitialized");
+   Print("Gold Miner EA v6.2 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -1054,6 +1082,18 @@ void OnTick()
    {
       CheckAndOpenHedge();
       ManageHedgeSets();
+   }
+
+   // === ORPHAN RECOVERY GRID ===
+   if(InpOrphan_Enable)
+   {
+      datetime now = TimeCurrent();
+      if(now - g_lastOrphanScanTime >= InpOrphan_ScanIntervalMin * 60)
+      {
+         ScanOrphanGenerations();
+         g_lastOrphanScanTime = now;
+      }
+      ManageOrphanGrid();
    }
 
    // === ORIGINAL TRADING LOGIC (unchanged) ===
@@ -2769,7 +2809,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.1 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.1 [ZZ]" : "Gold Miner EA v6.1 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.2 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.2 [ZZ]" : "Gold Miner EA v6.2 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -3059,6 +3099,22 @@ void DisplayDashboard()
        if(g_hedgeOrphanWarning)
        {
           DrawTableRow(row, "⚠ WARNING", "ORPHAN GRID ORDERS DETECTED", clrRed, COLOR_SECTION_HEDGE); row++;
+       }
+    }
+
+    // === Orphan Recovery Status ===
+    if(InpOrphan_Enable && g_activeOrphanGroupCount > 0)
+    {
+       DrawTableRow(row, "ORPHAN RECOVERY", IntegerToString(g_activeOrphanGroupCount) + " group(s)", clrYellow, COLOR_SECTION_HEDGE); row++;
+       for(int og = 0; og < MAX_ORPHAN_GROUPS; og++)
+       {
+          if(!g_orphanGroups[og].active) continue;
+          string genLabel = "Gen" + IntegerToString(g_orphanGroups[og].generation) + " (" + GenPrefix(g_orphanGroups[og].generation) + ")";
+          string info = "B:" + IntegerToString(g_orphanGroups[og].buyCount) +
+                        " S:" + IntegerToString(g_orphanGroups[og].sellCount) +
+                        " GL_B:" + IntegerToString(g_orphanGroups[og].gridLossBuyCount) + "/" + IntegerToString(GridLoss_MaxTrades) +
+                        " GL_S:" + IntegerToString(g_orphanGroups[og].gridLossSellCount) + "/" + IntegerToString(GridLoss_MaxTrades);
+          DrawTableRow(row, genLabel, info, clrOrange, COLOR_SECTION_HEDGE); row++;
        }
     }
 
@@ -6389,8 +6445,383 @@ void DetectOrphanHedgeOrders()
 }
 
 //+------------------------------------------------------------------+
-//| Manage all active hedge sets                                       |
+//| Count positions for a specific orphan generation                   |
 //+------------------------------------------------------------------+
+void CountOrphanPositions(int gen, int &buyCount, int &sellCount,
+                          int &gridLossBuyCount, int &gridLossSellCount,
+                          int &maxGridLevelBuy, int &maxGridLevelSell)
+{
+   buyCount = 0; sellCount = 0;
+   gridLossBuyCount = 0; gridLossSellCount = 0;
+   maxGridLevelBuy = 0; maxGridLevelSell = 0;
+   
+   string prefix = GenPrefix(gen);
+   
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if(IsTicketBound(ticket)) continue;
+      
+      string comment = PositionGetString(POSITION_COMMENT);
+      if(IsHedgeComment(comment)) continue;
+      
+      // Must start with this gen's prefix
+      if(StringFind(comment, prefix + "_") != 0) continue;
+      
+      // Verify exact gen (e.g. "GM_" should not match "GM1_")
+      int extractedGen = ExtractGeneration(comment);
+      if(extractedGen != gen) continue;
+      
+      long posType = PositionGetInteger(POSITION_TYPE);
+      
+      if(posType == POSITION_TYPE_BUY)
+      {
+         buyCount++;
+         if(StringFind(comment, "_GL") >= 0)
+         {
+            gridLossBuyCount++;
+            // Extract grid level from comment (e.g. GM_GL#3 → 3)
+            int hashPos = StringFind(comment, "#");
+            if(hashPos >= 0)
+            {
+               int level = (int)StringToInteger(StringSubstr(comment, hashPos + 1));
+               if(level > maxGridLevelBuy) maxGridLevelBuy = level;
+            }
+         }
+      }
+      else if(posType == POSITION_TYPE_SELL)
+      {
+         sellCount++;
+         if(StringFind(comment, "_GL") >= 0)
+         {
+            gridLossSellCount++;
+            int hashPos = StringFind(comment, "#");
+            if(hashPos >= 0)
+            {
+               int level = (int)StringToInteger(StringSubstr(comment, hashPos + 1));
+               if(level > maxGridLevelSell) maxGridLevelSell = level;
+            }
+         }
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Find last order price for a specific orphan generation             |
+//+------------------------------------------------------------------+
+void FindLastOrphanOrder(int gen, ENUM_POSITION_TYPE side, double &outPrice, datetime &outTime, int &outGridLevel)
+{
+   outPrice = 0;
+   outTime = 0;
+   outGridLevel = 0;
+   datetime latestTime = 0;
+   
+   string prefix = GenPrefix(gen);
+   
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if(PositionGetInteger(POSITION_TYPE) != side) continue;
+      if(IsTicketBound(ticket)) continue;
+      
+      string comment = PositionGetString(POSITION_COMMENT);
+      if(IsHedgeComment(comment)) continue;
+      if(StringFind(comment, prefix + "_") != 0) continue;
+      
+      int extractedGen = ExtractGeneration(comment);
+      if(extractedGen != gen) continue;
+      
+      // Must be _INIT or _GL
+      if(StringFind(comment, "_INIT") < 0 && StringFind(comment, "_GL") < 0) continue;
+      
+      datetime openTime = (datetime)PositionGetInteger(POSITION_TIME);
+      if(openTime > latestTime)
+      {
+         latestTime = openTime;
+         outPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+         outTime = openTime;
+         
+         int hashPos = StringFind(comment, "#");
+         if(hashPos >= 0)
+            outGridLevel = (int)StringToInteger(StringSubstr(comment, hashPos + 1));
+         else
+            outGridLevel = 0;
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Find max lot on side for a specific orphan generation              |
+//+------------------------------------------------------------------+
+double FindMaxLotOrphan(int gen, ENUM_POSITION_TYPE side)
+{
+   double maxLot = 0;
+   string prefix = GenPrefix(gen);
+   
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if(PositionGetInteger(POSITION_TYPE) != side) continue;
+      if(IsTicketBound(ticket)) continue;
+      
+      string comment = PositionGetString(POSITION_COMMENT);
+      if(IsHedgeComment(comment)) continue;
+      if(StringFind(comment, prefix + "_") != 0) continue;
+      
+      int extractedGen = ExtractGeneration(comment);
+      if(extractedGen != gen) continue;
+      
+      if(StringFind(comment, "_GL") >= 0 || StringFind(comment, "_INIT") >= 0)
+      {
+         double lot = PositionGetDouble(POSITION_VOLUME);
+         if(lot > maxLot) maxLot = lot;
+      }
+   }
+   return maxLot;
+}
+
+//+------------------------------------------------------------------+
+//| Scan for orphan generations (orders from older gens not bound)      |
+//+------------------------------------------------------------------+
+void ScanOrphanGenerations()
+{
+   g_activeOrphanGroupCount = 0;
+   
+   // Reset all groups
+   for(int g = 0; g < MAX_ORPHAN_GROUPS; g++)
+   {
+      g_orphanGroups[g].active = false;
+      g_orphanGroups[g].generation = -1;
+      g_orphanGroups[g].buyCount = 0;
+      g_orphanGroups[g].sellCount = 0;
+      g_orphanGroups[g].gridLossBuyCount = 0;
+      g_orphanGroups[g].gridLossSellCount = 0;
+      g_orphanGroups[g].maxGridLevelBuy = 0;
+      g_orphanGroups[g].maxGridLevelSell = 0;
+   }
+   
+   // Scan all positions → group by generation
+   int foundGens[];
+   int foundGenCount = 0;
+   
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if(IsTicketBound(ticket)) continue;
+      
+      string comment = PositionGetString(POSITION_COMMENT);
+      if(IsHedgeComment(comment)) continue;
+      if(StringFind(comment, "GM") != 0) continue;
+      
+      int gen = ExtractGeneration(comment);
+      if(gen < 0) continue;
+      if(gen == g_cycleGeneration) continue;  // skip current generation
+      
+      // Check if this gen is bound to an active hedge set
+      bool isBoundGen = false;
+      for(int h = 0; h < MAX_HEDGE_SETS; h++)
+      {
+         if(g_hedgeSets[h].active && g_hedgeSets[h].boundGeneration == gen)
+         { isBoundGen = true; break; }
+      }
+      if(isBoundGen) continue;
+      
+      // Check if gen already in foundGens
+      bool exists = false;
+      for(int f = 0; f < foundGenCount; f++)
+      {
+         if(foundGens[f] == gen) { exists = true; break; }
+      }
+      if(!exists && foundGenCount < MAX_ORPHAN_GROUPS)
+      {
+         ArrayResize(foundGens, foundGenCount + 1);
+         foundGens[foundGenCount] = gen;
+         foundGenCount++;
+      }
+   }
+   
+   // For each found gen, count positions
+   for(int f = 0; f < foundGenCount && f < MAX_ORPHAN_GROUPS; f++)
+   {
+      int gen = foundGens[f];
+      int bc = 0, sc = 0, glb = 0, gls = 0, mglb = 0, mgls = 0;
+      CountOrphanPositions(gen, bc, sc, glb, gls, mglb, mgls);
+      
+      if(bc > 0 || sc > 0)
+      {
+         g_orphanGroups[f].generation = gen;
+         g_orphanGroups[f].active = true;
+         g_orphanGroups[f].buyCount = bc;
+         g_orphanGroups[f].sellCount = sc;
+         g_orphanGroups[f].gridLossBuyCount = glb;
+         g_orphanGroups[f].gridLossSellCount = gls;
+         g_orphanGroups[f].maxGridLevelBuy = mglb;
+         g_orphanGroups[f].maxGridLevelSell = mgls;
+         g_activeOrphanGroupCount++;
+         
+         Print("ORPHAN SCAN: Gen", gen, " (", GenPrefix(gen), ") — B:", bc, " S:", sc,
+               " GL_B:", glb, " GL_S:", gls, " MaxGL_B:", mglb, " MaxGL_S:", mgls);
+      }
+   }
+   
+   if(g_activeOrphanGroupCount == 0)
+      Print("ORPHAN SCAN: No orphan generations found.");
+}
+
+//+------------------------------------------------------------------+
+//| Manage orphan grid — open recovery grid orders for orphan gens     |
+//+------------------------------------------------------------------+
+void ManageOrphanGrid()
+{
+   if(g_activeOrphanGroupCount == 0) return;
+   if(g_newOrderBlocked) return;
+   if(TotalOrderCount() >= MaxOpenOrders) return;
+   
+   // Only work in Normal or Squeeze — not Expansion
+   bool isExpansion = false;
+   if(InpUseSqueezeFilter)
+   {
+      for(int sq = 0; sq < 3; sq++)
+      {
+         if(g_squeeze[sq].state == 2)
+         { isExpansion = true; break; }
+      }
+   }
+   if(isExpansion) return;
+   
+   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   
+   for(int g = 0; g < MAX_ORPHAN_GROUPS; g++)
+   {
+      if(!g_orphanGroups[g].active) continue;
+      
+      int gen = g_orphanGroups[g].generation;
+      string prefix = GenPrefix(gen);
+      
+      // Re-count fresh each tick to detect if orders were closed
+      int bc = 0, sc = 0, glb = 0, gls = 0, mglb = 0, mgls = 0;
+      CountOrphanPositions(gen, bc, sc, glb, gls, mglb, mgls);
+      
+      // Update counts
+      g_orphanGroups[g].buyCount = bc;
+      g_orphanGroups[g].sellCount = sc;
+      g_orphanGroups[g].gridLossBuyCount = glb;
+      g_orphanGroups[g].gridLossSellCount = gls;
+      g_orphanGroups[g].maxGridLevelBuy = mglb;
+      g_orphanGroups[g].maxGridLevelSell = mgls;
+      
+      // Auto-cleanup: no orders left → deactivate
+      if(bc == 0 && sc == 0)
+      {
+         Print("ORPHAN Gen", gen, " all orders closed. Deactivating group.");
+         g_orphanGroups[g].active = false;
+         g_activeOrphanGroupCount--;
+         continue;
+      }
+      
+      if(TotalOrderCount() >= MaxOpenOrders) return;
+      if(glb >= GridLoss_MaxTrades && gls >= GridLoss_MaxTrades) continue;
+      
+      // === BUY side orphan grid ===
+      if(bc > 0 && glb < GridLoss_MaxTrades)
+      {
+         if(!g_squeezeBuyBlocked)
+         {
+            double lastPrice = 0;
+            datetime lastTime = 0;
+            int lastLevel = 0;
+            FindLastOrphanOrder(gen, POSITION_TYPE_BUY, lastPrice, lastTime, lastLevel);
+            
+            if(lastPrice > 0)
+            {
+               double distance = GetGridDistance(glb, true);
+               if(distance > 0)
+               {
+                  double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+                  if(currentPrice <= lastPrice - distance * point)
+                  {
+                     int nextLevel = mglb + 1;
+                     double lots = CalculateGridLot(glb, true);
+                     
+                     // Ensure lot continuation
+                     double maxExisting = FindMaxLotOrphan(gen, POSITION_TYPE_BUY);
+                     if(maxExisting > 0 && lots <= maxExisting)
+                     {
+                        if(GridLoss_LotMode == LOT_MULTIPLY)
+                           lots = maxExisting * GridLoss_MultiplyFactor;
+                        else if(GridLoss_LotMode == LOT_ADD)
+                           lots = maxExisting + InitialLotSize * GridLoss_AddLotPerLevel;
+                     }
+                     
+                     string comment = prefix + "_GL#" + IntegerToString(nextLevel);
+                     if(OpenOrder(ORDER_TYPE_BUY, lots, comment))
+                     {
+                        Print("ORPHAN GRID: Opened BUY ", prefix, "_GL#", nextLevel,
+                              " lots=", DoubleToString(lots, 2), " for Gen", gen);
+                     }
+                  }
+               }
+            }
+         }
+      }
+      
+      // === SELL side orphan grid ===
+      if(sc > 0 && gls < GridLoss_MaxTrades)
+      {
+         if(!g_squeezeSellBlocked)
+         {
+            double lastPrice = 0;
+            datetime lastTime = 0;
+            int lastLevel = 0;
+            FindLastOrphanOrder(gen, POSITION_TYPE_SELL, lastPrice, lastTime, lastLevel);
+            
+            if(lastPrice > 0)
+            {
+               double distance = GetGridDistance(gls, true);
+               if(distance > 0)
+               {
+                  double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+                  if(currentPrice >= lastPrice + distance * point)
+                  {
+                     int nextLevel = mgls + 1;
+                     double lots = CalculateGridLot(gls, true);
+                     
+                     // Ensure lot continuation
+                     double maxExisting = FindMaxLotOrphan(gen, POSITION_TYPE_SELL);
+                     if(maxExisting > 0 && lots <= maxExisting)
+                     {
+                        if(GridLoss_LotMode == LOT_MULTIPLY)
+                           lots = maxExisting * GridLoss_MultiplyFactor;
+                        else if(GridLoss_LotMode == LOT_ADD)
+                           lots = maxExisting + InitialLotSize * GridLoss_AddLotPerLevel;
+                     }
+                     
+                     string comment = prefix + "_GL#" + IntegerToString(nextLevel);
+                     if(OpenOrder(ORDER_TYPE_SELL, lots, comment))
+                     {
+                        Print("ORPHAN GRID: Opened SELL ", prefix, "_GL#", nextLevel,
+                              " lots=", DoubleToString(lots, 2), " for Gen", gen);
+                     }
+                  }
+               }
+            }
+         }
+      }
+   }
+}
+
 void ManageHedgeSets()
 {
    // Detect orphan hedge grid orders every tick
