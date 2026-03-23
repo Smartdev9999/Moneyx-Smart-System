@@ -2351,7 +2351,7 @@ void CheckGridProfit(ENUM_POSITION_TYPE side, int currentGridCount)
 //+------------------------------------------------------------------+
 //| Find last order price for a side (matching comment prefixes)       |
 //+------------------------------------------------------------------+
-void FindLastOrder(ENUM_POSITION_TYPE side, string prefix1, string prefix2, double &outPrice, datetime &outTime)
+void FindLastOrder(ENUM_POSITION_TYPE side, string suffix1, string suffix2, double &outPrice, datetime &outTime)
 {
    outPrice = 0;
    outTime = 0;
@@ -2364,9 +2364,11 @@ void FindLastOrder(ENUM_POSITION_TYPE side, string prefix1, string prefix2, doub
       if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       if(PositionGetInteger(POSITION_TYPE) != side) continue;
+      if(IsTicketBound(ticket)) continue;
 
       string comment = PositionGetString(POSITION_COMMENT);
-      if(StringFind(comment, prefix1) >= 0 || StringFind(comment, prefix2) >= 0)
+      if(IsHedgeComment(comment)) continue;
+      if(MatchGMSuffix(comment, suffix1) || MatchGMSuffix(comment, suffix2))
       {
          datetime openTime = (datetime)PositionGetInteger(POSITION_TIME);
          if(openTime > latestTime)
