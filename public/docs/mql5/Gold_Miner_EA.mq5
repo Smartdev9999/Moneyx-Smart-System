@@ -310,6 +310,7 @@ input double           InpSqueeze_ExpThreshold  = 1.5;            // Expansion T
 input bool             InpSqueeze_BlockOnExpansion = true;         // Block New Orders on Expansion
 input int              InpSqueeze_MinTFExpansion = 1;              // Min TFs in Expansion to Block (1-3)
 input bool             InpSqueeze_DirectionalBlock = false;        // Directional Block (block counter-trend only)
+input bool             InpSqueeze_CloseOnExpansion = false;        // Close All Orders on Expansion
 
 //--- Counter-Trend Hedging
 input group "=== Counter-Trend Hedging ==="
