@@ -1258,11 +1258,11 @@ void OnTick()
          //--- Grid Loss management (check both sides independently) - blocked by News/Time/Squeeze filter
          if(!g_newOrderBlocked)
          {
-            if(!g_squeezeBuyBlocked && (hasInitialBuy || g_initialBuyPrice > 0) && gridLossBuy < GridLoss_MaxTrades && buyCount > 0)
+            if(!g_squeezeBuyBlocked && (hasInitialBuy || g_initialBuyPrice > 0 || gridLossBuy > 0) && gridLossBuy < GridLoss_MaxTrades && buyCount > 0)
             {
                CheckGridLoss(POSITION_TYPE_BUY, gridLossBuy);
             }
-            if(!g_squeezeSellBlocked && (hasInitialSell || g_initialSellPrice > 0) && gridLossSell < GridLoss_MaxTrades && sellCount > 0)
+            if(!g_squeezeSellBlocked && (hasInitialSell || g_initialSellPrice > 0 || gridLossSell > 0) && gridLossSell < GridLoss_MaxTrades && sellCount > 0)
             {
                CheckGridLoss(POSITION_TYPE_SELL, gridLossSell);
             }
