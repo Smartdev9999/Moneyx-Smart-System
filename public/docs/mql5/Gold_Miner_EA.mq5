@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.4 - MTF ZigZag+CDC+Grid+License  |
+//|                //|                Gold Miner EA v6.5 - MTF ZigZag+CDC+Grid+License  |  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.40"
-#property description "Gold Miner EA v6.4 - MTF ZigZag + CDC + Squeeze + AvgTP + ReverseHedge + License"
+#property version   "6.50"
+#property description "Gold Miner EA v6.5 - MTF ZigZag + CDC + Squeeze + AvgTP + ReverseHedge + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -727,7 +727,7 @@ int OnInit()
    // === Recover Hedge Sets from existing positions (crash/restart recovery) ===
    RecoverHedgeSets();
 
-   Print("Gold Miner EA v6.4 initialized successfully | CycleGen=", g_cycleGeneration);
+   Print("Gold Miner EA v6.5 initialized successfully | CycleGen=", g_cycleGeneration);
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -779,7 +779,7 @@ void OnDeinit(const int reason)
 
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
-   Print("Gold Miner EA v6.4 deinitialized");
+   Print("Gold Miner EA v6.5 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -787,6 +787,7 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void RecoverInitialPrices()
 {
+   //--- First pass: try to find INIT orders (original logic)
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       ulong ticket = PositionGetTicket(i);
@@ -803,6 +804,63 @@ void RecoverInitialPrices()
             g_initialBuyPrice = openPrice;
          else if(posType == POSITION_TYPE_SELL)
             g_initialSellPrice = openPrice;
+      }
+   }
+
+   //--- Second pass: fallback — if no INIT found, recover from oldest GL order
+   if(g_initialBuyPrice <= 0 || g_initialSellPrice <= 0)
+   {
+      datetime oldestBuyTime = D'2099.01.01';
+      double   oldestBuyPrice = 0;
+      datetime oldestSellTime = D'2099.01.01';
+      double   oldestSellPrice = 0;
+
+      for(int i = PositionsTotal() - 1; i >= 0; i--)
+      {
+         ulong ticket = PositionGetTicket(i);
+         if(ticket == 0) continue;
+         if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+         if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+
+         string comment = PositionGetString(POSITION_COMMENT);
+         //--- Skip hedge/reverse hedge comments — only look at normal grid orders
+         if(IsHedgeComment(comment) || IsReverseHedgeComment(comment)) continue;
+
+         //--- Check for GL suffix (grid loss orders)
+         if(StringFind(comment, "_GL") >= 0)
+         {
+            long posType = PositionGetInteger(POSITION_TYPE);
+            datetime openTime = (datetime)PositionGetInteger(POSITION_TIME);
+            double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+
+            if(posType == POSITION_TYPE_BUY && g_initialBuyPrice <= 0)
+            {
+               if(openTime < oldestBuyTime)
+               {
+                  oldestBuyTime = openTime;
+                  oldestBuyPrice = openPrice;
+               }
+            }
+            else if(posType == POSITION_TYPE_SELL && g_initialSellPrice <= 0)
+            {
+               if(openTime < oldestSellTime)
+               {
+                  oldestSellTime = openTime;
+                  oldestSellPrice = openPrice;
+               }
+            }
+         }
+      }
+
+      if(g_initialBuyPrice <= 0 && oldestBuyPrice > 0)
+      {
+         g_initialBuyPrice = oldestBuyPrice;
+         Print("RecoverInitialPrices: BUY INIT not found, recovered from oldest GL order price=", oldestBuyPrice);
+      }
+      if(g_initialSellPrice <= 0 && oldestSellPrice > 0)
+      {
+         g_initialSellPrice = oldestSellPrice;
+         Print("RecoverInitialPrices: SELL INIT not found, recovered from oldest GL order price=", oldestSellPrice);
       }
    }
 }
@@ -1200,11 +1258,11 @@ void OnTick()
          //--- Grid Loss management (check both sides independently) - blocked by News/Time/Squeeze filter
          if(!g_newOrderBlocked)
          {
-            if(!g_squeezeBuyBlocked && (hasInitialBuy || g_initialBuyPrice > 0) && gridLossBuy < GridLoss_MaxTrades && buyCount > 0)
+            if(!g_squeezeBuyBlocked && (hasInitialBuy || g_initialBuyPrice > 0 || gridLossBuy > 0) && gridLossBuy < GridLoss_MaxTrades && buyCount > 0)
             {
                CheckGridLoss(POSITION_TYPE_BUY, gridLossBuy);
             }
-            if(!g_squeezeSellBlocked && (hasInitialSell || g_initialSellPrice > 0) && gridLossSell < GridLoss_MaxTrades && sellCount > 0)
+            if(!g_squeezeSellBlocked && (hasInitialSell || g_initialSellPrice > 0 || gridLossSell > 0) && gridLossSell < GridLoss_MaxTrades && sellCount > 0)
             {
                CheckGridLoss(POSITION_TYPE_SELL, gridLossSell);
             }
@@ -1336,9 +1394,9 @@ void OnTick()
       // Grid Loss management
       if(!g_newOrderBlocked)
       {
-         if(!g_squeezeBuyBlocked && (hasInitialBuy || g_initialBuyPrice > 0) && gridLossBuy < GridLoss_MaxTrades && buyCount > 0)
+         if(!g_squeezeBuyBlocked && (hasInitialBuy || g_initialBuyPrice > 0 || gridLossBuy > 0) && gridLossBuy < GridLoss_MaxTrades && buyCount > 0)
             CheckGridLoss(POSITION_TYPE_BUY, gridLossBuy);
-         if(!g_squeezeSellBlocked && (hasInitialSell || g_initialSellPrice > 0) && gridLossSell < GridLoss_MaxTrades && sellCount > 0)
+         if(!g_squeezeSellBlocked && (hasInitialSell || g_initialSellPrice > 0 || gridLossSell > 0) && gridLossSell < GridLoss_MaxTrades && sellCount > 0)
             CheckGridLoss(POSITION_TYPE_SELL, gridLossSell);
       }
 
@@ -2820,7 +2878,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.4 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.4 [ZZ]" : "Gold Miner EA v6.4 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.5 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.5 [ZZ]" : "Gold Miner EA v6.5 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
