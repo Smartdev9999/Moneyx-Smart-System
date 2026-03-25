@@ -5435,7 +5435,20 @@ void RefreshNewsData()
       
       eventCount++;
       
-      datetime eventTime = (datetime)StringToInteger(timestampStr);
+       datetime eventTime = (datetime)StringToInteger(timestampStr);
+       
+       // Convert UTC timestamp to broker server time (same as MoneyX Smart System)
+       int serverGMTOffset = (int)(TimeCurrent() - TimeGMT());
+       eventTime += serverGMTOffset;
+       
+       {
+          static bool tzDebugPrinted = false;
+          if(!tzDebugPrinted)
+          {
+             Print("NEWS FILTER TZ: Server GMT offset = ", serverGMTOffset/3600, "h");
+             tzDebugPrinted = true;
+          }
+       }
       
       if(impact == "Holiday")
       {
