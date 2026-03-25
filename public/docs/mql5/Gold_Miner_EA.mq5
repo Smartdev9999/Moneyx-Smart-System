@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                //|                Gold Miner EA v6.5 - MTF ZigZag+CDC+Grid+License  |  |
+//|                Gold Miner EA v6.6 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.50"
-#property description "Gold Miner EA v6.5 - MTF ZigZag + CDC + Squeeze + AvgTP + ReverseHedge + License"
+#property version   "6.60"
+#property description "Gold Miner EA v6.6 - MTF ZigZag + CDC + Squeeze + AvgTP + ReverseHedge + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -310,6 +310,7 @@ input double           InpSqueeze_ExpThreshold  = 1.5;            // Expansion T
 input bool             InpSqueeze_BlockOnExpansion = true;         // Block New Orders on Expansion
 input int              InpSqueeze_MinTFExpansion = 1;              // Min TFs in Expansion to Block (1-3)
 input bool             InpSqueeze_DirectionalBlock = false;        // Directional Block (block counter-trend only)
+input bool             InpSqueeze_CloseOnExpansion = false;        // Close All Orders on Expansion
 
 //--- Counter-Trend Hedging
 input group "=== Counter-Trend Hedging ==="
@@ -463,6 +464,7 @@ SqueezeState g_squeeze[3];
 bool         g_squeezeBlocked = false;     // true when expansion detected (all block)
 bool         g_squeezeBuyBlocked  = false;  // directional: block BUY only
 bool         g_squeezeSellBlocked = false;  // directional: block SELL only
+bool         g_expansionCloseTriggered = false;  // cooldown for CloseAllOnExpansion
 
 // === Counter-Trend Hedging State ===
 #define MAX_HEDGE_SETS 4
@@ -727,7 +729,7 @@ int OnInit()
    // === Recover Hedge Sets from existing positions (crash/restart recovery) ===
    RecoverHedgeSets();
 
-   Print("Gold Miner EA v6.5 initialized successfully | CycleGen=", g_cycleGeneration);
+   Print("Gold Miner EA v6.6 initialized successfully | CycleGen=", g_cycleGeneration);
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -779,7 +781,7 @@ void OnDeinit(const int reason)
 
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
-   Print("Gold Miner EA v6.5 deinitialized");
+   Print("Gold Miner EA v6.6 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -1125,26 +1127,38 @@ void OnTick()
                if(bestDir == 0) bestDir = g_squeeze[sq].direction;  // use highest TF direction
             }
          }
-         if(expCount >= InpSqueeze_MinTFExpansion)
-         {
-            if(InpSqueeze_DirectionalBlock && bestDir != 0)
-            {
-               // Directional: block counter-trend only
-               if(bestDir == 1)  // Bullish expansion → block SELL
-                  g_squeezeSellBlocked = true;
-               else              // Bearish expansion → block BUY
-                  g_squeezeBuyBlocked = true;
-               // Do NOT set g_newOrderBlocked → trend-following side can still open
-            }
-            else
-            {
-               // Original behavior: block everything
-               g_squeezeBlocked = true;
-               g_newOrderBlocked = true;
-            }
-         }
-      }
-   }
+          if(expCount >= InpSqueeze_MinTFExpansion)
+          {
+             if(InpSqueeze_DirectionalBlock && bestDir != 0)
+             {
+                // Directional: block counter-trend only
+                if(bestDir == 1)  // Bullish expansion → block SELL
+                   g_squeezeSellBlocked = true;
+                else              // Bearish expansion → block BUY
+                   g_squeezeBuyBlocked = true;
+                // Do NOT set g_newOrderBlocked → trend-following side can still open
+             }
+             else
+             {
+                // Original behavior: block everything
+                g_squeezeBlocked = true;
+                g_newOrderBlocked = true;
+             }
+             
+             // Close All on Expansion (v6.6)
+             if(InpSqueeze_CloseOnExpansion && !g_expansionCloseTriggered)
+             {
+                CloseAllOnExpansion();
+                g_expansionCloseTriggered = true;
+             }
+          }
+          else
+          {
+             // Reset cooldown when expansion ends
+             g_expansionCloseTriggered = false;
+          }
+       }
+    }
 
    // === COUNTER-TREND HEDGING CHECK ===
    if(InpHedge_Enable && InpUseSqueezeFilter)
@@ -2878,7 +2892,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.5 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.5 [ZZ]" : "Gold Miner EA v6.5 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.6 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.6 [ZZ]" : "Gold Miner EA v6.6 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -3135,8 +3149,15 @@ void DisplayDashboard()
       else if(g_squeezeBuyBlocked)     { sqBlock = "BUY BLOCKED"; sqBlockClr = clrOrange;  }
       else if(g_squeezeSellBlocked)    { sqBlock = "SELL BLOCKED"; sqBlockClr = clrOrange; }
       else                             { sqBlock = "OK";           sqBlockClr = clrLime;   }
-      DrawTableRow(row, "Squeeze Status", sqBlock, sqBlockClr, COLOR_SECTION_INFO); row++;
-   }
+       DrawTableRow(row, "Squeeze Status", sqBlock, sqBlockClr, COLOR_SECTION_INFO); row++;
+       
+       if(InpSqueeze_CloseOnExpansion)
+       {
+          string closeStatus = g_expansionCloseTriggered ? "TRIGGERED" : "ARMED";
+          color closeClr = g_expansionCloseTriggered ? clrRed : clrYellow;
+          DrawTableRow(row, "Close All", closeStatus, closeClr, COLOR_SECTION_INFO); row++;
+       }
+    }
 
    //--- Counter-Trend Hedging Section
    if(InpHedge_Enable)
@@ -5433,7 +5454,20 @@ void RefreshNewsData()
       
       eventCount++;
       
-      datetime eventTime = (datetime)StringToInteger(timestampStr);
+       datetime eventTime = (datetime)StringToInteger(timestampStr);
+       
+       // Convert UTC timestamp to broker server time (same as MoneyX Smart System)
+       int serverGMTOffset = (int)(TimeCurrent() - TimeGMT());
+       eventTime += serverGMTOffset;
+       
+       {
+          static bool tzDebugPrinted = false;
+          if(!tzDebugPrinted)
+          {
+             Print("NEWS FILTER TZ: Server GMT offset = ", serverGMTOffset/3600, "h");
+             tzDebugPrinted = true;
+          }
+       }
       
       if(impact == "Holiday")
       {
@@ -8066,6 +8100,36 @@ void ManageMatchingClose()
    }
 }
 //+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//| Close All Orders on Expansion (v6.6)                              |
+//+------------------------------------------------------------------+
+void CloseAllOnExpansion()
+{
+   int closed = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      
+      string comment = PositionGetString(POSITION_COMMENT);
+      // Skip reverse hedge orders
+      if(StringFind(comment, "GM_RHEDGE") >= 0) continue;
+      
+      string sym = PositionGetString(POSITION_SYMBOL);
+      double vol = PositionGetDouble(POSITION_VOLUME);
+      
+      if(trade.PositionClose(ticket))
+      {
+         closed++;
+         Print("EXPANSION CLOSE: Closed #", ticket, " ", sym, " ", vol, " lots");
+      }
+   }
+   
+   if(closed > 0)
+      Print("EXPANSION CLOSE ALL: Closed ", closed, " positions due to expansion >= ", InpSqueeze_MinTFExpansion, " TFs");
+}
 
 //+------------------------------------------------------------------+
 //| Volatility Squeeze Filter - Update State for all 3 TFs            |

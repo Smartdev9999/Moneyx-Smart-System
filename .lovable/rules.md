@@ -44,4 +44,30 @@
   - Dashboard display ที่แสดง version บนชาร์ต
 - ห้ามลืมอัปเดต version เด็ดขาด — ใช้เป็นตัวติดตามการเปลี่ยนแปลง
 
+## 7. Standard Modules — ต้องถามก่อนเพิ่ม
+ทุกครั้งที่สร้าง EA ใหม่ ต้อง **ถามผู้ใช้ก่อน** ว่าจะเพิ่ม module ต่อไปนี้หรือไม่:
+- **News Filter** — ระบบกรองข่าวเศรษฐกิจ
+- **License Check** — ระบบตรวจสอบ License
+- **Data Sync** — ระบบ sync ข้อมูลเข้า monitoring dashboard
+
+**ห้ามเพิ่ม modules เหล่านี้โดยไม่ได้รับอนุญาตจากผู้ใช้**
+
+ไฟล์อ้างอิงหลัก: `docs/mql5/Moneyx_Smart_Gold_EA_Licensed.mq5`
+
+## 8. News Filter Implementation Standard
+เมื่อเพิ่ม News Filter ใน EA ใดก็ตาม ต้องปฏิบัติตาม:
+- ใช้ `serverGMTOffset` แปลง UTC timestamp → broker server time **เสมอ**:
+  ```cpp
+  int serverGMTOffset = (int)(TimeCurrent() - TimeGMT());
+  eventTime += serverGMTOffset;
+  ```
+- อ้างอิง logic ทั้งหมดจาก MoneyX Smart System (`docs/mql5/Moneyx_Smart_Gold_EA_Licensed.mq5`)
+- รวมถึง: Custom Keywords filter, File cache fallback, WebRequest retry logic
+
+## 9. Data Sync Implementation Standard
+เมื่อเพิ่ม Data Sync ใน EA ใดก็ตาม ต้อง:
+- อ้างอิงรูปแบบการ sync จาก MoneyX Smart System (`docs/mql5/Moneyx_Smart_Gold_EA_Licensed.mq5`)
+- รวมถึง: Account data sync, Trade history sync, Event-based sync (order open/close)
+- ส่ง `ea_name` ใน payload เพื่อให้ dashboard ระบุ EA ได้
+
 **กฎนี้ใช้กับทุกไฟล์ .mq5 ใน `public/docs/mql5/` และ `docs/mql5/`**
