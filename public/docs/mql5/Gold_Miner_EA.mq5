@@ -787,6 +787,7 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void RecoverInitialPrices()
 {
+   //--- First pass: try to find INIT orders (original logic)
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       ulong ticket = PositionGetTicket(i);
@@ -803,6 +804,63 @@ void RecoverInitialPrices()
             g_initialBuyPrice = openPrice;
          else if(posType == POSITION_TYPE_SELL)
             g_initialSellPrice = openPrice;
+      }
+   }
+
+   //--- Second pass: fallback — if no INIT found, recover from oldest GL order
+   if(g_initialBuyPrice <= 0 || g_initialSellPrice <= 0)
+   {
+      datetime oldestBuyTime = D'2099.01.01';
+      double   oldestBuyPrice = 0;
+      datetime oldestSellTime = D'2099.01.01';
+      double   oldestSellPrice = 0;
+
+      for(int i = PositionsTotal() - 1; i >= 0; i--)
+      {
+         ulong ticket = PositionGetTicket(i);
+         if(ticket == 0) continue;
+         if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+         if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+
+         string comment = PositionGetString(POSITION_COMMENT);
+         //--- Skip hedge/reverse hedge comments — only look at normal grid orders
+         if(IsHedgeComment(comment) || IsReverseHedgeComment(comment)) continue;
+
+         //--- Check for GL suffix (grid loss orders)
+         if(StringFind(comment, "_GL") >= 0)
+         {
+            long posType = PositionGetInteger(POSITION_TYPE);
+            datetime openTime = (datetime)PositionGetInteger(POSITION_TIME);
+            double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+
+            if(posType == POSITION_TYPE_BUY && g_initialBuyPrice <= 0)
+            {
+               if(openTime < oldestBuyTime)
+               {
+                  oldestBuyTime = openTime;
+                  oldestBuyPrice = openPrice;
+               }
+            }
+            else if(posType == POSITION_TYPE_SELL && g_initialSellPrice <= 0)
+            {
+               if(openTime < oldestSellTime)
+               {
+                  oldestSellTime = openTime;
+                  oldestSellPrice = openPrice;
+               }
+            }
+         }
+      }
+
+      if(g_initialBuyPrice <= 0 && oldestBuyPrice > 0)
+      {
+         g_initialBuyPrice = oldestBuyPrice;
+         Print("RecoverInitialPrices: BUY INIT not found, recovered from oldest GL order price=", oldestBuyPrice);
+      }
+      if(g_initialSellPrice <= 0 && oldestSellPrice > 0)
+      {
+         g_initialSellPrice = oldestSellPrice;
+         Print("RecoverInitialPrices: SELL INIT not found, recovered from oldest GL order price=", oldestSellPrice);
       }
    }
 }
