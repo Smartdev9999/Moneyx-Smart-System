@@ -8095,6 +8095,36 @@ void ManageMatchingClose()
 //+------------------------------------------------------------------+
 
 //+------------------------------------------------------------------+
+//| Close All Orders on Expansion (v6.6)                              |
+//+------------------------------------------------------------------+
+void CloseAllOnExpansion()
+{
+   int closed = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      
+      string comment = PositionGetString(POSITION_COMMENT);
+      // Skip reverse hedge orders
+      if(StringFind(comment, "GM_RHEDGE") >= 0) continue;
+      
+      string sym = PositionGetString(POSITION_SYMBOL);
+      double vol = PositionGetDouble(POSITION_VOLUME);
+      
+      if(trade.PositionClose(ticket))
+      {
+         closed++;
+         Print("EXPANSION CLOSE: Closed #", ticket, " ", sym, " ", vol, " lots");
+      }
+   }
+   
+   if(closed > 0)
+      Print("EXPANSION CLOSE ALL: Closed ", closed, " positions due to expansion >= ", InpSqueeze_MinTFExpansion, " TFs");
+}
+
+//+------------------------------------------------------------------+
 //| Volatility Squeeze Filter - Update State for all 3 TFs            |
 //+------------------------------------------------------------------+
 void UpdateSqueezeState()
