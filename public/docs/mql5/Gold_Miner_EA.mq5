@@ -464,6 +464,7 @@ SqueezeState g_squeeze[3];
 bool         g_squeezeBlocked = false;     // true when expansion detected (all block)
 bool         g_squeezeBuyBlocked  = false;  // directional: block BUY only
 bool         g_squeezeSellBlocked = false;  // directional: block SELL only
+bool         g_expansionCloseTriggered = false;  // cooldown for CloseAllOnExpansion
 
 // === Counter-Trend Hedging State ===
 #define MAX_HEDGE_SETS 4
