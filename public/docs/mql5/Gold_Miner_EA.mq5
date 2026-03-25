@@ -1127,26 +1127,38 @@ void OnTick()
                if(bestDir == 0) bestDir = g_squeeze[sq].direction;  // use highest TF direction
             }
          }
-         if(expCount >= InpSqueeze_MinTFExpansion)
-         {
-            if(InpSqueeze_DirectionalBlock && bestDir != 0)
-            {
-               // Directional: block counter-trend only
-               if(bestDir == 1)  // Bullish expansion → block SELL
-                  g_squeezeSellBlocked = true;
-               else              // Bearish expansion → block BUY
-                  g_squeezeBuyBlocked = true;
-               // Do NOT set g_newOrderBlocked → trend-following side can still open
-            }
-            else
-            {
-               // Original behavior: block everything
-               g_squeezeBlocked = true;
-               g_newOrderBlocked = true;
-            }
-         }
-      }
-   }
+          if(expCount >= InpSqueeze_MinTFExpansion)
+          {
+             if(InpSqueeze_DirectionalBlock && bestDir != 0)
+             {
+                // Directional: block counter-trend only
+                if(bestDir == 1)  // Bullish expansion → block SELL
+                   g_squeezeSellBlocked = true;
+                else              // Bearish expansion → block BUY
+                   g_squeezeBuyBlocked = true;
+                // Do NOT set g_newOrderBlocked → trend-following side can still open
+             }
+             else
+             {
+                // Original behavior: block everything
+                g_squeezeBlocked = true;
+                g_newOrderBlocked = true;
+             }
+             
+             // Close All on Expansion (v6.6)
+             if(InpSqueeze_CloseOnExpansion && !g_expansionCloseTriggered)
+             {
+                CloseAllOnExpansion();
+                g_expansionCloseTriggered = true;
+             }
+          }
+          else
+          {
+             // Reset cooldown when expansion ends
+             g_expansionCloseTriggered = false;
+          }
+       }
+    }
 
    // === COUNTER-TREND HEDGING CHECK ===
    if(InpHedge_Enable && InpUseSqueezeFilter)
