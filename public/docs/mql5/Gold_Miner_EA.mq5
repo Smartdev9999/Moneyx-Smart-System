@@ -3149,8 +3149,15 @@ void DisplayDashboard()
       else if(g_squeezeBuyBlocked)     { sqBlock = "BUY BLOCKED"; sqBlockClr = clrOrange;  }
       else if(g_squeezeSellBlocked)    { sqBlock = "SELL BLOCKED"; sqBlockClr = clrOrange; }
       else                             { sqBlock = "OK";           sqBlockClr = clrLime;   }
-      DrawTableRow(row, "Squeeze Status", sqBlock, sqBlockClr, COLOR_SECTION_INFO); row++;
-   }
+       DrawTableRow(row, "Squeeze Status", sqBlock, sqBlockClr, COLOR_SECTION_INFO); row++;
+       
+       if(InpSqueeze_CloseOnExpansion)
+       {
+          string closeStatus = g_expansionCloseTriggered ? "TRIGGERED" : "ARMED";
+          color closeClr = g_expansionCloseTriggered ? clrRed : clrYellow;
+          DrawTableRow(row, "Close All", closeStatus, closeClr, COLOR_SECTION_INFO); row++;
+       }
+    }
 
    //--- Counter-Trend Hedging Section
    if(InpHedge_Enable)
