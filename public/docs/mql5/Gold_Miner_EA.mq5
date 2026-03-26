@@ -2893,7 +2893,7 @@ void DisplayDashboard()
    // Stale row cleanup moved to end of function (prevents flicker)
    
    double sc = MathMax(0.8, MathMin(1.5, DashboardScale));
-   int tableWidth = (int)(340 * sc);
+   int tableWidth = (int)(DashboardWidth * sc);
    int headerHeight = (int)(22 * sc);
    int headerFontSize = (int)(11 * sc);
    if(headerFontSize < 8) headerFontSize = 8;
