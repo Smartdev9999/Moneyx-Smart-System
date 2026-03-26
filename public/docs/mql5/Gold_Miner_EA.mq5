@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.6 - MTF ZigZag+CDC+Grid+License  |
+//|                Gold Miner EA v6.7 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.60"
-#property description "Gold Miner EA v6.6 - MTF ZigZag + CDC + Squeeze + AvgTP + ReverseHedge + License"
+#property version   "6.70"
+#property description "Gold Miner EA v6.7 - MTF ZigZag + CDC + Squeeze + AvgTP + ReverseHedge + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -163,6 +163,8 @@ input bool     UseTP_PercentBalance = false;   // Use TP % of Balance
 input double   TP_PercentBalance   = 5.0;      // TP % of Balance
 input bool     UseAccumulateClose  = false;    // Use Accumulate Close
 input double   AccumulateTarget    = 20000.0;  // Accumulate Target ($)
+input bool     UseTP_DDPercent     = false;    // Use TP % of Max Drawdown (per side)
+input double   TP_DDPercent        = 10.0;     // TP DD % (profit target = X% of max DD)
 input bool     ShowAverageLine     = true;          // Show Average Price Line
 input bool     ShowTPLine          = true;          // Show TP Line
 input color    AvgBuyLineColor     = clrDodgerBlue; // Average Buy Line Color
@@ -359,6 +361,8 @@ double         g_initialSellPrice;  // track initial order price for grid fallba
 double         g_accumulateBaseline; // Total history profit at last cycle reset
 double         g_maxDD;             // Track max drawdown
 bool           g_hadPositions;      // Track if we had positions (for accumulate auto-reset)
+double         g_maxDDBuy;          // Max drawdown (most negative PL) of BUY side - for DD% TP
+double         g_maxDDSell;         // Max drawdown (most negative PL) of SELL side - for DD% TP
 
 // Dashboard Control Variables (v2.9)
 bool           g_eaIsPaused = false;           // EA Pause State (manual)
@@ -654,6 +658,8 @@ int OnInit()
    g_initialSellPrice = 0;
    g_accumulateBaseline = 0;
    g_maxDD = 0;
+   g_maxDDBuy = 0;
+   g_maxDDSell = 0;
    g_hadPositions = (TotalOrderCount() > 0);  // detect if positions already exist on init
 
    //--- Calculate baseline for accumulate (FRESH START: only new deals count)
@@ -729,7 +735,7 @@ int OnInit()
    // === Recover Hedge Sets from existing positions (crash/restart recovery) ===
    RecoverHedgeSets();
 
-   Print("Gold Miner EA v6.6 initialized successfully | CycleGen=", g_cycleGeneration);
+   Print("Gold Miner EA v6.7 initialized successfully | CycleGen=", g_cycleGeneration);
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -781,7 +787,7 @@ void OnDeinit(const int reason)
 
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
-   Print("Gold Miner EA v6.6 deinitialized");
+   Print("Gold Miner EA v6.7 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -1192,6 +1198,16 @@ void OnTick()
       if(EntryMode == ENTRY_SMA || EntryMode == ENTRY_INSTANT)
          ManageTrailingStop();
       // ZigZag mode: per-TF trailing handled in OnTickZigZagMTF()
+   }
+
+   //--- Every tick: Track Max DD per side for DD% TP (v6.7)
+   if(UseTP_DDPercent)
+   {
+      double plBuyDD = CalculateFloatingPL(POSITION_TYPE_BUY);
+      double plSellDD = CalculateFloatingPL(POSITION_TYPE_SELL);
+      // Only track when positions exist (plBuy/plSell != 0 implies positions)
+      if(plBuyDD < g_maxDDBuy) g_maxDDBuy = plBuyDD;
+      if(plSellDD < g_maxDDSell) g_maxDDSell = plSellDD;
    }
 
    //--- Every tick: TP/SL management
@@ -1695,11 +1711,17 @@ void CloseAllSide(ENUM_POSITION_TYPE side)
       
       trade.PositionClose(ticket);
    }
-   // Set per-side close flag
+   // Set per-side close flag and reset DD tracker (v6.7)
    if(side == POSITION_TYPE_BUY)
+   {
       justClosedBuy = true;
+      g_maxDDBuy = 0;
+   }
    else
+   {
       justClosedSell = true;
+      g_maxDDSell = 0;
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -1718,8 +1740,8 @@ void CloseAllPositions()
       else hadSell = true;
       trade.PositionClose(ticket);
    }
-   if(hadBuy) { justClosedBuy = true; g_initialBuyPrice = 0; }
-   if(hadSell) { justClosedSell = true; g_initialSellPrice = 0; }
+   if(hadBuy) { justClosedBuy = true; g_initialBuyPrice = 0; g_maxDDBuy = 0; }
+   if(hadSell) { justClosedSell = true; g_initialSellPrice = 0; g_maxDDSell = 0; }
    ResetTrailingState();
 
    // Reset all hedge sets when closing everything
@@ -1761,6 +1783,17 @@ void ManageTPSL()
          if(UseTP_Dollar && plBuy >= TP_DollarAmount) closeTP = true;
          if(UseTP_Points && bid >= avgBuy + TP_Points * point) closeTP = true;
          if(UseTP_PercentBalance && plBuy >= balance * TP_PercentBalance / 100.0) closeTP = true;
+       }
+      
+      //--- DD% TP check (v6.7): profit target = X% of max drawdown, always close in profit
+      if(UseTP_DDPercent && g_maxDDBuy < 0)
+      {
+         double tpTarget = MathAbs(g_maxDDBuy) * TP_DDPercent / 100.0;
+         if(plBuy >= tpTarget && plBuy > 0)
+         {
+            Print("DD% TP HIT (BUY): PL=", plBuy, " Target=+", tpTarget, " MaxDD=", g_maxDDBuy);
+            closeTP = true;
+         }
       }
 
       if(closeTP)
@@ -1769,6 +1802,7 @@ void ManageTPSL()
          CloseAllSide(POSITION_TYPE_BUY);
          justClosedBuy = true;
          g_initialBuyPrice = 0;
+         g_maxDDBuy = 0;  // Reset DD tracker for next cycle
          ResetTrailingState();
          // No manual accumulate increment - baseline handles it
          return;
@@ -1828,6 +1862,17 @@ void ManageTPSL()
          if(UseTP_Dollar && plSell >= TP_DollarAmount) closeTP2 = true;
          if(UseTP_Points && ask <= avgSell - TP_Points * point) closeTP2 = true;
          if(UseTP_PercentBalance && plSell >= balance * TP_PercentBalance / 100.0) closeTP2 = true;
+       }
+      
+      //--- DD% TP check (v6.7): profit target = X% of max drawdown, always close in profit
+      if(UseTP_DDPercent && g_maxDDSell < 0)
+      {
+         double tpTargetSell = MathAbs(g_maxDDSell) * TP_DDPercent / 100.0;
+         if(plSell >= tpTargetSell && plSell > 0)
+         {
+            Print("DD% TP HIT (SELL): PL=", plSell, " Target=+", tpTargetSell, " MaxDD=", g_maxDDSell);
+            closeTP2 = true;
+         }
       }
 
       if(closeTP2)
@@ -1836,6 +1881,7 @@ void ManageTPSL()
          CloseAllSide(POSITION_TYPE_SELL);
          justClosedSell = true;
          g_initialSellPrice = 0;
+         g_maxDDSell = 0;  // Reset DD tracker for next cycle
          ResetTrailingState();
          // No manual accumulate increment - baseline handles it
          return;
@@ -2892,7 +2938,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.6 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.6 [ZZ]" : "Gold Miner EA v6.6 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.7 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.7 [ZZ]" : "Gold Miner EA v6.7 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -2981,6 +3027,38 @@ void DisplayDashboard()
                            + "  Tg:$" + DoubleToString(AccumulateTarget, 0)
                            + "  Need:$" + DoubleToString(accumNeed, 0);
       DrawTableRow(row, "Accum. Total",    accumTotalStr, (accumTotal >= 0 ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_ACCUM); row++;
+   }
+
+   //--- DD% TP Section (v6.7)
+   if(UseTP_DDPercent)
+   {
+      color COLOR_SECTION_DDTP = C'180,80,50';  // warm orange for DD% TP
+      double plBuyTP = CalculateFloatingPL(POSITION_TYPE_BUY);
+      double plSellTP = CalculateFloatingPL(POSITION_TYPE_SELL);
+      
+      // BUY side
+      if(g_maxDDBuy < 0)
+      {
+         double tpTargetBuy = MathAbs(g_maxDDBuy) * TP_DDPercent / 100.0;
+         string ddBuyStr = StringFormat("MaxDD=$%.2f | Tg=+$%.2f | Cur=$%.2f", g_maxDDBuy, tpTargetBuy, plBuyTP);
+         DrawTableRow(row, "DD%TP Buy", ddBuyStr, (plBuyTP >= tpTargetBuy && plBuyTP > 0) ? COLOR_PROFIT : COLOR_TEXT, COLOR_SECTION_DDTP); row++;
+      }
+      else
+      {
+         DrawTableRow(row, "DD%TP Buy", "Tracking...", COLOR_TEXT, COLOR_SECTION_DDTP); row++;
+      }
+      
+      // SELL side
+      if(g_maxDDSell < 0)
+      {
+         double tpTargetSell = MathAbs(g_maxDDSell) * TP_DDPercent / 100.0;
+         string ddSellStr = StringFormat("MaxDD=$%.2f | Tg=+$%.2f | Cur=$%.2f", g_maxDDSell, tpTargetSell, plSellTP);
+         DrawTableRow(row, "DD%TP Sell", ddSellStr, (plSellTP >= tpTargetSell && plSellTP > 0) ? COLOR_PROFIT : COLOR_TEXT, COLOR_SECTION_DDTP); row++;
+      }
+      else
+      {
+         DrawTableRow(row, "DD%TP Sell", "Tracking...", COLOR_TEXT, COLOR_SECTION_DDTP); row++;
+      }
    }
 
    //--- TRAILING Section
@@ -3918,6 +3996,17 @@ void ManageTPSL_TF(int tfIdx)
          if(UseTP_Dollar && plBuy >= TP_DollarAmount) closeTP = true;
          if(UseTP_Points && bid >= avgBuy + TP_Points * point) closeTP = true;
          if(UseTP_PercentBalance && plBuy >= bal * TP_PercentBalance / 100.0) closeTP = true;
+       }
+      
+      //--- DD% TP check (v6.7) - uses global max DD tracker (shared across TFs)
+      if(UseTP_DDPercent && g_maxDDBuy < 0)
+      {
+         double tpTarget = MathAbs(g_maxDDBuy) * TP_DDPercent / 100.0;
+         if(plBuy >= tpTarget && plBuy > 0)
+         {
+            Print("DD% TP HIT (", g_tfStates[tfIdx].tfLabel, " BUY): PL=", plBuy, " Target=+", tpTarget);
+            closeTP = true;
+         }
       }
 
       if(closeTP)
@@ -3968,6 +4057,17 @@ void ManageTPSL_TF(int tfIdx)
          if(UseTP_Dollar && plSell >= TP_DollarAmount) closeTP2 = true;
          if(UseTP_Points && ask <= avgSell - TP_Points * point) closeTP2 = true;
          if(UseTP_PercentBalance && plSell >= bal * TP_PercentBalance / 100.0) closeTP2 = true;
+       }
+      
+      //--- DD% TP check (v6.7) - uses global max DD tracker (shared across TFs)
+      if(UseTP_DDPercent && g_maxDDSell < 0)
+      {
+         double tpTargetSell = MathAbs(g_maxDDSell) * TP_DDPercent / 100.0;
+         if(plSell >= tpTargetSell && plSell > 0)
+         {
+            Print("DD% TP HIT (", g_tfStates[tfIdx].tfLabel, " SELL): PL=", plSell, " Target=+", tpTargetSell);
+            closeTP2 = true;
+         }
       }
 
       if(closeTP2)
