@@ -1200,6 +1200,16 @@ void OnTick()
       // ZigZag mode: per-TF trailing handled in OnTickZigZagMTF()
    }
 
+   //--- Every tick: Track Max DD per side for DD% TP (v6.7)
+   if(UseTP_DDPercent)
+   {
+      double plBuyDD = CalculateFloatingPL(POSITION_TYPE_BUY);
+      double plSellDD = CalculateFloatingPL(POSITION_TYPE_SELL);
+      // Only track when positions exist (plBuy/plSell != 0 implies positions)
+      if(plBuyDD < g_maxDDBuy) g_maxDDBuy = plBuyDD;
+      if(plSellDD < g_maxDDSell) g_maxDDSell = plSellDD;
+   }
+
    //--- Every tick: TP/SL management
    if(EntryMode == ENTRY_SMA || EntryMode == ENTRY_INSTANT)
       ManageTPSL();
