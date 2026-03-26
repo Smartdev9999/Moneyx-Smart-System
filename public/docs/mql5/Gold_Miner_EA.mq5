@@ -4025,6 +4025,17 @@ void ManageTPSL_TF(int tfIdx)
          if(UseTP_Dollar && plSell >= TP_DollarAmount) closeTP2 = true;
          if(UseTP_Points && ask <= avgSell - TP_Points * point) closeTP2 = true;
          if(UseTP_PercentBalance && plSell >= bal * TP_PercentBalance / 100.0) closeTP2 = true;
+       }
+      
+      //--- DD% TP check (v6.7) - uses global max DD tracker (shared across TFs)
+      if(UseTP_DDPercent && g_maxDDSell < 0)
+      {
+         double tpTargetSell = MathAbs(g_maxDDSell) * TP_DDPercent / 100.0;
+         if(plSell >= tpTargetSell && plSell > 0)
+         {
+            Print("DD% TP HIT (", g_tfStates[tfIdx].tfLabel, " SELL): PL=", plSell, " Target=+", tpTargetSell);
+            closeTP2 = true;
+         }
       }
 
       if(closeTP2)
