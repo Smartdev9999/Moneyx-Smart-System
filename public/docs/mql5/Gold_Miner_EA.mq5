@@ -658,6 +658,8 @@ int OnInit()
    g_initialSellPrice = 0;
    g_accumulateBaseline = 0;
    g_maxDD = 0;
+   g_maxDDBuy = 0;
+   g_maxDDSell = 0;
    g_hadPositions = (TotalOrderCount() > 0);  // detect if positions already exist on init
 
    //--- Calculate baseline for accumulate (FRESH START: only new deals count)
