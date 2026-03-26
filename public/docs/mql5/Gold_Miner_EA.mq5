@@ -1711,11 +1711,17 @@ void CloseAllSide(ENUM_POSITION_TYPE side)
       
       trade.PositionClose(ticket);
    }
-   // Set per-side close flag
+   // Set per-side close flag and reset DD tracker (v6.7)
    if(side == POSITION_TYPE_BUY)
+   {
       justClosedBuy = true;
+      g_maxDDBuy = 0;
+   }
    else
+   {
       justClosedSell = true;
+      g_maxDDSell = 0;
+   }
 }
 
 //+------------------------------------------------------------------+
