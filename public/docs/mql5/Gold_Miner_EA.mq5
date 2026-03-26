@@ -163,6 +163,8 @@ input bool     UseTP_PercentBalance = false;   // Use TP % of Balance
 input double   TP_PercentBalance   = 5.0;      // TP % of Balance
 input bool     UseAccumulateClose  = false;    // Use Accumulate Close
 input double   AccumulateTarget    = 20000.0;  // Accumulate Target ($)
+input bool     UseTP_DDPercent     = false;    // Use TP % of Max Drawdown (per side)
+input double   TP_DDPercent        = 10.0;     // TP DD % (profit target = X% of max DD)
 input bool     ShowAverageLine     = true;          // Show Average Price Line
 input bool     ShowTPLine          = true;          // Show TP Line
 input color    AvgBuyLineColor     = clrDodgerBlue; // Average Buy Line Color
