@@ -1856,6 +1856,17 @@ void ManageTPSL()
          if(UseTP_Dollar && plSell >= TP_DollarAmount) closeTP2 = true;
          if(UseTP_Points && ask <= avgSell - TP_Points * point) closeTP2 = true;
          if(UseTP_PercentBalance && plSell >= balance * TP_PercentBalance / 100.0) closeTP2 = true;
+       }
+      
+      //--- DD% TP check (v6.7): profit target = X% of max drawdown, always close in profit
+      if(UseTP_DDPercent && g_maxDDSell < 0)
+      {
+         double tpTargetSell = MathAbs(g_maxDDSell) * TP_DDPercent / 100.0;
+         if(plSell >= tpTargetSell && plSell > 0)
+         {
+            Print("DD% TP HIT (SELL): PL=", plSell, " Target=+", tpTargetSell, " MaxDD=", g_maxDDSell);
+            closeTP2 = true;
+         }
       }
 
       if(closeTP2)
@@ -1864,6 +1875,7 @@ void ManageTPSL()
          CloseAllSide(POSITION_TYPE_SELL);
          justClosedSell = true;
          g_initialSellPrice = 0;
+         g_maxDDSell = 0;  // Reset DD tracker for next cycle
          ResetTrailingState();
          // No manual accumulate increment - baseline handles it
          return;
