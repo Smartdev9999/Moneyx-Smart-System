@@ -3029,6 +3029,38 @@ void DisplayDashboard()
       DrawTableRow(row, "Accum. Total",    accumTotalStr, (accumTotal >= 0 ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_ACCUM); row++;
    }
 
+   //--- DD% TP Section (v6.7)
+   if(UseTP_DDPercent)
+   {
+      color COLOR_SECTION_DDTP = C'180,80,50';  // warm orange for DD% TP
+      double plBuyTP = CalculateFloatingPL(POSITION_TYPE_BUY);
+      double plSellTP = CalculateFloatingPL(POSITION_TYPE_SELL);
+      
+      // BUY side
+      if(g_maxDDBuy < 0)
+      {
+         double tpTargetBuy = MathAbs(g_maxDDBuy) * TP_DDPercent / 100.0;
+         string ddBuyStr = StringFormat("MaxDD=$%.2f | Tg=+$%.2f | Cur=$%.2f", g_maxDDBuy, tpTargetBuy, plBuyTP);
+         DrawTableRow(row, "DD%TP Buy", ddBuyStr, (plBuyTP >= tpTargetBuy && plBuyTP > 0) ? COLOR_PROFIT : COLOR_TEXT, COLOR_SECTION_DDTP); row++;
+      }
+      else
+      {
+         DrawTableRow(row, "DD%TP Buy", "Tracking...", COLOR_TEXT, COLOR_SECTION_DDTP); row++;
+      }
+      
+      // SELL side
+      if(g_maxDDSell < 0)
+      {
+         double tpTargetSell = MathAbs(g_maxDDSell) * TP_DDPercent / 100.0;
+         string ddSellStr = StringFormat("MaxDD=$%.2f | Tg=+$%.2f | Cur=$%.2f", g_maxDDSell, tpTargetSell, plSellTP);
+         DrawTableRow(row, "DD%TP Sell", ddSellStr, (plSellTP >= tpTargetSell && plSellTP > 0) ? COLOR_PROFIT : COLOR_TEXT, COLOR_SECTION_DDTP); row++;
+      }
+      else
+      {
+         DrawTableRow(row, "DD%TP Sell", "Tracking...", COLOR_TEXT, COLOR_SECTION_DDTP); row++;
+      }
+   }
+
    //--- TRAILING Section
    if(EnablePerOrderTrailing)
    {
