@@ -211,6 +211,7 @@ input int      DashboardX           = 20;      // Dashboard X Position
 input int      DashboardY           = 30;      // Dashboard Y Position
 input color    DashboardColor       = clrWhite; // Dashboard Text Color
 input double   DashboardScale       = 1.0;     // Dashboard Scale (0.8-1.5)
+input int      DashboardWidth       = 340;     // Dashboard Width (pixels, default 340)
 
 //--- Rebate Settings
 input group "=== Rebate Settings ==="
@@ -2858,7 +2859,7 @@ void DrawTableRow(int rowIndex, string label, string value, color valueColor, co
    int x = DashboardX;
    int rowH = (int)(20 * sc);
    int y = DashboardY + (int)(24 * sc) + rowIndex * rowH;
-   int tblW = (int)(340 * sc);
+   int tblW = (int)(DashboardWidth * sc);
    int rH = (int)(19 * sc);
    int sectionBarWidth = (int)(4 * sc);
    int labelX = x + sectionBarWidth + (int)(6 * sc);
@@ -2892,7 +2893,7 @@ void DisplayDashboard()
    // Stale row cleanup moved to end of function (prevents flicker)
    
    double sc = MathMax(0.8, MathMin(1.5, DashboardScale));
-   int tableWidth = (int)(340 * sc);
+   int tableWidth = (int)(DashboardWidth * sc);
    int headerHeight = (int)(22 * sc);
    int headerFontSize = (int)(11 * sc);
    if(headerFontSize < 8) headerFontSize = 8;
