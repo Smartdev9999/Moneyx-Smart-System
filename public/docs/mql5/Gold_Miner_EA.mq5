@@ -1740,8 +1740,8 @@ void CloseAllPositions()
       else hadSell = true;
       trade.PositionClose(ticket);
    }
-   if(hadBuy) { justClosedBuy = true; g_initialBuyPrice = 0; }
-   if(hadSell) { justClosedSell = true; g_initialSellPrice = 0; }
+   if(hadBuy) { justClosedBuy = true; g_initialBuyPrice = 0; g_maxDDBuy = 0; }
+   if(hadSell) { justClosedSell = true; g_initialSellPrice = 0; g_maxDDSell = 0; }
    ResetTrailingState();
 
    // Reset all hedge sets when closing everything
