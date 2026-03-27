@@ -7903,18 +7903,8 @@ bool ManageHedgeBoundAvgTP(int idx)
       Print("HEDGE AVG TP Set#", idx + 1, ": hedge not in loss, bounds closed only.");
    }
 
-   // Check if bound orders all gone → enter grid mode
-   // v6.12: Guard — must not have profitable reverse orders pending matching close
-   if(g_hedgeSets[idx].active && g_hedgeSets[idx].boundTicketCount == 0 && !HasProfitableReverseOrders())
-   {
-      if(PositionSelectByTicket(g_hedgeSets[idx].hedgeTicket))
-      {
-         hedgeLots = PositionGetDouble(POSITION_VOLUME);
-         Print("HEDGE Set#", idx + 1, " all bounds cleared via Avg TP. Entering Grid Mode.");
-         g_hedgeSets[idx].gridMode = true;
-         g_hedgeSets[idx].gridLevel = CalculateEquivGridLevel(hedgeLots);
-      }
-   }
+   // v6.13: Grid entry is now handled centrally by TryEnterCombinedGridMode() in ManageHedgeSets
+   // Do NOT set gridMode here — let the central gate handle it after matching is complete
 
    return true;
 }
