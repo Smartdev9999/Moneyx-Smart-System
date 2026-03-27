@@ -7521,17 +7521,27 @@ void ManageReverseHedge()
    double budget = totalProfit - InpHedge_ReverseMatchMinProfit;
    if(budget <= 0)
    {
-      // No profit budget → close all reverse hedges without matching
+      // v6.12: No profit budget → close only PROFITABLE reverse hedges, keep losing ones
       Print("REVERSE HEDGE: No profit budget ($", DoubleToString(totalProfit, 2), 
-            ") — closing ", g_reverseHedgeCount, " reverse hedges without matching");
+            ") — closing profitable reverse hedges only");
       for(int r = g_reverseHedgeCount - 1; r >= 0; r--)
       {
-         trade.PositionClose(g_reverseHedgeTickets[r]);
-         Sleep(50);
+         if(PositionSelectByTicket(g_reverseHedgeTickets[r]))
+         {
+            double rpnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+            if(rpnl > 0)
+            {
+               trade.PositionClose(g_reverseHedgeTickets[r]);
+               RemoveReverseHedgeTicket(g_reverseHedgeTickets[r]);
+               Sleep(50);
+            }
+         }
       }
-      g_reverseHedgeCount = 0;
       g_hedgeBalancedLock = false;
-      Print("ALL REVERSE HEDGES CLOSED — state reset");
+      if(g_reverseHedgeCount == 0)
+         Print("ALL REVERSE HEDGES CLOSED — state reset");
+      else
+         Print("REVERSE HEDGE: ", g_reverseHedgeCount, " losing reverse orders remain for grid recovery");
       return;
    }
    
@@ -7575,25 +7585,32 @@ void ManageReverseHedge()
          " budget=$", DoubleToString(budget, 2),
          " closed ", closedLoss, " loss orders ($", DoubleToString(cumLoss, 2), ")");
    
-   // Close all profit orders (including reverse hedges)
+   // v6.12: Close only PROFITABLE orders (including profitable reverse hedges)
+   // Losing reverse hedges stay open → they will enter combined grid recovery
    for(int p = 0; p < profitCount; p++)
    {
       if(PositionSelectByTicket(profitTickets[p]))
       {
+         // Check if this is a reverse hedge — if so, remove from array
+         if(IsInReverseHedgeArray(profitTickets[p]))
+            RemoveReverseHedgeTicket(profitTickets[p]);
+         
          trade.PositionClose(profitTickets[p]);
          Sleep(50);
       }
    }
    
-   // Reset reverse hedge state
-   g_reverseHedgeCount = 0;
+   // v6.12: Only reset balanced lock; do NOT zero g_reverseHedgeCount
+   // Losing reverse orders may still remain in the array
    g_hedgeBalancedLock = false;
    
-   // === v6.11: Dual-Track Grid Recovery for remaining orders ===
-   // Check what remains after matching close
+   if(g_reverseHedgeCount > 0)
+      Print("REVERSE HEDGE: ", g_reverseHedgeCount, " losing reverse orders remain for combined grid recovery");
+   
+   // === v6.12: Setup combined grid recovery for remaining orders ===
    CheckAndSetupDualTrackRecovery();
    
-   Print("REVERSE HEDGE RECOVERY COMPLETE — state reset, dual-track check done");
+   Print("REVERSE HEDGE RECOVERY COMPLETE — dual-track check done, remaining reverses: ", g_reverseHedgeCount);
 }
 
 //+------------------------------------------------------------------+
