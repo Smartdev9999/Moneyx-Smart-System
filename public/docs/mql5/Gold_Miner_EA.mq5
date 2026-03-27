@@ -7800,7 +7800,8 @@ bool ManageHedgeBoundAvgTP(int idx)
    }
 
    // Check if bound orders all gone → enter grid mode
-   if(g_hedgeSets[idx].active && g_hedgeSets[idx].boundTicketCount == 0)
+   // v6.12: Guard — must not have profitable reverse orders pending matching close
+   if(g_hedgeSets[idx].active && g_hedgeSets[idx].boundTicketCount == 0 && !HasProfitableReverseOrders())
    {
       if(PositionSelectByTicket(g_hedgeSets[idx].hedgeTicket))
       {
