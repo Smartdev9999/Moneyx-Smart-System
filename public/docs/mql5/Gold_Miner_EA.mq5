@@ -8036,6 +8036,8 @@ void ManageHedgeGridMode(int idx)
 //+------------------------------------------------------------------+
 void ManageMatchingClose()
 {
+   // v6.8: Skip matching close when hedge balanced lock is active
+   if(g_hedgeBalancedLock && g_hedgeSetCount > 0) return;
    int maxLoss = MathMin(MathMax(MatchingMaxLossOrders, 1), 10);  // allow up to 10
 
    // Process BUY side then SELL side
