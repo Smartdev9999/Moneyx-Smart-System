@@ -3275,15 +3275,24 @@ void DisplayDashboard()
        {
           DrawTableRow(row, "⚠ WARNING", "ORPHAN GRID ORDERS DETECTED", clrRed, COLOR_SECTION_HEDGE); row++;
         }
-        // Reverse Hedge status
-        if(g_reverseHedgeActive && PositionSelectByTicket(g_reverseHedgeTicket))
-        {
-           double rPnL = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
-           string rSide = (g_reverseHedgeSide == POSITION_TYPE_BUY) ? "BUY" : "SELL";
-           string rInfo = "REVERSE " + rSide + " " + DoubleToString(g_reverseHedgeLots, 2) + "L PnL:$" + DoubleToString(rPnL, 2);
-           color rClr = (rPnL >= 0) ? clrLime : clrOrangeRed;
-           DrawTableRow(row, "Rev.Hedge", rInfo, rClr, COLOR_SECTION_HEDGE); row++;
-        }
+        // v6.8: Reverse Hedge status (multiple)
+         for(int rv = 0; rv < g_reverseHedgeCount; rv++)
+         {
+            if(PositionSelectByTicket(g_reverseHedgeTickets[rv]))
+            {
+               double rPnL = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+               double rVol = PositionGetDouble(POSITION_VOLUME);
+               string rSide = ((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? "BUY" : "SELL";
+               string rInfo = "REV#" + IntegerToString(rv + 1) + " " + rSide + " " + DoubleToString(rVol, 2) + "L $" + DoubleToString(rPnL, 2);
+               color rClr = (rPnL >= 0) ? clrLime : clrOrangeRed;
+               DrawTableRow(row, "Rev.Hedge", rInfo, rClr, COLOR_SECTION_HEDGE); row++;
+            }
+         }
+         // v6.8: Balanced Lock indicator
+         if(g_hedgeBalancedLock)
+         {
+            DrawTableRow(row, "BALANCED", "TP/SL/Match LOCKED", clrYellow, COLOR_SECTION_HEDGE); row++;
+         }
      }
 
      // === Orphan Recovery Status ===
