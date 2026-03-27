@@ -8530,22 +8530,16 @@ void UpdateSqueezeState()
       else
          g_squeeze[sq].state = 0;  // NORMAL
 
-       // Direction: Close vs EMA (for directional block) — v6.9: Bid fallback
+        // Direction: Bid vs EMA (for directional block) — v6.10: use Bid directly
       g_squeeze[sq].direction = 0;
       if(g_squeeze[sq].state == 2)
       {
-         double closePrice = iClose(_Symbol, g_squeeze[sq].tf, 0);
-         if(closePrice > ema)
+         double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+         if(bid > ema)
             g_squeeze[sq].direction = 1;   // Bullish
-         else if(closePrice < ema)
+         else if(bid < ema)
             g_squeeze[sq].direction = -1;  // Bearish
-         else
-         {
-            // v6.9 Fallback: use current Bid vs EMA when close == ema
-            double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-            if(bid > ema)      g_squeeze[sq].direction = 1;
-            else if(bid < ema) g_squeeze[sq].direction = -1;
-         }
+         // bid == ema → direction stays 0 (v6.9 safety: won't block anything)
       }
    }
 }
