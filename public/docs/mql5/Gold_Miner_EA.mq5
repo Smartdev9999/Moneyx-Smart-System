@@ -7705,7 +7705,8 @@ void ManageReverseHedge()
 //+------------------------------------------------------------------+
 void CheckAndSetupDualTrackRecovery()
 {
-   // Scan remaining orders to separate into Track A (bound) vs Track B (hedge+reverse)
+   // v6.13: This function now ONLY sets up combinedGridMode data (lots/level)
+   // It does NOT set gridMode = true directly — that's handled by TryEnterCombinedGridMode()
    for(int h = 0; h < MAX_HEDGE_SETS; h++)
    {
       if(!g_hedgeSets[h].active) continue;
@@ -7735,11 +7736,8 @@ void CheckAndSetupDualTrackRecovery()
             reverseLots += PositionGetDouble(POSITION_VOLUME);
       }
       
-      // Track A: bound orders still exist → existing grid recovery handles this
-      // (no change needed — ManageHedgeGridMode already works for bound orders)
-      
-      // Track B: hedge + reverse orders remain but no bound orders
-      if(g_hedgeSets[h].boundTicketCount == 0 && (hedgeExists || reverseLots > 0))
+      // Setup combined grid data (but don't activate gridMode yet)
+      if(hedgeExists || reverseLots > 0)
       {
          double combinedLots = hedgeLots + reverseLots;
          if(combinedLots > 0)
@@ -7748,32 +7746,11 @@ void CheckAndSetupDualTrackRecovery()
             g_hedgeSets[h].combinedLots = combinedLots;
             g_hedgeSets[h].combinedGridLevel = CalculateEquivGridLevel(combinedLots);
             
-            // If hedge is gone but reverse remains → enter grid mode for combined
-            if(!hedgeExists)
-            {
-               g_hedgeSets[h].gridMode = true;
-               g_hedgeSets[h].gridLevel = g_hedgeSets[h].combinedGridLevel;
-            }
-            
-            Print("DUAL-TRACK: Set#", h + 1, " Track B activated. Combined lots=",
+            Print("v6.13 DUAL-TRACK: Set#", h + 1, " combined data prepared. CombinedLots=",
                   DoubleToString(combinedLots, 2), " (hedge=", DoubleToString(hedgeLots, 2),
-                  " reverse=", DoubleToString(reverseLots, 2), ") GridLevel=",
-                  g_hedgeSets[h].combinedGridLevel);
-         }
-      }
-      else if(g_hedgeSets[h].boundTicketCount > 0 && (hedgeExists || reverseLots > 0))
-      {
-         // Both Track A and Track B needed
-         double combinedLots = hedgeLots + reverseLots;
-         if(combinedLots > 0)
-         {
-            g_hedgeSets[h].combinedGridMode = true;
-            g_hedgeSets[h].combinedLots = combinedLots;
-            g_hedgeSets[h].combinedGridLevel = CalculateEquivGridLevel(combinedLots);
-            
-            Print("DUAL-TRACK: Set#", h + 1, " BOTH tracks. Track A: ",
-                  g_hedgeSets[h].boundTicketCount, " bound orders. Track B: combined=",
-                  DoubleToString(combinedLots, 2), " lots");
+                  " reverse=", DoubleToString(reverseLots, 2), ") Level=",
+                  g_hedgeSets[h].combinedGridLevel,
+                  " | gridMode deferred to TryEnterCombinedGridMode()");
          }
       }
    }
