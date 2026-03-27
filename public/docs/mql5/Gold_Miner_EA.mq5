@@ -7125,6 +7125,9 @@ void ManageHedgeSets()
    ManageReverseHedge();
    CheckAndOpenReverseHedge();
    
+   // v6.13: Strict gate — check all 3 TFs once for entire loop
+   bool allTFNormal = IsAllSqueezeTFNormalStrict();
+   
    for(int h = 0; h < MAX_HEDGE_SETS; h++)
    {
       if(!g_hedgeSets[h].active) continue;
@@ -7152,59 +7155,66 @@ void ManageHedgeSets()
          continue;
       }
 
-      // Check current squeeze state
-      bool isExpansion = false;
-      for(int sq = 0; sq < 3; sq++)
-      {
-         if(g_squeeze[sq].state == 2)
-         {
-            isExpansion = true;
-            break;
-         }
-      }
-
-      // v6.11: Gate grid execution — must wait for Normal state before opening grid orders
+      // v6.13: If in grid mode — only execute when all TFs normal
       if(g_hedgeSets[h].gridMode)
       {
-         if(!isExpansion)
+         if(allTFNormal)
             ManageHedgeGridMode(h);
-         continue;  // Still in expansion → wait for normal
+         // else: wait for all TFs normal
+         continue;
       }
-      else if(!isExpansion)
+      
+      // v6.13: NOT in grid mode — check if any TF is still EXPANSION
+      if(!allTFNormal)
       {
-         // Bound orders all gone → enter grid mode
-         // v6.12: Guard — must not have profitable reverse orders (they need matching close first)
-         if(g_hedgeSets[h].boundTicketCount == 0 && hedgeExists && !HasProfitableReverseOrders())
-         {
-            Print("HEDGE Set#", h + 1, " all bound orders cleared (Normal). Entering Grid Mode.");
-            g_hedgeSets[h].gridMode = true;
-            g_hedgeSets[h].gridLevel = CalculateEquivGridLevel(g_hedgeSets[h].hedgeLots);
-            continue;
-         }
-
-         // Expansion ended → check scenarios
+         // v6.13: Reset matchingDone when expansion detected — forces re-matching next normal phase
+         g_hedgeSets[h].matchingDone = false;
+         // Still in expansion → do NOT enter grid, do NOT run matching
+         continue;
+      }
+      
+      // === ALL 3 TFs are NORMAL from here ===
+      
+      // v6.13: STEP 1 — Run matching/close cycle FIRST (before any grid entry)
+      if(!g_hedgeSets[h].matchingDone)
+      {
          double hedgePnL = 0;
          if(hedgeExists)
             hedgePnL = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
 
-         // Matching Close FIRST (hedge is profitable → close + match losses)
+         // Matching Close (hedge is profitable → close + match losses)
          if(hedgePnL > 0)
          {
             ManageHedgeMatchingClose(h);
+            // After matching, mark done regardless (set may be deactivated inside)
+            if(g_hedgeSets[h].active)
+               g_hedgeSets[h].matchingDone = true;
             continue;
          }
 
-         // Average TP SECOND (hedge is in loss → try avg TP on bounds)
-         if(ManageHedgeBoundAvgTP(h)) continue;
+         // Average TP (hedge is in loss → try avg TP on bounds)
+         if(g_hedgeSets[h].boundTicketCount > 0)
+         {
+            if(ManageHedgeBoundAvgTP(h))
+            {
+               if(g_hedgeSets[h].active)
+                  g_hedgeSets[h].matchingDone = true;
+               continue;
+            }
+         }
 
          // Partial Close LAST
-         ManageHedgePartialClose(h);
+         if(g_hedgeSets[h].boundTicketCount > 0)
+         {
+            ManageHedgePartialClose(h);
+         }
+         
+         // Mark matching phase done for this normal cycle
+         g_hedgeSets[h].matchingDone = true;
       }
-      else
-      {
-         // v6.11: Still in expansion — do NOT enter grid mode here
-         // Wait for all TFs to return to Normal → matching close first → then grid
-      }
+      
+      // v6.13: STEP 2 — After matching done, try entering combined grid mode
+      TryEnterCombinedGridMode(h);
    }
 }
 
