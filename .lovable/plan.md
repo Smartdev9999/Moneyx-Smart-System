@@ -1,46 +1,88 @@
 
 
-## แก้ไข: Gold Miner EA v6.7 → v6.8 (Reverse Hedge NET + Dual-Track Recovery)
+## Fix: Squeeze Directional Block แสดง "BLOCKED ALL" ทั้งที่ตั้ง DirectionalBlock = true
 
-### สิ่งที่แก้ไข
+### ปัญหาที่พบ
+
+จากภาพ Dashboard แสดง:
+- M5/M15/M30 ล้วนแสดง **"EXPANSION"** (ไม่มี BUY หรือ SELL)
+- Squeeze Status: **BLOCKED ALL** (สีแดง)
+- ทั้งที่ตั้ง **Directional Block = true** ในตัวเลือก
+
+### สาเหตุ
+
+`g_squeeze[sq].direction` เป็น **0** ทั้ง 3 TF ทำให้ `bestDir = 0`:
+
+```text
+Line 1145: if(InpSqueeze_DirectionalBlock && bestDir != 0)
+                                             ^^^^^^^^^^^
+                                             bestDir == 0 → FALSE
+                                             → ตกไป else → BLOCK ALL!
+```
+
+Direction คำนวณจาก `iClose vs EMA` (line 8536-8540) — ใน Strategy Tester บาง tick ราคา close กับ EMA อาจเท่ากันพอดี หรือข้อมูล multi-timeframe ไม่ sync ทำให้ direction ไม่ถูกกำหนด
+
+### แก้ไข — 2 จุด
 
 **ไฟล์:** `public/docs/mql5/Gold_Miner_EA.mq5`
 
-#### 1. Reverse Hedge แบบ NET Calculation (v6.8)
-- คำนวณ totalBuyLots vs totalSellLots จาก **ทุก order** (Buy, Sell, Bound, Hedge, Grid, Reverse เก่า)
-- เปิด Reverse Hedge เท่ากับ NET difference ของ 2 ฝั่ง (ไม่ใช่แค่ฝั่ง hedge)
-- ถ้า NET = 0 → ไม่เปิด Reverse
+#### 1. Direction fallback ใน `UpdateSqueezeState()`
 
-#### 2. Multiple Reverse Hedges (v6.8)
-- เปลี่ยนจาก single ticket → array `g_reverseHedgeTickets[MAX_REVERSE_HEDGES]`
-- ไม่จำกัดจำนวน Reverse Hedge (สูงสุด 10)
-- Comment: `GM_RHEDGE_1`, `GM_RHEDGE_2`, ...
-- Recovery: `RecoverHedgeSets()` สแกน GM_RHEDGE ทั้งหมดเข้า array
+เมื่อ `closePrice == ema` (direction ยังเป็น 0) → ใช้ **Bid vs EMA** เป็น fallback:
 
-#### 3. Balanced Lock — TP/SL/Matching Disabled (v6.8)
-- Global flag: `g_hedgeBalancedLock`
-- เมื่อ totalBuyLots == totalSellLots → TP/SL/Matching Close ถูกปิด
-- ManageTPSL(), ManageTPSL_TF(), ManageMatchingClose() มี guard: `if(g_hedgeBalancedLock && g_hedgeSetCount > 0) return;`
-- Flag reset อัตโนมัติเมื่อ NET ≠ 0
+```cpp
+// Direction: Close vs EMA (for directional block)
+g_squeeze[sq].direction = 0;
+if(g_squeeze[sq].state == 2)
+{
+   double closePrice = iClose(_Symbol, g_squeeze[sq].tf, 0);
+   if(closePrice > ema)
+      g_squeeze[sq].direction = 1;
+   else if(closePrice < ema)
+      g_squeeze[sq].direction = -1;
+   else
+   {
+      // Fallback: use current Bid vs EMA
+      double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+      if(bid > ema)      g_squeeze[sq].direction = 1;
+      else if(bid < ema) g_squeeze[sq].direction = -1;
+   }
+}
+```
 
-#### 4. Global Matching Close เมื่อ Normal (v6.8)
-- ManageReverseHedge: สแกนทุก order (ไม่จำแนกชุด) → กำไร vs ขาดทุน
-- ปิดขาดทุน (oldest first) ด้วย budget จากกำไรรวม
-- ปิด profit orders ทั้งหมด (รวม reverse hedges)
+#### 2. Safety fallback ใน Directional Block logic
 
-#### 5. Dual-Track Grid Recovery (v6.8)
-- HedgeSet เพิ่ม fields: `combinedGridMode`, `combinedGridLevel`, `combinedLots`
-- Track A: Bound Orders → Grid Recovery เดิม (ไม่เปลี่ยน)
-- Track B: Hedge + Reverse → รวม lots → คำนวณ EquivGridLevel → Grid Recovery ชุดใหม่
-- CheckAndSetupDualTrackRecovery() ทำงานหลัง global matching close
+เมื่อ `InpSqueeze_DirectionalBlock = true` แต่ `bestDir` ยังเป็น 0 → **ไม่บล็อกเลย** (แทนที่จะบล็อกทุกอย่าง):
 
-#### 6. Version bump: v6.7 → v6.8
+```cpp
+if(expCount >= InpSqueeze_MinTFExpansion)
+{
+   if(InpSqueeze_DirectionalBlock)
+   {
+      if(bestDir == 1)
+         g_squeezeSellBlocked = true;
+      else if(bestDir == -1)
+         g_squeezeBuyBlocked = true;
+      // bestDir == 0 → ไม่บล็อกเลย (ไม่รู้ทิศทาง จะไม่ block ทั้งหมด)
+   }
+   else
+   {
+      g_squeezeBlocked = true;
+      g_newOrderBlocked = true;
+   }
+   // ... CloseOnExpansion logic unchanged ...
+}
+```
+
+#### 3. Version bump: v6.8 → v6.9
+
+---
 
 ### สิ่งที่ไม่เปลี่ยนแปลง
 - Order Execution Logic (trade.Buy/Sell/PositionClose)
 - Trading Strategy Logic (SMA/ZigZag/Instant, Grid entry/exit, TP/SL)
 - Core Module Logic (License, News filter, Time filter, Data sync)
-- Hedge system logic หลัก (Matching/Partial/AvgTP/Grid)
+- Hedge system logic ทั้งหมด (Matching/Partial/AvgTP/Grid/Reverse)
 - Orphan Recovery system
-- Grid Recovery Track A สำหรับ bound orders (logic เดิม 100%)
-- TP/SL เดิมทั้งหมดทำงานปกติเมื่อไม่อยู่ในสถานะ balanced lock
+- Squeeze Filter เมื่อ DirectionalBlock = false ยังทำงานเหมือนเดิม 100%
+
