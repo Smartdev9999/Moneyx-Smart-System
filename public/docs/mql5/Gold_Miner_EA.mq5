@@ -7940,7 +7940,8 @@ void ManageHedgePartialClose(int idx)
    if(hedgeLots <= 0) return;
 
    // Check if bound orders still exist
-   if(g_hedgeSets[idx].boundTicketCount == 0)
+   // v6.12: Guard — must not have profitable reverse orders pending matching close
+   if(g_hedgeSets[idx].boundTicketCount == 0 && !HasProfitableReverseOrders())
    {
       // No bound orders left → enter grid mode
       Print("HEDGE Set#", idx + 1, " no bound orders left. Entering Grid Mode.");
