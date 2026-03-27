@@ -7315,6 +7315,36 @@ bool IsAllSqueezeTFNormalStrict()
 }
 
 //+------------------------------------------------------------------+
+//| v6.14: Count expansion TFs with directional agreement check        |
+//| Returns expansion count. outDir = unified direction (1=BUY,-1=SELL)|
+//| outDir = 0 if expansions conflict (BUY+SELL mix) → block entry     |
+//+------------------------------------------------------------------+
+int CountDirectionalExpansion(int &outDir)
+{
+   int expCount = 0;
+   int buyExp = 0, sellExp = 0;
+   outDir = 0;
+   
+   for(int sq = 0; sq < 3; sq++)
+   {
+      if(g_squeeze[sq].state == 2)  // EXPANSION
+      {
+         expCount++;
+         if(g_squeeze[sq].direction == 1)  buyExp++;
+         else if(g_squeeze[sq].direction == -1) sellExp++;
+      }
+   }
+   
+   // If both BUY and SELL expansions exist → conflict → outDir = 0
+   if(buyExp > 0 && sellExp > 0) { outDir = 0; return expCount; }
+   
+   if(buyExp > 0) outDir = 1;
+   else if(sellExp > 0) outDir = -1;
+   
+   return expCount;
+}
+
+//+------------------------------------------------------------------+
 //| v6.13: Centralized gate to enter combined grid mode                 |
 //| ALL conditions must be met before gridMode can be set to true       |
 //+------------------------------------------------------------------+
