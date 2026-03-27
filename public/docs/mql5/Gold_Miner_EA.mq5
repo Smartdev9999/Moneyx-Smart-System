@@ -7424,17 +7424,10 @@ void CheckAndOpenReverseHedge()
    }
    if(activeIdx < 0) return;
    
-   // Determine current expansion direction
-   int expCount = 0;
+   // v6.14: Determine current expansion direction — all expansion TFs must agree
    int bestDir = 0;
-   for(int sq = 2; sq >= 0; sq--)
-   {
-      if(g_squeeze[sq].state == 2)
-      {
-         expCount++;
-         if(bestDir == 0) bestDir = g_squeeze[sq].direction;
-      }
-   }
+   int expCount = CountDirectionalExpansion(bestDir);
+   // bestDir == 0 means conflict (BUY+SELL mix) → do not open reverse hedge
    if(expCount < InpHedge_ReverseMinTFConfirm || bestDir == 0) return;
    
    // Check if expansion is OPPOSITE to the hedge side
