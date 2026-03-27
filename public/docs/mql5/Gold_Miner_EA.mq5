@@ -7272,6 +7272,23 @@ void CalculateNetLots(double &totalBuyLots, double &totalSellLots)
 //+------------------------------------------------------------------+
 //| v6.11: Check if a ticket is in the reverse hedge array             |
 //+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| v6.12: Check if any reverse hedge order is currently profitable     |
+//| Used as guard: must matching-close profitable reverses BEFORE grid  |
+//+------------------------------------------------------------------+
+bool HasProfitableReverseOrders()
+{
+   for(int i = 0; i < g_reverseHedgeCount; i++)
+   {
+      if(PositionSelectByTicket(g_reverseHedgeTickets[i]))
+      {
+         double pnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+         if(pnl > 0) return true;
+      }
+   }
+   return false;
+}
+
 bool IsInReverseHedgeArray(ulong ticket)
 {
    for(int i = 0; i < g_reverseHedgeCount; i++)
