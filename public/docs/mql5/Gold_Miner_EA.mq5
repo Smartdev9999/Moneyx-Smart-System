@@ -1760,6 +1760,9 @@ void CloseAllPositions()
       g_hedgeSets[h].gridMode = false;
       g_hedgeSets[h].gridLevel = 0;
       g_hedgeSets[h].gridTicketCount = 0;
+      g_hedgeSets[h].combinedGridMode = false;
+      g_hedgeSets[h].combinedGridLevel = 0;
+      g_hedgeSets[h].combinedLots = 0;
       ArrayResize(g_hedgeSets[h].gridTickets, 0);
       g_hedgeSets[h].boundTicketCount = 0;
       ArrayResize(g_hedgeSets[h].boundTickets, 0);
