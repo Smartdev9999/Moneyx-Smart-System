@@ -7161,9 +7161,12 @@ void ManageHedgeSets()
          }
       }
 
+      // v6.11: Gate grid execution — must wait for Normal state before opening grid orders
       if(g_hedgeSets[h].gridMode)
       {
-         ManageHedgeGridMode(h);
+         if(!isExpansion)
+            ManageHedgeGridMode(h);
+         continue;  // Still in expansion → wait for normal
       }
       else if(!isExpansion)
       {
