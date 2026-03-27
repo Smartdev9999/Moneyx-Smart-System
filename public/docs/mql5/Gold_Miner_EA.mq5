@@ -7197,12 +7197,119 @@ void ManageHedgeSets()
 }
 
 //+------------------------------------------------------------------+
-//| Check and open Reverse Hedge when expansion flips direction        |
+//| v6.8: Calculate NET lots of all orders and set balanced lock       |
+//+------------------------------------------------------------------+
+void UpdateHedgeBalancedLock()
+{
+   double totalBuyLots = 0, totalSellLots = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      
+      ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+      double vol = PositionGetDouble(POSITION_VOLUME);
+      if(posType == POSITION_TYPE_BUY)  totalBuyLots += vol;
+      if(posType == POSITION_TYPE_SELL) totalSellLots += vol;
+   }
+   
+   double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   double netDiff = MathAbs(totalBuyLots - totalSellLots);
+   
+   // Consider balanced if NET difference is less than 1 lot step
+   if(netDiff < lotStep)
+   {
+      if(!g_hedgeBalancedLock)
+      {
+         g_hedgeBalancedLock = true;
+         Print("HEDGE BALANCED LOCK: BuyLots=", DoubleToString(totalBuyLots, 2),
+               " SellLots=", DoubleToString(totalSellLots, 2), " → TP/SL/Matching disabled");
+      }
+   }
+   else
+   {
+      if(g_hedgeBalancedLock)
+      {
+         g_hedgeBalancedLock = false;
+         Print("HEDGE BALANCED LOCK RELEASED: BuyLots=", DoubleToString(totalBuyLots, 2),
+               " SellLots=", DoubleToString(totalSellLots, 2), " NET=", DoubleToString(netDiff, 2));
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| v6.8: Calculate NET lots of all orders (both sides)               |
+//+------------------------------------------------------------------+
+void CalculateNetLots(double &totalBuyLots, double &totalSellLots)
+{
+   totalBuyLots = 0;
+   totalSellLots = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      
+      ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+      double vol = PositionGetDouble(POSITION_VOLUME);
+      if(posType == POSITION_TYPE_BUY)  totalBuyLots += vol;
+      if(posType == POSITION_TYPE_SELL) totalSellLots += vol;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| v6.8: Check if a ticket is in the reverse hedge array             |
+//+------------------------------------------------------------------+
+bool IsInReverseHedgeArray(ulong ticket)
+{
+   for(int i = 0; i < g_reverseHedgeCount; i++)
+   {
+      if(g_reverseHedgeTickets[i] == ticket) return true;
+   }
+   return false;
+}
+
+//+------------------------------------------------------------------+
+//| v6.8: Add ticket to reverse hedge array                           |
+//+------------------------------------------------------------------+
+void AddReverseHedgeTicket(ulong ticket)
+{
+   if(g_reverseHedgeCount >= MAX_REVERSE_HEDGES)
+   {
+      Print("WARNING: MAX_REVERSE_HEDGES reached (", MAX_REVERSE_HEDGES, "). Cannot add more.");
+      return;
+   }
+   g_reverseHedgeTickets[g_reverseHedgeCount] = ticket;
+   g_reverseHedgeCount++;
+}
+
+//+------------------------------------------------------------------+
+//| v6.8: Remove ticket from reverse hedge array                      |
+//+------------------------------------------------------------------+
+void RemoveReverseHedgeTicket(ulong ticket)
+{
+   for(int i = 0; i < g_reverseHedgeCount; i++)
+   {
+      if(g_reverseHedgeTickets[i] == ticket)
+      {
+         // Shift remaining tickets down
+         for(int j = i; j < g_reverseHedgeCount - 1; j++)
+            g_reverseHedgeTickets[j] = g_reverseHedgeTickets[j + 1];
+         g_reverseHedgeCount--;
+         return;
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| v6.8: Check and open Reverse Hedge — NET-based, multiple allowed  |
 //+------------------------------------------------------------------+
 void CheckAndOpenReverseHedge()
 {
    if(!InpHedge_ReverseEnable) return;
-   if(g_reverseHedgeActive) return;  // already have one
    
    // Must have at least one active hedge set
    int activeIdx = -1;
@@ -7230,103 +7337,105 @@ void CheckAndOpenReverseHedge()
    if(expCount < InpHedge_ReverseMinTFConfirm || bestDir == 0) return;
    
    // Check if expansion is OPPOSITE to the hedge side
-   // Hedge SELL (bearish original) + now bullish expansion → need reverse BUY
-   // Hedge BUY (bullish original) + now bearish expansion → need reverse SELL
+   ENUM_POSITION_TYPE hedgeSide = g_hedgeSets[activeIdx].hedgeSide;
    bool needReverse = false;
    ENUM_POSITION_TYPE reverseSide = POSITION_TYPE_BUY;
-   ENUM_POSITION_TYPE hedgeSide = g_hedgeSets[activeIdx].hedgeSide;
    
    if(hedgeSide == POSITION_TYPE_SELL && bestDir == 1)  // hedge SELL, now bullish
    {
       needReverse = true;
-      reverseSide = POSITION_TYPE_BUY;  // lock SELL side with BUY
+      reverseSide = POSITION_TYPE_BUY;
    }
    else if(hedgeSide == POSITION_TYPE_BUY && bestDir == -1)  // hedge BUY, now bearish
    {
       needReverse = true;
-      reverseSide = POSITION_TYPE_SELL;  // lock BUY side with SELL
+      reverseSide = POSITION_TYPE_SELL;
    }
    
    if(!needReverse) return;
    
-   // Calculate total lots of ALL orders on the HEDGE SIDE (the side now losing)
-   // Include: normal orders, bound orders, main hedge, grid hedge orders
-   // Skip only: GM_RHEDGE itself
-   double totalLots = 0;
-   int orderCount = 0;
-   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   // === v6.8: Calculate NET of ALL orders (both sides) ===
+   double totalBuyLots = 0, totalSellLots = 0;
+   CalculateNetLots(totalBuyLots, totalSellLots);
+   
+   double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   double netDiff = MathAbs(totalBuyLots - totalSellLots);
+   
+   // If NET is zero (balanced) → no reverse needed
+   if(netDiff < lotStep)
    {
-      ulong ticket = PositionGetTicket(i);
-      if(ticket == 0) continue;
-      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
-      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
-      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != hedgeSide) continue;
-      
-      string cmt = PositionGetString(POSITION_COMMENT);
-      if(IsReverseHedgeComment(cmt)) continue;  // skip existing reverse hedge
-      
-      totalLots += PositionGetDouble(POSITION_VOLUME);
-      orderCount++;
+      // Already balanced — g_hedgeBalancedLock handles TP/SL disable
+      return;
    }
    
-   if(totalLots <= 0 || orderCount == 0) return;
+   // Determine which side needs more lots
+   // If reverseSide is BUY and totalBuy < totalSell → need more BUY
+   // If reverseSide is SELL and totalSell < totalBuy → need more SELL
+   bool sideMatches = false;
+   if(reverseSide == POSITION_TYPE_BUY && totalBuyLots < totalSellLots)
+      sideMatches = true;
+   if(reverseSide == POSITION_TYPE_SELL && totalSellLots < totalBuyLots)
+      sideMatches = true;
+   
+   if(!sideMatches) return;  // expansion direction doesn't match the weak side
    
    // Normalize lot size
-   double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
    double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
    double maxLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
-   totalLots = MathFloor(totalLots / lotStep) * lotStep;
-   totalLots = MathMax(minLot, MathMin(maxLot, totalLots));
+   double openLots = MathFloor(netDiff / lotStep) * lotStep;
+   openLots = MathMax(minLot, MathMin(maxLot, openLots));
+   
+   if(openLots < minLot) return;
    
    // Open reverse hedge order
    ENUM_ORDER_TYPE orderType = (reverseSide == POSITION_TYPE_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
-   string comment = "GM_RHEDGE";
+   string comment = "GM_RHEDGE_" + IntegerToString(g_reverseHedgeCount + 1);
    
-   if(OpenOrder(orderType, totalLots, comment))
+   if(OpenOrder(orderType, openLots, comment))
    {
-      g_reverseHedgeSide = reverseSide;
-      g_reverseHedgeLots = totalLots;
-      g_reverseForSetIndex = activeIdx;
-      g_reverseHedgeActive = true;
-      
       // Find the ticket we just opened
-      g_reverseHedgeTicket = 0;
+      ulong newTicket = 0;
       for(int i = PositionsTotal() - 1; i >= 0; i--)
       {
          ulong ticket = PositionGetTicket(i);
          if(ticket == 0) continue;
          if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
          if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
-         if(PositionGetString(POSITION_COMMENT) == "GM_RHEDGE")
+         if(PositionGetString(POSITION_COMMENT) == comment)
          {
-            g_reverseHedgeTicket = ticket;
+            newTicket = ticket;
             break;
          }
       }
       
+      if(newTicket > 0)
+         AddReverseHedgeTicket(newTicket);
+      
       string sideStr = (reverseSide == POSITION_TYPE_BUY) ? "BUY" : "SELL";
-      Print("REVERSE HEDGE OPENED: ", sideStr, " ", DoubleToString(totalLots, 2),
-            " lots to lock ", orderCount, " orders on hedge side");
+      Print("REVERSE HEDGE #", g_reverseHedgeCount, " OPENED: ", sideStr, " ", DoubleToString(openLots, 2),
+            " lots (NET diff=", DoubleToString(netDiff, 2), 
+            " BuyL=", DoubleToString(totalBuyLots, 2), " SellL=", DoubleToString(totalSellLots, 2), ")");
    }
 }
 
 //+------------------------------------------------------------------+
-//| Manage Reverse Hedge — close when Normal + matching close          |
+//| v6.8: Manage Reverse Hedges — global matching close when Normal   |
 //+------------------------------------------------------------------+
 void ManageReverseHedge()
 {
-   if(!g_reverseHedgeActive) return;
+   if(g_reverseHedgeCount == 0) return;
    
-   // Check if reverse hedge ticket still exists
-   if(!PositionSelectByTicket(g_reverseHedgeTicket))
+   // Clean up tickets that no longer exist
+   for(int i = g_reverseHedgeCount - 1; i >= 0; i--)
    {
-      Print("REVERSE HEDGE: Ticket ", g_reverseHedgeTicket, " no longer exists. Resetting.");
-      g_reverseHedgeActive = false;
-      g_reverseHedgeTicket = 0;
-      g_reverseHedgeLots = 0;
-      g_reverseForSetIndex = -1;
-      return;
+      if(!PositionSelectByTicket(g_reverseHedgeTickets[i]))
+      {
+         Print("REVERSE HEDGE: Ticket ", g_reverseHedgeTickets[i], " no longer exists. Removing.");
+         RemoveReverseHedgeTicket(g_reverseHedgeTickets[i]);
+      }
    }
+   
+   if(g_reverseHedgeCount == 0) return;
    
    // Check if market is Normal (no expansion on any TF)
    bool hasExpansion = false;
@@ -7341,104 +7450,202 @@ void ManageReverseHedge()
    
    if(hasExpansion) return;  // still in expansion — keep locking
    
-   // State is Normal → perform matching close + close reverse hedge
-   double reverseProfit = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+   // === State is Normal → perform GLOBAL matching close ===
+   // Scan ALL orders (no set distinction): profit vs loss
+   ulong profitTickets[];
+   double profitValues[];
+   ulong lossTickets[];
+   double lossValues[];
+   datetime lossTimes[];
+   int profitCount = 0, lossCount = 0;
+   double totalProfit = 0;
    
-   // Determine which side the reverse hedge was locking (opposite of reverse hedge side)
-   ENUM_POSITION_TYPE lockedSide = (g_reverseHedgeSide == POSITION_TYPE_BUY) ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
-   
-   if(reverseProfit > 0)
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
-      double budget = reverseProfit - InpHedge_ReverseMatchMinProfit;
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       
-      if(budget > 0)
+      double pnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+      
+      if(pnl > 0)
       {
-         // Collect ALL loss orders on the locked side (oldest first)
-         // Include: normal, bound, hedge, grid hedge — skip only GM_RHEDGE
-         ulong lossTickets[];
-         double lossValues[];
-         datetime lossTimes[];
-         int lossCount = 0;
-         
-         for(int i = PositionsTotal() - 1; i >= 0; i--)
-         {
-            ulong ticket = PositionGetTicket(i);
-            if(ticket == 0) continue;
-            if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
-            if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
-            if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != lockedSide) continue;
-            
-            string cmt = PositionGetString(POSITION_COMMENT);
-            if(IsReverseHedgeComment(cmt)) continue;
-            
-            double pnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
-            if(pnl >= 0) continue;  // only loss orders
-            
-            ArrayResize(lossTickets, lossCount + 1);
-            ArrayResize(lossValues, lossCount + 1);
-            ArrayResize(lossTimes, lossCount + 1);
-            lossTickets[lossCount] = ticket;
-            lossValues[lossCount] = pnl;
-            lossTimes[lossCount] = (datetime)PositionGetInteger(POSITION_TIME);
-            lossCount++;
-         }
-         
-         // Sort by open time ascending (oldest first)
-         for(int a = 0; a < lossCount - 1; a++)
-         {
-            for(int b = a + 1; b < lossCount; b++)
-            {
-               if(lossTimes[b] < lossTimes[a])
-               {
-                  double tmpV = lossValues[a]; lossValues[a] = lossValues[b]; lossValues[b] = tmpV;
-                  ulong tmpT = lossTickets[a]; lossTickets[a] = lossTickets[b]; lossTickets[b] = tmpT;
-                  datetime tmpD = lossTimes[a]; lossTimes[a] = lossTimes[b]; lossTimes[b] = tmpD;
-               }
-            }
-         }
-         
-         // Budget-based matching: close losses oldest first
-         double cumLoss = 0;
-         int closed = 0;
-         for(int l = 0; l < lossCount; l++)
-         {
-            double absLoss = MathAbs(lossValues[l]);
-            if(cumLoss + absLoss <= budget)
-            {
-               trade.PositionClose(lossTickets[l]);
-               cumLoss += absLoss;
-               closed++;
-               Sleep(50);
-               
-               // Also remove from bound tickets if applicable
-               for(int h = 0; h < MAX_HEDGE_SETS; h++)
-               {
-                  if(g_hedgeSets[h].active)
-                     RemoveBoundTicket(h, lossTickets[l]);
-               }
-            }
-         }
-         
-         Print("REVERSE HEDGE MATCHING: profit $", DoubleToString(reverseProfit, 2),
-               " budget $", DoubleToString(budget, 2),
-               " closed ", closed, " loss orders ($", DoubleToString(cumLoss, 2), ")");
+         ArrayResize(profitTickets, profitCount + 1);
+         ArrayResize(profitValues, profitCount + 1);
+         profitTickets[profitCount] = ticket;
+         profitValues[profitCount] = pnl;
+         totalProfit += pnl;
+         profitCount++;
+      }
+      else if(pnl < 0)
+      {
+         ArrayResize(lossTickets, lossCount + 1);
+         ArrayResize(lossValues, lossCount + 1);
+         ArrayResize(lossTimes, lossCount + 1);
+         lossTickets[lossCount] = ticket;
+         lossValues[lossCount] = pnl;
+         lossTimes[lossCount] = (datetime)PositionGetInteger(POSITION_TIME);
+         lossCount++;
       }
    }
-   else
+   
+   // Budget = total profit - min profit to keep
+   double budget = totalProfit - InpHedge_ReverseMatchMinProfit;
+   if(budget <= 0)
    {
-      Print("REVERSE HEDGE: No profit ($", DoubleToString(reverseProfit, 2), ") — closing without matching");
+      // No profit budget → close all reverse hedges without matching
+      Print("REVERSE HEDGE: No profit budget ($", DoubleToString(totalProfit, 2), 
+            ") — closing ", g_reverseHedgeCount, " reverse hedges without matching");
+      for(int r = g_reverseHedgeCount - 1; r >= 0; r--)
+      {
+         trade.PositionClose(g_reverseHedgeTickets[r]);
+         Sleep(50);
+      }
+      g_reverseHedgeCount = 0;
+      g_hedgeBalancedLock = false;
+      Print("ALL REVERSE HEDGES CLOSED — state reset");
+      return;
    }
    
-   // Close the reverse hedge itself
-   trade.PositionClose(g_reverseHedgeTicket);
-   Sleep(100);
+   // Sort losses by open time ascending (oldest first)
+   for(int a = 0; a < lossCount - 1; a++)
+   {
+      for(int b = a + 1; b < lossCount; b++)
+      {
+         if(lossTimes[b] < lossTimes[a])
+         {
+            double tmpV = lossValues[a]; lossValues[a] = lossValues[b]; lossValues[b] = tmpV;
+            ulong tmpT = lossTickets[a]; lossTickets[a] = lossTickets[b]; lossTickets[b] = tmpT;
+            datetime tmpD = lossTimes[a]; lossTimes[a] = lossTimes[b]; lossTimes[b] = tmpD;
+         }
+      }
+   }
    
-   // Reset state
-   g_reverseHedgeActive = false;
-   g_reverseHedgeTicket = 0;
-   g_reverseHedgeLots = 0;
-   g_reverseForSetIndex = -1;
-   Print("REVERSE HEDGE CLOSED — state reset");
+   // Budget-based matching: close losses oldest first
+   double cumLoss = 0;
+   int closedLoss = 0;
+   for(int l = 0; l < lossCount; l++)
+   {
+      double absLoss = MathAbs(lossValues[l]);
+      if(cumLoss + absLoss <= budget)
+      {
+         trade.PositionClose(lossTickets[l]);
+         cumLoss += absLoss;
+         closedLoss++;
+         Sleep(50);
+         
+         // Also remove from bound tickets if applicable
+         for(int h = 0; h < MAX_HEDGE_SETS; h++)
+         {
+            if(g_hedgeSets[h].active)
+               RemoveBoundTicket(h, lossTickets[l]);
+         }
+      }
+   }
+   
+   Print("REVERSE HEDGE GLOBAL MATCHING: totalProfit=$", DoubleToString(totalProfit, 2),
+         " budget=$", DoubleToString(budget, 2),
+         " closed ", closedLoss, " loss orders ($", DoubleToString(cumLoss, 2), ")");
+   
+   // Close all profit orders (including reverse hedges)
+   for(int p = 0; p < profitCount; p++)
+   {
+      if(PositionSelectByTicket(profitTickets[p]))
+      {
+         trade.PositionClose(profitTickets[p]);
+         Sleep(50);
+      }
+   }
+   
+   // Reset reverse hedge state
+   g_reverseHedgeCount = 0;
+   g_hedgeBalancedLock = false;
+   
+   // === v6.8: Dual-Track Grid Recovery for remaining orders ===
+   // Check what remains after matching close
+   CheckAndSetupDualTrackRecovery();
+   
+   Print("REVERSE HEDGE RECOVERY COMPLETE — state reset, dual-track check done");
+}
+
+//+------------------------------------------------------------------+
+//| v6.8: Setup dual-track grid recovery after global matching close  |
+//+------------------------------------------------------------------+
+void CheckAndSetupDualTrackRecovery()
+{
+   // Scan remaining orders to separate into Track A (bound) vs Track B (hedge+reverse)
+   for(int h = 0; h < MAX_HEDGE_SETS; h++)
+   {
+      if(!g_hedgeSets[h].active) continue;
+      
+      // Refresh bound tickets
+      RefreshBoundTickets(h);
+      
+      // Check if main hedge still exists
+      bool hedgeExists = false;
+      double hedgeLots = 0;
+      if(g_hedgeSets[h].hedgeTicket > 0 && PositionSelectByTicket(g_hedgeSets[h].hedgeTicket))
+      {
+         hedgeExists = true;
+         hedgeLots = PositionGetDouble(POSITION_VOLUME);
+      }
+      
+      // Count remaining reverse hedge orders for this set
+      double reverseLots = 0;
+      for(int i = PositionsTotal() - 1; i >= 0; i--)
+      {
+         ulong ticket = PositionGetTicket(i);
+         if(ticket == 0) continue;
+         if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+         if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+         string cmt = PositionGetString(POSITION_COMMENT);
+         if(StringFind(cmt, "GM_RHEDGE") >= 0)
+            reverseLots += PositionGetDouble(POSITION_VOLUME);
+      }
+      
+      // Track A: bound orders still exist → existing grid recovery handles this
+      // (no change needed — ManageHedgeGridMode already works for bound orders)
+      
+      // Track B: hedge + reverse orders remain but no bound orders
+      if(g_hedgeSets[h].boundTicketCount == 0 && (hedgeExists || reverseLots > 0))
+      {
+         double combinedLots = hedgeLots + reverseLots;
+         if(combinedLots > 0)
+         {
+            g_hedgeSets[h].combinedGridMode = true;
+            g_hedgeSets[h].combinedLots = combinedLots;
+            g_hedgeSets[h].combinedGridLevel = CalculateEquivGridLevel(combinedLots);
+            
+            // If hedge is gone but reverse remains → enter grid mode for combined
+            if(!hedgeExists)
+            {
+               g_hedgeSets[h].gridMode = true;
+               g_hedgeSets[h].gridLevel = g_hedgeSets[h].combinedGridLevel;
+            }
+            
+            Print("DUAL-TRACK: Set#", h + 1, " Track B activated. Combined lots=",
+                  DoubleToString(combinedLots, 2), " (hedge=", DoubleToString(hedgeLots, 2),
+                  " reverse=", DoubleToString(reverseLots, 2), ") GridLevel=",
+                  g_hedgeSets[h].combinedGridLevel);
+         }
+      }
+      else if(g_hedgeSets[h].boundTicketCount > 0 && (hedgeExists || reverseLots > 0))
+      {
+         // Both Track A and Track B needed
+         double combinedLots = hedgeLots + reverseLots;
+         if(combinedLots > 0)
+         {
+            g_hedgeSets[h].combinedGridMode = true;
+            g_hedgeSets[h].combinedLots = combinedLots;
+            g_hedgeSets[h].combinedGridLevel = CalculateEquivGridLevel(combinedLots);
+            
+            Print("DUAL-TRACK: Set#", h + 1, " BOTH tracks. Track A: ",
+                  g_hedgeSets[h].boundTicketCount, " bound orders. Track B: combined=",
+                  DoubleToString(combinedLots, 2), " lots");
+         }
+      }
+   }
 }
 
 //+------------------------------------------------------------------+
