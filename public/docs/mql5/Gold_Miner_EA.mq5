@@ -494,6 +494,8 @@ struct HedgeSet
    bool     combinedGridMode;   // Track B active (hedge+reverse combined recovery)
    int      combinedGridLevel;  // grid level for combined hedge+reverse
    double   combinedLots;       // combined lot size of hedge+reverse for recovery
+   // === v6.13: Matching-first sequencing ===
+   bool     matchingDone;       // true after matching cycle completes in this normal phase
 };
 HedgeSet g_hedgeSets[MAX_HEDGE_SETS];
 int      g_hedgeSetCount = 0;
