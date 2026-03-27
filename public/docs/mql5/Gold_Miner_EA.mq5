@@ -7199,14 +7199,8 @@ void ManageHedgeSets()
       }
       else
       {
-         // Still in expansion - check if bound orders are all gone
-         if(g_hedgeSets[h].boundTicketCount == 0 && hedgeExists)
-         {
-            // All bound orders gone but hedge remains → enter grid mode
-            Print("HEDGE Set#", h + 1, " all bound orders cleared. Entering Grid Mode.");
-            g_hedgeSets[h].gridMode = true;
-            g_hedgeSets[h].gridLevel = CalculateEquivGridLevel(g_hedgeSets[h].hedgeLots);
-         }
+         // v6.11: Still in expansion — do NOT enter grid mode here
+         // Wait for all TFs to return to Normal → matching close first → then grid
       }
    }
 }
