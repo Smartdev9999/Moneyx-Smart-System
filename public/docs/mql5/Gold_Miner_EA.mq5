@@ -1769,6 +1769,9 @@ void CloseAllPositions()
 //+------------------------------------------------------------------+
 void ManageTPSL()
 {
+   // v6.8: Skip TP/SL when hedge balanced lock is active (both sides equal)
+   if(g_hedgeBalancedLock && g_hedgeSetCount > 0) return;
+   
    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
 
