@@ -1,88 +1,38 @@
 
 
-## Fix: Squeeze Directional Block แสดง "BLOCKED ALL" ทั้งที่ตั้ง DirectionalBlock = true
-
-### ปัญหาที่พบ
-
-จากภาพ Dashboard แสดง:
-- M5/M15/M30 ล้วนแสดง **"EXPANSION"** (ไม่มี BUY หรือ SELL)
-- Squeeze Status: **BLOCKED ALL** (สีแดง)
-- ทั้งที่ตั้ง **Directional Block = true** ในตัวเลือก
+## Fix: Squeeze Direction กลับด้าน — ราคาวิ่งขึ้นแต่แสดง EXPANSION SELL
 
 ### สาเหตุ
 
-`g_squeeze[sq].direction` เป็น **0** ทั้ง 3 TF ทำให้ `bestDir = 0`:
+Direction คำนวณจาก `iClose(_Symbol, g_squeeze[sq].tf, 0)` vs `EMA` — แต่ใน Strategy Tester, `iClose` บน timeframe สูงกว่า (M5, M30) จะคืนค่า close ของ **แท่งเทียนที่สร้างเสร็จล่าสุด** ไม่ใช่ราคาปัจจุบัน ทำให้ตอนกราฟ M1 ดีดขึ้นแล้ว แต่ close ของ M5/M30 ยังเป็นค่าเก่าที่ต่ำกว่า EMA → direction = -1 (SELL) แทนที่จะเป็น 1 (BUY)
 
-```text
-Line 1145: if(InpSqueeze_DirectionalBlock && bestDir != 0)
-                                             ^^^^^^^^^^^
-                                             bestDir == 0 → FALSE
-                                             → ตกไป else → BLOCK ALL!
-```
-
-Direction คำนวณจาก `iClose vs EMA` (line 8536-8540) — ใน Strategy Tester บาง tick ราคา close กับ EMA อาจเท่ากันพอดี หรือข้อมูล multi-timeframe ไม่ sync ทำให้ direction ไม่ถูกกำหนด
-
-### แก้ไข — 2 จุด
+### แก้ไข
 
 **ไฟล์:** `public/docs/mql5/Gold_Miner_EA.mq5`
 
-#### 1. Direction fallback ใน `UpdateSqueezeState()`
-
-เมื่อ `closePrice == ema` (direction ยังเป็น 0) → ใช้ **Bid vs EMA** เป็น fallback:
+#### 1. เปลี่ยน Direction calc จาก `iClose` เป็น `SymbolInfoDouble(SYMBOL_BID)`
 
 ```cpp
-// Direction: Close vs EMA (for directional block)
+// Direction: Bid vs EMA (for directional block) — v6.10
 g_squeeze[sq].direction = 0;
 if(g_squeeze[sq].state == 2)
 {
-   double closePrice = iClose(_Symbol, g_squeeze[sq].tf, 0);
-   if(closePrice > ema)
-      g_squeeze[sq].direction = 1;
-   else if(closePrice < ema)
-      g_squeeze[sq].direction = -1;
-   else
-   {
-      // Fallback: use current Bid vs EMA
-      double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-      if(bid > ema)      g_squeeze[sq].direction = 1;
-      else if(bid < ema) g_squeeze[sq].direction = -1;
-   }
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   if(bid > ema)
+      g_squeeze[sq].direction = 1;   // Bullish
+   else if(bid < ema)
+      g_squeeze[sq].direction = -1;  // Bearish
+   // bid == ema → direction stays 0 (v6.9 safety: won't block anything)
 }
 ```
 
-#### 2. Safety fallback ใน Directional Block logic
+ใช้ Bid ตรงๆ เพราะเป็นราคาปัจจุบันจริง ไม่ขึ้นกับว่าแท่งเทียน TF ไหนสร้างเสร็จหรือยัง
 
-เมื่อ `InpSqueeze_DirectionalBlock = true` แต่ `bestDir` ยังเป็น 0 → **ไม่บล็อกเลย** (แทนที่จะบล็อกทุกอย่าง):
-
-```cpp
-if(expCount >= InpSqueeze_MinTFExpansion)
-{
-   if(InpSqueeze_DirectionalBlock)
-   {
-      if(bestDir == 1)
-         g_squeezeSellBlocked = true;
-      else if(bestDir == -1)
-         g_squeezeBuyBlocked = true;
-      // bestDir == 0 → ไม่บล็อกเลย (ไม่รู้ทิศทาง จะไม่ block ทั้งหมด)
-   }
-   else
-   {
-      g_squeezeBlocked = true;
-      g_newOrderBlocked = true;
-   }
-   // ... CloseOnExpansion logic unchanged ...
-}
-```
-
-#### 3. Version bump: v6.8 → v6.9
-
----
+#### 2. Version bump: v6.9 → v6.10
 
 ### สิ่งที่ไม่เปลี่ยนแปลง
-- Order Execution Logic (trade.Buy/Sell/PositionClose)
-- Trading Strategy Logic (SMA/ZigZag/Instant, Grid entry/exit, TP/SL)
-- Core Module Logic (License, News filter, Time filter, Data sync)
-- Hedge system logic ทั้งหมด (Matching/Partial/AvgTP/Grid/Reverse)
+- Order Execution Logic, Trading Strategy Logic, Core Module Logic
+- Hedge system ทั้งหมด (Matching/Partial/AvgTP/Grid/Reverse)
+- Squeeze Filter logic อื่นๆ (state detection, blocking threshold, CloseOnExpansion)
 - Orphan Recovery system
-- Squeeze Filter เมื่อ DirectionalBlock = false ยังทำงานเหมือนเดิม 100%
 
