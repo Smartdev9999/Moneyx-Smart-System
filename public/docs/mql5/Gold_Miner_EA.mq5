@@ -8529,7 +8529,7 @@ void UpdateSqueezeState()
       else
          g_squeeze[sq].state = 0;  // NORMAL
 
-      // Direction: Close vs EMA (for directional block)
+       // Direction: Close vs EMA (for directional block) — v6.9: Bid fallback
       g_squeeze[sq].direction = 0;
       if(g_squeeze[sq].state == 2)
       {
@@ -8538,6 +8538,13 @@ void UpdateSqueezeState()
             g_squeeze[sq].direction = 1;   // Bullish
          else if(closePrice < ema)
             g_squeeze[sq].direction = -1;  // Bearish
+         else
+         {
+            // v6.9 Fallback: use current Bid vs EMA when close == ema
+            double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+            if(bid > ema)      g_squeeze[sq].direction = 1;
+            else if(bid < ema) g_squeeze[sq].direction = -1;
+         }
       }
    }
 }
