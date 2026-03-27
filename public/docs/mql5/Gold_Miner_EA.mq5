@@ -1132,16 +1132,9 @@ void OnTick()
       UpdateSqueezeState();
       if(InpSqueeze_BlockOnExpansion)
       {
-         int expCount = 0;
-         int bestDir = 0;          // direction of highest-TF expansion
-         for(int sq = 2; sq >= 0; sq--)  // scan from highest TF first
-         {
-            if(g_squeeze[sq].state == 2)
-            {
-               expCount++;
-               if(bestDir == 0) bestDir = g_squeeze[sq].direction;  // use highest TF direction
-            }
-         }
+         // v6.14: Use unified directional expansion check
+         int bestDir = 0;
+         int expCount = CountDirectionalExpansion(bestDir);
           if(expCount >= InpSqueeze_MinTFExpansion)
           {
               if(InpSqueeze_DirectionalBlock)
