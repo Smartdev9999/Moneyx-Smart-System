@@ -6599,10 +6599,11 @@ void RecoverHedgeSets()
       
       g_hedgeSets[h].boundGeneration = (boundGen >= 0) ? boundGen : 0;
       
-      // Check if bounds are empty → enter grid mode
+      // v6.13: Recovery — check if grid orders already exist (resume grid mode)
+      // This is the ONLY place where gridMode can be set during recovery (OnInit)
+      // because grid orders already exist from a previous session
       if(g_hedgeSets[h].boundTicketCount == 0)
       {
-         // Check if grid orders exist
          string gridPrefix = "GM_HG" + IntegerToString(h + 1);
          bool hasGridOrders = false;
          for(int i = PositionsTotal() - 1; i >= 0; i--)
@@ -6618,6 +6619,7 @@ void RecoverHedgeSets()
          {
             g_hedgeSets[h].gridMode = true;
             g_hedgeSets[h].gridLevel = CalculateEquivGridLevel(g_hedgeSets[h].hedgeLots);
+            g_hedgeSets[h].matchingDone = true;  // grid already running → skip matching
             Print("RECOVER: Set#", h + 1, " entering Grid Mode (no bound orders, grid orders exist)");
          }
       }
