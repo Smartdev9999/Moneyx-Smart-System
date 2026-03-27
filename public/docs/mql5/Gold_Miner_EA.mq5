@@ -7903,13 +7903,25 @@ void ManageHedgeMatchingClose(int idx)
 
    if(lossUsed > 0)
    {
-      double finalNet = hedgeProfit - cumLoss;
+      double finalNet = totalBudgetProfit - cumLoss;
       Print("HEDGE MATCHING Set#", idx + 1, ": hedge profit $", DoubleToString(hedgeProfit, 2),
+            " + reverse profit $", DoubleToString(reverseProfit, 2),
             " covers ", lossUsed, " losses ($", DoubleToString(cumLoss, 2),
             ") net: $", DoubleToString(finalNet, 2));
 
       // Close hedge order
       trade.PositionClose(g_hedgeSets[idx].hedgeTicket);
+
+      // v6.12: Close profitable reverse orders that contributed to budget
+      for(int pr = 0; pr < profitableReverseCount; pr++)
+      {
+         if(PositionSelectByTicket(profitableReverseTickets[pr]))
+         {
+            trade.PositionClose(profitableReverseTickets[pr]);
+            RemoveReverseHedgeTicket(profitableReverseTickets[pr]);
+            Sleep(50);
+         }
+      }
 
       // Close matched losses + remove from boundTickets
       for(int cl = 0; cl < lossUsed; cl++)
