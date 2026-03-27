@@ -1,33 +1,36 @@
 
 
-## Implemented: v6.13 — Strict 3-TF Normal Gate + Matching-First Sequencing
+## Implemented: v6.14 — Directional Expansion Agreement Gate
 
 ### Changes Made
 
-1. **Stable Squeeze State (closed bar)**: `UpdateSqueezeState()` now uses index 1 (closed bar) instead of index 0 to prevent state flickering between ticks
+1. **`CountDirectionalExpansion(int &outDir)`**: New helper that counts expansion TFs and checks directional agreement
+   - Returns `outDir = 0` if BUY and SELL expansions co-exist (conflict)
+   - Used consistently across all 3 entry points
 
-2. **`IsAllSqueezeTFNormalStrict()`**: Central helper that checks ALL 3 TFs are not in EXPANSION state
+2. **`CheckAndOpenHedge()`**: Replaced manual scan loop with `CountDirectionalExpansion()` — blocks entry when `bestDir == 0` (conflict)
 
-3. **`TryEnterCombinedGridMode(h)`**: Single centralized gate for entering grid mode with 5 gates:
-   - All 3 TFs must be Normal
-   - No bound orders remaining
-   - No profitable reverse orders (need matching first)
-   - Matching phase must be complete (`matchingDone` flag)
-   - Hedge or reverse orders must still exist
+3. **`CheckAndOpenReverseHedge()`**: Same replacement — blocks reverse entry when expansion TFs disagree
 
-4. **`matchingDone` flag**: Added to HedgeSet struct, reset when expansion detected, set after matching cycle completes
+4. **Squeeze Filter block logic**: Updated to use `CountDirectionalExpansion()` — when `bestDir == 0` (conflict), directional block has no direction to block, so nothing is blocked
 
-5. **`ManageHedgeSets()` rewritten**: Strict flow — expansion resets matchingDone → all TFs normal → matching first → grid entry via central gate
+5. **Version bump**: v6.13 → v6.14 (all 5 locations)
 
-6. **Removed direct `gridMode = true`** from: ManageHedgeBoundAvgTP, ManageHedgePartialClose, CheckAndSetupDualTrackRecovery
+### กฎที่บังคับใช้
 
-7. **Recovery (OnInit)**: Only sets gridMode directly when resuming existing grid orders from previous session
+```text
+เปิด Hedge/Reverse ได้เมื่อ:
+1. มี TF expansion ≥ MinTFConfirm
+2. TF expansion ทั้งหมดต้องไปทิศทางเดียวกัน (BUY ล้วน หรือ SELL ล้วน)
+3. ถ้ามี BUY+SELL expansion พร้อมกัน → bestDir = 0 → BLOCK
+```
 
 ### สิ่งที่ไม่เปลี่ยนแปลง
 - Order Execution Logic (trade.Buy/Sell/PositionClose)
 - Trading Strategy Logic (SMA/ZigZag/Instant, Grid entry/exit, TP/SL)
 - Core Module Logic (License, News filter, Time filter, Data sync)
+- Hedge matching close / partial close / grid recovery logic
+- Reverse Hedge NET calculation / balanced lock
 - Orphan Recovery system
-- Grid Mode logic ตัวเอง (ManageHedgeGridMode)
-- Reverse Hedge opening logic (NET calculation)
-- Squeeze Filter / Directional Block
+- Squeeze state detection (BB/KC) — แค่เปลี่ยนวิธีตีความ direction
+- v6.13 strict 3-TF normal gate + matching-first sequencing
