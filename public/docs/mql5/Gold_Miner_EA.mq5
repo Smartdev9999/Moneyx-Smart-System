@@ -7097,6 +7097,16 @@ void ManageHedgeSets()
    // Detect orphan hedge grid orders every tick
    DetectOrphanHedgeOrders();
    
+   // v6.8: Calculate NET balance of all orders every tick for balanced lock
+   if(InpHedge_ReverseEnable && g_hedgeSetCount > 0)
+   {
+      UpdateHedgeBalancedLock();
+   }
+   else
+   {
+      g_hedgeBalancedLock = false;
+   }
+   
    // Reverse Hedge management
    ManageReverseHedge();
    CheckAndOpenReverseHedge();
