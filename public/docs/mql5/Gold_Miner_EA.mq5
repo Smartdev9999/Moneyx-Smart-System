@@ -8612,10 +8612,11 @@ void UpdateSqueezeState()
       ArraySetAsSeries(atrVal, true);
 
       // BB: buffer 1 = Upper, buffer 2 = Lower
-      if(CopyBuffer(g_squeeze[sq].handleBB, 1, 0, 1, bbUpper) < 1) continue;
-      if(CopyBuffer(g_squeeze[sq].handleBB, 2, 0, 1, bbLower) < 1) continue;
-      if(CopyBuffer(g_squeeze[sq].handleEMA, 0, 0, 1, emaVal) < 1) continue;
-      if(CopyBuffer(g_squeeze[sq].handleATR, 0, 0, 1, atrVal) < 1) continue;
+      // v6.13: Use closed bar (index 1) for state calculation to prevent flickering
+      if(CopyBuffer(g_squeeze[sq].handleBB, 1, 1, 1, bbUpper) < 1) continue;
+      if(CopyBuffer(g_squeeze[sq].handleBB, 2, 1, 1, bbLower) < 1) continue;
+      if(CopyBuffer(g_squeeze[sq].handleEMA, 0, 1, 1, emaVal) < 1) continue;
+      if(CopyBuffer(g_squeeze[sq].handleATR, 0, 1, 1, atrVal) < 1) continue;
 
       double upperBB = bbUpper[0];
       double lowerBB = bbLower[0];
