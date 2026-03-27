@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.12 - MTF ZigZag+CDC+Grid+License  |
+//|                Gold Miner EA v6.13 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.12"
-#property description "Gold Miner EA v6.12 - MTF ZigZag + CDC + Squeeze + AvgTP + ReverseHedge + License"
+#property version   "6.13"
+#property description "Gold Miner EA v6.13 - MTF ZigZag + CDC + Squeeze + AvgTP + ReverseHedge + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -494,6 +494,8 @@ struct HedgeSet
    bool     combinedGridMode;   // Track B active (hedge+reverse combined recovery)
    int      combinedGridLevel;  // grid level for combined hedge+reverse
    double   combinedLots;       // combined lot size of hedge+reverse for recovery
+   // === v6.13: Matching-first sequencing ===
+   bool     matchingDone;       // true after matching cycle completes in this normal phase
 };
 HedgeSet g_hedgeSets[MAX_HEDGE_SETS];
 int      g_hedgeSetCount = 0;
@@ -742,7 +744,7 @@ int OnInit()
    // === Recover Hedge Sets from existing positions (crash/restart recovery) ===
    RecoverHedgeSets();
 
-   Print("Gold Miner EA v6.12 initialized successfully | CycleGen=", g_cycleGeneration);
+   Print("Gold Miner EA v6.13 initialized successfully | CycleGen=", g_cycleGeneration);
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -794,7 +796,7 @@ void OnDeinit(const int reason)
 
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
-   Print("Gold Miner EA v6.12 deinitialized");
+   Print("Gold Miner EA v6.13 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -2952,7 +2954,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.12 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.12 [ZZ]" : "Gold Miner EA v6.12 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.13 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.13 [ZZ]" : "Gold Miner EA v6.13 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -6597,10 +6599,11 @@ void RecoverHedgeSets()
       
       g_hedgeSets[h].boundGeneration = (boundGen >= 0) ? boundGen : 0;
       
-      // Check if bounds are empty → enter grid mode
+      // v6.13: Recovery — check if grid orders already exist (resume grid mode)
+      // This is the ONLY place where gridMode can be set during recovery (OnInit)
+      // because grid orders already exist from a previous session
       if(g_hedgeSets[h].boundTicketCount == 0)
       {
-         // Check if grid orders exist
          string gridPrefix = "GM_HG" + IntegerToString(h + 1);
          bool hasGridOrders = false;
          for(int i = PositionsTotal() - 1; i >= 0; i--)
@@ -6616,6 +6619,7 @@ void RecoverHedgeSets()
          {
             g_hedgeSets[h].gridMode = true;
             g_hedgeSets[h].gridLevel = CalculateEquivGridLevel(g_hedgeSets[h].hedgeLots);
+            g_hedgeSets[h].matchingDone = true;  // grid already running → skip matching
             Print("RECOVER: Set#", h + 1, " entering Grid Mode (no bound orders, grid orders exist)");
          }
       }
@@ -7123,6 +7127,9 @@ void ManageHedgeSets()
    ManageReverseHedge();
    CheckAndOpenReverseHedge();
    
+   // v6.13: Strict gate — check all 3 TFs once for entire loop
+   bool allTFNormal = IsAllSqueezeTFNormalStrict();
+   
    for(int h = 0; h < MAX_HEDGE_SETS; h++)
    {
       if(!g_hedgeSets[h].active) continue;
@@ -7150,59 +7157,66 @@ void ManageHedgeSets()
          continue;
       }
 
-      // Check current squeeze state
-      bool isExpansion = false;
-      for(int sq = 0; sq < 3; sq++)
-      {
-         if(g_squeeze[sq].state == 2)
-         {
-            isExpansion = true;
-            break;
-         }
-      }
-
-      // v6.11: Gate grid execution — must wait for Normal state before opening grid orders
+      // v6.13: If in grid mode — only execute when all TFs normal
       if(g_hedgeSets[h].gridMode)
       {
-         if(!isExpansion)
+         if(allTFNormal)
             ManageHedgeGridMode(h);
-         continue;  // Still in expansion → wait for normal
+         // else: wait for all TFs normal
+         continue;
       }
-      else if(!isExpansion)
+      
+      // v6.13: NOT in grid mode — check if any TF is still EXPANSION
+      if(!allTFNormal)
       {
-         // Bound orders all gone → enter grid mode
-         // v6.12: Guard — must not have profitable reverse orders (they need matching close first)
-         if(g_hedgeSets[h].boundTicketCount == 0 && hedgeExists && !HasProfitableReverseOrders())
-         {
-            Print("HEDGE Set#", h + 1, " all bound orders cleared (Normal). Entering Grid Mode.");
-            g_hedgeSets[h].gridMode = true;
-            g_hedgeSets[h].gridLevel = CalculateEquivGridLevel(g_hedgeSets[h].hedgeLots);
-            continue;
-         }
-
-         // Expansion ended → check scenarios
+         // v6.13: Reset matchingDone when expansion detected — forces re-matching next normal phase
+         g_hedgeSets[h].matchingDone = false;
+         // Still in expansion → do NOT enter grid, do NOT run matching
+         continue;
+      }
+      
+      // === ALL 3 TFs are NORMAL from here ===
+      
+      // v6.13: STEP 1 — Run matching/close cycle FIRST (before any grid entry)
+      if(!g_hedgeSets[h].matchingDone)
+      {
          double hedgePnL = 0;
          if(hedgeExists)
             hedgePnL = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
 
-         // Matching Close FIRST (hedge is profitable → close + match losses)
+         // Matching Close (hedge is profitable → close + match losses)
          if(hedgePnL > 0)
          {
             ManageHedgeMatchingClose(h);
+            // After matching, mark done regardless (set may be deactivated inside)
+            if(g_hedgeSets[h].active)
+               g_hedgeSets[h].matchingDone = true;
             continue;
          }
 
-         // Average TP SECOND (hedge is in loss → try avg TP on bounds)
-         if(ManageHedgeBoundAvgTP(h)) continue;
+         // Average TP (hedge is in loss → try avg TP on bounds)
+         if(g_hedgeSets[h].boundTicketCount > 0)
+         {
+            if(ManageHedgeBoundAvgTP(h))
+            {
+               if(g_hedgeSets[h].active)
+                  g_hedgeSets[h].matchingDone = true;
+               continue;
+            }
+         }
 
          // Partial Close LAST
-         ManageHedgePartialClose(h);
+         if(g_hedgeSets[h].boundTicketCount > 0)
+         {
+            ManageHedgePartialClose(h);
+         }
+         
+         // Mark matching phase done for this normal cycle
+         g_hedgeSets[h].matchingDone = true;
       }
-      else
-      {
-         // v6.11: Still in expansion — do NOT enter grid mode here
-         // Wait for all TFs to return to Normal → matching close first → then grid
-      }
+      
+      // v6.13: STEP 2 — After matching done, try entering combined grid mode
+      TryEnterCombinedGridMode(h);
    }
 }
 
@@ -7297,6 +7311,81 @@ bool IsInReverseHedgeArray(ulong ticket)
       if(g_reverseHedgeTickets[i] == ticket) return true;
    }
    return false;
+}
+
+//+------------------------------------------------------------------+
+//| v6.13: Strict gate — ALL 3 squeeze TFs must be NORMAL (state 0)    |
+//| Uses stable state from closed bar (set in UpdateSqueezeState)       |
+//+------------------------------------------------------------------+
+bool IsAllSqueezeTFNormalStrict()
+{
+   if(!InpUseSqueezeFilter) return true;  // filter disabled → always "normal"
+   for(int sq = 0; sq < 3; sq++)
+   {
+      if(g_squeeze[sq].state == 2)  // EXPANSION
+         return false;
+      // state 1 (SQUEEZE) is ok — only EXPANSION blocks recovery
+   }
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| v6.13: Centralized gate to enter combined grid mode                 |
+//| ALL conditions must be met before gridMode can be set to true       |
+//+------------------------------------------------------------------+
+bool TryEnterCombinedGridMode(int h)
+{
+   if(!g_hedgeSets[h].active) return false;
+   if(g_hedgeSets[h].gridMode) return false;  // already in grid
+   
+   // Gate 1: All 3 TFs must be Normal (no expansion)
+   if(!IsAllSqueezeTFNormalStrict()) return false;
+   
+   // Gate 2: No bound orders remaining
+   if(g_hedgeSets[h].boundTicketCount > 0) return false;
+   
+   // Gate 3: No profitable reverse orders (they need matching close first)
+   if(HasProfitableReverseOrders()) return false;
+   
+   // Gate 4: Matching must have been attempted this normal phase
+   if(!g_hedgeSets[h].matchingDone) return false;
+   
+   // Gate 5: Hedge ticket must still exist
+   bool hedgeExists = false;
+   double hedgeLots = 0;
+   if(g_hedgeSets[h].hedgeTicket > 0 && PositionSelectByTicket(g_hedgeSets[h].hedgeTicket))
+   {
+      hedgeExists = true;
+      hedgeLots = PositionGetDouble(POSITION_VOLUME);
+   }
+   
+   // If hedge doesn't exist but reverse orders remain → also allow grid for combined recovery
+   double reverseLots = 0;
+   for(int i = 0; i < g_reverseHedgeCount; i++)
+   {
+      if(PositionSelectByTicket(g_reverseHedgeTickets[i]))
+         reverseLots += PositionGetDouble(POSITION_VOLUME);
+   }
+   
+   if(!hedgeExists && reverseLots <= 0) return false;  // nothing to recover
+   
+   double totalLots = hedgeLots + reverseLots;
+   
+   g_hedgeSets[h].gridMode = true;
+   g_hedgeSets[h].gridLevel = CalculateEquivGridLevel(totalLots);
+   
+   // Also setup combined grid data
+   if(reverseLots > 0)
+   {
+      g_hedgeSets[h].combinedGridMode = true;
+      g_hedgeSets[h].combinedLots = totalLots;
+      g_hedgeSets[h].combinedGridLevel = g_hedgeSets[h].gridLevel;
+   }
+   
+   Print("v6.13 GRID ENTRY: Set#", h + 1, " entering Combined Grid Mode. TotalLots=",
+         DoubleToString(totalLots, 2), " (hedge=", DoubleToString(hedgeLots, 2),
+         " reverse=", DoubleToString(reverseLots, 2), ") GridLevel=", g_hedgeSets[h].gridLevel);
+   return true;
 }
 
 //+------------------------------------------------------------------+
@@ -7618,7 +7707,8 @@ void ManageReverseHedge()
 //+------------------------------------------------------------------+
 void CheckAndSetupDualTrackRecovery()
 {
-   // Scan remaining orders to separate into Track A (bound) vs Track B (hedge+reverse)
+   // v6.13: This function now ONLY sets up combinedGridMode data (lots/level)
+   // It does NOT set gridMode = true directly — that's handled by TryEnterCombinedGridMode()
    for(int h = 0; h < MAX_HEDGE_SETS; h++)
    {
       if(!g_hedgeSets[h].active) continue;
@@ -7648,11 +7738,8 @@ void CheckAndSetupDualTrackRecovery()
             reverseLots += PositionGetDouble(POSITION_VOLUME);
       }
       
-      // Track A: bound orders still exist → existing grid recovery handles this
-      // (no change needed — ManageHedgeGridMode already works for bound orders)
-      
-      // Track B: hedge + reverse orders remain but no bound orders
-      if(g_hedgeSets[h].boundTicketCount == 0 && (hedgeExists || reverseLots > 0))
+      // Setup combined grid data (but don't activate gridMode yet)
+      if(hedgeExists || reverseLots > 0)
       {
          double combinedLots = hedgeLots + reverseLots;
          if(combinedLots > 0)
@@ -7661,32 +7748,11 @@ void CheckAndSetupDualTrackRecovery()
             g_hedgeSets[h].combinedLots = combinedLots;
             g_hedgeSets[h].combinedGridLevel = CalculateEquivGridLevel(combinedLots);
             
-            // If hedge is gone but reverse remains → enter grid mode for combined
-            if(!hedgeExists)
-            {
-               g_hedgeSets[h].gridMode = true;
-               g_hedgeSets[h].gridLevel = g_hedgeSets[h].combinedGridLevel;
-            }
-            
-            Print("DUAL-TRACK: Set#", h + 1, " Track B activated. Combined lots=",
+            Print("v6.13 DUAL-TRACK: Set#", h + 1, " combined data prepared. CombinedLots=",
                   DoubleToString(combinedLots, 2), " (hedge=", DoubleToString(hedgeLots, 2),
-                  " reverse=", DoubleToString(reverseLots, 2), ") GridLevel=",
-                  g_hedgeSets[h].combinedGridLevel);
-         }
-      }
-      else if(g_hedgeSets[h].boundTicketCount > 0 && (hedgeExists || reverseLots > 0))
-      {
-         // Both Track A and Track B needed
-         double combinedLots = hedgeLots + reverseLots;
-         if(combinedLots > 0)
-         {
-            g_hedgeSets[h].combinedGridMode = true;
-            g_hedgeSets[h].combinedLots = combinedLots;
-            g_hedgeSets[h].combinedGridLevel = CalculateEquivGridLevel(combinedLots);
-            
-            Print("DUAL-TRACK: Set#", h + 1, " BOTH tracks. Track A: ",
-                  g_hedgeSets[h].boundTicketCount, " bound orders. Track B: combined=",
-                  DoubleToString(combinedLots, 2), " lots");
+                  " reverse=", DoubleToString(reverseLots, 2), ") Level=",
+                  g_hedgeSets[h].combinedGridLevel,
+                  " | gridMode deferred to TryEnterCombinedGridMode()");
          }
       }
    }
@@ -7816,18 +7882,8 @@ bool ManageHedgeBoundAvgTP(int idx)
       Print("HEDGE AVG TP Set#", idx + 1, ": hedge not in loss, bounds closed only.");
    }
 
-   // Check if bound orders all gone → enter grid mode
-   // v6.12: Guard — must not have profitable reverse orders pending matching close
-   if(g_hedgeSets[idx].active && g_hedgeSets[idx].boundTicketCount == 0 && !HasProfitableReverseOrders())
-   {
-      if(PositionSelectByTicket(g_hedgeSets[idx].hedgeTicket))
-      {
-         hedgeLots = PositionGetDouble(POSITION_VOLUME);
-         Print("HEDGE Set#", idx + 1, " all bounds cleared via Avg TP. Entering Grid Mode.");
-         g_hedgeSets[idx].gridMode = true;
-         g_hedgeSets[idx].gridLevel = CalculateEquivGridLevel(hedgeLots);
-      }
-   }
+   // v6.13: Grid entry is now handled centrally by TryEnterCombinedGridMode() in ManageHedgeSets
+   // Do NOT set gridMode here — let the central gate handle it after matching is complete
 
    return true;
 }
@@ -7988,15 +8044,11 @@ void ManageHedgePartialClose(int idx)
    if(hedgePnL >= 0) return;  // not in loss → handled by ManageHedgeMatchingClose
    if(hedgeLots <= 0) return;
 
-   // Check if bound orders still exist
-   // v6.12: Guard — must not have profitable reverse orders pending matching close
-   if(g_hedgeSets[idx].boundTicketCount == 0 && !HasProfitableReverseOrders())
+   // v6.13: Grid entry is now handled centrally by TryEnterCombinedGridMode() in ManageHedgeSets
+   // Do NOT set gridMode here — let the central gate handle it after matching is complete
+   if(g_hedgeSets[idx].boundTicketCount == 0)
    {
-      // No bound orders left → enter grid mode
-      Print("HEDGE Set#", idx + 1, " no bound orders left. Entering Grid Mode.");
-      g_hedgeSets[idx].gridMode = true;
-      g_hedgeSets[idx].gridLevel = CalculateEquivGridLevel(hedgeLots);
-      return;
+      return;  // No bounds to partial-close; grid entry deferred to central gate
    }
 
    // Find profitable orders ONLY from this set's boundTickets
@@ -8560,10 +8612,11 @@ void UpdateSqueezeState()
       ArraySetAsSeries(atrVal, true);
 
       // BB: buffer 1 = Upper, buffer 2 = Lower
-      if(CopyBuffer(g_squeeze[sq].handleBB, 1, 0, 1, bbUpper) < 1) continue;
-      if(CopyBuffer(g_squeeze[sq].handleBB, 2, 0, 1, bbLower) < 1) continue;
-      if(CopyBuffer(g_squeeze[sq].handleEMA, 0, 0, 1, emaVal) < 1) continue;
-      if(CopyBuffer(g_squeeze[sq].handleATR, 0, 0, 1, atrVal) < 1) continue;
+      // v6.13: Use closed bar (index 1) for state calculation to prevent flickering
+      if(CopyBuffer(g_squeeze[sq].handleBB, 1, 1, 1, bbUpper) < 1) continue;
+      if(CopyBuffer(g_squeeze[sq].handleBB, 2, 1, 1, bbLower) < 1) continue;
+      if(CopyBuffer(g_squeeze[sq].handleEMA, 0, 1, 1, emaVal) < 1) continue;
+      if(CopyBuffer(g_squeeze[sq].handleATR, 0, 1, 1, atrVal) < 1) continue;
 
       double upperBB = bbUpper[0];
       double lowerBB = bbLower[0];
