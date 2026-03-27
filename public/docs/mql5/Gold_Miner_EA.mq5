@@ -5,7 +5,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.100"
+#property version   "6.10"
 #property description "Gold Miner EA v6.10 - MTF ZigZag + CDC + Squeeze + AvgTP + ReverseHedge + License"
 #property strict
 
@@ -8539,7 +8539,7 @@ void UpdateSqueezeState()
             g_squeeze[sq].direction = 1;   // Bullish
          else if(bid < ema)
             g_squeeze[sq].direction = -1;  // Bearish
-         // bid == ema → direction stays 0 (v6.9 safety: won't block anything)
+         // bid == ema → direction stays 0 (v6.10 safety: won't block anything)
       }
    }
 }
