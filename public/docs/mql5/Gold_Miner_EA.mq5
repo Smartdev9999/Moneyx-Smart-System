@@ -490,6 +490,10 @@ struct HedgeSet
    ulong    boundTickets[];   // tickets of counter-side orders bound to this set
    int      boundTicketCount; // count of bound tickets
    int      boundGeneration;  // cycle generation of bound orders
+   // === v6.8: Combined Grid Recovery (Track B) ===
+   bool     combinedGridMode;   // Track B active (hedge+reverse combined recovery)
+   int      combinedGridLevel;  // grid level for combined hedge+reverse
+   double   combinedLots;       // combined lot size of hedge+reverse for recovery
 };
 HedgeSet g_hedgeSets[MAX_HEDGE_SETS];
 int      g_hedgeSetCount = 0;
@@ -498,12 +502,11 @@ int      g_lastDashboardRowCount = 0;  // track previous tick row count for stal
 bool     g_hedgeOrphanWarning = false;  // orphan hedge grid orders detected
 int      g_cycleGeneration = 0;  // incremented each time a hedge opens — changes comment prefix
 
-// === Reverse Hedge State ===
-bool     g_reverseHedgeActive = false;
-ulong    g_reverseHedgeTicket = 0;
-double   g_reverseHedgeLots = 0;
-ENUM_POSITION_TYPE g_reverseHedgeSide = POSITION_TYPE_BUY;  // side of the reverse hedge order
-int      g_reverseForSetIndex = -1;  // which hedge set triggered this reverse
+// === Reverse Hedge State (v6.8: array-based for multiple reverse hedges) ===
+#define MAX_REVERSE_HEDGES 10
+ulong    g_reverseHedgeTickets[MAX_REVERSE_HEDGES];
+int      g_reverseHedgeCount = 0;
+bool     g_hedgeBalancedLock = false;  // when totalBuy == totalSell → disable TP/SL/Matching
 
 // === Orphan Recovery System ===
 datetime g_lastOrphanScanTime = 0;
