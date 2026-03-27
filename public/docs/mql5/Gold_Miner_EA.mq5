@@ -6634,11 +6634,9 @@ void RecoverHedgeSets()
       }
    }
    
-   // Step 4: Recover Reverse Hedge state
-   g_reverseHedgeActive = false;
-   g_reverseHedgeTicket = 0;
-   g_reverseHedgeLots = 0;
-   g_reverseForSetIndex = -1;
+   // Step 4: Recover Reverse Hedge state (v6.8: array-based, multiple reverse hedges)
+   g_reverseHedgeCount = 0;
+   g_hedgeBalancedLock = false;
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       ulong ticket = PositionGetTicket(i);
@@ -6648,25 +6646,20 @@ void RecoverHedgeSets()
       string cmt = PositionGetString(POSITION_COMMENT);
       if(StringFind(cmt, "GM_RHEDGE") >= 0)
       {
-         g_reverseHedgeActive = true;
-         g_reverseHedgeTicket = ticket;
-         g_reverseHedgeLots = PositionGetDouble(POSITION_VOLUME);
-         g_reverseHedgeSide = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
-         // Find which hedge set this relates to
-         for(int h = 0; h < MAX_HEDGE_SETS; h++)
+         if(g_reverseHedgeCount < MAX_REVERSE_HEDGES)
          {
-            if(g_hedgeSets[h].active)
-            {
-               g_reverseForSetIndex = h;
-               break;
-            }
+            g_reverseHedgeTickets[g_reverseHedgeCount] = ticket;
+            g_reverseHedgeCount++;
+            
+            string rSide = ((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? "BUY" : "SELL";
+            Print("RECOVER: Rebuilt Reverse Hedge #", g_reverseHedgeCount, " ticket=", ticket, 
+                  " side=", rSide,
+                  " lots=", DoubleToString(PositionGetDouble(POSITION_VOLUME), 2));
          }
-         Print("RECOVER: Rebuilt Reverse Hedge ticket=", ticket, 
-               " side=", (g_reverseHedgeSide == POSITION_TYPE_BUY ? "BUY" : "SELL"),
-               " lots=", DoubleToString(g_reverseHedgeLots, 2));
-         break;
       }
    }
+   if(g_reverseHedgeCount > 0)
+      Print("RECOVER: Total reverse hedges recovered: ", g_reverseHedgeCount);
    
    if(recovered > 0 || orphansClosed > 0)
       Print("RECOVER COMPLETE: ", recovered, " sets recovered, ", orphansClosed,
