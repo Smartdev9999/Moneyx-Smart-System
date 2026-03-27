@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.13 - MTF ZigZag+CDC+Grid+License  |
+//|                Gold Miner EA v6.14 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.13"
-#property description "Gold Miner EA v6.13 - MTF ZigZag + CDC + Squeeze + AvgTP + ReverseHedge + License"
+#property version   "6.14"
+#property description "Gold Miner EA v6.14 - MTF ZigZag + CDC + Squeeze + AvgTP + ReverseHedge + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -744,7 +744,7 @@ int OnInit()
    // === Recover Hedge Sets from existing positions (crash/restart recovery) ===
    RecoverHedgeSets();
 
-   Print("Gold Miner EA v6.13 initialized successfully | CycleGen=", g_cycleGeneration);
+   Print("Gold Miner EA v6.14 initialized successfully | CycleGen=", g_cycleGeneration);
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -796,7 +796,7 @@ void OnDeinit(const int reason)
 
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
-   Print("Gold Miner EA v6.13 deinitialized");
+   Print("Gold Miner EA v6.14 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -1132,16 +1132,9 @@ void OnTick()
       UpdateSqueezeState();
       if(InpSqueeze_BlockOnExpansion)
       {
-         int expCount = 0;
-         int bestDir = 0;          // direction of highest-TF expansion
-         for(int sq = 2; sq >= 0; sq--)  // scan from highest TF first
-         {
-            if(g_squeeze[sq].state == 2)
-            {
-               expCount++;
-               if(bestDir == 0) bestDir = g_squeeze[sq].direction;  // use highest TF direction
-            }
-         }
+         // v6.14: Use unified directional expansion check
+         int bestDir = 0;
+         int expCount = CountDirectionalExpansion(bestDir);
           if(expCount >= InpSqueeze_MinTFExpansion)
           {
               if(InpSqueeze_DirectionalBlock)
@@ -2954,7 +2947,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.13 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.13 [ZZ]" : "Gold Miner EA v6.13 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.14 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.14 [ZZ]" : "Gold Miner EA v6.14 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -6368,18 +6361,10 @@ int FindFreeHedgeSlot()
 //+------------------------------------------------------------------+
 void CheckAndOpenHedge()
 {
-   // Determine expansion direction
-   int expCount = 0;
+   // v6.14: Determine expansion direction — all expansion TFs must agree
    int bestDir = 0;
-   for(int sq = 2; sq >= 0; sq--)
-   {
-      if(g_squeeze[sq].state == 2)
-      {
-         expCount++;
-         if(bestDir == 0) bestDir = g_squeeze[sq].direction;
-      }
-   }
-
+   int expCount = CountDirectionalExpansion(bestDir);
+   // bestDir == 0 means conflict (BUY+SELL mix) → do not open hedge
    if(expCount < InpHedge_MinTFConfirm || bestDir == 0) return;
 
    // Bearish expansion → hedge BUY orders stuck (open SELL hedge)
@@ -7330,6 +7315,36 @@ bool IsAllSqueezeTFNormalStrict()
 }
 
 //+------------------------------------------------------------------+
+//| v6.14: Count expansion TFs with directional agreement check        |
+//| Returns expansion count. outDir = unified direction (1=BUY,-1=SELL)|
+//| outDir = 0 if expansions conflict (BUY+SELL mix) → block entry     |
+//+------------------------------------------------------------------+
+int CountDirectionalExpansion(int &outDir)
+{
+   int expCount = 0;
+   int buyExp = 0, sellExp = 0;
+   outDir = 0;
+   
+   for(int sq = 0; sq < 3; sq++)
+   {
+      if(g_squeeze[sq].state == 2)  // EXPANSION
+      {
+         expCount++;
+         if(g_squeeze[sq].direction == 1)  buyExp++;
+         else if(g_squeeze[sq].direction == -1) sellExp++;
+      }
+   }
+   
+   // If both BUY and SELL expansions exist → conflict → outDir = 0
+   if(buyExp > 0 && sellExp > 0) { outDir = 0; return expCount; }
+   
+   if(buyExp > 0) outDir = 1;
+   else if(sellExp > 0) outDir = -1;
+   
+   return expCount;
+}
+
+//+------------------------------------------------------------------+
 //| v6.13: Centralized gate to enter combined grid mode                 |
 //| ALL conditions must be met before gridMode can be set to true       |
 //+------------------------------------------------------------------+
@@ -7439,17 +7454,10 @@ void CheckAndOpenReverseHedge()
    }
    if(activeIdx < 0) return;
    
-   // Determine current expansion direction
-   int expCount = 0;
+   // v6.14: Determine current expansion direction — all expansion TFs must agree
    int bestDir = 0;
-   for(int sq = 2; sq >= 0; sq--)
-   {
-      if(g_squeeze[sq].state == 2)
-      {
-         expCount++;
-         if(bestDir == 0) bestDir = g_squeeze[sq].direction;
-      }
-   }
+   int expCount = CountDirectionalExpansion(bestDir);
+   // bestDir == 0 means conflict (BUY+SELL mix) → do not open reverse hedge
    if(expCount < InpHedge_ReverseMinTFConfirm || bestDir == 0) return;
    
    // Check if expansion is OPPOSITE to the hedge side
