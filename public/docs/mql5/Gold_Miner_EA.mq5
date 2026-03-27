@@ -8065,15 +8065,11 @@ void ManageHedgePartialClose(int idx)
    if(hedgePnL >= 0) return;  // not in loss → handled by ManageHedgeMatchingClose
    if(hedgeLots <= 0) return;
 
-   // Check if bound orders still exist
-   // v6.12: Guard — must not have profitable reverse orders pending matching close
-   if(g_hedgeSets[idx].boundTicketCount == 0 && !HasProfitableReverseOrders())
+   // v6.13: Grid entry is now handled centrally by TryEnterCombinedGridMode() in ManageHedgeSets
+   // Do NOT set gridMode here — let the central gate handle it after matching is complete
+   if(g_hedgeSets[idx].boundTicketCount == 0)
    {
-      // No bound orders left → enter grid mode
-      Print("HEDGE Set#", idx + 1, " no bound orders left. Entering Grid Mode.");
-      g_hedgeSets[idx].gridMode = true;
-      g_hedgeSets[idx].gridLevel = CalculateEquivGridLevel(hedgeLots);
-      return;
+      return;  // No bounds to partial-close; grid entry deferred to central gate
    }
 
    // Find profitable orders ONLY from this set's boundTickets
