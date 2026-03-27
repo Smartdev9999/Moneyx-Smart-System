@@ -7826,7 +7826,27 @@ void ManageHedgeMatchingClose(int idx)
    double hedgeProfit = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
    if(hedgeProfit <= 0) return;
 
-   double budget = hedgeProfit - InpHedge_MatchMinProfit;
+   // v6.12: Include profitable reverse orders in budget
+   double reverseProfit = 0;
+   ulong profitableReverseTickets[];
+   int profitableReverseCount = 0;
+   for(int r = 0; r < g_reverseHedgeCount; r++)
+   {
+      if(PositionSelectByTicket(g_reverseHedgeTickets[r]))
+      {
+         double rpnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+         if(rpnl > 0)
+         {
+            reverseProfit += rpnl;
+            ArrayResize(profitableReverseTickets, profitableReverseCount + 1);
+            profitableReverseTickets[profitableReverseCount] = g_reverseHedgeTickets[r];
+            profitableReverseCount++;
+         }
+      }
+   }
+
+   double totalBudgetProfit = hedgeProfit + reverseProfit;
+   double budget = totalBudgetProfit - InpHedge_MatchMinProfit;
    if(budget <= 0) return;
 
    // Collect loss orders ONLY from this set's boundTickets (oldest first)
