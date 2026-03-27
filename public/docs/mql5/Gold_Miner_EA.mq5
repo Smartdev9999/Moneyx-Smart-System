@@ -3986,6 +3986,8 @@ void CheckGridProfitTF(int tfIdx, ENUM_POSITION_TYPE side, int currentGridCount)
 //+------------------------------------------------------------------+
 void ManageTPSL_TF(int tfIdx)
 {
+   // v6.8: Skip TP/SL when hedge balanced lock is active
+   if(g_hedgeBalancedLock && g_hedgeSetCount > 0) return;
    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
    double bal = AccountInfoDouble(ACCOUNT_BALANCE);
 
