@@ -1142,21 +1142,22 @@ void OnTick()
          }
           if(expCount >= InpSqueeze_MinTFExpansion)
           {
-             if(InpSqueeze_DirectionalBlock && bestDir != 0)
-             {
-                // Directional: block counter-trend only
-                if(bestDir == 1)  // Bullish expansion → block SELL
-                   g_squeezeSellBlocked = true;
-                else              // Bearish expansion → block BUY
-                   g_squeezeBuyBlocked = true;
-                // Do NOT set g_newOrderBlocked → trend-following side can still open
-             }
-             else
-             {
-                // Original behavior: block everything
-                g_squeezeBlocked = true;
-                g_newOrderBlocked = true;
-             }
+              if(InpSqueeze_DirectionalBlock)
+              {
+                 // v6.9: Directional block — only block counter-trend side
+                 if(bestDir == 1)       // Bullish expansion → block SELL
+                    g_squeezeSellBlocked = true;
+                 else if(bestDir == -1) // Bearish expansion → block BUY
+                    g_squeezeBuyBlocked = true;
+                 // v6.9: bestDir == 0 → direction unknown → do NOT block anything
+                 //        (safer than blocking everything when DirectionalBlock is enabled)
+              }
+              else
+              {
+                 // Original behavior: block everything
+                 g_squeezeBlocked = true;
+                 g_newOrderBlocked = true;
+              }
              
              // Close All on Expansion (v6.6)
              if(InpSqueeze_CloseOnExpansion && !g_expansionCloseTriggered)
