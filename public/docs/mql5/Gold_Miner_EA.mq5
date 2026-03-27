@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.11 - MTF ZigZag+CDC+Grid+License  |
+//|                Gold Miner EA v6.12 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.11"
-#property description "Gold Miner EA v6.11 - MTF ZigZag + CDC + Squeeze + AvgTP + ReverseHedge + License"
+#property version   "6.12"
+#property description "Gold Miner EA v6.12 - MTF ZigZag + CDC + Squeeze + AvgTP + ReverseHedge + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -742,7 +742,7 @@ int OnInit()
    // === Recover Hedge Sets from existing positions (crash/restart recovery) ===
    RecoverHedgeSets();
 
-   Print("Gold Miner EA v6.11 initialized successfully | CycleGen=", g_cycleGeneration);
+   Print("Gold Miner EA v6.12 initialized successfully | CycleGen=", g_cycleGeneration);
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -794,7 +794,7 @@ void OnDeinit(const int reason)
 
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
-   Print("Gold Miner EA v6.11 deinitialized");
+   Print("Gold Miner EA v6.12 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -2952,7 +2952,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.11 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.11 [ZZ]" : "Gold Miner EA v6.11 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.12 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.12 [ZZ]" : "Gold Miner EA v6.12 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -7171,7 +7171,8 @@ void ManageHedgeSets()
       else if(!isExpansion)
       {
          // Bound orders all gone → enter grid mode
-         if(g_hedgeSets[h].boundTicketCount == 0 && hedgeExists)
+         // v6.12: Guard — must not have profitable reverse orders (they need matching close first)
+         if(g_hedgeSets[h].boundTicketCount == 0 && hedgeExists && !HasProfitableReverseOrders())
          {
             Print("HEDGE Set#", h + 1, " all bound orders cleared (Normal). Entering Grid Mode.");
             g_hedgeSets[h].gridMode = true;
@@ -7272,6 +7273,23 @@ void CalculateNetLots(double &totalBuyLots, double &totalSellLots)
 //+------------------------------------------------------------------+
 //| v6.11: Check if a ticket is in the reverse hedge array             |
 //+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| v6.12: Check if any reverse hedge order is currently profitable     |
+//| Used as guard: must matching-close profitable reverses BEFORE grid  |
+//+------------------------------------------------------------------+
+bool HasProfitableReverseOrders()
+{
+   for(int i = 0; i < g_reverseHedgeCount; i++)
+   {
+      if(PositionSelectByTicket(g_reverseHedgeTickets[i]))
+      {
+         double pnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+         if(pnl > 0) return true;
+      }
+   }
+   return false;
+}
+
 bool IsInReverseHedgeArray(ulong ticket)
 {
    for(int i = 0; i < g_reverseHedgeCount; i++)
@@ -7503,17 +7521,27 @@ void ManageReverseHedge()
    double budget = totalProfit - InpHedge_ReverseMatchMinProfit;
    if(budget <= 0)
    {
-      // No profit budget → close all reverse hedges without matching
+      // v6.12: No profit budget → close only PROFITABLE reverse hedges, keep losing ones
       Print("REVERSE HEDGE: No profit budget ($", DoubleToString(totalProfit, 2), 
-            ") — closing ", g_reverseHedgeCount, " reverse hedges without matching");
+            ") — closing profitable reverse hedges only");
       for(int r = g_reverseHedgeCount - 1; r >= 0; r--)
       {
-         trade.PositionClose(g_reverseHedgeTickets[r]);
-         Sleep(50);
+         if(PositionSelectByTicket(g_reverseHedgeTickets[r]))
+         {
+            double rpnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+            if(rpnl > 0)
+            {
+               trade.PositionClose(g_reverseHedgeTickets[r]);
+               RemoveReverseHedgeTicket(g_reverseHedgeTickets[r]);
+               Sleep(50);
+            }
+         }
       }
-      g_reverseHedgeCount = 0;
       g_hedgeBalancedLock = false;
-      Print("ALL REVERSE HEDGES CLOSED — state reset");
+      if(g_reverseHedgeCount == 0)
+         Print("ALL REVERSE HEDGES CLOSED — state reset");
+      else
+         Print("REVERSE HEDGE: ", g_reverseHedgeCount, " losing reverse orders remain for grid recovery");
       return;
    }
    
@@ -7557,25 +7585,32 @@ void ManageReverseHedge()
          " budget=$", DoubleToString(budget, 2),
          " closed ", closedLoss, " loss orders ($", DoubleToString(cumLoss, 2), ")");
    
-   // Close all profit orders (including reverse hedges)
+   // v6.12: Close only PROFITABLE orders (including profitable reverse hedges)
+   // Losing reverse hedges stay open → they will enter combined grid recovery
    for(int p = 0; p < profitCount; p++)
    {
       if(PositionSelectByTicket(profitTickets[p]))
       {
+         // Check if this is a reverse hedge — if so, remove from array
+         if(IsInReverseHedgeArray(profitTickets[p]))
+            RemoveReverseHedgeTicket(profitTickets[p]);
+         
          trade.PositionClose(profitTickets[p]);
          Sleep(50);
       }
    }
    
-   // Reset reverse hedge state
-   g_reverseHedgeCount = 0;
+   // v6.12: Only reset balanced lock; do NOT zero g_reverseHedgeCount
+   // Losing reverse orders may still remain in the array
    g_hedgeBalancedLock = false;
    
-   // === v6.11: Dual-Track Grid Recovery for remaining orders ===
-   // Check what remains after matching close
+   if(g_reverseHedgeCount > 0)
+      Print("REVERSE HEDGE: ", g_reverseHedgeCount, " losing reverse orders remain for combined grid recovery");
+   
+   // === v6.12: Setup combined grid recovery for remaining orders ===
    CheckAndSetupDualTrackRecovery();
    
-   Print("REVERSE HEDGE RECOVERY COMPLETE — state reset, dual-track check done");
+   Print("REVERSE HEDGE RECOVERY COMPLETE — dual-track check done, remaining reverses: ", g_reverseHedgeCount);
 }
 
 //+------------------------------------------------------------------+
@@ -7782,7 +7817,8 @@ bool ManageHedgeBoundAvgTP(int idx)
    }
 
    // Check if bound orders all gone → enter grid mode
-   if(g_hedgeSets[idx].active && g_hedgeSets[idx].boundTicketCount == 0)
+   // v6.12: Guard — must not have profitable reverse orders pending matching close
+   if(g_hedgeSets[idx].active && g_hedgeSets[idx].boundTicketCount == 0 && !HasProfitableReverseOrders())
    {
       if(PositionSelectByTicket(g_hedgeSets[idx].hedgeTicket))
       {
@@ -7807,7 +7843,27 @@ void ManageHedgeMatchingClose(int idx)
    double hedgeProfit = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
    if(hedgeProfit <= 0) return;
 
-   double budget = hedgeProfit - InpHedge_MatchMinProfit;
+   // v6.12: Include profitable reverse orders in budget
+   double reverseProfit = 0;
+   ulong profitableReverseTickets[];
+   int profitableReverseCount = 0;
+   for(int r = 0; r < g_reverseHedgeCount; r++)
+   {
+      if(PositionSelectByTicket(g_reverseHedgeTickets[r]))
+      {
+         double rpnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+         if(rpnl > 0)
+         {
+            reverseProfit += rpnl;
+            ArrayResize(profitableReverseTickets, profitableReverseCount + 1);
+            profitableReverseTickets[profitableReverseCount] = g_reverseHedgeTickets[r];
+            profitableReverseCount++;
+         }
+      }
+   }
+
+   double totalBudgetProfit = hedgeProfit + reverseProfit;
+   double budget = totalBudgetProfit - InpHedge_MatchMinProfit;
    if(budget <= 0) return;
 
    // Collect loss orders ONLY from this set's boundTickets (oldest first)
@@ -7864,13 +7920,25 @@ void ManageHedgeMatchingClose(int idx)
 
    if(lossUsed > 0)
    {
-      double finalNet = hedgeProfit - cumLoss;
+      double finalNet = totalBudgetProfit - cumLoss;
       Print("HEDGE MATCHING Set#", idx + 1, ": hedge profit $", DoubleToString(hedgeProfit, 2),
+            " + reverse profit $", DoubleToString(reverseProfit, 2),
             " covers ", lossUsed, " losses ($", DoubleToString(cumLoss, 2),
             ") net: $", DoubleToString(finalNet, 2));
 
       // Close hedge order
       trade.PositionClose(g_hedgeSets[idx].hedgeTicket);
+
+      // v6.12: Close profitable reverse orders that contributed to budget
+      for(int pr = 0; pr < profitableReverseCount; pr++)
+      {
+         if(PositionSelectByTicket(profitableReverseTickets[pr]))
+         {
+            trade.PositionClose(profitableReverseTickets[pr]);
+            RemoveReverseHedgeTicket(profitableReverseTickets[pr]);
+            Sleep(50);
+         }
+      }
 
       // Close matched losses + remove from boundTickets
       for(int cl = 0; cl < lossUsed; cl++)
@@ -7921,7 +7989,8 @@ void ManageHedgePartialClose(int idx)
    if(hedgeLots <= 0) return;
 
    // Check if bound orders still exist
-   if(g_hedgeSets[idx].boundTicketCount == 0)
+   // v6.12: Guard — must not have profitable reverse orders pending matching close
+   if(g_hedgeSets[idx].boundTicketCount == 0 && !HasProfitableReverseOrders())
    {
       // No bound orders left → enter grid mode
       Print("HEDGE Set#", idx + 1, " no bound orders left. Entering Grid Mode.");
