@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.8 - MTF ZigZag+CDC+Grid+License  |
+//|                Gold Miner EA v6.9 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.80"
-#property description "Gold Miner EA v6.8 - MTF ZigZag + CDC + Squeeze + AvgTP + ReverseHedge + License"
+#property version   "6.90"
+#property description "Gold Miner EA v6.9 - MTF ZigZag + CDC + Squeeze + AvgTP + ReverseHedge + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -490,7 +490,7 @@ struct HedgeSet
    ulong    boundTickets[];   // tickets of counter-side orders bound to this set
    int      boundTicketCount; // count of bound tickets
    int      boundGeneration;  // cycle generation of bound orders
-   // === v6.8: Combined Grid Recovery (Track B) ===
+   // === v6.9: Combined Grid Recovery (Track B) ===
    bool     combinedGridMode;   // Track B active (hedge+reverse combined recovery)
    int      combinedGridLevel;  // grid level for combined hedge+reverse
    double   combinedLots;       // combined lot size of hedge+reverse for recovery
@@ -502,7 +502,7 @@ int      g_lastDashboardRowCount = 0;  // track previous tick row count for stal
 bool     g_hedgeOrphanWarning = false;  // orphan hedge grid orders detected
 int      g_cycleGeneration = 0;  // incremented each time a hedge opens — changes comment prefix
 
-// === Reverse Hedge State (v6.8: array-based for multiple reverse hedges) ===
+// === Reverse Hedge State (v6.9: array-based for multiple reverse hedges) ===
 #define MAX_REVERSE_HEDGES 10
 ulong    g_reverseHedgeTickets[MAX_REVERSE_HEDGES];
 int      g_reverseHedgeCount = 0;
@@ -742,7 +742,7 @@ int OnInit()
    // === Recover Hedge Sets from existing positions (crash/restart recovery) ===
    RecoverHedgeSets();
 
-   Print("Gold Miner EA v6.8 initialized successfully | CycleGen=", g_cycleGeneration);
+   Print("Gold Miner EA v6.9 initialized successfully | CycleGen=", g_cycleGeneration);
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -794,7 +794,7 @@ void OnDeinit(const int reason)
 
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
-   Print("Gold Miner EA v6.8 deinitialized");
+   Print("Gold Miner EA v6.9 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -1776,7 +1776,7 @@ void CloseAllPositions()
 //+------------------------------------------------------------------+
 void ManageTPSL()
 {
-   // v6.8: Skip TP/SL when hedge balanced lock is active (both sides equal)
+   // v6.9: Skip TP/SL when hedge balanced lock is active (both sides equal)
    if(g_hedgeBalancedLock && g_hedgeSetCount > 0) return;
    
    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
@@ -2952,7 +2952,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.8 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.8 [ZZ]" : "Gold Miner EA v6.8 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.9 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.9 [ZZ]" : "Gold Miner EA v6.9 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -3282,7 +3282,7 @@ void DisplayDashboard()
        {
           DrawTableRow(row, "⚠ WARNING", "ORPHAN GRID ORDERS DETECTED", clrRed, COLOR_SECTION_HEDGE); row++;
         }
-        // v6.8: Reverse Hedge status (multiple)
+        // v6.9: Reverse Hedge status (multiple)
          for(int rv = 0; rv < g_reverseHedgeCount; rv++)
          {
             if(PositionSelectByTicket(g_reverseHedgeTickets[rv]))
@@ -3295,7 +3295,7 @@ void DisplayDashboard()
                DrawTableRow(row, "Rev.Hedge", rInfo, rClr, COLOR_SECTION_HEDGE); row++;
             }
          }
-         // v6.8: Balanced Lock indicator
+         // v6.9: Balanced Lock indicator
          if(g_hedgeBalancedLock)
          {
             DrawTableRow(row, "BALANCED", "TP/SL/Match LOCKED", clrYellow, COLOR_SECTION_HEDGE); row++;
@@ -4002,7 +4002,7 @@ void CheckGridProfitTF(int tfIdx, ENUM_POSITION_TYPE side, int currentGridCount)
 //+------------------------------------------------------------------+
 void ManageTPSL_TF(int tfIdx)
 {
-   // v6.8: Skip TP/SL when hedge balanced lock is active
+   // v6.9: Skip TP/SL when hedge balanced lock is active
    if(g_hedgeBalancedLock && g_hedgeSetCount > 0) return;
    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
    double bal = AccountInfoDouble(ACCOUNT_BALANCE);
@@ -6653,7 +6653,7 @@ void RecoverHedgeSets()
       }
    }
    
-   // Step 4: Recover Reverse Hedge state (v6.8: array-based, multiple reverse hedges)
+   // Step 4: Recover Reverse Hedge state (v6.9: array-based, multiple reverse hedges)
    g_reverseHedgeCount = 0;
    g_hedgeBalancedLock = false;
    for(int i = PositionsTotal() - 1; i >= 0; i--)
@@ -7109,7 +7109,7 @@ void ManageHedgeSets()
    // Detect orphan hedge grid orders every tick
    DetectOrphanHedgeOrders();
    
-   // v6.8: Calculate NET balance of all orders every tick for balanced lock
+   // v6.9: Calculate NET balance of all orders every tick for balanced lock
    if(InpHedge_ReverseEnable && g_hedgeSetCount > 0)
    {
       UpdateHedgeBalancedLock();
@@ -7209,7 +7209,7 @@ void ManageHedgeSets()
 }
 
 //+------------------------------------------------------------------+
-//| v6.8: Calculate NET lots of all orders and set balanced lock       |
+//| v6.9: Calculate NET lots of all orders and set balanced lock       |
 //+------------------------------------------------------------------+
 void UpdateHedgeBalancedLock()
 {
@@ -7252,7 +7252,7 @@ void UpdateHedgeBalancedLock()
 }
 
 //+------------------------------------------------------------------+
-//| v6.8: Calculate NET lots of all orders (both sides)               |
+//| v6.9: Calculate NET lots of all orders (both sides)               |
 //+------------------------------------------------------------------+
 void CalculateNetLots(double &totalBuyLots, double &totalSellLots)
 {
@@ -7273,7 +7273,7 @@ void CalculateNetLots(double &totalBuyLots, double &totalSellLots)
 }
 
 //+------------------------------------------------------------------+
-//| v6.8: Check if a ticket is in the reverse hedge array             |
+//| v6.9: Check if a ticket is in the reverse hedge array             |
 //+------------------------------------------------------------------+
 bool IsInReverseHedgeArray(ulong ticket)
 {
@@ -7285,7 +7285,7 @@ bool IsInReverseHedgeArray(ulong ticket)
 }
 
 //+------------------------------------------------------------------+
-//| v6.8: Add ticket to reverse hedge array                           |
+//| v6.9: Add ticket to reverse hedge array                           |
 //+------------------------------------------------------------------+
 void AddReverseHedgeTicket(ulong ticket)
 {
@@ -7299,7 +7299,7 @@ void AddReverseHedgeTicket(ulong ticket)
 }
 
 //+------------------------------------------------------------------+
-//| v6.8: Remove ticket from reverse hedge array                      |
+//| v6.9: Remove ticket from reverse hedge array                      |
 //+------------------------------------------------------------------+
 void RemoveReverseHedgeTicket(ulong ticket)
 {
@@ -7317,7 +7317,7 @@ void RemoveReverseHedgeTicket(ulong ticket)
 }
 
 //+------------------------------------------------------------------+
-//| v6.8: Check and open Reverse Hedge — NET-based, multiple allowed  |
+//| v6.9: Check and open Reverse Hedge — NET-based, multiple allowed  |
 //+------------------------------------------------------------------+
 void CheckAndOpenReverseHedge()
 {
@@ -7366,7 +7366,7 @@ void CheckAndOpenReverseHedge()
    
    if(!needReverse) return;
    
-   // === v6.8: Calculate NET of ALL orders (both sides) ===
+   // === v6.9: Calculate NET of ALL orders (both sides) ===
    double totalBuyLots = 0, totalSellLots = 0;
    CalculateNetLots(totalBuyLots, totalSellLots);
    
@@ -7431,7 +7431,7 @@ void CheckAndOpenReverseHedge()
 }
 
 //+------------------------------------------------------------------+
-//| v6.8: Manage Reverse Hedges — global matching close when Normal   |
+//| v6.9: Manage Reverse Hedges — global matching close when Normal   |
 //+------------------------------------------------------------------+
 void ManageReverseHedge()
 {
@@ -7574,7 +7574,7 @@ void ManageReverseHedge()
    g_reverseHedgeCount = 0;
    g_hedgeBalancedLock = false;
    
-   // === v6.8: Dual-Track Grid Recovery for remaining orders ===
+   // === v6.9: Dual-Track Grid Recovery for remaining orders ===
    // Check what remains after matching close
    CheckAndSetupDualTrackRecovery();
    
@@ -7582,7 +7582,7 @@ void ManageReverseHedge()
 }
 
 //+------------------------------------------------------------------+
-//| v6.8: Setup dual-track grid recovery after global matching close  |
+//| v6.9: Setup dual-track grid recovery after global matching close  |
 //+------------------------------------------------------------------+
 void CheckAndSetupDualTrackRecovery()
 {
@@ -8265,7 +8265,7 @@ void ManageHedgeGridMode(int idx)
 //+------------------------------------------------------------------+
 void ManageMatchingClose()
 {
-   // v6.8: Skip matching close when hedge balanced lock is active
+   // v6.9: Skip matching close when hedge balanced lock is active
    if(g_hedgeBalancedLock && g_hedgeSetCount > 0) return;
    int maxLoss = MathMin(MathMax(MatchingMaxLossOrders, 1), 10);  // allow up to 10
 
