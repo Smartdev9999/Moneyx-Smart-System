@@ -6545,7 +6545,10 @@ void RecoverHedgeSets()
             g_hedgeSets[h].counterSide = (g_hedgeSets[h].hedgeSide == POSITION_TYPE_BUY) 
                                          ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
             g_hedgeSets[h].gridMode = false;
-            g_hedgeSets[h].gridLevel = 0;
+             g_hedgeSets[h].gridLevel = 0;
+             g_hedgeSets[h].combinedGridMode = false;
+             g_hedgeSets[h].combinedGridLevel = 0;
+             g_hedgeSets[h].combinedLots = 0;
             g_hedgeSetCount++;
             recovered++;
             Print("RECOVER: Rebuilt Hedge Set#", h + 1, " from ticket ", ticket, 
