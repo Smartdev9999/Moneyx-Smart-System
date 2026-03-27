@@ -7171,7 +7171,8 @@ void ManageHedgeSets()
       else if(!isExpansion)
       {
          // Bound orders all gone → enter grid mode
-         if(g_hedgeSets[h].boundTicketCount == 0 && hedgeExists)
+         // v6.12: Guard — must not have profitable reverse orders (they need matching close first)
+         if(g_hedgeSets[h].boundTicketCount == 0 && hedgeExists && !HasProfitableReverseOrders())
          {
             Print("HEDGE Set#", h + 1, " all bound orders cleared (Normal). Entering Grid Mode.");
             g_hedgeSets[h].gridMode = true;
