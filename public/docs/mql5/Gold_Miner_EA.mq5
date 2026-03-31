@@ -6675,6 +6675,30 @@ void RecoverHedgeSets()
          }
       }
       
+      // v6.15: Recalculate zone prices from bound tickets + hedge open price
+      if(g_hedgeSets[h].boundTicketCount > 0 && g_hedgeSets[h].hedgeOpenPrice > 0)
+      {
+         double oldestPrice = 0;
+         datetime oldestTime = D'2099.01.01';
+         for(int b = 0; b < g_hedgeSets[h].boundTicketCount; b++)
+         {
+            if(PositionSelectByTicket(g_hedgeSets[h].boundTickets[b]))
+            {
+               datetime oTime = (datetime)PositionGetInteger(POSITION_TIME);
+               if(oTime < oldestTime)
+               {
+                  oldestTime = oTime;
+                  oldestPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+               }
+            }
+         }
+         g_hedgeSets[h].oldestBoundPrice = oldestPrice;
+         g_hedgeSets[h].zoneUpperPrice = MathMax(g_hedgeSets[h].hedgeOpenPrice, oldestPrice);
+         g_hedgeSets[h].zoneLowerPrice = MathMin(g_hedgeSets[h].hedgeOpenPrice, oldestPrice);
+         Print("RECOVER: Set#", h + 1, " zone=", DoubleToString(g_hedgeSets[h].zoneLowerPrice, _Digits),
+               "-", DoubleToString(g_hedgeSets[h].zoneUpperPrice, _Digits));
+      }
+      
       Print("RECOVER: Set#", h + 1, " bound ", g_hedgeSets[h].boundTicketCount,
             " counter-side orders (boundGen=", g_hedgeSets[h].boundGeneration, ")");
    }
