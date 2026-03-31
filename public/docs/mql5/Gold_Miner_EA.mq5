@@ -7151,27 +7151,64 @@ void ManageOrphanGrid()
    }
 }
 
+//+------------------------------------------------------------------+
+//| v6.15: Check if hedge close is allowed for a specific set          |
+//| Triple Gate: (1) Expansion Cycle, (2) Price Zone, (3) TP Distance  |
+//+------------------------------------------------------------------+
+bool IsHedgeCloseAllowed(int h)
+{
+   // Gate 1: Expansion Cycle — must have passed through expansion in TF index 2
+   if(g_hedgeSets[h].hedgedDuringExpansion)
+   {
+      // Case A: Hedge opened during expansion → just wait for all TFs Normal
+      if(!IsAllSqueezeTFNormalStrict()) return false;
+   }
+   else
+   {
+      // Case B: Hedge opened during Normal/Squeeze → must see expansion first, THEN normal
+      if(!g_hedgeSets[h].seenExpansionSinceHedge) return false;
+      if(!IsAllSqueezeTFNormalStrict()) return false;
+   }
+   
+   // Gate 2: Price Zone — price must be outside zone (oldest bound ↔ hedge)
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double zoneHi = g_hedgeSets[h].zoneUpperPrice;
+   double zoneLo = g_hedgeSets[h].zoneLowerPrice;
+   
+   // If zone is not set (both 0) → skip zone check (recovery scenario)
+   if(zoneHi > 0 && zoneLo > 0)
+   {
+      if(bid > zoneLo && bid < zoneHi) return false;  // IN ZONE → block
+      
+      // Gate 3: TP Distance — must be N points away from zone edge
+      double pts = _Point;
+      if(InpHedge_CloseMinPoints > 0)
+      {
+         if(bid >= zoneHi)
+         {
+            // Price exited above zone
+            if((bid - zoneHi) / pts < InpHedge_CloseMinPoints) return false;
+         }
+         else
+         {
+            // Price exited below zone
+            if((zoneLo - bid) / pts < InpHedge_CloseMinPoints) return false;
+         }
+      }
+   }
+   
+   return true;
+}
+
 void ManageHedgeSets()
 {
    // Detect orphan hedge grid orders every tick
    DetectOrphanHedgeOrders();
    
-   // v6.11: Calculate NET balance of all orders every tick for balanced lock
-   if(InpHedge_ReverseEnable && g_hedgeSetCount > 0)
-   {
-      UpdateHedgeBalancedLock();
-   }
-   else
-   {
-      g_hedgeBalancedLock = false;
-   }
+   // v6.15: Reverse Hedge disabled — always unlock balanced lock
+   g_hedgeBalancedLock = false;
    
-   // Reverse Hedge management
-   ManageReverseHedge();
-   CheckAndOpenReverseHedge();
-   
-   // v6.13: Strict gate — check all 3 TFs once for entire loop
-   bool allTFNormal = IsAllSqueezeTFNormalStrict();
+   // v6.15: Reverse Hedge management removed (no ManageReverseHedge / CheckAndOpenReverseHedge)
    
    for(int h = 0; h < MAX_HEDGE_SETS; h++)
    {
@@ -7179,6 +7216,13 @@ void ManageHedgeSets()
 
       // Refresh bound tickets — remove any that were closed externally
       RefreshBoundTickets(h);
+      
+      // v6.15: Track expansion on TF index 2 (largest) every tick
+      if(!g_hedgeSets[h].seenExpansionSinceHedge)
+      {
+         if(g_squeeze[2].state == 2)  // EXPANSION detected on biggest TF
+            g_hedgeSets[h].seenExpansionSinceHedge = true;
+      }
 
       // Verify hedge ticket still exists
       bool hedgeExists = false;
@@ -7200,27 +7244,25 @@ void ManageHedgeSets()
          continue;
       }
 
-      // v6.13: If in grid mode — only execute when all TFs normal
+      // === v6.15: Triple-Gate Close Check ===
+      // All recovery actions (matching, grid, partial close) require gate pass
+      if(!IsHedgeCloseAllowed(h))
+      {
+         // Reset matchingDone so it re-runs when gate opens
+         g_hedgeSets[h].matchingDone = false;
+         continue;  // Skip all close/grid logic for this set
+      }
+      
+      // === Gate passed — close logic allowed ===
+      
+      // If in grid mode → execute grid
       if(g_hedgeSets[h].gridMode)
       {
-         if(allTFNormal)
-            ManageHedgeGridMode(h);
-         // else: wait for all TFs normal
+         ManageHedgeGridMode(h);
          continue;
       }
       
-      // v6.13: NOT in grid mode — check if any TF is still EXPANSION
-      if(!allTFNormal)
-      {
-         // v6.13: Reset matchingDone when expansion detected — forces re-matching next normal phase
-         g_hedgeSets[h].matchingDone = false;
-         // Still in expansion → do NOT enter grid, do NOT run matching
-         continue;
-      }
-      
-      // === ALL 3 TFs are NORMAL from here ===
-      
-      // v6.13: STEP 1 — Run matching/close cycle FIRST (before any grid entry)
+      // STEP 1 — Run matching/close cycle FIRST (before any grid entry)
       if(!g_hedgeSets[h].matchingDone)
       {
          double hedgePnL = 0;
@@ -7231,7 +7273,6 @@ void ManageHedgeSets()
          if(hedgePnL > 0)
          {
             ManageHedgeMatchingClose(h);
-            // After matching, mark done regardless (set may be deactivated inside)
             if(g_hedgeSets[h].active)
                g_hedgeSets[h].matchingDone = true;
             continue;
@@ -7254,11 +7295,10 @@ void ManageHedgeSets()
             ManageHedgePartialClose(h);
          }
          
-         // Mark matching phase done for this normal cycle
          g_hedgeSets[h].matchingDone = true;
       }
       
-      // v6.13: STEP 2 — After matching done, try entering combined grid mode
+      // STEP 2 — After matching done, try entering combined grid mode
       TryEnterCombinedGridMode(h);
    }
 }
