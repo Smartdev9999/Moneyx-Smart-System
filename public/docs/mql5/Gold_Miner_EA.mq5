@@ -6840,11 +6840,12 @@ void RecoverHedgeSets()
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       
       string comment = PositionGetString(POSITION_COMMENT);
-      // Check for GM_HEDGE_1, GM_HEDGE_2, etc.
+      // Check for GM_HEDGE_1, GM_HEDGE_2, GM_HEDGE_D1, GM_HEDGE_D2, etc.
       for(int h = 0; h < MAX_HEDGE_SETS; h++)
       {
          string hedgePrefix = "GM_HEDGE_" + IntegerToString(h + 1);
-         if(StringFind(comment, hedgePrefix) >= 0 && !g_hedgeSets[h].active)
+         string hedgePrefixDD = "GM_HEDGE_D" + IntegerToString(h + 1);
+         if((StringFind(comment, hedgePrefix) >= 0 || StringFind(comment, hedgePrefixDD) >= 0) && !g_hedgeSets[h].active)
          {
             g_hedgeSets[h].active = true;
             g_hedgeSets[h].hedgeTicket = ticket;
