@@ -516,6 +516,8 @@ struct HedgeSet
    double   zoneLowerPrice;            // min(oldest bound price, hedge price)
    double   hedgeOpenPrice;            // open price of main hedge order
    double   oldestBoundPrice;          // open price of oldest bound order
+   // === v6.16: Hedge Trigger Type ===
+   int      triggerType;               // 0 = expansion, 1 = DD%
 };
 HedgeSet g_hedgeSets[MAX_HEDGE_SETS];
 int      g_hedgeSetCount = 0;
