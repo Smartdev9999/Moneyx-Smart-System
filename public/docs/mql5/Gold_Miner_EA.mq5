@@ -7027,6 +7027,24 @@ void RecoverHedgeSets()
    if(g_reverseHedgeCount > 0)
       Print("RECOVER: Total reverse hedges recovered: ", g_reverseHedgeCount);
    
+   // v6.16: Recalculate DD triggers from recovered DD-triggered sets
+   {
+      int ddBuyCount = 0, ddSellCount = 0;
+      for(int h = 0; h < MAX_HEDGE_SETS; h++)
+      {
+         if(!g_hedgeSets[h].active || g_hedgeSets[h].triggerType != 1) continue;
+         if(g_hedgeSets[h].counterSide == POSITION_TYPE_BUY)
+            ddBuyCount++;
+         else
+            ddSellCount++;
+      }
+      g_nextBuyDDTrigger  = InpHedge_DDTriggerPct + ddBuyCount * InpHedge_DDStepPct;
+      g_nextSellDDTrigger = InpHedge_DDTriggerPct + ddSellCount * InpHedge_DDStepPct;
+      if(ddBuyCount > 0 || ddSellCount > 0)
+         Print("RECOVER DD TRIGGERS: Next BUY=", DoubleToString(g_nextBuyDDTrigger, 1), 
+               "% SELL=", DoubleToString(g_nextSellDDTrigger, 1), "%");
+   }
+
    if(recovered > 0 || orphansClosed > 0)
       Print("RECOVER COMPLETE: ", recovered, " sets recovered, ", orphansClosed,
             " orphan grid orders closed, cycleGen=", g_cycleGeneration);
