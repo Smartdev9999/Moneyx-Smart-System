@@ -1778,6 +1778,13 @@ void CloseAllPositions()
       ArrayResize(g_hedgeSets[h].gridTickets, 0);
       g_hedgeSets[h].boundTicketCount = 0;
       ArrayResize(g_hedgeSets[h].boundTickets, 0);
+      // v6.15: Reset close gate
+      g_hedgeSets[h].seenExpansionSinceHedge = false;
+      g_hedgeSets[h].hedgedDuringExpansion = false;
+      g_hedgeSets[h].zoneUpperPrice = 0;
+      g_hedgeSets[h].zoneLowerPrice = 0;
+      g_hedgeSets[h].hedgeOpenPrice = 0;
+      g_hedgeSets[h].oldestBoundPrice = 0;
    }
    g_hedgeSetCount = 0;
 }
