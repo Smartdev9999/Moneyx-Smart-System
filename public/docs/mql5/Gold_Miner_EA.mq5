@@ -6539,6 +6539,8 @@ void CheckAndOpenHedge()
        bool bigTFExpansion = (g_squeeze[2].state == 2);
        g_hedgeSets[slot].hedgedDuringExpansion = bigTFExpansion;
        g_hedgeSets[slot].seenExpansionSinceHedge = bigTFExpansion;  // if already expansion, mark seen
+       // v6.16: Mark trigger type as Expansion
+       g_hedgeSets[slot].triggerType = 0;
        
        // Calculate Price Zone: find hedge open price + oldest bound order open price
        double hOpenPrice = 0;
@@ -6569,7 +6571,7 @@ void CheckAndOpenHedge()
        Print("HEDGE OPENED: Set#", slot + 1, " ", sideStr, " ", DoubleToString(counterLots, 2),
              " lots to cover ", counterCount, " stuck orders (bound ", g_hedgeSets[slot].boundTicketCount,
              " tickets, boundGen=", g_hedgeSets[slot].boundGeneration, ")");
-       Print("v6.15 CLOSE GATE: hedgedDuringExp=", bigTFExpansion,
+       Print("v6.16 CLOSE GATE: triggerType=Expansion hedgedDuringExp=", bigTFExpansion,
              " zone=", DoubleToString(g_hedgeSets[slot].zoneLowerPrice, _Digits),
              "-", DoubleToString(g_hedgeSets[slot].zoneUpperPrice, _Digits));
      }
