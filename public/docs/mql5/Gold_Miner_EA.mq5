@@ -326,10 +326,10 @@ input int      InpHedge_MaxSets              = 10;    // Max Active Hedge Sets (
 input int      InpHedge_BoundAvgTPPoints     = 0;     // Bound Avg TP Points (0=Disabled)
 input int      InpHedge_MinTFConfirm         = 1;     // Min TF Expansion to Confirm Hedge (1-3)
 input int      InpHedge_CloseMinPoints       = 300;   // v6.15: Min points from zone edge before matching close
-// v6.15: Reverse Hedge disabled — kept for compatibility but no longer used
-// input bool     InpHedge_ReverseEnable        = false;  // [DISABLED v6.15]
-// input int      InpHedge_ReverseMinTFConfirm  = 2;     // [DISABLED v6.15]
-// input double   InpHedge_ReverseMatchMinProfit = 0.50;  // [DISABLED v6.15]
+// v6.15: Reverse Hedge disabled — kept as constants for legacy function compilation
+const bool     InpHedge_ReverseEnable        = false;
+const int      InpHedge_ReverseMinTFConfirm  = 2;
+const double   InpHedge_ReverseMatchMinProfit = 0.50;
 
 input group "=== Orphan Recovery Grid ==="
 input bool     InpOrphan_Enable              = true;   // Enable Orphan Recovery Grid
