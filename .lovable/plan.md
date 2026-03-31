@@ -1,53 +1,56 @@
 
 
-## Implemented: v6.15 — Hedge Close Gate: Expansion Cycle + Price Zone + TP Distance
+## Implemented: v6.16 — Hedge Trigger Mode: Expansion vs DD%
 
 ### Changes Made
 
-1. **`IsHedgeCloseAllowed(int h)`**: New triple-gate function that checks per hedge set:
-   - **Gate 1: Expansion Cycle** — Case A (hedged during expansion → wait Normal) / Case B (hedged during Normal → wait expansion TF2 + Normal)
-   - **Gate 2: Price Zone** — price must exit zone between oldest bound order and hedge order
-   - **Gate 3: TP Distance** — after exiting zone, must be ≥ `InpHedge_CloseMinPoints` from zone edge
+1. **`ENUM_HEDGE_TRIGGER`**: New enum with `HEDGE_TRIGGER_EXPANSION` (original) and `HEDGE_TRIGGER_DD_PERCENT` (new)
 
-2. **`HedgeSet` struct expanded** with: `seenExpansionSinceHedge`, `hedgedDuringExpansion`, `zoneUpperPrice`, `zoneLowerPrice`, `hedgeOpenPrice`, `oldestBoundPrice`
+2. **New Input Parameters**:
+   - `InpHedge_TriggerMode` — choose between Expansion or DD% trigger
+   - `InpHedge_DDTriggerPct` — DD% to trigger first hedge (default 5%)
+   - `InpHedge_DDStepPct` — DD% step for subsequent hedges (default 5%)
+   - `InpHedge_DDCooldownSec` — min seconds between DD hedges (default 60)
 
-3. **`CheckAndOpenHedge()`** — records expansion state and zone prices at hedge open time
+3. **`HedgeSet.triggerType`**: New field (0=expansion, 1=DD%) for per-set gate logic
 
-4. **`ManageHedgeSets()`** — replaced old `allTFNormal` gate with per-set `IsHedgeCloseAllowed(h)`:
-   - Tracks TF2 expansion every tick per set
-   - All recovery (matching, partial, avg TP, grid) blocked until gate passes
-   - Reverse Hedge calls removed entirely
+4. **`CheckAndOpenHedgeByDD()`**: Calculates floating loss % per side (BUY/SELL) against balance, opens hedge when threshold reached
 
-5. **`TryEnterCombinedGridMode()`** — removed reverse hedge gates and reverse lot calculations
+5. **`OpenDDHedge()`**: Opens DD-triggered hedge with `GM_HEDGE_D` comment prefix for recovery identification
 
-6. **`RecoverHedgeSets()`** — recovers zone prices from position data, defaults expansion flags to `true` (conservative)
+6. **`IsHedgeCloseAllowed()`**: Gate 1 (Expansion Cycle) is skipped for DD-triggered sets (triggerType==1). Gates 2+3 remain mandatory for all types
 
-7. **Dashboard** — shows per-set gate status: Cycle (Wait Expansion/Wait Normal/Ready) + Zone (IN ZONE/OUT pts/OUT OK)
+7. **`ManageHedgeSets()`**: Added DD trigger recalculation at end of loop based on remaining active DD sets
 
-8. **Reverse Hedge disabled** — `ManageReverseHedge()`, `CheckAndOpenReverseHedge()`, `UpdateHedgeBalancedLock()` no longer called
+8. **`RecoverHedgeSets()`**: Detects `GM_HEDGE_D` prefix to recover triggerType + recalculates DD thresholds
 
-9. **Input changes**: Added `InpHedge_CloseMinPoints`, commented out Reverse Hedge inputs
+9. **OnTick flow**: Routes to `CheckAndOpenHedge()` or `CheckAndOpenHedgeByDD()` based on `InpHedge_TriggerMode`
 
-10. **Version bump**: v6.14 → v6.15 (all locations)
+10. **Dashboard**: Shows trigger type per set (Exp/DD%), cycle status shows "Skip(DD)" for DD sets, added DD trigger info row
+
+11. **Version bump**: v6.15 → v6.16
 
 ### กฎที่บังคับใช้
 
 ```text
-Hedge Set ปิดออเดอร์ได้เมื่อ:
-1. ผ่าน Expansion Cycle ใน TF ใหญ่ (index 2) อย่างน้อย 1 รอบ + กลับ Normal
-2. ราคาออกจากกรอบ (oldest bound ↔ hedge order)
-3. ราคาห่างจากขอบกรอบ ≥ InpHedge_CloseMinPoints
-→ ต้องผ่านครบ 3 ข้อ ถึงจะ matching close / grid ได้
-→ แต่ละ set ทำงานแยกกัน
-→ Accumulate Close ยังทำงานรวมเหมือนเดิม
+Hedge Trigger Mode:
+- Expansion: เปิด Hedge เมื่อ Squeeze Expansion ผ่าน (เดิม)
+- DD%: เปิด Hedge เมื่อ floating loss ฝั่ง BUY หรือ SELL ถึง % ที่กำหนด
+  - ทำงานแยกฝั่ง: BUY loss → SELL hedge, SELL loss → BUY hedge
+  - Threshold เพิ่มขึ้นทีละ step (5% → 10% → 15%...)
+  - Cooldown ป้องกัน hedge ถี่เกินไป
+
+การปิด Hedge:
+- DD sets: ข้าม Gate 1 (Expansion Cycle) → ใช้แค่ Gate 2+3
+- Expansion sets: ต้องผ่านครบ 3 Gates เหมือนเดิม
+- Accumulate Close ยังทำงานรวมเหมือนเดิม
 ```
 
 ### สิ่งที่ไม่เปลี่ยนแปลง
 - Order Execution Logic (trade.Buy/Sell/PositionClose)
 - Trading Strategy Logic (SMA/ZigZag/Instant, Grid entry/exit, TP/SL)
 - Core Module Logic (License, News filter, Time filter, Data sync)
-- Matching Close logic ภายใน — เพียงเพิ่ม gate ก่อนเรียก
-- Grid Mode logic — เพียงเพิ่ม gate ก่อนรัน
-- Accumulate Close — ทำงานรวมเหมือนเดิม ไม่สน gate
-- Orphan Recovery — ไม่แก้
-- Squeeze state detection (BB/KC) — ไม่แก้
+- Expansion Hedge logic — ทำงานเหมือนเดิมเมื่อเลือกโหมด EXPANSION
+- Matching Close / Grid Mode logic ภายใน — ไม่แก้
+- Accumulate Close — ทำงานรวมเหมือนเดิม
+- Orphan Recovery / Squeeze detection — ไม่แก้
