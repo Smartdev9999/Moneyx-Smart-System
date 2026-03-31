@@ -3276,14 +3276,16 @@ void DisplayDashboard()
       bool anyActive = false;
       for(int h = 0; h < MAX_HEDGE_SETS; h++)
       {
-         if(g_hedgeSets[h].active && PositionSelectByTicket(g_hedgeSets[h].hedgeTicket))
+         if(g_hedgeSets[h].active)
          {
             anyActive = true;
             string setLabel = "Hedge #" + IntegerToString(h + 1);
             string sideStr = (g_hedgeSets[h].hedgeSide == POSITION_TYPE_BUY) ? "BUY" : "SELL";
 
             // Get hedge PnL
-            double hedgePnL = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+            double hedgePnL = 0;
+            if(PositionSelectByTicket(g_hedgeSets[h].hedgeTicket))
+               hedgePnL = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
 
             string hedgeInfo = sideStr + " " + DoubleToString(g_hedgeSets[h].hedgeLots, 2) + "L";
             hedgeInfo += " PnL:$" + DoubleToString(hedgePnL, 2);
@@ -3293,31 +3295,50 @@ void DisplayDashboard()
 
             color hedgeClr = (hedgePnL >= 0) ? clrLime : clrOrangeRed;
             DrawTableRow(row, setLabel, hedgeInfo, hedgeClr, COLOR_SECTION_HEDGE); row++;
-         }
-       }
-       // Orphan warning
-       if(g_hedgeOrphanWarning)
-       {
-          DrawTableRow(row, "⚠ WARNING", "ORPHAN GRID ORDERS DETECTED", clrRed, COLOR_SECTION_HEDGE); row++;
-        }
-        // v6.11: Reverse Hedge status (multiple)
-         for(int rv = 0; rv < g_reverseHedgeCount; rv++)
-         {
-            if(PositionSelectByTicket(g_reverseHedgeTickets[rv]))
+            
+            // v6.15: Close Gate status per set
+            string cycleStatus = "";
+            if(!g_hedgeSets[h].seenExpansionSinceHedge)
+               cycleStatus = "Wait Expansion";
+            else if(!IsAllSqueezeTFNormalStrict())
+               cycleStatus = "Wait Normal";
+            else
+               cycleStatus = "Ready";
+            
+            // Zone status
+            double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+            string zoneStatus = "";
+            double zoneHi = g_hedgeSets[h].zoneUpperPrice;
+            double zoneLo = g_hedgeSets[h].zoneLowerPrice;
+            if(zoneHi > 0 && zoneLo > 0)
             {
-               double rPnL = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
-               double rVol = PositionGetDouble(POSITION_VOLUME);
-               string rSide = ((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? "BUY" : "SELL";
-               string rInfo = "REV#" + IntegerToString(rv + 1) + " " + rSide + " " + DoubleToString(rVol, 2) + "L $" + DoubleToString(rPnL, 2);
-               color rClr = (rPnL >= 0) ? clrLime : clrOrangeRed;
-               DrawTableRow(row, "Rev.Hedge", rInfo, rClr, COLOR_SECTION_HEDGE); row++;
+               if(bid > zoneLo && bid < zoneHi)
+                  zoneStatus = "IN ZONE";
+               else
+               {
+                  double edgePrice = (bid >= zoneHi) ? zoneHi : zoneLo;
+                  double distPts = MathAbs(bid - edgePrice) / _Point;
+                  if(distPts < InpHedge_CloseMinPoints)
+                     zoneStatus = "OUT " + IntegerToString((int)distPts) + "/" + IntegerToString(InpHedge_CloseMinPoints) + "pts";
+                  else
+                     zoneStatus = "OUT OK " + IntegerToString((int)distPts) + "pts";
+               }
             }
+            else
+               zoneStatus = "N/A";
+            
+            string gateInfo = "Cycle:" + cycleStatus + " Zone:" + zoneStatus;
+            bool gateOK = IsHedgeCloseAllowed(h);
+            color gateClr = gateOK ? clrLime : clrYellow;
+            DrawTableRow(row, "  Gate", gateInfo, gateClr, COLOR_SECTION_HEDGE); row++;
          }
-         // v6.11: Balanced Lock indicator
-         if(g_hedgeBalancedLock)
-         {
-            DrawTableRow(row, "BALANCED", "TP/SL/Match LOCKED", clrYellow, COLOR_SECTION_HEDGE); row++;
+        }
+        // Orphan warning
+        if(g_hedgeOrphanWarning)
+        {
+           DrawTableRow(row, "⚠ WARNING", "ORPHAN GRID ORDERS DETECTED", clrRed, COLOR_SECTION_HEDGE); row++;
          }
+         // v6.15: Reverse Hedge removed — no more reverse hedge or balanced lock display
      }
 
      // === Orphan Recovery Status ===
