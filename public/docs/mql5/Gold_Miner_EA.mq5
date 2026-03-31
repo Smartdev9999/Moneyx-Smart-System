@@ -1814,8 +1814,13 @@ void CloseAllPositions()
       g_hedgeSets[h].zoneLowerPrice = 0;
       g_hedgeSets[h].hedgeOpenPrice = 0;
       g_hedgeSets[h].oldestBoundPrice = 0;
+      // v6.16: Reset trigger type
+      g_hedgeSets[h].triggerType = 0;
    }
    g_hedgeSetCount = 0;
+   // v6.16: Reset DD triggers on full close
+   g_nextBuyDDTrigger  = InpHedge_DDTriggerPct;
+   g_nextSellDDTrigger = InpHedge_DDTriggerPct;
 }
 
 //+------------------------------------------------------------------+
