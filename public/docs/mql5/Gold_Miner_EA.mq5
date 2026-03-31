@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.14 - MTF ZigZag+CDC+Grid+License  |
+//|                Gold Miner EA v6.15 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.14"
-#property description "Gold Miner EA v6.14 - MTF ZigZag + CDC + Squeeze + AvgTP + ReverseHedge + License"
+#property version   "6.15"
+#property description "Gold Miner EA v6.15 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -325,9 +325,11 @@ input int      InpHedge_PartialMinProfitOrders = 3;    // Min Profit Orders for 
 input int      InpHedge_MaxSets              = 10;    // Max Active Hedge Sets (1-10)
 input int      InpHedge_BoundAvgTPPoints     = 0;     // Bound Avg TP Points (0=Disabled)
 input int      InpHedge_MinTFConfirm         = 1;     // Min TF Expansion to Confirm Hedge (1-3)
-input bool     InpHedge_ReverseEnable        = false;  // Enable Reverse Hedge (lock on direction change)
-input int      InpHedge_ReverseMinTFConfirm  = 2;     // Min TF Expansion to Confirm Reverse Hedge (1-3)
-input double   InpHedge_ReverseMatchMinProfit = 0.50;  // Reverse Match Min Profit to Keep ($)
+input int      InpHedge_CloseMinPoints       = 300;   // v6.15: Min points from zone edge before matching close
+// v6.15: Reverse Hedge disabled — kept for compatibility but no longer used
+// input bool     InpHedge_ReverseEnable        = false;  // [DISABLED v6.15]
+// input int      InpHedge_ReverseMinTFConfirm  = 2;     // [DISABLED v6.15]
+// input double   InpHedge_ReverseMatchMinProfit = 0.50;  // [DISABLED v6.15]
 
 input group "=== Orphan Recovery Grid ==="
 input bool     InpOrphan_Enable              = true;   // Enable Orphan Recovery Grid
@@ -496,6 +498,13 @@ struct HedgeSet
    double   combinedLots;       // combined lot size of hedge+reverse for recovery
    // === v6.13: Matching-first sequencing ===
    bool     matchingDone;       // true after matching cycle completes in this normal phase
+   // === v6.15: Hedge Close Gate — Expansion Cycle + Price Zone + TP Distance ===
+   bool     seenExpansionSinceHedge;   // has TF index 2 (largest) been in EXPANSION since hedge opened?
+   bool     hedgedDuringExpansion;     // was hedge opened while TF index 2 was EXPANSION?
+   double   zoneUpperPrice;            // max(oldest bound price, hedge price)
+   double   zoneLowerPrice;            // min(oldest bound price, hedge price)
+   double   hedgeOpenPrice;            // open price of main hedge order
+   double   oldestBoundPrice;          // open price of oldest bound order
 };
 HedgeSet g_hedgeSets[MAX_HEDGE_SETS];
 int      g_hedgeSetCount = 0;
@@ -738,13 +747,20 @@ int OnInit()
        g_hedgeSets[h].boundTicketCount = 0;
        ArrayResize(g_hedgeSets[h].boundTickets, 0);
        g_hedgeSets[h].boundGeneration = 0;
-    }
-    g_hedgeSetCount = 0;
+       // v6.15: Hedge Close Gate init
+       g_hedgeSets[h].seenExpansionSinceHedge = false;
+       g_hedgeSets[h].hedgedDuringExpansion = false;
+       g_hedgeSets[h].zoneUpperPrice = 0;
+       g_hedgeSets[h].zoneLowerPrice = 0;
+       g_hedgeSets[h].hedgeOpenPrice = 0;
+       g_hedgeSets[h].oldestBoundPrice = 0;
+     }
+     g_hedgeSetCount = 0;
 
    // === Recover Hedge Sets from existing positions (crash/restart recovery) ===
    RecoverHedgeSets();
 
-   Print("Gold Miner EA v6.14 initialized successfully | CycleGen=", g_cycleGeneration);
+   Print("Gold Miner EA v6.15 initialized successfully | CycleGen=", g_cycleGeneration);
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -796,7 +812,7 @@ void OnDeinit(const int reason)
 
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
-   Print("Gold Miner EA v6.14 deinitialized");
+   Print("Gold Miner EA v6.15 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -1762,6 +1778,13 @@ void CloseAllPositions()
       ArrayResize(g_hedgeSets[h].gridTickets, 0);
       g_hedgeSets[h].boundTicketCount = 0;
       ArrayResize(g_hedgeSets[h].boundTickets, 0);
+      // v6.15: Reset close gate
+      g_hedgeSets[h].seenExpansionSinceHedge = false;
+      g_hedgeSets[h].hedgedDuringExpansion = false;
+      g_hedgeSets[h].zoneUpperPrice = 0;
+      g_hedgeSets[h].zoneLowerPrice = 0;
+      g_hedgeSets[h].hedgeOpenPrice = 0;
+      g_hedgeSets[h].oldestBoundPrice = 0;
    }
    g_hedgeSetCount = 0;
 }
@@ -2947,7 +2970,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.14 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.14 [ZZ]" : "Gold Miner EA v6.14 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.15 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.15 [ZZ]" : "Gold Miner EA v6.15 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -3253,14 +3276,16 @@ void DisplayDashboard()
       bool anyActive = false;
       for(int h = 0; h < MAX_HEDGE_SETS; h++)
       {
-         if(g_hedgeSets[h].active && PositionSelectByTicket(g_hedgeSets[h].hedgeTicket))
+         if(g_hedgeSets[h].active)
          {
             anyActive = true;
             string setLabel = "Hedge #" + IntegerToString(h + 1);
             string sideStr = (g_hedgeSets[h].hedgeSide == POSITION_TYPE_BUY) ? "BUY" : "SELL";
 
             // Get hedge PnL
-            double hedgePnL = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+            double hedgePnL = 0;
+            if(PositionSelectByTicket(g_hedgeSets[h].hedgeTicket))
+               hedgePnL = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
 
             string hedgeInfo = sideStr + " " + DoubleToString(g_hedgeSets[h].hedgeLots, 2) + "L";
             hedgeInfo += " PnL:$" + DoubleToString(hedgePnL, 2);
@@ -3270,31 +3295,50 @@ void DisplayDashboard()
 
             color hedgeClr = (hedgePnL >= 0) ? clrLime : clrOrangeRed;
             DrawTableRow(row, setLabel, hedgeInfo, hedgeClr, COLOR_SECTION_HEDGE); row++;
-         }
-       }
-       // Orphan warning
-       if(g_hedgeOrphanWarning)
-       {
-          DrawTableRow(row, "⚠ WARNING", "ORPHAN GRID ORDERS DETECTED", clrRed, COLOR_SECTION_HEDGE); row++;
-        }
-        // v6.11: Reverse Hedge status (multiple)
-         for(int rv = 0; rv < g_reverseHedgeCount; rv++)
-         {
-            if(PositionSelectByTicket(g_reverseHedgeTickets[rv]))
+            
+            // v6.15: Close Gate status per set
+            string cycleStatus = "";
+            if(!g_hedgeSets[h].seenExpansionSinceHedge)
+               cycleStatus = "Wait Expansion";
+            else if(!IsAllSqueezeTFNormalStrict())
+               cycleStatus = "Wait Normal";
+            else
+               cycleStatus = "Ready";
+            
+            // Zone status
+            double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+            string zoneStatus = "";
+            double zoneHi = g_hedgeSets[h].zoneUpperPrice;
+            double zoneLo = g_hedgeSets[h].zoneLowerPrice;
+            if(zoneHi > 0 && zoneLo > 0)
             {
-               double rPnL = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
-               double rVol = PositionGetDouble(POSITION_VOLUME);
-               string rSide = ((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? "BUY" : "SELL";
-               string rInfo = "REV#" + IntegerToString(rv + 1) + " " + rSide + " " + DoubleToString(rVol, 2) + "L $" + DoubleToString(rPnL, 2);
-               color rClr = (rPnL >= 0) ? clrLime : clrOrangeRed;
-               DrawTableRow(row, "Rev.Hedge", rInfo, rClr, COLOR_SECTION_HEDGE); row++;
+               if(bid > zoneLo && bid < zoneHi)
+                  zoneStatus = "IN ZONE";
+               else
+               {
+                  double edgePrice = (bid >= zoneHi) ? zoneHi : zoneLo;
+                  double distPts = MathAbs(bid - edgePrice) / _Point;
+                  if(distPts < InpHedge_CloseMinPoints)
+                     zoneStatus = "OUT " + IntegerToString((int)distPts) + "/" + IntegerToString(InpHedge_CloseMinPoints) + "pts";
+                  else
+                     zoneStatus = "OUT OK " + IntegerToString((int)distPts) + "pts";
+               }
             }
+            else
+               zoneStatus = "N/A";
+            
+            string gateInfo = "Cycle:" + cycleStatus + " Zone:" + zoneStatus;
+            bool gateOK = IsHedgeCloseAllowed(h);
+            color gateClr = gateOK ? clrLime : clrYellow;
+            DrawTableRow(row, "  Gate", gateInfo, gateClr, COLOR_SECTION_HEDGE); row++;
          }
-         // v6.11: Balanced Lock indicator
-         if(g_hedgeBalancedLock)
-         {
-            DrawTableRow(row, "BALANCED", "TP/SL/Match LOCKED", clrYellow, COLOR_SECTION_HEDGE); row++;
+        }
+        // Orphan warning
+        if(g_hedgeOrphanWarning)
+        {
+           DrawTableRow(row, "⚠ WARNING", "ORPHAN GRID ORDERS DETECTED", clrRed, COLOR_SECTION_HEDGE); row++;
          }
+         // v6.15: Reverse Hedge removed — no more reverse hedge or balanced lock display
      }
 
      // === Orphan Recovery Status ===
@@ -6455,11 +6499,46 @@ void CheckAndOpenHedge()
        Print("CYCLE GENERATION incremented to ", g_cycleGeneration, " — new orders use prefix: ", GetCommentPrefix());
 
        g_hedgeSetCount++;
+       
+       // === v6.15: Record Expansion Cycle state + Price Zone ===
+       // Check if TF index 2 (largest) is currently in expansion
+       bool bigTFExpansion = (g_squeeze[2].state == 2);
+       g_hedgeSets[slot].hedgedDuringExpansion = bigTFExpansion;
+       g_hedgeSets[slot].seenExpansionSinceHedge = bigTFExpansion;  // if already expansion, mark seen
+       
+       // Calculate Price Zone: find hedge open price + oldest bound order open price
+       double hOpenPrice = 0;
+       if(g_hedgeSets[slot].hedgeTicket > 0 && PositionSelectByTicket(g_hedgeSets[slot].hedgeTicket))
+          hOpenPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+       g_hedgeSets[slot].hedgeOpenPrice = hOpenPrice;
+       
+       // Find oldest bound order's open price (earliest open time)
+       double oldestPrice = 0;
+       datetime oldestTime = D'2099.01.01';
+       for(int b = 0; b < g_hedgeSets[slot].boundTicketCount; b++)
+       {
+          if(PositionSelectByTicket(g_hedgeSets[slot].boundTickets[b]))
+          {
+             datetime oTime = (datetime)PositionGetInteger(POSITION_TIME);
+             if(oTime < oldestTime)
+             {
+                oldestTime = oTime;
+                oldestPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+             }
+          }
+       }
+       g_hedgeSets[slot].oldestBoundPrice = oldestPrice;
+       g_hedgeSets[slot].zoneUpperPrice = MathMax(hOpenPrice, oldestPrice);
+       g_hedgeSets[slot].zoneLowerPrice = MathMin(hOpenPrice, oldestPrice);
+       
        string sideStr = (hedgeSide == POSITION_TYPE_BUY) ? "BUY" : "SELL";
        Print("HEDGE OPENED: Set#", slot + 1, " ", sideStr, " ", DoubleToString(counterLots, 2),
              " lots to cover ", counterCount, " stuck orders (bound ", g_hedgeSets[slot].boundTicketCount,
              " tickets, boundGen=", g_hedgeSets[slot].boundGeneration, ")");
-    }
+       Print("v6.15 CLOSE GATE: hedgedDuringExp=", bigTFExpansion,
+             " zone=", DoubleToString(g_hedgeSets[slot].zoneLowerPrice, _Digits),
+             "-", DoubleToString(g_hedgeSets[slot].zoneUpperPrice, _Digits));
+     }
 }
 
 //+------------------------------------------------------------------+
@@ -6537,6 +6616,14 @@ void RecoverHedgeSets()
              g_hedgeSets[h].combinedGridMode = false;
              g_hedgeSets[h].combinedGridLevel = 0;
              g_hedgeSets[h].combinedLots = 0;
+             // v6.15: Recovery defaults — assume expansion was seen (conservative, prevent permanent lock)
+             g_hedgeSets[h].seenExpansionSinceHedge = true;
+             g_hedgeSets[h].hedgedDuringExpansion = true;
+             // Zone prices will be recalculated after bound tickets are rebuilt (Step 2)
+             g_hedgeSets[h].hedgeOpenPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+             g_hedgeSets[h].zoneUpperPrice = 0;
+             g_hedgeSets[h].zoneLowerPrice = 0;
+             g_hedgeSets[h].oldestBoundPrice = 0;
             g_hedgeSetCount++;
             recovered++;
             Print("RECOVER: Rebuilt Hedge Set#", h + 1, " from ticket ", ticket, 
@@ -6607,6 +6694,30 @@ void RecoverHedgeSets()
             g_hedgeSets[h].matchingDone = true;  // grid already running → skip matching
             Print("RECOVER: Set#", h + 1, " entering Grid Mode (no bound orders, grid orders exist)");
          }
+      }
+      
+      // v6.15: Recalculate zone prices from bound tickets + hedge open price
+      if(g_hedgeSets[h].boundTicketCount > 0 && g_hedgeSets[h].hedgeOpenPrice > 0)
+      {
+         double oldestPrice = 0;
+         datetime oldestTime = D'2099.01.01';
+         for(int b = 0; b < g_hedgeSets[h].boundTicketCount; b++)
+         {
+            if(PositionSelectByTicket(g_hedgeSets[h].boundTickets[b]))
+            {
+               datetime oTime = (datetime)PositionGetInteger(POSITION_TIME);
+               if(oTime < oldestTime)
+               {
+                  oldestTime = oTime;
+                  oldestPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+               }
+            }
+         }
+         g_hedgeSets[h].oldestBoundPrice = oldestPrice;
+         g_hedgeSets[h].zoneUpperPrice = MathMax(g_hedgeSets[h].hedgeOpenPrice, oldestPrice);
+         g_hedgeSets[h].zoneLowerPrice = MathMin(g_hedgeSets[h].hedgeOpenPrice, oldestPrice);
+         Print("RECOVER: Set#", h + 1, " zone=", DoubleToString(g_hedgeSets[h].zoneLowerPrice, _Digits),
+               "-", DoubleToString(g_hedgeSets[h].zoneUpperPrice, _Digits));
       }
       
       Print("RECOVER: Set#", h + 1, " bound ", g_hedgeSets[h].boundTicketCount,
@@ -7093,27 +7204,64 @@ void ManageOrphanGrid()
    }
 }
 
+//+------------------------------------------------------------------+
+//| v6.15: Check if hedge close is allowed for a specific set          |
+//| Triple Gate: (1) Expansion Cycle, (2) Price Zone, (3) TP Distance  |
+//+------------------------------------------------------------------+
+bool IsHedgeCloseAllowed(int h)
+{
+   // Gate 1: Expansion Cycle — must have passed through expansion in TF index 2
+   if(g_hedgeSets[h].hedgedDuringExpansion)
+   {
+      // Case A: Hedge opened during expansion → just wait for all TFs Normal
+      if(!IsAllSqueezeTFNormalStrict()) return false;
+   }
+   else
+   {
+      // Case B: Hedge opened during Normal/Squeeze → must see expansion first, THEN normal
+      if(!g_hedgeSets[h].seenExpansionSinceHedge) return false;
+      if(!IsAllSqueezeTFNormalStrict()) return false;
+   }
+   
+   // Gate 2: Price Zone — price must be outside zone (oldest bound ↔ hedge)
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double zoneHi = g_hedgeSets[h].zoneUpperPrice;
+   double zoneLo = g_hedgeSets[h].zoneLowerPrice;
+   
+   // If zone is not set (both 0) → skip zone check (recovery scenario)
+   if(zoneHi > 0 && zoneLo > 0)
+   {
+      if(bid > zoneLo && bid < zoneHi) return false;  // IN ZONE → block
+      
+      // Gate 3: TP Distance — must be N points away from zone edge
+      double pts = _Point;
+      if(InpHedge_CloseMinPoints > 0)
+      {
+         if(bid >= zoneHi)
+         {
+            // Price exited above zone
+            if((bid - zoneHi) / pts < InpHedge_CloseMinPoints) return false;
+         }
+         else
+         {
+            // Price exited below zone
+            if((zoneLo - bid) / pts < InpHedge_CloseMinPoints) return false;
+         }
+      }
+   }
+   
+   return true;
+}
+
 void ManageHedgeSets()
 {
    // Detect orphan hedge grid orders every tick
    DetectOrphanHedgeOrders();
    
-   // v6.11: Calculate NET balance of all orders every tick for balanced lock
-   if(InpHedge_ReverseEnable && g_hedgeSetCount > 0)
-   {
-      UpdateHedgeBalancedLock();
-   }
-   else
-   {
-      g_hedgeBalancedLock = false;
-   }
+   // v6.15: Reverse Hedge disabled — always unlock balanced lock
+   g_hedgeBalancedLock = false;
    
-   // Reverse Hedge management
-   ManageReverseHedge();
-   CheckAndOpenReverseHedge();
-   
-   // v6.13: Strict gate — check all 3 TFs once for entire loop
-   bool allTFNormal = IsAllSqueezeTFNormalStrict();
+   // v6.15: Reverse Hedge management removed (no ManageReverseHedge / CheckAndOpenReverseHedge)
    
    for(int h = 0; h < MAX_HEDGE_SETS; h++)
    {
@@ -7121,6 +7269,13 @@ void ManageHedgeSets()
 
       // Refresh bound tickets — remove any that were closed externally
       RefreshBoundTickets(h);
+      
+      // v6.15: Track expansion on TF index 2 (largest) every tick
+      if(!g_hedgeSets[h].seenExpansionSinceHedge)
+      {
+         if(g_squeeze[2].state == 2)  // EXPANSION detected on biggest TF
+            g_hedgeSets[h].seenExpansionSinceHedge = true;
+      }
 
       // Verify hedge ticket still exists
       bool hedgeExists = false;
@@ -7142,27 +7297,25 @@ void ManageHedgeSets()
          continue;
       }
 
-      // v6.13: If in grid mode — only execute when all TFs normal
+      // === v6.15: Triple-Gate Close Check ===
+      // All recovery actions (matching, grid, partial close) require gate pass
+      if(!IsHedgeCloseAllowed(h))
+      {
+         // Reset matchingDone so it re-runs when gate opens
+         g_hedgeSets[h].matchingDone = false;
+         continue;  // Skip all close/grid logic for this set
+      }
+      
+      // === Gate passed — close logic allowed ===
+      
+      // If in grid mode → execute grid
       if(g_hedgeSets[h].gridMode)
       {
-         if(allTFNormal)
-            ManageHedgeGridMode(h);
-         // else: wait for all TFs normal
+         ManageHedgeGridMode(h);
          continue;
       }
       
-      // v6.13: NOT in grid mode — check if any TF is still EXPANSION
-      if(!allTFNormal)
-      {
-         // v6.13: Reset matchingDone when expansion detected — forces re-matching next normal phase
-         g_hedgeSets[h].matchingDone = false;
-         // Still in expansion → do NOT enter grid, do NOT run matching
-         continue;
-      }
-      
-      // === ALL 3 TFs are NORMAL from here ===
-      
-      // v6.13: STEP 1 — Run matching/close cycle FIRST (before any grid entry)
+      // STEP 1 — Run matching/close cycle FIRST (before any grid entry)
       if(!g_hedgeSets[h].matchingDone)
       {
          double hedgePnL = 0;
@@ -7173,7 +7326,6 @@ void ManageHedgeSets()
          if(hedgePnL > 0)
          {
             ManageHedgeMatchingClose(h);
-            // After matching, mark done regardless (set may be deactivated inside)
             if(g_hedgeSets[h].active)
                g_hedgeSets[h].matchingDone = true;
             continue;
@@ -7196,11 +7348,10 @@ void ManageHedgeSets()
             ManageHedgePartialClose(h);
          }
          
-         // Mark matching phase done for this normal cycle
          g_hedgeSets[h].matchingDone = true;
       }
       
-      // v6.13: STEP 2 — After matching done, try entering combined grid mode
+      // STEP 2 — After matching done, try entering combined grid mode
       TryEnterCombinedGridMode(h);
    }
 }
@@ -7353,14 +7504,13 @@ bool TryEnterCombinedGridMode(int h)
    if(!g_hedgeSets[h].active) return false;
    if(g_hedgeSets[h].gridMode) return false;  // already in grid
    
-   // Gate 1: All 3 TFs must be Normal (no expansion)
-   if(!IsAllSqueezeTFNormalStrict()) return false;
+   // Gate 1: v6.15 — Close gate must be passed (replaces old allTFNormal check)
+   // IsHedgeCloseAllowed already checked in ManageHedgeSets() before calling this
    
    // Gate 2: No bound orders remaining
    if(g_hedgeSets[h].boundTicketCount > 0) return false;
    
-   // Gate 3: No profitable reverse orders (they need matching close first)
-   if(HasProfitableReverseOrders()) return false;
+   // Gate 3: v6.15 — Reverse Hedge removed, skip HasProfitableReverseOrders()
    
    // Gate 4: Matching must have been attempted this normal phase
    if(!g_hedgeSets[h].matchingDone) return false;
@@ -7374,32 +7524,15 @@ bool TryEnterCombinedGridMode(int h)
       hedgeLots = PositionGetDouble(POSITION_VOLUME);
    }
    
-   // If hedge doesn't exist but reverse orders remain → also allow grid for combined recovery
-   double reverseLots = 0;
-   for(int i = 0; i < g_reverseHedgeCount; i++)
-   {
-      if(PositionSelectByTicket(g_reverseHedgeTickets[i]))
-         reverseLots += PositionGetDouble(POSITION_VOLUME);
-   }
+   if(!hedgeExists) return false;  // v6.15: no reverse → nothing to recover
    
-   if(!hedgeExists && reverseLots <= 0) return false;  // nothing to recover
-   
-   double totalLots = hedgeLots + reverseLots;
+   double totalLots = hedgeLots;
    
    g_hedgeSets[h].gridMode = true;
    g_hedgeSets[h].gridLevel = CalculateEquivGridLevel(totalLots);
    
-   // Also setup combined grid data
-   if(reverseLots > 0)
-   {
-      g_hedgeSets[h].combinedGridMode = true;
-      g_hedgeSets[h].combinedLots = totalLots;
-      g_hedgeSets[h].combinedGridLevel = g_hedgeSets[h].gridLevel;
-   }
-   
-   Print("v6.13 GRID ENTRY: Set#", h + 1, " entering Combined Grid Mode. TotalLots=",
-         DoubleToString(totalLots, 2), " (hedge=", DoubleToString(hedgeLots, 2),
-         " reverse=", DoubleToString(reverseLots, 2), ") GridLevel=", g_hedgeSets[h].gridLevel);
+   Print("v6.15 GRID ENTRY: Set#", h + 1, " entering Grid Mode. TotalLots=",
+         DoubleToString(totalLots, 2), " GridLevel=", g_hedgeSets[h].gridLevel);
    return true;
 }
 

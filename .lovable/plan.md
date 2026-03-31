@@ -1,127 +1,53 @@
 
 
-## v6.15 — Hedge Close Gate: Expansion Cycle + Price Zone + TP Distance (ปรับจาก plan เดิม)
+## Implemented: v6.15 — Hedge Close Gate: Expansion Cycle + Price Zone + TP Distance
 
-### เงื่อนไขการปิด Hedge Set (ต้องผ่านครบทั้ง 3 ข้อ)
+### Changes Made
 
-```text
-Gate 1: Expansion Cycle (เหมือนเดิม)
-  Case A: Hedge ตอน Expansion → รอ Normal
-  Case B: Hedge ตอน Normal/Squeeze → รอ Expansion TF ใหญ่ 1 รอบ → กลับ Normal
+1. **`IsHedgeCloseAllowed(int h)`**: New triple-gate function that checks per hedge set:
+   - **Gate 1: Expansion Cycle** — Case A (hedged during expansion → wait Normal) / Case B (hedged during Normal → wait expansion TF2 + Normal)
+   - **Gate 2: Price Zone** — price must exit zone between oldest bound order and hedge order
+   - **Gate 3: TP Distance** — after exiting zone, must be ≥ `InpHedge_CloseMinPoints` from zone edge
 
-Gate 2: Price Zone Exit (เหมือนเดิม)
-  ราคาต้องออกจากกรอบ (oldest bound order ↔ hedge order)
+2. **`HedgeSet` struct expanded** with: `seenExpansionSinceHedge`, `hedgedDuringExpansion`, `zoneUpperPrice`, `zoneLowerPrice`, `hedgeOpenPrice`, `oldestBoundPrice`
 
-Gate 3: TP Distance (ใหม่ — เพิ่มเติมจาก plan เดิม)
-  หลังราคาออกจากกรอบแล้ว ต้องห่างขั้นต่ำ N points:
-  - ถ้าราคาไปทาง Hedge order → ห่างจาก Hedge order ≥ InpHedge_CloseMinPoints
-  - ถ้าราคาไปทาง Bound order → ห่างจาก oldest bound order ≥ InpHedge_CloseMinPoints
-  → ฝั่งที่ราคาวิ่งไปจะเป็นฝั่งที่กำไร → ห่างพอให้ matching close คุ้ม
+3. **`CheckAndOpenHedge()`** — records expansion state and zone prices at hedge open time
 
-ถ้าไม่ผ่านครบ 3 ข้อ → ระบบไม่ทำอะไรเลย (ไม่ matching, ไม่ grid)
-```
+4. **`ManageHedgeSets()`** — replaced old `allTFNormal` gate with per-set `IsHedgeCloseAllowed(h)`:
+   - Tracks TF2 expansion every tick per set
+   - All recovery (matching, partial, avg TP, grid) blocked until gate passes
+   - Reverse Hedge calls removed entirely
 
-### ตัวอย่างสถานการณ์
+5. **`TryEnterCombinedGridMode()`** — removed reverse hedge gates and reverse lot calculations
 
-```text
-Oldest bound BUY @ 2340.00 | Hedge SELL @ 2350.00
-Zone = 2340 - 2350 | InpHedge_CloseMinPoints = 300 (30 pips)
+6. **`RecoverHedgeSets()`** — recovers zone prices from position data, defaults expansion flags to `true` (conservative)
 
-Case 1: Bid = 2345 → IN ZONE → ❌ ไม่ปิด
-Case 2: Bid = 2352 → OUT ZONE ทาง hedge → แต่ห่าง hedge แค่ 20 pts → ❌ ไม่ปิด
-Case 3: Bid = 2355 → OUT ZONE ทาง hedge → ห่าง 500 pts ≥ 300 → ✅ matching close ได้
-Case 4: Bid = 2335 → OUT ZONE ทาง bound → ห่าง bound 500 pts ≥ 300 → ✅ matching close ได้
-```
+7. **Dashboard** — shows per-set gate status: Cycle (Wait Expansion/Wait Normal/Ready) + Zone (IN ZONE/OUT pts/OUT OK)
 
-### แผนแก้ไข
+8. **Reverse Hedge disabled** — `ManageReverseHedge()`, `CheckAndOpenReverseHedge()`, `UpdateHedgeBalancedLock()` no longer called
 
-**ไฟล์:** `public/docs/mql5/Gold_Miner_EA.mq5`
+9. **Input changes**: Added `InpHedge_CloseMinPoints`, commented out Reverse Hedge inputs
 
-#### 1. เพิ่ม Input Parameter
+10. **Version bump**: v6.14 → v6.15 (all locations)
 
-```cpp
-input int InpHedge_CloseMinPoints = 300; // Min points from zone edge before matching close
-```
-
-#### 2. เพิ่ม Fields ใน HedgeSet struct
-
-```cpp
-bool     seenExpansionSinceHedge;
-bool     hedgedDuringExpansion;
-double   zoneUpperPrice;   // max(oldest bound price, hedge price)
-double   zoneLowerPrice;   // min(oldest bound price, hedge price)
-double   hedgeOpenPrice;   // ราคาเปิดของ hedge order
-double   oldestBoundPrice; // ราคาเปิดของ bound order เก่าสุด
-```
-
-#### 3. บันทึกสถานะตอนเปิด Hedge — `CheckAndOpenHedge()`
-
-หลังเปิด hedge สำเร็จ:
-- Set `hedgedDuringExpansion` / `seenExpansionSinceHedge` ตาม TF ใหญ่
-- คำนวณ `zoneUpperPrice`, `zoneLowerPrice`, `hedgeOpenPrice`, `oldestBoundPrice`
-
-#### 4. สร้าง `IsHedgeCloseAllowed(int h)` — รวม 3 gates
+### กฎที่บังคับใช้
 
 ```text
-bool IsHedgeCloseAllowed(int h)
-{
-   // Gate 1: Expansion Cycle
-   if(!hedgedDuringExpansion && !seenExpansionSinceHedge) return false;
-   if(!IsAllSqueezeTFNormalStrict()) return false;
-
-   // Gate 2: Price Zone
-   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   if(bid > zoneLowerPrice && bid < zoneUpperPrice) return false;
-
-   // Gate 3: TP Distance — ราคาออกจากกรอบแล้ว ต้องห่างพอ
-   double pts = _Point;
-   if(bid >= zoneUpperPrice) {
-      // ราคาไปทาง hedge (ถ้า hedge อยู่บน) หรือ bound (ถ้า bound อยู่บน)
-      double edgePrice = zoneUpperPrice;
-      if((bid - edgePrice) / pts < InpHedge_CloseMinPoints) return false;
-   } else {
-      double edgePrice = zoneLowerPrice;
-      if((edgePrice - bid) / pts < InpHedge_CloseMinPoints) return false;
-   }
-
-   return true;
-}
+Hedge Set ปิดออเดอร์ได้เมื่อ:
+1. ผ่าน Expansion Cycle ใน TF ใหญ่ (index 2) อย่างน้อย 1 รอบ + กลับ Normal
+2. ราคาออกจากกรอบ (oldest bound ↔ hedge order)
+3. ราคาห่างจากขอบกรอบ ≥ InpHedge_CloseMinPoints
+→ ต้องผ่านครบ 3 ข้อ ถึงจะ matching close / grid ได้
+→ แต่ละ set ทำงานแยกกัน
+→ Accumulate Close ยังทำงานรวมเหมือนเดิม
 ```
-
-#### 5. Track Expansion ทุก Tick ใน `ManageHedgeSets()`
-
-```text
-if(!g_hedgeSets[h].seenExpansionSinceHedge)
-   if(g_squeeze[2].state == 2)
-      g_hedgeSets[h].seenExpansionSinceHedge = true;
-```
-
-#### 6. แก้ `ManageHedgeSets()` Flow
-
-```text
-for each active hedge set h:
-  1. RefreshBoundTickets
-  2. Track expansion
-  3. if(!IsHedgeCloseAllowed(h)) → continue (ไม่ matching, ไม่ grid)
-  4. ผ่านแล้ว → matching cycle → grid entry
-```
-
-#### 7. ปิด Reverse Hedge ทั้งระบบ (ตาม plan เดิม)
-
-#### 8. Recovery OnInit — recover zone prices + expansion flags จาก order data
-
-#### 9. Dashboard — แสดง "Cycle/Zone/Distance" status per set
-
-#### 10. Version bump: v6.14 → v6.15
 
 ### สิ่งที่ไม่เปลี่ยนแปลง
-
 - Order Execution Logic (trade.Buy/Sell/PositionClose)
 - Trading Strategy Logic (SMA/ZigZag/Instant, Grid entry/exit, TP/SL)
 - Core Module Logic (License, News filter, Time filter, Data sync)
-- Matching Close logic ภายใน (`ManageHedgeMatchingClose`) — เพียงเพิ่ม gate ก่อนเรียก
-- Grid Mode logic (`ManageHedgeGridMode`) — เพียงเพิ่ม gate ก่อนรัน
+- Matching Close logic ภายใน — เพียงเพิ่ม gate ก่อนเรียก
+- Grid Mode logic — เพียงเพิ่ม gate ก่อนรัน
 - Accumulate Close — ทำงานรวมเหมือนเดิม ไม่สน gate
 - Orphan Recovery — ไม่แก้
 - Squeeze state detection (BB/KC) — ไม่แก้
-
