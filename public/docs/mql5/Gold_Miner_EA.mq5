@@ -1213,7 +1213,11 @@ void OnTick()
    // === COUNTER-TREND HEDGING CHECK ===
    if(InpHedge_Enable && InpUseSqueezeFilter)
    {
-      CheckAndOpenHedge();
+      // v6.16: Choose trigger mode
+      if(InpHedge_TriggerMode == HEDGE_TRIGGER_EXPANSION)
+         CheckAndOpenHedge();        // Original — Squeeze expansion trigger
+      else
+         CheckAndOpenHedgeByDD();    // New — DD% per side trigger
       ManageHedgeSets();
    }
 
