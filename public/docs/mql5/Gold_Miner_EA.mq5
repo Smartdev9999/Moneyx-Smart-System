@@ -747,13 +747,20 @@ int OnInit()
        g_hedgeSets[h].boundTicketCount = 0;
        ArrayResize(g_hedgeSets[h].boundTickets, 0);
        g_hedgeSets[h].boundGeneration = 0;
-    }
-    g_hedgeSetCount = 0;
+       // v6.15: Hedge Close Gate init
+       g_hedgeSets[h].seenExpansionSinceHedge = false;
+       g_hedgeSets[h].hedgedDuringExpansion = false;
+       g_hedgeSets[h].zoneUpperPrice = 0;
+       g_hedgeSets[h].zoneLowerPrice = 0;
+       g_hedgeSets[h].hedgeOpenPrice = 0;
+       g_hedgeSets[h].oldestBoundPrice = 0;
+     }
+     g_hedgeSetCount = 0;
 
    // === Recover Hedge Sets from existing positions (crash/restart recovery) ===
    RecoverHedgeSets();
 
-   Print("Gold Miner EA v6.14 initialized successfully | CycleGen=", g_cycleGeneration);
+   Print("Gold Miner EA v6.15 initialized successfully | CycleGen=", g_cycleGeneration);
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
