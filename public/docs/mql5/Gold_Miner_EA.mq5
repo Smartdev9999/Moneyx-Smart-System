@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.15 - MTF ZigZag+CDC+Grid+License  |
+//|                Gold Miner EA v6.16 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.15"
-#property description "Gold Miner EA v6.15 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + License"
+#property version   "6.16"
+#property description "Gold Miner EA v6.16 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -67,6 +67,12 @@ enum ENUM_DD_MODE
 {
    DD_PERCENT       = 0,  // Percent (%)
    DD_FIXED_DOLLAR  = 1   // Fixed Dollar ($)
+};
+
+enum ENUM_HEDGE_TRIGGER
+{
+   HEDGE_TRIGGER_EXPANSION  = 0,  // Squeeze Expansion (Original)
+   HEDGE_TRIGGER_DD_PERCENT = 1   // Drawdown % per Side
 };
 
 // Sync Event Type (for real-time data sync)
@@ -318,6 +324,7 @@ input bool             InpSqueeze_CloseOnExpansion = false;        // Close All 
 //--- Counter-Trend Hedging
 input group "=== Counter-Trend Hedging ==="
 input bool     InpHedge_Enable              = false;   // Enable Hedging Mode (requires Squeeze Filter)
+input ENUM_HEDGE_TRIGGER InpHedge_TriggerMode = HEDGE_TRIGGER_EXPANSION; // Hedge Trigger Mode
 input double   InpHedge_MatchMinProfit      = 5.0;     // Min Profit for Hedge Matching ($)
 input int      InpHedge_MatchMinProfitOrders = 2;      // Min Profit Orders for Hedge Grid Matching
 input double   InpHedge_PartialMinProfit    = 5.0;     // Min Profit for Partial Close ($)
@@ -326,6 +333,10 @@ input int      InpHedge_MaxSets              = 10;    // Max Active Hedge Sets (
 input int      InpHedge_BoundAvgTPPoints     = 0;     // Bound Avg TP Points (0=Disabled)
 input int      InpHedge_MinTFConfirm         = 1;     // Min TF Expansion to Confirm Hedge (1-3)
 input int      InpHedge_CloseMinPoints       = 300;   // v6.15: Min points from zone edge before matching close
+// v6.16: DD% Hedge Trigger inputs
+input double   InpHedge_DDTriggerPct         = 5.0;   // DD% to trigger first hedge (per side)
+input double   InpHedge_DDStepPct            = 5.0;   // DD% step for next hedge level
+input int      InpHedge_DDCooldownSec        = 60;    // Min seconds between DD hedges
 // v6.15: Reverse Hedge disabled — kept as constants for legacy function compilation
 const bool     InpHedge_ReverseEnable        = false;
 const int      InpHedge_ReverseMinTFConfirm  = 2;
@@ -505,6 +516,8 @@ struct HedgeSet
    double   zoneLowerPrice;            // min(oldest bound price, hedge price)
    double   hedgeOpenPrice;            // open price of main hedge order
    double   oldestBoundPrice;          // open price of oldest bound order
+   // === v6.16: Hedge Trigger Type ===
+   int      triggerType;               // 0 = expansion, 1 = DD%
 };
 HedgeSet g_hedgeSets[MAX_HEDGE_SETS];
 int      g_hedgeSetCount = 0;
@@ -512,6 +525,11 @@ datetime g_lastHedgeGridTime = 0;  // cooldown timer for hedge grid orders
 int      g_lastDashboardRowCount = 0;  // track previous tick row count for stale cleanup
 bool     g_hedgeOrphanWarning = false;  // orphan hedge grid orders detected
 int      g_cycleGeneration = 0;  // incremented each time a hedge opens — changes comment prefix
+
+// === v6.16: DD% Hedge Trigger State ===
+double   g_nextBuyDDTrigger  = 5.0;    // DD% threshold for next BUY-side hedge
+double   g_nextSellDDTrigger = 5.0;    // DD% threshold for next SELL-side hedge
+datetime g_lastDDHedgeTime   = 0;      // cooldown tracker
 
 // === Reverse Hedge State (v6.11: array-based for multiple reverse hedges) ===
 #define MAX_REVERSE_HEDGES 10
@@ -754,13 +772,20 @@ int OnInit()
        g_hedgeSets[h].zoneLowerPrice = 0;
        g_hedgeSets[h].hedgeOpenPrice = 0;
        g_hedgeSets[h].oldestBoundPrice = 0;
+       // v6.16: Trigger type init
+       g_hedgeSets[h].triggerType = 0;
      }
      g_hedgeSetCount = 0;
+
+   // v6.16: Initialize DD% triggers
+   g_nextBuyDDTrigger  = InpHedge_DDTriggerPct;
+   g_nextSellDDTrigger = InpHedge_DDTriggerPct;
+   g_lastDDHedgeTime   = 0;
 
    // === Recover Hedge Sets from existing positions (crash/restart recovery) ===
    RecoverHedgeSets();
 
-   Print("Gold Miner EA v6.15 initialized successfully | CycleGen=", g_cycleGeneration);
+   Print("Gold Miner EA v6.16 initialized successfully | CycleGen=", g_cycleGeneration);
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -812,7 +837,7 @@ void OnDeinit(const int reason)
 
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
-   Print("Gold Miner EA v6.15 deinitialized");
+   Print("Gold Miner EA v6.16 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -1188,7 +1213,11 @@ void OnTick()
    // === COUNTER-TREND HEDGING CHECK ===
    if(InpHedge_Enable && InpUseSqueezeFilter)
    {
-      CheckAndOpenHedge();
+      // v6.16: Choose trigger mode
+      if(InpHedge_TriggerMode == HEDGE_TRIGGER_EXPANSION)
+         CheckAndOpenHedge();        // Original — Squeeze expansion trigger
+      else
+         CheckAndOpenHedgeByDD();    // New — DD% per side trigger
       ManageHedgeSets();
    }
 
@@ -1785,8 +1814,13 @@ void CloseAllPositions()
       g_hedgeSets[h].zoneLowerPrice = 0;
       g_hedgeSets[h].hedgeOpenPrice = 0;
       g_hedgeSets[h].oldestBoundPrice = 0;
+      // v6.16: Reset trigger type
+      g_hedgeSets[h].triggerType = 0;
    }
    g_hedgeSetCount = 0;
+   // v6.16: Reset DD triggers on full close
+   g_nextBuyDDTrigger  = InpHedge_DDTriggerPct;
+   g_nextSellDDTrigger = InpHedge_DDTriggerPct;
 }
 
 //+------------------------------------------------------------------+
@@ -3296,14 +3330,23 @@ void DisplayDashboard()
             color hedgeClr = (hedgePnL >= 0) ? clrLime : clrOrangeRed;
             DrawTableRow(row, setLabel, hedgeInfo, hedgeClr, COLOR_SECTION_HEDGE); row++;
             
-            // v6.15: Close Gate status per set
+            // v6.16: Close Gate status per set
+            string trigLabel = (g_hedgeSets[h].triggerType == 1) ? "DD%" : "Exp";
             string cycleStatus = "";
-            if(!g_hedgeSets[h].seenExpansionSinceHedge)
-               cycleStatus = "Wait Expansion";
-            else if(!IsAllSqueezeTFNormalStrict())
-               cycleStatus = "Wait Normal";
+            if(g_hedgeSets[h].triggerType == 1)
+            {
+               // DD-triggered → Gate 1 skipped
+               cycleStatus = "Skip(DD)";
+            }
             else
-               cycleStatus = "Ready";
+            {
+               if(!g_hedgeSets[h].seenExpansionSinceHedge)
+                  cycleStatus = "Wait Expansion";
+               else if(!IsAllSqueezeTFNormalStrict())
+                  cycleStatus = "Wait Normal";
+               else
+                  cycleStatus = "Ready";
+            }
             
             // Zone status
             double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
@@ -3327,12 +3370,20 @@ void DisplayDashboard()
             else
                zoneStatus = "N/A";
             
-            string gateInfo = "Cycle:" + cycleStatus + " Zone:" + zoneStatus;
+            string gateInfo = "T:" + trigLabel + " Cy:" + cycleStatus + " Z:" + zoneStatus;
             bool gateOK = IsHedgeCloseAllowed(h);
             color gateClr = gateOK ? clrLime : clrYellow;
             DrawTableRow(row, "  Gate", gateInfo, gateClr, COLOR_SECTION_HEDGE); row++;
          }
         }
+        
+        // v6.16: DD% Mode info line
+        if(InpHedge_TriggerMode == HEDGE_TRIGGER_DD_PERCENT)
+        {
+           string ddInfo = "Next BUY DD:" + DoubleToString(g_nextBuyDDTrigger, 1) + "% | SELL DD:" + DoubleToString(g_nextSellDDTrigger, 1) + "%";
+           DrawTableRow(row, "  DD Trig", ddInfo, clrAqua, COLOR_SECTION_HEDGE); row++;
+        }
+        
         // Orphan warning
         if(g_hedgeOrphanWarning)
         {
@@ -6505,6 +6556,8 @@ void CheckAndOpenHedge()
        bool bigTFExpansion = (g_squeeze[2].state == 2);
        g_hedgeSets[slot].hedgedDuringExpansion = bigTFExpansion;
        g_hedgeSets[slot].seenExpansionSinceHedge = bigTFExpansion;  // if already expansion, mark seen
+       // v6.16: Mark trigger type as Expansion
+       g_hedgeSets[slot].triggerType = 0;
        
        // Calculate Price Zone: find hedge open price + oldest bound order open price
        double hOpenPrice = 0;
@@ -6535,10 +6588,198 @@ void CheckAndOpenHedge()
        Print("HEDGE OPENED: Set#", slot + 1, " ", sideStr, " ", DoubleToString(counterLots, 2),
              " lots to cover ", counterCount, " stuck orders (bound ", g_hedgeSets[slot].boundTicketCount,
              " tickets, boundGen=", g_hedgeSets[slot].boundGeneration, ")");
-       Print("v6.15 CLOSE GATE: hedgedDuringExp=", bigTFExpansion,
+       Print("v6.16 CLOSE GATE: triggerType=Expansion hedgedDuringExp=", bigTFExpansion,
              " zone=", DoubleToString(g_hedgeSets[slot].zoneLowerPrice, _Digits),
              "-", DoubleToString(g_hedgeSets[slot].zoneUpperPrice, _Digits));
      }
+}
+
+//+------------------------------------------------------------------+
+//| v6.16: Check DD% per side and open hedge if threshold reached      |
+//+------------------------------------------------------------------+
+void CheckAndOpenHedgeByDD()
+{
+   if(!InpHedge_Enable || InpHedge_TriggerMode != HEDGE_TRIGGER_DD_PERCENT) return;
+   
+   // Cooldown check
+   datetime now = TimeCurrent();
+   if(now - g_lastDDHedgeTime < InpHedge_DDCooldownSec) return;
+   
+   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+   if(balance <= 0) return;
+   
+   // Calculate floating loss per side (BUY and SELL) — only normal orders, not hedge/reverse
+   double buyLoss = 0, sellLoss = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      string cmt = PositionGetString(POSITION_COMMENT);
+      if(IsHedgeComment(cmt)) continue;  // skip hedge orders
+      if(IsTicketBound(ticket)) continue;  // skip already-bound orders
+      
+      double pnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP) + PositionGetDouble(POSITION_COMMISSION);
+      if(pnl >= 0) continue;  // only count losses
+      
+      ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+      if(posType == POSITION_TYPE_BUY)
+         buyLoss += pnl;
+      else
+         sellLoss += pnl;
+   }
+   
+   // Calculate DD% (loss is negative, make positive for comparison)
+   double buyDDPct  = (buyLoss < 0)  ? (MathAbs(buyLoss) / balance * 100.0) : 0;
+   double sellDDPct = (sellLoss < 0) ? (MathAbs(sellLoss) / balance * 100.0) : 0;
+   
+   // Check BUY side (if BUY orders are losing → open SELL hedge)
+   if(buyDDPct >= g_nextBuyDDTrigger)
+   {
+      if(OpenDDHedge(POSITION_TYPE_BUY, POSITION_TYPE_SELL))
+      {
+         g_nextBuyDDTrigger += InpHedge_DDStepPct;
+         g_lastDDHedgeTime = now;
+         Print("DD HEDGE: BUY side DD=", DoubleToString(buyDDPct, 1), "% → SELL hedge opened. Next trigger at ", 
+               DoubleToString(g_nextBuyDDTrigger, 1), "%");
+      }
+   }
+   
+   // Check SELL side (if SELL orders are losing → open BUY hedge)
+   if(sellDDPct >= g_nextSellDDTrigger)
+   {
+      if(OpenDDHedge(POSITION_TYPE_SELL, POSITION_TYPE_BUY))
+      {
+         g_nextSellDDTrigger += InpHedge_DDStepPct;
+         g_lastDDHedgeTime = now;
+         Print("DD HEDGE: SELL side DD=", DoubleToString(sellDDPct, 1), "% → BUY hedge opened. Next trigger at ",
+               DoubleToString(g_nextSellDDTrigger, 1), "%");
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| v6.16: Open a DD%-triggered hedge order for a losing side          |
+//+------------------------------------------------------------------+
+bool OpenDDHedge(ENUM_POSITION_TYPE counterSide, ENUM_POSITION_TYPE hedgeSide)
+{
+   // Count unbound stuck orders on the losing counter side
+   double counterLots = 0, counterPL = 0;
+   int counterCount = CountUnboundOrders(counterSide, counterLots, counterPL);
+   if(counterCount == 0 || counterLots <= 0) return false;
+   
+   // Check max active sets
+   int activeSetCount = 0;
+   for(int h = 0; h < MAX_HEDGE_SETS; h++)
+      if(g_hedgeSets[h].active) activeSetCount++;
+   if(activeSetCount >= InpHedge_MaxSets)
+   {
+      Print("DD HEDGE: Max active sets reached (", activeSetCount, "/", InpHedge_MaxSets, ") - skip");
+      return false;
+   }
+   
+   int slot = FindFreeHedgeSlot();
+   if(slot < 0)
+   {
+      Print("DD HEDGE: No free slot available");
+      return false;
+   }
+   
+   // Use "GM_HEDGE_D" prefix for DD-triggered hedges (D = DD%, recoverable)
+   string comment = "GM_HEDGE_D" + IntegerToString(slot + 1);
+   
+   ENUM_ORDER_TYPE orderType = (hedgeSide == POSITION_TYPE_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+   if(!OpenOrder(orderType, counterLots, comment)) return false;
+   
+   // Setup hedge set (same as expansion hedge but with triggerType = 1)
+   g_hedgeSets[slot].active = true;
+   g_hedgeSets[slot].hedgeSide = hedgeSide;
+   g_hedgeSets[slot].counterSide = counterSide;
+   g_hedgeSets[slot].hedgeLots = counterLots;
+   g_hedgeSets[slot].originalTotalLots = counterLots;
+   g_hedgeSets[slot].gridMode = false;
+   g_hedgeSets[slot].gridLevel = 0;
+   g_hedgeSets[slot].gridTicketCount = 0;
+   ArrayResize(g_hedgeSets[slot].gridTickets, 0);
+   g_hedgeSets[slot].commentPrefix = comment;
+   g_hedgeSets[slot].triggerType = 1;  // DD-triggered
+   
+   // Find the hedge ticket
+   g_hedgeSets[slot].hedgeTicket = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if(PositionGetString(POSITION_COMMENT) == comment)
+      {
+         g_hedgeSets[slot].hedgeTicket = ticket;
+         break;
+      }
+   }
+   
+   // Bind unbound counter-side tickets
+   g_hedgeSets[slot].boundTicketCount = 0;
+   ArrayResize(g_hedgeSets[slot].boundTickets, 0);
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != counterSide) continue;
+      string cmt = PositionGetString(POSITION_COMMENT);
+      if(IsHedgeComment(cmt)) continue;
+      if(IsTicketBound(ticket)) continue;
+      
+      int bc = g_hedgeSets[slot].boundTicketCount;
+      ArrayResize(g_hedgeSets[slot].boundTickets, bc + 1);
+      g_hedgeSets[slot].boundTickets[bc] = ticket;
+      g_hedgeSets[slot].boundTicketCount = bc + 1;
+   }
+   
+   g_hedgeSets[slot].boundGeneration = g_cycleGeneration;
+   g_cycleGeneration++;
+   Print("CYCLE GENERATION incremented to ", g_cycleGeneration, " — new orders use prefix: ", GetCommentPrefix());
+   g_hedgeSetCount++;
+   
+   // DD-triggered hedge → skip Gate 1 (no expansion context needed)
+   g_hedgeSets[slot].hedgedDuringExpansion = false;
+   g_hedgeSets[slot].seenExpansionSinceHedge = true;  // mark seen to bypass if triggerType check fails
+   
+   // Calculate Price Zone (same as expansion hedge)
+   double hOpenPrice = 0;
+   if(g_hedgeSets[slot].hedgeTicket > 0 && PositionSelectByTicket(g_hedgeSets[slot].hedgeTicket))
+      hOpenPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+   g_hedgeSets[slot].hedgeOpenPrice = hOpenPrice;
+   
+   double oldestPrice = 0;
+   datetime oldestTime = D'2099.01.01';
+   for(int b = 0; b < g_hedgeSets[slot].boundTicketCount; b++)
+   {
+      if(PositionSelectByTicket(g_hedgeSets[slot].boundTickets[b]))
+      {
+         datetime oTime = (datetime)PositionGetInteger(POSITION_TIME);
+         if(oTime < oldestTime)
+         {
+            oldestTime = oTime;
+            oldestPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+         }
+      }
+   }
+   g_hedgeSets[slot].oldestBoundPrice = oldestPrice;
+   g_hedgeSets[slot].zoneUpperPrice = MathMax(hOpenPrice, oldestPrice);
+   g_hedgeSets[slot].zoneLowerPrice = MathMin(hOpenPrice, oldestPrice);
+   
+   string sideStr = (hedgeSide == POSITION_TYPE_BUY) ? "BUY" : "SELL";
+   Print("DD HEDGE OPENED: Set#", slot + 1, " ", sideStr, " ", DoubleToString(counterLots, 2),
+         " lots (bound ", g_hedgeSets[slot].boundTicketCount, " tickets)");
+   Print("v6.16 CLOSE GATE: triggerType=DD zone=", DoubleToString(g_hedgeSets[slot].zoneLowerPrice, _Digits),
+         "-", DoubleToString(g_hedgeSets[slot].zoneUpperPrice, _Digits));
+   
+   return true;
 }
 
 //+------------------------------------------------------------------+
@@ -6599,11 +6840,12 @@ void RecoverHedgeSets()
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       
       string comment = PositionGetString(POSITION_COMMENT);
-      // Check for GM_HEDGE_1, GM_HEDGE_2, etc.
+      // Check for GM_HEDGE_1, GM_HEDGE_2, GM_HEDGE_D1, GM_HEDGE_D2, etc.
       for(int h = 0; h < MAX_HEDGE_SETS; h++)
       {
          string hedgePrefix = "GM_HEDGE_" + IntegerToString(h + 1);
-         if(StringFind(comment, hedgePrefix) >= 0 && !g_hedgeSets[h].active)
+         string hedgePrefixDD = "GM_HEDGE_D" + IntegerToString(h + 1);
+         if((StringFind(comment, hedgePrefix) >= 0 || StringFind(comment, hedgePrefixDD) >= 0) && !g_hedgeSets[h].active)
          {
             g_hedgeSets[h].active = true;
             g_hedgeSets[h].hedgeTicket = ticket;
@@ -6624,6 +6866,11 @@ void RecoverHedgeSets()
              g_hedgeSets[h].zoneUpperPrice = 0;
              g_hedgeSets[h].zoneLowerPrice = 0;
              g_hedgeSets[h].oldestBoundPrice = 0;
+             // v6.16: Recover trigger type from comment prefix
+             if(StringFind(comment, "GM_HEDGE_D") >= 0)
+                g_hedgeSets[h].triggerType = 1;  // DD-triggered
+             else
+                g_hedgeSets[h].triggerType = 0;  // Expansion-triggered
             g_hedgeSetCount++;
             recovered++;
             Print("RECOVER: Rebuilt Hedge Set#", h + 1, " from ticket ", ticket, 
@@ -6780,6 +7027,24 @@ void RecoverHedgeSets()
    if(g_reverseHedgeCount > 0)
       Print("RECOVER: Total reverse hedges recovered: ", g_reverseHedgeCount);
    
+   // v6.16: Recalculate DD triggers from recovered DD-triggered sets
+   {
+      int ddBuyCount = 0, ddSellCount = 0;
+      for(int h = 0; h < MAX_HEDGE_SETS; h++)
+      {
+         if(!g_hedgeSets[h].active || g_hedgeSets[h].triggerType != 1) continue;
+         if(g_hedgeSets[h].counterSide == POSITION_TYPE_BUY)
+            ddBuyCount++;
+         else
+            ddSellCount++;
+      }
+      g_nextBuyDDTrigger  = InpHedge_DDTriggerPct + ddBuyCount * InpHedge_DDStepPct;
+      g_nextSellDDTrigger = InpHedge_DDTriggerPct + ddSellCount * InpHedge_DDStepPct;
+      if(ddBuyCount > 0 || ddSellCount > 0)
+         Print("RECOVER DD TRIGGERS: Next BUY=", DoubleToString(g_nextBuyDDTrigger, 1), 
+               "% SELL=", DoubleToString(g_nextSellDDTrigger, 1), "%");
+   }
+
    if(recovered > 0 || orphansClosed > 0)
       Print("RECOVER COMPLETE: ", recovered, " sets recovered, ", orphansClosed,
             " orphan grid orders closed, cycleGen=", g_cycleGeneration);
@@ -7210,18 +7475,23 @@ void ManageOrphanGrid()
 //+------------------------------------------------------------------+
 bool IsHedgeCloseAllowed(int h)
 {
-   // Gate 1: Expansion Cycle — must have passed through expansion in TF index 2
-   if(g_hedgeSets[h].hedgedDuringExpansion)
+   // v6.16: Gate 1 — Expansion Cycle (SKIP for DD%-triggered sets)
+   if(g_hedgeSets[h].triggerType == 0)
    {
-      // Case A: Hedge opened during expansion → just wait for all TFs Normal
-      if(!IsAllSqueezeTFNormalStrict()) return false;
+      // Expansion-triggered hedge → must pass cycle gate
+      if(g_hedgeSets[h].hedgedDuringExpansion)
+      {
+         // Case A: Hedge opened during expansion → just wait for all TFs Normal
+         if(!IsAllSqueezeTFNormalStrict()) return false;
+      }
+      else
+      {
+         // Case B: Hedge opened during Normal/Squeeze → must see expansion first, THEN normal
+         if(!g_hedgeSets[h].seenExpansionSinceHedge) return false;
+         if(!IsAllSqueezeTFNormalStrict()) return false;
+      }
    }
-   else
-   {
-      // Case B: Hedge opened during Normal/Squeeze → must see expansion first, THEN normal
-      if(!g_hedgeSets[h].seenExpansionSinceHedge) return false;
-      if(!IsAllSqueezeTFNormalStrict()) return false;
-   }
+   // DD%-triggered (triggerType == 1) → skip Gate 1 entirely
    
    // Gate 2: Price Zone — price must be outside zone (oldest bound ↔ hedge)
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
@@ -7353,6 +7623,22 @@ void ManageHedgeSets()
       
       // STEP 2 — After matching done, try entering combined grid mode
       TryEnterCombinedGridMode(h);
+   }
+   
+   // v6.16: Recalculate DD triggers based on remaining active DD sets
+   if(InpHedge_TriggerMode == HEDGE_TRIGGER_DD_PERCENT)
+   {
+      int ddBuyCount = 0, ddSellCount = 0;
+      for(int h = 0; h < MAX_HEDGE_SETS; h++)
+      {
+         if(!g_hedgeSets[h].active || g_hedgeSets[h].triggerType != 1) continue;
+         if(g_hedgeSets[h].counterSide == POSITION_TYPE_BUY)
+            ddBuyCount++;
+         else
+            ddSellCount++;
+      }
+      g_nextBuyDDTrigger  = InpHedge_DDTriggerPct + ddBuyCount * InpHedge_DDStepPct;
+      g_nextSellDDTrigger = InpHedge_DDTriggerPct + ddSellCount * InpHedge_DDStepPct;
    }
 }
 
