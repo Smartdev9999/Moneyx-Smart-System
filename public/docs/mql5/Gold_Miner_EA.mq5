@@ -7624,6 +7624,22 @@ void ManageHedgeSets()
       // STEP 2 — After matching done, try entering combined grid mode
       TryEnterCombinedGridMode(h);
    }
+   
+   // v6.16: Recalculate DD triggers based on remaining active DD sets
+   if(InpHedge_TriggerMode == HEDGE_TRIGGER_DD_PERCENT)
+   {
+      int ddBuyCount = 0, ddSellCount = 0;
+      for(int h = 0; h < MAX_HEDGE_SETS; h++)
+      {
+         if(!g_hedgeSets[h].active || g_hedgeSets[h].triggerType != 1) continue;
+         if(g_hedgeSets[h].counterSide == POSITION_TYPE_BUY)
+            ddBuyCount++;
+         else
+            ddSellCount++;
+      }
+      g_nextBuyDDTrigger  = InpHedge_DDTriggerPct + ddBuyCount * InpHedge_DDStepPct;
+      g_nextSellDDTrigger = InpHedge_DDTriggerPct + ddSellCount * InpHedge_DDStepPct;
+   }
 }
 
 //+------------------------------------------------------------------+
