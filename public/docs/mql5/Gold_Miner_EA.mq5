@@ -324,6 +324,7 @@ input bool             InpSqueeze_CloseOnExpansion = false;        // Close All 
 //--- Counter-Trend Hedging
 input group "=== Counter-Trend Hedging ==="
 input bool     InpHedge_Enable              = false;   // Enable Hedging Mode (requires Squeeze Filter)
+input ENUM_HEDGE_TRIGGER InpHedge_TriggerMode = HEDGE_TRIGGER_EXPANSION; // Hedge Trigger Mode
 input double   InpHedge_MatchMinProfit      = 5.0;     // Min Profit for Hedge Matching ($)
 input int      InpHedge_MatchMinProfitOrders = 2;      // Min Profit Orders for Hedge Grid Matching
 input double   InpHedge_PartialMinProfit    = 5.0;     // Min Profit for Partial Close ($)
@@ -332,6 +333,10 @@ input int      InpHedge_MaxSets              = 10;    // Max Active Hedge Sets (
 input int      InpHedge_BoundAvgTPPoints     = 0;     // Bound Avg TP Points (0=Disabled)
 input int      InpHedge_MinTFConfirm         = 1;     // Min TF Expansion to Confirm Hedge (1-3)
 input int      InpHedge_CloseMinPoints       = 300;   // v6.15: Min points from zone edge before matching close
+// v6.16: DD% Hedge Trigger inputs
+input double   InpHedge_DDTriggerPct         = 5.0;   // DD% to trigger first hedge (per side)
+input double   InpHedge_DDStepPct            = 5.0;   // DD% step for next hedge level
+input int      InpHedge_DDCooldownSec        = 60;    // Min seconds between DD hedges
 // v6.15: Reverse Hedge disabled — kept as constants for legacy function compilation
 const bool     InpHedge_ReverseEnable        = false;
 const int      InpHedge_ReverseMinTFConfirm  = 2;
