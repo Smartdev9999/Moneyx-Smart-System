@@ -3330,14 +3330,23 @@ void DisplayDashboard()
             color hedgeClr = (hedgePnL >= 0) ? clrLime : clrOrangeRed;
             DrawTableRow(row, setLabel, hedgeInfo, hedgeClr, COLOR_SECTION_HEDGE); row++;
             
-            // v6.15: Close Gate status per set
+            // v6.16: Close Gate status per set
+            string trigLabel = (g_hedgeSets[h].triggerType == 1) ? "DD%" : "Exp";
             string cycleStatus = "";
-            if(!g_hedgeSets[h].seenExpansionSinceHedge)
-               cycleStatus = "Wait Expansion";
-            else if(!IsAllSqueezeTFNormalStrict())
-               cycleStatus = "Wait Normal";
+            if(g_hedgeSets[h].triggerType == 1)
+            {
+               // DD-triggered → Gate 1 skipped
+               cycleStatus = "Skip(DD)";
+            }
             else
-               cycleStatus = "Ready";
+            {
+               if(!g_hedgeSets[h].seenExpansionSinceHedge)
+                  cycleStatus = "Wait Expansion";
+               else if(!IsAllSqueezeTFNormalStrict())
+                  cycleStatus = "Wait Normal";
+               else
+                  cycleStatus = "Ready";
+            }
             
             // Zone status
             double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
@@ -3361,12 +3370,20 @@ void DisplayDashboard()
             else
                zoneStatus = "N/A";
             
-            string gateInfo = "Cycle:" + cycleStatus + " Zone:" + zoneStatus;
+            string gateInfo = "T:" + trigLabel + " Cy:" + cycleStatus + " Z:" + zoneStatus;
             bool gateOK = IsHedgeCloseAllowed(h);
             color gateClr = gateOK ? clrLime : clrYellow;
             DrawTableRow(row, "  Gate", gateInfo, gateClr, COLOR_SECTION_HEDGE); row++;
          }
         }
+        
+        // v6.16: DD% Mode info line
+        if(InpHedge_TriggerMode == HEDGE_TRIGGER_DD_PERCENT)
+        {
+           string ddInfo = "Next BUY DD:" + DoubleToString(g_nextBuyDDTrigger, 1) + "% | SELL DD:" + DoubleToString(g_nextSellDDTrigger, 1) + "%";
+           DrawTableRow(row, "  DD Trig", ddInfo, clrAqua, COLOR_SECTION_HEDGE); row++;
+        }
+        
         // Orphan warning
         if(g_hedgeOrphanWarning)
         {
