@@ -7246,18 +7246,23 @@ void ManageOrphanGrid()
 //+------------------------------------------------------------------+
 bool IsHedgeCloseAllowed(int h)
 {
-   // Gate 1: Expansion Cycle — must have passed through expansion in TF index 2
-   if(g_hedgeSets[h].hedgedDuringExpansion)
+   // v6.16: Gate 1 — Expansion Cycle (SKIP for DD%-triggered sets)
+   if(g_hedgeSets[h].triggerType == 0)
    {
-      // Case A: Hedge opened during expansion → just wait for all TFs Normal
-      if(!IsAllSqueezeTFNormalStrict()) return false;
+      // Expansion-triggered hedge → must pass cycle gate
+      if(g_hedgeSets[h].hedgedDuringExpansion)
+      {
+         // Case A: Hedge opened during expansion → just wait for all TFs Normal
+         if(!IsAllSqueezeTFNormalStrict()) return false;
+      }
+      else
+      {
+         // Case B: Hedge opened during Normal/Squeeze → must see expansion first, THEN normal
+         if(!g_hedgeSets[h].seenExpansionSinceHedge) return false;
+         if(!IsAllSqueezeTFNormalStrict()) return false;
+      }
    }
-   else
-   {
-      // Case B: Hedge opened during Normal/Squeeze → must see expansion first, THEN normal
-      if(!g_hedgeSets[h].seenExpansionSinceHedge) return false;
-      if(!IsAllSqueezeTFNormalStrict()) return false;
-   }
+   // DD%-triggered (triggerType == 1) → skip Gate 1 entirely
    
    // Gate 2: Price Zone — price must be outside zone (oldest bound ↔ hedge)
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
