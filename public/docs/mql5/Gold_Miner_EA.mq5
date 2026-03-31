@@ -6478,11 +6478,46 @@ void CheckAndOpenHedge()
        Print("CYCLE GENERATION incremented to ", g_cycleGeneration, " — new orders use prefix: ", GetCommentPrefix());
 
        g_hedgeSetCount++;
+       
+       // === v6.15: Record Expansion Cycle state + Price Zone ===
+       // Check if TF index 2 (largest) is currently in expansion
+       bool bigTFExpansion = (g_squeeze[2].state == 2);
+       g_hedgeSets[slot].hedgedDuringExpansion = bigTFExpansion;
+       g_hedgeSets[slot].seenExpansionSinceHedge = bigTFExpansion;  // if already expansion, mark seen
+       
+       // Calculate Price Zone: find hedge open price + oldest bound order open price
+       double hOpenPrice = 0;
+       if(g_hedgeSets[slot].hedgeTicket > 0 && PositionSelectByTicket(g_hedgeSets[slot].hedgeTicket))
+          hOpenPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+       g_hedgeSets[slot].hedgeOpenPrice = hOpenPrice;
+       
+       // Find oldest bound order's open price (earliest open time)
+       double oldestPrice = 0;
+       datetime oldestTime = D'2099.01.01';
+       for(int b = 0; b < g_hedgeSets[slot].boundTicketCount; b++)
+       {
+          if(PositionSelectByTicket(g_hedgeSets[slot].boundTickets[b]))
+          {
+             datetime oTime = (datetime)PositionGetInteger(POSITION_TIME);
+             if(oTime < oldestTime)
+             {
+                oldestTime = oTime;
+                oldestPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+             }
+          }
+       }
+       g_hedgeSets[slot].oldestBoundPrice = oldestPrice;
+       g_hedgeSets[slot].zoneUpperPrice = MathMax(hOpenPrice, oldestPrice);
+       g_hedgeSets[slot].zoneLowerPrice = MathMin(hOpenPrice, oldestPrice);
+       
        string sideStr = (hedgeSide == POSITION_TYPE_BUY) ? "BUY" : "SELL";
        Print("HEDGE OPENED: Set#", slot + 1, " ", sideStr, " ", DoubleToString(counterLots, 2),
              " lots to cover ", counterCount, " stuck orders (bound ", g_hedgeSets[slot].boundTicketCount,
              " tickets, boundGen=", g_hedgeSets[slot].boundGeneration, ")");
-    }
+       Print("v6.15 CLOSE GATE: hedgedDuringExp=", bigTFExpansion,
+             " zone=", DoubleToString(g_hedgeSets[slot].zoneLowerPrice, _Digits),
+             "-", DoubleToString(g_hedgeSets[slot].zoneUpperPrice, _Digits));
+     }
 }
 
 //+------------------------------------------------------------------+
