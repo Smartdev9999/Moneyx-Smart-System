@@ -498,6 +498,13 @@ struct HedgeSet
    double   combinedLots;       // combined lot size of hedge+reverse for recovery
    // === v6.13: Matching-first sequencing ===
    bool     matchingDone;       // true after matching cycle completes in this normal phase
+   // === v6.15: Hedge Close Gate — Expansion Cycle + Price Zone + TP Distance ===
+   bool     seenExpansionSinceHedge;   // has TF index 2 (largest) been in EXPANSION since hedge opened?
+   bool     hedgedDuringExpansion;     // was hedge opened while TF index 2 was EXPANSION?
+   double   zoneUpperPrice;            // max(oldest bound price, hedge price)
+   double   zoneLowerPrice;            // min(oldest bound price, hedge price)
+   double   hedgeOpenPrice;            // open price of main hedge order
+   double   oldestBoundPrice;          // open price of oldest bound order
 };
 HedgeSet g_hedgeSets[MAX_HEDGE_SETS];
 int      g_hedgeSetCount = 0;
