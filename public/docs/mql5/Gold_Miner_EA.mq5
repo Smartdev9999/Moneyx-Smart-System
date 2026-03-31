@@ -6660,6 +6660,11 @@ void RecoverHedgeSets()
              g_hedgeSets[h].zoneUpperPrice = 0;
              g_hedgeSets[h].zoneLowerPrice = 0;
              g_hedgeSets[h].oldestBoundPrice = 0;
+             // v6.16: Recover trigger type from comment prefix
+             if(StringFind(comment, "GM_HEDGE_D") >= 0)
+                g_hedgeSets[h].triggerType = 1;  // DD-triggered
+             else
+                g_hedgeSets[h].triggerType = 0;  // Expansion-triggered
             g_hedgeSetCount++;
             recovered++;
             Print("RECOVER: Rebuilt Hedge Set#", h + 1, " from ticket ", ticket, 
