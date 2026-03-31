@@ -7451,14 +7451,13 @@ bool TryEnterCombinedGridMode(int h)
    if(!g_hedgeSets[h].active) return false;
    if(g_hedgeSets[h].gridMode) return false;  // already in grid
    
-   // Gate 1: All 3 TFs must be Normal (no expansion)
-   if(!IsAllSqueezeTFNormalStrict()) return false;
+   // Gate 1: v6.15 — Close gate must be passed (replaces old allTFNormal check)
+   // IsHedgeCloseAllowed already checked in ManageHedgeSets() before calling this
    
    // Gate 2: No bound orders remaining
    if(g_hedgeSets[h].boundTicketCount > 0) return false;
    
-   // Gate 3: No profitable reverse orders (they need matching close first)
-   if(HasProfitableReverseOrders()) return false;
+   // Gate 3: v6.15 — Reverse Hedge removed, skip HasProfitableReverseOrders()
    
    // Gate 4: Matching must have been attempted this normal phase
    if(!g_hedgeSets[h].matchingDone) return false;
@@ -7472,32 +7471,15 @@ bool TryEnterCombinedGridMode(int h)
       hedgeLots = PositionGetDouble(POSITION_VOLUME);
    }
    
-   // If hedge doesn't exist but reverse orders remain → also allow grid for combined recovery
-   double reverseLots = 0;
-   for(int i = 0; i < g_reverseHedgeCount; i++)
-   {
-      if(PositionSelectByTicket(g_reverseHedgeTickets[i]))
-         reverseLots += PositionGetDouble(POSITION_VOLUME);
-   }
+   if(!hedgeExists) return false;  // v6.15: no reverse → nothing to recover
    
-   if(!hedgeExists && reverseLots <= 0) return false;  // nothing to recover
-   
-   double totalLots = hedgeLots + reverseLots;
+   double totalLots = hedgeLots;
    
    g_hedgeSets[h].gridMode = true;
    g_hedgeSets[h].gridLevel = CalculateEquivGridLevel(totalLots);
    
-   // Also setup combined grid data
-   if(reverseLots > 0)
-   {
-      g_hedgeSets[h].combinedGridMode = true;
-      g_hedgeSets[h].combinedLots = totalLots;
-      g_hedgeSets[h].combinedGridLevel = g_hedgeSets[h].gridLevel;
-   }
-   
-   Print("v6.13 GRID ENTRY: Set#", h + 1, " entering Combined Grid Mode. TotalLots=",
-         DoubleToString(totalLots, 2), " (hedge=", DoubleToString(hedgeLots, 2),
-         " reverse=", DoubleToString(reverseLots, 2), ") GridLevel=", g_hedgeSets[h].gridLevel);
+   Print("v6.15 GRID ENTRY: Set#", h + 1, " entering Grid Mode. TotalLots=",
+         DoubleToString(totalLots, 2), " GridLevel=", g_hedgeSets[h].gridLevel);
    return true;
 }
 
