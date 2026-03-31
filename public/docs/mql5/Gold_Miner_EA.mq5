@@ -772,13 +772,20 @@ int OnInit()
        g_hedgeSets[h].zoneLowerPrice = 0;
        g_hedgeSets[h].hedgeOpenPrice = 0;
        g_hedgeSets[h].oldestBoundPrice = 0;
+       // v6.16: Trigger type init
+       g_hedgeSets[h].triggerType = 0;
      }
      g_hedgeSetCount = 0;
+
+   // v6.16: Initialize DD% triggers
+   g_nextBuyDDTrigger  = InpHedge_DDTriggerPct;
+   g_nextSellDDTrigger = InpHedge_DDTriggerPct;
+   g_lastDDHedgeTime   = 0;
 
    // === Recover Hedge Sets from existing positions (crash/restart recovery) ===
    RecoverHedgeSets();
 
-   Print("Gold Miner EA v6.15 initialized successfully | CycleGen=", g_cycleGeneration);
+   Print("Gold Miner EA v6.16 initialized successfully | CycleGen=", g_cycleGeneration);
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
