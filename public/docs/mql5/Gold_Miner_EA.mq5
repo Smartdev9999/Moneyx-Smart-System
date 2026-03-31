@@ -69,6 +69,12 @@ enum ENUM_DD_MODE
    DD_FIXED_DOLLAR  = 1   // Fixed Dollar ($)
 };
 
+enum ENUM_HEDGE_TRIGGER
+{
+   HEDGE_TRIGGER_EXPANSION  = 0,  // Squeeze Expansion (Original)
+   HEDGE_TRIGGER_DD_PERCENT = 1   // Drawdown % per Side
+};
+
 // Sync Event Type (for real-time data sync)
 enum ENUM_SYNC_EVENT
 {
