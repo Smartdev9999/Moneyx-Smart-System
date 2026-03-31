@@ -6595,6 +6595,194 @@ void CheckAndOpenHedge()
 }
 
 //+------------------------------------------------------------------+
+//| v6.16: Check DD% per side and open hedge if threshold reached      |
+//+------------------------------------------------------------------+
+void CheckAndOpenHedgeByDD()
+{
+   if(!InpHedge_Enable || InpHedge_TriggerMode != HEDGE_TRIGGER_DD_PERCENT) return;
+   
+   // Cooldown check
+   datetime now = TimeCurrent();
+   if(now - g_lastDDHedgeTime < InpHedge_DDCooldownSec) return;
+   
+   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+   if(balance <= 0) return;
+   
+   // Calculate floating loss per side (BUY and SELL) — only normal orders, not hedge/reverse
+   double buyLoss = 0, sellLoss = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      string cmt = PositionGetString(POSITION_COMMENT);
+      if(IsHedgeComment(cmt)) continue;  // skip hedge orders
+      if(IsTicketBound(ticket)) continue;  // skip already-bound orders
+      
+      double pnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP) + PositionGetDouble(POSITION_COMMISSION);
+      if(pnl >= 0) continue;  // only count losses
+      
+      ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+      if(posType == POSITION_TYPE_BUY)
+         buyLoss += pnl;
+      else
+         sellLoss += pnl;
+   }
+   
+   // Calculate DD% (loss is negative, make positive for comparison)
+   double buyDDPct  = (buyLoss < 0)  ? (MathAbs(buyLoss) / balance * 100.0) : 0;
+   double sellDDPct = (sellLoss < 0) ? (MathAbs(sellLoss) / balance * 100.0) : 0;
+   
+   // Check BUY side (if BUY orders are losing → open SELL hedge)
+   if(buyDDPct >= g_nextBuyDDTrigger)
+   {
+      if(OpenDDHedge(POSITION_TYPE_BUY, POSITION_TYPE_SELL))
+      {
+         g_nextBuyDDTrigger += InpHedge_DDStepPct;
+         g_lastDDHedgeTime = now;
+         Print("DD HEDGE: BUY side DD=", DoubleToString(buyDDPct, 1), "% → SELL hedge opened. Next trigger at ", 
+               DoubleToString(g_nextBuyDDTrigger, 1), "%");
+      }
+   }
+   
+   // Check SELL side (if SELL orders are losing → open BUY hedge)
+   if(sellDDPct >= g_nextSellDDTrigger)
+   {
+      if(OpenDDHedge(POSITION_TYPE_SELL, POSITION_TYPE_BUY))
+      {
+         g_nextSellDDTrigger += InpHedge_DDStepPct;
+         g_lastDDHedgeTime = now;
+         Print("DD HEDGE: SELL side DD=", DoubleToString(sellDDPct, 1), "% → BUY hedge opened. Next trigger at ",
+               DoubleToString(g_nextSellDDTrigger, 1), "%");
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| v6.16: Open a DD%-triggered hedge order for a losing side          |
+//+------------------------------------------------------------------+
+bool OpenDDHedge(ENUM_POSITION_TYPE counterSide, ENUM_POSITION_TYPE hedgeSide)
+{
+   // Count unbound stuck orders on the losing counter side
+   double counterLots = 0, counterPL = 0;
+   int counterCount = CountUnboundOrders(counterSide, counterLots, counterPL);
+   if(counterCount == 0 || counterLots <= 0) return false;
+   
+   // Check max active sets
+   int activeSetCount = 0;
+   for(int h = 0; h < MAX_HEDGE_SETS; h++)
+      if(g_hedgeSets[h].active) activeSetCount++;
+   if(activeSetCount >= InpHedge_MaxSets)
+   {
+      Print("DD HEDGE: Max active sets reached (", activeSetCount, "/", InpHedge_MaxSets, ") - skip");
+      return false;
+   }
+   
+   int slot = FindFreeHedgeSlot();
+   if(slot < 0)
+   {
+      Print("DD HEDGE: No free slot available");
+      return false;
+   }
+   
+   // Use "GM_HEDGE_D" prefix for DD-triggered hedges (D = DD%, recoverable)
+   string comment = "GM_HEDGE_D" + IntegerToString(slot + 1);
+   
+   ENUM_ORDER_TYPE orderType = (hedgeSide == POSITION_TYPE_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+   if(!OpenOrder(orderType, counterLots, comment)) return false;
+   
+   // Setup hedge set (same as expansion hedge but with triggerType = 1)
+   g_hedgeSets[slot].active = true;
+   g_hedgeSets[slot].hedgeSide = hedgeSide;
+   g_hedgeSets[slot].counterSide = counterSide;
+   g_hedgeSets[slot].hedgeLots = counterLots;
+   g_hedgeSets[slot].originalTotalLots = counterLots;
+   g_hedgeSets[slot].gridMode = false;
+   g_hedgeSets[slot].gridLevel = 0;
+   g_hedgeSets[slot].gridTicketCount = 0;
+   ArrayResize(g_hedgeSets[slot].gridTickets, 0);
+   g_hedgeSets[slot].commentPrefix = comment;
+   g_hedgeSets[slot].triggerType = 1;  // DD-triggered
+   
+   // Find the hedge ticket
+   g_hedgeSets[slot].hedgeTicket = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if(PositionGetString(POSITION_COMMENT) == comment)
+      {
+         g_hedgeSets[slot].hedgeTicket = ticket;
+         break;
+      }
+   }
+   
+   // Bind unbound counter-side tickets
+   g_hedgeSets[slot].boundTicketCount = 0;
+   ArrayResize(g_hedgeSets[slot].boundTickets, 0);
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != counterSide) continue;
+      string cmt = PositionGetString(POSITION_COMMENT);
+      if(IsHedgeComment(cmt)) continue;
+      if(IsTicketBound(ticket)) continue;
+      
+      int bc = g_hedgeSets[slot].boundTicketCount;
+      ArrayResize(g_hedgeSets[slot].boundTickets, bc + 1);
+      g_hedgeSets[slot].boundTickets[bc] = ticket;
+      g_hedgeSets[slot].boundTicketCount = bc + 1;
+   }
+   
+   g_hedgeSets[slot].boundGeneration = g_cycleGeneration;
+   g_cycleGeneration++;
+   Print("CYCLE GENERATION incremented to ", g_cycleGeneration, " — new orders use prefix: ", GetCommentPrefix());
+   g_hedgeSetCount++;
+   
+   // DD-triggered hedge → skip Gate 1 (no expansion context needed)
+   g_hedgeSets[slot].hedgedDuringExpansion = false;
+   g_hedgeSets[slot].seenExpansionSinceHedge = true;  // mark seen to bypass if triggerType check fails
+   
+   // Calculate Price Zone (same as expansion hedge)
+   double hOpenPrice = 0;
+   if(g_hedgeSets[slot].hedgeTicket > 0 && PositionSelectByTicket(g_hedgeSets[slot].hedgeTicket))
+      hOpenPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+   g_hedgeSets[slot].hedgeOpenPrice = hOpenPrice;
+   
+   double oldestPrice = 0;
+   datetime oldestTime = D'2099.01.01';
+   for(int b = 0; b < g_hedgeSets[slot].boundTicketCount; b++)
+   {
+      if(PositionSelectByTicket(g_hedgeSets[slot].boundTickets[b]))
+      {
+         datetime oTime = (datetime)PositionGetInteger(POSITION_TIME);
+         if(oTime < oldestTime)
+         {
+            oldestTime = oTime;
+            oldestPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+         }
+      }
+   }
+   g_hedgeSets[slot].oldestBoundPrice = oldestPrice;
+   g_hedgeSets[slot].zoneUpperPrice = MathMax(hOpenPrice, oldestPrice);
+   g_hedgeSets[slot].zoneLowerPrice = MathMin(hOpenPrice, oldestPrice);
+   
+   string sideStr = (hedgeSide == POSITION_TYPE_BUY) ? "BUY" : "SELL";
+   Print("DD HEDGE OPENED: Set#", slot + 1, " ", sideStr, " ", DoubleToString(counterLots, 2),
+         " lots (bound ", g_hedgeSets[slot].boundTicketCount, " tickets)");
+   Print("v6.16 CLOSE GATE: triggerType=DD zone=", DoubleToString(g_hedgeSets[slot].zoneLowerPrice, _Digits),
+         "-", DoubleToString(g_hedgeSets[slot].zoneUpperPrice, _Digits));
+   
+   return true;
+}
+
+//+------------------------------------------------------------------+
 //| Close all hedge grid orders for a given set (cleanup before deact) |
 //+------------------------------------------------------------------+
 void CloseAllHedgeGridOrders(int idx)
