@@ -6402,6 +6402,14 @@ double GetHedgeLotCap(ENUM_POSITION_TYPE side)
       if(!g_hedgeSets[h].active) continue;
       if(g_hedgeSets[h].counterSide != side) continue;
 
+      // v6.23: Skip hedge sets from previous generations — only cap current gen
+      if(g_hedgeSets[h].boundGeneration != g_cycleGeneration)
+      {
+         Print("GetHedgeLotCap: skip set#", h, " boundGen=", g_hedgeSets[h].boundGeneration,
+               " != currentGen=", g_cycleGeneration);
+         continue;
+      }
+
       // This hedge set has bound orders on this side
       double boundLots = 0;
       for(int b = 0; b < g_hedgeSets[h].boundTicketCount; b++)
@@ -6423,6 +6431,9 @@ double GetHedgeLotCap(ENUM_POSITION_TYPE side)
       else
          minCap = MathMin(minCap, allowed);
    }
+   if(minCap >= 0)
+      Print("GetHedgeLotCap: side=", EnumToString(side), " cap=", DoubleToString(minCap, 2),
+            " gen=", g_cycleGeneration);
    return minCap;
 }
 
