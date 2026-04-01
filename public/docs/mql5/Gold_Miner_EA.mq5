@@ -6607,7 +6607,9 @@ void CheckAndOpenHedgeByDD()
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
    if(balance <= 0) return;
    
-   // Calculate floating loss per side (BUY and SELL) — only normal orders, not hedge/reverse
+   // v6.18: Calculate floating loss per side — ONLY from current generation orders
+   // This prevents old generation orders (already managed by their own hedge sets) from triggering new hedges
+   int curGen = g_cycleGeneration;
    double buyLoss = 0, sellLoss = 0;
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
@@ -6618,6 +6620,11 @@ void CheckAndOpenHedgeByDD()
       string cmt = PositionGetString(POSITION_COMMENT);
       if(IsHedgeComment(cmt)) continue;  // skip hedge orders
       if(IsTicketBound(ticket)) continue;  // skip already-bound orders
+      
+      // v6.18: Generation filter — only count current generation
+      int orderGen = ExtractGeneration(cmt);
+      if(orderGen < 0) continue;   // not our comment format
+      if(orderGen != curGen) continue;  // skip older generations (GM, GM1, etc.)
       
       double pnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP) + PositionGetDouble(POSITION_COMMISSION);
       if(pnl >= 0) continue;  // only count losses
@@ -6640,7 +6647,7 @@ void CheckAndOpenHedgeByDD()
       {
          g_nextBuyDDTrigger += InpHedge_DDStepPct;
          g_lastDDHedgeTime = now;
-         Print("DD HEDGE: BUY side DD=", DoubleToString(buyDDPct, 1), "% → SELL hedge opened. Next trigger at ", 
+         Print("DD HEDGE [Gen", curGen, "]: BUY side DD=", DoubleToString(buyDDPct, 1), "% → SELL hedge opened. Next trigger at ", 
                DoubleToString(g_nextBuyDDTrigger, 1), "%");
       }
    }
@@ -6652,7 +6659,7 @@ void CheckAndOpenHedgeByDD()
       {
          g_nextSellDDTrigger += InpHedge_DDStepPct;
          g_lastDDHedgeTime = now;
-         Print("DD HEDGE: SELL side DD=", DoubleToString(sellDDPct, 1), "% → BUY hedge opened. Next trigger at ",
+         Print("DD HEDGE [Gen", curGen, "]: SELL side DD=", DoubleToString(sellDDPct, 1), "% → BUY hedge opened. Next trigger at ",
                DoubleToString(g_nextSellDDTrigger, 1), "%");
       }
    }
