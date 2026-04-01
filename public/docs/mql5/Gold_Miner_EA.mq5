@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.18 - MTF ZigZag+CDC+Grid+License  |
+//|                Gold Miner EA v6.19 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.18"
-#property description "Gold Miner EA v6.18 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + License"
+#property version   "6.19"
+#property description "Gold Miner EA v6.19 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -785,7 +785,7 @@ int OnInit()
    // === Recover Hedge Sets from existing positions (crash/restart recovery) ===
    RecoverHedgeSets();
 
-   Print("Gold Miner EA v6.18 initialized successfully | CycleGen=", g_cycleGeneration);
+   Print("Gold Miner EA v6.19 initialized successfully | CycleGen=", g_cycleGeneration);
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -837,7 +837,7 @@ void OnDeinit(const int reason)
 
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
-   Print("Gold Miner EA v6.18 deinitialized");
+   Print("Gold Miner EA v6.19 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -6469,9 +6469,9 @@ void CheckAndOpenHedge()
    ENUM_POSITION_TYPE counterSide = (bestDir == -1) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
    ENUM_POSITION_TYPE hedgeSide   = (bestDir == -1) ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
 
-   // Count UNBOUND stuck orders on counter side (not already assigned to another hedge set)
+   // v6.19: Count UNBOUND stuck orders on counter side — CURRENT GENERATION ONLY
    double counterLots = 0, counterPL = 0;
-   int counterCount = CountUnboundOrders(counterSide, counterLots, counterPL);
+   int counterCount = CountUnboundOrders(counterSide, counterLots, counterPL, g_cycleGeneration);
    if(counterCount == 0 || counterLots <= 0) return;
 
    // Find free slot
@@ -6537,6 +6537,10 @@ void CheckAndOpenHedge()
          string cmt = PositionGetString(POSITION_COMMENT);
          if(IsHedgeComment(cmt)) continue;
          if(IsTicketBound(ticket)) continue;  // already bound to another set
+         // v6.19: Generation filter — only bind orders from current generation
+         int orderGen = ExtractGeneration(cmt);
+         if(orderGen < 0) continue;
+         if(orderGen != g_cycleGeneration) continue;
 
          int bc = g_hedgeSets[slot].boundTicketCount;
          ArrayResize(g_hedgeSets[slot].boundTickets, bc + 1);
@@ -6590,7 +6594,7 @@ void CheckAndOpenHedge()
        Print("HEDGE OPENED: Set#", slot + 1, " ", sideStr, " ", DoubleToString(counterLots, 2),
              " lots to cover ", counterCount, " stuck orders (bound ", g_hedgeSets[slot].boundTicketCount,
              " tickets, boundGen=", g_hedgeSets[slot].boundGeneration, ")");
-       Print("v6.18 CLOSE GATE: triggerType=Expansion hedgedDuringExp=", bigTFExpansion,
+       Print("v6.19 CLOSE GATE: triggerType=Expansion hedgedDuringExp=", bigTFExpansion,
              " zone=", DoubleToString(g_hedgeSets[slot].zoneLowerPrice, _Digits),
              "-", DoubleToString(g_hedgeSets[slot].zoneUpperPrice, _Digits));
      }
