@@ -6983,6 +6983,8 @@ void RecoverHedgeSets()
                 g_hedgeSets[h].triggerType = 1;  // DD-triggered
              else
                 g_hedgeSets[h].triggerType = 0;  // Expansion-triggered
+              // v6.25: Recover openTime from hedge ticket
+              g_hedgeSets[h].openTime = (datetime)PositionGetInteger(POSITION_TIME);
             g_hedgeSetCount++;
             recovered++;
             Print("RECOVER: Rebuilt Hedge Set#", h + 1, " from ticket ", ticket, 
