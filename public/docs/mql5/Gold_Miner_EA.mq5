@@ -7416,7 +7416,7 @@ void ManageOrphanGrid()
          continue;
       }
       
-      if(TotalOrderCount() >= MaxOpenOrders) return;
+      if(NormalOrderCount() >= MaxOpenOrders) return;
       if(glb >= GridLoss_MaxTrades && gls >= GridLoss_MaxTrades) continue;
       
       // === BUY side orphan grid ===
