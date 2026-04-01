@@ -6469,9 +6469,9 @@ void CheckAndOpenHedge()
    ENUM_POSITION_TYPE counterSide = (bestDir == -1) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
    ENUM_POSITION_TYPE hedgeSide   = (bestDir == -1) ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
 
-   // Count UNBOUND stuck orders on counter side (not already assigned to another hedge set)
+   // v6.19: Count UNBOUND stuck orders on counter side — CURRENT GENERATION ONLY
    double counterLots = 0, counterPL = 0;
-   int counterCount = CountUnboundOrders(counterSide, counterLots, counterPL);
+   int counterCount = CountUnboundOrders(counterSide, counterLots, counterPL, g_cycleGeneration);
    if(counterCount == 0 || counterLots <= 0) return;
 
    // Find free slot
