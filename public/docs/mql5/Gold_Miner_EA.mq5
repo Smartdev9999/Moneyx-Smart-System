@@ -7730,6 +7730,8 @@ void ManageHedgeSets()
          g_hedgeSets[h].boundTicketCount = 0;
          ArrayResize(g_hedgeSets[h].boundTickets, 0);
           g_hedgeSetCount--;
+          // v6.26: Reset sequential lock
+          if(h == g_seqLockedIdx) { g_seqLockedIdx = -1; g_seqLastCloseTime = TimeCurrent(); Print("SEQ_LOCK: Released (Set#", h+1, " external close)"); }
           // v6.24: Reset generation when all hedge sets closed
           if(g_hedgeSetCount <= 0 && g_cycleGeneration > 0)
           {
