@@ -8844,9 +8844,16 @@ void ManageHedgeGridMode(int idx)
          if(StringFind(comment, prefix) >= 0)
             trade.PositionClose(ticket);
       }
-      g_hedgeSets[idx].active = false;
-      g_hedgeSetCount--;
-      Print("HEDGE Set#", idx + 1, " grid mode complete. All cleaned up.");
+       g_hedgeSets[idx].active = false;
+       g_hedgeSetCount--;
+       // v6.24: Reset generation when all hedge sets closed
+       if(g_hedgeSetCount <= 0 && g_cycleGeneration > 0)
+       {
+          g_cycleGeneration = 0;
+          g_hedgeSetCount = 0;
+          Print("CYCLE GENERATION reset to 0 — all hedge sets closed (grid cleanup)");
+       }
+       Print("HEDGE Set#", idx + 1, " grid mode complete. All cleaned up.");
       return;
    }
 
