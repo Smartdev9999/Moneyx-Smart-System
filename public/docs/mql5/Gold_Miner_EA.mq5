@@ -5,8 +5,8 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.25"
-#property description "Gold Miner EA v6.25 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge10 + GenReset + SeqClose + License"
+#property version   "6.26"
+#property description "Gold Miner EA v6.26 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge10 + GenReset + SeqClose + SeqLock + License"
 #property strict
 
 #include <Trade/Trade.mqh>
