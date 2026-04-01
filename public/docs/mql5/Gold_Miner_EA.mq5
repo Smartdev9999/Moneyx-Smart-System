@@ -335,7 +335,7 @@ input int      InpHedge_MinTFConfirm         = 1;     // Min TF Expansion to Con
 input int      InpHedge_CloseMinPoints       = 300;   // v6.15: Min points from zone edge before matching close
 // v6.16: DD% Hedge Trigger inputs
 input double   InpHedge_DDTriggerPct         = 5.0;   // DD% to trigger first hedge (per side)
-input double   InpHedge_DDStepPct            = 5.0;   // DD% step for next hedge level
+input double   InpHedge_DDStepPct            = 5.0;   // [LEGACY] DD% step — not used since v6.21 (constant threshold per gen)
 input int      InpHedge_DDCooldownSec        = 60;    // Min seconds between DD hedges
 // v6.15: Reverse Hedge disabled — kept as constants for legacy function compilation
 const bool     InpHedge_ReverseEnable        = false;
