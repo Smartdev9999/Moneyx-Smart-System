@@ -1491,7 +1491,7 @@ void OnTick()
       if(!g_eaStopped && !g_newOrderBlocked)
       {
          bool canOpenOnThisCandle = !(DontOpenSameCandle && currentBarTime == lastInitialCandleTime);
-         bool canOpenMore = TotalOrderCount() < MaxOpenOrders;
+         bool canOpenMore = NormalOrderCount() < MaxOpenOrders;
 
          // ===== BUY Entry (instant) =====
          if(!g_squeezeBuyBlocked && buyCount == 0 && g_initialBuyPrice == 0 && canOpenMore && canOpenOnThisCandle)
