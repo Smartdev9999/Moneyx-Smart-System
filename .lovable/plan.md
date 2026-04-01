@@ -1,24 +1,28 @@
 
 
-## Implemented: v6.20 — NormalOrderCount() แยก Hedge/Bound ออกจาก MaxOpenOrders
+## Implemented: v6.21 — DD Trigger Threshold คงที่ต่อ Generation
 
 ### Changes Made
 
-1. **`NormalOrderCount()`**: สร้างฟังก์ชันใหม่ที่นับเฉพาะ order ปกติ (ข้าม IsHedgeComment + IsTicketBound)
+1. **DD Trigger ใช้ `InpHedge_DDTriggerPct` คงที่** (ไม่สะสม 5→10→15 อีก)
+   - `CheckAndOpenHedgeByDD()`: เปลี่ยนจาก `g_nextBuyDDTrigger` / `g_nextSellDDTrigger` เป็น `InpHedge_DDTriggerPct` ตรงๆ
+   - ลบ `g_nextBuyDDTrigger += InpHedge_DDStepPct` หลังเปิด hedge
 
-2. **เปลี่ยน 8 จุด** ที่ใช้ `TotalOrderCount()` เป็น `NormalOrderCount()`:
-   - SMA/ZigZag entry, Instant entry, TF ZigZag entry (3 จุด)
-   - CheckGridLoss, CheckGridProfit, TF GridLoss, TF GridProfit (4 จุด)
-   - Orphan recovery (2 จุด)
+2. **Recovery logic ไม่คำนวณ cumulative threshold อีก** (2 จุด: line ~7081, ~7676)
 
-3. **คง `TotalOrderCount()` ไว้** สำหรับ: OnInit detection (line 696), cycle reset (line 2019), accumulate baseline (line 4394)
+3. **Dashboard แสดง DD จริง vs threshold คงที่**: "BUY DD:2.3/5.0% | SELL DD:4.1/5.0%"
 
-4. **Version bump**: v6.19 → v6.20 (header, property, OnInit, OnDeinit, Dashboard)
+4. **`InpHedge_DDStepPct` marked as LEGACY** — คงไว้เพื่อ backward compatibility
+
+5. **Version bump**: v6.20 → v6.21
 
 ### สิ่งที่ไม่เปลี่ยนแปลง
 - Order Execution Logic (trade.Buy/Sell/PositionClose)
 - Trading Strategy Logic (SMA/ZigZag/Instant, Grid entry/exit, TP/SL)
 - Core Module Logic (License, News filter, Time filter, Data sync)
 - Triple-gate close (Expansion + Zone + TP Distance)
-- DD% trigger / Generation-aware isolation (v6.18/v6.19)
+- Generation-aware binding/counting (v6.18/v6.19)
+- NormalOrderCount() logic (v6.20)
+- Expansion hedge trigger — ไม่แก้
+- OpenDDHedge() binding logic — ไม่แก้
 - CountPositions() — ไม่แก้
