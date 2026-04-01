@@ -6372,8 +6372,9 @@ double GetHedgeLotCap(ENUM_POSITION_TYPE side)
 
 //+------------------------------------------------------------------+
 //| Count unbound orders (not tied to any hedge set) for a side        |
+//| v6.18: genFilter >= 0 → only count orders matching that generation |
 //+------------------------------------------------------------------+
-int CountUnboundOrders(ENUM_POSITION_TYPE side, double &totalLots, double &totalPL)
+int CountUnboundOrders(ENUM_POSITION_TYPE side, double &totalLots, double &totalPL, int genFilter = -1)
 {
    int count = 0;
    totalLots = 0;
@@ -6388,6 +6389,12 @@ int CountUnboundOrders(ENUM_POSITION_TYPE side, double &totalLots, double &total
       string comment = PositionGetString(POSITION_COMMENT);
       if(IsHedgeComment(comment)) continue;
       if(IsTicketBound(ticket)) continue;  // skip tickets already bound to a set
+      // v6.18: Generation filter — only count orders from specified generation
+      if(genFilter >= 0)
+      {
+         int orderGen = ExtractGeneration(comment);
+         if(orderGen != genFilter) continue;
+      }
       count++;
       totalLots += PositionGetDouble(POSITION_VOLUME);
       totalPL += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
