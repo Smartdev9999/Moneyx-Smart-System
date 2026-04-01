@@ -7365,7 +7365,7 @@ void ManageOrphanGrid()
 {
    if(g_activeOrphanGroupCount == 0) return;
    if(g_newOrderBlocked) return;
-   if(TotalOrderCount() >= MaxOpenOrders) return;
+   if(NormalOrderCount() >= MaxOpenOrders) return;
    
    // Only work in Normal or Squeeze — not Expansion
    bool isExpansion = false;
