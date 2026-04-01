@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.19 - MTF ZigZag+CDC+Grid+License  |
+//|                Gold Miner EA v6.20 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.19"
-#property description "Gold Miner EA v6.19 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + License"
+#property version   "6.20"
+#property description "Gold Miner EA v6.20 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -785,7 +785,7 @@ int OnInit()
    // === Recover Hedge Sets from existing positions (crash/restart recovery) ===
    RecoverHedgeSets();
 
-   Print("Gold Miner EA v6.19 initialized successfully | CycleGen=", g_cycleGeneration);
+   Print("Gold Miner EA v6.20 initialized successfully | CycleGen=", g_cycleGeneration);
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -837,7 +837,7 @@ void OnDeinit(const int reason)
 
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
-   Print("Gold Miner EA v6.19 deinitialized");
+   Print("Gold Miner EA v6.20 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -1362,7 +1362,7 @@ void OnTick()
          //--- Entry logic: Independent Side Entry - blocked by News/Time filter
          if(!g_newOrderBlocked)
          {
-            bool canOpenMore = TotalOrderCount() < MaxOpenOrders;
+            bool canOpenMore = NormalOrderCount() < MaxOpenOrders;
             bool canOpenOnThisCandle = !(DontOpenSameCandle && currentBarTime == lastInitialCandleTime);
 
             //--- BUY side shouldEnter logic (v2.9 robust fix)
@@ -1491,7 +1491,7 @@ void OnTick()
       if(!g_eaStopped && !g_newOrderBlocked)
       {
          bool canOpenOnThisCandle = !(DontOpenSameCandle && currentBarTime == lastInitialCandleTime);
-         bool canOpenMore = TotalOrderCount() < MaxOpenOrders;
+         bool canOpenMore = NormalOrderCount() < MaxOpenOrders;
 
          // ===== BUY Entry (instant) =====
          if(!g_squeezeBuyBlocked && buyCount == 0 && g_initialBuyPrice == 0 && canOpenMore && canOpenOnThisCandle)
@@ -1593,6 +1593,26 @@ int TotalOrderCount()
       if(ticket == 0) continue;
       if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      count++;
+   }
+   return count;
+}
+
+//+------------------------------------------------------------------+
+//| v6.20: Normal order count — excludes hedge & bound orders          |
+//+------------------------------------------------------------------+
+int NormalOrderCount()
+{
+   int count = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      string comment = PositionGetString(POSITION_COMMENT);
+      if(IsHedgeComment(comment)) continue;
+      if(IsTicketBound(ticket)) continue;
       count++;
    }
    return count;
@@ -2430,7 +2450,7 @@ double FindMaxLotOnSide(ENUM_POSITION_TYPE side)
 void CheckGridLoss(ENUM_POSITION_TYPE side, int currentGridCount)
 {
    if(currentGridCount >= GridLoss_MaxTrades) return;
-   if(TotalOrderCount() >= MaxOpenOrders) return;
+   if(NormalOrderCount() >= MaxOpenOrders) return;
 
    //--- OnlyNewCandle check
    if(GridLoss_OnlyNewCandle)
@@ -2531,7 +2551,7 @@ void CheckGridLoss(ENUM_POSITION_TYPE side, int currentGridCount)
 void CheckGridProfit(ENUM_POSITION_TYPE side, int currentGridCount)
 {
    if(currentGridCount >= GridProfit_MaxTrades) return;
-   if(TotalOrderCount() >= MaxOpenOrders) return;
+   if(NormalOrderCount() >= MaxOpenOrders) return;
 
    //--- OnlyNewCandle check
    if(GridProfit_OnlyNewCandle)
@@ -3004,7 +3024,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.15 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.15 [ZZ]" : "Gold Miner EA v6.15 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.20 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.20 [ZZ]" : "Gold Miner EA v6.20 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -3923,7 +3943,7 @@ void CloseAllSideTF(int tfIdx, ENUM_POSITION_TYPE side)
 void CheckGridLossTF(int tfIdx, ENUM_POSITION_TYPE side, int currentGridCount)
 {
    if(currentGridCount >= GridLoss_MaxTrades) return;
-   if(TotalOrderCount() >= MaxOpenOrders) return;
+   if(NormalOrderCount() >= MaxOpenOrders) return;
 
    // OnlyNewCandle check (per-TF)
    if(GridLoss_OnlyNewCandle)
@@ -4017,7 +4037,7 @@ void CheckGridLossTF(int tfIdx, ENUM_POSITION_TYPE side, int currentGridCount)
 void CheckGridProfitTF(int tfIdx, ENUM_POSITION_TYPE side, int currentGridCount)
 {
    if(currentGridCount >= GridProfit_MaxTrades) return;
-   if(TotalOrderCount() >= MaxOpenOrders) return;
+   if(NormalOrderCount() >= MaxOpenOrders) return;
 
    if(GridProfit_OnlyNewCandle)
    {
@@ -4502,7 +4522,7 @@ void OnTickZigZagMTF()
       // Entry check: sub-TF ZigZag must agree with H4 direction
       if(!g_newOrderBlocked && effectiveDirection != "NONE")
       {
-         bool canOpenMore = TotalOrderCount() < MaxOpenOrders;
+         bool canOpenMore = NormalOrderCount() < MaxOpenOrders;
          bool canOpenThisCandle = !(DontOpenSameCandle && tfBar == g_tfStates[t].lastInitialCandle);
 
          // Detect sub-TF swing
@@ -7345,7 +7365,7 @@ void ManageOrphanGrid()
 {
    if(g_activeOrphanGroupCount == 0) return;
    if(g_newOrderBlocked) return;
-   if(TotalOrderCount() >= MaxOpenOrders) return;
+   if(NormalOrderCount() >= MaxOpenOrders) return;
    
    // Only work in Normal or Squeeze — not Expansion
    bool isExpansion = false;
@@ -7396,7 +7416,7 @@ void ManageOrphanGrid()
          continue;
       }
       
-      if(TotalOrderCount() >= MaxOpenOrders) return;
+      if(NormalOrderCount() >= MaxOpenOrders) return;
       if(glb >= GridLoss_MaxTrades && gls >= GridLoss_MaxTrades) continue;
       
       // === BUY side orphan grid ===
