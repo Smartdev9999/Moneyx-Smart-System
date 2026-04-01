@@ -7471,28 +7471,24 @@ void ManageOrphanGrid()
 }
 
 //+------------------------------------------------------------------+
-//| v6.15: Check if hedge close is allowed for a specific set          |
+//| v6.17: Check if hedge close is allowed for a specific set          |
 //| Triple Gate: (1) Expansion Cycle, (2) Price Zone, (3) TP Distance  |
+//| ALL trigger types must pass Gate 1 (Expansion + DD%)               |
 //+------------------------------------------------------------------+
 bool IsHedgeCloseAllowed(int h)
 {
-   // v6.16: Gate 1 — Expansion Cycle (SKIP for DD%-triggered sets)
-   if(g_hedgeSets[h].triggerType == 0)
+   // Gate 1: Expansion Cycle — mandatory for ALL trigger types (Expansion & DD%)
+   if(g_hedgeSets[h].hedgedDuringExpansion)
    {
-      // Expansion-triggered hedge → must pass cycle gate
-      if(g_hedgeSets[h].hedgedDuringExpansion)
-      {
-         // Case A: Hedge opened during expansion → just wait for all TFs Normal
-         if(!IsAllSqueezeTFNormalStrict()) return false;
-      }
-      else
-      {
-         // Case B: Hedge opened during Normal/Squeeze → must see expansion first, THEN normal
-         if(!g_hedgeSets[h].seenExpansionSinceHedge) return false;
-         if(!IsAllSqueezeTFNormalStrict()) return false;
-      }
+      // Case A: Hedge opened during Expansion → wait for all TFs Normal
+      if(!IsAllSqueezeTFNormalStrict()) return false;
    }
-   // DD%-triggered (triggerType == 1) → skip Gate 1 entirely
+   else
+   {
+      // Case B: Hedge opened during Normal/Squeeze → must see Expansion on biggest TF first, THEN all Normal
+      if(!g_hedgeSets[h].seenExpansionSinceHedge) return false;
+      if(!IsAllSqueezeTFNormalStrict()) return false;
+   }
    
    // Gate 2: Price Zone — price must be outside zone (oldest bound ↔ hedge)
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
