@@ -8549,26 +8549,40 @@ void ManageHedgeMatchingClose(int idx)
        g_hedgeSets[idx].active = false;
       g_hedgeSets[idx].boundTicketCount = 0;
       ArrayResize(g_hedgeSets[idx].boundTickets, 0);
-      g_hedgeSetCount--;
-      Sleep(100);
-   }
-    else
-    {
-       // No losses can be matched → close hedge + release all bound orders to normal
-       Print("HEDGE CLOSE (no matchable losses) Set#", idx + 1,
-             ": profit $", DoubleToString(hedgeProfit, 2),
-             " | Releasing ", g_hedgeSets[idx].boundTicketCount, " bound orders to normal trading");
-       trade.PositionClose(g_hedgeSets[idx].hedgeTicket);
-
-       // Release all bound orders → they return to normal trading system
-        CloseAllHedgeGridOrders(idx);
-        g_hedgeSets[idx].active = false;
-       g_hedgeSets[idx].boundTicketCount = 0;
-       ArrayResize(g_hedgeSets[idx].boundTickets, 0);
-       g_hedgeSets[idx].gridMode = false;
        g_hedgeSetCount--;
+       // v6.24: Reset generation when all hedge sets closed
+       if(g_hedgeSetCount <= 0 && g_cycleGeneration > 0)
+       {
+          g_cycleGeneration = 0;
+          g_hedgeSetCount = 0;
+          Print("CYCLE GENERATION reset to 0 — all hedge sets closed (matching close)");
+       }
        Sleep(100);
     }
+     else
+     {
+        // No losses can be matched → close hedge + release all bound orders to normal
+        Print("HEDGE CLOSE (no matchable losses) Set#", idx + 1,
+              ": profit $", DoubleToString(hedgeProfit, 2),
+              " | Releasing ", g_hedgeSets[idx].boundTicketCount, " bound orders to normal trading");
+        trade.PositionClose(g_hedgeSets[idx].hedgeTicket);
+
+        // Release all bound orders → they return to normal trading system
+         CloseAllHedgeGridOrders(idx);
+         g_hedgeSets[idx].active = false;
+        g_hedgeSets[idx].boundTicketCount = 0;
+        ArrayResize(g_hedgeSets[idx].boundTickets, 0);
+        g_hedgeSets[idx].gridMode = false;
+        g_hedgeSetCount--;
+        // v6.24: Reset generation when all hedge sets closed
+        if(g_hedgeSetCount <= 0 && g_cycleGeneration > 0)
+        {
+           g_cycleGeneration = 0;
+           g_hedgeSetCount = 0;
+           Print("CYCLE GENERATION reset to 0 — all hedge sets closed (release close)");
+        }
+        Sleep(100);
+     }
 }
 
 //+------------------------------------------------------------------+
