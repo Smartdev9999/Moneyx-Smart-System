@@ -6745,9 +6745,10 @@ bool OpenDDHedge(ENUM_POSITION_TYPE counterSide, ENUM_POSITION_TYPE hedgeSide)
    Print("CYCLE GENERATION incremented to ", g_cycleGeneration, " — new orders use prefix: ", GetCommentPrefix());
    g_hedgeSetCount++;
    
-   // DD-triggered hedge → skip Gate 1 (no expansion context needed)
-   g_hedgeSets[slot].hedgedDuringExpansion = false;
-   g_hedgeSets[slot].seenExpansionSinceHedge = true;  // mark seen to bypass if triggerType check fails
+    // v6.17: DD hedge must also pass Expansion Gate — track actual state
+    bool isBigTFExpansion = (g_squeeze[2].state == 2);
+    g_hedgeSets[slot].hedgedDuringExpansion = isBigTFExpansion;
+    g_hedgeSets[slot].seenExpansionSinceHedge = isBigTFExpansion;
    
    // Calculate Price Zone (same as expansion hedge)
    double hOpenPrice = 0;
