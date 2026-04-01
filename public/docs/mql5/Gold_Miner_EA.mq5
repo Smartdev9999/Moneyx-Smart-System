@@ -7168,9 +7168,28 @@ void RecoverHedgeSets()
                 " | Threshold constant=", DoubleToString(InpHedge_DDTriggerPct, 1), "%");
    }
 
-   if(recovered > 0 || orphansClosed > 0)
+    if(recovered > 0 || orphansClosed > 0)
       Print("RECOVER COMPLETE: ", recovered, " sets recovered, ", orphansClosed,
             " orphan grid orders closed, cycleGen=", g_cycleGeneration);
+   
+   // v6.26: Recover sequential lock — lock oldest active set that is already in gridMode or matchingDone
+   if(InpHedge_SequentialClose)
+   {
+      g_seqLockedIdx = -1;
+      datetime oldestLockTime = D'2099.01.01';
+      for(int h = 0; h < MAX_HEDGE_SETS; h++)
+      {
+         if(!g_hedgeSets[h].active) continue;
+         if(!g_hedgeSets[h].gridMode && !g_hedgeSets[h].matchingDone) continue;
+         if(g_hedgeSets[h].openTime < oldestLockTime)
+         {
+            oldestLockTime = g_hedgeSets[h].openTime;
+            g_seqLockedIdx = h;
+         }
+      }
+      if(g_seqLockedIdx >= 0)
+         Print("RECOVER: Sequential lock restored to Set#", g_seqLockedIdx + 1);
+   }
 }
 
 //+------------------------------------------------------------------+
