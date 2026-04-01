@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.21 - MTF ZigZag+CDC+Grid+License  |
+//|                Gold Miner EA v6.22 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.21"
-#property description "Gold Miner EA v6.21 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + License"
+#property version   "6.22"
+#property description "Gold Miner EA v6.22 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -785,7 +785,7 @@ int OnInit()
    // === Recover Hedge Sets from existing positions (crash/restart recovery) ===
    RecoverHedgeSets();
 
-   Print("Gold Miner EA v6.21 initialized successfully | CycleGen=", g_cycleGeneration);
+   Print("Gold Miner EA v6.22 initialized successfully | CycleGen=", g_cycleGeneration);
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -837,7 +837,7 @@ void OnDeinit(const int reason)
 
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
-   Print("Gold Miner EA v6.21 deinitialized");
+   Print("Gold Miner EA v6.22 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -1562,6 +1562,10 @@ void CountPositions(int &buyCount, int &sellCount,
       // Skip bound orders — managed by Hedge system, not normal trading cycle
       if(IsTicketBound(ticket)) continue;
       
+      // v6.22: Skip orders from previous generations — only count current gen
+      int orderGen = ExtractGeneration(comment);
+      if(orderGen >= 0 && orderGen != g_cycleGeneration) continue;
+      
       long posType = PositionGetInteger(POSITION_TYPE);
 
       if(posType == POSITION_TYPE_BUY)
@@ -1613,6 +1617,9 @@ int NormalOrderCount()
       string comment = PositionGetString(POSITION_COMMENT);
       if(IsHedgeComment(comment)) continue;
       if(IsTicketBound(ticket)) continue;
+      // v6.22: Skip orders from previous generations
+      int orderGen = ExtractGeneration(comment);
+      if(orderGen >= 0 && orderGen != g_cycleGeneration) continue;
       count++;
    }
    return count;
@@ -3024,7 +3031,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.21 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.21 [ZZ]" : "Gold Miner EA v6.21 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.22 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.22 [ZZ]" : "Gold Miner EA v6.22 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
