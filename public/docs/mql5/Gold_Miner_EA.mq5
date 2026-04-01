@@ -6852,7 +6852,9 @@ bool OpenDDHedge(ENUM_POSITION_TYPE counterSide, ENUM_POSITION_TYPE hedgeSide)
    g_hedgeSets[slot].boundGeneration = g_cycleGeneration;
    g_cycleGeneration++;
    Print("CYCLE GENERATION incremented to ", g_cycleGeneration, " — new orders use prefix: ", GetCommentPrefix());
-   g_hedgeSetCount++;
+    g_hedgeSetCount++;
+    // v6.25: Record open time for sequential close ordering
+    g_hedgeSets[slot].openTime = TimeCurrent();
    
     // v6.17: DD hedge must also pass Expansion Gate — track actual state
     bool isBigTFExpansion = (g_squeeze[2].state == 2);
