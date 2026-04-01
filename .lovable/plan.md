@@ -1,46 +1,85 @@
 
 
+## v6.20 — แก้ BUY Order ไม่ออกหลังโดน Hedging2: TotalOrderCount() นับรวม Hedge/Bound
 
+### ปัญหาที่พบ
 
-## Implemented: v6.19 — Expansion Hedge Generation-Aware (ต่อจาก v6.18)
-
-### Changes Made
-
-1. **`CheckAndOpenHedge()` (Expansion mode)**: เปลี่ยน `CountUnboundOrders()` จากนับทุก generation → นับเฉพาะ `g_cycleGeneration` เพื่อไม่ให้ bind order ข้าม generation
-
-2. **Binding loop ใน `CheckAndOpenHedge()`**: เพิ่ม `ExtractGeneration(cmt)` filter — bind เฉพาะ order ที่ตรงกับ `g_cycleGeneration` เท่านั้น
-
-3. **Version bump**: v6.18 → v6.19
-
-### กฎที่บังคับใช้
+`TotalOrderCount()` (line 1587-1598) นับ **ทุก position** ของ EA โดยไม่ข้าม hedge orders หรือ bound orders
 
 ```text
-Generation Isolation (v6.18 + v6.19):
-- DD calculation + Expansion binding ดูเฉพาะ order ของ generation ปัจจุบัน
-- Set#1 bind เฉพาะ GM → cycle ขยับเป็น GM1
-- Set#2 bind เฉพาะ GM1 → cycle ขยับเป็น GM2
-- Set#3 bind เฉพาะ GM2 → สามารถเปิดได้ ✅
-- order generation เก่าไม่ถูกเอามาคิด DD หรือ bind ใหม่
+TotalOrderCount() → นับ: normal + hedge + hedge_grid + bound = ทั้งหมด
+```
 
-Expansion Gate (Gate 1) — บังคับทุกโหมด:
-- Case A: Hedge ตอน Expansion → รอ all TFs Normal
-- Case B: Hedge ตอน Normal/Squeeze → รอ TF ใหญ่ Expansion 1 รอบ → all TFs Normal
-- ทั้ง Expansion-triggered และ DD%-triggered ต้องผ่านเหมือนกัน
+ผลลัพธ์: หลัง Hedging2 เปิด มี order จำนวนมาก (จากภาพ: Hedge#1 B:15, Hedge#2 B:17 = 32+ bound orders + hedge orders เอง) → `TotalOrderCount() >= MaxOpenOrders` = **true** → `canOpenMore = false` → BUY entry ถูก block
 
-Set Independence:
-- แต่ละ set track expansion/zone/distance แยกกัน
-- IsTicketBound() ป้องกัน bind ซ้ำ
-- Matching/Grid recovery ทำงานแยกชุด
+จุดที่ใช้ `TotalOrderCount()` ตรวจ MaxOpenOrders:
+- Line 1365: SMA/ZigZag entry
+- Line 1494: Instant entry  
+- Line 2433: CheckGridLoss
+- Line 2534: CheckGridProfit
+- Line 3926: TF GridLoss
+- Line 4020: TF GridProfit
+- Line 4505: TF ZigZag entry
+- Line 7348, 7399: Orphan recovery
+
+**หมายเหตุ**: `CountPositions()` (line 1540) **ข้าม** hedge/bound ถูกต้องแล้ว (ทำให้ `buyCount=0` ถูกต้อง) แต่ `TotalOrderCount()` ไม่ข้าม → เลยเป็น bottleneck
+
+### แผนแก้ไข
+
+**ไฟล์:** `public/docs/mql5/Gold_Miner_EA.mq5`
+
+#### 1. สร้าง `NormalOrderCount()` — นับเฉพาะ order ปกติ
+
+```cpp
+int NormalOrderCount()
+{
+   int count = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      string comment = PositionGetString(POSITION_COMMENT);
+      if(IsHedgeComment(comment)) continue;
+      if(IsTicketBound(ticket)) continue;
+      count++;
+   }
+   return count;
+}
+```
+
+#### 2. เปลี่ยนทุกจุดที่ใช้ `TotalOrderCount()` เพื่อเช็ค MaxOpenOrders
+
+แทนที่ด้วย `NormalOrderCount()` ใน **8 จุด**:
+- Entry logic (SMA, Instant, ZigZag) — 3 จุด
+- Grid entry (GridLoss, GridProfit ทั้ง main + TF) — 4 จุด
+- Orphan recovery — 2 จุด
+
+**คง `TotalOrderCount()` ไว้** สำหรับจุดอื่นที่ต้องนับจริงทั้งหมด (เช่น cycle reset detection, accumulate baseline)
+
+#### 3. Version bump: v6.19 → v6.20
+
+### ตัวอย่างหลังแก้
+
+```text
+สถานการณ์: MaxOpenOrders = 50
+- Normal orders: BUY 0, SELL 3
+- Hedge#1: 1 hedge + 15 bound = 16
+- Hedge#2: 1 hedge + 17 bound = 18
+- Total: 38 orders
+
+เดิม: TotalOrderCount() = 38 → ถ้า MaxOpenOrders=30 → BLOCKED
+ใหม่: NormalOrderCount() = 3 → canOpenMore = true → BUY เข้าได้ ✅
 ```
 
 ### สิ่งที่ไม่เปลี่ยนแปลง
-- Order Execution Logic (trade.Buy/Sell/PositionClose)
-- Trading Strategy Logic (SMA/ZigZag/Instant, Grid entry/exit, TP/SL)
-- Core Module Logic (License, News filter, Time filter, Data sync)
-- Gate 2 (Price Zone) + Gate 3 (TP Distance) — ไม่แก้
-- Matching Close / Grid Mode logic ภายใน — ไม่แก้
-- Accumulate Close — ทำงานรวมเหมือนเดิม
-- DD% trigger logic (CheckAndOpenHedgeByDD / OpenDDHedge) — ไม่แก้ (แก้ไปแล้วใน v6.18)
-- Bound ticket isolation (IsTicketBound) — ไม่แก้
-- Orphan Recovery / Squeeze detection — ไม่แก้
-- Expansion hedge OpenHedge() trigger logic — ไม่แก้ (แก้เฉพาะ scope ของ order ที่นับ/bind)
+- Order Execution Logic (trade.Buy/Sell/PositionClose) — ไม่แก้
+- Trading Strategy Logic (SMA/ZigZag/Instant, Grid entry/exit, TP/SL) — ไม่แก้ logic เพียงเปลี่ยนตัวนับ
+- Core Module Logic (License, News filter, Time filter, Data sync) — ไม่แก้
+- Triple-gate close (Expansion + Zone + TP Distance) — ไม่แก้
+- Matching Close / Grid Mode / Accumulate Close — ไม่แก้
+- DD% trigger / Generation-aware isolation — ไม่แก้
+- `CountPositions()` — ไม่แก้ (ทำงานถูกต้องอยู่แล้ว)
+- `TotalOrderCount()` — ยังคงอยู่สำหรับใช้งานอื่น
+
