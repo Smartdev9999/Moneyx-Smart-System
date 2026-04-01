@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.16 - MTF ZigZag+CDC+Grid+License  |
+//|                Gold Miner EA v6.17 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.16"
-#property description "Gold Miner EA v6.16 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + License"
+#property version   "6.17"
+#property description "Gold Miner EA v6.17 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -785,7 +785,7 @@ int OnInit()
    // === Recover Hedge Sets from existing positions (crash/restart recovery) ===
    RecoverHedgeSets();
 
-   Print("Gold Miner EA v6.16 initialized successfully | CycleGen=", g_cycleGeneration);
+   Print("Gold Miner EA v6.17 initialized successfully | CycleGen=", g_cycleGeneration);
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -837,7 +837,7 @@ void OnDeinit(const int reason)
 
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
-   Print("Gold Miner EA v6.16 deinitialized");
+   Print("Gold Miner EA v6.17 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -3330,23 +3330,15 @@ void DisplayDashboard()
             color hedgeClr = (hedgePnL >= 0) ? clrLime : clrOrangeRed;
             DrawTableRow(row, setLabel, hedgeInfo, hedgeClr, COLOR_SECTION_HEDGE); row++;
             
-            // v6.16: Close Gate status per set
-            string trigLabel = (g_hedgeSets[h].triggerType == 1) ? "DD%" : "Exp";
-            string cycleStatus = "";
-            if(g_hedgeSets[h].triggerType == 1)
-            {
-               // DD-triggered → Gate 1 skipped
-               cycleStatus = "Skip(DD)";
-            }
-            else
-            {
-               if(!g_hedgeSets[h].seenExpansionSinceHedge)
-                  cycleStatus = "Wait Expansion";
-               else if(!IsAllSqueezeTFNormalStrict())
-                  cycleStatus = "Wait Normal";
-               else
-                  cycleStatus = "Ready";
-            }
+             // v6.17: Close Gate status per set — all types show real cycle status
+             string trigLabel = (g_hedgeSets[h].triggerType == 1) ? "DD%" : "Exp";
+             string cycleStatus = "";
+             if(!g_hedgeSets[h].seenExpansionSinceHedge && !g_hedgeSets[h].hedgedDuringExpansion)
+                cycleStatus = "Wait Exp";
+             else if(!IsAllSqueezeTFNormalStrict())
+                cycleStatus = "Wait Norm";
+             else
+                cycleStatus = "Ready";
             
             // Zone status
             double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
@@ -6588,7 +6580,7 @@ void CheckAndOpenHedge()
        Print("HEDGE OPENED: Set#", slot + 1, " ", sideStr, " ", DoubleToString(counterLots, 2),
              " lots to cover ", counterCount, " stuck orders (bound ", g_hedgeSets[slot].boundTicketCount,
              " tickets, boundGen=", g_hedgeSets[slot].boundGeneration, ")");
-       Print("v6.16 CLOSE GATE: triggerType=Expansion hedgedDuringExp=", bigTFExpansion,
+       Print("v6.17 CLOSE GATE: triggerType=Expansion hedgedDuringExp=", bigTFExpansion,
              " zone=", DoubleToString(g_hedgeSets[slot].zoneLowerPrice, _Digits),
              "-", DoubleToString(g_hedgeSets[slot].zoneUpperPrice, _Digits));
      }
@@ -6745,9 +6737,10 @@ bool OpenDDHedge(ENUM_POSITION_TYPE counterSide, ENUM_POSITION_TYPE hedgeSide)
    Print("CYCLE GENERATION incremented to ", g_cycleGeneration, " — new orders use prefix: ", GetCommentPrefix());
    g_hedgeSetCount++;
    
-   // DD-triggered hedge → skip Gate 1 (no expansion context needed)
-   g_hedgeSets[slot].hedgedDuringExpansion = false;
-   g_hedgeSets[slot].seenExpansionSinceHedge = true;  // mark seen to bypass if triggerType check fails
+    // v6.17: DD hedge must also pass Expansion Gate — track actual state
+    bool isBigTFExpansion = (g_squeeze[2].state == 2);
+    g_hedgeSets[slot].hedgedDuringExpansion = isBigTFExpansion;
+    g_hedgeSets[slot].seenExpansionSinceHedge = isBigTFExpansion;
    
    // Calculate Price Zone (same as expansion hedge)
    double hOpenPrice = 0;
@@ -6858,9 +6851,9 @@ void RecoverHedgeSets()
              g_hedgeSets[h].combinedGridMode = false;
              g_hedgeSets[h].combinedGridLevel = 0;
              g_hedgeSets[h].combinedLots = 0;
-             // v6.15: Recovery defaults — assume expansion was seen (conservative, prevent permanent lock)
-             g_hedgeSets[h].seenExpansionSinceHedge = true;
-             g_hedgeSets[h].hedgedDuringExpansion = true;
+              // v6.17: Recovery — assume expansion was seen (conservative, prevent permanent lock)
+              g_hedgeSets[h].seenExpansionSinceHedge = true;
+              g_hedgeSets[h].hedgedDuringExpansion = true;
              // Zone prices will be recalculated after bound tickets are rebuilt (Step 2)
              g_hedgeSets[h].hedgeOpenPrice = PositionGetDouble(POSITION_PRICE_OPEN);
              g_hedgeSets[h].zoneUpperPrice = 0;
@@ -7470,28 +7463,24 @@ void ManageOrphanGrid()
 }
 
 //+------------------------------------------------------------------+
-//| v6.15: Check if hedge close is allowed for a specific set          |
+//| v6.17: Check if hedge close is allowed for a specific set          |
 //| Triple Gate: (1) Expansion Cycle, (2) Price Zone, (3) TP Distance  |
+//| ALL trigger types must pass Gate 1 (Expansion + DD%)               |
 //+------------------------------------------------------------------+
 bool IsHedgeCloseAllowed(int h)
 {
-   // v6.16: Gate 1 — Expansion Cycle (SKIP for DD%-triggered sets)
-   if(g_hedgeSets[h].triggerType == 0)
+   // Gate 1: Expansion Cycle — mandatory for ALL trigger types (Expansion & DD%)
+   if(g_hedgeSets[h].hedgedDuringExpansion)
    {
-      // Expansion-triggered hedge → must pass cycle gate
-      if(g_hedgeSets[h].hedgedDuringExpansion)
-      {
-         // Case A: Hedge opened during expansion → just wait for all TFs Normal
-         if(!IsAllSqueezeTFNormalStrict()) return false;
-      }
-      else
-      {
-         // Case B: Hedge opened during Normal/Squeeze → must see expansion first, THEN normal
-         if(!g_hedgeSets[h].seenExpansionSinceHedge) return false;
-         if(!IsAllSqueezeTFNormalStrict()) return false;
-      }
+      // Case A: Hedge opened during Expansion → wait for all TFs Normal
+      if(!IsAllSqueezeTFNormalStrict()) return false;
    }
-   // DD%-triggered (triggerType == 1) → skip Gate 1 entirely
+   else
+   {
+      // Case B: Hedge opened during Normal/Squeeze → must see Expansion on biggest TF first, THEN all Normal
+      if(!g_hedgeSets[h].seenExpansionSinceHedge) return false;
+      if(!IsAllSqueezeTFNormalStrict()) return false;
+   }
    
    // Gate 2: Price Zone — price must be outside zone (oldest bound ↔ hedge)
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
