@@ -339,6 +339,8 @@ input double   InpHedge_DDStepPct            = 5.0;   // [LEGACY] DD% step — n
 input int      InpHedge_DDCooldownSec        = 60;    // Min seconds between DD hedges
 // v6.25: Sequential Close — process one hedge set at a time (oldest eligible first)
 input bool     InpHedge_SequentialClose      = true;  // Sequential Close (oldest first, one at a time)
+// v6.26: Cooldown between sequential closes to prevent rapid-fire closures
+input int      InpHedge_SeqCooldownSec       = 30;    // Cooldown between sequential closes (sec)
 // v6.15: Reverse Hedge disabled — kept as constants for legacy function compilation
 const bool     InpHedge_ReverseEnable        = false;
 const int      InpHedge_ReverseMinTFConfirm  = 2;
