@@ -1362,7 +1362,7 @@ void OnTick()
          //--- Entry logic: Independent Side Entry - blocked by News/Time filter
          if(!g_newOrderBlocked)
          {
-            bool canOpenMore = TotalOrderCount() < MaxOpenOrders;
+            bool canOpenMore = NormalOrderCount() < MaxOpenOrders;
             bool canOpenOnThisCandle = !(DontOpenSameCandle && currentBarTime == lastInitialCandleTime);
 
             //--- BUY side shouldEnter logic (v2.9 robust fix)
