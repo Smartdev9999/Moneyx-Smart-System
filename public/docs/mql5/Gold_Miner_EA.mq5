@@ -7698,8 +7698,7 @@ void ManageHedgeSets()
          else
             ddSellCount++;
       }
-      g_nextBuyDDTrigger  = InpHedge_DDTriggerPct + ddBuyCount * InpHedge_DDStepPct;
-      g_nextSellDDTrigger = InpHedge_DDTriggerPct + ddSellCount * InpHedge_DDStepPct;
+       // v6.21: Threshold is constant per generation — no cumulative step needed
    }
 }
 
