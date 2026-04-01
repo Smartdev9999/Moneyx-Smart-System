@@ -1562,6 +1562,10 @@ void CountPositions(int &buyCount, int &sellCount,
       // Skip bound orders — managed by Hedge system, not normal trading cycle
       if(IsTicketBound(ticket)) continue;
       
+      // v6.22: Skip orders from previous generations — only count current gen
+      int orderGen = ExtractGeneration(comment);
+      if(orderGen >= 0 && orderGen != g_cycleGeneration) continue;
+      
       long posType = PositionGetInteger(POSITION_TYPE);
 
       if(posType == POSITION_TYPE_BUY)
