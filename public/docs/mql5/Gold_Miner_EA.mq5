@@ -3653,6 +3653,9 @@ void RecoverTFInitialPrices()
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
 
       string comment = PositionGetString(POSITION_COMMENT);
+      // v6.23: Skip orders from previous generations
+      int orderGen = ExtractGeneration(comment);
+      if(orderGen >= 0 && orderGen != g_cycleGeneration) continue;
       long posType = PositionGetInteger(POSITION_TYPE);
       double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
 
