@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.20 - MTF ZigZag+CDC+Grid+License  |
+//|                Gold Miner EA v6.21 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.20"
-#property description "Gold Miner EA v6.20 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + License"
+#property version   "6.21"
+#property description "Gold Miner EA v6.21 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -335,7 +335,7 @@ input int      InpHedge_MinTFConfirm         = 1;     // Min TF Expansion to Con
 input int      InpHedge_CloseMinPoints       = 300;   // v6.15: Min points from zone edge before matching close
 // v6.16: DD% Hedge Trigger inputs
 input double   InpHedge_DDTriggerPct         = 5.0;   // DD% to trigger first hedge (per side)
-input double   InpHedge_DDStepPct            = 5.0;   // DD% step for next hedge level
+input double   InpHedge_DDStepPct            = 5.0;   // [LEGACY] DD% step — not used since v6.21 (constant threshold per gen)
 input int      InpHedge_DDCooldownSec        = 60;    // Min seconds between DD hedges
 // v6.15: Reverse Hedge disabled — kept as constants for legacy function compilation
 const bool     InpHedge_ReverseEnable        = false;
@@ -785,7 +785,7 @@ int OnInit()
    // === Recover Hedge Sets from existing positions (crash/restart recovery) ===
    RecoverHedgeSets();
 
-   Print("Gold Miner EA v6.20 initialized successfully | CycleGen=", g_cycleGeneration);
+   Print("Gold Miner EA v6.21 initialized successfully | CycleGen=", g_cycleGeneration);
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -837,7 +837,7 @@ void OnDeinit(const int reason)
 
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
-   Print("Gold Miner EA v6.20 deinitialized");
+   Print("Gold Miner EA v6.21 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -3024,7 +3024,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.20 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.20 [ZZ]" : "Gold Miner EA v6.20 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.21 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.21 [ZZ]" : "Gold Miner EA v6.21 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -3390,10 +3390,37 @@ void DisplayDashboard()
         }
         
          // v6.18: DD% Mode info line with generation scope
-         if(InpHedge_TriggerMode == HEDGE_TRIGGER_DD_PERCENT)
-         {
-            string ddInfo = "Next BUY DD:" + DoubleToString(g_nextBuyDDTrigger, 1) + "% | SELL DD:" + DoubleToString(g_nextSellDDTrigger, 1) + "%";
-            DrawTableRow(row, "  DD Trig", ddInfo, clrAqua, COLOR_SECTION_HEDGE); row++;
+          if(InpHedge_TriggerMode == HEDGE_TRIGGER_DD_PERCENT)
+          {
+             // v6.21: Show current gen DD vs constant threshold
+             double curBuyDD = 0, curSellDD = 0;
+             {
+                double bal = AccountInfoDouble(ACCOUNT_BALANCE);
+                if(bal > 0)
+                {
+                   double bLoss = 0, sLoss = 0;
+                   int curGen = g_cycleGeneration;
+                   string genPrefix = GetCommentPrefix();
+                   for(int pi = PositionsTotal() - 1; pi >= 0; pi--)
+                   {
+                      ulong tk = PositionGetTicket(pi);
+                      if(tk == 0) continue;
+                      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+                      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+                      string cmt = PositionGetString(POSITION_COMMENT);
+                      if(IsHedgeComment(cmt) || IsTicketBound(tk)) continue;
+                      if(ExtractGeneration(cmt) != curGen) continue;
+                      double pl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+                      if(pl >= 0) continue;
+                      if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) bLoss += pl;
+                      else sLoss += pl;
+                   }
+                   curBuyDD  = (bLoss < 0) ? (MathAbs(bLoss) / bal * 100.0) : 0;
+                   curSellDD = (sLoss < 0) ? (MathAbs(sLoss) / bal * 100.0) : 0;
+                }
+             }
+             string ddInfo = "BUY DD:" + DoubleToString(curBuyDD, 1) + "/" + DoubleToString(InpHedge_DDTriggerPct, 1) + "% | SELL DD:" + DoubleToString(curSellDD, 1) + "/" + DoubleToString(InpHedge_DDTriggerPct, 1) + "%";
+             DrawTableRow(row, "  DD Trig", ddInfo, clrAqua, COLOR_SECTION_HEDGE); row++;
             // v6.18: Show which generation DD is currently monitoring
             string scopeInfo = "Scope: " + GetCommentPrefix() + " (Gen " + IntegerToString(g_cycleGeneration) + ")";
             DrawTableRow(row, "  DD Scope", scopeInfo, clrYellow, COLOR_SECTION_HEDGE); row++;
@@ -6667,29 +6694,27 @@ void CheckAndOpenHedgeByDD()
    double buyDDPct  = (buyLoss < 0)  ? (MathAbs(buyLoss) / balance * 100.0) : 0;
    double sellDDPct = (sellLoss < 0) ? (MathAbs(sellLoss) / balance * 100.0) : 0;
    
-   // Check BUY side (if BUY orders are losing → open SELL hedge)
-   if(buyDDPct >= g_nextBuyDDTrigger)
-   {
-      if(OpenDDHedge(POSITION_TYPE_BUY, POSITION_TYPE_SELL))
-      {
-         g_nextBuyDDTrigger += InpHedge_DDStepPct;
-         g_lastDDHedgeTime = now;
-         Print("DD HEDGE [Gen", curGen, "]: BUY side DD=", DoubleToString(buyDDPct, 1), "% → SELL hedge opened. Next trigger at ", 
-               DoubleToString(g_nextBuyDDTrigger, 1), "%");
-      }
-   }
-   
-   // Check SELL side (if SELL orders are losing → open BUY hedge)
-   if(sellDDPct >= g_nextSellDDTrigger)
-   {
-      if(OpenDDHedge(POSITION_TYPE_SELL, POSITION_TYPE_BUY))
-      {
-         g_nextSellDDTrigger += InpHedge_DDStepPct;
-         g_lastDDHedgeTime = now;
-         Print("DD HEDGE [Gen", curGen, "]: SELL side DD=", DoubleToString(sellDDPct, 1), "% → BUY hedge opened. Next trigger at ",
-               DoubleToString(g_nextSellDDTrigger, 1), "%");
-      }
-   }
+    // v6.21: Check BUY side — constant threshold per generation (no cumulative step)
+    if(buyDDPct >= InpHedge_DDTriggerPct)
+    {
+       if(OpenDDHedge(POSITION_TYPE_BUY, POSITION_TYPE_SELL))
+       {
+          g_lastDDHedgeTime = now;
+          Print("DD HEDGE [Gen", curGen, "]: BUY side DD=", DoubleToString(buyDDPct, 1), 
+                "% >= ", DoubleToString(InpHedge_DDTriggerPct, 1), "% → SELL hedge opened");
+       }
+    }
+    
+    // v6.21: Check SELL side — constant threshold per generation
+    if(sellDDPct >= InpHedge_DDTriggerPct)
+    {
+       if(OpenDDHedge(POSITION_TYPE_SELL, POSITION_TYPE_BUY))
+       {
+          g_lastDDHedgeTime = now;
+          Print("DD HEDGE [Gen", curGen, "]: SELL side DD=", DoubleToString(sellDDPct, 1),
+                "% >= ", DoubleToString(InpHedge_DDTriggerPct, 1), "% → BUY hedge opened");
+       }
+    }
 }
 
 //+------------------------------------------------------------------+
@@ -7078,11 +7103,11 @@ void RecoverHedgeSets()
          else
             ddSellCount++;
       }
-      g_nextBuyDDTrigger  = InpHedge_DDTriggerPct + ddBuyCount * InpHedge_DDStepPct;
-      g_nextSellDDTrigger = InpHedge_DDTriggerPct + ddSellCount * InpHedge_DDStepPct;
-      if(ddBuyCount > 0 || ddSellCount > 0)
-         Print("RECOVER DD TRIGGERS: Next BUY=", DoubleToString(g_nextBuyDDTrigger, 1), 
-               "% SELL=", DoubleToString(g_nextSellDDTrigger, 1), "%");
+       // v6.21: Threshold is constant per generation — no cumulative step needed
+       // g_nextBuyDDTrigger and g_nextSellDDTrigger are kept at InpHedge_DDTriggerPct
+       if(ddBuyCount > 0 || ddSellCount > 0)
+          Print("RECOVER DD SETS: BUY-side=", ddBuyCount, " SELL-side=", ddSellCount, 
+                " | Threshold constant=", DoubleToString(InpHedge_DDTriggerPct, 1), "%");
    }
 
    if(recovered > 0 || orphansClosed > 0)
@@ -7673,8 +7698,7 @@ void ManageHedgeSets()
          else
             ddSellCount++;
       }
-      g_nextBuyDDTrigger  = InpHedge_DDTriggerPct + ddBuyCount * InpHedge_DDStepPct;
-      g_nextSellDDTrigger = InpHedge_DDTriggerPct + ddSellCount * InpHedge_DDStepPct;
+       // v6.21: Threshold is constant per generation — no cumulative step needed
    }
 }
 
