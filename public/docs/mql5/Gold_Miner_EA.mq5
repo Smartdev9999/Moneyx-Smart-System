@@ -6670,9 +6670,9 @@ void CheckAndOpenHedgeByDD()
 //+------------------------------------------------------------------+
 bool OpenDDHedge(ENUM_POSITION_TYPE counterSide, ENUM_POSITION_TYPE hedgeSide)
 {
-   // Count unbound stuck orders on the losing counter side
+   // v6.18: Count unbound stuck orders on the losing counter side — CURRENT GENERATION ONLY
    double counterLots = 0, counterPL = 0;
-   int counterCount = CountUnboundOrders(counterSide, counterLots, counterPL);
+   int counterCount = CountUnboundOrders(counterSide, counterLots, counterPL, g_cycleGeneration);
    if(counterCount == 0 || counterLots <= 0) return false;
    
    // Check max active sets
