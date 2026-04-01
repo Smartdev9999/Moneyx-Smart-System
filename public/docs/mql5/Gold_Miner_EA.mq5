@@ -6646,6 +6646,8 @@ void CheckAndOpenHedge()
        Print("CYCLE GENERATION incremented to ", g_cycleGeneration, " — new orders use prefix: ", GetCommentPrefix());
 
        g_hedgeSetCount++;
+       // v6.25: Record open time for sequential close ordering
+       g_hedgeSets[slot].openTime = TimeCurrent();
        
        // === v6.15: Record Expansion Cycle state + Price Zone ===
        // Check if TF index 2 (largest) is currently in expansion
