@@ -6729,6 +6729,8 @@ bool OpenDDHedge(ENUM_POSITION_TYPE counterSide, ENUM_POSITION_TYPE hedgeSide)
    // Bind unbound counter-side tickets
    g_hedgeSets[slot].boundTicketCount = 0;
    ArrayResize(g_hedgeSets[slot].boundTickets, 0);
+   // v6.18: Only bind orders from current generation — prevents cross-generation contamination
+   int bindGen = g_cycleGeneration;
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       ulong ticket = PositionGetTicket(i);
@@ -6739,6 +6741,10 @@ bool OpenDDHedge(ENUM_POSITION_TYPE counterSide, ENUM_POSITION_TYPE hedgeSide)
       string cmt = PositionGetString(POSITION_COMMENT);
       if(IsHedgeComment(cmt)) continue;
       if(IsTicketBound(ticket)) continue;
+      // v6.18: Generation filter — only bind current generation orders
+      int orderGen = ExtractGeneration(cmt);
+      if(orderGen < 0) continue;
+      if(orderGen != bindGen) continue;
       
       int bc = g_hedgeSets[slot].boundTicketCount;
       ArrayResize(g_hedgeSets[slot].boundTickets, bc + 1);
