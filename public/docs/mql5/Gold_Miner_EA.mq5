@@ -1599,6 +1599,26 @@ int TotalOrderCount()
 }
 
 //+------------------------------------------------------------------+
+//| v6.20: Normal order count — excludes hedge & bound orders          |
+//+------------------------------------------------------------------+
+int NormalOrderCount()
+{
+   int count = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      string comment = PositionGetString(POSITION_COMMENT);
+      if(IsHedgeComment(comment)) continue;
+      if(IsTicketBound(ticket)) continue;
+      count++;
+   }
+   return count;
+}
+
+//+------------------------------------------------------------------+
 //| Open order                                                         |
 //+------------------------------------------------------------------+
 bool OpenOrder(ENUM_ORDER_TYPE orderType, double lots, string comment)
