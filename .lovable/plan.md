@@ -2,28 +2,25 @@
 
 
 
-## Implemented: v6.18 — Generation-Aware DD Hedge Isolation
+## Implemented: v6.19 — Expansion Hedge Generation-Aware (ต่อจาก v6.18)
 
 ### Changes Made
 
-1. **`CheckAndOpenHedgeByDD()`**: Added `ExtractGeneration()` filter — only counts DD from orders matching `g_cycleGeneration`. Old generation orders (GM, GM1, etc.) no longer trigger new hedges.
+1. **`CheckAndOpenHedge()` (Expansion mode)**: เปลี่ยน `CountUnboundOrders()` จากนับทุก generation → นับเฉพาะ `g_cycleGeneration` เพื่อไม่ให้ bind order ข้าม generation
 
-2. **`CountUnboundOrders()`**: Added optional `genFilter` parameter. When `genFilter >= 0`, only orders with matching generation are counted. Existing callers (expansion mode) unaffected (default = -1).
+2. **Binding loop ใน `CheckAndOpenHedge()`**: เพิ่ม `ExtractGeneration(cmt)` filter — bind เฉพาะ order ที่ตรงกับ `g_cycleGeneration` เท่านั้น
 
-3. **`OpenDDHedge()`**: Binding loop now filters by `g_cycleGeneration` — prevents new hedge sets from binding orders from older generations.
-
-4. **Dashboard**: Added "DD Scope" row showing which generation is being monitored (e.g., `Scope: GM1 (Gen 1)`).
-
-5. **Version bump**: v6.17 → v6.18
+3. **Version bump**: v6.18 → v6.19
 
 ### กฎที่บังคับใช้
 
 ```text
-Generation Isolation (v6.18):
-- DD calculation ดูเฉพาะ order ของ generation ปัจจุบัน
-- Hedge Set#1 bind เฉพาะ GM → cycle ขยับเป็น GM1
-- DD Hedge รอบถัดไปดูเฉพาะ GM1 เท่านั้น
-- GM เดิมไม่ถูกเอามาคิด DD เปิด Hedging2
+Generation Isolation (v6.18 + v6.19):
+- DD calculation + Expansion binding ดูเฉพาะ order ของ generation ปัจจุบัน
+- Set#1 bind เฉพาะ GM → cycle ขยับเป็น GM1
+- Set#2 bind เฉพาะ GM1 → cycle ขยับเป็น GM2
+- Set#3 bind เฉพาะ GM2 → สามารถเปิดได้ ✅
+- order generation เก่าไม่ถูกเอามาคิด DD หรือ bind ใหม่
 
 Expansion Gate (Gate 1) — บังคับทุกโหมด:
 - Case A: Hedge ตอน Expansion → รอ all TFs Normal
@@ -43,7 +40,7 @@ Set Independence:
 - Gate 2 (Price Zone) + Gate 3 (TP Distance) — ไม่แก้
 - Matching Close / Grid Mode logic ภายใน — ไม่แก้
 - Accumulate Close — ทำงานรวมเหมือนเดิม
-- DD% trigger logic threshold (InpHedge_DDTriggerPct) — ไม่แก้ค่า
+- DD% trigger logic (CheckAndOpenHedgeByDD / OpenDDHedge) — ไม่แก้ (แก้ไปแล้วใน v6.18)
 - Bound ticket isolation (IsTicketBound) — ไม่แก้
 - Orphan Recovery / Squeeze detection — ไม่แก้
-- Expansion hedge OpenHedge() — ไม่แก้ (ใช้ CountUnboundOrders default genFilter=-1)
+- Expansion hedge OpenHedge() trigger logic — ไม่แก้ (แก้เฉพาะ scope ของ order ที่นับ/bind)
