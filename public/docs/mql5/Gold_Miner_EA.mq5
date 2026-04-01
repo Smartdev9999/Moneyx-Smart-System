@@ -7643,6 +7643,25 @@ void ManageHedgeSets()
    
    // v6.15: Reverse Hedge management removed (no ManageReverseHedge / CheckAndOpenReverseHedge)
    
+   // === v6.25: Sequential Close — find oldest eligible set index ===
+   int seqActiveIdx = -1;  // index of the set currently allowed to do recovery
+   if(InpHedge_SequentialClose)
+   {
+      datetime oldestTime = D'2099.01.01';
+      for(int s = 0; s < MAX_HEDGE_SETS; s++)
+      {
+         if(!g_hedgeSets[s].active) continue;
+         if(!IsHedgeCloseAllowed(s)) continue;  // must pass Triple Gate to be eligible
+         if(g_hedgeSets[s].openTime < oldestTime)
+         {
+            oldestTime = g_hedgeSets[s].openTime;
+            seqActiveIdx = s;
+         }
+      }
+      if(seqActiveIdx >= 0)
+         Print("SEQ_CLOSE: Processing Set#", seqActiveIdx + 1, " (oldest eligible, openTime=", TimeToString(g_hedgeSets[seqActiveIdx].openTime), ")");
+   }
+   
    for(int h = 0; h < MAX_HEDGE_SETS; h++)
    {
       if(!g_hedgeSets[h].active) continue;
@@ -7691,6 +7710,13 @@ void ManageHedgeSets()
          // Reset matchingDone so it re-runs when gate opens
          g_hedgeSets[h].matchingDone = false;
          continue;  // Skip all close/grid logic for this set
+      }
+      
+      // === v6.25: Sequential Close — skip recovery if not the chosen set ===
+      if(InpHedge_SequentialClose && seqActiveIdx >= 0 && h != seqActiveIdx)
+      {
+         // Maintenance only — gate tracking and bound refresh already done above
+         continue;
       }
       
       // === Gate passed — close logic allowed ===
