@@ -7649,23 +7649,54 @@ void ManageHedgeSets()
    
    // v6.15: Reverse Hedge management removed (no ManageReverseHedge / CheckAndOpenReverseHedge)
    
-   // === v6.25: Sequential Close — find oldest eligible set index ===
+   // === v6.26: Sequential Close — lock-based, process one set until fully deactivated ===
    int seqActiveIdx = -1;  // index of the set currently allowed to do recovery
    if(InpHedge_SequentialClose)
    {
-      datetime oldestTime = D'2099.01.01';
-      for(int s = 0; s < MAX_HEDGE_SETS; s++)
+      // Priority 1: If a set is already locked and still active → keep it
+      if(g_seqLockedIdx >= 0 && g_seqLockedIdx < MAX_HEDGE_SETS && g_hedgeSets[g_seqLockedIdx].active)
       {
-         if(!g_hedgeSets[s].active) continue;
-         if(!IsHedgeCloseAllowed(s)) continue;  // must pass Triple Gate to be eligible
-         if(g_hedgeSets[s].openTime < oldestTime)
+         seqActiveIdx = g_seqLockedIdx;
+      }
+      else
+      {
+         // Previous lock invalid (set deactivated or -1) → clear it
+         if(g_seqLockedIdx >= 0)
          {
-            oldestTime = g_hedgeSets[s].openTime;
-            seqActiveIdx = s;
+            Print("SEQ_LOCK: Lock released (Set#", g_seqLockedIdx + 1, " no longer active)");
+            g_seqLockedIdx = -1;
+         }
+         
+         // Priority 2: Check cooldown before selecting a new set
+         if(g_seqLastCloseTime > 0 && (TimeCurrent() - g_seqLastCloseTime) < InpHedge_SeqCooldownSec)
+         {
+            // Cooldown active — don't select any new set for recovery
+            // All sets will only do maintenance (bound refresh + expansion tracking)
+         }
+         else
+         {
+            // Priority 3: Find oldest eligible set → lock it
+            datetime oldestTime = D'2099.01.01';
+            for(int s = 0; s < MAX_HEDGE_SETS; s++)
+            {
+               if(!g_hedgeSets[s].active) continue;
+               if(!IsHedgeCloseAllowed(s)) continue;  // must pass Triple Gate
+               if(g_hedgeSets[s].openTime < oldestTime)
+               {
+                  oldestTime = g_hedgeSets[s].openTime;
+                  seqActiveIdx = s;
+               }
+            }
+            if(seqActiveIdx >= 0)
+            {
+               g_seqLockedIdx = seqActiveIdx;
+               Print("SEQ_LOCK: Locked to Set#", seqActiveIdx + 1, " (oldest eligible, openTime=", TimeToString(g_hedgeSets[seqActiveIdx].openTime), ")");
+            }
          }
       }
+      
       if(seqActiveIdx >= 0)
-         Print("SEQ_CLOSE: Processing Set#", seqActiveIdx + 1, " (oldest eligible, openTime=", TimeToString(g_hedgeSets[seqActiveIdx].openTime), ")");
+         Print("SEQ_CLOSE: Processing Set#", seqActiveIdx + 1, " (locked, openTime=", TimeToString(g_hedgeSets[seqActiveIdx].openTime), ")");
    }
    
    for(int h = 0; h < MAX_HEDGE_SETS; h++)
