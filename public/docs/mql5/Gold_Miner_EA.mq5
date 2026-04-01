@@ -537,6 +537,10 @@ double   g_nextBuyDDTrigger  = 5.0;    // DD% threshold for next BUY-side hedge
 double   g_nextSellDDTrigger = 5.0;    // DD% threshold for next SELL-side hedge
 datetime g_lastDDHedgeTime   = 0;      // cooldown tracker
 
+// === v6.26: Sequential Close Lock ===
+int      g_seqLockedIdx     = -1;    // index of set currently being processed (-1 = none)
+datetime g_seqLastCloseTime = 0;     // time when last sequential set was deactivated
+
 // === Reverse Hedge State (v6.11: array-based for multiple reverse hedges) ===
 #define MAX_REVERSE_HEDGES 10
 ulong    g_reverseHedgeTickets[MAX_REVERSE_HEDGES];
