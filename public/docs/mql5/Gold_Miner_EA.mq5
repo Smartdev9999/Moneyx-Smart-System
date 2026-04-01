@@ -485,7 +485,7 @@ bool         g_squeezeSellBlocked = false;  // directional: block SELL only
 bool         g_expansionCloseTriggered = false;  // cooldown for CloseAllOnExpansion
 
 // === Counter-Trend Hedging State ===
-#define MAX_HEDGE_SETS 4
+#define MAX_HEDGE_SETS 10  // v6.24: expanded from 4 to support InpHedge_MaxSets up to 10
 #define MAX_BOUND_TICKETS 50
 struct HedgeSet
 {
