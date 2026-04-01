@@ -1,56 +1,97 @@
 
 
-## Implemented: v6.16 — Hedge Trigger Mode: Expansion vs DD%
+## Fix v6.17: DD Hedge ต้องผ่าน Expansion Gate เหมือนกัน + ยืนยัน Set แยกอิสระ
 
-### Changes Made
+### ปัญหาที่พบ
 
-1. **`ENUM_HEDGE_TRIGGER`**: New enum with `HEDGE_TRIGGER_EXPANSION` (original) and `HEDGE_TRIGGER_DD_PERCENT` (new)
+**ปัญหา 1: DD Hedge ข้าม Gate 1 (Expansion Cycle)**
 
-2. **New Input Parameters**:
-   - `InpHedge_TriggerMode` — choose between Expansion or DD% trigger
-   - `InpHedge_DDTriggerPct` — DD% to trigger first hedge (default 5%)
-   - `InpHedge_DDStepPct` — DD% step for subsequent hedges (default 5%)
-   - `InpHedge_DDCooldownSec` — min seconds between DD hedges (default 60)
+โค้ดปัจจุบัน (line 7478-7494):
+```text
+if(g_hedgeSets[h].triggerType == 0) {
+   // expansion hedge → check cycle gate
+} 
+// DD hedge (triggerType==1) → ข้ามไปเลย ไม่ต้องผ่าน expansion
+```
 
-3. **`HedgeSet.triggerType`**: New field (0=expansion, 1=DD%) for per-set gate logic
+และตอนเปิด DD hedge (line 6749-6750):
+```text
+g_hedgeSets[slot].seenExpansionSinceHedge = true;  // ← pre-pass Gate 1
+```
 
-4. **`CheckAndOpenHedgeByDD()`**: Calculates floating loss % per side (BUY/SELL) against balance, opens hedge when threshold reached
+**ผลลัพธ์**: DD hedge set ปิดได้ทันทีที่ราคาออกจาก zone + ห่างพอ โดยไม่ต้องรอ expansion → ผิดจากเงื่อนไขที่ต้องการ
 
-5. **`OpenDDHedge()`**: Opens DD-triggered hedge with `GM_HEDGE_D` comment prefix for recovery identification
+**ปัญหา 2**: ไม่ใช่ bug ในโค้ด — `IsTicketBound()` ป้องกันการ bind ซ้ำอยู่แล้ว และแต่ละ set ทำ matching/grid แยกกัน แต่ต้องยืนยันว่า expansion tracking แต่ละ set เป็นอิสระจริง ✅ (line 7543-7548 track per set)
 
-6. **`IsHedgeCloseAllowed()`**: Gate 1 (Expansion Cycle) is skipped for DD-triggered sets (triggerType==1). Gates 2+3 remain mandatory for all types
+### แผนแก้ไข
 
-7. **`ManageHedgeSets()`**: Added DD trigger recalculation at end of loop based on remaining active DD sets
+**ไฟล์:** `public/docs/mql5/Gold_Miner_EA.mq5`
 
-8. **`RecoverHedgeSets()`**: Detects `GM_HEDGE_D` prefix to recover triggerType + recalculates DD thresholds
+#### 1. แก้ `IsHedgeCloseAllowed()` — บังคับ Gate 1 ทุก triggerType
 
-9. **OnTick flow**: Routes to `CheckAndOpenHedge()` or `CheckAndOpenHedgeByDD()` based on `InpHedge_TriggerMode`
+```cpp
+bool IsHedgeCloseAllowed(int h)
+{
+   // Gate 1: Expansion Cycle — บังคับทุกโหมด (ทั้ง Expansion และ DD%)
+   if(g_hedgeSets[h].hedgedDuringExpansion)
+   {
+      // Case A: Hedge ตอน Expansion → รอ Normal
+      if(!IsAllSqueezeTFNormalStrict()) return false;
+   }
+   else
+   {
+      // Case B: Hedge ตอน Normal/Squeeze → รอ Expansion TF ใหญ่ 1 รอบ → Normal
+      if(!g_hedgeSets[h].seenExpansionSinceHedge) return false;
+      if(!IsAllSqueezeTFNormalStrict()) return false;
+   }
+   
+   // Gate 2 + Gate 3: Price Zone + TP Distance (ไม่เปลี่ยน)
+   ...
+}
+```
 
-10. **Dashboard**: Shows trigger type per set (Exp/DD%), cycle status shows "Skip(DD)" for DD sets, added DD trigger info row
+ลบ `if(triggerType == 0)` wrapper ออก → ทุก set ต้องผ่าน expansion เหมือนกัน
 
-11. **Version bump**: v6.15 → v6.16
+#### 2. แก้ `OpenDDHedge()` — ไม่ pre-pass expansion
 
-### กฎที่บังคับใช้
+```cpp
+// เดิม (ผิด):
+g_hedgeSets[slot].seenExpansionSinceHedge = true;
+
+// แก้เป็น (ถูก) — track ตามจริงเหมือน expansion hedge:
+bool isBigTFExpansion = (g_squeeze[2].state == 2);
+g_hedgeSets[slot].hedgedDuringExpansion = isBigTFExpansion;
+g_hedgeSets[slot].seenExpansionSinceHedge = isBigTFExpansion;
+```
+
+#### 3. Dashboard — ลบ "Skip(DD)" แสดงสถานะจริงแทน
+
+แสดง cycle status เหมือนกันทุก set: "Wait Exp" / "Wait Norm" / "Ready"
+
+#### 4. Version bump: v6.16 → v6.17
+
+### ตัวอย่างสถานการณ์
 
 ```text
-Hedge Trigger Mode:
-- Expansion: เปิด Hedge เมื่อ Squeeze Expansion ผ่าน (เดิม)
-- DD%: เปิด Hedge เมื่อ floating loss ฝั่ง BUY หรือ SELL ถึง % ที่กำหนด
-  - ทำงานแยกฝั่ง: BUY loss → SELL hedge, SELL loss → BUY hedge
-  - Threshold เพิ่มขึ้นทีละ step (5% → 10% → 15%...)
-  - Cooldown ป้องกัน hedge ถี่เกินไป
+DD Hedge Set#1 เปิดตอน TF ใหญ่ = Normal
+→ seenExpansion = false, hedgedDuringExpansion = false
+→ ต้องรอ TF ใหญ่ Expansion 1 รอบ → กลับ Normal → ค่อยเข้า Gate 2+3
 
-การปิด Hedge:
-- DD sets: ข้าม Gate 1 (Expansion Cycle) → ใช้แค่ Gate 2+3
-- Expansion sets: ต้องผ่านครบ 3 Gates เหมือนเดิม
-- Accumulate Close ยังทำงานรวมเหมือนเดิม
+DD Hedge Set#2 เปิดตอน TF ใหญ่ = Expansion
+→ hedgedDuringExpansion = true
+→ รอแค่ TF ทั้ง 3 กลับ Normal → เข้า Gate 2+3
+
+ทั้ง 2 set track แยกกัน ปิดตอนผ่านเงื่อนไขของตัวเอง
 ```
 
 ### สิ่งที่ไม่เปลี่ยนแปลง
 - Order Execution Logic (trade.Buy/Sell/PositionClose)
 - Trading Strategy Logic (SMA/ZigZag/Instant, Grid entry/exit, TP/SL)
 - Core Module Logic (License, News filter, Time filter, Data sync)
-- Expansion Hedge logic — ทำงานเหมือนเดิมเมื่อเลือกโหมด EXPANSION
+- Gate 2 (Price Zone) + Gate 3 (TP Distance) — ไม่แก้
 - Matching Close / Grid Mode logic ภายใน — ไม่แก้
 - Accumulate Close — ทำงานรวมเหมือนเดิม
+- DD% trigger logic (CheckAndOpenHedgeByDD) — ไม่แก้การเปิด
+- Bound ticket isolation (IsTicketBound) — ไม่แก้
 - Orphan Recovery / Squeeze detection — ไม่แก้
+
