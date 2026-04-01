@@ -2442,6 +2442,9 @@ double FindMaxLotOnSide(ENUM_POSITION_TYPE side)
       if(IsTicketBound(ticket)) continue;
       string comment = PositionGetString(POSITION_COMMENT);
       if(IsHedgeComment(comment)) continue;
+      // v6.23: Skip orders from previous generations
+      int orderGen = ExtractGeneration(comment);
+      if(orderGen >= 0 && orderGen != g_cycleGeneration) continue;
       if(MatchGMSuffix(comment, "_GL") || MatchGMSuffix(comment, "_INIT"))
       {
          double lot = PositionGetDouble(POSITION_VOLUME);
