@@ -6694,29 +6694,27 @@ void CheckAndOpenHedgeByDD()
    double buyDDPct  = (buyLoss < 0)  ? (MathAbs(buyLoss) / balance * 100.0) : 0;
    double sellDDPct = (sellLoss < 0) ? (MathAbs(sellLoss) / balance * 100.0) : 0;
    
-   // Check BUY side (if BUY orders are losing → open SELL hedge)
-   if(buyDDPct >= g_nextBuyDDTrigger)
-   {
-      if(OpenDDHedge(POSITION_TYPE_BUY, POSITION_TYPE_SELL))
-      {
-         g_nextBuyDDTrigger += InpHedge_DDStepPct;
-         g_lastDDHedgeTime = now;
-         Print("DD HEDGE [Gen", curGen, "]: BUY side DD=", DoubleToString(buyDDPct, 1), "% → SELL hedge opened. Next trigger at ", 
-               DoubleToString(g_nextBuyDDTrigger, 1), "%");
-      }
-   }
-   
-   // Check SELL side (if SELL orders are losing → open BUY hedge)
-   if(sellDDPct >= g_nextSellDDTrigger)
-   {
-      if(OpenDDHedge(POSITION_TYPE_SELL, POSITION_TYPE_BUY))
-      {
-         g_nextSellDDTrigger += InpHedge_DDStepPct;
-         g_lastDDHedgeTime = now;
-         Print("DD HEDGE [Gen", curGen, "]: SELL side DD=", DoubleToString(sellDDPct, 1), "% → BUY hedge opened. Next trigger at ",
-               DoubleToString(g_nextSellDDTrigger, 1), "%");
-      }
-   }
+    // v6.21: Check BUY side — constant threshold per generation (no cumulative step)
+    if(buyDDPct >= InpHedge_DDTriggerPct)
+    {
+       if(OpenDDHedge(POSITION_TYPE_BUY, POSITION_TYPE_SELL))
+       {
+          g_lastDDHedgeTime = now;
+          Print("DD HEDGE [Gen", curGen, "]: BUY side DD=", DoubleToString(buyDDPct, 1), 
+                "% >= ", DoubleToString(InpHedge_DDTriggerPct, 1), "% → SELL hedge opened");
+       }
+    }
+    
+    // v6.21: Check SELL side — constant threshold per generation
+    if(sellDDPct >= InpHedge_DDTriggerPct)
+    {
+       if(OpenDDHedge(POSITION_TYPE_SELL, POSITION_TYPE_BUY))
+       {
+          g_lastDDHedgeTime = now;
+          Print("DD HEDGE [Gen", curGen, "]: SELL side DD=", DoubleToString(sellDDPct, 1),
+                "% >= ", DoubleToString(InpHedge_DDTriggerPct, 1), "% → BUY hedge opened");
+       }
+    }
 }
 
 //+------------------------------------------------------------------+
