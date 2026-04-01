@@ -2647,6 +2647,9 @@ void FindLastOrder(ENUM_POSITION_TYPE side, string suffix1, string suffix2, doub
 
       string comment = PositionGetString(POSITION_COMMENT);
       if(IsHedgeComment(comment)) continue;
+      // v6.23: Skip orders from previous generations
+      int orderGen = ExtractGeneration(comment);
+      if(orderGen >= 0 && orderGen != g_cycleGeneration) continue;
       if(MatchGMSuffix(comment, suffix1) || MatchGMSuffix(comment, suffix2))
       {
          datetime openTime = (datetime)PositionGetInteger(POSITION_TIME);
