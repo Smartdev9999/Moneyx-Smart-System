@@ -1,56 +1,39 @@
 
 
-## Implemented: v6.16 — Hedge Trigger Mode: Expansion vs DD%
+
+## Implemented: v6.17 — DD Hedge ต้องผ่าน Expansion Gate + Set แยกอิสระ
 
 ### Changes Made
 
-1. **`ENUM_HEDGE_TRIGGER`**: New enum with `HEDGE_TRIGGER_EXPANSION` (original) and `HEDGE_TRIGGER_DD_PERCENT` (new)
+1. **`IsHedgeCloseAllowed()`**: Removed `triggerType == 0` wrapper — Gate 1 (Expansion Cycle) now mandatory for ALL hedge types (Expansion & DD%)
 
-2. **New Input Parameters**:
-   - `InpHedge_TriggerMode` — choose between Expansion or DD% trigger
-   - `InpHedge_DDTriggerPct` — DD% to trigger first hedge (default 5%)
-   - `InpHedge_DDStepPct` — DD% step for subsequent hedges (default 5%)
-   - `InpHedge_DDCooldownSec` — min seconds between DD hedges (default 60)
+2. **`OpenDDHedge()`**: Removed pre-pass `seenExpansionSinceHedge = true`. Now tracks actual biggest TF state at open time via `g_squeeze[2].state == 2`
 
-3. **`HedgeSet.triggerType`**: New field (0=expansion, 1=DD%) for per-set gate logic
+3. **Dashboard**: Removed "Skip(DD)" status. All sets now show real cycle status: "Wait Exp" / "Wait Norm" / "Ready"
 
-4. **`CheckAndOpenHedgeByDD()`**: Calculates floating loss % per side (BUY/SELL) against balance, opens hedge when threshold reached
-
-5. **`OpenDDHedge()`**: Opens DD-triggered hedge with `GM_HEDGE_D` comment prefix for recovery identification
-
-6. **`IsHedgeCloseAllowed()`**: Gate 1 (Expansion Cycle) is skipped for DD-triggered sets (triggerType==1). Gates 2+3 remain mandatory for all types
-
-7. **`ManageHedgeSets()`**: Added DD trigger recalculation at end of loop based on remaining active DD sets
-
-8. **`RecoverHedgeSets()`**: Detects `GM_HEDGE_D` prefix to recover triggerType + recalculates DD thresholds
-
-9. **OnTick flow**: Routes to `CheckAndOpenHedge()` or `CheckAndOpenHedgeByDD()` based on `InpHedge_TriggerMode`
-
-10. **Dashboard**: Shows trigger type per set (Exp/DD%), cycle status shows "Skip(DD)" for DD sets, added DD trigger info row
-
-11. **Version bump**: v6.15 → v6.16
+4. **Version bump**: v6.16 → v6.17
 
 ### กฎที่บังคับใช้
 
 ```text
-Hedge Trigger Mode:
-- Expansion: เปิด Hedge เมื่อ Squeeze Expansion ผ่าน (เดิม)
-- DD%: เปิด Hedge เมื่อ floating loss ฝั่ง BUY หรือ SELL ถึง % ที่กำหนด
-  - ทำงานแยกฝั่ง: BUY loss → SELL hedge, SELL loss → BUY hedge
-  - Threshold เพิ่มขึ้นทีละ step (5% → 10% → 15%...)
-  - Cooldown ป้องกัน hedge ถี่เกินไป
+Expansion Gate (Gate 1) — บังคับทุกโหมด:
+- Case A: Hedge ตอน Expansion → รอ all TFs Normal
+- Case B: Hedge ตอน Normal/Squeeze → รอ TF ใหญ่ Expansion 1 รอบ → all TFs Normal
+- ทั้ง Expansion-triggered และ DD%-triggered ต้องผ่านเหมือนกัน
 
-การปิด Hedge:
-- DD sets: ข้าม Gate 1 (Expansion Cycle) → ใช้แค่ Gate 2+3
-- Expansion sets: ต้องผ่านครบ 3 Gates เหมือนเดิม
-- Accumulate Close ยังทำงานรวมเหมือนเดิม
+Set Independence:
+- แต่ละ set track expansion/zone/distance แยกกัน
+- IsTicketBound() ป้องกัน bind ซ้ำ
+- Matching/Grid recovery ทำงานแยกชุด
 ```
 
 ### สิ่งที่ไม่เปลี่ยนแปลง
 - Order Execution Logic (trade.Buy/Sell/PositionClose)
 - Trading Strategy Logic (SMA/ZigZag/Instant, Grid entry/exit, TP/SL)
 - Core Module Logic (License, News filter, Time filter, Data sync)
-- Expansion Hedge logic — ทำงานเหมือนเดิมเมื่อเลือกโหมด EXPANSION
+- Gate 2 (Price Zone) + Gate 3 (TP Distance) — ไม่แก้
 - Matching Close / Grid Mode logic ภายใน — ไม่แก้
 - Accumulate Close — ทำงานรวมเหมือนเดิม
+- DD% trigger logic (CheckAndOpenHedgeByDD) — ไม่แก้การเปิด
+- Bound ticket isolation (IsTicketBound) — ไม่แก้
 - Orphan Recovery / Squeeze detection — ไม่แก้
