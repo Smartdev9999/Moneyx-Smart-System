@@ -1,65 +1,49 @@
 
-## Fix v6.18 — แยก DD Hedge ตาม Generation ให้ชัด และไม่นับ order ของชุดเก่า
 
-### ปัญหาที่พบ
-ตอนนี้ `CheckAndOpenHedgeByDD()` กับ `CountUnboundOrders()` ตัดแค่ hedge/bound ticket ออก แต่ยังมีโอกาสเอา order ที่เป็น generation เก่า (`GM`, `GM1`, `GM2`) มารวมคิด DD ถ้ามันไม่ได้อยู่ใน `boundTickets` แล้ว
 
-ผลคือ:
-- หลังชุด hedge เก่าปิดบางส่วน/ปล่อยบาง order ออกมา
-- order รุ่นเก่ายังติดลบอยู่
-- ระบบมองว่าเป็น “unbound loss” แล้วเปิด hedge ใหม่ทันที
-- ทำให้ Hedging2 ไปยุ่งกับ order ของ Hedging1 ซึ่งผิดจากโครงสร้างที่ต้องการ
 
-### แผนแก้ไข
-1. เพิ่ม helper สำหรับคัด order ที่ “มีสิทธิ์” ถูกนำไปคิด hedge ใหม่
-   - ต้องไม่ใช่ hedge / hedge grid / reverse
-   - ต้องไม่ใช่ bound ticket ของ active set ใดๆ
-   - ต้องเป็น comment generation ปัจจุบันเท่านั้น (`ExtractGeneration(comment) == g_cycleGeneration`)
-   - ถ้าไม่ใช่ format `GM...` จะไม่เอามาคิด
+## Implemented: v6.18 — Generation-Aware DD Hedge Isolation
 
-2. ปรับ logic นับ DD ใน `CheckAndOpenHedgeByDD()`
-   - คิด BUY DD / SELL DD จาก “current generation only”
-   - ไม่นับ order generation เก่า แม้จะยังติดลบอยู่
-   - ทำให้ Hedging2 โฟกัสเฉพาะ `GM1`, Hedging3 โฟกัสเฉพาะ `GM2`
+### Changes Made
 
-3. ปรับตัวนับ order สำหรับการเปิด hedge
-   - แยก/ปรับ `CountUnboundOrders()` ให้เป็น generation-aware
-   - ใช้เงื่อนไขเดียวกันทั้งตอน “คำนวณ DD” และ “bind order เข้า set ใหม่”
-   - ป้องกันไม่ให้ set ใหม่ไป bind order ของชุดเก่า
+1. **`CheckAndOpenHedgeByDD()`**: Added `ExtractGeneration()` filter — only counts DD from orders matching `g_cycleGeneration`. Old generation orders (GM, GM1, etc.) no longer trigger new hedges.
 
-4. คงการทำงานของชุดเก่าไว้ตามเดิม
-   - order ที่ยัง bound อยู่ → ให้ set เดิมจัดการเอง
-   - order generation เก่าที่หลุดจาก set แล้ว → ให้ recovery/orphan logic เดิมจัดการต่อด้วย prefix เดิม
-   - ไม่ให้ trigger hedge ใหม่ดึง order กลุ่มนี้กลับมาปน
+2. **`CountUnboundOrders()`**: Added optional `genFilter` parameter. When `genFilter >= 0`, only orders with matching generation are counted. Existing callers (expansion mode) unaffected (default = -1).
 
-5. เพิ่มความชัดเจนบน dashboard/log
-   - แสดงว่า DD mode ตอนนี้กำลังดู generation ไหน เช่น `DD Scope: GM1`
-   - ถ้าจำเป็น แสดง DD ของ current generation เพื่อเช็กได้ทันทีว่าระบบคิดจากชุดไหน
+3. **`OpenDDHedge()`**: Binding loop now filters by `g_cycleGeneration` — prevents new hedge sets from binding orders from older generations.
 
-6. bump version `v6.17 -> v6.18`
-   - อัปเดต `#property version`
-   - `#property description`
-   - header comment
-   - จุดที่แสดง version/log บน EA
+4. **Dashboard**: Added "DD Scope" row showing which generation is being monitored (e.g., `Scope: GM1 (Gen 1)`).
 
-### Technical details
+5. **Version bump**: v6.17 → v6.18
+
+### กฎที่บังคับใช้
+
 ```text
-หลักการใหม่:
-- Hedge Set#1 bind order ของ GM
-- หลังเปิด hedge แล้ว cycle ขยับไป GM1
-- DD hedge รอบถัดไปจะดูเฉพาะ GM1 ที่ยังไม่ bound
-- GM เดิมจะไม่ถูกเอามาคิดเปิด Hedging2 อีก
+Generation Isolation (v6.18):
+- DD calculation ดูเฉพาะ order ของ generation ปัจจุบัน
+- Hedge Set#1 bind เฉพาะ GM → cycle ขยับเป็น GM1
+- DD Hedge รอบถัดไปดูเฉพาะ GM1 เท่านั้น
+- GM เดิมไม่ถูกเอามาคิด DD เปิด Hedging2
 
-ตัวอย่าง:
-GM   = ชุดเก่า กำลัง recovery ของตัวเอง
-GM1  = ชุดใหม่ที่ใช้วัด DD เพื่อเปิด Hedging2
-GM2  = ชุดถัดไปสำหรับ Hedging3
+Expansion Gate (Gate 1) — บังคับทุกโหมด:
+- Case A: Hedge ตอน Expansion → รอ all TFs Normal
+- Case B: Hedge ตอน Normal/Squeeze → รอ TF ใหญ่ Expansion 1 รอบ → all TFs Normal
+- ทั้ง Expansion-triggered และ DD%-triggered ต้องผ่านเหมือนกัน
+
+Set Independence:
+- แต่ละ set track expansion/zone/distance แยกกัน
+- IsTicketBound() ป้องกัน bind ซ้ำ
+- Matching/Grid recovery ทำงานแยกชุด
 ```
 
 ### สิ่งที่ไม่เปลี่ยนแปลง
-- Order Execution Logic (`trade.Buy`, `trade.Sell`, `trade.PositionClose`) ไม่แก้
-- Trading Strategy Logic หลัก (entry, SMA/ZigZag, grid หลัก, TP/SL, trailing, accumulate close) ไม่แก้
-- Core Module Logic (license, news, time filter, data sync) ไม่แก้
-- Triple-gate close ของ hedge set (Expansion + Zone + TP Distance) ไม่เปลี่ยน
-- Orphan recovery framework ไม่เปลี่ยนแนวคิดหลัก
-- การแก้ครั้งนี้โฟกัสเฉพาะ “scope ของ order ที่เอามาคิด DD และเปิด hedge ใหม่” เพื่อให้แต่ละชุดแยกกันจริง และไม่กระทบ trading logic หลัก
+- Order Execution Logic (trade.Buy/Sell/PositionClose)
+- Trading Strategy Logic (SMA/ZigZag/Instant, Grid entry/exit, TP/SL)
+- Core Module Logic (License, News filter, Time filter, Data sync)
+- Gate 2 (Price Zone) + Gate 3 (TP Distance) — ไม่แก้
+- Matching Close / Grid Mode logic ภายใน — ไม่แก้
+- Accumulate Close — ทำงานรวมเหมือนเดิม
+- DD% trigger logic threshold (InpHedge_DDTriggerPct) — ไม่แก้ค่า
+- Bound ticket isolation (IsTicketBound) — ไม่แก้
+- Orphan Recovery / Squeeze detection — ไม่แก้
+- Expansion hedge OpenHedge() — ไม่แก้ (ใช้ CountUnboundOrders default genFilter=-1)

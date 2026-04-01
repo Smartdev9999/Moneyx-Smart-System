@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.17 - MTF ZigZag+CDC+Grid+License  |
+//|                Gold Miner EA v6.18 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.17"
-#property description "Gold Miner EA v6.17 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + License"
+#property version   "6.18"
+#property description "Gold Miner EA v6.18 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -785,7 +785,7 @@ int OnInit()
    // === Recover Hedge Sets from existing positions (crash/restart recovery) ===
    RecoverHedgeSets();
 
-   Print("Gold Miner EA v6.17 initialized successfully | CycleGen=", g_cycleGeneration);
+   Print("Gold Miner EA v6.18 initialized successfully | CycleGen=", g_cycleGeneration);
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -837,7 +837,7 @@ void OnDeinit(const int reason)
 
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
-   Print("Gold Miner EA v6.17 deinitialized");
+   Print("Gold Miner EA v6.18 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -3369,12 +3369,15 @@ void DisplayDashboard()
          }
         }
         
-        // v6.16: DD% Mode info line
-        if(InpHedge_TriggerMode == HEDGE_TRIGGER_DD_PERCENT)
-        {
-           string ddInfo = "Next BUY DD:" + DoubleToString(g_nextBuyDDTrigger, 1) + "% | SELL DD:" + DoubleToString(g_nextSellDDTrigger, 1) + "%";
-           DrawTableRow(row, "  DD Trig", ddInfo, clrAqua, COLOR_SECTION_HEDGE); row++;
-        }
+         // v6.18: DD% Mode info line with generation scope
+         if(InpHedge_TriggerMode == HEDGE_TRIGGER_DD_PERCENT)
+         {
+            string ddInfo = "Next BUY DD:" + DoubleToString(g_nextBuyDDTrigger, 1) + "% | SELL DD:" + DoubleToString(g_nextSellDDTrigger, 1) + "%";
+            DrawTableRow(row, "  DD Trig", ddInfo, clrAqua, COLOR_SECTION_HEDGE); row++;
+            // v6.18: Show which generation DD is currently monitoring
+            string scopeInfo = "Scope: " + GetCommentPrefix() + " (Gen " + IntegerToString(g_cycleGeneration) + ")";
+            DrawTableRow(row, "  DD Scope", scopeInfo, clrYellow, COLOR_SECTION_HEDGE); row++;
+         }
         
         // Orphan warning
         if(g_hedgeOrphanWarning)
@@ -6372,8 +6375,9 @@ double GetHedgeLotCap(ENUM_POSITION_TYPE side)
 
 //+------------------------------------------------------------------+
 //| Count unbound orders (not tied to any hedge set) for a side        |
+//| v6.18: genFilter >= 0 → only count orders matching that generation |
 //+------------------------------------------------------------------+
-int CountUnboundOrders(ENUM_POSITION_TYPE side, double &totalLots, double &totalPL)
+int CountUnboundOrders(ENUM_POSITION_TYPE side, double &totalLots, double &totalPL, int genFilter = -1)
 {
    int count = 0;
    totalLots = 0;
@@ -6388,6 +6392,12 @@ int CountUnboundOrders(ENUM_POSITION_TYPE side, double &totalLots, double &total
       string comment = PositionGetString(POSITION_COMMENT);
       if(IsHedgeComment(comment)) continue;
       if(IsTicketBound(ticket)) continue;  // skip tickets already bound to a set
+      // v6.18: Generation filter — only count orders from specified generation
+      if(genFilter >= 0)
+      {
+         int orderGen = ExtractGeneration(comment);
+         if(orderGen != genFilter) continue;
+      }
       count++;
       totalLots += PositionGetDouble(POSITION_VOLUME);
       totalPL += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
@@ -6580,7 +6590,7 @@ void CheckAndOpenHedge()
        Print("HEDGE OPENED: Set#", slot + 1, " ", sideStr, " ", DoubleToString(counterLots, 2),
              " lots to cover ", counterCount, " stuck orders (bound ", g_hedgeSets[slot].boundTicketCount,
              " tickets, boundGen=", g_hedgeSets[slot].boundGeneration, ")");
-       Print("v6.17 CLOSE GATE: triggerType=Expansion hedgedDuringExp=", bigTFExpansion,
+       Print("v6.18 CLOSE GATE: triggerType=Expansion hedgedDuringExp=", bigTFExpansion,
              " zone=", DoubleToString(g_hedgeSets[slot].zoneLowerPrice, _Digits),
              "-", DoubleToString(g_hedgeSets[slot].zoneUpperPrice, _Digits));
      }
@@ -6600,7 +6610,9 @@ void CheckAndOpenHedgeByDD()
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
    if(balance <= 0) return;
    
-   // Calculate floating loss per side (BUY and SELL) — only normal orders, not hedge/reverse
+   // v6.18: Calculate floating loss per side — ONLY from current generation orders
+   // This prevents old generation orders (already managed by their own hedge sets) from triggering new hedges
+   int curGen = g_cycleGeneration;
    double buyLoss = 0, sellLoss = 0;
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
@@ -6611,6 +6623,11 @@ void CheckAndOpenHedgeByDD()
       string cmt = PositionGetString(POSITION_COMMENT);
       if(IsHedgeComment(cmt)) continue;  // skip hedge orders
       if(IsTicketBound(ticket)) continue;  // skip already-bound orders
+      
+      // v6.18: Generation filter — only count current generation
+      int orderGen = ExtractGeneration(cmt);
+      if(orderGen < 0) continue;   // not our comment format
+      if(orderGen != curGen) continue;  // skip older generations (GM, GM1, etc.)
       
       double pnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP) + PositionGetDouble(POSITION_COMMISSION);
       if(pnl >= 0) continue;  // only count losses
@@ -6633,7 +6650,7 @@ void CheckAndOpenHedgeByDD()
       {
          g_nextBuyDDTrigger += InpHedge_DDStepPct;
          g_lastDDHedgeTime = now;
-         Print("DD HEDGE: BUY side DD=", DoubleToString(buyDDPct, 1), "% → SELL hedge opened. Next trigger at ", 
+         Print("DD HEDGE [Gen", curGen, "]: BUY side DD=", DoubleToString(buyDDPct, 1), "% → SELL hedge opened. Next trigger at ", 
                DoubleToString(g_nextBuyDDTrigger, 1), "%");
       }
    }
@@ -6645,7 +6662,7 @@ void CheckAndOpenHedgeByDD()
       {
          g_nextSellDDTrigger += InpHedge_DDStepPct;
          g_lastDDHedgeTime = now;
-         Print("DD HEDGE: SELL side DD=", DoubleToString(sellDDPct, 1), "% → BUY hedge opened. Next trigger at ",
+         Print("DD HEDGE [Gen", curGen, "]: SELL side DD=", DoubleToString(sellDDPct, 1), "% → BUY hedge opened. Next trigger at ",
                DoubleToString(g_nextSellDDTrigger, 1), "%");
       }
    }
@@ -6656,9 +6673,9 @@ void CheckAndOpenHedgeByDD()
 //+------------------------------------------------------------------+
 bool OpenDDHedge(ENUM_POSITION_TYPE counterSide, ENUM_POSITION_TYPE hedgeSide)
 {
-   // Count unbound stuck orders on the losing counter side
+   // v6.18: Count unbound stuck orders on the losing counter side — CURRENT GENERATION ONLY
    double counterLots = 0, counterPL = 0;
-   int counterCount = CountUnboundOrders(counterSide, counterLots, counterPL);
+   int counterCount = CountUnboundOrders(counterSide, counterLots, counterPL, g_cycleGeneration);
    if(counterCount == 0 || counterLots <= 0) return false;
    
    // Check max active sets
@@ -6715,6 +6732,8 @@ bool OpenDDHedge(ENUM_POSITION_TYPE counterSide, ENUM_POSITION_TYPE hedgeSide)
    // Bind unbound counter-side tickets
    g_hedgeSets[slot].boundTicketCount = 0;
    ArrayResize(g_hedgeSets[slot].boundTickets, 0);
+   // v6.18: Only bind orders from current generation — prevents cross-generation contamination
+   int bindGen = g_cycleGeneration;
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       ulong ticket = PositionGetTicket(i);
@@ -6725,6 +6744,10 @@ bool OpenDDHedge(ENUM_POSITION_TYPE counterSide, ENUM_POSITION_TYPE hedgeSide)
       string cmt = PositionGetString(POSITION_COMMENT);
       if(IsHedgeComment(cmt)) continue;
       if(IsTicketBound(ticket)) continue;
+      // v6.18: Generation filter — only bind current generation orders
+      int orderGen = ExtractGeneration(cmt);
+      if(orderGen < 0) continue;
+      if(orderGen != bindGen) continue;
       
       int bc = g_hedgeSets[slot].boundTicketCount;
       ArrayResize(g_hedgeSets[slot].boundTickets, bc + 1);
