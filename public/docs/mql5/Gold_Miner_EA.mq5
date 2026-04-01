@@ -3369,12 +3369,15 @@ void DisplayDashboard()
          }
         }
         
-        // v6.16: DD% Mode info line
-        if(InpHedge_TriggerMode == HEDGE_TRIGGER_DD_PERCENT)
-        {
-           string ddInfo = "Next BUY DD:" + DoubleToString(g_nextBuyDDTrigger, 1) + "% | SELL DD:" + DoubleToString(g_nextSellDDTrigger, 1) + "%";
-           DrawTableRow(row, "  DD Trig", ddInfo, clrAqua, COLOR_SECTION_HEDGE); row++;
-        }
+         // v6.18: DD% Mode info line with generation scope
+         if(InpHedge_TriggerMode == HEDGE_TRIGGER_DD_PERCENT)
+         {
+            string ddInfo = "Next BUY DD:" + DoubleToString(g_nextBuyDDTrigger, 1) + "% | SELL DD:" + DoubleToString(g_nextSellDDTrigger, 1) + "%";
+            DrawTableRow(row, "  DD Trig", ddInfo, clrAqua, COLOR_SECTION_HEDGE); row++;
+            // v6.18: Show which generation DD is currently monitoring
+            string scopeInfo = "Scope: " + GetCommentPrefix() + " (Gen " + IntegerToString(g_cycleGeneration) + ")";
+            DrawTableRow(row, "  DD Scope", scopeInfo, clrYellow, COLOR_SECTION_HEDGE); row++;
+         }
         
         // Orphan warning
         if(g_hedgeOrphanWarning)
