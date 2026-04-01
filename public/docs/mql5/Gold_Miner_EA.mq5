@@ -6590,7 +6590,7 @@ void CheckAndOpenHedge()
        Print("HEDGE OPENED: Set#", slot + 1, " ", sideStr, " ", DoubleToString(counterLots, 2),
              " lots to cover ", counterCount, " stuck orders (bound ", g_hedgeSets[slot].boundTicketCount,
              " tickets, boundGen=", g_hedgeSets[slot].boundGeneration, ")");
-       Print("v6.17 CLOSE GATE: triggerType=Expansion hedgedDuringExp=", bigTFExpansion,
+       Print("v6.18 CLOSE GATE: triggerType=Expansion hedgedDuringExp=", bigTFExpansion,
              " zone=", DoubleToString(g_hedgeSets[slot].zoneLowerPrice, _Digits),
              "-", DoubleToString(g_hedgeSets[slot].zoneUpperPrice, _Digits));
      }
