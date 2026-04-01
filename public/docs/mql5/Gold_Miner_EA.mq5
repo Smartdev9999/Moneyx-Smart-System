@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.26 - MTF ZigZag+CDC+Grid+License  |
+//|                Gold Miner EA v6.24 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.26"
-#property description "Gold Miner EA v6.26 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge10 + GenReset + SeqClose + SeqLock + License"
+#property version   "6.24"
+#property description "Gold Miner EA v6.24 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge10 + GenReset + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -337,10 +337,6 @@ input int      InpHedge_CloseMinPoints       = 300;   // v6.15: Min points from 
 input double   InpHedge_DDTriggerPct         = 5.0;   // DD% to trigger first hedge (per side)
 input double   InpHedge_DDStepPct            = 5.0;   // [LEGACY] DD% step — not used since v6.21 (constant threshold per gen)
 input int      InpHedge_DDCooldownSec        = 60;    // Min seconds between DD hedges
-// v6.25: Sequential Close — process one hedge set at a time (oldest eligible first)
-input bool     InpHedge_SequentialClose      = true;  // Sequential Close (oldest first, one at a time)
-// v6.26: Cooldown between sequential closes to prevent rapid-fire closures
-input int      InpHedge_SeqCooldownSec       = 30;    // Cooldown between sequential closes (sec)
 // v6.15: Reverse Hedge disabled — kept as constants for legacy function compilation
 const bool     InpHedge_ReverseEnable        = false;
 const int      InpHedge_ReverseMinTFConfirm  = 2;
@@ -520,10 +516,8 @@ struct HedgeSet
    double   zoneLowerPrice;            // min(oldest bound price, hedge price)
    double   hedgeOpenPrice;            // open price of main hedge order
    double   oldestBoundPrice;          // open price of oldest bound order
-    // === v6.16: Hedge Trigger Type ===
-    int      triggerType;               // 0 = expansion, 1 = DD%
-    // === v6.25: Sequential Close ===
-    datetime openTime;                  // when this hedge set was created (for age sorting)
+   // === v6.16: Hedge Trigger Type ===
+   int      triggerType;               // 0 = expansion, 1 = DD%
 };
 HedgeSet g_hedgeSets[MAX_HEDGE_SETS];
 int      g_hedgeSetCount = 0;
@@ -536,10 +530,6 @@ int      g_cycleGeneration = 0;  // incremented each time a hedge opens — chan
 double   g_nextBuyDDTrigger  = 5.0;    // DD% threshold for next BUY-side hedge
 double   g_nextSellDDTrigger = 5.0;    // DD% threshold for next SELL-side hedge
 datetime g_lastDDHedgeTime   = 0;      // cooldown tracker
-
-// === v6.26: Sequential Close Lock ===
-int      g_seqLockedIdx     = -1;    // index of set currently being processed (-1 = none)
-datetime g_seqLastCloseTime = 0;     // time when last sequential set was deactivated
 
 // === Reverse Hedge State (v6.11: array-based for multiple reverse hedges) ===
 #define MAX_REVERSE_HEDGES 10
@@ -795,7 +785,7 @@ int OnInit()
    // === Recover Hedge Sets from existing positions (crash/restart recovery) ===
    RecoverHedgeSets();
 
-   Print("Gold Miner EA v6.26 initialized successfully | CycleGen=", g_cycleGeneration, " SeqClose=", InpHedge_SequentialClose, " SeqLock=", g_seqLockedIdx, " Cooldown=", InpHedge_SeqCooldownSec, "s");
+   Print("Gold Miner EA v6.24 initialized successfully | CycleGen=", g_cycleGeneration);
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -847,7 +837,7 @@ void OnDeinit(const int reason)
 
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
-   Print("Gold Miner EA v6.26 deinitialized");
+   Print("Gold Miner EA v6.24 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -1861,9 +1851,6 @@ void CloseAllPositions()
       g_hedgeSets[h].triggerType = 0;
    }
    g_hedgeSetCount = 0;
-   // v6.26: Reset sequential lock on full close
-   g_seqLockedIdx = -1;
-   g_seqLastCloseTime = 0;
    // v6.16: Reset DD triggers on full close
    g_nextBuyDDTrigger  = InpHedge_DDTriggerPct;
    g_nextSellDDTrigger = InpHedge_DDTriggerPct;
@@ -3056,7 +3043,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.26 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.26 [ZZ]" : "Gold Miner EA v6.26 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.24 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.24 [ZZ]" : "Gold Miner EA v6.24 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -6655,8 +6642,6 @@ void CheckAndOpenHedge()
        Print("CYCLE GENERATION incremented to ", g_cycleGeneration, " — new orders use prefix: ", GetCommentPrefix());
 
        g_hedgeSetCount++;
-       // v6.25: Record open time for sequential close ordering
-       g_hedgeSets[slot].openTime = TimeCurrent();
        
        // === v6.15: Record Expansion Cycle state + Price Zone ===
        // Check if TF index 2 (largest) is currently in expansion
@@ -6861,9 +6846,7 @@ bool OpenDDHedge(ENUM_POSITION_TYPE counterSide, ENUM_POSITION_TYPE hedgeSide)
    g_hedgeSets[slot].boundGeneration = g_cycleGeneration;
    g_cycleGeneration++;
    Print("CYCLE GENERATION incremented to ", g_cycleGeneration, " — new orders use prefix: ", GetCommentPrefix());
-    g_hedgeSetCount++;
-    // v6.25: Record open time for sequential close ordering
-    g_hedgeSets[slot].openTime = TimeCurrent();
+   g_hedgeSetCount++;
    
     // v6.17: DD hedge must also pass Expansion Gate — track actual state
     bool isBigTFExpansion = (g_squeeze[2].state == 2);
@@ -6992,8 +6975,6 @@ void RecoverHedgeSets()
                 g_hedgeSets[h].triggerType = 1;  // DD-triggered
              else
                 g_hedgeSets[h].triggerType = 0;  // Expansion-triggered
-              // v6.25: Recover openTime from hedge ticket
-              g_hedgeSets[h].openTime = (datetime)PositionGetInteger(POSITION_TIME);
             g_hedgeSetCount++;
             recovered++;
             Print("RECOVER: Rebuilt Hedge Set#", h + 1, " from ticket ", ticket, 
@@ -7168,28 +7149,9 @@ void RecoverHedgeSets()
                 " | Threshold constant=", DoubleToString(InpHedge_DDTriggerPct, 1), "%");
    }
 
-    if(recovered > 0 || orphansClosed > 0)
+   if(recovered > 0 || orphansClosed > 0)
       Print("RECOVER COMPLETE: ", recovered, " sets recovered, ", orphansClosed,
             " orphan grid orders closed, cycleGen=", g_cycleGeneration);
-   
-   // v6.26: Recover sequential lock — lock oldest active set that is already in gridMode or matchingDone
-   if(InpHedge_SequentialClose)
-   {
-      g_seqLockedIdx = -1;
-      datetime oldestLockTime = D'2099.01.01';
-      for(int h = 0; h < MAX_HEDGE_SETS; h++)
-      {
-         if(!g_hedgeSets[h].active) continue;
-         if(!g_hedgeSets[h].gridMode && !g_hedgeSets[h].matchingDone) continue;
-         if(g_hedgeSets[h].openTime < oldestLockTime)
-         {
-            oldestLockTime = g_hedgeSets[h].openTime;
-            g_seqLockedIdx = h;
-         }
-      }
-      if(g_seqLockedIdx >= 0)
-         Print("RECOVER: Sequential lock restored to Set#", g_seqLockedIdx + 1);
-   }
 }
 
 //+------------------------------------------------------------------+
@@ -7671,56 +7633,6 @@ void ManageHedgeSets()
    
    // v6.15: Reverse Hedge management removed (no ManageReverseHedge / CheckAndOpenReverseHedge)
    
-   // === v6.26: Sequential Close — lock-based, process one set until fully deactivated ===
-   int seqActiveIdx = -1;  // index of the set currently allowed to do recovery
-   if(InpHedge_SequentialClose)
-   {
-      // Priority 1: If a set is already locked and still active → keep it
-      if(g_seqLockedIdx >= 0 && g_seqLockedIdx < MAX_HEDGE_SETS && g_hedgeSets[g_seqLockedIdx].active)
-      {
-         seqActiveIdx = g_seqLockedIdx;
-      }
-      else
-      {
-         // Previous lock invalid (set deactivated or -1) → clear it
-         if(g_seqLockedIdx >= 0)
-         {
-            Print("SEQ_LOCK: Lock released (Set#", g_seqLockedIdx + 1, " no longer active)");
-            g_seqLockedIdx = -1;
-         }
-         
-         // Priority 2: Check cooldown before selecting a new set
-         if(g_seqLastCloseTime > 0 && (TimeCurrent() - g_seqLastCloseTime) < InpHedge_SeqCooldownSec)
-         {
-            // Cooldown active — don't select any new set for recovery
-            // All sets will only do maintenance (bound refresh + expansion tracking)
-         }
-         else
-         {
-            // Priority 3: Find oldest eligible set → lock it
-            datetime oldestTime = D'2099.01.01';
-            for(int s = 0; s < MAX_HEDGE_SETS; s++)
-            {
-               if(!g_hedgeSets[s].active) continue;
-               if(!IsHedgeCloseAllowed(s)) continue;  // must pass Triple Gate
-               if(g_hedgeSets[s].openTime < oldestTime)
-               {
-                  oldestTime = g_hedgeSets[s].openTime;
-                  seqActiveIdx = s;
-               }
-            }
-            if(seqActiveIdx >= 0)
-            {
-               g_seqLockedIdx = seqActiveIdx;
-               Print("SEQ_LOCK: Locked to Set#", seqActiveIdx + 1, " (oldest eligible, openTime=", TimeToString(g_hedgeSets[seqActiveIdx].openTime), ")");
-            }
-         }
-      }
-      
-      if(seqActiveIdx >= 0)
-         Print("SEQ_CLOSE: Processing Set#", seqActiveIdx + 1, " (locked, openTime=", TimeToString(g_hedgeSets[seqActiveIdx].openTime), ")");
-   }
-   
    for(int h = 0; h < MAX_HEDGE_SETS; h++)
    {
       if(!g_hedgeSets[h].active) continue;
@@ -7752,8 +7664,6 @@ void ManageHedgeSets()
          g_hedgeSets[h].boundTicketCount = 0;
          ArrayResize(g_hedgeSets[h].boundTickets, 0);
           g_hedgeSetCount--;
-          // v6.26: Reset sequential lock
-          if(h == g_seqLockedIdx) { g_seqLockedIdx = -1; g_seqLastCloseTime = TimeCurrent(); Print("SEQ_LOCK: Released (Set#", h+1, " external close)"); }
           // v6.24: Reset generation when all hedge sets closed
           if(g_hedgeSetCount <= 0 && g_cycleGeneration > 0)
           {
@@ -7771,13 +7681,6 @@ void ManageHedgeSets()
          // Reset matchingDone so it re-runs when gate opens
          g_hedgeSets[h].matchingDone = false;
          continue;  // Skip all close/grid logic for this set
-      }
-      
-      // === v6.25: Sequential Close — skip recovery if not the chosen set ===
-      if(InpHedge_SequentialClose && seqActiveIdx >= 0 && h != seqActiveIdx)
-      {
-         // Maintenance only — gate tracking and bound refresh already done above
-         continue;
       }
       
       // === Gate passed — close logic allowed ===
@@ -8495,8 +8398,6 @@ bool ManageHedgeBoundAvgTP(int idx)
             g_hedgeSets[idx].boundTicketCount = 0;
             ArrayResize(g_hedgeSets[idx].boundTickets, 0);
             g_hedgeSetCount--;
-             // v6.26: Reset sequential lock
-             if(idx == g_seqLockedIdx) { g_seqLockedIdx = -1; g_seqLastCloseTime = TimeCurrent(); Print("SEQ_LOCK: Released (Set#", idx+1, " AvgTP close)"); }
              // v6.24: Reset generation when all hedge sets closed
              if(g_hedgeSetCount <= 0 && g_cycleGeneration > 0)
              {
@@ -8649,8 +8550,6 @@ void ManageHedgeMatchingClose(int idx)
       g_hedgeSets[idx].boundTicketCount = 0;
       ArrayResize(g_hedgeSets[idx].boundTickets, 0);
        g_hedgeSetCount--;
-       // v6.26: Reset sequential lock
-       if(idx == g_seqLockedIdx) { g_seqLockedIdx = -1; g_seqLastCloseTime = TimeCurrent(); Print("SEQ_LOCK: Released (Set#", idx+1, " matching close)"); }
        // v6.24: Reset generation when all hedge sets closed
        if(g_hedgeSetCount <= 0 && g_cycleGeneration > 0)
        {
@@ -8675,8 +8574,6 @@ void ManageHedgeMatchingClose(int idx)
         ArrayResize(g_hedgeSets[idx].boundTickets, 0);
         g_hedgeSets[idx].gridMode = false;
         g_hedgeSetCount--;
-        // v6.26: Reset sequential lock
-        if(idx == g_seqLockedIdx) { g_seqLockedIdx = -1; g_seqLastCloseTime = TimeCurrent(); Print("SEQ_LOCK: Released (Set#", idx+1, " release close)"); }
         // v6.24: Reset generation when all hedge sets closed
         if(g_hedgeSetCount <= 0 && g_cycleGeneration > 0)
         {
@@ -8795,8 +8692,6 @@ void ManageHedgePartialClose(int idx)
       g_hedgeSets[idx].boundTicketCount = 0;
       ArrayResize(g_hedgeSets[idx].boundTickets, 0);
        g_hedgeSetCount--;
-       // v6.26: Reset sequential lock
-       if(idx == g_seqLockedIdx) { g_seqLockedIdx = -1; g_seqLastCloseTime = TimeCurrent(); Print("SEQ_LOCK: Released (Set#", idx+1, " batch close)"); }
        // v6.24: Reset generation when all hedge sets closed
        if(g_hedgeSetCount <= 0 && g_cycleGeneration > 0)
        {
@@ -8914,8 +8809,6 @@ void ManageHedgeGridMode(int idx)
                 CloseAllHedgeGridOrders(idx);
                 g_hedgeSets[idx].active = false;
                 g_hedgeSetCount--;
-                // v6.26: Reset sequential lock
-                if(idx == g_seqLockedIdx) { g_seqLockedIdx = -1; g_seqLastCloseTime = TimeCurrent(); Print("SEQ_LOCK: Released (Set#", idx+1, " grid recover)"); }
                 // v6.24: Reset generation when all hedge sets closed
                 if(g_hedgeSetCount <= 0 && g_cycleGeneration > 0)
                 {
@@ -8953,8 +8846,6 @@ void ManageHedgeGridMode(int idx)
       }
        g_hedgeSets[idx].active = false;
        g_hedgeSetCount--;
-       // v6.26: Reset sequential lock
-       if(idx == g_seqLockedIdx) { g_seqLockedIdx = -1; g_seqLastCloseTime = TimeCurrent(); Print("SEQ_LOCK: Released (Set#", idx+1, " grid cleanup)"); }
        // v6.24: Reset generation when all hedge sets closed
        if(g_hedgeSetCount <= 0 && g_cycleGeneration > 0)
        {
