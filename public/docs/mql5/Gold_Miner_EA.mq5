@@ -3330,23 +3330,15 @@ void DisplayDashboard()
             color hedgeClr = (hedgePnL >= 0) ? clrLime : clrOrangeRed;
             DrawTableRow(row, setLabel, hedgeInfo, hedgeClr, COLOR_SECTION_HEDGE); row++;
             
-            // v6.16: Close Gate status per set
-            string trigLabel = (g_hedgeSets[h].triggerType == 1) ? "DD%" : "Exp";
-            string cycleStatus = "";
-            if(g_hedgeSets[h].triggerType == 1)
-            {
-               // DD-triggered → Gate 1 skipped
-               cycleStatus = "Skip(DD)";
-            }
-            else
-            {
-               if(!g_hedgeSets[h].seenExpansionSinceHedge)
-                  cycleStatus = "Wait Expansion";
-               else if(!IsAllSqueezeTFNormalStrict())
-                  cycleStatus = "Wait Normal";
-               else
-                  cycleStatus = "Ready";
-            }
+             // v6.17: Close Gate status per set — all types show real cycle status
+             string trigLabel = (g_hedgeSets[h].triggerType == 1) ? "DD%" : "Exp";
+             string cycleStatus = "";
+             if(!g_hedgeSets[h].seenExpansionSinceHedge && !g_hedgeSets[h].hedgedDuringExpansion)
+                cycleStatus = "Wait Exp";
+             else if(!IsAllSqueezeTFNormalStrict())
+                cycleStatus = "Wait Norm";
+             else
+                cycleStatus = "Ready";
             
             // Zone status
             double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
