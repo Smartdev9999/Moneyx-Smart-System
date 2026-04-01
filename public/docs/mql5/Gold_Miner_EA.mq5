@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.22 - MTF ZigZag+CDC+Grid+License  |
+//|                Gold Miner EA v6.23 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.22"
-#property description "Gold Miner EA v6.22 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + License"
+#property version   "6.23"
+#property description "Gold Miner EA v6.23 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -785,7 +785,7 @@ int OnInit()
    // === Recover Hedge Sets from existing positions (crash/restart recovery) ===
    RecoverHedgeSets();
 
-   Print("Gold Miner EA v6.22 initialized successfully | CycleGen=", g_cycleGeneration);
+   Print("Gold Miner EA v6.23 initialized successfully | CycleGen=", g_cycleGeneration);
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -837,7 +837,7 @@ void OnDeinit(const int reason)
 
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
-   Print("Gold Miner EA v6.22 deinitialized");
+   Print("Gold Miner EA v6.23 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -845,7 +845,7 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void RecoverInitialPrices()
 {
-   //--- First pass: try to find INIT orders (original logic)
+   //--- First pass: try to find INIT orders (current generation only)
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       ulong ticket = PositionGetTicket(i);
@@ -854,6 +854,9 @@ void RecoverInitialPrices()
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
 
       string comment = PositionGetString(POSITION_COMMENT);
+      // v6.23: Skip orders from previous generations
+      int orderGen = ExtractGeneration(comment);
+      if(orderGen >= 0 && orderGen != g_cycleGeneration) continue;
       if(MatchGMSuffix(comment, "_INIT"))
       {
          long posType = PositionGetInteger(POSITION_TYPE);
@@ -865,7 +868,7 @@ void RecoverInitialPrices()
       }
    }
 
-   //--- Second pass: fallback — if no INIT found, recover from oldest GL order
+   //--- Second pass: fallback — if no INIT found, recover from oldest GL order (current gen)
    if(g_initialBuyPrice <= 0 || g_initialSellPrice <= 0)
    {
       datetime oldestBuyTime = D'2099.01.01';
@@ -883,6 +886,9 @@ void RecoverInitialPrices()
          string comment = PositionGetString(POSITION_COMMENT);
          //--- Skip hedge/reverse hedge comments — only look at normal grid orders
          if(IsHedgeComment(comment) || IsReverseHedgeComment(comment)) continue;
+         // v6.23: Skip orders from previous generations
+         int orderGen = ExtractGeneration(comment);
+         if(orderGen >= 0 && orderGen != g_cycleGeneration) continue;
 
          //--- Check for GL suffix (grid loss orders)
          if(StringFind(comment, "_GL") >= 0)
@@ -913,12 +919,12 @@ void RecoverInitialPrices()
       if(g_initialBuyPrice <= 0 && oldestBuyPrice > 0)
       {
          g_initialBuyPrice = oldestBuyPrice;
-         Print("RecoverInitialPrices: BUY INIT not found, recovered from oldest GL order price=", oldestBuyPrice);
+         Print("RecoverInitialPrices: BUY INIT not found (gen=", g_cycleGeneration, "), recovered from oldest GL order price=", oldestBuyPrice);
       }
       if(g_initialSellPrice <= 0 && oldestSellPrice > 0)
       {
          g_initialSellPrice = oldestSellPrice;
-         Print("RecoverInitialPrices: SELL INIT not found, recovered from oldest GL order price=", oldestSellPrice);
+         Print("RecoverInitialPrices: SELL INIT not found (gen=", g_cycleGeneration, "), recovered from oldest GL order price=", oldestSellPrice);
       }
    }
 }
@@ -2442,6 +2448,9 @@ double FindMaxLotOnSide(ENUM_POSITION_TYPE side)
       if(IsTicketBound(ticket)) continue;
       string comment = PositionGetString(POSITION_COMMENT);
       if(IsHedgeComment(comment)) continue;
+      // v6.23: Skip orders from previous generations
+      int orderGen = ExtractGeneration(comment);
+      if(orderGen >= 0 && orderGen != g_cycleGeneration) continue;
       if(MatchGMSuffix(comment, "_GL") || MatchGMSuffix(comment, "_INIT"))
       {
          double lot = PositionGetDouble(POSITION_VOLUME);
@@ -2644,6 +2653,9 @@ void FindLastOrder(ENUM_POSITION_TYPE side, string suffix1, string suffix2, doub
 
       string comment = PositionGetString(POSITION_COMMENT);
       if(IsHedgeComment(comment)) continue;
+      // v6.23: Skip orders from previous generations
+      int orderGen = ExtractGeneration(comment);
+      if(orderGen >= 0 && orderGen != g_cycleGeneration) continue;
       if(MatchGMSuffix(comment, suffix1) || MatchGMSuffix(comment, suffix2))
       {
          datetime openTime = (datetime)PositionGetInteger(POSITION_TIME);
@@ -3031,7 +3043,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.22 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.22 [ZZ]" : "Gold Miner EA v6.22 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.23 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.23 [ZZ]" : "Gold Miner EA v6.23 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -3641,6 +3653,9 @@ void RecoverTFInitialPrices()
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
 
       string comment = PositionGetString(POSITION_COMMENT);
+      // v6.23: Skip orders from previous generations
+      int orderGen = ExtractGeneration(comment);
+      if(orderGen >= 0 && orderGen != g_cycleGeneration) continue;
       long posType = PositionGetInteger(POSITION_TYPE);
       double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
 
@@ -3832,7 +3847,10 @@ void CountPositionsTF(int tfIdx, int &buyCount, int &sellCount,
       if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
 
-      string comment = PositionGetString(POSITION_COMMENT);
+       string comment = PositionGetString(POSITION_COMMENT);
+      // v6.23: Skip orders from previous generations
+      int orderGen = ExtractGeneration(comment);
+      if(orderGen >= 0 && orderGen != g_cycleGeneration) continue;
       if(!MatchTFPrefix(comment, tfLabel)) continue;
 
       long posType = PositionGetInteger(POSITION_TYPE);
@@ -3932,7 +3950,10 @@ void FindLastOrderTF(int tfIdx, ENUM_POSITION_TYPE side, string suffix1, string 
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       if(PositionGetInteger(POSITION_TYPE) != side) continue;
 
-      string comment = PositionGetString(POSITION_COMMENT);
+       string comment = PositionGetString(POSITION_COMMENT);
+      // v6.23: Skip orders from previous generations
+      int orderGen = ExtractGeneration(comment);
+      if(orderGen >= 0 && orderGen != g_cycleGeneration) continue;
       if(!MatchTFPrefix(comment, tfLabel)) continue;
       if(StringFind(comment, suffix1) >= 0 || StringFind(comment, suffix2) >= 0)
       {
@@ -6402,6 +6423,14 @@ double GetHedgeLotCap(ENUM_POSITION_TYPE side)
       if(!g_hedgeSets[h].active) continue;
       if(g_hedgeSets[h].counterSide != side) continue;
 
+      // v6.23: Skip hedge sets from previous generations — only cap current gen
+      if(g_hedgeSets[h].boundGeneration != g_cycleGeneration)
+      {
+         Print("GetHedgeLotCap: skip set#", h, " boundGen=", g_hedgeSets[h].boundGeneration,
+               " != currentGen=", g_cycleGeneration);
+         continue;
+      }
+
       // This hedge set has bound orders on this side
       double boundLots = 0;
       for(int b = 0; b < g_hedgeSets[h].boundTicketCount; b++)
@@ -6423,6 +6452,9 @@ double GetHedgeLotCap(ENUM_POSITION_TYPE side)
       else
          minCap = MathMin(minCap, allowed);
    }
+   if(minCap >= 0)
+      Print("GetHedgeLotCap: side=", EnumToString(side), " cap=", DoubleToString(minCap, 2),
+            " gen=", g_cycleGeneration);
    return minCap;
 }
 
