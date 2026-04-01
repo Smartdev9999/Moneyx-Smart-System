@@ -2450,7 +2450,7 @@ double FindMaxLotOnSide(ENUM_POSITION_TYPE side)
 void CheckGridLoss(ENUM_POSITION_TYPE side, int currentGridCount)
 {
    if(currentGridCount >= GridLoss_MaxTrades) return;
-   if(TotalOrderCount() >= MaxOpenOrders) return;
+   if(NormalOrderCount() >= MaxOpenOrders) return;
 
    //--- OnlyNewCandle check
    if(GridLoss_OnlyNewCandle)
