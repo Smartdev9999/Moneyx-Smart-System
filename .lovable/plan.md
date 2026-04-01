@@ -1,59 +1,82 @@
 
 
+## v6.24 — แก้ MAX_HEDGE_SETS = 4 และ Generation Counter ไม่ Reset
 
-## Implemented: v6.23 — Lot-Cap & Helper Functions Generation-Aware
+### ปัญหาที่ 1: MAX_HEDGE_SETS hardcoded = 4
 
-### Changes Made
+```cpp
+#define MAX_HEDGE_SETS 4              // line 488 — แค่ 4 ช่อง
+HedgeSet g_hedgeSets[MAX_HEDGE_SETS]; // array มีแค่ 4 slots
+```
 
-1. **`GetHedgeLotCap()` — generation filter added**
-   - Skip hedge sets where `boundGeneration != g_cycleGeneration`
-   - Old hedge sets (H1/H2) no longer cap lot size for current generation orders
-   - Added debug log when cap is applied or skipped
+แม้ตั้ง `InpHedge_MaxSets = 6` แต่ `FindFreeHedgeSlot()` ลูปแค่ 4 ช่อง → return -1 หลัง H4 → H5 ไม่เปิด
 
-2. **`FindLastOrder()` — generation filter added**
-   - `ExtractGeneration(comment)` → skip orders from previous gens
-   - Grid loss/profit spacing now references only current gen orders
+### ปัญหาที่ 2: Generation Counter (GM13) ไม่ Reset
 
-3. **`FindMaxLotOnSide()` — generation filter added**
-   - Same filter — max lot calculation only considers current gen
+`g_cycleGeneration` เพิ่มทุกครั้งที่ hedge เปิด (ทั้ง Expansion และ DD) แต่ **reset เฉพาะเมื่อ ALL positions = 0**:
 
-4. **`RecoverInitialPrices()` — generation filter added (both passes)**
-   - First pass (INIT orders): skip non-current gen
-   - Second pass (GL fallback): skip non-current gen
-   - Log includes generation info
+```cpp
+// line 1324: reset เมื่อทุกอย่างปิดหมด
+if(g_hadPositions && totalPositions == 0 && g_hedgeSetCount == 0 && g_cycleGeneration > 0)
+   g_cycleGeneration = 0;
+```
 
-5. **`CountPositionsTF()` — generation filter added**
-   - TF position counting now skips previous gen orders
+ถ้ามี order ค้างอยู่ตลอด (ไม่เคยปิดหมดพร้อมกัน) → generation ไม่เคย reset → ขึ้นไปเรื่อยๆ (GM→GM1→...→GM13)
 
-6. **`FindLastOrderTF()` — generation filter added**
-   - TF grid spacing references only current gen
+ปัญหาจริง: เมื่อ hedge set ทั้งหมดปิด (triple-gate / matching close) แต่ยังมี normal orders ค้างจาก gen เก่า → generation ไม่ reset → order ใหม่ใช้ prefix GM13 → ดูสับสนและ gen number พุ่งไม่หยุด
 
-7. **`RecoverTFInitialPrices()` — generation filter added**
-   - TF initial price recovery only from current gen
+### แผนแก้ไข
 
-8. **Version bump**: v6.22 → v6.23
+**ไฟล์:** `public/docs/mql5/Gold_Miner_EA.mq5`
 
-### Generation-Aware Coverage Summary
+#### 1. เพิ่ม `MAX_HEDGE_SETS` จาก 4 เป็น 10
+
+```cpp
+#define MAX_HEDGE_SETS 10  // รองรับ H1-H10
+```
+
+ทุก loop ที่ใช้ `MAX_HEDGE_SETS` จะขยายอัตโนมัติ — ไม่ต้องแก้ loop
+
+#### 2. เพิ่ม Generation Reset เมื่อ Hedge Sets ปิดหมด
+
+เมื่อ `g_hedgeSetCount` ลดเหลือ 0 (hedge set สุดท้ายปิด) → reset generation เป็น 0 ทันที แม้ยังมี normal orders ค้าง:
+
+```cpp
+// ทุกจุดที่ g_hedgeSetCount-- ลดลง ตรวจสอบเพิ่ม:
+if(g_hedgeSetCount <= 0 && g_cycleGeneration > 0)
+{
+   g_cycleGeneration = 0;
+   g_hedgeSetCount = 0;
+   Print("CYCLE GENERATION reset to 0 — all hedge sets closed");
+}
+```
+
+เหตุผล: เมื่อไม่มี hedge set active แล้ว ไม่จำเป็นต้องแยก generation อีก — order ที่ค้างอยู่ (ถ้ามี) จะถูก system ปิดตามปกติ (TP/trailing) และ order ใหม่ควรเริ่มจาก GM ใหม่
+
+#### 3. Version bump: v6.23 → v6.24
+
+### Technical details
+
 ```text
-✓ CountPositions()         (v6.22)
-✓ NormalOrderCount()       (v6.22)
-✓ GetHedgeLotCap()         (v6.23) ← NEW
-✓ FindLastOrder()          (v6.23) ← NEW
-✓ FindMaxLotOnSide()       (v6.23) ← NEW
-✓ RecoverInitialPrices()   (v6.23) ← NEW
-✓ CountPositionsTF()       (v6.23) ← NEW
-✓ FindLastOrderTF()        (v6.23) ← NEW
-✓ RecoverTFInitialPrices() (v6.23) ← NEW
-✗ TotalOrderCount()        — intentionally not filtered (global system use)
+ปัญหา 1:
+  MAX_HEDGE_SETS = 4 → FindFreeHedgeSlot() return -1 หลัง 4 active sets
+  แก้: เพิ่มเป็น 10 → รองรับ InpHedge_MaxSets สูงสุด 10
+
+ปัญหา 2:
+  g_cycleGeneration increments ทุก hedge open (line 6641, 6847)
+  Reset condition: totalPositions == 0 && hedgeSetCount == 0
+  ถ้า positions ไม่เคยปิดหมด → gen ไม่ reset → GM13, GM14...
+  
+  แก้: reset เมื่อ hedgeSetCount ลดเหลือ 0 
+  (ทุกจุดที่ g_hedgeSetCount-- มีประมาณ 7 จุด)
 ```
 
 ### สิ่งที่ไม่เปลี่ยนแปลง
-- Order Execution Logic (trade.Buy/Sell/PositionClose)
-- Trading Strategy Logic (SMA/ZigZag/Instant, Grid entry/exit, TP/SL)
-- Core Module Logic (License, News filter, Time filter, Data sync)
-- Triple-gate close (Expansion + Zone + TP Distance)
-- Generation-aware binding/counting ใน hedge system (v6.18/v6.19)
-- DD trigger threshold logic (v6.21)
-- CountPositions / NormalOrderCount gen filter (v6.22)
-- `TotalOrderCount()` — ไม่แก้
-- OpenDDHedge() binding logic — ไม่แก้
+- Order Execution Logic (trade.Buy/Sell/PositionClose) — ไม่แก้
+- Trading Strategy Logic (SMA/ZigZag/Grid/TP/SL) — ไม่แก้
+- Core Module Logic (License, News, Time, Data sync) — ไม่แก้
+- Generation-aware isolation (v6.23) — ไม่แก้ logic, แค่ขยาย array + reset
+- DD trigger threshold (v6.21) — ไม่แก้
+- Triple-gate exit logic — ไม่แก้
+- OpenDDHedge / CheckAndOpenHedgeByDD — ไม่แก้ logic
+
