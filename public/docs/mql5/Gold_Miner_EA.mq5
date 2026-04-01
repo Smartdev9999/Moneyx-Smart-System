@@ -4522,7 +4522,7 @@ void OnTickZigZagMTF()
       // Entry check: sub-TF ZigZag must agree with H4 direction
       if(!g_newOrderBlocked && effectiveDirection != "NONE")
       {
-         bool canOpenMore = TotalOrderCount() < MaxOpenOrders;
+         bool canOpenMore = NormalOrderCount() < MaxOpenOrders;
          bool canOpenThisCandle = !(DontOpenSameCandle && tfBar == g_tfStates[t].lastInitialCandle);
 
          // Detect sub-TF swing
