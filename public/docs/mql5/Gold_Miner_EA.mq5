@@ -2551,7 +2551,7 @@ void CheckGridLoss(ENUM_POSITION_TYPE side, int currentGridCount)
 void CheckGridProfit(ENUM_POSITION_TYPE side, int currentGridCount)
 {
    if(currentGridCount >= GridProfit_MaxTrades) return;
-   if(TotalOrderCount() >= MaxOpenOrders) return;
+   if(NormalOrderCount() >= MaxOpenOrders) return;
 
    //--- OnlyNewCandle check
    if(GridProfit_OnlyNewCandle)
