@@ -6537,6 +6537,10 @@ void CheckAndOpenHedge()
          string cmt = PositionGetString(POSITION_COMMENT);
          if(IsHedgeComment(cmt)) continue;
          if(IsTicketBound(ticket)) continue;  // already bound to another set
+         // v6.19: Generation filter — only bind orders from current generation
+         int orderGen = ExtractGeneration(cmt);
+         if(orderGen < 0) continue;
+         if(orderGen != g_cycleGeneration) continue;
 
          int bc = g_hedgeSets[slot].boundTicketCount;
          ArrayResize(g_hedgeSets[slot].boundTickets, bc + 1);
