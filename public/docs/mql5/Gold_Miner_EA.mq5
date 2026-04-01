@@ -6851,9 +6851,9 @@ void RecoverHedgeSets()
              g_hedgeSets[h].combinedGridMode = false;
              g_hedgeSets[h].combinedGridLevel = 0;
              g_hedgeSets[h].combinedLots = 0;
-             // v6.15: Recovery defaults — assume expansion was seen (conservative, prevent permanent lock)
-             g_hedgeSets[h].seenExpansionSinceHedge = true;
-             g_hedgeSets[h].hedgedDuringExpansion = true;
+              // v6.17: Recovery — assume expansion was seen (conservative, prevent permanent lock)
+              g_hedgeSets[h].seenExpansionSinceHedge = true;
+              g_hedgeSets[h].hedgedDuringExpansion = true;
              // Zone prices will be recalculated after bound tickets are rebuilt (Step 2)
              g_hedgeSets[h].hedgeOpenPrice = PositionGetDouble(POSITION_PRICE_OPEN);
              g_hedgeSets[h].zoneUpperPrice = 0;
