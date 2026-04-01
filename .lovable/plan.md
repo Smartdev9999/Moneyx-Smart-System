@@ -1,33 +1,37 @@
 
 
-## Implemented: v6.25 — Sequential Hedge Recovery (oldest first, one at a time)
+## Implemented: v6.26 — Sequential Close Lock (process one set until fully deactivated)
 
 ### Changes Made
 
-1. **New input: `InpHedge_SequentialClose`** (bool, default: true)
+1. **New input: `InpHedge_SeqCooldownSec`** (int, default: 30)
    - In group "=== Counter-Trend Hedging ==="
-   - When `true`: only ONE hedge set processes recovery per tick (oldest eligible)
-   - When `false`: all sets process simultaneously (legacy behavior)
+   - Seconds to wait after one set deactivates before starting next
 
-2. **New field: `HedgeSet.openTime`** (datetime)
-   - Set at hedge creation time (`TimeCurrent()`)
-   - Recovered from hedge ticket's `POSITION_TIME` on EA restart
+2. **New globals: `g_seqLockedIdx`, `g_seqLastCloseTime`**
+   - `g_seqLockedIdx`: index of set currently being processed (-1 = none)
+   - `g_seqLastCloseTime`: timestamp when last set was deactivated
 
-3. **`ManageHedgeSets()` sequential logic**
-   - Before the main loop: scan all active sets that pass `IsHedgeCloseAllowed()`
-   - Select the one with the earliest `openTime` → `seqActiveIdx`
-   - In the loop: sets that are NOT `seqActiveIdx` still do maintenance (RefreshBoundTickets, expansion tracking, external close detection) but skip matching/grid recovery
-   - When the active set deactivates → next tick picks the new oldest eligible set
+3. **`ManageHedgeSets()` lock-based sequential logic**
+   - Priority 1: If locked set is still active → keep processing it (no switching)
+   - Priority 2: If lock released → check cooldown timer
+   - Priority 3: If cooldown expired → find oldest eligible set → lock it
+   - Other sets do maintenance only (refresh bounds, track expansion)
 
-4. **Version bump**: v6.24 → v6.25
+4. **All 7 deactivation points + full close** → reset lock + set cooldown timestamp
+
+5. **`RecoverHedgeSets()`** → recover lock on restart if a set is in gridMode/matchingDone
+
+6. **Version bump**: v6.25 → v6.26
 
 ### สิ่งที่ไม่เปลี่ยนแปลง
 - Order Execution Logic (trade.Buy/Sell/PositionClose)
 - Trading Strategy Logic (SMA/ZigZag/Grid/TP/SL)
 - Core Module Logic (License, News, Time, Data sync)
-- Triple-gate exit logic (still the gate — just limits WHO can pass per tick)
+- Triple-gate exit logic (still the gate — lock just prevents switching)
 - Matching close / Grid recovery logic ภายใน (ไม่แก้)
 - DD trigger / generation-aware isolation (v6.23/v6.24)
 - OpenDDHedge / CheckAndOpenHedgeByDD logic
 - Generation reset logic (v6.24)
 - MAX_HEDGE_SETS = 10 (v6.24)
+- Orphan recovery (แยก system)
