@@ -8653,6 +8653,8 @@ void ManageHedgeMatchingClose(int idx)
         ArrayResize(g_hedgeSets[idx].boundTickets, 0);
         g_hedgeSets[idx].gridMode = false;
         g_hedgeSetCount--;
+        // v6.26: Reset sequential lock
+        if(idx == g_seqLockedIdx) { g_seqLockedIdx = -1; g_seqLastCloseTime = TimeCurrent(); Print("SEQ_LOCK: Released (Set#", idx+1, " release close)"); }
         // v6.24: Reset generation when all hedge sets closed
         if(g_hedgeSetCount <= 0 && g_cycleGeneration > 0)
         {
