@@ -3950,7 +3950,10 @@ void FindLastOrderTF(int tfIdx, ENUM_POSITION_TYPE side, string suffix1, string 
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       if(PositionGetInteger(POSITION_TYPE) != side) continue;
 
-      string comment = PositionGetString(POSITION_COMMENT);
+       string comment = PositionGetString(POSITION_COMMENT);
+      // v6.23: Skip orders from previous generations
+      int orderGen = ExtractGeneration(comment);
+      if(orderGen >= 0 && orderGen != g_cycleGeneration) continue;
       if(!MatchTFPrefix(comment, tfLabel)) continue;
       if(StringFind(comment, suffix1) >= 0 || StringFind(comment, suffix2) >= 0)
       {
