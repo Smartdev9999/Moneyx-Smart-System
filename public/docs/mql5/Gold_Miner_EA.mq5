@@ -845,7 +845,7 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void RecoverInitialPrices()
 {
-   //--- First pass: try to find INIT orders (original logic)
+   //--- First pass: try to find INIT orders (current generation only)
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       ulong ticket = PositionGetTicket(i);
@@ -854,6 +854,9 @@ void RecoverInitialPrices()
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
 
       string comment = PositionGetString(POSITION_COMMENT);
+      // v6.23: Skip orders from previous generations
+      int orderGen = ExtractGeneration(comment);
+      if(orderGen >= 0 && orderGen != g_cycleGeneration) continue;
       if(MatchGMSuffix(comment, "_INIT"))
       {
          long posType = PositionGetInteger(POSITION_TYPE);
@@ -865,7 +868,7 @@ void RecoverInitialPrices()
       }
    }
 
-   //--- Second pass: fallback — if no INIT found, recover from oldest GL order
+   //--- Second pass: fallback — if no INIT found, recover from oldest GL order (current gen)
    if(g_initialBuyPrice <= 0 || g_initialSellPrice <= 0)
    {
       datetime oldestBuyTime = D'2099.01.01';
@@ -883,6 +886,9 @@ void RecoverInitialPrices()
          string comment = PositionGetString(POSITION_COMMENT);
          //--- Skip hedge/reverse hedge comments — only look at normal grid orders
          if(IsHedgeComment(comment) || IsReverseHedgeComment(comment)) continue;
+         // v6.23: Skip orders from previous generations
+         int orderGen = ExtractGeneration(comment);
+         if(orderGen >= 0 && orderGen != g_cycleGeneration) continue;
 
          //--- Check for GL suffix (grid loss orders)
          if(StringFind(comment, "_GL") >= 0)
@@ -913,12 +919,12 @@ void RecoverInitialPrices()
       if(g_initialBuyPrice <= 0 && oldestBuyPrice > 0)
       {
          g_initialBuyPrice = oldestBuyPrice;
-         Print("RecoverInitialPrices: BUY INIT not found, recovered from oldest GL order price=", oldestBuyPrice);
+         Print("RecoverInitialPrices: BUY INIT not found (gen=", g_cycleGeneration, "), recovered from oldest GL order price=", oldestBuyPrice);
       }
       if(g_initialSellPrice <= 0 && oldestSellPrice > 0)
       {
          g_initialSellPrice = oldestSellPrice;
-         Print("RecoverInitialPrices: SELL INIT not found, recovered from oldest GL order price=", oldestSellPrice);
+         Print("RecoverInitialPrices: SELL INIT not found (gen=", g_cycleGeneration, "), recovered from oldest GL order price=", oldestSellPrice);
       }
    }
 }
