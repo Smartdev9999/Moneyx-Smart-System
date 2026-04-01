@@ -7663,8 +7663,15 @@ void ManageHedgeSets()
          g_hedgeSets[h].active = false;
          g_hedgeSets[h].boundTicketCount = 0;
          ArrayResize(g_hedgeSets[h].boundTickets, 0);
-         g_hedgeSetCount--;
-         continue;
+          g_hedgeSetCount--;
+          // v6.24: Reset generation when all hedge sets closed
+          if(g_hedgeSetCount <= 0 && g_cycleGeneration > 0)
+          {
+             g_cycleGeneration = 0;
+             g_hedgeSetCount = 0;
+             Print("CYCLE GENERATION reset to 0 — all hedge sets closed (external close)");
+          }
+          continue;
       }
 
       // === v6.15: Triple-Gate Close Check ===
