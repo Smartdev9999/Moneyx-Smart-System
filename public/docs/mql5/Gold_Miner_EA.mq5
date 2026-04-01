@@ -7103,11 +7103,11 @@ void RecoverHedgeSets()
          else
             ddSellCount++;
       }
-      g_nextBuyDDTrigger  = InpHedge_DDTriggerPct + ddBuyCount * InpHedge_DDStepPct;
-      g_nextSellDDTrigger = InpHedge_DDTriggerPct + ddSellCount * InpHedge_DDStepPct;
-      if(ddBuyCount > 0 || ddSellCount > 0)
-         Print("RECOVER DD TRIGGERS: Next BUY=", DoubleToString(g_nextBuyDDTrigger, 1), 
-               "% SELL=", DoubleToString(g_nextSellDDTrigger, 1), "%");
+       // v6.21: Threshold is constant per generation — no cumulative step needed
+       // g_nextBuyDDTrigger and g_nextSellDDTrigger are kept at InpHedge_DDTriggerPct
+       if(ddBuyCount > 0 || ddSellCount > 0)
+          Print("RECOVER DD SETS: BUY-side=", ddBuyCount, " SELL-side=", ddSellCount, 
+                " | Threshold constant=", DoubleToString(InpHedge_DDTriggerPct, 1), "%");
    }
 
    if(recovered > 0 || orphansClosed > 0)
