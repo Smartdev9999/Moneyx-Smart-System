@@ -1861,6 +1861,9 @@ void CloseAllPositions()
       g_hedgeSets[h].triggerType = 0;
    }
    g_hedgeSetCount = 0;
+   // v6.26: Reset sequential lock on full close
+   g_seqLockedIdx = -1;
+   g_seqLastCloseTime = 0;
    // v6.16: Reset DD triggers on full close
    g_nextBuyDDTrigger  = InpHedge_DDTriggerPct;
    g_nextSellDDTrigger = InpHedge_DDTriggerPct;
