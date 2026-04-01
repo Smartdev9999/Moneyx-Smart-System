@@ -3943,7 +3943,7 @@ void CloseAllSideTF(int tfIdx, ENUM_POSITION_TYPE side)
 void CheckGridLossTF(int tfIdx, ENUM_POSITION_TYPE side, int currentGridCount)
 {
    if(currentGridCount >= GridLoss_MaxTrades) return;
-   if(TotalOrderCount() >= MaxOpenOrders) return;
+   if(NormalOrderCount() >= MaxOpenOrders) return;
 
    // OnlyNewCandle check (per-TF)
    if(GridLoss_OnlyNewCandle)
