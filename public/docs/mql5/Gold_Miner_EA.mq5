@@ -3390,10 +3390,37 @@ void DisplayDashboard()
         }
         
          // v6.18: DD% Mode info line with generation scope
-         if(InpHedge_TriggerMode == HEDGE_TRIGGER_DD_PERCENT)
-         {
-            string ddInfo = "Next BUY DD:" + DoubleToString(g_nextBuyDDTrigger, 1) + "% | SELL DD:" + DoubleToString(g_nextSellDDTrigger, 1) + "%";
-            DrawTableRow(row, "  DD Trig", ddInfo, clrAqua, COLOR_SECTION_HEDGE); row++;
+          if(InpHedge_TriggerMode == HEDGE_TRIGGER_DD_PERCENT)
+          {
+             // v6.21: Show current gen DD vs constant threshold
+             double curBuyDD = 0, curSellDD = 0;
+             {
+                double bal = AccountInfoDouble(ACCOUNT_BALANCE);
+                if(bal > 0)
+                {
+                   double bLoss = 0, sLoss = 0;
+                   int curGen = g_cycleGeneration;
+                   string genPrefix = GetCommentPrefix();
+                   for(int pi = PositionsTotal() - 1; pi >= 0; pi--)
+                   {
+                      ulong tk = PositionGetTicket(pi);
+                      if(tk == 0) continue;
+                      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+                      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+                      string cmt = PositionGetString(POSITION_COMMENT);
+                      if(IsHedgeComment(cmt) || IsTicketBound(tk)) continue;
+                      if(ExtractGeneration(cmt) != curGen) continue;
+                      double pl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+                      if(pl >= 0) continue;
+                      if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) bLoss += pl;
+                      else sLoss += pl;
+                   }
+                   curBuyDD  = (bLoss < 0) ? (MathAbs(bLoss) / bal * 100.0) : 0;
+                   curSellDD = (sLoss < 0) ? (MathAbs(sLoss) / bal * 100.0) : 0;
+                }
+             }
+             string ddInfo = "BUY DD:" + DoubleToString(curBuyDD, 1) + "/" + DoubleToString(InpHedge_DDTriggerPct, 1) + "% | SELL DD:" + DoubleToString(curSellDD, 1) + "/" + DoubleToString(InpHedge_DDTriggerPct, 1) + "%";
+             DrawTableRow(row, "  DD Trig", ddInfo, clrAqua, COLOR_SECTION_HEDGE); row++;
             // v6.18: Show which generation DD is currently monitoring
             string scopeInfo = "Scope: " + GetCommentPrefix() + " (Gen " + IntegerToString(g_cycleGeneration) + ")";
             DrawTableRow(row, "  DD Scope", scopeInfo, clrYellow, COLOR_SECTION_HEDGE); row++;
