@@ -4037,7 +4037,7 @@ void CheckGridLossTF(int tfIdx, ENUM_POSITION_TYPE side, int currentGridCount)
 void CheckGridProfitTF(int tfIdx, ENUM_POSITION_TYPE side, int currentGridCount)
 {
    if(currentGridCount >= GridProfit_MaxTrades) return;
-   if(TotalOrderCount() >= MaxOpenOrders) return;
+   if(NormalOrderCount() >= MaxOpenOrders) return;
 
    if(GridProfit_OnlyNewCandle)
    {
