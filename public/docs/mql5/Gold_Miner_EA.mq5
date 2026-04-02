@@ -532,6 +532,7 @@ int      g_cycleGeneration = 0;  // incremented each time a hedge opens — chan
 double   g_nextBuyDDTrigger  = 5.0;    // DD% threshold for next BUY-side hedge
 double   g_nextSellDDTrigger = 5.0;    // DD% threshold for next SELL-side hedge
 datetime g_lastDDHedgeTime   = 0;      // cooldown tracker
+datetime g_lastHedgeCloseTime = 0;     // v6.25: cooldown after hedge set close
 
 // === Reverse Hedge State (v6.11: array-based for multiple reverse hedges) ===
 #define MAX_REVERSE_HEDGES 10
