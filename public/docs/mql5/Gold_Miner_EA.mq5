@@ -7756,18 +7756,20 @@ void ManageHedgeSets()
          // Hedge was closed externally (accumulate close, manual, etc.)
          Print("HEDGE Set#", h + 1, " ticket no longer exists. Deactivating.");
          CloseAllHedgeGridOrders(h);
+         SaveBoundTicketsToPrevHedged(h);  // v6.26: remember released tickets
          g_hedgeSets[h].active = false;
          g_hedgeSets[h].boundTicketCount = 0;
          ArrayResize(g_hedgeSets[h].boundTickets, 0);
-           g_hedgeSetCount--;
-           g_lastHedgeCloseTime = TimeCurrent();  // v6.25: cooldown after set close
-          // v6.24: Reset generation when all hedge sets closed
-          if(g_hedgeSetCount <= 0 && g_cycleGeneration > 0)
-          {
-             g_cycleGeneration = 0;
-             g_hedgeSetCount = 0;
-             Print("CYCLE GENERATION reset to 0 — all hedge sets closed (external close)");
-          }
+            g_hedgeSetCount--;
+            g_lastHedgeCloseTime = TimeCurrent();  // v6.25: cooldown after set close
+           // v6.24: Reset generation when all hedge sets closed
+           if(g_hedgeSetCount <= 0 && g_cycleGeneration > 0)
+           {
+              g_cycleGeneration = 0;
+              ClearPrevHedgedTickets();  // v6.26: full reset
+              g_hedgeSetCount = 0;
+              Print("CYCLE GENERATION reset to 0 — all hedge sets closed (external close)");
+           }
           continue;
       }
 
