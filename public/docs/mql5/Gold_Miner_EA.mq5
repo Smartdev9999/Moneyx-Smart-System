@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.26 - MTF ZigZag+CDC+Grid+License  |
+//|                Gold Miner EA v6.27 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.26"
-#property description "Gold Miner EA v6.26 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge10 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + License"
+#property version   "6.27"
+#property description "Gold Miner EA v6.27 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge10 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -793,7 +793,7 @@ int OnInit()
    // === Recover Hedge Sets from existing positions (crash/restart recovery) ===
    RecoverHedgeSets();
 
-   Print("Gold Miner EA v6.26 initialized successfully | CycleGen=", g_cycleGeneration);
+   Print("Gold Miner EA v6.27 initialized successfully | CycleGen=", g_cycleGeneration);
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -845,7 +845,7 @@ void OnDeinit(const int reason)
 
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
-   Print("Gold Miner EA v6.26 deinitialized");
+   Print("Gold Miner EA v6.27 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -1329,11 +1329,9 @@ void OnTick()
           int totalPositions = buyCount + sellCount;
 
           //--- Reset cycle generation when all positions cleared (standalone check)
-          if(g_hadPositions && totalPositions == 0 && g_hedgeSetCount == 0 && g_cycleGeneration > 0)
+          if(g_hadPositions && totalPositions == 0)
           {
-              g_cycleGeneration = 0;
-              ClearPrevHedgedTickets();  // v6.26
-              Print("CYCLE GENERATION reset to 0 — all positions cleared");
+              TryResetCycleStateIfFlat("all positions cleared");  // v6.27
           }
 
          //--- Auto-detect broker-closed positions (e.g. trailing SL hit by broker)
@@ -2041,13 +2039,8 @@ void ManageTPSL()
       int currentCount = TotalOrderCount();
        if(g_hadPositions && currentCount == 0)
        {
-          // Reset cycle generation — no positions left, start fresh
-          if(g_hedgeSetCount == 0 && g_cycleGeneration > 0)
-          {
-              g_cycleGeneration = 0;
-              ClearPrevHedgedTickets();  // v6.26
-              Print("CYCLE GENERATION reset to 0 — all positions cleared (accumulate reset)");
-          }
+          // v6.27: Safe reset — only if truly flat
+          TryResetCycleStateIfFlat("accumulate reset");
           g_accumulateBaseline = CalcTotalHistoryProfit();
           g_accumulatedProfit = 0;
           g_hadPositions = false;
@@ -3053,7 +3046,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.26 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.26 [ZZ]" : "Gold Miner EA v6.26 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.27 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.27 [ZZ]" : "Gold Miner EA v6.27 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -4464,13 +4457,8 @@ void ManageAccumulateShared()
    int currentCount = TotalOrderCount();
     if(g_hadPositions && currentCount == 0)
    {
-      // Reset cycle generation — no positions left, start fresh
-      if(g_hedgeSetCount == 0 && g_cycleGeneration > 0)
-      {
-          g_cycleGeneration = 0;
-          ClearPrevHedgedTickets();  // v6.26
-          Print("CYCLE GENERATION reset to 0 — all positions cleared (ZZ accumulate reset)");
-      }
+      // v6.27: Safe reset — only if truly flat
+      TryResetCycleStateIfFlat("ZZ accumulate reset");
       g_accumulateBaseline = CalcTotalHistoryProfit();
       g_accumulatedProfit = 0;
       g_hadPositions = false;
@@ -6479,6 +6467,31 @@ void SaveBoundTicketsToPrevHedged(int idx)
 }
 
 //+------------------------------------------------------------------+
+//| v6.27: Safe cycle reset — only reset when account is truly flat    |
+//| Prevents premature clearing of prevHedgedTickets while released    |
+//| orders are still open (which would allow DD re-trigger)            |
+//+------------------------------------------------------------------+
+void TryResetCycleStateIfFlat(string reason)
+{
+   if(g_hedgeSetCount > 0) return;  // still have active sets
+   if(g_cycleGeneration <= 0) return;  // nothing to reset
+   
+   // v6.27: Check if any EA positions still exist
+   int remaining = TotalOrderCount();
+   if(remaining > 0)
+   {
+      Print("v6.27: Skipping cycle reset (", reason, ") — ", remaining, " positions still open. prevHedged preserved.");
+      return;
+   }
+   
+   // Truly flat — safe to reset everything
+   g_cycleGeneration = 0;
+   g_hedgeSetCount = 0;
+   ClearPrevHedgedTickets();
+   Print("CYCLE GENERATION reset to 0 — ", reason, " (v6.27 safe reset, account flat)");
+}
+
+//+------------------------------------------------------------------+
 //| Get lot cap for new orders when hedge set has bound orders          |
 //| Returns -1 if no hedge set exists for this side (no cap)           |
 //| Returns allowedLots = hedgeLots - remainingBoundLots               |
@@ -7765,14 +7778,8 @@ void ManageHedgeSets()
          ArrayResize(g_hedgeSets[h].boundTickets, 0);
             g_hedgeSetCount--;
             g_lastHedgeCloseTime = TimeCurrent();  // v6.25: cooldown after set close
-           // v6.24: Reset generation when all hedge sets closed
-           if(g_hedgeSetCount <= 0 && g_cycleGeneration > 0)
-           {
-              g_cycleGeneration = 0;
-              ClearPrevHedgedTickets();  // v6.26: full reset
-              g_hedgeSetCount = 0;
-              Print("CYCLE GENERATION reset to 0 — all hedge sets closed (external close)");
-           }
+            // v6.27: Safe reset — only if truly flat
+            TryResetCycleStateIfFlat("external close");
           continue;
       }
 
@@ -8502,14 +8509,8 @@ bool ManageHedgeBoundAvgTP(int idx)
              ArrayResize(g_hedgeSets[idx].boundTickets, 0);
              g_hedgeSetCount--;
               g_lastHedgeCloseTime = TimeCurrent();  // v6.25: cooldown after set close
-              // v6.24: Reset generation when all hedge sets closed
-              if(g_hedgeSetCount <= 0 && g_cycleGeneration > 0)
-              {
-                 g_cycleGeneration = 0;
-                 ClearPrevHedgedTickets();  // v6.26
-                 g_hedgeSetCount = 0;
-                 Print("CYCLE GENERATION reset to 0 — all hedge sets closed (AvgTP)");
-              }
+               // v6.27: Safe reset — only if truly flat
+               TryResetCycleStateIfFlat("AvgTP");
              Print("HEDGE Set#", idx + 1, " fully closed via Avg TP.");
          }
          else
@@ -8657,14 +8658,8 @@ void ManageHedgeMatchingClose(int idx)
        ArrayResize(g_hedgeSets[idx].boundTickets, 0);
          g_hedgeSetCount--;
          g_lastHedgeCloseTime = TimeCurrent();  // v6.25: cooldown after set close
-        // v6.24: Reset generation when all hedge sets closed
-        if(g_hedgeSetCount <= 0 && g_cycleGeneration > 0)
-        {
-           g_cycleGeneration = 0;
-           ClearPrevHedgedTickets();  // v6.26
-           g_hedgeSetCount = 0;
-           Print("CYCLE GENERATION reset to 0 — all hedge sets closed (matching close)");
-        }
+         // v6.27: Safe reset — only if truly flat
+         TryResetCycleStateIfFlat("matching close");
        Sleep(100);
     }
      else
@@ -8684,14 +8679,8 @@ void ManageHedgeMatchingClose(int idx)
          g_hedgeSets[idx].gridMode = false;
          g_hedgeSetCount--;
           g_lastHedgeCloseTime = TimeCurrent();  // v6.25: cooldown after set close
-         // v6.24: Reset generation when all hedge sets closed
-         if(g_hedgeSetCount <= 0 && g_cycleGeneration > 0)
-         {
-            g_cycleGeneration = 0;
-            ClearPrevHedgedTickets();  // v6.26
-            g_hedgeSetCount = 0;
-            Print("CYCLE GENERATION reset to 0 — all hedge sets closed (release close)");
-         }
+          // v6.27: Safe reset — only if truly flat
+          TryResetCycleStateIfFlat("release close");
         Sleep(100);
      }
 }
@@ -8805,14 +8794,8 @@ void ManageHedgePartialClose(int idx)
        ArrayResize(g_hedgeSets[idx].boundTickets, 0);
          g_hedgeSetCount--;
          g_lastHedgeCloseTime = TimeCurrent();  // v6.25: cooldown after set close
-        // v6.24: Reset generation when all hedge sets closed
-        if(g_hedgeSetCount <= 0 && g_cycleGeneration > 0)
-        {
-           g_cycleGeneration = 0;
-           ClearPrevHedgedTickets();  // v6.26
-           g_hedgeSetCount = 0;
-           Print("CYCLE GENERATION reset to 0 — all hedge sets closed (batch close)");
-        }
+         // v6.27: Safe reset — only if truly flat
+         TryResetCycleStateIfFlat("batch close");
        Print("HEDGE Set#", idx + 1, " fully closed via batch partial close.");
    }
    else
@@ -8925,14 +8908,8 @@ void ManageHedgeGridMode(int idx)
                  g_hedgeSets[idx].active = false;
                  g_hedgeSetCount--;
                   g_lastHedgeCloseTime = TimeCurrent();  // v6.25: cooldown after set close
-                 // v6.24: Reset generation when all hedge sets closed
-                 if(g_hedgeSetCount <= 0 && g_cycleGeneration > 0)
-                 {
-                    g_cycleGeneration = 0;
-                    ClearPrevHedgedTickets();  // v6.26
-                    g_hedgeSetCount = 0;
-                    Print("CYCLE GENERATION reset to 0 — all hedge sets closed (grid recover)");
-                 }
+                  // v6.27: Safe reset — only if truly flat
+                  TryResetCycleStateIfFlat("grid recover");
                  Print("HEDGE Set#", idx + 1, " fully recovered via grid mode.");
             }
             else
@@ -8965,14 +8942,8 @@ void ManageHedgeGridMode(int idx)
        g_hedgeSets[idx].active = false;
          g_hedgeSetCount--;
          g_lastHedgeCloseTime = TimeCurrent();  // v6.25: cooldown after set close
-        // v6.24: Reset generation when all hedge sets closed
-        if(g_hedgeSetCount <= 0 && g_cycleGeneration > 0)
-        {
-           g_cycleGeneration = 0;
-           ClearPrevHedgedTickets();  // v6.26
-           g_hedgeSetCount = 0;
-           Print("CYCLE GENERATION reset to 0 — all hedge sets closed (grid cleanup)");
-        }
+         // v6.27: Safe reset — only if truly flat
+         TryResetCycleStateIfFlat("grid cleanup");
         Print("HEDGE Set#", idx + 1, " grid mode complete. All cleaned up.");
       return;
    }
