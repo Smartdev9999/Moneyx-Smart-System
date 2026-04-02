@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.28 - MTF ZigZag+CDC+Grid+License  |
+//|                Gold Miner EA v6.29 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.28"
-#property description "Gold Miner EA v6.28 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge10 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + License"
+#property version   "6.29"
+#property description "Gold Miner EA v6.29 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge10 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -17,6 +17,13 @@ enum ENUM_LOT_MODE
    LOT_ADD     = 0,  // Add Lot
    LOT_CUSTOM  = 1,  // Custom Lot
    LOT_MULTIPLY= 2   // Multiply Lot
+};
+
+// v6.29: Balance Guard Mode
+enum ENUM_BALGUARD_MODE
+{
+   BALGUARD_FIXED   = 0,  // Fixed Target ($)
+   BALGUARD_DYNAMIC = 1   // Dynamic (last flat balance)
 };
 
 enum ENUM_GAP_TYPE
@@ -341,7 +348,8 @@ input int      InpHedge_DDCooldownSec        = 60;    // Min seconds between DD 
 input double   InpHedge_DDTriggerDollar      = 500.0; // v6.25: DD$ to trigger hedge (per side)
 // v6.28: Balance Guard — close all when equity recovers to target
 input bool     InpBalanceGuard_Enable        = false;  // Balance Guard: Enable
-input double   InpBalanceGuard_Target        = 1000.0; // Balance Guard: Target Equity ($)
+input ENUM_BALGUARD_MODE InpBalanceGuard_Mode = BALGUARD_FIXED; // Balance Guard: Mode (Fixed / Dynamic)
+input double   InpBalanceGuard_Target        = 1000.0; // Balance Guard: Target Equity ($) [Fixed mode]
 // v6.15: Reverse Hedge disabled — kept as constants for legacy function compilation
 const bool     InpHedge_ReverseEnable        = false;
 const int      InpHedge_ReverseMinTFConfirm  = 2;
@@ -544,6 +552,7 @@ int      g_prevHedgedCount = 0;
 
 // === v6.28: Balance Guard State ===
 bool g_balanceGuardActive = false;  // activated when hedge set opens
+double g_balanceGuardDynamicTarget = 0; // v6.29: dynamic target — updated when flat
 
 // === Reverse Hedge State (v6.11: array-based for multiple reverse hedges) ===
 #define MAX_REVERSE_HEDGES 10
@@ -799,7 +808,15 @@ int OnInit()
    // === Recover Hedge Sets from existing positions (crash/restart recovery) ===
    RecoverHedgeSets();
 
-   Print("Gold Miner EA v6.28 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF");
+   // v6.29: Initialize dynamic balance guard target
+   if(InpBalanceGuard_Enable && InpBalanceGuard_Mode == BALGUARD_DYNAMIC)
+   {
+      g_balanceGuardDynamicTarget = AccountInfoDouble(ACCOUNT_BALANCE);
+      Print("v6.29 Balance Guard Dynamic: Initial target set to $", DoubleToString(g_balanceGuardDynamicTarget, 2));
+   }
+
+   Print("Gold Miner EA v6.29 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+         " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic");
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -3469,24 +3486,26 @@ void DisplayDashboard()
          }
           // v6.15: Reverse Hedge removed — no more reverse hedge or balanced lock display
          
-         // v6.28: Balance Guard status
-         if(InpBalanceGuard_Enable)
-         {
-            double curEquity = AccountInfoDouble(ACCOUNT_EQUITY);
-            string bgStatus;
-            color bgClr;
-            if(g_balanceGuardActive)
-            {
-               bgStatus = "ACTIVE | Eq: $" + DoubleToString(curEquity, 2) + " / $" + DoubleToString(InpBalanceGuard_Target, 2);
-               bgClr = (curEquity >= InpBalanceGuard_Target) ? clrLime : clrOrange;
-            }
-            else
-            {
-               bgStatus = "Standby | Target: $" + DoubleToString(InpBalanceGuard_Target, 2);
-               bgClr = clrGray;
-            }
-            DrawTableRow(row, "Bal Guard", bgStatus, bgClr, COLOR_SECTION_HEDGE); row++;
-         }
+          // v6.29: Balance Guard status with mode display
+          if(InpBalanceGuard_Enable)
+          {
+             double curEquity = AccountInfoDouble(ACCOUNT_EQUITY);
+             double bgTarget = (InpBalanceGuard_Mode == BALGUARD_DYNAMIC) ? g_balanceGuardDynamicTarget : InpBalanceGuard_Target;
+             string modeStr = (InpBalanceGuard_Mode == BALGUARD_DYNAMIC) ? "Dyn" : "Fix";
+             string bgStatus;
+             color bgClr;
+             if(g_balanceGuardActive)
+             {
+                bgStatus = modeStr + " ACTIVE | Eq: $" + DoubleToString(curEquity, 2) + " / $" + DoubleToString(bgTarget, 2);
+                bgClr = (curEquity >= bgTarget) ? clrLime : clrOrange;
+             }
+             else
+             {
+                bgStatus = modeStr + " Standby | Target: $" + DoubleToString(bgTarget, 2);
+                bgClr = clrGray;
+             }
+             DrawTableRow(row, "Bal Guard", bgStatus, bgClr, COLOR_SECTION_HEDGE); row++;
+          }
       }
 
      // === Orphan Recovery Status ===
@@ -6527,13 +6546,17 @@ void CheckBalanceGuard()
 {
    if(!InpBalanceGuard_Enable) return;
    
+   // v6.29: Determine effective target based on mode
+   double effectiveTarget = (InpBalanceGuard_Mode == BALGUARD_DYNAMIC) ? g_balanceGuardDynamicTarget : InpBalanceGuard_Target;
+   
    // Activate guard when hedge set is active
    if(g_hedgeSetCount > 0)
    {
       if(!g_balanceGuardActive)
       {
          g_balanceGuardActive = true;
-         Print("v6.28 Balance Guard: ACTIVATED — monitoring equity toward $", DoubleToString(InpBalanceGuard_Target, 2));
+         string modeStr = (InpBalanceGuard_Mode == BALGUARD_DYNAMIC) ? "Dynamic" : "Fixed";
+         Print("v6.29 Balance Guard [", modeStr, "]: ACTIVATED — monitoring equity toward $", DoubleToString(effectiveTarget, 2));
       }
    }
    
@@ -6542,10 +6565,10 @@ void CheckBalanceGuard()
    
    double curEquity = AccountInfoDouble(ACCOUNT_EQUITY);
    
-   if(curEquity >= InpBalanceGuard_Target)
+   if(curEquity >= effectiveTarget)
    {
-      Print("v6.28 Balance Guard: TRIGGERED — Equity $", DoubleToString(curEquity, 2), 
-            " >= Target $", DoubleToString(InpBalanceGuard_Target, 2), " — closing ALL positions");
+      Print("v6.29 Balance Guard: TRIGGERED — Equity $", DoubleToString(curEquity, 2), 
+            " >= Target $", DoubleToString(effectiveTarget, 2), " — closing ALL positions");
       
       CloseAllPositions();
       
@@ -6555,16 +6578,29 @@ void CheckBalanceGuard()
       // Reset cycle state (CloseAllPositions already resets hedge sets)
       g_cycleGeneration = 0;
       ClearPrevHedgedTickets();
-      Print("v6.28 Balance Guard: Full reset complete — ready for fresh cycle");
+      Print("v6.29 Balance Guard: Full reset complete — ready for fresh cycle");
    }
    
    // Deactivate if no more hedge sets and no positions (flat after manual close)
+   // v6.29: Update dynamic target when account goes flat
    if(g_hedgeSetCount <= 0 && TotalOrderCount() == 0)
    {
       if(g_balanceGuardActive)
       {
          g_balanceGuardActive = false;
-         Print("v6.28 Balance Guard: Deactivated — account is flat");
+         Print("v6.29 Balance Guard: Deactivated — account is flat");
+      }
+      
+      // v6.29: Update dynamic target to current balance when flat (no orders)
+      if(InpBalanceGuard_Mode == BALGUARD_DYNAMIC)
+      {
+         double curBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+         if(MathAbs(curBalance - g_balanceGuardDynamicTarget) > 0.01)
+         {
+            Print("v6.29 Balance Guard Dynamic: Target updated $", DoubleToString(g_balanceGuardDynamicTarget, 2), 
+                  " → $", DoubleToString(curBalance, 2));
+            g_balanceGuardDynamicTarget = curBalance;
+         }
       }
    }
 }

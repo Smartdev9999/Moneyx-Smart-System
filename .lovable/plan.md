@@ -1,22 +1,24 @@
 
 
-## Implemented: v6.28 — Balance Guard (ปิดทุกออเดอร์เมื่อ Equity กลับถึงเป้า Balance)
+
+## Implemented: v6.29 — Balance Guard Mode Selection (Fixed / Dynamic)
 
 ### หลักการทำงาน
-เมื่อเกิด Hedging (มี active hedge set) ระบบเริ่ม track Equity → เมื่อ Equity >= `InpBalanceGuard_Target` → ปิดทุกออเดอร์ทันที (รวม hedge) แล้วเริ่มใหม่
+Balance Guard มี 2 โหมด:
+1. **Fixed** — ใช้ค่า `InpBalanceGuard_Target` คงที่ตามที่ตั้ง
+2. **Dynamic** — อัปเดต target อัตโนมัติจาก Balance ล่าสุดเมื่อ account flat (ไม่มี order ค้าง)
 
-### Changes Made
+เมื่อเกิด Hedging → ระบบ track Equity → ถึง target → ปิดทุกออเดอร์ → reset → (Dynamic mode) อัปเดต target ใหม่จาก balance ปัจจุบัน
 
-1. **Version bump**: v6.27 → v6.28
-2. **Input parameters**: `InpBalanceGuard_Enable`, `InpBalanceGuard_Target`
-3. **Global state**: `g_balanceGuardActive` — activated when hedge set opens
-4. **`CheckBalanceGuard()` function**:
-   - Activates when `g_hedgeSetCount > 0`
-   - Checks `AccountInfoDouble(ACCOUNT_EQUITY) >= InpBalanceGuard_Target`
-   - If triggered → `CloseAllPositions()` → full cycle reset
-   - Auto-deactivates when flat
-5. **OnTick integration**: Called after hedging check block
-6. **Dashboard**: Shows "Bal Guard" row with Active/Standby status, current Equity vs Target
+### Changes Made (v6.28 → v6.29)
+
+1. **Version bump**: v6.28 → v6.29
+2. **New enum**: `ENUM_BALGUARD_MODE` (BALGUARD_FIXED / BALGUARD_DYNAMIC)
+3. **New input**: `InpBalanceGuard_Mode` — เลือกโหมด Fixed หรือ Dynamic
+4. **New global**: `g_balanceGuardDynamicTarget` — เก็บ target ที่อัปเดตอัตโนมัติ
+5. **OnInit**: Dynamic mode เริ่มต้น target จาก `AccountInfoDouble(ACCOUNT_BALANCE)`
+6. **CheckBalanceGuard()**: ใช้ `effectiveTarget` จาก mode ที่เลือก, อัปเดต dynamic target เมื่อ flat
+7. **Dashboard**: แสดงโหมด (Fix/Dyn) + สถานะ Active/Standby + Equity vs Target
 
 ### สิ่งที่ไม่เปลี่ยนแปลง
 - Order Execution Logic (trade.Buy/Sell/PositionClose)
@@ -25,3 +27,4 @@
 - DD trigger / Triple-gate / Matching close
 - OpenDDHedge / binding / generation logic
 - Safe Cycle Reset (v6.27)
+- Balance Guard core trigger logic (v6.28)
