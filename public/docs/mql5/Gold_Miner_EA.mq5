@@ -7701,7 +7701,8 @@ void ManageHedgeSets()
          g_hedgeSets[h].active = false;
          g_hedgeSets[h].boundTicketCount = 0;
          ArrayResize(g_hedgeSets[h].boundTickets, 0);
-          g_hedgeSetCount--;
+           g_hedgeSetCount--;
+           g_lastHedgeCloseTime = TimeCurrent();  // v6.25: cooldown after set close
           // v6.24: Reset generation when all hedge sets closed
           if(g_hedgeSetCount <= 0 && g_cycleGeneration > 0)
           {
