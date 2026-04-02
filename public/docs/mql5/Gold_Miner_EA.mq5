@@ -8889,7 +8889,8 @@ void ManageHedgeGridMode(int idx)
             trade.PositionClose(ticket);
       }
        g_hedgeSets[idx].active = false;
-       g_hedgeSetCount--;
+        g_hedgeSetCount--;
+        g_lastHedgeCloseTime = TimeCurrent();  // v6.25: cooldown after set close
        // v6.24: Reset generation when all hedge sets closed
        if(g_hedgeSetCount <= 0 && g_cycleGeneration > 0)
        {
