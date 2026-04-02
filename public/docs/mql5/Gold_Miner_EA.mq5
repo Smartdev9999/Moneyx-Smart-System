@@ -3464,8 +3464,27 @@ void DisplayDashboard()
         {
            DrawTableRow(row, "⚠ WARNING", "ORPHAN GRID ORDERS DETECTED", clrRed, COLOR_SECTION_HEDGE); row++;
          }
-         // v6.15: Reverse Hedge removed — no more reverse hedge or balanced lock display
-     }
+          // v6.15: Reverse Hedge removed — no more reverse hedge or balanced lock display
+         
+         // v6.28: Balance Guard status
+         if(InpBalanceGuard_Enable)
+         {
+            double curEquity = AccountInfoDouble(ACCOUNT_EQUITY);
+            string bgStatus;
+            color bgClr;
+            if(g_balanceGuardActive)
+            {
+               bgStatus = "ACTIVE | Eq: $" + DoubleToString(curEquity, 2) + " / $" + DoubleToString(InpBalanceGuard_Target, 2);
+               bgClr = (curEquity >= InpBalanceGuard_Target) ? clrLime : clrOrange;
+            }
+            else
+            {
+               bgStatus = "Standby | Target: $" + DoubleToString(InpBalanceGuard_Target, 2);
+               bgClr = clrGray;
+            }
+            DrawTableRow(row, "Bal Guard", bgStatus, bgClr, COLOR_SECTION_HEDGE); row++;
+         }
+      }
 
      // === Orphan Recovery Status ===
      color COLOR_SECTION_ORPHAN = C'130,50,180';  // purple for orphan section
