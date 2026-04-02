@@ -1,58 +1,42 @@
 
 
+## v6.28 — เพิ่ม Balance Guard (ปิดทุกออเดอร์เมื่อ Equity กลับถึงเป้า Balance)
 
-## Implemented: v6.27 — Safe Cycle Reset (ป้องกัน DD Hedge Re-trigger หลัง Matching Close)
+### หลักการทำงาน
+เมื่อเกิด Hedging (มี active hedge set) ระบบจะเริ่ม track Equity → พอ Equity >= `InpBalanceGuardTarget` (เช่น 1000$) → ปิดทุกออเดอร์ทันที (รวม hedge) แล้วเริ่มใหม่
 
-### ปัญหา
-v6.26 เพิ่ม prevHedgedTickets แต่ deactivation points ทั้ง 7 จุดยังเรียก `ClearPrevHedgedTickets()` ทันทีเมื่อ `g_hedgeSetCount <= 0` แม้ยังมี released orders ค้างอยู่ → DD checker กลับมาเห็นออเดอร์เดิมและเปิด Hedge รอบ 2
+### Changes (5 steps)
 
-### แนวทางแก้
-สร้าง `TryResetCycleStateIfFlat(reason)` helper ที่เช็ค `TotalOrderCount() == 0` ก่อน reset → ป้องกันการล้าง prevHedged ก่อนเวลา
+#### 1. Version bump v6.27 → v6.28
+- `#property version`, `#property description`, header comment, dashboard
 
-### Changes Made
-
-1. **Version bump**: v6.26 → v6.27
-2. **`TryResetCycleStateIfFlat(string reason)`** — helper ที่ reset เฉพาะเมื่อ:
-   - `g_hedgeSetCount <= 0`
-   - `g_cycleGeneration > 0`  
-   - `TotalOrderCount() == 0` (account flat จริง)
-3. **แก้ 7 deactivation points** — แทนที่ inline reset block ด้วย `TryResetCycleStateIfFlat()`
-4. **แก้ 3 standalone reset points** — ใช้ helper เดียวกัน
-
-### Deactivation Points (ใช้ TryResetCycleStateIfFlat)
-```text
-✓ External close
-✓ AvgTP full close
-✓ Matching close
-✓ Release close (no matchable losses)
-✓ Batch partial close (full)
-✓ Grid mode recover (full)
-✓ Grid mode cleanup (main hedge gone)
+#### 2. เพิ่ม input parameters (หลัง line 341)
+```cpp
+input bool     InpBalanceGuard_Enable = false;  // Balance Guard: Enable
+input double   InpBalanceGuard_Target = 1000.0; // Balance Guard: Target Equity ($)
 ```
 
-### Standalone Reset Points
-```text
-✓ All positions cleared (standalone)
-✓ Accumulate reset
-✓ ZZ accumulate reset
+#### 3. เพิ่ม global state (หลัง line 540)
+```cpp
+bool g_balanceGuardActive = false;  // v6.28: activated when hedge set opens
 ```
 
-### ผลลัพธ์
-```text
-Matching Close → set ปิด → released orders ยังค้าง
-→ prevHedged ยังอยู่ (ไม่ถูก clear)
-→ cycleGeneration ยังไม่ reset
-→ DD checker skip released orders
-→ ไม่มี Hedge รอบ 2
-→ reset จริงเมื่อ flat ทั้งหมดเท่านั้น
-```
+#### 4. เพิ่ม `CheckBalanceGuard()` function
+- เช็คว่า `InpBalanceGuard_Enable` เปิดอยู่ และ `g_hedgeSetCount > 0` (มี hedge active)
+- ถ้ามี hedge → set `g_balanceGuardActive = true`
+- เช็ค `AccountInfoDouble(ACCOUNT_EQUITY) >= InpBalanceGuard_Target`
+- ถ้าถึงเป้า → เรียก `CloseAllPositions()` → reset state → Print log
+- Reset `g_balanceGuardActive` เมื่อ flat
+
+#### 5. เรียก `CheckBalanceGuard()` ใน OnTick
+- วางหลัง hedging check block (หลัง line 1236) ก่อน original trading logic
+- แสดงสถานะ Balance Guard บน Dashboard (BG: Active/Inactive, Equity/Target)
 
 ### สิ่งที่ไม่เปลี่ยนแปลง
-- Order Execution Logic (trade.Buy/Sell/PositionClose)
-- Trading Strategy Logic (SMA/ZigZag/Grid/TP/SL)
-- Core Module Logic (License, News, Time, Data sync)
-- Generation-aware isolation logic (v6.24)
-- Triple-gate exit logic
-- OpenDDHedge / binding logic
-- Matching close / grid recovery ทำงานเหมือนเดิม
-- SaveBoundTicketsToPrevHedged / IsPrevHedgedTicket (v6.26)
+- Order Execution Logic (trade.Buy/Sell/PositionClose) — ไม่แก้
+- Trading Strategy Logic (SMA/ZigZag/Grid/TP/SL) — ไม่แก้
+- Core Module Logic (License, News, Time, Data sync) — ไม่แก้
+- DD trigger / Triple-gate / Matching close — ไม่แก้
+- OpenDDHedge / binding / generation logic — ไม่แก้
+- Safe Cycle Reset (v6.27) — ไม่แก้
+
