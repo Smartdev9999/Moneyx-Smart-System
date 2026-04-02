@@ -1331,8 +1331,9 @@ void OnTick()
           //--- Reset cycle generation when all positions cleared (standalone check)
           if(g_hadPositions && totalPositions == 0 && g_hedgeSetCount == 0 && g_cycleGeneration > 0)
           {
-             g_cycleGeneration = 0;
-             Print("CYCLE GENERATION reset to 0 — all positions cleared");
+              g_cycleGeneration = 0;
+              ClearPrevHedgedTickets();  // v6.26
+              Print("CYCLE GENERATION reset to 0 — all positions cleared");
           }
 
          //--- Auto-detect broker-closed positions (e.g. trailing SL hit by broker)
