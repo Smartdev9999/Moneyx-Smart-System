@@ -348,7 +348,8 @@ input int      InpHedge_DDCooldownSec        = 60;    // Min seconds between DD 
 input double   InpHedge_DDTriggerDollar      = 500.0; // v6.25: DD$ to trigger hedge (per side)
 // v6.28: Balance Guard — close all when equity recovers to target
 input bool     InpBalanceGuard_Enable        = false;  // Balance Guard: Enable
-input double   InpBalanceGuard_Target        = 1000.0; // Balance Guard: Target Equity ($)
+input ENUM_BALGUARD_MODE InpBalanceGuard_Mode = BALGUARD_FIXED; // Balance Guard: Mode (Fixed / Dynamic)
+input double   InpBalanceGuard_Target        = 1000.0; // Balance Guard: Target Equity ($) [Fixed mode]
 // v6.15: Reverse Hedge disabled — kept as constants for legacy function compilation
 const bool     InpHedge_ReverseEnable        = false;
 const int      InpHedge_ReverseMinTFConfirm  = 2;
