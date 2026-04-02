@@ -1,22 +1,17 @@
 
 
-## Implemented: v6.25 — แก้ Hedge Re-trigger หลังปิด Set + เพิ่ม DD Dollar Mode
+## Implemented: v6.26 — ป้องกัน DD Hedge Re-trigger บนออเดอร์ที่เคยอยู่ใน Hedge Set
 
 ### Changes Made
 
-1. **Version bump**: v6.24 → v6.25
-2. **`HEDGE_TRIGGER_DD_DOLLAR` enum value** added (value 2)
-3. **`InpHedge_DDTriggerDollar`** input (default $500) for dollar-based DD threshold
-4. **`g_lastHedgeCloseTime`** global — cooldown timer after hedge set close
-5. **`CheckAndOpenHedgeByDD()`** updated:
-   - Accepts both DD% and DD$ modes
-   - Cooldown guard: checks both `g_lastDDHedgeTime` and `g_lastHedgeCloseTime`
-   - Dollar mode compares `MathAbs(loss) >= InpHedge_DDTriggerDollar` directly
-6. **OnTick routing**: `HEDGE_TRIGGER_DD_DOLLAR` routes to `CheckAndOpenHedgeByDD()`
-7. **`g_lastHedgeCloseTime = TimeCurrent()`** added at all 7 deactivation points
-8. **Dashboard DD display**: shows $ or % based on active mode
+1. **Version bump**: v6.25 → v6.26
+2. **`g_prevHedgedTickets[200]` + `g_prevHedgedCount`** — global array to track previously-hedged tickets
+3. **Helper functions**: `AddPrevHedgedTicket()`, `IsPrevHedgedTicket()`, `ClearPrevHedgedTickets()`, `SaveBoundTicketsToPrevHedged()`
+4. **`CheckAndOpenHedgeByDD()`** — added `IsPrevHedgedTicket(ticket)` guard after `IsTicketBound()` check
+5. **7 deactivation points** — `SaveBoundTicketsToPrevHedged(idx)` called before boundTickets cleared (only for DD-triggered sets)
+6. **All generation reset points** — `ClearPrevHedgedTickets()` called when `g_cycleGeneration` resets to 0
 
-### Cooldown Points (g_lastHedgeCloseTime)
+### Deactivation Points (SaveBoundTicketsToPrevHedged)
 ```text
 ✓ External close (hedge ticket gone)
 ✓ AvgTP full close
@@ -27,11 +22,19 @@
 ✓ Grid mode cleanup (main hedge gone)
 ```
 
+### Generation Reset Points (ClearPrevHedgedTickets)
+```text
+✓ All positions cleared (standalone)
+✓ Accumulate reset
+✓ ZZ accumulate reset
+✓ All 7 deactivation points (when hedgeSetCount <= 0)
+```
+
 ### สิ่งที่ไม่เปลี่ยนแปลง
 - Order Execution Logic (trade.Buy/Sell/PositionClose)
 - Trading Strategy Logic (SMA/ZigZag/Grid/TP/SL)
 - Core Module Logic (License, News, Time, Data sync)
 - Generation-aware isolation logic (v6.24)
-- DD% trigger threshold logic — unchanged, dollar mode added separately
 - Triple-gate exit logic
 - OpenDDHedge / binding logic
+- Matching close / grid recovery ทำงานเหมือนเดิม
