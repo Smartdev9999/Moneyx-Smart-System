@@ -19,6 +19,13 @@ enum ENUM_LOT_MODE
    LOT_MULTIPLY= 2   // Multiply Lot
 };
 
+// v6.29: Balance Guard Mode
+enum ENUM_BALGUARD_MODE
+{
+   BALGUARD_FIXED   = 0,  // Fixed Target ($)
+   BALGUARD_DYNAMIC = 1   // Dynamic (last flat balance)
+};
+
 enum ENUM_GAP_TYPE
 {
    GAP_FIXED   = 0,  // Fixed Points
