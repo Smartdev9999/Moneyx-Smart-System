@@ -8679,14 +8679,8 @@ void ManageHedgeMatchingClose(int idx)
          g_hedgeSets[idx].gridMode = false;
          g_hedgeSetCount--;
           g_lastHedgeCloseTime = TimeCurrent();  // v6.25: cooldown after set close
-         // v6.24: Reset generation when all hedge sets closed
-         if(g_hedgeSetCount <= 0 && g_cycleGeneration > 0)
-         {
-            g_cycleGeneration = 0;
-            ClearPrevHedgedTickets();  // v6.26
-            g_hedgeSetCount = 0;
-            Print("CYCLE GENERATION reset to 0 — all hedge sets closed (release close)");
-         }
+          // v6.27: Safe reset — only if truly flat
+          TryResetCycleStateIfFlat("release close");
         Sleep(100);
      }
 }
