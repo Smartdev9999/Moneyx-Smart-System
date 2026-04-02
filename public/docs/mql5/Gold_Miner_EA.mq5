@@ -2039,13 +2039,8 @@ void ManageTPSL()
       int currentCount = TotalOrderCount();
        if(g_hadPositions && currentCount == 0)
        {
-          // Reset cycle generation — no positions left, start fresh
-          if(g_hedgeSetCount == 0 && g_cycleGeneration > 0)
-          {
-              g_cycleGeneration = 0;
-              ClearPrevHedgedTickets();  // v6.26
-              Print("CYCLE GENERATION reset to 0 — all positions cleared (accumulate reset)");
-          }
+          // v6.27: Safe reset — only if truly flat
+          TryResetCycleStateIfFlat("accumulate reset");
           g_accumulateBaseline = CalcTotalHistoryProfit();
           g_accumulatedProfit = 0;
           g_hadPositions = false;
