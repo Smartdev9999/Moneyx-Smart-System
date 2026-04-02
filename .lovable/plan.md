@@ -1,30 +1,44 @@
 
 
+## v6.30 — แก้ Dynamic Balance Guard ไม่อัปเดต target เมื่อ flat
 
-## Implemented: v6.29 — Balance Guard Mode Selection (Fixed / Dynamic)
+### สาเหตุ
+`CheckBalanceGuard()` มี early return ที่ line 6564:
+```cpp
+if(!g_balanceGuardActive) return;  // ← blocks everything below
+```
+Dynamic target update อยู่ที่ line 6594-6604 ซึ่งอยู่ **หลัง** early return นี้ → เมื่อ guard deactivate แล้ว function จะ return ก่อนถึง update block ทุก tick → target ค้างที่ค่าเริ่มต้นตลอด
 
-### หลักการทำงาน
-Balance Guard มี 2 โหมด:
-1. **Fixed** — ใช้ค่า `InpBalanceGuard_Target` คงที่ตามที่ตั้ง
-2. **Dynamic** — อัปเดต target อัตโนมัติจาก Balance ล่าสุดเมื่อ account flat (ไม่มี order ค้าง)
+### แก้ไข
 
-เมื่อเกิด Hedging → ระบบ track Equity → ถึง target → ปิดทุกออเดอร์ → reset → (Dynamic mode) อัปเดต target ใหม่จาก balance ปัจจุบัน
+**ไฟล์:** `public/docs/mql5/Gold_Miner_EA.mq5`
 
-### Changes Made (v6.28 → v6.29)
+#### 1. Version bump v6.29 → v6.30
 
-1. **Version bump**: v6.28 → v6.29
-2. **New enum**: `ENUM_BALGUARD_MODE` (BALGUARD_FIXED / BALGUARD_DYNAMIC)
-3. **New input**: `InpBalanceGuard_Mode` — เลือกโหมด Fixed หรือ Dynamic
-4. **New global**: `g_balanceGuardDynamicTarget` — เก็บ target ที่อัปเดตอัตโนมัติ
-5. **OnInit**: Dynamic mode เริ่มต้น target จาก `AccountInfoDouble(ACCOUNT_BALANCE)`
-6. **CheckBalanceGuard()**: ใช้ `effectiveTarget` จาก mode ที่เลือก, อัปเดต dynamic target เมื่อ flat
-7. **Dashboard**: แสดงโหมด (Fix/Dyn) + สถานะ Active/Standby + Equity vs Target
+#### 2. ย้าย Dynamic target update ขึ้นมาก่อน early return
+ปรับโครงสร้าง `CheckBalanceGuard()` ให้:
+
+```text
+CheckBalanceGuard()
+├── if(!Enable) return
+├── [NEW] Dynamic update block — ทำงานทุก tick เมื่อ flat (ไม่ขึ้นกับ g_balanceGuardActive)
+│   └── if(BALGUARD_DYNAMIC && TotalOrderCount()==0) → update target จาก ACCOUNT_BALANCE
+├── Activate guard when g_hedgeSetCount > 0
+├── if(!g_balanceGuardActive) return   ← early return ยังอยู่
+├── Check equity >= target → CloseAll
+└── Deactivate if flat
+```
+
+จุดสำคัญ: Dynamic update block ต้องอยู่ **ก่อน** `if(!g_balanceGuardActive) return;` เพื่อให้ทำงานทุก tick ที่ไม่มี order โดยไม่สนว่า guard active หรือไม่
+
+#### 3. Dashboard — แสดง target ที่อัปเดตแล้ว (ใช้ของเดิม ไม่ต้องแก้)
 
 ### สิ่งที่ไม่เปลี่ยนแปลง
-- Order Execution Logic (trade.Buy/Sell/PositionClose)
-- Trading Strategy Logic (SMA/ZigZag/Grid/TP/SL)
-- Core Module Logic (License, News, Time, Data sync)
-- DD trigger / Triple-gate / Matching close
-- OpenDDHedge / binding / generation logic
-- Safe Cycle Reset (v6.27)
-- Balance Guard core trigger logic (v6.28)
+- Order Execution Logic — ไม่แก้
+- Trading Strategy Logic — ไม่แก้
+- Core Module Logic — ไม่แก้
+- DD trigger / Triple-gate / Matching close — ไม่แก้
+- OpenDDHedge / binding / generation logic — ไม่แก้
+- Safe Cycle Reset (v6.27) — ไม่แก้
+- Balance Guard trigger/close logic — ไม่แก้ (แค่ย้ายตำแหน่ง dynamic update)
+
