@@ -6517,6 +6517,56 @@ void TryResetCycleStateIfFlat(string reason)
 }
 
 //+------------------------------------------------------------------+
+//| v6.28: Balance Guard — close all positions when equity recovers    |
+//| to target balance. Only active during hedging (g_hedgeSetCount>0)  |
+//+------------------------------------------------------------------+
+void CheckBalanceGuard()
+{
+   if(!InpBalanceGuard_Enable) return;
+   
+   // Activate guard when hedge set is active
+   if(g_hedgeSetCount > 0)
+   {
+      if(!g_balanceGuardActive)
+      {
+         g_balanceGuardActive = true;
+         Print("v6.28 Balance Guard: ACTIVATED — monitoring equity toward $", DoubleToString(InpBalanceGuard_Target, 2));
+      }
+   }
+   
+   // Only check when guard is active
+   if(!g_balanceGuardActive) return;
+   
+   double curEquity = AccountInfoDouble(ACCOUNT_EQUITY);
+   
+   if(curEquity >= InpBalanceGuard_Target)
+   {
+      Print("v6.28 Balance Guard: TRIGGERED — Equity $", DoubleToString(curEquity, 2), 
+            " >= Target $", DoubleToString(InpBalanceGuard_Target, 2), " — closing ALL positions");
+      
+      CloseAllPositions();
+      
+      // Reset balance guard state
+      g_balanceGuardActive = false;
+      
+      // Reset cycle state (CloseAllPositions already resets hedge sets)
+      g_cycleGeneration = 0;
+      ClearPrevHedgedTickets();
+      Print("v6.28 Balance Guard: Full reset complete — ready for fresh cycle");
+   }
+   
+   // Deactivate if no more hedge sets and no positions (flat after manual close)
+   if(g_hedgeSetCount <= 0 && TotalOrderCount() == 0)
+   {
+      if(g_balanceGuardActive)
+      {
+         g_balanceGuardActive = false;
+         Print("v6.28 Balance Guard: Deactivated — account is flat");
+      }
+   }
+}
+
+
 //| Get lot cap for new orders when hedge set has bound orders          |
 //| Returns -1 if no hedge set exists for this side (no cap)           |
 //| Returns allowedLots = hedgeLots - remainingBoundLots               |
