@@ -6694,17 +6694,21 @@ void CheckAndOpenHedge()
 //+------------------------------------------------------------------+
 void CheckAndOpenHedgeByDD()
 {
-   if(!InpHedge_Enable || InpHedge_TriggerMode != HEDGE_TRIGGER_DD_PERCENT) return;
+   if(!InpHedge_Enable) return;
+   if(InpHedge_TriggerMode != HEDGE_TRIGGER_DD_PERCENT && InpHedge_TriggerMode != HEDGE_TRIGGER_DD_DOLLAR) return;
    
-   // Cooldown check
+   // Cooldown check — both DD hedge cooldown and post-close cooldown
    datetime now = TimeCurrent();
    if(now - g_lastDDHedgeTime < InpHedge_DDCooldownSec) return;
+   // v6.25: Cooldown after hedge set close to prevent immediate re-trigger
+   if(now - g_lastHedgeCloseTime < InpHedge_DDCooldownSec) return;
    
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
    if(balance <= 0) return;
    
+   bool isDollarMode = (InpHedge_TriggerMode == HEDGE_TRIGGER_DD_DOLLAR);
+   
    // v6.18: Calculate floating loss per side — ONLY from current generation orders
-   // This prevents old generation orders (already managed by their own hedge sets) from triggering new hedges
    int curGen = g_cycleGeneration;
    double buyLoss = 0, sellLoss = 0;
    for(int i = PositionsTotal() - 1; i >= 0; i--)
@@ -6714,16 +6718,15 @@ void CheckAndOpenHedgeByDD()
       if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       string cmt = PositionGetString(POSITION_COMMENT);
-      if(IsHedgeComment(cmt)) continue;  // skip hedge orders
-      if(IsTicketBound(ticket)) continue;  // skip already-bound orders
+      if(IsHedgeComment(cmt)) continue;
+      if(IsTicketBound(ticket)) continue;
       
-      // v6.18: Generation filter — only count current generation
       int orderGen = ExtractGeneration(cmt);
-      if(orderGen < 0) continue;   // not our comment format
-      if(orderGen != curGen) continue;  // skip older generations (GM, GM1, etc.)
+      if(orderGen < 0) continue;
+      if(orderGen != curGen) continue;
       
       double pnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP) + PositionGetDouble(POSITION_COMMISSION);
-      if(pnl >= 0) continue;  // only count losses
+      if(pnl >= 0) continue;
       
       ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
       if(posType == POSITION_TYPE_BUY)
@@ -6732,31 +6735,58 @@ void CheckAndOpenHedgeByDD()
          sellLoss += pnl;
    }
    
-   // Calculate DD% (loss is negative, make positive for comparison)
-   double buyDDPct  = (buyLoss < 0)  ? (MathAbs(buyLoss) / balance * 100.0) : 0;
-   double sellDDPct = (sellLoss < 0) ? (MathAbs(sellLoss) / balance * 100.0) : 0;
-   
-    // v6.21: Check BUY side — constant threshold per generation (no cumulative step)
-    if(buyDDPct >= InpHedge_DDTriggerPct)
-    {
-       if(OpenDDHedge(POSITION_TYPE_BUY, POSITION_TYPE_SELL))
-       {
-          g_lastDDHedgeTime = now;
-          Print("DD HEDGE [Gen", curGen, "]: BUY side DD=", DoubleToString(buyDDPct, 1), 
-                "% >= ", DoubleToString(InpHedge_DDTriggerPct, 1), "% → SELL hedge opened");
-       }
-    }
-    
-    // v6.21: Check SELL side — constant threshold per generation
-    if(sellDDPct >= InpHedge_DDTriggerPct)
-    {
-       if(OpenDDHedge(POSITION_TYPE_SELL, POSITION_TYPE_BUY))
-       {
-          g_lastDDHedgeTime = now;
-          Print("DD HEDGE [Gen", curGen, "]: SELL side DD=", DoubleToString(sellDDPct, 1),
-                "% >= ", DoubleToString(InpHedge_DDTriggerPct, 1), "% → BUY hedge opened");
-       }
-    }
+   if(isDollarMode)
+   {
+      // v6.25: Dollar mode — compare absolute loss directly
+      double buyLossAbs  = MathAbs(buyLoss);
+      double sellLossAbs = MathAbs(sellLoss);
+      
+      if(buyLossAbs >= InpHedge_DDTriggerDollar)
+      {
+         if(OpenDDHedge(POSITION_TYPE_BUY, POSITION_TYPE_SELL))
+         {
+            g_lastDDHedgeTime = now;
+            Print("DD$ HEDGE [Gen", curGen, "]: BUY side DD=$", DoubleToString(buyLossAbs, 2), 
+                  " >= $", DoubleToString(InpHedge_DDTriggerDollar, 2), " → SELL hedge opened");
+         }
+      }
+      
+      if(sellLossAbs >= InpHedge_DDTriggerDollar)
+      {
+         if(OpenDDHedge(POSITION_TYPE_SELL, POSITION_TYPE_BUY))
+         {
+            g_lastDDHedgeTime = now;
+            Print("DD$ HEDGE [Gen", curGen, "]: SELL side DD=$", DoubleToString(sellLossAbs, 2),
+                  " >= $", DoubleToString(InpHedge_DDTriggerDollar, 2), " → BUY hedge opened");
+         }
+      }
+   }
+   else
+   {
+      // Percent mode (original)
+      double buyDDPct  = (buyLoss < 0)  ? (MathAbs(buyLoss) / balance * 100.0) : 0;
+      double sellDDPct = (sellLoss < 0) ? (MathAbs(sellLoss) / balance * 100.0) : 0;
+      
+      if(buyDDPct >= InpHedge_DDTriggerPct)
+      {
+         if(OpenDDHedge(POSITION_TYPE_BUY, POSITION_TYPE_SELL))
+         {
+            g_lastDDHedgeTime = now;
+            Print("DD HEDGE [Gen", curGen, "]: BUY side DD=", DoubleToString(buyDDPct, 1), 
+                  "% >= ", DoubleToString(InpHedge_DDTriggerPct, 1), "% → SELL hedge opened");
+         }
+      }
+      
+      if(sellDDPct >= InpHedge_DDTriggerPct)
+      {
+         if(OpenDDHedge(POSITION_TYPE_SELL, POSITION_TYPE_BUY))
+         {
+            g_lastDDHedgeTime = now;
+            Print("DD HEDGE [Gen", curGen, "]: SELL side DD=", DoubleToString(sellDDPct, 1),
+                  "% >= ", DoubleToString(InpHedge_DDTriggerPct, 1), "% → BUY hedge opened");
+         }
+      }
+   }
 }
 
 //+------------------------------------------------------------------+
