@@ -1225,8 +1225,8 @@ void OnTick()
       // v6.16: Choose trigger mode
       if(InpHedge_TriggerMode == HEDGE_TRIGGER_EXPANSION)
          CheckAndOpenHedge();        // Original — Squeeze expansion trigger
-      else
-         CheckAndOpenHedgeByDD();    // New — DD% per side trigger
+      else if(InpHedge_TriggerMode == HEDGE_TRIGGER_DD_PERCENT || InpHedge_TriggerMode == HEDGE_TRIGGER_DD_DOLLAR)
+         CheckAndOpenHedgeByDD();    // v6.25: DD% or DD$ per side trigger
       ManageHedgeSets();
    }
 
