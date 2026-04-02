@@ -1,22 +1,22 @@
 
 
-## Implemented: v6.24 — MAX_HEDGE_SETS 10 + Generation Reset on Hedge Clear
+## Implemented: v6.25 — แก้ Hedge Re-trigger หลังปิด Set + เพิ่ม DD Dollar Mode
 
 ### Changes Made
 
-1. **`MAX_HEDGE_SETS` expanded from 4 to 10**
-   - `#define MAX_HEDGE_SETS 10` — supports H1-H10
-   - All loops already use `MAX_HEDGE_SETS` → auto-expanded
+1. **Version bump**: v6.24 → v6.25
+2. **`HEDGE_TRIGGER_DD_DOLLAR` enum value** added (value 2)
+3. **`InpHedge_DDTriggerDollar`** input (default $500) for dollar-based DD threshold
+4. **`g_lastHedgeCloseTime`** global — cooldown timer after hedge set close
+5. **`CheckAndOpenHedgeByDD()`** updated:
+   - Accepts both DD% and DD$ modes
+   - Cooldown guard: checks both `g_lastDDHedgeTime` and `g_lastHedgeCloseTime`
+   - Dollar mode compares `MathAbs(loss) >= InpHedge_DDTriggerDollar` directly
+6. **OnTick routing**: `HEDGE_TRIGGER_DD_DOLLAR` routes to `CheckAndOpenHedgeByDD()`
+7. **`g_lastHedgeCloseTime = TimeCurrent()`** added at all 7 deactivation points
+8. **Dashboard DD display**: shows $ or % based on active mode
 
-2. **Generation reset when all hedge sets close**
-   - Added check at all 7 `g_hedgeSetCount--` locations
-   - When `g_hedgeSetCount <= 0 && g_cycleGeneration > 0` → reset to 0
-   - Prevents GM number from climbing indefinitely (GM13, GM14...)
-   - Each reset point has unique log label for tracing
-
-3. **Version bump**: v6.23 → v6.24
-
-### Generation Reset Points
+### Cooldown Points (g_lastHedgeCloseTime)
 ```text
 ✓ External close (hedge ticket gone)
 ✓ AvgTP full close
@@ -31,7 +31,7 @@
 - Order Execution Logic (trade.Buy/Sell/PositionClose)
 - Trading Strategy Logic (SMA/ZigZag/Grid/TP/SL)
 - Core Module Logic (License, News, Time, Data sync)
-- Generation-aware isolation logic (v6.23)
-- DD trigger threshold logic (v6.21)
+- Generation-aware isolation logic (v6.24)
+- DD% trigger threshold logic — unchanged, dollar mode added separately
 - Triple-gate exit logic
-- OpenDDHedge / CheckAndOpenHedgeByDD logic
+- OpenDDHedge / binding logic
