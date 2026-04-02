@@ -6479,6 +6479,31 @@ void SaveBoundTicketsToPrevHedged(int idx)
 }
 
 //+------------------------------------------------------------------+
+//| v6.27: Safe cycle reset — only reset when account is truly flat    |
+//| Prevents premature clearing of prevHedgedTickets while released    |
+//| orders are still open (which would allow DD re-trigger)            |
+//+------------------------------------------------------------------+
+void TryResetCycleStateIfFlat(string reason)
+{
+   if(g_hedgeSetCount > 0) return;  // still have active sets
+   if(g_cycleGeneration <= 0) return;  // nothing to reset
+   
+   // v6.27: Check if any EA positions still exist
+   int remaining = TotalOrderCount();
+   if(remaining > 0)
+   {
+      Print("v6.27: Skipping cycle reset (", reason, ") — ", remaining, " positions still open. prevHedged preserved.");
+      return;
+   }
+   
+   // Truly flat — safe to reset everything
+   g_cycleGeneration = 0;
+   g_hedgeSetCount = 0;
+   ClearPrevHedgedTickets();
+   Print("CYCLE GENERATION reset to 0 — ", reason, " (v6.27 safe reset, account flat)");
+}
+
+//+------------------------------------------------------------------+
 //| Get lot cap for new orders when hedge set has bound orders          |
 //| Returns -1 if no hedge set exists for this side (no cap)           |
 //| Returns allowedLots = hedgeLots - remainingBoundLots               |
