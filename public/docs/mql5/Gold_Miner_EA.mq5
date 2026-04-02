@@ -72,7 +72,8 @@ enum ENUM_DD_MODE
 enum ENUM_HEDGE_TRIGGER
 {
    HEDGE_TRIGGER_EXPANSION  = 0,  // Squeeze Expansion (Original)
-   HEDGE_TRIGGER_DD_PERCENT = 1   // Drawdown % per Side
+   HEDGE_TRIGGER_DD_PERCENT = 1,  // Drawdown % per Side
+   HEDGE_TRIGGER_DD_DOLLAR  = 2   // Drawdown $ per Side
 };
 
 // Sync Event Type (for real-time data sync)
