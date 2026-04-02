@@ -808,7 +808,15 @@ int OnInit()
    // === Recover Hedge Sets from existing positions (crash/restart recovery) ===
    RecoverHedgeSets();
 
-   Print("Gold Miner EA v6.28 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF");
+   // v6.29: Initialize dynamic balance guard target
+   if(InpBalanceGuard_Enable && InpBalanceGuard_Mode == BALGUARD_DYNAMIC)
+   {
+      g_balanceGuardDynamicTarget = AccountInfoDouble(ACCOUNT_BALANCE);
+      Print("v6.29 Balance Guard Dynamic: Initial target set to $", DoubleToString(g_balanceGuardDynamicTarget, 2));
+   }
+
+   Print("Gold Miner EA v6.29 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+         " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic");
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
