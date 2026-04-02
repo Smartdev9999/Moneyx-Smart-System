@@ -338,6 +338,7 @@ input int      InpHedge_CloseMinPoints       = 300;   // v6.15: Min points from 
 input double   InpHedge_DDTriggerPct         = 5.0;   // DD% to trigger first hedge (per side)
 input double   InpHedge_DDStepPct            = 5.0;   // [LEGACY] DD% step — not used since v6.21 (constant threshold per gen)
 input int      InpHedge_DDCooldownSec        = 60;    // Min seconds between DD hedges
+input double   InpHedge_DDTriggerDollar      = 500.0; // v6.25: DD$ to trigger hedge (per side)
 // v6.15: Reverse Hedge disabled — kept as constants for legacy function compilation
 const bool     InpHedge_ReverseEnable        = false;
 const int      InpHedge_ReverseMinTFConfirm  = 2;
