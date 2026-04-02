@@ -6725,6 +6725,7 @@ void CheckAndOpenHedgeByDD()
       string cmt = PositionGetString(POSITION_COMMENT);
       if(IsHedgeComment(cmt)) continue;
       if(IsTicketBound(ticket)) continue;
+      if(IsPrevHedgedTicket(ticket)) continue;  // v6.26: skip previously-hedged orders
       
       int orderGen = ExtractGeneration(cmt);
       if(orderGen < 0) continue;
