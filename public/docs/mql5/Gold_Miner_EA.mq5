@@ -1329,11 +1329,9 @@ void OnTick()
           int totalPositions = buyCount + sellCount;
 
           //--- Reset cycle generation when all positions cleared (standalone check)
-          if(g_hadPositions && totalPositions == 0 && g_hedgeSetCount == 0 && g_cycleGeneration > 0)
+          if(g_hadPositions && totalPositions == 0)
           {
-              g_cycleGeneration = 0;
-              ClearPrevHedgedTickets();  // v6.26
-              Print("CYCLE GENERATION reset to 0 — all positions cleared");
+              TryResetCycleStateIfFlat("all positions cleared");  // v6.27
           }
 
          //--- Auto-detect broker-closed positions (e.g. trailing SL hit by broker)
