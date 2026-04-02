@@ -542,6 +542,9 @@ datetime g_lastHedgeCloseTime = 0;     // v6.25: cooldown after hedge set close
 ulong    g_prevHedgedTickets[MAX_PREV_HEDGED];
 int      g_prevHedgedCount = 0;
 
+// === v6.28: Balance Guard State ===
+bool g_balanceGuardActive = false;  // activated when hedge set opens
+
 // === Reverse Hedge State (v6.11: array-based for multiple reverse hedges) ===
 #define MAX_REVERSE_HEDGES 10
 ulong    g_reverseHedgeTickets[MAX_REVERSE_HEDGES];
