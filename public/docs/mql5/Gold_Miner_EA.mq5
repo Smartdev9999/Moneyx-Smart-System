@@ -8674,19 +8674,21 @@ void ManageHedgeMatchingClose(int idx)
 
         // Release all bound orders → they return to normal trading system
          CloseAllHedgeGridOrders(idx);
+         SaveBoundTicketsToPrevHedged(idx);  // v6.26
          g_hedgeSets[idx].active = false;
-        g_hedgeSets[idx].boundTicketCount = 0;
-        ArrayResize(g_hedgeSets[idx].boundTickets, 0);
-        g_hedgeSets[idx].gridMode = false;
-        g_hedgeSetCount--;
-         g_lastHedgeCloseTime = TimeCurrent();  // v6.25: cooldown after set close
-        // v6.24: Reset generation when all hedge sets closed
-        if(g_hedgeSetCount <= 0 && g_cycleGeneration > 0)
-        {
-           g_cycleGeneration = 0;
-           g_hedgeSetCount = 0;
-           Print("CYCLE GENERATION reset to 0 — all hedge sets closed (release close)");
-        }
+         g_hedgeSets[idx].boundTicketCount = 0;
+         ArrayResize(g_hedgeSets[idx].boundTickets, 0);
+         g_hedgeSets[idx].gridMode = false;
+         g_hedgeSetCount--;
+          g_lastHedgeCloseTime = TimeCurrent();  // v6.25: cooldown after set close
+         // v6.24: Reset generation when all hedge sets closed
+         if(g_hedgeSetCount <= 0 && g_cycleGeneration > 0)
+         {
+            g_cycleGeneration = 0;
+            ClearPrevHedgedTickets();  // v6.26
+            g_hedgeSetCount = 0;
+            Print("CYCLE GENERATION reset to 0 — all hedge sets closed (release close)");
+         }
         Sleep(100);
      }
 }
