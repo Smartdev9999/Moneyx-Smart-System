@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.24 - MTF ZigZag+CDC+Grid+License  |
+//|                Gold Miner EA v6.25 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.24"
-#property description "Gold Miner EA v6.24 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge10 + GenReset + License"
+#property version   "6.25"
+#property description "Gold Miner EA v6.25 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge10 + GenReset + DDDollar + HedgeCooldown + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -72,7 +72,8 @@ enum ENUM_DD_MODE
 enum ENUM_HEDGE_TRIGGER
 {
    HEDGE_TRIGGER_EXPANSION  = 0,  // Squeeze Expansion (Original)
-   HEDGE_TRIGGER_DD_PERCENT = 1   // Drawdown % per Side
+   HEDGE_TRIGGER_DD_PERCENT = 1,  // Drawdown % per Side
+   HEDGE_TRIGGER_DD_DOLLAR  = 2   // Drawdown $ per Side
 };
 
 // Sync Event Type (for real-time data sync)
@@ -337,6 +338,7 @@ input int      InpHedge_CloseMinPoints       = 300;   // v6.15: Min points from 
 input double   InpHedge_DDTriggerPct         = 5.0;   // DD% to trigger first hedge (per side)
 input double   InpHedge_DDStepPct            = 5.0;   // [LEGACY] DD% step — not used since v6.21 (constant threshold per gen)
 input int      InpHedge_DDCooldownSec        = 60;    // Min seconds between DD hedges
+input double   InpHedge_DDTriggerDollar      = 500.0; // v6.25: DD$ to trigger hedge (per side)
 // v6.15: Reverse Hedge disabled — kept as constants for legacy function compilation
 const bool     InpHedge_ReverseEnable        = false;
 const int      InpHedge_ReverseMinTFConfirm  = 2;
@@ -530,6 +532,7 @@ int      g_cycleGeneration = 0;  // incremented each time a hedge opens — chan
 double   g_nextBuyDDTrigger  = 5.0;    // DD% threshold for next BUY-side hedge
 double   g_nextSellDDTrigger = 5.0;    // DD% threshold for next SELL-side hedge
 datetime g_lastDDHedgeTime   = 0;      // cooldown tracker
+datetime g_lastHedgeCloseTime = 0;     // v6.25: cooldown after hedge set close
 
 // === Reverse Hedge State (v6.11: array-based for multiple reverse hedges) ===
 #define MAX_REVERSE_HEDGES 10
@@ -1222,8 +1225,8 @@ void OnTick()
       // v6.16: Choose trigger mode
       if(InpHedge_TriggerMode == HEDGE_TRIGGER_EXPANSION)
          CheckAndOpenHedge();        // Original — Squeeze expansion trigger
-      else
-         CheckAndOpenHedgeByDD();    // New — DD% per side trigger
+      else if(InpHedge_TriggerMode == HEDGE_TRIGGER_DD_PERCENT || InpHedge_TriggerMode == HEDGE_TRIGGER_DD_DOLLAR)
+         CheckAndOpenHedgeByDD();    // v6.25: DD% or DD$ per side trigger
       ManageHedgeSets();
    }
 
@@ -3408,18 +3411,18 @@ void DisplayDashboard()
          }
         }
         
-         // v6.18: DD% Mode info line with generation scope
-          if(InpHedge_TriggerMode == HEDGE_TRIGGER_DD_PERCENT)
+         // v6.18: DD% / v6.25: DD$ Mode info line with generation scope
+          if(InpHedge_TriggerMode == HEDGE_TRIGGER_DD_PERCENT || InpHedge_TriggerMode == HEDGE_TRIGGER_DD_DOLLAR)
           {
-             // v6.21: Show current gen DD vs constant threshold
+             bool isDollarMode = (InpHedge_TriggerMode == HEDGE_TRIGGER_DD_DOLLAR);
              double curBuyDD = 0, curSellDD = 0;
+             double bLossAbs = 0, sLossAbs = 0;
              {
                 double bal = AccountInfoDouble(ACCOUNT_BALANCE);
                 if(bal > 0)
                 {
                    double bLoss = 0, sLoss = 0;
                    int curGen = g_cycleGeneration;
-                   string genPrefix = GetCommentPrefix();
                    for(int pi = PositionsTotal() - 1; pi >= 0; pi--)
                    {
                       ulong tk = PositionGetTicket(pi);
@@ -3434,13 +3437,18 @@ void DisplayDashboard()
                       if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) bLoss += pl;
                       else sLoss += pl;
                    }
-                   curBuyDD  = (bLoss < 0) ? (MathAbs(bLoss) / bal * 100.0) : 0;
-                   curSellDD = (sLoss < 0) ? (MathAbs(sLoss) / bal * 100.0) : 0;
+                   bLossAbs = MathAbs(bLoss);
+                   sLossAbs = MathAbs(sLoss);
+                   curBuyDD  = (bLoss < 0) ? (bLossAbs / bal * 100.0) : 0;
+                   curSellDD = (sLoss < 0) ? (sLossAbs / bal * 100.0) : 0;
                 }
              }
-             string ddInfo = "BUY DD:" + DoubleToString(curBuyDD, 1) + "/" + DoubleToString(InpHedge_DDTriggerPct, 1) + "% | SELL DD:" + DoubleToString(curSellDD, 1) + "/" + DoubleToString(InpHedge_DDTriggerPct, 1) + "%";
+             string ddInfo;
+             if(isDollarMode)
+                ddInfo = "BUY DD:$" + DoubleToString(bLossAbs, 2) + "/$" + DoubleToString(InpHedge_DDTriggerDollar, 2) + " | SELL DD:$" + DoubleToString(sLossAbs, 2) + "/$" + DoubleToString(InpHedge_DDTriggerDollar, 2);
+             else
+                ddInfo = "BUY DD:" + DoubleToString(curBuyDD, 1) + "/" + DoubleToString(InpHedge_DDTriggerPct, 1) + "% | SELL DD:" + DoubleToString(curSellDD, 1) + "/" + DoubleToString(InpHedge_DDTriggerPct, 1) + "%";
              DrawTableRow(row, "  DD Trig", ddInfo, clrAqua, COLOR_SECTION_HEDGE); row++;
-            // v6.18: Show which generation DD is currently monitoring
             string scopeInfo = "Scope: " + GetCommentPrefix() + " (Gen " + IntegerToString(g_cycleGeneration) + ")";
             DrawTableRow(row, "  DD Scope", scopeInfo, clrYellow, COLOR_SECTION_HEDGE); row++;
          }
@@ -6691,17 +6699,21 @@ void CheckAndOpenHedge()
 //+------------------------------------------------------------------+
 void CheckAndOpenHedgeByDD()
 {
-   if(!InpHedge_Enable || InpHedge_TriggerMode != HEDGE_TRIGGER_DD_PERCENT) return;
+   if(!InpHedge_Enable) return;
+   if(InpHedge_TriggerMode != HEDGE_TRIGGER_DD_PERCENT && InpHedge_TriggerMode != HEDGE_TRIGGER_DD_DOLLAR) return;
    
-   // Cooldown check
+   // Cooldown check — both DD hedge cooldown and post-close cooldown
    datetime now = TimeCurrent();
    if(now - g_lastDDHedgeTime < InpHedge_DDCooldownSec) return;
+   // v6.25: Cooldown after hedge set close to prevent immediate re-trigger
+   if(now - g_lastHedgeCloseTime < InpHedge_DDCooldownSec) return;
    
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
    if(balance <= 0) return;
    
+   bool isDollarMode = (InpHedge_TriggerMode == HEDGE_TRIGGER_DD_DOLLAR);
+   
    // v6.18: Calculate floating loss per side — ONLY from current generation orders
-   // This prevents old generation orders (already managed by their own hedge sets) from triggering new hedges
    int curGen = g_cycleGeneration;
    double buyLoss = 0, sellLoss = 0;
    for(int i = PositionsTotal() - 1; i >= 0; i--)
@@ -6711,16 +6723,15 @@ void CheckAndOpenHedgeByDD()
       if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       string cmt = PositionGetString(POSITION_COMMENT);
-      if(IsHedgeComment(cmt)) continue;  // skip hedge orders
-      if(IsTicketBound(ticket)) continue;  // skip already-bound orders
+      if(IsHedgeComment(cmt)) continue;
+      if(IsTicketBound(ticket)) continue;
       
-      // v6.18: Generation filter — only count current generation
       int orderGen = ExtractGeneration(cmt);
-      if(orderGen < 0) continue;   // not our comment format
-      if(orderGen != curGen) continue;  // skip older generations (GM, GM1, etc.)
+      if(orderGen < 0) continue;
+      if(orderGen != curGen) continue;
       
       double pnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP) + PositionGetDouble(POSITION_COMMISSION);
-      if(pnl >= 0) continue;  // only count losses
+      if(pnl >= 0) continue;
       
       ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
       if(posType == POSITION_TYPE_BUY)
@@ -6729,31 +6740,58 @@ void CheckAndOpenHedgeByDD()
          sellLoss += pnl;
    }
    
-   // Calculate DD% (loss is negative, make positive for comparison)
-   double buyDDPct  = (buyLoss < 0)  ? (MathAbs(buyLoss) / balance * 100.0) : 0;
-   double sellDDPct = (sellLoss < 0) ? (MathAbs(sellLoss) / balance * 100.0) : 0;
-   
-    // v6.21: Check BUY side — constant threshold per generation (no cumulative step)
-    if(buyDDPct >= InpHedge_DDTriggerPct)
-    {
-       if(OpenDDHedge(POSITION_TYPE_BUY, POSITION_TYPE_SELL))
-       {
-          g_lastDDHedgeTime = now;
-          Print("DD HEDGE [Gen", curGen, "]: BUY side DD=", DoubleToString(buyDDPct, 1), 
-                "% >= ", DoubleToString(InpHedge_DDTriggerPct, 1), "% → SELL hedge opened");
-       }
-    }
-    
-    // v6.21: Check SELL side — constant threshold per generation
-    if(sellDDPct >= InpHedge_DDTriggerPct)
-    {
-       if(OpenDDHedge(POSITION_TYPE_SELL, POSITION_TYPE_BUY))
-       {
-          g_lastDDHedgeTime = now;
-          Print("DD HEDGE [Gen", curGen, "]: SELL side DD=", DoubleToString(sellDDPct, 1),
-                "% >= ", DoubleToString(InpHedge_DDTriggerPct, 1), "% → BUY hedge opened");
-       }
-    }
+   if(isDollarMode)
+   {
+      // v6.25: Dollar mode — compare absolute loss directly
+      double buyLossAbs  = MathAbs(buyLoss);
+      double sellLossAbs = MathAbs(sellLoss);
+      
+      if(buyLossAbs >= InpHedge_DDTriggerDollar)
+      {
+         if(OpenDDHedge(POSITION_TYPE_BUY, POSITION_TYPE_SELL))
+         {
+            g_lastDDHedgeTime = now;
+            Print("DD$ HEDGE [Gen", curGen, "]: BUY side DD=$", DoubleToString(buyLossAbs, 2), 
+                  " >= $", DoubleToString(InpHedge_DDTriggerDollar, 2), " → SELL hedge opened");
+         }
+      }
+      
+      if(sellLossAbs >= InpHedge_DDTriggerDollar)
+      {
+         if(OpenDDHedge(POSITION_TYPE_SELL, POSITION_TYPE_BUY))
+         {
+            g_lastDDHedgeTime = now;
+            Print("DD$ HEDGE [Gen", curGen, "]: SELL side DD=$", DoubleToString(sellLossAbs, 2),
+                  " >= $", DoubleToString(InpHedge_DDTriggerDollar, 2), " → BUY hedge opened");
+         }
+      }
+   }
+   else
+   {
+      // Percent mode (original)
+      double buyDDPct  = (buyLoss < 0)  ? (MathAbs(buyLoss) / balance * 100.0) : 0;
+      double sellDDPct = (sellLoss < 0) ? (MathAbs(sellLoss) / balance * 100.0) : 0;
+      
+      if(buyDDPct >= InpHedge_DDTriggerPct)
+      {
+         if(OpenDDHedge(POSITION_TYPE_BUY, POSITION_TYPE_SELL))
+         {
+            g_lastDDHedgeTime = now;
+            Print("DD HEDGE [Gen", curGen, "]: BUY side DD=", DoubleToString(buyDDPct, 1), 
+                  "% >= ", DoubleToString(InpHedge_DDTriggerPct, 1), "% → SELL hedge opened");
+         }
+      }
+      
+      if(sellDDPct >= InpHedge_DDTriggerPct)
+      {
+         if(OpenDDHedge(POSITION_TYPE_SELL, POSITION_TYPE_BUY))
+         {
+            g_lastDDHedgeTime = now;
+            Print("DD HEDGE [Gen", curGen, "]: SELL side DD=", DoubleToString(sellDDPct, 1),
+                  "% >= ", DoubleToString(InpHedge_DDTriggerPct, 1), "% → BUY hedge opened");
+         }
+      }
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -7663,7 +7701,8 @@ void ManageHedgeSets()
          g_hedgeSets[h].active = false;
          g_hedgeSets[h].boundTicketCount = 0;
          ArrayResize(g_hedgeSets[h].boundTickets, 0);
-          g_hedgeSetCount--;
+           g_hedgeSetCount--;
+           g_lastHedgeCloseTime = TimeCurrent();  // v6.25: cooldown after set close
           // v6.24: Reset generation when all hedge sets closed
           if(g_hedgeSetCount <= 0 && g_cycleGeneration > 0)
           {
@@ -8398,6 +8437,7 @@ bool ManageHedgeBoundAvgTP(int idx)
             g_hedgeSets[idx].boundTicketCount = 0;
             ArrayResize(g_hedgeSets[idx].boundTickets, 0);
             g_hedgeSetCount--;
+             g_lastHedgeCloseTime = TimeCurrent();  // v6.25: cooldown after set close
              // v6.24: Reset generation when all hedge sets closed
              if(g_hedgeSetCount <= 0 && g_cycleGeneration > 0)
              {
@@ -8549,7 +8589,8 @@ void ManageHedgeMatchingClose(int idx)
        g_hedgeSets[idx].active = false;
       g_hedgeSets[idx].boundTicketCount = 0;
       ArrayResize(g_hedgeSets[idx].boundTickets, 0);
-       g_hedgeSetCount--;
+        g_hedgeSetCount--;
+        g_lastHedgeCloseTime = TimeCurrent();  // v6.25: cooldown after set close
        // v6.24: Reset generation when all hedge sets closed
        if(g_hedgeSetCount <= 0 && g_cycleGeneration > 0)
        {
@@ -8574,6 +8615,7 @@ void ManageHedgeMatchingClose(int idx)
         ArrayResize(g_hedgeSets[idx].boundTickets, 0);
         g_hedgeSets[idx].gridMode = false;
         g_hedgeSetCount--;
+         g_lastHedgeCloseTime = TimeCurrent();  // v6.25: cooldown after set close
         // v6.24: Reset generation when all hedge sets closed
         if(g_hedgeSetCount <= 0 && g_cycleGeneration > 0)
         {
@@ -8691,7 +8733,8 @@ void ManageHedgePartialClose(int idx)
        g_hedgeSets[idx].active = false;
       g_hedgeSets[idx].boundTicketCount = 0;
       ArrayResize(g_hedgeSets[idx].boundTickets, 0);
-       g_hedgeSetCount--;
+        g_hedgeSetCount--;
+        g_lastHedgeCloseTime = TimeCurrent();  // v6.25: cooldown after set close
        // v6.24: Reset generation when all hedge sets closed
        if(g_hedgeSetCount <= 0 && g_cycleGeneration > 0)
        {
@@ -8809,6 +8852,7 @@ void ManageHedgeGridMode(int idx)
                 CloseAllHedgeGridOrders(idx);
                 g_hedgeSets[idx].active = false;
                 g_hedgeSetCount--;
+                 g_lastHedgeCloseTime = TimeCurrent();  // v6.25: cooldown after set close
                 // v6.24: Reset generation when all hedge sets closed
                 if(g_hedgeSetCount <= 0 && g_cycleGeneration > 0)
                 {
@@ -8845,7 +8889,8 @@ void ManageHedgeGridMode(int idx)
             trade.PositionClose(ticket);
       }
        g_hedgeSets[idx].active = false;
-       g_hedgeSetCount--;
+        g_hedgeSetCount--;
+        g_lastHedgeCloseTime = TimeCurrent();  // v6.25: cooldown after set close
        // v6.24: Reset generation when all hedge sets closed
        if(g_hedgeSetCount <= 0 && g_cycleGeneration > 0)
        {
