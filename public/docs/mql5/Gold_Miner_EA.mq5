@@ -1240,6 +1240,9 @@ void OnTick()
          CheckAndOpenHedgeByDD();    // v6.25: DD% or DD$ per side trigger
       ManageHedgeSets();
    }
+   
+   // === v6.28: BALANCE GUARD CHECK ===
+   CheckBalanceGuard();
 
    // === ORPHAN RECOVERY GRID ===
    if(InpOrphan_Enable)
