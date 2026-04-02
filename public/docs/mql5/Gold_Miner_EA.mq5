@@ -6424,6 +6424,58 @@ bool IsTicketBound(ulong ticket)
 }
 
 //+------------------------------------------------------------------+
+//| v6.26: Add ticket to previously-hedged list                        |
+//+------------------------------------------------------------------+
+void AddPrevHedgedTicket(ulong ticket)
+{
+   if(IsPrevHedgedTicket(ticket)) return;
+   if(g_prevHedgedCount >= MAX_PREV_HEDGED)
+   {
+      Print("WARNING: g_prevHedgedTickets array full (", MAX_PREV_HEDGED, "). Cannot add ticket ", ticket);
+      return;
+   }
+   g_prevHedgedTickets[g_prevHedgedCount] = ticket;
+   g_prevHedgedCount++;
+}
+
+//+------------------------------------------------------------------+
+//| v6.26: Check if ticket was previously in a DD hedge set             |
+//+------------------------------------------------------------------+
+bool IsPrevHedgedTicket(ulong ticket)
+{
+   for(int i = 0; i < g_prevHedgedCount; i++)
+   {
+      if(g_prevHedgedTickets[i] == ticket) return true;
+   }
+   return false;
+}
+
+//+------------------------------------------------------------------+
+//| v6.26: Clear previously-hedged tickets (full cycle reset)          |
+//+------------------------------------------------------------------+
+void ClearPrevHedgedTickets()
+{
+   ArrayInitialize(g_prevHedgedTickets, 0);
+   g_prevHedgedCount = 0;
+   Print("v6.26: Previously-hedged tickets cleared (cycle reset)");
+}
+
+//+------------------------------------------------------------------+
+//| v6.26: Save remaining bound tickets to prevHedged before deactivation |
+//+------------------------------------------------------------------+
+void SaveBoundTicketsToPrevHedged(int idx)
+{
+   if(g_hedgeSets[idx].triggerType != 1) return;  // only DD-triggered sets
+   for(int b = 0; b < g_hedgeSets[idx].boundTicketCount; b++)
+   {
+      ulong tk = g_hedgeSets[idx].boundTickets[b];
+      if(tk == 0) continue;
+      if(PositionSelectByTicket(tk))
+         AddPrevHedgedTicket(tk);
+   }
+}
+
+//+------------------------------------------------------------------+
 //| Get lot cap for new orders when hedge set has bound orders          |
 //| Returns -1 if no hedge set exists for this side (no cap)           |
 //| Returns allowedLots = hedgeLots - remainingBoundLots               |
