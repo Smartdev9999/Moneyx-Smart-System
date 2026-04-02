@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.27 - MTF ZigZag+CDC+Grid+License  |
+//|                Gold Miner EA v6.28 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.27"
-#property description "Gold Miner EA v6.27 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge10 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + License"
+#property version   "6.28"
+#property description "Gold Miner EA v6.28 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge10 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -339,6 +339,9 @@ input double   InpHedge_DDTriggerPct         = 5.0;   // DD% to trigger first he
 input double   InpHedge_DDStepPct            = 5.0;   // [LEGACY] DD% step — not used since v6.21 (constant threshold per gen)
 input int      InpHedge_DDCooldownSec        = 60;    // Min seconds between DD hedges
 input double   InpHedge_DDTriggerDollar      = 500.0; // v6.25: DD$ to trigger hedge (per side)
+// v6.28: Balance Guard — close all when equity recovers to target
+input bool     InpBalanceGuard_Enable        = false;  // Balance Guard: Enable
+input double   InpBalanceGuard_Target        = 1000.0; // Balance Guard: Target Equity ($)
 // v6.15: Reverse Hedge disabled — kept as constants for legacy function compilation
 const bool     InpHedge_ReverseEnable        = false;
 const int      InpHedge_ReverseMinTFConfirm  = 2;
@@ -538,6 +541,9 @@ datetime g_lastHedgeCloseTime = 0;     // v6.25: cooldown after hedge set close
 #define MAX_PREV_HEDGED 200
 ulong    g_prevHedgedTickets[MAX_PREV_HEDGED];
 int      g_prevHedgedCount = 0;
+
+// === v6.28: Balance Guard State ===
+bool g_balanceGuardActive = false;  // activated when hedge set opens
 
 // === Reverse Hedge State (v6.11: array-based for multiple reverse hedges) ===
 #define MAX_REVERSE_HEDGES 10
@@ -793,7 +799,7 @@ int OnInit()
    // === Recover Hedge Sets from existing positions (crash/restart recovery) ===
    RecoverHedgeSets();
 
-   Print("Gold Miner EA v6.27 initialized successfully | CycleGen=", g_cycleGeneration);
+   Print("Gold Miner EA v6.28 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF");
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -845,7 +851,7 @@ void OnDeinit(const int reason)
 
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
-   Print("Gold Miner EA v6.27 deinitialized");
+   Print("Gold Miner EA v6.28 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -1234,6 +1240,9 @@ void OnTick()
          CheckAndOpenHedgeByDD();    // v6.25: DD% or DD$ per side trigger
       ManageHedgeSets();
    }
+   
+   // === v6.28: BALANCE GUARD CHECK ===
+   CheckBalanceGuard();
 
    // === ORPHAN RECOVERY GRID ===
    if(InpOrphan_Enable)
@@ -3046,7 +3055,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.27 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.27 [ZZ]" : "Gold Miner EA v6.27 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.28 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.28 [ZZ]" : "Gold Miner EA v6.28 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -3458,8 +3467,27 @@ void DisplayDashboard()
         {
            DrawTableRow(row, "⚠ WARNING", "ORPHAN GRID ORDERS DETECTED", clrRed, COLOR_SECTION_HEDGE); row++;
          }
-         // v6.15: Reverse Hedge removed — no more reverse hedge or balanced lock display
-     }
+          // v6.15: Reverse Hedge removed — no more reverse hedge or balanced lock display
+         
+         // v6.28: Balance Guard status
+         if(InpBalanceGuard_Enable)
+         {
+            double curEquity = AccountInfoDouble(ACCOUNT_EQUITY);
+            string bgStatus;
+            color bgClr;
+            if(g_balanceGuardActive)
+            {
+               bgStatus = "ACTIVE | Eq: $" + DoubleToString(curEquity, 2) + " / $" + DoubleToString(InpBalanceGuard_Target, 2);
+               bgClr = (curEquity >= InpBalanceGuard_Target) ? clrLime : clrOrange;
+            }
+            else
+            {
+               bgStatus = "Standby | Target: $" + DoubleToString(InpBalanceGuard_Target, 2);
+               bgClr = clrGray;
+            }
+            DrawTableRow(row, "Bal Guard", bgStatus, bgClr, COLOR_SECTION_HEDGE); row++;
+         }
+      }
 
      // === Orphan Recovery Status ===
      color COLOR_SECTION_ORPHAN = C'130,50,180';  // purple for orphan section
@@ -6492,6 +6520,56 @@ void TryResetCycleStateIfFlat(string reason)
 }
 
 //+------------------------------------------------------------------+
+//| v6.28: Balance Guard — close all positions when equity recovers    |
+//| to target balance. Only active during hedging (g_hedgeSetCount>0)  |
+//+------------------------------------------------------------------+
+void CheckBalanceGuard()
+{
+   if(!InpBalanceGuard_Enable) return;
+   
+   // Activate guard when hedge set is active
+   if(g_hedgeSetCount > 0)
+   {
+      if(!g_balanceGuardActive)
+      {
+         g_balanceGuardActive = true;
+         Print("v6.28 Balance Guard: ACTIVATED — monitoring equity toward $", DoubleToString(InpBalanceGuard_Target, 2));
+      }
+   }
+   
+   // Only check when guard is active
+   if(!g_balanceGuardActive) return;
+   
+   double curEquity = AccountInfoDouble(ACCOUNT_EQUITY);
+   
+   if(curEquity >= InpBalanceGuard_Target)
+   {
+      Print("v6.28 Balance Guard: TRIGGERED — Equity $", DoubleToString(curEquity, 2), 
+            " >= Target $", DoubleToString(InpBalanceGuard_Target, 2), " — closing ALL positions");
+      
+      CloseAllPositions();
+      
+      // Reset balance guard state
+      g_balanceGuardActive = false;
+      
+      // Reset cycle state (CloseAllPositions already resets hedge sets)
+      g_cycleGeneration = 0;
+      ClearPrevHedgedTickets();
+      Print("v6.28 Balance Guard: Full reset complete — ready for fresh cycle");
+   }
+   
+   // Deactivate if no more hedge sets and no positions (flat after manual close)
+   if(g_hedgeSetCount <= 0 && TotalOrderCount() == 0)
+   {
+      if(g_balanceGuardActive)
+      {
+         g_balanceGuardActive = false;
+         Print("v6.28 Balance Guard: Deactivated — account is flat");
+      }
+   }
+}
+
+
 //| Get lot cap for new orders when hedge set has bound orders          |
 //| Returns -1 if no hedge set exists for this side (no cap)           |
 //| Returns allowedLots = hedgeLots - remainingBoundLots               |
