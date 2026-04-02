@@ -8918,17 +8918,19 @@ void ManageHedgeGridMode(int idx)
             {
                trade.PositionClose(g_hedgeSets[idx].hedgeTicket);
                 CloseAllHedgeGridOrders(idx);
-                g_hedgeSets[idx].active = false;
-                g_hedgeSetCount--;
-                 g_lastHedgeCloseTime = TimeCurrent();  // v6.25: cooldown after set close
-                // v6.24: Reset generation when all hedge sets closed
-                if(g_hedgeSetCount <= 0 && g_cycleGeneration > 0)
-                {
-                   g_cycleGeneration = 0;
-                   g_hedgeSetCount = 0;
-                   Print("CYCLE GENERATION reset to 0 — all hedge sets closed (grid recover)");
-                }
-                Print("HEDGE Set#", idx + 1, " fully recovered via grid mode.");
+                SaveBoundTicketsToPrevHedged(idx);  // v6.26
+                 g_hedgeSets[idx].active = false;
+                 g_hedgeSetCount--;
+                  g_lastHedgeCloseTime = TimeCurrent();  // v6.25: cooldown after set close
+                 // v6.24: Reset generation when all hedge sets closed
+                 if(g_hedgeSetCount <= 0 && g_cycleGeneration > 0)
+                 {
+                    g_cycleGeneration = 0;
+                    ClearPrevHedgedTickets();  // v6.26
+                    g_hedgeSetCount = 0;
+                    Print("CYCLE GENERATION reset to 0 — all hedge sets closed (grid recover)");
+                 }
+                 Print("HEDGE Set#", idx + 1, " fully recovered via grid mode.");
             }
             else
             {
