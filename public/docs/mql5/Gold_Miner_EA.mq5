@@ -3486,24 +3486,26 @@ void DisplayDashboard()
          }
           // v6.15: Reverse Hedge removed — no more reverse hedge or balanced lock display
          
-         // v6.28: Balance Guard status
-         if(InpBalanceGuard_Enable)
-         {
-            double curEquity = AccountInfoDouble(ACCOUNT_EQUITY);
-            string bgStatus;
-            color bgClr;
-            if(g_balanceGuardActive)
-            {
-               bgStatus = "ACTIVE | Eq: $" + DoubleToString(curEquity, 2) + " / $" + DoubleToString(InpBalanceGuard_Target, 2);
-               bgClr = (curEquity >= InpBalanceGuard_Target) ? clrLime : clrOrange;
-            }
-            else
-            {
-               bgStatus = "Standby | Target: $" + DoubleToString(InpBalanceGuard_Target, 2);
-               bgClr = clrGray;
-            }
-            DrawTableRow(row, "Bal Guard", bgStatus, bgClr, COLOR_SECTION_HEDGE); row++;
-         }
+          // v6.29: Balance Guard status with mode display
+          if(InpBalanceGuard_Enable)
+          {
+             double curEquity = AccountInfoDouble(ACCOUNT_EQUITY);
+             double bgTarget = (InpBalanceGuard_Mode == BALGUARD_DYNAMIC) ? g_balanceGuardDynamicTarget : InpBalanceGuard_Target;
+             string modeStr = (InpBalanceGuard_Mode == BALGUARD_DYNAMIC) ? "Dyn" : "Fix";
+             string bgStatus;
+             color bgClr;
+             if(g_balanceGuardActive)
+             {
+                bgStatus = modeStr + " ACTIVE | Eq: $" + DoubleToString(curEquity, 2) + " / $" + DoubleToString(bgTarget, 2);
+                bgClr = (curEquity >= bgTarget) ? clrLime : clrOrange;
+             }
+             else
+             {
+                bgStatus = modeStr + " Standby | Target: $" + DoubleToString(bgTarget, 2);
+                bgClr = clrGray;
+             }
+             DrawTableRow(row, "Bal Guard", bgStatus, bgClr, COLOR_SECTION_HEDGE); row++;
+          }
       }
 
      // === Orphan Recovery Status ===
