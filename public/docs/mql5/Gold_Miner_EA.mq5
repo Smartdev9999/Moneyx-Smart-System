@@ -339,6 +339,9 @@ input double   InpHedge_DDTriggerPct         = 5.0;   // DD% to trigger first he
 input double   InpHedge_DDStepPct            = 5.0;   // [LEGACY] DD% step — not used since v6.21 (constant threshold per gen)
 input int      InpHedge_DDCooldownSec        = 60;    // Min seconds between DD hedges
 input double   InpHedge_DDTriggerDollar      = 500.0; // v6.25: DD$ to trigger hedge (per side)
+// v6.28: Balance Guard — close all when equity recovers to target
+input bool     InpBalanceGuard_Enable        = false;  // Balance Guard: Enable
+input double   InpBalanceGuard_Target        = 1000.0; // Balance Guard: Target Equity ($)
 // v6.15: Reverse Hedge disabled — kept as constants for legacy function compilation
 const bool     InpHedge_ReverseEnable        = false;
 const int      InpHedge_ReverseMinTFConfirm  = 2;
