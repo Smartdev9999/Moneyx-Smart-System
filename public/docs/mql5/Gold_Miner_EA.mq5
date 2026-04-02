@@ -8615,6 +8615,7 @@ void ManageHedgeMatchingClose(int idx)
         ArrayResize(g_hedgeSets[idx].boundTickets, 0);
         g_hedgeSets[idx].gridMode = false;
         g_hedgeSetCount--;
+         g_lastHedgeCloseTime = TimeCurrent();  // v6.25: cooldown after set close
         // v6.24: Reset generation when all hedge sets closed
         if(g_hedgeSetCount <= 0 && g_cycleGeneration > 0)
         {
