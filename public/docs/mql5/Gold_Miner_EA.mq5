@@ -552,6 +552,7 @@ int      g_prevHedgedCount = 0;
 
 // === v6.28: Balance Guard State ===
 bool g_balanceGuardActive = false;  // activated when hedge set opens
+double g_balanceGuardDynamicTarget = 0; // v6.29: dynamic target — updated when flat
 
 // === Reverse Hedge State (v6.11: array-based for multiple reverse hedges) ===
 #define MAX_REVERSE_HEDGES 10
