@@ -6546,13 +6546,17 @@ void CheckBalanceGuard()
 {
    if(!InpBalanceGuard_Enable) return;
    
+   // v6.29: Determine effective target based on mode
+   double effectiveTarget = (InpBalanceGuard_Mode == BALGUARD_DYNAMIC) ? g_balanceGuardDynamicTarget : InpBalanceGuard_Target;
+   
    // Activate guard when hedge set is active
    if(g_hedgeSetCount > 0)
    {
       if(!g_balanceGuardActive)
       {
          g_balanceGuardActive = true;
-         Print("v6.28 Balance Guard: ACTIVATED — monitoring equity toward $", DoubleToString(InpBalanceGuard_Target, 2));
+         string modeStr = (InpBalanceGuard_Mode == BALGUARD_DYNAMIC) ? "Dynamic" : "Fixed";
+         Print("v6.29 Balance Guard [", modeStr, "]: ACTIVATED — monitoring equity toward $", DoubleToString(effectiveTarget, 2));
       }
    }
    
@@ -6561,10 +6565,10 @@ void CheckBalanceGuard()
    
    double curEquity = AccountInfoDouble(ACCOUNT_EQUITY);
    
-   if(curEquity >= InpBalanceGuard_Target)
+   if(curEquity >= effectiveTarget)
    {
-      Print("v6.28 Balance Guard: TRIGGERED — Equity $", DoubleToString(curEquity, 2), 
-            " >= Target $", DoubleToString(InpBalanceGuard_Target, 2), " — closing ALL positions");
+      Print("v6.29 Balance Guard: TRIGGERED — Equity $", DoubleToString(curEquity, 2), 
+            " >= Target $", DoubleToString(effectiveTarget, 2), " — closing ALL positions");
       
       CloseAllPositions();
       
@@ -6574,16 +6578,29 @@ void CheckBalanceGuard()
       // Reset cycle state (CloseAllPositions already resets hedge sets)
       g_cycleGeneration = 0;
       ClearPrevHedgedTickets();
-      Print("v6.28 Balance Guard: Full reset complete — ready for fresh cycle");
+      Print("v6.29 Balance Guard: Full reset complete — ready for fresh cycle");
    }
    
    // Deactivate if no more hedge sets and no positions (flat after manual close)
+   // v6.29: Update dynamic target when account goes flat
    if(g_hedgeSetCount <= 0 && TotalOrderCount() == 0)
    {
       if(g_balanceGuardActive)
       {
          g_balanceGuardActive = false;
-         Print("v6.28 Balance Guard: Deactivated — account is flat");
+         Print("v6.29 Balance Guard: Deactivated — account is flat");
+      }
+      
+      // v6.29: Update dynamic target to current balance when flat (no orders)
+      if(InpBalanceGuard_Mode == BALGUARD_DYNAMIC)
+      {
+         double curBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+         if(MathAbs(curBalance - g_balanceGuardDynamicTarget) > 0.01)
+         {
+            Print("v6.29 Balance Guard Dynamic: Target updated $", DoubleToString(g_balanceGuardDynamicTarget, 2), 
+                  " → $", DoubleToString(curBalance, 2));
+            g_balanceGuardDynamicTarget = curBalance;
+         }
       }
    }
 }
