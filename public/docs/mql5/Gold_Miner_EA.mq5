@@ -3252,14 +3252,16 @@ void DisplayDashboard()
 
    DrawTableRow(row, "Auto Re-Entry", (EnableAutoReEntry ? "ON" : "OFF"), (EnableAutoReEntry ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_INFO); row++;
 
-   // Daily Profit Pause status
+   // Daily Profit Pause status (v6.32: Equity-based)
    if(InpEnableDailyProfitPause)
    {
-      double dailyPL = CalcDailyPL();
+      double dailyPL = AccountInfoDouble(ACCOUNT_EQUITY) - g_dailyStartBalance;
       string dpText = StringFormat("$%.2f / $%.2f", dailyPL, InpDailyProfitTarget);
       color dpColor = g_dailyProfitPaused ? COLOR_LOSS : COLOR_PROFIT;
       if(g_dailyProfitPaused) dpText = dpText + " PAUSED";
-      DrawTableRow(row, "Daily Profit", dpText, dpColor, COLOR_SECTION_INFO); row++;
+      else if(TotalOrderCount() > 0 && dailyPL >= InpDailyProfitTarget)
+         dpText = dpText + " (wait flat)";
+      DrawTableRow(row, "Daily Profit(Eq)", dpText, dpColor, COLOR_SECTION_INFO); row++;
    }
 
    // System Status (v2.9)
