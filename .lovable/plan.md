@@ -1,15 +1,16 @@
-## Implemented: v6.33 — แก้ Dynamic Balance Guard ให้อัปเดต target เฉพาะเมื่อไม่มีออเดอร์เท่านั้น
+## Implemented: v6.34 — แก้ Max DD ให้แสดงเป็น % เสมอทุกโหมด
 
 ### ปัญหา
-`UpdateDynamicBalanceGuardTarget()` อัปเดต target ทุกครั้งที่ balance เปลี่ยน แม้ยังมีออเดอร์อยู่ → target วิ่งหนี → ชุด hedge ไม่มีทาง trigger Balance Guard
+โหมด Dollar แปลง `g_maxDD` (%) กลับเป็น $ ด้วย `g_maxDD / 100.0 * balance` → ค่าผิดเพราะ balance เปลี่ยนตลอด
 
-### แก้ไข (v6.33)
-1. **Version bump**: v6.32 → v6.33
-2. **เพิ่ม `if(TotalOrderCount() != 0) return;`** ใน `UpdateDynamicBalanceGuardTarget()` — อัปเดตเฉพาะเมื่อ flat เท่านั้น
+### แก้ไข (v6.34)
+1. **Version bump**: v6.33 → v6.34
+2. **Dashboard line 3151-3152**: เปลี่ยนจากแสดง `$` เป็นแสดง `%` เหมือนโหมด Percent — ทุกโหมดแสดง Max DD% เป็น % เหมือนกัน
 
 ### สิ่งที่ไม่เปลี่ยนแปลง
+- `g_maxDD` tracking logic — ยังคำนวณ % เหมือนเดิม
 - Order Execution Logic, Trading Strategy Logic, Core Module Logic
 - DD trigger / Triple-gate / Matching close
 - OpenDDHedge / binding / generation logic
-- Balance Guard trigger/close logic
+- Balance Guard (v6.33)
 - Daily Target Profit (v6.32)
