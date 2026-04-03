@@ -6568,17 +6568,8 @@ void CheckBalanceGuard()
 {
    if(!InpBalanceGuard_Enable) return;
    
-   // v6.30: Dynamic target update — runs EVERY tick when flat, regardless of guard active state
-   if(InpBalanceGuard_Mode == BALGUARD_DYNAMIC && TotalOrderCount() == 0)
-   {
-      double curBalance = AccountInfoDouble(ACCOUNT_BALANCE);
-      if(MathAbs(curBalance - g_balanceGuardDynamicTarget) > 0.01)
-      {
-         Print("v6.30 Balance Guard Dynamic: Target updated $", DoubleToString(g_balanceGuardDynamicTarget, 2), 
-               " → $", DoubleToString(curBalance, 2));
-         g_balanceGuardDynamicTarget = curBalance;
-      }
-   }
+   // v6.31: Dynamic target update — fallback check every tick when flat
+   UpdateDynamicBalanceGuardTarget();
    
    // v6.30: Determine effective target based on mode
    double effectiveTarget = (InpBalanceGuard_Mode == BALGUARD_DYNAMIC) ? g_balanceGuardDynamicTarget : InpBalanceGuard_Target;
