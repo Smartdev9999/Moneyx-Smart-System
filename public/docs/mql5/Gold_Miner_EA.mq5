@@ -3148,7 +3148,7 @@ void DisplayDashboard()
       double ddDollar = balance - equity;
       DrawTableRow(row, "Current DD",   "$" + DoubleToString(ddDollar, 2) + " / $" + DoubleToString(MaxDrawdownDollar, 2),
                    (ddDollar > MaxDrawdownDollar * 0.5 ? COLOR_LOSS : COLOR_TEXT), COLOR_SECTION_DETAIL); row++;
-      DrawTableRow(row, "Max DD",       "$" + DoubleToString(g_maxDD / 100.0 * balance, 2),
+      DrawTableRow(row, "Max DD%",      DoubleToString(g_maxDD, 2) + "%",
                    (g_maxDD > 15 ? COLOR_LOSS : COLOR_TEXT), COLOR_SECTION_DETAIL); row++;
    }
    else
