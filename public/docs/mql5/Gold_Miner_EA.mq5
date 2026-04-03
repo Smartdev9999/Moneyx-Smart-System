@@ -2064,16 +2064,17 @@ void ManageTPSL()
    {
       //--- Auto-reset baseline when all positions are closed (cycle ended)
       int currentCount = TotalOrderCount();
-       if(g_hadPositions && currentCount == 0)
-       {
-          // v6.27: Safe reset — only if truly flat
-          TryResetCycleStateIfFlat("accumulate reset");
-          g_accumulateBaseline = CalcTotalHistoryProfit();
-          g_accumulatedProfit = 0;
-          g_hadPositions = false;
-          Print("Accumulate auto-reset: no positions left. New baseline: ", g_accumulateBaseline);
-          return;
-       }
+        if(g_hadPositions && currentCount == 0)
+        {
+           // v6.27: Safe reset — only if truly flat
+           TryResetCycleStateIfFlat("accumulate reset");
+           UpdateDynamicBalanceGuardTarget();  // v6.31
+           g_accumulateBaseline = CalcTotalHistoryProfit();
+           g_accumulatedProfit = 0;
+           g_hadPositions = false;
+           Print("Accumulate auto-reset: no positions left. New baseline: ", g_accumulateBaseline);
+           return;
+        }
       if(currentCount > 0) g_hadPositions = true;
 
       double totalHistory = CalcTotalHistoryProfit();
