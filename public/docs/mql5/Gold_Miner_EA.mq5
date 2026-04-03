@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.32 - MTF ZigZag+CDC+Grid+License  |
+//|                Gold Miner EA v6.33 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.32"
-#property description "Gold Miner EA v6.32 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge10 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + License"
+#property version   "6.33"
+#property description "Gold Miner EA v6.33 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge10 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -819,7 +819,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-   Print("Gold Miner EA v6.32 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+   Print("Gold Miner EA v6.33 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
          " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic");
 
    // === News Filter Init ===
@@ -3086,7 +3086,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.28 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.28 [ZZ]" : "Gold Miner EA v6.28 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.33 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.33 [ZZ]" : "Gold Miner EA v6.33 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -6564,10 +6564,11 @@ void UpdateDynamicBalanceGuardTarget()
 {
    if(!InpBalanceGuard_Enable) return;
    if(InpBalanceGuard_Mode != BALGUARD_DYNAMIC) return;
+   if(TotalOrderCount() != 0) return;  // v6.33: อัปเดตเฉพาะเมื่อ flat (ไม่มีออเดอร์) เท่านั้น
    double bal = AccountInfoDouble(ACCOUNT_BALANCE);
    if(MathAbs(bal - g_balanceGuardDynamicTarget) > 0.01)
    {
-      Print("v6.31 BG Dynamic: Target updated $", 
+      Print("v6.33 BG Dynamic: Target updated $", 
             DoubleToString(g_balanceGuardDynamicTarget, 2),
             " → $", DoubleToString(bal, 2));
       g_balanceGuardDynamicTarget = bal;
