@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.30 - MTF ZigZag+CDC+Grid+License  |
+//|                Gold Miner EA v6.31 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.30"
-#property description "Gold Miner EA v6.30 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge10 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + License"
+#property version   "6.31"
+#property description "Gold Miner EA v6.31 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge10 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -812,10 +812,10 @@ int OnInit()
    if(InpBalanceGuard_Enable && InpBalanceGuard_Mode == BALGUARD_DYNAMIC)
    {
       g_balanceGuardDynamicTarget = AccountInfoDouble(ACCOUNT_BALANCE);
-      Print("v6.30 Balance Guard Dynamic: Initial target set to $", DoubleToString(g_balanceGuardDynamicTarget, 2));
+      Print("v6.31 Balance Guard Dynamic: Initial target set to $", DoubleToString(g_balanceGuardDynamicTarget, 2));
    }
 
-   Print("Gold Miner EA v6.30 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+   Print("Gold Miner EA v6.31 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
          " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic");
 
    // === News Filter Init ===
@@ -1355,10 +1355,11 @@ void OnTick()
           int totalPositions = buyCount + sellCount;
 
           //--- Reset cycle generation when all positions cleared (standalone check)
-          if(g_hadPositions && totalPositions == 0)
-          {
-              TryResetCycleStateIfFlat("all positions cleared");  // v6.27
-          }
+           if(g_hadPositions && totalPositions == 0)
+           {
+               TryResetCycleStateIfFlat("all positions cleared");  // v6.27
+               UpdateDynamicBalanceGuardTarget();  // v6.31
+           }
 
          //--- Auto-detect broker-closed positions (e.g. trailing SL hit by broker)
          if(buyCount == 0 && g_initialBuyPrice != 0)
@@ -2063,16 +2064,17 @@ void ManageTPSL()
    {
       //--- Auto-reset baseline when all positions are closed (cycle ended)
       int currentCount = TotalOrderCount();
-       if(g_hadPositions && currentCount == 0)
-       {
-          // v6.27: Safe reset — only if truly flat
-          TryResetCycleStateIfFlat("accumulate reset");
-          g_accumulateBaseline = CalcTotalHistoryProfit();
-          g_accumulatedProfit = 0;
-          g_hadPositions = false;
-          Print("Accumulate auto-reset: no positions left. New baseline: ", g_accumulateBaseline);
-          return;
-       }
+        if(g_hadPositions && currentCount == 0)
+        {
+           // v6.27: Safe reset — only if truly flat
+           TryResetCycleStateIfFlat("accumulate reset");
+           UpdateDynamicBalanceGuardTarget();  // v6.31
+           g_accumulateBaseline = CalcTotalHistoryProfit();
+           g_accumulatedProfit = 0;
+           g_hadPositions = false;
+           Print("Accumulate auto-reset: no positions left. New baseline: ", g_accumulateBaseline);
+           return;
+        }
       if(currentCount > 0) g_hadPositions = true;
 
       double totalHistory = CalcTotalHistoryProfit();
@@ -4502,10 +4504,11 @@ void ManageAccumulateShared()
 
    //--- Auto-reset baseline when all positions are closed (cycle ended)
    int currentCount = TotalOrderCount();
-    if(g_hadPositions && currentCount == 0)
+     if(g_hadPositions && currentCount == 0)
    {
       // v6.27: Safe reset — only if truly flat
       TryResetCycleStateIfFlat("ZZ accumulate reset");
+      UpdateDynamicBalanceGuardTarget();  // v6.31
       g_accumulateBaseline = CalcTotalHistoryProfit();
       g_accumulatedProfit = 0;
       g_hadPositions = false;
@@ -6535,7 +6538,26 @@ void TryResetCycleStateIfFlat(string reason)
    g_cycleGeneration = 0;
    g_hedgeSetCount = 0;
    ClearPrevHedgedTickets();
+   UpdateDynamicBalanceGuardTarget();  // v6.31: update target immediately when flat
    Print("CYCLE GENERATION reset to 0 — ", reason, " (v6.27 safe reset, account flat)");
+}
+
+//+------------------------------------------------------------------+
+//| v6.31: Helper — update dynamic balance guard target from balance   |
+//| Called at every flat-detection point for immediate update          |
+//+------------------------------------------------------------------+
+void UpdateDynamicBalanceGuardTarget()
+{
+   if(!InpBalanceGuard_Enable) return;
+   if(InpBalanceGuard_Mode != BALGUARD_DYNAMIC) return;
+   double bal = AccountInfoDouble(ACCOUNT_BALANCE);
+   if(MathAbs(bal - g_balanceGuardDynamicTarget) > 0.01)
+   {
+      Print("v6.31 BG Dynamic: Target updated $", 
+            DoubleToString(g_balanceGuardDynamicTarget, 2),
+            " → $", DoubleToString(bal, 2));
+      g_balanceGuardDynamicTarget = bal;
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -6546,19 +6568,10 @@ void CheckBalanceGuard()
 {
    if(!InpBalanceGuard_Enable) return;
    
-   // v6.30: Dynamic target update — runs EVERY tick when flat, regardless of guard active state
-   if(InpBalanceGuard_Mode == BALGUARD_DYNAMIC && TotalOrderCount() == 0)
-   {
-      double curBalance = AccountInfoDouble(ACCOUNT_BALANCE);
-      if(MathAbs(curBalance - g_balanceGuardDynamicTarget) > 0.01)
-      {
-         Print("v6.30 Balance Guard Dynamic: Target updated $", DoubleToString(g_balanceGuardDynamicTarget, 2), 
-               " → $", DoubleToString(curBalance, 2));
-         g_balanceGuardDynamicTarget = curBalance;
-      }
-   }
+   // v6.31: Dynamic target update — fallback check every tick when flat
+   UpdateDynamicBalanceGuardTarget();
    
-   // v6.30: Determine effective target based on mode
+    // v6.31: Determine effective target based on mode
    double effectiveTarget = (InpBalanceGuard_Mode == BALGUARD_DYNAMIC) ? g_balanceGuardDynamicTarget : InpBalanceGuard_Target;
    
    // Activate guard when hedge set is active
@@ -6568,7 +6581,7 @@ void CheckBalanceGuard()
       {
          g_balanceGuardActive = true;
          string modeStr = (InpBalanceGuard_Mode == BALGUARD_DYNAMIC) ? "Dynamic" : "Fixed";
-         Print("v6.30 Balance Guard [", modeStr, "]: ACTIVATED — monitoring equity toward $", DoubleToString(effectiveTarget, 2));
+         Print("v6.31 Balance Guard [", modeStr, "]: ACTIVATED — monitoring equity toward $", DoubleToString(effectiveTarget, 2));
       }
    }
    
@@ -6579,7 +6592,7 @@ void CheckBalanceGuard()
    
    if(curEquity >= effectiveTarget)
    {
-      Print("v6.30 Balance Guard: TRIGGERED — Equity $", DoubleToString(curEquity, 2), 
+      Print("v6.31 Balance Guard: TRIGGERED — Equity $", DoubleToString(curEquity, 2), 
             " >= Target $", DoubleToString(effectiveTarget, 2), " — closing ALL positions");
       
       CloseAllPositions();
@@ -6590,7 +6603,7 @@ void CheckBalanceGuard()
       // Reset cycle state (CloseAllPositions already resets hedge sets)
       g_cycleGeneration = 0;
       ClearPrevHedgedTickets();
-      Print("v6.30 Balance Guard: Full reset complete — ready for fresh cycle");
+      Print("v6.31 Balance Guard: Full reset complete — ready for fresh cycle");
    }
    
    // Deactivate if no more hedge sets and no positions (flat after manual close)
@@ -6599,7 +6612,7 @@ void CheckBalanceGuard()
       if(g_balanceGuardActive)
       {
          g_balanceGuardActive = false;
-         Print("v6.30 Balance Guard: Deactivated — account is flat");
+         Print("v6.31 Balance Guard: Deactivated — account is flat");
       }
    }
 }
