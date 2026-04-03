@@ -399,6 +399,7 @@ int            g_atrHideAttempts = 0;          // ATR hide retry counter
 // Daily Profit Pause Variables
 bool           g_dailyProfitPaused   = false;  // Daily profit target reached
 datetime       g_dailyProfitPauseDay = 0;      // Day when pause was triggered
+double         g_dailyStartBalance   = 0;      // v6.32: Balance snapshot at day start
 
 // License Verification Variables
 bool              g_isLicenseValid = false;
