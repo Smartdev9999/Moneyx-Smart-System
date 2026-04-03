@@ -6564,10 +6564,11 @@ void UpdateDynamicBalanceGuardTarget()
 {
    if(!InpBalanceGuard_Enable) return;
    if(InpBalanceGuard_Mode != BALGUARD_DYNAMIC) return;
+   if(TotalOrderCount() != 0) return;  // v6.33: อัปเดตเฉพาะเมื่อ flat (ไม่มีออเดอร์) เท่านั้น
    double bal = AccountInfoDouble(ACCOUNT_BALANCE);
    if(MathAbs(bal - g_balanceGuardDynamicTarget) > 0.01)
    {
-      Print("v6.31 BG Dynamic: Target updated $", 
+      Print("v6.33 BG Dynamic: Target updated $", 
             DoubleToString(g_balanceGuardDynamicTarget, 2),
             " → $", DoubleToString(bal, 2));
       g_balanceGuardDynamicTarget = bal;
