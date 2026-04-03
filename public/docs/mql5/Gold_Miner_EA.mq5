@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.31 - MTF ZigZag+CDC+Grid+License  |
+//|                Gold Miner EA v6.32 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.31"
-#property description "Gold Miner EA v6.31 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge10 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + License"
+#property version   "6.32"
+#property description "Gold Miner EA v6.32 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge10 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -399,6 +399,7 @@ int            g_atrHideAttempts = 0;          // ATR hide retry counter
 // Daily Profit Pause Variables
 bool           g_dailyProfitPaused   = false;  // Daily profit target reached
 datetime       g_dailyProfitPauseDay = 0;      // Day when pause was triggered
+double         g_dailyStartBalance   = 0;      // v6.32: Balance snapshot at day start
 
 // License Verification Variables
 bool              g_isLicenseValid = false;
@@ -815,7 +816,10 @@ int OnInit()
       Print("v6.31 Balance Guard Dynamic: Initial target set to $", DoubleToString(g_balanceGuardDynamicTarget, 2));
    }
 
-   Print("Gold Miner EA v6.31 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+   // v6.32: Initialize daily start balance
+   g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+   
+   Print("Gold Miner EA v6.32 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
          " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic");
 
    // === News Filter Init ===
@@ -1170,7 +1174,7 @@ void OnTick()
    if(InpUseTimeFilter && !IsWithinTradingHours())
       g_newOrderBlocked = true;
 
-   // === DAILY PROFIT PAUSE CHECK ===
+   // === DAILY PROFIT PAUSE CHECK (v6.32: Equity-based, flat-only trigger) ===
    if(InpEnableDailyProfitPause)
    {
       MqlDateTime dtNow;
@@ -1178,22 +1182,30 @@ void OnTick()
       dtNow.hour = 0; dtNow.min = 0; dtNow.sec = 0;
       datetime today = StructToTime(dtNow);
 
-      // Reset pause flag when new day starts
+      // Reset pause flag and snapshot balance when new day starts
       if(g_dailyProfitPauseDay != today)
       {
          g_dailyProfitPaused = false;
          g_dailyProfitPauseDay = today;
+         g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+         Print("v6.32 Daily Profit: New day — start balance snapshot $", DoubleToString(g_dailyStartBalance, 2));
       }
+      
+      // v6.32: Initialize start balance if not set (first run)
+      if(g_dailyStartBalance <= 0)
+         g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
 
-      // Check if daily target reached
+      // v6.32: Check if daily target reached using Equity vs start-of-day Balance
       if(!g_dailyProfitPaused)
       {
-         double dailyPL = CalcDailyPL();
-         if(dailyPL >= InpDailyProfitTarget)
+         double dailyPL = AccountInfoDouble(ACCOUNT_EQUITY) - g_dailyStartBalance;
+         if(dailyPL >= InpDailyProfitTarget && TotalOrderCount() == 0)
          {
             g_dailyProfitPaused = true;
-            Print("DAILY PROFIT PAUSE: Target $", DoubleToString(InpDailyProfitTarget, 2),
-                  " reached (PL=$", DoubleToString(dailyPL, 2), "). No new orders until tomorrow.");
+            Print("v6.32 DAILY PROFIT PAUSE: Target $", DoubleToString(InpDailyProfitTarget, 2),
+                  " reached (Equity PL=$", DoubleToString(dailyPL, 2), 
+                  ", StartBal=$", DoubleToString(g_dailyStartBalance, 2),
+                  "). No new orders until tomorrow.");
          }
       }
 
@@ -3243,14 +3255,16 @@ void DisplayDashboard()
 
    DrawTableRow(row, "Auto Re-Entry", (EnableAutoReEntry ? "ON" : "OFF"), (EnableAutoReEntry ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_INFO); row++;
 
-   // Daily Profit Pause status
+   // Daily Profit Pause status (v6.32: Equity-based)
    if(InpEnableDailyProfitPause)
    {
-      double dailyPL = CalcDailyPL();
+      double dailyPL = AccountInfoDouble(ACCOUNT_EQUITY) - g_dailyStartBalance;
       string dpText = StringFormat("$%.2f / $%.2f", dailyPL, InpDailyProfitTarget);
       color dpColor = g_dailyProfitPaused ? COLOR_LOSS : COLOR_PROFIT;
       if(g_dailyProfitPaused) dpText = dpText + " PAUSED";
-      DrawTableRow(row, "Daily Profit", dpText, dpColor, COLOR_SECTION_INFO); row++;
+      else if(TotalOrderCount() > 0 && dailyPL >= InpDailyProfitTarget)
+         dpText = dpText + " (wait flat)";
+      DrawTableRow(row, "Daily Profit(Eq)", dpText, dpColor, COLOR_SECTION_INFO); row++;
    }
 
    // System Status (v2.9)
