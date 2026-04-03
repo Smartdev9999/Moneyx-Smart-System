@@ -819,7 +819,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-   Print("Gold Miner EA v6.33 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+   Print("Gold Miner EA v6.34 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
          " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic");
 
    // === News Filter Init ===
