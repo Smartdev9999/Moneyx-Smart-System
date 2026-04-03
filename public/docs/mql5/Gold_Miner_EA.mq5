@@ -1171,7 +1171,7 @@ void OnTick()
    if(InpUseTimeFilter && !IsWithinTradingHours())
       g_newOrderBlocked = true;
 
-   // === DAILY PROFIT PAUSE CHECK ===
+   // === DAILY PROFIT PAUSE CHECK (v6.32: Equity-based, flat-only trigger) ===
    if(InpEnableDailyProfitPause)
    {
       MqlDateTime dtNow;
@@ -1179,22 +1179,30 @@ void OnTick()
       dtNow.hour = 0; dtNow.min = 0; dtNow.sec = 0;
       datetime today = StructToTime(dtNow);
 
-      // Reset pause flag when new day starts
+      // Reset pause flag and snapshot balance when new day starts
       if(g_dailyProfitPauseDay != today)
       {
          g_dailyProfitPaused = false;
          g_dailyProfitPauseDay = today;
+         g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+         Print("v6.32 Daily Profit: New day — start balance snapshot $", DoubleToString(g_dailyStartBalance, 2));
       }
+      
+      // v6.32: Initialize start balance if not set (first run)
+      if(g_dailyStartBalance <= 0)
+         g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
 
-      // Check if daily target reached
+      // v6.32: Check if daily target reached using Equity vs start-of-day Balance
       if(!g_dailyProfitPaused)
       {
-         double dailyPL = CalcDailyPL();
-         if(dailyPL >= InpDailyProfitTarget)
+         double dailyPL = AccountInfoDouble(ACCOUNT_EQUITY) - g_dailyStartBalance;
+         if(dailyPL >= InpDailyProfitTarget && TotalOrderCount() == 0)
          {
             g_dailyProfitPaused = true;
-            Print("DAILY PROFIT PAUSE: Target $", DoubleToString(InpDailyProfitTarget, 2),
-                  " reached (PL=$", DoubleToString(dailyPL, 2), "). No new orders until tomorrow.");
+            Print("v6.32 DAILY PROFIT PAUSE: Target $", DoubleToString(InpDailyProfitTarget, 2),
+                  " reached (Equity PL=$", DoubleToString(dailyPL, 2), 
+                  ", StartBal=$", DoubleToString(g_dailyStartBalance, 2),
+                  "). No new orders until tomorrow.");
          }
       }
 
