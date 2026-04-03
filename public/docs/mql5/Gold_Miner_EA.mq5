@@ -6571,7 +6571,7 @@ void CheckBalanceGuard()
    // v6.31: Dynamic target update — fallback check every tick when flat
    UpdateDynamicBalanceGuardTarget();
    
-   // v6.30: Determine effective target based on mode
+    // v6.31: Determine effective target based on mode
    double effectiveTarget = (InpBalanceGuard_Mode == BALGUARD_DYNAMIC) ? g_balanceGuardDynamicTarget : InpBalanceGuard_Target;
    
    // Activate guard when hedge set is active
@@ -6581,7 +6581,7 @@ void CheckBalanceGuard()
       {
          g_balanceGuardActive = true;
          string modeStr = (InpBalanceGuard_Mode == BALGUARD_DYNAMIC) ? "Dynamic" : "Fixed";
-         Print("v6.30 Balance Guard [", modeStr, "]: ACTIVATED — monitoring equity toward $", DoubleToString(effectiveTarget, 2));
+         Print("v6.31 Balance Guard [", modeStr, "]: ACTIVATED — monitoring equity toward $", DoubleToString(effectiveTarget, 2));
       }
    }
    
@@ -6592,7 +6592,7 @@ void CheckBalanceGuard()
    
    if(curEquity >= effectiveTarget)
    {
-      Print("v6.30 Balance Guard: TRIGGERED — Equity $", DoubleToString(curEquity, 2), 
+      Print("v6.31 Balance Guard: TRIGGERED — Equity $", DoubleToString(curEquity, 2), 
             " >= Target $", DoubleToString(effectiveTarget, 2), " — closing ALL positions");
       
       CloseAllPositions();
@@ -6603,7 +6603,7 @@ void CheckBalanceGuard()
       // Reset cycle state (CloseAllPositions already resets hedge sets)
       g_cycleGeneration = 0;
       ClearPrevHedgedTickets();
-      Print("v6.30 Balance Guard: Full reset complete — ready for fresh cycle");
+      Print("v6.31 Balance Guard: Full reset complete — ready for fresh cycle");
    }
    
    // Deactivate if no more hedge sets and no positions (flat after manual close)
@@ -6612,7 +6612,7 @@ void CheckBalanceGuard()
       if(g_balanceGuardActive)
       {
          g_balanceGuardActive = false;
-         Print("v6.30 Balance Guard: Deactivated — account is flat");
+         Print("v6.31 Balance Guard: Deactivated — account is flat");
       }
    }
 }
