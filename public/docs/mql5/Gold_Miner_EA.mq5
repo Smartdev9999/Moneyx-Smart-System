@@ -6538,7 +6538,26 @@ void TryResetCycleStateIfFlat(string reason)
    g_cycleGeneration = 0;
    g_hedgeSetCount = 0;
    ClearPrevHedgedTickets();
+   UpdateDynamicBalanceGuardTarget();  // v6.31: update target immediately when flat
    Print("CYCLE GENERATION reset to 0 — ", reason, " (v6.27 safe reset, account flat)");
+}
+
+//+------------------------------------------------------------------+
+//| v6.31: Helper — update dynamic balance guard target from balance   |
+//| Called at every flat-detection point for immediate update          |
+//+------------------------------------------------------------------+
+void UpdateDynamicBalanceGuardTarget()
+{
+   if(!InpBalanceGuard_Enable) return;
+   if(InpBalanceGuard_Mode != BALGUARD_DYNAMIC) return;
+   double bal = AccountInfoDouble(ACCOUNT_BALANCE);
+   if(MathAbs(bal - g_balanceGuardDynamicTarget) > 0.01)
+   {
+      Print("v6.31 BG Dynamic: Target updated $", 
+            DoubleToString(g_balanceGuardDynamicTarget, 2),
+            " → $", DoubleToString(bal, 2));
+      g_balanceGuardDynamicTarget = bal;
+   }
 }
 
 //+------------------------------------------------------------------+
