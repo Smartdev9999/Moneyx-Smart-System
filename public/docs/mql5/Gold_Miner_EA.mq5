@@ -816,7 +816,10 @@ int OnInit()
       Print("v6.31 Balance Guard Dynamic: Initial target set to $", DoubleToString(g_balanceGuardDynamicTarget, 2));
    }
 
-   Print("Gold Miner EA v6.31 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+   // v6.32: Initialize daily start balance
+   g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+   
+   Print("Gold Miner EA v6.32 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
          " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic");
 
    // === News Filter Init ===
