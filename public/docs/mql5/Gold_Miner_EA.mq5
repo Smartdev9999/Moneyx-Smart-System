@@ -1355,10 +1355,11 @@ void OnTick()
           int totalPositions = buyCount + sellCount;
 
           //--- Reset cycle generation when all positions cleared (standalone check)
-          if(g_hadPositions && totalPositions == 0)
-          {
-              TryResetCycleStateIfFlat("all positions cleared");  // v6.27
-          }
+           if(g_hadPositions && totalPositions == 0)
+           {
+               TryResetCycleStateIfFlat("all positions cleared");  // v6.27
+               UpdateDynamicBalanceGuardTarget();  // v6.31
+           }
 
          //--- Auto-detect broker-closed positions (e.g. trailing SL hit by broker)
          if(buyCount == 0 && g_initialBuyPrice != 0)
