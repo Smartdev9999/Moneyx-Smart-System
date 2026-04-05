@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.34 - MTF ZigZag+CDC+Grid+License  |
+//|                //|                Gold Miner EA v6.35 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.34"
-#property description "Gold Miner EA v6.34 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge10 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + License"
+#property version   "6.35"
+#property description "Gold Miner EA v6.35 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge10 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -350,6 +350,7 @@ input double   InpHedge_DDTriggerDollar      = 500.0; // v6.25: DD$ to trigger h
 input bool     InpBalanceGuard_Enable        = false;  // Balance Guard: Enable
 input ENUM_BALGUARD_MODE InpBalanceGuard_Mode = BALGUARD_FIXED; // Balance Guard: Mode (Fixed / Dynamic)
 input double   InpBalanceGuard_Target        = 1000.0; // Balance Guard: Target Equity ($) [Fixed mode]
+input double   InpBalanceGuard_Profit        = 0.0;   // Balance Guard: Min Profit ($) added to target
 // v6.15: Reverse Hedge disabled — kept as constants for legacy function compilation
 const bool     InpHedge_ReverseEnable        = false;
 const int      InpHedge_ReverseMinTFConfirm  = 2;
@@ -819,8 +820,9 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-   Print("Gold Miner EA v6.34 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
-         " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic");
+   Print("Gold Miner EA v6.35 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+         " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
+         " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2));
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -3086,7 +3088,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.34 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.34 [ZZ]" : "Gold Miner EA v6.34 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.35 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.35 [ZZ]" : "Gold Miner EA v6.35 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -3506,7 +3508,7 @@ void DisplayDashboard()
           if(InpBalanceGuard_Enable)
           {
              double curEquity = AccountInfoDouble(ACCOUNT_EQUITY);
-             double bgTarget = (InpBalanceGuard_Mode == BALGUARD_DYNAMIC) ? g_balanceGuardDynamicTarget : InpBalanceGuard_Target;
+             double bgTarget = ((InpBalanceGuard_Mode == BALGUARD_DYNAMIC) ? g_balanceGuardDynamicTarget : InpBalanceGuard_Target) + InpBalanceGuard_Profit;  // v6.35: include min profit
              string modeStr = (InpBalanceGuard_Mode == BALGUARD_DYNAMIC) ? "Dyn" : "Fix";
              string bgStatus;
              color bgClr;
@@ -6587,7 +6589,7 @@ void CheckBalanceGuard()
    UpdateDynamicBalanceGuardTarget();
    
     // v6.31: Determine effective target based on mode
-   double effectiveTarget = (InpBalanceGuard_Mode == BALGUARD_DYNAMIC) ? g_balanceGuardDynamicTarget : InpBalanceGuard_Target;
+   double effectiveTarget = ((InpBalanceGuard_Mode == BALGUARD_DYNAMIC) ? g_balanceGuardDynamicTarget : InpBalanceGuard_Target) + InpBalanceGuard_Profit;  // v6.35: Add minimum profit to target
    
    // Activate guard when hedge set is active
    if(g_hedgeSetCount > 0)
