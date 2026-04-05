@@ -6589,7 +6589,7 @@ void CheckBalanceGuard()
    UpdateDynamicBalanceGuardTarget();
    
     // v6.31: Determine effective target based on mode
-   double effectiveTarget = (InpBalanceGuard_Mode == BALGUARD_DYNAMIC) ? g_balanceGuardDynamicTarget : InpBalanceGuard_Target;
+   double effectiveTarget = ((InpBalanceGuard_Mode == BALGUARD_DYNAMIC) ? g_balanceGuardDynamicTarget : InpBalanceGuard_Target) + InpBalanceGuard_Profit;  // v6.35: Add minimum profit to target
    
    // Activate guard when hedge set is active
    if(g_hedgeSetCount > 0)
