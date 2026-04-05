@@ -1,19 +1,14 @@
-## Implemented: v6.35 — เพิ่ม Profit for Balance Guard
+## Implemented: v6.36 — เพิ่ม Max Hedge Sets จาก 10 เป็น 50
 
-### หลักการ
-เพิ่ม `InpBalanceGuard_Profit` เพื่อกำหนดกำไรขั้นต่ำ ($) ที่ต้องบวกเข้ากับ target ของ Balance Guard
-เช่น Balance ตอน flat = $102,000, Profit = $2,000 → ระบบปิดเมื่อ Equity >= $104,000
-
-### แก้ไข (v6.35)
-1. **Version bump**: v6.34 → v6.35
-2. **Input parameter ใหม่**: `InpBalanceGuard_Profit` (default 0.0) — อยู่หลัง `InpBalanceGuard_Target`
-3. **CheckBalanceGuard()**: `effectiveTarget += InpBalanceGuard_Profit`
-4. **Dashboard**: `bgTarget` รวม profit แล้วแสดงยอดรวม
+### แก้ไข (v6.36)
+1. **Version bump**: v6.35 → v6.36
+2. **`#define MAX_HEDGE_SETS`**: 10 → 50
+3. **Input comment**: `(1-10)` → `(1-50)` — default ยังเป็น 10
 
 ### สิ่งที่ไม่เปลี่ยนแปลง
 - Order Execution Logic, Trading Strategy Logic, Core Module Logic
 - DD trigger / Triple-gate / Matching close
 - OpenDDHedge / binding / generation logic
-- Balance Guard dynamic update logic (v6.33)
+- Balance Guard (v6.33/v6.35)
 - Daily Target Profit (v6.32)
-- Max DD% display fix (v6.34)
+- Loop logic ทั้งหมดใช้ `MAX_HEDGE_SETS` อยู่แล้ว จึงรองรับอัตโนมัติ
