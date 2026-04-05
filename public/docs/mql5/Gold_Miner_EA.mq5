@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                //|                Gold Miner EA v6.35 - MTF ZigZag+CDC+Grid+License  |
+//|                //|                Gold Miner EA v6.36 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.35"
-#property description "Gold Miner EA v6.35 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge10 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + License"
+#property version   "6.36"
+#property description "Gold Miner EA v6.36 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -337,7 +337,7 @@ input double   InpHedge_MatchMinProfit      = 5.0;     // Min Profit for Hedge M
 input int      InpHedge_MatchMinProfitOrders = 2;      // Min Profit Orders for Hedge Grid Matching
 input double   InpHedge_PartialMinProfit    = 5.0;     // Min Profit for Partial Close ($)
 input int      InpHedge_PartialMinProfitOrders = 3;    // Min Profit Orders for Partial Close (0=Always)
-input int      InpHedge_MaxSets              = 10;    // Max Active Hedge Sets (1-10)
+input int      InpHedge_MaxSets              = 10;    // Max Active Hedge Sets (1-50)
 input int      InpHedge_BoundAvgTPPoints     = 0;     // Bound Avg TP Points (0=Disabled)
 input int      InpHedge_MinTFConfirm         = 1;     // Min TF Expansion to Confirm Hedge (1-3)
 input int      InpHedge_CloseMinPoints       = 300;   // v6.15: Min points from zone edge before matching close
@@ -500,7 +500,7 @@ bool         g_squeezeSellBlocked = false;  // directional: block SELL only
 bool         g_expansionCloseTriggered = false;  // cooldown for CloseAllOnExpansion
 
 // === Counter-Trend Hedging State ===
-#define MAX_HEDGE_SETS 10  // v6.24: expanded from 4 to support InpHedge_MaxSets up to 10
+#define MAX_HEDGE_SETS 50  // v6.36: expanded from 10 to support up to 50 sets
 #define MAX_BOUND_TICKETS 50
 struct HedgeSet
 {
@@ -820,7 +820,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-   Print("Gold Miner EA v6.35 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+   Print("Gold Miner EA v6.36 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
          " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
          " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2));
 
@@ -3088,7 +3088,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.35 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.35 [ZZ]" : "Gold Miner EA v6.35 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.36 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.36 [ZZ]" : "Gold Miner EA v6.36 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
