@@ -337,7 +337,7 @@ input double   InpHedge_MatchMinProfit      = 5.0;     // Min Profit for Hedge M
 input int      InpHedge_MatchMinProfitOrders = 2;      // Min Profit Orders for Hedge Grid Matching
 input double   InpHedge_PartialMinProfit    = 5.0;     // Min Profit for Partial Close ($)
 input int      InpHedge_PartialMinProfitOrders = 3;    // Min Profit Orders for Partial Close (0=Always)
-input int      InpHedge_MaxSets              = 10;    // Max Active Hedge Sets (1-10)
+input int      InpHedge_MaxSets              = 10;    // Max Active Hedge Sets (1-50)
 input int      InpHedge_BoundAvgTPPoints     = 0;     // Bound Avg TP Points (0=Disabled)
 input int      InpHedge_MinTFConfirm         = 1;     // Min TF Expansion to Confirm Hedge (1-3)
 input int      InpHedge_CloseMinPoints       = 300;   // v6.15: Min points from zone edge before matching close
