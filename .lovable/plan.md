@@ -1,16 +1,19 @@
-## Implemented: v6.34 — แก้ Max DD ให้แสดงเป็น % เสมอทุกโหมด
+## Implemented: v6.35 — เพิ่ม Profit for Balance Guard
 
-### ปัญหา
-โหมด Dollar แปลง `g_maxDD` (%) กลับเป็น $ ด้วย `g_maxDD / 100.0 * balance` → ค่าผิดเพราะ balance เปลี่ยนตลอด
+### หลักการ
+เพิ่ม `InpBalanceGuard_Profit` เพื่อกำหนดกำไรขั้นต่ำ ($) ที่ต้องบวกเข้ากับ target ของ Balance Guard
+เช่น Balance ตอน flat = $102,000, Profit = $2,000 → ระบบปิดเมื่อ Equity >= $104,000
 
-### แก้ไข (v6.34)
-1. **Version bump**: v6.33 → v6.34
-2. **Dashboard line 3151-3152**: เปลี่ยนจากแสดง `$` เป็นแสดง `%` เหมือนโหมด Percent — ทุกโหมดแสดง Max DD% เป็น % เหมือนกัน
+### แก้ไข (v6.35)
+1. **Version bump**: v6.34 → v6.35
+2. **Input parameter ใหม่**: `InpBalanceGuard_Profit` (default 0.0) — อยู่หลัง `InpBalanceGuard_Target`
+3. **CheckBalanceGuard()**: `effectiveTarget += InpBalanceGuard_Profit`
+4. **Dashboard**: `bgTarget` รวม profit แล้วแสดงยอดรวม
 
 ### สิ่งที่ไม่เปลี่ยนแปลง
-- `g_maxDD` tracking logic — ยังคำนวณ % เหมือนเดิม
 - Order Execution Logic, Trading Strategy Logic, Core Module Logic
 - DD trigger / Triple-gate / Matching close
 - OpenDDHedge / binding / generation logic
-- Balance Guard (v6.33)
+- Balance Guard dynamic update logic (v6.33)
 - Daily Target Profit (v6.32)
+- Max DD% display fix (v6.34)
