@@ -3508,7 +3508,7 @@ void DisplayDashboard()
           if(InpBalanceGuard_Enable)
           {
              double curEquity = AccountInfoDouble(ACCOUNT_EQUITY);
-             double bgTarget = (InpBalanceGuard_Mode == BALGUARD_DYNAMIC) ? g_balanceGuardDynamicTarget : InpBalanceGuard_Target;
+             double bgTarget = ((InpBalanceGuard_Mode == BALGUARD_DYNAMIC) ? g_balanceGuardDynamicTarget : InpBalanceGuard_Target) + InpBalanceGuard_Profit;  // v6.35: include min profit
              string modeStr = (InpBalanceGuard_Mode == BALGUARD_DYNAMIC) ? "Dyn" : "Fix";
              string bgStatus;
              color bgClr;
