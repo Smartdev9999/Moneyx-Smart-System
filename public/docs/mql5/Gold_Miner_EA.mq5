@@ -6706,7 +6706,7 @@ int CountUnboundOrders(ENUM_POSITION_TYPE side, double &totalLots, double &total
       if(genFilter >= 0)
       {
          int orderGen = ExtractGeneration(comment);
-         if(orderGen != genFilter) continue;
+         if(orderGen > genFilter) continue;  // v6.38: include all gens <= genFilter (orphan fix)
       }
       count++;
       totalLots += PositionGetDouble(POSITION_VOLUME);
