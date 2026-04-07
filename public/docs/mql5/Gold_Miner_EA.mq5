@@ -6930,7 +6930,7 @@ void CheckAndOpenHedgeByDD()
    bool isDollarMode = (InpHedge_TriggerMode == HEDGE_TRIGGER_DD_DOLLAR);
    
    // v6.18: Calculate floating loss per side — ONLY from current generation orders
-   int curGen = g_cycleGeneration;
+    int curGen = g_cycleGeneration;  // v6.37: snapshot generation before any hedge opens (race condition fix)
    double buyLoss = 0, sellLoss = 0;
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
