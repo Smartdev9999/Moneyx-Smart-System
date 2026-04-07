@@ -7090,7 +7090,7 @@ bool OpenDDHedge(ENUM_POSITION_TYPE counterSide, ENUM_POSITION_TYPE hedgeSide, i
       // v6.18: Generation filter — only bind current generation orders
       int orderGen = ExtractGeneration(cmt);
       if(orderGen < 0) continue;
-      if(orderGen != bindGen) continue;
+      if(orderGen > bindGen) continue;  // v6.38: bind unbound orders from all gens <= bindGen
       
       int bc = g_hedgeSets[slot].boundTicketCount;
       ArrayResize(g_hedgeSets[slot].boundTickets, bc + 1);
