@@ -7013,12 +7013,13 @@ void CheckAndOpenHedgeByDD()
 
 //+------------------------------------------------------------------+
 //| v6.16: Open a DD%-triggered hedge order for a losing side          |
+//| v6.37: Added bindGen parameter to fix generation race condition    |
 //+------------------------------------------------------------------+
-bool OpenDDHedge(ENUM_POSITION_TYPE counterSide, ENUM_POSITION_TYPE hedgeSide)
+bool OpenDDHedge(ENUM_POSITION_TYPE counterSide, ENUM_POSITION_TYPE hedgeSide, int bindGen)
 {
-   // v6.18: Count unbound stuck orders on the losing counter side — CURRENT GENERATION ONLY
+   // v6.37: Use bindGen (snapshot) instead of g_cycleGeneration to prevent race condition
    double counterLots = 0, counterPL = 0;
-   int counterCount = CountUnboundOrders(counterSide, counterLots, counterPL, g_cycleGeneration);
+   int counterCount = CountUnboundOrders(counterSide, counterLots, counterPL, bindGen);
    if(counterCount == 0 || counterLots <= 0) return false;
    
    // Check max active sets
