@@ -6945,7 +6945,7 @@ void CheckAndOpenHedgeByDD()
       
       int orderGen = ExtractGeneration(cmt);
       if(orderGen < 0) continue;
-      if(orderGen != curGen) continue;
+      if(orderGen > curGen) continue;  // v6.38: include orphaned orders from all gens <= curGen
       
       double pnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP) + PositionGetDouble(POSITION_COMMISSION);
       if(pnl >= 0) continue;
