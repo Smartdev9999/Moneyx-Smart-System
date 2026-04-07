@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                //|                Gold Miner EA v6.36 - MTF ZigZag+CDC+Grid+License  |
+//|                //|                Gold Miner EA v6.37 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.36"
-#property description "Gold Miner EA v6.36 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + License"
+#property version   "6.37"
+#property description "Gold Miner EA v6.37 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + GenRaceFix + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -820,7 +820,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-   Print("Gold Miner EA v6.36 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+   Print("Gold Miner EA v6.37 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
          " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
          " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2));
 
@@ -3088,7 +3088,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.36 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.36 [ZZ]" : "Gold Miner EA v6.36 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.37 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.37 [ZZ]" : "Gold Miner EA v6.37 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -6930,7 +6930,7 @@ void CheckAndOpenHedgeByDD()
    bool isDollarMode = (InpHedge_TriggerMode == HEDGE_TRIGGER_DD_DOLLAR);
    
    // v6.18: Calculate floating loss per side — ONLY from current generation orders
-   int curGen = g_cycleGeneration;
+    int curGen = g_cycleGeneration;  // v6.37: snapshot generation before any hedge opens (race condition fix)
    double buyLoss = 0, sellLoss = 0;
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
@@ -6965,7 +6965,7 @@ void CheckAndOpenHedgeByDD()
       
       if(buyLossAbs >= InpHedge_DDTriggerDollar)
       {
-         if(OpenDDHedge(POSITION_TYPE_BUY, POSITION_TYPE_SELL))
+         if(OpenDDHedge(POSITION_TYPE_BUY, POSITION_TYPE_SELL, curGen))  // v6.37: pass snapshot gen
          {
             g_lastDDHedgeTime = now;
             Print("DD$ HEDGE [Gen", curGen, "]: BUY side DD=$", DoubleToString(buyLossAbs, 2), 
@@ -6975,7 +6975,7 @@ void CheckAndOpenHedgeByDD()
       
       if(sellLossAbs >= InpHedge_DDTriggerDollar)
       {
-         if(OpenDDHedge(POSITION_TYPE_SELL, POSITION_TYPE_BUY))
+         if(OpenDDHedge(POSITION_TYPE_SELL, POSITION_TYPE_BUY, curGen))  // v6.37: pass snapshot gen
          {
             g_lastDDHedgeTime = now;
             Print("DD$ HEDGE [Gen", curGen, "]: SELL side DD=$", DoubleToString(sellLossAbs, 2),
@@ -6991,7 +6991,7 @@ void CheckAndOpenHedgeByDD()
       
       if(buyDDPct >= InpHedge_DDTriggerPct)
       {
-         if(OpenDDHedge(POSITION_TYPE_BUY, POSITION_TYPE_SELL))
+         if(OpenDDHedge(POSITION_TYPE_BUY, POSITION_TYPE_SELL, curGen))  // v6.37: pass snapshot gen
          {
             g_lastDDHedgeTime = now;
             Print("DD HEDGE [Gen", curGen, "]: BUY side DD=", DoubleToString(buyDDPct, 1), 
@@ -7001,7 +7001,7 @@ void CheckAndOpenHedgeByDD()
       
       if(sellDDPct >= InpHedge_DDTriggerPct)
       {
-         if(OpenDDHedge(POSITION_TYPE_SELL, POSITION_TYPE_BUY))
+         if(OpenDDHedge(POSITION_TYPE_SELL, POSITION_TYPE_BUY, curGen))  // v6.37: pass snapshot gen
          {
             g_lastDDHedgeTime = now;
             Print("DD HEDGE [Gen", curGen, "]: SELL side DD=", DoubleToString(sellDDPct, 1),
@@ -7013,12 +7013,13 @@ void CheckAndOpenHedgeByDD()
 
 //+------------------------------------------------------------------+
 //| v6.16: Open a DD%-triggered hedge order for a losing side          |
+//| v6.37: Added bindGen parameter to fix generation race condition    |
 //+------------------------------------------------------------------+
-bool OpenDDHedge(ENUM_POSITION_TYPE counterSide, ENUM_POSITION_TYPE hedgeSide)
+bool OpenDDHedge(ENUM_POSITION_TYPE counterSide, ENUM_POSITION_TYPE hedgeSide, int bindGen)
 {
-   // v6.18: Count unbound stuck orders on the losing counter side — CURRENT GENERATION ONLY
+   // v6.37: Use bindGen (snapshot) instead of g_cycleGeneration to prevent race condition
    double counterLots = 0, counterPL = 0;
-   int counterCount = CountUnboundOrders(counterSide, counterLots, counterPL, g_cycleGeneration);
+   int counterCount = CountUnboundOrders(counterSide, counterLots, counterPL, bindGen);
    if(counterCount == 0 || counterLots <= 0) return false;
    
    // Check max active sets
@@ -7075,8 +7076,7 @@ bool OpenDDHedge(ENUM_POSITION_TYPE counterSide, ENUM_POSITION_TYPE hedgeSide)
    // Bind unbound counter-side tickets
    g_hedgeSets[slot].boundTicketCount = 0;
    ArrayResize(g_hedgeSets[slot].boundTickets, 0);
-   // v6.18: Only bind orders from current generation — prevents cross-generation contamination
-   int bindGen = g_cycleGeneration;
+    // v6.37: Use bindGen parameter — prevents cross-generation contamination & race condition
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       ulong ticket = PositionGetTicket(i);
@@ -7098,7 +7098,7 @@ bool OpenDDHedge(ENUM_POSITION_TYPE counterSide, ENUM_POSITION_TYPE hedgeSide)
       g_hedgeSets[slot].boundTicketCount = bc + 1;
    }
    
-   g_hedgeSets[slot].boundGeneration = g_cycleGeneration;
+    g_hedgeSets[slot].boundGeneration = bindGen;  // v6.37: use snapshot gen, not current
    g_cycleGeneration++;
    Print("CYCLE GENERATION incremented to ", g_cycleGeneration, " — new orders use prefix: ", GetCommentPrefix());
    g_hedgeSetCount++;
