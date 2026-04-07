@@ -6965,7 +6965,7 @@ void CheckAndOpenHedgeByDD()
       
       if(buyLossAbs >= InpHedge_DDTriggerDollar)
       {
-         if(OpenDDHedge(POSITION_TYPE_BUY, POSITION_TYPE_SELL))
+         if(OpenDDHedge(POSITION_TYPE_BUY, POSITION_TYPE_SELL, curGen))  // v6.37: pass snapshot gen
          {
             g_lastDDHedgeTime = now;
             Print("DD$ HEDGE [Gen", curGen, "]: BUY side DD=$", DoubleToString(buyLossAbs, 2), 
