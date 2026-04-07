@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                //|                Gold Miner EA v6.37 - MTF ZigZag+CDC+Grid+License  |
+//|                //|                Gold Miner EA v6.38 - MTF ZigZag+CDC+Grid+License  |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.37"
-#property description "Gold Miner EA v6.37 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + GenRaceFix + License"
+#property version   "6.38"
+#property description "Gold Miner EA v6.38 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + GenRaceFix + OrphanGenFix + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -820,7 +820,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-   Print("Gold Miner EA v6.37 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+   Print("Gold Miner EA v6.38 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
          " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
          " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2));
 
@@ -3088,7 +3088,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.37 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.37 [ZZ]" : "Gold Miner EA v6.37 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.38 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.38 [ZZ]" : "Gold Miner EA v6.38 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -6706,7 +6706,7 @@ int CountUnboundOrders(ENUM_POSITION_TYPE side, double &totalLots, double &total
       if(genFilter >= 0)
       {
          int orderGen = ExtractGeneration(comment);
-         if(orderGen != genFilter) continue;
+         if(orderGen > genFilter) continue;  // v6.38: include all gens <= genFilter (orphan fix)
       }
       count++;
       totalLots += PositionGetDouble(POSITION_VOLUME);
@@ -6945,7 +6945,7 @@ void CheckAndOpenHedgeByDD()
       
       int orderGen = ExtractGeneration(cmt);
       if(orderGen < 0) continue;
-      if(orderGen != curGen) continue;
+      if(orderGen > curGen) continue;  // v6.38: include orphaned orders from all gens <= curGen
       
       double pnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP) + PositionGetDouble(POSITION_COMMISSION);
       if(pnl >= 0) continue;
@@ -7090,7 +7090,7 @@ bool OpenDDHedge(ENUM_POSITION_TYPE counterSide, ENUM_POSITION_TYPE hedgeSide, i
       // v6.18: Generation filter — only bind current generation orders
       int orderGen = ExtractGeneration(cmt);
       if(orderGen < 0) continue;
-      if(orderGen != bindGen) continue;
+      if(orderGen > bindGen) continue;  // v6.38: bind unbound orders from all gens <= bindGen
       
       int bc = g_hedgeSets[slot].boundTicketCount;
       ArrayResize(g_hedgeSets[slot].boundTickets, bc + 1);
