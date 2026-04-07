@@ -7098,7 +7098,7 @@ bool OpenDDHedge(ENUM_POSITION_TYPE counterSide, ENUM_POSITION_TYPE hedgeSide, i
       g_hedgeSets[slot].boundTicketCount = bc + 1;
    }
    
-   g_hedgeSets[slot].boundGeneration = g_cycleGeneration;
+    g_hedgeSets[slot].boundGeneration = bindGen;  // v6.37: use snapshot gen, not current
    g_cycleGeneration++;
    Print("CYCLE GENERATION incremented to ", g_cycleGeneration, " — new orders use prefix: ", GetCommentPrefix());
    g_hedgeSetCount++;
