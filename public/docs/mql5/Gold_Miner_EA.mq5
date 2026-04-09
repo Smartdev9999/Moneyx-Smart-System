@@ -1535,58 +1535,64 @@ void OnTick()
       if(buyCount == 0 && g_initialBuyPrice != 0) { g_initialBuyPrice = 0; }
       if(sellCount == 0 && g_initialSellPrice != 0) { g_initialSellPrice = 0; }
 
-      // Grid Loss management
-      if(!g_newOrderBlocked)
-      {
-         if(!g_squeezeBuyBlocked && (hasInitialBuy || g_initialBuyPrice > 0 || gridLossBuy > 0) && gridLossBuy < GridLoss_MaxTrades && buyCount > 0)
-            CheckGridLoss(POSITION_TYPE_BUY, gridLossBuy);
-         if(!g_squeezeSellBlocked && (hasInitialSell || g_initialSellPrice > 0 || gridLossSell > 0) && gridLossSell < GridLoss_MaxTrades && sellCount > 0)
-            CheckGridLoss(POSITION_TYPE_SELL, gridLossSell);
-      }
+       // v6.39: Hedge Side Pause for Instant mode
+       bool buyHedgePaused = (InpHedge_SidePauseMin > 0 && g_lastHedgeBuyTime > 0 
+                              && (TimeCurrent() - g_lastHedgeBuyTime) < InpHedge_SidePauseMin * 60);
+       bool sellHedgePaused = (InpHedge_SidePauseMin > 0 && g_lastHedgeSellTime > 0 
+                               && (TimeCurrent() - g_lastHedgeSellTime) < InpHedge_SidePauseMin * 60);
 
-      // Grid Profit management
-      if(!g_newOrderBlocked && GridProfit_Enable)
-      {
-         if(!g_squeezeBuyBlocked && (hasInitialBuy || g_initialBuyPrice > 0) && gridProfitBuy < GridProfit_MaxTrades && buyCount > 0)
-            CheckGridProfit(POSITION_TYPE_BUY, gridProfitBuy);
-         if(!g_squeezeSellBlocked && (hasInitialSell || g_initialSellPrice > 0) && gridProfitSell < GridProfit_MaxTrades && sellCount > 0)
-            CheckGridProfit(POSITION_TYPE_SELL, gridProfitSell);
-      }
+       // Grid Loss management
+       if(!g_newOrderBlocked)
+       {
+          if(!buyHedgePaused && !g_squeezeBuyBlocked && (hasInitialBuy || g_initialBuyPrice > 0 || gridLossBuy > 0) && gridLossBuy < GridLoss_MaxTrades && buyCount > 0)
+             CheckGridLoss(POSITION_TYPE_BUY, gridLossBuy);
+          if(!sellHedgePaused && !g_squeezeSellBlocked && (hasInitialSell || g_initialSellPrice > 0 || gridLossSell > 0) && gridLossSell < GridLoss_MaxTrades && sellCount > 0)
+             CheckGridLoss(POSITION_TYPE_SELL, gridLossSell);
+       }
 
-      // Entry logic
-      if(!g_eaStopped && !g_newOrderBlocked)
-      {
-         bool canOpenOnThisCandle = !(DontOpenSameCandle && currentBarTime == lastInitialCandleTime);
-         bool canOpenMore = NormalOrderCount() < MaxOpenOrders;
+       // Grid Profit management
+       if(!g_newOrderBlocked && GridProfit_Enable)
+       {
+          if(!g_squeezeBuyBlocked && (hasInitialBuy || g_initialBuyPrice > 0) && gridProfitBuy < GridProfit_MaxTrades && buyCount > 0)
+             CheckGridProfit(POSITION_TYPE_BUY, gridProfitBuy);
+          if(!g_squeezeSellBlocked && (hasInitialSell || g_initialSellPrice > 0) && gridProfitSell < GridProfit_MaxTrades && sellCount > 0)
+             CheckGridProfit(POSITION_TYPE_SELL, gridProfitSell);
+       }
 
-         // ===== BUY Entry (instant) =====
-         if(!g_squeezeBuyBlocked && buyCount == 0 && g_initialBuyPrice == 0 && canOpenMore && canOpenOnThisCandle)
-         {
-            if(TradingMode == TRADE_BUY_ONLY || TradingMode == TRADE_BOTH)
-            {
-               if(OpenOrder(ORDER_TYPE_BUY, InitialLotSize, GetCommentPrefix() + "_INIT"))
-               {
-                  g_initialBuyPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-                  lastInitialCandleTime = currentBarTime;
-                  ResetTrailingState();
-               }
-            }
-         }
+       // Entry logic
+       if(!g_eaStopped && !g_newOrderBlocked)
+       {
+          bool canOpenOnThisCandle = !(DontOpenSameCandle && currentBarTime == lastInitialCandleTime);
+          bool canOpenMore = NormalOrderCount() < MaxOpenOrders;
 
-         // ===== SELL Entry (instant) =====
-         if(!g_squeezeSellBlocked && sellCount == 0 && g_initialSellPrice == 0 && canOpenMore && canOpenOnThisCandle)
-         {
-            if(TradingMode == TRADE_SELL_ONLY || TradingMode == TRADE_BOTH)
-            {
-               if(OpenOrder(ORDER_TYPE_SELL, InitialLotSize, GetCommentPrefix() + "_INIT"))
-               {
-                  g_initialSellPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-                  lastInitialCandleTime = currentBarTime;
-                  ResetTrailingState();
-               }
-            }
-         }
-      }
+          // ===== BUY Entry (instant) ===== v6.39: add hedge pause guard
+          if(!buyHedgePaused && !g_squeezeBuyBlocked && buyCount == 0 && g_initialBuyPrice == 0 && canOpenMore && canOpenOnThisCandle)
+          {
+             if(TradingMode == TRADE_BUY_ONLY || TradingMode == TRADE_BOTH)
+             {
+                if(OpenOrder(ORDER_TYPE_BUY, InitialLotSize, GetCommentPrefix() + "_INIT"))
+                {
+                   g_initialBuyPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+                   lastInitialCandleTime = currentBarTime;
+                   ResetTrailingState();
+                }
+             }
+          }
+
+          // ===== SELL Entry (instant) ===== v6.39: add hedge pause guard
+          if(!sellHedgePaused && !g_squeezeSellBlocked && sellCount == 0 && g_initialSellPrice == 0 && canOpenMore && canOpenOnThisCandle)
+          {
+             if(TradingMode == TRADE_SELL_ONLY || TradingMode == TRADE_BOTH)
+             {
+                if(OpenOrder(ORDER_TYPE_SELL, InitialLotSize, GetCommentPrefix() + "_INIT"))
+                {
+                   g_initialSellPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+                   lastInitialCandleTime = currentBarTime;
+                   ResetTrailingState();
+                }
+             }
+          }
+       }
 
       // Reset justClosed flags
       if(!g_newOrderBlocked)
