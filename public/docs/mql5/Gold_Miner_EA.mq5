@@ -4643,54 +4643,60 @@ void OnTickZigZagMTF()
          g_tfStates[t].initialSellPrice = 0;
       }
 
-      // Grid management
-      if(!g_newOrderBlocked)
-      {
-         // Grid Loss
-         if(!g_squeezeBuyBlocked && (tfHasInitBuy || g_tfStates[t].initialBuyPrice > 0) && tfGLBuy < GridLoss_MaxTrades && tfBuyCount > 0)
-            CheckGridLossTF(t, POSITION_TYPE_BUY, tfGLBuy);
-         if(!g_squeezeSellBlocked && (tfHasInitSell || g_tfStates[t].initialSellPrice > 0) && tfGLSell < GridLoss_MaxTrades && tfSellCount > 0)
-            CheckGridLossTF(t, POSITION_TYPE_SELL, tfGLSell);
+       // v6.39: Hedge Side Pause for ZigZag mode
+       bool buyHedgePaused = (InpHedge_SidePauseMin > 0 && g_lastHedgeBuyTime > 0 
+                              && (TimeCurrent() - g_lastHedgeBuyTime) < InpHedge_SidePauseMin * 60);
+       bool sellHedgePaused = (InpHedge_SidePauseMin > 0 && g_lastHedgeSellTime > 0 
+                               && (TimeCurrent() - g_lastHedgeSellTime) < InpHedge_SidePauseMin * 60);
 
-         // Grid Profit
-         if(GridProfit_Enable)
-         {
-            if(!g_squeezeBuyBlocked && (tfHasInitBuy || g_tfStates[t].initialBuyPrice > 0) && tfGPBuy < GridProfit_MaxTrades && tfBuyCount > 0)
-               CheckGridProfitTF(t, POSITION_TYPE_BUY, tfGPBuy);
-            if(!g_squeezeSellBlocked && (tfHasInitSell || g_tfStates[t].initialSellPrice > 0) && tfGPSell < GridProfit_MaxTrades && tfSellCount > 0)
-               CheckGridProfitTF(t, POSITION_TYPE_SELL, tfGPSell);
-         }
-      }
+       // Grid management
+       if(!g_newOrderBlocked)
+       {
+          // Grid Loss
+          if(!buyHedgePaused && !g_squeezeBuyBlocked && (tfHasInitBuy || g_tfStates[t].initialBuyPrice > 0) && tfGLBuy < GridLoss_MaxTrades && tfBuyCount > 0)
+             CheckGridLossTF(t, POSITION_TYPE_BUY, tfGLBuy);
+          if(!sellHedgePaused && !g_squeezeSellBlocked && (tfHasInitSell || g_tfStates[t].initialSellPrice > 0) && tfGLSell < GridLoss_MaxTrades && tfSellCount > 0)
+             CheckGridLossTF(t, POSITION_TYPE_SELL, tfGLSell);
 
-      // Entry check: sub-TF ZigZag must agree with H4 direction
-      if(!g_newOrderBlocked && effectiveDirection != "NONE")
-      {
-         bool canOpenMore = NormalOrderCount() < MaxOpenOrders;
-         bool canOpenThisCandle = !(DontOpenSameCandle && tfBar == g_tfStates[t].lastInitialCandle);
+          // Grid Profit
+          if(GridProfit_Enable)
+          {
+             if(!g_squeezeBuyBlocked && (tfHasInitBuy || g_tfStates[t].initialBuyPrice > 0) && tfGPBuy < GridProfit_MaxTrades && tfBuyCount > 0)
+                CheckGridProfitTF(t, POSITION_TYPE_BUY, tfGPBuy);
+             if(!g_squeezeSellBlocked && (tfHasInitSell || g_tfStates[t].initialSellPrice > 0) && tfGPSell < GridProfit_MaxTrades && tfSellCount > 0)
+                CheckGridProfitTF(t, POSITION_TYPE_SELL, tfGPSell);
+          }
+       }
 
-         // Detect sub-TF swing
-         string subSwing = DetectZigZagSwing(t);
+       // Entry check: sub-TF ZigZag must agree with H4 direction
+       if(!g_newOrderBlocked && effectiveDirection != "NONE")
+       {
+          bool canOpenMore = NormalOrderCount() < MaxOpenOrders;
+          bool canOpenThisCandle = !(DontOpenSameCandle && tfBar == g_tfStates[t].lastInitialCandle);
 
-         // BUY entry
-         if(!g_squeezeBuyBlocked && effectiveDirection == "BUY" && subSwing == "LOW" && tfBuyCount == 0
-            && g_tfStates[t].initialBuyPrice == 0 && canOpenMore && canOpenThisCandle
-            && (TradingMode == TRADE_BUY_ONLY || TradingMode == TRADE_BOTH))
-         {
-            bool shouldEnter = true;
-            if(g_tfStates[t].justClosedBuy && !EnableAutoReEntry)
-               shouldEnter = false;
+          // Detect sub-TF swing
+          string subSwing = DetectZigZagSwing(t);
 
-            if(shouldEnter)
-            {
-               if(OpenOrderTF(t, ORDER_TYPE_BUY, InitialLotSize, "INIT"))
-               {
-                  g_tfStates[t].initialBuyPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-                  g_tfStates[t].lastInitialCandle = tfBar;
-                  ResetTrailingStateTF(t);
-                  Print(g_tfStates[t].tfLabel, " ZigZag BUY INIT at ", g_tfStates[t].initialBuyPrice);
-               }
-            }
-         }
+          // BUY entry — v6.39: add hedge pause guard
+          if(!buyHedgePaused && !g_squeezeBuyBlocked && effectiveDirection == "BUY" && subSwing == "LOW" && tfBuyCount == 0
+             && g_tfStates[t].initialBuyPrice == 0 && canOpenMore && canOpenThisCandle
+             && (TradingMode == TRADE_BUY_ONLY || TradingMode == TRADE_BOTH))
+          {
+             bool shouldEnter = true;
+             if(g_tfStates[t].justClosedBuy && !EnableAutoReEntry)
+                shouldEnter = false;
+
+             if(shouldEnter)
+             {
+                if(OpenOrderTF(t, ORDER_TYPE_BUY, InitialLotSize, "INIT"))
+                {
+                   g_tfStates[t].initialBuyPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+                   g_tfStates[t].lastInitialCandle = tfBar;
+                   ResetTrailingStateTF(t);
+                   Print(g_tfStates[t].tfLabel, " ZigZag BUY INIT at ", g_tfStates[t].initialBuyPrice);
+                }
+             }
+          }
 
          // SELL entry
          if(!g_squeezeSellBlocked && effectiveDirection == "SELL" && subSwing == "HIGH" && tfSellCount == 0
