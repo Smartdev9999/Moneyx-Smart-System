@@ -6575,11 +6575,13 @@ void TryResetCycleStateIfFlat(string reason)
    }
    
    // Truly flat — safe to reset everything
-   g_cycleGeneration = 0;
-   g_hedgeSetCount = 0;
-   ClearPrevHedgedTickets();
-   UpdateDynamicBalanceGuardTarget();  // v6.31: update target immediately when flat
-   Print("CYCLE GENERATION reset to 0 — ", reason, " (v6.27 safe reset, account flat)");
+    g_cycleGeneration = 0;
+    g_hedgeSetCount = 0;
+    ClearPrevHedgedTickets();
+    g_lastHedgeBuyTime = 0;   // v6.39: reset side pause
+    g_lastHedgeSellTime = 0;  // v6.39: reset side pause
+    UpdateDynamicBalanceGuardTarget();  // v6.31: update target immediately when flat
+    Print("CYCLE GENERATION reset to 0 — ", reason, " (v6.27 safe reset, account flat)");
 }
 
 //+------------------------------------------------------------------+
