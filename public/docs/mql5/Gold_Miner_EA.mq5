@@ -3541,8 +3541,32 @@ void DisplayDashboard()
                 bgClr = clrGray;
              }
              DrawTableRow(row, "Bal Guard", bgStatus, bgClr, COLOR_SECTION_HEDGE); row++;
-          }
-      }
+           }
+           
+           // v6.39: Hedge Side Pause status
+           if(InpHedge_SidePauseMin > 0)
+           {
+              datetime nowDash = TimeCurrent();
+              bool bPaused = (g_lastHedgeBuyTime > 0 && (nowDash - g_lastHedgeBuyTime) < InpHedge_SidePauseMin * 60);
+              bool sPaused = (g_lastHedgeSellTime > 0 && (nowDash - g_lastHedgeSellTime) < InpHedge_SidePauseMin * 60);
+              if(bPaused || sPaused)
+              {
+                 string pauseStr = "";
+                 if(bPaused)
+                 {
+                    int remB = InpHedge_SidePauseMin * 60 - (int)(nowDash - g_lastHedgeBuyTime);
+                    pauseStr += "BUY PAUSED " + IntegerToString(remB/60) + "m" + IntegerToString(remB%60) + "s";
+                 }
+                 if(sPaused)
+                 {
+                    if(pauseStr != "") pauseStr += " | ";
+                    int remS = InpHedge_SidePauseMin * 60 - (int)(nowDash - g_lastHedgeSellTime);
+                    pauseStr += "SELL PAUSED " + IntegerToString(remS/60) + "m" + IntegerToString(remS%60) + "s";
+                 }
+                 DrawTableRow(row, "Side Pause", pauseStr, clrOrange, COLOR_SECTION_HEDGE); row++;
+              }
+           }
+       }
 
      // === Orphan Recovery Status ===
      color COLOR_SECTION_ORPHAN = C'130,50,180';  // purple for orphan section
