@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                //|                Gold Miner EA v6.38 - MTF ZigZag+CDC+Grid+License  |
+//|                Gold Miner EA v6.39 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.38"
-#property description "Gold Miner EA v6.38 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + GenRaceFix + OrphanGenFix + License"
+#property version   "6.39"
+#property description "Gold Miner EA v6.39 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + GenRaceFix + OrphanGenFix + HedgeSidePause + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -345,6 +345,7 @@ input int      InpHedge_CloseMinPoints       = 300;   // v6.15: Min points from 
 input double   InpHedge_DDTriggerPct         = 5.0;   // DD% to trigger first hedge (per side)
 input double   InpHedge_DDStepPct            = 5.0;   // [LEGACY] DD% step — not used since v6.21 (constant threshold per gen)
 input int      InpHedge_DDCooldownSec        = 60;    // Min seconds between DD hedges
+input int      InpHedge_SidePauseMin         = 0;     // v6.39: Pause hedged side entries (minutes, 0=Off)
 input double   InpHedge_DDTriggerDollar      = 500.0; // v6.25: DD$ to trigger hedge (per side)
 // v6.28: Balance Guard — close all when equity recovers to target
 input bool     InpBalanceGuard_Enable        = false;  // Balance Guard: Enable
@@ -546,6 +547,10 @@ double   g_nextBuyDDTrigger  = 5.0;    // DD% threshold for next BUY-side hedge
 double   g_nextSellDDTrigger = 5.0;    // DD% threshold for next SELL-side hedge
 datetime g_lastDDHedgeTime   = 0;      // cooldown tracker
 datetime g_lastHedgeCloseTime = 0;     // v6.25: cooldown after hedge set close
+
+// === v6.39: Hedge Side Pause State ===
+datetime g_lastHedgeBuyTime  = 0;   // last time BUY orders got hedged → pause BUY entries
+datetime g_lastHedgeSellTime = 0;   // last time SELL orders got hedged → pause SELL entries
 
 // === v6.26: Previously-Hedged Tickets — prevent DD re-trigger on released orders ===
 #define MAX_PREV_HEDGED 200
@@ -820,9 +825,10 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-   Print("Gold Miner EA v6.38 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
-         " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
-         " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2));
+    Print("Gold Miner EA v6.39 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+          " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
+          " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
+          " | SidePause=", InpHedge_SidePauseMin, "min");
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -1388,17 +1394,23 @@ void OnTick()
          }
 
          //--- Grid Loss management (check both sides independently) - blocked by News/Time/Squeeze filter
-         if(!g_newOrderBlocked)
-         {
-            if(!g_squeezeBuyBlocked && (hasInitialBuy || g_initialBuyPrice > 0 || gridLossBuy > 0) && gridLossBuy < GridLoss_MaxTrades && buyCount > 0)
-            {
-               CheckGridLoss(POSITION_TYPE_BUY, gridLossBuy);
-            }
-            if(!g_squeezeSellBlocked && (hasInitialSell || g_initialSellPrice > 0 || gridLossSell > 0) && gridLossSell < GridLoss_MaxTrades && sellCount > 0)
-            {
-               CheckGridLoss(POSITION_TYPE_SELL, gridLossSell);
-            }
-         }
+          // v6.39: Hedge Side Pause — check if each side is paused
+          bool buyHedgePaused = (InpHedge_SidePauseMin > 0 && g_lastHedgeBuyTime > 0 
+                                 && (TimeCurrent() - g_lastHedgeBuyTime) < InpHedge_SidePauseMin * 60);
+          bool sellHedgePaused = (InpHedge_SidePauseMin > 0 && g_lastHedgeSellTime > 0 
+                                  && (TimeCurrent() - g_lastHedgeSellTime) < InpHedge_SidePauseMin * 60);
+
+          if(!g_newOrderBlocked)
+          {
+             if(!buyHedgePaused && !g_squeezeBuyBlocked && (hasInitialBuy || g_initialBuyPrice > 0 || gridLossBuy > 0) && gridLossBuy < GridLoss_MaxTrades && buyCount > 0)
+             {
+                CheckGridLoss(POSITION_TYPE_BUY, gridLossBuy);
+             }
+             if(!sellHedgePaused && !g_squeezeSellBlocked && (hasInitialSell || g_initialSellPrice > 0 || gridLossSell > 0) && gridLossSell < GridLoss_MaxTrades && sellCount > 0)
+             {
+                CheckGridLoss(POSITION_TYPE_SELL, gridLossSell);
+             }
+          }
 
          //--- Grid Profit management - blocked by News/Time/Squeeze filter
          if(!g_newOrderBlocked && GridProfit_Enable)
@@ -1439,47 +1451,47 @@ void OnTick()
                   shouldEnterSell = true;   // Ready to enter (auto re-entry or normal)
             }
 
-             // ===== BUY Entry (independent) =====
-             if(!g_squeezeBuyBlocked && buyCount == 0 && g_initialBuyPrice == 0 && canOpenMore && canOpenOnThisCandle)
-             {
-                if(currentPrice > smaValue && (TradingMode == TRADE_BUY_ONLY || TradingMode == TRADE_BOTH))
-                {
-                   if(shouldEnterBuy)
-                   {
-                       if(OpenOrder(ORDER_TYPE_BUY, InitialLotSize, GetCommentPrefix() + "_INIT"))
-                      {
-                         g_initialBuyPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-                         lastInitialCandleTime = currentBarTime;
-                         ResetTrailingState();
-                      }
-                   }
-                }
-                else if(shouldEnterBuy)
-                {
-                   Print("BUY ENTRY SKIP: SMA signal not match (Price=", currentPrice, " SMA=", smaValue, ")");
-                }
-             }
+              // ===== BUY Entry (independent) ===== v6.39: add hedge pause guard
+              if(!buyHedgePaused && !g_squeezeBuyBlocked && buyCount == 0 && g_initialBuyPrice == 0 && canOpenMore && canOpenOnThisCandle)
+              {
+                 if(currentPrice > smaValue && (TradingMode == TRADE_BUY_ONLY || TradingMode == TRADE_BOTH))
+                 {
+                    if(shouldEnterBuy)
+                    {
+                        if(OpenOrder(ORDER_TYPE_BUY, InitialLotSize, GetCommentPrefix() + "_INIT"))
+                       {
+                          g_initialBuyPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+                          lastInitialCandleTime = currentBarTime;
+                          ResetTrailingState();
+                       }
+                    }
+                 }
+                 else if(shouldEnterBuy)
+                 {
+                    Print("BUY ENTRY SKIP: SMA signal not match (Price=", currentPrice, " SMA=", smaValue, ")");
+                 }
+              }
 
-             // ===== SELL Entry (independent) =====
-             if(!g_squeezeSellBlocked && sellCount == 0 && g_initialSellPrice == 0 && canOpenMore && canOpenOnThisCandle)
-             {
-                if(currentPrice < smaValue && (TradingMode == TRADE_SELL_ONLY || TradingMode == TRADE_BOTH))
-                {
-                   if(shouldEnterSell)
-                   {
-                       if(OpenOrder(ORDER_TYPE_SELL, InitialLotSize, GetCommentPrefix() + "_INIT"))
-                      {
-                         g_initialSellPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-                         lastInitialCandleTime = currentBarTime;
-                         ResetTrailingState();
-                      }
-                   }
-                }
-                else if(shouldEnterSell)
-                {
-                   Print("SELL ENTRY SKIP: SMA signal not match (Price=", currentPrice, " SMA=", smaValue, ")");
-                }
-             }
+              // ===== SELL Entry (independent) ===== v6.39: add hedge pause guard
+              if(!sellHedgePaused && !g_squeezeSellBlocked && sellCount == 0 && g_initialSellPrice == 0 && canOpenMore && canOpenOnThisCandle)
+              {
+                 if(currentPrice < smaValue && (TradingMode == TRADE_SELL_ONLY || TradingMode == TRADE_BOTH))
+                 {
+                    if(shouldEnterSell)
+                    {
+                        if(OpenOrder(ORDER_TYPE_SELL, InitialLotSize, GetCommentPrefix() + "_INIT"))
+                       {
+                          g_initialSellPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+                          lastInitialCandleTime = currentBarTime;
+                          ResetTrailingState();
+                       }
+                    }
+                 }
+                 else if(shouldEnterSell)
+                 {
+                    Print("SELL ENTRY SKIP: SMA signal not match (Price=", currentPrice, " SMA=", smaValue, ")");
+                 }
+              }
          }
 
          // Reset justClosed flags ONLY after entry logic has had a chance to use them
@@ -1523,58 +1535,64 @@ void OnTick()
       if(buyCount == 0 && g_initialBuyPrice != 0) { g_initialBuyPrice = 0; }
       if(sellCount == 0 && g_initialSellPrice != 0) { g_initialSellPrice = 0; }
 
-      // Grid Loss management
-      if(!g_newOrderBlocked)
-      {
-         if(!g_squeezeBuyBlocked && (hasInitialBuy || g_initialBuyPrice > 0 || gridLossBuy > 0) && gridLossBuy < GridLoss_MaxTrades && buyCount > 0)
-            CheckGridLoss(POSITION_TYPE_BUY, gridLossBuy);
-         if(!g_squeezeSellBlocked && (hasInitialSell || g_initialSellPrice > 0 || gridLossSell > 0) && gridLossSell < GridLoss_MaxTrades && sellCount > 0)
-            CheckGridLoss(POSITION_TYPE_SELL, gridLossSell);
-      }
+       // v6.39: Hedge Side Pause for Instant mode
+       bool buyHedgePaused = (InpHedge_SidePauseMin > 0 && g_lastHedgeBuyTime > 0 
+                              && (TimeCurrent() - g_lastHedgeBuyTime) < InpHedge_SidePauseMin * 60);
+       bool sellHedgePaused = (InpHedge_SidePauseMin > 0 && g_lastHedgeSellTime > 0 
+                               && (TimeCurrent() - g_lastHedgeSellTime) < InpHedge_SidePauseMin * 60);
 
-      // Grid Profit management
-      if(!g_newOrderBlocked && GridProfit_Enable)
-      {
-         if(!g_squeezeBuyBlocked && (hasInitialBuy || g_initialBuyPrice > 0) && gridProfitBuy < GridProfit_MaxTrades && buyCount > 0)
-            CheckGridProfit(POSITION_TYPE_BUY, gridProfitBuy);
-         if(!g_squeezeSellBlocked && (hasInitialSell || g_initialSellPrice > 0) && gridProfitSell < GridProfit_MaxTrades && sellCount > 0)
-            CheckGridProfit(POSITION_TYPE_SELL, gridProfitSell);
-      }
+       // Grid Loss management
+       if(!g_newOrderBlocked)
+       {
+          if(!buyHedgePaused && !g_squeezeBuyBlocked && (hasInitialBuy || g_initialBuyPrice > 0 || gridLossBuy > 0) && gridLossBuy < GridLoss_MaxTrades && buyCount > 0)
+             CheckGridLoss(POSITION_TYPE_BUY, gridLossBuy);
+          if(!sellHedgePaused && !g_squeezeSellBlocked && (hasInitialSell || g_initialSellPrice > 0 || gridLossSell > 0) && gridLossSell < GridLoss_MaxTrades && sellCount > 0)
+             CheckGridLoss(POSITION_TYPE_SELL, gridLossSell);
+       }
 
-      // Entry logic
-      if(!g_eaStopped && !g_newOrderBlocked)
-      {
-         bool canOpenOnThisCandle = !(DontOpenSameCandle && currentBarTime == lastInitialCandleTime);
-         bool canOpenMore = NormalOrderCount() < MaxOpenOrders;
+       // Grid Profit management
+       if(!g_newOrderBlocked && GridProfit_Enable)
+       {
+          if(!g_squeezeBuyBlocked && (hasInitialBuy || g_initialBuyPrice > 0) && gridProfitBuy < GridProfit_MaxTrades && buyCount > 0)
+             CheckGridProfit(POSITION_TYPE_BUY, gridProfitBuy);
+          if(!g_squeezeSellBlocked && (hasInitialSell || g_initialSellPrice > 0) && gridProfitSell < GridProfit_MaxTrades && sellCount > 0)
+             CheckGridProfit(POSITION_TYPE_SELL, gridProfitSell);
+       }
 
-         // ===== BUY Entry (instant) =====
-         if(!g_squeezeBuyBlocked && buyCount == 0 && g_initialBuyPrice == 0 && canOpenMore && canOpenOnThisCandle)
-         {
-            if(TradingMode == TRADE_BUY_ONLY || TradingMode == TRADE_BOTH)
-            {
-               if(OpenOrder(ORDER_TYPE_BUY, InitialLotSize, GetCommentPrefix() + "_INIT"))
-               {
-                  g_initialBuyPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-                  lastInitialCandleTime = currentBarTime;
-                  ResetTrailingState();
-               }
-            }
-         }
+       // Entry logic
+       if(!g_eaStopped && !g_newOrderBlocked)
+       {
+          bool canOpenOnThisCandle = !(DontOpenSameCandle && currentBarTime == lastInitialCandleTime);
+          bool canOpenMore = NormalOrderCount() < MaxOpenOrders;
 
-         // ===== SELL Entry (instant) =====
-         if(!g_squeezeSellBlocked && sellCount == 0 && g_initialSellPrice == 0 && canOpenMore && canOpenOnThisCandle)
-         {
-            if(TradingMode == TRADE_SELL_ONLY || TradingMode == TRADE_BOTH)
-            {
-               if(OpenOrder(ORDER_TYPE_SELL, InitialLotSize, GetCommentPrefix() + "_INIT"))
-               {
-                  g_initialSellPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-                  lastInitialCandleTime = currentBarTime;
-                  ResetTrailingState();
-               }
-            }
-         }
-      }
+          // ===== BUY Entry (instant) ===== v6.39: add hedge pause guard
+          if(!buyHedgePaused && !g_squeezeBuyBlocked && buyCount == 0 && g_initialBuyPrice == 0 && canOpenMore && canOpenOnThisCandle)
+          {
+             if(TradingMode == TRADE_BUY_ONLY || TradingMode == TRADE_BOTH)
+             {
+                if(OpenOrder(ORDER_TYPE_BUY, InitialLotSize, GetCommentPrefix() + "_INIT"))
+                {
+                   g_initialBuyPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+                   lastInitialCandleTime = currentBarTime;
+                   ResetTrailingState();
+                }
+             }
+          }
+
+          // ===== SELL Entry (instant) ===== v6.39: add hedge pause guard
+          if(!sellHedgePaused && !g_squeezeSellBlocked && sellCount == 0 && g_initialSellPrice == 0 && canOpenMore && canOpenOnThisCandle)
+          {
+             if(TradingMode == TRADE_SELL_ONLY || TradingMode == TRADE_BOTH)
+             {
+                if(OpenOrder(ORDER_TYPE_SELL, InitialLotSize, GetCommentPrefix() + "_INIT"))
+                {
+                   g_initialSellPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+                   lastInitialCandleTime = currentBarTime;
+                   ResetTrailingState();
+                }
+             }
+          }
+       }
 
       // Reset justClosed flags
       if(!g_newOrderBlocked)
@@ -3088,7 +3106,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.38 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.38 [ZZ]" : "Gold Miner EA v6.38 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.39 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.39 [ZZ]" : "Gold Miner EA v6.39 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -3523,8 +3541,32 @@ void DisplayDashboard()
                 bgClr = clrGray;
              }
              DrawTableRow(row, "Bal Guard", bgStatus, bgClr, COLOR_SECTION_HEDGE); row++;
-          }
-      }
+           }
+           
+           // v6.39: Hedge Side Pause status
+           if(InpHedge_SidePauseMin > 0)
+           {
+              datetime nowDash = TimeCurrent();
+              bool bPaused = (g_lastHedgeBuyTime > 0 && (nowDash - g_lastHedgeBuyTime) < InpHedge_SidePauseMin * 60);
+              bool sPaused = (g_lastHedgeSellTime > 0 && (nowDash - g_lastHedgeSellTime) < InpHedge_SidePauseMin * 60);
+              if(bPaused || sPaused)
+              {
+                 string pauseStr = "";
+                 if(bPaused)
+                 {
+                    int remB = InpHedge_SidePauseMin * 60 - (int)(nowDash - g_lastHedgeBuyTime);
+                    pauseStr += "BUY PAUSED " + IntegerToString(remB/60) + "m" + IntegerToString(remB%60) + "s";
+                 }
+                 if(sPaused)
+                 {
+                    if(pauseStr != "") pauseStr += " | ";
+                    int remS = InpHedge_SidePauseMin * 60 - (int)(nowDash - g_lastHedgeSellTime);
+                    pauseStr += "SELL PAUSED " + IntegerToString(remS/60) + "m" + IntegerToString(remS%60) + "s";
+                 }
+                 DrawTableRow(row, "Side Pause", pauseStr, clrOrange, COLOR_SECTION_HEDGE); row++;
+              }
+           }
+       }
 
      // === Orphan Recovery Status ===
      color COLOR_SECTION_ORPHAN = C'130,50,180';  // purple for orphan section
@@ -4625,75 +4667,81 @@ void OnTickZigZagMTF()
          g_tfStates[t].initialSellPrice = 0;
       }
 
-      // Grid management
-      if(!g_newOrderBlocked)
-      {
-         // Grid Loss
-         if(!g_squeezeBuyBlocked && (tfHasInitBuy || g_tfStates[t].initialBuyPrice > 0) && tfGLBuy < GridLoss_MaxTrades && tfBuyCount > 0)
-            CheckGridLossTF(t, POSITION_TYPE_BUY, tfGLBuy);
-         if(!g_squeezeSellBlocked && (tfHasInitSell || g_tfStates[t].initialSellPrice > 0) && tfGLSell < GridLoss_MaxTrades && tfSellCount > 0)
-            CheckGridLossTF(t, POSITION_TYPE_SELL, tfGLSell);
+       // v6.39: Hedge Side Pause for ZigZag mode
+       bool buyHedgePaused = (InpHedge_SidePauseMin > 0 && g_lastHedgeBuyTime > 0 
+                              && (TimeCurrent() - g_lastHedgeBuyTime) < InpHedge_SidePauseMin * 60);
+       bool sellHedgePaused = (InpHedge_SidePauseMin > 0 && g_lastHedgeSellTime > 0 
+                               && (TimeCurrent() - g_lastHedgeSellTime) < InpHedge_SidePauseMin * 60);
 
-         // Grid Profit
-         if(GridProfit_Enable)
-         {
-            if(!g_squeezeBuyBlocked && (tfHasInitBuy || g_tfStates[t].initialBuyPrice > 0) && tfGPBuy < GridProfit_MaxTrades && tfBuyCount > 0)
-               CheckGridProfitTF(t, POSITION_TYPE_BUY, tfGPBuy);
-            if(!g_squeezeSellBlocked && (tfHasInitSell || g_tfStates[t].initialSellPrice > 0) && tfGPSell < GridProfit_MaxTrades && tfSellCount > 0)
-               CheckGridProfitTF(t, POSITION_TYPE_SELL, tfGPSell);
-         }
-      }
+       // Grid management
+       if(!g_newOrderBlocked)
+       {
+          // Grid Loss
+          if(!buyHedgePaused && !g_squeezeBuyBlocked && (tfHasInitBuy || g_tfStates[t].initialBuyPrice > 0) && tfGLBuy < GridLoss_MaxTrades && tfBuyCount > 0)
+             CheckGridLossTF(t, POSITION_TYPE_BUY, tfGLBuy);
+          if(!sellHedgePaused && !g_squeezeSellBlocked && (tfHasInitSell || g_tfStates[t].initialSellPrice > 0) && tfGLSell < GridLoss_MaxTrades && tfSellCount > 0)
+             CheckGridLossTF(t, POSITION_TYPE_SELL, tfGLSell);
 
-      // Entry check: sub-TF ZigZag must agree with H4 direction
-      if(!g_newOrderBlocked && effectiveDirection != "NONE")
-      {
-         bool canOpenMore = NormalOrderCount() < MaxOpenOrders;
-         bool canOpenThisCandle = !(DontOpenSameCandle && tfBar == g_tfStates[t].lastInitialCandle);
+          // Grid Profit
+          if(GridProfit_Enable)
+          {
+             if(!g_squeezeBuyBlocked && (tfHasInitBuy || g_tfStates[t].initialBuyPrice > 0) && tfGPBuy < GridProfit_MaxTrades && tfBuyCount > 0)
+                CheckGridProfitTF(t, POSITION_TYPE_BUY, tfGPBuy);
+             if(!g_squeezeSellBlocked && (tfHasInitSell || g_tfStates[t].initialSellPrice > 0) && tfGPSell < GridProfit_MaxTrades && tfSellCount > 0)
+                CheckGridProfitTF(t, POSITION_TYPE_SELL, tfGPSell);
+          }
+       }
 
-         // Detect sub-TF swing
-         string subSwing = DetectZigZagSwing(t);
+       // Entry check: sub-TF ZigZag must agree with H4 direction
+       if(!g_newOrderBlocked && effectiveDirection != "NONE")
+       {
+          bool canOpenMore = NormalOrderCount() < MaxOpenOrders;
+          bool canOpenThisCandle = !(DontOpenSameCandle && tfBar == g_tfStates[t].lastInitialCandle);
 
-         // BUY entry
-         if(!g_squeezeBuyBlocked && effectiveDirection == "BUY" && subSwing == "LOW" && tfBuyCount == 0
-            && g_tfStates[t].initialBuyPrice == 0 && canOpenMore && canOpenThisCandle
-            && (TradingMode == TRADE_BUY_ONLY || TradingMode == TRADE_BOTH))
-         {
-            bool shouldEnter = true;
-            if(g_tfStates[t].justClosedBuy && !EnableAutoReEntry)
-               shouldEnter = false;
+          // Detect sub-TF swing
+          string subSwing = DetectZigZagSwing(t);
 
-            if(shouldEnter)
-            {
-               if(OpenOrderTF(t, ORDER_TYPE_BUY, InitialLotSize, "INIT"))
-               {
-                  g_tfStates[t].initialBuyPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-                  g_tfStates[t].lastInitialCandle = tfBar;
-                  ResetTrailingStateTF(t);
-                  Print(g_tfStates[t].tfLabel, " ZigZag BUY INIT at ", g_tfStates[t].initialBuyPrice);
-               }
-            }
-         }
+          // BUY entry — v6.39: add hedge pause guard
+          if(!buyHedgePaused && !g_squeezeBuyBlocked && effectiveDirection == "BUY" && subSwing == "LOW" && tfBuyCount == 0
+             && g_tfStates[t].initialBuyPrice == 0 && canOpenMore && canOpenThisCandle
+             && (TradingMode == TRADE_BUY_ONLY || TradingMode == TRADE_BOTH))
+          {
+             bool shouldEnter = true;
+             if(g_tfStates[t].justClosedBuy && !EnableAutoReEntry)
+                shouldEnter = false;
 
-         // SELL entry
-         if(!g_squeezeSellBlocked && effectiveDirection == "SELL" && subSwing == "HIGH" && tfSellCount == 0
-            && g_tfStates[t].initialSellPrice == 0 && canOpenMore && canOpenThisCandle
-            && (TradingMode == TRADE_SELL_ONLY || TradingMode == TRADE_BOTH))
-         {
-            bool shouldEnter = true;
-            if(g_tfStates[t].justClosedSell && !EnableAutoReEntry)
-               shouldEnter = false;
+             if(shouldEnter)
+             {
+                if(OpenOrderTF(t, ORDER_TYPE_BUY, InitialLotSize, "INIT"))
+                {
+                   g_tfStates[t].initialBuyPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+                   g_tfStates[t].lastInitialCandle = tfBar;
+                   ResetTrailingStateTF(t);
+                   Print(g_tfStates[t].tfLabel, " ZigZag BUY INIT at ", g_tfStates[t].initialBuyPrice);
+                }
+             }
+          }
 
-            if(shouldEnter)
-            {
-               if(OpenOrderTF(t, ORDER_TYPE_SELL, InitialLotSize, "INIT"))
-               {
-                  g_tfStates[t].initialSellPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-                  g_tfStates[t].lastInitialCandle = tfBar;
-                  ResetTrailingStateTF(t);
-                  Print(g_tfStates[t].tfLabel, " ZigZag SELL INIT at ", g_tfStates[t].initialSellPrice);
-               }
-            }
-         }
+          // SELL entry — v6.39: add hedge pause guard
+          if(!sellHedgePaused && !g_squeezeSellBlocked && effectiveDirection == "SELL" && subSwing == "HIGH" && tfSellCount == 0
+             && g_tfStates[t].initialSellPrice == 0 && canOpenMore && canOpenThisCandle
+             && (TradingMode == TRADE_SELL_ONLY || TradingMode == TRADE_BOTH))
+          {
+             bool shouldEnter = true;
+             if(g_tfStates[t].justClosedSell && !EnableAutoReEntry)
+                shouldEnter = false;
+
+             if(shouldEnter)
+             {
+                if(OpenOrderTF(t, ORDER_TYPE_SELL, InitialLotSize, "INIT"))
+                {
+                   g_tfStates[t].initialSellPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+                   g_tfStates[t].lastInitialCandle = tfBar;
+                   ResetTrailingStateTF(t);
+                   Print(g_tfStates[t].tfLabel, " ZigZag SELL INIT at ", g_tfStates[t].initialSellPrice);
+                }
+             }
+          }
       }
 
       // Reset justClosed flags when not blocked
@@ -6551,11 +6599,13 @@ void TryResetCycleStateIfFlat(string reason)
    }
    
    // Truly flat — safe to reset everything
-   g_cycleGeneration = 0;
-   g_hedgeSetCount = 0;
-   ClearPrevHedgedTickets();
-   UpdateDynamicBalanceGuardTarget();  // v6.31: update target immediately when flat
-   Print("CYCLE GENERATION reset to 0 — ", reason, " (v6.27 safe reset, account flat)");
+    g_cycleGeneration = 0;
+    g_hedgeSetCount = 0;
+    ClearPrevHedgedTickets();
+    g_lastHedgeBuyTime = 0;   // v6.39: reset side pause
+    g_lastHedgeSellTime = 0;  // v6.39: reset side pause
+    UpdateDynamicBalanceGuardTarget();  // v6.31: update target immediately when flat
+    Print("CYCLE GENERATION reset to 0 — ", reason, " (v6.27 safe reset, account flat)");
 }
 
 //+------------------------------------------------------------------+
@@ -6618,9 +6668,11 @@ void CheckBalanceGuard()
       g_balanceGuardActive = false;
       
       // Reset cycle state (CloseAllPositions already resets hedge sets)
-      g_cycleGeneration = 0;
-      ClearPrevHedgedTickets();
-      Print("v6.31 Balance Guard: Full reset complete — ready for fresh cycle");
+       g_cycleGeneration = 0;
+       ClearPrevHedgedTickets();
+       g_lastHedgeBuyTime = 0;   // v6.39: reset side pause
+       g_lastHedgeSellTime = 0;  // v6.39: reset side pause
+       Print("v6.31 Balance Guard: Full reset complete — ready for fresh cycle");
    }
    
    // Deactivate if no more hedge sets and no positions (flat after manual close)
@@ -6966,10 +7018,11 @@ void CheckAndOpenHedgeByDD()
       if(buyLossAbs >= InpHedge_DDTriggerDollar)
       {
          if(OpenDDHedge(POSITION_TYPE_BUY, POSITION_TYPE_SELL, curGen))  // v6.37: pass snapshot gen
-         {
-            g_lastDDHedgeTime = now;
-            Print("DD$ HEDGE [Gen", curGen, "]: BUY side DD=$", DoubleToString(buyLossAbs, 2), 
-                  " >= $", DoubleToString(InpHedge_DDTriggerDollar, 2), " → SELL hedge opened");
+          {
+             g_lastDDHedgeTime = now;
+             g_lastHedgeBuyTime = now;  // v6.39: BUY orders got hedged → pause BUY entries
+             Print("DD$ HEDGE [Gen", curGen, "]: BUY side DD=$", DoubleToString(buyLossAbs, 2), 
+                   " >= $", DoubleToString(InpHedge_DDTriggerDollar, 2), " → SELL hedge opened");
          }
       }
       
@@ -6977,9 +7030,10 @@ void CheckAndOpenHedgeByDD()
       {
          if(OpenDDHedge(POSITION_TYPE_SELL, POSITION_TYPE_BUY, curGen))  // v6.37: pass snapshot gen
          {
-            g_lastDDHedgeTime = now;
-            Print("DD$ HEDGE [Gen", curGen, "]: SELL side DD=$", DoubleToString(sellLossAbs, 2),
-                  " >= $", DoubleToString(InpHedge_DDTriggerDollar, 2), " → BUY hedge opened");
+             g_lastDDHedgeTime = now;
+             g_lastHedgeSellTime = now;  // v6.39: SELL orders got hedged → pause SELL entries
+             Print("DD$ HEDGE [Gen", curGen, "]: SELL side DD=$", DoubleToString(sellLossAbs, 2),
+                   " >= $", DoubleToString(InpHedge_DDTriggerDollar, 2), " → BUY hedge opened");
          }
       }
    }
@@ -6993,9 +7047,10 @@ void CheckAndOpenHedgeByDD()
       {
          if(OpenDDHedge(POSITION_TYPE_BUY, POSITION_TYPE_SELL, curGen))  // v6.37: pass snapshot gen
          {
-            g_lastDDHedgeTime = now;
-            Print("DD HEDGE [Gen", curGen, "]: BUY side DD=", DoubleToString(buyDDPct, 1), 
-                  "% >= ", DoubleToString(InpHedge_DDTriggerPct, 1), "% → SELL hedge opened");
+             g_lastDDHedgeTime = now;
+             g_lastHedgeBuyTime = now;  // v6.39: BUY orders got hedged → pause BUY entries
+             Print("DD HEDGE [Gen", curGen, "]: BUY side DD=", DoubleToString(buyDDPct, 1), 
+                   "% >= ", DoubleToString(InpHedge_DDTriggerPct, 1), "% → SELL hedge opened");
          }
       }
       
@@ -7003,9 +7058,10 @@ void CheckAndOpenHedgeByDD()
       {
          if(OpenDDHedge(POSITION_TYPE_SELL, POSITION_TYPE_BUY, curGen))  // v6.37: pass snapshot gen
          {
-            g_lastDDHedgeTime = now;
-            Print("DD HEDGE [Gen", curGen, "]: SELL side DD=", DoubleToString(sellDDPct, 1),
-                  "% >= ", DoubleToString(InpHedge_DDTriggerPct, 1), "% → BUY hedge opened");
+             g_lastDDHedgeTime = now;
+             g_lastHedgeSellTime = now;  // v6.39: SELL orders got hedged → pause SELL entries
+             Print("DD HEDGE [Gen", curGen, "]: SELL side DD=", DoubleToString(sellDDPct, 1),
+                   "% >= ", DoubleToString(InpHedge_DDTriggerPct, 1), "% → BUY hedge opened");
          }
       }
    }
