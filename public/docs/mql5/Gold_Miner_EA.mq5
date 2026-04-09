@@ -6644,9 +6644,11 @@ void CheckBalanceGuard()
       g_balanceGuardActive = false;
       
       // Reset cycle state (CloseAllPositions already resets hedge sets)
-      g_cycleGeneration = 0;
-      ClearPrevHedgedTickets();
-      Print("v6.31 Balance Guard: Full reset complete — ready for fresh cycle");
+       g_cycleGeneration = 0;
+       ClearPrevHedgedTickets();
+       g_lastHedgeBuyTime = 0;   // v6.39: reset side pause
+       g_lastHedgeSellTime = 0;  // v6.39: reset side pause
+       Print("v6.31 Balance Guard: Full reset complete — ready for fresh cycle");
    }
    
    // Deactivate if no more hedge sets and no positions (flat after manual close)
