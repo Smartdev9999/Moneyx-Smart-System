@@ -1451,47 +1451,47 @@ void OnTick()
                   shouldEnterSell = true;   // Ready to enter (auto re-entry or normal)
             }
 
-             // ===== BUY Entry (independent) =====
-             if(!g_squeezeBuyBlocked && buyCount == 0 && g_initialBuyPrice == 0 && canOpenMore && canOpenOnThisCandle)
-             {
-                if(currentPrice > smaValue && (TradingMode == TRADE_BUY_ONLY || TradingMode == TRADE_BOTH))
-                {
-                   if(shouldEnterBuy)
-                   {
-                       if(OpenOrder(ORDER_TYPE_BUY, InitialLotSize, GetCommentPrefix() + "_INIT"))
-                      {
-                         g_initialBuyPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-                         lastInitialCandleTime = currentBarTime;
-                         ResetTrailingState();
-                      }
-                   }
-                }
-                else if(shouldEnterBuy)
-                {
-                   Print("BUY ENTRY SKIP: SMA signal not match (Price=", currentPrice, " SMA=", smaValue, ")");
-                }
-             }
+              // ===== BUY Entry (independent) ===== v6.39: add hedge pause guard
+              if(!buyHedgePaused && !g_squeezeBuyBlocked && buyCount == 0 && g_initialBuyPrice == 0 && canOpenMore && canOpenOnThisCandle)
+              {
+                 if(currentPrice > smaValue && (TradingMode == TRADE_BUY_ONLY || TradingMode == TRADE_BOTH))
+                 {
+                    if(shouldEnterBuy)
+                    {
+                        if(OpenOrder(ORDER_TYPE_BUY, InitialLotSize, GetCommentPrefix() + "_INIT"))
+                       {
+                          g_initialBuyPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+                          lastInitialCandleTime = currentBarTime;
+                          ResetTrailingState();
+                       }
+                    }
+                 }
+                 else if(shouldEnterBuy)
+                 {
+                    Print("BUY ENTRY SKIP: SMA signal not match (Price=", currentPrice, " SMA=", smaValue, ")");
+                 }
+              }
 
-             // ===== SELL Entry (independent) =====
-             if(!g_squeezeSellBlocked && sellCount == 0 && g_initialSellPrice == 0 && canOpenMore && canOpenOnThisCandle)
-             {
-                if(currentPrice < smaValue && (TradingMode == TRADE_SELL_ONLY || TradingMode == TRADE_BOTH))
-                {
-                   if(shouldEnterSell)
-                   {
-                       if(OpenOrder(ORDER_TYPE_SELL, InitialLotSize, GetCommentPrefix() + "_INIT"))
-                      {
-                         g_initialSellPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-                         lastInitialCandleTime = currentBarTime;
-                         ResetTrailingState();
-                      }
-                   }
-                }
-                else if(shouldEnterSell)
-                {
-                   Print("SELL ENTRY SKIP: SMA signal not match (Price=", currentPrice, " SMA=", smaValue, ")");
-                }
-             }
+              // ===== SELL Entry (independent) ===== v6.39: add hedge pause guard
+              if(!sellHedgePaused && !g_squeezeSellBlocked && sellCount == 0 && g_initialSellPrice == 0 && canOpenMore && canOpenOnThisCandle)
+              {
+                 if(currentPrice < smaValue && (TradingMode == TRADE_SELL_ONLY || TradingMode == TRADE_BOTH))
+                 {
+                    if(shouldEnterSell)
+                    {
+                        if(OpenOrder(ORDER_TYPE_SELL, InitialLotSize, GetCommentPrefix() + "_INIT"))
+                       {
+                          g_initialSellPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+                          lastInitialCandleTime = currentBarTime;
+                          ResetTrailingState();
+                       }
+                    }
+                 }
+                 else if(shouldEnterSell)
+                 {
+                    Print("SELL ENTRY SKIP: SMA signal not match (Price=", currentPrice, " SMA=", smaValue, ")");
+                 }
+              }
          }
 
          // Reset justClosed flags ONLY after entry logic has had a chance to use them
