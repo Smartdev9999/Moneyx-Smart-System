@@ -4698,26 +4698,26 @@ void OnTickZigZagMTF()
              }
           }
 
-         // SELL entry
-         if(!g_squeezeSellBlocked && effectiveDirection == "SELL" && subSwing == "HIGH" && tfSellCount == 0
-            && g_tfStates[t].initialSellPrice == 0 && canOpenMore && canOpenThisCandle
-            && (TradingMode == TRADE_SELL_ONLY || TradingMode == TRADE_BOTH))
-         {
-            bool shouldEnter = true;
-            if(g_tfStates[t].justClosedSell && !EnableAutoReEntry)
-               shouldEnter = false;
+          // SELL entry — v6.39: add hedge pause guard
+          if(!sellHedgePaused && !g_squeezeSellBlocked && effectiveDirection == "SELL" && subSwing == "HIGH" && tfSellCount == 0
+             && g_tfStates[t].initialSellPrice == 0 && canOpenMore && canOpenThisCandle
+             && (TradingMode == TRADE_SELL_ONLY || TradingMode == TRADE_BOTH))
+          {
+             bool shouldEnter = true;
+             if(g_tfStates[t].justClosedSell && !EnableAutoReEntry)
+                shouldEnter = false;
 
-            if(shouldEnter)
-            {
-               if(OpenOrderTF(t, ORDER_TYPE_SELL, InitialLotSize, "INIT"))
-               {
-                  g_tfStates[t].initialSellPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-                  g_tfStates[t].lastInitialCandle = tfBar;
-                  ResetTrailingStateTF(t);
-                  Print(g_tfStates[t].tfLabel, " ZigZag SELL INIT at ", g_tfStates[t].initialSellPrice);
-               }
-            }
-         }
+             if(shouldEnter)
+             {
+                if(OpenOrderTF(t, ORDER_TYPE_SELL, InitialLotSize, "INIT"))
+                {
+                   g_tfStates[t].initialSellPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+                   g_tfStates[t].lastInitialCandle = tfBar;
+                   ResetTrailingStateTF(t);
+                   Print(g_tfStates[t].tfLabel, " ZigZag SELL INIT at ", g_tfStates[t].initialSellPrice);
+                }
+             }
+          }
       }
 
       // Reset justClosed flags when not blocked
