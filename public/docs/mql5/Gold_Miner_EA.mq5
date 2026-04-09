@@ -7002,9 +7002,10 @@ void CheckAndOpenHedgeByDD()
       {
          if(OpenDDHedge(POSITION_TYPE_SELL, POSITION_TYPE_BUY, curGen))  // v6.37: pass snapshot gen
          {
-            g_lastDDHedgeTime = now;
-            Print("DD$ HEDGE [Gen", curGen, "]: SELL side DD=$", DoubleToString(sellLossAbs, 2),
-                  " >= $", DoubleToString(InpHedge_DDTriggerDollar, 2), " → BUY hedge opened");
+             g_lastDDHedgeTime = now;
+             g_lastHedgeSellTime = now;  // v6.39: SELL orders got hedged → pause SELL entries
+             Print("DD$ HEDGE [Gen", curGen, "]: SELL side DD=$", DoubleToString(sellLossAbs, 2),
+                   " >= $", DoubleToString(InpHedge_DDTriggerDollar, 2), " → BUY hedge opened");
          }
       }
    }
