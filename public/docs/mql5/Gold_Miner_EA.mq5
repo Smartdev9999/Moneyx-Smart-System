@@ -548,6 +548,10 @@ double   g_nextSellDDTrigger = 5.0;    // DD% threshold for next SELL-side hedge
 datetime g_lastDDHedgeTime   = 0;      // cooldown tracker
 datetime g_lastHedgeCloseTime = 0;     // v6.25: cooldown after hedge set close
 
+// === v6.39: Hedge Side Pause State ===
+datetime g_lastHedgeBuyTime  = 0;   // last time BUY orders got hedged → pause BUY entries
+datetime g_lastHedgeSellTime = 0;   // last time SELL orders got hedged → pause SELL entries
+
 // === v6.26: Previously-Hedged Tickets — prevent DD re-trigger on released orders ===
 #define MAX_PREV_HEDGED 200
 ulong    g_prevHedgedTickets[MAX_PREV_HEDGED];
