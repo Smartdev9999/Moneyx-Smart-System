@@ -7019,9 +7019,10 @@ void CheckAndOpenHedgeByDD()
       {
          if(OpenDDHedge(POSITION_TYPE_BUY, POSITION_TYPE_SELL, curGen))  // v6.37: pass snapshot gen
          {
-            g_lastDDHedgeTime = now;
-            Print("DD HEDGE [Gen", curGen, "]: BUY side DD=", DoubleToString(buyDDPct, 1), 
-                  "% >= ", DoubleToString(InpHedge_DDTriggerPct, 1), "% → SELL hedge opened");
+             g_lastDDHedgeTime = now;
+             g_lastHedgeBuyTime = now;  // v6.39: BUY orders got hedged → pause BUY entries
+             Print("DD HEDGE [Gen", curGen, "]: BUY side DD=", DoubleToString(buyDDPct, 1), 
+                   "% >= ", DoubleToString(InpHedge_DDTriggerPct, 1), "% → SELL hedge opened");
          }
       }
       
