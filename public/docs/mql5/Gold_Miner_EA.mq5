@@ -5,8 +5,8 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.44"
-#property description "Gold Miner EA v6.44 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + GenRaceFix + OrphanGenFix + HedgeSidePause + GLCandleConfirm + MaxGridTrail + BrokerTPSL + DashCache + DashThrottle + LiveTPFix + License"
+#property version   "6.45"
+#property description "Gold Miner EA v6.45 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + GenRaceFix + OrphanGenFix + HedgeSidePause + GLCandleConfirm + MaxGridTrail + BrokerTPSL + DashCache + DashThrottle + LiveTPFix + HedgeClearTP + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -2117,13 +2117,16 @@ void ClearBrokerTPSL()
       if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       if(IsHedgeComment(PositionGetString(POSITION_COMMENT))) continue;
-      if(IsTicketBound(ticket)) continue;
+      // v6.45: Removed IsTicketBound skip — bound orders MUST have TP/SL cleared during hedge
 
       double curTP = PositionGetDouble(POSITION_TP);
       double curSL = PositionGetDouble(POSITION_SL);
 
       if(curTP != 0 || curSL != 0)
-         trade.PositionModify(ticket, 0, 0);
+      {
+         if(trade.PositionModify(ticket, 0, 0))
+            Print("v6.45 ClearTP: Cleared order #", ticket, " TP=", curTP, "->0 SL=", curSL, "->0");
+      }
    }
 
    g_lastBrokerTP_Buy  = 0;
