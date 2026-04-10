@@ -5723,16 +5723,16 @@ void OnTradeTransaction(const MqlTradeTransaction& trans,
          
          if(dealMagic == MagicNumber || dealMagic == 0)
          {
-            if(dealEntry == DEAL_ENTRY_IN)
-            {
-               Print("[Sync] Order opened - syncing data...");
-               SyncAccountDataWithEvent(SYNC_ORDER_OPEN);
-            }
-            else if(dealEntry == DEAL_ENTRY_OUT || dealEntry == DEAL_ENTRY_INOUT)
-            {
-               Print("[Sync] Order closed - syncing data with trade history...");
-               SyncAccountDataWithEvent(SYNC_ORDER_CLOSE);
-            }
+             if(dealEntry == DEAL_ENTRY_IN)
+             {
+                // v6.49: Deferred sync — set flag only, actual sync runs at end of OnTick after TP/SL is set
+                g_pendingSyncOrderOpen = true;
+             }
+             else if(dealEntry == DEAL_ENTRY_OUT || dealEntry == DEAL_ENTRY_INOUT)
+             {
+                // v6.49: Deferred sync — set flag only
+                g_pendingSyncOrderClose = true;
+             }
          }
       }
    }
