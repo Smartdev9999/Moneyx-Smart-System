@@ -1,58 +1,90 @@
 
 
-## v6.40 — เพิ่ม Grid Loss Candle Confirmation Filter
+## v6.41 — เพิ่ม Max Grid Average Trailing Stop
 
 ### หลักการ
 
-เพิ่มเงื่อนไขกรองก่อนเปิด Grid Loss: ต้องมีแท่งเทียนปิดในทิศทางเดียวกับฝั่งที่จะเปิด GL ก่อน N แท่ง (ตามที่กำหนด) ก่อนระบบจะอนุญาตให้เปิด GL
+ระบบ Trailing Stop ใหม่ที่ทำงาน **เฉพาะเมื่อ** ชุดออเดอร์ถึง Max Grid Loss เท่านั้น — เป็นระบบแยกจาก Average Trailing Stop ที่มีอยู่ (ซึ่งทำงานกับทุกชุดออเดอร์)
 
-- BUY GL: ต้องมีแท่งเขียว (close > open) ปิดก่อน N แท่ง
-- SELL GL: ต้องมีแท่งแดง (close < open) ปิดก่อน N แท่ง
-- ตั้งค่า 0 = ปิดฟีเจอร์ (ไม่กรอง)
-- เป็นเงื่อนไขเสริม ต้องผ่านเงื่อนไขอื่นๆ (distance, min gap, new candle) ด้วย
+**Flow:**
+1. ออเดอร์ BUY INIT + GL ครบ `GridLoss_MaxTrades` → ระบบ activate monitoring
+2. ราคาวิ่งกลับถึงค่าเฉลี่ย + Activation points → เริ่ม trailing
+3. ราคาวิ่งต่อ → trailing SL กันหน้าทุนลงไปเรื่อยๆ
+4. ราคาย้อนกลับ hit trailing SL → ปิดชุดออเดอร์ generation นั้น
+5. ระบบขยับไป monitor generation ถัดไป (GM→GM1→GM2) ที่ยังมีชุดที่ถึง max grid
+6. เมื่อไม่มีออเดอร์เหลือ → reset ทั้งหมด
 
 ### ไฟล์: `public/docs/mql5/Gold_Miner_EA.mq5`
 
-#### 1. Version bump → v6.40
+#### 1. Version bump → v6.41
 
-#### 2. เพิ่ม input parameter (ใต้ GridLoss_MinGapPoints)
-
-```cpp
-input int GridLoss_CandleConfirm = 0; // v6.40: Require N confirming candles before GL (0=Off)
-```
-
-#### 3. เพิ่ม helper function
+#### 2. เพิ่ม input parameters (group ใหม่)
 
 ```cpp
-bool HasCandleConfirmation(ENUM_POSITION_TYPE side, ENUM_TIMEFRAMES tf, int requiredCandles)
+input group "=== Max Grid Average Trailing Stop ==="
+input bool   MaxGrid_TrailEnable     = false;  // Enable Max Grid Avg Trailing
+input int    MaxGrid_TrailActivation = 100;    // Activation (points from average, 0=Off)
+input int    MaxGrid_TrailStep       = 50;     // Trailing Step (points)
+input int    MaxGrid_BreakevenBuffer = 10;     // Breakeven Buffer (points above/below avg)
 ```
 
-- ตรวจสอบ N แท่งเทียนล่าสุดที่ปิดแล้ว (shift 1 ถึง N) ว่ามีแท่งที่ปิดในทิศทางที่ต้องการครบตามจำนวนหรือไม่
-- BUY: นับแท่งที่ close > open (bullish) จากแท่งล่าสุดที่ปิดแล้ว
-- SELL: นับแท่งที่ close < open (bearish)
-- หากมีครบ N แท่ง (ไม่จำเป็นต้องต่อเนื่อง แต่ต้องเป็นแท่งล่าสุดติดกัน N แท่ง) → return true
-- **แก้ไข**: ตรวจ N แท่งล่าสุดที่ปิดแล้ว (shift 1..N) ว่าทั้งหมดเป็นทิศทางเดียวกัน → ถ้าต้องการ "ปิด 1 แท่ง" ก็ตรวจแค่ shift=1 ว่าเป็น bullish/bearish
+#### 3. เพิ่ม global variables
 
-#### 4. เพิ่ม guard ใน 3 จุด Grid Loss entry
+```cpp
+// Max Grid Trailing State — per side
+double   g_maxGridTrailSL_Buy  = 0;
+double   g_maxGridTrailSL_Sell = 0;
+bool     g_maxGridTrailActive_Buy  = false;
+bool     g_maxGridTrailActive_Sell = false;
+int      g_maxGridMonitorGen = 0;  // generation ที่กำลัง monitor อยู่
+```
 
-- **SMA mode** `CheckGridLoss()` (~line 2540 หลัง OnlyNewCandle): เพิ่ม check `GridLoss_CandleConfirm`
-- **Instant/ZigZag mode** `CheckGridLossTF()` (~line 4123 หลัง OnlyNewCandle): เพิ่ม check
-- **Orphan grid** `CheckOrphanGridEntry()` (~line 7762 หลัง OnlyNewCandle): เพิ่ม check
+#### 4. เพิ่ม helper functions
 
-#### 5. Dashboard แสดงค่า CandleConfirm
+- **`CountGenGridLoss(int gen, ENUM_POSITION_TYPE side)`** — นับ GL orders ของ generation + side ที่ระบุ
+- **`CalcGenAveragePrice(int gen, ENUM_POSITION_TYPE side)`** — คำนวณราคาเฉลี่ยเฉพาะ generation + side (INIT+GL, ไม่รวม hedge/bound)
+- **`CloseGenSide(int gen, ENUM_POSITION_TYPE side)`** — ปิดออเดอร์ทั้งหมดของ generation + side
+- **`ManageMaxGridTrailing()`** — function หลักที่ monitor และจัดการ trailing
 
-#### 6. อัปเดต version ทุกจุด
+#### 5. Logic หลักของ `ManageMaxGridTrailing()`
+
+```text
+1. หา generation ที่กำลัง monitor (g_maxGridMonitorGen)
+2. สำหรับแต่ละ side (BUY/SELL):
+   a. นับ GL orders ของ gen นี้ → ถ้าไม่ถึง GridLoss_MaxTrades → skip
+   b. คำนวณ avg price ของ gen นี้
+   c. ถ้า price ถึง avg + activation → activate trailing
+   d. ถ้า trailing active → คำนวณ new SL, lock profit
+   e. ถ้า price hit trailing SL → ปิดชุด gen นั้นทั้ง side
+3. ถ้า gen ปัจจุบันไม่มีออเดอร์แล้ว → ขยับไป gen ถัดไป
+4. ถ้า TotalOrderCount() == 0 → reset ทั้งหมด
+```
+
+#### 6. เรียกใช้ใน OnTick (ก่อน/หลัง existing trailing)
+
+```cpp
+if(MaxGrid_TrailEnable)
+   ManageMaxGridTrailing();
+```
+
+#### 7. Dashboard แสดงสถานะ
+
+- "MaxGrid Trail: ON/OFF"
+- "Monitoring: GM/GM1/GM2"  
+- "BUY/SELL MaxGrid Trail Active" + SL level
 
 ### ตัวอย่าง
-- ตั้ง 1: มี BUY INIT → ราคาลง → ถึงระยะ GL → ต้องรอแท่งเขียวปิด 1 แท่งก่อน → ถึงจะเปิด GL BUY
-- ตั้ง 2: ต้องมีแท่งเขียวปิดติดกัน 2 แท่งก่อน
-- ตั้ง 0: ปิดฟีเจอร์ ทำงานเหมือนเดิม
+
+- GM มี SELL INIT + 10 GL (max=10) → ราคาลงถึง avg + 100 pts → trailing activate → ราคาลงต่อ → SL กันหน้าทุนลงเรื่อยๆ → ราคากลับตัว hit SL → ปิดชุด GM SELL ทั้งหมด
+- GM ถูก hedge → ระบบขยับไป monitor GM1 → GM1 ถึง max grid → activate trailing เหมือนกัน
 
 ### สิ่งที่ไม่เปลี่ยนแปลง
+
 - Order Execution Logic — ไม่แก้
-- Trading Strategy Logic — ไม่แก้ (เป็น guard เสริมเท่านั้น)
+- Trading Strategy Logic — ไม่แก้ (เป็น trailing เสริมเฉพาะ max grid)
 - Core Module Logic — ไม่แก้
-- Grid distance / min gap / new candle / signal filter — ไม่แก้
+- Existing Average Trailing Stop / Per-Order Trailing — ไม่แก้
+- Grid distance / min gap / new candle / candle confirm — ไม่แก้
 - DD trigger / Hedge / Balance Guard — ไม่แก้
-- Gen Race fix (v6.37), Orphan fix (v6.38), Side Pause (v6.39) — ไม่แก้
+- Gen Race fix (v6.37), Orphan fix (v6.38), Side Pause (v6.39), GL CandleConfirm (v6.40) — ไม่แก้
 
