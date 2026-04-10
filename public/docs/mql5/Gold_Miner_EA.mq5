@@ -4778,7 +4778,8 @@ void ManageTPSL_TF(int tfIdx)
       if(!EnablePerOrderTrailing)
       {
          if(UseTP_Dollar && plBuy >= TP_DollarAmount) closeTP = true;
-         if(UseTP_Points && bid >= avgBuy + TP_Points * point) closeTP = true;
+         // v6.42: TP Points handled by broker via PositionModify
+         // if(UseTP_Points && bid >= avgBuy + TP_Points * point) closeTP = true;
          if(UseTP_PercentBalance && plBuy >= bal * TP_PercentBalance / 100.0) closeTP = true;
        }
       
@@ -4805,7 +4806,8 @@ void ManageTPSL_TF(int tfIdx)
       if(EnableSL && !EnablePerOrderTrailing)
       {
          if(UseSL_Dollar && plBuy <= -SL_DollarAmount) closeSL = true;
-         if(UseSL_Points && bid <= avgBuy - SL_Points * point) closeSL = true;
+         // v6.42: SL Points handled by broker via PositionModify
+         // if(UseSL_Points && bid <= avgBuy - SL_Points * point) closeSL = true;
          if(UseSL_PercentBalance && plBuy <= -(bal * SL_PercentBalance / 100.0)) closeSL = true;
 
          if(closeSL)
@@ -4839,7 +4841,8 @@ void ManageTPSL_TF(int tfIdx)
       if(!EnablePerOrderTrailing)
       {
          if(UseTP_Dollar && plSell >= TP_DollarAmount) closeTP2 = true;
-         if(UseTP_Points && ask <= avgSell - TP_Points * point) closeTP2 = true;
+         // v6.42: TP Points handled by broker via PositionModify
+         // if(UseTP_Points && ask <= avgSell - TP_Points * point) closeTP2 = true;
          if(UseTP_PercentBalance && plSell >= bal * TP_PercentBalance / 100.0) closeTP2 = true;
        }
       
@@ -4866,7 +4869,8 @@ void ManageTPSL_TF(int tfIdx)
       if(EnableSL && !EnablePerOrderTrailing)
       {
          if(UseSL_Dollar && plSell <= -SL_DollarAmount) closeSL2 = true;
-         if(UseSL_Points && ask >= avgSell + SL_Points * point) closeSL2 = true;
+         // v6.42: SL Points handled by broker via PositionModify
+         // if(UseSL_Points && ask >= avgSell + SL_Points * point) closeSL2 = true;
          if(UseSL_PercentBalance && plSell <= -(bal * SL_PercentBalance / 100.0)) closeSL2 = true;
 
          if(closeSL2)
