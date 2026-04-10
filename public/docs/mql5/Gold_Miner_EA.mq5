@@ -1998,11 +1998,12 @@ void SyncBrokerTPSL()
    // v6.46: Use direct hedge set check instead of g_hedgeBalancedLock
    //        g_hedgeBalancedLock was reset to false every tick in ManageHedgeSets()
    //        so ClearBrokerTPSL() was never reached — bound orders kept stale TP
+   // v6.47: Do NOT return after clearing — continue to set TP/SL for non-bound orders (GM1, GM2...)
    if(HasActiveBoundHedgeSet())
    {
       // Clear broker TP/SL for bound orders — prevent broker from closing during hedge
       ClearBrokerTPSL();
-      return;
+      // Fall through to set TP/SL for non-bound orders of the current generation
    }
 
    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
@@ -2152,7 +2153,8 @@ void ManageTPSL()
 {
    // v6.11: Skip TP/SL when hedge balanced lock is active (both sides equal)
    // v6.46: Use direct hedge set check instead of g_hedgeBalancedLock
-   if(HasActiveBoundHedgeSet()) return;
+   // v6.47: Removed early return — CalculateAveragePrice/FloatingPL already skip bound orders
+   //        so new generation orders (GM1, GM2) still get TP/SL management
    
    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
@@ -4823,7 +4825,7 @@ void ManageTPSL_TF(int tfIdx)
 {
    // v6.11: Skip TP/SL when hedge balanced lock is active
    // v6.46: Use direct hedge set check instead of g_hedgeBalancedLock
-   if(HasActiveBoundHedgeSet()) return;
+   // v6.47: Removed early return — TF calculations filter by comment prefix, bound orders won't interfere
    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
    double bal = AccountInfoDouble(ACCOUNT_BALANCE);
 
@@ -9807,7 +9809,7 @@ void ManageMatchingClose()
 {
    // v6.11: Skip matching close when hedge balanced lock is active
    // v6.46: Use direct hedge set check instead of g_hedgeBalancedLock
-   if(HasActiveBoundHedgeSet()) return;
+   // v6.47: Removed early return — matching close should work for non-bound orders of new generation
    int maxLoss = MathMin(MathMax(MatchingMaxLossOrders, 1), 10);  // allow up to 10
 
    // Process BUY side then SELL side
