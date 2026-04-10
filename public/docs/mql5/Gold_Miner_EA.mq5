@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.48 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.49 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.48"
-#property description "Gold Miner EA v6.48 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + GenRaceFix + OrphanGenFix + HedgeSidePause + GLCandleConfirm + MaxGridTrail + BrokerTPSL + DashCache + DashThrottle + LiveTPFix + HedgeClearTP + BoundClearFix + InstantSync + License"
+#property version   "6.49"
+#property description "Gold Miner EA v6.49 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + GenRaceFix + OrphanGenFix + HedgeSidePause + GLCandleConfirm + MaxGridTrail + BrokerTPSL + DashCache + DashThrottle + LiveTPFix + HedgeClearTP + BoundClearFix + InstantSync + DeferredSync + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -599,6 +599,10 @@ double   g_lastBrokerTP_Sell       = 0;  // last TP price set for SELL
 double   g_lastBrokerSL_Buy        = 0;  // last SL price set for BUY
 double   g_lastBrokerSL_Sell       = 0;  // last SL price set for SELL
 
+// === v6.49: Deferred Sync Flags ===
+bool     g_pendingSyncOrderOpen   = false;
+bool     g_pendingSyncOrderClose  = false;
+
 // v6.44: Dashboard render throttle
 datetime g_lastDashboardRenderTime = 0;
 int      g_dashRenderIntervalSec   = 1;  // render dashboard every 1 second only
@@ -861,7 +865,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.48 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.49 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min");
@@ -919,7 +923,7 @@ void OnDeinit(const int reason)
 
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
-   Print("Gold Miner EA v6.48 deinitialized");
+   Print("Gold Miner EA v6.49 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -1656,9 +1660,26 @@ void OnTick()
    // v6.44: Dashboard render throttle — once per second instead of every tick
    if(ShowDashboard && TimeCurrent() - g_lastDashboardRenderTime >= g_dashRenderIntervalSec)
    {
-      DisplayDashboard();
-      g_lastDashboardRenderTime = TimeCurrent();
-   }
+       DisplayDashboard();
+       g_lastDashboardRenderTime = TimeCurrent();
+    }
+
+    // === v6.49: Deferred Data Sync — runs AFTER TP/SL is set to avoid blocking ===
+    if(!MQLInfoInteger(MQL_TESTER) && !MQLInfoInteger(MQL_OPTIMIZATION))
+    {
+       if(g_pendingSyncOrderOpen)
+       {
+          Print("[Sync] Deferred: Order opened - syncing data...");
+          SyncAccountDataWithEvent(SYNC_ORDER_OPEN);
+          g_pendingSyncOrderOpen = false;
+       }
+       if(g_pendingSyncOrderClose)
+       {
+          Print("[Sync] Deferred: Order closed - syncing data with trade history...");
+          SyncAccountDataWithEvent(SYNC_ORDER_CLOSE);
+          g_pendingSyncOrderClose = false;
+       }
+    }
 }
 
 //+------------------------------------------------------------------+
@@ -3610,7 +3631,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.48 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.48 [ZZ]" : "Gold Miner EA v6.48 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.49 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.49 [ZZ]" : "Gold Miner EA v6.49 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -5719,16 +5740,16 @@ void OnTradeTransaction(const MqlTradeTransaction& trans,
          
          if(dealMagic == MagicNumber || dealMagic == 0)
          {
-            if(dealEntry == DEAL_ENTRY_IN)
-            {
-               Print("[Sync] Order opened - syncing data...");
-               SyncAccountDataWithEvent(SYNC_ORDER_OPEN);
-            }
-            else if(dealEntry == DEAL_ENTRY_OUT || dealEntry == DEAL_ENTRY_INOUT)
-            {
-               Print("[Sync] Order closed - syncing data with trade history...");
-               SyncAccountDataWithEvent(SYNC_ORDER_CLOSE);
-            }
+             if(dealEntry == DEAL_ENTRY_IN)
+             {
+                // v6.49: Deferred sync — set flag only, actual sync runs at end of OnTick after TP/SL is set
+                g_pendingSyncOrderOpen = true;
+             }
+             else if(dealEntry == DEAL_ENTRY_OUT || dealEntry == DEAL_ENTRY_INOUT)
+             {
+                // v6.49: Deferred sync — set flag only
+                g_pendingSyncOrderClose = true;
+             }
          }
       }
    }
