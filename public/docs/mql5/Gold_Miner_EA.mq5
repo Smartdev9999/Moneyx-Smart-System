@@ -3867,8 +3867,25 @@ void DisplayDashboard()
             if(GridLoss_CandleConfirm > 0)
             {
                DrawTableRow(row, "GL CandleConfirm", IntegerToString(GridLoss_CandleConfirm) + " candle(s)", clrCyan, COLOR_SECTION_HEDGE); row++;
-            }
-        }
+             }
+             
+             // v6.41: Max Grid Average Trailing Stop display
+             if(MaxGrid_TrailEnable)
+             {
+                color COLOR_SECTION_MAXTRAIL = C'20,100,120';
+                string genLabel = GenPrefix(g_maxGridMonitorGen);
+                DrawTableRow(row, "MaxGrid Trail", "ON | Mon: " + genLabel, clrLime, COLOR_SECTION_MAXTRAIL); row++;
+                
+                if(g_maxGridTrailActive_Buy)
+                {
+                   DrawTableRow(row, "MG BUY Trail", "ACTIVE SL=" + DoubleToString(g_maxGridTrailSL_Buy, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)), clrLime, COLOR_SECTION_MAXTRAIL); row++;
+                }
+                if(g_maxGridTrailActive_Sell)
+                {
+                   DrawTableRow(row, "MG SELL Trail", "ACTIVE SL=" + DoubleToString(g_maxGridTrailSL_Sell, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)), clrLime, COLOR_SECTION_MAXTRAIL); row++;
+                }
+             }
+         }
 
      // === Orphan Recovery Status ===
      color COLOR_SECTION_ORPHAN = C'130,50,180';  // purple for orphan section
