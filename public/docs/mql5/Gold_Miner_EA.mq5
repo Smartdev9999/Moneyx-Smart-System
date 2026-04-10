@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.39 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.40 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.39"
-#property description "Gold Miner EA v6.39 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + GenRaceFix + OrphanGenFix + HedgeSidePause + License"
+#property version   "6.40"
+#property description "Gold Miner EA v6.40 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + GenRaceFix + OrphanGenFix + HedgeSidePause + GLCandleConfirm + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -145,6 +145,7 @@ input int            GridLoss_ATR_Period     = 14;         // ATR Period
 input double         GridLoss_ATR_Multiplier = 1.5;        // ATR Multiplier
 input ENUM_ATR_REF   GridLoss_ATR_Reference  = ATR_REF_DYNAMIC; // ATR Reference Point
 input int            GridLoss_MinGapPoints   = 100;             // Minimum Grid Gap (points)
+input int            GridLoss_CandleConfirm  = 0;               // v6.40: Require N confirming candles before GL (0=Off)
 input bool           GridLoss_OnlyInSignal   = false;      // Grid Only in Signal Direction
 input bool           GridLoss_OnlyNewCandle  = true;       // Grid Only on New Candle
 input bool           GridLoss_DontSameCandle = true;       // Don't Open Grid in Same Candle as Initial
@@ -825,7 +826,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.39 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.40 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min");
@@ -2538,6 +2539,12 @@ void CheckGridLoss(ENUM_POSITION_TYPE side, int currentGridCount)
       if(barTime == lastGridLossCandleTime) return;
    }
 
+   //--- v6.40: Candle Confirmation check
+   if(GridLoss_CandleConfirm > 0)
+   {
+      if(!HasCandleConfirmation(side, PERIOD_CURRENT, GridLoss_CandleConfirm)) return;
+   }
+
    //--- Check signal filter
    if(GridLoss_OnlyInSignal)
    {
@@ -3106,7 +3113,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.39 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.39 [ZZ]" : "Gold Miner EA v6.39 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.40 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.40 [ZZ]" : "Gold Miner EA v6.40 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -4122,7 +4129,13 @@ void CheckGridLossTF(int tfIdx, ENUM_POSITION_TYPE side, int currentGridCount)
       if(barTime == g_tfStates[tfIdx].lastGridLossCandle) return;
    }
 
-   // Find last order for this TF
+   //--- v6.40: Candle Confirmation check
+   if(GridLoss_CandleConfirm > 0)
+   {
+      if(!HasCandleConfirmation(side, g_tfStates[tfIdx].tf, GridLoss_CandleConfirm)) return;
+   }
+
+    // Find last order for this TF
    double lastPrice = 0;
    datetime lastTime = 0;
    FindLastOrderTF(tfIdx, side, "INIT", "GL", lastPrice, lastTime);
@@ -7759,9 +7772,11 @@ void ManageOrphanGrid()
    {
       datetime barTime = iTime(_Symbol, PERIOD_CURRENT, 0);
       if(barTime == g_lastOrphanGridCandleTime) return;
-   }
-    
-   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+    }
+     
+    // v6.40: Candle Confirmation — applied per-side inside the loop below
+     
+    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
    
    for(int g = 0; g < MAX_ORPHAN_GROUPS; g++)
    {
@@ -7797,8 +7812,12 @@ void ManageOrphanGrid()
       // === BUY side orphan grid ===
       if(bc > 0 && glb < GridLoss_MaxTrades)
       {
-         if(!g_squeezeBuyBlocked)
-         {
+          if(!g_squeezeBuyBlocked)
+          {
+             // v6.40: Candle Confirmation for orphan BUY GL
+             if(GridLoss_CandleConfirm > 0 && !HasCandleConfirmation(POSITION_TYPE_BUY, PERIOD_CURRENT, GridLoss_CandleConfirm)) { /* skip */ }
+             else
+             {
             double lastPrice = 0;
             datetime lastTime = 0;
             int lastLevel = 0;
@@ -7835,14 +7854,19 @@ void ManageOrphanGrid()
                   }
                }
             }
-         }
-      }
+             }
+          }
+       }
       
       // === SELL side orphan grid ===
       if(sc > 0 && gls < GridLoss_MaxTrades)
       {
-         if(!g_squeezeSellBlocked)
-         {
+          if(!g_squeezeSellBlocked)
+          {
+             // v6.40: Candle Confirmation for orphan SELL GL
+             if(GridLoss_CandleConfirm > 0 && !HasCandleConfirmation(POSITION_TYPE_SELL, PERIOD_CURRENT, GridLoss_CandleConfirm)) { /* skip */ }
+             else
+             {
             double lastPrice = 0;
             datetime lastTime = 0;
             int lastLevel = 0;
