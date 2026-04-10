@@ -2532,6 +2532,31 @@ void CheckGridLoss(ENUM_POSITION_TYPE side, int currentGridCount)
    if(currentGridCount >= GridLoss_MaxTrades) return;
    if(NormalOrderCount() >= MaxOpenOrders) return;
 
+// === v6.40: Candle Confirmation Helper ===
+// Checks if the last N closed candles (shift 1..N) all confirm the trade direction
+// BUY: all N candles must be bullish (close > open)
+// SELL: all N candles must be bearish (close < open)
+bool HasCandleConfirmation(ENUM_POSITION_TYPE side, ENUM_TIMEFRAMES tf, int requiredCandles)
+{
+   if(requiredCandles <= 0) return true;
+   
+   for(int i = 1; i <= requiredCandles; i++)
+   {
+      double o = iOpen(_Symbol, tf, i);
+      double c = iClose(_Symbol, tf, i);
+      
+      if(side == POSITION_TYPE_BUY)
+      {
+         if(c <= o) return false;  // not bullish
+      }
+      else // SELL
+      {
+         if(c >= o) return false;  // not bearish
+      }
+   }
+   return true;
+}
+
    //--- OnlyNewCandle check
    if(GridLoss_OnlyNewCandle)
    {
