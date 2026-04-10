@@ -2151,7 +2151,8 @@ void ClearBrokerTPSL()
 void ManageTPSL()
 {
    // v6.11: Skip TP/SL when hedge balanced lock is active (both sides equal)
-   if(g_hedgeBalancedLock && g_hedgeSetCount > 0) return;
+   // v6.46: Use direct hedge set check instead of g_hedgeBalancedLock
+   if(HasActiveBoundHedgeSet()) return;
    
    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
@@ -4821,7 +4822,8 @@ void CheckGridProfitTF(int tfIdx, ENUM_POSITION_TYPE side, int currentGridCount)
 void ManageTPSL_TF(int tfIdx)
 {
    // v6.11: Skip TP/SL when hedge balanced lock is active
-   if(g_hedgeBalancedLock && g_hedgeSetCount > 0) return;
+   // v6.46: Use direct hedge set check instead of g_hedgeBalancedLock
+   if(HasActiveBoundHedgeSet()) return;
    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
    double bal = AccountInfoDouble(ACCOUNT_BALANCE);
 
@@ -9804,7 +9806,8 @@ void ManageHedgeGridMode(int idx)
 void ManageMatchingClose()
 {
    // v6.11: Skip matching close when hedge balanced lock is active
-   if(g_hedgeBalancedLock && g_hedgeSetCount > 0) return;
+   // v6.46: Use direct hedge set check instead of g_hedgeBalancedLock
+   if(HasActiveBoundHedgeSet()) return;
    int maxLoss = MathMin(MathMax(MatchingMaxLossOrders, 1), 10);  // allow up to 10
 
    // Process BUY side then SELL side
