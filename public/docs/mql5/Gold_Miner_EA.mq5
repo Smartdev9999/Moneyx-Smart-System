@@ -1981,12 +1981,26 @@ void CloseAllPositions()
 //| v6.42: Sync Broker-Level TP/SL via PositionModify                  |
 //| Sets real TP/SL on each position so broker closes automatically    |
 //+------------------------------------------------------------------+
+// v6.46: Direct check for active hedge sets with bound orders
+//        Replaces unreliable g_hedgeBalancedLock trigger
+bool HasActiveBoundHedgeSet()
+{
+   for(int h = 0; h < MAX_HEDGE_SETS; h++)
+   {
+      if(g_hedgeSets[h].active && g_hedgeSets[h].boundTicketCount > 0)
+         return true;
+   }
+   return false;
+}
+
 void SyncBrokerTPSL()
 {
-   // Skip when hedge balanced lock is active
-   if(g_hedgeBalancedLock && g_hedgeSetCount > 0)
+   // v6.46: Use direct hedge set check instead of g_hedgeBalancedLock
+   //        g_hedgeBalancedLock was reset to false every tick in ManageHedgeSets()
+   //        so ClearBrokerTPSL() was never reached — bound orders kept stale TP
+   if(HasActiveBoundHedgeSet())
    {
-      // Clear broker TP/SL during hedge lock — prevent broker from closing
+      // Clear broker TP/SL for bound orders — prevent broker from closing during hedge
       ClearBrokerTPSL();
       return;
    }
