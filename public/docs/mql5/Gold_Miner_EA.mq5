@@ -840,7 +840,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.40 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.41 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min");
@@ -1321,9 +1321,13 @@ void OnTick()
       if(EntryMode == ENTRY_SMA || EntryMode == ENTRY_INSTANT)
          ManageTrailingStop();
       // ZigZag mode: per-TF trailing handled in OnTickZigZagMTF()
-   }
+    }
 
-   //--- Every tick: Track Max DD per side for DD% TP (v6.7)
+    //--- v6.41: Max Grid Average Trailing Stop
+    if(MaxGrid_TrailEnable)
+       ManageMaxGridTrailing();
+
+    //--- Every tick: Track Max DD per side for DD% TP (v6.7)
    if(UseTP_DDPercent)
    {
       double plBuyDD = CalculateFloatingPL(POSITION_TYPE_BUY);
@@ -2539,7 +2543,253 @@ double FindMaxLotOnSide(ENUM_POSITION_TYPE side)
 }
 
 //+------------------------------------------------------------------+
-//| Check Grid Loss                                                    |
+//| v6.41: Count GL orders for a specific generation + side            |
+//+------------------------------------------------------------------+
+int CountGenGridLoss(int gen, ENUM_POSITION_TYPE side)
+{
+   int count = 0;
+   string prefix = GenPrefix(gen);
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
+      string comment = PositionGetString(POSITION_COMMENT);
+      if(IsHedgeComment(comment)) continue;
+      if(IsTicketBound(ticket)) continue;
+      int orderGen = ExtractGeneration(comment);
+      if(orderGen != gen) continue;
+      if(StringFind(comment, "_GL") >= 0) count++;
+   }
+   return count;
+}
+
+//+------------------------------------------------------------------+
+//| v6.41: Calc average price for gen + side (INIT + GL only)          |
+//+------------------------------------------------------------------+
+double CalcGenAveragePrice(int gen, ENUM_POSITION_TYPE side)
+{
+   double totalPrice = 0;
+   double totalLots = 0;
+   string prefix = GenPrefix(gen);
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
+      string comment = PositionGetString(POSITION_COMMENT);
+      if(IsHedgeComment(comment)) continue;
+      if(IsTicketBound(ticket)) continue;
+      int orderGen = ExtractGeneration(comment);
+      if(orderGen != gen) continue;
+      // Include INIT and GL only
+      if(StringFind(comment, "_INIT") < 0 && StringFind(comment, "_GL") < 0) continue;
+      double lots = PositionGetDouble(POSITION_VOLUME);
+      double price = PositionGetDouble(POSITION_PRICE_OPEN);
+      totalPrice += price * lots;
+      totalLots += lots;
+   }
+   if(totalLots <= 0) return 0;
+   return totalPrice / totalLots;
+}
+
+//+------------------------------------------------------------------+
+//| v6.41: Count total INIT+GL orders for gen + side                   |
+//+------------------------------------------------------------------+
+int CountGenOrders(int gen, ENUM_POSITION_TYPE side)
+{
+   int count = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
+      string comment = PositionGetString(POSITION_COMMENT);
+      if(IsHedgeComment(comment)) continue;
+      if(IsTicketBound(ticket)) continue;
+      int orderGen = ExtractGeneration(comment);
+      if(orderGen != gen) continue;
+      if(StringFind(comment, "_INIT") >= 0 || StringFind(comment, "_GL") >= 0) count++;
+   }
+   return count;
+}
+
+//+------------------------------------------------------------------+
+//| v6.41: Close all orders of a specific generation + side            |
+//+------------------------------------------------------------------+
+void CloseGenSide(int gen, ENUM_POSITION_TYPE side)
+{
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
+      string comment = PositionGetString(POSITION_COMMENT);
+      if(IsHedgeComment(comment)) continue;
+      if(IsTicketBound(ticket)) continue;
+      int orderGen = ExtractGeneration(comment);
+      if(orderGen != gen) continue;
+      if(StringFind(comment, "_INIT") >= 0 || StringFind(comment, "_GL") >= 0)
+         trade.PositionClose(ticket);
+   }
+   Print("v6.41 MaxGridTrail: Closed Gen", gen, " side=", (side == POSITION_TYPE_BUY ? "BUY" : "SELL"));
+}
+
+//+------------------------------------------------------------------+
+//| v6.41: Manage Max Grid Average Trailing Stop                       |
+//+------------------------------------------------------------------+
+void ManageMaxGridTrailing()
+{
+   // Reset if no orders at all
+   if(TotalOrderCount() == 0)
+   {
+      g_maxGridMonitorGen = 0;
+      g_maxGridTrailActive_Buy = false;
+      g_maxGridTrailActive_Sell = false;
+      g_maxGridTrailSL_Buy = 0;
+      g_maxGridTrailSL_Sell = 0;
+      return;
+   }
+   
+   // Auto-advance generation: if current monitored gen has no orders, find next
+   int maxGenToCheck = g_cycleGeneration;
+   while(g_maxGridMonitorGen <= maxGenToCheck)
+   {
+      // Check if this gen has any orders
+      int buyOrders = CountGenOrders(g_maxGridMonitorGen, POSITION_TYPE_BUY);
+      int sellOrders = CountGenOrders(g_maxGridMonitorGen, POSITION_TYPE_SELL);
+      if(buyOrders > 0 || sellOrders > 0) break;  // found active gen
+      // No orders in this gen, advance
+      g_maxGridTrailActive_Buy = false;
+      g_maxGridTrailActive_Sell = false;
+      g_maxGridTrailSL_Buy = 0;
+      g_maxGridTrailSL_Sell = 0;
+      g_maxGridMonitorGen++;
+   }
+   
+   // If we've gone past all generations, reset
+   if(g_maxGridMonitorGen > maxGenToCheck)
+   {
+      g_maxGridMonitorGen = 0;
+      return;
+   }
+   
+   int gen = g_maxGridMonitorGen;
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double point = _Point;
+   
+   // === BUY side trailing ===
+   {
+      int glCount = CountGenGridLoss(gen, POSITION_TYPE_BUY);
+      if(glCount >= GridLoss_MaxTrades)
+      {
+         double avgPrice = CalcGenAveragePrice(gen, POSITION_TYPE_BUY);
+         if(avgPrice > 0)
+         {
+            double activationPrice = avgPrice + MaxGrid_TrailActivation * point;
+            
+            if(!g_maxGridTrailActive_Buy)
+            {
+               // Check if price reached activation level
+               if(bid >= activationPrice)
+               {
+                  g_maxGridTrailActive_Buy = true;
+                  g_maxGridTrailSL_Buy = avgPrice + MaxGrid_BreakevenBuffer * point;
+                  Print("v6.41 MaxGridTrail BUY ACTIVATED: Gen=", gen, " AvgPrice=", avgPrice, " SL=", g_maxGridTrailSL_Buy);
+               }
+            }
+            else
+            {
+               // Trailing is active — move SL up
+               double newSL = bid - MaxGrid_TrailStep * point;
+               if(newSL > g_maxGridTrailSL_Buy)
+               {
+                  g_maxGridTrailSL_Buy = newSL;
+               }
+               
+               // Check if price hit trailing SL
+               if(bid <= g_maxGridTrailSL_Buy)
+               {
+                  Print("v6.41 MaxGridTrail BUY HIT SL: Gen=", gen, " SL=", g_maxGridTrailSL_Buy, " Bid=", bid);
+                  CloseGenSide(gen, POSITION_TYPE_BUY);
+                  g_maxGridTrailActive_Buy = false;
+                  g_maxGridTrailSL_Buy = 0;
+               }
+            }
+         }
+      }
+      else
+      {
+         // Not at max grid — reset trailing for this side
+         if(g_maxGridTrailActive_Buy)
+         {
+            g_maxGridTrailActive_Buy = false;
+            g_maxGridTrailSL_Buy = 0;
+         }
+      }
+   }
+   
+   // === SELL side trailing ===
+   {
+      int glCount = CountGenGridLoss(gen, POSITION_TYPE_SELL);
+      if(glCount >= GridLoss_MaxTrades)
+      {
+         double avgPrice = CalcGenAveragePrice(gen, POSITION_TYPE_SELL);
+         if(avgPrice > 0)
+         {
+            double activationPrice = avgPrice - MaxGrid_TrailActivation * point;
+            
+            if(!g_maxGridTrailActive_Sell)
+            {
+               // Check if price reached activation level (for SELL, price must go below avg)
+               if(ask <= activationPrice)
+               {
+                  g_maxGridTrailActive_Sell = true;
+                  g_maxGridTrailSL_Sell = avgPrice - MaxGrid_BreakevenBuffer * point;
+                  Print("v6.41 MaxGridTrail SELL ACTIVATED: Gen=", gen, " AvgPrice=", avgPrice, " SL=", g_maxGridTrailSL_Sell);
+               }
+            }
+            else
+            {
+               // Trailing is active — move SL down
+               double newSL = ask + MaxGrid_TrailStep * point;
+               if(newSL < g_maxGridTrailSL_Sell || g_maxGridTrailSL_Sell == 0)
+               {
+                  g_maxGridTrailSL_Sell = newSL;
+               }
+               
+               // Check if price hit trailing SL (for SELL, ask goes above SL)
+               if(ask >= g_maxGridTrailSL_Sell)
+               {
+                  Print("v6.41 MaxGridTrail SELL HIT SL: Gen=", gen, " SL=", g_maxGridTrailSL_Sell, " Ask=", ask);
+                  CloseGenSide(gen, POSITION_TYPE_SELL);
+                  g_maxGridTrailActive_Sell = false;
+                  g_maxGridTrailSL_Sell = 0;
+               }
+            }
+         }
+      }
+      else
+      {
+         // Not at max grid — reset trailing for this side
+         if(g_maxGridTrailActive_Sell)
+         {
+            g_maxGridTrailActive_Sell = false;
+            g_maxGridTrailSL_Sell = 0;
+         }
+      }
+   }
+}
+
 // === v6.40: Candle Confirmation Helper ===
 // Checks if the last N closed candles (shift 1..N) all confirm the trade direction
 // BUY: all N candles must be bullish (close > open)
