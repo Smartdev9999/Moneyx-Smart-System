@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.46 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.47 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.46"
-#property description "Gold Miner EA v6.46 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + GenRaceFix + OrphanGenFix + HedgeSidePause + GLCandleConfirm + MaxGridTrail + BrokerTPSL + DashCache + DashThrottle + LiveTPFix + HedgeClearTP + BoundClearFix + License"
+#property version   "6.47"
+#property description "Gold Miner EA v6.47 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + GenRaceFix + OrphanGenFix + HedgeSidePause + GLCandleConfirm + MaxGridTrail + BrokerTPSL + DashCache + DashThrottle + LiveTPFix + HedgeClearTP + BoundClearFix + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -861,7 +861,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.46 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.47 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min");
@@ -919,7 +919,7 @@ void OnDeinit(const int reason)
 
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
-   Print("Gold Miner EA v6.46 deinitialized");
+   Print("Gold Miner EA v6.47 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -1998,11 +1998,12 @@ void SyncBrokerTPSL()
    // v6.46: Use direct hedge set check instead of g_hedgeBalancedLock
    //        g_hedgeBalancedLock was reset to false every tick in ManageHedgeSets()
    //        so ClearBrokerTPSL() was never reached — bound orders kept stale TP
+   // v6.47: Do NOT return after clearing — continue to set TP/SL for non-bound orders (GM1, GM2...)
    if(HasActiveBoundHedgeSet())
    {
       // Clear broker TP/SL for bound orders — prevent broker from closing during hedge
       ClearBrokerTPSL();
-      return;
+      // Fall through to set TP/SL for non-bound orders of the current generation
    }
 
    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
@@ -2137,7 +2138,7 @@ void ClearBrokerTPSL()
       if(curTP != 0 || curSL != 0)
       {
          if(trade.PositionModify(ticket, 0, 0))
-            Print("v6.46 ClearTP: Cleared bound order #", ticket, " TP=", curTP, "->0 SL=", curSL, "->0");
+            Print("v6.47 ClearTP: Cleared bound order #", ticket, " TP=", curTP, "->0 SL=", curSL, "->0");
       }
    }
 
@@ -2152,7 +2153,8 @@ void ManageTPSL()
 {
    // v6.11: Skip TP/SL when hedge balanced lock is active (both sides equal)
    // v6.46: Use direct hedge set check instead of g_hedgeBalancedLock
-   if(HasActiveBoundHedgeSet()) return;
+   // v6.47: Removed early return — CalculateAveragePrice/FloatingPL already skip bound orders
+   //        so new generation orders (GM1, GM2) still get TP/SL management
    
    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
@@ -3596,7 +3598,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.46 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.46 [ZZ]" : "Gold Miner EA v6.46 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.47 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.47 [ZZ]" : "Gold Miner EA v6.47 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -4823,7 +4825,7 @@ void ManageTPSL_TF(int tfIdx)
 {
    // v6.11: Skip TP/SL when hedge balanced lock is active
    // v6.46: Use direct hedge set check instead of g_hedgeBalancedLock
-   if(HasActiveBoundHedgeSet()) return;
+   // v6.47: Removed early return — TF calculations filter by comment prefix, bound orders won't interfere
    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
    double bal = AccountInfoDouble(ACCOUNT_BALANCE);
 
@@ -9807,7 +9809,7 @@ void ManageMatchingClose()
 {
    // v6.11: Skip matching close when hedge balanced lock is active
    // v6.46: Use direct hedge set check instead of g_hedgeBalancedLock
-   if(HasActiveBoundHedgeSet()) return;
+   // v6.47: Removed early return — matching close should work for non-bound orders of new generation
    int maxLoss = MathMin(MathMax(MatchingMaxLossOrders, 1), 10);  // allow up to 10
 
    // Process BUY side then SELL side
