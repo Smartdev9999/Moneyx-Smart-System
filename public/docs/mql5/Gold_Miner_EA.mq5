@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.42 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.43 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.42"
-#property description "Gold Miner EA v6.42 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + GenRaceFix + OrphanGenFix + HedgeSidePause + GLCandleConfirm + MaxGridTrail + BrokerTPSL + DashCache + License"
+#property version   "6.43"
+#property description "Gold Miner EA v6.43 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + GenRaceFix + OrphanGenFix + HedgeSidePause + GLCandleConfirm + MaxGridTrail + BrokerTPSL + DashCache + DashThrottle + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -599,6 +599,10 @@ double   g_lastBrokerTP_Sell       = 0;  // last TP price set for SELL
 double   g_lastBrokerSL_Buy        = 0;  // last SL price set for BUY
 double   g_lastBrokerSL_Sell       = 0;  // last SL price set for SELL
 
+// v6.43: Dashboard render throttle
+datetime g_lastDashboardRenderTime = 0;
+int      g_dashRenderIntervalSec   = 1;  // render dashboard every 1 second only
+
 // === Orphan Recovery System ===
 datetime g_lastOrphanScanTime = 0;
 datetime g_lastOrphanGridCandleTime = 0;  // Track candle time for orphan grid (OnlyNewCandle)
@@ -873,6 +877,9 @@ int OnInit()
       CheckWebRequestConfiguration();
       RefreshNewsData();
    }
+
+   // v6.43: Render dashboard immediately on attach (don't wait for first tick)
+   if(ShowDashboard) DisplayDashboard();
 
    return INIT_SUCCEEDED;
 }
@@ -1359,8 +1366,9 @@ void OnTick()
        ManageTPSL();
     // ZigZag mode: per-TF TP/SL + shared accumulate handled in OnTickZigZagMTF()
 
-    //--- v6.42: Broker-Level TP/SL sync (every 2 seconds)
-    if((UseTP_Points || (EnableSL && UseSL_Points)) && !EnablePerOrderTrailing)
+    //--- v6.42/v6.43: Broker-Level TP/SL sync (every 2 seconds)
+    //--- v6.43 fix: removed !EnablePerOrderTrailing guard — broker TP and per-order trailing SL work independently
+    if(UseTP_Points || (EnableSL && UseSL_Points))
     {
        if(TimeCurrent() - g_lastBrokerTPSLSync >= g_brokerTPSLIntervalSec)
           SyncBrokerTPSL();
@@ -1646,7 +1654,12 @@ void OnTick()
    }
 
    DrawLines();
-   if(ShowDashboard) DisplayDashboard();
+   // v6.43: Dashboard render throttle — once per second instead of every tick
+   if(ShowDashboard && TimeCurrent() - g_lastDashboardRenderTime >= g_dashRenderIntervalSec)
+   {
+      DisplayDashboard();
+      g_lastDashboardRenderTime = TimeCurrent();
+   }
 }
 
 //+------------------------------------------------------------------+
