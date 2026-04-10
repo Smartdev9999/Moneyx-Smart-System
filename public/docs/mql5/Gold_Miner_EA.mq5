@@ -2004,16 +2004,18 @@ void SyncBrokerTPSL()
 
    if(avgBuy > 0)
    {
-      if(UseTP_Points && !EnablePerOrderTrailing)
+      if(UseTP_Points)
          tpBuy = NormalizeDouble(avgBuy + TP_Points * point, digits);
+      // v6.43: SL via broker only when per-order trailing is OFF (trailing manages its own SL)
       if(EnableSL && UseSL_Points && !EnablePerOrderTrailing)
          slBuy = NormalizeDouble(avgBuy - SL_Points * point, digits);
    }
 
    if(avgSell > 0)
    {
-      if(UseTP_Points && !EnablePerOrderTrailing)
+      if(UseTP_Points)
          tpSell = NormalizeDouble(avgSell - TP_Points * point, digits);
+      // v6.43: SL via broker only when per-order trailing is OFF
       if(EnableSL && UseSL_Points && !EnablePerOrderTrailing)
          slSell = NormalizeDouble(avgSell + SL_Points * point, digits);
    }
@@ -2114,14 +2116,14 @@ void ManageTPSL()
       bool closeTP = false;
       bool closeSL = false;
 
-      //--- TP checks (skip basket TP when per-order trailing is active)
+      //--- TP checks
+      //--- v6.43: Dollar/Percent TP still managed by EA (skip only when per-order trailing active)
+      //--- Points TP is handled by broker via PositionModify — no EA check needed
       if(!EnablePerOrderTrailing)
       {
          if(UseTP_Dollar && plBuy >= TP_DollarAmount) closeTP = true;
-          // v6.42: TP Points now handled by broker via PositionModify (SyncBrokerTPSL)
-          // if(UseTP_Points && bid >= avgBuy + TP_Points * point) closeTP = true;
          if(UseTP_PercentBalance && plBuy >= balance * TP_PercentBalance / 100.0) closeTP = true;
-       }
+      }
       
       //--- DD% TP check (v6.7): profit target = X% of max drawdown, always close in profit
       if(UseTP_DDPercent && g_maxDDBuy < 0)
@@ -2191,14 +2193,13 @@ void ManageTPSL()
       bool closeTP2 = false;
       bool closeSL2 = false;
 
-      //--- TP checks (skip basket TP when per-order trailing is active)
+      //--- TP checks
+      //--- v6.43: Dollar/Percent TP still managed by EA; Points TP handled by broker
       if(!EnablePerOrderTrailing)
       {
          if(UseTP_Dollar && plSell >= TP_DollarAmount) closeTP2 = true;
-          // v6.42: TP Points now handled by broker via PositionModify (SyncBrokerTPSL)
-          // if(UseTP_Points && ask <= avgSell - TP_Points * point) closeTP2 = true;
          if(UseTP_PercentBalance && plSell >= balance * TP_PercentBalance / 100.0) closeTP2 = true;
-       }
+      }
       
       //--- DD% TP check (v6.7): profit target = X% of max drawdown, always close in profit
       if(UseTP_DDPercent && g_maxDDSell < 0)
@@ -3646,8 +3647,9 @@ void DisplayDashboard()
    if(UseTP_DDPercent)
    {
       color COLOR_SECTION_DDTP = C'180,80,50';  // warm orange for DD% TP
-      double plBuyTP = CalculateFloatingPL(POSITION_TYPE_BUY);
-      double plSellTP = CalculateFloatingPL(POSITION_TYPE_SELL);
+      // v6.43: reuse plBuy/plSell from top of function (no redundant recalculation)
+      double plBuyTP = plBuy;
+      double plSellTP = plSell;
       
       // BUY side
       if(g_maxDDBuy < 0)
@@ -3694,7 +3696,8 @@ void DisplayDashboard()
    color COLOR_SECTION_HIST = C'50,100,180';  // distinct blue for history section
 
    // Current open lot total
-   double totalCurrentLots = CalculateTotalLots(POSITION_TYPE_BUY) + CalculateTotalLots(POSITION_TYPE_SELL);
+   // v6.43: reuse lotsBuy/lotsSell from top of function
+   double totalCurrentLots = lotsBuy + lotsSell;
    DrawTableRow(row, "Total Cur. Lot",   DoubleToString(totalCurrentLots, 2) + " L", COLOR_TEXT, COLOR_SECTION_HIST); row++;
 
     // History metrics — v6.42: cached every 5 seconds to reduce CPU load
