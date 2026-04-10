@@ -1,30 +1,32 @@
 
 
 
-## v6.42 — Broker-Level TP/SL (PositionModify) + Dashboard Cache
+## v6.43 — Fix Broker TP/SL + Dashboard Render Throttle
 
 ### หลักการ
 
-1. **Broker-Level TP/SL**: เปลี่ยน TP/SL Points mode จาก "EA เช็คราคาแล้วปิดเอง" → "EA เซ็ต TP/SL ลงในออเดอร์ผ่าน `trade.PositionModify()`" ให้ Broker เป็นคนปิดแทน ทำให้ปิดได้ทันทีแม้ EA ช้า
-2. **Dashboard Cache**: Cache history metrics ทุก 5 วินาที แทนที่จะคำนวณทุก tick ลด CPU load จาก ~15,000 iterations/tick → 0
+1. **Fix Broker TP/SL**: ลบ `!EnablePerOrderTrailing` guard ที่ block `SyncBrokerTPSL()` → TP จะปรากฏในออเดอร์ทันที
+2. **Dashboard Render Throttle**: render dashboard ทุก 1 วินาทีแทนทุก tick ลด CPU 80-90%
+3. **OnInit Dashboard**: แสดง dashboard ทันทีเมื่อลาก EA เข้าชาร์ต
+4. **Redundant Calc Fix**: ลบ redundant `CalculateFloatingPL()` / `CalculateTotalLots()` calls
 
 ### ไฟล์: `public/docs/mql5/Gold_Miner_EA.mq5`
 
 #### Changes
-- Version bump → v6.42
-- เพิ่ม `SyncBrokerTPSL()` — คำนวณ avg + TP/SL Points → set ลงทุก position ทุก 2 วินาที
-- เพิ่ม `ClearBrokerTPSL()` — clear TP/SL เมื่อ hedge lock active
-- แก้ `ManageTPSL()` + `ManageTPSL_TF()` — skip Points check (broker จัดการ)
-- แก้ `DisplayDashboard()` — cache history functions ทุก 5 วินาที
-- เพิ่ม dashboard แสดง Broker TP/SL price
-- เรียก `SyncBrokerTPSL()` ใน OnTick ทุก 2 วินาที
+- Version bump → v6.43
+- ลบ `!EnablePerOrderTrailing` จาก SyncBrokerTPSL call condition (OnTick)
+- แก้ SyncBrokerTPSL(): set TP เสมอ, set SL เฉพาะเมื่อไม่มี per-order trailing
+- เพิ่ม dashboard render throttle (1 วินาที) ใน OnTick
+- เพิ่ม `DisplayDashboard()` ใน OnInit
+- ลบ redundant `CalculateFloatingPL()` ใน DD%TP section → ใช้ plBuy/plSell จากต้นฟังก์ชัน
+- ลบ redundant `CalculateTotalLots()` ใน INFO section → ใช้ lotsBuy+lotsSell
 
 ### สิ่งที่ไม่เปลี่ยนแปลง
 - Order Execution Logic — ไม่แก้
 - Trading Strategy Logic — ไม่แก้
 - Core Module Logic — ไม่แก้
-- Dollar/Percent/DD% TP modes — ยังทำงานผ่าน EA เหมือนเดิม
+- Dollar/Percent/DD% TP — ยังจัดการผ่าน EA เหมือนเดิม
+- Per-Order Trailing Stop logic — ไม่แก้
 - Accumulate Close / Drawdown Exit — ไม่แก้
-- Grid distance / min gap / new candle / candle confirm — ไม่แก้
-- DD trigger / Hedge / Balance Guard — ไม่แก้
-- v6.37-v6.41 features — ไม่แก้
+- Grid / Hedge / Balance Guard — ไม่แก้
+- v6.37-v6.42 features — ไม่แก้
