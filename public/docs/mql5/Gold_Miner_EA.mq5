@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.41 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.42 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.41"
-#property description "Gold Miner EA v6.41 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + GenRaceFix + OrphanGenFix + HedgeSidePause + GLCandleConfirm + MaxGridTrail + License"
+#property version   "6.42"
+#property description "Gold Miner EA v6.42 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + GenRaceFix + OrphanGenFix + HedgeSidePause + GLCandleConfirm + MaxGridTrail + BrokerTPSL + DashCache + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -581,6 +581,23 @@ double   g_maxGridTrailSL_Sell = 0;
 bool     g_maxGridTrailActive_Buy  = false;
 bool     g_maxGridTrailActive_Sell = false;
 int      g_maxGridMonitorGen = 0;  // generation currently being monitored
+
+// === v6.42: Dashboard History Cache ===
+datetime g_lastDashHistoryCalcTime = 0;
+int      g_dashCacheIntervalSec    = 5;  // recalculate every 5 seconds
+double   g_cachedClosedLots        = 0;
+int      g_cachedClosedOrders      = 0;
+double   g_cachedMonthlyPL         = 0;
+double   g_cachedTotalPLHist       = 0;
+double   g_cachedDailyClosedLots   = 0;
+
+// === v6.42: Broker-Level TP/SL State ===
+datetime g_lastBrokerTPSLSync      = 0;
+int      g_brokerTPSLIntervalSec   = 2;  // sync every 2 seconds
+double   g_lastBrokerTP_Buy        = 0;  // last TP price set for BUY
+double   g_lastBrokerTP_Sell       = 0;  // last TP price set for SELL
+double   g_lastBrokerSL_Buy        = 0;  // last SL price set for BUY
+double   g_lastBrokerSL_Sell       = 0;  // last SL price set for SELL
 
 // === Orphan Recovery System ===
 datetime g_lastOrphanScanTime = 0;
