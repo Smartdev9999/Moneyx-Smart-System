@@ -2526,12 +2526,6 @@ double FindMaxLotOnSide(ENUM_POSITION_TYPE side)
 
 //+------------------------------------------------------------------+
 //| Check Grid Loss                                                    |
-//+------------------------------------------------------------------+
-void CheckGridLoss(ENUM_POSITION_TYPE side, int currentGridCount)
-{
-   if(currentGridCount >= GridLoss_MaxTrades) return;
-   if(NormalOrderCount() >= MaxOpenOrders) return;
-
 // === v6.40: Candle Confirmation Helper ===
 // Checks if the last N closed candles (shift 1..N) all confirm the trade direction
 // BUY: all N candles must be bullish (close > open)
@@ -2547,15 +2541,21 @@ bool HasCandleConfirmation(ENUM_POSITION_TYPE side, ENUM_TIMEFRAMES tf, int requ
       
       if(side == POSITION_TYPE_BUY)
       {
-         if(c <= o) return false;  // not bullish
+         if(c <= o) return false;
       }
-      else // SELL
+      else
       {
-         if(c >= o) return false;  // not bearish
+         if(c >= o) return false;
       }
    }
    return true;
 }
+
+//+------------------------------------------------------------------+
+void CheckGridLoss(ENUM_POSITION_TYPE side, int currentGridCount)
+{
+   if(currentGridCount >= GridLoss_MaxTrades) return;
+   if(NormalOrderCount() >= MaxOpenOrders) return;
 
    //--- OnlyNewCandle check
    if(GridLoss_OnlyNewCandle)
