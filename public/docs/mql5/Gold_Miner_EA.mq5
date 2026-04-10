@@ -1959,8 +1959,124 @@ void CloseAllPositions()
 }
 
 //+------------------------------------------------------------------+
-//| Manage TP/SL (Basket)                                              |
+//| v6.42: Sync Broker-Level TP/SL via PositionModify                  |
+//| Sets real TP/SL on each position so broker closes automatically    |
 //+------------------------------------------------------------------+
+void SyncBrokerTPSL()
+{
+   // Skip when hedge balanced lock is active
+   if(g_hedgeBalancedLock && g_hedgeSetCount > 0)
+   {
+      // Clear broker TP/SL during hedge lock — prevent broker from closing
+      ClearBrokerTPSL();
+      return;
+   }
+
+   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+
+   // Calculate average prices
+   double avgBuy  = CalculateAveragePrice(POSITION_TYPE_BUY);
+   double avgSell = CalculateAveragePrice(POSITION_TYPE_SELL);
+
+   // Calculate target TP/SL prices
+   double tpBuy = 0, slBuy = 0, tpSell = 0, slSell = 0;
+
+   if(avgBuy > 0)
+   {
+      if(UseTP_Points && !EnablePerOrderTrailing)
+         tpBuy = NormalizeDouble(avgBuy + TP_Points * point, digits);
+      if(EnableSL && UseSL_Points && !EnablePerOrderTrailing)
+         slBuy = NormalizeDouble(avgBuy - SL_Points * point, digits);
+   }
+
+   if(avgSell > 0)
+   {
+      if(UseTP_Points && !EnablePerOrderTrailing)
+         tpSell = NormalizeDouble(avgSell - TP_Points * point, digits);
+      if(EnableSL && UseSL_Points && !EnablePerOrderTrailing)
+         slSell = NormalizeDouble(avgSell + SL_Points * point, digits);
+   }
+
+   // Check if TP/SL changed from last sync (avoid redundant modify)
+   bool buyChanged  = (tpBuy != g_lastBrokerTP_Buy || slBuy != g_lastBrokerSL_Buy);
+   bool sellChanged = (tpSell != g_lastBrokerTP_Sell || slSell != g_lastBrokerSL_Sell);
+
+   // Modify positions
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+
+      // Skip hedge/bound orders
+      if(IsHedgeComment(PositionGetString(POSITION_COMMENT))) continue;
+      if(IsTicketBound(ticket)) continue;
+
+      ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+      double curTP = PositionGetDouble(POSITION_TP);
+      double curSL = PositionGetDouble(POSITION_SL);
+
+      if(posType == POSITION_TYPE_BUY && buyChanged && avgBuy > 0)
+      {
+         if(NormalizeDouble(curTP, digits) != tpBuy || NormalizeDouble(curSL, digits) != slBuy)
+         {
+            if(!trade.PositionModify(ticket, slBuy, tpBuy))
+               Print("v6.42 BrokerTPSL: Modify BUY #", ticket, " failed: ", GetLastError());
+         }
+      }
+      else if(posType == POSITION_TYPE_SELL && sellChanged && avgSell > 0)
+      {
+         if(NormalizeDouble(curTP, digits) != tpSell || NormalizeDouble(curSL, digits) != slSell)
+         {
+            if(!trade.PositionModify(ticket, slSell, tpSell))
+               Print("v6.42 BrokerTPSL: Modify SELL #", ticket, " failed: ", GetLastError());
+         }
+      }
+   }
+
+   // Update cached values
+   g_lastBrokerTP_Buy  = tpBuy;
+   g_lastBrokerSL_Buy  = slBuy;
+   g_lastBrokerTP_Sell  = tpSell;
+   g_lastBrokerSL_Sell  = slSell;
+
+   g_lastBrokerTPSLSync = TimeCurrent();
+}
+
+//+------------------------------------------------------------------+
+//| v6.42: Clear Broker TP/SL (during hedge lock or no positions)      |
+//+------------------------------------------------------------------+
+void ClearBrokerTPSL()
+{
+   // Reset cached prices
+   if(g_lastBrokerTP_Buy == 0 && g_lastBrokerSL_Buy == 0 &&
+      g_lastBrokerTP_Sell == 0 && g_lastBrokerSL_Sell == 0) return;
+
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if(IsHedgeComment(PositionGetString(POSITION_COMMENT))) continue;
+      if(IsTicketBound(ticket)) continue;
+
+      double curTP = PositionGetDouble(POSITION_TP);
+      double curSL = PositionGetDouble(POSITION_SL);
+
+      if(curTP != 0 || curSL != 0)
+         trade.PositionModify(ticket, 0, 0);
+   }
+
+   g_lastBrokerTP_Buy  = 0;
+   g_lastBrokerSL_Buy  = 0;
+   g_lastBrokerTP_Sell  = 0;
+   g_lastBrokerSL_Sell  = 0;
+}
+
+
 void ManageTPSL()
 {
    // v6.11: Skip TP/SL when hedge balanced lock is active (both sides equal)
