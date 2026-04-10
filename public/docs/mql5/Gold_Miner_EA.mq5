@@ -599,6 +599,10 @@ double   g_lastBrokerTP_Sell       = 0;  // last TP price set for SELL
 double   g_lastBrokerSL_Buy        = 0;  // last SL price set for BUY
 double   g_lastBrokerSL_Sell       = 0;  // last SL price set for SELL
 
+// === v6.49: Deferred Sync Flags ===
+bool     g_pendingSyncOrderOpen   = false;
+bool     g_pendingSyncOrderClose  = false;
+
 // v6.44: Dashboard render throttle
 datetime g_lastDashboardRenderTime = 0;
 int      g_dashRenderIntervalSec   = 1;  // render dashboard every 1 second only
