@@ -1,53 +1,58 @@
 
-## v6.39 — ตรวจสอบ DDCooldown + เพิ่ม Hedge Side Pause
 
-### ส่วนที่ 1: ตรวจสอบ InpHedge_DDCooldownSec
+## v6.40 — เพิ่ม Grid Loss Candle Confirmation Filter
 
-`InpHedge_DDCooldownSec` (ค่า default 60, ผู้ใช้ตั้ง 120) ทำหน้าที่เว้นระยะเวลาขั้นต่ำระหว่าง **การเปิด hedge set ใหม่** — ไม่ใช่ระยะห่างระหว่าง set 1 กับ set 2 โดยเฉพาะ แต่เป็น cooldown หลังจากเปิด hedge ครั้งล่าสุด (ทุกครั้ง)
+### หลักการ
 
-**ปัญหาที่พบ:** Cooldown นี้ใช้ `g_lastDDHedgeTime` ซึ่งอัปเดตทุกครั้งที่ `OpenDDHedge()` สำเร็จ — แต่ใน v6.37/v6.38 เมื่อทั้งสองฝั่ง trigger พร้อมกัน (ใน tick เดียวกัน) cooldown ไม่ช่วยเพราะทั้งสองฝั่งถูกประเมินใน function call เดียวกัน ก่อนที่ cooldown จะมีผล → **นี่คือ design ที่ถูกต้อง** เพราะ v6.37 ต้องการให้ทั้งสองฝั่ง hedge ได้ในรอบเดียวกัน
+เพิ่มเงื่อนไขกรองก่อนเปิด Grid Loss: ต้องมีแท่งเทียนปิดในทิศทางเดียวกับฝั่งที่จะเปิด GL ก่อน N แท่ง (ตามที่กำหนด) ก่อนระบบจะอนุญาตให้เปิด GL
 
-Cooldown ทำงานถูกต้องสำหรับ: ป้องกันไม่ให้ gen ถัดไปเปิด hedge ซ้ำภายใน 120 วินาที
+- BUY GL: ต้องมีแท่งเขียว (close > open) ปิดก่อน N แท่ง
+- SELL GL: ต้องมีแท่งแดง (close < open) ปิดก่อน N แท่ง
+- ตั้งค่า 0 = ปิดฟีเจอร์ (ไม่กรอง)
+- เป็นเงื่อนไขเสริม ต้องผ่านเงื่อนไขอื่นๆ (distance, min gap, new candle) ด้วย
 
-### ส่วนที่ 2: เพิ่ม Hedge Side Pause (ฟีเจอร์ใหม่)
+### ไฟล์: `public/docs/mql5/Gold_Miner_EA.mq5`
 
-**หลักการ:** เมื่อฝั่ง BUY โดน hedge (BUY orders ติดลบ → เปิด SELL hedge) → หยุดเปิดออเดอร์ BUY ใหม่ชั่วคราว เพราะอาจเป็น downtrend | เมื่อฝั่ง SELL โดน hedge → หยุดเปิด SELL ใหม่ เพราะอาจเป็น uptrend
+#### 1. Version bump → v6.40
 
-**ไฟล์:** `public/docs/mql5/Gold_Miner_EA.mq5`
+#### 2. เพิ่ม input parameter (ใต้ GridLoss_MinGapPoints)
 
-#### 1. Version bump → v6.39
-
-#### 2. เพิ่ม input parameter (ใต้ InpHedge_DDCooldownSec)
 ```cpp
-input int InpHedge_SidePauseMin = 0; // v6.39: Pause hedged side entries (minutes, 0=Off)
+input int GridLoss_CandleConfirm = 0; // v6.40: Require N confirming candles before GL (0=Off)
 ```
 
-#### 3. เพิ่ม global variables
+#### 3. เพิ่ม helper function
+
 ```cpp
-datetime g_lastHedgeBuyTime  = 0;  // เมื่อ BUY orders โดน hedge → pause BUY entries
-datetime g_lastHedgeSellTime = 0;  // เมื่อ SELL orders โดน hedge → pause SELL entries
+bool HasCandleConfirmation(ENUM_POSITION_TYPE side, ENUM_TIMEFRAMES tf, int requiredCandles)
 ```
 
-#### 4. บันทึกเวลาใน CheckAndOpenHedgeByDD()
-- BUY side DD trigger → เปิด SELL hedge → `g_lastHedgeBuyTime = now`
-- SELL side DD trigger → เปิด BUY hedge → `g_lastHedgeSellTime = now`
+- ตรวจสอบ N แท่งเทียนล่าสุดที่ปิดแล้ว (shift 1 ถึง N) ว่ามีแท่งที่ปิดในทิศทางที่ต้องการครบตามจำนวนหรือไม่
+- BUY: นับแท่งที่ close > open (bullish) จากแท่งล่าสุดที่ปิดแล้ว
+- SELL: นับแท่งที่ close < open (bearish)
+- หากมีครบ N แท่ง (ไม่จำเป็นต้องต่อเนื่อง แต่ต้องเป็นแท่งล่าสุดติดกัน N แท่ง) → return true
+- **แก้ไข**: ตรวจ N แท่งล่าสุดที่ปิดแล้ว (shift 1..N) ว่าทั้งหมดเป็นทิศทางเดียวกัน → ถ้าต้องการ "ปิด 1 แท่ง" ก็ตรวจแค่ shift=1 ว่าเป็น bullish/bearish
 
-#### 5. เพิ่ม guard ใน OnTick — block ทั้ง INIT entry และ Grid Loss
-- BUY INIT + Grid Loss BUY: ถ้า `buyHedgePaused` → skip
-- SELL INIT + Grid Loss SELL: ถ้า `sellHedgePaused` → skip
+#### 4. เพิ่ม guard ใน 3 จุด Grid Loss entry
 
-#### 6. Reset เมื่อ flat (TotalOrderCount() == 0)
+- **SMA mode** `CheckGridLoss()` (~line 2540 หลัง OnlyNewCandle): เพิ่ม check `GridLoss_CandleConfirm`
+- **Instant/ZigZag mode** `CheckGridLossTF()` (~line 4123 หลัง OnlyNewCandle): เพิ่ม check
+- **Orphan grid** `CheckOrphanGridEntry()` (~line 7762 หลัง OnlyNewCandle): เพิ่ม check
 
-#### 7. Dashboard แสดงสถานะ pause + เวลาที่เหลือ
+#### 5. Dashboard แสดงค่า CandleConfirm
+
+#### 6. อัปเดต version ทุกจุด
 
 ### ตัวอย่าง
-- ตั้ง 60 นาที → SELL 10 ตัวโดน DD → เปิด BUY hedge → หยุด SELL ใหม่ 60 นาที
-- ตั้ง 0 → ปิดฟีเจอร์
+- ตั้ง 1: มี BUY INIT → ราคาลง → ถึงระยะ GL → ต้องรอแท่งเขียวปิด 1 แท่งก่อน → ถึงจะเปิด GL BUY
+- ตั้ง 2: ต้องมีแท่งเขียวปิดติดกัน 2 แท่งก่อน
+- ตั้ง 0: ปิดฟีเจอร์ ทำงานเหมือนเดิม
 
 ### สิ่งที่ไม่เปลี่ยนแปลง
-- Order Execution Logic, Trading Strategy Logic, Core Module Logic — ไม่แก้
-- DD trigger / Triple-gate / Matching close — ไม่แก้
-- OpenDDHedge / binding / generation logic — ไม่แก้
-- Balance Guard (v6.33/v6.35), Daily Target (v6.32) — ไม่แก้
-- Gen Race fix (v6.37), Orphan fix (v6.38) — ไม่แก้
-- InpHedge_DDCooldownSec — ไม่แก้ (ทำงานถูกต้อง)
+- Order Execution Logic — ไม่แก้
+- Trading Strategy Logic — ไม่แก้ (เป็น guard เสริมเท่านั้น)
+- Core Module Logic — ไม่แก้
+- Grid distance / min gap / new candle / signal filter — ไม่แก้
+- DD trigger / Hedge / Balance Guard — ไม่แก้
+- Gen Race fix (v6.37), Orphan fix (v6.38), Side Pause (v6.39) — ไม่แก้
+
