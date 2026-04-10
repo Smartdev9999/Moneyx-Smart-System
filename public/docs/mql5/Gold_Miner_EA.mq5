@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.43 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.44 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.43"
-#property description "Gold Miner EA v6.43 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + GenRaceFix + OrphanGenFix + HedgeSidePause + GLCandleConfirm + MaxGridTrail + BrokerTPSL + DashCache + DashThrottle + License"
+#property version   "6.44"
+#property description "Gold Miner EA v6.44 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + GenRaceFix + OrphanGenFix + HedgeSidePause + GLCandleConfirm + MaxGridTrail + BrokerTPSL + DashCache + DashThrottle + LiveTPFix + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -599,7 +599,7 @@ double   g_lastBrokerTP_Sell       = 0;  // last TP price set for SELL
 double   g_lastBrokerSL_Buy        = 0;  // last SL price set for BUY
 double   g_lastBrokerSL_Sell       = 0;  // last SL price set for SELL
 
-// v6.43: Dashboard render throttle
+// v6.44: Dashboard render throttle
 datetime g_lastDashboardRenderTime = 0;
 int      g_dashRenderIntervalSec   = 1;  // render dashboard every 1 second only
 
@@ -861,7 +861,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.43 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.44 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min");
@@ -878,7 +878,7 @@ int OnInit()
       RefreshNewsData();
    }
 
-   // v6.43: Render dashboard immediately on attach (don't wait for first tick)
+   // v6.44: Render dashboard immediately on attach (don't wait for first tick)
    if(ShowDashboard) DisplayDashboard();
 
    return INIT_SUCCEEDED;
@@ -919,7 +919,7 @@ void OnDeinit(const int reason)
 
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
-   Print("Gold Miner EA v6.43 deinitialized");
+   Print("Gold Miner EA v6.44 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -1366,13 +1366,12 @@ void OnTick()
        ManageTPSL();
     // ZigZag mode: per-TF TP/SL + shared accumulate handled in OnTickZigZagMTF()
 
-    //--- v6.42/v6.43: Broker-Level TP/SL sync (every 2 seconds)
-    //--- v6.43 fix: removed !EnablePerOrderTrailing guard — broker TP and per-order trailing SL work independently
-    if(UseTP_Points || (EnableSL && UseSL_Points))
-    {
-       if(TimeCurrent() - g_lastBrokerTPSLSync >= g_brokerTPSLIntervalSec)
-          SyncBrokerTPSL();
-    }
+     //--- v6.44: Broker-Level TP/SL sync (every 2 seconds) — covers ALL TP modes
+     if(UseTP_Points || UseTP_Dollar || UseTP_PercentBalance || (EnableSL && UseSL_Points))
+     {
+        if(TimeCurrent() - g_lastBrokerTPSLSync >= g_brokerTPSLIntervalSec)
+           SyncBrokerTPSL();
+     }
 
    //--- Every tick: Matching Close (pair profit vs loss orders)
    if(UseMatchingClose)
@@ -1654,7 +1653,7 @@ void OnTick()
    }
 
    DrawLines();
-   // v6.43: Dashboard render throttle — once per second instead of every tick
+   // v6.44: Dashboard render throttle — once per second instead of every tick
    if(ShowDashboard && TimeCurrent() - g_lastDashboardRenderTime >= g_dashRenderIntervalSec)
    {
       DisplayDashboard();
@@ -1999,26 +1998,57 @@ void SyncBrokerTPSL()
    double avgBuy  = CalculateAveragePrice(POSITION_TYPE_BUY);
    double avgSell = CalculateAveragePrice(POSITION_TYPE_SELL);
 
-   // Calculate target TP/SL prices
-   double tpBuy = 0, slBuy = 0, tpSell = 0, slSell = 0;
+    // v6.44: Calculate target TP/SL prices — supports Points, Dollar, and Percent modes
+    double tpBuy = 0, slBuy = 0, tpSell = 0, slSell = 0;
+    double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
+    double tickSize  = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+    double balance   = AccountInfoDouble(ACCOUNT_BALANCE);
 
-   if(avgBuy > 0)
-   {
-      if(UseTP_Points)
-         tpBuy = NormalizeDouble(avgBuy + TP_Points * point, digits);
-      // v6.43: SL via broker only when per-order trailing is OFF (trailing manages its own SL)
-      if(EnableSL && UseSL_Points && !EnablePerOrderTrailing)
-         slBuy = NormalizeDouble(avgBuy - SL_Points * point, digits);
-   }
+    if(avgBuy > 0)
+    {
+       double totalBuyLots = CalculateTotalLots(POSITION_TYPE_BUY);
+       
+       if(UseTP_Points)
+          tpBuy = NormalizeDouble(avgBuy + TP_Points * point, digits);
+       else if(UseTP_Dollar && totalBuyLots > 0 && tickValue > 0)
+       {
+          double priceDistBuy = TP_DollarAmount / (totalBuyLots * tickValue / tickSize);
+          tpBuy = NormalizeDouble(avgBuy + priceDistBuy, digits);
+       }
+       else if(UseTP_PercentBalance && totalBuyLots > 0 && tickValue > 0 && balance > 0)
+       {
+          double dollarTargetBuy = balance * TP_PercentBalance / 100.0;
+          double priceDistBuy = dollarTargetBuy / (totalBuyLots * tickValue / tickSize);
+          tpBuy = NormalizeDouble(avgBuy + priceDistBuy, digits);
+       }
+       
+       // SL via broker only when per-order trailing is OFF (trailing manages its own SL)
+       if(EnableSL && UseSL_Points && !EnablePerOrderTrailing)
+          slBuy = NormalizeDouble(avgBuy - SL_Points * point, digits);
+    }
 
-   if(avgSell > 0)
-   {
-      if(UseTP_Points)
-         tpSell = NormalizeDouble(avgSell - TP_Points * point, digits);
-      // v6.43: SL via broker only when per-order trailing is OFF
-      if(EnableSL && UseSL_Points && !EnablePerOrderTrailing)
-         slSell = NormalizeDouble(avgSell + SL_Points * point, digits);
-   }
+    if(avgSell > 0)
+    {
+       double totalSellLots = CalculateTotalLots(POSITION_TYPE_SELL);
+       
+       if(UseTP_Points)
+          tpSell = NormalizeDouble(avgSell - TP_Points * point, digits);
+       else if(UseTP_Dollar && totalSellLots > 0 && tickValue > 0)
+       {
+          double priceDistSell = TP_DollarAmount / (totalSellLots * tickValue / tickSize);
+          tpSell = NormalizeDouble(avgSell - priceDistSell, digits);
+       }
+       else if(UseTP_PercentBalance && totalSellLots > 0 && tickValue > 0 && balance > 0)
+       {
+          double dollarTargetSell = balance * TP_PercentBalance / 100.0;
+          double priceDistSell = dollarTargetSell / (totalSellLots * tickValue / tickSize);
+          tpSell = NormalizeDouble(avgSell - priceDistSell, digits);
+       }
+       
+       // SL via broker only when per-order trailing is OFF
+       if(EnableSL && UseSL_Points && !EnablePerOrderTrailing)
+          slSell = NormalizeDouble(avgSell + SL_Points * point, digits);
+    }
 
    // Check if TP/SL changed from last sync (avoid redundant modify)
    bool buyChanged  = (tpBuy != g_lastBrokerTP_Buy || slBuy != g_lastBrokerSL_Buy);
@@ -2040,22 +2070,26 @@ void SyncBrokerTPSL()
       double curTP = PositionGetDouble(POSITION_TP);
       double curSL = PositionGetDouble(POSITION_SL);
 
-      if(posType == POSITION_TYPE_BUY && buyChanged && avgBuy > 0)
-      {
-         if(NormalizeDouble(curTP, digits) != tpBuy || NormalizeDouble(curSL, digits) != slBuy)
-         {
-            if(!trade.PositionModify(ticket, slBuy, tpBuy))
-               Print("v6.42 BrokerTPSL: Modify BUY #", ticket, " failed: ", GetLastError());
-         }
-      }
-      else if(posType == POSITION_TYPE_SELL && sellChanged && avgSell > 0)
-      {
-         if(NormalizeDouble(curTP, digits) != tpSell || NormalizeDouble(curSL, digits) != slSell)
-         {
-            if(!trade.PositionModify(ticket, slSell, tpSell))
-               Print("v6.42 BrokerTPSL: Modify SELL #", ticket, " failed: ", GetLastError());
-         }
-      }
+       if(posType == POSITION_TYPE_BUY && buyChanged && avgBuy > 0)
+       {
+          if(NormalizeDouble(curTP, digits) != tpBuy || NormalizeDouble(curSL, digits) != slBuy)
+          {
+             if(trade.PositionModify(ticket, slBuy, tpBuy))
+                Print("v6.44 BrokerTP: SET BUY #", ticket, " TP=", tpBuy, " SL=", slBuy);
+             else
+                Print("v6.44 BrokerTP: Modify BUY #", ticket, " failed: ", GetLastError());
+          }
+       }
+       else if(posType == POSITION_TYPE_SELL && sellChanged && avgSell > 0)
+       {
+          if(NormalizeDouble(curTP, digits) != tpSell || NormalizeDouble(curSL, digits) != slSell)
+          {
+             if(trade.PositionModify(ticket, slSell, tpSell))
+                Print("v6.44 BrokerTP: SET SELL #", ticket, " TP=", tpSell, " SL=", slSell);
+             else
+                Print("v6.44 BrokerTP: Modify SELL #", ticket, " failed: ", GetLastError());
+          }
+       }
    }
 
    // Update cached values
@@ -2116,14 +2150,11 @@ void ManageTPSL()
       bool closeTP = false;
       bool closeSL = false;
 
-      //--- TP checks
-      //--- v6.43: Dollar/Percent TP still managed by EA (skip only when per-order trailing active)
-      //--- Points TP is handled by broker via PositionModify — no EA check needed
-      if(!EnablePerOrderTrailing)
-      {
-         if(UseTP_Dollar && plBuy >= TP_DollarAmount) closeTP = true;
-         if(UseTP_PercentBalance && plBuy >= balance * TP_PercentBalance / 100.0) closeTP = true;
-      }
+       //--- TP checks
+       //--- v6.44: Dollar/Percent TP always active — Per-Order Trailing only manages SL, not TP
+       //--- Points TP is handled by broker via PositionModify — no EA check needed
+       if(UseTP_Dollar && plBuy >= TP_DollarAmount) closeTP = true;
+       if(UseTP_PercentBalance && plBuy >= balance * TP_PercentBalance / 100.0) closeTP = true;
       
       //--- DD% TP check (v6.7): profit target = X% of max drawdown, always close in profit
       if(UseTP_DDPercent && g_maxDDBuy < 0)
@@ -2193,13 +2224,10 @@ void ManageTPSL()
       bool closeTP2 = false;
       bool closeSL2 = false;
 
-      //--- TP checks
-      //--- v6.43: Dollar/Percent TP still managed by EA; Points TP handled by broker
-      if(!EnablePerOrderTrailing)
-      {
-         if(UseTP_Dollar && plSell >= TP_DollarAmount) closeTP2 = true;
-         if(UseTP_PercentBalance && plSell >= balance * TP_PercentBalance / 100.0) closeTP2 = true;
-      }
+       //--- TP checks
+       //--- v6.44: Dollar/Percent TP always active — Per-Order Trailing only manages SL, not TP
+       if(UseTP_Dollar && plSell >= TP_DollarAmount) closeTP2 = true;
+       if(UseTP_PercentBalance && plSell >= balance * TP_PercentBalance / 100.0) closeTP2 = true;
       
       //--- DD% TP check (v6.7): profit target = X% of max drawdown, always close in profit
       if(UseTP_DDPercent && g_maxDDSell < 0)
@@ -3552,7 +3580,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.43 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.43 [ZZ]" : "Gold Miner EA v6.43 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.44 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.44 [ZZ]" : "Gold Miner EA v6.44 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -3647,7 +3675,7 @@ void DisplayDashboard()
    if(UseTP_DDPercent)
    {
       color COLOR_SECTION_DDTP = C'180,80,50';  // warm orange for DD% TP
-      // v6.43: reuse plBuy/plSell from top of function (no redundant recalculation)
+      // v6.44: reuse plBuy/plSell from top of function (no redundant recalculation)
       double plBuyTP = plBuy;
       double plSellTP = plSell;
       
@@ -3696,7 +3724,7 @@ void DisplayDashboard()
    color COLOR_SECTION_HIST = C'50,100,180';  // distinct blue for history section
 
    // Current open lot total
-   // v6.43: reuse lotsBuy/lotsSell from top of function
+   // v6.44: reuse lotsBuy/lotsSell from top of function
    double totalCurrentLots = lotsBuy + lotsSell;
    DrawTableRow(row, "Total Cur. Lot",   DoubleToString(totalCurrentLots, 2) + " L", COLOR_TEXT, COLOR_SECTION_HIST); row++;
 
@@ -4791,13 +4819,11 @@ void ManageTPSL_TF(int tfIdx)
       bool closeTP = false;
       bool closeSL = false;
 
-      if(!EnablePerOrderTrailing)
-      {
-         if(UseTP_Dollar && plBuy >= TP_DollarAmount) closeTP = true;
-         // v6.42: TP Points handled by broker via PositionModify
-         // if(UseTP_Points && bid >= avgBuy + TP_Points * point) closeTP = true;
-         if(UseTP_PercentBalance && plBuy >= bal * TP_PercentBalance / 100.0) closeTP = true;
-       }
+       //--- v6.44: Dollar/Percent TP always active — Per-Order Trailing only manages SL
+       if(UseTP_Dollar && plBuy >= TP_DollarAmount) closeTP = true;
+       // v6.42: TP Points handled by broker via PositionModify
+       // if(UseTP_Points && bid >= avgBuy + TP_Points * point) closeTP = true;
+       if(UseTP_PercentBalance && plBuy >= bal * TP_PercentBalance / 100.0) closeTP = true;
       
       //--- DD% TP check (v6.7) - uses global max DD tracker (shared across TFs)
       if(UseTP_DDPercent && g_maxDDBuy < 0)
@@ -4854,13 +4880,11 @@ void ManageTPSL_TF(int tfIdx)
       bool closeTP2 = false;
       bool closeSL2 = false;
 
-      if(!EnablePerOrderTrailing)
-      {
-         if(UseTP_Dollar && plSell >= TP_DollarAmount) closeTP2 = true;
-         // v6.42: TP Points handled by broker via PositionModify
-         // if(UseTP_Points && ask <= avgSell - TP_Points * point) closeTP2 = true;
-         if(UseTP_PercentBalance && plSell >= bal * TP_PercentBalance / 100.0) closeTP2 = true;
-       }
+       //--- v6.44: Dollar/Percent TP always active — Per-Order Trailing only manages SL
+       if(UseTP_Dollar && plSell >= TP_DollarAmount) closeTP2 = true;
+       // v6.42: TP Points handled by broker via PositionModify
+       // if(UseTP_Points && ask <= avgSell - TP_Points * point) closeTP2 = true;
+       if(UseTP_PercentBalance && plSell >= bal * TP_PercentBalance / 100.0) closeTP2 = true;
       
       //--- DD% TP check (v6.7) - uses global max DD tracker (shared across TFs)
       if(UseTP_DDPercent && g_maxDDSell < 0)
