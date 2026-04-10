@@ -1660,9 +1660,26 @@ void OnTick()
    // v6.44: Dashboard render throttle — once per second instead of every tick
    if(ShowDashboard && TimeCurrent() - g_lastDashboardRenderTime >= g_dashRenderIntervalSec)
    {
-      DisplayDashboard();
-      g_lastDashboardRenderTime = TimeCurrent();
-   }
+       DisplayDashboard();
+       g_lastDashboardRenderTime = TimeCurrent();
+    }
+
+    // === v6.49: Deferred Data Sync — runs AFTER TP/SL is set to avoid blocking ===
+    if(!MQLInfoInteger(MQL_TESTER) && !MQLInfoInteger(MQL_OPTIMIZATION))
+    {
+       if(g_pendingSyncOrderOpen)
+       {
+          Print("[Sync] Deferred: Order opened - syncing data...");
+          SyncAccountDataWithEvent(SYNC_ORDER_OPEN);
+          g_pendingSyncOrderOpen = false;
+       }
+       if(g_pendingSyncOrderClose)
+       {
+          Print("[Sync] Deferred: Order closed - syncing data with trade history...");
+          SyncAccountDataWithEvent(SYNC_ORDER_CLOSE);
+          g_pendingSyncOrderClose = false;
+       }
+    }
 }
 
 //+------------------------------------------------------------------+
