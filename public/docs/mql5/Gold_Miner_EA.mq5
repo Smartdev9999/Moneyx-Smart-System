@@ -599,7 +599,7 @@ double   g_lastBrokerTP_Sell       = 0;  // last TP price set for SELL
 double   g_lastBrokerSL_Buy        = 0;  // last SL price set for BUY
 double   g_lastBrokerSL_Sell       = 0;  // last SL price set for SELL
 
-// v6.43: Dashboard render throttle
+// v6.44: Dashboard render throttle
 datetime g_lastDashboardRenderTime = 0;
 int      g_dashRenderIntervalSec   = 1;  // render dashboard every 1 second only
 
@@ -861,7 +861,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.43 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.44 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min");
@@ -878,7 +878,7 @@ int OnInit()
       RefreshNewsData();
    }
 
-   // v6.43: Render dashboard immediately on attach (don't wait for first tick)
+   // v6.44: Render dashboard immediately on attach (don't wait for first tick)
    if(ShowDashboard) DisplayDashboard();
 
    return INIT_SUCCEEDED;
@@ -919,7 +919,7 @@ void OnDeinit(const int reason)
 
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
-   Print("Gold Miner EA v6.43 deinitialized");
+   Print("Gold Miner EA v6.44 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -1653,7 +1653,7 @@ void OnTick()
    }
 
    DrawLines();
-   // v6.43: Dashboard render throttle — once per second instead of every tick
+   // v6.44: Dashboard render throttle — once per second instead of every tick
    if(ShowDashboard && TimeCurrent() - g_lastDashboardRenderTime >= g_dashRenderIntervalSec)
    {
       DisplayDashboard();
@@ -3580,7 +3580,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.43 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.43 [ZZ]" : "Gold Miner EA v6.43 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.44 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.44 [ZZ]" : "Gold Miner EA v6.44 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -3675,7 +3675,7 @@ void DisplayDashboard()
    if(UseTP_DDPercent)
    {
       color COLOR_SECTION_DDTP = C'180,80,50';  // warm orange for DD% TP
-      // v6.43: reuse plBuy/plSell from top of function (no redundant recalculation)
+      // v6.44: reuse plBuy/plSell from top of function (no redundant recalculation)
       double plBuyTP = plBuy;
       double plSellTP = plSell;
       
@@ -3724,7 +3724,7 @@ void DisplayDashboard()
    color COLOR_SECTION_HIST = C'50,100,180';  // distinct blue for history section
 
    // Current open lot total
-   // v6.43: reuse lotsBuy/lotsSell from top of function
+   // v6.44: reuse lotsBuy/lotsSell from top of function
    double totalCurrentLots = lotsBuy + lotsSell;
    DrawTableRow(row, "Total Cur. Lot",   DoubleToString(totalCurrentLots, 2) + " L", COLOR_TEXT, COLOR_SECTION_HIST); row++;
 
