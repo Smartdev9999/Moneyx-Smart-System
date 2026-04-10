@@ -2120,10 +2120,6 @@ void SyncBrokerTPSL()
 //+------------------------------------------------------------------+
 void ClearBrokerTPSL()
 {
-   // Reset cached prices
-   if(g_lastBrokerTP_Buy == 0 && g_lastBrokerSL_Buy == 0 &&
-      g_lastBrokerTP_Sell == 0 && g_lastBrokerSL_Sell == 0) return;
-
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       ulong ticket = PositionGetTicket(i);
@@ -2131,7 +2127,9 @@ void ClearBrokerTPSL()
       if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       if(IsHedgeComment(PositionGetString(POSITION_COMMENT))) continue;
-      // v6.45: Removed IsTicketBound skip — bound orders MUST have TP/SL cleared during hedge
+      
+      // v6.46: Only clear TP/SL for orders that are bound in active hedge sets
+      if(!IsTicketBound(ticket)) continue;
 
       double curTP = PositionGetDouble(POSITION_TP);
       double curSL = PositionGetDouble(POSITION_SL);
@@ -2139,7 +2137,7 @@ void ClearBrokerTPSL()
       if(curTP != 0 || curSL != 0)
       {
          if(trade.PositionModify(ticket, 0, 0))
-            Print("v6.45 ClearTP: Cleared order #", ticket, " TP=", curTP, "->0 SL=", curSL, "->0");
+            Print("v6.46 ClearTP: Cleared bound order #", ticket, " TP=", curTP, "->0 SL=", curSL, "->0");
       }
    }
 
