@@ -3572,8 +3572,14 @@ void DisplayDashboard()
                  }
                  DrawTableRow(row, "Side Pause", pauseStr, clrOrange, COLOR_SECTION_HEDGE); row++;
               }
-           }
-       }
+            }
+            
+            // v6.40: Grid Loss Candle Confirmation display
+            if(GridLoss_CandleConfirm > 0)
+            {
+               DrawTableRow(row, "GL CandleConfirm", IntegerToString(GridLoss_CandleConfirm) + " candle(s)", clrCyan, COLOR_SECTION_HEDGE); row++;
+            }
+        }
 
      // === Orphan Recovery Status ===
      color COLOR_SECTION_ORPHAN = C'130,50,180';  // purple for orphan section
