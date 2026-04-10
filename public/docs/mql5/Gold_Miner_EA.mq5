@@ -3716,6 +3716,20 @@ void DisplayDashboard()
 
    DrawTableRow(row, "Auto Re-Entry", (EnableAutoReEntry ? "ON" : "OFF"), (EnableAutoReEntry ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_INFO); row++;
 
+   // v6.42: Broker TP/SL display
+   if(UseTP_Points || (EnableSL && UseSL_Points))
+   {
+      color COLOR_SECTION_BROKER = C'50,130,100';
+      if(g_lastBrokerTP_Buy > 0)
+      {  DrawTableRow(row, "Broker TP BUY", DoubleToString(g_lastBrokerTP_Buy, digits), COLOR_PROFIT, COLOR_SECTION_BROKER); row++; }
+      if(g_lastBrokerTP_Sell > 0)
+      {  DrawTableRow(row, "Broker TP SELL", DoubleToString(g_lastBrokerTP_Sell, digits), COLOR_PROFIT, COLOR_SECTION_BROKER); row++; }
+      if(g_lastBrokerSL_Buy > 0)
+      {  DrawTableRow(row, "Broker SL BUY", DoubleToString(g_lastBrokerSL_Buy, digits), COLOR_LOSS, COLOR_SECTION_BROKER); row++; }
+      if(g_lastBrokerSL_Sell > 0)
+      {  DrawTableRow(row, "Broker SL SELL", DoubleToString(g_lastBrokerSL_Sell, digits), COLOR_LOSS, COLOR_SECTION_BROKER); row++; }
+   }
+
    // Daily Profit Pause status (v6.32: Equity-based)
    if(InpEnableDailyProfitPause)
    {
