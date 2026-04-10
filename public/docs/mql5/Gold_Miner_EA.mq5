@@ -7930,16 +7930,14 @@ void ManageOrphanGrid()
                          g_lastOrphanGridCandleTime = iTime(_Symbol, PERIOD_CURRENT, 0);
                          Print("ORPHAN GRID: Opened SELL ", prefix, "_GL#", nextLevel,
                                " lots=", DoubleToString(lots, 2), " for Gen", gen);
-                      }
-                  }
-               }
+                       }
+                   }
+                }
              }
-          }
-       }
+              }
+           }
+        }
     }
- }
-}
-   }
 }
 
 //+------------------------------------------------------------------+
