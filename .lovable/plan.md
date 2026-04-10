@@ -1,16 +1,14 @@
 
 
 
-## v6.48 — Fix: Broker TP/SL Delay หลังเปิดออเดอร์ใหม่ (Cache Bug + Throttle Reset)
+## v6.49 — Fix: Broker TP/SL Delay เกิดจาก Sync Data บล็อก OnTick
 
 ### หลักการ
 
-1. **Root Cause #1**: `SyncBrokerTPSL()` มี throttle 2 วินาที — หลังเปิดออเดอร์ใหม่ต้องรอจนกว่า throttle หมด
-2. **Root Cause #2 (ตัวการจริง)**: Cache (`g_lastBrokerTP_Buy` ฯลฯ) ถูกอัปเดตทุกครั้ง ไม่ว่า `PositionModify` จะสำเร็จหรือไม่ → ถ้า broker busy → modify ล้มเหลว → cache คิดว่า set แล้ว → ไม่ retry อีกเลย
-3. **Fix #1**: ใน `OpenOrder()` หลัง trade สำเร็จ → reset `g_lastBrokerTPSLSync = 0` + invalidate cache (`= -1`) → tick ถัดไป SyncBrokerTPSL รันทันที
-4. **Fix #2**: ลบ `buyChanged/sellChanged` gate → เช็คจาก actual order TP/SL แทน → ไม่มี cache bug
-5. **Fix #3**: Cache อัปเดตเฉพาะเมื่อ ALL modifies สำเร็จจริง → ถ้าล้มเหลวจะ retry ทุก 2 วินาที
-6. **Version bump**: v6.47 → v6.48
+1. **Root Cause**: `OnTradeTransaction()` เรียก `SyncAccountDataWithEvent()` ทันทีหลังเปิด/ปิดออเดอร์ → ทำ blocking HTTP WebRequest → EA ถูกบล็อก → OnTick ไม่ทำงาน → SyncBrokerTPSL() ไม่ได้รัน → TP ดีเลย์
+2. **Fix**: เปลี่ยนเป็น Deferred Sync — ตั้ง flag ใน OnTradeTransaction แล้วให้ sync ทำงานท้าย OnTick() หลัง TP/SL ถูก set เรียบร้อยแล้ว
+3. **ลำดับใหม่**: Order opened → SyncBrokerTPSL (set TP) → Deferred Sync (HTTP)
+4. **Version bump**: v6.48 → v6.49
 
 ### ไฟล์: `public/docs/mql5/Gold_Miner_EA.mq5`
 
@@ -18,9 +16,6 @@
 - Order Execution Logic — ไม่แก้
 - Trading Strategy Logic — ไม่แก้
 - Core Module Logic — ไม่แก้
-- SyncBrokerTPSL TP/SL calculation — ไม่แก้
-- ClearBrokerTPSL — ไม่แก้
-- HasActiveBoundHedgeSet — ไม่แก้
-- Hedge recovery / Triple Gate / Matching Close — ไม่แก้
-- Per-Order Trailing / DD trigger — ไม่แก้
-- v6.37-v6.47 features — ไม่แก้
+- SyncBrokerTPSL calculation — ไม่แก้
+- ข้อมูลที่ sync ยัง sync เหมือนเดิม แค่เปลี่ยนจังหวะ
+- v6.37-v6.48 features — ไม่แก้
