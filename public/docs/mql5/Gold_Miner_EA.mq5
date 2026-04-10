@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.40 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.41 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.40"
-#property description "Gold Miner EA v6.40 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + GenRaceFix + OrphanGenFix + HedgeSidePause + GLCandleConfirm + License"
+#property version   "6.41"
+#property description "Gold Miner EA v6.41 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + GenRaceFix + OrphanGenFix + HedgeSidePause + GLCandleConfirm + MaxGridTrail + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -146,6 +146,13 @@ input double         GridLoss_ATR_Multiplier = 1.5;        // ATR Multiplier
 input ENUM_ATR_REF   GridLoss_ATR_Reference  = ATR_REF_DYNAMIC; // ATR Reference Point
 input int            GridLoss_MinGapPoints   = 100;             // Minimum Grid Gap (points)
 input int            GridLoss_CandleConfirm  = 0;               // v6.40: Require N confirming candles before GL (0=Off)
+
+//--- Max Grid Average Trailing Stop (v6.41)
+input group "=== Max Grid Average Trailing Stop ==="
+input bool           MaxGrid_TrailEnable     = false;             // Enable Max Grid Avg Trailing
+input int            MaxGrid_TrailActivation = 100;               // Activation (points from average, 0=Off)
+input int            MaxGrid_TrailStep       = 50;                // Trailing Step (points)
+input int            MaxGrid_BreakevenBuffer = 10;                // Breakeven Buffer (points above/below avg)
 input bool           GridLoss_OnlyInSignal   = false;      // Grid Only in Signal Direction
 input bool           GridLoss_OnlyNewCandle  = true;       // Grid Only on New Candle
 input bool           GridLoss_DontSameCandle = true;       // Don't Open Grid in Same Candle as Initial
@@ -567,6 +574,13 @@ double g_balanceGuardDynamicTarget = 0; // v6.29: dynamic target — updated whe
 ulong    g_reverseHedgeTickets[MAX_REVERSE_HEDGES];
 int      g_reverseHedgeCount = 0;
 bool     g_hedgeBalancedLock = false;  // when totalBuy == totalSell → disable TP/SL/Matching
+
+// === v6.41: Max Grid Average Trailing Stop State ===
+double   g_maxGridTrailSL_Buy  = 0;
+double   g_maxGridTrailSL_Sell = 0;
+bool     g_maxGridTrailActive_Buy  = false;
+bool     g_maxGridTrailActive_Sell = false;
+int      g_maxGridMonitorGen = 0;  // generation currently being monitored
 
 // === Orphan Recovery System ===
 datetime g_lastOrphanScanTime = 0;
