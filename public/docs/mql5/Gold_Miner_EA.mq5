@@ -3565,16 +3565,25 @@ void DisplayDashboard()
    double totalCurrentLots = CalculateTotalLots(POSITION_TYPE_BUY) + CalculateTotalLots(POSITION_TYPE_SELL);
    DrawTableRow(row, "Total Cur. Lot",   DoubleToString(totalCurrentLots, 2) + " L", COLOR_TEXT, COLOR_SECTION_HIST); row++;
 
-   // History metrics (read from deal history)
-   double closedLots   = CalcTotalClosedLots();
-   int    closedOrders = CalcTotalClosedOrders();
-   double monthlyPL    = CalcMonthlyPL();
-   double totalPLHist  = CalcTotalHistoryProfit();
+    // History metrics — v6.42: cached every 5 seconds to reduce CPU load
+    if(TimeCurrent() - g_lastDashHistoryCalcTime >= g_dashCacheIntervalSec)
+    {
+       g_cachedClosedLots    = CalcTotalClosedLots();
+       g_cachedClosedOrders  = CalcTotalClosedOrders();
+       g_cachedMonthlyPL     = CalcMonthlyPL();
+       g_cachedTotalPLHist   = CalcTotalHistoryProfit();
+       g_cachedDailyClosedLots = CalcDailyClosedLots();
+       g_lastDashHistoryCalcTime = TimeCurrent();
+    }
+    double closedLots   = g_cachedClosedLots;
+    int    closedOrders = g_cachedClosedOrders;
+    double monthlyPL    = g_cachedMonthlyPL;
+    double totalPLHist  = g_cachedTotalPLHist;
 
-   DrawTableRow(row, "Total Closed Lot", DoubleToString(closedLots, 2) + " L", COLOR_TEXT, COLOR_SECTION_HIST); row++;
+    DrawTableRow(row, "Total Closed Lot", DoubleToString(closedLots, 2) + " L", COLOR_TEXT, COLOR_SECTION_HIST); row++;
 
-   // Rebate metrics
-   double dailyClosedLots = CalcDailyClosedLots();
+    // Rebate metrics
+    double dailyClosedLots = g_cachedDailyClosedLots;
    double dailyRebate     = dailyClosedLots * InpRebatePerLot;
    double totalRebate     = closedLots * InpRebatePerLot;
    color  COLOR_SECTION_REBATE = C'180,150,50';  // gold for rebate section
