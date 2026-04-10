@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.49 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.50 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.49"
-#property description "Gold Miner EA v6.49 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + GenRaceFix + OrphanGenFix + HedgeSidePause + GLCandleConfirm + MaxGridTrail + BrokerTPSL + DashCache + DashThrottle + LiveTPFix + HedgeClearTP + BoundClearFix + InstantSync + DeferredSync + License"
+#property version   "6.50"
+#property description "Gold Miner EA v6.50 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + GenRaceFix + OrphanGenFix + HedgeSidePause + GLCandleConfirm + MaxGridTrail + BrokerTPSL + DashCache + DashThrottle + LiveTPFix + HedgeClearTP + BoundClearFix + InstantSync + DeferredSync + InstantTP + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -865,7 +865,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.49 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.50 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min");
@@ -923,7 +923,7 @@ void OnDeinit(const int reason)
 
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
-   Print("Gold Miner EA v6.49 deinitialized");
+   Print("Gold Miner EA v6.50 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -1805,9 +1805,61 @@ bool OpenOrder(ENUM_ORDER_TYPE orderType, double lots, string comment)
    
    lots = MathMax(minLot, MathMin(maxLot, NormalizeDouble(MathRound(lots / lotStep) * lotStep, 2)));
 
+   // === v6.50: Pre-calculate TP for INIT order (first order — avg = own price) ===
+   double preTP = 0;
+   double preSL = 0;
+   bool isHedge = IsHedgeComment(comment);
+   ENUM_POSITION_TYPE side = (orderType == ORDER_TYPE_BUY) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
+   
+   if(!isHedge)
+   {
+      double existingLots = CalculateTotalLots(side);
+      if(existingLots == 0)  // First order on this side — avg = this order's price
+      {
+         double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+         int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+         double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
+         double tickSize  = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+         double balance   = AccountInfoDouble(ACCOUNT_BALANCE);
+         
+         if(UseTP_Points)
+         {
+            preTP = (side == POSITION_TYPE_BUY) 
+                  ? NormalizeDouble(price + TP_Points * point, digits)
+                  : NormalizeDouble(price - TP_Points * point, digits);
+         }
+         else if(UseTP_Dollar && lots > 0 && tickValue > 0)
+         {
+            double dist = TP_DollarAmount / (lots * tickValue / tickSize);
+            preTP = (side == POSITION_TYPE_BUY)
+                  ? NormalizeDouble(price + dist, digits)
+                  : NormalizeDouble(price - dist, digits);
+         }
+         else if(UseTP_PercentBalance && lots > 0 && tickValue > 0 && balance > 0)
+         {
+            double dollarTarget = balance * TP_PercentBalance / 100.0;
+            double dist = dollarTarget / (lots * tickValue / tickSize);
+            preTP = (side == POSITION_TYPE_BUY)
+                  ? NormalizeDouble(price + dist, digits)
+                  : NormalizeDouble(price - dist, digits);
+         }
+         
+         // SL for first order (only Points mode, only when per-order trailing is OFF)
+         if(EnableSL && UseSL_Points && !EnablePerOrderTrailing)
+         {
+            preSL = (side == POSITION_TYPE_BUY)
+                  ? NormalizeDouble(price - SL_Points * point, digits)
+                  : NormalizeDouble(price + SL_Points * point, digits);
+         }
+         
+         if(preTP > 0)
+            Print("v6.50 InstantTP: INIT order preTP=", preTP, " preSL=", preSL);
+      }
+   }
+
    if(orderType == ORDER_TYPE_BUY)
    {
-      if(!trade.Buy(lots, _Symbol, price, 0, 0, comment))
+      if(!trade.Buy(lots, _Symbol, price, preSL, preTP, comment))
       {
          Print("ERROR: Buy failed - ", trade.ResultRetcodeDescription());
          return false;
@@ -1815,14 +1867,14 @@ bool OpenOrder(ENUM_ORDER_TYPE orderType, double lots, string comment)
    }
    else
    {
-      if(!trade.Sell(lots, _Symbol, price, 0, 0, comment))
+      if(!trade.Sell(lots, _Symbol, price, preSL, preTP, comment))
       {
          Print("ERROR: Sell failed - ", trade.ResultRetcodeDescription());
          return false;
       }
    }
 
-   Print("Order opened: ", comment, " Lots=", lots, " Price=", price);
+   Print("Order opened: ", comment, " Lots=", lots, " Price=", price, (preTP > 0 ? " TP=" + DoubleToString(preTP, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)) : ""));
 
    // v6.48: Force immediate broker TP/SL sync on next tick after new order
    g_lastBrokerTPSLSync = 0;
@@ -1830,6 +1882,14 @@ bool OpenOrder(ENUM_ORDER_TYPE orderType, double lots, string comment)
    g_lastBrokerTP_Sell  = -1;
    g_lastBrokerSL_Buy   = -1;
    g_lastBrokerSL_Sell  = -1;
+
+   // === v6.50: Immediate SyncBrokerTPSL for grid orders (not first, not hedge) ===
+   // Grid orders change the average price → must modify ALL orders' TP immediately
+   if(!isHedge && preTP == 0)
+   {
+      Print("v6.50 InstantTP: Grid order — immediate SyncBrokerTPSL");
+      SyncBrokerTPSL();
+   }
 
    return true;
 }
@@ -3631,7 +3691,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.49 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.49 [ZZ]" : "Gold Miner EA v6.49 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.50 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.50 [ZZ]" : "Gold Miner EA v6.50 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
