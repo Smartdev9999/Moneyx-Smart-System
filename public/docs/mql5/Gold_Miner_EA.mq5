@@ -1354,10 +1354,17 @@ void OnTick()
       if(plSellDD < g_maxDDSell) g_maxDDSell = plSellDD;
    }
 
-   //--- Every tick: TP/SL management
-   if(EntryMode == ENTRY_SMA || EntryMode == ENTRY_INSTANT)
-      ManageTPSL();
-   // ZigZag mode: per-TF TP/SL + shared accumulate handled in OnTickZigZagMTF()
+    //--- Every tick: TP/SL management
+    if(EntryMode == ENTRY_SMA || EntryMode == ENTRY_INSTANT)
+       ManageTPSL();
+    // ZigZag mode: per-TF TP/SL + shared accumulate handled in OnTickZigZagMTF()
+
+    //--- v6.42: Broker-Level TP/SL sync (every 2 seconds)
+    if((UseTP_Points || (EnableSL && UseSL_Points)) && !EnablePerOrderTrailing)
+    {
+       if(TimeCurrent() - g_lastBrokerTPSLSync >= g_brokerTPSLIntervalSec)
+          SyncBrokerTPSL();
+    }
 
    //--- Every tick: Matching Close (pair profit vs loss orders)
    if(UseMatchingClose)
