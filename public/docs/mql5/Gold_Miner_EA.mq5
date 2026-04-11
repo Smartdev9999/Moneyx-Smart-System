@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.50 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.51 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.50"
-#property description "Gold Miner EA v6.50 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + GenRaceFix + OrphanGenFix + HedgeSidePause + GLCandleConfirm + MaxGridTrail + BrokerTPSL + DashCache + DashThrottle + LiveTPFix + HedgeClearTP + BoundClearFix + InstantSync + DeferredSync + InstantTP + License"
+#property version   "6.51"
+#property description "Gold Miner EA v6.51 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + GenRaceFix + OrphanGenFix + HedgeSidePause + GLCandleConfirm + MaxGridTrail + BrokerTPSL + DashCache + DashThrottle + LiveTPFix + HedgeClearTP + BoundClearFix + InstantSync + DeferredSync + InstantTP + MatchCloseToggle + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -355,6 +355,7 @@ input double   InpHedge_DDStepPct            = 5.0;   // [LEGACY] DD% step — n
 input int      InpHedge_DDCooldownSec        = 60;    // Min seconds between DD hedges
 input int      InpHedge_SidePauseMin         = 0;     // v6.39: Pause hedged side entries (minutes, 0=Off)
 input double   InpHedge_DDTriggerDollar      = 500.0; // v6.25: DD$ to trigger hedge (per side)
+input bool     InpHedge_UseMatchingClose     = true;  // v6.51: Enable Hedge Matching Close (false=skip)
 // v6.28: Balance Guard — close all when equity recovers to target
 input bool     InpBalanceGuard_Enable        = false;  // Balance Guard: Enable
 input ENUM_BALGUARD_MODE InpBalanceGuard_Mode = BALGUARD_FIXED; // Balance Guard: Mode (Fixed / Dynamic)
@@ -865,7 +866,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.50 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.51 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min");
@@ -923,7 +924,7 @@ void OnDeinit(const int reason)
 
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
-   Print("Gold Miner EA v6.50 deinitialized");
+   Print("Gold Miner EA v6.51 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -3691,7 +3692,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.50 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.50 [ZZ]" : "Gold Miner EA v6.50 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.51 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.51 [ZZ]" : "Gold Miner EA v6.51 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -8659,14 +8660,15 @@ void ManageHedgeSets()
          if(hedgeExists)
             hedgePnL = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
 
-         // Matching Close (hedge is profitable → close + match losses)
-         if(hedgePnL > 0)
-         {
-            ManageHedgeMatchingClose(h);
-            if(g_hedgeSets[h].active)
-               g_hedgeSets[h].matchingDone = true;
-            continue;
-         }
+          // Matching Close (hedge is profitable → close + match losses)
+          // v6.51: Skip matching close if disabled by input
+          if(hedgePnL > 0 && InpHedge_UseMatchingClose)
+          {
+             ManageHedgeMatchingClose(h);
+             if(g_hedgeSets[h].active)
+                g_hedgeSets[h].matchingDone = true;
+             continue;
+          }
 
          // Average TP (hedge is in loss → try avg TP on bounds)
          if(g_hedgeSets[h].boundTicketCount > 0)
