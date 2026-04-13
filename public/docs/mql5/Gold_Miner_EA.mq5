@@ -7268,6 +7268,7 @@ void TryResetCycleStateIfFlat(string reason)
    
    // Truly flat — safe to reset everything
     g_cycleGeneration = 0;
+    SaveCycleGeneration();  // v6.53: persist reset
     g_hedgeSetCount = 0;
     ClearPrevHedgedTickets();
     g_lastHedgeBuyTime = 0;   // v6.39: reset side pause
@@ -7337,6 +7338,7 @@ void CheckBalanceGuard()
       
       // Reset cycle state (CloseAllPositions already resets hedge sets)
        g_cycleGeneration = 0;
+       SaveCycleGeneration();  // v6.53: persist reset
        ClearPrevHedgedTickets();
        g_lastHedgeBuyTime = 0;   // v6.39: reset side pause
        g_lastHedgeSellTime = 0;  // v6.39: reset side pause
@@ -7583,6 +7585,7 @@ void CheckAndOpenHedge()
 
        // Increment cycle generation — new orders will use new prefix (GM1_, GM2_, etc.)
        g_cycleGeneration++;
+       SaveCycleGeneration();  // v6.53: persist after increment
        Print("CYCLE GENERATION incremented to ", g_cycleGeneration, " — new orders use prefix: ", GetCommentPrefix());
 
        g_hedgeSetCount++;
@@ -7824,6 +7827,7 @@ bool OpenDDHedge(ENUM_POSITION_TYPE counterSide, ENUM_POSITION_TYPE hedgeSide, i
    
     g_hedgeSets[slot].boundGeneration = bindGen;  // v6.37: use snapshot gen, not current
    g_cycleGeneration++;
+   SaveCycleGeneration();  // v6.53: persist after increment
    Print("CYCLE GENERATION incremented to ", g_cycleGeneration, " — new orders use prefix: ", GetCommentPrefix());
    g_hedgeSetCount++;
    
@@ -7912,6 +7916,7 @@ void RecoverHedgeSets()
       if(gen > maxGen) maxGen = gen;
    }
    g_cycleGeneration = maxGen;
+   SaveCycleGeneration();  // v6.53: persist recovered generation
    Print("RECOVER: Detected cycle generation = ", g_cycleGeneration);
    
    // Step 1: Find main hedge positions (GM_HEDGE_N) and rebuild sets
