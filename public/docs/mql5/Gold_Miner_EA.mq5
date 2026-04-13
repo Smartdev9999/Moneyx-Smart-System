@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.52 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.53 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.52"
-#property description "Gold Miner EA v6.52 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + GenRaceFix + OrphanGenFix + HedgeSidePause + GLCandleConfirm + MaxGridTrail + BrokerTPSL + DashCache + DashThrottle + LiveTPFix + HedgeClearTP + BoundClearFix + InstantSync + DeferredSync + InstantTP + MatchCloseToggle + HedgeRecoveryToggle + License"
+#property version   "6.53"
+#property description "Gold Miner EA v6.53 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + GenRaceFix + OrphanGenFix + HedgeSidePause + GLCandleConfirm + MaxGridTrail + BrokerTPSL + DashCache + DashThrottle + LiveTPFix + HedgeClearTP + BoundClearFix + InstantSync + DeferredSync + InstantTP + MatchCloseToggle + HedgeRecoveryToggle + PersistGen + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -635,6 +635,22 @@ string GetCommentPrefix()
    return "GM" + IntegerToString(g_cycleGeneration);
 }
 
+// === v6.53: Persist g_cycleGeneration via GlobalVariable ===
+string GV_CycleGenKey() { return "GM_CycleGen_" + _Symbol + "_" + IntegerToString(MagicNumber); }
+
+void SaveCycleGeneration()
+{
+   GlobalVariableSet(GV_CycleGenKey(), (double)g_cycleGeneration);
+}
+
+int LoadCycleGeneration()
+{
+   string key = GV_CycleGenKey();
+   if(GlobalVariableCheck(key))
+      return (int)GlobalVariableGet(key);
+   return -1;  // not found
+}
+
 // Get prefix for a specific generation
 string GenPrefix(int gen)
 {
@@ -854,7 +870,15 @@ int OnInit()
    g_lastDDHedgeTime   = 0;
 
    // === Recover Hedge Sets from existing positions (crash/restart recovery) ===
+   int savedGen = LoadCycleGeneration();  // v6.53: load persisted generation
    RecoverHedgeSets();
+   
+   // v6.53: If saved gen is higher than recovered (e.g. hedge was closed externally), use saved
+   if(savedGen > g_cycleGeneration)
+   {
+      g_cycleGeneration = savedGen;
+      Print("v6.53: Restored g_cycleGeneration from GlobalVariable = ", savedGen);
+   }
 
    // v6.29: Initialize dynamic balance guard target
    if(InpBalanceGuard_Enable && InpBalanceGuard_Mode == BALGUARD_DYNAMIC)
@@ -866,7 +890,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.52 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.53 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min");
@@ -924,7 +948,8 @@ void OnDeinit(const int reason)
 
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
-   Print("Gold Miner EA v6.52 deinitialized");
+   SaveCycleGeneration();  // v6.53: persist before shutdown
+   Print("Gold Miner EA v6.53 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -1979,6 +2004,8 @@ double CalculateTotalLots(ENUM_POSITION_TYPE side)
       if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       if(PositionGetInteger(POSITION_TYPE) != side) continue;
+      if(IsHedgeComment(PositionGetString(POSITION_COMMENT))) continue;  // v6.53: skip hedge orders
+      if(IsTicketBound(ticket)) continue;  // v6.53: skip bound orders
       totalLots += PositionGetDouble(POSITION_VOLUME);
    }
    return totalLots;
@@ -3692,7 +3719,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.52 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.52 [ZZ]" : "Gold Miner EA v6.52 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.53 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.53 [ZZ]" : "Gold Miner EA v6.53 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -7241,6 +7268,7 @@ void TryResetCycleStateIfFlat(string reason)
    
    // Truly flat — safe to reset everything
     g_cycleGeneration = 0;
+    SaveCycleGeneration();  // v6.53: persist reset
     g_hedgeSetCount = 0;
     ClearPrevHedgedTickets();
     g_lastHedgeBuyTime = 0;   // v6.39: reset side pause
@@ -7310,6 +7338,7 @@ void CheckBalanceGuard()
       
       // Reset cycle state (CloseAllPositions already resets hedge sets)
        g_cycleGeneration = 0;
+       SaveCycleGeneration();  // v6.53: persist reset
        ClearPrevHedgedTickets();
        g_lastHedgeBuyTime = 0;   // v6.39: reset side pause
        g_lastHedgeSellTime = 0;  // v6.39: reset side pause
@@ -7556,6 +7585,7 @@ void CheckAndOpenHedge()
 
        // Increment cycle generation — new orders will use new prefix (GM1_, GM2_, etc.)
        g_cycleGeneration++;
+       SaveCycleGeneration();  // v6.53: persist after increment
        Print("CYCLE GENERATION incremented to ", g_cycleGeneration, " — new orders use prefix: ", GetCommentPrefix());
 
        g_hedgeSetCount++;
@@ -7797,6 +7827,7 @@ bool OpenDDHedge(ENUM_POSITION_TYPE counterSide, ENUM_POSITION_TYPE hedgeSide, i
    
     g_hedgeSets[slot].boundGeneration = bindGen;  // v6.37: use snapshot gen, not current
    g_cycleGeneration++;
+   SaveCycleGeneration();  // v6.53: persist after increment
    Print("CYCLE GENERATION incremented to ", g_cycleGeneration, " — new orders use prefix: ", GetCommentPrefix());
    g_hedgeSetCount++;
    
@@ -7885,6 +7916,7 @@ void RecoverHedgeSets()
       if(gen > maxGen) maxGen = gen;
    }
    g_cycleGeneration = maxGen;
+   SaveCycleGeneration();  // v6.53: persist recovered generation
    Print("RECOVER: Detected cycle generation = ", g_cycleGeneration);
    
    // Step 1: Find main hedge positions (GM_HEDGE_N) and rebuild sets
