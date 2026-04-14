@@ -147,9 +147,11 @@ input ENUM_ATR_REF   GridLoss_ATR_Reference  = ATR_REF_DYNAMIC; // ATR Reference
 input int            GridLoss_MinGapPoints   = 100;             // Minimum Grid Gap (points)
 input int            GridLoss_CandleConfirm  = 0;               // v6.40: Require N confirming candles before GL (0=Off)
 
-//--- Max Grid Average Trailing Stop (v6.41)
+//--- Max Grid Average Trailing Stop (v6.41, v6.54)
 input group "=== Max Grid Average Trailing Stop ==="
 input bool           MaxGrid_TrailEnable     = false;             // Enable Max Grid Avg Trailing
+input int            MaxGrid_TrailMode       = 0;                 // Mode: 0=Max Order Grid, 1=Start Order Grid
+input int            MaxGrid_StartOrders     = 10;                // Start Trail at N orders (Mode 1 only)
 input int            MaxGrid_TrailActivation = 100;               // Activation (points from average, 0=Off)
 input int            MaxGrid_TrailStep       = 50;                // Trailing Step (points)
 input int            MaxGrid_BreakevenBuffer = 10;                // Breakeven Buffer (points above/below avg)
@@ -890,7 +892,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.53 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.54 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min");
@@ -949,7 +951,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.53 deinitialized");
+   Print("Gold Miner EA v6.54 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -3007,7 +3009,8 @@ void ManageMaxGridTrailing()
    // === BUY side trailing ===
    {
       int glCount = CountGenGridLoss(gen, POSITION_TYPE_BUY);
-      if(glCount >= GridLoss_MaxTrades)
+      int requiredOrders_Buy = (MaxGrid_TrailMode == 1) ? MaxGrid_StartOrders : GridLoss_MaxTrades;  // v6.54
+      if(glCount >= requiredOrders_Buy)
       {
          double avgPrice = CalcGenAveragePrice(gen, POSITION_TYPE_BUY);
          if(avgPrice > 0)
@@ -3058,7 +3061,8 @@ void ManageMaxGridTrailing()
    // === SELL side trailing ===
    {
       int glCount = CountGenGridLoss(gen, POSITION_TYPE_SELL);
-      if(glCount >= GridLoss_MaxTrades)
+      int requiredOrders_Sell = (MaxGrid_TrailMode == 1) ? MaxGrid_StartOrders : GridLoss_MaxTrades;  // v6.54
+      if(glCount >= requiredOrders_Sell)
       {
          double avgPrice = CalcGenAveragePrice(gen, POSITION_TYPE_SELL);
          if(avgPrice > 0)
@@ -3719,7 +3723,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.53 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.53 [ZZ]" : "Gold Miner EA v6.53 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.54 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.54 [ZZ]" : "Gold Miner EA v6.54 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -4216,7 +4220,8 @@ void DisplayDashboard()
              {
                 color COLOR_SECTION_MAXTRAIL = C'20,100,120';
                 string genLabel = GenPrefix(g_maxGridMonitorGen);
-                DrawTableRow(row, "MaxGrid Trail", "ON | Mon: " + genLabel, clrLime, COLOR_SECTION_MAXTRAIL); row++;
+                string modeStr = (MaxGrid_TrailMode == 1) ? "Start@" + IntegerToString(MaxGrid_StartOrders) : "MaxOrd";  // v6.54
+                DrawTableRow(row, "MaxGrid Trail", "ON | " + modeStr + " | Mon: " + genLabel, clrLime, COLOR_SECTION_MAXTRAIL); row++;
                 
                 if(g_maxGridTrailActive_Buy)
                 {
