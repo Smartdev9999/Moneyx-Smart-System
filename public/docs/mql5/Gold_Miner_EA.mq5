@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.54 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.55 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.54"
-#property description "Gold Miner EA v6.54 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + GenRaceFix + OrphanGenFix + HedgeSidePause + GLCandleConfirm + MaxGridTrail + BrokerTPSL + DashCache + DashThrottle + LiveTPFix + HedgeClearTP + BoundClearFix + InstantSync + DeferredSync + InstantTP + MatchCloseToggle + HedgeRecoveryToggle + PersistGen + StartOrderTrail + License"
+#property version   "6.55"
+#property description "Gold Miner EA v6.55 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + GenRaceFix + OrphanGenFix + HedgeSidePause + GLCandleConfirm + MaxGridTrail + BrokerTPSL + DashCache + DashThrottle + LiveTPFix + HedgeClearTP + BoundClearFix + InstantSync + DeferredSync + InstantTP + MatchCloseToggle + HedgeRecoveryToggle + PersistGen + StartOrderTrail + BoundNoClose + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -892,7 +892,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.54 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.55 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min");
@@ -951,7 +951,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.54 deinitialized");
+   Print("Gold Miner EA v6.55 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -3723,7 +3723,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.54 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.54 [ZZ]" : "Gold Miner EA v6.54 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.55 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.55 [ZZ]" : "Gold Miner EA v6.55 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -9334,95 +9334,22 @@ bool ManageHedgeBoundAvgTP(int idx)
 
    if(!tpReached) return false;
 
-   // TP reached → collect profitable bound orders
-   ulong profitTickets[];
-   double profitValues[];
-   int profitCount = 0;
-   double totalProfit = 0;
+   // v6.55: TP reached → do NOT close bound orders, release them as recovery instead
+   // Only close hedge order and deactivate set — bound orders stay open
+   Print("HEDGE AVG TP Set#", idx + 1, " v6.55: avgPrice=", DoubleToString(avgPrice, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)),
+         " target=", InpHedge_BoundAvgTPPoints, "pts REACHED → releasing ", g_hedgeSets[idx].boundTicketCount, " bound orders to recovery");
 
-   for(int b = 0; b < g_hedgeSets[idx].boundTicketCount; b++)
-   {
-      ulong ticket = g_hedgeSets[idx].boundTickets[b];
-      if(!PositionSelectByTicket(ticket)) continue;
-      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != boundSide) continue;
-
-      double pnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
-      if(pnl <= 0) continue;
-
-      ArrayResize(profitTickets, profitCount + 1);
-      ArrayResize(profitValues, profitCount + 1);
-      profitTickets[profitCount] = ticket;
-      profitValues[profitCount] = pnl;
-      totalProfit += pnl;
-      profitCount++;
-   }
-
-   if(profitCount == 0 || totalProfit <= 0) return false;
-
-   // Get hedge info for partial close
-   if(!PositionSelectByTicket(g_hedgeSets[idx].hedgeTicket)) return false;
-   double hedgePnL = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
-   double hedgeLots = PositionGetDouble(POSITION_VOLUME);
-   if(hedgeLots <= 0) return false;
-
-   double hedgeLossPerLot = (hedgePnL < 0) ? (MathAbs(hedgePnL) / hedgeLots) : 0;
-
-   Print("HEDGE AVG TP Set#", idx + 1, ": avgPrice=", DoubleToString(avgPrice, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)),
-         " target=", InpHedge_BoundAvgTPPoints, "pts, profitOrders=", profitCount,
-         " totalProfit=$", DoubleToString(totalProfit, 2));
-
-   // Close all profitable bound orders
-   for(int p = 0; p < profitCount; p++)
-   {
-      trade.PositionClose(profitTickets[p]);
-      RemoveBoundTicket(idx, profitTickets[p]);
-      Sleep(50);
-   }
-
-   // Partial close hedge with profit (shred, not full close)
-   if(hedgeLossPerLot > 0)
-   {
-      double closeLots = totalProfit / hedgeLossPerLot;
-      double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
-      double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
-      closeLots = MathMax(minLot, MathMin(hedgeLots, NormalizeDouble(MathFloor(closeLots / lotStep) * lotStep, 2)));
-
-      if(closeLots >= minLot)
-      {
-         if(!PositionSelectByTicket(g_hedgeSets[idx].hedgeTicket)) return true;
-         hedgeLots = PositionGetDouble(POSITION_VOLUME);
-
-         if(closeLots >= hedgeLots)
-         {
-            trade.PositionClose(g_hedgeSets[idx].hedgeTicket);
-              CloseAllHedgeGridOrders(idx);
-              SaveBoundTicketsToPrevHedged(idx);  // v6.26
-              g_hedgeSets[idx].active = false;
-             g_hedgeSets[idx].boundTicketCount = 0;
-             ArrayResize(g_hedgeSets[idx].boundTickets, 0);
-             g_hedgeSetCount--;
-              g_lastHedgeCloseTime = TimeCurrent();  // v6.25: cooldown after set close
-               // v6.27: Safe reset — only if truly flat
-               TryResetCycleStateIfFlat("AvgTP");
-             Print("HEDGE Set#", idx + 1, " fully closed via Avg TP.");
-         }
-         else
-         {
-            trade.PositionClosePartial(g_hedgeSets[idx].hedgeTicket, closeLots);
-            g_hedgeSets[idx].hedgeLots = hedgeLots - closeLots;
-            Print("HEDGE Set#", idx + 1, " reduced to ", DoubleToString(hedgeLots - closeLots, 2), " lots via Avg TP");
-         }
-         Sleep(100);
-      }
-   }
-   else
-   {
-      // Hedge is not in loss → just close profitable bounds, hedge stays
-      Print("HEDGE AVG TP Set#", idx + 1, ": hedge not in loss, bounds closed only.");
-   }
-
-   // v6.13: Grid entry is now handled centrally by TryEnterCombinedGridMode() in ManageHedgeSets
-   // Do NOT set gridMode here — let the central gate handle it after matching is complete
+   // Close hedge order
+   trade.PositionClose(g_hedgeSets[idx].hedgeTicket);
+   CloseAllHedgeGridOrders(idx);
+   SaveBoundTicketsToPrevHedged(idx);
+   g_hedgeSets[idx].active = false;
+   g_hedgeSets[idx].boundTicketCount = 0;
+   ArrayResize(g_hedgeSets[idx].boundTickets, 0);
+   g_hedgeSetCount--;
+   g_lastHedgeCloseTime = TimeCurrent();
+   TryResetCycleStateIfFlat("AvgTP release");
+   Sleep(100);
 
    return true;
 }
@@ -9535,25 +9462,20 @@ void ManageHedgeMatchingClose(int idx)
          }
       }
 
-      // Close matched losses + remove from boundTickets
-      for(int cl = 0; cl < lossUsed; cl++)
-      {
-         int li = closeLossIdx[cl];
-         trade.PositionClose(lossTickets[li]);
-         RemoveBoundTicket(idx, lossTickets[li]);
-      }
+       // v6.55: Do NOT close bound loss orders — release them as recovery orders
+       Print("HEDGE MATCHING v6.55 Set#", idx + 1, ": releasing ", g_hedgeSets[idx].boundTicketCount, " bound orders to recovery (not closing)");
 
-      // Deactivate hedge set
-       CloseAllHedgeGridOrders(idx);
-       SaveBoundTicketsToPrevHedged(idx);  // v6.26
-       g_hedgeSets[idx].active = false;
-       g_hedgeSets[idx].boundTicketCount = 0;
-       ArrayResize(g_hedgeSets[idx].boundTickets, 0);
-         g_hedgeSetCount--;
-         g_lastHedgeCloseTime = TimeCurrent();  // v6.25: cooldown after set close
-         // v6.27: Safe reset — only if truly flat
-         TryResetCycleStateIfFlat("matching close");
-       Sleep(100);
+       // Deactivate hedge set — bound orders remain open as recovery
+        CloseAllHedgeGridOrders(idx);
+        SaveBoundTicketsToPrevHedged(idx);  // v6.26
+        g_hedgeSets[idx].active = false;
+        g_hedgeSets[idx].boundTicketCount = 0;
+        ArrayResize(g_hedgeSets[idx].boundTickets, 0);
+          g_hedgeSetCount--;
+          g_lastHedgeCloseTime = TimeCurrent();  // v6.25: cooldown after set close
+          // v6.27: Safe reset — only if truly flat
+          TryResetCycleStateIfFlat("matching close");
+        Sleep(100);
     }
      else
      {
@@ -9584,120 +9506,19 @@ void ManageHedgeMatchingClose(int idx)
 //+------------------------------------------------------------------+
 void ManageHedgePartialClose(int idx)
 {
+   // v6.55: Do NOT close bound orders — skip partial close entirely
+   // Bound orders will be released to recovery when hedge set is deactivated
+   // This function now only logs that it's skipping
    if(!PositionSelectByTicket(g_hedgeSets[idx].hedgeTicket)) return;
 
    double hedgePnL = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
-   double hedgeLots = PositionGetDouble(POSITION_VOLUME);
    if(hedgePnL >= 0) return;  // not in loss → handled by ManageHedgeMatchingClose
-   if(hedgeLots <= 0) return;
 
-   // v6.13: Grid entry is now handled centrally by TryEnterCombinedGridMode() in ManageHedgeSets
-   // Do NOT set gridMode here — let the central gate handle it after matching is complete
-   if(g_hedgeSets[idx].boundTicketCount == 0)
-   {
-      return;  // No bounds to partial-close; grid entry deferred to central gate
-   }
+   if(g_hedgeSets[idx].boundTicketCount == 0) return;
 
-   // Find profitable orders ONLY from this set's boundTickets
-    ulong profitTickets[];
-    double profitValues[];
-    datetime profitTimes[];
-    int profitCount = 0;
-
-    for(int b = 0; b < g_hedgeSets[idx].boundTicketCount; b++)
-    {
-       ulong ticket = g_hedgeSets[idx].boundTickets[b];
-       if(!PositionSelectByTicket(ticket)) continue;
-       if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != g_hedgeSets[idx].counterSide) continue;
-
-       double pnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
-       if(pnl <= 0) continue;
-
-       ArrayResize(profitTickets, profitCount + 1);
-       ArrayResize(profitValues, profitCount + 1);
-       ArrayResize(profitTimes, profitCount + 1);
-       profitTickets[profitCount] = ticket;
-       profitValues[profitCount] = pnl;
-       profitTimes[profitCount] = (datetime)PositionGetInteger(POSITION_TIME);
-       profitCount++;
-    }
-
-    if(profitCount == 0) return;  // no profitable bound orders to use
-
-    // Guard: require minimum number of profitable counter-orders before starting partial close
-    int minOrders = MathMax(InpHedge_PartialMinProfitOrders, 1);
-    if(profitCount < minOrders) return;
-
-    // Sort by open time descending (newest first) to pick N newest
-    for(int a = 0; a < profitCount - 1; a++)
-       for(int b2 = a + 1; b2 < profitCount; b2++)
-          if(profitTimes[b2] > profitTimes[a])
-          {
-             datetime tmpT = profitTimes[a]; profitTimes[a] = profitTimes[b2]; profitTimes[b2] = tmpT;
-             double tmpV = profitValues[a]; profitValues[a] = profitValues[b2]; profitValues[b2] = tmpV;
-             ulong tmpK = profitTickets[a]; profitTickets[a] = profitTickets[b2]; profitTickets[b2] = tmpK;
-          }
-
-    // Take only N newest profitable orders (not all)
-    int closeCount = minOrders;
-
-    // Calculate hedge loss per lot
-    double hedgeLossPerLot = MathAbs(hedgePnL) / hedgeLots;
-    if(hedgeLossPerLot <= 0) return;
-
-    // === BATCH MODE: aggregate only N newest profitable orders ===
-    double totalProfit = 0;
-    for(int p = 0; p < closeCount; p++)
-       totalProfit += profitValues[p];
-
-    // Calculate total hedge lots that can be covered by combined profit
-    double closeLots = (totalProfit - InpHedge_PartialMinProfit) / hedgeLossPerLot;
-    if(closeLots <= 0) return;
-
-    // Normalize lot
-    double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
-    double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
-    closeLots = MathMax(minLot, MathMin(hedgeLots, NormalizeDouble(MathFloor(closeLots / lotStep) * lotStep, 2)));
-
-    if(closeLots < minLot) return;
-
-    Print("HEDGE PARTIAL CLOSE (BATCH) Set#", idx + 1, ": ", closeCount, "/", profitCount, " newest profit orders total $",
-          DoubleToString(totalProfit, 2), " → close ", DoubleToString(closeLots, 2),
-          " lots of hedge (current ", DoubleToString(hedgeLots, 2), " lots)");
-
-    // Close only N newest profitable bound orders + remove from boundTickets
-    for(int p = 0; p < closeCount; p++)
-    {
-       trade.PositionClose(profitTickets[p]);
-       RemoveBoundTicket(idx, profitTickets[p]);
-       Sleep(50);
-    }
-
-   // Partial close (or full close) hedge
-   if(!PositionSelectByTicket(g_hedgeSets[idx].hedgeTicket)) return;
-   hedgeLots = PositionGetDouble(POSITION_VOLUME);
-
-   if(closeLots >= hedgeLots)
-   {
-      trade.PositionClose(g_hedgeSets[idx].hedgeTicket);
-       CloseAllHedgeGridOrders(idx);
-       SaveBoundTicketsToPrevHedged(idx);  // v6.26
-       g_hedgeSets[idx].active = false;
-       g_hedgeSets[idx].boundTicketCount = 0;
-       ArrayResize(g_hedgeSets[idx].boundTickets, 0);
-         g_hedgeSetCount--;
-         g_lastHedgeCloseTime = TimeCurrent();  // v6.25: cooldown after set close
-         // v6.27: Safe reset — only if truly flat
-         TryResetCycleStateIfFlat("batch close");
-       Print("HEDGE Set#", idx + 1, " fully closed via batch partial close.");
-   }
-   else
-   {
-      trade.PositionClosePartial(g_hedgeSets[idx].hedgeTicket, closeLots);
-      g_hedgeSets[idx].hedgeLots = hedgeLots - closeLots;
-      Print("HEDGE Set#", idx + 1, " reduced to ", DoubleToString(hedgeLots - closeLots, 2), " lots");
-   }
-   Sleep(100);
+   // v6.55: Skip — do not close bound orders while hedge is active
+   // Wait for Balance Guard or hedge profit to trigger release
+   return;
 }
 
 //+------------------------------------------------------------------+
