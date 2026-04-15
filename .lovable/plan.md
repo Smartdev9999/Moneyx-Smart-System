@@ -1,12 +1,12 @@
 
 
-## v6.54 — เพิ่มโหมด "Start Order Grid" สำหรับ Max Grid Average Trailing Stop
+## v6.55 — Matching Close ไม่ปิด Bound Orders (ปล่อยเป็น Recovery แทน)
 
 ### หลักการ
 
-1. **ปัญหา**: Max Grid Trailing ทำงานเมื่อ `glCount >= GridLoss_MaxTrades` เท่านั้น → ต้องรอจนถึง max orders
-2. **Fix**: เพิ่ม `MaxGrid_TrailMode` (0=Max Order Grid, 1=Start Order Grid) + `MaxGrid_StartOrders` → trailing เริ่มได้เร็วขึ้น
-3. **Version bump**: v6.53 → v6.54
+1. **ปัญหา**: ManageHedgeMatchingClose / BoundAvgTP / PartialClose ปิด bound orders ทิ้ง → ไม่ถูกต้อง
+2. **Fix**: ทั้ง 3 ฟังก์ชัน ไม่ปิด bound orders อีกต่อไป → ปิดแค่ hedge + release bounds เป็น recovery
+3. **Version bump**: v6.54 → v6.55
 
 ### ไฟล์: `public/docs/mql5/Gold_Miner_EA.mq5`
 
@@ -15,6 +15,7 @@
 - Trading Strategy Logic — ไม่แก้
 - Core Module Logic — ไม่แก้
 - Grid entry/exit logic — ไม่แก้
-- Hedge Matching Close / Balance Guard — ไม่แก้
-- ManageMaxGridTrailing trailing/activation/close logic — ไม่แก้ (แก้แค่เงื่อนไขเริ่มต้น)
-- v6.37-v6.53 features — ไม่แก้
+- Balance Guard — ยังทำงานปกติ
+- Triple Gate logic — ไม่แก้
+- IsTicketBound / IsHedgeComment guards — ไม่แก้
+- v6.37-v6.54 features — ไม่แก้
