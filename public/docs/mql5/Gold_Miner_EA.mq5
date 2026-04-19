@@ -1827,6 +1827,72 @@ int NormalOrderCount()
 //+------------------------------------------------------------------+
 //| Open order                                                         |
 //+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| v6.56: Bollinger Band Entry Filter helpers                       |
+//| Returns block state: 0=allow, 1=block buy, 2=block sell, 3=both  |
+//+------------------------------------------------------------------+
+int GetBBBlockState(double &outUpper, double &outMiddle, double &outLower, string &outReason)
+{
+   outUpper = 0; outMiddle = 0; outLower = 0; outReason = "";
+   if(!BB_FilterEnable || g_bbHandle == INVALID_HANDLE) return 0;
+
+   double up[2], mid[2], lo[2];
+   if(CopyBuffer(g_bbHandle, 1, 0, 1, up) < 1) return 0;   // UPPER_BAND
+   if(CopyBuffer(g_bbHandle, 0, 0, 2, mid) < 2) return 0;  // BASE_LINE (need 2 for slope)
+   if(CopyBuffer(g_bbHandle, 2, 0, 1, lo) < 1) return 0;   // LOWER_BAND
+
+   outUpper  = up[0];
+   outMiddle = mid[0];
+   outLower  = lo[0];
+
+   double price = (SymbolInfoDouble(_Symbol, SYMBOL_BID) + SymbolInfoDouble(_Symbol, SYMBOL_ASK)) / 2.0;
+   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   if(point <= 0) return 0;
+   double proxDist = BB_ProximityPips * point;
+
+   // Outside band -> block both
+   if(price > outUpper)  { outReason = "PRICE > UPPER"; return 3; }
+   if(price < outLower)  { outReason = "PRICE < LOWER"; return 3; }
+
+   // Near upper
+   if(MathAbs(price - outUpper) <= proxDist)
+   {
+      if(BB_BlockMode == 0) { outReason = "NEAR UPPER (both)"; return 3; }
+      // Counter-trend: near upper -> block buy
+      outReason = "NEAR UPPER (block buy)"; return 1;
+   }
+   // Near lower
+   if(MathAbs(price - outLower) <= proxDist)
+   {
+      if(BB_BlockMode == 0) { outReason = "NEAR LOWER (both)"; return 3; }
+      outReason = "NEAR LOWER (block sell)"; return 2;
+   }
+   // Near middle
+   if(MathAbs(price - outMiddle) <= proxDist)
+   {
+      if(BB_BlockMode == 0) { outReason = "NEAR MID (both)"; return 3; }
+      // Use middle slope: rising mid -> uptrend -> block sell; falling -> block buy
+      double slope = mid[0] - mid[1];
+      if(slope >= 0) { outReason = "NEAR MID (rising, block sell)"; return 2; }
+      else           { outReason = "NEAR MID (falling, block buy)"; return 1; }
+   }
+   return 0;
+}
+
+bool IsBBBlockingBuy()
+{
+   double u, m, l; string r;
+   int s = GetBBBlockState(u, m, l, r);
+   return (s == 1 || s == 3);
+}
+
+bool IsBBBlockingSell()
+{
+   double u, m, l; string r;
+   int s = GetBBBlockState(u, m, l, r);
+   return (s == 2 || s == 3);
+}
+
 bool OpenOrder(ENUM_ORDER_TYPE orderType, double lots, string comment)
 {
    double price = (orderType == ORDER_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
