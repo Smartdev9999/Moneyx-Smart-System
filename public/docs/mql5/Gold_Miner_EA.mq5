@@ -1897,6 +1897,27 @@ bool OpenOrder(ENUM_ORDER_TYPE orderType, double lots, string comment)
 {
    double price = (orderType == ORDER_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
 
+   //--- v6.56: Bollinger Band Entry Filter (Block New Orders Only — exempt hedge orders)
+   if(BB_FilterEnable && !IsHedgeComment(comment))
+   {
+      double bbU, bbM, bbL; string bbReason;
+      int bbState = GetBBBlockState(bbU, bbM, bbL, bbReason);
+      bool blockBuy  = (bbState == 1 || bbState == 3);
+      bool blockSell = (bbState == 2 || bbState == 3);
+      if(orderType == ORDER_TYPE_BUY && blockBuy)
+      {
+         static datetime lastLogB = 0;
+         if(TimeCurrent() - lastLogB >= 30) { Print("v6.56 BB BLOCK BUY: ", comment, " | ", bbReason, " | Px=", price, " U=", bbU, " M=", bbM, " L=", bbL); lastLogB = TimeCurrent(); }
+         return false;
+      }
+      if(orderType == ORDER_TYPE_SELL && blockSell)
+      {
+         static datetime lastLogS = 0;
+         if(TimeCurrent() - lastLogS >= 30) { Print("v6.56 BB BLOCK SELL: ", comment, " | ", bbReason, " | Px=", price, " U=", bbU, " M=", bbM, " L=", bbL); lastLogS = TimeCurrent(); }
+         return false;
+      }
+   }
+
    //--- Normalize lot
    double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
    double maxLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
