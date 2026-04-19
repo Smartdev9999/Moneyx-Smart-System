@@ -766,6 +766,18 @@ int OnInit()
       }
    }
 
+   //--- v6.56: Bollinger Band Entry Filter handle
+   if(BB_FilterEnable)
+   {
+      g_bbHandle = iBands(_Symbol, BB_Timeframe, BB_Period, 0, BB_Deviation, PRICE_CLOSE);
+      if(g_bbHandle == INVALID_HANDLE)
+      {
+         Print("ERROR: Failed to create BB Filter handle");
+         return INIT_FAILED;
+      }
+      Print("v6.56 BB Filter: ENABLED TF=", EnumToString(BB_Timeframe), " Period=", BB_Period, " Dev=", BB_Deviation, " Prox=", BB_ProximityPips, "p Mode=", BB_BlockMode);
+   }
+
    //--- Init arrays
    ArraySetAsSeries(bufSMA, true);
    ArraySetAsSeries(bufATR_Loss, true);
@@ -933,6 +945,7 @@ void OnDeinit(const int reason)
    if(handleSMA != INVALID_HANDLE) IndicatorRelease(handleSMA);
    if(handleATR_Loss != INVALID_HANDLE) IndicatorRelease(handleATR_Loss);
    if(handleATR_Profit != INVALID_HANDLE) IndicatorRelease(handleATR_Profit);
+   if(g_bbHandle != INVALID_HANDLE) { IndicatorRelease(g_bbHandle); g_bbHandle = INVALID_HANDLE; } // v6.56
 
    // Release ZigZag indicator handles
    for(int zz = 0; zz < g_activeTFCount; zz++)
