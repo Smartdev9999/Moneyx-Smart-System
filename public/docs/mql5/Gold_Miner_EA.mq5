@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.55 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.56 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.55"
-#property description "Gold Miner EA v6.55 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + GenRaceFix + OrphanGenFix + HedgeSidePause + GLCandleConfirm + MaxGridTrail + BrokerTPSL + DashCache + DashThrottle + LiveTPFix + HedgeClearTP + BoundClearFix + InstantSync + DeferredSync + InstantTP + MatchCloseToggle + HedgeRecoveryToggle + PersistGen + StartOrderTrail + BoundNoClose + License"
+#property version   "6.56"
+#property description "Gold Miner EA v6.56 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + GenRaceFix + OrphanGenFix + HedgeSidePause + GLCandleConfirm + MaxGridTrail + BrokerTPSL + DashCache + DashThrottle + LiveTPFix + HedgeClearTP + BoundClearFix + InstantSync + DeferredSync + InstantTP + MatchCloseToggle + HedgeRecoveryToggle + PersistGen + StartOrderTrail + BoundNoClose + BBFilter + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -228,6 +228,15 @@ input bool     InpEnableTrailing         = true;     // Enable Trailing
 input int      InpTrailingStop           = 200;      // Trailing Distance (points from current price)
 input int      InpTrailingStep           = 10;       // Trailing Step (min SL movement in points)
 
+//--- v6.56: Bollinger Band Entry Filter
+input group "=== Bollinger Band Entry Filter (v6.56) ==="
+input bool             BB_FilterEnable    = false;       // Enable BB Entry Filter
+input ENUM_TIMEFRAMES  BB_Timeframe       = PERIOD_M15;  // BB Timeframe
+input int              BB_Period          = 20;          // BB Period
+input double           BB_Deviation       = 2.0;         // BB Deviation (StdDev)
+input int              BB_ProximityPips   = 100;         // Block range near each band (points)
+input int              BB_BlockMode       = 0;           // 0=Block Both Sides, 1=Block Counter-Trend Only
+
 //--- Dashboard
 input group "=== Dashboard ==="
 input bool     ShowDashboard        = true;    // Show Dashboard
@@ -379,6 +388,7 @@ CTrade         trade;
 int            handleSMA;
 int            handleATR_Loss;
 int            handleATR_Profit;
+int            g_bbHandle = INVALID_HANDLE;       // v6.56: Bollinger Band Entry Filter handle
 double         bufSMA[];
 double         bufATR_Loss[];
 double         bufATR_Profit[];
@@ -756,6 +766,18 @@ int OnInit()
       }
    }
 
+   //--- v6.56: Bollinger Band Entry Filter handle
+   if(BB_FilterEnable)
+   {
+      g_bbHandle = iBands(_Symbol, BB_Timeframe, BB_Period, 0, BB_Deviation, PRICE_CLOSE);
+      if(g_bbHandle == INVALID_HANDLE)
+      {
+         Print("ERROR: Failed to create BB Filter handle");
+         return INIT_FAILED;
+      }
+      Print("v6.56 BB Filter: ENABLED TF=", EnumToString(BB_Timeframe), " Period=", BB_Period, " Dev=", BB_Deviation, " Prox=", BB_ProximityPips, "p Mode=", BB_BlockMode);
+   }
+
    //--- Init arrays
    ArraySetAsSeries(bufSMA, true);
    ArraySetAsSeries(bufATR_Loss, true);
@@ -892,7 +914,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.55 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.56 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min");
@@ -923,6 +945,7 @@ void OnDeinit(const int reason)
    if(handleSMA != INVALID_HANDLE) IndicatorRelease(handleSMA);
    if(handleATR_Loss != INVALID_HANDLE) IndicatorRelease(handleATR_Loss);
    if(handleATR_Profit != INVALID_HANDLE) IndicatorRelease(handleATR_Profit);
+   if(g_bbHandle != INVALID_HANDLE) { IndicatorRelease(g_bbHandle); g_bbHandle = INVALID_HANDLE; } // v6.56
 
    // Release ZigZag indicator handles
    for(int zz = 0; zz < g_activeTFCount; zz++)
@@ -951,7 +974,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.55 deinitialized");
+   Print("Gold Miner EA v6.56 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -1804,9 +1827,96 @@ int NormalOrderCount()
 //+------------------------------------------------------------------+
 //| Open order                                                         |
 //+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| v6.56: Bollinger Band Entry Filter helpers                       |
+//| Returns block state: 0=allow, 1=block buy, 2=block sell, 3=both  |
+//+------------------------------------------------------------------+
+int GetBBBlockState(double &outUpper, double &outMiddle, double &outLower, string &outReason)
+{
+   outUpper = 0; outMiddle = 0; outLower = 0; outReason = "";
+   if(!BB_FilterEnable || g_bbHandle == INVALID_HANDLE) return 0;
+
+   double up[2], mid[2], lo[2];
+   if(CopyBuffer(g_bbHandle, 1, 0, 1, up) < 1) return 0;   // UPPER_BAND
+   if(CopyBuffer(g_bbHandle, 0, 0, 2, mid) < 2) return 0;  // BASE_LINE (need 2 for slope)
+   if(CopyBuffer(g_bbHandle, 2, 0, 1, lo) < 1) return 0;   // LOWER_BAND
+
+   outUpper  = up[0];
+   outMiddle = mid[0];
+   outLower  = lo[0];
+
+   double price = (SymbolInfoDouble(_Symbol, SYMBOL_BID) + SymbolInfoDouble(_Symbol, SYMBOL_ASK)) / 2.0;
+   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   if(point <= 0) return 0;
+   double proxDist = BB_ProximityPips * point;
+
+   // Outside band -> block both
+   if(price > outUpper)  { outReason = "PRICE > UPPER"; return 3; }
+   if(price < outLower)  { outReason = "PRICE < LOWER"; return 3; }
+
+   // Near upper
+   if(MathAbs(price - outUpper) <= proxDist)
+   {
+      if(BB_BlockMode == 0) { outReason = "NEAR UPPER (both)"; return 3; }
+      // Counter-trend: near upper -> block buy
+      outReason = "NEAR UPPER (block buy)"; return 1;
+   }
+   // Near lower
+   if(MathAbs(price - outLower) <= proxDist)
+   {
+      if(BB_BlockMode == 0) { outReason = "NEAR LOWER (both)"; return 3; }
+      outReason = "NEAR LOWER (block sell)"; return 2;
+   }
+   // Near middle
+   if(MathAbs(price - outMiddle) <= proxDist)
+   {
+      if(BB_BlockMode == 0) { outReason = "NEAR MID (both)"; return 3; }
+      // Use middle slope: rising mid -> uptrend -> block sell; falling -> block buy
+      double slope = mid[0] - mid[1];
+      if(slope >= 0) { outReason = "NEAR MID (rising, block sell)"; return 2; }
+      else           { outReason = "NEAR MID (falling, block buy)"; return 1; }
+   }
+   return 0;
+}
+
+bool IsBBBlockingBuy()
+{
+   double u, m, l; string r;
+   int s = GetBBBlockState(u, m, l, r);
+   return (s == 1 || s == 3);
+}
+
+bool IsBBBlockingSell()
+{
+   double u, m, l; string r;
+   int s = GetBBBlockState(u, m, l, r);
+   return (s == 2 || s == 3);
+}
+
 bool OpenOrder(ENUM_ORDER_TYPE orderType, double lots, string comment)
 {
    double price = (orderType == ORDER_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
+
+   //--- v6.56: Bollinger Band Entry Filter (Block New Orders Only — exempt hedge orders)
+   if(BB_FilterEnable && !IsHedgeComment(comment))
+   {
+      double bbU, bbM, bbL; string bbReason;
+      int bbState = GetBBBlockState(bbU, bbM, bbL, bbReason);
+      bool blockBuy  = (bbState == 1 || bbState == 3);
+      bool blockSell = (bbState == 2 || bbState == 3);
+      if(orderType == ORDER_TYPE_BUY && blockBuy)
+      {
+         static datetime lastLogB = 0;
+         if(TimeCurrent() - lastLogB >= 30) { Print("v6.56 BB BLOCK BUY: ", comment, " | ", bbReason, " | Px=", price, " U=", bbU, " M=", bbM, " L=", bbL); lastLogB = TimeCurrent(); }
+         return false;
+      }
+      if(orderType == ORDER_TYPE_SELL && blockSell)
+      {
+         static datetime lastLogS = 0;
+         if(TimeCurrent() - lastLogS >= 30) { Print("v6.56 BB BLOCK SELL: ", comment, " | ", bbReason, " | Px=", price, " U=", bbU, " M=", bbM, " L=", bbL); lastLogS = TimeCurrent(); }
+         return false;
+      }
+   }
 
    //--- Normalize lot
    double minLot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
@@ -2269,8 +2379,7 @@ void ClearBrokerTPSL()
    g_lastBrokerSL_Buy  = 0;
    g_lastBrokerTP_Sell  = 0;
    g_lastBrokerSL_Sell  = 0;
-}
-
+    }
 
 void ManageTPSL()
 {
@@ -3723,7 +3832,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.55 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.55 [ZZ]" : "Gold Miner EA v6.55 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.56 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.56 [ZZ]" : "Gold Miner EA v6.56 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -4048,6 +4157,26 @@ void DisplayDashboard()
           DrawTableRow(row, "Close All", closeStatus, closeClr, COLOR_SECTION_INFO); row++;
        }
     }
+
+   //--- v6.56: Bollinger Band Filter Section
+   if(BB_FilterEnable)
+   {
+      color COLOR_SECTION_BB = C'70,130,180';
+      double bbU, bbM, bbL; string bbReason;
+      int bbState = GetBBBlockState(bbU, bbM, bbL, bbReason);
+      int dg = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+      string modeStr = (BB_BlockMode == 0) ? "Both" : "Counter";
+      string cfg = StringFormat("ON %s(%d,%.1f) Prox:%dp %s", EnumToString(BB_Timeframe), BB_Period, BB_Deviation, BB_ProximityPips, modeStr);
+      DrawTableRow(row, "BB Filter", cfg, clrSkyBlue, COLOR_SECTION_BB); row++;
+      string lvls = StringFormat("U:%s M:%s L:%s", DoubleToString(bbU, dg), DoubleToString(bbM, dg), DoubleToString(bbL, dg));
+      DrawTableRow(row, "BB Levels", lvls, clrLightGray, COLOR_SECTION_BB); row++;
+      string blkBuy  = (bbState == 1 || bbState == 3) ? "BLOCKED" : "ALLOW";
+      string blkSell = (bbState == 2 || bbState == 3) ? "BLOCKED" : "ALLOW";
+      color blkClr = (bbState == 0) ? clrLime : clrOrangeRed;
+      string blkInfo = StringFormat("BUY:%s | SELL:%s", blkBuy, blkSell);
+      if(bbState != 0) blkInfo += " (" + bbReason + ")";
+      DrawTableRow(row, "BB Block", blkInfo, blkClr, COLOR_SECTION_BB); row++;
+   }
 
    //--- Counter-Trend Hedging Section
    if(InpHedge_Enable)
