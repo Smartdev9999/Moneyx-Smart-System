@@ -228,6 +228,15 @@ input bool     InpEnableTrailing         = true;     // Enable Trailing
 input int      InpTrailingStop           = 200;      // Trailing Distance (points from current price)
 input int      InpTrailingStep           = 10;       // Trailing Step (min SL movement in points)
 
+//--- v6.56: Bollinger Band Entry Filter
+input group "=== Bollinger Band Entry Filter (v6.56) ==="
+input bool             BB_FilterEnable    = false;       // Enable BB Entry Filter
+input ENUM_TIMEFRAMES  BB_Timeframe       = PERIOD_M15;  // BB Timeframe
+input int              BB_Period          = 20;          // BB Period
+input double           BB_Deviation       = 2.0;         // BB Deviation (StdDev)
+input int              BB_ProximityPips   = 100;         // Block range near each band (points)
+input int              BB_BlockMode       = 0;           // 0=Block Both Sides, 1=Block Counter-Trend Only
+
 //--- Dashboard
 input group "=== Dashboard ==="
 input bool     ShowDashboard        = true;    // Show Dashboard
