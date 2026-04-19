@@ -2381,27 +2381,6 @@ void ClearBrokerTPSL()
    g_lastBrokerSL_Sell  = 0;
     }
 
-   //--- v6.56: Bollinger Band Filter Section
-   if(BB_FilterEnable)
-   {
-      color COLOR_SECTION_BB = C'70,130,180';  // steel blue
-      double bbU, bbM, bbL; string bbReason;
-      int bbState = GetBBBlockState(bbU, bbM, bbL, bbReason);
-      int dg = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
-      string modeStr = (BB_BlockMode == 0) ? "Both" : "Counter";
-      string cfg = StringFormat("ON %s(%d,%.1f) Prox:%dp %s", EnumToString(BB_Timeframe), BB_Period, BB_Deviation, BB_ProximityPips, modeStr);
-      DrawTableRow(row, "BB Filter", cfg, clrSkyBlue, COLOR_SECTION_BB); row++;
-      string lvls = StringFormat("U:%s M:%s L:%s", DoubleToString(bbU, dg), DoubleToString(bbM, dg), DoubleToString(bbL, dg));
-      DrawTableRow(row, "BB Levels", lvls, clrLightGray, COLOR_SECTION_BB); row++;
-      string blkBuy  = (bbState == 1 || bbState == 3) ? "BLOCKED" : "ALLOW";
-      string blkSell = (bbState == 2 || bbState == 3) ? "BLOCKED" : "ALLOW";
-      color blkClr = (bbState == 0) ? clrLime : clrOrangeRed;
-      string blkInfo = StringFormat("BUY:%s | SELL:%s", blkBuy, blkSell);
-      if(bbState != 0) blkInfo += " (" + bbReason + ")";
-      DrawTableRow(row, "BB Block", blkInfo, blkClr, COLOR_SECTION_BB); row++;
-   }
-
-
 void ManageTPSL()
 {
    // v6.11: Skip TP/SL when hedge balanced lock is active (both sides equal)
