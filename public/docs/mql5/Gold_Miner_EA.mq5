@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.57 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.58 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.57"
-#property description "Gold Miner EA v6.57 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + GenRaceFix + OrphanGenFix + HedgeSidePause + GLCandleConfirm + MaxGridTrail + BrokerTPSL + DashCache + DashThrottle + LiveTPFix + HedgeClearTP + BoundClearFix + InstantSync + DeferredSync + InstantTP + MatchCloseToggle + HedgeRecoveryToggle + PersistGen + StartOrderTrail + BoundNoClose + BBFilter + RecoveryGrid + SequentialRecovery + FlatGenReset + License"
+#property version   "6.58"
+#property description "Gold Miner EA v6.58 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + GenRaceFix + OrphanGenFix + HedgeSidePause + GLCandleConfirm + MaxGridTrail + BrokerTPSL + DashCache + DashThrottle + LiveTPFix + HedgeClearTP + BoundClearFix + InstantSync + DeferredSync + InstantTP + MatchCloseToggle + HedgeRecoveryToggle + PersistGen + StartOrderTrail + BoundNoClose + BBFilter + RecoveryGrid + SequentialRecovery + FlatGenReset + SeqOneSetPerTick + RehedgeGuard + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -938,7 +938,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.57 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.58 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min");
@@ -998,7 +998,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.57 deinitialized");
+   Print("Gold Miner EA v6.58 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -3865,7 +3865,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.57 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.57 [ZZ]" : "Gold Miner EA v6.57 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.58 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.58 [ZZ]" : "Gold Miner EA v6.58 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -4395,14 +4395,20 @@ void DisplayDashboard()
                 }
              }
 
-             // v6.57: Sequential Hedge Recovery status
+             // v6.57/v6.58: Sequential Hedge Recovery status
              if(InpHedge_SequentialRecovery && g_hedgeSetCount > 0)
              {
                 int oldestIdx = FindOldestActiveHedgeSet();
-                string seqInfo = "Sequential | Active: H" + IntegerToString(oldestIdx + 1);
+                string seqInfo = "Sequential | Acting: H" + IntegerToString(oldestIdx + 1) + " (1/tick)";
                 int pendingCount = g_hedgeSetCount - 1;
-                if(pendingCount > 0) seqInfo += " | Pending: " + IntegerToString(pendingCount) + " set(s)";
+                if(pendingCount > 0) seqInfo += " | Wait: " + IntegerToString(pendingCount) + " set(s)";
                 DrawTableRow(row, "Hedge Recovery", seqInfo, clrAqua, COLOR_SECTION_HEDGE); row++;
+                // v6.58: PrevHedged lock count
+                if(g_prevHedgedCount > 0)
+                {
+                   string phInfo = IntegerToString(g_prevHedgedCount) + " ticket(s) locked from re-hedge";
+                   DrawTableRow(row, "PrevHedged", phInfo, clrOrange, COLOR_SECTION_HEDGE); row++;
+                }
              }
 
              // v6.57: Recovery Grid mode indicator
@@ -7737,6 +7743,7 @@ int CountUnboundOrders(ENUM_POSITION_TYPE side, double &totalLots, double &total
       string comment = PositionGetString(POSITION_COMMENT);
       if(IsHedgeComment(comment)) continue;
       if(IsTicketBound(ticket)) continue;  // skip tickets already bound to a set
+      if(IsPrevHedgedTicket(ticket)) continue;  // v6.58: skip released-from-hedge tickets
       // v6.18: Generation filter — only count orders from specified generation
       if(genFilter >= 0)
       {
@@ -7882,6 +7889,7 @@ void CheckAndOpenHedge()
          string cmt = PositionGetString(POSITION_COMMENT);
          if(IsHedgeComment(cmt)) continue;
          if(IsTicketBound(ticket)) continue;  // already bound to another set
+         if(IsPrevHedgedTicket(ticket)) continue;  // v6.58: never re-bind released tickets
          // v6.19: Generation filter — only bind orders from current generation
          int orderGen = ExtractGeneration(cmt);
          if(orderGen < 0) continue;
@@ -8134,6 +8142,7 @@ bool OpenDDHedge(ENUM_POSITION_TYPE counterSide, ENUM_POSITION_TYPE hedgeSide, i
       string cmt = PositionGetString(POSITION_COMMENT);
       if(IsHedgeComment(cmt)) continue;
       if(IsTicketBound(ticket)) continue;
+      if(IsPrevHedgedTicket(ticket)) continue;  // v6.58: never re-bind released tickets
       // v6.18: Generation filter — only bind current generation orders
       int orderGen = ExtractGeneration(cmt);
       if(orderGen < 0) continue;
@@ -8321,6 +8330,7 @@ void RecoverHedgeSets()
          string cmt = PositionGetString(POSITION_COMMENT);
          if(IsHedgeComment(cmt)) continue;
          if(IsTicketBound(ticket)) continue;
+         if(IsPrevHedgedTicket(ticket)) continue;  // v6.58: never re-bind released tickets
          
          // Only bind orders from older generations (not current cycle)
          int orderGen = ExtractGeneration(cmt);
@@ -8943,6 +8953,7 @@ void ManageHedgeSets()
    
    // v6.15: Reverse Hedge management removed (no ManageReverseHedge / CheckAndOpenReverseHedge)
    
+   bool sequentialActed = false;  // v6.58: only one hedge set may close/recover per tick
    for(int h = 0; h < MAX_HEDGE_SETS; h++)
    {
       if(!g_hedgeSets[h].active) continue;
@@ -8992,11 +9003,18 @@ void ManageHedgeSets()
       
       // === Gate passed — close logic allowed ===
 
-      // === v6.57: Sequential Recovery — only act on the OLDEST active set ===
+      // === v6.57/v6.58: Sequential Recovery — only act on the OLDEST active set, ONE per tick ===
       // Other sets stay locked (no matching/avgTP/partial/grid recovery) but new
-      // hedges can still be opened independently. Once oldest closes → next becomes oldest.
+      // hedges can still be opened independently. Once oldest closes → next tick the
+      // new oldest may be processed. This guarantees true H1 → H2 → H3 sequencing.
       if(InpHedge_SequentialRecovery)
       {
+         // v6.58: if any set already acted this tick → block all remaining sets
+         if(sequentialActed)
+         {
+            g_hedgeSets[h].matchingDone = false;
+            continue;
+         }
          int oldestActiveIdx = FindOldestActiveHedgeSet();
          if(oldestActiveIdx >= 0 && h != oldestActiveIdx)
          {
@@ -9004,6 +9022,8 @@ void ManageHedgeSets()
             g_hedgeSets[h].matchingDone = false;
             continue;
          }
+         // This set IS the oldest → mark that we're acting on it this tick
+         sequentialActed = true;
       }
 
       // If in grid mode → execute grid
