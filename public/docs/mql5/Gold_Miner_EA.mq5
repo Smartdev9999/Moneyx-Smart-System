@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.59 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.60 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.59"
-#property description "Gold Miner EA v6.59 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + GenRaceFix + OrphanGenFix + HedgeSidePause + GLCandleConfirm + MaxGridTrail + BrokerTPSL + DashCache + DashThrottle + LiveTPFix + HedgeClearTP + BoundClearFix + InstantSync + DeferredSync + InstantTP + MatchCloseToggle + HedgeRecoveryToggle + PersistGen + StartOrderTrail + BoundNoClose + BBFilter + RecoveryGrid + SequentialRecovery + FlatGenReset + SeqOneSetPerTick + RehedgeGuard + SeqRecoveryOwner + License"
+#property version   "6.60"
+#property description "Gold Miner EA v6.60 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + GenRaceFix + OrphanGenFix + HedgeSidePause + GLCandleConfirm + MaxGridTrail + BrokerTPSL + DashCache + DashThrottle + LiveTPFix + HedgeClearTP + BoundClearFix + InstantSync + DeferredSync + InstantTP + MatchCloseToggle + HedgeRecoveryToggle + PersistGen + StartOrderTrail + BoundNoClose + BBFilter + RecoveryGrid + SequentialRecovery + FlatGenReset + SeqOneSetPerTick + RehedgeGuard + SeqRecoveryOwner + Gen0OwnerFix + StrictOwnerCount + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -943,7 +943,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.59 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.60 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min");
@@ -1003,7 +1003,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.59 deinitialized");
+   Print("Gold Miner EA v6.60 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -3870,7 +3870,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.59 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.59 [ZZ]" : "Gold Miner EA v6.59 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.60 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.60 [ZZ]" : "Gold Miner EA v6.60 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -4406,8 +4406,8 @@ void DisplayDashboard()
                 string seqInfo;
                 if(g_sequentialRecoveryActive)
                 {
-                   // v6.59: owner-locked → show what's holding the queue
-                   int ownerRemain = CountAllGenPositions(g_sequentialRecoveryGen);
+                   // v6.60: owner-locked → show what's holding the queue (strict count, excludes hedges)
+                   int ownerRemain = CountSequentialOwnerOrders(g_sequentialRecoveryGen);
                    seqInfo = "LOCKED | Owner Gen" + IntegerToString(g_sequentialRecoveryGen) +
                              " (Src H" + IntegerToString(g_sequentialRecoverySetIdx + 1) + ")" +
                              " | " + IntegerToString(ownerRemain) + " order(s) left";
@@ -7476,31 +7476,63 @@ int CountAllGenPositions(int gen)
    return count;
 }
 
+// v6.60: Strict owner counter — counts ONLY normal recovery orders for a specific generation
+// Excludes hedge/reverse-hedge/grid-hedge comments so Gen0 (GM) is not polluted by GM_HEDGE_*, GM_HG*, GM_RHEDGE*
+int CountSequentialOwnerOrders(int gen)
+{
+   if(gen < 0) return 0;
+   string genPrefix = (gen == 0) ? "GM_" : ("GM" + IntegerToString(gen) + "_");
+   int prefixLen = StringLen(genPrefix);
+   int count = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      string comment = PositionGetString(POSITION_COMMENT);
+      // Must start exactly with this generation's prefix (e.g. "GM_" not "GM1_")
+      if(StringFind(comment, genPrefix) != 0) continue;
+      // Exclude hedge-family comments — those belong to hedge sets, not recovery owner
+      string suffix = StringSubstr(comment, prefixLen);
+      if(StringFind(suffix, "HEDGE") == 0) continue;   // GM_HEDGE_*
+      if(StringFind(suffix, "HG") == 0) continue;      // GM_HG*
+      if(StringFind(suffix, "RHEDGE") == 0) continue;  // GM_RHEDGE*
+      count++;
+   }
+   return count;
+}
+
 bool IsSequentialRecoveryComplete()
 {
    if(!g_sequentialRecoveryActive) return true;
-   return (CountAllGenPositions(g_sequentialRecoveryGen) == 0);
+   return (CountSequentialOwnerOrders(g_sequentialRecoveryGen) == 0);  // v6.60: strict count
 }
 
 void SetSequentialRecoveryOwner(int hedgeSetIdx, int gen)
 {
    if(!InpHedge_SequentialRecovery) return;
    if(g_sequentialRecoveryActive) return;  // do not override existing owner
-   if(gen <= 0) return;
-   // Only lock if the released set still has bound orders that became recovery
-   if(CountAllGenPositions(gen) == 0) return;
+   if(gen < 0) return;  // v6.60: allow Gen0 (GM) to claim ownership
+   // v6.60: only lock if the released set still has normal recovery orders open
+   int remain = CountSequentialOwnerOrders(gen);
+   if(remain == 0)
+   {
+      Print("v6.60 SEQ OWNER SKIP: Gen", gen, " has 0 released recovery orders (Set#", hedgeSetIdx + 1, ")");
+      return;
+   }
    g_sequentialRecoveryGen    = gen;
    g_sequentialRecoverySetIdx = hedgeSetIdx;
    g_sequentialRecoveryActive = true;
-   Print("v6.59 SEQ OWNER: Gen", gen, " locked from Set#", hedgeSetIdx + 1,
-         " — H", hedgeSetIdx + 2, "+ blocked until this generation closes");
+   Print("v6.60 SEQ OWNER: Gen", gen, " claimed from Set#", hedgeSetIdx + 1,
+         " | ", remain, " recovery order(s) — other hedge sets blocked until flat");
 }
 
 void ClearSequentialRecoveryOwner(string reason)
 {
    if(!g_sequentialRecoveryActive) return;
-   Print("v6.59 SEQ COMPLETE: Gen", g_sequentialRecoveryGen,
-         " fully closed (", reason, ") → unlocking next hedge set (one-tick handoff)");
+   Print("v6.60 SEQ COMPLETE: Gen", g_sequentialRecoveryGen,
+         " flat (", reason, ") -> unlock next set next tick");
    g_sequentialRecoveryGen    = -1;
    g_sequentialRecoverySetIdx = -1;
    g_sequentialRecoveryActive = false;
