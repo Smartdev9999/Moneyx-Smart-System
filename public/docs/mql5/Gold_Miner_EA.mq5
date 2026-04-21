@@ -4404,9 +4404,9 @@ void DisplayDashboard()
                 if(pendingCount > 0) seqInfo += " | Wait: " + IntegerToString(pendingCount) + " set(s)";
                 DrawTableRow(row, "Hedge Recovery", seqInfo, clrAqua, COLOR_SECTION_HEDGE); row++;
                 // v6.58: PrevHedged lock count
-                if(g_prevHedgedTicketCount > 0)
+                if(g_prevHedgedCount > 0)
                 {
-                   string phInfo = IntegerToString(g_prevHedgedTicketCount) + " ticket(s) locked from re-hedge";
+                   string phInfo = IntegerToString(g_prevHedgedCount) + " ticket(s) locked from re-hedge";
                    DrawTableRow(row, "PrevHedged", phInfo, clrOrange, COLOR_SECTION_HEDGE); row++;
                 }
              }
