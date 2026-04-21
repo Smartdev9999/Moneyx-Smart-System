@@ -7760,8 +7760,13 @@ void CheckAndOpenHedge()
        // Calculate Price Zone: find hedge open price + oldest bound order open price
        double hOpenPrice = 0;
        if(g_hedgeSets[slot].hedgeTicket > 0 && PositionSelectByTicket(g_hedgeSets[slot].hedgeTicket))
-          hOpenPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-       g_hedgeSets[slot].hedgeOpenPrice = hOpenPrice;
+           hOpenPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+        g_hedgeSets[slot].hedgeOpenPrice = hOpenPrice;
+        // v6.57: record hedge open time for sequential FIFO ordering
+        if(g_hedgeSets[slot].hedgeTicket > 0 && PositionSelectByTicket(g_hedgeSets[slot].hedgeTicket))
+           g_hedgeSets[slot].hedgeOpenTime = (datetime)PositionGetInteger(POSITION_TIME);
+        else
+           g_hedgeSets[slot].hedgeOpenTime = TimeCurrent();
        
        // Find oldest bound order's open price (earliest open time)
        double oldestPrice = 0;
@@ -7943,6 +7948,7 @@ bool OpenDDHedge(ENUM_POSITION_TYPE counterSide, ENUM_POSITION_TYPE hedgeSide, i
    ArrayResize(g_hedgeSets[slot].gridTickets, 0);
    g_hedgeSets[slot].commentPrefix = comment;
    g_hedgeSets[slot].triggerType = 1;  // DD-triggered
+   g_hedgeSets[slot].hedgeOpenTime = TimeCurrent();  // v6.57: temporary; refined after ticket lookup
    
    // Find the hedge ticket
    g_hedgeSets[slot].hedgeTicket = 0;
