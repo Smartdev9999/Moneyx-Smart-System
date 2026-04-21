@@ -581,6 +581,11 @@ struct HedgeSet
 };
 HedgeSet g_hedgeSets[MAX_HEDGE_SETS];
 int      g_hedgeSetCount = 0;
+// === v6.59: Sequential Recovery Owner — locks recovery to one generation until flat ===
+int      g_sequentialRecoveryGen      = -1;    // generation currently owning recovery lock
+int      g_sequentialRecoverySetIdx   = -1;    // originating hedge set index (for dashboard/log)
+bool     g_sequentialRecoveryActive   = false; // true → block all other sets and other-gen orphan recovery
+bool     g_sequentialRecoveryCompletedThisTick = false; // one-tick handoff guard
 datetime g_lastHedgeGridTime = 0;  // cooldown timer for hedge grid orders
 int      g_lastDashboardRowCount = 0;  // track previous tick row count for stale cleanup
 bool     g_hedgeOrphanWarning = false;  // orphan hedge grid orders detected
