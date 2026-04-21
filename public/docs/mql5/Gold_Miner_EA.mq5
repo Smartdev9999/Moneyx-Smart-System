@@ -10088,7 +10088,7 @@ void ManageHedgeMatchingClose(int idx)
       }
    }
 
-   if(lossUsed == 0) return;  // can't cover even smallest loss → wait
+   // v6.64: Do NOT return when lossUsed==0 — fall through to partial-hedge fallback below
 
    double finalNet = totalBudgetProfit - cumLoss;
    int boundGen = g_hedgeSets[idx].boundGeneration;
