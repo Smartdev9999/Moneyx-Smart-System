@@ -1287,6 +1287,14 @@ void OnTick()
    // === NEWS FILTER - Refresh hourly ===
    RefreshNewsData();
 
+    // === v6.57: Auto-reset cycle generation when account is fully flat ===
+    // Catches cases where positions closed by manual / SL / external means and
+    // TryResetCycleStateIfFlat was never invoked, leaving comments stuck at GMx.
+    if(g_cycleGeneration > 0 && g_hedgeSetCount == 0 && TotalOrderCount() == 0)
+    {
+       TryResetCycleStateIfFlat("OnTick flat-detect");
+    }
+
    // === Determine if new orders are blocked (News/Time/Pause) ===
    g_newOrderBlocked = false;
 
