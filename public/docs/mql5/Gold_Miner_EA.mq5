@@ -7432,6 +7432,68 @@ void ClearPrevHedgedTickets()
 //+------------------------------------------------------------------+
 //| v6.26: Save remaining bound tickets to prevHedged before deactivation |
 //+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| v6.59: Sequential Recovery Owner — exclusive recovery lock         |
+//+------------------------------------------------------------------+
+bool HasSequentialRecoveryOwner()
+{
+   return g_sequentialRecoveryActive;
+}
+
+bool IsSequentialRecoveryGen(int gen)
+{
+   if(!g_sequentialRecoveryActive) return false;
+   return (g_sequentialRecoveryGen == gen);
+}
+
+// Count remaining EA positions of a given generation (any side, including bound/recovery)
+int CountAllGenPositions(int gen)
+{
+   int count = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      string comment = PositionGetString(POSITION_COMMENT);
+      int orderGen = ExtractGeneration(comment);
+      if(orderGen == gen) count++;
+   }
+   return count;
+}
+
+bool IsSequentialRecoveryComplete()
+{
+   if(!g_sequentialRecoveryActive) return true;
+   return (CountAllGenPositions(g_sequentialRecoveryGen) == 0);
+}
+
+void SetSequentialRecoveryOwner(int hedgeSetIdx, int gen)
+{
+   if(!InpHedge_SequentialRecovery) return;
+   if(g_sequentialRecoveryActive) return;  // do not override existing owner
+   if(gen <= 0) return;
+   // Only lock if the released set still has bound orders that became recovery
+   if(CountAllGenPositions(gen) == 0) return;
+   g_sequentialRecoveryGen    = gen;
+   g_sequentialRecoverySetIdx = hedgeSetIdx;
+   g_sequentialRecoveryActive = true;
+   Print("v6.59 SEQ OWNER: Gen", gen, " locked from Set#", hedgeSetIdx + 1,
+         " — H", hedgeSetIdx + 2, "+ blocked until this generation closes");
+}
+
+void ClearSequentialRecoveryOwner(string reason)
+{
+   if(!g_sequentialRecoveryActive) return;
+   Print("v6.59 SEQ COMPLETE: Gen", g_sequentialRecoveryGen,
+         " fully closed (", reason, ") → unlocking next hedge set (one-tick handoff)");
+   g_sequentialRecoveryGen    = -1;
+   g_sequentialRecoverySetIdx = -1;
+   g_sequentialRecoveryActive = false;
+   g_sequentialRecoveryCompletedThisTick = true;  // skip releasing next set this tick
+}
+
 void SaveBoundTicketsToPrevHedged(int idx)
 {
    if(g_hedgeSets[idx].triggerType != 1) return;  // only DD-triggered sets
