@@ -381,6 +381,27 @@ input group "=== Orphan Recovery Grid ==="
 input bool     InpOrphan_Enable              = true;   // Enable Orphan Recovery Grid
 input int      InpOrphan_ScanIntervalMin     = 15;     // Scan Interval (Minutes)
 
+// === v6.57: Recovery Grid (separate from GridLoss) ===
+input group "=== Recovery Grid (Bound/Orphan Orders) ==="
+input bool           Recovery_UseSeparate    = false;                       // Use separate Recovery settings (false=use GridLoss_*)
+input int            Recovery_MaxTrades      = 5;                           // Recovery Max Grid Trades
+input ENUM_LOT_MODE  Recovery_LotMode        = LOT_ADD;                     // Recovery Lot Mode
+input string         Recovery_CustomLots     = "0.01;0.02;0.03;0.04;0.05"; // Recovery Custom Lots
+input double         Recovery_AddLotPerLevel = 0.4;                         // Recovery Add Lot per Level
+input double         Recovery_MultiplyFactor = 2.0;                         // Recovery Multiply Factor
+input ENUM_GAP_TYPE  Recovery_GapType        = GAP_FIXED;                   // Recovery Gap Type
+input int            Recovery_Points         = 500;                         // Recovery Distance (points)
+input string         Recovery_CustomDistance = "100;200;300;400;500";       // Recovery Custom Distance
+input ENUM_TIMEFRAMES Recovery_ATR_TF        = PERIOD_H1;                   // Recovery ATR Timeframe
+input int            Recovery_ATR_Period     = 14;                          // Recovery ATR Period
+input double         Recovery_ATR_Multiplier = 1.5;                         // Recovery ATR Multiplier
+input ENUM_ATR_REF   Recovery_ATR_Reference  = ATR_REF_DYNAMIC;             // Recovery ATR Reference
+input int            Recovery_MinGapPoints   = 100;                         // Recovery Min Grid Gap (points)
+input int            Recovery_CandleConfirm  = 0;                           // Recovery Candle Confirm (0=Off)
+
+// === v6.57: Sequential Hedge Recovery ===
+input group "=== Sequential Hedge Recovery ==="
+input bool   InpHedge_SequentialRecovery = true;   // true=close oldest hedge set first (H1→H2→H3), false=close any (legacy)
 //+------------------------------------------------------------------+
 //| Global Variables                                                   |
 //+------------------------------------------------------------------+
