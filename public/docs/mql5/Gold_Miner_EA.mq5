@@ -7515,6 +7515,134 @@ void CheckBalanceGuard()
    }
 }
 
+//+------------------------------------------------------------------+
+//| v6.57: Recovery Grid getters — fall back to GridLoss_* when off    |
+//+------------------------------------------------------------------+
+int GetRecoveryMaxTrades()
+{
+   return Recovery_UseSeparate ? Recovery_MaxTrades : GridLoss_MaxTrades;
+}
+ENUM_LOT_MODE GetRecoveryLotMode()
+{
+   return Recovery_UseSeparate ? Recovery_LotMode : GridLoss_LotMode;
+}
+double GetRecoveryAddLotPerLevel()
+{
+   return Recovery_UseSeparate ? Recovery_AddLotPerLevel : GridLoss_AddLotPerLevel;
+}
+double GetRecoveryMultiplyFactor()
+{
+   return Recovery_UseSeparate ? Recovery_MultiplyFactor : GridLoss_MultiplyFactor;
+}
+ENUM_GAP_TYPE GetRecoveryGapType()
+{
+   return Recovery_UseSeparate ? Recovery_GapType : GridLoss_GapType;
+}
+int GetRecoveryPoints()
+{
+   return Recovery_UseSeparate ? Recovery_Points : GridLoss_Points;
+}
+string GetRecoveryCustomDistance()
+{
+   return Recovery_UseSeparate ? Recovery_CustomDistance : GridLoss_CustomDistance;
+}
+string GetRecoveryCustomLots()
+{
+   return Recovery_UseSeparate ? Recovery_CustomLots : GridLoss_CustomLots;
+}
+ENUM_TIMEFRAMES GetRecoveryATR_TF()
+{
+   return Recovery_UseSeparate ? Recovery_ATR_TF : GridLoss_ATR_TF;
+}
+int GetRecoveryATR_Period()
+{
+   return Recovery_UseSeparate ? Recovery_ATR_Period : GridLoss_ATR_Period;
+}
+double GetRecoveryATR_Multiplier()
+{
+   return Recovery_UseSeparate ? Recovery_ATR_Multiplier : GridLoss_ATR_Multiplier;
+}
+ENUM_ATR_REF GetRecoveryATR_Reference()
+{
+   return Recovery_UseSeparate ? Recovery_ATR_Reference : GridLoss_ATR_Reference;
+}
+int GetRecoveryMinGapPoints()
+{
+   return Recovery_UseSeparate ? Recovery_MinGapPoints : GridLoss_MinGapPoints;
+}
+int GetRecoveryCandleConfirm()
+{
+   return Recovery_UseSeparate ? Recovery_CandleConfirm : GridLoss_CandleConfirm;
+}
+
+// Compute Recovery grid distance (points) for level (0-based)
+double GetRecoveryGridDistancePoints(int level)
+{
+   ENUM_GAP_TYPE gt = GetRecoveryGapType();
+   if(gt == GAP_FIXED)
+      return (double)GetRecoveryPoints();
+   if(gt == GAP_CUSTOM)
+      return ParseCustomValue(GetRecoveryCustomDistance(), level);
+   // ATR
+   double atrVal = CalculateSimplifiedATR(_Symbol, GetRecoveryATR_TF(), GetRecoveryATR_Period());
+   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   if(atrVal > 0 && point > 0)
+   {
+      double atrDist = atrVal * GetRecoveryATR_Multiplier() / point;
+      return MathMax(atrDist, (double)GetRecoveryMinGapPoints());
+   }
+   return (double)GetRecoveryPoints();
+}
+
+// Compute Recovery grid lot using mode + maxExisting continuation
+double ComputeRecoveryGridLot(double maxExisting, int level)
+{
+   ENUM_LOT_MODE mode = GetRecoveryLotMode();
+   double lots = InitialLotSize;
+   if(mode == LOT_ADD)
+      lots = InitialLotSize + InitialLotSize * GetRecoveryAddLotPerLevel() * (level + 1);
+   else if(mode == LOT_CUSTOM)
+      lots = ParseCustomValue(GetRecoveryCustomLots(), level);
+   else // LOT_MULTIPLY
+      lots = InitialLotSize * MathPow(GetRecoveryMultiplyFactor(), level + 1);
+
+   if(maxExisting > 0 && lots <= maxExisting)
+   {
+      if(mode == LOT_MULTIPLY)
+         lots = maxExisting * GetRecoveryMultiplyFactor();
+      else if(mode == LOT_ADD)
+         lots = maxExisting + InitialLotSize * GetRecoveryAddLotPerLevel();
+   }
+   return lots;
+}
+
+//+------------------------------------------------------------------+
+//| v6.57: Find the oldest active hedge set (FIFO ordering)            |
+//| Returns -1 if no active set                                        |
+//+------------------------------------------------------------------+
+int FindOldestActiveHedgeSet()
+{
+   int oldest = -1;
+   datetime oldestTime = 0;
+   for(int h = 0; h < MAX_HEDGE_SETS; h++)
+   {
+      if(!g_hedgeSets[h].active) continue;
+      datetime t = g_hedgeSets[h].hedgeOpenTime;
+      if(t == 0)
+      {
+         // fallback: try live ticket
+         if(g_hedgeSets[h].hedgeTicket > 0 && PositionSelectByTicket(g_hedgeSets[h].hedgeTicket))
+            t = (datetime)PositionGetInteger(POSITION_TIME);
+      }
+      if(oldest < 0 || (t > 0 && t < oldestTime) || oldestTime == 0)
+      {
+         oldest = h;
+         oldestTime = t;
+      }
+   }
+   return oldest;
+}
+
 
 //| Get lot cap for new orders when hedge set has bound orders          |
 //| Returns -1 if no hedge set exists for this side (no cap)           |
