@@ -908,6 +908,7 @@ int OnInit()
        g_hedgeSets[h].oldestBoundPrice = 0;
        // v6.16: Trigger type init
        g_hedgeSets[h].triggerType = 0;
+       g_hedgeSets[h].hedgeOpenTime = 0;  // v6.57
      }
      g_hedgeSetCount = 0;
 
@@ -2222,6 +2223,7 @@ void CloseAllPositions()
       g_hedgeSets[h].oldestBoundPrice = 0;
       // v6.16: Reset trigger type
       g_hedgeSets[h].triggerType = 0;
+      g_hedgeSets[h].hedgeOpenTime = 0;  // v6.57
    }
    g_hedgeSetCount = 0;
    // v6.16: Reset DD triggers on full close
