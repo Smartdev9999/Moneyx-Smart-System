@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.62 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.63 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.62"
-#property description "Gold Miner EA v6.62 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + GenRaceFix + OrphanGenFix + HedgeSidePause + GLCandleConfirm + MaxGridTrail + BrokerTPSL + DashCache + DashThrottle + LiveTPFix + HedgeClearTP + BoundClearFix + InstantSync + DeferredSync + InstantTP + MatchCloseToggle + HedgeRecoveryToggle + PersistGen + StartOrderTrail + BoundNoClose + BBFilter + RecoveryGrid + SequentialRecovery + FlatGenReset + SeqOneSetPerTick + RehedgeGuard + SeqRecoveryOwner + Gen0OwnerFix + StrictOwnerCount + MatchPoolBothSides + StrictInSetPool + License"
+#property version   "6.63"
+#property description "Gold Miner EA v6.63 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + GenRaceFix + OrphanGenFix + HedgeSidePause + GLCandleConfirm + MaxGridTrail + BrokerTPSL + DashCache + DashThrottle + LiveTPFix + HedgeClearTP + BoundClearFix + InstantSync + DeferredSync + InstantTP + MatchCloseToggle + HedgeRecoveryToggle + PersistGen + StartOrderTrail + BoundNoClose + BBFilter + RecoveryGrid + SequentialRecovery + FlatGenReset + SeqOneSetPerTick + RehedgeGuard + SeqRecoveryOwner + Gen0OwnerFix + StrictOwnerCount + MatchPoolBothSides + StrictInSetPool + InSetMatchAlways + PersistHedgeSlot + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -7909,10 +7909,46 @@ void RefreshBoundTickets(int idx)
 //+------------------------------------------------------------------+
 int FindFreeHedgeSlot()
 {
+   // v6.63: Persistent slot numbering — do not reuse slot numbers
+   //   while ANY hedge set is still active. Only reset to slot 0 (= GM_HEDGE_1)
+   //   when the entire hedge-set array is flat. This keeps comments sequential
+   //   (H1 → H2 → H3 → H4 …) so the user is never confused by reused IDs.
+   int  maxActiveSlot = -1;
+   bool anyActive     = false;
    for(int h = 0; h < MAX_HEDGE_SETS; h++)
    {
-      if(!g_hedgeSets[h].active) return h;
+      if(g_hedgeSets[h].active)
+      {
+         anyActive = true;
+         if(h > maxActiveSlot) maxActiveSlot = h;
+      }
    }
+
+   if(!anyActive)
+   {
+      // All sets flat → safe to reset numbering back to GM_HEDGE_1
+      Print("v6.63 SLOT ASSIGN: all sets flat → reset to slot=0 (GM_HEDGE_1)");
+      return 0;
+   }
+
+   // Use slot strictly after the highest active slot — never reuse middle gaps
+   int next = maxActiveSlot + 1;
+   if(next < MAX_HEDGE_SETS)
+   {
+      Print("v6.63 SLOT ASSIGN: maxActiveSlot=", maxActiveSlot,
+            " → new slot=", next, " (comment=GM_HEDGE_", next+1, ")");
+      return next;
+   }
+
+   // Array exhausted at the tail → fallback to any free middle slot to avoid overflow
+   for(int h = 0; h < MAX_HEDGE_SETS; h++)
+      if(!g_hedgeSets[h].active)
+      {
+         Print("v6.63 SLOT ASSIGN: tail full → fallback middle slot=", h,
+               " (comment=GM_HEDGE_", h+1, ")");
+         return h;
+      }
+
    return -1;
 }
 
@@ -9136,45 +9172,55 @@ void ManageHedgeSets()
       
       // === Gate passed — close logic allowed ===
 
-      // === v6.57/v6.58/v6.59: Sequential Recovery ===
-      // v6.59: If a recovery owner exists → block ALL hedge-set release/recovery
-      //        until that owner generation is fully closed. Hedges may still open.
-      // v6.58: Otherwise enforce one-set-per-tick on the OLDEST active set.
+      // === v6.57/v6.58/v6.59/v6.63: Sequential Recovery ===
+      // v6.63: After v6.62 strict in-set pooling, matching/AvgTP/PartialClose
+      //        cannot leak across sets — so allow EVERY set to run its OWN
+      //        in-set matching every tick, even while a recovery owner is locked.
+      //        Only RECOVERY GRID (TryEnterCombinedGridMode + ManageHedgeGridMode)
+      //        is gated to the owner generation, so non-owner sets cannot expand
+      //        new grid orders until the owner is fully flat.
+      bool blockGridForThisSet = false;
       if(InpHedge_SequentialRecovery)
       {
-         // v6.59: Owner active → block every set's release/recovery this tick
-         if(g_sequentialRecoveryActive)
-         {
-            g_hedgeSets[h].matchingDone = false;
-            continue;
-         }
-         // v6.59: Just completed handoff this tick → wait one more tick
+         // v6.59: Just completed handoff this tick → wait one more tick (full pause)
          if(g_sequentialRecoveryCompletedThisTick)
          {
             g_hedgeSets[h].matchingDone = false;
             continue;
          }
-         // v6.58: if any set already acted this tick → block all remaining sets
-         if(sequentialActed)
+         if(g_sequentialRecoveryActive)
          {
-            g_hedgeSets[h].matchingDone = false;
-            continue;
+            // v6.63: matching allowed (in-set safe). Block grid only for non-owner sets.
+            int boundGenH = g_hedgeSets[h].boundGeneration;
+            if(boundGenH != g_sequentialRecoveryGen)
+               blockGridForThisSet = true;
          }
-         int oldestActiveIdx = FindOldestActiveHedgeSet();
-         if(oldestActiveIdx >= 0 && h != oldestActiveIdx)
+         else if(sequentialActed)
          {
-            // Reset matchingDone so when this set becomes oldest, recovery re-runs fresh
-            g_hedgeSets[h].matchingDone = false;
-            continue;
+            // Another set has already taken the per-tick grid slot → only block grid
+            blockGridForThisSet = true;
          }
-         // This set IS the oldest → mark that we're acting on it this tick
-         sequentialActed = true;
+         else
+         {
+            int oldestActiveIdx = FindOldestActiveHedgeSet();
+            if(oldestActiveIdx >= 0 && h != oldestActiveIdx)
+            {
+               // Not the oldest → matching still runs (in-set), but grid waits
+               blockGridForThisSet = true;
+            }
+            else
+            {
+               // This set IS the oldest → claim the per-tick grid slot
+               sequentialActed = true;
+            }
+         }
       }
 
-      // If in grid mode → execute grid
+      // If in grid mode → execute grid (only when grid is permitted for this set)
       if(g_hedgeSets[h].gridMode)
       {
-         ManageHedgeGridMode(h);
+         if(!blockGridForThisSet)
+            ManageHedgeGridMode(h);
          continue;
       }
        
