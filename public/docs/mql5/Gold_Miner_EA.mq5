@@ -8780,15 +8780,17 @@ void ManageOrphanGrid()
       }
       
       if(NormalOrderCount() >= MaxOpenOrders) return;
-      if(glb >= GridLoss_MaxTrades && gls >= GridLoss_MaxTrades) continue;
+      // v6.57: use Recovery getters (falls back to GridLoss_* when Recovery_UseSeparate=false)
+      int recMax = GetRecoveryMaxTrades();
+      int recCC  = GetRecoveryCandleConfirm();
+      if(glb >= recMax && gls >= recMax) continue;
       
       // === BUY side orphan grid ===
-      if(bc > 0 && glb < GridLoss_MaxTrades)
+      if(bc > 0 && glb < recMax)
       {
           if(!g_squeezeBuyBlocked)
           {
-             // v6.40: Candle Confirmation for orphan BUY GL
-             if(GridLoss_CandleConfirm > 0 && !HasCandleConfirmation(POSITION_TYPE_BUY, PERIOD_CURRENT, GridLoss_CandleConfirm)) { /* skip */ }
+             if(recCC > 0 && !HasCandleConfirmation(POSITION_TYPE_BUY, PERIOD_CURRENT, recCC)) { /* skip */ }
              else
              {
             double lastPrice = 0;
@@ -8798,30 +8800,21 @@ void ManageOrphanGrid()
             
             if(lastPrice > 0)
             {
-               double distance = GetGridDistance(glb, true);
+               double distance = GetRecoveryGridDistancePoints(glb);  // v6.57
                if(distance > 0)
                {
                   double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
                   if(currentPrice <= lastPrice - distance * point)
                   {
                      int nextLevel = mglb + 1;
-                     double lots = CalculateGridLot(glb, true);
-                     
-                     // Ensure lot continuation
                      double maxExisting = FindMaxLotOrphan(gen, POSITION_TYPE_BUY);
-                     if(maxExisting > 0 && lots <= maxExisting)
-                     {
-                        if(GridLoss_LotMode == LOT_MULTIPLY)
-                           lots = maxExisting * GridLoss_MultiplyFactor;
-                        else if(GridLoss_LotMode == LOT_ADD)
-                           lots = maxExisting + InitialLotSize * GridLoss_AddLotPerLevel;
-                     }
+                     double lots = ComputeRecoveryGridLot(maxExisting, glb);  // v6.57
                      
                      string comment = prefix + "_GL#" + IntegerToString(nextLevel);
                       if(OpenOrder(ORDER_TYPE_BUY, lots, comment))
                       {
                          g_lastOrphanGridCandleTime = iTime(_Symbol, PERIOD_CURRENT, 0);
-                         Print("ORPHAN GRID: Opened BUY ", prefix, "_GL#", nextLevel,
+                         Print("ORPHAN/RECOVERY GRID: Opened BUY ", prefix, "_GL#", nextLevel,
                                " lots=", DoubleToString(lots, 2), " for Gen", gen);
                       }
                   }
@@ -8832,12 +8825,11 @@ void ManageOrphanGrid()
        }
       
       // === SELL side orphan grid ===
-      if(sc > 0 && gls < GridLoss_MaxTrades)
+      if(sc > 0 && gls < recMax)
       {
           if(!g_squeezeSellBlocked)
           {
-             // v6.40: Candle Confirmation for orphan SELL GL
-             if(GridLoss_CandleConfirm > 0 && !HasCandleConfirmation(POSITION_TYPE_SELL, PERIOD_CURRENT, GridLoss_CandleConfirm)) { /* skip */ }
+             if(recCC > 0 && !HasCandleConfirmation(POSITION_TYPE_SELL, PERIOD_CURRENT, recCC)) { /* skip */ }
              else
              {
             double lastPrice = 0;
@@ -8847,30 +8839,21 @@ void ManageOrphanGrid()
             
             if(lastPrice > 0)
             {
-               double distance = GetGridDistance(gls, true);
+               double distance = GetRecoveryGridDistancePoints(gls);  // v6.57
                if(distance > 0)
                {
                   double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
                   if(currentPrice >= lastPrice + distance * point)
                   {
                      int nextLevel = mgls + 1;
-                     double lots = CalculateGridLot(gls, true);
-                     
-                     // Ensure lot continuation
                      double maxExisting = FindMaxLotOrphan(gen, POSITION_TYPE_SELL);
-                     if(maxExisting > 0 && lots <= maxExisting)
-                     {
-                        if(GridLoss_LotMode == LOT_MULTIPLY)
-                           lots = maxExisting * GridLoss_MultiplyFactor;
-                        else if(GridLoss_LotMode == LOT_ADD)
-                           lots = maxExisting + InitialLotSize * GridLoss_AddLotPerLevel;
-                     }
+                     double lots = ComputeRecoveryGridLot(maxExisting, gls);  // v6.57
                      
                      string comment = prefix + "_GL#" + IntegerToString(nextLevel);
                       if(OpenOrder(ORDER_TYPE_SELL, lots, comment))
                       {
                          g_lastOrphanGridCandleTime = iTime(_Symbol, PERIOD_CURRENT, 0);
-                         Print("ORPHAN GRID: Opened SELL ", prefix, "_GL#", nextLevel,
+                         Print("ORPHAN/RECOVERY GRID: Opened SELL ", prefix, "_GL#", nextLevel,
                                " lots=", DoubleToString(lots, 2), " for Gen", gen);
                        }
                    }
