@@ -8972,7 +8972,21 @@ void ManageHedgeSets()
       }
       
       // === Gate passed — close logic allowed ===
-      
+
+      // === v6.57: Sequential Recovery — only act on the OLDEST active set ===
+      // Other sets stay locked (no matching/avgTP/partial/grid recovery) but new
+      // hedges can still be opened independently. Once oldest closes → next becomes oldest.
+      if(InpHedge_SequentialRecovery)
+      {
+         int oldestActiveIdx = FindOldestActiveHedgeSet();
+         if(oldestActiveIdx >= 0 && h != oldestActiveIdx)
+         {
+            // Reset matchingDone so when this set becomes oldest, recovery re-runs fresh
+            g_hedgeSets[h].matchingDone = false;
+            continue;
+         }
+      }
+
       // If in grid mode → execute grid
       if(g_hedgeSets[h].gridMode)
       {
