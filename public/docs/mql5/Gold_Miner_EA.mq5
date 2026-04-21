@@ -9078,12 +9078,24 @@ void ManageHedgeSets()
       
       // === Gate passed — close logic allowed ===
 
-      // === v6.57/v6.58: Sequential Recovery — only act on the OLDEST active set, ONE per tick ===
-      // Other sets stay locked (no matching/avgTP/partial/grid recovery) but new
-      // hedges can still be opened independently. Once oldest closes → next tick the
-      // new oldest may be processed. This guarantees true H1 → H2 → H3 sequencing.
+      // === v6.57/v6.58/v6.59: Sequential Recovery ===
+      // v6.59: If a recovery owner exists → block ALL hedge-set release/recovery
+      //        until that owner generation is fully closed. Hedges may still open.
+      // v6.58: Otherwise enforce one-set-per-tick on the OLDEST active set.
       if(InpHedge_SequentialRecovery)
       {
+         // v6.59: Owner active → block every set's release/recovery this tick
+         if(g_sequentialRecoveryActive)
+         {
+            g_hedgeSets[h].matchingDone = false;
+            continue;
+         }
+         // v6.59: Just completed handoff this tick → wait one more tick
+         if(g_sequentialRecoveryCompletedThisTick)
+         {
+            g_hedgeSets[h].matchingDone = false;
+            continue;
+         }
          // v6.58: if any set already acted this tick → block all remaining sets
          if(sequentialActed)
          {
