@@ -8851,6 +8851,19 @@ void ManageOrphanGrid()
       if(!g_orphanGroups[g].active) continue;
       
       int gen = g_orphanGroups[g].generation;
+      // v6.59: Sequential Recovery Owner — only the owner generation may run recovery grid
+      if(InpHedge_SequentialRecovery && g_sequentialRecoveryActive
+         && gen != g_sequentialRecoveryGen)
+      {
+         static datetime s_lastSeqSkipLog = 0;
+         if(TimeCurrent() - s_lastSeqSkipLog >= 30)
+         {
+            Print("v6.59 SEQ WAIT: Skip orphan Gen", gen,
+                  " (owner=Gen", g_sequentialRecoveryGen, ")");
+            s_lastSeqSkipLog = TimeCurrent();
+         }
+         continue;
+      }
       string prefix = GenPrefix(gen);
       
       // Re-count fresh each tick to detect if orders were closed
