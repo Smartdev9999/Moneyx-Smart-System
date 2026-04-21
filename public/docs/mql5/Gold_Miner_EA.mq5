@@ -9020,6 +9020,11 @@ void ManageHedgeSets()
    
    // v6.15: Reverse Hedge management removed (no ManageReverseHedge / CheckAndOpenReverseHedge)
    
+   // v6.59: Sequential Recovery Owner — clear when owner generation is fully closed
+   g_sequentialRecoveryCompletedThisTick = false;
+   if(g_sequentialRecoveryActive && IsSequentialRecoveryComplete())
+      ClearSequentialRecoveryOwner("owner gen flat");
+   
    bool sequentialActed = false;  // v6.58: only one hedge set may close/recover per tick
    for(int h = 0; h < MAX_HEDGE_SETS; h++)
    {
