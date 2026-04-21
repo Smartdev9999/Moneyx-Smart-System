@@ -8204,7 +8204,17 @@ void CloseAllHedgeGridOrders(int idx)
 void RecoverHedgeSets()
 {
    int recovered = 0;
-   
+
+   // v6.57: If account is fully flat → reset persisted cycle gen immediately
+   if(PositionsTotal() == 0)
+   {
+      if(GlobalVariableCheck(GV_CycleGenKey()))
+         GlobalVariableDel(GV_CycleGenKey());
+      g_cycleGeneration = 0;
+      Print("v6.57 RecoverHedgeSets: account flat → cycleGen reset to 0");
+      return;
+   }
+
    // Step 0: Determine current cycle generation from existing positions
    int maxGen = 0;
    for(int i = PositionsTotal() - 1; i >= 0; i--)
