@@ -10054,10 +10054,12 @@ void ManageHedgeGridMode(int idx)
             {
                trade.PositionClose(g_hedgeSets[idx].hedgeTicket);
                 CloseAllHedgeGridOrders(idx);
+                int gridGen = g_hedgeSets[idx].boundGeneration;  // v6.59
                 SaveBoundTicketsToPrevHedged(idx);  // v6.26
                  g_hedgeSets[idx].active = false;
                  g_hedgeSetCount--;
                   g_lastHedgeCloseTime = TimeCurrent();  // v6.25: cooldown after set close
+                  SetSequentialRecoveryOwner(idx, gridGen);  // v6.59
                   // v6.27: Safe reset — only if truly flat
                   TryResetCycleStateIfFlat("grid recover");
                  Print("HEDGE Set#", idx + 1, " fully recovered via grid mode.");
@@ -10088,10 +10090,12 @@ void ManageHedgeGridMode(int idx)
          if(StringFind(comment, prefix) >= 0)
             trade.PositionClose(ticket);
       }
+       int cleanupGen = g_hedgeSets[idx].boundGeneration;  // v6.59
        SaveBoundTicketsToPrevHedged(idx);  // v6.26
        g_hedgeSets[idx].active = false;
          g_hedgeSetCount--;
          g_lastHedgeCloseTime = TimeCurrent();  // v6.25: cooldown after set close
+         SetSequentialRecoveryOwner(idx, cleanupGen);  // v6.59
          // v6.27: Safe reset — only if truly flat
          TryResetCycleStateIfFlat("grid cleanup");
         Print("HEDGE Set#", idx + 1, " grid mode complete. All cleaned up.");
