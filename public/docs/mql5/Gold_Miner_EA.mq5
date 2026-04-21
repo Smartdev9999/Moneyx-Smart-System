@@ -4395,14 +4395,20 @@ void DisplayDashboard()
                 }
              }
 
-             // v6.57: Sequential Hedge Recovery status
+             // v6.57/v6.58: Sequential Hedge Recovery status
              if(InpHedge_SequentialRecovery && g_hedgeSetCount > 0)
              {
                 int oldestIdx = FindOldestActiveHedgeSet();
-                string seqInfo = "Sequential | Active: H" + IntegerToString(oldestIdx + 1);
+                string seqInfo = "Sequential | Acting: H" + IntegerToString(oldestIdx + 1) + " (1/tick)";
                 int pendingCount = g_hedgeSetCount - 1;
-                if(pendingCount > 0) seqInfo += " | Pending: " + IntegerToString(pendingCount) + " set(s)";
+                if(pendingCount > 0) seqInfo += " | Wait: " + IntegerToString(pendingCount) + " set(s)";
                 DrawTableRow(row, "Hedge Recovery", seqInfo, clrAqua, COLOR_SECTION_HEDGE); row++;
+                // v6.58: PrevHedged lock count
+                if(g_prevHedgedTicketCount > 0)
+                {
+                   string phInfo = IntegerToString(g_prevHedgedTicketCount) + " ticket(s) locked from re-hedge";
+                   DrawTableRow(row, "PrevHedged", phInfo, clrOrange, COLOR_SECTION_HEDGE); row++;
+                }
              }
 
              // v6.57: Recovery Grid mode indicator
@@ -8947,6 +8953,7 @@ void ManageHedgeSets()
    
    // v6.15: Reverse Hedge management removed (no ManageReverseHedge / CheckAndOpenReverseHedge)
    
+   bool sequentialActed = false;  // v6.58: only one hedge set may close/recover per tick
    for(int h = 0; h < MAX_HEDGE_SETS; h++)
    {
       if(!g_hedgeSets[h].active) continue;
@@ -8996,11 +9003,18 @@ void ManageHedgeSets()
       
       // === Gate passed — close logic allowed ===
 
-      // === v6.57: Sequential Recovery — only act on the OLDEST active set ===
+      // === v6.57/v6.58: Sequential Recovery — only act on the OLDEST active set, ONE per tick ===
       // Other sets stay locked (no matching/avgTP/partial/grid recovery) but new
-      // hedges can still be opened independently. Once oldest closes → next becomes oldest.
+      // hedges can still be opened independently. Once oldest closes → next tick the
+      // new oldest may be processed. This guarantees true H1 → H2 → H3 sequencing.
       if(InpHedge_SequentialRecovery)
       {
+         // v6.58: if any set already acted this tick → block all remaining sets
+         if(sequentialActed)
+         {
+            g_hedgeSets[h].matchingDone = false;
+            continue;
+         }
          int oldestActiveIdx = FindOldestActiveHedgeSet();
          if(oldestActiveIdx >= 0 && h != oldestActiveIdx)
          {
@@ -9008,6 +9022,8 @@ void ManageHedgeSets()
             g_hedgeSets[h].matchingDone = false;
             continue;
          }
+         // This set IS the oldest → mark that we're acting on it this tick
+         sequentialActed = true;
       }
 
       // If in grid mode → execute grid
