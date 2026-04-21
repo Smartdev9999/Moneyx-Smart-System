@@ -4400,13 +4400,26 @@ void DisplayDashboard()
                 }
              }
 
-             // v6.57/v6.58: Sequential Hedge Recovery status
-             if(InpHedge_SequentialRecovery && g_hedgeSetCount > 0)
+             // v6.57/v6.58/v6.59: Sequential Hedge Recovery status
+             if(InpHedge_SequentialRecovery && (g_hedgeSetCount > 0 || g_sequentialRecoveryActive))
              {
-                int oldestIdx = FindOldestActiveHedgeSet();
-                string seqInfo = "Sequential | Acting: H" + IntegerToString(oldestIdx + 1) + " (1/tick)";
-                int pendingCount = g_hedgeSetCount - 1;
-                if(pendingCount > 0) seqInfo += " | Wait: " + IntegerToString(pendingCount) + " set(s)";
+                string seqInfo;
+                if(g_sequentialRecoveryActive)
+                {
+                   // v6.59: owner-locked → show what's holding the queue
+                   int ownerRemain = CountAllGenPositions(g_sequentialRecoveryGen);
+                   seqInfo = "LOCKED | Owner Gen" + IntegerToString(g_sequentialRecoveryGen) +
+                             " (Src H" + IntegerToString(g_sequentialRecoverySetIdx + 1) + ")" +
+                             " | " + IntegerToString(ownerRemain) + " order(s) left";
+                   if(g_hedgeSetCount > 0) seqInfo += " | Wait: " + IntegerToString(g_hedgeSetCount) + " set(s)";
+                }
+                else if(g_hedgeSetCount > 0)
+                {
+                   int oldestIdx = FindOldestActiveHedgeSet();
+                   seqInfo = "Sequential | Next Unlock: H" + IntegerToString(oldestIdx + 1) + " (1/tick)";
+                   int pendingCount = g_hedgeSetCount - 1;
+                   if(pendingCount > 0) seqInfo += " | Wait: " + IntegerToString(pendingCount) + " set(s)";
+                }
                 DrawTableRow(row, "Hedge Recovery", seqInfo, clrAqua, COLOR_SECTION_HEDGE); row++;
                 // v6.58: PrevHedged lock count
                 if(g_prevHedgedCount > 0)
