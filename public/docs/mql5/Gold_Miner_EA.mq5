@@ -9772,12 +9772,14 @@ bool ManageHedgeBoundAvgTP(int idx)
    // Close hedge order
    trade.PositionClose(g_hedgeSets[idx].hedgeTicket);
    CloseAllHedgeGridOrders(idx);
+   int avgGen = g_hedgeSets[idx].boundGeneration;  // v6.59: capture before clear
    SaveBoundTicketsToPrevHedged(idx);
    g_hedgeSets[idx].active = false;
    g_hedgeSets[idx].boundTicketCount = 0;
    ArrayResize(g_hedgeSets[idx].boundTickets, 0);
    g_hedgeSetCount--;
    g_lastHedgeCloseTime = TimeCurrent();
+   SetSequentialRecoveryOwner(idx, avgGen);  // v6.59: claim recovery owner
    TryResetCycleStateIfFlat("AvgTP release");
    Sleep(100);
 
@@ -9895,18 +9897,20 @@ void ManageHedgeMatchingClose(int idx)
        // v6.55: Do NOT close bound loss orders — release them as recovery orders
        Print("HEDGE MATCHING v6.55 Set#", idx + 1, ": releasing ", g_hedgeSets[idx].boundTicketCount, " bound orders to recovery (not closing)");
 
-       // Deactivate hedge set — bound orders remain open as recovery
-        CloseAllHedgeGridOrders(idx);
-        SaveBoundTicketsToPrevHedged(idx);  // v6.26
-        g_hedgeSets[idx].active = false;
-        g_hedgeSets[idx].boundTicketCount = 0;
-        ArrayResize(g_hedgeSets[idx].boundTickets, 0);
-          g_hedgeSetCount--;
-          g_lastHedgeCloseTime = TimeCurrent();  // v6.25: cooldown after set close
-          // v6.27: Safe reset — only if truly flat
-          TryResetCycleStateIfFlat("matching close");
-        Sleep(100);
-    }
+        // Deactivate hedge set — bound orders remain open as recovery
+         CloseAllHedgeGridOrders(idx);
+         int matchGen = g_hedgeSets[idx].boundGeneration;  // v6.59
+         SaveBoundTicketsToPrevHedged(idx);  // v6.26
+         g_hedgeSets[idx].active = false;
+         g_hedgeSets[idx].boundTicketCount = 0;
+         ArrayResize(g_hedgeSets[idx].boundTickets, 0);
+           g_hedgeSetCount--;
+           g_lastHedgeCloseTime = TimeCurrent();  // v6.25: cooldown after set close
+           SetSequentialRecoveryOwner(idx, matchGen);  // v6.59: claim recovery owner
+           // v6.27: Safe reset — only if truly flat
+           TryResetCycleStateIfFlat("matching close");
+         Sleep(100);
+     }
      else
      {
         // No losses can be matched → close hedge + release all bound orders to normal
@@ -9915,19 +9919,21 @@ void ManageHedgeMatchingClose(int idx)
               " | Releasing ", g_hedgeSets[idx].boundTicketCount, " bound orders to normal trading");
         trade.PositionClose(g_hedgeSets[idx].hedgeTicket);
 
-        // Release all bound orders → they return to normal trading system
-         CloseAllHedgeGridOrders(idx);
-         SaveBoundTicketsToPrevHedged(idx);  // v6.26
-         g_hedgeSets[idx].active = false;
-         g_hedgeSets[idx].boundTicketCount = 0;
-         ArrayResize(g_hedgeSets[idx].boundTickets, 0);
-         g_hedgeSets[idx].gridMode = false;
-         g_hedgeSetCount--;
-          g_lastHedgeCloseTime = TimeCurrent();  // v6.25: cooldown after set close
-          // v6.27: Safe reset — only if truly flat
-          TryResetCycleStateIfFlat("release close");
-        Sleep(100);
-     }
+         // Release all bound orders → they return to normal trading system
+          CloseAllHedgeGridOrders(idx);
+          int relGen = g_hedgeSets[idx].boundGeneration;  // v6.59
+          SaveBoundTicketsToPrevHedged(idx);  // v6.26
+          g_hedgeSets[idx].active = false;
+          g_hedgeSets[idx].boundTicketCount = 0;
+          ArrayResize(g_hedgeSets[idx].boundTickets, 0);
+          g_hedgeSets[idx].gridMode = false;
+          g_hedgeSetCount--;
+           g_lastHedgeCloseTime = TimeCurrent();  // v6.25: cooldown after set close
+           SetSequentialRecoveryOwner(idx, relGen);  // v6.59: claim recovery owner
+           // v6.27: Safe reset — only if truly flat
+           TryResetCycleStateIfFlat("release close");
+         Sleep(100);
+      }
 }
 
 //+------------------------------------------------------------------+
