@@ -576,6 +576,8 @@ struct HedgeSet
    double   oldestBoundPrice;          // open price of oldest bound order
    // === v6.16: Hedge Trigger Type ===
    int      triggerType;               // 0 = expansion, 1 = DD%
+   // === v6.57: Sequential Recovery ordering ===
+   datetime hedgeOpenTime;             // open time of main hedge order (FIFO ordering)
 };
 HedgeSet g_hedgeSets[MAX_HEDGE_SETS];
 int      g_hedgeSetCount = 0;
