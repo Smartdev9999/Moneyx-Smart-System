@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.63 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.64 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.63"
-#property description "Gold Miner EA v6.63 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + GenRaceFix + OrphanGenFix + HedgeSidePause + GLCandleConfirm + MaxGridTrail + BrokerTPSL + DashCache + DashThrottle + LiveTPFix + HedgeClearTP + BoundClearFix + InstantSync + DeferredSync + InstantTP + MatchCloseToggle + HedgeRecoveryToggle + PersistGen + StartOrderTrail + BoundNoClose + BBFilter + RecoveryGrid + SequentialRecovery + FlatGenReset + SeqOneSetPerTick + RehedgeGuard + SeqRecoveryOwner + Gen0OwnerFix + StrictOwnerCount + MatchPoolBothSides + StrictInSetPool + InSetMatchAlways + PersistHedgeSlot + License"
+#property version   "6.64"
+#property description "Gold Miner EA v6.64 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + GenRaceFix + OrphanGenFix + HedgeSidePause + GLCandleConfirm + MaxGridTrail + BrokerTPSL + DashCache + DashThrottle + LiveTPFix + HedgeClearTP + BoundClearFix + InstantSync + DeferredSync + InstantTP + MatchCloseToggle + HedgeRecoveryToggle + PersistGen + StartOrderTrail + BoundNoClose + BBFilter + RecoveryGrid + SequentialRecovery + FlatGenReset + SeqOneSetPerTick + RehedgeGuard + SeqRecoveryOwner + Gen0OwnerFix + StrictOwnerCount + MatchPoolBothSides + StrictInSetPool + InSetMatchAlways + PersistHedgeSlot + MatchTickRetry + HedgePartialFallback + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -943,7 +943,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.62 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.64 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min");
@@ -1003,7 +1003,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.62 deinitialized");
+   Print("Gold Miner EA v6.64 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -9228,6 +9228,11 @@ void ManageHedgeSets()
        if(!InpHedge_UseMatchingClose)
           continue;
        
+       // v6.64: Reset matchingDone every tick for active sets so matching/AvgTP/PartialClose
+       //        re-evaluate continuously (budget changes with floating P/L). Strict in-set
+       //        pooling (v6.62) makes this safe — no cross-set leakage.
+       g_hedgeSets[h].matchingDone = false;
+
        // STEP 1 — Run matching/close cycle FIRST (before any grid entry)
        if(!g_hedgeSets[h].matchingDone)
        {
@@ -9235,11 +9240,14 @@ void ManageHedgeSets()
           if(hedgeExists)
              hedgePnL = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
 
-            // v6.62: Matching Close — enter if ANY in-set profit exists
-            // (hedge OR reverse OR bound on either side). Treats whole set as one pool.
+            // v6.62/v6.64: Matching Close — enter if ANY in-set profit exists.
+            // v6.64: ManageHedgeMatchingClose now performs partial-hedge fallback when
+            //        budget cannot fully cover any single loss ticket.
             double setProfitProbe = ProbeSetProfit(h);
             if(setProfitProbe > InpHedge_MatchMinProfit)
             {
+               Print("v6.64 MATCH RETRY Set#", h + 1, " Gen", g_hedgeSets[h].boundGeneration,
+                     ": probe profit=$", DoubleToString(setProfitProbe, 2), " — running matching");
                ManageHedgeMatchingClose(h);
                if(g_hedgeSets[h].active)
                   g_hedgeSets[h].matchingDone = true;
@@ -9264,7 +9272,7 @@ void ManageHedgeSets()
          }
          
          g_hedgeSets[h].matchingDone = true;
-      }
+       }
       
       // STEP 2 — After matching done, try entering combined grid mode
       // v6.63: Skip new grid entry for non-owner sets while sequential owner is locked
@@ -10080,91 +10088,191 @@ void ManageHedgeMatchingClose(int idx)
       }
    }
 
-   if(lossUsed == 0) return;  // can't cover even smallest loss → wait
+   // v6.64: Do NOT return when lossUsed==0 — fall through to partial-hedge fallback below
 
    double finalNet = totalBudgetProfit - cumLoss;
    int boundGen = g_hedgeSets[idx].boundGeneration;
-   Print("v6.62 IN-SET POOL Set#", idx + 1, " Gen", boundGen,
-         ": profit pool=$", DoubleToString(totalBudgetProfit, 2),
-         " from ", profitCount, " positions (hedge/reverse/bound)",
-         " | losses=", lossCount, " ($", DoubleToString(lossSum, 2),
-         ") | will close ", lossUsed, " losses ($", DoubleToString(cumLoss, 2),
-         ") | net=$", DoubleToString(finalNet, 2));
+
+   if(lossUsed > 0)
+   {
+      Print("v6.62 IN-SET POOL Set#", idx + 1, " Gen", boundGen,
+            ": profit pool=$", DoubleToString(totalBudgetProfit, 2),
+            " from ", profitCount, " positions (hedge/reverse/bound)",
+            " | losses=", lossCount, " ($", DoubleToString(lossSum, 2),
+            ") | will close ", lossUsed, " losses ($", DoubleToString(cumLoss, 2),
+            ") | net=$", DoubleToString(finalNet, 2));
+   }
+   else
+   {
+      Print("v6.64 MATCH NO FULL-FIT Set#", idx + 1, " Gen", boundGen,
+            ": profit pool=$", DoubleToString(totalBudgetProfit, 2),
+            " | losses=", lossCount, " (smallest=$",
+            DoubleToString(MathAbs(lossValues[lossCount - 1]), 2),
+            ") | fallback to hedge partial-close");
+   }
 
    int closedProfitCount = 0;
    int closedLossCount = 0;
    double netClosed = 0;
+   double remainingBudget = budget;  // v6.64: track leftover budget for hedge partial fallback
 
-   // C1) Close ALL profit tickets (used as budget)
-   for(int p = 0; p < profitCount; p++)
+   if(lossUsed > 0)
    {
-      ulong ptk = profitTickets[p];
-      int   kind = profitKinds[p];
-      if(PositionSelectByTicket(ptk))
+      // C1) Close ALL profit tickets (used as budget) — only when we have full-loss matches to settle
+      for(int p = 0; p < profitCount; p++)
       {
-         if(trade.PositionClose(ptk))
+         ulong ptk = profitTickets[p];
+         int   kind = profitKinds[p];
+         if(PositionSelectByTicket(ptk))
          {
-            closedProfitCount++;
-            netClosed += profitValues[p];
-            if(kind == 0)
+            if(trade.PositionClose(ptk))
             {
-               // hedge
-               g_hedgeSets[idx].hedgeTicket = 0;
-               g_hedgeSets[idx].hedgeLots   = 0;
+               closedProfitCount++;
+               netClosed += profitValues[p];
+               if(kind == 0)
+               {
+                  // hedge
+                  g_hedgeSets[idx].hedgeTicket = 0;
+                  g_hedgeSets[idx].hedgeLots   = 0;
+               }
+               else if(kind == 1)
+               {
+                  RemoveReverseHedgeTicket(ptk);
+               }
+               else // bound
+               {
+                  RemoveBoundTicket(idx, ptk);
+               }
+               Sleep(50);
             }
-            else if(kind == 1)
-            {
-               RemoveReverseHedgeTicket(ptk);
-            }
-            else // bound
-            {
-               RemoveBoundTicket(idx, ptk);
-            }
-            Sleep(50);
+         }
+         else
+         {
+            // already gone — still drop from tracking
+            if(kind == 0) { g_hedgeSets[idx].hedgeTicket = 0; g_hedgeSets[idx].hedgeLots = 0; }
+            else if(kind == 1) RemoveReverseHedgeTicket(ptk);
+            else               RemoveBoundTicket(idx, ptk);
          }
       }
-      else
+
+      // C2) Close matched LOSS tickets
+      for(int k = 0; k < lossUsed; k++)
       {
-         // already gone — still drop from tracking
-         if(kind == 0) { g_hedgeSets[idx].hedgeTicket = 0; g_hedgeSets[idx].hedgeLots = 0; }
-         else if(kind == 1) RemoveReverseHedgeTicket(ptk);
-         else               RemoveBoundTicket(idx, ptk);
+         int idxL = closeLossIdx[k];
+         ulong ltk = lossTickets[idxL];
+         int   kind = lossKinds[idxL];
+         if(PositionSelectByTicket(ltk))
+         {
+            if(trade.PositionClose(ltk))
+            {
+               closedLossCount++;
+               netClosed += lossValues[idxL];
+               if(kind == 0)
+               {
+                  g_hedgeSets[idx].hedgeTicket = 0;
+                  g_hedgeSets[idx].hedgeLots   = 0;
+               }
+               else if(kind == 1)
+               {
+                  RemoveReverseHedgeTicket(ltk);
+               }
+               else
+               {
+                  RemoveBoundTicket(idx, ltk);
+               }
+               Sleep(50);
+            }
+         }
+         else
+         {
+            if(kind == 0) { g_hedgeSets[idx].hedgeTicket = 0; g_hedgeSets[idx].hedgeLots = 0; }
+            else if(kind == 1) RemoveReverseHedgeTicket(ltk);
+            else               RemoveBoundTicket(idx, ltk);
+         }
       }
+
+      remainingBudget = budget - cumLoss;
    }
 
-   // C2) Close matched LOSS tickets
-   for(int k = 0; k < lossUsed; k++)
+   // v6.64: C2.5 — Partial hedge close fallback
+   //        If budget remains (or no full-loss tickets fit) AND main hedge still open AND in loss,
+   //        use the leftover budget to shred the hedge ticket proportionally.
+   //        When lossUsed==0 we have not yet closed profit tickets — do so now to realize the budget.
+   if(g_hedgeSets[idx].hedgeTicket > 0 &&
+      PositionSelectByTicket(g_hedgeSets[idx].hedgeTicket) &&
+      remainingBudget > 0 &&
+      g_hedgeSets[idx].hedgeLots > 0)
    {
-      int idxL = closeLossIdx[k];
-      ulong ltk = lossTickets[idxL];
-      int   kind = lossKinds[idxL];
-      if(PositionSelectByTicket(ltk))
+      double hedgePnLnow = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+      if(hedgePnLnow < 0)
       {
-         if(trade.PositionClose(ltk))
+         double hedgeLotsNow = g_hedgeSets[idx].hedgeLots;
+         double hedgeLossPerLot = MathAbs(hedgePnLnow) / hedgeLotsNow;
+         if(hedgeLossPerLot > 0)
          {
-            closedLossCount++;
-            netClosed += lossValues[idxL];
-            if(kind == 0)
+            double closeLots = remainingBudget / hedgeLossPerLot;
+            double minLot   = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+            double lotStep  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+            closeLots = MathMin(hedgeLotsNow,
+                        NormalizeDouble(MathFloor(closeLots / lotStep) * lotStep, 2));
+
+            if(closeLots >= minLot)
             {
-               g_hedgeSets[idx].hedgeTicket = 0;
-               g_hedgeSets[idx].hedgeLots   = 0;
+               // If lossUsed==0 we still need to realize profits to fund this partial close
+               if(lossUsed == 0)
+               {
+                  for(int p2 = 0; p2 < profitCount; p2++)
+                  {
+                     ulong ptk2 = profitTickets[p2];
+                     int   kind2 = profitKinds[p2];
+                     if(ptk2 == g_hedgeSets[idx].hedgeTicket) continue;  // never close hedge here as profit
+                     if(PositionSelectByTicket(ptk2))
+                     {
+                        if(trade.PositionClose(ptk2))
+                        {
+                           closedProfitCount++;
+                           netClosed += profitValues[p2];
+                           if(kind2 == 1) RemoveReverseHedgeTicket(ptk2);
+                           else if(kind2 == 2) RemoveBoundTicket(idx, ptk2);
+                           Sleep(50);
+                        }
+                     }
+                     else
+                     {
+                        if(kind2 == 1) RemoveReverseHedgeTicket(ptk2);
+                        else if(kind2 == 2) RemoveBoundTicket(idx, ptk2);
+                     }
+                  }
+               }
+
+               double remainingLots = hedgeLotsNow - closeLots;
+               Print("v6.64 HEDGE PARTIAL Set#", idx + 1, " Gen", boundGen,
+                     ": budget=$", DoubleToString(remainingBudget, 2),
+                     " hedgeLossPerLot=$", DoubleToString(hedgeLossPerLot, 2),
+                     " closeLots=", DoubleToString(closeLots, 2),
+                     " remainingLots=", DoubleToString(remainingLots, 2));
+
+               if(closeLots >= hedgeLotsNow - 0.0000001)
+               {
+                  // Close hedge fully
+                  if(trade.PositionClose(g_hedgeSets[idx].hedgeTicket))
+                  {
+                     netClosed += hedgePnLnow;
+                     g_hedgeSets[idx].hedgeTicket = 0;
+                     g_hedgeSets[idx].hedgeLots   = 0;
+                  }
+               }
+               else
+               {
+                  if(trade.PositionClosePartial(g_hedgeSets[idx].hedgeTicket, closeLots))
+                  {
+                     g_hedgeSets[idx].hedgeLots = remainingLots;
+                     netClosed += (-1.0) * (closeLots * hedgeLossPerLot);
+                  }
+               }
+               Sleep(100);
             }
-            else if(kind == 1)
-            {
-               RemoveReverseHedgeTicket(ltk);
-            }
-            else
-            {
-               RemoveBoundTicket(idx, ltk);
-            }
-            Sleep(50);
          }
-      }
-      else
-      {
-         if(kind == 0) { g_hedgeSets[idx].hedgeTicket = 0; g_hedgeSets[idx].hedgeLots = 0; }
-         else if(kind == 1) RemoveReverseHedgeTicket(ltk);
-         else               RemoveBoundTicket(idx, ltk);
       }
    }
 
