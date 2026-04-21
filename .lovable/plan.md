@@ -1,18 +1,19 @@
-## v6.60 — Gen0 Owner Fix + Strict Owner Counter
+## v6.61 — Match-Close Pool Both Sides + Partial Close Keeps Set Active
 
 ### ไฟล์: `public/docs/mql5/Gold_Miner_EA.mq5`
 
 ### สิ่งที่แก้
-1. **Gen0 (GM) claim owner ได้แล้ว**: เปลี่ยน guard ใน `SetSequentialRecoveryOwner()` จาก `gen <= 0` → `gen < 0`
-2. **`CountSequentialOwnerOrders(gen)` ใหม่**: นับเฉพาะออเดอร์ recovery ปกติของ generation นั้น โดยใช้ exact prefix (`GM_` สำหรับ Gen0, `GM<n>_` สำหรับ Gen>0) และ **ข้าม** `GM_HEDGE_*`, `GM_HG*`, `GM_RHEDGE*`
-3. **`IsSequentialRecoveryComplete()` ใช้ตัวนับใหม่** — owner clear เมื่อ recovery orders จริงปิดหมด ไม่ปนกับ hedge comments
-4. **Dashboard ใช้ตัวนับใหม่** (`ownerRemain`) → สะท้อน "N order(s) left" จริง
-5. **Log v6.60**: SEQ OWNER claim/skip/complete แสดงชัดเจน
+1. `ManageHedgeMatchingClose()` เขียนใหม่ — pool budget = max(hedge,0) + reverseProfit + boundProfit (ทั้ง 2 ฝั่ง)
+2. Loss pool รวม bound losses ทั้ง 2 ฝั่ง (ลบ filter counterSide), sort by magnitude DESC, greedy fit
+3. Close: hedge (ถ้า +) + bound profit ที่ใช้เป็น budget + reverse profit + matched losses
+4. ใช้ `RemoveBoundTicket()` ตัด ticket ที่ปิดออกจาก boundTickets[] (ไม่ clear ทั้ง array)
+5. **Partial close** → set ยัง ACTIVE ต่อ → recovery grid ทำงานต่อ → owner ยังไม่ claim
+6. **Full close** (boundCount==0) → deactivate + claim sequential owner ตามเดิม
+7. Version bump v6.60 → v6.61 ทุกจุด (property/header/init/deinit/dashboard)
 
 ### สิ่งที่ไม่เปลี่ยนแปลง
-- Order Execution / Trading Strategy / Core Module — ไม่แก้
-- `ManageHedgeSets()` owner-lock structure / `ManageOrphanGrid()` skip-non-owner — โครง v6.59 คงไว้
-- Triple Gate / Matching Close / BoundAvgTP / PartialClose — ไม่แก้
-- Re-hedge guard `IsPrevHedgedTicket()` v6.58 / Recovery Grid v6.57 / BB Filter v6.56 — ไม่แก้
-- v6.37–v6.59 features — ไม่แก้
-- `CountAllGenPositions()` ยังอยู่ (ใช้ที่อื่นใน orphan scan)
+- Order Execution / Strategy / Signal / Initial Grid — ไม่แก้
+- `ManageHedgeBoundAvgTP()` / `ManageHedgePartialClose()` — ไม่แก้
+- Hedge trigger / Triple Gate / DD threshold — ไม่แก้
+- Sequential Recovery Owner v6.59-v6.60 / Re-hedge guard v6.58 / BB Filter / Recovery Grid v6.57 — ไม่แก้
+- Balance Guard / News / License / Time Filter — ไม่แก้
