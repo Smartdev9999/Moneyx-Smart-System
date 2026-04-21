@@ -9267,7 +9267,9 @@ void ManageHedgeSets()
       }
       
       // STEP 2 — After matching done, try entering combined grid mode
-      TryEnterCombinedGridMode(h);
+      // v6.63: Skip new grid entry for non-owner sets while sequential owner is locked
+      if(!blockGridForThisSet)
+         TryEnterCombinedGridMode(h);
    }
    
    // v6.16: Recalculate DD triggers based on remaining active DD sets
