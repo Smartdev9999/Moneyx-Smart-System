@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.61 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.62 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.61"
-#property description "Gold Miner EA v6.61 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + GenRaceFix + OrphanGenFix + HedgeSidePause + GLCandleConfirm + MaxGridTrail + BrokerTPSL + DashCache + DashThrottle + LiveTPFix + HedgeClearTP + BoundClearFix + InstantSync + DeferredSync + InstantTP + MatchCloseToggle + HedgeRecoveryToggle + PersistGen + StartOrderTrail + BoundNoClose + BBFilter + RecoveryGrid + SequentialRecovery + FlatGenReset + SeqOneSetPerTick + RehedgeGuard + SeqRecoveryOwner + Gen0OwnerFix + StrictOwnerCount + MatchPoolBothSides + License"
+#property version   "6.62"
+#property description "Gold Miner EA v6.62 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + GenRaceFix + OrphanGenFix + HedgeSidePause + GLCandleConfirm + MaxGridTrail + BrokerTPSL + DashCache + DashThrottle + LiveTPFix + HedgeClearTP + BoundClearFix + InstantSync + DeferredSync + InstantTP + MatchCloseToggle + HedgeRecoveryToggle + PersistGen + StartOrderTrail + BoundNoClose + BBFilter + RecoveryGrid + SequentialRecovery + FlatGenReset + SeqOneSetPerTick + RehedgeGuard + SeqRecoveryOwner + Gen0OwnerFix + StrictOwnerCount + MatchPoolBothSides + StrictInSetPool + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -943,7 +943,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.61 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.62 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min");
@@ -1003,7 +1003,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.61 deinitialized");
+   Print("Gold Miner EA v6.62 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -3870,7 +3870,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.61 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.61 [ZZ]" : "Gold Miner EA v6.61 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.62 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.62 [ZZ]" : "Gold Miner EA v6.62 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -9189,14 +9189,16 @@ void ManageHedgeSets()
           if(hedgeExists)
              hedgePnL = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
 
-           // Matching Close (hedge is profitable → close + match losses)
-           if(hedgePnL > 0)
-           {
-              ManageHedgeMatchingClose(h);
-              if(g_hedgeSets[h].active)
-                 g_hedgeSets[h].matchingDone = true;
-              continue;
-           }
+            // v6.62: Matching Close — enter if ANY in-set profit exists
+            // (hedge OR reverse OR bound on either side). Treats whole set as one pool.
+            double setProfitProbe = ProbeSetProfit(h);
+            if(setProfitProbe > InpHedge_MatchMinProfit)
+            {
+               ManageHedgeMatchingClose(h);
+               if(g_hedgeSets[h].active)
+                  g_hedgeSets[h].matchingDone = true;
+               continue;
+            }
 
          // Average TP (hedge is in loss → try avg TP on bounds)
          if(g_hedgeSets[h].boundTicketCount > 0)
@@ -9845,87 +9847,173 @@ bool ManageHedgeBoundAvgTP(int idx)
 }
 
 //+------------------------------------------------------------------+
-//| Scenario 1: Hedge in profit + expansion ended → match with losses  |
-//| Now uses boundTickets[] for set-specific isolation                  |
+//| v6.62: Probe whether this set has any positive in-set profit       |
+//| Treats hedge / reverse / bound uniformly. Strict in-set only.      |
 //+------------------------------------------------------------------+
-void ManageHedgeMatchingClose(int idx)
+double ProbeSetProfit(int idx)
 {
-   // v6.61: Pool all profits (hedge + reverse + bound profit BOTH sides) as budget,
-   //        match against ALL bound losses (BOTH sides) greedily by magnitude desc.
-   //        Partial close: keep set ACTIVE if bound orders remain → recovery grid continues.
+   double total = 0;
 
-   bool hedgeAlive = PositionSelectByTicket(g_hedgeSets[idx].hedgeTicket);
-   double hedgeProfit = 0;
-   if(hedgeAlive)
-      hedgeProfit = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+   // Hedge ticket (if profit)
+   if(PositionSelectByTicket(g_hedgeSets[idx].hedgeTicket))
+   {
+      double p = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+      if(p > 0) total += p;
+   }
 
-   // ---------- Phase A: Profit Pool ----------
-   // A1) Reverse hedge profit
-   double reverseProfit = 0;
-   ulong profitableReverseTickets[];
-   int profitableReverseCount = 0;
+   // Reverse hedges (if profit)
    for(int r = 0; r < g_reverseHedgeCount; r++)
    {
       if(PositionSelectByTicket(g_reverseHedgeTickets[r]))
       {
-         double rpnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
-         if(rpnl > 0)
-         {
-            reverseProfit += rpnl;
-            ArrayResize(profitableReverseTickets, profitableReverseCount + 1);
-            profitableReverseTickets[profitableReverseCount] = g_reverseHedgeTickets[r];
-            profitableReverseCount++;
-         }
+         double p = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+         if(p > 0) total += p;
       }
    }
 
-   // A2) Bound profit (BOTH sides) + Loss pool (BOTH sides)
-   ulong  boundProfitTickets[];
-   double boundProfitValues[];
-   int    boundProfitCount = 0;
-   double boundProfit = 0;
-
-   ulong    lossTickets[];
-   double   lossValues[];
-   int      lossCount = 0;
-
+   // Bound (if profit)
    for(int b = 0; b < g_hedgeSets[idx].boundTicketCount; b++)
    {
-      ulong ticket = g_hedgeSets[idx].boundTickets[b];
-      if(!PositionSelectByTicket(ticket)) continue;
+      if(PositionSelectByTicket(g_hedgeSets[idx].boundTickets[b]))
+      {
+         double p = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+         if(p > 0) total += p;
+      }
+   }
 
+   return total;
+}
+
+//+------------------------------------------------------------------+
+//| v6.62: STRICT IN-SET POOLING                                       |
+//| Treats hedge + reverse + bound as ONE unified pool for THIS set.   |
+//| Profits (any of the three) → budget. Losses (any of the three) →   |
+//| greedy match by magnitude. NO cross-set leakage. Partial close     |
+//| keeps set ACTIVE → recovery grid keeps working on remaining loss.  |
+//+------------------------------------------------------------------+
+void ManageHedgeMatchingClose(int idx)
+{
+   // ---------- Phase A: Build unified PROFIT pool (in-set only) ----------
+   ulong  profitTickets[];      // tickets to close as budget
+   double profitValues[];
+   int    profitKinds[];        // 0=hedge, 1=reverse, 2=bound
+   int    profitCount = 0;
+   double totalBudgetProfit = 0;
+
+   // ---------- Phase B: Build unified LOSS pool (in-set only) ----------
+   ulong  lossTickets[];
+   double lossValues[];
+   int    lossKinds[];          // 0=hedge, 1=reverse, 2=bound
+   int    lossCount = 0;
+   double lossSum = 0;
+
+   bool   hedgeAlive   = false;
+   bool   hedgeIsProfit = false;
+   bool   hedgeIsLoss   = false;
+
+   // A0/B0: Hedge ticket
+   if(PositionSelectByTicket(g_hedgeSets[idx].hedgeTicket))
+   {
+      hedgeAlive = true;
       double pnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
       if(pnl > 0)
       {
-         ArrayResize(boundProfitTickets, boundProfitCount + 1);
-         ArrayResize(boundProfitValues,  boundProfitCount + 1);
-         boundProfitTickets[boundProfitCount] = ticket;
-         boundProfitValues[boundProfitCount]  = pnl;
-         boundProfit += pnl;
-         boundProfitCount++;
+         ArrayResize(profitTickets, profitCount + 1);
+         ArrayResize(profitValues,  profitCount + 1);
+         ArrayResize(profitKinds,   profitCount + 1);
+         profitTickets[profitCount] = g_hedgeSets[idx].hedgeTicket;
+         profitValues[profitCount]  = pnl;
+         profitKinds[profitCount]   = 0;
+         totalBudgetProfit += pnl;
+         profitCount++;
+         hedgeIsProfit = true;
       }
       else if(pnl < 0)
       {
          ArrayResize(lossTickets, lossCount + 1);
          ArrayResize(lossValues,  lossCount + 1);
-         lossTickets[lossCount] = ticket;
+         ArrayResize(lossKinds,   lossCount + 1);
+         lossTickets[lossCount] = g_hedgeSets[idx].hedgeTicket;
          lossValues[lossCount]  = pnl;
+         lossKinds[lossCount]   = 0;
+         lossSum += pnl;
+         lossCount++;
+         hedgeIsLoss = true;
+      }
+   }
+
+   // A1/B1: Reverse hedges (treated as set members)
+   for(int r = 0; r < g_reverseHedgeCount; r++)
+   {
+      ulong rtk = g_reverseHedgeTickets[r];
+      if(!PositionSelectByTicket(rtk)) continue;
+      double pnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+      if(pnl > 0)
+      {
+         ArrayResize(profitTickets, profitCount + 1);
+         ArrayResize(profitValues,  profitCount + 1);
+         ArrayResize(profitKinds,   profitCount + 1);
+         profitTickets[profitCount] = rtk;
+         profitValues[profitCount]  = pnl;
+         profitKinds[profitCount]   = 1;
+         totalBudgetProfit += pnl;
+         profitCount++;
+      }
+      else if(pnl < 0)
+      {
+         ArrayResize(lossTickets, lossCount + 1);
+         ArrayResize(lossValues,  lossCount + 1);
+         ArrayResize(lossKinds,   lossCount + 1);
+         lossTickets[lossCount] = rtk;
+         lossValues[lossCount]  = pnl;
+         lossKinds[lossCount]   = 1;
+         lossSum += pnl;
          lossCount++;
       }
    }
 
-   double totalBudgetProfit = MathMax(hedgeProfit, 0) + reverseProfit + boundProfit;
+   // A2/B2: Bound tickets (BOTH sides) — strict in-set
+   for(int b = 0; b < g_hedgeSets[idx].boundTicketCount; b++)
+   {
+      ulong ticket = g_hedgeSets[idx].boundTickets[b];
+      if(!PositionSelectByTicket(ticket)) continue;
+      double pnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+      if(pnl > 0)
+      {
+         ArrayResize(profitTickets, profitCount + 1);
+         ArrayResize(profitValues,  profitCount + 1);
+         ArrayResize(profitKinds,   profitCount + 1);
+         profitTickets[profitCount] = ticket;
+         profitValues[profitCount]  = pnl;
+         profitKinds[profitCount]   = 2;
+         totalBudgetProfit += pnl;
+         profitCount++;
+      }
+      else if(pnl < 0)
+      {
+         ArrayResize(lossTickets, lossCount + 1);
+         ArrayResize(lossValues,  lossCount + 1);
+         ArrayResize(lossKinds,   lossCount + 1);
+         lossTickets[lossCount] = ticket;
+         lossValues[lossCount]  = pnl;
+         lossKinds[lossCount]   = 2;
+         lossSum += pnl;
+         lossCount++;
+      }
+   }
+
    double budget = totalBudgetProfit - InpHedge_MatchMinProfit;
    if(budget <= 0) return;
-   if(lossCount == 0) return;  // nothing to match
+   if(lossCount == 0) return;
 
-   // ---------- Phase B: Sort losses by magnitude DESC (greedy fit) ----------
+   // ---------- Phase B-sort: losses by magnitude DESC ----------
    for(int a = 0; a < lossCount - 1; a++)
       for(int b = a + 1; b < lossCount; b++)
          if(MathAbs(lossValues[b]) > MathAbs(lossValues[a]))
          {
             double tmpV = lossValues[a]; lossValues[a] = lossValues[b]; lossValues[b] = tmpV;
             ulong  tmpT = lossTickets[a]; lossTickets[a] = lossTickets[b]; lossTickets[b] = tmpT;
+            int    tmpK = lossKinds[a];   lossKinds[a]  = lossKinds[b];   lossKinds[b]  = tmpK;
          }
 
    // ---------- Phase C: Greedy match ----------
@@ -9944,88 +10032,103 @@ void ManageHedgeMatchingClose(int idx)
       }
    }
 
-   if(lossUsed == 0) return;  // can't even cover smallest loss → wait
+   if(lossUsed == 0) return;  // can't cover even smallest loss → wait
 
    double finalNet = totalBudgetProfit - cumLoss;
-   Print("v6.61 MATCH POOL Set#", idx + 1,
-         ": hedge=$", DoubleToString(hedgeProfit, 2),
-         " + revProfit=$", DoubleToString(reverseProfit, 2),
-         " + boundProfit=$", DoubleToString(boundProfit, 2),
-         " = budget=$", DoubleToString(totalBudgetProfit, 2),
-         " | losses available=", lossCount,
-         " | will close ", lossUsed, " losses ($", DoubleToString(cumLoss, 2),
+   int boundGen = g_hedgeSets[idx].boundGeneration;
+   Print("v6.62 IN-SET POOL Set#", idx + 1, " Gen", boundGen,
+         ": profit pool=$", DoubleToString(totalBudgetProfit, 2),
+         " from ", profitCount, " positions (hedge/reverse/bound)",
+         " | losses=", lossCount, " ($", DoubleToString(lossSum, 2),
+         ") | will close ", lossUsed, " losses ($", DoubleToString(cumLoss, 2),
          ") | net=$", DoubleToString(finalNet, 2));
 
    int closedProfitCount = 0;
    int closedLossCount = 0;
+   double netClosed = 0;
 
-   // C1) Close hedge ticket if profit
-   if(hedgeAlive && hedgeProfit > 0)
+   // C1) Close ALL profit tickets (used as budget)
+   for(int p = 0; p < profitCount; p++)
    {
-      if(trade.PositionClose(g_hedgeSets[idx].hedgeTicket))
+      ulong ptk = profitTickets[p];
+      int   kind = profitKinds[p];
+      if(PositionSelectByTicket(ptk))
       {
-         closedProfitCount++;
-         Sleep(50);
-      }
-   }
-
-   // C2) Close all bound profit tickets used as budget + remove from boundTickets[]
-   for(int p = 0; p < boundProfitCount; p++)
-   {
-      if(PositionSelectByTicket(boundProfitTickets[p]))
-      {
-         if(trade.PositionClose(boundProfitTickets[p]))
+         if(trade.PositionClose(ptk))
          {
             closedProfitCount++;
-            RemoveBoundTicket(idx, boundProfitTickets[p]);
+            netClosed += profitValues[p];
+            if(kind == 0)
+            {
+               // hedge
+               g_hedgeSets[idx].hedgeTicket = 0;
+               g_hedgeSets[idx].hedgeLots   = 0;
+            }
+            else if(kind == 1)
+            {
+               RemoveReverseHedgeTicket(ptk);
+            }
+            else // bound
+            {
+               RemoveBoundTicket(idx, ptk);
+            }
             Sleep(50);
          }
       }
       else
       {
-         // already gone — still drop from bound list
-         RemoveBoundTicket(idx, boundProfitTickets[p]);
+         // already gone — still drop from tracking
+         if(kind == 0) { g_hedgeSets[idx].hedgeTicket = 0; g_hedgeSets[idx].hedgeLots = 0; }
+         else if(kind == 1) RemoveReverseHedgeTicket(ptk);
+         else               RemoveBoundTicket(idx, ptk);
       }
    }
 
-   // C3) Close profitable reverse hedges
-   for(int pr = 0; pr < profitableReverseCount; pr++)
-   {
-      if(PositionSelectByTicket(profitableReverseTickets[pr]))
-      {
-         if(trade.PositionClose(profitableReverseTickets[pr]))
-         {
-            closedProfitCount++;
-            RemoveReverseHedgeTicket(profitableReverseTickets[pr]);
-            Sleep(50);
-         }
-      }
-   }
-
-   // C4) Close matched loss tickets + remove from boundTickets[]
+   // C2) Close matched LOSS tickets
    for(int k = 0; k < lossUsed; k++)
    {
-      ulong ltk = lossTickets[closeLossIdx[k]];
+      int idxL = closeLossIdx[k];
+      ulong ltk = lossTickets[idxL];
+      int   kind = lossKinds[idxL];
       if(PositionSelectByTicket(ltk))
       {
          if(trade.PositionClose(ltk))
          {
             closedLossCount++;
-            RemoveBoundTicket(idx, ltk);
+            netClosed += lossValues[idxL];
+            if(kind == 0)
+            {
+               g_hedgeSets[idx].hedgeTicket = 0;
+               g_hedgeSets[idx].hedgeLots   = 0;
+            }
+            else if(kind == 1)
+            {
+               RemoveReverseHedgeTicket(ltk);
+            }
+            else
+            {
+               RemoveBoundTicket(idx, ltk);
+            }
             Sleep(50);
          }
       }
       else
       {
-         RemoveBoundTicket(idx, ltk);
+         if(kind == 0) { g_hedgeSets[idx].hedgeTicket = 0; g_hedgeSets[idx].hedgeLots = 0; }
+         else if(kind == 1) RemoveReverseHedgeTicket(ltk);
+         else               RemoveBoundTicket(idx, ltk);
       }
    }
 
-   // C5) If bound list now empty → deactivate set + claim sequential owner
-   if(g_hedgeSets[idx].boundTicketCount <= 0)
+   // C3) Determine if set is fully flat
+   bool hedgeStillOpen = (g_hedgeSets[idx].hedgeTicket != 0 &&
+                          PositionSelectByTicket(g_hedgeSets[idx].hedgeTicket));
+   bool boundEmpty = (g_hedgeSets[idx].boundTicketCount <= 0);
+
+   if(!hedgeStillOpen && boundEmpty)
    {
+      // Fully flat → deactivate + claim sequential owner
       int matchGen = g_hedgeSets[idx].boundGeneration;
-      // ensure remaining hedge grid orders cleaned (in case hedge wasn't profit-closed)
       CloseAllHedgeGridOrders(idx);
       SaveBoundTicketsToPrevHedged(idx);
       g_hedgeSets[idx].active = false;
@@ -10035,17 +10138,20 @@ void ManageHedgeMatchingClose(int idx)
       g_hedgeSetCount--;
       g_lastHedgeCloseTime = TimeCurrent();
       SetSequentialRecoveryOwner(idx, matchGen);
-      TryResetCycleStateIfFlat("matching close v6.61 full");
-      Print("v6.61 MATCH FULL Set#", idx + 1,
-            ": closed ", closedProfitCount, " profit + ", closedLossCount, " loss",
-            " | bound remaining=0 | set DEACTIVATED");
+      TryResetCycleStateIfFlat("matching close v6.62 full");
+      Print("v6.62 IN-SET CLOSE Set#", idx + 1,
+            ": closed ", closedProfitCount, "+ ", closedLossCount, "-",
+            " | net=$", DoubleToString(netClosed, 2),
+            " | set DEACTIVATED (flat)");
    }
    else
    {
-      // Partial close — set REMAINS ACTIVE so recovery grid keeps working on leftovers
-      Print("v6.61 MATCH PARTIAL Set#", idx + 1,
-            ": closed ", closedProfitCount, " profit + ", closedLossCount, " loss",
-            " | bound remaining=", g_hedgeSets[idx].boundTicketCount,
+      // Partial close — set REMAINS ACTIVE; recovery grid will handle leftovers
+      Print("v6.62 IN-SET CLOSE Set#", idx + 1,
+            ": closed ", closedProfitCount, "+ ", closedLossCount, "-",
+            " | net=$", DoubleToString(netClosed, 2),
+            " | remaining: hedge=", (hedgeStillOpen ? "Y" : "N"),
+            " bound=", g_hedgeSets[idx].boundTicketCount,
             " (set still ACTIVE — recovery grid continues)");
    }
    Sleep(100);
