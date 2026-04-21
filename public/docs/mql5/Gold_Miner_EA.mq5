@@ -4394,6 +4394,24 @@ void DisplayDashboard()
                    DrawTableRow(row, "MG SELL Trail", "ACTIVE SL=" + DoubleToString(g_maxGridTrailSL_Sell, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)), clrLime, COLOR_SECTION_MAXTRAIL); row++;
                 }
              }
+
+             // v6.57: Sequential Hedge Recovery status
+             if(InpHedge_SequentialRecovery && g_hedgeSetCount > 0)
+             {
+                int oldestIdx = FindOldestActiveHedgeSet();
+                string seqInfo = "Sequential | Active: H" + IntegerToString(oldestIdx + 1);
+                int pendingCount = g_hedgeSetCount - 1;
+                if(pendingCount > 0) seqInfo += " | Pending: " + IntegerToString(pendingCount) + " set(s)";
+                DrawTableRow(row, "Hedge Recovery", seqInfo, clrAqua, COLOR_SECTION_HEDGE); row++;
+             }
+
+             // v6.57: Recovery Grid mode indicator
+             if(Recovery_UseSeparate)
+             {
+                string recInfo = "Separate | Max:" + IntegerToString(Recovery_MaxTrades) +
+                                 " | Dist:" + IntegerToString(Recovery_Points) + "p";
+                DrawTableRow(row, "Recovery Grid", recInfo, clrCyan, COLOR_SECTION_HEDGE); row++;
+             }
          }
 
      // === Orphan Recovery Status ===
