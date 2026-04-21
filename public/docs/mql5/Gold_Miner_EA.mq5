@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.63 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.64 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.63"
-#property description "Gold Miner EA v6.63 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + GenRaceFix + OrphanGenFix + HedgeSidePause + GLCandleConfirm + MaxGridTrail + BrokerTPSL + DashCache + DashThrottle + LiveTPFix + HedgeClearTP + BoundClearFix + InstantSync + DeferredSync + InstantTP + MatchCloseToggle + HedgeRecoveryToggle + PersistGen + StartOrderTrail + BoundNoClose + BBFilter + RecoveryGrid + SequentialRecovery + FlatGenReset + SeqOneSetPerTick + RehedgeGuard + SeqRecoveryOwner + Gen0OwnerFix + StrictOwnerCount + MatchPoolBothSides + StrictInSetPool + InSetMatchAlways + PersistHedgeSlot + License"
+#property version   "6.64"
+#property description "Gold Miner EA v6.64 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + GenRaceFix + OrphanGenFix + HedgeSidePause + GLCandleConfirm + MaxGridTrail + BrokerTPSL + DashCache + DashThrottle + LiveTPFix + HedgeClearTP + BoundClearFix + InstantSync + DeferredSync + InstantTP + MatchCloseToggle + HedgeRecoveryToggle + PersistGen + StartOrderTrail + BoundNoClose + BBFilter + RecoveryGrid + SequentialRecovery + FlatGenReset + SeqOneSetPerTick + RehedgeGuard + SeqRecoveryOwner + Gen0OwnerFix + StrictOwnerCount + MatchPoolBothSides + StrictInSetPool + InSetMatchAlways + PersistHedgeSlot + MatchTickRetry + HedgePartialFallback + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -9228,6 +9228,11 @@ void ManageHedgeSets()
        if(!InpHedge_UseMatchingClose)
           continue;
        
+       // v6.64: Reset matchingDone every tick for active sets so matching/AvgTP/PartialClose
+       //        re-evaluate continuously (budget changes with floating P/L). Strict in-set
+       //        pooling (v6.62) makes this safe — no cross-set leakage.
+       g_hedgeSets[h].matchingDone = false;
+
        // STEP 1 — Run matching/close cycle FIRST (before any grid entry)
        if(!g_hedgeSets[h].matchingDone)
        {
@@ -9235,11 +9240,14 @@ void ManageHedgeSets()
           if(hedgeExists)
              hedgePnL = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
 
-            // v6.62: Matching Close — enter if ANY in-set profit exists
-            // (hedge OR reverse OR bound on either side). Treats whole set as one pool.
+            // v6.62/v6.64: Matching Close — enter if ANY in-set profit exists.
+            // v6.64: ManageHedgeMatchingClose now performs partial-hedge fallback when
+            //        budget cannot fully cover any single loss ticket.
             double setProfitProbe = ProbeSetProfit(h);
             if(setProfitProbe > InpHedge_MatchMinProfit)
             {
+               Print("v6.64 MATCH RETRY Set#", h + 1, " Gen", g_hedgeSets[h].boundGeneration,
+                     ": probe profit=$", DoubleToString(setProfitProbe, 2), " — running matching");
                ManageHedgeMatchingClose(h);
                if(g_hedgeSets[h].active)
                   g_hedgeSets[h].matchingDone = true;
@@ -9264,7 +9272,7 @@ void ManageHedgeSets()
          }
          
          g_hedgeSets[h].matchingDone = true;
-      }
+       }
       
       // STEP 2 — After matching done, try entering combined grid mode
       // v6.63: Skip new grid entry for non-owner sets while sequential owner is locked
