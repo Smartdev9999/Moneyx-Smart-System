@@ -84,7 +84,13 @@ enum ENUM_HEDGE_TRIGGER
    HEDGE_TRIGGER_DD_DOLLAR  = 2   // Drawdown $ per Side
 };
 
-// Sync Event Type (for real-time data sync)
+// v6.71: Recovery Close Mode after hedge unlock
+enum ENUM_RECOVERY_CLOSE_MODE
+{
+   RECOVERY_CLOSE_MATCHING = 0,  // Matching Close (current — partial close pool)
+   RECOVERY_CLOSE_AVG_TP   = 1   // Weighted Avg TP across bound + hedge + recovery grid
+};
+
 enum ENUM_SYNC_EVENT
 {
    SYNC_SCHEDULED,          // Scheduled sync (daily)
