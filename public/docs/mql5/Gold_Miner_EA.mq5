@@ -8115,6 +8115,148 @@ int CountHedgeGridOrdersForGen(int gen)
    return cnt;
 }
 
+//+------------------------------------------------------------------+
+//| v6.71: Recovery AvgTP Mode — manage entire set basket             |
+//|        (bound + remaining hedge + recovery grid) via single broker|
+//|        TP placed N points from net weighted-average break-even.   |
+//+------------------------------------------------------------------+
+void ManageRecoveryAvgTP(int idx)
+{
+   if(idx < 0 || idx >= MAX_HEDGE_SETS) return;
+   if(!g_hedgeSets[idx].active) return;
+
+   // Prune dead recovery tickets first
+   CompactRecoveryGridTickets(idx);
+
+   // Build dedup ticket list: hedge + bound + recovery + comment-match GM_HD<gen>_*
+   ulong  tks[];
+   double lots[];
+   double prices[];
+   int    types[];   // 0=BUY, 1=SELL
+   int    cnt = 0;
+
+   // Helper inline: append unique ticket
+   // (manual dedup via linear scan — basket sizes are small)
+
+   // 1) Main hedge ticket
+   ulong hedgeTk = g_hedgeSets[idx].hedgeTicket;
+   if(hedgeTk > 0 && PositionSelectByTicket(hedgeTk))
+   {
+      ArrayResize(tks, cnt + 1);  ArrayResize(lots, cnt + 1);
+      ArrayResize(prices, cnt + 1); ArrayResize(types, cnt + 1);
+      tks[cnt]    = hedgeTk;
+      lots[cnt]   = PositionGetDouble(POSITION_VOLUME);
+      prices[cnt] = PositionGetDouble(POSITION_PRICE_OPEN);
+      types[cnt]  = ((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? 0 : 1;
+      cnt++;
+   }
+
+   // 2) Bound tickets
+   for(int b = 0; b < g_hedgeSets[idx].boundTicketCount; b++)
+   {
+      ulong tk = g_hedgeSets[idx].boundTickets[b];
+      if(tk == 0 || !PositionSelectByTicket(tk)) continue;
+      bool dup = false;
+      for(int z = 0; z < cnt; z++) if(tks[z] == tk) { dup = true; break; }
+      if(dup) continue;
+      ArrayResize(tks, cnt + 1);  ArrayResize(lots, cnt + 1);
+      ArrayResize(prices, cnt + 1); ArrayResize(types, cnt + 1);
+      tks[cnt]    = tk;
+      lots[cnt]   = PositionGetDouble(POSITION_VOLUME);
+      prices[cnt] = PositionGetDouble(POSITION_PRICE_OPEN);
+      types[cnt]  = ((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? 0 : 1;
+      cnt++;
+   }
+
+   // 3) Recovery grid tickets
+   for(int k = 0; k < g_hedgeSets[idx].recoveryGridCount; k++)
+   {
+      ulong tk = g_hedgeSets[idx].recoveryGridTickets[k];
+      if(tk == 0 || !PositionSelectByTicket(tk)) continue;
+      bool dup = false;
+      for(int z = 0; z < cnt; z++) if(tks[z] == tk) { dup = true; break; }
+      if(dup) continue;
+      ArrayResize(tks, cnt + 1);  ArrayResize(lots, cnt + 1);
+      ArrayResize(prices, cnt + 1); ArrayResize(types, cnt + 1);
+      tks[cnt]    = tk;
+      lots[cnt]   = PositionGetDouble(POSITION_VOLUME);
+      prices[cnt] = PositionGetDouble(POSITION_PRICE_OPEN);
+      types[cnt]  = ((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? 0 : 1;
+      cnt++;
+   }
+
+   // 4) Comment-match GM_HD<gen+1>_* (catches floaters that lost ticket binding)
+   int genLabel = g_hedgeSets[idx].boundGeneration + 1;
+   string modern = "GM_HD" + IntegerToString(genLabel) + "_";
+   string legacy = "GM_HG" + IntegerToString(idx + 1);
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      string cmt = PositionGetString(POSITION_COMMENT);
+      if(StringFind(cmt, modern) < 0 && StringFind(cmt, legacy) < 0) continue;
+      bool dup = false;
+      for(int z = 0; z < cnt; z++) if(tks[z] == tk) { dup = true; break; }
+      if(dup) continue;
+      ArrayResize(tks, cnt + 1);  ArrayResize(lots, cnt + 1);
+      ArrayResize(prices, cnt + 1); ArrayResize(types, cnt + 1);
+      tks[cnt]    = tk;
+      lots[cnt]   = PositionGetDouble(POSITION_VOLUME);
+      prices[cnt] = PositionGetDouble(POSITION_PRICE_OPEN);
+      types[cnt]  = ((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? 0 : 1;
+      cnt++;
+   }
+
+   if(cnt < 1) return;
+
+   // Compute weighted avg per side, then net break-even
+   double buyLots = 0,  buyValue  = 0;
+   double sellLots = 0, sellValue = 0;
+   for(int i = 0; i < cnt; i++)
+   {
+      if(types[i] == 0) { buyLots  += lots[i]; buyValue  += lots[i] * prices[i]; }
+      else              { sellLots += lots[i]; sellValue += lots[i] * prices[i]; }
+   }
+
+   double netLots = buyLots - sellLots;  // >0 net BUY, <0 net SELL
+   if(MathAbs(netLots) < 0.0001) return;  // perfectly hedged → no clean BE
+
+   // Basket break-even: priceBE = (buyValue - sellValue) / netLots
+   double priceBE = (buyValue - sellValue) / netLots;
+
+   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   double targetTP;
+   string netSide;
+   if(netLots > 0) { targetTP = priceBE + InpRecovery_AvgTPDistance * point; netSide = "BUY"; }
+   else            { targetTP = priceBE - InpRecovery_AvgTPDistance * point; netSide = "SELL"; }
+
+   int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+   targetTP = NormalizeDouble(targetTP, digits);
+
+   // Apply broker TP to every ticket (keep existing SL)
+   int modified = 0;
+   for(int i = 0; i < cnt; i++)
+   {
+      if(!PositionSelectByTicket(tks[i])) continue;
+      double curTP = PositionGetDouble(POSITION_TP);
+      double curSL = PositionGetDouble(POSITION_SL);
+      if(MathAbs(curTP - targetTP) < point) continue;  // skip no-op
+      if(trade.PositionModify(tks[i], curSL, targetTP)) modified++;
+   }
+
+   if(modified > 0)
+   {
+      Print("v6.71 AVGTP Set#", idx + 1, " (Gen", g_hedgeSets[idx].boundGeneration,
+            "): tickets=", cnt, " netSide=", netSide,
+            " netLots=", DoubleToString(MathAbs(netLots), 2),
+            " avgPx=", DoubleToString(priceBE, digits),
+            " targetTP=", DoubleToString(targetTP, digits),
+            " (", (netLots > 0 ? "+" : "-"), InpRecovery_AvgTPDistance, "p) modified=", modified, "/", cnt);
+   }
+}
+
 // v6.66: Combined Avg TP — sync TP across remaining hedge ticket + all GM_HG{idx+1}_GL
 //        positions of the set. Computes weighted-average price and applies single TP target.
 //        Respects UseTP_Points / UseTP_Dollar / UseTP_PercentBalance priority.
