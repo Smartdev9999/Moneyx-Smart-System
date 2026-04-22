@@ -4192,21 +4192,15 @@ void DisplayDashboard()
       color COLOR_SECTION_HEDGE = C'130,50,180';  // purple for hedge section
       bool anyActive = false;
 
-      // v6.60: Sequential Release status row (comment-based gen scan)
+      // v6.61: Sequential Release status row (hedge-only comment scan)
       {
-         int activeCnt = 0;
-         for(int hc = 0; hc < MAX_HEDGE_SETS; hc++)
-            if(g_hedgeSets[hc].active) activeCnt++;
-         int orphanCnt = 0;
-         for(int oc = 0; oc < MAX_ORPHAN_GROUPS; oc++)
-            if(g_orphanGroups[oc].active) orphanCnt++;
          int allowedGen = g_seqAllowedGen;
          string seqVal;
          color seqClr;
          if(InpHedge_SequentialRelease)
          {
             if(allowedGen == -1)
-               seqVal = "ON | No live orders — full trading";
+               seqVal = "ON | No active hedge — full trading + free orphan recovery";
             else
             {
                // Count frozen sets (active hedge sets whose boundGeneration != allowed)
@@ -4214,12 +4208,13 @@ void DisplayDashboard()
                for(int hc2 = 0; hc2 < MAX_HEDGE_SETS; hc2++)
                   if(g_hedgeSets[hc2].active && g_hedgeSets[hc2].boundGeneration != allowedGen)
                      frozenHedge++;
+               // Orphans frozen only if newer than allowed hedge gen (v6.61 rule)
                int frozenOrphan = 0;
                for(int oc2 = 0; oc2 < MAX_ORPHAN_GROUPS; oc2++)
-                  if(g_orphanGroups[oc2].active && g_orphanGroups[oc2].generation != allowedGen)
+                  if(g_orphanGroups[oc2].active && g_orphanGroups[oc2].generation > allowedGen)
                      frozenOrphan++;
-               seqVal = "ON | Allowed: Gen" + IntegerToString(allowedGen)
-                      + " (GM" + (allowedGen == 0 ? "" : IntegerToString(allowedGen)) + "_*+GM_HD" + IntegerToString(allowedGen + 1) + ")"
+               seqVal = "ON | Allowed Hedge: Gen" + IntegerToString(allowedGen)
+                      + " (GM_HD" + IntegerToString(allowedGen + 1) + ")"
                       + " | New cycles: ALLOWED"
                       + " | Frozen Hedge: " + IntegerToString(frozenHedge)
                       + " | Frozen Orphans: " + IntegerToString(frozenOrphan);
@@ -7734,6 +7729,9 @@ int GetSequentialAllowedGeneration()
 {
    if(!InpHedge_SequentialRelease) return -1;
 
+   // v6.61: Scan ONLY hedge comments (GM_HD<n>). Bound/orphan orders never gate
+   //         the sequential queue — once a hedge set's matching close releases its
+   //         bounds as orphans, the next generation's hedge becomes allowed.
    int oldest = INT_MAX;
    int total = PositionsTotal();
    for(int i = 0; i < total; i++)
@@ -7745,6 +7743,8 @@ int GetSequentialAllowedGeneration()
       if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
 
       string c = PositionGetString(POSITION_COMMENT);
+      // v6.61: hedge-only filter
+      if(StringFind(c, "GM_HD") != 0) continue;
       int gen = ParseGenerationFromComment(c);
       if(gen >= 0 && gen < oldest) oldest = gen;
    }
@@ -8714,8 +8714,10 @@ void ManageOrphanGrid()
 
       int gen = g_orphanGroups[g].generation;
 
-      // v6.58: Skip non-allowed generations (recovery one-at-a-time)
-      if(seqAllowed != -1 && gen != seqAllowed) continue;
+      // v6.61: seqAllowed = lowest live HEDGE generation. Allow orphans whose gen
+      //         is older than or equal to it (no live hedge blocks them); freeze
+      //         only orphans newer than the active hedge generation.
+      if(seqAllowed != -1 && gen > seqAllowed) continue;
 
       string prefix = GenPrefix(gen);
       
