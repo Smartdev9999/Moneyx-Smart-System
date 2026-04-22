@@ -9817,6 +9817,20 @@ void ManageHedgeSets()
          if(_hPnL > InpHedge_MatchMinProfit) seqBypass_profitClose = true;
       }
 
+      // v6.69: Time-based unlock delay — กันปลด set ถัดไปทันทีหลังชุดก่อนเพิ่งปิด
+      if(InpHedge_SequentialRecovery && IsSequentialUnlockDelayActive())
+      {
+         g_hedgeSets[h].matchingDone = false;
+         static datetime _lastSeqDelayLog = 0;
+         if(TimeCurrent() - _lastSeqDelayLog >= 15)
+         {
+            Print("v6.69 SEQ DELAY HOLD: Set#", h+1, " deferred — remain ",
+                  GetSequentialUnlockRemainSec(), " sec (", g_sequentialUnlockReason, ")");
+            _lastSeqDelayLog = TimeCurrent();
+         }
+         continue;
+      }
+
       if(InpHedge_SequentialRecovery && !seqBypass_profitClose)
       {
          // v6.59: Owner active → block every set's release/recovery this tick
