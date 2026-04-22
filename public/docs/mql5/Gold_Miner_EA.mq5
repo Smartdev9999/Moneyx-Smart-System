@@ -7405,7 +7405,68 @@ bool IsReverseHedgeComment(string comment)
 
 bool IsHedgeComment(string comment)
 {
-   return (StringFind(comment, "GM_HEDGE") >= 0 || StringFind(comment, "GM_HG") >= 0 || IsReverseHedgeComment(comment));
+   return (StringFind(comment, "GM_HEDGE") >= 0 || StringFind(comment, "GM_HG") >= 0 || StringFind(comment, "GM_HD") >= 0 || IsReverseHedgeComment(comment));
+}
+
+// v6.69: Recovery grid comment matcher (legacy GM_HG + new GM_HD)
+bool IsRecoveryGridComment(const string c)
+{
+   return (StringFind(c, "GM_HG") >= 0 || StringFind(c, "GM_HD") >= 0);
+}
+
+// v6.69: Match recovery grid comment to a specific set (by slot idx + bound generation)
+bool IsRecoveryGridForSet(const string c, int idx, int gen)
+{
+   string legacy = "GM_HG" + IntegerToString(idx + 1);
+   if(StringFind(c, legacy) >= 0) return true;        // legacy slot-based
+   string modern = "GM_HD" + IntegerToString(gen) + "_";
+   if(StringFind(c, modern) >= 0) return true;        // v6.69 generation-based
+   return false;
+}
+
+// v6.69: Track a newly opened recovery grid ticket for the set (in-memory + GV persistence)
+void TrackRecoveryGridTicket(int idx, ulong newTicket)
+{
+   if(idx < 0 || idx >= MAX_HEDGE_SETS) return;
+   if(newTicket == 0) return;
+   // dedupe
+   for(int k = 0; k < g_hedgeSets[idx].recoveryGridCount; k++)
+      if(g_hedgeSets[idx].recoveryGridTickets[k] == newTicket) return;
+   int rc = g_hedgeSets[idx].recoveryGridCount;
+   ArrayResize(g_hedgeSets[idx].recoveryGridTickets, rc + 1);
+   g_hedgeSets[idx].recoveryGridTickets[rc] = newTicket;
+   g_hedgeSets[idx].recoveryGridCount = rc + 1;
+   GlobalVariableSet("GME_REC_TK_" + IntegerToString(idx) + "_" + IntegerToString(rc), (double)newTicket);
+}
+
+// v6.69: Drop closed tickets from recoveryGridTickets[] and clean their GVs
+void CompactRecoveryGridTickets(int idx)
+{
+   if(idx < 0 || idx >= MAX_HEDGE_SETS) return;
+   ulong alive[];
+   int aliveCnt = 0;
+   for(int k = 0; k < g_hedgeSets[idx].recoveryGridCount; k++)
+   {
+      ulong tk = g_hedgeSets[idx].recoveryGridTickets[k];
+      if(tk != 0 && PositionSelectByTicket(tk))
+      {
+         ArrayResize(alive, aliveCnt + 1);
+         alive[aliveCnt++] = tk;
+      }
+   }
+   // wipe old GVs
+   for(int k = 0; k < g_hedgeSets[idx].recoveryGridCount; k++)
+   {
+      string gv = "GME_REC_TK_" + IntegerToString(idx) + "_" + IntegerToString(k);
+      if(GlobalVariableCheck(gv)) GlobalVariableDel(gv);
+   }
+   ArrayResize(g_hedgeSets[idx].recoveryGridTickets, aliveCnt);
+   for(int k = 0; k < aliveCnt; k++)
+   {
+      g_hedgeSets[idx].recoveryGridTickets[k] = alive[k];
+      GlobalVariableSet("GME_REC_TK_" + IntegerToString(idx) + "_" + IntegerToString(k), (double)alive[k]);
+   }
+   g_hedgeSets[idx].recoveryGridCount = aliveCnt;
 }
 
 //+------------------------------------------------------------------+
