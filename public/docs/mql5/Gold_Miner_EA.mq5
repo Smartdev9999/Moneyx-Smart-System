@@ -5,8 +5,8 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.65"
-#property description "Gold Miner EA v6.65 - v6.64 + DD Hedge Strict Generation Bind (fix lot inflation: bind/count เฉพาะ gen ปัจจุบัน + audit watchdog)"
+#property version   "6.66"
+#property description "Gold Miner EA v6.66 - v6.65 + Smart Generation Recycling (re-anchor cycleGen เมื่อไม่มี active hedge แม้ orphan ค้าง) + Active Hedge Visibility (dashboard X/Max + log บล็อกชัดเจน)"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -981,7 +981,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.65 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.66 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min");
@@ -1041,7 +1041,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.65 deinitialized");
+   Print("Gold Miner EA v6.66 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -1331,11 +1331,12 @@ void OnTick()
    RefreshNewsData();
 
     // === v6.57: Auto-reset cycle generation when account is fully flat ===
+    // === v6.66: also re-anchor cycleGen when no active hedge but orphans remain ===
     // Catches cases where positions closed by manual / SL / external means and
     // TryResetCycleStateIfFlat was never invoked, leaving comments stuck at GMx.
-    if(g_cycleGeneration > 0 && g_hedgeSetCount == 0 && TotalOrderCount() == 0)
+    if(g_cycleGeneration > 1 && g_hedgeSetCount == 0)
     {
-       TryResetCycleStateIfFlat("OnTick flat-detect");
+       TryResetCycleStateIfFlat("OnTick gen-anchor check");
     }
 
    // === Determine if new orders are blocked (News/Time/Pause) ===
@@ -3937,7 +3938,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.65 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.65 [ZZ]" : "Gold Miner EA v6.65 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.66 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.66 [ZZ]" : "Gold Miner EA v6.66 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -4495,6 +4496,19 @@ void DisplayDashboard()
                     DrawTableRow(row, "Owner Untracked GL",
                                  IntegerToString(g_lastOrphanGLCount) + " order(s) missing Broker TP",
                                  orphanColor, COLOR_SECTION_HEDGE); row++;
+                 }
+                 // v6.66: Active Hedge X/Max — clarifies that GMx counter ≠ hedge cap
+                 {
+                    int activeNow = 0;
+                    for(int hh = 0; hh < MAX_HEDGE_SETS; hh++)
+                       if(g_hedgeSets[hh].active) activeNow++;
+                    color actColor = (activeNow >= InpHedge_MaxSets) ? clrOrangeRed
+                                    : (activeNow > 0) ? clrYellow : clrLime;
+                    string actStr = IntegerToString(activeNow) + " / " + IntegerToString(InpHedge_MaxSets)
+                                  + (activeNow >= InpHedge_MaxSets ? "  (CAP — new hedges blocked)" : "");
+                    DrawTableRow(row, "Active Hedge Sets", actStr, actColor, COLOR_SECTION_HEDGE); row++;
+                    DrawTableRow(row, "Cycle Gen (comment)", "GM" + IntegerToString(g_cycleGeneration)
+                                  + "  (counter only — not a cap)", clrSilver, COLOR_SECTION_HEDGE); row++;
                  }
                  // v6.65: Hedge Set Integrity status
                  {
@@ -8096,26 +8110,50 @@ void SaveBoundTicketsToPrevHedged(int idx)
 //+------------------------------------------------------------------+
 void TryResetCycleStateIfFlat(string reason)
 {
-   if(g_hedgeSetCount > 0) return;  // still have active sets
+   if(g_hedgeSetCount > 0) return;  // still have active sets — never reset
    if(g_cycleGeneration <= 1) return;  // v6.62: GM1 is the base — nothing to reset
 
-   // v6.27: Check if any EA positions still exist
    int remaining = TotalOrderCount();
-   if(remaining > 0)
+
+   // === Case A: account fully flat → full reset to GM1 ===
+   if(remaining == 0)
    {
-      Print("v6.27: Skipping cycle reset (", reason, ") — ", remaining, " positions still open. prevHedged preserved.");
+      g_cycleGeneration = 1;  // v6.62: cycles always restart at GM1
+      SaveCycleGeneration();  // v6.53: persist reset
+      g_hedgeSetCount = 0;
+      ClearPrevHedgedTickets();
+      g_lastHedgeBuyTime = 0;   // v6.39: reset side pause
+      g_lastHedgeSellTime = 0;  // v6.39: reset side pause
+      UpdateDynamicBalanceGuardTarget();  // v6.31: update target immediately when flat
+      Print("v6.66 CYCLE RESET → GM1 — ", reason, " (account flat)");
       return;
    }
 
-   // Truly flat — safe to reset everything
-    g_cycleGeneration = 1;  // v6.62: cycles always restart at GM1
-    SaveCycleGeneration();  // v6.53: persist reset
-    g_hedgeSetCount = 0;
-    ClearPrevHedgedTickets();
-    g_lastHedgeBuyTime = 0;   // v6.39: reset side pause
-    g_lastHedgeSellTime = 0;  // v6.39: reset side pause
-    UpdateDynamicBalanceGuardTarget();  // v6.31: update target immediately when flat
-    Print("v6.62 CYCLE RESET → GM1 — ", reason, " (account flat)");
+   // === Case B (v6.66): no active hedge but orphan orders remain ===
+   // Re-anchor cycleGen to MAX gen of remaining orders so next hedge
+   // doesn't keep climbing GM12/13/14… indefinitely.
+   int maxRemainingGen = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong t = PositionGetTicket(i);
+      if(t == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      string cmt = PositionGetString(POSITION_COMMENT);
+      if(IsHedgeComment(cmt)) continue;  // hedge comments shouldn't drive gen anchor
+      int g = ExtractGeneration(cmt);
+      if(g > maxRemainingGen) maxRemainingGen = g;
+   }
+   int newGen = (maxRemainingGen < 1) ? 1 : maxRemainingGen;
+   if(newGen < g_cycleGeneration)
+   {
+      Print("v6.66 CYCLE RE-ANCHOR: GM", g_cycleGeneration, " → GM", newGen,
+            " (no active hedge, ", remaining, " orphan orders remain) — ", reason);
+      g_cycleGeneration = newGen;
+      SaveCycleGeneration();
+      g_lastHedgeBuyTime = 0;
+      g_lastHedgeSellTime = 0;
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -8484,7 +8522,7 @@ void CheckAndOpenHedge()
       if(g_hedgeSets[h].active) activeSetCount++;
    if(activeSetCount >= InpHedge_MaxSets)
    {
-      Print("HEDGE: Max active sets reached (", activeSetCount, "/", InpHedge_MaxSets, ") - skip");
+      Print("v6.66 HEDGE BLOCKED: Active hedge sets = ", activeSetCount, "/", InpHedge_MaxSets, " (cap reached) → skip new hedge for GM", g_cycleGeneration);
       return;
    }
 
@@ -8734,7 +8772,7 @@ bool OpenDDHedge(ENUM_POSITION_TYPE counterSide, ENUM_POSITION_TYPE hedgeSide, i
       if(g_hedgeSets[h].active) activeSetCount++;
    if(activeSetCount >= InpHedge_MaxSets)
    {
-      Print("DD HEDGE: Max active sets reached (", activeSetCount, "/", InpHedge_MaxSets, ") - skip");
+      Print("v6.66 DD HEDGE BLOCKED: Active hedge sets = ", activeSetCount, "/", InpHedge_MaxSets, " (cap reached) → skip new DD hedge for GM", bindGen);
       return false;
    }
    
