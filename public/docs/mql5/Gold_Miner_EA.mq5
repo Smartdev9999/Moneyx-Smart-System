@@ -8775,13 +8775,31 @@ void ManageHedgeSets()
    
    // v6.15: Reverse Hedge management removed (no ManageReverseHedge / CheckAndOpenReverseHedge)
    
+   // v6.57: Sequential release mode — only oldest active set is allowed to recover
+   int seqOldestIdx = -1;
+   if(InpHedge_SequentialRelease)
+      seqOldestIdx = GetOldestActiveHedgeSetIndex();
+
    for(int h = 0; h < MAX_HEDGE_SETS; h++)
    {
       if(!g_hedgeSets[h].active) continue;
 
       // Refresh bound tickets — remove any that were closed externally
       RefreshBoundTickets(h);
-      
+
+      // v6.57: Sequential gate — freeze every set except the oldest active one
+      //         Hedge order, bound orders and expansion tracking remain intact;
+      //         only matching/avgTP/partial/grid recovery is skipped.
+      bool seqFreeze = (InpHedge_SequentialRelease && seqOldestIdx != -1 && h != seqOldestIdx);
+      if(seqFreeze)
+      {
+         // Still track expansion so set is ready when its turn comes
+         if(!g_hedgeSets[h].seenExpansionSinceHedge && g_squeeze[2].state == 2)
+            g_hedgeSets[h].seenExpansionSinceHedge = true;
+         g_hedgeSets[h].matchingDone = false;  // reset so it re-runs when promoted
+         continue;
+      }
+
       // v6.15: Track expansion on TF index 2 (largest) every tick
       if(!g_hedgeSets[h].seenExpansionSinceHedge)
       {
