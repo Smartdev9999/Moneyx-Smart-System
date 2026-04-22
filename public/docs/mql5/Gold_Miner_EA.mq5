@@ -5,8 +5,8 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.65"
-#property description "Gold Miner EA v6.65 - v6.64 + DD Hedge Strict Generation Bind (fix lot inflation: bind/count เฉพาะ gen ปัจจุบัน + audit watchdog)"
+#property version   "6.66"
+#property description "Gold Miner EA v6.66 - v6.65 + Smart Generation Recycling (re-anchor cycleGen เมื่อไม่มี active hedge แม้ orphan ค้าง) + Active Hedge Visibility (dashboard X/Max + log บล็อกชัดเจน)"
 #property strict
 
 #include <Trade/Trade.mqh>
