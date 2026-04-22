@@ -4184,6 +4184,34 @@ void DisplayDashboard()
    {
       color COLOR_SECTION_HEDGE = C'130,50,180';  // purple for hedge section
       bool anyActive = false;
+
+      // v6.57: Sequential Release status row
+      {
+         int seqOldest = GetOldestActiveHedgeSetIndex();
+         int activeCnt = 0;
+         for(int hc = 0; hc < MAX_HEDGE_SETS; hc++)
+            if(g_hedgeSets[hc].active) activeCnt++;
+         string seqVal;
+         color seqClr;
+         if(InpHedge_SequentialRelease)
+         {
+            if(seqOldest == -1)
+               seqVal = "ON | No active sets";
+            else
+            {
+               int frozen = (activeCnt > 0) ? (activeCnt - 1) : 0;
+               seqVal = "ON | Active: Set#" + IntegerToString(seqOldest + 1) + " (Oldest) | Frozen: " + IntegerToString(frozen);
+            }
+            seqClr = clrGold;
+         }
+         else
+         {
+            seqVal = "OFF | Parallel recovery";
+            seqClr = clrSilver;
+         }
+         DrawTableRow(row, "Seq Release", seqVal, seqClr, COLOR_SECTION_HEDGE); row++;
+      }
+
       for(int h = 0; h < MAX_HEDGE_SETS; h++)
       {
          if(g_hedgeSets[h].active)
