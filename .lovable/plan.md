@@ -1,130 +1,130 @@
 
 
-## v6.61 — Matching Close ให้ตรง Concept: Shred ทั้ง 2 ทิศ + Recovery Seed จากผลรวม
+## v6.62 — เริ่ม Comment ที่ GM1 + ผูก Hedge ตามรุ่น Bound (GM_Hedge_D{gen})
 
-### สรุปการตรวจสอบ Logic ปัจจุบัน vs Concept ของคุณ
+### สรุปการเปลี่ยนชื่อ Comment
 
-ผมเทียบไฟล์ `public/docs/mql5/Gold_Miner_EA.mq5` กับ concept ที่อธิบายมา พบว่า **โครง sequential queue (v6.59/v6.60) ถูกต้องแล้ว** แต่ **กลไกการปิดออเดอร์จริงยังผิดเพี้ยน 4 จุดหลัก**:
+ระบบเดิม (v6.61):
+- รุ่นแรกใช้ `GM_INIT`, `GM_GL#1`, ... → รุ่นถัดไปจึงเป็น `GM1_`, `GM2_`
+- Hedge ใช้เลข **slot index** (`GM_HEDGE_1`, `GM_HEDGE_D2`) → ไม่ผูกกับรุ่นของ bound group
 
-| # | Concept ของคุณ | โค้ดปัจจุบัน | สถานะ |
-|---|---|---|---|
-| 1 | ฝั่งที่กำไร (Buy 10 ออเดอร์) ใช้กำไรตัวเองมา **ซอยปิด Sell Hedge ทีละส่วน** จนเหลือ Hedge เล็กๆ | `ManageHedgePartialClose()` v6.55 ถูกปิดการทำงาน (`return;` ทันที) → ไม่มีการซอย hedge เลย | ❌ ผิด |
-| 2 | Hedge ทำกำไร (Sell ทำกำไร) → ใช้กำไร hedge **ซอยปิด Buy ที่ขาดทุนเก่าสุดให้ได้มากที่สุด** เหลือ Buy ที่ขาดทุนน้อย → ไปต่อด้วย GL ปกติ | `ManageHedgeMatchingClose()` ปิด hedge เต็มจำนวน + **ปล่อย bound losers ทั้งหมด** เป็น recovery (ไม่ปิดเลย) | ❌ ผิด |
-| 3 | หลัง shred แล้ว ส่วนที่เหลือจะถูก **ลบ comment hedge** กลายเป็น seed ของ recovery grid ใหม่ | ไม่มี logic strip comment / ไม่มี seed จาก hedge remainder | ❌ ขาด |
-| 4 | Recovery grid เริ่มจาก lot ≈ **ผลรวมสะสมของ initial+GL ทั้งชุด** (เช่น 0.05+0.07+...+0.38 ≈ 1.21 → seed ≈ 0.38 ที่ใกล้ 1 ที่สุด) | `ComputeRecoveryGridLot()` ใช้ `FindMaxLotOrphan()` = **lot เดี่ยวที่ใหญ่สุด** (0.38) ซึ่งบังเอิญใกล้เคียงในตัวอย่างนี้ แต่ตรรกะไม่ตรง spec | ⚠️ ใกล้เคียงแต่ผิด |
-| 5 | Sequential: ปิด GM ทั้งชุดก่อน → ค่อยทำ GM1 → GM2 | v6.59/v6.60 lock owner ตามรุ่น + นับเฉพาะ order ของรุ่นนั้น | ✅ ถูกแล้ว |
-| 6 | Avg TP ของชุดที่เหลือ = ค่าเฉลี่ยถ่วงน้ำหนัก hedge_remainder + recovery_grid + bound losers ที่เหลือ → TP ห่าง 500 จุด | `ManageHedgeBoundAvgTP()` คิด avg เฉพาะ bound side ของรุ่นนั้น แต่ **ไม่รวม hedge remainder ที่ถูก strip comment** | ⚠️ ต้องขยาย |
+ระบบใหม่ (v6.62) — ตามที่คุณต้องการ:
+- รุ่นแรกใช้ **`GM1_INIT`**, `GM1_GL#1`, ...  → ถัดไป `GM2_`, `GM3_`, ...
+- Hedge ผูกกับรุ่นของ bound group:  
+  - บล็อก `GM1` → `GM_Hedge_D1` (DD trigger) / `GM_Hedge_E1` (Expansion trigger)  
+  - บล็อก `GM2` → `GM_Hedge_D2` / `GM_Hedge_E2`  
+  - ฯลฯ
+- เมื่อปิดออเดอร์ทั้งหมด → reset กลับไปเริ่มที่ **GM1** วนซ้ำ (ไม่ใช่ GM)
 
-### แผนแก้ไข `public/docs/mql5/Gold_Miner_EA.mq5` → v6.61
-
-#### 1) Version bump → v6.61 (header / property / dashboard / log)
-
-#### 2) เพิ่ม input parameters ใหม่ (Recovery Shred & Seed)
-
-```cpp
-input bool   InpHedge_ShredOnMatch        = true;   // Shred hedge proportionally (not full close)
-input double InpHedge_ShredMinNetProfit   = 1.0;    // Min net profit ($) after shred
-input double InpRecovery_SeedTargetLots   = 1.0;    // Target cumulative lots for seed selection
-input bool   InpRecovery_StripHedgeComment = true;  // Strip GM_HEDGE_* comment on remainder
-```
-
-#### 3) เขียน `ManageHedgeMatchingClose()` ใหม่ (Hedge Profit Path) — Shred bound losers
-แทนการ "ปล่อย bound ทั้งหมดเป็น recovery":
-
-- คำนวณ `budget = hedgeProfit + reverseProfit - InpHedge_MatchMinProfit`
-- สแกน bound ที่ขาดทุน **เก่าสุดก่อน** (มีอยู่แล้ว)
-- ปิดเป็นชุดตราบที่ `cumLoss ≤ budget` (มีอยู่แล้ว) — **คงเดิม**
-- **เพิ่ม:** หากปิด bound losers ได้บางส่วน แต่ยังเหลือ bound อื่น → เก็บ bound ที่เหลือเป็น recovery กลุ่มใหม่ (ไม่ใช่ปล่อยทั้งหมด)
-- ปิด hedge เต็มจำนวน (เหมือนเดิม) + ตั้ง sequential owner = `boundGeneration`
-
-#### 4) เปิดใช้ `ManageHedgePartialClose()` ใหม่ (Bound Profit Path) — Shred hedge
-
-แทน `return;` ของ v6.55 ให้:
-
-- คำนวณ `boundProfit = ผลรวมกำไรของ bound orders ฝั่ง counterSide ทั้งหมดของ set นี้`
-- ถ้า `boundProfit > 0` และ `hedgePnL < 0`:
-  - คำนวณ `hedgeLossPerLot = |hedgePnL| / hedgeLots`
-  - `closeLots = (boundProfit - InpHedge_ShredMinNetProfit) / hedgeLossPerLot` (normalize ตาม lot step)
-  - **ปิดบางส่วนของ hedge** ผ่าน `trade.PositionClosePartial(hedgeTicket, closeLots)`
-  - ปิด **bound profit-takers เก่าสุดก่อน** จนใช้กำไรหมดตาม budget
-  - อัปเดต `g_hedgeSets[idx].hedgeLots -= closeLots`
-- ถ้า `closeLots ≥ hedgeLots` → ปิด hedge หมด + release bound เหลือเป็น recovery + ตั้ง owner
-
-#### 5) Strip Comment + Re-bind เป็น Recovery Seed
-เพิ่มขั้นตอนหลัง shred:
-
-- หลัง partial close hedge ถ้า remainder lot > 0 → เปลี่ยน comment ของ hedge ticket จาก `GM_HEDGE_n` เป็น `GM[gen]_RECOV_SEED` (ใช้ `trade.PositionModify` ไม่ได้แก้ comment ตรงๆ ใน MT5 → ทำแบบ logical: เก็บใน array `g_recoverySeedTickets[]` แล้ว exclude จาก hedge accounting + include ใน orphan-recovery accounting แทน)
-- ในรอบ tick ถัดไป `ScanOrphanGenerations()` จะเห็น recovery seed นี้เป็น order ของรุ่น `gen` → `ManageOrphanGrid()` ใช้เป็น seed สำหรับ GL grid
-
-#### 6) แก้ `ComputeRecoveryGridLot()` ให้ใช้ "Cumulative Sum Seed"
-ตามตัวอย่างของคุณ: 0.05+0.07+0.10+0.14+0.196+0.274+0.38 = 1.21 → seed ที่ใกล้ `InpRecovery_SeedTargetLots` (1.0) ที่สุดคือ 0.38
-
-เพิ่ม helper:
-```cpp
-double FindCumulativeSeedLot(int gen, ENUM_POSITION_TYPE side, double targetLots)
-{
-   // sum lots ของ order ทุกตัวฝั่งนั้นของ gen นี้ (รวม recovery seed ที่ strip comment แล้ว)
-   // ไล่จาก initial → GL#max หา lot ที่ทำให้ cumulative ≤ targetLots ก่อนเกิน
-   // คืนค่า lot ของ level ที่ใกล้เคียงเกณฑ์
-}
-```
-
-ใช้ใน `ManageOrphanGrid()` แทน `FindMaxLotOrphan()` ทั้ง 2 จุด (Buy/Sell side)
-
-#### 7) ขยาย `ManageHedgeBoundAvgTP()` ให้รวม Recovery Seed + Recovery Grid
-คำนวณ weighted avg ครอบคลุม:
-- Bound losers ที่เหลือ
-- Recovery seed (hedge remainder ที่ strip comment)
-- Recovery grid orders (`GM[gen]_GL#`)
-
-แล้ว TP = avg ± `InpHedge_BoundAvgTPPoints` → ปิดทุกตัวพร้อมกัน → owner clear → tick ถัดไป H2 ปลด
-
-#### 8) Ticket Tracking Array (Anti-skip Guarantee)
-เพิ่ม global:
-```cpp
-struct RecoverySetTracker {
-   int       generation;
-   ulong     tickets[];      // all tickets belonging to this recovery set (seed + bound + grid)
-   int       sourceHedgeIdx; // origin H#
-   bool      complete;
-};
-RecoverySetTracker g_recoverySets[];
-```
-
-หน้าที่: ทุก scenario ที่ปิด/ปลด hedge → push tickets ที่เกี่ยวข้องเข้า `g_recoverySets[gen]` → `IsSequentialRecoveryComplete()` ใช้ track นี้เช็คให้ตรง 100% (ไม่อิง prefix scan อย่างเดียว) → กันออเดอร์ตกหล่น/ข้ามรุ่น
-
-#### 9) Dashboard เพิ่มบรรทัด
-
-```text
-Recovery Set | Gen0 | Seed: 0.38 | Bound: 4 | Grid: 2 | AvgTP: 1923.45
-Shred Status | Hedge 2.00→0.85 lots | Saved: $87.30
-Queue        | GM(active) → GM1(wait) → GM2(wait)
-```
-
-#### 10) Log เพิ่มจุดสำคัญ
-- `v6.61 SHRED HEDGE: Set#1 closed 1.15/2.00 lots, kept 0.85 as recovery seed`
-- `v6.61 SHRED BOUND: Set#1 closed 6/10 bound losers via hedge profit, 4 remain`
-- `v6.61 RECOVERY SEED: Gen0 seed=0.38 (cum=1.21 target=1.00)`
+ตัวเลขท้าย Hedge = **boundGeneration ของกลุ่มนั้น**, ไม่ใช่ slot index → ไม่สับสน ไม่เปิดซ้อน
 
 ---
 
-### สิ่งที่ไม่เปลี่ยนแปลง (ตามกฎเหล็ก)
+### จุดที่ต้องแก้ใน `public/docs/mql5/Gold_Miner_EA.mq5`
 
-- `trade.Buy / trade.Sell / trade.PositionClose` core calls — ไม่แก้
-- Trading Strategy (SMA/EMA/Squeeze entry) — ไม่แก้
-- Hedge **trigger** logic (Expansion / DD% / Dollar) — ไม่แก้
+#### 1) Version bump → v6.62 (header / `#property` / dashboard / log)
+
+#### 2) เปลี่ยน base generation จาก 0 → 1
+
+| ฟังก์ชัน / ตัวแปร | เดิม | ใหม่ |
+|---|---|---|
+| `g_cycleGeneration` ค่าเริ่มต้น | `0` | `1` |
+| `GenPrefix(0)` | `"GM"` | (ไม่ใช้แล้ว) |
+| `GenPrefix(gen)` ทุกค่า | `gen==0?"GM":"GM"+gen` | `"GM" + IntegerToString(gen)` (เริ่มที่ 1 เสมอ) |
+| `GetCommentPrefix()` | คืน `"GM"` ตอน gen=0 | คืน `"GM"+gen` เสมอ (ขั้นต่ำ GM1) |
+| `ExtractGeneration("GM_...")` (legacy) | คืน 0 | คงไว้เพื่อ backward-compat อ่าน order เก่าได้ — แต่ไม่ใช้สร้างใหม่ |
+| `TryResetCycleStateIfFlat()` | ตั้ง `g_cycleGeneration = 0` | ตั้ง `g_cycleGeneration = 1` |
+| `RecoverHedgeSets()` flat-branch | reset เป็น 0 | reset เป็น 1 |
+| `LoadCycleGeneration()` ตอนยังไม่มีค่า | `-1` | คงเดิม แต่หลัง init ถ้า ≤0 ให้ปรับเป็น 1 |
+| `g_cycleGeneration++` (2 จุดในฟังก์ชันเปิด hedge) | คงเดิม | คงเดิม (ตอนนี้จะเริ่มจาก 1 → 2 → 3) |
+
+#### 3) เปลี่ยน Hedge Comment ให้ผูกกับ bound generation
+
+ที่ `OpenHedge()` (บรรทัด ~8273) และ `OpenDDHedge()` (บรรทัด ~8520):
+
+```cpp
+// เดิม: string comment = "GM_HEDGE_"  + IntegerToString(slot + 1);
+// เดิม: string comment = "GM_HEDGE_D" + IntegerToString(slot + 1);
+
+// ใหม่ v6.62: ผูกกับ bound generation (= g_cycleGeneration ปัจจุบัน ก่อน ++)
+int bindGenForComment = g_cycleGeneration;  // จะกลายเป็น boundGeneration ของ set นี้
+string comment = "GM_Hedge_E" + IntegerToString(bindGenForComment);  // Expansion trigger
+// หรือ
+string comment = "GM_Hedge_D" + IntegerToString(bindGenForComment);  // DD trigger
+```
+
+→ ผลลัพธ์: บล็อก `GM1_*` ถูกล็อกด้วย `GM_Hedge_D1` หรือ `GM_Hedge_E1` เท่านั้น  
+→ บล็อก `GM2_*` ถูกล็อกด้วย `GM_Hedge_D2` หรือ `GM_Hedge_E2` ฯลฯ
+
+#### 4) อัปเดต `IsHedgeComment()` ให้รับชื่อใหม่และเก่า (backward-compat)
+
+```cpp
+bool IsHedgeComment(string comment) {
+   return (StringFind(comment, "GM_Hedge_")  >= 0   // v6.62 ใหม่ (E/D + gen)
+        || StringFind(comment, "GM_HEDGE")   >= 0   // legacy v6.61
+        || StringFind(comment, "GM_HG")      >= 0
+        || IsReverseHedgeComment(comment));
+}
+```
+
+#### 5) อัปเดต `RecoverHedgeSets()` (~บรรทัด 8685–8723)
+
+เพิ่ม pattern ใหม่ในการสแกน:
+- เดิม: `GM_HEDGE_<slot>` / `GM_HEDGE_D<slot>`
+- เพิ่ม: `GM_Hedge_E<gen>` / `GM_Hedge_D<gen>` (v6.62)
+
+วิธี recover slot/boundGeneration จาก comment ใหม่:
+- ดึงตัวเลขท้าย → คือ **boundGeneration**
+- หา free slot ปกติ → bind boundGeneration ไปยัง slot นั้น
+- triggerType: `E` → 0 (Expansion), `D` → 1 (DD)
+
+#### 6) อัปเดตจุดที่กรอง/นับ generation
+
+`CountSequentialOwnerOrders()` (~7517) และทุกจุดที่ทำ:
+```cpp
+string genPrefix = (gen == 0) ? "GM_" : ("GM" + IntegerToString(gen) + "_");
+```
+→ เปลี่ยนเป็น:
+```cpp
+string genPrefix = "GM" + IntegerToString(gen) + "_";  // v6.62: เริ่มที่ GM1 เสมอ
+```
+(ลบ branch `gen==0` ออก เพราะไม่มีรุ่น 0 อีกต่อไป)
+
+ใน `ExtractGeneration()` คงไว้ตามเดิม → ยังอ่าน `GM_INIT` ของออเดอร์เก่าได้ (คืนค่า 0) → ระบบ recovery ของ generation 0 ที่ค้างจาก v6.61 จะยังถูกจัดการครบก่อน reset
+
+#### 7) Dashboard / Log
+
+- Dashboard แสดง: `Active Cycle: GM1` (แทน `GM`)
+- Log เปลี่ยนข้อความ:
+  - `v6.62 INIT: Cycle generation starts at GM1`
+  - `v6.62 HEDGE OPEN: GM_Hedge_D2 bound to GM2 group (slot=1)`
+  - `v6.62 RESET: Account flat → cycleGen back to 1 (GM1)`
+
+#### 8) Migration เคสมีออเดอร์เก่า `GM_*` ค้างอยู่
+
+- ถ้า `RecoverHedgeSets()` พบ `GM_INIT` ออเดอร์เก่า (gen 0) → set `g_cycleGeneration = max(1, recoveredMaxGen)` (กันไม่ให้เริ่มที่ 0 อีก)
+- ระหว่างที่ออเดอร์ gen 0 ยังมีอยู่ ระบบ orphan recovery + sequential owner v6.59/v6.60 จะจัดการให้ปิดครบก่อน
+- เมื่อ flat → reset → รุ่นถัดไปเริ่ม `GM1` ตามปกติ
+
+---
+
+### สิ่งที่ไม่เปลี่ยนแปลง (กฎเหล็ก)
+
+- `trade.Buy / trade.Sell / trade.PositionClose / PositionClosePartial` — ไม่แก้
+- Trading strategy, signal, grid logic, TP/SL — ไม่แก้
 - `IsHedgeCloseAllowed()` Triple Gate — ไม่แก้
-- Sequential Owner Lock v6.59/v6.60 — **คงไว้** (กลไกถูกแล้ว)
-- `IsPrevHedgedTicket()` v6.58 / BB Filter v6.56 — ไม่แก้
-- News / License / Time Filter / Data Sync — ไม่แก้
-- Balance Guard / Max DD% — ไม่แก้
-- v6.37–v6.60 features นอกเหนือจากที่ระบุ — ไม่แก้
+- Sequential owner lock v6.59/v6.60 — ไม่แก้ (แค่ปรับ prefix string)
+- Shred/Match/Partial close v6.61 — ไม่แก้ logic, ปรับเฉพาะการอ่าน comment
+- Recovery seed registry v6.61 — ไม่แก้
+- BB filter v6.56 / IsPrevHedgedTicket v6.58 — ไม่แก้
+- License / News / Time filter / Sync — ไม่แก้
 
 ### ผลลัพธ์ที่คาดหวัง
 
-1. **Buy 10 ขาดทุน + Sell Hedge กำไร** → shred Buy เก่าสุด 6-7 ตัว → เหลือ Buy 3-4 ตัวที่ขาดทุนน้อย + ปิด hedge เต็ม → recovery grid ทำต่อด้วย GL#11 ใช้ seed จาก cumulative
-2. **Buy 10 กำไร + Sell Hedge ขาดทุน** → shred Sell hedge จาก 2.0 → 0.85 lots → Sell remainder strip comment → กลายเป็น recovery seed → recovery grid เปิด GL ฝั่ง Sell ต่อจาก seed
-3. **Avg TP** คำนวณจากทั้งชุด (seed + bound + grid) → ปิดพร้อมกันที่ 500 จุด
-4. **Sequential** ทำงาน GM ปิดหมด → GM1 → GM2 ทีละชุดแน่นอน (track ด้วย ticket array)
-5. ไม่มีออเดอร์ข้ามรุ่นหรือตกหล่น เพราะมี `g_recoverySets[]` tracker
+1. ออเดอร์ใหม่หลัง init / reset เริ่มต้นที่ `GM1_INIT`, `GM1_GL#1`, ...
+2. เมื่อเปิด hedge ของบล็อก GM1 → comment = `GM_Hedge_D1` หรือ `GM_Hedge_E1`
+3. ออเดอร์รุ่นถัดไปคือ `GM2_*` พร้อม hedge ของมันเองคือ `GM_Hedge_D2`
+4. ไม่มีกรณี `GM_Hedge_*` ตัวเดียวกันถูกมอง bind ผิดบล็อก เพราะเลขท้าย = bound generation จริง
+5. ปิดออเดอร์ครบทั้งหมด → reset → รอบใหม่เริ่มที่ `GM1` วนซ้ำตามที่กำหนด
+6. ออเดอร์เก่า `GM_*` (ถ้ามีค้าง) ยังถูกจัดการครบก่อน reset (backward-compat)
 
