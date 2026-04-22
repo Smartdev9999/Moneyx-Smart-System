@@ -1,8 +1,8 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.69 - MTF ZigZag+CDC+Grid+License |
-//|         v6.69: RecoveryNewCandle + GM_HD<gen>_<NN> + TicketBind  |
+//|                Gold Miner EA v6.70 - MTF ZigZag+CDC+Grid+License |
+//|  v6.70: GM1-Start + ImmediateRecoveryTP + HardFlatReset (GM_HD)  |
 //+------------------------------------------------------------------+
 #property copyright "Money X System"
 #property link      ""
