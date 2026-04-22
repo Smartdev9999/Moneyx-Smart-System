@@ -1456,6 +1456,9 @@ void OnTick()
       }
       ManageOrphanGrid();
    }
+   // v6.61: Prune recovery seeds + check unified avg TP for current owner
+   PruneRecoverySeeds();
+   ManageRecoveryOwnerAvgTP();
 
    // === ORIGINAL TRADING LOGIC (unchanged) ===
    if(g_eaStopped) return;
