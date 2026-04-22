@@ -8069,9 +8069,7 @@ void SyncRecoveryBasketTP(int idx)
       prices[cnt]  = PositionGetDouble(POSITION_PRICE_OPEN);
       lots[cnt]    = PositionGetDouble(POSITION_VOLUME);
       cnt++;
-   }
-
-   // 2) Add recovery grid (comment-based: legacy GM_HG + new GM_HD) on hedgeSide
+      fromHedge++;
    int gen = g_hedgeSets[idx].boundGeneration;
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
