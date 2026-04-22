@@ -8683,6 +8683,150 @@ void ScanOrphanGenerations()
 }
 
 //+------------------------------------------------------------------+
+//| v6.64: Profit-Loss Netting within a single generation             |
+//|   Scans bound positions of `gen` (excludes hedge tickets), then    |
+//|   uses profit pool to "shred" oldest losses. Locks profit-only.    |
+//|   - Respects InpHedge_UseMatchingClose master toggle               |
+//|   - Uses InpHedge_MatchMinProfit as required net buffer            |
+//|   - Only operates when gen == g_seqAllowedGen (sequential mode)    |
+//+------------------------------------------------------------------+
+void RunBoundProfitLossNetting(int gen)
+{
+   if(gen < 0) return;
+   if(!InpHedge_UseMatchingClose) return;
+   if(InpHedge_SequentialRelease && g_seqAllowedGen != -1 && gen != g_seqAllowedGen) return;
+
+   // Collect bound positions of this generation (skip hedge comments)
+   ulong   profitTk[];   double profitPL[];
+   ulong   lossTk[];     double lossPL[];   datetime lossTime[];
+   int pCnt = 0, lCnt = 0;
+
+   int total = PositionsTotal();
+   for(int i = 0; i < total; i++)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0) continue;
+      if(!PositionSelectByTicket(tk)) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+
+      string c = PositionGetString(POSITION_COMMENT);
+      // Skip hedge tickets — handled by hedge logic
+      if(StringFind(c, "GM_HEDGE_") == 0) continue;
+
+      int pgen = ParseGenerationFromComment(c);
+      if(pgen != gen) continue;
+
+      double pnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+      datetime ot = (datetime)PositionGetInteger(POSITION_TIME);
+
+      if(pnl > 0)
+      {
+         ArrayResize(profitTk, pCnt + 1);
+         ArrayResize(profitPL, pCnt + 1);
+         profitTk[pCnt] = tk;
+         profitPL[pCnt] = pnl;
+         pCnt++;
+      }
+      else if(pnl < 0)
+      {
+         ArrayResize(lossTk, lCnt + 1);
+         ArrayResize(lossPL, lCnt + 1);
+         ArrayResize(lossTime, lCnt + 1);
+         lossTk[lCnt]   = tk;
+         lossPL[lCnt]   = pnl;
+         lossTime[lCnt] = ot;
+         lCnt++;
+      }
+   }
+
+   if(pCnt == 0) return;  // no profit pool
+
+   double totalProfit = 0;
+   for(int i = 0; i < pCnt; i++) totalProfit += profitPL[i];
+
+   double budget = totalProfit - InpHedge_MatchMinProfit;
+   if(budget <= 0)
+   {
+      // Not enough profit to absorb min-profit buffer; do not lock either
+      return;
+   }
+
+   // Sort losses oldest first (selection sort — small N)
+   for(int i = 0; i < lCnt - 1; i++)
+   {
+      int minIdx = i;
+      for(int j = i + 1; j < lCnt; j++)
+         if(lossTime[j] < lossTime[minIdx]) minIdx = j;
+      if(minIdx != i)
+      {
+         datetime tt = lossTime[i]; lossTime[i] = lossTime[minIdx]; lossTime[minIdx] = tt;
+         ulong    tk = lossTk[i];   lossTk[i]   = lossTk[minIdx];   lossTk[minIdx]   = tk;
+         double   pl = lossPL[i];   lossPL[i]   = lossPL[minIdx];   lossPL[minIdx]   = pl;
+      }
+   }
+
+   // Greedy match: pick losses whose cumulative |loss| fits the budget
+   int matchedLossIdx[];
+   int mCnt = 0;
+   double cumLoss = 0;
+   for(int i = 0; i < lCnt; i++)
+   {
+      double absLoss = -lossPL[i];
+      if(cumLoss + absLoss <= budget)
+      {
+         ArrayResize(matchedLossIdx, mCnt + 1);
+         matchedLossIdx[mCnt] = i;
+         mCnt++;
+         cumLoss += absLoss;
+      }
+   }
+
+   // Decision: profit + matched losses, OR profit-only lock
+   if(mCnt > 0)
+   {
+      // Close all profit + matched losses
+      double netClosed = totalProfit - cumLoss;
+      int closedP = 0, closedL = 0;
+      for(int i = 0; i < pCnt; i++)
+      {
+         if(trade.PositionClose(profitTk[i])) closedP++;
+         Sleep(50);
+      }
+      for(int i = 0; i < mCnt; i++)
+      {
+         if(trade.PositionClose(lossTk[matchedLossIdx[i]])) closedL++;
+         Sleep(50);
+      }
+      g_nettingLastGen            = gen;
+      g_nettingLastProfitsClosed  = closedP;
+      g_nettingLastLossesClosed   = closedL;
+      g_nettingLastNet            = netClosed;
+      g_nettingLastTime           = TimeCurrent();
+      Print("NETTING Gen", gen, ": closed ", closedP, "P + ", closedL, "L | net=$",
+            DoubleToString(netClosed, 2), " budget=$", DoubleToString(budget, 2));
+   }
+   else if(lCnt == 0)
+   {
+      // Profit-only lock: no losses at all in this gen → close all profits
+      int closedP = 0;
+      for(int i = 0; i < pCnt; i++)
+      {
+         if(trade.PositionClose(profitTk[i])) closedP++;
+         Sleep(50);
+      }
+      g_nettingLastGen            = gen;
+      g_nettingLastProfitsClosed  = closedP;
+      g_nettingLastLossesClosed   = 0;
+      g_nettingLastNet            = totalProfit;
+      g_nettingLastTime           = TimeCurrent();
+      Print("NETTING Gen", gen, ": profit-only close ", closedP, "P | locked $",
+            DoubleToString(totalProfit, 2));
+   }
+   // Else: there are losses but none fit budget → do nothing (wait for more profit / orphan grid)
+}
+
+//+------------------------------------------------------------------+
 //| Manage orphan grid — open recovery grid orders for orphan gens     |
 //+------------------------------------------------------------------+
 void ManageOrphanGrid()
