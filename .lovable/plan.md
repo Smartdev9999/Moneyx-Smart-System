@@ -1,194 +1,142 @@
 
-## v6.70 — Recovery TP Sync Fix + Start Comments at GM1 + Hard Flat Reset
 
-### ปัญหาที่ต้องแก้จากรอบนี้
+## v6.71 — Hedge MinSpacing (minutes) + Recovery Close Mode (Matching vs AvgTP) + Fix Duplicate Hedge Spam
 
-1. **Recovery orders ไม่ถูกเอาเข้าคำนวณ Avg TP / ไม่ได้ broker TP**
-   - จากภาพ: main hedge มี TP แต่ `GM_HD9_01..04` ยังเป็น `T/P = 0.00`
-   - ในโค้ดตอนนี้ `SyncRecoveryBasketTP()` ถูกเรียกจาก flow หลักหลัง matching เท่านั้น แต่ **ตอนเปิด recovery order ใหม่ใน `ManageHedgeGridMode()` ยังไม่ได้ sync TP ทันที**
-   - ทำให้มีช่วงที่ recovery order ถูกเปิดแล้ว แต่ยังไม่ถูก modify TP หรือบาง set หลุดจากจังหวะ sync
+### ปัญหาที่ต้องแก้
 
-2. **ชื่อ comment เริ่มที่ `GM` ทำให้อ่านยาก**
-   - ตอนนี้ generation แรกยังเป็น `GM`
-   - ต้องการให้ **รอบแรกเริ่มที่ `GM1`** เพื่อให้ map ง่าย:
-     - `GM1_INIT`
-     - `GM_HEDGE_1` ผูกกับ `GM1`
-     - `GM_HD1_01` ผูกกับ `GM1`
+1. **Hedge ออกซ้ำรัวๆ** (image-912)
+   - `GM_HEDGE_7` (tk 2751, 2026.02.05 01:10) → `GM_HEDGE_8` (tk 2770, 01:21) ห่างกันแค่ 11 นาที, lot ขนาดใหญ่ (0.36, 0.05) ทยอยเปิด
+   - สาเหตุ: Squeeze Expansion trigger (`CheckAndOpenHedge`) **ไม่มี cooldown** เลย — มีเฉพาะ DD mode ที่ใช้ `InpHedge_DDCooldownSec`. พอ expansion bar ค้างหลายแท่งและ `g_cycleGeneration` ขยับ → trigger ใหม่ทันที
+   - และไม่มี gate ระหว่างชุด hedge (set#1 → set#2) ที่เป็น **นาที** ตามที่ user ขอ
 
-3. **เวลาบัญชีไม่มีออเดอร์แล้ว ระบบยังไม่ reset กลับไปเริ่มที่ GM1**
-   - ตอนนี้ `g_cycleGeneration` ยังมีโอกาสค้างและนับต่อ
-   - ต้องทำให้เมื่อ **flat จริงทั้งบัญชี** ระบบ reset state ทั้งหมดและรอบใหม่กลับไป `GM1`
+2. **ต้องการ "เวลาขั้นต่ำระหว่าง Hedge ชุด" เป็นนาที**
+   - หลัง hedge ชุดที่ 1 เปิด → ปล่อยให้ราคาวิ่งสักพัก → ค่อยอนุญาตชุดที่ 2 (กัน fault signal)
+   - ใช้กับทุก trigger mode (Expansion / DD% / DD$)
+
+3. **Recovery หลังปลดล็อค hedge ยังเป็น matching close ผสมกับ recovery grid**
+   - ตอนนี้ recovery grid เปิดใหม่ไปด้วย แต่ flow matching ยังพยายาม "ซอยปิด" hedge/bound ที่เหลือต่อด้วย profit ของ recovery → สับสน
+   - User ต้องการ **เลือกได้** ว่าหลัง hedge unlock แล้วจะใช้:
+     - **MATCHING_CLOSE** (เดิม) — recovery profit ใช้ซอยปิดทีละไม้
+     - **AVERAGE_TP** (ใหม่) — รวม `bound + hedge ที่เหลือ + recovery grid` → คำนวณ weighted avg → ตั้ง broker TP ห่างจาก avg N points (parameter ใหม่) ให้ **ทุกตั๋วในตะกร้า** แล้วรอปิดพร้อมกันที่ broker
 
 ---
 
 ## แผนแก้ไข — `public/docs/mql5/Gold_Miner_EA.mq5`
 
-### 1) Version bump → v6.70
-อัปเดต:
-- `#property version`
-- `#property description`
-- header comment
-- init/deinit log
-- dashboard label
+### 1) Version bump → v6.71
+อัปเดต `#property version`, description, header, init log, dashboard label
 
-### 2) แยก “internal generation” ออกจาก “comment label”
-คง internal index เดิมเพื่อไม่กระทบ logic/set array แต่เปลี่ยน **label ที่ user เห็น** เป็นเริ่มจาก 1
-
-เพิ่ม helper ใหม่ เช่น:
+### 2) Input ใหม่ 3 ตัว (กลุ่ม Counter-Trend Hedging)
 ```cpp
-int GenLabel(int gen) { return gen + 1; }
-string GenPrefixLabel(int gen) { return "GM" + IntegerToString(GenLabel(gen)); }
-string GetCommentPrefix() { return GenPrefixLabel(g_cycleGeneration); }
+input int    InpHedge_MinSpacingMin       = 30;   // v6.71: Min minutes between hedge sets (0=Off)
+input ENUM_RECOVERY_CLOSE_MODE InpRecovery_CloseMode = RECOVERY_CLOSE_MATCHING; // v6.71
+input int    InpRecovery_AvgTPDistance    = 500;  // v6.71: Avg TP distance points (AVERAGE_TP mode)
 ```
 
-แล้วเปลี่ยนจุดสร้าง comment ให้ใช้ label ใหม่:
-- `GM_INIT` → `GM1_INIT`
-- `GM1_INIT` เดิม → `GM2_INIT`
-- recovery comment:
-  - `GM_HD<boundGen+1>_<NN>`
-- orphan generation label / dashboard / logs ใช้แบบเดียวกัน
-
-### 3) Backward-compatible parser สำหรับ comment เก่าและใหม่
-แก้ `ExtractGeneration()` ให้รองรับทั้ง:
-- legacy: `GM_INIT`, `GM_GL#1` → internal gen `0`
-- new: `GM1_INIT`, `GM1_GL#1` → internal gen `0`
-- `GM2_*` → internal gen `1`
-
-ผลคือ:
-- order เก่าที่ยังลอยอยู่ยังอ่านได้
-- order ใหม่หลังอัปเดตจะเริ่มที่ `GM1`
-
-### 4) Fix Recovery comment mapping ให้ตรงกับ GM1-based label
-ตอนนี้ `GM_HD<gen>_<NN>` ยังอิงเลข internal อยู่  
-ปรับเป็น:
+Enum ใหม่:
 ```cpp
-string comment = "GM_HD" + IntegerToString(g_hedgeSets[idx].boundGeneration + 1) + "_"
-               + StringFormat("%02d", currentGridCount + 1);
+enum ENUM_RECOVERY_CLOSE_MODE {
+   RECOVERY_CLOSE_MATCHING = 0,  // Matching Close (current behavior)
+   RECOVERY_CLOSE_AVG_TP   = 1   // Weighted Avg TP across bound+hedge+recovery
+};
 ```
 
-และ matcher:
+### 3) Fix Hedge Spam — เพิ่ม MinSpacing gate ทุก trigger
+Global tracker ใหม่:
 ```cpp
-bool IsRecoveryGridForSet(const string c, int idx, int gen)
+datetime g_lastHedgeOpenTime = 0;   // v6.71: last time ANY hedge set opened
+```
+
+ใน `CheckAndOpenHedge()` (Expansion) — ก่อน `FindGenerationHedgeSlot`:
+```cpp
+if(InpHedge_MinSpacingMin > 0 && g_lastHedgeOpenTime > 0)
 {
-   if(StringFind(c, "GM_HG" + IntegerToString(idx + 1)) >= 0) return true; // legacy
-   if(StringFind(c, "GM_HD" + IntegerToString(gen + 1) + "_") >= 0) return true; // new label
-   return false;
+   int elapsedSec = (int)(TimeCurrent() - g_lastHedgeOpenTime);
+   int requiredSec = InpHedge_MinSpacingMin * 60;
+   if(elapsedSec < requiredSec)
+   {
+      static datetime s_lastSpaceLog = 0;
+      if(TimeCurrent() - s_lastSpaceLog >= 60)
+      {
+         Print("v6.71 HEDGE SPACING: wait ", (requiredSec - elapsedSec)/60, "m more");
+         s_lastSpaceLog = TimeCurrent();
+      }
+      return;
+   }
 }
 ```
 
-### 5) บังคับ sync Avg TP / broker TP ทันทีหลังเปิด recovery order
-จุดสำคัญสุดของ bug รอบนี้
+หลัง `OpenOrder(...)` สำเร็จ → `g_lastHedgeOpenTime = TimeCurrent();`
 
-ใน `ManageHedgeGridMode(idx)` หลัง `OpenOrder(...)` สำเร็จ:
-- track ticket เหมือนเดิม
-- **เรียก `SyncRecoveryBasketTP(idx)` ทันที**
-- จากนั้น reselect ticket และ log ว่า TP ถูก apply แล้วหรือไม่
+ใส่ guard เดียวกันใน `CheckAndOpenHedgeByDD()` (สองสาขา DD%/DD$) — บังคับ spacing ระดับเดียวกัน (เพิ่มเติมจาก `DDCooldownSec` ที่มีอยู่)
 
-แนวคิด:
+ใน `RecoverHedgeSets()` ตอน restart → ตั้ง `g_lastHedgeOpenTime = max(hedge.openTime)` จาก hedge sets ที่ active เพื่อ honor spacing ข้าม restart
+
+### 4) Recovery Close Mode = MATCHING (เดิม)
+ไม่เปลี่ยน flow เดิม — `ManageHedgeMatchingClose` + `ManageHedgeBoundAvgTP` + `ManageHedgePartialClose` ทำงานปกติ
+
+### 5) Recovery Close Mode = AVERAGE_TP (ใหม่)
+ใน `ManageHedgeSets()` loop ต่อ set, ก่อน `ProbeSetProfit/MatchingClose` block:
 ```cpp
-if(OpenOrder(orderType, nextLot, comment))
+if(InpRecovery_CloseMode == RECOVERY_CLOSE_AVG_TP)
 {
-   ...
-   TrackRecoveryGridTicket(idx, newTk);
-   SyncRecoveryBasketTP(idx);   // new in v6.70
+   // Skip matching/partial entirely — manage by weighted avg TP
+   ManageRecoveryAvgTP(h);
+   g_hedgeSets[h].matchingDone = true;
+   // Still allow grid expansion (TryEnterCombinedGridMode + ManageHedgeGridMode)
+   if(!blockGridForThisSet) {
+      if(g_hedgeSets[h].gridMode) ManageHedgeGridMode(h);
+      else TryEnterCombinedGridMode(h);
+   }
+   continue;
 }
 ```
 
-เพื่อให้ recovery order ใหม่:
-- ถูกนำเข้าคิด weighted average ทันที
-- ได้ broker TP ทันทีใน tick เดียวกัน
-- ไม่ต้องรอ flow matching รอบถัดไป
-
-### 6) Harden `SyncRecoveryBasketTP()` ให้รวม recovery tickets ได้ชัวร์กว่าเดิม
-เสริม guard ใน `SyncRecoveryBasketTP(idx)`:
-- เรียก `CompactRecoveryGridTickets(idx)` ก่อนสร้าง basket
-- union จาก 3 แหล่ง:
-  1. main hedge ticket
-  2. comment-match (`GM_HD...` + legacy)
-  3. `recoveryGridTickets[]`
-- dedupe ด้วย ticket
-- ถ้า `cnt >= 2` หรือมี hedge+recovery อย่างน้อย 1 ตัว ให้ modify TP ทั้งหมด
-
-เพิ่ม log ชัดเจน:
+ฟังก์ชันใหม่ `ManageRecoveryAvgTP(int idx)`:
+1. รวมตั๋วทั้งหมดของ set: `hedgeTicket` (ถ้ายังเหลือ) + `boundTickets[]` + recovery grid (comment-match `GM_HD<gen>_*` + `recoveryGridTickets[]`)
+2. คำนวณ weighted avg open price (sum(lot*price) / sum(lot)) **แยก side** เพราะตะกร้ามีทั้ง BUY & SELL
+   - Net side = side ที่ lot รวมมากกว่า
+   - `netLots = |buyLots - sellLots|`, `netAvgPrice` = weighted avg ของ net side หลังหักฝั่งตรงข้าม (ใช้สูตร basket break-even มาตรฐาน)
+3. คำนวณ `targetPrice`:
+   - Net BUY → `targetPrice = netAvgPrice + InpRecovery_AvgTPDistance * point`
+   - Net SELL → `targetPrice = netAvgPrice - InpRecovery_AvgTPDistance * point`
+4. **ตั้ง broker TP = `targetPrice`** ให้ **ทุกตั๋วในตะกร้า** ผ่าน `trade.PositionModify(tk, sl_existing, targetPrice)` (skip ถ้า TP เดิม == ใหม่ ภายใน 1 point เพื่อลด server load)
+5. Log:
 ```text
-v6.70 RECOVERY TP Set#1: hedge=1 gridByComment=3 ticketOnly=1 total=5 avg=...
+v6.71 AVGTP Set#1 (Gen0): tickets=6 netSide=BUY netLots=0.42 avgPx=4951.20 targetTP=4956.20 (+500p) modified=6/6
 ```
+6. Throttle: เรียกซ้ำได้ทุก tick แต่จริงๆ จะ no-op เพราะ TP ไม่เปลี่ยน เว้นแต่มีตั๋วใหม่หรือปิด
 
-### 7) ให้ orphan recovery ใช้ comment scheme เดียวกัน
-ตอนนี้ `ManageOrphanGrid()` ยังมีจุดที่เปิด comment แบบ `prefix + "_GL#"`  
-ปรับให้ใช้ scheme เดียวกับ recovery set:
-- `GM_HD<label>_<NN>`
-- และถ้ามี ticket mapping ที่โยงเข้า hedge set ได้ ให้ track ticket ด้วย
+หมายเหตุ: ใช้ `SyncRecoveryBasketTP` ที่มีอยู่เป็นต้นแบบ basket calc — แต่ `ManageRecoveryAvgTP` คำนวณ **ทั้ง bound + hedge + recovery รวมกัน** (ไม่ใช่แค่ hedge-side) เพื่อสะท้อนความต้องการ user
 
-เพื่อไม่ให้มี 2 รูปแบบ comment ปะปนใน recovery path ใหม่
-
-### 8) Flat reset ให้รีเซ็ตกลับไป GM1 แบบชัวร์
-เพิ่ม helper reset กลาง เช่น:
-```cpp
-void ForceResetCycleState(string reason)
-```
-ให้ทำทั้งหมดเมื่อ `TotalOrderCount()==0`:
-- `g_cycleGeneration = 0`
-- `SaveCycleGeneration()` หรือ delete GV
-- `g_hedgeSetCount = 0`
-- clear ทุก `g_hedgeSets[h]`
-- clear `recoveryGridTickets[]`
-- delete `GME_REC_TK_*`
-- clear sequential owner / orphan groups / prev hedged tickets
-- reset side-pause state
-
-แล้วเปลี่ยนจุด reset หลักทั้งหมดให้เรียก helper กลางนี้เมื่อ flat จริง:
-- `TryResetCycleStateIfFlat()`
-- `OnTick flat-detect`
-- close-all / balance-guard reset path
-- external-close cleanup path
-
-ผลลัพธ์:
-- พอบัญชีไม่มีออเดอร์แล้ว รอบถัดไปจะเริ่มใหม่ที่ `GM1`
-- ไม่ค้างเป็น `GM9`, `GM10`, `GM11` ต่อไปเรื่อยๆ
-
-### 9) Recovery on init ให้ respect GM1 label scheme
-ใน `RecoverHedgeSets()`:
-- ถ้า flat → ล้าง cycle GV + state ทั้งหมด
-- ถ้ามี order ค้าง:
-  - legacy `GM` = gen0
-  - `GM1` = gen0
-  - `GM2` = gen1
-- dashboard/log แสดงเป็น label แบบ 1-based ทั้งหมด
-
-### 10) Dashboard / Logging ปรับให้อ่านตามเลขเดียวกัน
-ตัวอย่าง:
+### 6) Dashboard
+เพิ่มแถว:
 ```text
-Cycle: GM1
-Hedge #1 | Gen=GM1
-Recovery Grid | next=GM_HD1_03
-v6.70 RECOVERY TP Set#1: total=5 avg=4851.22 tp=4723.56 modified=5/5
-v6.70 FLAT RESET: all states cleared -> next cycle starts at GM1
+Hedge Spacing : 30min (last hedge 12m ago — 18m to next)
+Recovery Mode : AVERAGE_TP (dist=500p)
 ```
+
+### 7) Validation Checklist
+1. `InpHedge_MinSpacingMin=30`, hedge#1 เปิด → 10 นาทีถัดมา expansion เกิดอีก → log "HEDGE SPACING: wait 20m more", ไม่เปิด hedge#2
+2. ผ่าน 30 นาที → expansion เกิด → hedge#2 เปิดได้ปกติ
+3. `InpHedge_MinSpacingMin=0` → behavior เดิม (regression OK)
+4. Restart EA ระหว่าง hedge#1 active → spacing นับต่อจาก openTime ของ hedge#1
+5. `InpRecovery_CloseMode=MATCHING` → flow เดิม v6.70 ทุกประการ
+6. `InpRecovery_CloseMode=AVERAGE_TP` → ไม่มี partial close / matching close ทำงาน, ทุกตั๋วใน set ได้ broker TP เดียวกัน = avg + 500p
+7. ตะกร้า basket ปิดพร้อมกันทั้งหมดเมื่อราคาแตะ targetTP → triggers `ForceResetCycleState` (v6.70) ถ้า flat
+8. Dashboard แสดงสถานะ spacing countdown + recovery mode ปัจจุบัน
 
 ---
 
 ## สิ่งที่ไม่เปลี่ยนแปลง
 
-- Order execution logic (`OrderSend`, `trade.Buy`, `trade.Sell`, `trade.PositionClose`, `trade.PositionClosePartial`) — ไม่แก้
-- Trading strategy / signal / initial entry conditions — ไม่แก้
-- Grid distance / lot formula / reverse-walk seed logic — ไม่แก้
-- Hedge trigger rules (Expansion / DD% / Dollar) — ไม่แก้
-- Triple Gate exit / matching rules / one-time shred / combined TP formula — ไม่แก้สูตร
-- News / License / Time filter / Sync modules — ไม่แก้
-- Max active hedge sets / generation-locked hedge slot concept — ไม่แก้
+- Order Execution (`OrderSend`, `trade.Buy/Sell/PositionClose/PositionClosePartial/PositionModify`) — ไม่แก้
+- Trading Strategy / Initial Entry / Grid Loss / Grid Profit (basket หลัก) — ไม่แก้
+- Hedge open trigger logic (Squeeze Expansion / DD% / DD$ rules) — ไม่แก้, แค่เพิ่ม MinSpacing gate
+- Triple Gate exit, Reverse-Walk Seed v6.66, Combined TP formula — ไม่แก้
+- v6.67 Unified Recovery Params, v6.68 Gen-Locked Slot, v6.69 New-Candle/GM_HD comments, v6.70 GM1-Start/HardFlatReset — ไม่แก้
+- Hedge Side Pause v6.39, BB Filter v6.56, Sequential Recovery Owner v6.59, Strict In-Set Pool v6.62 — ไม่แก้
+- News / License / Time Filter / Sync / Balance Guard — ไม่แก้
+- Existing `InpHedge_DDCooldownSec` — คงไว้ (ทำงานคู่กับ MinSpacing)
+- `InpHedge_UseMatchingClose` toggle — คงไว้ (เป็น master switch; MinSpacing/AvgTP mode อยู่ใต้ switch นี้)
 
----
-
-## Validation Checklist
-
-1. เปิด cycle ใหม่ตอนบัญชีว่าง → comment แรกเป็น `GM1_INIT` ไม่ใช่ `GM_INIT`
-2. Hedge ชุดแรกยังเป็น `GM_HEDGE_1` แต่ bound กับ `GM1` ชัดเจน
-3. Recovery ชุดแรกเป็น `GM_HD1_01`, `GM_HD1_02`, ...
-4. เมื่อ recovery order เปิดใหม่ใน `ManageHedgeGridMode()` → ได้ broker TP ใน tick เดียวกัน
-5. `SyncRecoveryBasketTP()` log แสดงจำนวน tickets รวม hedge + recovery ครบ
-6. ภาพแบบเดิมที่มี hedge 1 ตัว + recovery 4 ตัว → TP ถูก set ครบทั้ง 5 ตัว ไม่ใช่เฉพาะ hedge
-7. Order comment เก่าแบบ `GM_*` หรือ `GM_HG*` ยัง recover/manage ได้
-8. เมื่อปิดทุกออเดอร์หมดทั้งบัญชี → cycle reset กลับ 0 ภายใน state และรอบใหม่เริ่ม `GM1`
-9. หลัง flat reset แล้ว ไม่มี `GM9/GM10/GM11` ต่อเนื่องข้ามรอบอีก
-10. Restart EA ระหว่างมี order เก่า/ใหม่ปะปน → parser ยัง bind generation ถูกต้อง
