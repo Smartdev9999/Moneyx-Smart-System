@@ -8108,9 +8108,7 @@ void SyncRecoveryBasketTP(int idx)
       prices[cnt]  = PositionGetDouble(POSITION_PRICE_OPEN);
       lots[cnt]    = PositionGetDouble(POSITION_VOLUME);
       cnt++;
-   }
-
-   if(cnt == 0) return;
+      fromTicket++;
 
    // 3) Weighted average
    double totalLots = 0, weightedPrice = 0;
