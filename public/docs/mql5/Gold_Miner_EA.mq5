@@ -8096,26 +8096,50 @@ void SaveBoundTicketsToPrevHedged(int idx)
 //+------------------------------------------------------------------+
 void TryResetCycleStateIfFlat(string reason)
 {
-   if(g_hedgeSetCount > 0) return;  // still have active sets
+   if(g_hedgeSetCount > 0) return;  // still have active sets — never reset
    if(g_cycleGeneration <= 1) return;  // v6.62: GM1 is the base — nothing to reset
 
-   // v6.27: Check if any EA positions still exist
    int remaining = TotalOrderCount();
-   if(remaining > 0)
+
+   // === Case A: account fully flat → full reset to GM1 ===
+   if(remaining == 0)
    {
-      Print("v6.27: Skipping cycle reset (", reason, ") — ", remaining, " positions still open. prevHedged preserved.");
+      g_cycleGeneration = 1;  // v6.62: cycles always restart at GM1
+      SaveCycleGeneration();  // v6.53: persist reset
+      g_hedgeSetCount = 0;
+      ClearPrevHedgedTickets();
+      g_lastHedgeBuyTime = 0;   // v6.39: reset side pause
+      g_lastHedgeSellTime = 0;  // v6.39: reset side pause
+      UpdateDynamicBalanceGuardTarget();  // v6.31: update target immediately when flat
+      Print("v6.66 CYCLE RESET → GM1 — ", reason, " (account flat)");
       return;
    }
 
-   // Truly flat — safe to reset everything
-    g_cycleGeneration = 1;  // v6.62: cycles always restart at GM1
-    SaveCycleGeneration();  // v6.53: persist reset
-    g_hedgeSetCount = 0;
-    ClearPrevHedgedTickets();
-    g_lastHedgeBuyTime = 0;   // v6.39: reset side pause
-    g_lastHedgeSellTime = 0;  // v6.39: reset side pause
-    UpdateDynamicBalanceGuardTarget();  // v6.31: update target immediately when flat
-    Print("v6.62 CYCLE RESET → GM1 — ", reason, " (account flat)");
+   // === Case B (v6.66): no active hedge but orphan orders remain ===
+   // Re-anchor cycleGen to MAX gen of remaining orders so next hedge
+   // doesn't keep climbing GM12/13/14… indefinitely.
+   int maxRemainingGen = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong t = PositionGetTicket(i);
+      if(t == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      string cmt = PositionGetString(POSITION_COMMENT);
+      if(IsHedgeComment(cmt)) continue;  // hedge comments shouldn't drive gen anchor
+      int g = ExtractGeneration(cmt);
+      if(g > maxRemainingGen) maxRemainingGen = g;
+   }
+   int newGen = (maxRemainingGen < 1) ? 1 : maxRemainingGen;
+   if(newGen < g_cycleGeneration)
+   {
+      Print("v6.66 CYCLE RE-ANCHOR: GM", g_cycleGeneration, " → GM", newGen,
+            " (no active hedge, ", remaining, " orphan orders remain) — ", reason);
+      g_cycleGeneration = newGen;
+      SaveCycleGeneration();
+      g_lastHedgeBuyTime = 0;
+      g_lastHedgeSellTime = 0;
+   }
 }
 
 //+------------------------------------------------------------------+
