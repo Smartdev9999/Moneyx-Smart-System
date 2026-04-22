@@ -1,8 +1,8 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.70 - MTF ZigZag+CDC+Grid+License |
-//|  v6.70: GM1-Start + ImmediateRecoveryTP + HardFlatReset (GM_HD)  |
+//|                Gold Miner EA v6.71 - MTF ZigZag+CDC+Grid+License |
+//|  v6.71: HedgeMinSpacing(min) + RecoveryCloseMode (Match/AvgTP)  |
 //+------------------------------------------------------------------+
 #property copyright "Money X System"
 #property link      ""
