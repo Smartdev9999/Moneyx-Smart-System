@@ -8873,7 +8873,11 @@ void ManageOrphanGrid()
       if(seqAllowed != -1 && gen != seqAllowed) continue;
 
       string prefix = GenPrefix(gen);
-      
+
+      // v6.64: Profit-Loss Netting — try to net profits against oldest losses
+      //         in this generation BEFORE expanding the grid further.
+      RunBoundProfitLossNetting(gen);
+
       // Re-count fresh each tick to detect if orders were closed
       int bc = 0, sc = 0, glb = 0, gls = 0, mglb = 0, mgls = 0;
       CountOrphanPositions(gen, bc, sc, glb, gls, mglb, mgls);
