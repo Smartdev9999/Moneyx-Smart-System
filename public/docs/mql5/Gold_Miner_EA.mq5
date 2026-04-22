@@ -9646,11 +9646,13 @@ void ManageOrphanGrid()
                      else
                         lots = ComputeRecoveryGridLot(maxExisting, gls);  // v6.57
 
-                     string comment = prefix + "_GL#" + IntegerToString(nextLevel);
+                     // v6.70: orphan recovery uses GM_HD<genLabel>_<NN> scheme
+                     string comment = "GM_HD" + IntegerToString(GenLabel(gen)) + "_"
+                                    + StringFormat("%02d", nextLevel);
                       if(OpenOrder(ORDER_TYPE_SELL, lots, comment))
                       {
                          g_lastOrphanGridCandleTime = iTime(_Symbol, PERIOD_CURRENT, 0);
-                         Print("ORPHAN/RECOVERY GRID: Opened SELL ", prefix, "_GL#", nextLevel,
+                         Print("ORPHAN/RECOVERY GRID: Opened SELL ", comment,
                                " lots=", DoubleToString(lots, 2), " for Gen", gen);
                        }
                    }
