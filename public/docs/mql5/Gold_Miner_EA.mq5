@@ -594,6 +594,31 @@ int      g_sequentialRecoveryGen      = -1;    // generation currently owning re
 int      g_sequentialRecoverySetIdx   = -1;    // originating hedge set index (for dashboard/log)
 bool     g_sequentialRecoveryActive   = false; // true → block all other sets and other-gen orphan recovery
 bool     g_sequentialRecoveryCompletedThisTick = false; // one-tick handoff guard
+
+// === v6.61: Recovery Seed (logically-stripped hedge remainders treated as gen orders) ===
+ulong    g_recoverySeedTickets[];   // hedge remainders re-bound as recovery seed
+int      g_recoverySeedGen[];       // parallel: generation each seed belongs to
+double   g_recoverySeedOpenPrice[]; // parallel: original hedge open price (for avg TP calc)
+int      g_recoverySeedCount = 0;
+
+// === v6.61: Recovery Set Tracker — guarantees no skip across generations ===
+struct RecoverySetTracker
+{
+   int    generation;
+   ulong  tickets[];
+   int    sourceHedgeIdx;
+   bool   complete;
+};
+RecoverySetTracker g_recoverySets[];
+int      g_recoverySetCount = 0;
+
+// === v6.61: Last shred event (for dashboard) ===
+double   g_lastShredHedgeFrom = 0;
+double   g_lastShredHedgeTo   = 0;
+int      g_lastShredBoundClosed = 0;
+int      g_lastShredBoundRemain = 0;
+double   g_lastShredNet       = 0;
+datetime g_lastShredTime      = 0;
 datetime g_lastHedgeGridTime = 0;  // cooldown timer for hedge grid orders
 int      g_lastDashboardRowCount = 0;  // track previous tick row count for stale cleanup
 bool     g_hedgeOrphanWarning = false;  // orphan hedge grid orders detected
