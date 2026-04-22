@@ -4496,7 +4496,27 @@ void DisplayDashboard()
                                  IntegerToString(g_lastOrphanGLCount) + " order(s) missing Broker TP",
                                  orphanColor, COLOR_SECTION_HEDGE); row++;
                  }
-                // v6.58: PrevHedged lock count
+                 // v6.65: Hedge Set Integrity status
+                 {
+                    string integStatus;
+                    color integColor;
+                    if(g_hedgeIntegrityCriticalCount > 0)
+                    {
+                       integStatus = "CRITICAL: " + IntegerToString(g_hedgeIntegrityCriticalCount) + " set(s) w/o bound orders";
+                       integColor = clrRed;
+                    }
+                    else if(g_hedgeIntegrityWarnCount > 0)
+                    {
+                       integStatus = "WARN: " + IntegerToString(g_hedgeIntegrityWarnCount) + " set(s) inflated (>2x)";
+                       integColor = clrYellow;
+                    }
+                    else
+                    {
+                       integStatus = "Healthy (all sets balanced)";
+                       integColor = clrLime;
+                    }
+                    DrawTableRow(row, "Hedge Integrity", integStatus, integColor, COLOR_SECTION_HEDGE); row++;
+                 }
                 if(g_prevHedgedCount > 0)
                 {
                    string phInfo = IntegerToString(g_prevHedgedCount) + " ticket(s) locked from re-hedge";
