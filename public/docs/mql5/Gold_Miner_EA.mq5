@@ -450,6 +450,12 @@ datetime g_lastNewsRefresh = 0;
 bool g_isNewsPaused = false;
 bool g_newOrderBlocked = false;  // true = News/Time filter blocks new entries only
 int  g_seqAllowedGen = -1;  // v6.59: Sequential Release allowed gen for recovery (-1 = unrestricted)
+// v6.64: Netting status (for dashboard)
+int      g_nettingLastGen        = -1;
+int      g_nettingLastProfitsClosed = 0;
+int      g_nettingLastLossesClosed  = 0;
+double   g_nettingLastNet        = 0.0;
+datetime g_nettingLastTime       = 0;
 string g_nextNewsTitle = "";
 datetime g_nextNewsTime = 0;
 string g_newsStatus = "OK";
