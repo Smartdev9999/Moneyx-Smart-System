@@ -8764,9 +8764,16 @@ void RecoverHedgeSets()
                 g_hedgeSets[h].triggerType = 0;  // Expansion-triggered
             g_hedgeSetCount++;
             recovered++;
-            Print("RECOVER: Rebuilt Hedge Set#", h + 1, " from ticket ", ticket, 
+            // v6.66: restore One-Time Shred flag from GlobalVariable
+            string gvShred = "GME_HEDGE_SHRED_" + IntegerToString(h);
+            if(GlobalVariableCheck(gvShred) && GlobalVariableGet(gvShred) > 0)
+               g_hedgeSets[h].shredCompleted = true;
+            // v6.66: persist current ticket so partial-close residue stays bound
+            GlobalVariableSet("GME_HEDGE_TICKET_" + IntegerToString(h), (double)ticket);
+            Print("RECOVER: Rebuilt Hedge Set#", h + 1, " from ticket ", ticket,
                   " side=", (g_hedgeSets[h].hedgeSide == POSITION_TYPE_BUY ? "BUY" : "SELL"),
-                  " lots=", DoubleToString(g_hedgeSets[h].hedgeLots, 2));
+                  " lots=", DoubleToString(g_hedgeSets[h].hedgeLots, 2),
+                  " shred=", (g_hedgeSets[h].shredCompleted ? "DONE" : "PENDING"));
             break;
          }
       }
