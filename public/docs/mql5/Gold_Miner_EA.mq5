@@ -3515,7 +3515,12 @@ void CheckGridLoss(ENUM_POSITION_TYPE side, int currentGridCount)
          // LOT_CUSTOM: keep level-based calculation
       }
       
-      string comment = GetCommentPrefix() + "_GL#" + IntegerToString(currentGridCount + 1);
+      // v6.71: Use max existing GL level + 1 to avoid duplicate/back-numbered comments
+      int maxLevel_GL = FindMaxGridLevelOnSide(side, "_GL");
+      int nextLevel_GL = MathMax(maxLevel_GL + 1, currentGridCount + 1);
+      string comment = GetCommentPrefix() + "_GL#" + IntegerToString(nextLevel_GL);
+      PrintFormat("v6.71 GRID NEXT-LEVEL: side=%s openGL=%d maxLevel=%d -> nextLevel=%d comment=%s",
+                  EnumToString(side), currentGridCount, maxLevel_GL, nextLevel_GL, comment);
       ENUM_ORDER_TYPE orderType = (side == POSITION_TYPE_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
       if(OpenOrder(orderType, lots, comment))
       {
@@ -3587,7 +3592,12 @@ void CheckGridProfit(ENUM_POSITION_TYPE side, int currentGridCount)
    if(shouldOpen)
    {
       double lots = CalculateGridLot(currentGridCount, false);
-      string comment = GetCommentPrefix() + "_GP#" + IntegerToString(currentGridCount + 1);
+      // v6.71: Use max existing GP level + 1 to avoid duplicate/back-numbered comments
+      int maxLevel_GP = FindMaxGridLevelOnSide(side, "_GP");
+      int nextLevel_GP = MathMax(maxLevel_GP + 1, currentGridCount + 1);
+      string comment = GetCommentPrefix() + "_GP#" + IntegerToString(nextLevel_GP);
+      PrintFormat("v6.71 GRID NEXT-LEVEL: side=%s openGP=%d maxLevel=%d -> nextLevel=%d comment=%s",
+                  EnumToString(side), currentGridCount, maxLevel_GP, nextLevel_GP, comment);
       ENUM_ORDER_TYPE orderType = (side == POSITION_TYPE_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
       if(OpenOrder(orderType, lots, comment))
       {
@@ -5251,7 +5261,10 @@ void CheckGridLossTF(int tfIdx, ENUM_POSITION_TYPE side, int currentGridCount)
          // LOT_CUSTOM: keep level-based calculation
       }
       
-      string suffix = "GL#" + IntegerToString(currentGridCount + 1);
+      // v6.71: Use max existing GL level + 1 (TF variant)
+      int maxLevelTF_GL = FindMaxGridLevelOnSideTF(tfIdx, side, "GL");
+      int nextLevelTF_GL = MathMax(maxLevelTF_GL + 1, currentGridCount + 1);
+      string suffix = "GL#" + IntegerToString(nextLevelTF_GL);
       ENUM_ORDER_TYPE orderType = (side == POSITION_TYPE_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
       if(OpenOrderTF(tfIdx, orderType, lots, suffix))
       {
@@ -5322,7 +5335,10 @@ void CheckGridProfitTF(int tfIdx, ENUM_POSITION_TYPE side, int currentGridCount)
    if(shouldOpen)
    {
       double lots = CalculateGridLot(currentGridCount, false);
-      string suffix = "GP#" + IntegerToString(currentGridCount + 1);
+      // v6.71: Use max existing GP level + 1 (TF variant)
+      int maxLevelTF_GP = FindMaxGridLevelOnSideTF(tfIdx, side, "GP");
+      int nextLevelTF_GP = MathMax(maxLevelTF_GP + 1, currentGridCount + 1);
+      string suffix = "GP#" + IntegerToString(nextLevelTF_GP);
       ENUM_ORDER_TYPE orderType = (side == POSITION_TYPE_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
       if(OpenOrderTF(tfIdx, orderType, lots, suffix))
       {
