@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.61 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.62 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.61"
-#property description "Gold Miner EA v6.61 - v6.60 + ShredHedgeOnBoundProfit + ShredBoundOnHedgeProfit + RecoverySeedFromHedgeRemainder + CumulativeSeedLot + UnifiedRecoveryAvgTP + RecoverySetTracker (anti-skip) + License"
+#property version   "6.62"
+#property description "Gold Miner EA v6.62 - v6.61 + Comments start at GM1 + Hedge tied to bound generation (GM_Hedge_E{gen} / GM_Hedge_D{gen}) + Reset cycles back to GM1"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -622,7 +622,7 @@ datetime g_lastShredTime      = 0;
 datetime g_lastHedgeGridTime = 0;  // cooldown timer for hedge grid orders
 int      g_lastDashboardRowCount = 0;  // track previous tick row count for stale cleanup
 bool     g_hedgeOrphanWarning = false;  // orphan hedge grid orders detected
-int      g_cycleGeneration = 0;  // incremented each time a hedge opens — changes comment prefix
+int      g_cycleGeneration = 1;  // v6.62: starts at 1 (GM1). Incremented on each hedge open. Reset → 1.
 
 // === v6.16: DD% Hedge Trigger State ===
 double   g_nextBuyDDTrigger  = 5.0;    // DD% threshold for next BUY-side hedge
@@ -702,10 +702,11 @@ int g_activeOrphanGroupCount = 0;
 //+------------------------------------------------------------------+
 //| Comment Generation Helpers                                         |
 //+------------------------------------------------------------------+
+// v6.62: comments start at GM1. gen=0 only kept for backward-compat reading legacy "GM_*" orders.
 string GetCommentPrefix()
 {
-   if(g_cycleGeneration == 0) return "GM";
-   return "GM" + IntegerToString(g_cycleGeneration);
+   int g = (g_cycleGeneration < 1) ? 1 : g_cycleGeneration;
+   return "GM" + IntegerToString(g);
 }
 
 // === v6.53: Persist g_cycleGeneration via GlobalVariable ===
@@ -725,9 +726,10 @@ int LoadCycleGeneration()
 }
 
 // Get prefix for a specific generation
+// v6.62: gen 0 = legacy "GM" (read-only backward-compat). New cycles always >= 1 → "GM1", "GM2", ...
 string GenPrefix(int gen)
 {
-   if(gen == 0) return "GM";
+   if(gen <= 0) return "GM";  // legacy reader only
    return "GM" + IntegerToString(gen);
 }
 
@@ -7397,7 +7399,11 @@ bool IsReverseHedgeComment(string comment)
 
 bool IsHedgeComment(string comment)
 {
-   return (StringFind(comment, "GM_HEDGE") >= 0 || StringFind(comment, "GM_HG") >= 0 || IsReverseHedgeComment(comment));
+   // v6.62: also recognise new "GM_Hedge_E{gen}" / "GM_Hedge_D{gen}" comments
+   return (StringFind(comment, "GM_Hedge_") >= 0
+        || StringFind(comment, "GM_HEDGE") >= 0
+        || StringFind(comment, "GM_HG") >= 0
+        || IsReverseHedgeComment(comment));
 }
 
 //+------------------------------------------------------------------+
@@ -7512,8 +7518,8 @@ int CountAllGenPositions(int gen)
    return count;
 }
 
-// v6.60: Strict owner counter — counts ONLY normal recovery orders for a specific generation
-// Excludes hedge/reverse-hedge/grid-hedge comments so Gen0 (GM) is not polluted by GM_HEDGE_*, GM_HG*, GM_RHEDGE*
+// v6.60/v6.62: Strict owner counter — counts ONLY normal recovery orders for a specific generation
+// Excludes hedge-family comments. v6.62: gen=0 = legacy "GM_" (back-compat); gen>=1 = "GM{gen}_".
 int CountSequentialOwnerOrders(int gen)
 {
    if(gen < 0) return 0;
@@ -7527,11 +7533,12 @@ int CountSequentialOwnerOrders(int gen)
       if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       string comment = PositionGetString(POSITION_COMMENT);
-      // Must start exactly with this generation's prefix (e.g. "GM_" not "GM1_")
+      // Must start exactly with this generation's prefix (e.g. "GM1_" not "GM10_")
       if(StringFind(comment, genPrefix) != 0) continue;
       // Exclude hedge-family comments — those belong to hedge sets, not recovery owner
       string suffix = StringSubstr(comment, prefixLen);
-      if(StringFind(suffix, "HEDGE") == 0) continue;   // GM_HEDGE_*
+      if(StringFind(suffix, "HEDGE") == 0) continue;   // legacy GM_HEDGE_*
+      if(StringFind(suffix, "Hedge") == 0) continue;   // v6.62 GM_Hedge_*
       if(StringFind(suffix, "HG") == 0) continue;      // GM_HG*
       if(StringFind(suffix, "RHEDGE") == 0) continue;  // GM_RHEDGE*
       count++;
@@ -8268,9 +8275,11 @@ void CheckAndOpenHedge()
       return;
    }
 
-   // Open hedge order
-   ENUM_ORDER_TYPE orderType = (hedgeSide == POSITION_TYPE_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
-   string comment = "GM_HEDGE_" + IntegerToString(slot + 1);
+    // Open hedge order
+    ENUM_ORDER_TYPE orderType = (hedgeSide == POSITION_TYPE_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+    // v6.62: Hedge comment ties to the bound generation (= current g_cycleGeneration before increment)
+    int bindGenForComment = (g_cycleGeneration < 1) ? 1 : g_cycleGeneration;
+    string comment = "GM_Hedge_E" + IntegerToString(bindGenForComment);  // E = Expansion-triggered, suffix = bound gen
 
    if(OpenOrder(orderType, counterLots, comment))
    {
@@ -8516,8 +8525,9 @@ bool OpenDDHedge(ENUM_POSITION_TYPE counterSide, ENUM_POSITION_TYPE hedgeSide, i
       return false;
    }
    
-   // Use "GM_HEDGE_D" prefix for DD-triggered hedges (D = DD%, recoverable)
-   string comment = "GM_HEDGE_D" + IntegerToString(slot + 1);
+    // v6.62: DD-triggered hedge — comment ties to bound generation (= bindGen, not slot)
+    int bindGenForComment = (bindGen < 1) ? 1 : bindGen;
+    string comment = "GM_Hedge_D" + IntegerToString(bindGenForComment);  // D = DD-triggered, suffix = bound gen
    
    ENUM_ORDER_TYPE orderType = (hedgeSide == POSITION_TYPE_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
    if(!OpenOrder(orderType, counterLots, comment)) return false;
