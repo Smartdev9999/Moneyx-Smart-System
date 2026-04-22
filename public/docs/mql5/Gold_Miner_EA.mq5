@@ -1,13 +1,13 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.69 - MTF ZigZag+CDC+Grid+License |
-//|         v6.69: RecoveryNewCandle + GM_HD<gen>_<NN> + TicketBind  |
+//|                Gold Miner EA v6.70 - MTF ZigZag+CDC+Grid+License |
+//|  v6.70: GM1-Start + ImmediateRecoveryTP + HardFlatReset (GM_HD)  |
 //+------------------------------------------------------------------+
 #property copyright "Money X System"
 #property link      ""
-#property version   "6.69"
-#property description "Gold Miner EA v6.69 - RecoveryNewCandle + GM_HD<gen>_<NN> Comments + TicketBindFallback + FloaterIncludedTP + GenerationLockedHedgeSlot + UnifiedRecoveryParams + ReverseWalkSeed + CombinedAvgTP + MaxGridCap + OneTimeShred + HedgeTicketPersist + StrictSequentialMatching + AutoRecoveryLot + MatchTickRetry + HedgePartialFallback + InSetMatchAlways + PersistHedgeSlot + StrictInSetPool + MatchPoolBothSides + SeqRecoveryOwner + RehedgeGuard + SequentialRecovery + RecoveryGrid + BBFilter + BoundNoClose + StartOrderTrail + PersistGen + HedgeRecoveryToggle + MatchCloseToggle + InstantTP + DashCache + BrokerTPSL + MaxGridTrail + GLCandleConfirm + HedgeSidePause + OrphanGenFix + BalanceGuard + DDHedge + HedgeCloseGate + AvgTP + Squeeze + CDC + MTF ZigZag + License"
+#property version   "6.70"
+#property description "Gold Miner EA v6.70 - GM1-Start Comment Scheme + ImmediateRecoveryTPSync + HardFlatReset + RecoveryNewCandle + GM_HD<gen>_<NN> Comments + TicketBindFallback + FloaterIncludedTP + GenerationLockedHedgeSlot + UnifiedRecoveryParams + ReverseWalkSeed + CombinedAvgTP + MaxGridCap + OneTimeShred + HedgeTicketPersist + StrictSequentialMatching + AutoRecoveryLot + MatchTickRetry + HedgePartialFallback + InSetMatchAlways + PersistHedgeSlot + StrictInSetPool + MatchPoolBothSides + SeqRecoveryOwner + RehedgeGuard + SequentialRecovery + RecoveryGrid + BBFilter + BoundNoClose + StartOrderTrail + PersistGen + HedgeRecoveryToggle + MatchCloseToggle + InstantTP + DashCache + BrokerTPSL + MaxGridTrail + GLCandleConfirm + HedgeSidePause + OrphanGenFix + BalanceGuard + DDHedge + HedgeCloseGate + AvgTP + Squeeze + CDC + MTF ZigZag + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -679,12 +679,18 @@ OrphanGenGroup g_orphanGroups[MAX_ORPHAN_GROUPS];
 int g_activeOrphanGroupCount = 0;
 
 //+------------------------------------------------------------------+
-//| Comment Generation Helpers                                         |
+//| Comment Generation Helpers (v6.70: 1-based labels GM1, GM2, ...) |
 //+------------------------------------------------------------------+
+// v6.70: User-facing label = internal gen + 1
+//   internal g_cycleGeneration=0 → "GM1"
+//   internal g_cycleGeneration=1 → "GM2"
+// Legacy comments "GM_*" still map to internal gen 0 via ExtractGeneration().
+int    GenLabel(int gen)         { return gen + 1; }
+string GenPrefixLabel(int gen)   { return "GM" + IntegerToString(GenLabel(gen)); }
+
 string GetCommentPrefix()
 {
-   if(g_cycleGeneration == 0) return "GM";
-   return "GM" + IntegerToString(g_cycleGeneration);
+   return GenPrefixLabel(g_cycleGeneration);
 }
 
 // === v6.53: Persist g_cycleGeneration via GlobalVariable ===
@@ -703,11 +709,10 @@ int LoadCycleGeneration()
    return -1;  // not found
 }
 
-// Get prefix for a specific generation
+// Get prefix for a specific generation (v6.70: 1-based label)
 string GenPrefix(int gen)
 {
-   if(gen == 0) return "GM";
-   return "GM" + IntegerToString(gen);
+   return GenPrefixLabel(gen);
 }
 
 // Match comment from any GM generation with a suffix (e.g. "_INIT", "_GL", "_GP")
@@ -725,8 +730,12 @@ bool MatchTFPrefix(string comment, string tfLabel)
    return StringFind(comment, tfToken) >= 0;
 }
 
-// Extract cycle generation number from comment
-// GM_INIT → 0, GM1_INIT → 1, GM2_INIT → 2
+// Extract internal cycle generation number from comment
+// v6.70 1-based label scheme:
+//   "GM_INIT"   (legacy) → 0
+//   "GM1_INIT"  (new)    → 0
+//   "GM2_INIT"  (new)    → 1
+//   "GM3_INIT"  (new)    → 2
 int ExtractGeneration(string comment)
 {
    if(StringFind(comment, "GM") != 0) return -1;
@@ -737,9 +746,12 @@ int ExtractGeneration(string comment)
       if(ch >= '0' && ch <= '9') pos++;
       else break;
    }
-   if(pos == 2) return 0;  // "GM_" = gen 0
-   return (int)StringToInteger(StringSubstr(comment, 2, pos - 2));
+   if(pos == 2) return 0;  // legacy "GM_*" → gen 0
+   int label = (int)StringToInteger(StringSubstr(comment, 2, pos - 2));
+   if(label <= 0) return 0;
+   return label - 1;  // v6.70: convert 1-based label → internal gen
 }
+
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                     |
@@ -960,7 +972,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.69 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.70 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min",
@@ -1022,7 +1034,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.69 deinitialized");
+   Print("Gold Miner EA v6.70 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -3899,7 +3911,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.69 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.69 [ZZ]" : "Gold Miner EA v6.69 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.70 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.70 [ZZ]" : "Gold Miner EA v6.70 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -7414,13 +7426,15 @@ bool IsRecoveryGridComment(const string c)
    return (StringFind(c, "GM_HG") >= 0 || StringFind(c, "GM_HD") >= 0);
 }
 
-// v6.69: Match recovery grid comment to a specific set (by slot idx + bound generation)
+// v6.70: Match recovery grid comment to a specific set (by slot idx + bound generation)
+//   Modern: "GM_HD<genLabel>_..." where genLabel = gen+1
+//   Legacy: "GM_HG<idx+1>..."
 bool IsRecoveryGridForSet(const string c, int idx, int gen)
 {
    string legacy = "GM_HG" + IntegerToString(idx + 1);
    if(StringFind(c, legacy) >= 0) return true;        // legacy slot-based
-   string modern = "GM_HD" + IntegerToString(gen) + "_";
-   if(StringFind(c, modern) >= 0) return true;        // v6.69 generation-based
+   string modern = "GM_HD" + IntegerToString(GenLabel(gen)) + "_";
+   if(StringFind(c, modern) >= 0) return true;        // v6.70 1-based label
    return false;
 }
 
@@ -7664,8 +7678,13 @@ void SaveBoundTicketsToPrevHedged(int idx)
 void TryResetCycleStateIfFlat(string reason)
 {
    if(g_hedgeSetCount > 0) return;  // still have active sets
-   if(g_cycleGeneration <= 0) return;  // nothing to reset
-   
+   if(g_cycleGeneration <= 0)
+   {
+      // v6.70: even if cycleGen is already 0, ensure stale GVs/state cleared once flat
+      if(TotalOrderCount() == 0) ForceResetCycleState(reason + " (already gen0)");
+      return;
+   }
+
    // v6.27: Check if any EA positions still exist
    int remaining = TotalOrderCount();
    if(remaining > 0)
@@ -7673,16 +7692,77 @@ void TryResetCycleStateIfFlat(string reason)
       Print("v6.27: Skipping cycle reset (", reason, ") — ", remaining, " positions still open. prevHedged preserved.");
       return;
    }
-   
-   // Truly flat — safe to reset everything
-    g_cycleGeneration = 0;
-    SaveCycleGeneration();  // v6.53: persist reset
-    g_hedgeSetCount = 0;
-    ClearPrevHedgedTickets();
-    g_lastHedgeBuyTime = 0;   // v6.39: reset side pause
-    g_lastHedgeSellTime = 0;  // v6.39: reset side pause
-    UpdateDynamicBalanceGuardTarget();  // v6.31: update target immediately when flat
-    Print("CYCLE GENERATION reset to 0 — ", reason, " (v6.27 safe reset, account flat)");
+
+   // v6.70: delegate to centralized hard reset
+   ForceResetCycleState(reason);
+}
+
+//+------------------------------------------------------------------+
+//| v6.70: Hard flat reset — wipes ALL recovery state when account    |
+//| is truly flat. Ensures next cycle restarts at GM1.                 |
+//+------------------------------------------------------------------+
+void ForceResetCycleState(string reason)
+{
+   if(TotalOrderCount() != 0) return;  // double-guard: only when truly flat
+
+   int prevGen = g_cycleGeneration;
+
+   // 1) cycle generation
+   g_cycleGeneration = 0;
+   SaveCycleGeneration();
+   if(GlobalVariableCheck(GV_CycleGenKey())) GlobalVariableDel(GV_CycleGenKey());
+
+   // 2) hedge sets — clear in-memory state + persisted GVs
+   for(int h = 0; h < MAX_HEDGE_SETS; h++)
+   {
+      g_hedgeSets[h].active = false;
+      g_hedgeSets[h].hedgeTicket = 0;
+      g_hedgeSets[h].hedgeLots = 0;
+      g_hedgeSets[h].boundTicketCount = 0;
+      g_hedgeSets[h].boundGeneration = 0;
+      g_hedgeSets[h].shredCompleted = false;
+      g_hedgeSets[h].lastRecoveryGridBarTime = 0;
+      // wipe recovery grid ticket GVs
+      for(int rk = 0; rk < g_hedgeSets[h].recoveryGridCount; rk++)
+      {
+         string gv = "GME_REC_TK_" + IntegerToString(h) + "_" + IntegerToString(rk);
+         if(GlobalVariableCheck(gv)) GlobalVariableDel(gv);
+      }
+      ArrayResize(g_hedgeSets[h].recoveryGridTickets, 0);
+      g_hedgeSets[h].recoveryGridCount = 0;
+      // also clean lingering ticket/shred GVs (defensive sweep up to 200 tickets)
+      string gvT = "GME_HEDGE_TICKET_" + IntegerToString(h);
+      if(GlobalVariableCheck(gvT)) GlobalVariableDel(gvT);
+      string gvS = "GME_HEDGE_SHRED_" + IntegerToString(h);
+      if(GlobalVariableCheck(gvS)) GlobalVariableDel(gvS);
+      for(int rk2 = 0; rk2 < 200; rk2++)
+      {
+         string gv2 = "GME_REC_TK_" + IntegerToString(h) + "_" + IntegerToString(rk2);
+         if(GlobalVariableCheck(gv2)) GlobalVariableDel(gv2);
+      }
+   }
+   g_hedgeSetCount = 0;
+
+   // 3) sequential recovery owner / orphan groups
+   g_sequentialRecoveryActive = false;
+   g_sequentialRecoveryGen = -1;
+   for(int og = 0; og < MAX_ORPHAN_GROUPS; og++)
+   {
+      g_orphanGroups[og].active = false;
+      g_orphanGroups[og].generation = -1;
+   }
+   g_activeOrphanGroupCount = 0;
+
+   // 4) prev-hedged tickets + side pause
+   ClearPrevHedgedTickets();
+   g_lastHedgeBuyTime = 0;
+   g_lastHedgeSellTime = 0;
+
+   // 5) balance guard refresh
+   UpdateDynamicBalanceGuardTarget();
+
+   Print("v6.70 FLAT RESET: all states cleared (prevGen=", prevGen,
+         ", reason=", reason, ") -> next cycle starts at GM1");
 }
 
 //+------------------------------------------------------------------+
@@ -8033,10 +8113,14 @@ void SyncRecoveryBasketTP(int idx)
    if(idx < 0 || idx >= MAX_HEDGE_SETS) return;
    if(!g_hedgeSets[idx].active) return;
 
+   // v6.70: prune dead tickets first so basket reflects only live positions
+   CompactRecoveryGridTickets(idx);
+
    ulong  tickets[];
    double prices[];
    double lots[];
    int    cnt = 0;
+   int    fromHedge = 0, fromComment = 0, fromTicket = 0;
 
    ENUM_POSITION_TYPE side = g_hedgeSets[idx].hedgeSide;
    ulong  hedgeTk = g_hedgeSets[idx].hedgeTicket;
@@ -8051,9 +8135,7 @@ void SyncRecoveryBasketTP(int idx)
       prices[cnt]  = PositionGetDouble(POSITION_PRICE_OPEN);
       lots[cnt]    = PositionGetDouble(POSITION_VOLUME);
       cnt++;
-   }
-
-   // 2) Add recovery grid (comment-based: legacy GM_HG + new GM_HD) on hedgeSide
+      fromHedge++;
    int gen = g_hedgeSets[idx].boundGeneration;
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
@@ -8072,9 +8154,8 @@ void SyncRecoveryBasketTP(int idx)
       prices[cnt]  = PositionGetDouble(POSITION_PRICE_OPEN);
       lots[cnt]    = PositionGetDouble(POSITION_VOLUME);
       cnt++;
+      fromComment++;
    }
-
-   // 3) v6.69: Add ticket-based floaters (comment lost after partial-close)
    for(int k = 0; k < g_hedgeSets[idx].recoveryGridCount; k++)
    {
       ulong tk = g_hedgeSets[idx].recoveryGridTickets[k];
@@ -8093,9 +8174,7 @@ void SyncRecoveryBasketTP(int idx)
       prices[cnt]  = PositionGetDouble(POSITION_PRICE_OPEN);
       lots[cnt]    = PositionGetDouble(POSITION_VOLUME);
       cnt++;
-   }
-
-   if(cnt == 0) return;
+      fromTicket++;
 
    // 3) Weighted average
    double totalLots = 0, weightedPrice = 0;
@@ -8154,16 +8233,15 @@ void SyncRecoveryBasketTP(int idx)
    }
    if(modified > 0)
    {
-      static datetime s_lastRecTpLog = 0;
-      if(TimeCurrent() - s_lastRecTpLog >= 10)
-      {
-         Print("v6.66 RECOVERY TP Set#", idx + 1,
-               ": avg=", DoubleToString(avg, digits),
-               " totalLots=", DoubleToString(totalLots, 2),
-               " tp=", DoubleToString(tpTarget, digits),
-               " modified=", modified, "/", cnt);
-         s_lastRecTpLog = TimeCurrent();
-      }
+      // v6.70: always log when at least one ticket modified — verify TP applies to recovery+floater
+      Print("v6.70 RECOVERY TP Set#", idx + 1,
+            ": hedge=", fromHedge,
+            " gridByComment=", fromComment,
+            " ticketOnly=", fromTicket,
+            " total=", cnt,
+            " avg=", DoubleToString(avg, digits),
+            " tp=", DoubleToString(tpTarget, digits),
+            " modified=", modified, "/", cnt);
    }
 }
 
@@ -9495,11 +9573,13 @@ void ManageOrphanGrid()
                      else
                         lots = ComputeRecoveryGridLot(maxExisting, glb);  // v6.57
 
-                     string comment = prefix + "_GL#" + IntegerToString(nextLevel);
+                     // v6.70: orphan recovery uses GM_HD<genLabel>_<NN> scheme
+                     string comment = "GM_HD" + IntegerToString(GenLabel(gen)) + "_"
+                                    + StringFormat("%02d", nextLevel);
                       if(OpenOrder(ORDER_TYPE_BUY, lots, comment))
                       {
                          g_lastOrphanGridCandleTime = iTime(_Symbol, PERIOD_CURRENT, 0);
-                         Print("ORPHAN/RECOVERY GRID: Opened BUY ", prefix, "_GL#", nextLevel,
+                         Print("ORPHAN/RECOVERY GRID: Opened BUY ", comment,
                                " lots=", DoubleToString(lots, 2), " for Gen", gen);
                       }
                   }
@@ -9566,11 +9646,13 @@ void ManageOrphanGrid()
                      else
                         lots = ComputeRecoveryGridLot(maxExisting, gls);  // v6.57
 
-                     string comment = prefix + "_GL#" + IntegerToString(nextLevel);
+                     // v6.70: orphan recovery uses GM_HD<genLabel>_<NN> scheme
+                     string comment = "GM_HD" + IntegerToString(GenLabel(gen)) + "_"
+                                    + StringFormat("%02d", nextLevel);
                       if(OpenOrder(ORDER_TYPE_SELL, lots, comment))
                       {
                          g_lastOrphanGridCandleTime = iTime(_Symbol, PERIOD_CURRENT, 0);
-                         Print("ORPHAN/RECOVERY GRID: Opened SELL ", prefix, "_GL#", nextLevel,
+                         Print("ORPHAN/RECOVERY GRID: Opened SELL ", comment,
                                " lots=", DoubleToString(lots, 2), " for Gen", gen);
                        }
                    }
@@ -11181,9 +11263,9 @@ void ManageHedgeGridMode(int idx)
          }
          ENUM_ORDER_TYPE orderType = (g_hedgeSets[idx].hedgeSide == POSITION_TYPE_BUY)
                                     ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
-         // v6.69: Comment format = GM_HD<gen>_<NN>  (e.g. Gen1 lvl 1 → GM_HD1_01)
+         // v6.70: Comment format = GM_HD<genLabel>_<NN>  (1-based; Gen0 → GM_HD1_01)
          int gen = g_hedgeSets[idx].boundGeneration;
-         string comment = "GM_HD" + IntegerToString(gen) + "_"
+         string comment = "GM_HD" + IntegerToString(GenLabel(gen)) + "_"
                         + StringFormat("%02d", currentGridCount + 1);
 
          if(OpenOrder(orderType, nextLot, comment))
@@ -11198,6 +11280,9 @@ void ManageHedgeGridMode(int idx)
                   " lots=", DoubleToString(nextLot, 2),
                   " gap=", DoubleToString(distance, 0), "/", DoubleToString(requiredGap, 0),
                   " tk=", newTk);
+            // v6.70: Immediately sync weighted-avg broker TP across all tickets in this set
+            //        so the new recovery order gets a TP in the same tick it was opened.
+            SyncRecoveryBasketTP(idx);
          }
       }
    }
