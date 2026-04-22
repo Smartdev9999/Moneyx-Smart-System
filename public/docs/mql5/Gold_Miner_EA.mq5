@@ -5,8 +5,8 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.63"
-#property description "Gold Miner EA v6.63 - v6.62 + Recovery Owner Broker TP Sync + Orphan GL Watchdog (fix GL ใหม่หลัง hedge ปลด ไม่ได้ TP)"
+#property version   "6.64"
+#property description "Gold Miner EA v6.64 - v6.63 + Recovery TP Sync Throttling (sync เฉพาะตอน basket เปลี่ยน, แก้ ping-pong กับ ClearBrokerTPSL)"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -979,7 +979,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.62 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.64 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min");
@@ -1039,7 +1039,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.62 deinitialized");
+   Print("Gold Miner EA v6.64 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -2450,10 +2450,21 @@ void ClearBrokerTPSL()
       if(ticket == 0) continue;
       if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
-      if(IsHedgeComment(PositionGetString(POSITION_COMMENT))) continue;
+      string clearComment = PositionGetString(POSITION_COMMENT);
+      if(IsHedgeComment(clearComment)) continue;
       
       // v6.46: Only clear TP/SL for orders that are bound in active hedge sets
       if(!IsTicketBound(ticket)) continue;
+
+      // v6.64: Don't clear TP of recovery owner generation orders — they're managed
+      // by ManageRecoveryOwnerAvgTP. Without this guard, ClearBrokerTPSL and
+      // ManageRecoveryOwnerAvgTP fight every tick (ping-pong loop in journal).
+      if(g_sequentialRecoveryActive)
+      {
+         int og = ExtractGeneration(clearComment);
+         if(og == g_sequentialRecoveryGen) continue;
+         if(IsRecoverySeedTicket(ticket) && GetRecoverySeedGen(ticket) == g_sequentialRecoveryGen) continue;
+      }
 
       double curTP = PositionGetDouble(POSITION_TP);
       double curSL = PositionGetDouble(POSITION_SL);
@@ -3922,7 +3933,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.62 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.62 [ZZ]" : "Gold Miner EA v6.62 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.64 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.64 [ZZ]" : "Gold Miner EA v6.64 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -7687,6 +7698,14 @@ void ManageRecoveryOwnerAvgTP()
 
    string prefix = GenPrefix(gen);
 
+   // v6.64: per-side cache for change detection — only sync TP when basket changes
+   //        (count, lots, gen, or avg price differs from last tick). This stops the
+   //        ping-pong with ClearBrokerTPSL and stops journal log spam.
+   static int    s_lastBasketCount[2] = {0, 0};
+   static double s_lastBasketLots[2]  = {0.0, 0.0};
+   static double s_lastAvgPrice[2]    = {0.0, 0.0};
+   static int    s_lastGen[2]         = {-1, -1};
+
    // Build basket per side: include normal gen orders + recovery seeds for this gen
    for(int sideI = 0; sideI < 2; sideI++)
    {
@@ -7723,7 +7742,15 @@ void ManageRecoveryOwnerAvgTP()
          basketTickets[basketCount++] = ticket;
       }
 
-      if(totalLots <= 0 || basketCount == 0) continue;
+      if(totalLots <= 0 || basketCount == 0)
+      {
+         // basket empty for this side — reset cache so next time it appears we sync fresh
+         s_lastBasketCount[sideI] = 0;
+         s_lastBasketLots[sideI]  = 0.0;
+         s_lastAvgPrice[sideI]    = 0.0;
+         s_lastGen[sideI]         = -1;
+         continue;
+      }
 
       double avgPrice  = totalWeighted / totalLots;
       double tpDist    = InpHedge_BoundAvgTPPoints * _Point;
@@ -7736,21 +7763,38 @@ void ManageRecoveryOwnerAvgTP()
       else
          tpReached = (SymbolInfoDouble(_Symbol, SYMBOL_ASK) <= avgPrice - tpDist);
 
-      // v6.63 FIX: Always sync Broker TP for owner basket (even before TP reached)
-      // This ensures GL orders opened AFTER hedge release get the correct avg TP
-      // and survive EA restart / connection drop.
-      for(int b = 0; b < basketCount; b++)
+      // v6.64: Only re-sync Broker TP when basket signature changes
+      // (new GL added, order closed, gen change, or avg shifted by > 1 point).
+      // Per user spec: "ควรจะแก้เมื่อมีออเดอร์ Generation เดียวกันเพิ่มขึ้นมาใหม่
+      //                 ไม่ใช่จะต้องรีเซ็ตตลอดเวลาแบบนี้"
+      bool basketChanged = (basketCount != s_lastBasketCount[sideI])
+                        || (MathAbs(totalLots - s_lastBasketLots[sideI]) > 0.001)
+                        || (gen != s_lastGen[sideI])
+                        || (MathAbs(avgPrice - s_lastAvgPrice[sideI]) > _Point);
+
+      if(basketChanged)
       {
-         if(!PositionSelectByTicket(basketTickets[b])) continue;
-         double curTP = PositionGetDouble(POSITION_TP);
-         double curSL = PositionGetDouble(POSITION_SL);
-         if(NormalizeDouble(curTP, _Digits) != tpPrice)
+         int syncedCnt = 0;
+         for(int b = 0; b < basketCount; b++)
          {
-            if(trade.PositionModify(basketTickets[b], curSL, tpPrice))
-               Print("v6.63 RECOV TP SYNC: Gen", gen, " #", basketTickets[b],
-                     " TP=", DoubleToString(tpPrice, _Digits),
-                     " (avg=", DoubleToString(avgPrice, _Digits), ")");
+            if(!PositionSelectByTicket(basketTickets[b])) continue;
+            double curTP = PositionGetDouble(POSITION_TP);
+            double curSL = PositionGetDouble(POSITION_SL);
+            if(NormalizeDouble(curTP, _Digits) != tpPrice)
+            {
+               if(trade.PositionModify(basketTickets[b], curSL, tpPrice))
+                  syncedCnt++;
+            }
          }
+         Print("v6.64 RECOV TP RECALC: Gen", gen, " side=", EnumToString(side),
+               " basket=", basketCount, " lots=", DoubleToString(totalLots, 2),
+               " avg=", DoubleToString(avgPrice, _Digits),
+               " TP=", DoubleToString(tpPrice, _Digits),
+               " synced=", syncedCnt);
+         s_lastBasketCount[sideI] = basketCount;
+         s_lastBasketLots[sideI]  = totalLots;
+         s_lastAvgPrice[sideI]    = avgPrice;
+         s_lastGen[sideI]         = gen;
       }
 
       if(!tpReached) continue;
@@ -7767,6 +7811,11 @@ void ManageRecoveryOwnerAvgTP()
             Sleep(30);
          }
       }
+      // basket about to be cleared — reset cache
+      s_lastBasketCount[sideI] = 0;
+      s_lastBasketLots[sideI]  = 0.0;
+      s_lastAvgPrice[sideI]    = 0.0;
+      s_lastGen[sideI]         = -1;
    }
 }
 
@@ -7799,12 +7848,12 @@ void AuditUnTPedOwnerOrders()
          ownerOrder = true;
       if(!ownerOrder) continue;
       if(PositionGetDouble(POSITION_TP) == 0)
-      {
          orphanCnt++;
-         Print("v6.63 ORPHAN GL: Gen", gen, " #", ticket, " (", c,
-               ") has TP=0 → next ManageRecoveryOwnerAvgTP tick will sync");
-      }
    }
+   // v6.64: print summary only (one line per audit cycle), not per-ticket spam
+   if(orphanCnt > 0)
+      Print("v6.64 ORPHAN GL: Gen", gen, " has ", orphanCnt,
+            " owner orders with TP=0 → will sync on next basket change");
    if(orphanCnt > 0)
    {
       s_lastAuditLog = TimeCurrent();
