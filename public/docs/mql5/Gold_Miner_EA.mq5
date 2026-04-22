@@ -7964,8 +7964,14 @@ double ComputeAutoNextLot(double lastGridLot)
 // v6.66: Count active GM_HG{idx+1}_GL* positions for max-grid cap
 int CountHedgeGridOrders(int idx)
 {
+   if(idx < 0 || idx >= MAX_HEDGE_SETS) return 0;
    int cnt = 0;
-   string prefix = "GM_HG" + IntegerToString(idx + 1);
+   int gen = g_hedgeSets[idx].boundGeneration;
+   ENUM_POSITION_TYPE side = g_hedgeSets[idx].hedgeSide;
+   ulong hedgeTk = g_hedgeSets[idx].hedgeTicket;
+   ulong counted[]; int countedN = 0;
+
+   // Pass 1: comment-based (legacy GM_HG + new GM_HD)
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       ulong tk = PositionGetTicket(i);
@@ -7973,7 +7979,23 @@ int CountHedgeGridOrders(int idx)
       if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       string c = PositionGetString(POSITION_COMMENT);
-      if(StringFind(c, prefix) >= 0) cnt++;
+      if(!IsRecoveryGridForSet(c, idx, gen)) continue;
+      ArrayResize(counted, countedN + 1); counted[countedN++] = tk;
+      cnt++;
+   }
+   // Pass 2: ticket-based fallback (comment lost after partial-close)
+   for(int k = 0; k < g_hedgeSets[idx].recoveryGridCount; k++)
+   {
+      ulong tk = g_hedgeSets[idx].recoveryGridTickets[k];
+      if(tk == 0 || tk == hedgeTk) continue;
+      bool dup = false;
+      for(int j = 0; j < countedN; j++) if(counted[j] == tk) { dup = true; break; }
+      if(dup) continue;
+      if(!PositionSelectByTicket(tk)) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
+      ArrayResize(counted, countedN + 1); counted[countedN++] = tk;
+      cnt++;
    }
    return cnt;
 }
@@ -8020,8 +8042,8 @@ void SyncRecoveryBasketTP(int idx)
       cnt++;
    }
 
-   // 2) Add all GM_HG{idx+1}_GL on hedgeSide
-   string prefix = "GM_HG" + IntegerToString(idx + 1);
+   // 2) Add recovery grid (comment-based: legacy GM_HG + new GM_HD) on hedgeSide
+   int gen = g_hedgeSets[idx].boundGeneration;
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       ulong tk = PositionGetTicket(i);
@@ -8030,8 +8052,29 @@ void SyncRecoveryBasketTP(int idx)
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
       string c = PositionGetString(POSITION_COMMENT);
-      if(StringFind(c, prefix) < 0) continue;
+      if(!IsRecoveryGridForSet(c, idx, gen)) continue;
       if(tk == hedgeTk) continue;  // already added
+      ArrayResize(tickets, cnt + 1);
+      ArrayResize(prices,  cnt + 1);
+      ArrayResize(lots,    cnt + 1);
+      tickets[cnt] = tk;
+      prices[cnt]  = PositionGetDouble(POSITION_PRICE_OPEN);
+      lots[cnt]    = PositionGetDouble(POSITION_VOLUME);
+      cnt++;
+   }
+
+   // 3) v6.69: Add ticket-based floaters (comment lost after partial-close)
+   for(int k = 0; k < g_hedgeSets[idx].recoveryGridCount; k++)
+   {
+      ulong tk = g_hedgeSets[idx].recoveryGridTickets[k];
+      if(tk == 0 || tk == hedgeTk) continue;
+      // dedupe against already-added
+      bool dup = false;
+      for(int j = 0; j < cnt; j++) if(tickets[j] == tk) { dup = true; break; }
+      if(dup) continue;
+      if(!PositionSelectByTicket(tk)) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
       ArrayResize(tickets, cnt + 1);
       ArrayResize(prices,  cnt + 1);
       ArrayResize(lots,    cnt + 1);
