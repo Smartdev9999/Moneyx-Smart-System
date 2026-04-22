@@ -10658,6 +10658,12 @@ void ManageHedgeMatchingClose(int idx)
                   {
                      g_hedgeSets[idx].hedgeLots = remainingLots;
                      netClosed += (-1.0) * (closeLots * hedgeLossPerLot);
+                     // v6.66: One-Time Shred — lock further hedge partial closes;
+                     //        let Combined Avg TP take over for the remaining basket.
+                     g_hedgeSets[idx].shredCompleted = true;
+                     GlobalVariableSet("GME_HEDGE_SHRED_" + IntegerToString(idx), 1);
+                     Print("v6.66 SHRED DONE Set#", idx + 1,
+                           ": shred locked, switching to Combined TP");
                   }
                }
                Sleep(100);
