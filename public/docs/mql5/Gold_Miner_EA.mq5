@@ -4422,7 +4422,8 @@ void DisplayDashboard()
                 else if(g_hedgeSetCount > 0)
                 {
                    int oldestIdx = FindOldestActiveHedgeSet();
-                   seqInfo = "Sequential | Next Unlock: H" + IntegerToString(oldestIdx + 1) + " (1/tick)";
+                   // v6.65: Strict sequential matching → name the active matcher
+                   seqInfo = "Strict Seq | Active Matcher: H" + IntegerToString(oldestIdx + 1);
                    int pendingCount = g_hedgeSetCount - 1;
                    if(pendingCount > 0) seqInfo += " | Wait: " + IntegerToString(pendingCount) + " set(s)";
                 }
@@ -4435,8 +4436,22 @@ void DisplayDashboard()
                 }
              }
 
-             // v6.57: Recovery Grid mode indicator
-             if(Recovery_UseSeparate)
+             // v6.57/v6.65: Recovery Grid mode indicator
+             if(Recovery_AutoLot)
+             {
+                string recInfo = "Auto:ON Init=" + DoubleToString(Recovery_AutoInitLot, 2) +
+                                 " Mult=" + DoubleToString(Recovery_AutoMult, 2);
+                int matcherIdx = g_sequentialRecoveryActive ? g_sequentialRecoverySetIdx : FindOldestActiveHedgeSet();
+                if(matcherIdx >= 0 && matcherIdx < MAX_HEDGE_SETS && g_hedgeSets[matcherIdx].active)
+                {
+                   double used = SumHedgeGridLots(matcherIdx);
+                   double rem  = g_hedgeSets[matcherIdx].hedgeLots;
+                   recInfo += " | H" + IntegerToString(matcherIdx + 1) +
+                              " used " + DoubleToString(used, 2) + "/" + DoubleToString(rem, 2);
+                }
+                DrawTableRow(row, "Recovery Grid", recInfo, clrCyan, COLOR_SECTION_HEDGE); row++;
+             }
+             else if(Recovery_UseSeparate)
              {
                 string recInfo = "Separate | Max:" + IntegerToString(Recovery_MaxTrades) +
                                  " | Dist:" + IntegerToString(Recovery_Points) + "p";
