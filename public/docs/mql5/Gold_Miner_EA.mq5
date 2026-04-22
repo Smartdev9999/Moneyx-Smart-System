@@ -10842,34 +10842,46 @@ void ManageHedgeGridMode(int idx)
       if(StringFind(comment, prefix) >= 0) currentGridCount++;
    }
 
-   if(currentGridCount < GridLoss_MaxTrades && currentGridCount <= g_hedgeSets[idx].gridLevel + 3)
+   // v6.66: Max grid cap applies to BOTH Auto + Manual modes
+   int recMaxCap = GetRecoveryMaxTrades();
+   if(currentGridCount >= recMaxCap)
+   {
+      static datetime s_lastMaxCapLog = 0;
+      if(TimeCurrent() - s_lastMaxCapLog >= 60)
+      {
+         Print("v6.66 MAX GRID Set#", idx + 1, " reached ", currentGridCount,
+               "/", recMaxCap, " — wait for TP");
+         s_lastMaxCapLog = TimeCurrent();
+      }
+      return;
+   }
+
+   if(currentGridCount < recMaxCap && currentGridCount <= g_hedgeSets[idx].gridLevel + 3)
    {
       // Calculate next grid lot
       int nextLevel = g_hedgeSets[idx].gridLevel + currentGridCount + 1;
       double nextLot = InitialLotSize;
       if(Recovery_AutoLot)
       {
-         double existingLots = SumHedgeGridLots(idx);
-         double lastGridLot  = FindLastHedgeGridLot(idx);
-         double remHedge     = g_hedgeSets[idx].hedgeLots;
-         nextLot = ComputeAutoRecoveryLot(remHedge, existingLots, lastGridLot);
-         if(nextLot <= 0)
+         double lastGridLot = FindLastHedgeGridLot(idx);
+         double remHedge    = g_hedgeSets[idx].hedgeLots;
+         if(lastGridLot <= 0)
          {
-            static datetime s_lastAutoFullLog = 0;
-            if(TimeCurrent() - s_lastAutoFullLog >= 60)
-            {
-               Print("v6.65 AUTO LOT Set#", idx + 1,
-                     ": BUDGET FULL (used=", DoubleToString(existingLots, 2),
-                     "/", DoubleToString(remHedge, 2), ") -> skip");
-               s_lastAutoFullLog = TimeCurrent();
-            }
-            return;  // budget full → wait
+            nextLot = ComputeAutoSeedLot(remHedge);
+            Print("v6.66 SEED Set#", idx + 1,
+                  ": rem=", DoubleToString(remHedge, 2),
+                  " init=", DoubleToString(Recovery_AutoInitLot, 2),
+                  " mult=", DoubleToString(Recovery_AutoMult, 2),
+                  " -> seed=", DoubleToString(nextLot, 2));
          }
-         Print("v6.65 AUTO LOT Set#", idx + 1,
-               ": rem=", DoubleToString(remHedge, 2),
-               " used=", DoubleToString(existingLots, 2),
-               " last=", DoubleToString(lastGridLot, 2),
-               " -> next=", DoubleToString(nextLot, 2));
+         else
+         {
+            nextLot = ComputeAutoNextLot(lastGridLot);
+            Print("v6.66 NEXT Set#", idx + 1,
+                  ": last=", DoubleToString(lastGridLot, 2),
+                  " -> next=", DoubleToString(nextLot, 2));
+         }
+         if(nextLot <= 0) return;
       }
       else if(GridLoss_LotMode == LOT_MULTIPLY)
          nextLot = InitialLotSize * MathPow(GridLoss_MultiplyFactor, nextLevel);
