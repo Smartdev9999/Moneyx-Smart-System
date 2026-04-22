@@ -7620,6 +7620,17 @@ int FindFreeHedgeSlot()
 }
 
 //+------------------------------------------------------------------+
+//| v6.57: Find oldest active hedge set (lowest slot index)          |
+//| Returns -1 if no active set                                       |
+//+------------------------------------------------------------------+
+int GetOldestActiveHedgeSetIndex()
+{
+   for(int h = 0; h < MAX_HEDGE_SETS; h++)
+      if(g_hedgeSets[h].active) return h;
+   return -1;
+}
+
+//+------------------------------------------------------------------+
 //| Check expansion and open hedge if needed                           |
 //| Now supports multiple hedge sets on same side (unbound orders)     |
 //+------------------------------------------------------------------+
