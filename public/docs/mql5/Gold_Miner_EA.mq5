@@ -8774,7 +8774,8 @@ bool OpenDDHedge(ENUM_POSITION_TYPE counterSide, ENUM_POSITION_TYPE hedgeSide, i
 //+------------------------------------------------------------------+
 void CloseAllHedgeGridOrders(int idx)
 {
-   string prefix = "GM_HG" + IntegerToString(idx + 1);
+   if(idx < 0 || idx >= MAX_HEDGE_SETS) return;
+   int gen = g_hedgeSets[idx].boundGeneration;
    int closed = 0;
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
@@ -8783,7 +8784,13 @@ void CloseAllHedgeGridOrders(int idx)
       if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       string comment = PositionGetString(POSITION_COMMENT);
-      if(StringFind(comment, prefix) >= 0)
+      bool isOurs = IsRecoveryGridForSet(comment, idx, gen);  // v6.69
+      if(!isOurs)
+      {
+         for(int k = 0; k < g_hedgeSets[idx].recoveryGridCount; k++)
+            if(g_hedgeSets[idx].recoveryGridTickets[k] == ticket) { isOurs = true; break; }
+      }
+      if(isOurs)
       {
          trade.PositionClose(ticket);
          closed++;
@@ -8791,9 +8798,10 @@ void CloseAllHedgeGridOrders(int idx)
       }
    }
    if(closed > 0)
-      Print("HEDGE CLEANUP Set#", idx + 1, ": closed ", closed, " orphan grid orders (", prefix, ")");
+      Print("HEDGE CLEANUP Set#", idx + 1, ": closed ", closed, " recovery grid orders (Gen", gen, ")");
    g_hedgeSets[idx].gridTicketCount = 0;
    ArrayResize(g_hedgeSets[idx].gridTickets, 0);
+   CompactRecoveryGridTickets(idx);  // v6.69
 }
 
 //+------------------------------------------------------------------+
