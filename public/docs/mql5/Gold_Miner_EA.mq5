@@ -6,8 +6,8 @@
 //+------------------------------------------------------------------+
 #property copyright "Money X System"
 #property link      ""
-#property version   "6.69"
-#property description "Gold Miner EA v6.69 - RecoveryNewCandle + GM_HD<gen>_<NN> Comments + TicketBindFallback + FloaterIncludedTP + GenerationLockedHedgeSlot + UnifiedRecoveryParams + ReverseWalkSeed + CombinedAvgTP + MaxGridCap + OneTimeShred + HedgeTicketPersist + StrictSequentialMatching + AutoRecoveryLot + MatchTickRetry + HedgePartialFallback + InSetMatchAlways + PersistHedgeSlot + StrictInSetPool + MatchPoolBothSides + SeqRecoveryOwner + RehedgeGuard + SequentialRecovery + RecoveryGrid + BBFilter + BoundNoClose + StartOrderTrail + PersistGen + HedgeRecoveryToggle + MatchCloseToggle + InstantTP + DashCache + BrokerTPSL + MaxGridTrail + GLCandleConfirm + HedgeSidePause + OrphanGenFix + BalanceGuard + DDHedge + HedgeCloseGate + AvgTP + Squeeze + CDC + MTF ZigZag + License"
+#property version   "6.70"
+#property description "Gold Miner EA v6.70 - GM1-Start Comment Scheme + ImmediateRecoveryTPSync + HardFlatReset + RecoveryNewCandle + GM_HD<gen>_<NN> Comments + TicketBindFallback + FloaterIncludedTP + GenerationLockedHedgeSlot + UnifiedRecoveryParams + ReverseWalkSeed + CombinedAvgTP + MaxGridCap + OneTimeShred + HedgeTicketPersist + StrictSequentialMatching + AutoRecoveryLot + MatchTickRetry + HedgePartialFallback + InSetMatchAlways + PersistHedgeSlot + StrictInSetPool + MatchPoolBothSides + SeqRecoveryOwner + RehedgeGuard + SequentialRecovery + RecoveryGrid + BBFilter + BoundNoClose + StartOrderTrail + PersistGen + HedgeRecoveryToggle + MatchCloseToggle + InstantTP + DashCache + BrokerTPSL + MaxGridTrail + GLCandleConfirm + HedgeSidePause + OrphanGenFix + BalanceGuard + DDHedge + HedgeCloseGate + AvgTP + Squeeze + CDC + MTF ZigZag + License"
 #property strict
 
 #include <Trade/Trade.mqh>
