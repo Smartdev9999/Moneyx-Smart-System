@@ -1,13 +1,13 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.65 - MTF ZigZag+CDC+Grid+License |
-//|         v6.65: Strict Sequential Matching + Auto Recovery Lot   |
+//|                Gold Miner EA v6.66 - MTF ZigZag+CDC+Grid+License |
+//|         v6.66: ReverseWalkSeed + CombinedAvgTP + MaxGridCap     |
 //+------------------------------------------------------------------+
 #property copyright "Money X System"
 #property link      ""
-#property version   "6.65"
-#property description "Gold Miner EA v6.65 - StrictSequentialMatching + AutoRecoveryLot + MatchTickRetry + HedgePartialFallback + InSetMatchAlways + PersistHedgeSlot + StrictInSetPool + MatchPoolBothSides + StrictOwnerCount + Gen0OwnerFix + SeqRecoveryOwner + RehedgeGuard + SeqOneSetPerTick + FlatGenReset + SequentialRecovery + RecoveryGrid + BBFilter + BoundNoClose + StartOrderTrail + PersistGen + HedgeRecoveryToggle + MatchCloseToggle + InstantTP + DeferredSync + InstantSync + BoundClearFix + HedgeClearTP + LiveTPFix + DashThrottle + DashCache + BrokerTPSL + MaxGridTrail + GLCandleConfirm + HedgeSidePause + OrphanGenFix + GenRaceFix + BalGuardProfit + BalanceGuard + SafeReset + PrevHedgedGuard + HedgeCooldown + DDDollar + GenReset + MaxHedge50 + GenHelpers + GenCountFilter + ConstDDThreshold + NormalCount + GenAware + DDHedge + HedgeCloseGate + AvgTP + Squeeze + CDC + MTF ZigZag + License"
+#property version   "6.66"
+#property description "Gold Miner EA v6.66 - ReverseWalkSeed + CombinedAvgTP + MaxGridCap + OneTimeShred + HedgeTicketPersist + StrictSequentialMatching + AutoRecoveryLot + MatchTickRetry + HedgePartialFallback + InSetMatchAlways + PersistHedgeSlot + StrictInSetPool + MatchPoolBothSides + SeqRecoveryOwner + RehedgeGuard + SequentialRecovery + RecoveryGrid + BBFilter + BoundNoClose + StartOrderTrail + PersistGen + HedgeRecoveryToggle + MatchCloseToggle + InstantTP + DashCache + BrokerTPSL + MaxGridTrail + GLCandleConfirm + HedgeSidePause + OrphanGenFix + BalanceGuard + DDHedge + HedgeCloseGate + AvgTP + Squeeze + CDC + MTF ZigZag + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -400,10 +400,11 @@ input ENUM_ATR_REF   Recovery_ATR_Reference  = ATR_REF_DYNAMIC;             // R
 input int            Recovery_MinGapPoints   = 100;                         // Recovery Min Grid Gap (points)
 input int            Recovery_CandleConfirm  = 0;                           // Recovery Candle Confirm (0=Off)
 
-// === v6.65: Auto Recovery Lot Sizing ===
-input bool           Recovery_AutoLot        = false;  // v6.65 Auto: คำนวณ lot จาก hedge lots ที่เหลือ
+// === v6.65/v6.66: Auto Recovery Lot Sizing ===
+input bool           Recovery_AutoLot        = false;  // v6.66 Auto: Reverse-walk seed from init*mult^n until cumulative > remHedge
 input double         Recovery_AutoInitLot    = 0.05;   // v6.65 Auto Initial Lot
 input double         Recovery_AutoMult       = 1.4;    // v6.65 Auto Multiplier
+input bool           Recovery_UseCombinedTP  = true;   // v6.66 Combined Avg TP across remaining hedge + HG_GL orders
 
 // === v6.57: Sequential Hedge Recovery ===
 input group "=== Sequential Hedge Recovery ==="
@@ -584,6 +585,8 @@ struct HedgeSet
    int      triggerType;               // 0 = expansion, 1 = DD%
    // === v6.57: Sequential Recovery ordering ===
    datetime hedgeOpenTime;             // open time of main hedge order (FIFO ordering)
+   // === v6.66: One-Time Shred + Combined TP ===
+   bool     shredCompleted;            // true after first hedge partial-close — disables further shredding
 };
 HedgeSet g_hedgeSets[MAX_HEDGE_SETS];
 int      g_hedgeSetCount = 0;
@@ -920,6 +923,7 @@ int OnInit()
        // v6.16: Trigger type init
        g_hedgeSets[h].triggerType = 0;
        g_hedgeSets[h].hedgeOpenTime = 0;  // v6.57
+       g_hedgeSets[h].shredCompleted = false;  // v6.66
      }
      g_hedgeSetCount = 0;
 
@@ -949,10 +953,12 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.65 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.66 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
-          " | SidePause=", InpHedge_SidePauseMin, "min");
+          " | SidePause=", InpHedge_SidePauseMin, "min",
+          " | AutoLot=", Recovery_AutoLot ? "ON" : "OFF",
+          " | CombinedTP=", Recovery_UseCombinedTP ? "ON" : "OFF");
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -1009,7 +1015,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.65 deinitialized");
+   Print("Gold Miner EA v6.66 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -2243,6 +2249,12 @@ void CloseAllPositions()
       // v6.16: Reset trigger type
       g_hedgeSets[h].triggerType = 0;
       g_hedgeSets[h].hedgeOpenTime = 0;  // v6.57
+      g_hedgeSets[h].shredCompleted = false;  // v6.66
+      // v6.66: clear persisted state
+      string gvShred  = "GME_HEDGE_SHRED_"  + IntegerToString(h);
+      string gvTicket = "GME_HEDGE_TICKET_" + IntegerToString(h);
+      if(GlobalVariableCheck(gvShred))  GlobalVariableDel(gvShred);
+      if(GlobalVariableCheck(gvTicket)) GlobalVariableDel(gvTicket);
    }
    g_hedgeSetCount = 0;
    // v6.16: Reset DD triggers on full close
@@ -3876,7 +3888,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.65 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.65 [ZZ]" : "Gold Miner EA v6.65 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.66 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.66 [ZZ]" : "Gold Miner EA v6.66 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -7833,7 +7845,200 @@ double SumOrphanGridLots(int gen, ENUM_POSITION_TYPE side)
    return total;
 }
 
-// v6.65: คืน lot ของไม้ recovery ถัดไป; คืน 0 ถ้า budget เต็ม
+// v6.66: Reverse-walk seed lot — find the lot in series init*mult^n that
+//        makes cumulative just exceed remHedgeLots. That is our seed = first
+//        recovery grid order. Subsequent orders multiply from the previous lot.
+double ComputeAutoSeedLot(double remHedgeLots)
+{
+   double minLot  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   if(lotStep <= 0) lotStep = 0.01;
+   if(minLot  <= 0) minLot  = 0.01;
+   if(remHedgeLots < minLot) return minLot;
+
+   double curLot = Recovery_AutoInitLot;
+   if(curLot < minLot) curLot = minLot;
+   double cum    = 0.0;
+   double prev   = curLot;
+   int    safety = 0;
+   while(safety++ < 200)
+   {
+      double normLot = MathFloor(curLot / lotStep + 0.0000001) * lotStep;
+      if(normLot < minLot) normLot = minLot;
+      cum += normLot;
+      if(cum > remHedgeLots + 0.0000001) return normLot;
+      prev   = normLot;
+      curLot = normLot * Recovery_AutoMult;
+   }
+   return prev;
+}
+
+// v6.66: Next lot = lastGridLot * mult, normalized
+double ComputeAutoNextLot(double lastGridLot)
+{
+   double minLot  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   if(lotStep <= 0) lotStep = 0.01;
+   if(minLot  <= 0) minLot  = 0.01;
+   double next = MathFloor((lastGridLot * Recovery_AutoMult) / lotStep + 0.0000001) * lotStep;
+   if(next < minLot) next = minLot;
+   return next;
+}
+
+// v6.66: Count active GM_HG{idx+1}_GL* positions for max-grid cap
+int CountHedgeGridOrders(int idx)
+{
+   int cnt = 0;
+   string prefix = "GM_HG" + IntegerToString(idx + 1);
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      string c = PositionGetString(POSITION_COMMENT);
+      if(StringFind(c, prefix) >= 0) cnt++;
+   }
+   return cnt;
+}
+
+// v6.66: Count GM_HG_GL across all sets bound to a generation (for orphan grid cap)
+int CountHedgeGridOrdersForGen(int gen)
+{
+   int cnt = 0;
+   for(int h = 0; h < MAX_HEDGE_SETS; h++)
+   {
+      if(!g_hedgeSets[h].active) continue;
+      if(g_hedgeSets[h].boundGeneration != gen) continue;
+      cnt += CountHedgeGridOrders(h);
+   }
+   return cnt;
+}
+
+// v6.66: Combined Avg TP — sync TP across remaining hedge ticket + all GM_HG{idx+1}_GL
+//        positions of the set. Computes weighted-average price and applies single TP target.
+//        Respects UseTP_Points / UseTP_Dollar / UseTP_PercentBalance priority.
+void SyncRecoveryBasketTP(int idx)
+{
+   if(!Recovery_UseCombinedTP) return;
+   if(idx < 0 || idx >= MAX_HEDGE_SETS) return;
+   if(!g_hedgeSets[idx].active) return;
+
+   ulong  tickets[];
+   double prices[];
+   double lots[];
+   int    cnt = 0;
+
+   ENUM_POSITION_TYPE side = g_hedgeSets[idx].hedgeSide;
+   ulong  hedgeTk = g_hedgeSets[idx].hedgeTicket;
+
+   // 1) Add main hedge if alive
+   if(hedgeTk > 0 && PositionSelectByTicket(hedgeTk))
+   {
+      ArrayResize(tickets, cnt + 1);
+      ArrayResize(prices,  cnt + 1);
+      ArrayResize(lots,    cnt + 1);
+      tickets[cnt] = hedgeTk;
+      prices[cnt]  = PositionGetDouble(POSITION_PRICE_OPEN);
+      lots[cnt]    = PositionGetDouble(POSITION_VOLUME);
+      cnt++;
+   }
+
+   // 2) Add all GM_HG{idx+1}_GL on hedgeSide
+   string prefix = "GM_HG" + IntegerToString(idx + 1);
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
+      string c = PositionGetString(POSITION_COMMENT);
+      if(StringFind(c, prefix) < 0) continue;
+      if(tk == hedgeTk) continue;  // already added
+      ArrayResize(tickets, cnt + 1);
+      ArrayResize(prices,  cnt + 1);
+      ArrayResize(lots,    cnt + 1);
+      tickets[cnt] = tk;
+      prices[cnt]  = PositionGetDouble(POSITION_PRICE_OPEN);
+      lots[cnt]    = PositionGetDouble(POSITION_VOLUME);
+      cnt++;
+   }
+
+   if(cnt == 0) return;
+
+   // 3) Weighted average
+   double totalLots = 0, weightedPrice = 0;
+   for(int k = 0; k < cnt; k++)
+   {
+      totalLots     += lots[k];
+      weightedPrice += prices[k] * lots[k];
+   }
+   if(totalLots <= 0) return;
+   double avg = weightedPrice / totalLots;
+
+   // 4) TP target
+   double point     = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   int    digits    = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+   double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
+   double tickSize  = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+   double balance   = AccountInfoDouble(ACCOUNT_BALANCE);
+
+   double tpTarget = 0;
+   if(UseTP_Points)
+   {
+      tpTarget = (side == POSITION_TYPE_BUY)
+                 ? NormalizeDouble(avg + TP_Points * point, digits)
+                 : NormalizeDouble(avg - TP_Points * point, digits);
+   }
+   else if(UseTP_Dollar && tickValue > 0 && tickSize > 0)
+   {
+      double dist = TP_DollarAmount / (totalLots * tickValue / tickSize);
+      tpTarget = (side == POSITION_TYPE_BUY)
+                 ? NormalizeDouble(avg + dist, digits)
+                 : NormalizeDouble(avg - dist, digits);
+   }
+   else if(UseTP_PercentBalance && tickValue > 0 && tickSize > 0 && balance > 0)
+   {
+      double dollarTarget = balance * TP_PercentBalance / 100.0;
+      double dist = dollarTarget / (totalLots * tickValue / tickSize);
+      tpTarget = (side == POSITION_TYPE_BUY)
+                 ? NormalizeDouble(avg + dist, digits)
+                 : NormalizeDouble(avg - dist, digits);
+   }
+   else
+   {
+      return;  // no TP mode enabled
+   }
+
+   // 5) Apply TP to all tickets in basket
+   int modified = 0;
+   for(int k = 0; k < cnt; k++)
+   {
+      if(!PositionSelectByTicket(tickets[k])) continue;
+      double curTP = PositionGetDouble(POSITION_TP);
+      double curSL = PositionGetDouble(POSITION_SL);
+      if(NormalizeDouble(curTP, digits) == tpTarget) continue;
+      if(trade.PositionModify(tickets[k], curSL, tpTarget))
+         modified++;
+   }
+   if(modified > 0)
+   {
+      static datetime s_lastRecTpLog = 0;
+      if(TimeCurrent() - s_lastRecTpLog >= 10)
+      {
+         Print("v6.66 RECOVERY TP Set#", idx + 1,
+               ": avg=", DoubleToString(avg, digits),
+               " totalLots=", DoubleToString(totalLots, 2),
+               " tp=", DoubleToString(tpTarget, digits),
+               " modified=", modified, "/", cnt);
+         s_lastRecTpLog = TimeCurrent();
+      }
+   }
+}
+
+// v6.65 (kept for backward compat / regression path): legacy budget-cap helper.
+//        v6.66 uses ComputeAutoSeedLot + ComputeAutoNextLot instead.
 double ComputeAutoRecoveryLot(double remainingHedgeLots,
                               double existingTotalLots,
                               double lastLot)
@@ -7842,19 +8047,8 @@ double ComputeAutoRecoveryLot(double remainingHedgeLots,
    double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
    if(lotStep <= 0) lotStep = 0.01;
    if(minLot  <= 0) minLot  = 0.01;
-   double budget  = remainingHedgeLots - existingTotalLots;
-   if(budget < minLot) return 0.0;
-
-   double baseLot = (lastLot > 0) ? lastLot * Recovery_AutoMult : Recovery_AutoInitLot;
-   double nextLot = MathFloor(baseLot / lotStep + 0.0000001) * lotStep;
-   if(nextLot < minLot) nextLot = minLot;
-
-   if(existingTotalLots + nextLot > remainingHedgeLots + 0.0000001)
-   {
-      nextLot = MathFloor(budget / lotStep + 0.0000001) * lotStep;
-      if(nextLot < minLot) return 0.0;
-   }
-   return nextLot;
+   if(lastLot > 0) return ComputeAutoNextLot(lastLot);
+   return ComputeAutoSeedLot(remainingHedgeLots);
 }
 
 // Compute Recovery grid lot using mode + maxExisting continuation
@@ -8139,6 +8333,8 @@ void CheckAndOpenHedge()
          if(PositionGetString(POSITION_COMMENT) == comment)
          {
             g_hedgeSets[slot].hedgeTicket = ticket;
+            // v6.66: persist hedge ticket so we can re-bind after broker clears partial-close comment
+            GlobalVariableSet("GME_HEDGE_TICKET_" + IntegerToString(slot), (double)ticket);
             break;
          }
       }
@@ -9116,15 +9312,36 @@ void ManageOrphanGrid()
                   {
                      int nextLevel = mglb + 1;
                      double maxExisting = FindMaxLotOrphan(gen, POSITION_TYPE_BUY);
+                     // v6.66: enforce max grid cap on orphan recovery (Auto + Manual)
+                     int genGridCount = CountHedgeGridOrdersForGen(gen) + glb;
+                     if(genGridCount >= recMax)
+                     {
+                        static datetime s_lastOrphMaxLogB = 0;
+                        if(TimeCurrent() - s_lastOrphMaxLogB >= 60)
+                        {
+                           Print("v6.66 MAX GRID Gen", gen, " BUY reached ", genGridCount,
+                                 "/", recMax, " — wait for TP");
+                           s_lastOrphMaxLogB = TimeCurrent();
+                        }
+                        continue;
+                     }
                      double lots;
                      if(Recovery_AutoLot)
                      {
                         double remHedge = GetHedgeLotsForGen(gen);
-                        double existLots = SumOrphanGridLots(gen, POSITION_TYPE_BUY);
-                        lots = ComputeAutoRecoveryLot(remHedge, existLots, maxExisting);
+                        if(maxExisting <= 0)
+                        {
+                           lots = ComputeAutoSeedLot(remHedge);
+                           Print("v6.66 SEED Gen", gen, " BUY: rem=", DoubleToString(remHedge, 2),
+                                 " -> seed=", DoubleToString(lots, 2));
+                        }
+                        else
+                        {
+                           lots = ComputeAutoNextLot(maxExisting);
+                           Print("v6.66 NEXT Gen", gen, " BUY: last=", DoubleToString(maxExisting, 2),
+                                 " -> next=", DoubleToString(lots, 2));
+                        }
                         if(lots <= 0) continue;
-                        Print("v6.65 AUTO LOT Gen", gen, " BUY: rem=", DoubleToString(remHedge, 2),
-                              " used=", DoubleToString(existLots, 2), " -> next=", DoubleToString(lots, 2));
                      }
                      else
                         lots = ComputeRecoveryGridLot(maxExisting, glb);  // v6.57
@@ -9166,15 +9383,36 @@ void ManageOrphanGrid()
                   {
                      int nextLevel = mgls + 1;
                      double maxExisting = FindMaxLotOrphan(gen, POSITION_TYPE_SELL);
+                     // v6.66: enforce max grid cap on orphan recovery (Auto + Manual)
+                     int genGridCountS = CountHedgeGridOrdersForGen(gen) + gls;
+                     if(genGridCountS >= recMax)
+                     {
+                        static datetime s_lastOrphMaxLogS = 0;
+                        if(TimeCurrent() - s_lastOrphMaxLogS >= 60)
+                        {
+                           Print("v6.66 MAX GRID Gen", gen, " SELL reached ", genGridCountS,
+                                 "/", recMax, " — wait for TP");
+                           s_lastOrphMaxLogS = TimeCurrent();
+                        }
+                        continue;
+                     }
                      double lots;
                      if(Recovery_AutoLot)
                      {
                         double remHedge = GetHedgeLotsForGen(gen);
-                        double existLots = SumOrphanGridLots(gen, POSITION_TYPE_SELL);
-                        lots = ComputeAutoRecoveryLot(remHedge, existLots, maxExisting);
+                        if(maxExisting <= 0)
+                        {
+                           lots = ComputeAutoSeedLot(remHedge);
+                           Print("v6.66 SEED Gen", gen, " SELL: rem=", DoubleToString(remHedge, 2),
+                                 " -> seed=", DoubleToString(lots, 2));
+                        }
+                        else
+                        {
+                           lots = ComputeAutoNextLot(maxExisting);
+                           Print("v6.66 NEXT Gen", gen, " SELL: last=", DoubleToString(maxExisting, 2),
+                                 " -> next=", DoubleToString(lots, 2));
+                        }
                         if(lots <= 0) continue;
-                        Print("v6.65 AUTO LOT Gen", gen, " SELL: rem=", DoubleToString(remHedge, 2),
-                              " used=", DoubleToString(existLots, 2), " -> next=", DoubleToString(lots, 2));
                      }
                      else
                         lots = ComputeRecoveryGridLot(maxExisting, gls);  // v6.57
@@ -10355,7 +10593,8 @@ void ManageHedgeMatchingClose(int idx)
    if(g_hedgeSets[idx].hedgeTicket > 0 &&
       PositionSelectByTicket(g_hedgeSets[idx].hedgeTicket) &&
       remainingBudget > 0 &&
-      g_hedgeSets[idx].hedgeLots > 0)
+      g_hedgeSets[idx].hedgeLots > 0 &&
+      !g_hedgeSets[idx].shredCompleted)   // v6.66: One-Time Shred guard
    {
       double hedgePnLnow = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
       if(hedgePnLnow < 0)
@@ -10422,6 +10661,12 @@ void ManageHedgeMatchingClose(int idx)
                   {
                      g_hedgeSets[idx].hedgeLots = remainingLots;
                      netClosed += (-1.0) * (closeLots * hedgeLossPerLot);
+                     // v6.66: One-Time Shred — lock further hedge partial closes;
+                     //        let Combined Avg TP take over for the remaining basket.
+                     g_hedgeSets[idx].shredCompleted = true;
+                     GlobalVariableSet("GME_HEDGE_SHRED_" + IntegerToString(idx), 1);
+                     Print("v6.66 SHRED DONE Set#", idx + 1,
+                           ": shred locked, switching to Combined TP");
                   }
                }
                Sleep(100);
@@ -10648,34 +10893,46 @@ void ManageHedgeGridMode(int idx)
       if(StringFind(comment, prefix) >= 0) currentGridCount++;
    }
 
-   if(currentGridCount < GridLoss_MaxTrades && currentGridCount <= g_hedgeSets[idx].gridLevel + 3)
+   // v6.66: Max grid cap applies to BOTH Auto + Manual modes
+   int recMaxCap = GetRecoveryMaxTrades();
+   if(currentGridCount >= recMaxCap)
+   {
+      static datetime s_lastMaxCapLog = 0;
+      if(TimeCurrent() - s_lastMaxCapLog >= 60)
+      {
+         Print("v6.66 MAX GRID Set#", idx + 1, " reached ", currentGridCount,
+               "/", recMaxCap, " — wait for TP");
+         s_lastMaxCapLog = TimeCurrent();
+      }
+      return;
+   }
+
+   if(currentGridCount < recMaxCap && currentGridCount <= g_hedgeSets[idx].gridLevel + 3)
    {
       // Calculate next grid lot
       int nextLevel = g_hedgeSets[idx].gridLevel + currentGridCount + 1;
       double nextLot = InitialLotSize;
       if(Recovery_AutoLot)
       {
-         double existingLots = SumHedgeGridLots(idx);
-         double lastGridLot  = FindLastHedgeGridLot(idx);
-         double remHedge     = g_hedgeSets[idx].hedgeLots;
-         nextLot = ComputeAutoRecoveryLot(remHedge, existingLots, lastGridLot);
-         if(nextLot <= 0)
+         double lastGridLot = FindLastHedgeGridLot(idx);
+         double remHedge    = g_hedgeSets[idx].hedgeLots;
+         if(lastGridLot <= 0)
          {
-            static datetime s_lastAutoFullLog = 0;
-            if(TimeCurrent() - s_lastAutoFullLog >= 60)
-            {
-               Print("v6.65 AUTO LOT Set#", idx + 1,
-                     ": BUDGET FULL (used=", DoubleToString(existingLots, 2),
-                     "/", DoubleToString(remHedge, 2), ") -> skip");
-               s_lastAutoFullLog = TimeCurrent();
-            }
-            return;  // budget full → wait
+            nextLot = ComputeAutoSeedLot(remHedge);
+            Print("v6.66 SEED Set#", idx + 1,
+                  ": rem=", DoubleToString(remHedge, 2),
+                  " init=", DoubleToString(Recovery_AutoInitLot, 2),
+                  " mult=", DoubleToString(Recovery_AutoMult, 2),
+                  " -> seed=", DoubleToString(nextLot, 2));
          }
-         Print("v6.65 AUTO LOT Set#", idx + 1,
-               ": rem=", DoubleToString(remHedge, 2),
-               " used=", DoubleToString(existingLots, 2),
-               " last=", DoubleToString(lastGridLot, 2),
-               " -> next=", DoubleToString(nextLot, 2));
+         else
+         {
+            nextLot = ComputeAutoNextLot(lastGridLot);
+            Print("v6.66 NEXT Set#", idx + 1,
+                  ": last=", DoubleToString(lastGridLot, 2),
+                  " -> next=", DoubleToString(nextLot, 2));
+         }
+         if(nextLot <= 0) return;
       }
       else if(GridLoss_LotMode == LOT_MULTIPLY)
          nextLot = InitialLotSize * MathPow(GridLoss_MultiplyFactor, nextLevel);
