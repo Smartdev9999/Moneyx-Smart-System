@@ -4333,7 +4333,32 @@ void DisplayDashboard()
             DrawTableRow(row, "  Gate", gateInfo, gateClr, COLOR_SECTION_HEDGE); row++;
          }
         }
-        
+
+         // v6.71: Hedge MinSpacing + Recovery Close Mode info
+         {
+            string spacingInfo;
+            if(InpHedge_MinSpacingMin <= 0)
+               spacingInfo = "Off";
+            else if(g_lastHedgeOpenTime <= 0)
+               spacingInfo = IntegerToString(InpHedge_MinSpacingMin) + "min (ready)";
+            else
+            {
+               int elapsedM  = (int)((TimeCurrent() - g_lastHedgeOpenTime) / 60);
+               int remainM   = InpHedge_MinSpacingMin - elapsedM;
+               if(remainM <= 0)
+                  spacingInfo = IntegerToString(InpHedge_MinSpacingMin) + "min (ready, last " + IntegerToString(elapsedM) + "m ago)";
+               else
+                  spacingInfo = IntegerToString(InpHedge_MinSpacingMin) + "min (last " + IntegerToString(elapsedM) + "m — " + IntegerToString(remainM) + "m to next)";
+            }
+            DrawTableRow(row, "Hedge Spacing", spacingInfo, clrSilver, COLOR_SECTION_HEDGE); row++;
+
+            string modeInfo = (InpRecovery_CloseMode == RECOVERY_CLOSE_AVG_TP)
+                              ? ("AVERAGE_TP (dist=" + IntegerToString(InpRecovery_AvgTPDistance) + "p)")
+                              : "MATCHING_CLOSE";
+            DrawTableRow(row, "Recovery Mode", modeInfo, clrSilver, COLOR_SECTION_HEDGE); row++;
+         }
+
+
          // v6.18: DD% / v6.25: DD$ Mode info line with generation scope
           if(InpHedge_TriggerMode == HEDGE_TRIGGER_DD_PERCENT || InpHedge_TriggerMode == HEDGE_TRIGGER_DD_DOLLAR)
           {
