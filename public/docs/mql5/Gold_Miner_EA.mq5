@@ -2,12 +2,12 @@
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
 //|                Gold Miner EA v6.69 - MTF ZigZag+CDC+Grid+License |
-//|         v6.68: GenerationLockedHedgeSlot (slot===gen, no reuse) |
+//|         v6.69: RecoveryNewCandle + GM_HD<gen>_<NN> + TicketBind  |
 //+------------------------------------------------------------------+
 #property copyright "Money X System"
 #property link      ""
-#property version   "6.68"
-#property description "Gold Miner EA v6.68 - GenerationLockedHedgeSlot + UnifiedRecoveryParams + ReverseWalkSeed + CombinedAvgTP + MaxGridCap + OneTimeShred + HedgeTicketPersist + StrictSequentialMatching + AutoRecoveryLot + MatchTickRetry + HedgePartialFallback + InSetMatchAlways + PersistHedgeSlot + StrictInSetPool + MatchPoolBothSides + SeqRecoveryOwner + RehedgeGuard + SequentialRecovery + RecoveryGrid + BBFilter + BoundNoClose + StartOrderTrail + PersistGen + HedgeRecoveryToggle + MatchCloseToggle + InstantTP + DashCache + BrokerTPSL + MaxGridTrail + GLCandleConfirm + HedgeSidePause + OrphanGenFix + BalanceGuard + DDHedge + HedgeCloseGate + AvgTP + Squeeze + CDC + MTF ZigZag + License"
+#property version   "6.69"
+#property description "Gold Miner EA v6.69 - RecoveryNewCandle + GM_HD<gen>_<NN> Comments + TicketBindFallback + FloaterIncludedTP + GenerationLockedHedgeSlot + UnifiedRecoveryParams + ReverseWalkSeed + CombinedAvgTP + MaxGridCap + OneTimeShred + HedgeTicketPersist + StrictSequentialMatching + AutoRecoveryLot + MatchTickRetry + HedgePartialFallback + InSetMatchAlways + PersistHedgeSlot + StrictInSetPool + MatchPoolBothSides + SeqRecoveryOwner + RehedgeGuard + SequentialRecovery + RecoveryGrid + BBFilter + BoundNoClose + StartOrderTrail + PersistGen + HedgeRecoveryToggle + MatchCloseToggle + InstantTP + DashCache + BrokerTPSL + MaxGridTrail + GLCandleConfirm + HedgeSidePause + OrphanGenFix + BalanceGuard + DDHedge + HedgeCloseGate + AvgTP + Squeeze + CDC + MTF ZigZag + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -403,6 +403,7 @@ input int            Recovery_CandleConfirm  = 0;                           // R
 // === v6.67: Auto Recovery Lot Sizing (uses Grid Recovery params above) ===
 input bool           Recovery_AutoLot        = false;  // v6.67 Auto Recovery (Reverse-walk seed, uses InitialLotSize + Recovery/GridLoss MultiplyFactor)
 input bool           Recovery_UseCombinedTP  = true;   // v6.66 Combined Avg TP across remaining hedge + HG_GL orders
+input bool           Recovery_OnlyNewCandle  = true;   // v6.69 Recovery Grid: only 1 grid order per new bar (per set)
 
 // === v6.57: Sequential Hedge Recovery ===
 input group "=== Sequential Hedge Recovery ==="
@@ -585,6 +586,10 @@ struct HedgeSet
    datetime hedgeOpenTime;             // open time of main hedge order (FIFO ordering)
    // === v6.66: One-Time Shred + Combined TP ===
    bool     shredCompleted;            // true after first hedge partial-close — disables further shredding
+   // === v6.69: Recovery grid bookkeeping (ticket-based, comment-loss safe) ===
+   ulong    recoveryGridTickets[];     // tickets opened as recovery grid for this set
+   int      recoveryGridCount;         // number of recovery grid tickets tracked
+   datetime lastRecoveryGridBarTime;   // last bar time a recovery grid order was opened (per set)
 };
 HedgeSet g_hedgeSets[MAX_HEDGE_SETS];
 int      g_hedgeSetCount = 0;
@@ -951,7 +956,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.68 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.69 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min",
@@ -1013,7 +1018,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.68 deinitialized");
+   Print("Gold Miner EA v6.69 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -3886,7 +3891,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.68 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.68 [ZZ]" : "Gold Miner EA v6.68 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.69 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.69 [ZZ]" : "Gold Miner EA v6.69 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
