@@ -7705,11 +7705,31 @@ void ManageRecoveryOwnerAvgTP()
 
       double avgPrice  = totalWeighted / totalLots;
       double tpDist    = InpHedge_BoundAvgTPPoints * _Point;
+      double tpPrice   = (side == POSITION_TYPE_BUY)
+                         ? NormalizeDouble(avgPrice + tpDist, _Digits)
+                         : NormalizeDouble(avgPrice - tpDist, _Digits);
       bool   tpReached = false;
       if(side == POSITION_TYPE_BUY)
          tpReached = (SymbolInfoDouble(_Symbol, SYMBOL_BID) >= avgPrice + tpDist);
       else
          tpReached = (SymbolInfoDouble(_Symbol, SYMBOL_ASK) <= avgPrice - tpDist);
+
+      // v6.63 FIX: Always sync Broker TP for owner basket (even before TP reached)
+      // This ensures GL orders opened AFTER hedge release get the correct avg TP
+      // and survive EA restart / connection drop.
+      for(int b = 0; b < basketCount; b++)
+      {
+         if(!PositionSelectByTicket(basketTickets[b])) continue;
+         double curTP = PositionGetDouble(POSITION_TP);
+         double curSL = PositionGetDouble(POSITION_SL);
+         if(NormalizeDouble(curTP, _Digits) != tpPrice)
+         {
+            if(trade.PositionModify(basketTickets[b], curSL, tpPrice))
+               Print("v6.63 RECOV TP SYNC: Gen", gen, " #", basketTickets[b],
+                     " TP=", DoubleToString(tpPrice, _Digits),
+                     " (avg=", DoubleToString(avgPrice, _Digits), ")");
+         }
+      }
 
       if(!tpReached) continue;
 
@@ -7725,6 +7745,52 @@ void ManageRecoveryOwnerAvgTP()
             Sleep(30);
          }
       }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| v6.63: Orphan GL Watchdog — alert when owner-gen orders have TP=0 |
+//+------------------------------------------------------------------+
+void AuditUnTPedOwnerOrders()
+{
+   if(!g_sequentialRecoveryActive) return;
+   int gen = g_sequentialRecoveryGen;
+   if(gen < 0) return;
+   string prefix = GenPrefix(gen);
+   static datetime s_lastAuditLog = 0;
+   if(TimeCurrent() - s_lastAuditLog < 30) return;  // throttle 30s
+
+   int orphanCnt = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      string c = PositionGetString(POSITION_COMMENT);
+      if(IsHedgeComment(c)) continue;
+      if(IsTicketBound(ticket)) continue;
+      bool ownerOrder = false;
+      if(IsRecoverySeedTicket(ticket) && GetRecoverySeedGen(ticket) == gen)
+         ownerOrder = true;
+      else if(StringFind(c, prefix + "_") == 0)
+         ownerOrder = true;
+      if(!ownerOrder) continue;
+      if(PositionGetDouble(POSITION_TP) == 0)
+      {
+         orphanCnt++;
+         Print("v6.63 ORPHAN GL: Gen", gen, " #", ticket, " (", c,
+               ") has TP=0 → next ManageRecoveryOwnerAvgTP tick will sync");
+      }
+   }
+   if(orphanCnt > 0)
+   {
+      s_lastAuditLog = TimeCurrent();
+      g_lastOrphanGLCount = orphanCnt;
+   }
+   else
+   {
+      g_lastOrphanGLCount = 0;
    }
 }
 
