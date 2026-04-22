@@ -7705,10 +7705,11 @@ void ManageRecoveryOwnerAvgTP()
    }
 }
 
-
+//+------------------------------------------------------------------+
+//| v6.61: RecoverySetTracker — anti-skip ticket array per generation |
+//+------------------------------------------------------------------+
+int FindRecoverySetIdx(int gen)
 {
-   for(int i = 0; i < g_recoverySetCount; i++)
-      if(g_recoverySets[i].generation == gen) return i;
    return -1;
 }
 
