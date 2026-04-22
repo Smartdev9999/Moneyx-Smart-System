@@ -10900,6 +10900,7 @@ void ManageHedgeGridMode(int idx)
    ulong gridProfitTickets[];
    double gridProfitValues[];
 
+   int rgGen = g_hedgeSets[idx].boundGeneration;
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       ulong ticket = PositionGetTicket(i);
@@ -10908,8 +10909,14 @@ void ManageHedgeGridMode(int idx)
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
 
       string comment = PositionGetString(POSITION_COMMENT);
-      string prefix = "GM_HG" + IntegerToString(idx + 1);
-      if(StringFind(comment, prefix) < 0) continue;
+      bool isOurs = IsRecoveryGridForSet(comment, idx, rgGen);  // v6.69 legacy + GM_HD
+      // v6.69: ticket-based fallback for floaters with empty comment
+      if(!isOurs)
+      {
+         for(int k = 0; k < g_hedgeSets[idx].recoveryGridCount; k++)
+            if(g_hedgeSets[idx].recoveryGridTickets[k] == ticket) { isOurs = true; break; }
+      }
+      if(!isOurs) continue;
 
       double pnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
       if(pnl > 0)
@@ -10975,7 +10982,8 @@ void ManageHedgeGridMode(int idx)
    // If main hedge fully closed
    if(!mainHedgeExists)
    {
-      // Close remaining grid orders
+      // v6.69: Close remaining recovery grid (legacy GM_HG + new GM_HD) for this set
+      int rgGenC = g_hedgeSets[idx].boundGeneration;
       for(int i = PositionsTotal() - 1; i >= 0; i--)
       {
          ulong ticket = PositionGetTicket(i);
@@ -10983,9 +10991,13 @@ void ManageHedgeGridMode(int idx)
          if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
          if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
          string comment = PositionGetString(POSITION_COMMENT);
-         string prefix = "GM_HG" + IntegerToString(idx + 1);
-         if(StringFind(comment, prefix) >= 0)
-            trade.PositionClose(ticket);
+         bool isOurs = IsRecoveryGridForSet(comment, idx, rgGenC);
+         if(!isOurs)
+         {
+            for(int k = 0; k < g_hedgeSets[idx].recoveryGridCount; k++)
+               if(g_hedgeSets[idx].recoveryGridTickets[k] == ticket) { isOurs = true; break; }
+         }
+         if(isOurs) trade.PositionClose(ticket);
       }
        int cleanupGen = g_hedgeSets[idx].boundGeneration;  // v6.59
        SaveBoundTicketsToPrevHedged(idx);  // v6.26
@@ -10993,6 +11005,7 @@ void ManageHedgeGridMode(int idx)
          g_hedgeSetCount--;
          g_lastHedgeCloseTime = TimeCurrent();  // v6.25: cooldown after set close
          SetSequentialRecoveryOwner(idx, cleanupGen);  // v6.59
+         CompactRecoveryGridTickets(idx);  // v6.69: clear stale ticket GVs
          // v6.27: Safe reset — only if truly flat
          TryResetCycleStateIfFlat("grid cleanup");
         Print("HEDGE Set#", idx + 1, " grid mode complete. All cleaned up.");
@@ -11002,17 +11015,8 @@ void ManageHedgeGridMode(int idx)
    // Open next grid order if needed (direction = same as hedge)
    if(g_newOrderBlocked) return;  // respect news/time filters
 
-   int currentGridCount = 0;
-   for(int i = PositionsTotal() - 1; i >= 0; i--)
-   {
-      ulong ticket = PositionGetTicket(i);
-      if(ticket == 0) continue;
-      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
-      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
-      string comment = PositionGetString(POSITION_COMMENT);
-      string prefix = "GM_HG" + IntegerToString(idx + 1);
-      if(StringFind(comment, prefix) >= 0) currentGridCount++;
-   }
+   // v6.69: Use centralized counter (handles legacy GM_HG + GM_HD + ticket fallback)
+   int currentGridCount = CountHedgeGridOrders(idx);
 
    // v6.66: Max grid cap applies to BOTH Auto + Manual modes
    int recMaxCap = GetRecoveryMaxTrades();
