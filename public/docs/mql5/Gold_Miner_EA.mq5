@@ -923,6 +923,7 @@ int OnInit()
        // v6.16: Trigger type init
        g_hedgeSets[h].triggerType = 0;
        g_hedgeSets[h].hedgeOpenTime = 0;  // v6.57
+       g_hedgeSets[h].shredCompleted = false;  // v6.66
      }
      g_hedgeSetCount = 0;
 
@@ -2248,6 +2249,12 @@ void CloseAllPositions()
       // v6.16: Reset trigger type
       g_hedgeSets[h].triggerType = 0;
       g_hedgeSets[h].hedgeOpenTime = 0;  // v6.57
+      g_hedgeSets[h].shredCompleted = false;  // v6.66
+      // v6.66: clear persisted state
+      string gvShred  = "GME_HEDGE_SHRED_"  + IntegerToString(h);
+      string gvTicket = "GME_HEDGE_TICKET_" + IntegerToString(h);
+      if(GlobalVariableCheck(gvShred))  GlobalVariableDel(gvShred);
+      if(GlobalVariableCheck(gvTicket)) GlobalVariableDel(gvTicket);
    }
    g_hedgeSetCount = 0;
    // v6.16: Reset DD triggers on full close
