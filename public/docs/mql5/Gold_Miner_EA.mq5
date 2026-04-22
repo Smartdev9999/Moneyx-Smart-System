@@ -4493,6 +4493,12 @@ void DisplayDashboard()
                    int pendingCount = g_hedgeSetCount - 1;
                    if(pendingCount > 0) seqInfo += " | Wait: " + IntegerToString(pendingCount) + " set(s)";
                 }
+                // v6.69: time-based unlock cooldown overlay
+                if(IsSequentialUnlockDelayActive())
+                {
+                   int rem = GetSequentialUnlockRemainSec();
+                   seqInfo = "Cooldown " + IntegerToString(rem/60) + "m" + IntegerToString(rem%60) + "s | " + seqInfo;
+                }
                  DrawTableRow(row, "Hedge Recovery", seqInfo, clrAqua, COLOR_SECTION_HEDGE); row++;
                  // v6.63: Owner Avg TP + orphan watchdog
                  if(g_sequentialRecoveryActive)
