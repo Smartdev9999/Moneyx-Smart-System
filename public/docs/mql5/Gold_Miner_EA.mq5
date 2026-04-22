@@ -9670,6 +9670,18 @@ void ManageHedgeSets()
       // v6.63: Skip new grid entry for non-owner sets while sequential owner is locked
       if(!blockGridForThisSet)
          TryEnterCombinedGridMode(h);
+
+      // v6.66: Combined Avg TP — sync recovery basket TP for matcher set
+      //        when shred is done OR recovery grid orders already exist.
+      if(Recovery_UseCombinedTP && (!InpHedge_SequentialRecovery || h == activeMatcherIdx))
+      {
+         bool hasGrid = (CountHedgeGridOrders(h) > 0);
+         if((g_hedgeSets[h].shredCompleted || hasGrid) &&
+            (g_hedgeSets[h].hedgeLots > 0 || hasGrid))
+         {
+            SyncRecoveryBasketTP(h);
+         }
+      }
    }
    
    // v6.16: Recalculate DD triggers based on remaining active DD sets
