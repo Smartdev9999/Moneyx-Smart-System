@@ -11212,6 +11212,9 @@ void ManageHedgeGridMode(int idx)
                   " lots=", DoubleToString(nextLot, 2),
                   " gap=", DoubleToString(distance, 0), "/", DoubleToString(requiredGap, 0),
                   " tk=", newTk);
+            // v6.70: Immediately sync weighted-avg broker TP across all tickets in this set
+            //        so the new recovery order gets a TP in the same tick it was opened.
+            SyncRecoveryBasketTP(idx);
          }
       }
    }
