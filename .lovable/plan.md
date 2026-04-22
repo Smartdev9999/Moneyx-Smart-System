@@ -1,19 +1,20 @@
-## v6.61 — Sequential Gate ใช้ Hedge Comments เท่านั้น
+## v6.62 — Fix Hedge Comment Prefix (`GM_HEDGE_` not `GM_HD`)
 
 ### ปัญหา
-v6.60 scan bound+hedge → หลัง matching close ปิด hedge Gen0 แต่ bound loss orders (`GM_GL#*`) ถูก release เป็น orphan → ParseGen=0 → allowed ค้างที่ 0 → Set#2-#6 freeze ค้าง
+v6.61 ใช้ filter `"GM_HD"` แต่ comment จริงคือ `"GM_HEDGE_<n>"` → `StringFind("GM_HEDGE_6","GM_HD")==0` ผ่าน filter แต่ ParseGen ตัด substring ผิด → คืน -1 → gate ปิด → ทุก hedge set ทำงานพร้อมกัน
 
 ### แก้
-- `GetSequentialAllowedGeneration()` — เพิ่ม filter `if(StringFind(c, "GM_HD") != 0) continue;` → นับเฉพาะ hedge comments
-- `ManageOrphanGrid()` gate — เปลี่ยน `gen != seqAllowed` → `gen > seqAllowed` (orphan เก่า/เท่า → recover ได้, orphan ใหม่กว่า hedge → freeze)
-- Dashboard: `Allowed Hedge: GenN (GM_HD(N+1))` / `No active hedge — full trading + free orphan recovery`
+- `ParseGenerationFromComment()` — branch hedge ใช้ prefix `"GM_HEDGE_"` + `StringSubstr(c, 9)`
+- `GetSequentialAllowedGeneration()` — filter `if(StringFind(c, "GM_HEDGE_") != 0) continue;`
+- Dashboard label: `(GM_HEDGE_(N+1))`
+- Version → v6.62 (header / `#property` / dashboard / init+deinit log)
 
 ### ไฟล์
-- `public/docs/mql5/Gold_Miner_EA.mq5` → v6.61
+- `public/docs/mql5/Gold_Miner_EA.mq5` → v6.62
 
 ### ไม่เปลี่ยน
 - Order Execution / Strategy / Entry / Grid distance / Lot calc
 - License / News / Time / Triple Gate / Hedge open trigger / Matching Pool (v6.60) / BB Filter / Balance Guard
-- `ParseGenerationFromComment()` / `ManageHedgeSets()` freeze logic
-- Initial entry ของ new cycle (v6.59)
-- v6.37–v6.60 features
+- `ManageHedgeSets()` freeze logic / `ManageOrphanGrid()` gate (รับค่า g_seqAllowedGen ที่ถูกต้องอัตโนมัติ)
+- Hedge slot persistence (v6.68) / commentPrefix format
+- v6.37–v6.61 features
