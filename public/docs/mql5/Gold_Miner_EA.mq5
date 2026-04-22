@@ -1268,11 +1268,10 @@ void OnTick()
    // === Determine if new orders are blocked (News/Time/Pause) ===
    g_newOrderBlocked = false;
 
-   // v6.59: Sequential Release — compute allowed gen for dashboard + recovery-grid gating.
-   //        Do NOT set g_newOrderBlocked here (would block new cycle initial entries).
-   //        Initial entry of new cycles must remain free so trading continues while
-   //        older generations recover one-at-a-time. Gating is enforced only at
-   //        recovery sites: ManageOrphanGrid() + per-gen grid loops.
+   // v6.60: Sequential Release — comment-based scan returns lowest live generation.
+   //        Used by ManageOrphanGrid + ManageHedgeSets + per-gen grid loops to gate
+   //        recovery to ONE generation at a time (lowest first). Initial entry of
+   //        new cycles is NEVER blocked here (v6.59 rule preserved).
    g_seqAllowedGen = GetSequentialAllowedGeneration();
 
    // Manual Pause check (v2.9)
@@ -4193,29 +4192,35 @@ void DisplayDashboard()
       color COLOR_SECTION_HEDGE = C'130,50,180';  // purple for hedge section
       bool anyActive = false;
 
-      // v6.57/v6.58: Sequential Release status row
+      // v6.60: Sequential Release status row (comment-based gen scan)
       {
-         int seqOldest = GetOldestActiveHedgeSetIndex();
          int activeCnt = 0;
          for(int hc = 0; hc < MAX_HEDGE_SETS; hc++)
             if(g_hedgeSets[hc].active) activeCnt++;
          int orphanCnt = 0;
          for(int oc = 0; oc < MAX_ORPHAN_GROUPS; oc++)
             if(g_orphanGroups[oc].active) orphanCnt++;
-         int allowedGen = GetSequentialAllowedGeneration();
+         int allowedGen = g_seqAllowedGen;
          string seqVal;
          color seqClr;
          if(InpHedge_SequentialRelease)
          {
             if(allowedGen == -1)
-               seqVal = "ON | No active sets — full trading";
+               seqVal = "ON | No live orders — full trading";
             else
             {
-               int frozenHedge  = (activeCnt > 0) ? (activeCnt - 1) : 0;
-               int frozenOrphan = (orphanCnt > 0 && allowedGen >= 0) ? (orphanCnt - ((seqOldest == -1) ? 1 : 0)) : 0;
-               if(frozenOrphan < 0) frozenOrphan = 0;
-               seqVal = "ON | Allowed Recovery: Gen" + IntegerToString(allowedGen)
-                      + " | New cycle entries: ALLOWED"
+               // Count frozen sets (active hedge sets whose boundGeneration != allowed)
+               int frozenHedge = 0;
+               for(int hc2 = 0; hc2 < MAX_HEDGE_SETS; hc2++)
+                  if(g_hedgeSets[hc2].active && g_hedgeSets[hc2].boundGeneration != allowedGen)
+                     frozenHedge++;
+               int frozenOrphan = 0;
+               for(int oc2 = 0; oc2 < MAX_ORPHAN_GROUPS; oc2++)
+                  if(g_orphanGroups[oc2].active && g_orphanGroups[oc2].generation != allowedGen)
+                     frozenOrphan++;
+               seqVal = "ON | Allowed: Gen" + IntegerToString(allowedGen)
+                      + " (GM" + (allowedGen == 0 ? "" : IntegerToString(allowedGen)) + "_*+GM_HD" + IntegerToString(allowedGen + 1) + ")"
+                      + " | New cycles: ALLOWED"
                       + " | Frozen Hedge: " + IntegerToString(frozenHedge)
                       + " | Frozen Orphans: " + IntegerToString(frozenOrphan);
             }
