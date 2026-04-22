@@ -7868,8 +7868,59 @@ void AuditUnTPedOwnerOrders()
 }
 
 //+------------------------------------------------------------------+
-//| v6.61: RecoverySetTracker — anti-skip ticket array per generation |
+//| v6.65: Hedge Set Integrity Watchdog                              |
+//| Detect hedge sets where hedgeLots >> bound orders (lot inflation) |
+//| or sets with zero bound orders (orphan hedges)                    |
 //+------------------------------------------------------------------+
+void AuditHedgeSetIntegrity()
+{
+   static datetime s_lastIntegrityLog = 0;
+   if(TimeCurrent() - s_lastIntegrityLog < 30) return;  // throttle 30s
+
+   int warnCnt = 0, critCnt = 0;
+   for(int h = 0; h < MAX_HEDGE_SETS; h++)
+   {
+      if(!g_hedgeSets[h].active) continue;
+
+      // Refresh bound list (remove closed tickets)
+      RefreshBoundTickets(h);
+
+      double boundLotsActual = 0;
+      for(int b = 0; b < g_hedgeSets[h].boundTicketCount; b++)
+      {
+         ulong tk = g_hedgeSets[h].boundTickets[b];
+         if(!PositionSelectByTicket(tk)) continue;
+         boundLotsActual += PositionGetDouble(POSITION_VOLUME);
+      }
+
+      double hLots = g_hedgeSets[h].hedgeLots;
+      int gen = g_hedgeSets[h].boundGeneration;
+
+      // CRITICAL: hedge open but no bound orders at all
+      if(g_hedgeSets[h].boundTicketCount == 0 && hLots > 0)
+      {
+         critCnt++;
+         Print("v6.65 HEDGE INTEGRITY CRITICAL: set#", h, " gen=", gen,
+               " hedgeLots=", DoubleToString(hLots, 2),
+               " has NO bound orders (orphan hedge — manual review required)");
+         continue;
+      }
+
+      // WARN: hedge volume more than 2x of actual bound coverage
+      if(boundLotsActual > 0 && hLots > boundLotsActual * 2.0)
+      {
+         warnCnt++;
+         Print("v6.65 HEDGE INTEGRITY WARN: set#", h, " gen=", gen,
+               " hedgeLots=", DoubleToString(hLots, 2),
+               " >> boundLots=", DoubleToString(boundLotsActual, 2),
+               " (>2x — possible lot inflation)");
+      }
+   }
+
+   g_hedgeIntegrityWarnCount = warnCnt;
+   g_hedgeIntegrityCriticalCount = critCnt;
+   s_lastIntegrityLog = TimeCurrent();
+}
 int FindRecoverySetIdx(int gen)
 {
    // v6.63 FIX: previously hard-coded -1, breaking RecoverySetTracker entirely
