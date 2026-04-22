@@ -5,8 +5,8 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.67"
-#property description "Gold Miner EA v6.67 - v6.66 + SeqRecovery Bypass for Profit-Hedge Close (hedge ที่กำไรพอ matching close ได้แม้มี seq owner ของ gen อื่น)"
+#property version   "6.68"
+#property description "Gold Miner EA v6.68 - v6.67 + Enforce one-hedge-per-tick rule on profit-close bypass (ป้องกันปลด hedge หลายชุดพร้อมกัน)"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -981,7 +981,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.67 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.68 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min");
@@ -1041,7 +1041,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.67 deinitialized");
+   Print("Gold Miner EA v6.68 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -3938,7 +3938,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.67 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.67 [ZZ]" : "Gold Miner EA v6.67 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.68 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.68 [ZZ]" : "Gold Miner EA v6.68 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -9809,9 +9809,23 @@ void ManageHedgeSets()
          // This set IS the oldest → mark that we're acting on it this tick
          sequentialActed = true;
       }
-      else if(seqBypass_profitClose && InpHedge_SequentialRecovery && (g_sequentialRecoveryActive || sequentialActed))
+      else if(seqBypass_profitClose && InpHedge_SequentialRecovery)
       {
-         Print("v6.67 SEQ BYPASS: Set#", h+1, " profit-close allowed (hedge PnL > MatchMinProfit) despite seq owner Gen", g_sequentialRecoveryGen);
+         // v6.68: bypass ยังต้องเคารพ one-set-per-tick — ป้องกันปลด hedge หลายชุดพร้อมกันใน tick เดียว
+         if(sequentialActed)
+         {
+            g_hedgeSets[h].matchingDone = false;
+            Print("v6.68 SEQ BYPASS DEFER: Set#", h+1, " profit-close deferred (another set already acted this tick)");
+            continue;
+         }
+         if(g_sequentialRecoveryCompletedThisTick)
+         {
+            g_hedgeSets[h].matchingDone = false;
+            continue;
+         }
+         if(g_sequentialRecoveryActive)
+            Print("v6.67 SEQ BYPASS: Set#", h+1, " profit-close allowed (hedge PnL > MatchMinProfit) despite seq owner Gen", g_sequentialRecoveryGen);
+         sequentialActed = true;  // v6.68: บล็อก set ถัดไปใน tick นี้
       }
 
       // If in grid mode → execute grid
