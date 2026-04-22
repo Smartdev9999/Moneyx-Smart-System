@@ -8273,7 +8273,7 @@ void ManageRecoveryAvgTP(int idx)
 
    if(modified > 0)
    {
-      Print("v6.71 AVGTP Set#", idx + 1, " (Gen", g_hedgeSets[idx].boundGeneration,
+      Print("v6.72 AVGTP-S2 Set#", idx + 1, " (Gen", g_hedgeSets[idx].boundGeneration,
             "): tickets=", cnt, " netSide=", netSide,
             " netLots=", DoubleToString(MathAbs(netLots), 2),
             " avgPx=", DoubleToString(priceBE, digits),
