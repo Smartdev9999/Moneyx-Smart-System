@@ -8874,12 +8874,11 @@ void ManageOrphanGrid()
    }
    if(isExpansion) return;
    
-   // OnlyNewCandle check — same rule as normal grid
-   if(GridLoss_OnlyNewCandle)
-   {
-      datetime barTime = iTime(_Symbol, PERIOD_CURRENT, 0);
-      if(barTime == g_lastOrphanGridCandleTime) return;
-    }
+    // v6.65: Removed global g_lastOrphanGridCandleTime gate.
+    //         Orphan GL expansion is governed by per-side distance check
+    //         (currentPrice vs lastPrice + distance*point) below, plus
+    //         MaxOpenOrders + GridLoss_MaxTrades caps. Allows multiple GL
+    //         layers within the same candle if price moves far enough.
      
     // v6.40: Candle Confirmation — applied per-side inside the loop below
      
