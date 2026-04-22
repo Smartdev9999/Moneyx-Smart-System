@@ -8943,7 +8943,7 @@ void RecoverHedgeSets()
       // because grid orders already exist from a previous session
       if(g_hedgeSets[h].boundTicketCount == 0)
       {
-         string gridPrefix = "GM_HG" + IntegerToString(h + 1);
+         int rcGen = g_hedgeSets[h].boundGeneration;
          bool hasGridOrders = false;
          for(int i = PositionsTotal() - 1; i >= 0; i--)
          {
@@ -8951,7 +8951,7 @@ void RecoverHedgeSets()
             if(ticket == 0) continue;
             if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
             if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
-            if(StringFind(PositionGetString(POSITION_COMMENT), gridPrefix) >= 0)
+            if(IsRecoveryGridForSet(PositionGetString(POSITION_COMMENT), h, rcGen))  // v6.69
             { hasGridOrders = true; break; }
          }
          if(hasGridOrders)
