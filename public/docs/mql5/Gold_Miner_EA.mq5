@@ -9054,7 +9054,7 @@ void RecoverHedgeSets()
    }
    if(maxHedgeTime > 0) g_lastHedgeOpenTime = maxHedgeTime;
 
-
+   // Step 2: Rebind counter-side orders — ONLY bind orders from OLDER generations
    for(int h = 0; h < MAX_HEDGE_SETS; h++)
    {
       if(!g_hedgeSets[h].active) continue;
