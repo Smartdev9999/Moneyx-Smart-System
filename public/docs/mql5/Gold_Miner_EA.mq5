@@ -1339,7 +1339,18 @@ void OnTick()
     // TryResetCycleStateIfFlat was never invoked, leaving comments stuck at GMx.
     if(g_cycleGeneration > 0 && g_hedgeSetCount == 0 && TotalOrderCount() == 0)
     {
-       TryResetCycleStateIfFlat("OnTick flat-detect");
+       TryResetCycleStateIfFlat("OnTick flat-detect v6.73");
+    }
+    // v6.73: Warn when orphans block cycle reset (no active sets but positions remain)
+    else if(g_cycleGeneration > 0 && g_hedgeSetCount == 0 && TotalOrderCount() > 0)
+    {
+       static datetime s_lastOrphanWarn = 0;
+       if(TimeCurrent() - s_lastOrphanWarn >= 60)
+       {
+          Print("v6.73 ORPHAN: ", TotalOrderCount(), " positions remain but no active hedge sets — cycle stuck at GM",
+                g_cycleGeneration + 1, " until they close");
+          s_lastOrphanWarn = TimeCurrent();
+       }
     }
 
    // === Determine if new orders are blocked (News/Time/Pause) ===
@@ -8234,6 +8245,37 @@ void ManageRecoveryAvgTP(int idx)
       cnt++;
    }
 
+   // 5) v6.73: Hedge-side residue from partial closes —
+   //          tickets matching hedge side + magic + symbol with empty/stripped comment
+   //          (left over after partial close) that aren't tagged for any hedge/recovery set.
+   ENUM_POSITION_TYPE hSide = g_hedgeSets[idx].hedgeSide;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      ENUM_POSITION_TYPE pType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+      if(pType != hSide) continue;  // residue is same side as original hedge
+      string cmt = PositionGetString(POSITION_COMMENT);
+      // skip if explicitly tagged for a different set/recovery (already handled by 1-4 if ours)
+      if(StringFind(cmt, "GM_HEDGE_") >= 0 || StringFind(cmt, "GM_HD") >= 0 || StringFind(cmt, "GM_HG") >= 0)
+         continue;
+      // skip initial/grid loss/profit comments (different basket)
+      if(StringFind(cmt, "_GL#") >= 0 || StringFind(cmt, "_GP#") >= 0 || StringFind(cmt, "_INIT") >= 0)
+         continue;
+      bool dup = false;
+      for(int z = 0; z < cnt; z++) if(tks[z] == tk) { dup = true; break; }
+      if(dup) continue;
+      ArrayResize(tks, cnt + 1);  ArrayResize(lots, cnt + 1);
+      ArrayResize(prices, cnt + 1); ArrayResize(types, cnt + 1);
+      tks[cnt]    = tk;
+      lots[cnt]   = PositionGetDouble(POSITION_VOLUME);
+      prices[cnt] = PositionGetDouble(POSITION_PRICE_OPEN);
+      types[cnt]  = (pType == POSITION_TYPE_BUY) ? 0 : 1;
+      cnt++;
+   }
+
    if(cnt < 1) return;
 
    // Compute weighted avg per side, then net break-even
@@ -8273,7 +8315,7 @@ void ManageRecoveryAvgTP(int idx)
 
    if(modified > 0)
    {
-      Print("v6.72 AVGTP-S2 Set#", idx + 1, " (Gen", g_hedgeSets[idx].boundGeneration,
+      Print("v6.73 AVGTP-S2 Set#", idx + 1, " (Gen", g_hedgeSets[idx].boundGeneration,
             "): tickets=", cnt, " netSide=", netSide,
             " netLots=", DoubleToString(MathAbs(netLots), 2),
             " avgPx=", DoubleToString(priceBE, digits),
@@ -11369,6 +11411,40 @@ void ManageHedgeGridMode(int idx)
          }
          if(isOurs) trade.PositionClose(ticket);
       }
+
+      // v6.73: Verify all recovery grid orders ACTUALLY closed before deactivating set.
+      //        Otherwise leftover orphans lose all management (no TP, no close).
+      int stillOpen = 0;
+      for(int i = PositionsTotal() - 1; i >= 0; i--)
+      {
+         ulong tk = PositionGetTicket(i);
+         if(tk == 0) continue;
+         if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+         if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+         string c = PositionGetString(POSITION_COMMENT);
+         bool isOurs = IsRecoveryGridForSet(c, idx, rgGenC);
+         if(!isOurs)
+            for(int k = 0; k < g_hedgeSets[idx].recoveryGridCount; k++)
+               if(g_hedgeSets[idx].recoveryGridTickets[k] == tk) { isOurs = true; break; }
+         if(isOurs) stillOpen++;
+      }
+      if(stillOpen > 0)
+      {
+         // Keep set alive — Stage 2 AvgTP (or SyncRecoveryBasketTP) will manage orphans until they close.
+         static datetime s_lastOrphanLog = 0;
+         if(TimeCurrent() - s_lastOrphanLog >= 60)
+         {
+            Print("v6.73 KEEP-ALIVE Set#", idx + 1, " Gen", rgGenC,
+                  ": hedge fully closed but ", stillOpen, " recovery orphans remain — managing via Stage 2 TP");
+            s_lastOrphanLog = TimeCurrent();
+         }
+         g_hedgeSets[idx].hedgeTicket = 0;
+         g_hedgeSets[idx].hedgeLots   = 0;
+         if(InpRecovery_CloseMode == RECOVERY_CLOSE_AVG_TP) ManageRecoveryAvgTP(idx);
+         else                                                SyncRecoveryBasketTP(idx);
+         return;
+      }
+
        int cleanupGen = g_hedgeSets[idx].boundGeneration;  // v6.59
        SaveBoundTicketsToPrevHedged(idx);  // v6.26
        g_hedgeSets[idx].active = false;
@@ -11511,10 +11587,30 @@ void ManageHedgeGridMode(int idx)
          }
          ENUM_ORDER_TYPE orderType = (g_hedgeSets[idx].hedgeSide == POSITION_TYPE_BUY)
                                     ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
-         // v6.70: Comment format = GM_HD<genLabel>_<NN>  (1-based; Gen0 → GM_HD1_01)
-         int gen = g_hedgeSets[idx].boundGeneration;
-         string comment = "GM_HD" + IntegerToString(GenLabel(gen)) + "_"
-                        + StringFormat("%02d", currentGridCount + 1);
+          // v6.73: Use monotonic recoveryGridCount as suffix base + collision guard for uniqueness.
+          //        recoveryGridCount only ever grows (CompactRecoveryGridTickets does NOT decrement)
+          //        so suffix never repeats even if individual orders are partially closed.
+          int gen = g_hedgeSets[idx].boundGeneration;
+          string baseLabel = "GM_HD" + IntegerToString(GenLabel(gen)) + "_";
+          int seqNo = g_hedgeSets[idx].recoveryGridCount + 1;
+          string comment = "";
+          int safetyHop = 0;
+          while(safetyHop++ < 1000)
+          {
+             string testComment = baseLabel + StringFormat("%02d", seqNo);
+             bool collision = false;
+             for(int ci = PositionsTotal() - 1; ci >= 0; ci--)
+             {
+                ulong ctk = PositionGetTicket(ci);
+                if(ctk == 0) continue;
+                if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+                if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+                if(PositionGetString(POSITION_COMMENT) == testComment) { collision = true; break; }
+             }
+             if(!collision) { comment = testComment; break; }
+             seqNo++;
+          }
+          if(comment == "") return;  // safety bail (shouldn't happen)
 
          if(OpenOrder(orderType, nextLot, comment))
          {
