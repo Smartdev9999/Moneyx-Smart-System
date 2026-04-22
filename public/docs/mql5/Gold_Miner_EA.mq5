@@ -7426,13 +7426,15 @@ bool IsRecoveryGridComment(const string c)
    return (StringFind(c, "GM_HG") >= 0 || StringFind(c, "GM_HD") >= 0);
 }
 
-// v6.69: Match recovery grid comment to a specific set (by slot idx + bound generation)
+// v6.70: Match recovery grid comment to a specific set (by slot idx + bound generation)
+//   Modern: "GM_HD<genLabel>_..." where genLabel = gen+1
+//   Legacy: "GM_HG<idx+1>..."
 bool IsRecoveryGridForSet(const string c, int idx, int gen)
 {
    string legacy = "GM_HG" + IntegerToString(idx + 1);
    if(StringFind(c, legacy) >= 0) return true;        // legacy slot-based
-   string modern = "GM_HD" + IntegerToString(gen) + "_";
-   if(StringFind(c, modern) >= 0) return true;        // v6.69 generation-based
+   string modern = "GM_HD" + IntegerToString(GenLabel(gen)) + "_";
+   if(StringFind(c, modern) >= 0) return true;        // v6.70 1-based label
    return false;
 }
 
