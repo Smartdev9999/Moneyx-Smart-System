@@ -4213,8 +4213,8 @@ void DisplayDashboard()
                for(int oc2 = 0; oc2 < MAX_ORPHAN_GROUPS; oc2++)
                   if(g_orphanGroups[oc2].active && g_orphanGroups[oc2].generation > allowedGen)
                      frozenOrphan++;
-               seqVal = "ON | Allowed Hedge: Gen" + IntegerToString(allowedGen)
-                      + " (GM_HD" + IntegerToString(allowedGen + 1) + ")"
+                seqVal = "ON | Allowed Hedge: Gen" + IntegerToString(allowedGen)
+                       + " (GM_HEDGE_" + IntegerToString(allowedGen + 1) + ")"
                       + " | New cycles: ALLOWED"
                       + " | Frozen Hedge: " + IntegerToString(frozenHedge)
                       + " | Frozen Orphans: " + IntegerToString(frozenOrphan);
