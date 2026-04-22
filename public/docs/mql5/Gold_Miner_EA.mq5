@@ -4353,7 +4353,7 @@ void DisplayDashboard()
             DrawTableRow(row, "Hedge Spacing", spacingInfo, clrSilver, COLOR_SECTION_HEDGE); row++;
 
             string modeInfo = (InpRecovery_CloseMode == RECOVERY_CLOSE_AVG_TP)
-                              ? ("AVERAGE_TP (dist=" + IntegerToString(InpRecovery_AvgTPDistance) + "p)")
+                              ? ("MATCHING+AVGTP (dist=" + IntegerToString(InpRecovery_AvgTPDistance) + "p)")
                               : "MATCHING_CLOSE";
             DrawTableRow(row, "Recovery Mode", modeInfo, clrSilver, COLOR_SECTION_HEDGE); row++;
          }
