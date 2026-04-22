@@ -7756,6 +7756,7 @@ double FindCumulativeSeedLot(int gen, ENUM_POSITION_TYPE side, double targetLots
    return pickedLot;
 }
 
+void SaveBoundTicketsToPrevHedged(int idx)
 {
    if(g_hedgeSets[idx].triggerType != 1) return;  // only DD-triggered sets
    for(int b = 0; b < g_hedgeSets[idx].boundTicketCount; b++)
