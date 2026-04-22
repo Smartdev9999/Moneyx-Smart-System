@@ -1268,6 +1268,13 @@ void OnTick()
    // === Determine if new orders are blocked (News/Time/Pause) ===
    g_newOrderBlocked = false;
 
+   // v6.58: Sequential Release gate — block new orders for any generation
+   //        other than the allowed one (oldest active hedge set / orphan).
+   //        Hedge orders, closes, and matching logic remain unaffected.
+   g_seqAllowedGen = GetSequentialAllowedGeneration();
+   if(g_seqAllowedGen != -1 && g_seqAllowedGen != g_cycleGeneration)
+      g_newOrderBlocked = true;
+
    // Manual Pause check (v2.9)
    if(g_eaIsPaused)
       g_newOrderBlocked = true;
@@ -7656,6 +7663,35 @@ int GetOldestActiveHedgeSetIndex()
 {
    for(int h = 0; h < MAX_HEDGE_SETS; h++)
       if(g_hedgeSets[h].active) return h;
+   return -1;
+}
+
+//+------------------------------------------------------------------+
+//| v6.58: Determine which generation may open NEW recovery orders    |
+//| when Sequential Release is ON.                                    |
+//|   Returns -1  → no restriction (feature OFF, or nothing pending)  |
+//|   Returns N   → only Gen N may open new initial/grid orders       |
+//| Hedge orders, closes, and matching logic are NEVER restricted.    |
+//+------------------------------------------------------------------+
+int GetSequentialAllowedGeneration()
+{
+   if(!InpHedge_SequentialRelease) return -1;
+
+   // Priority 1: oldest active hedge set (slot index === bound generation, v6.68)
+   int oldestHedge = GetOldestActiveHedgeSetIndex();
+   if(oldestHedge >= 0) return oldestHedge;
+
+   // Priority 2: oldest active orphan group
+   int oldestOrphan = INT_MAX;
+   for(int g = 0; g < MAX_ORPHAN_GROUPS; g++)
+   {
+      if(g_orphanGroups[g].active && g_orphanGroups[g].generation >= 0
+         && g_orphanGroups[g].generation < oldestOrphan)
+         oldestOrphan = g_orphanGroups[g].generation;
+   }
+   if(oldestOrphan != INT_MAX) return oldestOrphan;
+
+   // Nothing pending → unrestricted (current cycle gen may open new orders)
    return -1;
 }
 
