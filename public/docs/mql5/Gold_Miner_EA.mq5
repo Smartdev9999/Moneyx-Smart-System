@@ -7848,12 +7848,12 @@ void AuditUnTPedOwnerOrders()
          ownerOrder = true;
       if(!ownerOrder) continue;
       if(PositionGetDouble(POSITION_TP) == 0)
-      {
          orphanCnt++;
-         Print("v6.63 ORPHAN GL: Gen", gen, " #", ticket, " (", c,
-               ") has TP=0 → next ManageRecoveryOwnerAvgTP tick will sync");
-      }
    }
+   // v6.64: print summary only (one line per audit cycle), not per-ticket spam
+   if(orphanCnt > 0)
+      Print("v6.64 ORPHAN GL: Gen", gen, " has ", orphanCnt,
+            " owner orders with TP=0 → will sync on next basket change");
    if(orphanCnt > 0)
    {
       s_lastAuditLog = TimeCurrent();
