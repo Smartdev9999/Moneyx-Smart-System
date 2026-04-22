@@ -7845,7 +7845,200 @@ double SumOrphanGridLots(int gen, ENUM_POSITION_TYPE side)
    return total;
 }
 
-// v6.65: คืน lot ของไม้ recovery ถัดไป; คืน 0 ถ้า budget เต็ม
+// v6.66: Reverse-walk seed lot — find the lot in series init*mult^n that
+//        makes cumulative just exceed remHedgeLots. That is our seed = first
+//        recovery grid order. Subsequent orders multiply from the previous lot.
+double ComputeAutoSeedLot(double remHedgeLots)
+{
+   double minLot  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   if(lotStep <= 0) lotStep = 0.01;
+   if(minLot  <= 0) minLot  = 0.01;
+   if(remHedgeLots < minLot) return minLot;
+
+   double curLot = Recovery_AutoInitLot;
+   if(curLot < minLot) curLot = minLot;
+   double cum    = 0.0;
+   double prev   = curLot;
+   int    safety = 0;
+   while(safety++ < 200)
+   {
+      double normLot = MathFloor(curLot / lotStep + 0.0000001) * lotStep;
+      if(normLot < minLot) normLot = minLot;
+      cum += normLot;
+      if(cum > remHedgeLots + 0.0000001) return normLot;
+      prev   = normLot;
+      curLot = normLot * Recovery_AutoMult;
+   }
+   return prev;
+}
+
+// v6.66: Next lot = lastGridLot * mult, normalized
+double ComputeAutoNextLot(double lastGridLot)
+{
+   double minLot  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   if(lotStep <= 0) lotStep = 0.01;
+   if(minLot  <= 0) minLot  = 0.01;
+   double next = MathFloor((lastGridLot * Recovery_AutoMult) / lotStep + 0.0000001) * lotStep;
+   if(next < minLot) next = minLot;
+   return next;
+}
+
+// v6.66: Count active GM_HG{idx+1}_GL* positions for max-grid cap
+int CountHedgeGridOrders(int idx)
+{
+   int cnt = 0;
+   string prefix = "GM_HG" + IntegerToString(idx + 1);
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      string c = PositionGetString(POSITION_COMMENT);
+      if(StringFind(c, prefix) >= 0) cnt++;
+   }
+   return cnt;
+}
+
+// v6.66: Count GM_HG_GL across all sets bound to a generation (for orphan grid cap)
+int CountHedgeGridOrdersForGen(int gen)
+{
+   int cnt = 0;
+   for(int h = 0; h < MAX_HEDGE_SETS; h++)
+   {
+      if(!g_hedgeSets[h].active) continue;
+      if(g_hedgeSets[h].boundGeneration != gen) continue;
+      cnt += CountHedgeGridOrders(h);
+   }
+   return cnt;
+}
+
+// v6.66: Combined Avg TP — sync TP across remaining hedge ticket + all GM_HG{idx+1}_GL
+//        positions of the set. Computes weighted-average price and applies single TP target.
+//        Respects UseTP_Points / UseTP_Dollar / UseTP_PercentBalance priority.
+void SyncRecoveryBasketTP(int idx)
+{
+   if(!Recovery_UseCombinedTP) return;
+   if(idx < 0 || idx >= MAX_HEDGE_SETS) return;
+   if(!g_hedgeSets[idx].active) return;
+
+   ulong  tickets[];
+   double prices[];
+   double lots[];
+   int    cnt = 0;
+
+   ENUM_POSITION_TYPE side = g_hedgeSets[idx].hedgeSide;
+   ulong  hedgeTk = g_hedgeSets[idx].hedgeTicket;
+
+   // 1) Add main hedge if alive
+   if(hedgeTk > 0 && PositionSelectByTicket(hedgeTk))
+   {
+      ArrayResize(tickets, cnt + 1);
+      ArrayResize(prices,  cnt + 1);
+      ArrayResize(lots,    cnt + 1);
+      tickets[cnt] = hedgeTk;
+      prices[cnt]  = PositionGetDouble(POSITION_PRICE_OPEN);
+      lots[cnt]    = PositionGetDouble(POSITION_VOLUME);
+      cnt++;
+   }
+
+   // 2) Add all GM_HG{idx+1}_GL on hedgeSide
+   string prefix = "GM_HG" + IntegerToString(idx + 1);
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
+      string c = PositionGetString(POSITION_COMMENT);
+      if(StringFind(c, prefix) < 0) continue;
+      if(tk == hedgeTk) continue;  // already added
+      ArrayResize(tickets, cnt + 1);
+      ArrayResize(prices,  cnt + 1);
+      ArrayResize(lots,    cnt + 1);
+      tickets[cnt] = tk;
+      prices[cnt]  = PositionGetDouble(POSITION_PRICE_OPEN);
+      lots[cnt]    = PositionGetDouble(POSITION_VOLUME);
+      cnt++;
+   }
+
+   if(cnt == 0) return;
+
+   // 3) Weighted average
+   double totalLots = 0, weightedPrice = 0;
+   for(int k = 0; k < cnt; k++)
+   {
+      totalLots     += lots[k];
+      weightedPrice += prices[k] * lots[k];
+   }
+   if(totalLots <= 0) return;
+   double avg = weightedPrice / totalLots;
+
+   // 4) TP target
+   double point     = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   int    digits    = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+   double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
+   double tickSize  = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+   double balance   = AccountInfoDouble(ACCOUNT_BALANCE);
+
+   double tpTarget = 0;
+   if(UseTP_Points)
+   {
+      tpTarget = (side == POSITION_TYPE_BUY)
+                 ? NormalizeDouble(avg + TP_Points * point, digits)
+                 : NormalizeDouble(avg - TP_Points * point, digits);
+   }
+   else if(UseTP_Dollar && tickValue > 0 && tickSize > 0)
+   {
+      double dist = TP_DollarAmount / (totalLots * tickValue / tickSize);
+      tpTarget = (side == POSITION_TYPE_BUY)
+                 ? NormalizeDouble(avg + dist, digits)
+                 : NormalizeDouble(avg - dist, digits);
+   }
+   else if(UseTP_PercentBalance && tickValue > 0 && tickSize > 0 && balance > 0)
+   {
+      double dollarTarget = balance * TP_PercentBalance / 100.0;
+      double dist = dollarTarget / (totalLots * tickValue / tickSize);
+      tpTarget = (side == POSITION_TYPE_BUY)
+                 ? NormalizeDouble(avg + dist, digits)
+                 : NormalizeDouble(avg - dist, digits);
+   }
+   else
+   {
+      return;  // no TP mode enabled
+   }
+
+   // 5) Apply TP to all tickets in basket
+   int modified = 0;
+   for(int k = 0; k < cnt; k++)
+   {
+      if(!PositionSelectByTicket(tickets[k])) continue;
+      double curTP = PositionGetDouble(POSITION_TP);
+      double curSL = PositionGetDouble(POSITION_SL);
+      if(NormalizeDouble(curTP, digits) == tpTarget) continue;
+      if(trade.PositionModify(tickets[k], curSL, tpTarget))
+         modified++;
+   }
+   if(modified > 0)
+   {
+      static datetime s_lastRecTpLog = 0;
+      if(TimeCurrent() - s_lastRecTpLog >= 10)
+      {
+         Print("v6.66 RECOVERY TP Set#", idx + 1,
+               ": avg=", DoubleToString(avg, digits),
+               " totalLots=", DoubleToString(totalLots, 2),
+               " tp=", DoubleToString(tpTarget, digits),
+               " modified=", modified, "/", cnt);
+         s_lastRecTpLog = TimeCurrent();
+      }
+   }
+}
+
+// v6.65 (kept for backward compat / regression path): legacy budget-cap helper.
+//        v6.66 uses ComputeAutoSeedLot + ComputeAutoNextLot instead.
 double ComputeAutoRecoveryLot(double remainingHedgeLots,
                               double existingTotalLots,
                               double lastLot)
@@ -7854,19 +8047,8 @@ double ComputeAutoRecoveryLot(double remainingHedgeLots,
    double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
    if(lotStep <= 0) lotStep = 0.01;
    if(minLot  <= 0) minLot  = 0.01;
-   double budget  = remainingHedgeLots - existingTotalLots;
-   if(budget < minLot) return 0.0;
-
-   double baseLot = (lastLot > 0) ? lastLot * Recovery_AutoMult : Recovery_AutoInitLot;
-   double nextLot = MathFloor(baseLot / lotStep + 0.0000001) * lotStep;
-   if(nextLot < minLot) nextLot = minLot;
-
-   if(existingTotalLots + nextLot > remainingHedgeLots + 0.0000001)
-   {
-      nextLot = MathFloor(budget / lotStep + 0.0000001) * lotStep;
-      if(nextLot < minLot) return 0.0;
-   }
-   return nextLot;
+   if(lastLot > 0) return ComputeAutoNextLot(lastLot);
+   return ComputeAutoSeedLot(remainingHedgeLots);
 }
 
 // Compute Recovery grid lot using mode + maxExisting continuation
