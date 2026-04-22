@@ -4235,6 +4235,33 @@ void DisplayDashboard()
          DrawTableRow(row, "Seq Release", seqVal, seqClr, COLOR_SECTION_HEDGE); row++;
       }
 
+      // v6.64: Netting status row
+      {
+         string nVal;
+         color  nClr;
+         if(!InpHedge_UseMatchingClose)
+         {
+            nVal = "OFF (UseMatchingClose=false)";
+            nClr = clrSilver;
+         }
+         else if(g_nettingLastTime == 0)
+         {
+            nVal = "Idle — waiting for profit pool in allowed Gen";
+            nClr = clrSilver;
+         }
+         else
+         {
+            string genTag = (g_nettingLastGen == 0) ? "GM" : ("GM" + IntegerToString(g_nettingLastGen));
+            nVal = StringFormat("Last Gen%d (%s): closed %dP+%dL net $%+.2f @ %s",
+                                g_nettingLastGen, genTag,
+                                g_nettingLastProfitsClosed, g_nettingLastLossesClosed,
+                                g_nettingLastNet,
+                                TimeToString(g_nettingLastTime, TIME_MINUTES|TIME_SECONDS));
+            nClr = (g_nettingLastNet >= 0) ? clrLime : clrOrange;
+         }
+         DrawTableRow(row, "Netting", nVal, nClr, COLOR_SECTION_HEDGE); row++;
+      }
+
       for(int h = 0; h < MAX_HEDGE_SETS; h++)
       {
          if(g_hedgeSets[h].active)
