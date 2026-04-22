@@ -9015,16 +9015,26 @@ void ScanOrphanGenerations()
       if(ticket == 0) continue;
       if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
-      if(IsTicketBound(ticket)) continue;
-      
+
       string comment = PositionGetString(POSITION_COMMENT);
-      if(IsHedgeComment(comment)) continue;
-      if(StringFind(comment, "GM") != 0) continue;
-      
-      int gen = ExtractGeneration(comment);
+      int gen = -1;
+
+      // v6.61: Recovery seed (logically stripped hedge remainder) → treat as orphan of its bound gen
+      if(IsRecoverySeedTicket(ticket))
+      {
+         gen = GetRecoverySeedGen(ticket);
+      }
+      else
+      {
+         if(IsTicketBound(ticket)) continue;
+         if(IsHedgeComment(comment)) continue;
+         if(StringFind(comment, "GM") != 0) continue;
+         gen = ExtractGeneration(comment);
+      }
+
       if(gen < 0) continue;
       if(gen == g_cycleGeneration) continue;  // skip current generation
-      
+
       // Check if this gen is bound to an active hedge set
       bool isBoundGen = false;
       for(int h = 0; h < MAX_HEDGE_SETS; h++)
@@ -9033,7 +9043,7 @@ void ScanOrphanGenerations()
          { isBoundGen = true; break; }
       }
       if(isBoundGen) continue;
-      
+
       // Check if gen already in foundGens
       bool exists = false;
       for(int f = 0; f < foundGenCount; f++)
