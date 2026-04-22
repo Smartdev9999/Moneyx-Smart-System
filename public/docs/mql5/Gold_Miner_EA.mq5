@@ -8088,9 +8088,8 @@ void SyncRecoveryBasketTP(int idx)
       prices[cnt]  = PositionGetDouble(POSITION_PRICE_OPEN);
       lots[cnt]    = PositionGetDouble(POSITION_VOLUME);
       cnt++;
+      fromComment++;
    }
-
-   // 3) v6.69: Add ticket-based floaters (comment lost after partial-close)
    for(int k = 0; k < g_hedgeSets[idx].recoveryGridCount; k++)
    {
       ulong tk = g_hedgeSets[idx].recoveryGridTickets[k];
