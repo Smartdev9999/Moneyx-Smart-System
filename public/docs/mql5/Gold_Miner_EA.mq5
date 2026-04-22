@@ -8653,6 +8653,23 @@ void CheckAndOpenHedgeByDD()
    if(now - g_lastDDHedgeTime < InpHedge_DDCooldownSec) return;
    // v6.25: Cooldown after hedge set close to prevent immediate re-trigger
    if(now - g_lastHedgeCloseTime < InpHedge_DDCooldownSec) return;
+
+   // v6.71: MinSpacing gate — minutes between any hedge sets (applies to DD too)
+   if(InpHedge_MinSpacingMin > 0 && g_lastHedgeOpenTime > 0)
+   {
+      int elapsedSec  = (int)(now - g_lastHedgeOpenTime);
+      int requiredSec = InpHedge_MinSpacingMin * 60;
+      if(elapsedSec < requiredSec)
+      {
+         static datetime s_lastDDSpaceLog = 0;
+         if(now - s_lastDDSpaceLog >= 60)
+         {
+            Print("v6.71 HEDGE SPACING: wait ", (requiredSec - elapsedSec) / 60, "m more (DD)");
+            s_lastDDSpaceLog = now;
+         }
+         return;
+      }
+   }
    
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
    if(balance <= 0) return;
