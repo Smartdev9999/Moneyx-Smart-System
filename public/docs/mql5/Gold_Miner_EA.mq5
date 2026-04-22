@@ -4192,7 +4192,7 @@ void DisplayDashboard()
       color COLOR_SECTION_HEDGE = C'130,50,180';  // purple for hedge section
       bool anyActive = false;
 
-      // v6.61: Sequential Release status row (hedge-only comment scan)
+      // v6.63: Sequential Release status row (strict lowest-live-generation)
       {
          int allowedGen = g_seqAllowedGen;
          string seqVal;
@@ -4200,21 +4200,21 @@ void DisplayDashboard()
          if(InpHedge_SequentialRelease)
          {
             if(allowedGen == -1)
-               seqVal = "ON | No active hedge — full trading + free orphan recovery";
+               seqVal = "ON | No live system orders — full trading + free recovery";
             else
             {
-               // Count frozen sets (active hedge sets whose boundGeneration != allowed)
+               // v6.63: strict gate — count any active hedge/orphan whose gen != allowed
                int frozenHedge = 0;
                for(int hc2 = 0; hc2 < MAX_HEDGE_SETS; hc2++)
                   if(g_hedgeSets[hc2].active && g_hedgeSets[hc2].boundGeneration != allowedGen)
                      frozenHedge++;
-               // Orphans frozen only if newer than allowed hedge gen (v6.61 rule)
                int frozenOrphan = 0;
                for(int oc2 = 0; oc2 < MAX_ORPHAN_GROUPS; oc2++)
-                  if(g_orphanGroups[oc2].active && g_orphanGroups[oc2].generation > allowedGen)
+                  if(g_orphanGroups[oc2].active && g_orphanGroups[oc2].generation != allowedGen)
                      frozenOrphan++;
-                seqVal = "ON | Allowed Hedge: Gen" + IntegerToString(allowedGen)
-                       + " (GM_HEDGE_" + IntegerToString(allowedGen + 1) + ")"
+               string genTag = (allowedGen == 0) ? "GM" : ("GM" + IntegerToString(allowedGen));
+                seqVal = "ON | Allowed Gen: Gen" + IntegerToString(allowedGen)
+                       + " (" + genTag + ") | Strict one-by-one"
                       + " | New cycles: ALLOWED"
                       + " | Frozen Hedge: " + IntegerToString(frozenHedge)
                       + " | Frozen Orphans: " + IntegerToString(frozenOrphan);
