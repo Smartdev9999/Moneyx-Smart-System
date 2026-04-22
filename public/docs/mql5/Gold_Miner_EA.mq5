@@ -7628,9 +7628,84 @@ void PruneRecoverySeeds()
 }
 
 //+------------------------------------------------------------------+
-//| v6.61: RecoverySetTracker — anti-skip ticket array per generation |
+//| v6.61: Unified Recovery Owner Avg TP                              |
+//| When the sequential-recovery owner generation reaches its weighted|
+//| average TP (recovery seed + remaining bound losers + recovery     |
+//| grid orders), close the entire basket and clear the owner.        |
 //+------------------------------------------------------------------+
-int FindRecoverySetIdx(int gen)
+void ManageRecoveryOwnerAvgTP()
+{
+   if(InpHedge_BoundAvgTPPoints <= 0) return;
+   if(!g_sequentialRecoveryActive) return;
+   int gen = g_sequentialRecoveryGen;
+   if(gen < 0) return;
+
+   string prefix = GenPrefix(gen);
+
+   // Build basket per side: include normal gen orders + recovery seeds for this gen
+   for(int sideI = 0; sideI < 2; sideI++)
+   {
+      ENUM_POSITION_TYPE side = (sideI == 0) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
+      double totalWeighted = 0;
+      double totalLots = 0;
+      ulong  basketTickets[];
+      int    basketCount = 0;
+
+      for(int i = PositionsTotal() - 1; i >= 0; i--)
+      {
+         ulong ticket = PositionGetTicket(i);
+         if(ticket == 0) continue;
+         if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+         if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+         if(PositionGetInteger(POSITION_TYPE) != side) continue;
+
+         string comment = PositionGetString(POSITION_COMMENT);
+         bool isSeed = IsRecoverySeedTicket(ticket);
+         bool isOwnerOrder = false;
+
+         if(isSeed && GetRecoverySeedGen(ticket) == gen)
+            isOwnerOrder = true;
+         else if(StringFind(comment, prefix + "_") == 0 && !IsHedgeComment(comment))
+            isOwnerOrder = true;
+
+         if(!isOwnerOrder) continue;
+
+         double lots = PositionGetDouble(POSITION_VOLUME);
+         double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+         totalWeighted += lots * openPrice;
+         totalLots     += lots;
+         ArrayResize(basketTickets, basketCount + 1);
+         basketTickets[basketCount++] = ticket;
+      }
+
+      if(totalLots <= 0 || basketCount == 0) continue;
+
+      double avgPrice  = totalWeighted / totalLots;
+      double tpDist    = InpHedge_BoundAvgTPPoints * _Point;
+      bool   tpReached = false;
+      if(side == POSITION_TYPE_BUY)
+         tpReached = (SymbolInfoDouble(_Symbol, SYMBOL_BID) >= avgPrice + tpDist);
+      else
+         tpReached = (SymbolInfoDouble(_Symbol, SYMBOL_ASK) <= avgPrice - tpDist);
+
+      if(!tpReached) continue;
+
+      Print("v6.61 RECOV AVG TP: Gen", gen, " side=", EnumToString(side),
+            " avg=", DoubleToString(avgPrice, _Digits),
+            " target=", InpHedge_BoundAvgTPPoints, "pts REACHED → closing ", basketCount, " orders");
+
+      for(int b = 0; b < basketCount; b++)
+      {
+         if(PositionSelectByTicket(basketTickets[b]))
+         {
+            trade.PositionClose(basketTickets[b]);
+            Sleep(30);
+         }
+      }
+   }
+}
+
+
 {
    for(int i = 0; i < g_recoverySetCount; i++)
       if(g_recoverySets[i].generation == gen) return i;
