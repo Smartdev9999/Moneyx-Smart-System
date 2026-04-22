@@ -8883,7 +8883,28 @@ void RecoverHedgeSets()
             // v6.66: restore One-Time Shred flag from GlobalVariable
             string gvShred = "GME_HEDGE_SHRED_" + IntegerToString(h);
             if(GlobalVariableCheck(gvShred) && GlobalVariableGet(gvShred) > 0)
-               g_hedgeSets[h].shredCompleted = true;
+             g_hedgeSets[h].shredCompleted = true;
+            // v6.69: reload recovery grid ticket list from GVs
+            ArrayResize(g_hedgeSets[h].recoveryGridTickets, 0);
+            g_hedgeSets[h].recoveryGridCount = 0;
+            for(int rk = 0; rk < 200; rk++)
+            {
+               string gvTk = "GME_REC_TK_" + IntegerToString(h) + "_" + IntegerToString(rk);
+               if(!GlobalVariableCheck(gvTk)) break;
+               ulong rt = (ulong)GlobalVariableGet(gvTk);
+               if(rt > 0 && PositionSelectByTicket(rt))
+               {
+                  int rc = g_hedgeSets[h].recoveryGridCount;
+                  ArrayResize(g_hedgeSets[h].recoveryGridTickets, rc + 1);
+                  g_hedgeSets[h].recoveryGridTickets[rc] = rt;
+                  g_hedgeSets[h].recoveryGridCount = rc + 1;
+               }
+               else
+               {
+                  GlobalVariableDel(gvTk);
+               }
+            }
+            g_hedgeSets[h].lastRecoveryGridBarTime = 0;
             // v6.66: persist current ticket so partial-close residue stays bound
             GlobalVariableSet("GME_HEDGE_TICKET_" + IntegerToString(h), (double)ticket);
             Print("RECOVER: Rebuilt Hedge Set#", h + 1, " from ticket ", ticket,
