@@ -927,6 +927,10 @@ int OnInit()
        g_hedgeSets[h].triggerType = 0;
        g_hedgeSets[h].hedgeOpenTime = 0;  // v6.57
        g_hedgeSets[h].shredCompleted = false;  // v6.66
+       // v6.69: recovery grid bookkeeping
+       ArrayResize(g_hedgeSets[h].recoveryGridTickets, 0);
+       g_hedgeSets[h].recoveryGridCount = 0;
+       g_hedgeSets[h].lastRecoveryGridBarTime = 0;
      }
      g_hedgeSetCount = 0;
 
@@ -2253,6 +2257,10 @@ void CloseAllPositions()
       g_hedgeSets[h].triggerType = 0;
       g_hedgeSets[h].hedgeOpenTime = 0;  // v6.57
       g_hedgeSets[h].shredCompleted = false;  // v6.66
+      // v6.69: recovery grid bookkeeping
+      ArrayResize(g_hedgeSets[h].recoveryGridTickets, 0);
+      g_hedgeSets[h].recoveryGridCount = 0;
+      g_hedgeSets[h].lastRecoveryGridBarTime = 0;
       // v6.66: clear persisted state
       string gvShred  = "GME_HEDGE_SHRED_"  + IntegerToString(h);
       string gvTicket = "GME_HEDGE_TICKET_" + IntegerToString(h);
