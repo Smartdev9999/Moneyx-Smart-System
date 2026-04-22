@@ -7654,6 +7654,8 @@ void SetSequentialRecoveryOwner(int hedgeSetIdx, int gen)
    if(remain + seedRemain == 0)
    {
       Print("v6.61 SEQ OWNER SKIP: Gen", gen, " has 0 released recovery orders (Set#", hedgeSetIdx + 1, ")");
+      // v6.69: ถึงจะไม่มี owner ก็ต้องหน่วงไม่ให้ set ถัดไปปลดทันที
+      ArmSequentialUnlockDelay(hedgeSetIdx, "set closed clean (no owner)");
       return;
    }
    g_sequentialRecoveryGen    = gen;
@@ -7661,6 +7663,8 @@ void SetSequentialRecoveryOwner(int hedgeSetIdx, int gen)
    g_sequentialRecoveryActive = true;
    Print("v6.60 SEQ OWNER: Gen", gen, " claimed from Set#", hedgeSetIdx + 1,
          " | ", remain, " recovery order(s) — other hedge sets blocked until flat");
+   // v6.69: arm delay เผื่อกรณี owner clear แล้วจะถูกต่ออายุ — และกัน set ถัดไปไม่ให้แทรกระหว่าง owner active
+   ArmSequentialUnlockDelay(hedgeSetIdx, "owner Gen" + IntegerToString(gen) + " claimed");
 }
 
 void ClearSequentialRecoveryOwner(string reason)
