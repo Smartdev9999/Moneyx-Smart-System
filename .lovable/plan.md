@@ -1,21 +1,22 @@
-## v6.65 — Netting Pre-Gate + Orphan Continuous GL
+## v6.60 — Sequential Release: Comment-Based Gen Scan + Match Pool (Bound Profit)
 
-### ปัญหา
-Gen1 (Set#2 bound) มีกำไรล้วน +$3,290 แต่ระบบไม่ปิด เพราะ Triple Gate ของ Set#2 ยังไม่ผ่าน → netting v6.64 ที่อยู่หลัง gate ไม่เคยรัน. Orphan GL ออกได้แค่ 1 ตัว/แท่งเพราะ global `g_lastOrphanGridCandleTime` block
+### ปัญหาเดิม
+1. **Match Close**: pool รวมแค่ hedge+reverse → ปิดเฉพาะ bound ที่ขาดทุน, bound ที่กำไรค้างไว้ → ชุดไม่สมดุล
+2. **Sequential Recovery**: gate ใช้ `GetOldestActiveHedgeSetIndex()` → หลัง deactivate set#A ทันที set#B เริ่ม recovery ทั้งที่ orphan ของ A ยังไม่หมด → 2 ชุดทำงานพร้อมกัน
 
 ### แก้
-- ย้าย `RunBoundProfitLossNetting` ใน `ManageHedgeSets()` มา **ก่อน** `IsHedgeCloseAllowed()` (netting แตะแค่ bound, skip hedge — ปลอดภัยต่อ Triple Gate)
-- เพิ่ม per-tick netting fallback ที่ต้น `ManageHedgeSets()` (1 ครั้ง/tick สำหรับ `seqAllowedGen`) เพื่อ scan รวม bound ที่กระจายระหว่าง active set + orphan group
-- ลบ global `g_lastOrphanGridCandleTime` gate ใน `ManageOrphanGrid()` (และ 2 จุด assignment) → orphan GL ขยาย level ต่อเนื่องในแท่งเดียวได้ตามระยะราคา (ยังถูก gate ด้วย distance check + MaxOpenOrders + GridLoss_MaxTrades)
-- Version → v6.65
+- `ParseGenerationFromComment()` — map "GM"/"GM_*"→0, "GMN_*"→N, "GM_HD(N+1)"→N
+- `GetSequentialAllowedGeneration()` — scan PositionsTotal() คืน gen ต่ำสุดที่ยังมีออเดอร์จริง (bound+hedge)
+- `ManageHedgeSets()` seqFreeze ใช้ `boundGeneration != g_seqAllowedGen` แทน slot index
+- `ManageHedgeMatchingClose()` — รวม `boundProfitPool` ของ counterSide ที่ pnl>0 เข้า budget + ปิด tickets เหล่านั้นหลัง close reverse
+- Dashboard: `Seq Release | ON | Allowed: GenN (GMN_*+GM_HD(N+1)) | Frozen Hedge: X | Frozen Orphans: Y`
 
 ### ไฟล์
-- `public/docs/mql5/Gold_Miner_EA.mq5` → v6.65
+- `public/docs/mql5/Gold_Miner_EA.mq5` → v6.60
 
 ### ไม่เปลี่ยน
-- Order Execution / Strategy / Entry / Grid distance / Lot calc
-- License / News / Time / Triple Gate logic / Hedge open trigger / BB Filter / Balance Guard
-- `RunBoundProfitLossNetting()` core algorithm (แค่ย้ายตำแหน่งเรียก)
-- `ManageHedgeMatchingClose()` / `ManageHedgeBoundAvgTP()` / `ManageHedgePartialClose()`
-- Sequential gate v6.63 / Initial entry v6.59
-- v6.37–v6.64 features
+- Order Execution / Strategy / Entry signals / Grid distance / Lot calc
+- License / News / Time / Triple Gate / Hedge open trigger / Balance Guard / BB Filter
+- Initial entry ของ new cycle (v6.59) — ไม่ block
+- ManageOrphanGrid sequential gate (v6.58) — ใช้ `g_seqAllowedGen` ค่าใหม่
+- v6.37–v6.59 features
