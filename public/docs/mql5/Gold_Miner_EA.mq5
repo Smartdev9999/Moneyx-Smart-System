@@ -400,10 +400,8 @@ input ENUM_ATR_REF   Recovery_ATR_Reference  = ATR_REF_DYNAMIC;             // R
 input int            Recovery_MinGapPoints   = 100;                         // Recovery Min Grid Gap (points)
 input int            Recovery_CandleConfirm  = 0;                           // Recovery Candle Confirm (0=Off)
 
-// === v6.65/v6.66: Auto Recovery Lot Sizing ===
-input bool           Recovery_AutoLot        = false;  // v6.66 Auto: Reverse-walk seed from init*mult^n until cumulative > remHedge
-input double         Recovery_AutoInitLot    = 0.05;   // v6.65 Auto Initial Lot
-input double         Recovery_AutoMult       = 1.4;    // v6.65 Auto Multiplier
+// === v6.67: Auto Recovery Lot Sizing (uses Grid Recovery params above) ===
+input bool           Recovery_AutoLot        = false;  // v6.67 Auto Recovery (Reverse-walk seed, uses InitialLotSize + Recovery/GridLoss MultiplyFactor)
 input bool           Recovery_UseCombinedTP  = true;   // v6.66 Combined Avg TP across remaining hedge + HG_GL orders
 
 // === v6.57: Sequential Hedge Recovery ===
