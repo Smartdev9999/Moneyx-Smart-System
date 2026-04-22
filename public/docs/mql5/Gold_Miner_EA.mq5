@@ -1466,6 +1466,8 @@ void OnTick()
    ManageRecoveryOwnerAvgTP();
    // v6.63: Watchdog — alert if owner-gen orders are missing Broker TP
    AuditUnTPedOwnerOrders();
+   // v6.65: Watchdog — alert if hedge set lots are inflated vs bound orders
+   AuditHedgeSetIntegrity();
 
    // === ORIGINAL TRADING LOGIC (unchanged) ===
    if(g_eaStopped) return;
