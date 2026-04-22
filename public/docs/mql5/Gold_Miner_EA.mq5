@@ -10183,12 +10183,54 @@ void ManageHedgeMatchingClose(int idx)
          }
       }
 
-       // v6.55: Do NOT close bound loss orders — release them as recovery orders
-       Print("HEDGE MATCHING v6.55 Set#", idx + 1, ": releasing ", g_hedgeSets[idx].boundTicketCount, " bound orders to recovery (not closing)");
+       // v6.61: SHRED bound losers (oldest first) using hedge profit, then close hedge
+       int closedBoundCount = 0;
+       if(InpHedge_ShredOnMatch)
+       {
+          for(int li = 0; li < lossUsed; li++)
+          {
+             ulong tk = lossTickets[ closeLossIdx[li] ];
+             if(PositionSelectByTicket(tk))
+             {
+                if(trade.PositionClose(tk)) closedBoundCount++;
+                Sleep(30);
+             }
+          }
+          Print("v6.61 SHRED BOUND: Set#", idx + 1, " closed ", closedBoundCount,
+                "/", g_hedgeSets[idx].boundTicketCount, " bound losers via hedge profit");
+       }
+       else
+       {
+          Print("HEDGE MATCHING v6.55 Set#", idx + 1, ": releasing ", g_hedgeSets[idx].boundTicketCount, " bound orders to recovery (not closing)");
+       }
 
-        // Deactivate hedge set — bound orders remain open as recovery
+       // Track shred event for dashboard
+       g_lastShredHedgeFrom    = g_hedgeSets[idx].hedgeLots;
+       g_lastShredHedgeTo      = 0;
+       g_lastShredBoundClosed  = closedBoundCount;
+       g_lastShredBoundRemain  = MathMax(0, g_hedgeSets[idx].boundTicketCount - closedBoundCount);
+       g_lastShredNet          = finalNet;
+       g_lastShredTime         = TimeCurrent();
+
+        // Deactivate hedge set — remaining bound orders stay open as recovery
          CloseAllHedgeGridOrders(idx);
          int matchGen = g_hedgeSets[idx].boundGeneration;  // v6.59
+
+         // v6.61: Register all REMAINING (still-open) bound tickets as recovery set
+         ulong remainBound[];
+         int rbCnt = 0;
+         for(int b = 0; b < g_hedgeSets[idx].boundTicketCount; b++)
+         {
+            ulong tkb = g_hedgeSets[idx].boundTickets[b];
+            if(tkb == 0) continue;
+            if(PositionSelectByTicket(tkb))
+            {
+               ArrayResize(remainBound, rbCnt + 1);
+               remainBound[rbCnt++] = tkb;
+            }
+         }
+         if(rbCnt > 0) RegisterRecoverySetTickets(matchGen, idx, remainBound);
+
          SaveBoundTicketsToPrevHedged(idx);  // v6.26
          g_hedgeSets[idx].active = false;
          g_hedgeSets[idx].boundTicketCount = 0;
