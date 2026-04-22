@@ -9131,7 +9131,17 @@ void ManageHedgeSets()
       }
       
       // === Gate passed — close logic allowed ===
-      
+
+      // v6.64: Profit-Loss Netting — net bound profits vs losses BEFORE
+      //         hedge matching/avgTP/grid. Works even when hedge is in loss.
+      if(InpHedge_SequentialRelease
+         && g_seqAllowedGen != -1
+         && g_hedgeSets[h].boundGeneration == g_seqAllowedGen)
+      {
+         RunBoundProfitLossNetting(g_hedgeSets[h].boundGeneration);
+         RefreshBoundTickets(h);
+      }
+
       // If in grid mode → execute grid
       if(g_hedgeSets[h].gridMode)
       {
