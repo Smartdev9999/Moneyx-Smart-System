@@ -4497,6 +4497,19 @@ void DisplayDashboard()
                                  IntegerToString(g_lastOrphanGLCount) + " order(s) missing Broker TP",
                                  orphanColor, COLOR_SECTION_HEDGE); row++;
                  }
+                 // v6.66: Active Hedge X/Max — clarifies that GMx counter ≠ hedge cap
+                 {
+                    int activeNow = 0;
+                    for(int hh = 0; hh < MAX_HEDGE_SETS; hh++)
+                       if(g_hedgeSets[hh].active) activeNow++;
+                    color actColor = (activeNow >= InpHedge_MaxSets) ? clrOrangeRed
+                                    : (activeNow > 0) ? clrYellow : clrLime;
+                    string actStr = IntegerToString(activeNow) + " / " + IntegerToString(InpHedge_MaxSets)
+                                  + (activeNow >= InpHedge_MaxSets ? "  (CAP — new hedges blocked)" : "");
+                    DrawTableRow(row, "Active Hedge Sets", actStr, actColor, COLOR_SECTION_HEDGE); row++;
+                    DrawTableRow(row, "Cycle Gen (comment)", "GM" + IntegerToString(g_cycleGeneration)
+                                  + "  (counter only — not a cap)", clrSilver, COLOR_SECTION_HEDGE); row++;
+                 }
                  // v6.65: Hedge Set Integrity status
                  {
                     string integStatus;
