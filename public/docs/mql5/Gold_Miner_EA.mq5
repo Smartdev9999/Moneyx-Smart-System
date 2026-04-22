@@ -9151,8 +9151,19 @@ void ManageOrphanGrid()
                   {
                      int nextLevel = mgls + 1;
                      double maxExisting = FindMaxLotOrphan(gen, POSITION_TYPE_SELL);
-                     double lots = ComputeRecoveryGridLot(maxExisting, gls);  // v6.57
-                     
+                     double lots;
+                     if(Recovery_AutoLot)
+                     {
+                        double remHedge = GetHedgeLotsForGen(gen);
+                        double existLots = SumOrphanGridLots(gen, POSITION_TYPE_SELL);
+                        lots = ComputeAutoRecoveryLot(remHedge, existLots, maxExisting);
+                        if(lots <= 0) continue;
+                        Print("v6.65 AUTO LOT Gen", gen, " SELL: rem=", DoubleToString(remHedge, 2),
+                              " used=", DoubleToString(existLots, 2), " -> next=", DoubleToString(lots, 2));
+                     }
+                     else
+                        lots = ComputeRecoveryGridLot(maxExisting, gls);  // v6.57
+
                      string comment = prefix + "_GL#" + IntegerToString(nextLevel);
                       if(OpenOrder(ORDER_TYPE_SELL, lots, comment))
                       {
