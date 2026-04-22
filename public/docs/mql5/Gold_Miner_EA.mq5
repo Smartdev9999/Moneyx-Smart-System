@@ -679,12 +679,18 @@ OrphanGenGroup g_orphanGroups[MAX_ORPHAN_GROUPS];
 int g_activeOrphanGroupCount = 0;
 
 //+------------------------------------------------------------------+
-//| Comment Generation Helpers                                         |
+//| Comment Generation Helpers (v6.70: 1-based labels GM1, GM2, ...) |
 //+------------------------------------------------------------------+
+// v6.70: User-facing label = internal gen + 1
+//   internal g_cycleGeneration=0 → "GM1"
+//   internal g_cycleGeneration=1 → "GM2"
+// Legacy comments "GM_*" still map to internal gen 0 via ExtractGeneration().
+int    GenLabel(int gen)         { return gen + 1; }
+string GenPrefixLabel(int gen)   { return "GM" + IntegerToString(GenLabel(gen)); }
+
 string GetCommentPrefix()
 {
-   if(g_cycleGeneration == 0) return "GM";
-   return "GM" + IntegerToString(g_cycleGeneration);
+   return GenPrefixLabel(g_cycleGeneration);
 }
 
 // === v6.53: Persist g_cycleGeneration via GlobalVariable ===
@@ -703,11 +709,10 @@ int LoadCycleGeneration()
    return -1;  // not found
 }
 
-// Get prefix for a specific generation
+// Get prefix for a specific generation (v6.70: 1-based label)
 string GenPrefix(int gen)
 {
-   if(gen == 0) return "GM";
-   return "GM" + IntegerToString(gen);
+   return GenPrefixLabel(gen);
 }
 
 // Match comment from any GM generation with a suffix (e.g. "_INIT", "_GL", "_GP")
@@ -725,8 +730,12 @@ bool MatchTFPrefix(string comment, string tfLabel)
    return StringFind(comment, tfToken) >= 0;
 }
 
-// Extract cycle generation number from comment
-// GM_INIT → 0, GM1_INIT → 1, GM2_INIT → 2
+// Extract internal cycle generation number from comment
+// v6.70 1-based label scheme:
+//   "GM_INIT"   (legacy) → 0
+//   "GM1_INIT"  (new)    → 0
+//   "GM2_INIT"  (new)    → 1
+//   "GM3_INIT"  (new)    → 2
 int ExtractGeneration(string comment)
 {
    if(StringFind(comment, "GM") != 0) return -1;
@@ -737,9 +746,12 @@ int ExtractGeneration(string comment)
       if(ch >= '0' && ch <= '9') pos++;
       else break;
    }
-   if(pos == 2) return 0;  // "GM_" = gen 0
-   return (int)StringToInteger(StringSubstr(comment, 2, pos - 2));
+   if(pos == 2) return 0;  // legacy "GM_*" → gen 0
+   int label = (int)StringToInteger(StringSubstr(comment, 2, pos - 2));
+   if(label <= 0) return 0;
+   return label - 1;  // v6.70: convert 1-based label → internal gen
 }
+
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                     |
