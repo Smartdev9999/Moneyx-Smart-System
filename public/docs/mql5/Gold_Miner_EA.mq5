@@ -5,8 +5,8 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.62"
-#property description "Gold Miner EA v6.62 - v6.61 + Comments start at GM1 + Hedge tied to bound generation (GM_Hedge_E{gen} / GM_Hedge_D{gen}) + Reset cycles back to GM1"
+#property version   "6.63"
+#property description "Gold Miner EA v6.63 - v6.62 + Recovery Owner Broker TP Sync + Orphan GL Watchdog (fix GL ใหม่หลัง hedge ปลด ไม่ได้ TP)"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -594,6 +594,7 @@ int      g_sequentialRecoveryGen      = -1;    // generation currently owning re
 int      g_sequentialRecoverySetIdx   = -1;    // originating hedge set index (for dashboard/log)
 bool     g_sequentialRecoveryActive   = false; // true → block all other sets and other-gen orphan recovery
 bool     g_sequentialRecoveryCompletedThisTick = false; // one-tick handoff guard
+int      g_lastOrphanGLCount = 0;  // v6.63: dashboard counter for owner-gen orders missing Broker TP
 
 // === v6.61: Recovery Seed (logically-stripped hedge remainders treated as gen orders) ===
 ulong    g_recoverySeedTickets[];   // hedge remainders re-bound as recovery seed
@@ -1461,6 +1462,8 @@ void OnTick()
    // v6.61: Prune recovery seeds + check unified avg TP for current owner
    PruneRecoverySeeds();
    ManageRecoveryOwnerAvgTP();
+   // v6.63: Watchdog — alert if owner-gen orders are missing Broker TP
+   AuditUnTPedOwnerOrders();
 
    // === ORIGINAL TRADING LOGIC (unchanged) ===
    if(g_eaStopped) return;
@@ -2385,6 +2388,17 @@ void SyncBrokerTPSL()
       // Skip hedge/bound orders
       if(IsHedgeComment(PositionGetString(POSITION_COMMENT))) continue;
       if(IsTicketBound(ticket)) continue;
+
+      // v6.63 FIX: Skip orders managed by Recovery Owner — they have their own
+      // per-generation avg TP path (ManageRecoveryOwnerAvgTP). Mixing them into
+      // the global avg TP causes new GLs to be set with the WRONG TP price.
+      if(g_sequentialRecoveryActive)
+      {
+         string ownerComment = PositionGetString(POSITION_COMMENT);
+         int ownerOg = ExtractGeneration(ownerComment);
+         if(ownerOg == g_sequentialRecoveryGen) continue;
+         if(IsRecoverySeedTicket(ticket) && GetRecoverySeedGen(ticket) == g_sequentialRecoveryGen) continue;
+      }
 
       ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
       double curTP = PositionGetDouble(POSITION_TP);
@@ -4458,7 +4472,15 @@ void DisplayDashboard()
                    int pendingCount = g_hedgeSetCount - 1;
                    if(pendingCount > 0) seqInfo += " | Wait: " + IntegerToString(pendingCount) + " set(s)";
                 }
-                DrawTableRow(row, "Hedge Recovery", seqInfo, clrAqua, COLOR_SECTION_HEDGE); row++;
+                 DrawTableRow(row, "Hedge Recovery", seqInfo, clrAqua, COLOR_SECTION_HEDGE); row++;
+                 // v6.63: Owner Avg TP + orphan watchdog
+                 if(g_sequentialRecoveryActive)
+                 {
+                    color orphanColor = (g_lastOrphanGLCount > 0) ? clrRed : clrLime;
+                    DrawTableRow(row, "Owner Untracked GL",
+                                 IntegerToString(g_lastOrphanGLCount) + " order(s) missing Broker TP",
+                                 orphanColor, COLOR_SECTION_HEDGE); row++;
+                 }
                 // v6.58: PrevHedged lock count
                 if(g_prevHedgedCount > 0)
                 {
@@ -7705,11 +7727,31 @@ void ManageRecoveryOwnerAvgTP()
 
       double avgPrice  = totalWeighted / totalLots;
       double tpDist    = InpHedge_BoundAvgTPPoints * _Point;
+      double tpPrice   = (side == POSITION_TYPE_BUY)
+                         ? NormalizeDouble(avgPrice + tpDist, _Digits)
+                         : NormalizeDouble(avgPrice - tpDist, _Digits);
       bool   tpReached = false;
       if(side == POSITION_TYPE_BUY)
          tpReached = (SymbolInfoDouble(_Symbol, SYMBOL_BID) >= avgPrice + tpDist);
       else
          tpReached = (SymbolInfoDouble(_Symbol, SYMBOL_ASK) <= avgPrice - tpDist);
+
+      // v6.63 FIX: Always sync Broker TP for owner basket (even before TP reached)
+      // This ensures GL orders opened AFTER hedge release get the correct avg TP
+      // and survive EA restart / connection drop.
+      for(int b = 0; b < basketCount; b++)
+      {
+         if(!PositionSelectByTicket(basketTickets[b])) continue;
+         double curTP = PositionGetDouble(POSITION_TP);
+         double curSL = PositionGetDouble(POSITION_SL);
+         if(NormalizeDouble(curTP, _Digits) != tpPrice)
+         {
+            if(trade.PositionModify(basketTickets[b], curSL, tpPrice))
+               Print("v6.63 RECOV TP SYNC: Gen", gen, " #", basketTickets[b],
+                     " TP=", DoubleToString(tpPrice, _Digits),
+                     " (avg=", DoubleToString(avgPrice, _Digits), ")");
+         }
+      }
 
       if(!tpReached) continue;
 
@@ -7729,10 +7771,59 @@ void ManageRecoveryOwnerAvgTP()
 }
 
 //+------------------------------------------------------------------+
+//| v6.63: Orphan GL Watchdog — alert when owner-gen orders have TP=0 |
+//+------------------------------------------------------------------+
+void AuditUnTPedOwnerOrders()
+{
+   if(!g_sequentialRecoveryActive) return;
+   int gen = g_sequentialRecoveryGen;
+   if(gen < 0) return;
+   string prefix = GenPrefix(gen);
+   static datetime s_lastAuditLog = 0;
+   if(TimeCurrent() - s_lastAuditLog < 30) return;  // throttle 30s
+
+   int orphanCnt = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      string c = PositionGetString(POSITION_COMMENT);
+      if(IsHedgeComment(c)) continue;
+      if(IsTicketBound(ticket)) continue;
+      bool ownerOrder = false;
+      if(IsRecoverySeedTicket(ticket) && GetRecoverySeedGen(ticket) == gen)
+         ownerOrder = true;
+      else if(StringFind(c, prefix + "_") == 0)
+         ownerOrder = true;
+      if(!ownerOrder) continue;
+      if(PositionGetDouble(POSITION_TP) == 0)
+      {
+         orphanCnt++;
+         Print("v6.63 ORPHAN GL: Gen", gen, " #", ticket, " (", c,
+               ") has TP=0 → next ManageRecoveryOwnerAvgTP tick will sync");
+      }
+   }
+   if(orphanCnt > 0)
+   {
+      s_lastAuditLog = TimeCurrent();
+      g_lastOrphanGLCount = orphanCnt;
+   }
+   else
+   {
+      g_lastOrphanGLCount = 0;
+   }
+}
+
+//+------------------------------------------------------------------+
 //| v6.61: RecoverySetTracker — anti-skip ticket array per generation |
 //+------------------------------------------------------------------+
 int FindRecoverySetIdx(int gen)
 {
+   // v6.63 FIX: previously hard-coded -1, breaking RecoverySetTracker entirely
+   for(int i = 0; i < g_recoverySetCount; i++)
+      if(g_recoverySets[i].generation == gen) return i;
    return -1;
 }
 
