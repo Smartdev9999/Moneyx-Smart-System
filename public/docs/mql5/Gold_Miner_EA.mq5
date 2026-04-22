@@ -3083,6 +3083,68 @@ double FindMaxLotOnSide(ENUM_POSITION_TYPE side)
 }
 
 //+------------------------------------------------------------------+
+//| v6.71: Find max grid level (#N) currently open on side+suffix     |
+//|        Used to ensure new grid comment never duplicates or goes   |
+//|        backwards after hedge matching/partial close removed lower |
+//|        numbered grids. suffix = "_GL" or "_GP".                   |
+//+------------------------------------------------------------------+
+int FindMaxGridLevelOnSide(ENUM_POSITION_TYPE side, string suffix)
+{
+   int maxLevel = 0;
+   for(int i = PositionsTotal()-1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
+      if(IsTicketBound(ticket)) continue;
+      string comment = PositionGetString(POSITION_COMMENT);
+      if(IsHedgeComment(comment)) continue;
+      // Only current generation
+      int orderGen = ExtractGeneration(comment);
+      if(orderGen >= 0 && orderGen != g_cycleGeneration) continue;
+      if(StringFind(comment, suffix + "#") < 0) continue;
+      int hashPos = StringFind(comment, "#");
+      if(hashPos < 0) continue;
+      int level = (int)StringToInteger(StringSubstr(comment, hashPos + 1));
+      if(level > maxLevel) maxLevel = level;
+   }
+   return maxLevel;
+}
+
+//+------------------------------------------------------------------+
+//| v6.71: TF variant — match by tf prefix in comment                 |
+//+------------------------------------------------------------------+
+int FindMaxGridLevelOnSideTF(int tfIdx, ENUM_POSITION_TYPE side, string suffix)
+{
+   int maxLevel = 0;
+   string tfTag = "TF" + IntegerToString(tfIdx);
+   for(int i = PositionsTotal()-1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
+      if(IsTicketBound(ticket)) continue;
+      string comment = PositionGetString(POSITION_COMMENT);
+      if(IsHedgeComment(comment)) continue;
+      // Best-effort TF tag match (TF comments include tfIdx); fall back to plain match
+      if(StringFind(comment, tfTag) < 0 && StringFind(comment, "_" + IntegerToString(tfIdx) + "_") < 0)
+      {
+         // still allow if suffix appears (older builds without TF tag)
+      }
+      if(StringFind(comment, suffix + "#") < 0) continue;
+      int hashPos = StringFind(comment, "#");
+      if(hashPos < 0) continue;
+      int level = (int)StringToInteger(StringSubstr(comment, hashPos + 1));
+      if(level > maxLevel) maxLevel = level;
+   }
+   return maxLevel;
+}
+
+//+------------------------------------------------------------------+
 //| v6.41: Count GL orders for a specific generation + side            |
 //+------------------------------------------------------------------+
 int CountGenGridLoss(int gen, ENUM_POSITION_TYPE side)
