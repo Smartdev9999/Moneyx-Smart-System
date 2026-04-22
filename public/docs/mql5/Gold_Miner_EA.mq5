@@ -402,6 +402,14 @@ input int            Recovery_CandleConfirm  = 0;                           // R
 // === v6.57: Sequential Hedge Recovery ===
 input group "=== Sequential Hedge Recovery ==="
 input bool   InpHedge_SequentialRecovery = true;   // true=close oldest hedge set first (H1→H2→H3), false=close any (legacy)
+
+// === v6.61: Recovery Shred & Seed ===
+input group "=== Recovery Shred & Seed (v6.61) ==="
+input bool   InpHedge_ShredOnMatch         = true;  // Shred bound losers using hedge profit (oldest first)
+input bool   InpHedge_ShredHedgeOnProfit   = true;  // Shred hedge proportionally when bound side is profitable
+input double InpHedge_ShredMinNetProfit    = 1.0;   // Min net $ kept after each shred
+input double InpRecovery_SeedTargetLots    = 1.0;   // Target cumulative lots for recovery seed selection
+input bool   InpRecovery_StripHedgeComment = true;  // Treat hedge remainder as recovery seed (logical strip)
 //+------------------------------------------------------------------+
 //| Global Variables                                                   |
 //+------------------------------------------------------------------+
