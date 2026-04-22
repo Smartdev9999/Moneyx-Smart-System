@@ -10616,7 +10616,31 @@ void ManageHedgeGridMode(int idx)
       // Calculate next grid lot
       int nextLevel = g_hedgeSets[idx].gridLevel + currentGridCount + 1;
       double nextLot = InitialLotSize;
-      if(GridLoss_LotMode == LOT_MULTIPLY)
+      if(Recovery_AutoLot)
+      {
+         double existingLots = SumHedgeGridLots(idx);
+         double lastGridLot  = FindLastHedgeGridLot(idx);
+         double remHedge     = g_hedgeSets[idx].hedgeLots;
+         nextLot = ComputeAutoRecoveryLot(remHedge, existingLots, lastGridLot);
+         if(nextLot <= 0)
+         {
+            static datetime s_lastAutoFullLog = 0;
+            if(TimeCurrent() - s_lastAutoFullLog >= 60)
+            {
+               Print("v6.65 AUTO LOT Set#", idx + 1,
+                     ": BUDGET FULL (used=", DoubleToString(existingLots, 2),
+                     "/", DoubleToString(remHedge, 2), ") -> skip");
+               s_lastAutoFullLog = TimeCurrent();
+            }
+            return;  // budget full → wait
+         }
+         Print("v6.65 AUTO LOT Set#", idx + 1,
+               ": rem=", DoubleToString(remHedge, 2),
+               " used=", DoubleToString(existingLots, 2),
+               " last=", DoubleToString(lastGridLot, 2),
+               " -> next=", DoubleToString(nextLot, 2));
+      }
+      else if(GridLoss_LotMode == LOT_MULTIPLY)
          nextLot = InitialLotSize * MathPow(GridLoss_MultiplyFactor, nextLevel);
       else if(GridLoss_LotMode == LOT_ADD)
          nextLot = InitialLotSize + (GridLoss_AddLotPerLevel * InitialLotSize) * nextLevel;
