@@ -7733,9 +7733,10 @@ int GetSequentialAllowedGeneration()
 {
    if(!InpHedge_SequentialRelease) return -1;
 
-   // v6.61: Scan ONLY hedge comments (GM_HD<n>). Bound/orphan orders never gate
-   //         the sequential queue — once a hedge set's matching close releases its
-   //         bounds as orphans, the next generation's hedge becomes allowed.
+   // v6.63: Strict sequential queue — scan ALL live system orders (bound, hedge,
+   //         orphan, DD hedge) and return the LOWEST generation still present.
+   //         This guarantees recovery proceeds GM → GM1 → GM2 in strict order:
+   //         while ANY Gen0 order remains, only Gen0 may run recovery.
    int oldest = INT_MAX;
    int total = PositionsTotal();
    for(int i = 0; i < total; i++)
@@ -7747,8 +7748,6 @@ int GetSequentialAllowedGeneration()
       if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
 
       string c = PositionGetString(POSITION_COMMENT);
-      // v6.62: hedge-only filter — match real comment prefix "GM_HEDGE_"
-      if(StringFind(c, "GM_HEDGE_") != 0) continue;
       int gen = ParseGenerationFromComment(c);
       if(gen >= 0 && gen < oldest) oldest = gen;
    }
