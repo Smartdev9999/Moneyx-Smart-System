@@ -7846,8 +7846,9 @@ double GetRecoveryGridDistancePoints(int level)
 // v6.65: Auto Recovery Lot helpers ---------------------------------
 double SumHedgeGridLots(int idx)
 {
+   if(idx < 0 || idx >= MAX_HEDGE_SETS) return 0.0;
    double total = 0.0;
-   string prefix = "GM_HG" + IntegerToString(idx + 1);
+   int gen = g_hedgeSets[idx].boundGeneration;
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       ulong tk = PositionGetTicket(i);
@@ -7855,7 +7856,7 @@ double SumHedgeGridLots(int idx)
       if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       string c = PositionGetString(POSITION_COMMENT);
-      if(StringFind(c, prefix) >= 0)
+      if(IsRecoveryGridForSet(c, idx, gen))   // v6.69 legacy GM_HG + new GM_HD
          total += PositionGetDouble(POSITION_VOLUME);
    }
    return total;
@@ -7863,9 +7864,10 @@ double SumHedgeGridLots(int idx)
 
 double FindLastHedgeGridLot(int idx)
 {
+   if(idx < 0 || idx >= MAX_HEDGE_SETS) return 0.0;
    double lastLot = 0.0;
    datetime lastT = 0;
-   string prefix = "GM_HG" + IntegerToString(idx + 1);
+   int gen = g_hedgeSets[idx].boundGeneration;
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       ulong tk = PositionGetTicket(i);
@@ -7873,13 +7875,22 @@ double FindLastHedgeGridLot(int idx)
       if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       string c = PositionGetString(POSITION_COMMENT);
-      if(StringFind(c, prefix) < 0) continue;
+      if(!IsRecoveryGridForSet(c, idx, gen)) continue;
       datetime t = (datetime)PositionGetInteger(POSITION_TIME);
       if(t >= lastT)
       {
          lastT = t;
          lastLot = PositionGetDouble(POSITION_VOLUME);
       }
+   }
+   // v6.69: also consider ticket-only floaters (last-opened by ticket order)
+   for(int k = 0; k < g_hedgeSets[idx].recoveryGridCount; k++)
+   {
+      ulong tk = g_hedgeSets[idx].recoveryGridTickets[k];
+      if(tk == 0) continue;
+      if(!PositionSelectByTicket(tk)) continue;
+      datetime t = (datetime)PositionGetInteger(POSITION_TIME);
+      if(t >= lastT) { lastT = t; lastLot = PositionGetDouble(POSITION_VOLUME); }
    }
    return lastLot;
 }
