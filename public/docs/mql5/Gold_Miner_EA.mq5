@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.62 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.69 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.68"
-#property description "Gold Miner EA v6.68 - v6.67 + Enforce one-hedge-per-tick rule on profit-close bypass (ป้องกันปลด hedge หลายชุดพร้อมกัน)"
+#property version   "6.69"
+#property description "Gold Miner EA v6.69 - v6.68 + Sequential Unlock Delay (time-based cooldown ก่อนปลด hedge ชุดถัดไป)"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -402,6 +402,7 @@ input int            Recovery_CandleConfirm  = 0;                           // R
 // === v6.57: Sequential Hedge Recovery ===
 input group "=== Sequential Hedge Recovery ==="
 input bool   InpHedge_SequentialRecovery = true;   // true=close oldest hedge set first (H1→H2→H3), false=close any (legacy)
+input int    InpHedge_SequentialUnlockDelayMin = 1; // v6.69: Delay before next hedge set unlock after previous set/owner closes (minutes, 0=Off)
 
 // === v6.61: Recovery Shred & Seed ===
 input group "=== Recovery Shred & Seed (v6.61) ==="
@@ -594,6 +595,10 @@ int      g_sequentialRecoveryGen      = -1;    // generation currently owning re
 int      g_sequentialRecoverySetIdx   = -1;    // originating hedge set index (for dashboard/log)
 bool     g_sequentialRecoveryActive   = false; // true → block all other sets and other-gen orphan recovery
 bool     g_sequentialRecoveryCompletedThisTick = false; // one-tick handoff guard
+// === v6.69: Sequential Unlock Delay (time-based cooldown ก่อนปลด hedge ชุดถัดไป) ===
+datetime g_sequentialUnlockBlockedUntil = 0;   // unix time จนกว่าจะปลด set ถัดไปได้
+int      g_sequentialUnlockSourceSetIdx = -1;  // ชุดต้นทางที่ทำให้เริ่ม cooldown (เพื่อ debug)
+string   g_sequentialUnlockReason       = "";  // เหตุผลที่ arm cooldown
 int      g_lastOrphanGLCount = 0;  // v6.63: dashboard counter for owner-gen orders missing Broker TP
 int      g_hedgeIntegrityWarnCount = 0;  // v6.65: count of hedge sets with hedgeLots >> boundLots (>2x)
 int      g_hedgeIntegrityCriticalCount = 0;  // v6.65: count of hedge sets with NO bound orders
@@ -981,7 +986,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.68 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.69 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min");
@@ -1041,7 +1046,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.68 deinitialized");
+   Print("Gold Miner EA v6.69 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -3938,7 +3943,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.68 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.68 [ZZ]" : "Gold Miner EA v6.68 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.69 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.69 [ZZ]" : "Gold Miner EA v6.69 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -4487,6 +4492,12 @@ void DisplayDashboard()
                    seqInfo = "Sequential | Next Unlock: H" + IntegerToString(oldestIdx + 1) + " (1/tick)";
                    int pendingCount = g_hedgeSetCount - 1;
                    if(pendingCount > 0) seqInfo += " | Wait: " + IntegerToString(pendingCount) + " set(s)";
+                }
+                // v6.69: time-based unlock cooldown overlay
+                if(IsSequentialUnlockDelayActive())
+                {
+                   int rem = GetSequentialUnlockRemainSec();
+                   seqInfo = "Cooldown " + IntegerToString(rem/60) + "m" + IntegerToString(rem%60) + "s | " + seqInfo;
                 }
                  DrawTableRow(row, "Hedge Recovery", seqInfo, clrAqua, COLOR_SECTION_HEDGE); row++;
                  // v6.63: Owner Avg TP + orphan watchdog
@@ -7649,6 +7660,8 @@ void SetSequentialRecoveryOwner(int hedgeSetIdx, int gen)
    if(remain + seedRemain == 0)
    {
       Print("v6.61 SEQ OWNER SKIP: Gen", gen, " has 0 released recovery orders (Set#", hedgeSetIdx + 1, ")");
+      // v6.69: ถึงจะไม่มี owner ก็ต้องหน่วงไม่ให้ set ถัดไปปลดทันที
+      ArmSequentialUnlockDelay(hedgeSetIdx, "set closed clean (no owner)");
       return;
    }
    g_sequentialRecoveryGen    = gen;
@@ -7656,17 +7669,52 @@ void SetSequentialRecoveryOwner(int hedgeSetIdx, int gen)
    g_sequentialRecoveryActive = true;
    Print("v6.60 SEQ OWNER: Gen", gen, " claimed from Set#", hedgeSetIdx + 1,
          " | ", remain, " recovery order(s) — other hedge sets blocked until flat");
+   // v6.69: arm delay เผื่อกรณี owner clear แล้วจะถูกต่ออายุ — และกัน set ถัดไปไม่ให้แทรกระหว่าง owner active
+   ArmSequentialUnlockDelay(hedgeSetIdx, "owner Gen" + IntegerToString(gen) + " claimed");
 }
 
 void ClearSequentialRecoveryOwner(string reason)
 {
    if(!g_sequentialRecoveryActive) return;
    Print("v6.60 SEQ COMPLETE: Gen", g_sequentialRecoveryGen,
-         " flat (", reason, ") -> unlock next set next tick");
+          " flat (", reason, ") -> unlock next set next tick");
    g_sequentialRecoveryGen    = -1;
    g_sequentialRecoverySetIdx = -1;
    g_sequentialRecoveryActive = false;
    g_sequentialRecoveryCompletedThisTick = true;  // skip releasing next set this tick
+   // v6.69: also arm time-based delay so next set ไม่ถูกปลดทันทีหลัง owner เพิ่ง flat
+   ArmSequentialUnlockDelay(g_sequentialRecoverySetIdx, "owner cleared: " + reason);
+}
+
+//+------------------------------------------------------------------+
+//| v6.69: Sequential Unlock Delay helpers                            |
+//+------------------------------------------------------------------+
+void ArmSequentialUnlockDelay(int sourceSetIdx, string reason)
+{
+   if(InpHedge_SequentialUnlockDelayMin <= 0) return;  // disabled
+   datetime newUntil = TimeCurrent() + (datetime)(InpHedge_SequentialUnlockDelayMin * 60);
+   // ถ้ามี cooldown ค้างอยู่แล้วและยาวกว่า ใหม่ → คงของเดิมไว้
+   if(newUntil > g_sequentialUnlockBlockedUntil)
+   {
+      g_sequentialUnlockBlockedUntil = newUntil;
+      g_sequentialUnlockSourceSetIdx = sourceSetIdx;
+      g_sequentialUnlockReason       = reason;
+      Print("v6.69 SEQ DELAY ARM: src=Set#", sourceSetIdx + 1,
+            " | wait ", InpHedge_SequentialUnlockDelayMin, " min (", reason, ")");
+   }
+}
+
+bool IsSequentialUnlockDelayActive()
+{
+   if(InpHedge_SequentialUnlockDelayMin <= 0) return false;
+   if(g_sequentialUnlockBlockedUntil <= 0) return false;
+   return (TimeCurrent() < g_sequentialUnlockBlockedUntil);
+}
+
+int GetSequentialUnlockRemainSec()
+{
+   if(!IsSequentialUnlockDelayActive()) return 0;
+   return (int)(g_sequentialUnlockBlockedUntil - TimeCurrent());
 }
 
 //+------------------------------------------------------------------+
@@ -9777,6 +9825,20 @@ void ManageHedgeSets()
          double _hPnL = 0;
          if(hedgeExists) _hPnL = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
          if(_hPnL > InpHedge_MatchMinProfit) seqBypass_profitClose = true;
+      }
+
+      // v6.69: Time-based unlock delay — กันปลด set ถัดไปทันทีหลังชุดก่อนเพิ่งปิด
+      if(InpHedge_SequentialRecovery && IsSequentialUnlockDelayActive())
+      {
+         g_hedgeSets[h].matchingDone = false;
+         static datetime _lastSeqDelayLog = 0;
+         if(TimeCurrent() - _lastSeqDelayLog >= 15)
+         {
+            Print("v6.69 SEQ DELAY HOLD: Set#", h+1, " deferred — remain ",
+                  GetSequentialUnlockRemainSec(), " sec (", g_sequentialUnlockReason, ")");
+            _lastSeqDelayLog = TimeCurrent();
+         }
+         continue;
       }
 
       if(InpHedge_SequentialRecovery && !seqBypass_profitClose)
