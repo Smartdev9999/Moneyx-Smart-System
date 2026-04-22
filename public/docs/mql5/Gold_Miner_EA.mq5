@@ -1,12 +1,13 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.64 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.65 - MTF ZigZag+CDC+Grid+License |
+//|         v6.65: Strict Sequential Matching + Auto Recovery Lot   |
 //+------------------------------------------------------------------+
-#property copyright "Copyright 2025, MoneyX Smart System"
-#property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.64"
-#property description "Gold Miner EA v6.64 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + GenRaceFix + OrphanGenFix + HedgeSidePause + GLCandleConfirm + MaxGridTrail + BrokerTPSL + DashCache + DashThrottle + LiveTPFix + HedgeClearTP + BoundClearFix + InstantSync + DeferredSync + InstantTP + MatchCloseToggle + HedgeRecoveryToggle + PersistGen + StartOrderTrail + BoundNoClose + BBFilter + RecoveryGrid + SequentialRecovery + FlatGenReset + SeqOneSetPerTick + RehedgeGuard + SeqRecoveryOwner + Gen0OwnerFix + StrictOwnerCount + MatchPoolBothSides + StrictInSetPool + InSetMatchAlways + PersistHedgeSlot + MatchTickRetry + HedgePartialFallback + License"
+#property copyright "Money X System"
+#property link      ""
+#property version   "6.65"
+#property description "Gold Miner EA v6.65 - StrictSequentialMatching + AutoRecoveryLot + MatchTickRetry + HedgePartialFallback + InSetMatchAlways + PersistHedgeSlot + StrictInSetPool + MatchPoolBothSides + StrictOwnerCount + Gen0OwnerFix + SeqRecoveryOwner + RehedgeGuard + SeqOneSetPerTick + FlatGenReset + SequentialRecovery + RecoveryGrid + BBFilter + BoundNoClose + StartOrderTrail + PersistGen + HedgeRecoveryToggle + MatchCloseToggle + InstantTP + DeferredSync + InstantSync + BoundClearFix + HedgeClearTP + LiveTPFix + DashThrottle + DashCache + BrokerTPSL + MaxGridTrail + GLCandleConfirm + HedgeSidePause + OrphanGenFix + GenRaceFix + BalGuardProfit + BalanceGuard + SafeReset + PrevHedgedGuard + HedgeCooldown + DDDollar + GenReset + MaxHedge50 + GenHelpers + GenCountFilter + ConstDDThreshold + NormalCount + GenAware + DDHedge + HedgeCloseGate + AvgTP + Squeeze + CDC + MTF ZigZag + License"
 #property strict
 
 #include <Trade/Trade.mqh>
