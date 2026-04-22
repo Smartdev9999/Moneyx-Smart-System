@@ -4472,7 +4472,15 @@ void DisplayDashboard()
                    int pendingCount = g_hedgeSetCount - 1;
                    if(pendingCount > 0) seqInfo += " | Wait: " + IntegerToString(pendingCount) + " set(s)";
                 }
-                DrawTableRow(row, "Hedge Recovery", seqInfo, clrAqua, COLOR_SECTION_HEDGE); row++;
+                 DrawTableRow(row, "Hedge Recovery", seqInfo, clrAqua, COLOR_SECTION_HEDGE); row++;
+                 // v6.63: Owner Avg TP + orphan watchdog
+                 if(g_sequentialRecoveryActive)
+                 {
+                    color orphanColor = (g_lastOrphanGLCount > 0) ? clrRed : clrLime;
+                    DrawTableRow(row, "Owner Untracked GL",
+                                 IntegerToString(g_lastOrphanGLCount) + " order(s) missing Broker TP",
+                                 orphanColor, COLOR_SECTION_HEDGE); row++;
+                 }
                 // v6.58: PrevHedged lock count
                 if(g_prevHedgedCount > 0)
                 {
