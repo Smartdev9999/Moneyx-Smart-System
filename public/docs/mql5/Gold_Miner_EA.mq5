@@ -5,8 +5,8 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.64"
-#property description "Gold Miner EA v6.64 - v6.63 + Recovery TP Sync Throttling (sync เฉพาะตอน basket เปลี่ยน, แก้ ping-pong กับ ClearBrokerTPSL)"
+#property version   "6.65"
+#property description "Gold Miner EA v6.65 - v6.64 + DD Hedge Strict Generation Bind (fix lot inflation: bind/count เฉพาะ gen ปัจจุบัน + audit watchdog)"
 #property strict
 
 #include <Trade/Trade.mqh>
