@@ -7676,20 +7676,20 @@ int GetOldestActiveHedgeSetIndex()
 }
 
 //+------------------------------------------------------------------+
-//| v6.61: Parse generation number from order comment                  |
-//|   "GM" or "GM_*" or "GM_HD1"  → 0                                  |
-//|   "GM1_*" or "GM_HD2"         → 1                                  |
-//|   "GMN_*" or "GM_HD(N+1)"     → N                                  |
+//| v6.62: Parse generation number from order comment                  |
+//|   "GM" or "GM_*" or "GM_HEDGE_1"  → 0                              |
+//|   "GM1_*" or "GM_HEDGE_2"         → 1                              |
+//|   "GMN_*" or "GM_HEDGE_(N+1)"     → N                              |
 //|   Returns -1 if comment doesn't match any known pattern.           |
 //+------------------------------------------------------------------+
 int ParseGenerationFromComment(string c)
 {
    if(c == "") return -1;
 
-   // Hedge comment: "GM_HD<n>"  → gen = n - 1
-   if(StringFind(c, "GM_HD") == 0)
+   // v6.62: Hedge comment is "GM_HEDGE_<n>"  → gen = n - 1
+   if(StringFind(c, "GM_HEDGE_") == 0)
    {
-      string numStr = StringSubstr(c, 5);
+      string numStr = StringSubstr(c, 9);   // skip "GM_HEDGE_"
       int n = (int)StringToInteger(numStr);
       if(n >= 1) return n - 1;
       return -1;
