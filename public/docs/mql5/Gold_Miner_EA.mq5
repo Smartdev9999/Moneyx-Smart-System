@@ -8315,11 +8315,12 @@ int CountUnboundOrders(ENUM_POSITION_TYPE side, double &totalLots, double &total
       if(IsHedgeComment(comment)) continue;
       if(IsTicketBound(ticket)) continue;  // skip tickets already bound to a set
       if(IsPrevHedgedTicket(ticket)) continue;  // v6.58: skip released-from-hedge tickets
-      // v6.18: Generation filter — only count orders from specified generation
+      // v6.65: STRICT generation match — only orders of EXACT generation
+      // (เดิม v6.38 ใช้ <= → DD hedge ดูด orphan gen เก่า → lots inflated)
       if(genFilter >= 0)
       {
          int orderGen = ExtractGeneration(comment);
-         if(orderGen > genFilter) continue;  // v6.38: include all gens <= genFilter (orphan fix)
+         if(orderGen != genFilter) continue;
       }
       count++;
       totalLots += PositionGetDouble(POSITION_VOLUME);
