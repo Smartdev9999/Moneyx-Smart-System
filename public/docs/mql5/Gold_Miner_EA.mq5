@@ -9015,7 +9015,7 @@ void ManageOrphanGrid()
                      string comment = prefix + "_GL#" + IntegerToString(nextLevel);
                       if(OpenOrder(ORDER_TYPE_SELL, lots, comment))
                       {
-                         g_lastOrphanGridCandleTime = iTime(_Symbol, PERIOD_CURRENT, 0);
+                         // v6.65: removed g_lastOrphanGridCandleTime assignment
                          Print("ORPHAN GRID: Opened SELL ", prefix, "_GL#", nextLevel,
                                " lots=", DoubleToString(lots, 2), " for Gen", gen);
                        }
