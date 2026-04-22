@@ -8991,7 +8991,7 @@ void RecoverHedgeSets()
             " counter-side orders (boundGen=", g_hedgeSets[h].boundGeneration, ")");
    }
    
-   // Step 3: Clean up orphan GM_HG orders that have no active main hedge
+   // Step 3: Clean up orphan recovery grid orders (legacy GM_HG + new GM_HD) without active main hedge — v6.69
    int orphansClosed = 0;
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
@@ -9000,14 +9000,14 @@ void RecoverHedgeSets()
       if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       string comment = PositionGetString(POSITION_COMMENT);
-      if(StringFind(comment, "GM_HG") < 0) continue;
-      
-      // Find which set this belongs to
+      if(!IsRecoveryGridComment(comment)) continue;
+
+      // Find which set this belongs to (match by slot OR by bound generation)
       bool belongsToActive = false;
       for(int h = 0; h < MAX_HEDGE_SETS; h++)
       {
-         string prefix = "GM_HG" + IntegerToString(h + 1);
-         if(StringFind(comment, prefix) >= 0 && g_hedgeSets[h].active)
+         if(!g_hedgeSets[h].active) continue;
+         if(IsRecoveryGridForSet(comment, h, g_hedgeSets[h].boundGeneration))
          { belongsToActive = true; break; }
       }
       
