@@ -8178,6 +8178,7 @@ void SyncRecoveryBasketTP(int idx)
       lots[cnt]    = PositionGetDouble(POSITION_VOLUME);
       cnt++;
       fromTicket++;
+   }
 
    // 3) Weighted average
    double totalLots = 0, weightedPrice = 0;
