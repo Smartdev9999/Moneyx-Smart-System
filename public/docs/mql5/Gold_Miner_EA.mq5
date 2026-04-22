@@ -400,6 +400,11 @@ input ENUM_ATR_REF   Recovery_ATR_Reference  = ATR_REF_DYNAMIC;             // R
 input int            Recovery_MinGapPoints   = 100;                         // Recovery Min Grid Gap (points)
 input int            Recovery_CandleConfirm  = 0;                           // Recovery Candle Confirm (0=Off)
 
+// === v6.65: Auto Recovery Lot Sizing ===
+input bool           Recovery_AutoLot        = false;  // v6.65 Auto: คำนวณ lot จาก hedge lots ที่เหลือ
+input double         Recovery_AutoInitLot    = 0.05;   // v6.65 Auto Initial Lot
+input double         Recovery_AutoMult       = 1.4;    // v6.65 Auto Multiplier
+
 // === v6.57: Sequential Hedge Recovery ===
 input group "=== Sequential Hedge Recovery ==="
 input bool   InpHedge_SequentialRecovery = true;   // true=close oldest hedge set first (H1→H2→H3), false=close any (legacy)
