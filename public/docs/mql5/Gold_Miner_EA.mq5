@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.56 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.58 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.57"
-#property description "Gold Miner EA v6.57 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + GenRaceFix + OrphanGenFix + HedgeSidePause + GLCandleConfirm + MaxGridTrail + BrokerTPSL + DashCache + DashThrottle + LiveTPFix + HedgeClearTP + BoundClearFix + InstantSync + DeferredSync + InstantTP + MatchCloseToggle + HedgeRecoveryToggle + PersistGen + StartOrderTrail + BoundNoClose + BBFilter + SeqRelease + License"
+#property version   "6.58"
+#property description "Gold Miner EA v6.58 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + GenRaceFix + OrphanGenFix + HedgeSidePause + GLCandleConfirm + MaxGridTrail + BrokerTPSL + DashCache + DashThrottle + LiveTPFix + HedgeClearTP + BoundClearFix + InstantSync + DeferredSync + InstantTP + MatchCloseToggle + HedgeRecoveryToggle + PersistGen + StartOrderTrail + BoundNoClose + BBFilter + SeqRelease + SeqGridGate + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -449,6 +449,7 @@ int g_newsEventCount = 0;
 datetime g_lastNewsRefresh = 0;
 bool g_isNewsPaused = false;
 bool g_newOrderBlocked = false;  // true = News/Time filter blocks new entries only
+int  g_seqAllowedGen = -1;  // v6.58: Sequential Release allowed generation (-1 = unrestricted)
 string g_nextNewsTitle = "";
 datetime g_nextNewsTime = 0;
 string g_newsStatus = "OK";
@@ -915,7 +916,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.56 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.58 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min");
@@ -975,7 +976,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.56 deinitialized");
+   Print("Gold Miner EA v6.58 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -1266,6 +1267,13 @@ void OnTick()
 
    // === Determine if new orders are blocked (News/Time/Pause) ===
    g_newOrderBlocked = false;
+
+   // v6.58: Sequential Release gate — block new orders for any generation
+   //        other than the allowed one (oldest active hedge set / orphan).
+   //        Hedge orders, closes, and matching logic remain unaffected.
+   g_seqAllowedGen = GetSequentialAllowedGeneration();
+   if(g_seqAllowedGen != -1 && g_seqAllowedGen != g_cycleGeneration)
+      g_newOrderBlocked = true;
 
    // Manual Pause check (v2.9)
    if(g_eaIsPaused)
@@ -3833,7 +3841,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.56 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.56 [ZZ]" : "Gold Miner EA v6.56 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.58 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.58 [ZZ]" : "Gold Miner EA v6.58 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -4185,22 +4193,30 @@ void DisplayDashboard()
       color COLOR_SECTION_HEDGE = C'130,50,180';  // purple for hedge section
       bool anyActive = false;
 
-      // v6.57: Sequential Release status row
+      // v6.57/v6.58: Sequential Release status row
       {
          int seqOldest = GetOldestActiveHedgeSetIndex();
          int activeCnt = 0;
          for(int hc = 0; hc < MAX_HEDGE_SETS; hc++)
             if(g_hedgeSets[hc].active) activeCnt++;
+         int orphanCnt = 0;
+         for(int oc = 0; oc < MAX_ORPHAN_GROUPS; oc++)
+            if(g_orphanGroups[oc].active) orphanCnt++;
+         int allowedGen = GetSequentialAllowedGeneration();
          string seqVal;
          color seqClr;
          if(InpHedge_SequentialRelease)
          {
-            if(seqOldest == -1)
-               seqVal = "ON | No active sets";
+            if(allowedGen == -1)
+               seqVal = "ON | No pending recovery — open orders allowed";
             else
             {
-               int frozen = (activeCnt > 0) ? (activeCnt - 1) : 0;
-               seqVal = "ON | Active: Set#" + IntegerToString(seqOldest + 1) + " (Oldest) | Frozen: " + IntegerToString(frozen);
+               int frozenHedge  = (activeCnt > 0) ? (activeCnt - 1) : 0;
+               int frozenOrphan = (orphanCnt > 0 && allowedGen >= 0) ? (orphanCnt - ((seqOldest == -1) ? 1 : 0)) : 0;
+               if(frozenOrphan < 0) frozenOrphan = 0;
+               seqVal = "ON | Allowed: Gen" + IntegerToString(allowedGen)
+                      + " | Frozen Hedge: " + IntegerToString(frozenHedge)
+                      + " | Frozen Orphans: " + IntegerToString(frozenOrphan);
             }
             seqClr = clrGold;
          }
@@ -7659,6 +7675,35 @@ int GetOldestActiveHedgeSetIndex()
 }
 
 //+------------------------------------------------------------------+
+//| v6.58: Determine which generation may open NEW recovery orders    |
+//| when Sequential Release is ON.                                    |
+//|   Returns -1  → no restriction (feature OFF, or nothing pending)  |
+//|   Returns N   → only Gen N may open new initial/grid orders       |
+//| Hedge orders, closes, and matching logic are NEVER restricted.    |
+//+------------------------------------------------------------------+
+int GetSequentialAllowedGeneration()
+{
+   if(!InpHedge_SequentialRelease) return -1;
+
+   // Priority 1: oldest active hedge set (slot index === bound generation, v6.68)
+   int oldestHedge = GetOldestActiveHedgeSetIndex();
+   if(oldestHedge >= 0) return oldestHedge;
+
+   // Priority 2: oldest active orphan group
+   int oldestOrphan = INT_MAX;
+   for(int g = 0; g < MAX_ORPHAN_GROUPS; g++)
+   {
+      if(g_orphanGroups[g].active && g_orphanGroups[g].generation >= 0
+         && g_orphanGroups[g].generation < oldestOrphan)
+         oldestOrphan = g_orphanGroups[g].generation;
+   }
+   if(oldestOrphan != INT_MAX) return oldestOrphan;
+
+   // Nothing pending → unrestricted (current cycle gen may open new orders)
+   return -1;
+}
+
+//+------------------------------------------------------------------+
 //| Check expansion and open hedge if needed                           |
 //| Now supports multiple hedge sets on same side (unbound orders)     |
 //+------------------------------------------------------------------+
@@ -8612,11 +8657,18 @@ void ManageOrphanGrid()
      
     double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
    
+   // v6.58: Sequential Release — only the allowed generation may open new orphan grids
+   int seqAllowed = GetSequentialAllowedGeneration();
+
    for(int g = 0; g < MAX_ORPHAN_GROUPS; g++)
    {
       if(!g_orphanGroups[g].active) continue;
-      
+
       int gen = g_orphanGroups[g].generation;
+
+      // v6.58: Skip non-allowed generations (recovery one-at-a-time)
+      if(seqAllowed != -1 && gen != seqAllowed) continue;
+
       string prefix = GenPrefix(gen);
       
       // Re-count fresh each tick to detect if orders were closed
