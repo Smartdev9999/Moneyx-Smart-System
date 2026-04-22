@@ -8717,10 +8717,10 @@ void ManageOrphanGrid()
 
       int gen = g_orphanGroups[g].generation;
 
-      // v6.61: seqAllowed = lowest live HEDGE generation. Allow orphans whose gen
-      //         is older than or equal to it (no live hedge blocks them); freeze
-      //         only orphans newer than the active hedge generation.
-      if(seqAllowed != -1 && gen > seqAllowed) continue;
+      // v6.63: Strict sequential gate — only the EXACT allowed generation may
+      //         run orphan recovery. Lower/higher generations all freeze until
+      //         the current generation is fully flat.
+      if(seqAllowed != -1 && gen != seqAllowed) continue;
 
       string prefix = GenPrefix(gen);
       
