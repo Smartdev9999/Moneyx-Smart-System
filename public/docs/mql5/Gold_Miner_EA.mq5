@@ -7921,6 +7921,10 @@ void AuditHedgeSetIntegrity()
    g_hedgeIntegrityCriticalCount = critCnt;
    s_lastIntegrityLog = TimeCurrent();
 }
+
+//+------------------------------------------------------------------+
+//| v6.61: RecoverySetTracker — anti-skip ticket array per generation |
+//+------------------------------------------------------------------+
 int FindRecoverySetIdx(int gen)
 {
    // v6.63 FIX: previously hard-coded -1, breaking RecoverySetTracker entirely
