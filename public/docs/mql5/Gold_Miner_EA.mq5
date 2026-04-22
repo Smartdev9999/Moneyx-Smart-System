@@ -11193,9 +11193,9 @@ void ManageHedgeGridMode(int idx)
          }
          ENUM_ORDER_TYPE orderType = (g_hedgeSets[idx].hedgeSide == POSITION_TYPE_BUY)
                                     ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
-         // v6.69: Comment format = GM_HD<gen>_<NN>  (e.g. Gen1 lvl 1 → GM_HD1_01)
+         // v6.70: Comment format = GM_HD<genLabel>_<NN>  (1-based; Gen0 → GM_HD1_01)
          int gen = g_hedgeSets[idx].boundGeneration;
-         string comment = "GM_HD" + IntegerToString(gen) + "_"
+         string comment = "GM_HD" + IntegerToString(GenLabel(gen)) + "_"
                         + StringFormat("%02d", currentGridCount + 1);
 
          if(OpenOrder(orderType, nextLot, comment))
