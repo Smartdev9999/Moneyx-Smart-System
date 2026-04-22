@@ -5,8 +5,8 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.67"
-#property description "Gold Miner EA v6.67 - v6.66 + SeqRecovery Bypass for Profit-Hedge Close (hedge ที่กำไรพอ matching close ได้แม้มี seq owner ของ gen อื่น)"
+#property version   "6.68"
+#property description "Gold Miner EA v6.68 - v6.67 + Enforce one-hedge-per-tick rule on profit-close bypass (ป้องกันปลด hedge หลายชุดพร้อมกัน)"
 #property strict
 
 #include <Trade/Trade.mqh>
