@@ -1,130 +1,127 @@
 
 
-## v6.65 — Fix DD Hedge Lot Inflation: Bind/Count เฉพาะ Generation ปัจจุบันเท่านั้น
+## v6.66 — Fix Active Hedge Counting + Generation Recycling
 
-### วินิจฉัยปัญหาจากภาพ (image-936)
+### วินิจฉัยจากภาพ (image-939)
 
-| Hedge | Lots | Bound orders จริงในตาราง | สัดส่วน |
-|---|---|---|---|
-| GM_Hedge_D5 | 0.21 | GM_INIT 0.03 | 7x เกิน |
-| GM_Hedge_D6 | 0.90 | GM6_INIT+GL#1+GL#2 = 0.13 | **6.9x เกิน** |
-| GM_Hedge_D7 | 1.51 | **ไม่มี GM7_*** | ∞ |
-| GM_Hedge_D8 | 2.98 | GM8_INIT 0.03 | **99x เกิน** |
-| GM_Hedge_D9 | 1.72 | **ไม่มี GM9_*** | ∞ |
+ภาพแสดง: GM11_INIT/GL#1-5 + GM_Hedge_D11 (ล็อกอยู่) + GM12_INIT/GL#1-3 + GM12 ฝั่ง buy (เปิด basket ใหม่) — ระบบนับขึ้นไปถึง GM12 ทั้งที่ user ตั้ง `InpHedge_MaxSets = 10`
 
-→ Hedge เปิดขนาดมหึมาเทียบกับ bound order จริง และบางชุดไม่มี bound order ให้ป้องกันเลย
+### Root Cause 2 จุด
 
-### Root Cause
+**ปัญหา 1: Active Hedge Limit ไม่ทำงาน**
+- โค้ดที่ line 8485, 8735 เช็ก `activeSetCount >= InpHedge_MaxSets` ก็ถูกแล้ว
+- **แต่** ในภาพมี `GM_Hedge_D11` แค่ตัวเดียวที่ active → activeSetCount = 1 ไม่ใช่ 11 → ผ่านการเช็ก → เปิด GM12 hedge ได้
+- ปัญหาที่แท้คือ user เข้าใจว่า `MaxSets=10` = "ห้ามเกิน 10 hedge ที่ active พร้อมกัน" ซึ่ง**ทำงานถูกต้องอยู่แล้ว** — ที่เห็น GM11/GM12 คือ generation counter ไม่ใช่จำนวน active hedge
+- → ต้องการ feedback ที่ดีกว่า: dashboard แสดงให้เห็นชัดว่า active = X / 10
 
-ปัจจุบันใน `CountUnboundOrders()` (บรรทัด 8302) และ `OpenDDHedge()` bind loop (บรรทัด 8723):
+**ปัญหา 2: Generation ไม่รีเซ็ตกลับ GM1 เมื่อไม่มี order**
+- `TryResetCycleStateIfFlat()` (line 8097) reset เฉพาะเมื่อ `g_hedgeSetCount == 0` **และ** `TotalOrderCount() == 0` (account flat ทั้งหมด)
+- แต่ในภาพ: GM_Hedge_D11 ปลดไปแล้ว (เห็น GM11_* ไม่มี hedge ผูก ไม่มี TP) แต่ GM11_INIT-GL#5 ยังเปิดค้าง (เป็น orphan losing orders) → `TotalOrderCount() > 0` → ไม่ reset → ระบบเปิด GM12 ต่อไป
+- **กฎที่ user ต้องการ**: เมื่อ basket ของ generation ปัจจุบันถูกปิดหมด (ไม่มี hedge active สำหรับ gen นี้แล้ว) → ควร reset gen counter กลับไปที่ค่าต่ำสุดที่ยังมี order อยู่ หรือ GM1 ถ้าไม่มี order เลย
 
-```cpp
-if(orderGen > bindGen) continue;  // v6.38: include all gens <= bindGen (orphan fix)
-```
+### แผนแก้ v6.66 (Fix-only)
 
-ใช้เงื่อนไข **`<= bindGen`** → DD trigger ของ Gen 6 จะ scoop:
-- Orders Gen 6 ปัจจุบัน (ที่ตั้งใจจะ hedge)
-- **+ orphan orders จาก Gen 0,1,2,3,4,5** ที่ยังลอยอยู่ (ถูก match-close บางส่วน, hedge เคยปลดไปแล้ว, แต่ไม่ได้อยู่ใน `prevHedgedTickets` แล้วเพราะ ClearPrevHedgedTickets ทำงานเมื่อ flat)
+ไฟล์: `public/docs/mql5/Gold_Miner_EA.mq5`
 
-ผลลัพธ์:
-1. `counterLots` รวมทุก gen → hedge ใหญ่เกินจริงมาก (เช่น GM8_Hedge_D8 = 2.98 lots ทั้งที่ Gen 8 มีแค่ 0.03)
-2. orphan orders ของ gen เก่าถูก bind เข้า hedge set ใหม่ → comment `GM_Hedge_D8` ผูก orders ที่จริงๆเป็น GM3, GM4, GM5 → ผิดความหมาย v6.62
-3. กรณี Gen 7, Gen 9 ไม่มี new order → hedge bind orphan ทั้งหมด → ดูเหมือน "hedge ลอย"
-
-นี่คือผลข้างเคียงของ v6.38 "orphan generation recovery" ที่ขัดกับ v6.62 "comment ผูก gen" — รุ่น hedge ควรปกป้องเฉพาะ orders ของ generation ตัวเองเท่านั้น
-
-### แผนแก้ v6.65 (fix-only, ไม่แตะ trade execution)
-
-**ไฟล์**: `public/docs/mql5/Gold_Miner_EA.mq5`
-
-#### Fix 1: `CountUnboundOrders()` — Strict Generation Match (บรรทัด 8302-8329)
+#### Fix 1: Smart Generation Recycling — `TryResetCycleStateIfFlat()`
+แทนที่จะรีเซ็ตเฉพาะเมื่อ flat 100% ให้ปรับลอจิกเป็น:
 
 ```cpp
-if(genFilter >= 0)
+void TryResetCycleStateIfFlat(string reason)
 {
-   int orderGen = ExtractGeneration(comment);
-   // v6.65: STRICT match — only orders of EXACT generation
-   // (เดิม v6.38: <= genFilter → ดูด orphan เก่า → hedge inflated)
-   if(orderGen != genFilter) continue;
+   if(g_hedgeSetCount > 0) return;               // มี hedge active อยู่ → ห้ามรีเซ็ต
+   if(g_cycleGeneration <= 1) return;            // เป็น GM1 อยู่แล้ว
+   
+   int total = TotalOrderCount();
+   
+   // Case A: Account flat ทั้งหมด → reset เป็น GM1 (เดิม)
+   if(total == 0) {
+      g_cycleGeneration = 1;
+      ClearPrevHedgedTickets();
+      // ... (เดิม)
+      Print("v6.66 CYCLE RESET → GM1 (account flat) — ", reason);
+      return;
+   }
+   
+   // Case B (ใหม่): ยังมี orphan orders ลอยอยู่ และไม่มี hedge active
+   // → re-anchor cycleGen ไปที่ "max gen ของ orders ที่ยังเหลือ" 
+   // → Gen ปัจจุบันที่ basket ปิดหมดแล้วจะไม่ถูกใช้ต่อ — Gen ถัดไปจะนับจาก max ที่ยังเหลือ
+   int maxRemainingGen = 0;
+   for(int i = PositionsTotal()-1; i >= 0; i--) {
+      ulong t = PositionGetTicket(i);
+      if(t==0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      int g = ExtractGeneration(PositionGetString(POSITION_COMMENT));
+      if(g > maxRemainingGen) maxRemainingGen = g;
+   }
+   int newGen = (maxRemainingGen < 1) ? 1 : maxRemainingGen;
+   if(newGen < g_cycleGeneration) {
+      Print("v6.66 CYCLE RE-ANCHOR: GM", g_cycleGeneration, " → GM", newGen,
+            " (orphans remain, no active hedge) — ", reason);
+      g_cycleGeneration = newGen;
+      SaveCycleGeneration();
+   }
 }
 ```
 
-#### Fix 2: `OpenDDHedge()` bind loop — Strict Generation (บรรทัด 8709-8729)
+ผลลัพธ์: เมื่อ GM_Hedge_D11 ปลด → ไม่มี hedge active → orphan GM11 ยังอยู่ → cycleGen re-anchor เป็น 11 (max ที่เหลือ) → DD trigger ครั้งถัดไปจะเปิด `GM_Hedge_D12` (เพราะ increment หลัง bind) — แต่ถ้า orphan ของ GM11 ถูก match-close หมดด้วย → next call → maxRemaining อาจเป็น GM10/9/... → **ไม่บานปลายไปเรื่อย ๆ**
+
+> หมายเหตุ: ถ้า user ต้องการพฤติกรรม "reset เป็น GM1 ทันทีเมื่อไม่มี hedge active แม้มี orphan ค้าง" จะแรงเกินไปและทำให้ comment ใหม่ชนกับ orphan เดิม (GM1 เคยใช้แล้ว) — re-anchor แบบนี้ปลอดภัยกว่า
+
+#### Fix 2: Hard Cap Generation by InpHedge_MaxSets
+เพิ่ม guard ใน `OpenDDHedge()` และ expansion hedge ก่อน increment:
 
 ```cpp
-int orderGen = ExtractGeneration(cmt);
-if(orderGen != bindGen) continue;  // v6.65: bind ONLY current gen orders
-```
-
-#### Fix 3: `CheckAndOpenHedgeByDD()` loss aggregator (บรรทัด 8568-8570)
-
-```cpp
-int orderGen = ExtractGeneration(cmt);
-if(orderGen != curGen) continue;  // v6.65: คำนวณ DD เฉพาะ gen ปัจจุบัน
-```
-
-#### Fix 4: เพิ่ม Orphan Sanity Check ก่อน open DD hedge
-
-ก่อน `OpenDDHedge()` ในบรรทัด 8590, 8601, 8618, 8629 เพิ่ม guard:
-```cpp
-double curLots = 0, curPL = 0;
-int curCount = CountUnboundOrders(POSITION_TYPE_BUY, curLots, curPL, curGen);
-if(curCount == 0 || curLots <= 0)
-{
-   Print("v6.65 DD HEDGE SKIP: Gen", curGen, " BUY has no current-gen orders to hedge");
-   return; // ไม่เปิด hedge ถ้าไม่มี order ของ gen ปัจจุบันให้ป้องกัน
+// v6.66: ถ้า cycleGen ไปไกลเกิน MaxSets แล้วและไม่มี hedge active → re-anchor ก่อน
+if(g_cycleGeneration > InpHedge_MaxSets * 2 && g_hedgeSetCount == 0) {
+   TryResetCycleStateIfFlat("gen exceeded cap, no active hedge");
 }
 ```
 
-→ ป้องกันกรณี GM7_Hedge_D7 / GM9_Hedge_D9 (ไม่มี order ของ gen นั้นเลย)
+ป้องกันกรณี edge ที่ generation วิ่งไปไกลผิดปกติ
 
-#### Fix 5: Audit Watchdog — `AuditHedgeSetIntegrity()` (ใหม่)
+#### Fix 3: Dashboard เพิ่มความชัดเจน
+แสดง 2 แถว:
+- **Active Hedge: 1 / 10** (จำนวน hedge set ที่ active)
+- **Cycle Gen: GM12** (generation ปัจจุบัน — แค่ counter ของชื่อ comment, ไม่ใช่ limit)
 
-ฟังก์ชันใหม่เรียกใน OnTick ทุก ~30 วินาที:
-- Loop `g_hedgeSets[]` ที่ active
-- คำนวณ `boundLotsActual` (จาก boundTickets ที่ยังมีอยู่จริง) เทียบกับ `hedgeLots`
-- ถ้า `hedgeLots > boundLotsActual * 2.0` (อย่างน้อย 2 เท่า) → log warning:
-  ```
-  v6.65 HEDGE INTEGRITY WARN: set#X gen=Y hedgeLots=Z >> boundLots=W (2x+)
-  ```
-- ถ้า `boundTicketCount == 0` และ hedge ยังเปิดอยู่ → log critical warning + (ไม่ปิดออเดอร์อัตโนมัติ — ต้องให้ user ตัดสินใจ)
-- Throttle: 1 บรรทัด/set/รอบ (ไม่สแปม)
+อธิบายให้ user เห็นว่า GM11/GM12 คือ "ลำดับชื่อรอบ" ไม่ใช่ "จำนวน hedge active"
 
-#### Fix 6: Dashboard เพิ่มแถว "Hedge Integrity"
-- Green: ทุก set healthy
-- Yellow: มี set ที่ inflated (>2x)
-- Red: มี set ที่ no bound orders เลย
+#### Fix 4: Log ให้ชัดเจนเมื่อบล็อก
+แก้ log ที่ line 8487 / 8737 จาก:
+```
+HEDGE: Max active sets reached (10/10) - skip
+```
+เป็น:
+```
+v6.66 HEDGE BLOCKED: Active hedge sets = 10 / Max=10 → skip new hedge for GM<gen>
+```
 
-#### Fix 7: Version bump → v6.65
-- `#property version "6.65"`
-- `#property description` += "v6.65 — DD Hedge Strict Generation Bind (fix lot inflation)"
-- Header comment + Dashboard
-
----
+#### Fix 5: Version bump → v6.66
+- `#property version "6.66"`
+- `#property description` += "v6.66 — Smart Gen Recycling + Active Hedge Visibility"
+- Header + Dashboard
 
 ### สิ่งที่ไม่เปลี่ยนแปลง (กฎเหล็ก)
 
-- `trade.Buy/Sell/PositionClose` — ไม่แก้
-- Trading strategy / signal / grid entry — ไม่แก้
-- TP/SL formula — ไม่แก้
+- `trade.Buy/Sell/PositionClose` / `OpenOrder` — ไม่แก้
+- Trading strategy / signal / grid entry / TP/SL — ไม่แก้
 - `IsHedgeCloseAllowed()` Triple Gate — ไม่แก้
-- Sequential Recovery / Match-Close — ไม่แก้
-- v6.62 Hedge comment scheme — ไม่แก้ (ที่จริง fix นี้ทำให้ v6.62 ทำงานถูกต้องตามดีไซน์)
-- v6.63/v6.64 Recovery TP sync — ไม่แก้
+- Sequential Recovery / Match-Close pool — ไม่แก้
+- `InpHedge_MaxSets` semantic เดิม (= max active concurrent hedge sets) — **ยืนยันถูกต้อง**, ไม่เปลี่ยน
+- v6.62 hedge comment scheme / v6.63 / v6.64 / v6.65 — ไม่แก้
 - BB / News / License / Time filter — ไม่แก้
 
 ### ผลลัพธ์ที่คาดหวัง
 
-1. **DD hedge ลอตจะ = sum(lots ของ orders Gen X เท่านั้น)** เช่น Gen 8 มี GM8_INIT 0.03 → hedge = 0.03 (ไม่ใช่ 2.98)
-2. **Gen 7, Gen 9 ที่ไม่มี new order → DD hedge จะไม่เปิด** (Fix 4 guard)
-3. Orphan orders จาก gen เก่าจัดการโดย `Sequential Recovery` / `Orphan Generation Recovery` (v6.3) ตามดีไซน์เดิม — **ไม่ถูก hedge ปนเปื้อนอีก**
-4. Dashboard แสดง integrity status ของทุก hedge set
-5. Watchdog log เตือนทันทีถ้า hedge มี mismatch
-6. แก้ปัญหาเดิมที่ภาพแสดง: hedge ใหญ่เกินจริง 6-99 เท่า
+1. **Active Hedge limit ทำงานถูกตามดีไซน์** — ถ้ามี 10 hedge set กำลังล็อกอยู่ → hedge ที่ 11 จะไม่เปิด (มีอยู่แล้วใน v6.65 — จะเพิ่ม log/dashboard ให้เห็นชัด)
+2. **Generation ลด/รีเซ็ตได้** — เมื่อ basket ของ gen ปัจจุบันถูกปิดและไม่มี hedge active → cycleGen re-anchor เป็น max gen ของ orphan ที่เหลือ → ป้องกันการเลื่อนเป็น GM13/14/15... ไม่หยุด
+3. **Reset เป็น GM1 เต็มรูปแบบ** ยังเกิดเมื่อ account flat ทั้งหมด (เดิม)
+4. Dashboard แยกชัดระหว่าง "Active Hedge X/10" กับ "Cycle Gen GMx"
 
 ### ความเสี่ยงและ Mitigation
 
-- **Risk**: v6.38 ใส่ `<= genFilter` เพื่อจัดการ orphan — การถอด อาจทำให้ orphan gen เก่าไม่ได้รับ hedge protection
-- **Mitigation**: orphan ของ gen เก่าควรเข้า `Sequential Recovery System` (v6.59) หรือ `Orphan Generation Recovery` (v6.3) อยู่แล้ว — ไม่ใช่หน้าที่ DD hedge ของ gen ใหม่ และ Match-Close pool (v6.61) ก็ pool ทั้งสองข้างอยู่แล้ว
-- ถ้าหลัง deploy พบ orphan ค้างนาน → จะเสนอเพิ่ม "Orphan DD Hedge แยกชุด" ใน v6.66 (per-gen DD trigger)
+- **Risk**: Re-anchor cycleGen ขณะมี orphan ค้าง → comment ใหม่อาจซ้ำกับ orphan เดิม (เช่น GM11_GL#6 ใหม่ vs GM11_GL#5 เก่า)
+- **Mitigation**: `GetCommentPrefix()` + grid level counter (`GL#N`) นับจาก order ที่มีอยู่จริงของ gen นั้น → ใช้ `#N+1` ต่อจากตัวเดิม — ตรวจ logic นี้ระหว่าง implement ถ้าพบว่า counter เริ่มที่ 1 เสมอ จะปรับให้สแกน max GL# ของ gen นั้นก่อน
 
