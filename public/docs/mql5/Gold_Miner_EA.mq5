@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.61 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.62 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.61"
-#property description "Gold Miner EA v6.61 - SeqRelease (Comment-Based Gen Scan) + MatchPool (Bound Profit) + MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + BBFilter + License"
+#property version   "6.62"
+#property description "Gold Miner EA v6.62 - SeqRelease (Hedge Comment Prefix Fix) + MatchPool + MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + BBFilter + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -916,7 +916,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.61 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.62 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min");
@@ -976,7 +976,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.61 deinitialized");
+   Print("Gold Miner EA v6.62 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -3840,7 +3840,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.61 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.61 [ZZ]" : "Gold Miner EA v6.61 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.62 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.62 [ZZ]" : "Gold Miner EA v6.62 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -4213,8 +4213,8 @@ void DisplayDashboard()
                for(int oc2 = 0; oc2 < MAX_ORPHAN_GROUPS; oc2++)
                   if(g_orphanGroups[oc2].active && g_orphanGroups[oc2].generation > allowedGen)
                      frozenOrphan++;
-               seqVal = "ON | Allowed Hedge: Gen" + IntegerToString(allowedGen)
-                      + " (GM_HD" + IntegerToString(allowedGen + 1) + ")"
+                seqVal = "ON | Allowed Hedge: Gen" + IntegerToString(allowedGen)
+                       + " (GM_HEDGE_" + IntegerToString(allowedGen + 1) + ")"
                       + " | New cycles: ALLOWED"
                       + " | Frozen Hedge: " + IntegerToString(frozenHedge)
                       + " | Frozen Orphans: " + IntegerToString(frozenOrphan);
@@ -7676,20 +7676,20 @@ int GetOldestActiveHedgeSetIndex()
 }
 
 //+------------------------------------------------------------------+
-//| v6.61: Parse generation number from order comment                  |
-//|   "GM" or "GM_*" or "GM_HD1"  → 0                                  |
-//|   "GM1_*" or "GM_HD2"         → 1                                  |
-//|   "GMN_*" or "GM_HD(N+1)"     → N                                  |
+//| v6.62: Parse generation number from order comment                  |
+//|   "GM" or "GM_*" or "GM_HEDGE_1"  → 0                              |
+//|   "GM1_*" or "GM_HEDGE_2"         → 1                              |
+//|   "GMN_*" or "GM_HEDGE_(N+1)"     → N                              |
 //|   Returns -1 if comment doesn't match any known pattern.           |
 //+------------------------------------------------------------------+
 int ParseGenerationFromComment(string c)
 {
    if(c == "") return -1;
 
-   // Hedge comment: "GM_HD<n>"  → gen = n - 1
-   if(StringFind(c, "GM_HD") == 0)
+   // v6.62: Hedge comment is "GM_HEDGE_<n>"  → gen = n - 1
+   if(StringFind(c, "GM_HEDGE_") == 0)
    {
-      string numStr = StringSubstr(c, 5);
+      string numStr = StringSubstr(c, 9);   // skip "GM_HEDGE_"
       int n = (int)StringToInteger(numStr);
       if(n >= 1) return n - 1;
       return -1;
@@ -7743,8 +7743,8 @@ int GetSequentialAllowedGeneration()
       if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
 
       string c = PositionGetString(POSITION_COMMENT);
-      // v6.61: hedge-only filter
-      if(StringFind(c, "GM_HD") != 0) continue;
+      // v6.62: hedge-only filter — match real comment prefix "GM_HEDGE_"
+      if(StringFind(c, "GM_HEDGE_") != 0) continue;
       int gen = ParseGenerationFromComment(c);
       if(gen >= 0 && gen < oldest) oldest = gen;
    }
