@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.70 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.71 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.70"
-#property description "Gold Miner EA v6.70 - v6.69 + Strict FIFO hedge close (no out-of-order release; profit-bypass gated by toggle)"
+#property version   "6.71"
+#property description "Gold Miner EA v6.71 - v6.70 + Grid comment continues from max-level (no duplicate/back-numbered GL/GP after hedge unlock)"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -987,7 +987,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.70 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.71 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min");
@@ -1047,7 +1047,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.70 deinitialized");
+   Print("Gold Miner EA v6.71 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -3083,6 +3083,68 @@ double FindMaxLotOnSide(ENUM_POSITION_TYPE side)
 }
 
 //+------------------------------------------------------------------+
+//| v6.71: Find max grid level (#N) currently open on side+suffix     |
+//|        Used to ensure new grid comment never duplicates or goes   |
+//|        backwards after hedge matching/partial close removed lower |
+//|        numbered grids. suffix = "_GL" or "_GP".                   |
+//+------------------------------------------------------------------+
+int FindMaxGridLevelOnSide(ENUM_POSITION_TYPE side, string suffix)
+{
+   int maxLevel = 0;
+   for(int i = PositionsTotal()-1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
+      if(IsTicketBound(ticket)) continue;
+      string comment = PositionGetString(POSITION_COMMENT);
+      if(IsHedgeComment(comment)) continue;
+      // Only current generation
+      int orderGen = ExtractGeneration(comment);
+      if(orderGen >= 0 && orderGen != g_cycleGeneration) continue;
+      if(StringFind(comment, suffix + "#") < 0) continue;
+      int hashPos = StringFind(comment, "#");
+      if(hashPos < 0) continue;
+      int level = (int)StringToInteger(StringSubstr(comment, hashPos + 1));
+      if(level > maxLevel) maxLevel = level;
+   }
+   return maxLevel;
+}
+
+//+------------------------------------------------------------------+
+//| v6.71: TF variant — match by tf prefix in comment                 |
+//+------------------------------------------------------------------+
+int FindMaxGridLevelOnSideTF(int tfIdx, ENUM_POSITION_TYPE side, string suffix)
+{
+   int maxLevel = 0;
+   string tfTag = "TF" + IntegerToString(tfIdx);
+   for(int i = PositionsTotal()-1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
+      if(IsTicketBound(ticket)) continue;
+      string comment = PositionGetString(POSITION_COMMENT);
+      if(IsHedgeComment(comment)) continue;
+      // Best-effort TF tag match (TF comments include tfIdx); fall back to plain match
+      if(StringFind(comment, tfTag) < 0 && StringFind(comment, "_" + IntegerToString(tfIdx) + "_") < 0)
+      {
+         // still allow if suffix appears (older builds without TF tag)
+      }
+      if(StringFind(comment, suffix + "#") < 0) continue;
+      int hashPos = StringFind(comment, "#");
+      if(hashPos < 0) continue;
+      int level = (int)StringToInteger(StringSubstr(comment, hashPos + 1));
+      if(level > maxLevel) maxLevel = level;
+   }
+   return maxLevel;
+}
+
+//+------------------------------------------------------------------+
 //| v6.41: Count GL orders for a specific generation + side            |
 //+------------------------------------------------------------------+
 int CountGenGridLoss(int gen, ENUM_POSITION_TYPE side)
@@ -3453,7 +3515,12 @@ void CheckGridLoss(ENUM_POSITION_TYPE side, int currentGridCount)
          // LOT_CUSTOM: keep level-based calculation
       }
       
-      string comment = GetCommentPrefix() + "_GL#" + IntegerToString(currentGridCount + 1);
+      // v6.71: Use max existing GL level + 1 to avoid duplicate/back-numbered comments
+      int maxLevel_GL = FindMaxGridLevelOnSide(side, "_GL");
+      int nextLevel_GL = MathMax(maxLevel_GL + 1, currentGridCount + 1);
+      string comment = GetCommentPrefix() + "_GL#" + IntegerToString(nextLevel_GL);
+      PrintFormat("v6.71 GRID NEXT-LEVEL: side=%s openGL=%d maxLevel=%d -> nextLevel=%d comment=%s",
+                  EnumToString(side), currentGridCount, maxLevel_GL, nextLevel_GL, comment);
       ENUM_ORDER_TYPE orderType = (side == POSITION_TYPE_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
       if(OpenOrder(orderType, lots, comment))
       {
@@ -3525,7 +3592,12 @@ void CheckGridProfit(ENUM_POSITION_TYPE side, int currentGridCount)
    if(shouldOpen)
    {
       double lots = CalculateGridLot(currentGridCount, false);
-      string comment = GetCommentPrefix() + "_GP#" + IntegerToString(currentGridCount + 1);
+      // v6.71: Use max existing GP level + 1 to avoid duplicate/back-numbered comments
+      int maxLevel_GP = FindMaxGridLevelOnSide(side, "_GP");
+      int nextLevel_GP = MathMax(maxLevel_GP + 1, currentGridCount + 1);
+      string comment = GetCommentPrefix() + "_GP#" + IntegerToString(nextLevel_GP);
+      PrintFormat("v6.71 GRID NEXT-LEVEL: side=%s openGP=%d maxLevel=%d -> nextLevel=%d comment=%s",
+                  EnumToString(side), currentGridCount, maxLevel_GP, nextLevel_GP, comment);
       ENUM_ORDER_TYPE orderType = (side == POSITION_TYPE_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
       if(OpenOrder(orderType, lots, comment))
       {
@@ -3944,7 +4016,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.70 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.70 [ZZ]" : "Gold Miner EA v6.70 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.71 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.71 [ZZ]" : "Gold Miner EA v6.71 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -5189,7 +5261,10 @@ void CheckGridLossTF(int tfIdx, ENUM_POSITION_TYPE side, int currentGridCount)
          // LOT_CUSTOM: keep level-based calculation
       }
       
-      string suffix = "GL#" + IntegerToString(currentGridCount + 1);
+      // v6.71: Use max existing GL level + 1 (TF variant)
+      int maxLevelTF_GL = FindMaxGridLevelOnSideTF(tfIdx, side, "GL");
+      int nextLevelTF_GL = MathMax(maxLevelTF_GL + 1, currentGridCount + 1);
+      string suffix = "GL#" + IntegerToString(nextLevelTF_GL);
       ENUM_ORDER_TYPE orderType = (side == POSITION_TYPE_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
       if(OpenOrderTF(tfIdx, orderType, lots, suffix))
       {
@@ -5260,7 +5335,10 @@ void CheckGridProfitTF(int tfIdx, ENUM_POSITION_TYPE side, int currentGridCount)
    if(shouldOpen)
    {
       double lots = CalculateGridLot(currentGridCount, false);
-      string suffix = "GP#" + IntegerToString(currentGridCount + 1);
+      // v6.71: Use max existing GP level + 1 (TF variant)
+      int maxLevelTF_GP = FindMaxGridLevelOnSideTF(tfIdx, side, "GP");
+      int nextLevelTF_GP = MathMax(maxLevelTF_GP + 1, currentGridCount + 1);
+      string suffix = "GP#" + IntegerToString(nextLevelTF_GP);
       ENUM_ORDER_TYPE orderType = (side == POSITION_TYPE_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
       if(OpenOrderTF(tfIdx, orderType, lots, suffix))
       {
