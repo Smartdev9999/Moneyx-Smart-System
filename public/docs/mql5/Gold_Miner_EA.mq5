@@ -5,8 +5,8 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.64"
-#property description "Gold Miner EA v6.64 - v6.63 + Recovery TP Sync Throttling (sync เฉพาะตอน basket เปลี่ยน, แก้ ping-pong กับ ClearBrokerTPSL)"
+#property version   "6.65"
+#property description "Gold Miner EA v6.65 - v6.64 + DD Hedge Strict Generation Bind (fix lot inflation: bind/count เฉพาะ gen ปัจจุบัน + audit watchdog)"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -595,6 +595,8 @@ int      g_sequentialRecoverySetIdx   = -1;    // originating hedge set index (f
 bool     g_sequentialRecoveryActive   = false; // true → block all other sets and other-gen orphan recovery
 bool     g_sequentialRecoveryCompletedThisTick = false; // one-tick handoff guard
 int      g_lastOrphanGLCount = 0;  // v6.63: dashboard counter for owner-gen orders missing Broker TP
+int      g_hedgeIntegrityWarnCount = 0;  // v6.65: count of hedge sets with hedgeLots >> boundLots (>2x)
+int      g_hedgeIntegrityCriticalCount = 0;  // v6.65: count of hedge sets with NO bound orders
 
 // === v6.61: Recovery Seed (logically-stripped hedge remainders treated as gen orders) ===
 ulong    g_recoverySeedTickets[];   // hedge remainders re-bound as recovery seed
@@ -979,7 +981,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.64 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.65 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min");
@@ -1039,7 +1041,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.64 deinitialized");
+   Print("Gold Miner EA v6.65 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -1464,6 +1466,8 @@ void OnTick()
    ManageRecoveryOwnerAvgTP();
    // v6.63: Watchdog — alert if owner-gen orders are missing Broker TP
    AuditUnTPedOwnerOrders();
+   // v6.65: Watchdog — alert if hedge set lots are inflated vs bound orders
+   AuditHedgeSetIntegrity();
 
    // === ORIGINAL TRADING LOGIC (unchanged) ===
    if(g_eaStopped) return;
@@ -3933,7 +3937,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.64 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.64 [ZZ]" : "Gold Miner EA v6.64 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.65 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.65 [ZZ]" : "Gold Miner EA v6.65 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -4492,7 +4496,27 @@ void DisplayDashboard()
                                  IntegerToString(g_lastOrphanGLCount) + " order(s) missing Broker TP",
                                  orphanColor, COLOR_SECTION_HEDGE); row++;
                  }
-                // v6.58: PrevHedged lock count
+                 // v6.65: Hedge Set Integrity status
+                 {
+                    string integStatus;
+                    color integColor;
+                    if(g_hedgeIntegrityCriticalCount > 0)
+                    {
+                       integStatus = "CRITICAL: " + IntegerToString(g_hedgeIntegrityCriticalCount) + " set(s) w/o bound orders";
+                       integColor = clrRed;
+                    }
+                    else if(g_hedgeIntegrityWarnCount > 0)
+                    {
+                       integStatus = "WARN: " + IntegerToString(g_hedgeIntegrityWarnCount) + " set(s) inflated (>2x)";
+                       integColor = clrYellow;
+                    }
+                    else
+                    {
+                       integStatus = "Healthy (all sets balanced)";
+                       integColor = clrLime;
+                    }
+                    DrawTableRow(row, "Hedge Integrity", integStatus, integColor, COLOR_SECTION_HEDGE); row++;
+                 }
                 if(g_prevHedgedCount > 0)
                 {
                    string phInfo = IntegerToString(g_prevHedgedCount) + " ticket(s) locked from re-hedge";
@@ -7866,6 +7890,61 @@ void AuditUnTPedOwnerOrders()
 }
 
 //+------------------------------------------------------------------+
+//| v6.65: Hedge Set Integrity Watchdog                              |
+//| Detect hedge sets where hedgeLots >> bound orders (lot inflation) |
+//| or sets with zero bound orders (orphan hedges)                    |
+//+------------------------------------------------------------------+
+void AuditHedgeSetIntegrity()
+{
+   static datetime s_lastIntegrityLog = 0;
+   if(TimeCurrent() - s_lastIntegrityLog < 30) return;  // throttle 30s
+
+   int warnCnt = 0, critCnt = 0;
+   for(int h = 0; h < MAX_HEDGE_SETS; h++)
+   {
+      if(!g_hedgeSets[h].active) continue;
+
+      // Refresh bound list (remove closed tickets)
+      RefreshBoundTickets(h);
+
+      double boundLotsActual = 0;
+      for(int b = 0; b < g_hedgeSets[h].boundTicketCount; b++)
+      {
+         ulong tk = g_hedgeSets[h].boundTickets[b];
+         if(!PositionSelectByTicket(tk)) continue;
+         boundLotsActual += PositionGetDouble(POSITION_VOLUME);
+      }
+
+      double hLots = g_hedgeSets[h].hedgeLots;
+      int gen = g_hedgeSets[h].boundGeneration;
+
+      // CRITICAL: hedge open but no bound orders at all
+      if(g_hedgeSets[h].boundTicketCount == 0 && hLots > 0)
+      {
+         critCnt++;
+         Print("v6.65 HEDGE INTEGRITY CRITICAL: set#", h, " gen=", gen,
+               " hedgeLots=", DoubleToString(hLots, 2),
+               " has NO bound orders (orphan hedge — manual review required)");
+         continue;
+      }
+
+      // WARN: hedge volume more than 2x of actual bound coverage
+      if(boundLotsActual > 0 && hLots > boundLotsActual * 2.0)
+      {
+         warnCnt++;
+         Print("v6.65 HEDGE INTEGRITY WARN: set#", h, " gen=", gen,
+               " hedgeLots=", DoubleToString(hLots, 2),
+               " >> boundLots=", DoubleToString(boundLotsActual, 2),
+               " (>2x — possible lot inflation)");
+      }
+   }
+
+   g_hedgeIntegrityWarnCount = warnCnt;
+   g_hedgeIntegrityCriticalCount = critCnt;
+   s_lastIntegrityLog = TimeCurrent();
+}
+
+//+------------------------------------------------------------------+
 //| v6.61: RecoverySetTracker — anti-skip ticket array per generation |
 //+------------------------------------------------------------------+
 int FindRecoverySetIdx(int gen)
@@ -8315,11 +8394,12 @@ int CountUnboundOrders(ENUM_POSITION_TYPE side, double &totalLots, double &total
       if(IsHedgeComment(comment)) continue;
       if(IsTicketBound(ticket)) continue;  // skip tickets already bound to a set
       if(IsPrevHedgedTicket(ticket)) continue;  // v6.58: skip released-from-hedge tickets
-      // v6.18: Generation filter — only count orders from specified generation
+      // v6.65: STRICT generation match — only orders of EXACT generation
+      // (เดิม v6.38 ใช้ <= → DD hedge ดูด orphan gen เก่า → lots inflated)
       if(genFilter >= 0)
       {
          int orderGen = ExtractGeneration(comment);
-         if(orderGen > genFilter) continue;  // v6.38: include all gens <= genFilter (orphan fix)
+         if(orderGen != genFilter) continue;
       }
       count++;
       totalLots += PositionGetDouble(POSITION_VOLUME);
@@ -8567,7 +8647,7 @@ void CheckAndOpenHedgeByDD()
       
       int orderGen = ExtractGeneration(cmt);
       if(orderGen < 0) continue;
-      if(orderGen > curGen) continue;  // v6.38: include orphaned orders from all gens <= curGen
+      if(orderGen != curGen) continue;  // v6.65: STRICT — DD คำนวณเฉพาะ orders ของ gen ปัจจุบันเท่านั้น
       
       double pnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP) + PositionGetDouble(POSITION_COMMISSION);
       if(pnl >= 0) continue;
@@ -8717,10 +8797,11 @@ bool OpenDDHedge(ENUM_POSITION_TYPE counterSide, ENUM_POSITION_TYPE hedgeSide, i
       if(IsHedgeComment(cmt)) continue;
       if(IsTicketBound(ticket)) continue;
       if(IsPrevHedgedTicket(ticket)) continue;  // v6.58: never re-bind released tickets
-      // v6.18: Generation filter — only bind current generation orders
+      // v6.65: STRICT generation match — bind ONLY orders of EXACT bindGen
+      // (เดิม v6.38 ใช้ <= → bind orphan ของ gen เก่าเข้า hedge set ใหม่ → ลอตเกินจริง)
       int orderGen = ExtractGeneration(cmt);
       if(orderGen < 0) continue;
-      if(orderGen > bindGen) continue;  // v6.38: bind unbound orders from all gens <= bindGen
+      if(orderGen != bindGen) continue;
       
       int bc = g_hedgeSets[slot].boundTicketCount;
       ArrayResize(g_hedgeSets[slot].boundTickets, bc + 1);
