@@ -1,12 +1,13 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.64 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.65 - MTF ZigZag+CDC+Grid+License |
+//|         v6.65: Strict Sequential Matching + Auto Recovery Lot   |
 //+------------------------------------------------------------------+
-#property copyright "Copyright 2025, MoneyX Smart System"
-#property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.64"
-#property description "Gold Miner EA v6.64 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + GenRaceFix + OrphanGenFix + HedgeSidePause + GLCandleConfirm + MaxGridTrail + BrokerTPSL + DashCache + DashThrottle + LiveTPFix + HedgeClearTP + BoundClearFix + InstantSync + DeferredSync + InstantTP + MatchCloseToggle + HedgeRecoveryToggle + PersistGen + StartOrderTrail + BoundNoClose + BBFilter + RecoveryGrid + SequentialRecovery + FlatGenReset + SeqOneSetPerTick + RehedgeGuard + SeqRecoveryOwner + Gen0OwnerFix + StrictOwnerCount + MatchPoolBothSides + StrictInSetPool + InSetMatchAlways + PersistHedgeSlot + MatchTickRetry + HedgePartialFallback + License"
+#property copyright "Money X System"
+#property link      ""
+#property version   "6.65"
+#property description "Gold Miner EA v6.65 - StrictSequentialMatching + AutoRecoveryLot + MatchTickRetry + HedgePartialFallback + InSetMatchAlways + PersistHedgeSlot + StrictInSetPool + MatchPoolBothSides + StrictOwnerCount + Gen0OwnerFix + SeqRecoveryOwner + RehedgeGuard + SeqOneSetPerTick + FlatGenReset + SequentialRecovery + RecoveryGrid + BBFilter + BoundNoClose + StartOrderTrail + PersistGen + HedgeRecoveryToggle + MatchCloseToggle + InstantTP + DeferredSync + InstantSync + BoundClearFix + HedgeClearTP + LiveTPFix + DashThrottle + DashCache + BrokerTPSL + MaxGridTrail + GLCandleConfirm + HedgeSidePause + OrphanGenFix + GenRaceFix + BalGuardProfit + BalanceGuard + SafeReset + PrevHedgedGuard + HedgeCooldown + DDDollar + GenReset + MaxHedge50 + GenHelpers + GenCountFilter + ConstDDThreshold + NormalCount + GenAware + DDHedge + HedgeCloseGate + AvgTP + Squeeze + CDC + MTF ZigZag + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -398,6 +399,11 @@ input double         Recovery_ATR_Multiplier = 1.5;                         // R
 input ENUM_ATR_REF   Recovery_ATR_Reference  = ATR_REF_DYNAMIC;             // Recovery ATR Reference
 input int            Recovery_MinGapPoints   = 100;                         // Recovery Min Grid Gap (points)
 input int            Recovery_CandleConfirm  = 0;                           // Recovery Candle Confirm (0=Off)
+
+// === v6.65: Auto Recovery Lot Sizing ===
+input bool           Recovery_AutoLot        = false;  // v6.65 Auto: คำนวณ lot จาก hedge lots ที่เหลือ
+input double         Recovery_AutoInitLot    = 0.05;   // v6.65 Auto Initial Lot
+input double         Recovery_AutoMult       = 1.4;    // v6.65 Auto Multiplier
 
 // === v6.57: Sequential Hedge Recovery ===
 input group "=== Sequential Hedge Recovery ==="
@@ -943,7 +949,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.64 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.65 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min");
@@ -1003,7 +1009,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.64 deinitialized");
+   Print("Gold Miner EA v6.65 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -3870,7 +3876,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.62 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.62 [ZZ]" : "Gold Miner EA v6.62 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.65 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.65 [ZZ]" : "Gold Miner EA v6.65 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -4416,7 +4422,8 @@ void DisplayDashboard()
                 else if(g_hedgeSetCount > 0)
                 {
                    int oldestIdx = FindOldestActiveHedgeSet();
-                   seqInfo = "Sequential | Next Unlock: H" + IntegerToString(oldestIdx + 1) + " (1/tick)";
+                   // v6.65: Strict sequential matching → name the active matcher
+                   seqInfo = "Strict Seq | Active Matcher: H" + IntegerToString(oldestIdx + 1);
                    int pendingCount = g_hedgeSetCount - 1;
                    if(pendingCount > 0) seqInfo += " | Wait: " + IntegerToString(pendingCount) + " set(s)";
                 }
@@ -4429,8 +4436,22 @@ void DisplayDashboard()
                 }
              }
 
-             // v6.57: Recovery Grid mode indicator
-             if(Recovery_UseSeparate)
+             // v6.57/v6.65: Recovery Grid mode indicator
+             if(Recovery_AutoLot)
+             {
+                string recInfo = "Auto:ON Init=" + DoubleToString(Recovery_AutoInitLot, 2) +
+                                 " Mult=" + DoubleToString(Recovery_AutoMult, 2);
+                int matcherIdx = g_sequentialRecoveryActive ? g_sequentialRecoverySetIdx : FindOldestActiveHedgeSet();
+                if(matcherIdx >= 0 && matcherIdx < MAX_HEDGE_SETS && g_hedgeSets[matcherIdx].active)
+                {
+                   double used = SumHedgeGridLots(matcherIdx);
+                   double rem  = g_hedgeSets[matcherIdx].hedgeLots;
+                   recInfo += " | H" + IntegerToString(matcherIdx + 1) +
+                              " used " + DoubleToString(used, 2) + "/" + DoubleToString(rem, 2);
+                }
+                DrawTableRow(row, "Recovery Grid", recInfo, clrCyan, COLOR_SECTION_HEDGE); row++;
+             }
+             else if(Recovery_UseSeparate)
              {
                 string recInfo = "Separate | Max:" + IntegerToString(Recovery_MaxTrades) +
                                  " | Dist:" + IntegerToString(Recovery_Points) + "p";
@@ -7738,6 +7759,104 @@ double GetRecoveryGridDistancePoints(int level)
    return (double)GetRecoveryPoints();
 }
 
+// v6.65: Auto Recovery Lot helpers ---------------------------------
+double SumHedgeGridLots(int idx)
+{
+   double total = 0.0;
+   string prefix = "GM_HG" + IntegerToString(idx + 1);
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      string c = PositionGetString(POSITION_COMMENT);
+      if(StringFind(c, prefix) >= 0)
+         total += PositionGetDouble(POSITION_VOLUME);
+   }
+   return total;
+}
+
+double FindLastHedgeGridLot(int idx)
+{
+   double lastLot = 0.0;
+   datetime lastT = 0;
+   string prefix = "GM_HG" + IntegerToString(idx + 1);
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      string c = PositionGetString(POSITION_COMMENT);
+      if(StringFind(c, prefix) < 0) continue;
+      datetime t = (datetime)PositionGetInteger(POSITION_TIME);
+      if(t >= lastT)
+      {
+         lastT = t;
+         lastLot = PositionGetDouble(POSITION_VOLUME);
+      }
+   }
+   return lastLot;
+}
+
+double GetHedgeLotsForGen(int gen)
+{
+   double total = 0.0;
+   for(int h = 0; h < MAX_HEDGE_SETS; h++)
+   {
+      if(!g_hedgeSets[h].active) continue;
+      if(g_hedgeSets[h].boundGeneration != gen) continue;
+      if(g_hedgeSets[h].hedgeTicket > 0 && PositionSelectByTicket(g_hedgeSets[h].hedgeTicket))
+         total += PositionGetDouble(POSITION_VOLUME);
+      else
+         total += g_hedgeSets[h].hedgeLots;
+   }
+   return total;
+}
+
+double SumOrphanGridLots(int gen, ENUM_POSITION_TYPE side)
+{
+   double total = 0.0;
+   string prefix = GenPrefix(gen);
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
+      string c = PositionGetString(POSITION_COMMENT);
+      if(StringFind(c, prefix + "_GL") >= 0)
+         total += PositionGetDouble(POSITION_VOLUME);
+   }
+   return total;
+}
+
+// v6.65: คืน lot ของไม้ recovery ถัดไป; คืน 0 ถ้า budget เต็ม
+double ComputeAutoRecoveryLot(double remainingHedgeLots,
+                              double existingTotalLots,
+                              double lastLot)
+{
+   double minLot  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   if(lotStep <= 0) lotStep = 0.01;
+   if(minLot  <= 0) minLot  = 0.01;
+   double budget  = remainingHedgeLots - existingTotalLots;
+   if(budget < minLot) return 0.0;
+
+   double baseLot = (lastLot > 0) ? lastLot * Recovery_AutoMult : Recovery_AutoInitLot;
+   double nextLot = MathFloor(baseLot / lotStep + 0.0000001) * lotStep;
+   if(nextLot < minLot) nextLot = minLot;
+
+   if(existingTotalLots + nextLot > remainingHedgeLots + 0.0000001)
+   {
+      nextLot = MathFloor(budget / lotStep + 0.0000001) * lotStep;
+      if(nextLot < minLot) return 0.0;
+   }
+   return nextLot;
+}
+
 // Compute Recovery grid lot using mode + maxExisting continuation
 double ComputeRecoveryGridLot(double maxExisting, int level)
 {
@@ -8997,8 +9116,19 @@ void ManageOrphanGrid()
                   {
                      int nextLevel = mglb + 1;
                      double maxExisting = FindMaxLotOrphan(gen, POSITION_TYPE_BUY);
-                     double lots = ComputeRecoveryGridLot(maxExisting, glb);  // v6.57
-                     
+                     double lots;
+                     if(Recovery_AutoLot)
+                     {
+                        double remHedge = GetHedgeLotsForGen(gen);
+                        double existLots = SumOrphanGridLots(gen, POSITION_TYPE_BUY);
+                        lots = ComputeAutoRecoveryLot(remHedge, existLots, maxExisting);
+                        if(lots <= 0) continue;
+                        Print("v6.65 AUTO LOT Gen", gen, " BUY: rem=", DoubleToString(remHedge, 2),
+                              " used=", DoubleToString(existLots, 2), " -> next=", DoubleToString(lots, 2));
+                     }
+                     else
+                        lots = ComputeRecoveryGridLot(maxExisting, glb);  // v6.57
+
                      string comment = prefix + "_GL#" + IntegerToString(nextLevel);
                       if(OpenOrder(ORDER_TYPE_BUY, lots, comment))
                       {
@@ -9036,8 +9166,19 @@ void ManageOrphanGrid()
                   {
                      int nextLevel = mgls + 1;
                      double maxExisting = FindMaxLotOrphan(gen, POSITION_TYPE_SELL);
-                     double lots = ComputeRecoveryGridLot(maxExisting, gls);  // v6.57
-                     
+                     double lots;
+                     if(Recovery_AutoLot)
+                     {
+                        double remHedge = GetHedgeLotsForGen(gen);
+                        double existLots = SumOrphanGridLots(gen, POSITION_TYPE_SELL);
+                        lots = ComputeAutoRecoveryLot(remHedge, existLots, maxExisting);
+                        if(lots <= 0) continue;
+                        Print("v6.65 AUTO LOT Gen", gen, " SELL: rem=", DoubleToString(remHedge, 2),
+                              " used=", DoubleToString(existLots, 2), " -> next=", DoubleToString(lots, 2));
+                     }
+                     else
+                        lots = ComputeRecoveryGridLot(maxExisting, gls);  // v6.57
+
                      string comment = prefix + "_GL#" + IntegerToString(nextLevel);
                       if(OpenOrder(ORDER_TYPE_SELL, lots, comment))
                       {
@@ -9120,6 +9261,39 @@ void ManageHedgeSets()
       ClearSequentialRecoveryOwner("owner gen flat");
    
    bool sequentialActed = false;  // v6.58: only one hedge set may close/recover per tick
+
+   // v6.65: STRICT SEQUENTIAL MATCHING — pick exactly ONE matcher set per tick.
+   //        Only this set runs matching/AvgTP/PartialClose/Grid. All others
+   //        wait silently to prevent two sets from shredding hedges in parallel
+   //        (which produced uncommented partial remnants in v6.64).
+   int activeMatcherIdx = -1;
+   if(InpHedge_SequentialRecovery)
+   {
+      if(g_sequentialRecoveryActive)
+      {
+         // Owner-locked → matcher = owner set (still must be active)
+         if(g_sequentialRecoverySetIdx >= 0
+            && g_sequentialRecoverySetIdx < MAX_HEDGE_SETS
+            && g_hedgeSets[g_sequentialRecoverySetIdx].active)
+            activeMatcherIdx = g_sequentialRecoverySetIdx;
+         else
+            activeMatcherIdx = FindOldestActiveHedgeSet();
+      }
+      else
+      {
+         activeMatcherIdx = FindOldestActiveHedgeSet();
+      }
+      if(activeMatcherIdx >= 0 && g_hedgeSetCount > 1)
+      {
+         static datetime s_lastSeqLog = 0;
+         if(TimeCurrent() - s_lastSeqLog >= 30)
+         {
+            Print("v6.65 STRICT SEQ: matcher=Set#", activeMatcherIdx + 1,
+                  " | other ", g_hedgeSetCount - 1, " set(s) waiting");
+            s_lastSeqLog = TimeCurrent();
+         }
+      }
+   }
    for(int h = 0; h < MAX_HEDGE_SETS; h++)
    {
       if(!g_hedgeSets[h].active) continue;
@@ -9172,13 +9346,10 @@ void ManageHedgeSets()
       
       // === Gate passed — close logic allowed ===
 
-      // === v6.57/v6.58/v6.59/v6.63: Sequential Recovery ===
-      // v6.63: After v6.62 strict in-set pooling, matching/AvgTP/PartialClose
-      //        cannot leak across sets — so allow EVERY set to run its OWN
-      //        in-set matching every tick, even while a recovery owner is locked.
-      //        Only RECOVERY GRID (TryEnterCombinedGridMode + ManageHedgeGridMode)
-      //        is gated to the owner generation, so non-owner sets cannot expand
-      //        new grid orders until the owner is fully flat.
+      // === v6.65: Strict Sequential Matching ===
+      // Only the activeMatcherIdx may run matching/AvgTP/PartialClose/Grid.
+      // All other active sets wait silently (no shred, no grid) so we never
+      // get parallel partial closes that leave uncommented remnants.
       bool blockGridForThisSet = false;
       if(InpHedge_SequentialRecovery)
       {
@@ -9188,32 +9359,15 @@ void ManageHedgeSets()
             g_hedgeSets[h].matchingDone = false;
             continue;
          }
-         if(g_sequentialRecoveryActive)
+         if(activeMatcherIdx >= 0 && h != activeMatcherIdx)
          {
-            // v6.63: matching allowed (in-set safe). Block grid only for non-owner sets.
-            int boundGenH = g_hedgeSets[h].boundGeneration;
-            if(boundGenH != g_sequentialRecoveryGen)
-               blockGridForThisSet = true;
+            // v6.65: Non-matcher → skip everything. Reset state so it's ready
+            //        when its turn comes.
+            g_hedgeSets[h].matchingDone = false;
+            continue;
          }
-         else if(sequentialActed)
-         {
-            // Another set has already taken the per-tick grid slot → only block grid
-            blockGridForThisSet = true;
-         }
-         else
-         {
-            int oldestActiveIdx = FindOldestActiveHedgeSet();
-            if(oldestActiveIdx >= 0 && h != oldestActiveIdx)
-            {
-               // Not the oldest → matching still runs (in-set), but grid waits
-               blockGridForThisSet = true;
-            }
-            else
-            {
-               // This set IS the oldest → claim the per-tick grid slot
-               sequentialActed = true;
-            }
-         }
+         // This set IS the active matcher → claim the per-tick slot
+         sequentialActed = true;
       }
 
       // If in grid mode → execute grid (only when grid is permitted for this set)
@@ -10499,7 +10653,31 @@ void ManageHedgeGridMode(int idx)
       // Calculate next grid lot
       int nextLevel = g_hedgeSets[idx].gridLevel + currentGridCount + 1;
       double nextLot = InitialLotSize;
-      if(GridLoss_LotMode == LOT_MULTIPLY)
+      if(Recovery_AutoLot)
+      {
+         double existingLots = SumHedgeGridLots(idx);
+         double lastGridLot  = FindLastHedgeGridLot(idx);
+         double remHedge     = g_hedgeSets[idx].hedgeLots;
+         nextLot = ComputeAutoRecoveryLot(remHedge, existingLots, lastGridLot);
+         if(nextLot <= 0)
+         {
+            static datetime s_lastAutoFullLog = 0;
+            if(TimeCurrent() - s_lastAutoFullLog >= 60)
+            {
+               Print("v6.65 AUTO LOT Set#", idx + 1,
+                     ": BUDGET FULL (used=", DoubleToString(existingLots, 2),
+                     "/", DoubleToString(remHedge, 2), ") -> skip");
+               s_lastAutoFullLog = TimeCurrent();
+            }
+            return;  // budget full → wait
+         }
+         Print("v6.65 AUTO LOT Set#", idx + 1,
+               ": rem=", DoubleToString(remHedge, 2),
+               " used=", DoubleToString(existingLots, 2),
+               " last=", DoubleToString(lastGridLot, 2),
+               " -> next=", DoubleToString(nextLot, 2));
+      }
+      else if(GridLoss_LotMode == LOT_MULTIPLY)
          nextLot = InitialLotSize * MathPow(GridLoss_MultiplyFactor, nextLevel);
       else if(GridLoss_LotMode == LOT_ADD)
          nextLot = InitialLotSize + (GridLoss_AddLotPerLevel * InitialLotSize) * nextLevel;
