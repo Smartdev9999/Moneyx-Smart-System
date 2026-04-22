@@ -9044,8 +9044,17 @@ void RecoverHedgeSets()
          }
       }
    }
-   
-   // Step 2: Rebind counter-side orders — ONLY bind orders from OLDER generations
+
+   // v6.71: honor MinSpacing across restart — set last hedge open time = max(active hedge openTime)
+   datetime maxHedgeTime = 0;
+   for(int h = 0; h < MAX_HEDGE_SETS; h++)
+   {
+      if(g_hedgeSets[h].active && g_hedgeSets[h].hedgeOpenTime > maxHedgeTime)
+         maxHedgeTime = g_hedgeSets[h].hedgeOpenTime;
+   }
+   if(maxHedgeTime > 0) g_lastHedgeOpenTime = maxHedgeTime;
+
+
    for(int h = 0; h < MAX_HEDGE_SETS; h++)
    {
       if(!g_hedgeSets[h].active) continue;
