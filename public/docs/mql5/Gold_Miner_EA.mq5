@@ -7742,7 +7742,7 @@ int GetSequentialAllowedGeneration()
       if(tk == 0) continue;
       if(!PositionSelectByTicket(tk)) continue;
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
-      if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
 
       string c = PositionGetString(POSITION_COMMENT);
       int gen = ParseGenerationFromComment(c);
