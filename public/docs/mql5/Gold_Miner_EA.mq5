@@ -8047,10 +8047,14 @@ void SyncRecoveryBasketTP(int idx)
    if(idx < 0 || idx >= MAX_HEDGE_SETS) return;
    if(!g_hedgeSets[idx].active) return;
 
+   // v6.70: prune dead tickets first so basket reflects only live positions
+   CompactRecoveryGridTickets(idx);
+
    ulong  tickets[];
    double prices[];
    double lots[];
    int    cnt = 0;
+   int    fromHedge = 0, fromComment = 0, fromTicket = 0;
 
    ENUM_POSITION_TYPE side = g_hedgeSets[idx].hedgeSide;
    ulong  hedgeTk = g_hedgeSets[idx].hedgeTicket;
