@@ -7572,7 +7572,190 @@ void ClearSequentialRecoveryOwner(string reason)
    g_sequentialRecoveryCompletedThisTick = true;  // skip releasing next set this tick
 }
 
-void SaveBoundTicketsToPrevHedged(int idx)
+//+------------------------------------------------------------------+
+//| v6.61: Recovery Seed registry (logical strip of hedge comment)    |
+//+------------------------------------------------------------------+
+bool IsRecoverySeedTicket(ulong ticket)
+{
+   for(int i = 0; i < g_recoverySeedCount; i++)
+      if(g_recoverySeedTickets[i] == ticket) return true;
+   return false;
+}
+
+int GetRecoverySeedGen(ulong ticket)
+{
+   for(int i = 0; i < g_recoverySeedCount; i++)
+      if(g_recoverySeedTickets[i] == ticket) return g_recoverySeedGen[i];
+   return -1;
+}
+
+void RegisterRecoverySeed(ulong ticket, int gen, double openPrice)
+{
+   if(ticket == 0 || gen < 0) return;
+   if(IsRecoverySeedTicket(ticket)) return;
+   ArrayResize(g_recoverySeedTickets, g_recoverySeedCount + 1);
+   ArrayResize(g_recoverySeedGen,     g_recoverySeedCount + 1);
+   ArrayResize(g_recoverySeedOpenPrice, g_recoverySeedCount + 1);
+   g_recoverySeedTickets[g_recoverySeedCount]    = ticket;
+   g_recoverySeedGen[g_recoverySeedCount]        = gen;
+   g_recoverySeedOpenPrice[g_recoverySeedCount]  = openPrice;
+   g_recoverySeedCount++;
+   Print("v6.61 RECOV SEED: ticket=", ticket, " gen=", gen, " open=", DoubleToString(openPrice, _Digits));
+}
+
+void PruneRecoverySeeds()
+{
+   // remove tickets that no longer exist
+   for(int i = g_recoverySeedCount - 1; i >= 0; i--)
+   {
+      if(!PositionSelectByTicket(g_recoverySeedTickets[i]))
+      {
+         for(int j = i; j < g_recoverySeedCount - 1; j++)
+         {
+            g_recoverySeedTickets[j]   = g_recoverySeedTickets[j + 1];
+            g_recoverySeedGen[j]       = g_recoverySeedGen[j + 1];
+            g_recoverySeedOpenPrice[j] = g_recoverySeedOpenPrice[j + 1];
+         }
+         g_recoverySeedCount--;
+         ArrayResize(g_recoverySeedTickets, g_recoverySeedCount);
+         ArrayResize(g_recoverySeedGen, g_recoverySeedCount);
+         ArrayResize(g_recoverySeedOpenPrice, g_recoverySeedCount);
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| v6.61: RecoverySetTracker — anti-skip ticket array per generation |
+//+------------------------------------------------------------------+
+int FindRecoverySetIdx(int gen)
+{
+   for(int i = 0; i < g_recoverySetCount; i++)
+      if(g_recoverySets[i].generation == gen) return i;
+   return -1;
+}
+
+void RegisterRecoverySetTickets(int gen, int sourceHedgeIdx, ulong &tickets[])
+{
+   if(gen < 0) return;
+   int idx = FindRecoverySetIdx(gen);
+   if(idx < 0)
+   {
+      ArrayResize(g_recoverySets, g_recoverySetCount + 1);
+      idx = g_recoverySetCount;
+      g_recoverySets[idx].generation     = gen;
+      g_recoverySets[idx].sourceHedgeIdx = sourceHedgeIdx;
+      g_recoverySets[idx].complete       = false;
+      ArrayResize(g_recoverySets[idx].tickets, 0);
+      g_recoverySetCount++;
+   }
+   for(int t = 0; t < ArraySize(tickets); t++)
+   {
+      if(tickets[t] == 0) continue;
+      bool exists = false;
+      int curSize = ArraySize(g_recoverySets[idx].tickets);
+      for(int x = 0; x < curSize; x++)
+         if(g_recoverySets[idx].tickets[x] == tickets[t]) { exists = true; break; }
+      if(exists) continue;
+      ArrayResize(g_recoverySets[idx].tickets, curSize + 1);
+      g_recoverySets[idx].tickets[curSize] = tickets[t];
+   }
+   g_recoverySets[idx].complete = false;
+}
+
+bool IsRecoverySetFlat(int gen)
+{
+   int idx = FindRecoverySetIdx(gen);
+   if(idx < 0) return true;
+   for(int t = 0; t < ArraySize(g_recoverySets[idx].tickets); t++)
+   {
+      ulong tk = g_recoverySets[idx].tickets[t];
+      if(tk == 0) continue;
+      if(PositionSelectByTicket(tk)) return false;
+   }
+   // also include any new recovery grid orders for this gen still alive
+   if(CountSequentialOwnerOrders(gen) > 0) return false;
+   return true;
+}
+
+void ClearRecoverySetIfFlat(int gen)
+{
+   int idx = FindRecoverySetIdx(gen);
+   if(idx < 0) return;
+   if(!IsRecoverySetFlat(gen)) return;
+   g_recoverySets[idx].complete = true;
+}
+
+//+------------------------------------------------------------------+
+//| v6.61: Cumulative Sum Seed selection                              |
+//| Sums lots of all orders (Initial + GLs + recovery seed) for gen   |
+//| on `side`, then returns the level lot whose cumulative is closest |
+//| to (but <=) targetLots. Falls back to max single lot if nothing.  |
+//+------------------------------------------------------------------+
+double FindCumulativeSeedLot(int gen, ENUM_POSITION_TYPE side, double targetLots)
+{
+   // Collect lots ordered by open time (oldest first) for this gen + side
+   string prefix = GenPrefix(gen);
+   double lots[];
+   datetime times[];
+   int cnt = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if(PositionGetInteger(POSITION_TYPE) != side) continue;
+
+      string comment = PositionGetString(POSITION_COMMENT);
+      bool include = false;
+      // Normal gen orders (Initial / GL)
+      if(StringFind(comment, prefix + "_") == 0 && !IsHedgeComment(comment))
+      {
+         if(StringFind(comment, "_INIT") >= 0 || StringFind(comment, "_GL") >= 0)
+            include = true;
+      }
+      // Recovery seed (logically stripped hedge remainder)
+      if(IsRecoverySeedTicket(ticket) && GetRecoverySeedGen(ticket) == gen)
+         include = true;
+
+      if(!include) continue;
+
+      double lot = PositionGetDouble(POSITION_VOLUME);
+      datetime t = (datetime)PositionGetInteger(POSITION_TIME);
+      ArrayResize(lots, cnt + 1);
+      ArrayResize(times, cnt + 1);
+      lots[cnt] = lot;
+      times[cnt] = t;
+      cnt++;
+   }
+   if(cnt == 0) return 0;
+
+   // sort ascending by time (oldest first) — reflects level order
+   for(int a = 0; a < cnt - 1; a++)
+      for(int b = a + 1; b < cnt; b++)
+         if(times[b] < times[a])
+         {
+            datetime tt = times[a]; times[a] = times[b]; times[b] = tt;
+            double lt = lots[a]; lots[a] = lots[b]; lots[b] = lt;
+         }
+
+   // cumulative scan; pick lot of last level whose cumulative <= target
+   double cum = 0;
+   double pickedLot = lots[0];
+   for(int k = 0; k < cnt; k++)
+   {
+      cum += lots[k];
+      if(cum <= targetLots) pickedLot = lots[k];
+      else break;
+   }
+   if(cum <= targetLots) pickedLot = lots[cnt - 1]; // all fit → take largest
+
+   Print("v6.61 RECOVERY SEED: Gen", gen, " side=", EnumToString(side),
+         " seed=", DoubleToString(pickedLot, 2),
+         " (cum=", DoubleToString(cum, 2), " target=", DoubleToString(targetLots, 2), ")");
+   return pickedLot;
+}
+
 {
    if(g_hedgeSets[idx].triggerType != 1) return;  // only DD-triggered sets
    for(int b = 0; b < g_hedgeSets[idx].boundTicketCount; b++)
