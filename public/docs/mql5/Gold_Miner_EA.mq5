@@ -9083,13 +9083,13 @@ void DetectOrphanHedgeOrders()
       if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       string comment = PositionGetString(POSITION_COMMENT);
-      if(StringFind(comment, "GM_HG") < 0) continue;
-      
+      if(!IsRecoveryGridComment(comment)) continue;  // v6.69 legacy + new
+
       bool belongsToActive = false;
       for(int h = 0; h < MAX_HEDGE_SETS; h++)
       {
-         string prefix = "GM_HG" + IntegerToString(h + 1);
-         if(StringFind(comment, prefix) >= 0 && g_hedgeSets[h].active)
+         if(!g_hedgeSets[h].active) continue;
+         if(IsRecoveryGridForSet(comment, h, g_hedgeSets[h].boundGeneration))
          { belongsToActive = true; break; }
       }
       
@@ -11223,7 +11223,7 @@ void ManageMatchingClose()
 
             // Skip hedge orders — managed separately
             string mcComment = PositionGetString(POSITION_COMMENT);
-            if(StringFind(mcComment, "GM_HEDGE") >= 0 || StringFind(mcComment, "GM_HG") >= 0) continue;
+            if(StringFind(mcComment, "GM_HEDGE") >= 0 || StringFind(mcComment, "GM_HG") >= 0 || StringFind(mcComment, "GM_HD") >= 0) continue;  // v6.69
             if(IsTicketBound(ticket)) continue;  // bound orders managed by Hedge system only
 
             double pnl = PositionGetDouble(POSITION_PROFIT)
