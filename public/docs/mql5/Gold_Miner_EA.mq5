@@ -1,13 +1,13 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.71 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.72 - MTF ZigZag+CDC+Grid+License |
 //|  v6.71: HedgeMinSpacing(min) + RecoveryCloseMode (Match/AvgTP)  |
 //+------------------------------------------------------------------+
 #property copyright "Money X System"
 #property link      ""
-#property version   "6.71"
-#property description "Gold Miner EA v6.71 - HedgeMinSpacing(min) + RecoveryCloseMode (Matching/AvgTP) + DuplicateHedgeFix + GM1-Start Comment Scheme + ImmediateRecoveryTPSync + HardFlatReset + RecoveryNewCandle + GM_HD<gen>_<NN> Comments + TicketBindFallback + FloaterIncludedTP + GenerationLockedHedgeSlot + UnifiedRecoveryParams + ReverseWalkSeed + CombinedAvgTP + MaxGridCap + OneTimeShred + HedgeTicketPersist + StrictSequentialMatching + AutoRecoveryLot + MatchTickRetry + HedgePartialFallback + InSetMatchAlways + PersistHedgeSlot + StrictInSetPool + MatchPoolBothSides + SeqRecoveryOwner + RehedgeGuard + SequentialRecovery + RecoveryGrid + BBFilter + BoundNoClose + StartOrderTrail + PersistGen + HedgeRecoveryToggle + MatchCloseToggle + InstantTP + DashCache + BrokerTPSL + MaxGridTrail + GLCandleConfirm + HedgeSidePause + OrphanGenFix + BalanceGuard + DDHedge + HedgeCloseGate + AvgTP + Squeeze + CDC + MTF ZigZag + License"
+#property version   "6.72"
+#property description "Gold Miner EA v6.72 - AvgTPStage2 + HedgeMinSpacing(min) + RecoveryCloseMode (Matching/AvgTP) + DuplicateHedgeFix + GM1-Start Comment Scheme + ImmediateRecoveryTPSync + HardFlatReset + RecoveryNewCandle + GM_HD<gen>_<NN> Comments + TicketBindFallback + FloaterIncludedTP + GenerationLockedHedgeSlot + UnifiedRecoveryParams + ReverseWalkSeed + CombinedAvgTP + MaxGridCap + OneTimeShred + HedgeTicketPersist + StrictSequentialMatching + AutoRecoveryLot + MatchTickRetry + HedgePartialFallback + InSetMatchAlways + PersistHedgeSlot + StrictInSetPool + MatchPoolBothSides + SeqRecoveryOwner + RehedgeGuard + SequentialRecovery + RecoveryGrid + BBFilter + BoundNoClose + StartOrderTrail + PersistGen + HedgeRecoveryToggle + MatchCloseToggle + InstantTP + DashCache + BrokerTPSL + MaxGridTrail + GLCandleConfirm + HedgeSidePause + OrphanGenFix + BalanceGuard + DDHedge + HedgeCloseGate + AvgTP + Squeeze + CDC + MTF ZigZag + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -983,7 +983,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.71 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.72 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min",
@@ -1045,7 +1045,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.71 deinitialized");
+   Print("Gold Miner EA v6.72 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -3922,7 +3922,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.71 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.71 [ZZ]" : "Gold Miner EA v6.71 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.72 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.72 [ZZ]" : "Gold Miner EA v6.72 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -4353,7 +4353,7 @@ void DisplayDashboard()
             DrawTableRow(row, "Hedge Spacing", spacingInfo, clrSilver, COLOR_SECTION_HEDGE); row++;
 
             string modeInfo = (InpRecovery_CloseMode == RECOVERY_CLOSE_AVG_TP)
-                              ? ("AVERAGE_TP (dist=" + IntegerToString(InpRecovery_AvgTPDistance) + "p)")
+                              ? ("MATCHING+AVGTP (dist=" + IntegerToString(InpRecovery_AvgTPDistance) + "p)")
                               : "MATCHING_CLOSE";
             DrawTableRow(row, "Recovery Mode", modeInfo, clrSilver, COLOR_SECTION_HEDGE); row++;
          }
@@ -8273,7 +8273,7 @@ void ManageRecoveryAvgTP(int idx)
 
    if(modified > 0)
    {
-      Print("v6.71 AVGTP Set#", idx + 1, " (Gen", g_hedgeSets[idx].boundGeneration,
+      Print("v6.72 AVGTP-S2 Set#", idx + 1, " (Gen", g_hedgeSets[idx].boundGeneration,
             "): tickets=", cnt, " netSide=", netSide,
             " netLots=", DoubleToString(MathAbs(netLots), 2),
             " avgPx=", DoubleToString(priceBE, digits),
@@ -10078,21 +10078,11 @@ void ManageHedgeSets()
         if(!InpHedge_UseMatchingClose)
            continue;
 
-        // v6.71: Recovery Close Mode = AVERAGE_TP → skip matching/partial entirely;
-        //        manage entire basket via single weighted-avg broker TP.
-        //        Grid expansion still runs so the set can keep recovering.
-        if(InpRecovery_CloseMode == RECOVERY_CLOSE_AVG_TP)
-        {
-           ManageRecoveryAvgTP(h);
-           g_hedgeSets[h].matchingDone = true;
-           if(!blockGridForThisSet)
-           {
-              if(g_hedgeSets[h].gridMode) ManageHedgeGridMode(h);
-              else                        TryEnterCombinedGridMode(h);
-           }
-           continue;
-        }
-        
+         // v6.72: AVG_TP is now Stage 2 — runs AFTER matching unlocks the main hedge.
+         //        Stage 1 (matching/partial close) below executes normally first.
+         //        Stage 2 trigger is placed after the matching block.
+
+         
        // v6.64: Reset matchingDone every tick for active sets so matching/AvgTP/PartialClose
        //        re-evaluate continuously (budget changes with floating P/L). Strict in-set
        //        pooling (v6.62) makes this safe — no cross-set leakage.
@@ -10153,6 +10143,22 @@ void ManageHedgeSets()
             (g_hedgeSets[h].hedgeLots > 0 || hasGrid))
          {
             SyncRecoveryBasketTP(h);
+         }
+      }
+
+      // v6.72: STAGE 2 — AVG_TP basket exit after main hedge has been unlocked.
+      //        (a) user selected RECOVERY_CLOSE_AVG_TP
+      //        (b) main hedge ticket released by Stage 1 matching
+      //        (c) recovery grid has at least one live order
+      //        Stage 1 (matching/partial close above) is NEVER skipped.
+      if(InpRecovery_CloseMode == RECOVERY_CLOSE_AVG_TP)
+      {
+         bool hedgeReleased = (g_hedgeSets[h].hedgeTicket == 0
+                               || !PositionSelectByTicket(g_hedgeSets[h].hedgeTicket));
+         int recoveryCount = CountHedgeGridOrders(h);
+         if(hedgeReleased && recoveryCount > 0)
+         {
+            ManageRecoveryAvgTP(h);
          }
       }
    }
