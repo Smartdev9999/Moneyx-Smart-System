@@ -5,8 +5,8 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.63"
-#property description "Gold Miner EA v6.63 - v6.62 + Recovery Owner Broker TP Sync + Orphan GL Watchdog (fix GL ใหม่หลัง hedge ปลด ไม่ได้ TP)"
+#property version   "6.64"
+#property description "Gold Miner EA v6.64 - v6.63 + Recovery TP Sync Throttling (sync เฉพาะตอน basket เปลี่ยน, แก้ ping-pong กับ ClearBrokerTPSL)"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -2450,10 +2450,21 @@ void ClearBrokerTPSL()
       if(ticket == 0) continue;
       if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
-      if(IsHedgeComment(PositionGetString(POSITION_COMMENT))) continue;
+      string clearComment = PositionGetString(POSITION_COMMENT);
+      if(IsHedgeComment(clearComment)) continue;
       
       // v6.46: Only clear TP/SL for orders that are bound in active hedge sets
       if(!IsTicketBound(ticket)) continue;
+
+      // v6.64: Don't clear TP of recovery owner generation orders — they're managed
+      // by ManageRecoveryOwnerAvgTP. Without this guard, ClearBrokerTPSL and
+      // ManageRecoveryOwnerAvgTP fight every tick (ping-pong loop in journal).
+      if(g_sequentialRecoveryActive)
+      {
+         int og = ExtractGeneration(clearComment);
+         if(og == g_sequentialRecoveryGen) continue;
+         if(IsRecoverySeedTicket(ticket) && GetRecoverySeedGen(ticket) == g_sequentialRecoveryGen) continue;
+      }
 
       double curTP = PositionGetDouble(POSITION_TP);
       double curSL = PositionGetDouble(POSITION_SL);
