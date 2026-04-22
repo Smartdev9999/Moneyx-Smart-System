@@ -9094,6 +9094,15 @@ void ManageHedgeSets()
    //         generation has zero live orders (bound OR hedge).
    int seqAllowedGen = g_seqAllowedGen;  // refreshed each tick in OnTick
 
+   // v6.65: Per-tick netting fallback for the allowed generation. Runs once
+   //         per tick BEFORE the per-set loop so that bound orders of the
+   //         allowed gen — even those scattered across the active set + an
+   //         orphan group — are scanned together.
+   if(InpHedge_SequentialRelease && seqAllowedGen != -1)
+   {
+      RunBoundProfitLossNetting(seqAllowedGen);
+   }
+
    for(int h = 0; h < MAX_HEDGE_SETS; h++)
    {
       if(!g_hedgeSets[h].active) continue;
