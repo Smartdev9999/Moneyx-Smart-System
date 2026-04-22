@@ -8276,10 +8276,11 @@ void CheckAndOpenHedge()
       return;
    }
 
-   int slot = FindFreeHedgeSlot();
+   // v6.68: Generation-Locked slot — slot id maps 1:1 with current cycle gen
+   int slot = FindGenerationHedgeSlot(g_cycleGeneration);
    if(slot < 0)
    {
-      Print("HEDGE: No free slot available (max ", MAX_HEDGE_SETS, " sets)");
+      Print("HEDGE: Cannot allocate gen-locked slot for gen=", g_cycleGeneration);
       return;
    }
 
