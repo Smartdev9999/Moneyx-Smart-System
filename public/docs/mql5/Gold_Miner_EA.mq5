@@ -618,6 +618,7 @@ double   g_nextBuyDDTrigger  = 5.0;    // DD% threshold for next BUY-side hedge
 double   g_nextSellDDTrigger = 5.0;    // DD% threshold for next SELL-side hedge
 datetime g_lastDDHedgeTime   = 0;      // cooldown tracker
 datetime g_lastHedgeCloseTime = 0;     // v6.25: cooldown after hedge set close
+datetime g_lastHedgeOpenTime  = 0;     // v6.71: last time ANY hedge set opened (MinSpacing gate)
 
 // === v6.39: Hedge Side Pause State ===
 datetime g_lastHedgeBuyTime  = 0;   // last time BUY orders got hedged → pause BUY entries
