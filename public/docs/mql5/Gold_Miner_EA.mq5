@@ -1,13 +1,13 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.67 - MTF ZigZag+CDC+Grid+License |
-//|         v6.67: UnifiedRecoveryParams (Auto uses Grid Recovery)   |
+//|                Gold Miner EA v6.68 - MTF ZigZag+CDC+Grid+License |
+//|         v6.68: GenerationLockedHedgeSlot (slot===gen, no reuse) |
 //+------------------------------------------------------------------+
 #property copyright "Money X System"
 #property link      ""
-#property version   "6.67"
-#property description "Gold Miner EA v6.67 - UnifiedRecoveryParams + ReverseWalkSeed + CombinedAvgTP + MaxGridCap + OneTimeShred + HedgeTicketPersist + StrictSequentialMatching + AutoRecoveryLot + MatchTickRetry + HedgePartialFallback + InSetMatchAlways + PersistHedgeSlot + StrictInSetPool + MatchPoolBothSides + SeqRecoveryOwner + RehedgeGuard + SequentialRecovery + RecoveryGrid + BBFilter + BoundNoClose + StartOrderTrail + PersistGen + HedgeRecoveryToggle + MatchCloseToggle + InstantTP + DashCache + BrokerTPSL + MaxGridTrail + GLCandleConfirm + HedgeSidePause + OrphanGenFix + BalanceGuard + DDHedge + HedgeCloseGate + AvgTP + Squeeze + CDC + MTF ZigZag + License"
+#property version   "6.68"
+#property description "Gold Miner EA v6.68 - GenerationLockedHedgeSlot + UnifiedRecoveryParams + ReverseWalkSeed + CombinedAvgTP + MaxGridCap + OneTimeShred + HedgeTicketPersist + StrictSequentialMatching + AutoRecoveryLot + MatchTickRetry + HedgePartialFallback + InSetMatchAlways + PersistHedgeSlot + StrictInSetPool + MatchPoolBothSides + SeqRecoveryOwner + RehedgeGuard + SequentialRecovery + RecoveryGrid + BBFilter + BoundNoClose + StartOrderTrail + PersistGen + HedgeRecoveryToggle + MatchCloseToggle + InstantTP + DashCache + BrokerTPSL + MaxGridTrail + GLCandleConfirm + HedgeSidePause + OrphanGenFix + BalanceGuard + DDHedge + HedgeCloseGate + AvgTP + Squeeze + CDC + MTF ZigZag + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -951,7 +951,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.67 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.68 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min",
@@ -1013,7 +1013,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.67 deinitialized");
+   Print("Gold Miner EA v6.68 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -3886,7 +3886,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.67 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.67 [ZZ]" : "Gold Miner EA v6.67 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.68 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.68 [ZZ]" : "Gold Miner EA v6.68 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -8220,51 +8220,27 @@ void RefreshBoundTickets(int idx)
 }
 
 //+------------------------------------------------------------------+
-//| Find free hedge set slot                                           |
+//| v6.68: Generation-Locked Hedge Slot                                |
+//|   slot index === bound generation; comment === GM_HEDGE_(slot+1)   |
+//|   Never reuses slot id while same-gen hedge is still active.       |
 //+------------------------------------------------------------------+
-int FindFreeHedgeSlot()
+int FindGenerationHedgeSlot(int bindGen)
 {
-   // v6.63: Persistent slot numbering — do not reuse slot numbers
-   //   while ANY hedge set is still active. Only reset to slot 0 (= GM_HEDGE_1)
-   //   when the entire hedge-set array is flat. This keeps comments sequential
-   //   (H1 → H2 → H3 → H4 …) so the user is never confused by reused IDs.
-   int  maxActiveSlot = -1;
-   bool anyActive     = false;
-   for(int h = 0; h < MAX_HEDGE_SETS; h++)
+   if(bindGen < 0 || bindGen >= MAX_HEDGE_SETS)
    {
-      if(g_hedgeSets[h].active)
-      {
-         anyActive = true;
-         if(h > maxActiveSlot) maxActiveSlot = h;
-      }
+      Print("v6.68 SLOT: bindGen=", bindGen, " out of range [0..", MAX_HEDGE_SETS-1, "] → reject");
+      return -1;
    }
-
-   if(!anyActive)
+   if(g_hedgeSets[bindGen].active)
    {
-      // All sets flat → safe to reset numbering back to GM_HEDGE_1
-      Print("v6.63 SLOT ASSIGN: all sets flat → reset to slot=0 (GM_HEDGE_1)");
-      return 0;
+      // Generation already has an active hedge — never overwrite, never reuse slot id
+      Print("v6.68 GEN-LOCK SKIP: gen=", bindGen,
+            " already hedged as GM_HEDGE_", bindGen + 1, " — skip new hedge for same gen");
+      return -1;
    }
-
-   // Use slot strictly after the highest active slot — never reuse middle gaps
-   int next = maxActiveSlot + 1;
-   if(next < MAX_HEDGE_SETS)
-   {
-      Print("v6.63 SLOT ASSIGN: maxActiveSlot=", maxActiveSlot,
-            " → new slot=", next, " (comment=GM_HEDGE_", next+1, ")");
-      return next;
-   }
-
-   // Array exhausted at the tail → fallback to any free middle slot to avoid overflow
-   for(int h = 0; h < MAX_HEDGE_SETS; h++)
-      if(!g_hedgeSets[h].active)
-      {
-         Print("v6.63 SLOT ASSIGN: tail full → fallback middle slot=", h,
-               " (comment=GM_HEDGE_", h+1, ")");
-         return h;
-      }
-
-   return -1;
+   Print("v6.68 SLOT ASSIGN: gen=", bindGen, " → slot=", bindGen,
+         " (comment=GM_HEDGE_", bindGen + 1, ")");
+   return bindGen;
 }
 
 //+------------------------------------------------------------------+
@@ -8300,10 +8276,11 @@ void CheckAndOpenHedge()
       return;
    }
 
-   int slot = FindFreeHedgeSlot();
+   // v6.68: Generation-Locked slot — slot id maps 1:1 with current cycle gen
+   int slot = FindGenerationHedgeSlot(g_cycleGeneration);
    if(slot < 0)
    {
-      Print("HEDGE: No free slot available (max ", MAX_HEDGE_SETS, " sets)");
+      Print("HEDGE: Cannot allocate gen-locked slot for gen=", g_cycleGeneration);
       return;
    }
 
@@ -8550,10 +8527,11 @@ bool OpenDDHedge(ENUM_POSITION_TYPE counterSide, ENUM_POSITION_TYPE hedgeSide, i
       return false;
    }
    
-   int slot = FindFreeHedgeSlot();
+   // v6.68: Generation-Locked slot — slot id maps 1:1 with bindGen
+   int slot = FindGenerationHedgeSlot(bindGen);
    if(slot < 0)
    {
-      Print("DD HEDGE: No free slot available");
+      Print("DD HEDGE: Cannot allocate gen-locked slot for gen=", bindGen);
       return false;
    }
    
@@ -8817,7 +8795,12 @@ void RecoverHedgeSets()
          if(boundGen < 0 || orderGen < boundGen) boundGen = orderGen;
       }
       
-      g_hedgeSets[h].boundGeneration = (boundGen >= 0) ? boundGen : 0;
+      // v6.68: Generation-locked invariant — slot index === bound generation.
+      // Override oldest-found logic to keep mapping consistent across restarts.
+      g_hedgeSets[h].boundGeneration = h;
+      if(boundGen >= 0 && boundGen != h)
+         Print("v6.68 RECOVER WARN: Set#", h+1, " oldest bound gen=", boundGen,
+               " differs from slot-locked gen=", h, " — using slot-locked");
       
       // v6.13: Recovery — check if grid orders already exist (resume grid mode)
       // This is the ONLY place where gridMode can be set during recovery (OnInit)
