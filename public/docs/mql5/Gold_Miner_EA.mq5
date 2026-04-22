@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.56 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.60 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.56"
-#property description "Gold Miner EA v6.56 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + GenRaceFix + OrphanGenFix + HedgeSidePause + GLCandleConfirm + MaxGridTrail + BrokerTPSL + DashCache + DashThrottle + LiveTPFix + HedgeClearTP + BoundClearFix + InstantSync + DeferredSync + InstantTP + MatchCloseToggle + HedgeRecoveryToggle + PersistGen + StartOrderTrail + BoundNoClose + BBFilter + License"
+#property version   "6.60"
+#property description "Gold Miner EA v6.60 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + GenRaceFix + OrphanGenFix + HedgeSidePause + GLCandleConfirm + MaxGridTrail + BrokerTPSL + DashCache + DashThrottle + LiveTPFix + HedgeClearTP + BoundClearFix + InstantSync + DeferredSync + InstantTP + MatchCloseToggle + HedgeRecoveryToggle + PersistGen + StartOrderTrail + BoundNoClose + BBFilter + RecoveryGrid + SequentialRecovery + FlatGenReset + SeqOneSetPerTick + RehedgeGuard + SeqRecoveryOwner + Gen0OwnerFix + StrictOwnerCount + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -381,6 +381,27 @@ input group "=== Orphan Recovery Grid ==="
 input bool     InpOrphan_Enable              = true;   // Enable Orphan Recovery Grid
 input int      InpOrphan_ScanIntervalMin     = 15;     // Scan Interval (Minutes)
 
+// === v6.57: Recovery Grid (separate from GridLoss) ===
+input group "=== Recovery Grid (Bound/Orphan Orders) ==="
+input bool           Recovery_UseSeparate    = false;                       // Use separate Recovery settings (false=use GridLoss_*)
+input int            Recovery_MaxTrades      = 5;                           // Recovery Max Grid Trades
+input ENUM_LOT_MODE  Recovery_LotMode        = LOT_ADD;                     // Recovery Lot Mode
+input string         Recovery_CustomLots     = "0.01;0.02;0.03;0.04;0.05"; // Recovery Custom Lots
+input double         Recovery_AddLotPerLevel = 0.4;                         // Recovery Add Lot per Level
+input double         Recovery_MultiplyFactor = 2.0;                         // Recovery Multiply Factor
+input ENUM_GAP_TYPE  Recovery_GapType        = GAP_FIXED;                   // Recovery Gap Type
+input int            Recovery_Points         = 500;                         // Recovery Distance (points)
+input string         Recovery_CustomDistance = "100;200;300;400;500";       // Recovery Custom Distance
+input ENUM_TIMEFRAMES Recovery_ATR_TF        = PERIOD_H1;                   // Recovery ATR Timeframe
+input int            Recovery_ATR_Period     = 14;                          // Recovery ATR Period
+input double         Recovery_ATR_Multiplier = 1.5;                         // Recovery ATR Multiplier
+input ENUM_ATR_REF   Recovery_ATR_Reference  = ATR_REF_DYNAMIC;             // Recovery ATR Reference
+input int            Recovery_MinGapPoints   = 100;                         // Recovery Min Grid Gap (points)
+input int            Recovery_CandleConfirm  = 0;                           // Recovery Candle Confirm (0=Off)
+
+// === v6.57: Sequential Hedge Recovery ===
+input group "=== Sequential Hedge Recovery ==="
+input bool   InpHedge_SequentialRecovery = true;   // true=close oldest hedge set first (H1→H2→H3), false=close any (legacy)
 //+------------------------------------------------------------------+
 //| Global Variables                                                   |
 //+------------------------------------------------------------------+
@@ -555,9 +576,16 @@ struct HedgeSet
    double   oldestBoundPrice;          // open price of oldest bound order
    // === v6.16: Hedge Trigger Type ===
    int      triggerType;               // 0 = expansion, 1 = DD%
+   // === v6.57: Sequential Recovery ordering ===
+   datetime hedgeOpenTime;             // open time of main hedge order (FIFO ordering)
 };
 HedgeSet g_hedgeSets[MAX_HEDGE_SETS];
 int      g_hedgeSetCount = 0;
+// === v6.59: Sequential Recovery Owner — locks recovery to one generation until flat ===
+int      g_sequentialRecoveryGen      = -1;    // generation currently owning recovery lock
+int      g_sequentialRecoverySetIdx   = -1;    // originating hedge set index (for dashboard/log)
+bool     g_sequentialRecoveryActive   = false; // true → block all other sets and other-gen orphan recovery
+bool     g_sequentialRecoveryCompletedThisTick = false; // one-tick handoff guard
 datetime g_lastHedgeGridTime = 0;  // cooldown timer for hedge grid orders
 int      g_lastDashboardRowCount = 0;  // track previous tick row count for stale cleanup
 bool     g_hedgeOrphanWarning = false;  // orphan hedge grid orders detected
@@ -885,6 +913,7 @@ int OnInit()
        g_hedgeSets[h].oldestBoundPrice = 0;
        // v6.16: Trigger type init
        g_hedgeSets[h].triggerType = 0;
+       g_hedgeSets[h].hedgeOpenTime = 0;  // v6.57
      }
      g_hedgeSetCount = 0;
 
@@ -914,7 +943,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.56 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.60 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min");
@@ -974,7 +1003,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.56 deinitialized");
+   Print("Gold Miner EA v6.60 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -1262,6 +1291,14 @@ void OnTick()
 
    // === NEWS FILTER - Refresh hourly ===
    RefreshNewsData();
+
+    // === v6.57: Auto-reset cycle generation when account is fully flat ===
+    // Catches cases where positions closed by manual / SL / external means and
+    // TryResetCycleStateIfFlat was never invoked, leaving comments stuck at GMx.
+    if(g_cycleGeneration > 0 && g_hedgeSetCount == 0 && TotalOrderCount() == 0)
+    {
+       TryResetCycleStateIfFlat("OnTick flat-detect");
+    }
 
    // === Determine if new orders are blocked (News/Time/Pause) ===
    g_newOrderBlocked = false;
@@ -2199,6 +2236,7 @@ void CloseAllPositions()
       g_hedgeSets[h].oldestBoundPrice = 0;
       // v6.16: Reset trigger type
       g_hedgeSets[h].triggerType = 0;
+      g_hedgeSets[h].hedgeOpenTime = 0;  // v6.57
    }
    g_hedgeSetCount = 0;
    // v6.16: Reset DD triggers on full close
@@ -3832,7 +3870,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.56 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.56 [ZZ]" : "Gold Miner EA v6.56 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.60 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.60 [ZZ]" : "Gold Miner EA v6.60 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -4360,6 +4398,43 @@ void DisplayDashboard()
                 {
                    DrawTableRow(row, "MG SELL Trail", "ACTIVE SL=" + DoubleToString(g_maxGridTrailSL_Sell, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)), clrLime, COLOR_SECTION_MAXTRAIL); row++;
                 }
+             }
+
+             // v6.57/v6.58/v6.59: Sequential Hedge Recovery status
+             if(InpHedge_SequentialRecovery && (g_hedgeSetCount > 0 || g_sequentialRecoveryActive))
+             {
+                string seqInfo;
+                if(g_sequentialRecoveryActive)
+                {
+                   // v6.60: owner-locked → show what's holding the queue (strict count, excludes hedges)
+                   int ownerRemain = CountSequentialOwnerOrders(g_sequentialRecoveryGen);
+                   seqInfo = "LOCKED | Owner Gen" + IntegerToString(g_sequentialRecoveryGen) +
+                             " (Src H" + IntegerToString(g_sequentialRecoverySetIdx + 1) + ")" +
+                             " | " + IntegerToString(ownerRemain) + " order(s) left";
+                   if(g_hedgeSetCount > 0) seqInfo += " | Wait: " + IntegerToString(g_hedgeSetCount) + " set(s)";
+                }
+                else if(g_hedgeSetCount > 0)
+                {
+                   int oldestIdx = FindOldestActiveHedgeSet();
+                   seqInfo = "Sequential | Next Unlock: H" + IntegerToString(oldestIdx + 1) + " (1/tick)";
+                   int pendingCount = g_hedgeSetCount - 1;
+                   if(pendingCount > 0) seqInfo += " | Wait: " + IntegerToString(pendingCount) + " set(s)";
+                }
+                DrawTableRow(row, "Hedge Recovery", seqInfo, clrAqua, COLOR_SECTION_HEDGE); row++;
+                // v6.58: PrevHedged lock count
+                if(g_prevHedgedCount > 0)
+                {
+                   string phInfo = IntegerToString(g_prevHedgedCount) + " ticket(s) locked from re-hedge";
+                   DrawTableRow(row, "PrevHedged", phInfo, clrOrange, COLOR_SECTION_HEDGE); row++;
+                }
+             }
+
+             // v6.57: Recovery Grid mode indicator
+             if(Recovery_UseSeparate)
+             {
+                string recInfo = "Separate | Max:" + IntegerToString(Recovery_MaxTrades) +
+                                 " | Dist:" + IntegerToString(Recovery_Points) + "p";
+                DrawTableRow(row, "Recovery Grid", recInfo, clrCyan, COLOR_SECTION_HEDGE); row++;
              }
          }
 
@@ -7370,6 +7445,100 @@ void ClearPrevHedgedTickets()
 //+------------------------------------------------------------------+
 //| v6.26: Save remaining bound tickets to prevHedged before deactivation |
 //+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| v6.59: Sequential Recovery Owner — exclusive recovery lock         |
+//+------------------------------------------------------------------+
+bool HasSequentialRecoveryOwner()
+{
+   return g_sequentialRecoveryActive;
+}
+
+bool IsSequentialRecoveryGen(int gen)
+{
+   if(!g_sequentialRecoveryActive) return false;
+   return (g_sequentialRecoveryGen == gen);
+}
+
+// Count remaining EA positions of a given generation (any side, including bound/recovery)
+int CountAllGenPositions(int gen)
+{
+   int count = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      string comment = PositionGetString(POSITION_COMMENT);
+      int orderGen = ExtractGeneration(comment);
+      if(orderGen == gen) count++;
+   }
+   return count;
+}
+
+// v6.60: Strict owner counter — counts ONLY normal recovery orders for a specific generation
+// Excludes hedge/reverse-hedge/grid-hedge comments so Gen0 (GM) is not polluted by GM_HEDGE_*, GM_HG*, GM_RHEDGE*
+int CountSequentialOwnerOrders(int gen)
+{
+   if(gen < 0) return 0;
+   string genPrefix = (gen == 0) ? "GM_" : ("GM" + IntegerToString(gen) + "_");
+   int prefixLen = StringLen(genPrefix);
+   int count = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      string comment = PositionGetString(POSITION_COMMENT);
+      // Must start exactly with this generation's prefix (e.g. "GM_" not "GM1_")
+      if(StringFind(comment, genPrefix) != 0) continue;
+      // Exclude hedge-family comments — those belong to hedge sets, not recovery owner
+      string suffix = StringSubstr(comment, prefixLen);
+      if(StringFind(suffix, "HEDGE") == 0) continue;   // GM_HEDGE_*
+      if(StringFind(suffix, "HG") == 0) continue;      // GM_HG*
+      if(StringFind(suffix, "RHEDGE") == 0) continue;  // GM_RHEDGE*
+      count++;
+   }
+   return count;
+}
+
+bool IsSequentialRecoveryComplete()
+{
+   if(!g_sequentialRecoveryActive) return true;
+   return (CountSequentialOwnerOrders(g_sequentialRecoveryGen) == 0);  // v6.60: strict count
+}
+
+void SetSequentialRecoveryOwner(int hedgeSetIdx, int gen)
+{
+   if(!InpHedge_SequentialRecovery) return;
+   if(g_sequentialRecoveryActive) return;  // do not override existing owner
+   if(gen < 0) return;  // v6.60: allow Gen0 (GM) to claim ownership
+   // v6.60: only lock if the released set still has normal recovery orders open
+   int remain = CountSequentialOwnerOrders(gen);
+   if(remain == 0)
+   {
+      Print("v6.60 SEQ OWNER SKIP: Gen", gen, " has 0 released recovery orders (Set#", hedgeSetIdx + 1, ")");
+      return;
+   }
+   g_sequentialRecoveryGen    = gen;
+   g_sequentialRecoverySetIdx = hedgeSetIdx;
+   g_sequentialRecoveryActive = true;
+   Print("v6.60 SEQ OWNER: Gen", gen, " claimed from Set#", hedgeSetIdx + 1,
+         " | ", remain, " recovery order(s) — other hedge sets blocked until flat");
+}
+
+void ClearSequentialRecoveryOwner(string reason)
+{
+   if(!g_sequentialRecoveryActive) return;
+   Print("v6.60 SEQ COMPLETE: Gen", g_sequentialRecoveryGen,
+         " flat (", reason, ") -> unlock next set next tick");
+   g_sequentialRecoveryGen    = -1;
+   g_sequentialRecoverySetIdx = -1;
+   g_sequentialRecoveryActive = false;
+   g_sequentialRecoveryCompletedThisTick = true;  // skip releasing next set this tick
+}
+
 void SaveBoundTicketsToPrevHedged(int idx)
 {
    if(g_hedgeSets[idx].triggerType != 1) return;  // only DD-triggered sets
@@ -7490,6 +7659,134 @@ void CheckBalanceGuard()
    }
 }
 
+//+------------------------------------------------------------------+
+//| v6.57: Recovery Grid getters — fall back to GridLoss_* when off    |
+//+------------------------------------------------------------------+
+int GetRecoveryMaxTrades()
+{
+   return Recovery_UseSeparate ? Recovery_MaxTrades : GridLoss_MaxTrades;
+}
+ENUM_LOT_MODE GetRecoveryLotMode()
+{
+   return Recovery_UseSeparate ? Recovery_LotMode : GridLoss_LotMode;
+}
+double GetRecoveryAddLotPerLevel()
+{
+   return Recovery_UseSeparate ? Recovery_AddLotPerLevel : GridLoss_AddLotPerLevel;
+}
+double GetRecoveryMultiplyFactor()
+{
+   return Recovery_UseSeparate ? Recovery_MultiplyFactor : GridLoss_MultiplyFactor;
+}
+ENUM_GAP_TYPE GetRecoveryGapType()
+{
+   return Recovery_UseSeparate ? Recovery_GapType : GridLoss_GapType;
+}
+int GetRecoveryPoints()
+{
+   return Recovery_UseSeparate ? Recovery_Points : GridLoss_Points;
+}
+string GetRecoveryCustomDistance()
+{
+   return Recovery_UseSeparate ? Recovery_CustomDistance : GridLoss_CustomDistance;
+}
+string GetRecoveryCustomLots()
+{
+   return Recovery_UseSeparate ? Recovery_CustomLots : GridLoss_CustomLots;
+}
+ENUM_TIMEFRAMES GetRecoveryATR_TF()
+{
+   return Recovery_UseSeparate ? Recovery_ATR_TF : GridLoss_ATR_TF;
+}
+int GetRecoveryATR_Period()
+{
+   return Recovery_UseSeparate ? Recovery_ATR_Period : GridLoss_ATR_Period;
+}
+double GetRecoveryATR_Multiplier()
+{
+   return Recovery_UseSeparate ? Recovery_ATR_Multiplier : GridLoss_ATR_Multiplier;
+}
+ENUM_ATR_REF GetRecoveryATR_Reference()
+{
+   return Recovery_UseSeparate ? Recovery_ATR_Reference : GridLoss_ATR_Reference;
+}
+int GetRecoveryMinGapPoints()
+{
+   return Recovery_UseSeparate ? Recovery_MinGapPoints : GridLoss_MinGapPoints;
+}
+int GetRecoveryCandleConfirm()
+{
+   return Recovery_UseSeparate ? Recovery_CandleConfirm : GridLoss_CandleConfirm;
+}
+
+// Compute Recovery grid distance (points) for level (0-based)
+double GetRecoveryGridDistancePoints(int level)
+{
+   ENUM_GAP_TYPE gt = GetRecoveryGapType();
+   if(gt == GAP_FIXED)
+      return (double)GetRecoveryPoints();
+   if(gt == GAP_CUSTOM)
+      return ParseCustomValue(GetRecoveryCustomDistance(), level);
+   // ATR
+   double atrVal = CalculateSimplifiedATR(_Symbol, GetRecoveryATR_TF(), GetRecoveryATR_Period());
+   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   if(atrVal > 0 && point > 0)
+   {
+      double atrDist = atrVal * GetRecoveryATR_Multiplier() / point;
+      return MathMax(atrDist, (double)GetRecoveryMinGapPoints());
+   }
+   return (double)GetRecoveryPoints();
+}
+
+// Compute Recovery grid lot using mode + maxExisting continuation
+double ComputeRecoveryGridLot(double maxExisting, int level)
+{
+   ENUM_LOT_MODE mode = GetRecoveryLotMode();
+   double lots = InitialLotSize;
+   if(mode == LOT_ADD)
+      lots = InitialLotSize + InitialLotSize * GetRecoveryAddLotPerLevel() * (level + 1);
+   else if(mode == LOT_CUSTOM)
+      lots = ParseCustomValue(GetRecoveryCustomLots(), level);
+   else // LOT_MULTIPLY
+      lots = InitialLotSize * MathPow(GetRecoveryMultiplyFactor(), level + 1);
+
+   if(maxExisting > 0 && lots <= maxExisting)
+   {
+      if(mode == LOT_MULTIPLY)
+         lots = maxExisting * GetRecoveryMultiplyFactor();
+      else if(mode == LOT_ADD)
+         lots = maxExisting + InitialLotSize * GetRecoveryAddLotPerLevel();
+   }
+   return lots;
+}
+
+//+------------------------------------------------------------------+
+//| v6.57: Find the oldest active hedge set (FIFO ordering)            |
+//| Returns -1 if no active set                                        |
+//+------------------------------------------------------------------+
+int FindOldestActiveHedgeSet()
+{
+   int oldest = -1;
+   datetime oldestTime = 0;
+   for(int h = 0; h < MAX_HEDGE_SETS; h++)
+   {
+      if(!g_hedgeSets[h].active) continue;
+      datetime t = g_hedgeSets[h].hedgeOpenTime;
+      if(t == 0)
+      {
+         // fallback: try live ticket
+         if(g_hedgeSets[h].hedgeTicket > 0 && PositionSelectByTicket(g_hedgeSets[h].hedgeTicket))
+            t = (datetime)PositionGetInteger(POSITION_TIME);
+      }
+      if(oldest < 0 || (t > 0 && t < oldestTime) || oldestTime == 0)
+      {
+         oldest = h;
+         oldestTime = t;
+      }
+   }
+   return oldest;
+}
+
 
 //| Get lot cap for new orders when hedge set has bound orders          |
 //| Returns -1 if no hedge set exists for this side (no cap)           |
@@ -7558,6 +7855,7 @@ int CountUnboundOrders(ENUM_POSITION_TYPE side, double &totalLots, double &total
       string comment = PositionGetString(POSITION_COMMENT);
       if(IsHedgeComment(comment)) continue;
       if(IsTicketBound(ticket)) continue;  // skip tickets already bound to a set
+      if(IsPrevHedgedTicket(ticket)) continue;  // v6.58: skip released-from-hedge tickets
       // v6.18: Generation filter — only count orders from specified generation
       if(genFilter >= 0)
       {
@@ -7703,6 +8001,7 @@ void CheckAndOpenHedge()
          string cmt = PositionGetString(POSITION_COMMENT);
          if(IsHedgeComment(cmt)) continue;
          if(IsTicketBound(ticket)) continue;  // already bound to another set
+         if(IsPrevHedgedTicket(ticket)) continue;  // v6.58: never re-bind released tickets
          // v6.19: Generation filter — only bind orders from current generation
          int orderGen = ExtractGeneration(cmt);
          if(orderGen < 0) continue;
@@ -7735,8 +8034,13 @@ void CheckAndOpenHedge()
        // Calculate Price Zone: find hedge open price + oldest bound order open price
        double hOpenPrice = 0;
        if(g_hedgeSets[slot].hedgeTicket > 0 && PositionSelectByTicket(g_hedgeSets[slot].hedgeTicket))
-          hOpenPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-       g_hedgeSets[slot].hedgeOpenPrice = hOpenPrice;
+           hOpenPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+        g_hedgeSets[slot].hedgeOpenPrice = hOpenPrice;
+        // v6.57: record hedge open time for sequential FIFO ordering
+        if(g_hedgeSets[slot].hedgeTicket > 0 && PositionSelectByTicket(g_hedgeSets[slot].hedgeTicket))
+           g_hedgeSets[slot].hedgeOpenTime = (datetime)PositionGetInteger(POSITION_TIME);
+        else
+           g_hedgeSets[slot].hedgeOpenTime = TimeCurrent();
        
        // Find oldest bound order's open price (earliest open time)
        double oldestPrice = 0;
@@ -7918,6 +8222,7 @@ bool OpenDDHedge(ENUM_POSITION_TYPE counterSide, ENUM_POSITION_TYPE hedgeSide, i
    ArrayResize(g_hedgeSets[slot].gridTickets, 0);
    g_hedgeSets[slot].commentPrefix = comment;
    g_hedgeSets[slot].triggerType = 1;  // DD-triggered
+   g_hedgeSets[slot].hedgeOpenTime = TimeCurrent();  // v6.57: temporary; refined after ticket lookup
    
    // Find the hedge ticket
    g_hedgeSets[slot].hedgeTicket = 0;
@@ -7930,6 +8235,7 @@ bool OpenDDHedge(ENUM_POSITION_TYPE counterSide, ENUM_POSITION_TYPE hedgeSide, i
       if(PositionGetString(POSITION_COMMENT) == comment)
       {
          g_hedgeSets[slot].hedgeTicket = ticket;
+         g_hedgeSets[slot].hedgeOpenTime = (datetime)PositionGetInteger(POSITION_TIME);  // v6.57
          break;
       }
    }
@@ -7948,6 +8254,7 @@ bool OpenDDHedge(ENUM_POSITION_TYPE counterSide, ENUM_POSITION_TYPE hedgeSide, i
       string cmt = PositionGetString(POSITION_COMMENT);
       if(IsHedgeComment(cmt)) continue;
       if(IsTicketBound(ticket)) continue;
+      if(IsPrevHedgedTicket(ticket)) continue;  // v6.58: never re-bind released tickets
       // v6.18: Generation filter — only bind current generation orders
       int orderGen = ExtractGeneration(cmt);
       if(orderGen < 0) continue;
@@ -8036,7 +8343,17 @@ void CloseAllHedgeGridOrders(int idx)
 void RecoverHedgeSets()
 {
    int recovered = 0;
-   
+
+   // v6.57: If account is fully flat → reset persisted cycle gen immediately
+   if(PositionsTotal() == 0)
+   {
+      if(GlobalVariableCheck(GV_CycleGenKey()))
+         GlobalVariableDel(GV_CycleGenKey());
+      g_cycleGeneration = 0;
+      Print("v6.57 RecoverHedgeSets: account flat → cycleGen reset to 0");
+      return;
+   }
+
    // Step 0: Determine current cycle generation from existing positions
    int maxGen = 0;
    for(int i = PositionsTotal() - 1; i >= 0; i--)
@@ -8085,6 +8402,7 @@ void RecoverHedgeSets()
               g_hedgeSets[h].hedgedDuringExpansion = true;
              // Zone prices will be recalculated after bound tickets are rebuilt (Step 2)
              g_hedgeSets[h].hedgeOpenPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+             g_hedgeSets[h].hedgeOpenTime  = (datetime)PositionGetInteger(POSITION_TIME);  // v6.57
              g_hedgeSets[h].zoneUpperPrice = 0;
              g_hedgeSets[h].zoneLowerPrice = 0;
              g_hedgeSets[h].oldestBoundPrice = 0;
@@ -8124,6 +8442,7 @@ void RecoverHedgeSets()
          string cmt = PositionGetString(POSITION_COMMENT);
          if(IsHedgeComment(cmt)) continue;
          if(IsTicketBound(ticket)) continue;
+         if(IsPrevHedgedTicket(ticket)) continue;  // v6.58: never re-bind released tickets
          
          // Only bind orders from older generations (not current cycle)
          int orderGen = ExtractGeneration(cmt);
@@ -8577,6 +8896,19 @@ void ManageOrphanGrid()
       if(!g_orphanGroups[g].active) continue;
       
       int gen = g_orphanGroups[g].generation;
+      // v6.59: Sequential Recovery Owner — only the owner generation may run recovery grid
+      if(InpHedge_SequentialRecovery && g_sequentialRecoveryActive
+         && gen != g_sequentialRecoveryGen)
+      {
+         static datetime s_lastSeqSkipLog = 0;
+         if(TimeCurrent() - s_lastSeqSkipLog >= 30)
+         {
+            Print("v6.59 SEQ WAIT: Skip orphan Gen", gen,
+                  " (owner=Gen", g_sequentialRecoveryGen, ")");
+            s_lastSeqSkipLog = TimeCurrent();
+         }
+         continue;
+      }
       string prefix = GenPrefix(gen);
       
       // Re-count fresh each tick to detect if orders were closed
@@ -8601,15 +8933,17 @@ void ManageOrphanGrid()
       }
       
       if(NormalOrderCount() >= MaxOpenOrders) return;
-      if(glb >= GridLoss_MaxTrades && gls >= GridLoss_MaxTrades) continue;
+      // v6.57: use Recovery getters (falls back to GridLoss_* when Recovery_UseSeparate=false)
+      int recMax = GetRecoveryMaxTrades();
+      int recCC  = GetRecoveryCandleConfirm();
+      if(glb >= recMax && gls >= recMax) continue;
       
       // === BUY side orphan grid ===
-      if(bc > 0 && glb < GridLoss_MaxTrades)
+      if(bc > 0 && glb < recMax)
       {
           if(!g_squeezeBuyBlocked)
           {
-             // v6.40: Candle Confirmation for orphan BUY GL
-             if(GridLoss_CandleConfirm > 0 && !HasCandleConfirmation(POSITION_TYPE_BUY, PERIOD_CURRENT, GridLoss_CandleConfirm)) { /* skip */ }
+             if(recCC > 0 && !HasCandleConfirmation(POSITION_TYPE_BUY, PERIOD_CURRENT, recCC)) { /* skip */ }
              else
              {
             double lastPrice = 0;
@@ -8619,30 +8953,21 @@ void ManageOrphanGrid()
             
             if(lastPrice > 0)
             {
-               double distance = GetGridDistance(glb, true);
+               double distance = GetRecoveryGridDistancePoints(glb);  // v6.57
                if(distance > 0)
                {
                   double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
                   if(currentPrice <= lastPrice - distance * point)
                   {
                      int nextLevel = mglb + 1;
-                     double lots = CalculateGridLot(glb, true);
-                     
-                     // Ensure lot continuation
                      double maxExisting = FindMaxLotOrphan(gen, POSITION_TYPE_BUY);
-                     if(maxExisting > 0 && lots <= maxExisting)
-                     {
-                        if(GridLoss_LotMode == LOT_MULTIPLY)
-                           lots = maxExisting * GridLoss_MultiplyFactor;
-                        else if(GridLoss_LotMode == LOT_ADD)
-                           lots = maxExisting + InitialLotSize * GridLoss_AddLotPerLevel;
-                     }
+                     double lots = ComputeRecoveryGridLot(maxExisting, glb);  // v6.57
                      
                      string comment = prefix + "_GL#" + IntegerToString(nextLevel);
                       if(OpenOrder(ORDER_TYPE_BUY, lots, comment))
                       {
                          g_lastOrphanGridCandleTime = iTime(_Symbol, PERIOD_CURRENT, 0);
-                         Print("ORPHAN GRID: Opened BUY ", prefix, "_GL#", nextLevel,
+                         Print("ORPHAN/RECOVERY GRID: Opened BUY ", prefix, "_GL#", nextLevel,
                                " lots=", DoubleToString(lots, 2), " for Gen", gen);
                       }
                   }
@@ -8653,12 +8978,11 @@ void ManageOrphanGrid()
        }
       
       // === SELL side orphan grid ===
-      if(sc > 0 && gls < GridLoss_MaxTrades)
+      if(sc > 0 && gls < recMax)
       {
           if(!g_squeezeSellBlocked)
           {
-             // v6.40: Candle Confirmation for orphan SELL GL
-             if(GridLoss_CandleConfirm > 0 && !HasCandleConfirmation(POSITION_TYPE_SELL, PERIOD_CURRENT, GridLoss_CandleConfirm)) { /* skip */ }
+             if(recCC > 0 && !HasCandleConfirmation(POSITION_TYPE_SELL, PERIOD_CURRENT, recCC)) { /* skip */ }
              else
              {
             double lastPrice = 0;
@@ -8668,30 +8992,21 @@ void ManageOrphanGrid()
             
             if(lastPrice > 0)
             {
-               double distance = GetGridDistance(gls, true);
+               double distance = GetRecoveryGridDistancePoints(gls);  // v6.57
                if(distance > 0)
                {
                   double currentPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
                   if(currentPrice >= lastPrice + distance * point)
                   {
                      int nextLevel = mgls + 1;
-                     double lots = CalculateGridLot(gls, true);
-                     
-                     // Ensure lot continuation
                      double maxExisting = FindMaxLotOrphan(gen, POSITION_TYPE_SELL);
-                     if(maxExisting > 0 && lots <= maxExisting)
-                     {
-                        if(GridLoss_LotMode == LOT_MULTIPLY)
-                           lots = maxExisting * GridLoss_MultiplyFactor;
-                        else if(GridLoss_LotMode == LOT_ADD)
-                           lots = maxExisting + InitialLotSize * GridLoss_AddLotPerLevel;
-                     }
+                     double lots = ComputeRecoveryGridLot(maxExisting, gls);  // v6.57
                      
                      string comment = prefix + "_GL#" + IntegerToString(nextLevel);
                       if(OpenOrder(ORDER_TYPE_SELL, lots, comment))
                       {
                          g_lastOrphanGridCandleTime = iTime(_Symbol, PERIOD_CURRENT, 0);
-                         Print("ORPHAN GRID: Opened SELL ", prefix, "_GL#", nextLevel,
+                         Print("ORPHAN/RECOVERY GRID: Opened SELL ", prefix, "_GL#", nextLevel,
                                " lots=", DoubleToString(lots, 2), " for Gen", gen);
                        }
                    }
@@ -8763,6 +9078,12 @@ void ManageHedgeSets()
    
    // v6.15: Reverse Hedge management removed (no ManageReverseHedge / CheckAndOpenReverseHedge)
    
+   // v6.59: Sequential Recovery Owner — clear when owner generation is fully closed
+   g_sequentialRecoveryCompletedThisTick = false;
+   if(g_sequentialRecoveryActive && IsSequentialRecoveryComplete())
+      ClearSequentialRecoveryOwner("owner gen flat");
+   
+   bool sequentialActed = false;  // v6.58: only one hedge set may close/recover per tick
    for(int h = 0; h < MAX_HEDGE_SETS; h++)
    {
       if(!g_hedgeSets[h].active) continue;
@@ -8790,12 +9111,15 @@ void ManageHedgeSets()
          // Hedge was closed externally (accumulate close, manual, etc.)
          Print("HEDGE Set#", h + 1, " ticket no longer exists. Deactivating.");
          CloseAllHedgeGridOrders(h);
+         int extGen = g_hedgeSets[h].boundGeneration;  // v6.59: capture before clear
          SaveBoundTicketsToPrevHedged(h);  // v6.26: remember released tickets
          g_hedgeSets[h].active = false;
          g_hedgeSets[h].boundTicketCount = 0;
          ArrayResize(g_hedgeSets[h].boundTickets, 0);
             g_hedgeSetCount--;
             g_lastHedgeCloseTime = TimeCurrent();  // v6.25: cooldown after set close
+            // v6.59: claim recovery owner if released bound orders remain open
+            SetSequentialRecoveryOwner(h, extGen);
             // v6.27: Safe reset — only if truly flat
             TryResetCycleStateIfFlat("external close");
           continue;
@@ -8811,7 +9135,42 @@ void ManageHedgeSets()
       }
       
       // === Gate passed — close logic allowed ===
-      
+
+      // === v6.57/v6.58/v6.59: Sequential Recovery ===
+      // v6.59: If a recovery owner exists → block ALL hedge-set release/recovery
+      //        until that owner generation is fully closed. Hedges may still open.
+      // v6.58: Otherwise enforce one-set-per-tick on the OLDEST active set.
+      if(InpHedge_SequentialRecovery)
+      {
+         // v6.59: Owner active → block every set's release/recovery this tick
+         if(g_sequentialRecoveryActive)
+         {
+            g_hedgeSets[h].matchingDone = false;
+            continue;
+         }
+         // v6.59: Just completed handoff this tick → wait one more tick
+         if(g_sequentialRecoveryCompletedThisTick)
+         {
+            g_hedgeSets[h].matchingDone = false;
+            continue;
+         }
+         // v6.58: if any set already acted this tick → block all remaining sets
+         if(sequentialActed)
+         {
+            g_hedgeSets[h].matchingDone = false;
+            continue;
+         }
+         int oldestActiveIdx = FindOldestActiveHedgeSet();
+         if(oldestActiveIdx >= 0 && h != oldestActiveIdx)
+         {
+            // Reset matchingDone so when this set becomes oldest, recovery re-runs fresh
+            g_hedgeSets[h].matchingDone = false;
+            continue;
+         }
+         // This set IS the oldest → mark that we're acting on it this tick
+         sequentialActed = true;
+      }
+
       // If in grid mode → execute grid
       if(g_hedgeSets[h].gridMode)
       {
@@ -9471,12 +9830,14 @@ bool ManageHedgeBoundAvgTP(int idx)
    // Close hedge order
    trade.PositionClose(g_hedgeSets[idx].hedgeTicket);
    CloseAllHedgeGridOrders(idx);
+   int avgGen = g_hedgeSets[idx].boundGeneration;  // v6.59: capture before clear
    SaveBoundTicketsToPrevHedged(idx);
    g_hedgeSets[idx].active = false;
    g_hedgeSets[idx].boundTicketCount = 0;
    ArrayResize(g_hedgeSets[idx].boundTickets, 0);
    g_hedgeSetCount--;
    g_lastHedgeCloseTime = TimeCurrent();
+   SetSequentialRecoveryOwner(idx, avgGen);  // v6.59: claim recovery owner
    TryResetCycleStateIfFlat("AvgTP release");
    Sleep(100);
 
@@ -9594,18 +9955,20 @@ void ManageHedgeMatchingClose(int idx)
        // v6.55: Do NOT close bound loss orders — release them as recovery orders
        Print("HEDGE MATCHING v6.55 Set#", idx + 1, ": releasing ", g_hedgeSets[idx].boundTicketCount, " bound orders to recovery (not closing)");
 
-       // Deactivate hedge set — bound orders remain open as recovery
-        CloseAllHedgeGridOrders(idx);
-        SaveBoundTicketsToPrevHedged(idx);  // v6.26
-        g_hedgeSets[idx].active = false;
-        g_hedgeSets[idx].boundTicketCount = 0;
-        ArrayResize(g_hedgeSets[idx].boundTickets, 0);
-          g_hedgeSetCount--;
-          g_lastHedgeCloseTime = TimeCurrent();  // v6.25: cooldown after set close
-          // v6.27: Safe reset — only if truly flat
-          TryResetCycleStateIfFlat("matching close");
-        Sleep(100);
-    }
+        // Deactivate hedge set — bound orders remain open as recovery
+         CloseAllHedgeGridOrders(idx);
+         int matchGen = g_hedgeSets[idx].boundGeneration;  // v6.59
+         SaveBoundTicketsToPrevHedged(idx);  // v6.26
+         g_hedgeSets[idx].active = false;
+         g_hedgeSets[idx].boundTicketCount = 0;
+         ArrayResize(g_hedgeSets[idx].boundTickets, 0);
+           g_hedgeSetCount--;
+           g_lastHedgeCloseTime = TimeCurrent();  // v6.25: cooldown after set close
+           SetSequentialRecoveryOwner(idx, matchGen);  // v6.59: claim recovery owner
+           // v6.27: Safe reset — only if truly flat
+           TryResetCycleStateIfFlat("matching close");
+         Sleep(100);
+     }
      else
      {
         // No losses can be matched → close hedge + release all bound orders to normal
@@ -9614,19 +9977,21 @@ void ManageHedgeMatchingClose(int idx)
               " | Releasing ", g_hedgeSets[idx].boundTicketCount, " bound orders to normal trading");
         trade.PositionClose(g_hedgeSets[idx].hedgeTicket);
 
-        // Release all bound orders → they return to normal trading system
-         CloseAllHedgeGridOrders(idx);
-         SaveBoundTicketsToPrevHedged(idx);  // v6.26
-         g_hedgeSets[idx].active = false;
-         g_hedgeSets[idx].boundTicketCount = 0;
-         ArrayResize(g_hedgeSets[idx].boundTickets, 0);
-         g_hedgeSets[idx].gridMode = false;
-         g_hedgeSetCount--;
-          g_lastHedgeCloseTime = TimeCurrent();  // v6.25: cooldown after set close
-          // v6.27: Safe reset — only if truly flat
-          TryResetCycleStateIfFlat("release close");
-        Sleep(100);
-     }
+         // Release all bound orders → they return to normal trading system
+          CloseAllHedgeGridOrders(idx);
+          int relGen = g_hedgeSets[idx].boundGeneration;  // v6.59
+          SaveBoundTicketsToPrevHedged(idx);  // v6.26
+          g_hedgeSets[idx].active = false;
+          g_hedgeSets[idx].boundTicketCount = 0;
+          ArrayResize(g_hedgeSets[idx].boundTickets, 0);
+          g_hedgeSets[idx].gridMode = false;
+          g_hedgeSetCount--;
+           g_lastHedgeCloseTime = TimeCurrent();  // v6.25: cooldown after set close
+           SetSequentialRecoveryOwner(idx, relGen);  // v6.59: claim recovery owner
+           // v6.27: Safe reset — only if truly flat
+           TryResetCycleStateIfFlat("release close");
+         Sleep(100);
+      }
 }
 
 //+------------------------------------------------------------------+
@@ -9747,10 +10112,12 @@ void ManageHedgeGridMode(int idx)
             {
                trade.PositionClose(g_hedgeSets[idx].hedgeTicket);
                 CloseAllHedgeGridOrders(idx);
+                int gridGen = g_hedgeSets[idx].boundGeneration;  // v6.59
                 SaveBoundTicketsToPrevHedged(idx);  // v6.26
                  g_hedgeSets[idx].active = false;
                  g_hedgeSetCount--;
                   g_lastHedgeCloseTime = TimeCurrent();  // v6.25: cooldown after set close
+                  SetSequentialRecoveryOwner(idx, gridGen);  // v6.59
                   // v6.27: Safe reset — only if truly flat
                   TryResetCycleStateIfFlat("grid recover");
                  Print("HEDGE Set#", idx + 1, " fully recovered via grid mode.");
@@ -9781,10 +10148,12 @@ void ManageHedgeGridMode(int idx)
          if(StringFind(comment, prefix) >= 0)
             trade.PositionClose(ticket);
       }
+       int cleanupGen = g_hedgeSets[idx].boundGeneration;  // v6.59
        SaveBoundTicketsToPrevHedged(idx);  // v6.26
        g_hedgeSets[idx].active = false;
          g_hedgeSetCount--;
          g_lastHedgeCloseTime = TimeCurrent();  // v6.25: cooldown after set close
+         SetSequentialRecoveryOwner(idx, cleanupGen);  // v6.59
          // v6.27: Safe reset — only if truly flat
          TryResetCycleStateIfFlat("grid cleanup");
         Print("HEDGE Set#", idx + 1, " grid mode complete. All cleaned up.");
