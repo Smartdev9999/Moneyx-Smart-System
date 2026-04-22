@@ -7743,8 +7743,8 @@ int GetSequentialAllowedGeneration()
       if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
 
       string c = PositionGetString(POSITION_COMMENT);
-      // v6.61: hedge-only filter
-      if(StringFind(c, "GM_HD") != 0) continue;
+      // v6.62: hedge-only filter — match real comment prefix "GM_HEDGE_"
+      if(StringFind(c, "GM_HEDGE_") != 0) continue;
       int gen = ParseGenerationFromComment(c);
       if(gen >= 0 && gen < oldest) oldest = gen;
    }
