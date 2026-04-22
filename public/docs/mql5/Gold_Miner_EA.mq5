@@ -11114,16 +11114,40 @@ void ManageHedgeGridMode(int idx)
 
       if(distance >= requiredGap && distance > 0)
       {
+         // v6.69: New-Candle gate per set
+         if(Recovery_OnlyNewCandle)
+         {
+            datetime curBar = iTime(_Symbol, PERIOD_CURRENT, 0);
+            if(curBar == g_hedgeSets[idx].lastRecoveryGridBarTime)
+            {
+               static datetime s_lastSkipLog = 0;
+               if(TimeCurrent() - s_lastSkipLog >= 30)
+               {
+                  Print("v6.69 SKIP NEW-CANDLE Set#", idx + 1, " (Gen", g_hedgeSets[idx].boundGeneration, "): same bar");
+                  s_lastSkipLog = TimeCurrent();
+               }
+               return;
+            }
+         }
          ENUM_ORDER_TYPE orderType = (g_hedgeSets[idx].hedgeSide == POSITION_TYPE_BUY)
                                     ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
-         string comment = "GM_HG" + IntegerToString(idx + 1) + "_GL" + IntegerToString(currentGridCount + 1);
+         // v6.69: Comment format = GM_HD<gen>_<NN>  (e.g. Gen1 lvl 1 → GM_HD1_01)
+         int gen = g_hedgeSets[idx].boundGeneration;
+         string comment = "GM_HD" + IntegerToString(gen) + "_"
+                        + StringFormat("%02d", currentGridCount + 1);
 
          if(OpenOrder(orderType, nextLot, comment))
          {
             g_lastHedgeGridTime = TimeCurrent();
-            Print("HEDGE GRID Set#", idx + 1, " opened grid L", currentGridCount + 1,
+            g_hedgeSets[idx].lastRecoveryGridBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);  // v6.69
+            // v6.69: Track ticket for floater fallback (comment-loss safe)
+            ulong newTk = (ulong)trade.ResultOrder();
+            if(newTk == 0) newTk = (ulong)trade.ResultDeal();
+            if(newTk > 0) TrackRecoveryGridTicket(idx, newTk);
+            Print("HEDGE GRID Set#", idx + 1, " opened ", comment,
                   " lots=", DoubleToString(nextLot, 2),
-                  " gap=", DoubleToString(distance, 0), "/", DoubleToString(requiredGap, 0));
+                  " gap=", DoubleToString(distance, 0), "/", DoubleToString(requiredGap, 0),
+                  " tk=", newTk);
          }
       }
    }
