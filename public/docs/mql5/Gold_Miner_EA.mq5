@@ -9310,15 +9310,36 @@ void ManageOrphanGrid()
                   {
                      int nextLevel = mglb + 1;
                      double maxExisting = FindMaxLotOrphan(gen, POSITION_TYPE_BUY);
+                     // v6.66: enforce max grid cap on orphan recovery (Auto + Manual)
+                     int genGridCount = CountHedgeGridOrdersForGen(gen) + glb;
+                     if(genGridCount >= recMax)
+                     {
+                        static datetime s_lastOrphMaxLogB = 0;
+                        if(TimeCurrent() - s_lastOrphMaxLogB >= 60)
+                        {
+                           Print("v6.66 MAX GRID Gen", gen, " BUY reached ", genGridCount,
+                                 "/", recMax, " — wait for TP");
+                           s_lastOrphMaxLogB = TimeCurrent();
+                        }
+                        continue;
+                     }
                      double lots;
                      if(Recovery_AutoLot)
                      {
                         double remHedge = GetHedgeLotsForGen(gen);
-                        double existLots = SumOrphanGridLots(gen, POSITION_TYPE_BUY);
-                        lots = ComputeAutoRecoveryLot(remHedge, existLots, maxExisting);
+                        if(maxExisting <= 0)
+                        {
+                           lots = ComputeAutoSeedLot(remHedge);
+                           Print("v6.66 SEED Gen", gen, " BUY: rem=", DoubleToString(remHedge, 2),
+                                 " -> seed=", DoubleToString(lots, 2));
+                        }
+                        else
+                        {
+                           lots = ComputeAutoNextLot(maxExisting);
+                           Print("v6.66 NEXT Gen", gen, " BUY: last=", DoubleToString(maxExisting, 2),
+                                 " -> next=", DoubleToString(lots, 2));
+                        }
                         if(lots <= 0) continue;
-                        Print("v6.65 AUTO LOT Gen", gen, " BUY: rem=", DoubleToString(remHedge, 2),
-                              " used=", DoubleToString(existLots, 2), " -> next=", DoubleToString(lots, 2));
                      }
                      else
                         lots = ComputeRecoveryGridLot(maxExisting, glb);  // v6.57
@@ -9360,15 +9381,36 @@ void ManageOrphanGrid()
                   {
                      int nextLevel = mgls + 1;
                      double maxExisting = FindMaxLotOrphan(gen, POSITION_TYPE_SELL);
+                     // v6.66: enforce max grid cap on orphan recovery (Auto + Manual)
+                     int genGridCountS = CountHedgeGridOrdersForGen(gen) + gls;
+                     if(genGridCountS >= recMax)
+                     {
+                        static datetime s_lastOrphMaxLogS = 0;
+                        if(TimeCurrent() - s_lastOrphMaxLogS >= 60)
+                        {
+                           Print("v6.66 MAX GRID Gen", gen, " SELL reached ", genGridCountS,
+                                 "/", recMax, " — wait for TP");
+                           s_lastOrphMaxLogS = TimeCurrent();
+                        }
+                        continue;
+                     }
                      double lots;
                      if(Recovery_AutoLot)
                      {
                         double remHedge = GetHedgeLotsForGen(gen);
-                        double existLots = SumOrphanGridLots(gen, POSITION_TYPE_SELL);
-                        lots = ComputeAutoRecoveryLot(remHedge, existLots, maxExisting);
+                        if(maxExisting <= 0)
+                        {
+                           lots = ComputeAutoSeedLot(remHedge);
+                           Print("v6.66 SEED Gen", gen, " SELL: rem=", DoubleToString(remHedge, 2),
+                                 " -> seed=", DoubleToString(lots, 2));
+                        }
+                        else
+                        {
+                           lots = ComputeAutoNextLot(maxExisting);
+                           Print("v6.66 NEXT Gen", gen, " SELL: last=", DoubleToString(maxExisting, 2),
+                                 " -> next=", DoubleToString(lots, 2));
+                        }
                         if(lots <= 0) continue;
-                        Print("v6.65 AUTO LOT Gen", gen, " SELL: rem=", DoubleToString(remHedge, 2),
-                              " used=", DoubleToString(existLots, 2), " -> next=", DoubleToString(lots, 2));
                      }
                      else
                         lots = ComputeRecoveryGridLot(maxExisting, gls);  // v6.57
