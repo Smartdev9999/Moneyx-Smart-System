@@ -1,22 +1,19 @@
-## v6.60 — Sequential Release: Comment-Based Gen Scan + Match Pool (Bound Profit)
+## v6.61 — Sequential Gate ใช้ Hedge Comments เท่านั้น
 
-### ปัญหาเดิม
-1. **Match Close**: pool รวมแค่ hedge+reverse → ปิดเฉพาะ bound ที่ขาดทุน, bound ที่กำไรค้างไว้ → ชุดไม่สมดุล
-2. **Sequential Recovery**: gate ใช้ `GetOldestActiveHedgeSetIndex()` → หลัง deactivate set#A ทันที set#B เริ่ม recovery ทั้งที่ orphan ของ A ยังไม่หมด → 2 ชุดทำงานพร้อมกัน
+### ปัญหา
+v6.60 scan bound+hedge → หลัง matching close ปิด hedge Gen0 แต่ bound loss orders (`GM_GL#*`) ถูก release เป็น orphan → ParseGen=0 → allowed ค้างที่ 0 → Set#2-#6 freeze ค้าง
 
 ### แก้
-- `ParseGenerationFromComment()` — map "GM"/"GM_*"→0, "GMN_*"→N, "GM_HD(N+1)"→N
-- `GetSequentialAllowedGeneration()` — scan PositionsTotal() คืน gen ต่ำสุดที่ยังมีออเดอร์จริง (bound+hedge)
-- `ManageHedgeSets()` seqFreeze ใช้ `boundGeneration != g_seqAllowedGen` แทน slot index
-- `ManageHedgeMatchingClose()` — รวม `boundProfitPool` ของ counterSide ที่ pnl>0 เข้า budget + ปิด tickets เหล่านั้นหลัง close reverse
-- Dashboard: `Seq Release | ON | Allowed: GenN (GMN_*+GM_HD(N+1)) | Frozen Hedge: X | Frozen Orphans: Y`
+- `GetSequentialAllowedGeneration()` — เพิ่ม filter `if(StringFind(c, "GM_HD") != 0) continue;` → นับเฉพาะ hedge comments
+- `ManageOrphanGrid()` gate — เปลี่ยน `gen != seqAllowed` → `gen > seqAllowed` (orphan เก่า/เท่า → recover ได้, orphan ใหม่กว่า hedge → freeze)
+- Dashboard: `Allowed Hedge: GenN (GM_HD(N+1))` / `No active hedge — full trading + free orphan recovery`
 
 ### ไฟล์
-- `public/docs/mql5/Gold_Miner_EA.mq5` → v6.60
+- `public/docs/mql5/Gold_Miner_EA.mq5` → v6.61
 
 ### ไม่เปลี่ยน
-- Order Execution / Strategy / Entry signals / Grid distance / Lot calc
-- License / News / Time / Triple Gate / Hedge open trigger / Balance Guard / BB Filter
-- Initial entry ของ new cycle (v6.59) — ไม่ block
-- ManageOrphanGrid sequential gate (v6.58) — ใช้ `g_seqAllowedGen` ค่าใหม่
-- v6.37–v6.59 features
+- Order Execution / Strategy / Entry / Grid distance / Lot calc
+- License / News / Time / Triple Gate / Hedge open trigger / Matching Pool (v6.60) / BB Filter / Balance Guard
+- `ParseGenerationFromComment()` / `ManageHedgeSets()` freeze logic
+- Initial entry ของ new cycle (v6.59)
+- v6.37–v6.60 features
