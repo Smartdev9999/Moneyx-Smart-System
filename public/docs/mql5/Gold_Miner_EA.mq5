@@ -8167,16 +8167,15 @@ void SyncRecoveryBasketTP(int idx)
    }
    if(modified > 0)
    {
-      static datetime s_lastRecTpLog = 0;
-      if(TimeCurrent() - s_lastRecTpLog >= 10)
-      {
-         Print("v6.66 RECOVERY TP Set#", idx + 1,
-               ": avg=", DoubleToString(avg, digits),
-               " totalLots=", DoubleToString(totalLots, 2),
-               " tp=", DoubleToString(tpTarget, digits),
-               " modified=", modified, "/", cnt);
-         s_lastRecTpLog = TimeCurrent();
-      }
+      // v6.70: always log when at least one ticket modified — verify TP applies to recovery+floater
+      Print("v6.70 RECOVERY TP Set#", idx + 1,
+            ": hedge=", fromHedge,
+            " gridByComment=", fromComment,
+            " ticketOnly=", fromTicket,
+            " total=", cnt,
+            " avg=", DoubleToString(avg, digits),
+            " tp=", DoubleToString(tpTarget, digits),
+            " modified=", modified, "/", cnt);
    }
 }
 
