@@ -8220,51 +8220,27 @@ void RefreshBoundTickets(int idx)
 }
 
 //+------------------------------------------------------------------+
-//| Find free hedge set slot                                           |
+//| v6.68: Generation-Locked Hedge Slot                                |
+//|   slot index === bound generation; comment === GM_HEDGE_(slot+1)   |
+//|   Never reuses slot id while same-gen hedge is still active.       |
 //+------------------------------------------------------------------+
-int FindFreeHedgeSlot()
+int FindGenerationHedgeSlot(int bindGen)
 {
-   // v6.63: Persistent slot numbering — do not reuse slot numbers
-   //   while ANY hedge set is still active. Only reset to slot 0 (= GM_HEDGE_1)
-   //   when the entire hedge-set array is flat. This keeps comments sequential
-   //   (H1 → H2 → H3 → H4 …) so the user is never confused by reused IDs.
-   int  maxActiveSlot = -1;
-   bool anyActive     = false;
-   for(int h = 0; h < MAX_HEDGE_SETS; h++)
+   if(bindGen < 0 || bindGen >= MAX_HEDGE_SETS)
    {
-      if(g_hedgeSets[h].active)
-      {
-         anyActive = true;
-         if(h > maxActiveSlot) maxActiveSlot = h;
-      }
+      Print("v6.68 SLOT: bindGen=", bindGen, " out of range [0..", MAX_HEDGE_SETS-1, "] → reject");
+      return -1;
    }
-
-   if(!anyActive)
+   if(g_hedgeSets[bindGen].active)
    {
-      // All sets flat → safe to reset numbering back to GM_HEDGE_1
-      Print("v6.63 SLOT ASSIGN: all sets flat → reset to slot=0 (GM_HEDGE_1)");
-      return 0;
+      // Generation already has an active hedge — never overwrite, never reuse slot id
+      Print("v6.68 GEN-LOCK SKIP: gen=", bindGen,
+            " already hedged as GM_HEDGE_", bindGen + 1, " — skip new hedge for same gen");
+      return -1;
    }
-
-   // Use slot strictly after the highest active slot — never reuse middle gaps
-   int next = maxActiveSlot + 1;
-   if(next < MAX_HEDGE_SETS)
-   {
-      Print("v6.63 SLOT ASSIGN: maxActiveSlot=", maxActiveSlot,
-            " → new slot=", next, " (comment=GM_HEDGE_", next+1, ")");
-      return next;
-   }
-
-   // Array exhausted at the tail → fallback to any free middle slot to avoid overflow
-   for(int h = 0; h < MAX_HEDGE_SETS; h++)
-      if(!g_hedgeSets[h].active)
-      {
-         Print("v6.63 SLOT ASSIGN: tail full → fallback middle slot=", h,
-               " (comment=GM_HEDGE_", h+1, ")");
-         return h;
-      }
-
-   return -1;
+   Print("v6.68 SLOT ASSIGN: gen=", bindGen, " → slot=", bindGen,
+         " (comment=GM_HEDGE_", bindGen + 1, ")");
+   return bindGen;
 }
 
 //+------------------------------------------------------------------+
