@@ -7698,6 +7698,14 @@ void ManageRecoveryOwnerAvgTP()
 
    string prefix = GenPrefix(gen);
 
+   // v6.64: per-side cache for change detection — only sync TP when basket changes
+   //        (count, lots, gen, or avg price differs from last tick). This stops the
+   //        ping-pong with ClearBrokerTPSL and stops journal log spam.
+   static int    s_lastBasketCount[2] = {0, 0};
+   static double s_lastBasketLots[2]  = {0.0, 0.0};
+   static double s_lastAvgPrice[2]    = {0.0, 0.0};
+   static int    s_lastGen[2]         = {-1, -1};
+
    // Build basket per side: include normal gen orders + recovery seeds for this gen
    for(int sideI = 0; sideI < 2; sideI++)
    {
@@ -7734,7 +7742,15 @@ void ManageRecoveryOwnerAvgTP()
          basketTickets[basketCount++] = ticket;
       }
 
-      if(totalLots <= 0 || basketCount == 0) continue;
+      if(totalLots <= 0 || basketCount == 0)
+      {
+         // basket empty for this side — reset cache so next time it appears we sync fresh
+         s_lastBasketCount[sideI] = 0;
+         s_lastBasketLots[sideI]  = 0.0;
+         s_lastAvgPrice[sideI]    = 0.0;
+         s_lastGen[sideI]         = -1;
+         continue;
+      }
 
       double avgPrice  = totalWeighted / totalLots;
       double tpDist    = InpHedge_BoundAvgTPPoints * _Point;
@@ -7747,21 +7763,38 @@ void ManageRecoveryOwnerAvgTP()
       else
          tpReached = (SymbolInfoDouble(_Symbol, SYMBOL_ASK) <= avgPrice - tpDist);
 
-      // v6.63 FIX: Always sync Broker TP for owner basket (even before TP reached)
-      // This ensures GL orders opened AFTER hedge release get the correct avg TP
-      // and survive EA restart / connection drop.
-      for(int b = 0; b < basketCount; b++)
+      // v6.64: Only re-sync Broker TP when basket signature changes
+      // (new GL added, order closed, gen change, or avg shifted by > 1 point).
+      // Per user spec: "ควรจะแก้เมื่อมีออเดอร์ Generation เดียวกันเพิ่มขึ้นมาใหม่
+      //                 ไม่ใช่จะต้องรีเซ็ตตลอดเวลาแบบนี้"
+      bool basketChanged = (basketCount != s_lastBasketCount[sideI])
+                        || (MathAbs(totalLots - s_lastBasketLots[sideI]) > 0.001)
+                        || (gen != s_lastGen[sideI])
+                        || (MathAbs(avgPrice - s_lastAvgPrice[sideI]) > _Point);
+
+      if(basketChanged)
       {
-         if(!PositionSelectByTicket(basketTickets[b])) continue;
-         double curTP = PositionGetDouble(POSITION_TP);
-         double curSL = PositionGetDouble(POSITION_SL);
-         if(NormalizeDouble(curTP, _Digits) != tpPrice)
+         int syncedCnt = 0;
+         for(int b = 0; b < basketCount; b++)
          {
-            if(trade.PositionModify(basketTickets[b], curSL, tpPrice))
-               Print("v6.63 RECOV TP SYNC: Gen", gen, " #", basketTickets[b],
-                     " TP=", DoubleToString(tpPrice, _Digits),
-                     " (avg=", DoubleToString(avgPrice, _Digits), ")");
+            if(!PositionSelectByTicket(basketTickets[b])) continue;
+            double curTP = PositionGetDouble(POSITION_TP);
+            double curSL = PositionGetDouble(POSITION_SL);
+            if(NormalizeDouble(curTP, _Digits) != tpPrice)
+            {
+               if(trade.PositionModify(basketTickets[b], curSL, tpPrice))
+                  syncedCnt++;
+            }
          }
+         Print("v6.64 RECOV TP RECALC: Gen", gen, " side=", EnumToString(side),
+               " basket=", basketCount, " lots=", DoubleToString(totalLots, 2),
+               " avg=", DoubleToString(avgPrice, _Digits),
+               " TP=", DoubleToString(tpPrice, _Digits),
+               " synced=", syncedCnt);
+         s_lastBasketCount[sideI] = basketCount;
+         s_lastBasketLots[sideI]  = totalLots;
+         s_lastAvgPrice[sideI]    = avgPrice;
+         s_lastGen[sideI]         = gen;
       }
 
       if(!tpReached) continue;
@@ -7778,6 +7811,11 @@ void ManageRecoveryOwnerAvgTP()
             Sleep(30);
          }
       }
+      // basket about to be cleared — reset cache
+      s_lastBasketCount[sideI] = 0;
+      s_lastBasketLots[sideI]  = 0.0;
+      s_lastAvgPrice[sideI]    = 0.0;
+      s_lastGen[sideI]         = -1;
    }
 }
 
