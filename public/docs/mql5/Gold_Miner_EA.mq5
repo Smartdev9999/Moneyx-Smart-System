@@ -7686,10 +7686,14 @@ int ParseGenerationFromComment(string c)
 {
    if(c == "") return -1;
 
-   // v6.62: Hedge comment is "GM_HEDGE_<n>"  → gen = n - 1
+   // v6.63: Hedge comment is "GM_HEDGE_<n>" or "GM_HEDGE_D<n>" (DD-triggered)
+   //         → gen = n - 1 in both cases
    if(StringFind(c, "GM_HEDGE_") == 0)
    {
       string numStr = StringSubstr(c, 9);   // skip "GM_HEDGE_"
+      // v6.63: handle DD prefix "D<n>"
+      if(StringLen(numStr) > 0 && StringGetCharacter(numStr, 0) == 'D')
+         numStr = StringSubstr(numStr, 1);
       int n = (int)StringToInteger(numStr);
       if(n >= 1) return n - 1;
       return -1;
