@@ -5,8 +5,8 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.66"
-#property description "Gold Miner EA v6.66 - v6.65 + Smart Generation Recycling (re-anchor cycleGen เมื่อไม่มี active hedge แม้ orphan ค้าง) + Active Hedge Visibility (dashboard X/Max + log บล็อกชัดเจน)"
+#property version   "6.67"
+#property description "Gold Miner EA v6.67 - v6.66 + SeqRecovery Bypass for Profit-Hedge Close (hedge ที่กำไรพอ matching close ได้แม้มี seq owner ของ gen อื่น)"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -981,7 +981,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.66 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.67 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min");
@@ -1041,7 +1041,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.66 deinitialized");
+   Print("Gold Miner EA v6.67 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -3938,7 +3938,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.66 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.66 [ZZ]" : "Gold Miner EA v6.66 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.67 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.67 [ZZ]" : "Gold Miner EA v6.67 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -9764,11 +9764,22 @@ void ManageHedgeSets()
       
       // === Gate passed — close logic allowed ===
 
-      // === v6.57/v6.58/v6.59: Sequential Recovery ===
+      // === v6.57/v6.58/v6.59/v6.67: Sequential Recovery ===
       // v6.59: If a recovery owner exists → block ALL hedge-set release/recovery
       //        until that owner generation is fully closed. Hedges may still open.
       // v6.58: Otherwise enforce one-set-per-tick on the OLDEST active set.
-      if(InpHedge_SequentialRecovery)
+      // v6.67: BYPASS — if THIS hedge is profitable enough to matching-close (gate already passed),
+      //        allow it to close regardless of seq owner / oldest rule. Closing a profit hedge
+      //        only REDUCES exposure — it never harms the recovery owner generation.
+      bool seqBypass_profitClose = false;
+      if(InpHedge_UseMatchingClose && !g_hedgeSets[h].gridMode)
+      {
+         double _hPnL = 0;
+         if(hedgeExists) _hPnL = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+         if(_hPnL > InpHedge_MatchMinProfit) seqBypass_profitClose = true;
+      }
+
+      if(InpHedge_SequentialRecovery && !seqBypass_profitClose)
       {
          // v6.59: Owner active → block every set's release/recovery this tick
          if(g_sequentialRecoveryActive)
@@ -9797,6 +9808,10 @@ void ManageHedgeSets()
          }
          // This set IS the oldest → mark that we're acting on it this tick
          sequentialActed = true;
+      }
+      else if(seqBypass_profitClose && InpHedge_SequentialRecovery && (g_sequentialRecoveryActive || sequentialActed))
+      {
+         Print("v6.67 SEQ BYPASS: Set#", h+1, " profit-close allowed (hedge PnL > MatchMinProfit) despite seq owner Gen", g_sequentialRecoveryGen);
       }
 
       // If in grid mode → execute grid
