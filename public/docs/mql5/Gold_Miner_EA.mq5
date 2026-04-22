@@ -9177,8 +9177,10 @@ void ManageOrphanGrid()
                   if(currentPrice <= lastPrice - distance * point)
                   {
                      int nextLevel = mglb + 1;
-                     double maxExisting = FindMaxLotOrphan(gen, POSITION_TYPE_BUY);
-                     double lots = ComputeRecoveryGridLot(maxExisting, glb);  // v6.57
+                      // v6.61: cumulative-sum seed (closest level to InpRecovery_SeedTargetLots)
+                      double seedLot = FindCumulativeSeedLot(gen, POSITION_TYPE_BUY, InpRecovery_SeedTargetLots);
+                      double maxExisting = (seedLot > 0) ? seedLot : FindMaxLotOrphan(gen, POSITION_TYPE_BUY);
+                      double lots = ComputeRecoveryGridLot(maxExisting, glb);  // v6.57
                      
                      string comment = prefix + "_GL#" + IntegerToString(nextLevel);
                       if(OpenOrder(ORDER_TYPE_BUY, lots, comment))
