@@ -1,130 +1,133 @@
 
 
-## v6.62 — เริ่ม Comment ที่ GM1 + ผูก Hedge ตามรุ่น Bound (GM_Hedge_D{gen})
+## v6.63 — Fix Bound Order Detection หลัง Hedge Released: GL ใหม่ต้องเข้า Avg TP เสมอ
 
-### สรุปการเปลี่ยนชื่อ Comment
+### วินิจฉัยปัญหาจริงจากภาพ (GM4)
 
-ระบบเดิม (v6.61):
-- รุ่นแรกใช้ `GM_INIT`, `GM_GL#1`, ... → รุ่นถัดไปจึงเป็น `GM1_`, `GM2_`
-- Hedge ใช้เลข **slot index** (`GM_HEDGE_1`, `GM_HEDGE_D2`) → ไม่ผูกกับรุ่นของ bound group
+ภาพแสดง: GM4 เคยมี hedge (GM_Hedge_D4) ปลดไปแล้ว → มี GL#5/6/7/8 เปิดใหม่ทีหลัง → **GL#6-8 ตัวใหม่ไม่มี Broker TP (T/P=0.00) แม้ว่า GM4_INIT/GL#1-4 ตัวเก่าจะมี TP=4922.07 อยู่** → ราคาเฉลี่ยถูกล็อกค้างไว้ที่ basket เดิม ไม่รวม GL ใหม่
 
-ระบบใหม่ (v6.62) — ตามที่คุณต้องการ:
-- รุ่นแรกใช้ **`GM1_INIT`**, `GM1_GL#1`, ...  → ถัดไป `GM2_`, `GM3_`, ...
-- Hedge ผูกกับรุ่นของ bound group:  
-  - บล็อก `GM1` → `GM_Hedge_D1` (DD trigger) / `GM_Hedge_E1` (Expansion trigger)  
-  - บล็อก `GM2` → `GM_Hedge_D2` / `GM_Hedge_E2`  
-  - ฯลฯ
-- เมื่อปิดออเดอร์ทั้งหมด → reset กลับไปเริ่มที่ **GM1** วนซ้ำ (ไม่ใช่ GM)
-
-ตัวเลขท้าย Hedge = **boundGeneration ของกลุ่มนั้น**, ไม่ใช่ slot index → ไม่สับสน ไม่เปิดซ้อน
+ไล่ source code เจอ **3 บั๊กตามลำดับ** ที่ทำให้เกิดอาการนี้:
 
 ---
 
-### จุดที่ต้องแก้ใน `public/docs/mql5/Gold_Miner_EA.mq5`
-
-#### 1) Version bump → v6.62 (header / `#property` / dashboard / log)
-
-#### 2) เปลี่ยน base generation จาก 0 → 1
-
-| ฟังก์ชัน / ตัวแปร | เดิม | ใหม่ |
-|---|---|---|
-| `g_cycleGeneration` ค่าเริ่มต้น | `0` | `1` |
-| `GenPrefix(0)` | `"GM"` | (ไม่ใช้แล้ว) |
-| `GenPrefix(gen)` ทุกค่า | `gen==0?"GM":"GM"+gen` | `"GM" + IntegerToString(gen)` (เริ่มที่ 1 เสมอ) |
-| `GetCommentPrefix()` | คืน `"GM"` ตอน gen=0 | คืน `"GM"+gen` เสมอ (ขั้นต่ำ GM1) |
-| `ExtractGeneration("GM_...")` (legacy) | คืน 0 | คงไว้เพื่อ backward-compat อ่าน order เก่าได้ — แต่ไม่ใช้สร้างใหม่ |
-| `TryResetCycleStateIfFlat()` | ตั้ง `g_cycleGeneration = 0` | ตั้ง `g_cycleGeneration = 1` |
-| `RecoverHedgeSets()` flat-branch | reset เป็น 0 | reset เป็น 1 |
-| `LoadCycleGeneration()` ตอนยังไม่มีค่า | `-1` | คงเดิม แต่หลัง init ถ้า ≤0 ให้ปรับเป็น 1 |
-| `g_cycleGeneration++` (2 จุดในฟังก์ชันเปิด hedge) | คงเดิม | คงเดิม (ตอนนี้จะเริ่มจาก 1 → 2 → 3) |
-
-#### 3) เปลี่ยน Hedge Comment ให้ผูกกับ bound generation
-
-ที่ `OpenHedge()` (บรรทัด ~8273) และ `OpenDDHedge()` (บรรทัด ~8520):
+### บั๊ก #1 — `FindRecoverySetIdx()` คืน `-1` เสมอ (บรรทัด 7734-7737)
 
 ```cpp
-// เดิม: string comment = "GM_HEDGE_"  + IntegerToString(slot + 1);
-// เดิม: string comment = "GM_HEDGE_D" + IntegerToString(slot + 1);
-
-// ใหม่ v6.62: ผูกกับ bound generation (= g_cycleGeneration ปัจจุบัน ก่อน ++)
-int bindGenForComment = g_cycleGeneration;  // จะกลายเป็น boundGeneration ของ set นี้
-string comment = "GM_Hedge_E" + IntegerToString(bindGenForComment);  // Expansion trigger
-// หรือ
-string comment = "GM_Hedge_D" + IntegerToString(bindGenForComment);  // DD trigger
-```
-
-→ ผลลัพธ์: บล็อก `GM1_*` ถูกล็อกด้วย `GM_Hedge_D1` หรือ `GM_Hedge_E1` เท่านั้น  
-→ บล็อก `GM2_*` ถูกล็อกด้วย `GM_Hedge_D2` หรือ `GM_Hedge_E2` ฯลฯ
-
-#### 4) อัปเดต `IsHedgeComment()` ให้รับชื่อใหม่และเก่า (backward-compat)
-
-```cpp
-bool IsHedgeComment(string comment) {
-   return (StringFind(comment, "GM_Hedge_")  >= 0   // v6.62 ใหม่ (E/D + gen)
-        || StringFind(comment, "GM_HEDGE")   >= 0   // legacy v6.61
-        || StringFind(comment, "GM_HG")      >= 0
-        || IsReverseHedgeComment(comment));
+int FindRecoverySetIdx(int gen) {
+   return -1;   // ← ฟังก์ชันถูกตัดทิ้งกลางทาง ไม่เคย iterate g_recoverySets[]
 }
 ```
 
-#### 5) อัปเดต `RecoverHedgeSets()` (~บรรทัด 8685–8723)
+ผลกระทบลูกโซ่:
+- `RegisterRecoverySetTickets()` คิดว่า gen นี้ยังไม่มี → สร้าง entry **ใหม่ทุกครั้ง** ที่ hedge ปลด → tracker ซ้ำซ้อน
+- `IsRecoverySetFlat()` → `idx<0` → คืน `true` ทันที → tracker ตัวจริงไม่ถูกตรวจ
+- `ClearRecoverySetIfFlat()` no-op → flag `complete` ไม่ถูก set → sequential lock อาจค้าง
 
-เพิ่ม pattern ใหม่ในการสแกน:
-- เดิม: `GM_HEDGE_<slot>` / `GM_HEDGE_D<slot>`
-- เพิ่ม: `GM_Hedge_E<gen>` / `GM_Hedge_D<gen>` (v6.62)
+### บั๊ก #2 — `IsTicketBound()` ยัง return `true` หลัง hedge ปลด (บรรทัด 7438-7448 + 8195-8208)
 
-วิธี recover slot/boundGeneration จาก comment ใหม่:
-- ดึงตัวเลขท้าย → คือ **boundGeneration**
-- หา free slot ปกติ → bind boundGeneration ไปยัง slot นั้น
-- triggerType: `E` → 0 (Expansion), `D` → 1 (DD)
+ตอน hedge ของ GM4 ปลดด้วย `ManageHedgeAvgTP()` (10199-10211) หรือ `ManageHedgeMatchingClose()` shred-full (10506-10537):
+- โค้ด **เซ็ต `active=false` แล้ว reset `boundTicketCount=0`** → ดูเหมือนเคลียร์
+- **แต่** `IsTicketBound()` loop ผ่าน `if(!g_hedgeSets[h].active) continue;` ก่อน → ใช้ได้
+- **ปัญหาจริง**: GL#5-8 ที่เปิด **ก่อน** hedge ปลด ถูก `bind` เข้า set นี้ตอน `OpenDDHedge()` แล้ว เมื่อ set ปลด → ตัวมันถูกปล่อย เป็น "recovery owner"
+- เมื่อระบบเปิด **GL#6-8 ตัวใหม่หลัง hedge ปลด** ในระหว่างที่ `g_sequentialRecoveryActive=true` ของ Gen4 → **ตัวใหม่ไม่ถูก bind** (ถูกต้อง) → `IsTicketBound()=false` → ควรได้รับ Broker TP จาก `SyncBrokerTPSL`
+- **แต่** `SyncBrokerTPSL` ใช้ `CalculateAveragePrice()` ที่ skip bound + hedge แล้วคำนวณ avg ของ "ทุก order ที่ไม่ bound" → **ไม่กรองตาม generation** → เมื่อมี GM5/GM6/GM7/GM8/GM9 active พร้อมกัน → คำนวณ avg ของ **ทุก gen รวมกัน** → ตั้ง TP รวมที่จุดเดียว
+- อาการตามภาพ: order เก่าของ GM4 (ที่ออกก่อน hedge ปลด) ถูก set TP=4922.07 ไว้แล้ว แต่ **ไม่ถูก re-modify** เพราะ cache `g_lastBrokerTP_Sell` ตรงกับค่าเดิม หรือเพราะ `IsTicketBound()` ของตัวมันยัง true อยู่ (ตกค้างใน slot อื่น)
 
-#### 6) อัปเดตจุดที่กรอง/นับ generation
+### บั๊ก #3 — Broker TP ไม่รู้จัก "Recovery Owner Generation" (root cause หลัก)
 
-`CountSequentialOwnerOrders()` (~7517) และทุกจุดที่ทำ:
+`SyncBrokerTPSL()` (บรรทัด 2301-2426) ออกแบบมาสำหรับ "หนึ่ง basket ต่อ side" → คำนวณ `avgBuy`/`avgSell` รวม **ทุก generation** ที่ไม่ bound
+
+แต่ระบบ v6.62 มี **multi-generation พร้อมกัน** (GM4 recovery + GM5..GM9 active) → ทุกตัวไหลเข้า avg เดียวกัน → ผลลัพธ์:
+- Order GM4 เดิมที่มี TP=4922.07 ค้างอยู่ → ไม่ถูก update เพราะเทียบกับ cache แล้วเหมือนเดิม
+- **GL#6-8 ตัวใหม่ของ GM4** เพิ่งเปิดออกมา → `PositionGetDouble(POSITION_TP)=0` ≠ tpSell ที่คำนวณใหม่ → **ควร** PositionModify
+- **แต่** `tpSell` ที่คำนวณคือค่าเฉลี่ย "รวม GM4..GM9 ทุก order" — ไม่ใช่ avg เฉพาะ GM4
+- ที่แย่กว่า: `ManageRecoveryOwnerAvgTP()` (7659-7729) คำนวณ avg เฉพาะ owner gen ถูกต้องแล้ว → ใช้ "ปิด basket ที่ราคา avg+TP" แต่ **ไม่ได้ตั้ง Broker TP** ลงไปที่ order เลย → ถ้า EA หลุด/restart ระหว่างนั้น → order ไม่มี broker safety net
+
+นี่คือเหตุผลที่ภาพแสดง GL ใหม่ T/P = 0.00
+
+---
+
+### แผนแก้ v6.63 (fix-only — ไม่แตะ trading logic)
+
+**ไฟล์**: `public/docs/mql5/Gold_Miner_EA.mq5`
+
+#### Fix 1: ซ่อม `FindRecoverySetIdx()` (บรรทัด 7734-7737)
 ```cpp
-string genPrefix = (gen == 0) ? "GM_" : ("GM" + IntegerToString(gen) + "_");
+int FindRecoverySetIdx(int gen) {
+   for(int i = 0; i < g_recoverySetCount; i++)
+      if(g_recoverySets[i].generation == gen) return i;
+   return -1;
+}
 ```
-→ เปลี่ยนเป็น:
+
+#### Fix 2: เพิ่ม `SyncRecoveryOwnerBrokerTP()` ใน `ManageRecoveryOwnerAvgTP()` (บรรทัด 7659-7729)
+
+หลัง loop คำนวณ avg ของ owner gen แต่ละ side — ถ้า **ยังไม่ถึง TP** → set Broker TP ลงทุก order ใน basket นั้น (รวม seed + GL ใหม่ที่เปิดทีหลัง):
+
 ```cpp
-string genPrefix = "GM" + IntegerToString(gen) + "_";  // v6.62: เริ่มที่ GM1 เสมอ
+// หลัง if(!tpReached) continue; → เพิ่ม:
+double tpPrice = (side == POSITION_TYPE_BUY)
+   ? NormalizeDouble(avgPrice + tpDist, _Digits)
+   : NormalizeDouble(avgPrice - tpDist, _Digits);
+for(int b = 0; b < basketCount; b++) {
+   if(!PositionSelectByTicket(basketTickets[b])) continue;
+   double curTP = PositionGetDouble(POSITION_TP);
+   if(NormalizeDouble(curTP, _Digits) != tpPrice)
+      trade.PositionModify(basketTickets[b], PositionGetDouble(POSITION_SL), tpPrice);
+}
 ```
-(ลบ branch `gen==0` ออก เพราะไม่มีรุ่น 0 อีกต่อไป)
 
-ใน `ExtractGeneration()` คงไว้ตามเดิม → ยังอ่าน `GM_INIT` ของออเดอร์เก่าได้ (คืนค่า 0) → ระบบ recovery ของ generation 0 ที่ค้างจาก v6.61 จะยังถูกจัดการครบก่อน reset
+→ ทุก tick ที่ recovery active → owner basket ถูก re-sync เสมอ → GL ใหม่ของ GM4 จะได้ TP=4922.x ทันทีที่เปิด
 
-#### 7) Dashboard / Log
+#### Fix 3: บล็อก `SyncBrokerTPSL` ไม่ให้แตะ order ของ "recovery owner generation"
 
-- Dashboard แสดง: `Active Cycle: GM1` (แทน `GM`)
-- Log เปลี่ยนข้อความ:
-  - `v6.62 INIT: Cycle generation starts at GM1`
-  - `v6.62 HEDGE OPEN: GM_Hedge_D2 bound to GM2 group (slot=1)`
-  - `v6.62 RESET: Account flat → cycleGen back to 1 (GM1)`
+ใน loop modify (บรรทัด 2378-2419) เพิ่ม guard ก่อน modify:
+```cpp
+// v6.63: skip orders managed by Recovery Owner — has its own avg TP path
+if(g_sequentialRecoveryActive) {
+   string c = PositionGetString(POSITION_COMMENT);
+   int og = ExtractGeneration(c);
+   if(og == g_sequentialRecoveryGen) continue;
+   if(IsRecoverySeedTicket(ticket) && GetRecoverySeedGen(ticket) == g_sequentialRecoveryGen) continue;
+}
+```
 
-#### 8) Migration เคสมีออเดอร์เก่า `GM_*` ค้างอยู่
+→ ป้องกันค่า avg ปนเปื้อนระหว่าง gen / ป้องกันการเขียนทับ TP ที่ Fix 2 เพิ่งตั้ง
 
-- ถ้า `RecoverHedgeSets()` พบ `GM_INIT` ออเดอร์เก่า (gen 0) → set `g_cycleGeneration = max(1, recoveredMaxGen)` (กันไม่ให้เริ่มที่ 0 อีก)
-- ระหว่างที่ออเดอร์ gen 0 ยังมีอยู่ ระบบ orphan recovery + sequential owner v6.59/v6.60 จะจัดการให้ปิดครบก่อน
-- เมื่อ flat → reset → รุ่นถัดไปเริ่ม `GM1` ตามปกติ
+#### Fix 4: เพิ่ม `Detect Orphan GL` watchdog ทุกtick
+
+เพิ่มฟังก์ชันใหม่ `AuditUnTPedOwnerOrders()` เรียกใน `OnTick()` หลัง `ManageRecoveryOwnerAvgTP()`:
+- สแกนทุก order ของ owner gen ที่ `POSITION_TP == 0` และไม่ใช่ hedge/bound
+- log warning + force re-sync: `Print("v6.63 ORPHAN: Gen", gen, " #", ticket, " has TP=0 → forcing avg sync")`
+
+→ มี alarm ใน Journal ทันทีถ้า GL ใหม่หลุดออกจากระบบ → ผู้ใช้รู้ตัวก่อนเสียหาย
+
+#### Fix 5: Dashboard เพิ่มบรรทัด `Owner Avg TP: 4922.07 | Untracked: 0`
+แสดง avg ปัจจุบันของ recovery owner + จำนวน order ที่ TP=0 (ควรเป็น 0 เสมอ)
+
+#### Fix 6: Version bump → v6.63
+- `#property version "6.63"`
+- `#property description` เพิ่ม "v6.63 — Recovery Owner Broker TP Sync + Orphan GL Watchdog"
+- Header comment block + Dashboard
 
 ---
 
 ### สิ่งที่ไม่เปลี่ยนแปลง (กฎเหล็ก)
 
-- `trade.Buy / trade.Sell / trade.PositionClose / PositionClosePartial` — ไม่แก้
-- Trading strategy, signal, grid logic, TP/SL — ไม่แก้
+- `trade.Buy / Sell / PositionClose` — ไม่แก้
+- Trading strategy / signal / grid entry / TP-SL calc — ไม่แก้
 - `IsHedgeCloseAllowed()` Triple Gate — ไม่แก้
-- Sequential owner lock v6.59/v6.60 — ไม่แก้ (แค่ปรับ prefix string)
-- Shred/Match/Partial close v6.61 — ไม่แก้ logic, ปรับเฉพาะการอ่าน comment
-- Recovery seed registry v6.61 — ไม่แก้
-- BB filter v6.56 / IsPrevHedgedTicket v6.58 — ไม่แก้
-- License / News / Time filter / Sync — ไม่แก้
+- Sequential Recovery v6.59/v6.60 — ไม่แก้ logic, แค่ใช้ flag
+- Shred/Match/Partial close v6.61 — ไม่แก้
+- Hedge comment scheme v6.62 (GM_Hedge_D{gen}) — ไม่แก้
+- BB filter / News / License / Time filter — ไม่แก้
+- `OpenHedge()` / `OpenDDHedge()` — ไม่แก้
 
 ### ผลลัพธ์ที่คาดหวัง
 
-1. ออเดอร์ใหม่หลัง init / reset เริ่มต้นที่ `GM1_INIT`, `GM1_GL#1`, ...
-2. เมื่อเปิด hedge ของบล็อก GM1 → comment = `GM_Hedge_D1` หรือ `GM_Hedge_E1`
-3. ออเดอร์รุ่นถัดไปคือ `GM2_*` พร้อม hedge ของมันเองคือ `GM_Hedge_D2`
-4. ไม่มีกรณี `GM_Hedge_*` ตัวเดียวกันถูกมอง bind ผิดบล็อก เพราะเลขท้าย = bound generation จริง
-5. ปิดออเดอร์ครบทั้งหมด → reset → รอบใหม่เริ่มที่ `GM1` วนซ้ำตามที่กำหนด
-6. ออเดอร์เก่า `GM_*` (ถ้ามีค้าง) ยังถูกจัดการครบก่อน reset (backward-compat)
+1. หลัง hedge GM4 ปลด → GM4 เป็น recovery owner → **ทุก order ของ GM4 (เก่า + GL ใหม่ + seed)** ได้รับ Broker TP เดียวกัน คำนวณจาก weighted avg ของทั้ง basket → TP รี-ซิงค์ทุก tick
+2. GL#6, GL#7, GL#8 ที่เปิดใหม่จะแสดง T/P ในตาราง MT5 ทันที (ไม่ใช่ 0.00 อีก)
+3. ไม่มี order หลุดจากระบบ — `AuditUnTPedOwnerOrders()` log warning ทันทีถ้าเจอ
+4. Order ของ GM5..GM9 ที่ยัง active แยกการคำนวณ avg ของตัวเอง ไม่ปนกับ GM4 owner
+5. EA ปิด/restart กลางทาง → broker ยังมี TP ตั้งไว้ → ไม่ขาด safety net
 
