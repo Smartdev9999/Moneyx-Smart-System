@@ -7667,11 +7667,44 @@ void ClearSequentialRecoveryOwner(string reason)
 {
    if(!g_sequentialRecoveryActive) return;
    Print("v6.60 SEQ COMPLETE: Gen", g_sequentialRecoveryGen,
-         " flat (", reason, ") -> unlock next set next tick");
+          " flat (", reason, ") -> unlock next set next tick");
    g_sequentialRecoveryGen    = -1;
    g_sequentialRecoverySetIdx = -1;
    g_sequentialRecoveryActive = false;
    g_sequentialRecoveryCompletedThisTick = true;  // skip releasing next set this tick
+   // v6.69: also arm time-based delay so next set ไม่ถูกปลดทันทีหลัง owner เพิ่ง flat
+   ArmSequentialUnlockDelay(g_sequentialRecoverySetIdx, "owner cleared: " + reason);
+}
+
+//+------------------------------------------------------------------+
+//| v6.69: Sequential Unlock Delay helpers                            |
+//+------------------------------------------------------------------+
+void ArmSequentialUnlockDelay(int sourceSetIdx, string reason)
+{
+   if(InpHedge_SequentialUnlockDelayMin <= 0) return;  // disabled
+   datetime newUntil = TimeCurrent() + (datetime)(InpHedge_SequentialUnlockDelayMin * 60);
+   // ถ้ามี cooldown ค้างอยู่แล้วและยาวกว่า ใหม่ → คงของเดิมไว้
+   if(newUntil > g_sequentialUnlockBlockedUntil)
+   {
+      g_sequentialUnlockBlockedUntil = newUntil;
+      g_sequentialUnlockSourceSetIdx = sourceSetIdx;
+      g_sequentialUnlockReason       = reason;
+      Print("v6.69 SEQ DELAY ARM: src=Set#", sourceSetIdx + 1,
+            " | wait ", InpHedge_SequentialUnlockDelayMin, " min (", reason, ")");
+   }
+}
+
+bool IsSequentialUnlockDelayActive()
+{
+   if(InpHedge_SequentialUnlockDelayMin <= 0) return false;
+   if(g_sequentialUnlockBlockedUntil <= 0) return false;
+   return (TimeCurrent() < g_sequentialUnlockBlockedUntil);
+}
+
+int GetSequentialUnlockRemainSec()
+{
+   if(!IsSequentialUnlockDelayActive()) return 0;
+   return (int)(g_sequentialUnlockBlockedUntil - TimeCurrent());
 }
 
 //+------------------------------------------------------------------+
