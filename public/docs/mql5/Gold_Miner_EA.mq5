@@ -10145,6 +10145,22 @@ void ManageHedgeSets()
             SyncRecoveryBasketTP(h);
          }
       }
+
+      // v6.72: STAGE 2 — AVG_TP basket exit after main hedge has been unlocked.
+      //        (a) user selected RECOVERY_CLOSE_AVG_TP
+      //        (b) main hedge ticket released by Stage 1 matching
+      //        (c) recovery grid has at least one live order
+      //        Stage 1 (matching/partial close above) is NEVER skipped.
+      if(InpRecovery_CloseMode == RECOVERY_CLOSE_AVG_TP)
+      {
+         bool hedgeReleased = (g_hedgeSets[h].hedgeTicket == 0
+                               || !PositionSelectByTicket(g_hedgeSets[h].hedgeTicket));
+         int recoveryCount = CountHedgeGridOrders(h);
+         if(hedgeReleased && recoveryCount > 0)
+         {
+            ManageRecoveryAvgTP(h);
+         }
+      }
    }
    
    // v6.16: Recalculate DD triggers based on remaining active DD sets
