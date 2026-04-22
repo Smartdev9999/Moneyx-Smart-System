@@ -5,8 +5,8 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.56"
-#property description "Gold Miner EA v6.56 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + GenRaceFix + OrphanGenFix + HedgeSidePause + GLCandleConfirm + MaxGridTrail + BrokerTPSL + DashCache + DashThrottle + LiveTPFix + HedgeClearTP + BoundClearFix + InstantSync + DeferredSync + InstantTP + MatchCloseToggle + HedgeRecoveryToggle + PersistGen + StartOrderTrail + BoundNoClose + BBFilter + License"
+#property version   "6.57"
+#property description "Gold Miner EA v6.57 - MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + NormalCount + ConstDDThreshold + GenCountFilter + GenHelpers + MaxHedge50 + GenReset + DDDollar + HedgeCooldown + PrevHedgedGuard + SafeReset + BalanceGuard + BalGuardProfit + GenRaceFix + OrphanGenFix + HedgeSidePause + GLCandleConfirm + MaxGridTrail + BrokerTPSL + DashCache + DashThrottle + LiveTPFix + HedgeClearTP + BoundClearFix + InstantSync + DeferredSync + InstantTP + MatchCloseToggle + HedgeRecoveryToggle + PersistGen + StartOrderTrail + BoundNoClose + BBFilter + SeqRelease + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -367,6 +367,7 @@ input int      InpHedge_DDCooldownSec        = 60;    // Min seconds between DD 
 input int      InpHedge_SidePauseMin         = 0;     // v6.39: Pause hedged side entries (minutes, 0=Off)
 input double   InpHedge_DDTriggerDollar      = 500.0; // v6.25: DD$ to trigger hedge (per side)
 input bool     InpHedge_UseMatchingClose     = true;  // v6.51: Enable Hedge Recovery (false=only Balance Guard closes hedge)
+input bool     InpHedge_SequentialRelease    = false; // v6.57: Release hedge sets one-at-a-time (oldest first)
 // v6.28: Balance Guard — close all when equity recovers to target
 input bool     InpBalanceGuard_Enable        = false;  // Balance Guard: Enable
 input ENUM_BALGUARD_MODE InpBalanceGuard_Mode = BALGUARD_FIXED; // Balance Guard: Mode (Fixed / Dynamic)
@@ -4183,6 +4184,34 @@ void DisplayDashboard()
    {
       color COLOR_SECTION_HEDGE = C'130,50,180';  // purple for hedge section
       bool anyActive = false;
+
+      // v6.57: Sequential Release status row
+      {
+         int seqOldest = GetOldestActiveHedgeSetIndex();
+         int activeCnt = 0;
+         for(int hc = 0; hc < MAX_HEDGE_SETS; hc++)
+            if(g_hedgeSets[hc].active) activeCnt++;
+         string seqVal;
+         color seqClr;
+         if(InpHedge_SequentialRelease)
+         {
+            if(seqOldest == -1)
+               seqVal = "ON | No active sets";
+            else
+            {
+               int frozen = (activeCnt > 0) ? (activeCnt - 1) : 0;
+               seqVal = "ON | Active: Set#" + IntegerToString(seqOldest + 1) + " (Oldest) | Frozen: " + IntegerToString(frozen);
+            }
+            seqClr = clrGold;
+         }
+         else
+         {
+            seqVal = "OFF | Parallel recovery";
+            seqClr = clrSilver;
+         }
+         DrawTableRow(row, "Seq Release", seqVal, seqClr, COLOR_SECTION_HEDGE); row++;
+      }
+
       for(int h = 0; h < MAX_HEDGE_SETS; h++)
       {
          if(g_hedgeSets[h].active)
@@ -7619,6 +7648,17 @@ int FindFreeHedgeSlot()
 }
 
 //+------------------------------------------------------------------+
+//| v6.57: Find oldest active hedge set (lowest slot index)          |
+//| Returns -1 if no active set                                       |
+//+------------------------------------------------------------------+
+int GetOldestActiveHedgeSetIndex()
+{
+   for(int h = 0; h < MAX_HEDGE_SETS; h++)
+      if(g_hedgeSets[h].active) return h;
+   return -1;
+}
+
+//+------------------------------------------------------------------+
 //| Check expansion and open hedge if needed                           |
 //| Now supports multiple hedge sets on same side (unbound orders)     |
 //+------------------------------------------------------------------+
@@ -8763,13 +8803,31 @@ void ManageHedgeSets()
    
    // v6.15: Reverse Hedge management removed (no ManageReverseHedge / CheckAndOpenReverseHedge)
    
+   // v6.57: Sequential release mode — only oldest active set is allowed to recover
+   int seqOldestIdx = -1;
+   if(InpHedge_SequentialRelease)
+      seqOldestIdx = GetOldestActiveHedgeSetIndex();
+
    for(int h = 0; h < MAX_HEDGE_SETS; h++)
    {
       if(!g_hedgeSets[h].active) continue;
 
       // Refresh bound tickets — remove any that were closed externally
       RefreshBoundTickets(h);
-      
+
+      // v6.57: Sequential gate — freeze every set except the oldest active one
+      //         Hedge order, bound orders and expansion tracking remain intact;
+      //         only matching/avgTP/partial/grid recovery is skipped.
+      bool seqFreeze = (InpHedge_SequentialRelease && seqOldestIdx != -1 && h != seqOldestIdx);
+      if(seqFreeze)
+      {
+         // Still track expansion so set is ready when its turn comes
+         if(!g_hedgeSets[h].seenExpansionSinceHedge && g_squeeze[2].state == 2)
+            g_hedgeSets[h].seenExpansionSinceHedge = true;
+         g_hedgeSets[h].matchingDone = false;  // reset so it re-runs when promoted
+         continue;
+      }
+
       // v6.15: Track expansion on TF index 2 (largest) every tick
       if(!g_hedgeSets[h].seenExpansionSinceHedge)
       {
