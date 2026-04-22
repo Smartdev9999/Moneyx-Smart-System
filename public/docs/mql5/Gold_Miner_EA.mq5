@@ -10273,19 +10273,154 @@ void ManageHedgeMatchingClose(int idx)
 //+------------------------------------------------------------------+
 void ManageHedgePartialClose(int idx)
 {
-   // v6.55: Do NOT close bound orders — skip partial close entirely
-   // Bound orders will be released to recovery when hedge set is deactivated
-   // This function now only logs that it's skipping
+   // v6.61: SHRED hedge using bound profit (oldest profit-takers first)
+   if(!InpHedge_ShredHedgeOnProfit) return;
    if(!PositionSelectByTicket(g_hedgeSets[idx].hedgeTicket)) return;
 
    double hedgePnL = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
-   if(hedgePnL >= 0) return;  // not in loss → handled by ManageHedgeMatchingClose
+   if(hedgePnL >= 0) return;  // hedge in profit → handled by ManageHedgeMatchingClose
+
+   double hedgeLots = PositionGetDouble(POSITION_VOLUME);
+   if(hedgeLots <= 0) return;
+   double hedgeOpenPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+   ENUM_POSITION_TYPE hedgeType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
 
    if(g_hedgeSets[idx].boundTicketCount == 0) return;
 
-   // v6.55: Skip — do not close bound orders while hedge is active
-   // Wait for Balance Guard or hedge profit to trigger release
-   return;
+   // Collect profitable bound orders (oldest first)
+   ulong  profTickets[];
+   double profValues[];
+   datetime profTimes[];
+   int profCount = 0;
+   double boundProfit = 0;
+   for(int b = 0; b < g_hedgeSets[idx].boundTicketCount; b++)
+   {
+      ulong ticket = g_hedgeSets[idx].boundTickets[b];
+      if(!PositionSelectByTicket(ticket)) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != g_hedgeSets[idx].counterSide) continue;
+      double pnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+      if(pnl <= 0) continue;
+      ArrayResize(profTickets, profCount + 1);
+      ArrayResize(profValues, profCount + 1);
+      ArrayResize(profTimes, profCount + 1);
+      profTickets[profCount] = ticket;
+      profValues[profCount]  = pnl;
+      profTimes[profCount]   = (datetime)PositionGetInteger(POSITION_TIME);
+      boundProfit += pnl;
+      profCount++;
+   }
+   if(profCount == 0 || boundProfit <= InpHedge_ShredMinNetProfit) return;
+
+   // Re-select hedge ticket for accurate read
+   if(!PositionSelectByTicket(g_hedgeSets[idx].hedgeTicket)) return;
+
+   double hedgeLossPerLot = MathAbs(hedgePnL) / hedgeLots;
+   if(hedgeLossPerLot <= 0) return;
+
+   double budget = boundProfit - InpHedge_ShredMinNetProfit;
+   double closeLots = budget / hedgeLossPerLot;
+
+   double minLot  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   if(lotStep <= 0) lotStep = 0.01;
+   closeLots = MathFloor(closeLots / lotStep) * lotStep;
+   closeLots = NormalizeDouble(closeLots, 2);
+   if(closeLots < minLot) return;
+   if(closeLots > hedgeLots) closeLots = hedgeLots;
+
+   // Sort profitable bound by time ascending
+   for(int a = 0; a < profCount - 1; a++)
+      for(int c = a + 1; c < profCount; c++)
+         if(profTimes[c] < profTimes[a])
+         {
+            datetime tt = profTimes[a]; profTimes[a] = profTimes[c]; profTimes[c] = tt;
+            double vv = profValues[a]; profValues[a] = profValues[c]; profValues[c] = vv;
+            ulong tk = profTickets[a]; profTickets[a] = profTickets[c]; profTickets[c] = tk;
+         }
+
+   bool fullClose = (closeLots >= hedgeLots - lotStep / 2.0);
+
+   Print("v6.61 SHRED HEDGE: Set#", idx + 1, " hedge ", DoubleToString(hedgeLots, 2),
+         " -> close ", DoubleToString(closeLots, 2), " lots (boundProfit=$",
+         DoubleToString(boundProfit, 2), " hedgeLoss/lot=$",
+         DoubleToString(hedgeLossPerLot, 2), ")");
+
+   // Close profitable bound orders (oldest first) up to budget
+   double profUsed = 0;
+   for(int p = 0; p < profCount; p++)
+   {
+      if(profUsed >= budget) break;
+      if(PositionSelectByTicket(profTickets[p]))
+      {
+         if(trade.PositionClose(profTickets[p]))
+         {
+            profUsed += profValues[p];
+            Sleep(30);
+         }
+      }
+   }
+
+   // Track shred event
+   g_lastShredHedgeFrom   = hedgeLots;
+   g_lastShredNet         = profUsed - (closeLots * hedgeLossPerLot);
+   g_lastShredTime        = TimeCurrent();
+
+   if(fullClose)
+   {
+      // Close hedge fully → release remaining bound + take ownership
+      trade.PositionClose(g_hedgeSets[idx].hedgeTicket);
+      g_lastShredHedgeTo = 0;
+      Print("v6.61 SHRED HEDGE: Set#", idx + 1, " hedge fully closed");
+
+      CloseAllHedgeGridOrders(idx);
+      int gen = g_hedgeSets[idx].boundGeneration;
+      ulong remainBound[];
+      int rbCnt = 0;
+      for(int b = 0; b < g_hedgeSets[idx].boundTicketCount; b++)
+      {
+         ulong tkb = g_hedgeSets[idx].boundTickets[b];
+         if(tkb == 0) continue;
+         if(PositionSelectByTicket(tkb))
+         {
+            ArrayResize(remainBound, rbCnt + 1);
+            remainBound[rbCnt++] = tkb;
+         }
+      }
+      if(rbCnt > 0) RegisterRecoverySetTickets(gen, idx, remainBound);
+      SaveBoundTicketsToPrevHedged(idx);
+      g_hedgeSets[idx].active = false;
+      g_hedgeSets[idx].boundTicketCount = 0;
+      ArrayResize(g_hedgeSets[idx].boundTickets, 0);
+      g_hedgeSetCount--;
+      g_lastHedgeCloseTime = TimeCurrent();
+      SetSequentialRecoveryOwner(idx, gen);
+      TryResetCycleStateIfFlat("shred hedge full");
+      Sleep(100);
+   }
+   else
+   {
+      // Partial close hedge → strip comment logically → register as recovery seed
+      if(trade.PositionClosePartial(g_hedgeSets[idx].hedgeTicket, closeLots))
+      {
+         double newLots = hedgeLots - closeLots;
+         g_hedgeSets[idx].hedgeLots = newLots;
+         g_lastShredHedgeTo = newLots;
+         Print("v6.61 SHRED HEDGE: Set#", idx + 1, " partial closed ",
+               DoubleToString(closeLots, 2), " lots, remainder=", DoubleToString(newLots, 2));
+
+         if(InpRecovery_StripHedgeComment)
+         {
+            int gen = g_hedgeSets[idx].boundGeneration;
+            RegisterRecoverySeed(g_hedgeSets[idx].hedgeTicket, gen, hedgeOpenPrice);
+
+            // Track in recovery set tracker for anti-skip
+            ulong seedArr[1];
+            seedArr[0] = g_hedgeSets[idx].hedgeTicket;
+            RegisterRecoverySetTickets(gen, idx, seedArr);
+         }
+      }
+      Sleep(100);
+   }
 }
 
 //+------------------------------------------------------------------+
