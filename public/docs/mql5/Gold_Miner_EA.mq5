@@ -8527,10 +8527,11 @@ bool OpenDDHedge(ENUM_POSITION_TYPE counterSide, ENUM_POSITION_TYPE hedgeSide, i
       return false;
    }
    
-   int slot = FindFreeHedgeSlot();
+   // v6.68: Generation-Locked slot — slot id maps 1:1 with bindGen
+   int slot = FindGenerationHedgeSlot(bindGen);
    if(slot < 0)
    {
-      Print("DD HEDGE: No free slot available");
+      Print("DD HEDGE: Cannot allocate gen-locked slot for gen=", bindGen);
       return false;
    }
    
