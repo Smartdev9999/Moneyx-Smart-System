@@ -9809,9 +9809,23 @@ void ManageHedgeSets()
          // This set IS the oldest → mark that we're acting on it this tick
          sequentialActed = true;
       }
-      else if(seqBypass_profitClose && InpHedge_SequentialRecovery && (g_sequentialRecoveryActive || sequentialActed))
+      else if(seqBypass_profitClose && InpHedge_SequentialRecovery)
       {
-         Print("v6.67 SEQ BYPASS: Set#", h+1, " profit-close allowed (hedge PnL > MatchMinProfit) despite seq owner Gen", g_sequentialRecoveryGen);
+         // v6.68: bypass ยังต้องเคารพ one-set-per-tick — ป้องกันปลด hedge หลายชุดพร้อมกันใน tick เดียว
+         if(sequentialActed)
+         {
+            g_hedgeSets[h].matchingDone = false;
+            Print("v6.68 SEQ BYPASS DEFER: Set#", h+1, " profit-close deferred (another set already acted this tick)");
+            continue;
+         }
+         if(g_sequentialRecoveryCompletedThisTick)
+         {
+            g_hedgeSets[h].matchingDone = false;
+            continue;
+         }
+         if(g_sequentialRecoveryActive)
+            Print("v6.67 SEQ BYPASS: Set#", h+1, " profit-close allowed (hedge PnL > MatchMinProfit) despite seq owner Gen", g_sequentialRecoveryGen);
+         sequentialActed = true;  // v6.68: บล็อก set ถัดไปใน tick นี้
       }
 
       // If in grid mode → execute grid
