@@ -7678,8 +7678,13 @@ void SaveBoundTicketsToPrevHedged(int idx)
 void TryResetCycleStateIfFlat(string reason)
 {
    if(g_hedgeSetCount > 0) return;  // still have active sets
-   if(g_cycleGeneration <= 0) return;  // nothing to reset
-   
+   if(g_cycleGeneration <= 0)
+   {
+      // v6.70: even if cycleGen is already 0, ensure stale GVs/state cleared once flat
+      if(TotalOrderCount() == 0) ForceResetCycleState(reason + " (already gen0)");
+      return;
+   }
+
    // v6.27: Check if any EA positions still exist
    int remaining = TotalOrderCount();
    if(remaining > 0)
@@ -7687,16 +7692,77 @@ void TryResetCycleStateIfFlat(string reason)
       Print("v6.27: Skipping cycle reset (", reason, ") — ", remaining, " positions still open. prevHedged preserved.");
       return;
    }
-   
-   // Truly flat — safe to reset everything
-    g_cycleGeneration = 0;
-    SaveCycleGeneration();  // v6.53: persist reset
-    g_hedgeSetCount = 0;
-    ClearPrevHedgedTickets();
-    g_lastHedgeBuyTime = 0;   // v6.39: reset side pause
-    g_lastHedgeSellTime = 0;  // v6.39: reset side pause
-    UpdateDynamicBalanceGuardTarget();  // v6.31: update target immediately when flat
-    Print("CYCLE GENERATION reset to 0 — ", reason, " (v6.27 safe reset, account flat)");
+
+   // v6.70: delegate to centralized hard reset
+   ForceResetCycleState(reason);
+}
+
+//+------------------------------------------------------------------+
+//| v6.70: Hard flat reset — wipes ALL recovery state when account    |
+//| is truly flat. Ensures next cycle restarts at GM1.                 |
+//+------------------------------------------------------------------+
+void ForceResetCycleState(string reason)
+{
+   if(TotalOrderCount() != 0) return;  // double-guard: only when truly flat
+
+   int prevGen = g_cycleGeneration;
+
+   // 1) cycle generation
+   g_cycleGeneration = 0;
+   SaveCycleGeneration();
+   if(GlobalVariableCheck(GV_CycleGenKey())) GlobalVariableDel(GV_CycleGenKey());
+
+   // 2) hedge sets — clear in-memory state + persisted GVs
+   for(int h = 0; h < MAX_HEDGE_SETS; h++)
+   {
+      g_hedgeSets[h].active = false;
+      g_hedgeSets[h].hedgeTicket = 0;
+      g_hedgeSets[h].hedgeLots = 0;
+      g_hedgeSets[h].boundTicketCount = 0;
+      g_hedgeSets[h].boundGeneration = 0;
+      g_hedgeSets[h].shredCompleted = false;
+      g_hedgeSets[h].lastRecoveryGridBarTime = 0;
+      // wipe recovery grid ticket GVs
+      for(int rk = 0; rk < g_hedgeSets[h].recoveryGridCount; rk++)
+      {
+         string gv = "GME_REC_TK_" + IntegerToString(h) + "_" + IntegerToString(rk);
+         if(GlobalVariableCheck(gv)) GlobalVariableDel(gv);
+      }
+      ArrayResize(g_hedgeSets[h].recoveryGridTickets, 0);
+      g_hedgeSets[h].recoveryGridCount = 0;
+      // also clean lingering ticket/shred GVs (defensive sweep up to 200 tickets)
+      string gvT = "GME_HEDGE_TICKET_" + IntegerToString(h);
+      if(GlobalVariableCheck(gvT)) GlobalVariableDel(gvT);
+      string gvS = "GME_HEDGE_SHRED_" + IntegerToString(h);
+      if(GlobalVariableCheck(gvS)) GlobalVariableDel(gvS);
+      for(int rk2 = 0; rk2 < 200; rk2++)
+      {
+         string gv2 = "GME_REC_TK_" + IntegerToString(h) + "_" + IntegerToString(rk2);
+         if(GlobalVariableCheck(gv2)) GlobalVariableDel(gv2);
+      }
+   }
+   g_hedgeSetCount = 0;
+
+   // 3) sequential recovery owner / orphan groups
+   g_sequentialRecoveryActive = false;
+   g_sequentialRecoveryGen = -1;
+   for(int og = 0; og < MAX_ORPHAN_GROUPS; og++)
+   {
+      g_orphanGroups[og].active = false;
+      g_orphanGroups[og].generation = -1;
+   }
+   g_activeOrphanGroupCount = 0;
+
+   // 4) prev-hedged tickets + side pause
+   ClearPrevHedgedTickets();
+   g_lastHedgeBuyTime = 0;
+   g_lastHedgeSellTime = 0;
+
+   // 5) balance guard refresh
+   UpdateDynamicBalanceGuardTarget();
+
+   Print("v6.70 FLAT RESET: all states cleared (prevGen=", prevGen,
+         ", reason=", reason, ") -> next cycle starts at GM1");
 }
 
 //+------------------------------------------------------------------+
