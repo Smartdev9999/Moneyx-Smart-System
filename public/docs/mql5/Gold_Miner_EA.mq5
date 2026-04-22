@@ -595,6 +595,8 @@ int      g_sequentialRecoverySetIdx   = -1;    // originating hedge set index (f
 bool     g_sequentialRecoveryActive   = false; // true → block all other sets and other-gen orphan recovery
 bool     g_sequentialRecoveryCompletedThisTick = false; // one-tick handoff guard
 int      g_lastOrphanGLCount = 0;  // v6.63: dashboard counter for owner-gen orders missing Broker TP
+int      g_hedgeIntegrityWarnCount = 0;  // v6.65: count of hedge sets with hedgeLots >> boundLots (>2x)
+int      g_hedgeIntegrityCriticalCount = 0;  // v6.65: count of hedge sets with NO bound orders
 
 // === v6.61: Recovery Seed (logically-stripped hedge remainders treated as gen orders) ===
 ulong    g_recoverySeedTickets[];   // hedge remainders re-bound as recovery seed
