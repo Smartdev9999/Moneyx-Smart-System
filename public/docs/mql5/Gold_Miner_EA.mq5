@@ -7744,6 +7744,104 @@ double GetRecoveryGridDistancePoints(int level)
    return (double)GetRecoveryPoints();
 }
 
+// v6.65: Auto Recovery Lot helpers ---------------------------------
+double SumHedgeGridLots(int idx)
+{
+   double total = 0.0;
+   string prefix = "GM_HG" + IntegerToString(idx + 1);
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      string c = PositionGetString(POSITION_COMMENT);
+      if(StringFind(c, prefix) >= 0)
+         total += PositionGetDouble(POSITION_VOLUME);
+   }
+   return total;
+}
+
+double FindLastHedgeGridLot(int idx)
+{
+   double lastLot = 0.0;
+   datetime lastT = 0;
+   string prefix = "GM_HG" + IntegerToString(idx + 1);
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      string c = PositionGetString(POSITION_COMMENT);
+      if(StringFind(c, prefix) < 0) continue;
+      datetime t = (datetime)PositionGetInteger(POSITION_TIME);
+      if(t >= lastT)
+      {
+         lastT = t;
+         lastLot = PositionGetDouble(POSITION_VOLUME);
+      }
+   }
+   return lastLot;
+}
+
+double GetHedgeLotsForGen(int gen)
+{
+   double total = 0.0;
+   for(int h = 0; h < MAX_HEDGE_SETS; h++)
+   {
+      if(!g_hedgeSets[h].active) continue;
+      if(g_hedgeSets[h].boundGeneration != gen) continue;
+      if(g_hedgeSets[h].hedgeTicket > 0 && PositionSelectByTicket(g_hedgeSets[h].hedgeTicket))
+         total += PositionGetDouble(POSITION_VOLUME);
+      else
+         total += g_hedgeSets[h].hedgeLots;
+   }
+   return total;
+}
+
+double SumOrphanGridLots(int gen, ENUM_POSITION_TYPE side)
+{
+   double total = 0.0;
+   string prefix = GenPrefix(gen);
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
+      string c = PositionGetString(POSITION_COMMENT);
+      if(StringFind(c, prefix + "_GL") >= 0)
+         total += PositionGetDouble(POSITION_VOLUME);
+   }
+   return total;
+}
+
+// v6.65: คืน lot ของไม้ recovery ถัดไป; คืน 0 ถ้า budget เต็ม
+double ComputeAutoRecoveryLot(double remainingHedgeLots,
+                              double existingTotalLots,
+                              double lastLot)
+{
+   double minLot  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   if(lotStep <= 0) lotStep = 0.01;
+   if(minLot  <= 0) minLot  = 0.01;
+   double budget  = remainingHedgeLots - existingTotalLots;
+   if(budget < minLot) return 0.0;
+
+   double baseLot = (lastLot > 0) ? lastLot * Recovery_AutoMult : Recovery_AutoInitLot;
+   double nextLot = MathFloor(baseLot / lotStep + 0.0000001) * lotStep;
+   if(nextLot < minLot) nextLot = minLot;
+
+   if(existingTotalLots + nextLot > remainingHedgeLots + 0.0000001)
+   {
+      nextLot = MathFloor(budget / lotStep + 0.0000001) * lotStep;
+      if(nextLot < minLot) return 0.0;
+   }
+   return nextLot;
+}
+
 // Compute Recovery grid lot using mode + maxExisting continuation
 double ComputeRecoveryGridLot(double maxExisting, int level)
 {
