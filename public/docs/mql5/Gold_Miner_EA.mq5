@@ -7562,10 +7562,15 @@ void SetSequentialRecoveryOwner(int hedgeSetIdx, int gen)
    if(g_sequentialRecoveryActive) return;  // do not override existing owner
    if(gen < 0) return;  // v6.60: allow Gen0 (GM) to claim ownership
    // v6.60: only lock if the released set still has normal recovery orders open
+   // v6.61: also count recovery seeds belonging to this gen
    int remain = CountSequentialOwnerOrders(gen);
-   if(remain == 0)
+   int seedRemain = 0;
+   for(int s = 0; s < g_recoverySeedCount; s++)
+      if(g_recoverySeedGen[s] == gen && PositionSelectByTicket(g_recoverySeedTickets[s]))
+         seedRemain++;
+   if(remain + seedRemain == 0)
    {
-      Print("v6.60 SEQ OWNER SKIP: Gen", gen, " has 0 released recovery orders (Set#", hedgeSetIdx + 1, ")");
+      Print("v6.61 SEQ OWNER SKIP: Gen", gen, " has 0 released recovery orders (Set#", hedgeSetIdx + 1, ")");
       return;
    }
    g_sequentialRecoveryGen    = gen;
