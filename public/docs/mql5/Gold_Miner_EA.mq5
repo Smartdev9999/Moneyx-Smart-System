@@ -978,7 +978,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.61 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.62 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min");
@@ -1038,7 +1038,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.61 deinitialized");
+   Print("Gold Miner EA v6.62 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -3908,7 +3908,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.61 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.61 [ZZ]" : "Gold Miner EA v6.61 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.62 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.62 [ZZ]" : "Gold Miner EA v6.62 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -7878,8 +7878,8 @@ void SaveBoundTicketsToPrevHedged(int idx)
 void TryResetCycleStateIfFlat(string reason)
 {
    if(g_hedgeSetCount > 0) return;  // still have active sets
-   if(g_cycleGeneration <= 0) return;  // nothing to reset
-   
+   if(g_cycleGeneration <= 1) return;  // v6.62: GM1 is the base — nothing to reset
+
    // v6.27: Check if any EA positions still exist
    int remaining = TotalOrderCount();
    if(remaining > 0)
@@ -7887,16 +7887,16 @@ void TryResetCycleStateIfFlat(string reason)
       Print("v6.27: Skipping cycle reset (", reason, ") — ", remaining, " positions still open. prevHedged preserved.");
       return;
    }
-   
+
    // Truly flat — safe to reset everything
-    g_cycleGeneration = 0;
+    g_cycleGeneration = 1;  // v6.62: cycles always restart at GM1
     SaveCycleGeneration();  // v6.53: persist reset
     g_hedgeSetCount = 0;
     ClearPrevHedgedTickets();
     g_lastHedgeBuyTime = 0;   // v6.39: reset side pause
     g_lastHedgeSellTime = 0;  // v6.39: reset side pause
     UpdateDynamicBalanceGuardTarget();  // v6.31: update target immediately when flat
-    Print("CYCLE GENERATION reset to 0 — ", reason, " (v6.27 safe reset, account flat)");
+    Print("v6.62 CYCLE RESET → GM1 — ", reason, " (account flat)");
 }
 
 //+------------------------------------------------------------------+
@@ -7959,7 +7959,7 @@ void CheckBalanceGuard()
       g_balanceGuardActive = false;
       
       // Reset cycle state (CloseAllPositions already resets hedge sets)
-       g_cycleGeneration = 0;
+       g_cycleGeneration = 1;  // v6.62: restart at GM1
        SaveCycleGeneration();  // v6.53: persist reset
        ClearPrevHedgedTickets();
        g_lastHedgeBuyTime = 0;   // v6.39: reset side pause
@@ -8671,8 +8671,8 @@ void RecoverHedgeSets()
    {
       if(GlobalVariableCheck(GV_CycleGenKey()))
          GlobalVariableDel(GV_CycleGenKey());
-      g_cycleGeneration = 0;
-      Print("v6.57 RecoverHedgeSets: account flat → cycleGen reset to 0");
+      g_cycleGeneration = 1;  // v6.62: base cycle is GM1
+      Print("v6.62 RecoverHedgeSets: account flat → cycleGen reset to 1 (GM1)");
       return;
    }
 
@@ -8688,9 +8688,10 @@ void RecoverHedgeSets()
       int gen = ExtractGeneration(cmt);
       if(gen > maxGen) maxGen = gen;
    }
-   g_cycleGeneration = maxGen;
+   // v6.62: never go below GM1 (legacy GM_* orders may report gen=0; allow them to live but new cycles start ≥1)
+   g_cycleGeneration = (maxGen < 1) ? 1 : maxGen;
    SaveCycleGeneration();  // v6.53: persist recovered generation
-   Print("RECOVER: Detected cycle generation = ", g_cycleGeneration);
+   Print("RECOVER: Detected cycle generation = ", g_cycleGeneration, " (v6.62 min=GM1)");
    
    // Step 1: Find main hedge positions (GM_HEDGE_N) and rebuild sets
    for(int i = PositionsTotal() - 1; i >= 0; i--)
@@ -8701,45 +8702,77 @@ void RecoverHedgeSets()
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       
       string comment = PositionGetString(POSITION_COMMENT);
-      // Check for GM_HEDGE_1, GM_HEDGE_2, GM_HEDGE_D1, GM_HEDGE_D2, etc.
-      for(int h = 0; h < MAX_HEDGE_SETS; h++)
+      // v6.62: Recognise both legacy GM_HEDGE_<slot>/GM_HEDGE_D<slot> AND new GM_Hedge_E<gen>/GM_Hedge_D<gen>
+      // Legacy: suffix = slot index. v6.62: suffix = bound generation.
+      bool isHedge = false;
+      bool isDD    = false;
+      int  legacySlotIdx = -1;
+      int  boundGenFromCmt = -1;
+
+      // New v6.62 format
+      if(StringFind(comment, "GM_Hedge_E") == 0)
       {
-         string hedgePrefix = "GM_HEDGE_" + IntegerToString(h + 1);
-         string hedgePrefixDD = "GM_HEDGE_D" + IntegerToString(h + 1);
-         if((StringFind(comment, hedgePrefix) >= 0 || StringFind(comment, hedgePrefixDD) >= 0) && !g_hedgeSets[h].active)
+         isHedge = true; isDD = false;
+         boundGenFromCmt = (int)StringToInteger(StringSubstr(comment, StringLen("GM_Hedge_E")));
+      }
+      else if(StringFind(comment, "GM_Hedge_D") == 0)
+      {
+         isHedge = true; isDD = true;
+         boundGenFromCmt = (int)StringToInteger(StringSubstr(comment, StringLen("GM_Hedge_D")));
+      }
+      else
+      {
+         // Legacy GM_HEDGE_<slot> / GM_HEDGE_D<slot>
+         for(int h = 0; h < MAX_HEDGE_SETS; h++)
          {
-            g_hedgeSets[h].active = true;
-            g_hedgeSets[h].hedgeTicket = ticket;
-            g_hedgeSets[h].hedgeSide = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
-            g_hedgeSets[h].hedgeLots = PositionGetDouble(POSITION_VOLUME);
-            g_hedgeSets[h].counterSide = (g_hedgeSets[h].hedgeSide == POSITION_TYPE_BUY) 
-                                         ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
-            g_hedgeSets[h].gridMode = false;
-             g_hedgeSets[h].gridLevel = 0;
-             g_hedgeSets[h].combinedGridMode = false;
-             g_hedgeSets[h].combinedGridLevel = 0;
-             g_hedgeSets[h].combinedLots = 0;
-              // v6.17: Recovery — assume expansion was seen (conservative, prevent permanent lock)
-              g_hedgeSets[h].seenExpansionSinceHedge = true;
-              g_hedgeSets[h].hedgedDuringExpansion = true;
-             // Zone prices will be recalculated after bound tickets are rebuilt (Step 2)
-             g_hedgeSets[h].hedgeOpenPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-             g_hedgeSets[h].hedgeOpenTime  = (datetime)PositionGetInteger(POSITION_TIME);  // v6.57
-             g_hedgeSets[h].zoneUpperPrice = 0;
-             g_hedgeSets[h].zoneLowerPrice = 0;
-             g_hedgeSets[h].oldestBoundPrice = 0;
-             // v6.16: Recover trigger type from comment prefix
-             if(StringFind(comment, "GM_HEDGE_D") >= 0)
-                g_hedgeSets[h].triggerType = 1;  // DD-triggered
-             else
-                g_hedgeSets[h].triggerType = 0;  // Expansion-triggered
-            g_hedgeSetCount++;
-            recovered++;
-            Print("RECOVER: Rebuilt Hedge Set#", h + 1, " from ticket ", ticket, 
-                  " side=", (g_hedgeSets[h].hedgeSide == POSITION_TYPE_BUY ? "BUY" : "SELL"),
-                  " lots=", DoubleToString(g_hedgeSets[h].hedgeLots, 2));
-            break;
+            string hedgePrefix   = "GM_HEDGE_"  + IntegerToString(h + 1);
+            string hedgePrefixDD = "GM_HEDGE_D" + IntegerToString(h + 1);
+            if(StringFind(comment, hedgePrefixDD) >= 0) { isHedge = true; isDD = true;  legacySlotIdx = h; break; }
+            if(StringFind(comment, hedgePrefix)   >= 0) { isHedge = true; isDD = false; legacySlotIdx = h; break; }
          }
+      }
+
+      if(!isHedge) continue;
+
+      // Pick slot: legacy uses recorded slot index; new format finds first free slot
+      int slot = (legacySlotIdx >= 0) ? legacySlotIdx : -1;
+      if(slot < 0)
+      {
+         for(int h = 0; h < MAX_HEDGE_SETS; h++) { if(!g_hedgeSets[h].active) { slot = h; break; } }
+      }
+      if(slot < 0 || g_hedgeSets[slot].active) continue;
+
+      {
+         int h = slot;
+         g_hedgeSets[h].active = true;
+         g_hedgeSets[h].hedgeTicket = ticket;
+         g_hedgeSets[h].hedgeSide = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+         g_hedgeSets[h].hedgeLots = PositionGetDouble(POSITION_VOLUME);
+         g_hedgeSets[h].counterSide = (g_hedgeSets[h].hedgeSide == POSITION_TYPE_BUY)
+                                      ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
+         g_hedgeSets[h].gridMode = false;
+         g_hedgeSets[h].gridLevel = 0;
+         g_hedgeSets[h].combinedGridMode = false;
+         g_hedgeSets[h].combinedGridLevel = 0;
+         g_hedgeSets[h].combinedLots = 0;
+         g_hedgeSets[h].seenExpansionSinceHedge = true;
+         g_hedgeSets[h].hedgedDuringExpansion = true;
+         g_hedgeSets[h].hedgeOpenPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+         g_hedgeSets[h].hedgeOpenTime  = (datetime)PositionGetInteger(POSITION_TIME);
+         g_hedgeSets[h].zoneUpperPrice = 0;
+         g_hedgeSets[h].zoneLowerPrice = 0;
+         g_hedgeSets[h].oldestBoundPrice = 0;
+         g_hedgeSets[h].triggerType = isDD ? 1 : 0;
+         g_hedgeSets[h].commentPrefix = comment;
+         // v6.62: if recovered via new format, we know the bound generation directly
+         if(boundGenFromCmt >= 0) g_hedgeSets[h].boundGeneration = boundGenFromCmt;
+         g_hedgeSetCount++;
+         recovered++;
+         Print("RECOVER v6.62: Rebuilt Hedge Set#", h + 1, " from ticket ", ticket,
+               " comment=", comment,
+               " boundGen=", (boundGenFromCmt >= 0 ? IntegerToString(boundGenFromCmt) : "(legacy)"),
+               " side=", (g_hedgeSets[h].hedgeSide == POSITION_TYPE_BUY ? "BUY" : "SELL"),
+               " lots=", DoubleToString(g_hedgeSets[h].hedgeLots, 2));
       }
    }
    
