@@ -8497,8 +8497,23 @@ void CheckAndOpenHedge()
       return;
    }
 
-   // v6.68: Generation-Locked slot — slot id maps 1:1 with current cycle gen
-   int slot = FindGenerationHedgeSlot(g_cycleGeneration);
+   // v6.71: MinSpacing gate — enforce N minutes between any hedge sets
+   if(InpHedge_MinSpacingMin > 0 && g_lastHedgeOpenTime > 0)
+   {
+      int elapsedSec  = (int)(TimeCurrent() - g_lastHedgeOpenTime);
+      int requiredSec = InpHedge_MinSpacingMin * 60;
+      if(elapsedSec < requiredSec)
+      {
+         static datetime s_lastSpaceLog = 0;
+         if(TimeCurrent() - s_lastSpaceLog >= 60)
+         {
+            Print("v6.71 HEDGE SPACING: wait ", (requiredSec - elapsedSec) / 60, "m more (Expansion)");
+            s_lastSpaceLog = TimeCurrent();
+         }
+         return;
+      }
+   }
+
    if(slot < 0)
    {
       Print("HEDGE: Cannot allocate gen-locked slot for gen=", g_cycleGeneration);
