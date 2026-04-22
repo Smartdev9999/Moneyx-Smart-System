@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.60 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.61 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.60"
-#property description "Gold Miner EA v6.60 - SeqRelease (Comment-Based Gen Scan) + MatchPool (Bound Profit) + MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + BBFilter + License"
+#property version   "6.61"
+#property description "Gold Miner EA v6.61 - SeqRelease (Comment-Based Gen Scan) + MatchPool (Bound Profit) + MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + BBFilter + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -916,7 +916,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.60 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.61 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min");
@@ -976,7 +976,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.60 deinitialized");
+   Print("Gold Miner EA v6.61 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -1268,7 +1268,7 @@ void OnTick()
    // === Determine if new orders are blocked (News/Time/Pause) ===
    g_newOrderBlocked = false;
 
-   // v6.60: Sequential Release — comment-based scan returns lowest live generation.
+   // v6.61: Sequential Release — comment-based scan returns lowest live generation.
    //        Used by ManageOrphanGrid + ManageHedgeSets + per-gen grid loops to gate
    //        recovery to ONE generation at a time (lowest first). Initial entry of
    //        new cycles is NEVER blocked here (v6.59 rule preserved).
@@ -3840,7 +3840,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.60 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.60 [ZZ]" : "Gold Miner EA v6.60 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.61 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.61 [ZZ]" : "Gold Miner EA v6.61 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -4192,21 +4192,15 @@ void DisplayDashboard()
       color COLOR_SECTION_HEDGE = C'130,50,180';  // purple for hedge section
       bool anyActive = false;
 
-      // v6.60: Sequential Release status row (comment-based gen scan)
+      // v6.61: Sequential Release status row (hedge-only comment scan)
       {
-         int activeCnt = 0;
-         for(int hc = 0; hc < MAX_HEDGE_SETS; hc++)
-            if(g_hedgeSets[hc].active) activeCnt++;
-         int orphanCnt = 0;
-         for(int oc = 0; oc < MAX_ORPHAN_GROUPS; oc++)
-            if(g_orphanGroups[oc].active) orphanCnt++;
          int allowedGen = g_seqAllowedGen;
          string seqVal;
          color seqClr;
          if(InpHedge_SequentialRelease)
          {
             if(allowedGen == -1)
-               seqVal = "ON | No live orders — full trading";
+               seqVal = "ON | No active hedge — full trading + free orphan recovery";
             else
             {
                // Count frozen sets (active hedge sets whose boundGeneration != allowed)
@@ -4214,12 +4208,13 @@ void DisplayDashboard()
                for(int hc2 = 0; hc2 < MAX_HEDGE_SETS; hc2++)
                   if(g_hedgeSets[hc2].active && g_hedgeSets[hc2].boundGeneration != allowedGen)
                      frozenHedge++;
+               // Orphans frozen only if newer than allowed hedge gen (v6.61 rule)
                int frozenOrphan = 0;
                for(int oc2 = 0; oc2 < MAX_ORPHAN_GROUPS; oc2++)
-                  if(g_orphanGroups[oc2].active && g_orphanGroups[oc2].generation != allowedGen)
+                  if(g_orphanGroups[oc2].active && g_orphanGroups[oc2].generation > allowedGen)
                      frozenOrphan++;
-               seqVal = "ON | Allowed: Gen" + IntegerToString(allowedGen)
-                      + " (GM" + (allowedGen == 0 ? "" : IntegerToString(allowedGen)) + "_*+GM_HD" + IntegerToString(allowedGen + 1) + ")"
+               seqVal = "ON | Allowed Hedge: Gen" + IntegerToString(allowedGen)
+                      + " (GM_HD" + IntegerToString(allowedGen + 1) + ")"
                       + " | New cycles: ALLOWED"
                       + " | Frozen Hedge: " + IntegerToString(frozenHedge)
                       + " | Frozen Orphans: " + IntegerToString(frozenOrphan);
@@ -7681,7 +7676,7 @@ int GetOldestActiveHedgeSetIndex()
 }
 
 //+------------------------------------------------------------------+
-//| v6.60: Parse generation number from order comment                  |
+//| v6.61: Parse generation number from order comment                  |
 //|   "GM" or "GM_*" or "GM_HD1"  → 0                                  |
 //|   "GM1_*" or "GM_HD2"         → 1                                  |
 //|   "GMN_*" or "GM_HD(N+1)"     → N                                  |
@@ -7722,7 +7717,7 @@ int ParseGenerationFromComment(string c)
 }
 
 //+------------------------------------------------------------------+
-//| v6.60: Determine which generation may run recovery (comment-based) |
+//| v6.61: Determine which generation may run recovery (comment-based) |
 //|   Scans live positions on this symbol/magic and returns the lowest  |
 //|   generation that still has any open order (bound OR hedge).       |
 //|   Returns -1 → no restriction (feature OFF, or nothing pending).   |
@@ -7734,6 +7729,9 @@ int GetSequentialAllowedGeneration()
 {
    if(!InpHedge_SequentialRelease) return -1;
 
+   // v6.61: Scan ONLY hedge comments (GM_HD<n>). Bound/orphan orders never gate
+   //         the sequential queue — once a hedge set's matching close releases its
+   //         bounds as orphans, the next generation's hedge becomes allowed.
    int oldest = INT_MAX;
    int total = PositionsTotal();
    for(int i = 0; i < total; i++)
@@ -7745,6 +7743,8 @@ int GetSequentialAllowedGeneration()
       if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
 
       string c = PositionGetString(POSITION_COMMENT);
+      // v6.61: hedge-only filter
+      if(StringFind(c, "GM_HD") != 0) continue;
       int gen = ParseGenerationFromComment(c);
       if(gen >= 0 && gen < oldest) oldest = gen;
    }
@@ -8714,8 +8714,10 @@ void ManageOrphanGrid()
 
       int gen = g_orphanGroups[g].generation;
 
-      // v6.58: Skip non-allowed generations (recovery one-at-a-time)
-      if(seqAllowed != -1 && gen != seqAllowed) continue;
+      // v6.61: seqAllowed = lowest live HEDGE generation. Allow orphans whose gen
+      //         is older than or equal to it (no live hedge blocks them); freeze
+      //         only orphans newer than the active hedge generation.
+      if(seqAllowed != -1 && gen > seqAllowed) continue;
 
       string prefix = GenPrefix(gen);
       
@@ -8903,7 +8905,7 @@ void ManageHedgeSets()
    
    // v6.15: Reverse Hedge management removed (no ManageReverseHedge / CheckAndOpenReverseHedge)
    
-   // v6.60: Sequential release mode — gate by lowest live generation (comment-based)
+   // v6.61: Sequential release mode — gate by lowest live generation (comment-based)
    //         Only the hedge set whose boundGeneration === g_seqAllowedGen may run
    //         matching/avgTP/partial/grid recovery. All others freeze until that
    //         generation has zero live orders (bound OR hedge).
@@ -8916,7 +8918,7 @@ void ManageHedgeSets()
       // Refresh bound tickets — remove any that were closed externally
       RefreshBoundTickets(h);
 
-      // v6.60: Sequential gate — freeze every set whose generation isn't allowed
+      // v6.61: Sequential gate — freeze every set whose generation isn't allowed
       //         Hedge order, bound orders and expansion tracking remain intact;
       //         only matching/avgTP/partial/grid recovery is skipped.
       bool seqFreeze = (InpHedge_SequentialRelease
@@ -9674,7 +9676,7 @@ void ManageHedgeMatchingClose(int idx)
       }
    }
 
-   // v6.60: Include profitable BOUND orders (counterSide) in budget pool
+   // v6.61: Include profitable BOUND orders (counterSide) in budget pool
    //        and close them alongside the matched losses so the entire set
    //        is closed in balance, not just the losing side.
    double boundProfitPool = 0;
@@ -9695,7 +9697,7 @@ void ManageHedgeMatchingClose(int idx)
       }
    }
 
-   double totalBudgetProfit = hedgeProfit + reverseProfit + boundProfitPool;  // v6.60
+   double totalBudgetProfit = hedgeProfit + reverseProfit + boundProfitPool;  // v6.61
    double budget = totalBudgetProfit - InpHedge_MatchMinProfit;
    if(budget <= 0) return;
 
@@ -9754,7 +9756,7 @@ void ManageHedgeMatchingClose(int idx)
    if(lossUsed > 0)
    {
       double finalNet = totalBudgetProfit - cumLoss;
-      Print("HEDGE MATCHING v6.60 Set#", idx + 1, ": hedge $", DoubleToString(hedgeProfit, 2),
+      Print("HEDGE MATCHING v6.61 Set#", idx + 1, ": hedge $", DoubleToString(hedgeProfit, 2),
             " + reverse $", DoubleToString(reverseProfit, 2),
             " + boundProfit $", DoubleToString(boundProfitPool, 2),
             " covers ", lossUsed, " losses ($", DoubleToString(cumLoss, 2),
@@ -9775,7 +9777,7 @@ void ManageHedgeMatchingClose(int idx)
          }
       }
 
-      // v6.60: Close profitable BOUND orders that contributed to budget
+      // v6.61: Close profitable BOUND orders that contributed to budget
       for(int pb = 0; pb < profitableBoundCount; pb++)
       {
          if(PositionSelectByTicket(profitableBoundTickets[pb]))
