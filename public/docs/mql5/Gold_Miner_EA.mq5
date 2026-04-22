@@ -594,6 +594,7 @@ int      g_sequentialRecoveryGen      = -1;    // generation currently owning re
 int      g_sequentialRecoverySetIdx   = -1;    // originating hedge set index (for dashboard/log)
 bool     g_sequentialRecoveryActive   = false; // true → block all other sets and other-gen orphan recovery
 bool     g_sequentialRecoveryCompletedThisTick = false; // one-tick handoff guard
+int      g_lastOrphanGLCount = 0;  // v6.63: dashboard counter for owner-gen orders missing Broker TP
 
 // === v6.61: Recovery Seed (logically-stripped hedge remainders treated as gen orders) ===
 ulong    g_recoverySeedTickets[];   // hedge remainders re-bound as recovery seed
@@ -1461,6 +1462,8 @@ void OnTick()
    // v6.61: Prune recovery seeds + check unified avg TP for current owner
    PruneRecoverySeeds();
    ManageRecoveryOwnerAvgTP();
+   // v6.63: Watchdog — alert if owner-gen orders are missing Broker TP
+   AuditUnTPedOwnerOrders();
 
    // === ORIGINAL TRADING LOGIC (unchanged) ===
    if(g_eaStopped) return;
@@ -2385,6 +2388,17 @@ void SyncBrokerTPSL()
       // Skip hedge/bound orders
       if(IsHedgeComment(PositionGetString(POSITION_COMMENT))) continue;
       if(IsTicketBound(ticket)) continue;
+
+      // v6.63 FIX: Skip orders managed by Recovery Owner — they have their own
+      // per-generation avg TP path (ManageRecoveryOwnerAvgTP). Mixing them into
+      // the global avg TP causes new GLs to be set with the WRONG TP price.
+      if(g_sequentialRecoveryActive)
+      {
+         string ownerComment = PositionGetString(POSITION_COMMENT);
+         int ownerOg = ExtractGeneration(ownerComment);
+         if(ownerOg == g_sequentialRecoveryGen) continue;
+         if(IsRecoverySeedTicket(ticket) && GetRecoverySeedGen(ticket) == g_sequentialRecoveryGen) continue;
+      }
 
       ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
       double curTP = PositionGetDouble(POSITION_TP);
