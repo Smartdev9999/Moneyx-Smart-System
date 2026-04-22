@@ -4193,22 +4193,30 @@ void DisplayDashboard()
       color COLOR_SECTION_HEDGE = C'130,50,180';  // purple for hedge section
       bool anyActive = false;
 
-      // v6.57: Sequential Release status row
+      // v6.57/v6.58: Sequential Release status row
       {
          int seqOldest = GetOldestActiveHedgeSetIndex();
          int activeCnt = 0;
          for(int hc = 0; hc < MAX_HEDGE_SETS; hc++)
             if(g_hedgeSets[hc].active) activeCnt++;
+         int orphanCnt = 0;
+         for(int oc = 0; oc < MAX_ORPHAN_GROUPS; oc++)
+            if(g_orphanGroups[oc].active) orphanCnt++;
+         int allowedGen = GetSequentialAllowedGeneration();
          string seqVal;
          color seqClr;
          if(InpHedge_SequentialRelease)
          {
-            if(seqOldest == -1)
-               seqVal = "ON | No active sets";
+            if(allowedGen == -1)
+               seqVal = "ON | No pending recovery — open orders allowed";
             else
             {
-               int frozen = (activeCnt > 0) ? (activeCnt - 1) : 0;
-               seqVal = "ON | Active: Set#" + IntegerToString(seqOldest + 1) + " (Oldest) | Frozen: " + IntegerToString(frozen);
+               int frozenHedge  = (activeCnt > 0) ? (activeCnt - 1) : 0;
+               int frozenOrphan = (orphanCnt > 0 && allowedGen >= 0) ? (orphanCnt - ((seqOldest == -1) ? 1 : 0)) : 0;
+               if(frozenOrphan < 0) frozenOrphan = 0;
+               seqVal = "ON | Allowed: Gen" + IntegerToString(allowedGen)
+                      + " | Frozen Hedge: " + IntegerToString(frozenHedge)
+                      + " | Frozen Orphans: " + IntegerToString(frozenOrphan);
             }
             seqClr = clrGold;
          }
