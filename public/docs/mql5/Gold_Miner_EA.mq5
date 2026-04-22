@@ -1,7 +1,7 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.68 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.69 - MTF ZigZag+CDC+Grid+License |
 //|         v6.68: GenerationLockedHedgeSlot (slot===gen, no reuse) |
 //+------------------------------------------------------------------+
 #property copyright "Money X System"
