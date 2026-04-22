@@ -8136,6 +8136,9 @@ void SyncRecoveryBasketTP(int idx)
       lots[cnt]    = PositionGetDouble(POSITION_VOLUME);
       cnt++;
       fromHedge++;
+   }
+
+   // 2) Comment scan for recovery grid orders bound to this set
    int gen = g_hedgeSets[idx].boundGeneration;
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
@@ -8175,6 +8178,7 @@ void SyncRecoveryBasketTP(int idx)
       lots[cnt]    = PositionGetDouble(POSITION_VOLUME);
       cnt++;
       fromTicket++;
+   }
 
    // 3) Weighted average
    double totalLots = 0, weightedPrice = 0;
