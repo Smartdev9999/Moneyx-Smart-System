@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.64 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.65 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.64"
-#property description "Gold Miner EA v6.64 - SeqRelease + ProfitLossNetting + MatchPool + MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + BBFilter + License"
+#property version   "6.65"
+#property description "Gold Miner EA v6.65 - NettingPreGate + OrphanContinuousGL + SeqRelease + ProfitLossNetting + MatchPool + MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + BBFilter + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -922,7 +922,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.64 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.65 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min");
@@ -982,7 +982,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.64 deinitialized");
+   Print("Gold Miner EA v6.65 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -3846,7 +3846,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.64 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.64 [ZZ]" : "Gold Miner EA v6.64 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.65 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.65 [ZZ]" : "Gold Miner EA v6.65 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -8874,12 +8874,11 @@ void ManageOrphanGrid()
    }
    if(isExpansion) return;
    
-   // OnlyNewCandle check — same rule as normal grid
-   if(GridLoss_OnlyNewCandle)
-   {
-      datetime barTime = iTime(_Symbol, PERIOD_CURRENT, 0);
-      if(barTime == g_lastOrphanGridCandleTime) return;
-    }
+    // v6.65: Removed global g_lastOrphanGridCandleTime gate.
+    //         Orphan GL expansion is governed by per-side distance check
+    //         (currentPrice vs lastPrice + distance*point) below, plus
+    //         MaxOpenOrders + GridLoss_MaxTrades caps. Allows multiple GL
+    //         layers within the same candle if price moves far enough.
      
     // v6.40: Candle Confirmation — applied per-side inside the loop below
      
@@ -8967,7 +8966,7 @@ void ManageOrphanGrid()
                      string comment = prefix + "_GL#" + IntegerToString(nextLevel);
                       if(OpenOrder(ORDER_TYPE_BUY, lots, comment))
                       {
-                         g_lastOrphanGridCandleTime = iTime(_Symbol, PERIOD_CURRENT, 0);
+                         // v6.65: removed g_lastOrphanGridCandleTime assignment
                          Print("ORPHAN GRID: Opened BUY ", prefix, "_GL#", nextLevel,
                                " lots=", DoubleToString(lots, 2), " for Gen", gen);
                       }
@@ -9016,7 +9015,7 @@ void ManageOrphanGrid()
                      string comment = prefix + "_GL#" + IntegerToString(nextLevel);
                       if(OpenOrder(ORDER_TYPE_SELL, lots, comment))
                       {
-                         g_lastOrphanGridCandleTime = iTime(_Symbol, PERIOD_CURRENT, 0);
+                         // v6.65: removed g_lastOrphanGridCandleTime assignment
                          Print("ORPHAN GRID: Opened SELL ", prefix, "_GL#", nextLevel,
                                " lots=", DoubleToString(lots, 2), " for Gen", gen);
                        }
@@ -9095,6 +9094,15 @@ void ManageHedgeSets()
    //         generation has zero live orders (bound OR hedge).
    int seqAllowedGen = g_seqAllowedGen;  // refreshed each tick in OnTick
 
+   // v6.65: Per-tick netting fallback for the allowed generation. Runs once
+   //         per tick BEFORE the per-set loop so that bound orders of the
+   //         allowed gen — even those scattered across the active set + an
+   //         orphan group — are scanned together.
+   if(InpHedge_SequentialRelease && seqAllowedGen != -1)
+   {
+      RunBoundProfitLossNetting(seqAllowedGen);
+   }
+
    for(int h = 0; h < MAX_HEDGE_SETS; h++)
    {
       if(!g_hedgeSets[h].active) continue;
@@ -9148,6 +9156,19 @@ void ManageHedgeSets()
           continue;
       }
 
+      // v6.65: Profit-Loss Netting — moved BEFORE Triple Gate.
+      //         Netting only touches BOUND orders (skips GM_HEDGE_*),
+      //         so it doesn't violate Triple Gate (which guards hedge close).
+      //         Allows allowed-gen profit lock / loss shred even while
+      //         the hedge is still waiting for expansion/zone/distance.
+      if(InpHedge_SequentialRelease
+         && g_seqAllowedGen != -1
+         && g_hedgeSets[h].boundGeneration == g_seqAllowedGen)
+      {
+         RunBoundProfitLossNetting(g_hedgeSets[h].boundGeneration);
+         RefreshBoundTickets(h);
+      }
+
       // === v6.15: Triple-Gate Close Check ===
       // All recovery actions (matching, grid, partial close) require gate pass
       if(!IsHedgeCloseAllowed(h))
@@ -9158,16 +9179,6 @@ void ManageHedgeSets()
       }
       
       // === Gate passed — close logic allowed ===
-
-      // v6.64: Profit-Loss Netting — net bound profits vs losses BEFORE
-      //         hedge matching/avgTP/grid. Works even when hedge is in loss.
-      if(InpHedge_SequentialRelease
-         && g_seqAllowedGen != -1
-         && g_hedgeSets[h].boundGeneration == g_seqAllowedGen)
-      {
-         RunBoundProfitLossNetting(g_hedgeSets[h].boundGeneration);
-         RefreshBoundTickets(h);
-      }
 
       // If in grid mode → execute grid
       if(g_hedgeSets[h].gridMode)
