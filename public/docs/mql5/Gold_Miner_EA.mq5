@@ -8508,7 +8508,7 @@ void CheckAndOpenHedge()
       if(g_hedgeSets[h].active) activeSetCount++;
    if(activeSetCount >= InpHedge_MaxSets)
    {
-      Print("HEDGE: Max active sets reached (", activeSetCount, "/", InpHedge_MaxSets, ") - skip");
+      Print("v6.66 HEDGE BLOCKED: Active hedge sets = ", activeSetCount, "/", InpHedge_MaxSets, " (cap reached) → skip new hedge for GM", g_cycleGeneration);
       return;
    }
 
@@ -8758,7 +8758,7 @@ bool OpenDDHedge(ENUM_POSITION_TYPE counterSide, ENUM_POSITION_TYPE hedgeSide, i
       if(g_hedgeSets[h].active) activeSetCount++;
    if(activeSetCount >= InpHedge_MaxSets)
    {
-      Print("DD HEDGE: Max active sets reached (", activeSetCount, "/", InpHedge_MaxSets, ") - skip");
+      Print("v6.66 DD HEDGE BLOCKED: Active hedge sets = ", activeSetCount, "/", InpHedge_MaxSets, " (cap reached) → skip new DD hedge for GM", bindGen);
       return false;
    }
    
