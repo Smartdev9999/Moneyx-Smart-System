@@ -9309,13 +9309,10 @@ void ManageHedgeSets()
       
       // === Gate passed — close logic allowed ===
 
-      // === v6.57/v6.58/v6.59/v6.63: Sequential Recovery ===
-      // v6.63: After v6.62 strict in-set pooling, matching/AvgTP/PartialClose
-      //        cannot leak across sets — so allow EVERY set to run its OWN
-      //        in-set matching every tick, even while a recovery owner is locked.
-      //        Only RECOVERY GRID (TryEnterCombinedGridMode + ManageHedgeGridMode)
-      //        is gated to the owner generation, so non-owner sets cannot expand
-      //        new grid orders until the owner is fully flat.
+      // === v6.65: Strict Sequential Matching ===
+      // Only the activeMatcherIdx may run matching/AvgTP/PartialClose/Grid.
+      // All other active sets wait silently (no shred, no grid) so we never
+      // get parallel partial closes that leave uncommented remnants.
       bool blockGridForThisSet = false;
       if(InpHedge_SequentialRecovery)
       {
@@ -9325,32 +9322,15 @@ void ManageHedgeSets()
             g_hedgeSets[h].matchingDone = false;
             continue;
          }
-         if(g_sequentialRecoveryActive)
+         if(activeMatcherIdx >= 0 && h != activeMatcherIdx)
          {
-            // v6.63: matching allowed (in-set safe). Block grid only for non-owner sets.
-            int boundGenH = g_hedgeSets[h].boundGeneration;
-            if(boundGenH != g_sequentialRecoveryGen)
-               blockGridForThisSet = true;
+            // v6.65: Non-matcher → skip everything. Reset state so it's ready
+            //        when its turn comes.
+            g_hedgeSets[h].matchingDone = false;
+            continue;
          }
-         else if(sequentialActed)
-         {
-            // Another set has already taken the per-tick grid slot → only block grid
-            blockGridForThisSet = true;
-         }
-         else
-         {
-            int oldestActiveIdx = FindOldestActiveHedgeSet();
-            if(oldestActiveIdx >= 0 && h != oldestActiveIdx)
-            {
-               // Not the oldest → matching still runs (in-set), but grid waits
-               blockGridForThisSet = true;
-            }
-            else
-            {
-               // This set IS the oldest → claim the per-tick grid slot
-               sequentialActed = true;
-            }
-         }
+         // This set IS the active matcher → claim the per-tick slot
+         sequentialActed = true;
       }
 
       // If in grid mode → execute grid (only when grid is permitted for this set)
