@@ -4449,8 +4449,8 @@ void DisplayDashboard()
              // v6.57/v6.65: Recovery Grid mode indicator
              if(Recovery_AutoLot)
              {
-                string recInfo = "Auto:ON Init=" + DoubleToString(Recovery_AutoInitLot, 2) +
-                                 " Mult=" + DoubleToString(Recovery_AutoMult, 2);
+                string recInfo = "Auto:ON Init=" + DoubleToString(InitialLotSize, 2) +
+                                 " Mult=" + DoubleToString(GetRecoveryMultiplyFactor(), 2) + " (shared)";
                 int matcherIdx = g_sequentialRecoveryActive ? g_sequentialRecoverySetIdx : FindOldestActiveHedgeSet();
                 if(matcherIdx >= 0 && matcherIdx < MAX_HEDGE_SETS && g_hedgeSets[matcherIdx].active)
                 {
@@ -7843,9 +7843,9 @@ double SumOrphanGridLots(int gen, ENUM_POSITION_TYPE side)
    return total;
 }
 
-// v6.66: Reverse-walk seed lot — find the lot in series init*mult^n that
-//        makes cumulative just exceed remHedgeLots. That is our seed = first
-//        recovery grid order. Subsequent orders multiply from the previous lot.
+// v6.67: Reverse-walk seed lot — uses InitialLotSize as init and
+//        GetRecoveryMultiplyFactor() (Recovery_MultiplyFactor or GridLoss_MultiplyFactor)
+//        as multiplier. Walks series init*mult^n until cumulative exceeds remHedgeLots.
 double ComputeAutoSeedLot(double remHedgeLots)
 {
    double minLot  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
@@ -7854,7 +7854,9 @@ double ComputeAutoSeedLot(double remHedgeLots)
    if(minLot  <= 0) minLot  = 0.01;
    if(remHedgeLots < minLot) return minLot;
 
-   double curLot = Recovery_AutoInitLot;
+   double mult   = GetRecoveryMultiplyFactor();
+   if(mult <= 1.0) mult = 1.4;  // safety: must grow
+   double curLot = InitialLotSize;
    if(curLot < minLot) curLot = minLot;
    double cum    = 0.0;
    double prev   = curLot;
@@ -7866,19 +7868,21 @@ double ComputeAutoSeedLot(double remHedgeLots)
       cum += normLot;
       if(cum > remHedgeLots + 0.0000001) return normLot;
       prev   = normLot;
-      curLot = normLot * Recovery_AutoMult;
+      curLot = normLot * mult;
    }
    return prev;
 }
 
-// v6.66: Next lot = lastGridLot * mult, normalized
+// v6.67: Next lot = lastGridLot * GetRecoveryMultiplyFactor(), normalized
 double ComputeAutoNextLot(double lastGridLot)
 {
    double minLot  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
    double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
    if(lotStep <= 0) lotStep = 0.01;
    if(minLot  <= 0) minLot  = 0.01;
-   double next = MathFloor((lastGridLot * Recovery_AutoMult) / lotStep + 0.0000001) * lotStep;
+   double mult = GetRecoveryMultiplyFactor();
+   if(mult <= 1.0) mult = 1.4;
+   double next = MathFloor((lastGridLot * mult) / lotStep + 0.0000001) * lotStep;
    if(next < minLot) next = minLot;
    return next;
 }
@@ -10936,10 +10940,10 @@ void ManageHedgeGridMode(int idx)
          if(lastGridLot <= 0)
          {
             nextLot = ComputeAutoSeedLot(remHedge);
-            Print("v6.66 SEED Set#", idx + 1,
+            Print("v6.67 SEED Set#", idx + 1,
                   ": rem=", DoubleToString(remHedge, 2),
-                  " init=", DoubleToString(Recovery_AutoInitLot, 2),
-                  " mult=", DoubleToString(Recovery_AutoMult, 2),
+                  " init=", DoubleToString(InitialLotSize, 2),
+                  " mult=", DoubleToString(GetRecoveryMultiplyFactor(), 2),
                   " -> seed=", DoubleToString(nextLot, 2));
          }
          else
