@@ -8649,11 +8649,18 @@ void ManageOrphanGrid()
      
     double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
    
+   // v6.58: Sequential Release — only the allowed generation may open new orphan grids
+   int seqAllowed = GetSequentialAllowedGeneration();
+
    for(int g = 0; g < MAX_ORPHAN_GROUPS; g++)
    {
       if(!g_orphanGroups[g].active) continue;
-      
+
       int gen = g_orphanGroups[g].generation;
+
+      // v6.58: Skip non-allowed generations (recovery one-at-a-time)
+      if(seqAllowed != -1 && gen != seqAllowed) continue;
+
       string prefix = GenPrefix(gen);
       
       // Re-count fresh each tick to detect if orders were closed
