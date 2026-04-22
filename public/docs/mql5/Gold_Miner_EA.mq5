@@ -10078,21 +10078,11 @@ void ManageHedgeSets()
         if(!InpHedge_UseMatchingClose)
            continue;
 
-        // v6.71: Recovery Close Mode = AVERAGE_TP → skip matching/partial entirely;
-        //        manage entire basket via single weighted-avg broker TP.
-        //        Grid expansion still runs so the set can keep recovering.
-        if(InpRecovery_CloseMode == RECOVERY_CLOSE_AVG_TP)
-        {
-           ManageRecoveryAvgTP(h);
-           g_hedgeSets[h].matchingDone = true;
-           if(!blockGridForThisSet)
-           {
-              if(g_hedgeSets[h].gridMode) ManageHedgeGridMode(h);
-              else                        TryEnterCombinedGridMode(h);
-           }
-           continue;
-        }
-        
+         // v6.72: AVG_TP is now Stage 2 — runs AFTER matching unlocks the main hedge.
+         //        Stage 1 (matching/partial close) below executes normally first.
+         //        Stage 2 trigger is placed after the matching block.
+
+         
        // v6.64: Reset matchingDone every tick for active sets so matching/AvgTP/PartialClose
        //        re-evaluate continuously (budget changes with floating P/L). Strict in-set
        //        pooling (v6.62) makes this safe — no cross-set leakage.
