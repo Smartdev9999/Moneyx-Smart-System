@@ -8796,6 +8796,7 @@ bool OpenDDHedge(ENUM_POSITION_TYPE counterSide, ENUM_POSITION_TYPE hedgeSide, i
    
    ENUM_ORDER_TYPE orderType = (hedgeSide == POSITION_TYPE_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
    if(!OpenOrder(orderType, counterLots, comment)) return false;
+   g_lastHedgeOpenTime = TimeCurrent();  // v6.71: stamp for MinSpacing
    
    // Setup hedge set (same as expansion hedge but with triggerType = 1)
    g_hedgeSets[slot].active = true;
