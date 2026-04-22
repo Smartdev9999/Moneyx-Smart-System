@@ -368,6 +368,10 @@ input int      InpHedge_DDCooldownSec        = 60;    // Min seconds between DD 
 input int      InpHedge_SidePauseMin         = 0;     // v6.39: Pause hedged side entries (minutes, 0=Off)
 input double   InpHedge_DDTriggerDollar      = 500.0; // v6.25: DD$ to trigger hedge (per side)
 input bool     InpHedge_UseMatchingClose     = true;  // v6.51: Enable Hedge Recovery (false=only Balance Guard closes hedge)
+// === v6.71: Hedge MinSpacing + Recovery Close Mode ===
+input int      InpHedge_MinSpacingMin        = 30;    // v6.71: Min minutes between hedge sets (0=Off)
+input ENUM_RECOVERY_CLOSE_MODE InpRecovery_CloseMode = RECOVERY_CLOSE_MATCHING; // v6.71: Recovery close mode after hedge unlock
+input int      InpRecovery_AvgTPDistance     = 500;   // v6.71: AvgTP distance points (AVERAGE_TP mode)
 // v6.28: Balance Guard — close all when equity recovers to target
 input bool     InpBalanceGuard_Enable        = false;  // Balance Guard: Enable
 input ENUM_BALGUARD_MODE InpBalanceGuard_Mode = BALGUARD_FIXED; // Balance Guard: Mode (Fixed / Dynamic)
