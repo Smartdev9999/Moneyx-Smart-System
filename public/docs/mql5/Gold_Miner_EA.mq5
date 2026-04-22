@@ -5,8 +5,8 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.66"
-#property description "Gold Miner EA v6.66 - v6.65 + Smart Generation Recycling (re-anchor cycleGen เมื่อไม่มี active hedge แม้ orphan ค้าง) + Active Hedge Visibility (dashboard X/Max + log บล็อกชัดเจน)"
+#property version   "6.67"
+#property description "Gold Miner EA v6.67 - v6.66 + SeqRecovery Bypass for Profit-Hedge Close (hedge ที่กำไรพอ matching close ได้แม้มี seq owner ของ gen อื่น)"
 #property strict
 
 #include <Trade/Trade.mqh>
