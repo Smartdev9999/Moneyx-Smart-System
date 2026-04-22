@@ -9147,6 +9147,19 @@ void ManageHedgeSets()
           continue;
       }
 
+      // v6.65: Profit-Loss Netting — moved BEFORE Triple Gate.
+      //         Netting only touches BOUND orders (skips GM_HEDGE_*),
+      //         so it doesn't violate Triple Gate (which guards hedge close).
+      //         Allows allowed-gen profit lock / loss shred even while
+      //         the hedge is still waiting for expansion/zone/distance.
+      if(InpHedge_SequentialRelease
+         && g_seqAllowedGen != -1
+         && g_hedgeSets[h].boundGeneration == g_seqAllowedGen)
+      {
+         RunBoundProfitLossNetting(g_hedgeSets[h].boundGeneration);
+         RefreshBoundTickets(h);
+      }
+
       // === v6.15: Triple-Gate Close Check ===
       // All recovery actions (matching, grid, partial close) require gate pass
       if(!IsHedgeCloseAllowed(h))
@@ -9157,16 +9170,6 @@ void ManageHedgeSets()
       }
       
       // === Gate passed — close logic allowed ===
-
-      // v6.64: Profit-Loss Netting — net bound profits vs losses BEFORE
-      //         hedge matching/avgTP/grid. Works even when hedge is in loss.
-      if(InpHedge_SequentialRelease
-         && g_seqAllowedGen != -1
-         && g_hedgeSets[h].boundGeneration == g_seqAllowedGen)
-      {
-         RunBoundProfitLossNetting(g_hedgeSets[h].boundGeneration);
-         RefreshBoundTickets(h);
-      }
 
       // If in grid mode → execute grid
       if(g_hedgeSets[h].gridMode)
