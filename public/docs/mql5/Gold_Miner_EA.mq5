@@ -8718,10 +8718,11 @@ bool OpenDDHedge(ENUM_POSITION_TYPE counterSide, ENUM_POSITION_TYPE hedgeSide, i
       if(IsHedgeComment(cmt)) continue;
       if(IsTicketBound(ticket)) continue;
       if(IsPrevHedgedTicket(ticket)) continue;  // v6.58: never re-bind released tickets
-      // v6.18: Generation filter — only bind current generation orders
+      // v6.65: STRICT generation match — bind ONLY orders of EXACT bindGen
+      // (เดิม v6.38 ใช้ <= → bind orphan ของ gen เก่าเข้า hedge set ใหม่ → ลอตเกินจริง)
       int orderGen = ExtractGeneration(cmt);
       if(orderGen < 0) continue;
-      if(orderGen > bindGen) continue;  // v6.38: bind unbound orders from all gens <= bindGen
+      if(orderGen != bindGen) continue;
       
       int bc = g_hedgeSets[slot].boundTicketCount;
       ArrayResize(g_hedgeSets[slot].boundTickets, bc + 1);
