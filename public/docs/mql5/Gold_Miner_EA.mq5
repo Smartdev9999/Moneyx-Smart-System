@@ -1331,11 +1331,12 @@ void OnTick()
    RefreshNewsData();
 
     // === v6.57: Auto-reset cycle generation when account is fully flat ===
+    // === v6.66: also re-anchor cycleGen when no active hedge but orphans remain ===
     // Catches cases where positions closed by manual / SL / external means and
     // TryResetCycleStateIfFlat was never invoked, leaving comments stuck at GMx.
-    if(g_cycleGeneration > 0 && g_hedgeSetCount == 0 && TotalOrderCount() == 0)
+    if(g_cycleGeneration > 1 && g_hedgeSetCount == 0)
     {
-       TryResetCycleStateIfFlat("OnTick flat-detect");
+       TryResetCycleStateIfFlat("OnTick gen-anchor check");
     }
 
    // === Determine if new orders are blocked (News/Time/Pause) ===
