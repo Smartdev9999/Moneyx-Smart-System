@@ -1,13 +1,13 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.66 - MTF ZigZag+CDC+Grid+License |
-//|         v6.66: ReverseWalkSeed + CombinedAvgTP + MaxGridCap     |
+//|                Gold Miner EA v6.67 - MTF ZigZag+CDC+Grid+License |
+//|         v6.67: UnifiedRecoveryParams (Auto uses Grid Recovery)   |
 //+------------------------------------------------------------------+
 #property copyright "Money X System"
 #property link      ""
-#property version   "6.66"
-#property description "Gold Miner EA v6.66 - ReverseWalkSeed + CombinedAvgTP + MaxGridCap + OneTimeShred + HedgeTicketPersist + StrictSequentialMatching + AutoRecoveryLot + MatchTickRetry + HedgePartialFallback + InSetMatchAlways + PersistHedgeSlot + StrictInSetPool + MatchPoolBothSides + SeqRecoveryOwner + RehedgeGuard + SequentialRecovery + RecoveryGrid + BBFilter + BoundNoClose + StartOrderTrail + PersistGen + HedgeRecoveryToggle + MatchCloseToggle + InstantTP + DashCache + BrokerTPSL + MaxGridTrail + GLCandleConfirm + HedgeSidePause + OrphanGenFix + BalanceGuard + DDHedge + HedgeCloseGate + AvgTP + Squeeze + CDC + MTF ZigZag + License"
+#property version   "6.67"
+#property description "Gold Miner EA v6.67 - UnifiedRecoveryParams + ReverseWalkSeed + CombinedAvgTP + MaxGridCap + OneTimeShred + HedgeTicketPersist + StrictSequentialMatching + AutoRecoveryLot + MatchTickRetry + HedgePartialFallback + InSetMatchAlways + PersistHedgeSlot + StrictInSetPool + MatchPoolBothSides + SeqRecoveryOwner + RehedgeGuard + SequentialRecovery + RecoveryGrid + BBFilter + BoundNoClose + StartOrderTrail + PersistGen + HedgeRecoveryToggle + MatchCloseToggle + InstantTP + DashCache + BrokerTPSL + MaxGridTrail + GLCandleConfirm + HedgeSidePause + OrphanGenFix + BalanceGuard + DDHedge + HedgeCloseGate + AvgTP + Squeeze + CDC + MTF ZigZag + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -400,10 +400,8 @@ input ENUM_ATR_REF   Recovery_ATR_Reference  = ATR_REF_DYNAMIC;             // R
 input int            Recovery_MinGapPoints   = 100;                         // Recovery Min Grid Gap (points)
 input int            Recovery_CandleConfirm  = 0;                           // Recovery Candle Confirm (0=Off)
 
-// === v6.65/v6.66: Auto Recovery Lot Sizing ===
-input bool           Recovery_AutoLot        = false;  // v6.66 Auto: Reverse-walk seed from init*mult^n until cumulative > remHedge
-input double         Recovery_AutoInitLot    = 0.05;   // v6.65 Auto Initial Lot
-input double         Recovery_AutoMult       = 1.4;    // v6.65 Auto Multiplier
+// === v6.67: Auto Recovery Lot Sizing (uses Grid Recovery params above) ===
+input bool           Recovery_AutoLot        = false;  // v6.67 Auto Recovery (Reverse-walk seed, uses InitialLotSize + Recovery/GridLoss MultiplyFactor)
 input bool           Recovery_UseCombinedTP  = true;   // v6.66 Combined Avg TP across remaining hedge + HG_GL orders
 
 // === v6.57: Sequential Hedge Recovery ===
@@ -953,7 +951,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.66 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.67 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min",
@@ -1015,7 +1013,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.66 deinitialized");
+   Print("Gold Miner EA v6.67 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -3888,7 +3886,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.66 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.66 [ZZ]" : "Gold Miner EA v6.66 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.67 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.67 [ZZ]" : "Gold Miner EA v6.67 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -4451,8 +4449,8 @@ void DisplayDashboard()
              // v6.57/v6.65: Recovery Grid mode indicator
              if(Recovery_AutoLot)
              {
-                string recInfo = "Auto:ON Init=" + DoubleToString(Recovery_AutoInitLot, 2) +
-                                 " Mult=" + DoubleToString(Recovery_AutoMult, 2);
+                string recInfo = "Auto:ON Init=" + DoubleToString(InitialLotSize, 2) +
+                                 " Mult=" + DoubleToString(GetRecoveryMultiplyFactor(), 2) + " (shared)";
                 int matcherIdx = g_sequentialRecoveryActive ? g_sequentialRecoverySetIdx : FindOldestActiveHedgeSet();
                 if(matcherIdx >= 0 && matcherIdx < MAX_HEDGE_SETS && g_hedgeSets[matcherIdx].active)
                 {
@@ -7845,9 +7843,9 @@ double SumOrphanGridLots(int gen, ENUM_POSITION_TYPE side)
    return total;
 }
 
-// v6.66: Reverse-walk seed lot — find the lot in series init*mult^n that
-//        makes cumulative just exceed remHedgeLots. That is our seed = first
-//        recovery grid order. Subsequent orders multiply from the previous lot.
+// v6.67: Reverse-walk seed lot — uses InitialLotSize as init and
+//        GetRecoveryMultiplyFactor() (Recovery_MultiplyFactor or GridLoss_MultiplyFactor)
+//        as multiplier. Walks series init*mult^n until cumulative exceeds remHedgeLots.
 double ComputeAutoSeedLot(double remHedgeLots)
 {
    double minLot  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
@@ -7856,7 +7854,9 @@ double ComputeAutoSeedLot(double remHedgeLots)
    if(minLot  <= 0) minLot  = 0.01;
    if(remHedgeLots < minLot) return minLot;
 
-   double curLot = Recovery_AutoInitLot;
+   double mult   = GetRecoveryMultiplyFactor();
+   if(mult <= 1.0) mult = 1.4;  // safety: must grow
+   double curLot = InitialLotSize;
    if(curLot < minLot) curLot = minLot;
    double cum    = 0.0;
    double prev   = curLot;
@@ -7868,19 +7868,21 @@ double ComputeAutoSeedLot(double remHedgeLots)
       cum += normLot;
       if(cum > remHedgeLots + 0.0000001) return normLot;
       prev   = normLot;
-      curLot = normLot * Recovery_AutoMult;
+      curLot = normLot * mult;
    }
    return prev;
 }
 
-// v6.66: Next lot = lastGridLot * mult, normalized
+// v6.67: Next lot = lastGridLot * GetRecoveryMultiplyFactor(), normalized
 double ComputeAutoNextLot(double lastGridLot)
 {
    double minLot  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
    double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
    if(lotStep <= 0) lotStep = 0.01;
    if(minLot  <= 0) minLot  = 0.01;
-   double next = MathFloor((lastGridLot * Recovery_AutoMult) / lotStep + 0.0000001) * lotStep;
+   double mult = GetRecoveryMultiplyFactor();
+   if(mult <= 1.0) mult = 1.4;
+   double next = MathFloor((lastGridLot * mult) / lotStep + 0.0000001) * lotStep;
    if(next < minLot) next = minLot;
    return next;
 }
@@ -10938,10 +10940,10 @@ void ManageHedgeGridMode(int idx)
          if(lastGridLot <= 0)
          {
             nextLot = ComputeAutoSeedLot(remHedge);
-            Print("v6.66 SEED Set#", idx + 1,
+            Print("v6.67 SEED Set#", idx + 1,
                   ": rem=", DoubleToString(remHedge, 2),
-                  " init=", DoubleToString(Recovery_AutoInitLot, 2),
-                  " mult=", DoubleToString(Recovery_AutoMult, 2),
+                  " init=", DoubleToString(InitialLotSize, 2),
+                  " mult=", DoubleToString(GetRecoveryMultiplyFactor(), 2),
                   " -> seed=", DoubleToString(nextLot, 2));
          }
          else
