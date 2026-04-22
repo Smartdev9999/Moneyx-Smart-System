@@ -11094,7 +11094,8 @@ void ManageHedgeGridMode(int idx)
       if(PositionSelectByTicket(g_hedgeSets[idx].hedgeTicket))
          lastPrice = PositionGetDouble(POSITION_PRICE_OPEN);
 
-      // Find last grid order price
+      // Find last grid order price (v6.69: legacy GM_HG + new GM_HD + ticket floaters)
+      int rgGenP = g_hedgeSets[idx].boundGeneration;
       for(int i = PositionsTotal() - 1; i >= 0; i--)
       {
          ulong ticket = PositionGetTicket(i);
@@ -11102,8 +11103,13 @@ void ManageHedgeGridMode(int idx)
          if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
          if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
          string comment = PositionGetString(POSITION_COMMENT);
-         string prefix = "GM_HG" + IntegerToString(idx + 1);
-         if(StringFind(comment, prefix) >= 0)
+         bool isOurs = IsRecoveryGridForSet(comment, idx, rgGenP);
+         if(!isOurs)
+         {
+            for(int k = 0; k < g_hedgeSets[idx].recoveryGridCount; k++)
+               if(g_hedgeSets[idx].recoveryGridTickets[k] == ticket) { isOurs = true; break; }
+         }
+         if(isOurs)
          {
             double gPrice = PositionGetDouble(POSITION_PRICE_OPEN);
             if(g_hedgeSets[idx].hedgeSide == POSITION_TYPE_BUY)
