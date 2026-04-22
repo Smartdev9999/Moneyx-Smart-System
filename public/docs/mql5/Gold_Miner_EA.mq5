@@ -9224,6 +9224,39 @@ void ManageHedgeSets()
       ClearSequentialRecoveryOwner("owner gen flat");
    
    bool sequentialActed = false;  // v6.58: only one hedge set may close/recover per tick
+
+   // v6.65: STRICT SEQUENTIAL MATCHING — pick exactly ONE matcher set per tick.
+   //        Only this set runs matching/AvgTP/PartialClose/Grid. All others
+   //        wait silently to prevent two sets from shredding hedges in parallel
+   //        (which produced uncommented partial remnants in v6.64).
+   int activeMatcherIdx = -1;
+   if(InpHedge_SequentialRecovery)
+   {
+      if(g_sequentialRecoveryActive)
+      {
+         // Owner-locked → matcher = owner set (still must be active)
+         if(g_sequentialRecoverySetIdx >= 0
+            && g_sequentialRecoverySetIdx < MAX_HEDGE_SETS
+            && g_hedgeSets[g_sequentialRecoverySetIdx].active)
+            activeMatcherIdx = g_sequentialRecoverySetIdx;
+         else
+            activeMatcherIdx = FindOldestActiveHedgeSet();
+      }
+      else
+      {
+         activeMatcherIdx = FindOldestActiveHedgeSet();
+      }
+      if(activeMatcherIdx >= 0 && g_hedgeSetCount > 1)
+      {
+         static datetime s_lastSeqLog = 0;
+         if(TimeCurrent() - s_lastSeqLog >= 30)
+         {
+            Print("v6.65 STRICT SEQ: matcher=Set#", activeMatcherIdx + 1,
+                  " | other ", g_hedgeSetCount - 1, " set(s) waiting");
+            s_lastSeqLog = TimeCurrent();
+         }
+      }
+   }
    for(int h = 0; h < MAX_HEDGE_SETS; h++)
    {
       if(!g_hedgeSets[h].active) continue;
