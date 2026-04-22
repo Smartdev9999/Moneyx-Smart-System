@@ -7542,7 +7542,18 @@ int CountSequentialOwnerOrders(int gen)
 bool IsSequentialRecoveryComplete()
 {
    if(!g_sequentialRecoveryActive) return true;
-   return (CountSequentialOwnerOrders(g_sequentialRecoveryGen) == 0);  // v6.60: strict count
+   int gen = g_sequentialRecoveryGen;
+   // v6.61: must be flat by BOTH strict prefix count AND recovery seed/tracker
+   if(CountSequentialOwnerOrders(gen) > 0) return false;
+   // Check any recovery seeds for this gen still alive
+   for(int s = 0; s < g_recoverySeedCount; s++)
+   {
+      if(g_recoverySeedGen[s] == gen && PositionSelectByTicket(g_recoverySeedTickets[s]))
+         return false;
+   }
+   // Check tracker tickets
+   if(!IsRecoverySetFlat(gen)) return false;
+   return true;
 }
 
 void SetSequentialRecoveryOwner(int hedgeSetIdx, int gen)
