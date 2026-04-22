@@ -9764,11 +9764,22 @@ void ManageHedgeSets()
       
       // === Gate passed — close logic allowed ===
 
-      // === v6.57/v6.58/v6.59: Sequential Recovery ===
+      // === v6.57/v6.58/v6.59/v6.67: Sequential Recovery ===
       // v6.59: If a recovery owner exists → block ALL hedge-set release/recovery
       //        until that owner generation is fully closed. Hedges may still open.
       // v6.58: Otherwise enforce one-set-per-tick on the OLDEST active set.
-      if(InpHedge_SequentialRecovery)
+      // v6.67: BYPASS — if THIS hedge is profitable enough to matching-close (gate already passed),
+      //        allow it to close regardless of seq owner / oldest rule. Closing a profit hedge
+      //        only REDUCES exposure — it never harms the recovery owner generation.
+      bool seqBypass_profitClose = false;
+      if(InpHedge_UseMatchingClose && !g_hedgeSets[h].gridMode)
+      {
+         double _hPnL = 0;
+         if(hedgeExists) _hPnL = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+         if(_hPnL > InpHedge_MatchMinProfit) seqBypass_profitClose = true;
+      }
+
+      if(InpHedge_SequentialRecovery && !seqBypass_profitClose)
       {
          // v6.59: Owner active → block every set's release/recovery this tick
          if(g_sequentialRecoveryActive)
@@ -9797,6 +9808,10 @@ void ManageHedgeSets()
          }
          // This set IS the oldest → mark that we're acting on it this tick
          sequentialActed = true;
+      }
+      else if(seqBypass_profitClose && InpHedge_SequentialRecovery && (g_sequentialRecoveryActive || sequentialActed))
+      {
+         Print("v6.67 SEQ BYPASS: Set#", h+1, " profit-close allowed (hedge PnL > MatchMinProfit) despite seq owner Gen", g_sequentialRecoveryGen);
       }
 
       // If in grid mode → execute grid
