@@ -8528,6 +8528,7 @@ void CheckAndOpenHedge()
 
    if(OpenOrder(orderType, counterLots, comment))
    {
+      g_lastHedgeOpenTime = TimeCurrent();  // v6.71: stamp for MinSpacing
       g_hedgeSets[slot].active = true;
       g_hedgeSets[slot].hedgeSide = hedgeSide;
       g_hedgeSets[slot].counterSide = counterSide;
