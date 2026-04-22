@@ -8795,7 +8795,12 @@ void RecoverHedgeSets()
          if(boundGen < 0 || orderGen < boundGen) boundGen = orderGen;
       }
       
-      g_hedgeSets[h].boundGeneration = (boundGen >= 0) ? boundGen : 0;
+      // v6.68: Generation-locked invariant — slot index === bound generation.
+      // Override oldest-found logic to keep mapping consistent across restarts.
+      g_hedgeSets[h].boundGeneration = h;
+      if(boundGen >= 0 && boundGen != h)
+         Print("v6.68 RECOVER WARN: Set#", h+1, " oldest bound gen=", boundGen,
+               " differs from slot-locked gen=", h, " — using slot-locked");
       
       // v6.13: Recovery — check if grid orders already exist (resume grid mode)
       // This is the ONLY place where gridMode can be set during recovery (OnInit)
