@@ -8333,6 +8333,8 @@ void CheckAndOpenHedge()
          if(PositionGetString(POSITION_COMMENT) == comment)
          {
             g_hedgeSets[slot].hedgeTicket = ticket;
+            // v6.66: persist hedge ticket so we can re-bind after broker clears partial-close comment
+            GlobalVariableSet("GME_HEDGE_TICKET_" + IntegerToString(slot), (double)ticket);
             break;
          }
       }
@@ -10591,7 +10593,8 @@ void ManageHedgeMatchingClose(int idx)
    if(g_hedgeSets[idx].hedgeTicket > 0 &&
       PositionSelectByTicket(g_hedgeSets[idx].hedgeTicket) &&
       remainingBudget > 0 &&
-      g_hedgeSets[idx].hedgeLots > 0)
+      g_hedgeSets[idx].hedgeLots > 0 &&
+      !g_hedgeSets[idx].shredCompleted)   // v6.66: One-Time Shred guard
    {
       double hedgePnLnow = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
       if(hedgePnLnow < 0)
