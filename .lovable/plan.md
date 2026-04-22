@@ -1,27 +1,21 @@
-## v6.58 — Sequential Release: Block Recovery Grid on Frozen Generations
+## v6.59 — Sequential Release: Allow New Cycle Initial Entries
 
-### หลักการ
-- v6.57 freeze เฉพาะ `ManageHedgeSets()` แต่ orphan grid + main per-gen grid ยังออก order พร้อมกัน
-- v6.58 เพิ่ม `GetSequentialAllowedGeneration()`:
-  - ON + มี hedge set active → allowed = oldest hedge slot index (= bound gen, v6.68)
-  - ON + ไม่มี hedge แต่มี orphan → allowed = oldest orphan generation
-  - ON + ไม่มีอะไรเลย → -1 (unrestricted)
-  - OFF → -1
-- OnTick คำนวณ `g_seqAllowedGen` ก่อน flag → ถ้า allowed != current `g_cycleGeneration` → set `g_newOrderBlocked = true` (block initial + grid loss/profit ใหม่ทั้งหมดของ cycle gen)
-- `ManageOrphanGrid()` skip orphan group ที่ generation != allowed
+### ปัญหา
+v6.58 ตั้ง `g_newOrderBlocked = true` เมื่อ allowedGen != g_cycleGeneration → block initial entry ของ gen ใหม่ → ระบบหยุดเทรดหลัง hedge ครั้งแรก
 
-### ไฟล์: `public/docs/mql5/Gold_Miner_EA.mq5`
-- Version → v6.58 (#property version, description, init/deinit/header logs)
-- Global var `g_seqAllowedGen`
-- Helper `GetSequentialAllowedGeneration()` (วางถัดจาก `GetOldestActiveHedgeSetIndex`)
-- OnTick: คำนวณ allowed gen → block current cycle gen ถ้าไม่ match
-- `ManageOrphanGrid()` loop: skip non-allowed orphan generations
-- Dashboard "Seq Release" แสดง Allowed Gen + Frozen Hedge + Frozen Orphans
+### แก้
+- ลบ `g_newOrderBlocked = true` จาก OnTick (line 1271–1276)
+- เก็บแค่ `g_seqAllowedGen = GetSequentialAllowedGeneration()` ไว้ใช้ที่ ManageOrphanGrid + dashboard
+- Initial entry / new cycle gen → เปิดได้เสมอ
+- Recovery grid (orphan) → ยังถูก gate ทีละ gen ตามเดิม (ManageOrphanGrid)
 
-### สิ่งที่ไม่เปลี่ยนแปลง
-- Order Execution / Strategy / Core Module Logic — ไม่แก้
-- Hedge open/close, Triple Gate, Matching, BoundAvgTP, PartialClose — ไม่แก้
-- Balance Guard, BB Filter, News/Time/License — ไม่แก้
-- Grid distance/lot/candle confirmation — ไม่แก้
-- Hedge orders เปิดได้ปกติทุก gen
-- v6.37–v6.57 features — ไม่แก้
+### ไฟล์
+- `public/docs/mql5/Gold_Miner_EA.mq5` → v6.59 (header/property/init/deinit/dashboard)
+- Comment block + dashboard label "New cycle entries: ALLOWED"
+
+### ไม่เปลี่ยน
+- Order Execution / Strategy / Core Module — ไม่แก้
+- Hedge / Triple Gate / Matching / BoundAvgTP / PartialClose — ไม่แก้
+- Balance Guard / News / Time / License / BB Filter — ไม่แก้
+- ManageOrphanGrid sequential gate — ไม่แก้
+- v6.37–v6.58 features — ไม่แก้
