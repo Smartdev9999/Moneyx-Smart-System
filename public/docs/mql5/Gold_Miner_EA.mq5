@@ -5,8 +5,8 @@
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.62"
-#property description "Gold Miner EA v6.62 - v6.61 + Comments start at GM1 + Hedge tied to bound generation (GM_Hedge_E{gen} / GM_Hedge_D{gen}) + Reset cycles back to GM1"
+#property version   "6.63"
+#property description "Gold Miner EA v6.63 - v6.62 + Recovery Owner Broker TP Sync + Orphan GL Watchdog (fix GL ใหม่หลัง hedge ปลด ไม่ได้ TP)"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -7733,6 +7733,9 @@ void ManageRecoveryOwnerAvgTP()
 //+------------------------------------------------------------------+
 int FindRecoverySetIdx(int gen)
 {
+   // v6.63 FIX: previously hard-coded -1, breaking RecoverySetTracker entirely
+   for(int i = 0; i < g_recoverySetCount; i++)
+      if(g_recoverySets[i].generation == gen) return i;
    return -1;
 }
 
