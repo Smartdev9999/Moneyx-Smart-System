@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.69 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.70 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.69"
-#property description "Gold Miner EA v6.69 - v6.68 + Sequential Unlock Delay (time-based cooldown ก่อนปลด hedge ชุดถัดไป)"
+#property version   "6.70"
+#property description "Gold Miner EA v6.70 - v6.69 + Strict FIFO hedge close (no out-of-order release; profit-bypass gated by toggle)"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -403,6 +403,7 @@ input int            Recovery_CandleConfirm  = 0;                           // R
 input group "=== Sequential Hedge Recovery ==="
 input bool   InpHedge_SequentialRecovery = true;   // true=close oldest hedge set first (H1→H2→H3), false=close any (legacy)
 input int    InpHedge_SequentialUnlockDelayMin = 1; // v6.69: Delay before next hedge set unlock after previous set/owner closes (minutes, 0=Off)
+input bool   InpHedge_AllowProfitBypass = false;   // v6.70: true=allow profitable hedge to close out of FIFO order, false=STRICT FIFO (default)
 
 // === v6.61: Recovery Shred & Seed ===
 input group "=== Recovery Shred & Seed (v6.61) ==="
@@ -986,7 +987,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.69 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.70 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min");
@@ -1046,7 +1047,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.69 deinitialized");
+   Print("Gold Miner EA v6.70 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -3943,7 +3944,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.69 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.69 [ZZ]" : "Gold Miner EA v6.69 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.70 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.70 [ZZ]" : "Gold Miner EA v6.70 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -9812,15 +9813,14 @@ void ManageHedgeSets()
       
       // === Gate passed — close logic allowed ===
 
-      // === v6.57/v6.58/v6.59/v6.67: Sequential Recovery ===
+      // === v6.57/v6.58/v6.59/v6.67/v6.70: Sequential Recovery ===
       // v6.59: If a recovery owner exists → block ALL hedge-set release/recovery
       //        until that owner generation is fully closed. Hedges may still open.
       // v6.58: Otherwise enforce one-set-per-tick on the OLDEST active set.
-      // v6.67: BYPASS — if THIS hedge is profitable enough to matching-close (gate already passed),
-      //        allow it to close regardless of seq owner / oldest rule. Closing a profit hedge
-      //        only REDUCES exposure — it never harms the recovery owner generation.
+      // v6.70: STRICT FIFO is now default. Profit-bypass is gated behind
+      //        InpHedge_AllowProfitBypass and STILL requires set to be the oldest.
       bool seqBypass_profitClose = false;
-      if(InpHedge_UseMatchingClose && !g_hedgeSets[h].gridMode)
+      if(InpHedge_AllowProfitBypass && InpHedge_UseMatchingClose && !g_hedgeSets[h].gridMode)
       {
          double _hPnL = 0;
          if(hedgeExists) _hPnL = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
@@ -9841,14 +9841,16 @@ void ManageHedgeSets()
          continue;
       }
 
-      if(InpHedge_SequentialRecovery && !seqBypass_profitClose)
+      if(InpHedge_SequentialRecovery)
       {
-         // v6.59: Owner active → block every set's release/recovery this tick
-         if(g_sequentialRecoveryActive)
+         // v6.59: Owner active → block every set's release/recovery this tick (even profit bypass)
+         if(g_sequentialRecoveryActive && !seqBypass_profitClose)
          {
             g_hedgeSets[h].matchingDone = false;
             continue;
          }
+         // v6.70: even with bypass enabled, owner lock still blocks unless this IS the oldest
+         //        (oldest check below also applies)
          // v6.59: Just completed handoff this tick → wait one more tick
          if(g_sequentialRecoveryCompletedThisTick)
          {
@@ -9861,34 +9863,29 @@ void ManageHedgeSets()
             g_hedgeSets[h].matchingDone = false;
             continue;
          }
+         // v6.70: STRICT FIFO — only the oldest active set may proceed.
+         //        Profit bypass NO LONGER skips this check; it only skips owner lock above.
          int oldestActiveIdx = FindOldestActiveHedgeSet();
          if(oldestActiveIdx >= 0 && h != oldestActiveIdx)
          {
-            // Reset matchingDone so when this set becomes oldest, recovery re-runs fresh
             g_hedgeSets[h].matchingDone = false;
+            static datetime _lastFifoLog = 0;
+            if(TimeCurrent() - _lastFifoLog >= 30)
+            {
+               double _profit = 0;
+               if(hedgeExists) _profit = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+               Print("v6.70 STRICT FIFO BLOCK: Set#", h+1, " profit=$",
+                     DoubleToString(_profit,2), " deferred — Set#", oldestActiveIdx+1, " must complete first");
+               _lastFifoLog = TimeCurrent();
+            }
             continue;
          }
          // This set IS the oldest → mark that we're acting on it this tick
+         if(seqBypass_profitClose && g_sequentialRecoveryActive)
+            Print("v6.70 SEQ BYPASS (oldest+profit): Set#", h+1, " allowed despite owner Gen", g_sequentialRecoveryGen);
          sequentialActed = true;
       }
-      else if(seqBypass_profitClose && InpHedge_SequentialRecovery)
-      {
-         // v6.68: bypass ยังต้องเคารพ one-set-per-tick — ป้องกันปลด hedge หลายชุดพร้อมกันใน tick เดียว
-         if(sequentialActed)
-         {
-            g_hedgeSets[h].matchingDone = false;
-            Print("v6.68 SEQ BYPASS DEFER: Set#", h+1, " profit-close deferred (another set already acted this tick)");
-            continue;
-         }
-         if(g_sequentialRecoveryCompletedThisTick)
-         {
-            g_hedgeSets[h].matchingDone = false;
-            continue;
-         }
-         if(g_sequentialRecoveryActive)
-            Print("v6.67 SEQ BYPASS: Set#", h+1, " profit-close allowed (hedge PnL > MatchMinProfit) despite seq owner Gen", g_sequentialRecoveryGen);
-         sequentialActed = true;  // v6.68: บล็อก set ถัดไปใน tick นี้
-      }
+
 
       // If in grid mode → execute grid
       if(g_hedgeSets[h].gridMode)
