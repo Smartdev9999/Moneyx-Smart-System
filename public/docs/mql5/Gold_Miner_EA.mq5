@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.62 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.69 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.68"
-#property description "Gold Miner EA v6.68 - v6.67 + Enforce one-hedge-per-tick rule on profit-close bypass (ป้องกันปลด hedge หลายชุดพร้อมกัน)"
+#property version   "6.69"
+#property description "Gold Miner EA v6.69 - v6.68 + Sequential Unlock Delay (time-based cooldown ก่อนปลด hedge ชุดถัดไป)"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -402,6 +402,7 @@ input int            Recovery_CandleConfirm  = 0;                           // R
 // === v6.57: Sequential Hedge Recovery ===
 input group "=== Sequential Hedge Recovery ==="
 input bool   InpHedge_SequentialRecovery = true;   // true=close oldest hedge set first (H1→H2→H3), false=close any (legacy)
+input int    InpHedge_SequentialUnlockDelayMin = 1; // v6.69: Delay before next hedge set unlock after previous set/owner closes (minutes, 0=Off)
 
 // === v6.61: Recovery Shred & Seed ===
 input group "=== Recovery Shred & Seed (v6.61) ==="
@@ -594,6 +595,10 @@ int      g_sequentialRecoveryGen      = -1;    // generation currently owning re
 int      g_sequentialRecoverySetIdx   = -1;    // originating hedge set index (for dashboard/log)
 bool     g_sequentialRecoveryActive   = false; // true → block all other sets and other-gen orphan recovery
 bool     g_sequentialRecoveryCompletedThisTick = false; // one-tick handoff guard
+// === v6.69: Sequential Unlock Delay (time-based cooldown ก่อนปลด hedge ชุดถัดไป) ===
+datetime g_sequentialUnlockBlockedUntil = 0;   // unix time จนกว่าจะปลด set ถัดไปได้
+int      g_sequentialUnlockSourceSetIdx = -1;  // ชุดต้นทางที่ทำให้เริ่ม cooldown (เพื่อ debug)
+string   g_sequentialUnlockReason       = "";  // เหตุผลที่ arm cooldown
 int      g_lastOrphanGLCount = 0;  // v6.63: dashboard counter for owner-gen orders missing Broker TP
 int      g_hedgeIntegrityWarnCount = 0;  // v6.65: count of hedge sets with hedgeLots >> boundLots (>2x)
 int      g_hedgeIntegrityCriticalCount = 0;  // v6.65: count of hedge sets with NO bound orders
