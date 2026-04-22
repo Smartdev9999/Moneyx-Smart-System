@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.70 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.71 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.70"
-#property description "Gold Miner EA v6.70 - v6.69 + Strict FIFO hedge close (no out-of-order release; profit-bypass gated by toggle)"
+#property version   "6.71"
+#property description "Gold Miner EA v6.71 - v6.70 + Grid comment continues from max-level (no duplicate/back-numbered GL/GP after hedge unlock)"
 #property strict
 
 #include <Trade/Trade.mqh>
