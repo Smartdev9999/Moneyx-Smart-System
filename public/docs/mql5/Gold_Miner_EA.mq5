@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.62 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.63 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.62"
-#property description "Gold Miner EA v6.62 - SeqRelease (Hedge Comment Prefix Fix) + MatchPool + MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + BBFilter + License"
+#property version   "6.63"
+#property description "Gold Miner EA v6.63 - SeqRelease (Strict Lowest-Live-Gen Unlock) + MatchPool + MTF ZigZag + CDC + Squeeze + AvgTP + HedgeCloseGate + DDHedge + GenAware + BBFilter + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -916,7 +916,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.62 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.63 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min");
@@ -976,7 +976,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.62 deinitialized");
+   Print("Gold Miner EA v6.63 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -3840,7 +3840,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.62 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.62 [ZZ]" : "Gold Miner EA v6.62 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.63 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.63 [ZZ]" : "Gold Miner EA v6.63 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -4192,7 +4192,7 @@ void DisplayDashboard()
       color COLOR_SECTION_HEDGE = C'130,50,180';  // purple for hedge section
       bool anyActive = false;
 
-      // v6.61: Sequential Release status row (hedge-only comment scan)
+      // v6.63: Sequential Release status row (strict lowest-live-generation)
       {
          int allowedGen = g_seqAllowedGen;
          string seqVal;
@@ -4200,21 +4200,21 @@ void DisplayDashboard()
          if(InpHedge_SequentialRelease)
          {
             if(allowedGen == -1)
-               seqVal = "ON | No active hedge — full trading + free orphan recovery";
+               seqVal = "ON | No live system orders — full trading + free recovery";
             else
             {
-               // Count frozen sets (active hedge sets whose boundGeneration != allowed)
+               // v6.63: strict gate — count any active hedge/orphan whose gen != allowed
                int frozenHedge = 0;
                for(int hc2 = 0; hc2 < MAX_HEDGE_SETS; hc2++)
                   if(g_hedgeSets[hc2].active && g_hedgeSets[hc2].boundGeneration != allowedGen)
                      frozenHedge++;
-               // Orphans frozen only if newer than allowed hedge gen (v6.61 rule)
                int frozenOrphan = 0;
                for(int oc2 = 0; oc2 < MAX_ORPHAN_GROUPS; oc2++)
-                  if(g_orphanGroups[oc2].active && g_orphanGroups[oc2].generation > allowedGen)
+                  if(g_orphanGroups[oc2].active && g_orphanGroups[oc2].generation != allowedGen)
                      frozenOrphan++;
-                seqVal = "ON | Allowed Hedge: Gen" + IntegerToString(allowedGen)
-                       + " (GM_HEDGE_" + IntegerToString(allowedGen + 1) + ")"
+               string genTag = (allowedGen == 0) ? "GM" : ("GM" + IntegerToString(allowedGen));
+                seqVal = "ON | Allowed Gen: Gen" + IntegerToString(allowedGen)
+                       + " (" + genTag + ") | Strict one-by-one"
                       + " | New cycles: ALLOWED"
                       + " | Frozen Hedge: " + IntegerToString(frozenHedge)
                       + " | Frozen Orphans: " + IntegerToString(frozenOrphan);
@@ -7686,10 +7686,14 @@ int ParseGenerationFromComment(string c)
 {
    if(c == "") return -1;
 
-   // v6.62: Hedge comment is "GM_HEDGE_<n>"  → gen = n - 1
+   // v6.63: Hedge comment is "GM_HEDGE_<n>" or "GM_HEDGE_D<n>" (DD-triggered)
+   //         → gen = n - 1 in both cases
    if(StringFind(c, "GM_HEDGE_") == 0)
    {
       string numStr = StringSubstr(c, 9);   // skip "GM_HEDGE_"
+      // v6.63: handle DD prefix "D<n>"
+      if(StringLen(numStr) > 0 && StringGetCharacter(numStr, 0) == 'D')
+         numStr = StringSubstr(numStr, 1);
       int n = (int)StringToInteger(numStr);
       if(n >= 1) return n - 1;
       return -1;
@@ -7729,9 +7733,10 @@ int GetSequentialAllowedGeneration()
 {
    if(!InpHedge_SequentialRelease) return -1;
 
-   // v6.61: Scan ONLY hedge comments (GM_HD<n>). Bound/orphan orders never gate
-   //         the sequential queue — once a hedge set's matching close releases its
-   //         bounds as orphans, the next generation's hedge becomes allowed.
+   // v6.63: Strict sequential queue — scan ALL live system orders (bound, hedge,
+   //         orphan, DD hedge) and return the LOWEST generation still present.
+   //         This guarantees recovery proceeds GM → GM1 → GM2 in strict order:
+   //         while ANY Gen0 order remains, only Gen0 may run recovery.
    int oldest = INT_MAX;
    int total = PositionsTotal();
    for(int i = 0; i < total; i++)
@@ -7743,8 +7748,6 @@ int GetSequentialAllowedGeneration()
       if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
 
       string c = PositionGetString(POSITION_COMMENT);
-      // v6.62: hedge-only filter — match real comment prefix "GM_HEDGE_"
-      if(StringFind(c, "GM_HEDGE_") != 0) continue;
       int gen = ParseGenerationFromComment(c);
       if(gen >= 0 && gen < oldest) oldest = gen;
    }
@@ -8714,10 +8717,10 @@ void ManageOrphanGrid()
 
       int gen = g_orphanGroups[g].generation;
 
-      // v6.61: seqAllowed = lowest live HEDGE generation. Allow orphans whose gen
-      //         is older than or equal to it (no live hedge blocks them); freeze
-      //         only orphans newer than the active hedge generation.
-      if(seqAllowed != -1 && gen > seqAllowed) continue;
+      // v6.63: Strict sequential gate — only the EXACT allowed generation may
+      //         run orphan recovery. Lower/higher generations all freeze until
+      //         the current generation is fully flat.
+      if(seqAllowed != -1 && gen != seqAllowed) continue;
 
       string prefix = GenPrefix(gen);
       
