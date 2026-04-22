@@ -1,13 +1,13 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.70 - MTF ZigZag+CDC+Grid+License |
-//|  v6.70: GM1-Start + ImmediateRecoveryTP + HardFlatReset (GM_HD)  |
+//|                Gold Miner EA v6.71 - MTF ZigZag+CDC+Grid+License |
+//|  v6.71: HedgeMinSpacing(min) + RecoveryCloseMode (Match/AvgTP)  |
 //+------------------------------------------------------------------+
 #property copyright "Money X System"
 #property link      ""
-#property version   "6.70"
-#property description "Gold Miner EA v6.70 - GM1-Start Comment Scheme + ImmediateRecoveryTPSync + HardFlatReset + RecoveryNewCandle + GM_HD<gen>_<NN> Comments + TicketBindFallback + FloaterIncludedTP + GenerationLockedHedgeSlot + UnifiedRecoveryParams + ReverseWalkSeed + CombinedAvgTP + MaxGridCap + OneTimeShred + HedgeTicketPersist + StrictSequentialMatching + AutoRecoveryLot + MatchTickRetry + HedgePartialFallback + InSetMatchAlways + PersistHedgeSlot + StrictInSetPool + MatchPoolBothSides + SeqRecoveryOwner + RehedgeGuard + SequentialRecovery + RecoveryGrid + BBFilter + BoundNoClose + StartOrderTrail + PersistGen + HedgeRecoveryToggle + MatchCloseToggle + InstantTP + DashCache + BrokerTPSL + MaxGridTrail + GLCandleConfirm + HedgeSidePause + OrphanGenFix + BalanceGuard + DDHedge + HedgeCloseGate + AvgTP + Squeeze + CDC + MTF ZigZag + License"
+#property version   "6.71"
+#property description "Gold Miner EA v6.71 - HedgeMinSpacing(min) + RecoveryCloseMode (Matching/AvgTP) + DuplicateHedgeFix + GM1-Start Comment Scheme + ImmediateRecoveryTPSync + HardFlatReset + RecoveryNewCandle + GM_HD<gen>_<NN> Comments + TicketBindFallback + FloaterIncludedTP + GenerationLockedHedgeSlot + UnifiedRecoveryParams + ReverseWalkSeed + CombinedAvgTP + MaxGridCap + OneTimeShred + HedgeTicketPersist + StrictSequentialMatching + AutoRecoveryLot + MatchTickRetry + HedgePartialFallback + InSetMatchAlways + PersistHedgeSlot + StrictInSetPool + MatchPoolBothSides + SeqRecoveryOwner + RehedgeGuard + SequentialRecovery + RecoveryGrid + BBFilter + BoundNoClose + StartOrderTrail + PersistGen + HedgeRecoveryToggle + MatchCloseToggle + InstantTP + DashCache + BrokerTPSL + MaxGridTrail + GLCandleConfirm + HedgeSidePause + OrphanGenFix + BalanceGuard + DDHedge + HedgeCloseGate + AvgTP + Squeeze + CDC + MTF ZigZag + License"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -84,7 +84,13 @@ enum ENUM_HEDGE_TRIGGER
    HEDGE_TRIGGER_DD_DOLLAR  = 2   // Drawdown $ per Side
 };
 
-// Sync Event Type (for real-time data sync)
+// v6.71: Recovery Close Mode after hedge unlock
+enum ENUM_RECOVERY_CLOSE_MODE
+{
+   RECOVERY_CLOSE_MATCHING = 0,  // Matching Close (current — partial close pool)
+   RECOVERY_CLOSE_AVG_TP   = 1   // Weighted Avg TP across bound + hedge + recovery grid
+};
+
 enum ENUM_SYNC_EVENT
 {
    SYNC_SCHEDULED,          // Scheduled sync (daily)
@@ -368,6 +374,10 @@ input int      InpHedge_DDCooldownSec        = 60;    // Min seconds between DD 
 input int      InpHedge_SidePauseMin         = 0;     // v6.39: Pause hedged side entries (minutes, 0=Off)
 input double   InpHedge_DDTriggerDollar      = 500.0; // v6.25: DD$ to trigger hedge (per side)
 input bool     InpHedge_UseMatchingClose     = true;  // v6.51: Enable Hedge Recovery (false=only Balance Guard closes hedge)
+// === v6.71: Hedge MinSpacing + Recovery Close Mode ===
+input int      InpHedge_MinSpacingMin        = 30;    // v6.71: Min minutes between hedge sets (0=Off)
+input ENUM_RECOVERY_CLOSE_MODE InpRecovery_CloseMode = RECOVERY_CLOSE_MATCHING; // v6.71: Recovery close mode after hedge unlock
+input int      InpRecovery_AvgTPDistance     = 500;   // v6.71: AvgTP distance points (AVERAGE_TP mode)
 // v6.28: Balance Guard — close all when equity recovers to target
 input bool     InpBalanceGuard_Enable        = false;  // Balance Guard: Enable
 input ENUM_BALGUARD_MODE InpBalanceGuard_Mode = BALGUARD_FIXED; // Balance Guard: Mode (Fixed / Dynamic)
@@ -608,6 +618,7 @@ double   g_nextBuyDDTrigger  = 5.0;    // DD% threshold for next BUY-side hedge
 double   g_nextSellDDTrigger = 5.0;    // DD% threshold for next SELL-side hedge
 datetime g_lastDDHedgeTime   = 0;      // cooldown tracker
 datetime g_lastHedgeCloseTime = 0;     // v6.25: cooldown after hedge set close
+datetime g_lastHedgeOpenTime  = 0;     // v6.71: last time ANY hedge set opened (MinSpacing gate)
 
 // === v6.39: Hedge Side Pause State ===
 datetime g_lastHedgeBuyTime  = 0;   // last time BUY orders got hedged → pause BUY entries
@@ -972,7 +983,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.70 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.71 initialized successfully | CycleGen=", g_cycleGeneration, " | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min",
@@ -1034,7 +1045,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.70 deinitialized");
+   Print("Gold Miner EA v6.71 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -3911,7 +3922,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.70 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.70 [ZZ]" : "Gold Miner EA v6.70 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.71 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.71 [ZZ]" : "Gold Miner EA v6.71 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -4322,7 +4333,32 @@ void DisplayDashboard()
             DrawTableRow(row, "  Gate", gateInfo, gateClr, COLOR_SECTION_HEDGE); row++;
          }
         }
-        
+
+         // v6.71: Hedge MinSpacing + Recovery Close Mode info
+         {
+            string spacingInfo;
+            if(InpHedge_MinSpacingMin <= 0)
+               spacingInfo = "Off";
+            else if(g_lastHedgeOpenTime <= 0)
+               spacingInfo = IntegerToString(InpHedge_MinSpacingMin) + "min (ready)";
+            else
+            {
+               int elapsedM  = (int)((TimeCurrent() - g_lastHedgeOpenTime) / 60);
+               int remainM   = InpHedge_MinSpacingMin - elapsedM;
+               if(remainM <= 0)
+                  spacingInfo = IntegerToString(InpHedge_MinSpacingMin) + "min (ready, last " + IntegerToString(elapsedM) + "m ago)";
+               else
+                  spacingInfo = IntegerToString(InpHedge_MinSpacingMin) + "min (last " + IntegerToString(elapsedM) + "m — " + IntegerToString(remainM) + "m to next)";
+            }
+            DrawTableRow(row, "Hedge Spacing", spacingInfo, clrSilver, COLOR_SECTION_HEDGE); row++;
+
+            string modeInfo = (InpRecovery_CloseMode == RECOVERY_CLOSE_AVG_TP)
+                              ? ("AVERAGE_TP (dist=" + IntegerToString(InpRecovery_AvgTPDistance) + "p)")
+                              : "MATCHING_CLOSE";
+            DrawTableRow(row, "Recovery Mode", modeInfo, clrSilver, COLOR_SECTION_HEDGE); row++;
+         }
+
+
          // v6.18: DD% / v6.25: DD$ Mode info line with generation scope
           if(InpHedge_TriggerMode == HEDGE_TRIGGER_DD_PERCENT || InpHedge_TriggerMode == HEDGE_TRIGGER_DD_DOLLAR)
           {
@@ -8104,6 +8140,148 @@ int CountHedgeGridOrdersForGen(int gen)
    return cnt;
 }
 
+//+------------------------------------------------------------------+
+//| v6.71: Recovery AvgTP Mode — manage entire set basket             |
+//|        (bound + remaining hedge + recovery grid) via single broker|
+//|        TP placed N points from net weighted-average break-even.   |
+//+------------------------------------------------------------------+
+void ManageRecoveryAvgTP(int idx)
+{
+   if(idx < 0 || idx >= MAX_HEDGE_SETS) return;
+   if(!g_hedgeSets[idx].active) return;
+
+   // Prune dead recovery tickets first
+   CompactRecoveryGridTickets(idx);
+
+   // Build dedup ticket list: hedge + bound + recovery + comment-match GM_HD<gen>_*
+   ulong  tks[];
+   double lots[];
+   double prices[];
+   int    types[];   // 0=BUY, 1=SELL
+   int    cnt = 0;
+
+   // Helper inline: append unique ticket
+   // (manual dedup via linear scan — basket sizes are small)
+
+   // 1) Main hedge ticket
+   ulong hedgeTk = g_hedgeSets[idx].hedgeTicket;
+   if(hedgeTk > 0 && PositionSelectByTicket(hedgeTk))
+   {
+      ArrayResize(tks, cnt + 1);  ArrayResize(lots, cnt + 1);
+      ArrayResize(prices, cnt + 1); ArrayResize(types, cnt + 1);
+      tks[cnt]    = hedgeTk;
+      lots[cnt]   = PositionGetDouble(POSITION_VOLUME);
+      prices[cnt] = PositionGetDouble(POSITION_PRICE_OPEN);
+      types[cnt]  = ((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? 0 : 1;
+      cnt++;
+   }
+
+   // 2) Bound tickets
+   for(int b = 0; b < g_hedgeSets[idx].boundTicketCount; b++)
+   {
+      ulong tk = g_hedgeSets[idx].boundTickets[b];
+      if(tk == 0 || !PositionSelectByTicket(tk)) continue;
+      bool dup = false;
+      for(int z = 0; z < cnt; z++) if(tks[z] == tk) { dup = true; break; }
+      if(dup) continue;
+      ArrayResize(tks, cnt + 1);  ArrayResize(lots, cnt + 1);
+      ArrayResize(prices, cnt + 1); ArrayResize(types, cnt + 1);
+      tks[cnt]    = tk;
+      lots[cnt]   = PositionGetDouble(POSITION_VOLUME);
+      prices[cnt] = PositionGetDouble(POSITION_PRICE_OPEN);
+      types[cnt]  = ((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? 0 : 1;
+      cnt++;
+   }
+
+   // 3) Recovery grid tickets
+   for(int k = 0; k < g_hedgeSets[idx].recoveryGridCount; k++)
+   {
+      ulong tk = g_hedgeSets[idx].recoveryGridTickets[k];
+      if(tk == 0 || !PositionSelectByTicket(tk)) continue;
+      bool dup = false;
+      for(int z = 0; z < cnt; z++) if(tks[z] == tk) { dup = true; break; }
+      if(dup) continue;
+      ArrayResize(tks, cnt + 1);  ArrayResize(lots, cnt + 1);
+      ArrayResize(prices, cnt + 1); ArrayResize(types, cnt + 1);
+      tks[cnt]    = tk;
+      lots[cnt]   = PositionGetDouble(POSITION_VOLUME);
+      prices[cnt] = PositionGetDouble(POSITION_PRICE_OPEN);
+      types[cnt]  = ((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? 0 : 1;
+      cnt++;
+   }
+
+   // 4) Comment-match GM_HD<gen+1>_* (catches floaters that lost ticket binding)
+   int genLabel = g_hedgeSets[idx].boundGeneration + 1;
+   string modern = "GM_HD" + IntegerToString(genLabel) + "_";
+   string legacy = "GM_HG" + IntegerToString(idx + 1);
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      string cmt = PositionGetString(POSITION_COMMENT);
+      if(StringFind(cmt, modern) < 0 && StringFind(cmt, legacy) < 0) continue;
+      bool dup = false;
+      for(int z = 0; z < cnt; z++) if(tks[z] == tk) { dup = true; break; }
+      if(dup) continue;
+      ArrayResize(tks, cnt + 1);  ArrayResize(lots, cnt + 1);
+      ArrayResize(prices, cnt + 1); ArrayResize(types, cnt + 1);
+      tks[cnt]    = tk;
+      lots[cnt]   = PositionGetDouble(POSITION_VOLUME);
+      prices[cnt] = PositionGetDouble(POSITION_PRICE_OPEN);
+      types[cnt]  = ((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? 0 : 1;
+      cnt++;
+   }
+
+   if(cnt < 1) return;
+
+   // Compute weighted avg per side, then net break-even
+   double buyLots = 0,  buyValue  = 0;
+   double sellLots = 0, sellValue = 0;
+   for(int i = 0; i < cnt; i++)
+   {
+      if(types[i] == 0) { buyLots  += lots[i]; buyValue  += lots[i] * prices[i]; }
+      else              { sellLots += lots[i]; sellValue += lots[i] * prices[i]; }
+   }
+
+   double netLots = buyLots - sellLots;  // >0 net BUY, <0 net SELL
+   if(MathAbs(netLots) < 0.0001) return;  // perfectly hedged → no clean BE
+
+   // Basket break-even: priceBE = (buyValue - sellValue) / netLots
+   double priceBE = (buyValue - sellValue) / netLots;
+
+   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   double targetTP;
+   string netSide;
+   if(netLots > 0) { targetTP = priceBE + InpRecovery_AvgTPDistance * point; netSide = "BUY"; }
+   else            { targetTP = priceBE - InpRecovery_AvgTPDistance * point; netSide = "SELL"; }
+
+   int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+   targetTP = NormalizeDouble(targetTP, digits);
+
+   // Apply broker TP to every ticket (keep existing SL)
+   int modified = 0;
+   for(int i = 0; i < cnt; i++)
+   {
+      if(!PositionSelectByTicket(tks[i])) continue;
+      double curTP = PositionGetDouble(POSITION_TP);
+      double curSL = PositionGetDouble(POSITION_SL);
+      if(MathAbs(curTP - targetTP) < point) continue;  // skip no-op
+      if(trade.PositionModify(tks[i], curSL, targetTP)) modified++;
+   }
+
+   if(modified > 0)
+   {
+      Print("v6.71 AVGTP Set#", idx + 1, " (Gen", g_hedgeSets[idx].boundGeneration,
+            "): tickets=", cnt, " netSide=", netSide,
+            " netLots=", DoubleToString(MathAbs(netLots), 2),
+            " avgPx=", DoubleToString(priceBE, digits),
+            " targetTP=", DoubleToString(targetTP, digits),
+            " (", (netLots > 0 ? "+" : "-"), InpRecovery_AvgTPDistance, "p) modified=", modified, "/", cnt);
+   }
+}
+
 // v6.66: Combined Avg TP — sync TP across remaining hedge ticket + all GM_HG{idx+1}_GL
 //        positions of the set. Computes weighted-average price and applies single TP target.
 //        Respects UseTP_Points / UseTP_Dollar / UseTP_PercentBalance priority.
@@ -8486,6 +8664,23 @@ void CheckAndOpenHedge()
       return;
    }
 
+   // v6.71: MinSpacing gate — enforce N minutes between any hedge sets
+   if(InpHedge_MinSpacingMin > 0 && g_lastHedgeOpenTime > 0)
+   {
+      int elapsedSec  = (int)(TimeCurrent() - g_lastHedgeOpenTime);
+      int requiredSec = InpHedge_MinSpacingMin * 60;
+      if(elapsedSec < requiredSec)
+      {
+         static datetime s_lastSpaceLog = 0;
+         if(TimeCurrent() - s_lastSpaceLog >= 60)
+         {
+            Print("v6.71 HEDGE SPACING: wait ", (requiredSec - elapsedSec) / 60, "m more (Expansion)");
+            s_lastSpaceLog = TimeCurrent();
+         }
+         return;
+      }
+   }
+
    // v6.68: Generation-Locked slot — slot id maps 1:1 with current cycle gen
    int slot = FindGenerationHedgeSlot(g_cycleGeneration);
    if(slot < 0)
@@ -8500,6 +8695,7 @@ void CheckAndOpenHedge()
 
    if(OpenOrder(orderType, counterLots, comment))
    {
+      g_lastHedgeOpenTime = TimeCurrent();  // v6.71: stamp for MinSpacing
       g_hedgeSets[slot].active = true;
       g_hedgeSets[slot].hedgeSide = hedgeSide;
       g_hedgeSets[slot].counterSide = counterSide;
@@ -8624,6 +8820,23 @@ void CheckAndOpenHedgeByDD()
    if(now - g_lastDDHedgeTime < InpHedge_DDCooldownSec) return;
    // v6.25: Cooldown after hedge set close to prevent immediate re-trigger
    if(now - g_lastHedgeCloseTime < InpHedge_DDCooldownSec) return;
+
+   // v6.71: MinSpacing gate — minutes between any hedge sets (applies to DD too)
+   if(InpHedge_MinSpacingMin > 0 && g_lastHedgeOpenTime > 0)
+   {
+      int elapsedSec  = (int)(now - g_lastHedgeOpenTime);
+      int requiredSec = InpHedge_MinSpacingMin * 60;
+      if(elapsedSec < requiredSec)
+      {
+         static datetime s_lastDDSpaceLog = 0;
+         if(now - s_lastDDSpaceLog >= 60)
+         {
+            Print("v6.71 HEDGE SPACING: wait ", (requiredSec - elapsedSec) / 60, "m more (DD)");
+            s_lastDDSpaceLog = now;
+         }
+         return;
+      }
+   }
    
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
    if(balance <= 0) return;
@@ -8750,6 +8963,7 @@ bool OpenDDHedge(ENUM_POSITION_TYPE counterSide, ENUM_POSITION_TYPE hedgeSide, i
    
    ENUM_ORDER_TYPE orderType = (hedgeSide == POSITION_TYPE_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
    if(!OpenOrder(orderType, counterLots, comment)) return false;
+   g_lastHedgeOpenTime = TimeCurrent();  // v6.71: stamp for MinSpacing
    
    // Setup hedge set (same as expansion hedge but with triggerType = 1)
    g_hedgeSets[slot].active = true;
@@ -8997,7 +9211,16 @@ void RecoverHedgeSets()
          }
       }
    }
-   
+
+   // v6.71: honor MinSpacing across restart — set last hedge open time = max(active hedge openTime)
+   datetime maxHedgeTime = 0;
+   for(int h = 0; h < MAX_HEDGE_SETS; h++)
+   {
+      if(g_hedgeSets[h].active && g_hedgeSets[h].hedgeOpenTime > maxHedgeTime)
+         maxHedgeTime = g_hedgeSets[h].hedgeOpenTime;
+   }
+   if(maxHedgeTime > 0) g_lastHedgeOpenTime = maxHedgeTime;
+
    // Step 2: Rebind counter-side orders — ONLY bind orders from OLDER generations
    for(int h = 0; h < MAX_HEDGE_SETS; h++)
    {
@@ -9851,10 +10074,25 @@ void ManageHedgeSets()
          continue;
       }
        
-       // v6.52: If hedge recovery disabled → skip ALL recovery (only Balance Guard can close hedge)
-       if(!InpHedge_UseMatchingClose)
-          continue;
-       
+        // v6.52: If hedge recovery disabled → skip ALL recovery (only Balance Guard can close hedge)
+        if(!InpHedge_UseMatchingClose)
+           continue;
+
+        // v6.71: Recovery Close Mode = AVERAGE_TP → skip matching/partial entirely;
+        //        manage entire basket via single weighted-avg broker TP.
+        //        Grid expansion still runs so the set can keep recovering.
+        if(InpRecovery_CloseMode == RECOVERY_CLOSE_AVG_TP)
+        {
+           ManageRecoveryAvgTP(h);
+           g_hedgeSets[h].matchingDone = true;
+           if(!blockGridForThisSet)
+           {
+              if(g_hedgeSets[h].gridMode) ManageHedgeGridMode(h);
+              else                        TryEnterCombinedGridMode(h);
+           }
+           continue;
+        }
+        
        // v6.64: Reset matchingDone every tick for active sets so matching/AvgTP/PartialClose
        //        re-evaluate continuously (budget changes with floating P/L). Strict in-set
        //        pooling (v6.62) makes this safe — no cross-set leakage.

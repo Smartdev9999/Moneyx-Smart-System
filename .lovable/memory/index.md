@@ -1,0 +1,1 @@
+- [Hedge Spacing + Recovery Mode v6.71](mem://trading/gold-miner-ea/hedge-spacing-recovery-mode-v6-71) — MinSpacing minutes between hedge sets (all triggers); MATCHING vs AVERAGE_TP recovery close mode
