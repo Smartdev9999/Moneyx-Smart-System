@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.79 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.80 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
 #property version   "6.78"
-#property description "Gold Miner EA v6.79 - v6.78 + Scheduled Stuck-TP Scanner (สแกน TP ค้างของออเดอร์ที่ยัง hedge-lock อยู่ ทุก N นาที)"
+#property description "Gold Miner EA v6.80 - v6.79 + Stuck-Hedge Scanner (วินิจฉัย hedge set ที่นิ่งเกินเกณฑ์ + auto-heal stale flags)"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -380,6 +380,12 @@ input ENUM_HEDGE_DELAY_MODE InpHedge_OpenDelayMode = HDELAY_BOTH;        // v6.7
 input bool     InpStuckTP_ScanEnable      = true;  // v6.79: Enable scheduled stuck-TP scanner
 input int      InpStuckTP_ScanIntervalMin = 5;     // v6.79: Scan interval (minutes, e.g. 5)
 input bool     InpStuckTP_LogVerbose      = true;  // v6.79: Log each cleared ticket
+// v6.80: Stuck-Hedge Scanner — วินิจฉัย hedge set ที่นิ่งเกินเกณฑ์ + auto-heal stale flags
+input bool     InpStuckHedge_ScanEnable        = true;  // v6.80: Enable stuck-hedge scanner
+input int      InpStuckHedge_ScanIntervalMin   = 5;     // v6.80: Scan interval (minutes)
+input int      InpStuckHedge_StuckThresholdMin = 15;    // v6.80: Idle threshold (minutes) before flagging
+input bool     InpStuckHedge_AutoHeal          = true;  // v6.80: Auto-clear stale owner / matchingDone flags
+input bool     InpStuckHedge_LogVerbose        = true;  // v6.80: Log diagnosis details
 input double   InpHedge_DDTriggerDollar      = 500.0; // v6.25: DD$ to trigger hedge (per side)
 input bool     InpHedge_UseMatchingClose     = true;  // v6.51: Enable Hedge Recovery (false=only Balance Guard closes hedge)
 // v6.28: Balance Guard — close all when equity recovers to target
@@ -607,6 +613,8 @@ struct HedgeSet
    int      triggerType;               // 0 = expansion, 1 = DD%
    // === v6.57: Sequential Recovery ordering ===
    datetime hedgeOpenTime;             // open time of main hedge order (FIFO ordering)
+   // === v6.80: Stuck-Hedge tracking ===
+   datetime lastActionTime;            // last time this set performed an action (matching/avgTP/partial/grid)
 };
 HedgeSet g_hedgeSets[MAX_HEDGE_SETS];
 int      g_hedgeSetCount = 0;
@@ -719,6 +727,12 @@ double   g_lastBrokerSL_Sell       = 0;  // last SL price set for SELL
 datetime g_lastStuckTPScan         = 0;  // last time the scheduled scanner ran
 int      g_stuckTPClearedTotal     = 0;  // running total of TPs cleared by scanner
 int      g_stuckTPClearedLastRun   = 0;  // count cleared in the most recent run
+
+// === v6.80: Stuck-Hedge Scanner state ===
+datetime g_lastStuckHedgeScan         = 0;
+int      g_stuckHedgeDetectedLastRun  = 0;
+int      g_stuckHedgeHealedTotal      = 0;
+string   g_stuckHedgeLastDiag         = "";  // short diag string for dashboard
 
 // === v6.49: Deferred Sync Flags ===
 bool     g_pendingSyncOrderOpen   = false;
@@ -996,6 +1010,7 @@ int OnInit()
        // v6.16: Trigger type init
        g_hedgeSets[h].triggerType = 0;
        g_hedgeSets[h].hedgeOpenTime = 0;  // v6.57
+       g_hedgeSets[h].lastActionTime = 0; // v6.80
      }
      g_hedgeSetCount = 0;
 
@@ -1025,12 +1040,13 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.79 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.80 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min",
           " | HedgeOpenDelay=", InpHedge_OpenDelayMin, "min (mode=", (int)InpHedge_OpenDelayMode, ")",
-          " | StuckTPScan=", (InpStuckTP_ScanEnable ? IntegerToString(InpStuckTP_ScanIntervalMin) + "min" : "OFF"));
+          " | StuckTPScan=", (InpStuckTP_ScanEnable ? IntegerToString(InpStuckTP_ScanIntervalMin) + "min" : "OFF"),
+          " | StuckHedgeScan=", (InpStuckHedge_ScanEnable ? IntegerToString(InpStuckHedge_ScanIntervalMin) + "m/idle" + IntegerToString(InpStuckHedge_StuckThresholdMin) + "m" + (InpStuckHedge_AutoHeal ? "+heal" : "") : "OFF"));
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -1567,6 +1583,13 @@ void OnTick()
      {
         if(TimeCurrent() - g_lastStuckTPScan >= (datetime)(InpStuckTP_ScanIntervalMin * 60))
            ScanAndClearStuckHedgeLockTP();
+     }
+
+     //--- v6.80: Stuck-Hedge Scanner — วินิจฉัย hedge set ที่นิ่งเกินเกณฑ์ + auto-heal stale flags
+     if(InpStuckHedge_ScanEnable && InpStuckHedge_ScanIntervalMin > 0)
+     {
+        if(TimeCurrent() - g_lastStuckHedgeScan >= (datetime)(InpStuckHedge_ScanIntervalMin * 60))
+           ScanAndDiagnoseStuckHedgeSets();
      }
 
      //--- v6.44: Broker-Level TP/SL sync (every 2 seconds) — covers ALL TP modes
@@ -2369,6 +2392,7 @@ void CloseAllPositions()
       // v6.16: Reset trigger type
       g_hedgeSets[h].triggerType = 0;
       g_hedgeSets[h].hedgeOpenTime = 0;  // v6.57
+      g_hedgeSets[h].lastActionTime = 0; // v6.80
    }
    g_hedgeSetCount = 0;
    // v6.16: Reset DD triggers on full close
@@ -4677,6 +4701,31 @@ void DisplayDashboard()
               else
               {
                  DrawTableRow(row, "StuckTP Scan", "OFF", clrGray, COLOR_SECTION_HEDGE); row++;
+              }
+
+              // v6.80: Stuck-Hedge Scanner status
+              if(InpStuckHedge_ScanEnable && InpStuckHedge_ScanIntervalMin > 0)
+              {
+                 datetime nowH = TimeCurrent();
+                 int intH = InpStuckHedge_ScanIntervalMin * 60;
+                 int elapH = (int)(nowH - g_lastStuckHedgeScan);
+                 int nextH = intH - elapH; if(nextH < 0) nextH = 0;
+                 string hScan = "Every " + IntegerToString(InpStuckHedge_ScanIntervalMin) + "m"
+                              + " | Idle>=" + IntegerToString(InpStuckHedge_StuckThresholdMin) + "m"
+                              + " | Next " + IntegerToString(nextH/60) + "m" + IntegerToString(nextH%60) + "s"
+                              + " | Detect " + IntegerToString(g_stuckHedgeDetectedLastRun)
+                              + " | Heal " + IntegerToString(g_stuckHedgeHealedTotal)
+                              + (InpStuckHedge_AutoHeal ? " | Heal:ON" : " | Heal:OFF");
+                 color hClr = (g_stuckHedgeDetectedLastRun > 0) ? clrOrange : clrAqua;
+                 DrawTableRow(row, "StuckHedge Scan", hScan, hClr, COLOR_SECTION_HEDGE); row++;
+                 if(g_stuckHedgeLastDiag != "")
+                 {
+                    DrawTableRow(row, "  ↳ Last Diag", g_stuckHedgeLastDiag, clrOrange, COLOR_SECTION_HEDGE); row++;
+                 }
+              }
+              else
+              {
+                 DrawTableRow(row, "StuckHedge Scan", "OFF", clrGray, COLOR_SECTION_HEDGE); row++;
               }
              
             // v6.40: Grid Loss Candle Confirmation display
@@ -9012,6 +9061,130 @@ void ScanAndClearStuckHedgeLockTP()
    }
 }
 
+//+------------------------------------------------------------------+
+//| v6.80: Stuck-Hedge Scanner — diagnoses idle hedge sets            |
+//| - STALE_OWNER: owner flag held but ownerOrdersLeft==0  → heal     |
+//| - UNLOCK_DELAY stuck > 2x threshold → log warn                    |
+//| - GATE_FAIL / FIFO_BLOCK / OWNER_LOCK → log only (per design)     |
+//| - NO_ACTION (gate ok + oldest + no owner) → reset stale flags     |
+//+------------------------------------------------------------------+
+void ScanAndDiagnoseStuckHedgeSets()
+{
+   g_lastStuckHedgeScan = TimeCurrent();
+   g_stuckHedgeDetectedLastRun = 0;
+   g_stuckHedgeLastDiag = "";
+
+   int thresholdSec = InpStuckHedge_StuckThresholdMin * 60;
+   if(thresholdSec <= 0) thresholdSec = 900;
+
+   int oldestIdx = FindOldestActiveHedgeSet();
+   bool ownerActive = g_sequentialRecoveryActive;
+   int ownerGen = g_sequentialRecoveryGen;
+   int ownerOrdersLeft = ownerActive ? CountSequentialOwnerOrders(ownerGen) : 0;
+   bool unlockDelay = IsSequentialUnlockDelayActive();
+   int unlockRemain = unlockDelay ? GetSequentialUnlockRemainSec() : 0;
+
+   // Heal #A: STALE OWNER
+   if(ownerActive && ownerOrdersLeft == 0)
+   {
+      string diagA = StringFormat("STALE_OWNER: Gen%d ordersLeft=0", ownerGen);
+      g_stuckHedgeDetectedLastRun++;
+      g_stuckHedgeLastDiag = diagA;
+      if(InpStuckHedge_LogVerbose)
+         PrintFormat("v6.80 StuckHedge DETECT %s", diagA);
+      if(InpStuckHedge_AutoHeal)
+      {
+         ClearSequentialRecoveryOwner("v6.80 stuck-heal: owner ordersLeft=0");
+         g_stuckHedgeHealedTotal++;
+         PrintFormat("v6.80 StuckHedge HEAL: cleared stale owner Gen%d", ownerGen);
+         ownerActive = g_sequentialRecoveryActive;
+         ownerGen = g_sequentialRecoveryGen;
+         ownerOrdersLeft = 0;
+      }
+   }
+
+   // Warn #B: UNLOCK_DELAY stuck > 2x threshold
+   if(unlockDelay && unlockRemain > thresholdSec * 2)
+   {
+      string diagB = StringFormat("UNLOCK_DELAY: remain=%ds (>2x threshold) reason=%s",
+                                   unlockRemain, g_sequentialUnlockReason);
+      g_stuckHedgeDetectedLastRun++;
+      if(g_stuckHedgeLastDiag == "") g_stuckHedgeLastDiag = diagB;
+      if(InpStuckHedge_LogVerbose)
+         PrintFormat("v6.80 StuckHedge WARN %s", diagB);
+   }
+
+   // Per-set diagnosis
+   int scanned = 0;
+   int detected = 0;
+   for(int h = 0; h < MAX_HEDGE_SETS; h++)
+   {
+      if(!g_hedgeSets[h].active) continue;
+      scanned++;
+
+      datetime lat = g_hedgeSets[h].lastActionTime;
+      if(lat == 0) { g_hedgeSets[h].lastActionTime = TimeCurrent(); continue; }
+
+      int idleSec = (int)(TimeCurrent() - lat);
+      if(idleSec < thresholdSec) continue;
+
+      bool gateOK = IsHedgeCloseAllowed(h);
+      bool isOldest = (h == oldestIdx);
+      double pnl = 0;
+      if(g_hedgeSets[h].hedgeTicket > 0 && PositionSelectByTicket(g_hedgeSets[h].hedgeTicket))
+         pnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+
+      string reason = "";
+      if(!gateOK)
+         reason = StringFormat("GATE_FAIL: seenExp=%s zoneSet=%s",
+                               g_hedgeSets[h].seenExpansionSinceHedge ? "Y" : "N",
+                               (g_hedgeSets[h].zoneUpperPrice > 0 ? "Y" : "N"));
+      else if(ownerActive && !isOldest)
+         reason = StringFormat("OWNER_LOCK: ownerGen=%d (not oldest)", ownerGen);
+      else if(!isOldest)
+         reason = StringFormat("FIFO_BLOCK: oldest=Set#%d", oldestIdx + 1);
+      else if(unlockDelay)
+         reason = StringFormat("UNLOCK_DELAY: remain=%ds", unlockRemain);
+      else
+      {
+         reason = StringFormat("NO_ACTION: matchingDone=%s pnl=$%s",
+                               g_hedgeSets[h].matchingDone ? "Y" : "N",
+                               DoubleToString(pnl, 2));
+         if(InpStuckHedge_AutoHeal)
+         {
+            g_hedgeSets[h].matchingDone = false;
+            if(!g_hedgeSets[h].seenExpansionSinceHedge)
+               g_hedgeSets[h].seenExpansionSinceHedge = true;
+            g_hedgeSets[h].lastActionTime = TimeCurrent();
+            g_stuckHedgeHealedTotal++;
+            PrintFormat("v6.80 StuckHedge HEAL: Set#%d cleared stale matchingDone + forced seenExpansion (was idle %dm)",
+                        h + 1, idleSec / 60);
+         }
+      }
+
+      detected++;
+      string diag = StringFormat("Set#%d idle=%dm gate=%s oldest=%s pnl=$%s | %s",
+                                 h + 1, idleSec / 60,
+                                 gateOK ? "PASS" : "FAIL",
+                                 isOldest ? "Y" : "N",
+                                 DoubleToString(pnl, 2),
+                                 reason);
+      if(g_stuckHedgeLastDiag == "") g_stuckHedgeLastDiag = diag;
+      if(InpStuckHedge_LogVerbose)
+         PrintFormat("v6.80 StuckHedge DETECT %s", diag);
+   }
+
+   g_stuckHedgeDetectedLastRun += detected;
+
+   if(detected > 0 || InpStuckHedge_LogVerbose)
+   {
+      PrintFormat("v6.80 StuckHedge-Scan summary: scanned=%d detected=%d healedTotal=%d (interval=%dm, threshold=%dm, autoHeal=%s)",
+                  scanned, detected, g_stuckHedgeHealedTotal,
+                  InpStuckHedge_ScanIntervalMin, InpStuckHedge_StuckThresholdMin,
+                  InpStuckHedge_AutoHeal ? "ON" : "OFF");
+   }
+}
+
 
 //| Get lot cap for new orders when hedge set has bound orders          |
 //| Returns -1 if no hedge set exists for this side (no cap)           |
@@ -9258,6 +9431,7 @@ void CheckAndOpenHedge()
    if(OpenOrder(orderType, counterLots, comment))
    {
       g_hedgeSets[slot].active = true;
+      g_hedgeSets[slot].lastActionTime = TimeCurrent();  // v6.80
       g_hedgeSets[slot].hedgeSide = hedgeSide;
       g_hedgeSets[slot].counterSide = counterSide;
       g_hedgeSets[slot].hedgeLots = counterLots;
@@ -9539,6 +9713,7 @@ bool OpenDDHedge(ENUM_POSITION_TYPE counterSide, ENUM_POSITION_TYPE hedgeSide, i
    g_hedgeSets[slot].commentPrefix = comment;
    g_hedgeSets[slot].triggerType = 1;  // DD-triggered
    g_hedgeSets[slot].hedgeOpenTime = TimeCurrent();  // v6.57: temporary; refined after ticket lookup
+   g_hedgeSets[slot].lastActionTime = TimeCurrent(); // v6.80
    
    // Find the hedge ticket
    g_hedgeSets[slot].hedgeTicket = 0;
@@ -11199,6 +11374,7 @@ bool ManageHedgeBoundAvgTP(int idx)
 {
    if(InpHedge_BoundAvgTPPoints <= 0) return false;
    if(g_hedgeSets[idx].boundTicketCount == 0) return false;
+   g_hedgeSets[idx].lastActionTime = TimeCurrent();  // v6.80: mark active
    if(!g_hedgeSets[idx].active) return false;
 
    // Calculate weighted average price of bound orders
@@ -11260,6 +11436,7 @@ bool ManageHedgeBoundAvgTP(int idx)
 //+------------------------------------------------------------------+
 void ManageHedgeMatchingClose(int idx)
 {
+   g_hedgeSets[idx].lastActionTime = TimeCurrent();  // v6.80: mark active
    if(!PositionSelectByTicket(g_hedgeSets[idx].hedgeTicket)) return;
 
    double hedgeProfit = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
@@ -11452,6 +11629,7 @@ void ManageHedgeMatchingClose(int idx)
 //+------------------------------------------------------------------+
 void ManageHedgePartialClose(int idx)
 {
+   g_hedgeSets[idx].lastActionTime = TimeCurrent();  // v6.80: mark active
    // v6.61: SHRED hedge using bound profit (oldest profit-takers first)
    if(!InpHedge_ShredHedgeOnProfit) return;
    if(!PositionSelectByTicket(g_hedgeSets[idx].hedgeTicket)) return;
@@ -11632,6 +11810,7 @@ int CalculateEquivGridLevel(double remainingLots)
 //+------------------------------------------------------------------+
 void ManageHedgeGridMode(int idx)
 {
+   g_hedgeSets[idx].lastActionTime = TimeCurrent();  // v6.80: mark active
    // Verify main hedge ticket
    bool mainHedgeExists = false;
    double mainHedgePnL = 0;
