@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.73 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.74 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "6.73"
-#property description "Gold Miner EA v6.73 - v6.72 + Cross-gen INIT guard + Owner auto skip-forward + Universal No-Re-Hedge of released tickets (let grid recover)"
+#property version   "6.74"
+#property description "Gold Miner EA v6.74 - v6.73 + Released Gen-Side Lock (กัน hedge ซ้ำชุดเดิมหลังปลดล็อค — ปล่อยให้กรีดแก้ต่อจนจบ)"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -407,6 +407,7 @@ input bool   InpHedge_AllowProfitBypass = false;   // v6.70: true=allow profitab
 input bool   InpCrossGen_InitGuard      = true;    // v6.73: block new-gen INIT while older-gen same-side orders are still free (not hedged)
 input bool   InpOwnerAutoAdvance        = true;    // v6.73: auto-advance sequential recovery owner to next remaining gen when current gen flat
 input bool   InpHedge_NoReHedgeReleased = true;    // v6.73: tickets released from any hedge set never get re-hedged (let grid recover)
+input bool   InpHedge_NoReHedgeGenSide  = true;    // v6.74: ทั้ง gen+side ที่เคย hedge แล้วถูกปล่อยจะไม่ถูก hedge ซ้ำอีกจน flat
 
 // === v6.61: Recovery Shred & Seed ===
 input group "=== Recovery Shred & Seed (v6.61) ==="
@@ -650,6 +651,20 @@ datetime g_lastHedgeSellTime = 0;   // last time SELL orders got hedged → paus
 #define MAX_PREV_HEDGED 200
 ulong    g_prevHedgedTickets[MAX_PREV_HEDGED];
 int      g_prevHedgedCount = 0;
+
+// === v6.74: Released Gen+Side Lock — prevent re-hedge of an entire (gen,side) ===
+// Once a hedge set is released and bound orders go back to grid recovery, the
+// SAME (boundGeneration, counterSide) is locked from being hedged again.
+// Lock auto-clears when that gen+side has no live normal/recovery orders left.
+#define MAX_RELEASED_LOCKS 100
+struct ReleasedGenSideLock {
+   int                 generation;
+   ENUM_POSITION_TYPE  side;
+   datetime            lockedAt;
+   bool                active;
+};
+ReleasedGenSideLock g_releasedGenSide[MAX_RELEASED_LOCKS];
+int      g_releasedGenSideCount = 0;
 
 // === v6.28: Balance Guard State ===
 bool g_balanceGuardActive = false;  // activated when hedge set opens
@@ -990,7 +1005,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.73 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.74 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min");
@@ -1050,7 +1065,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.73 deinitialized");
+   Print("Gold Miner EA v6.74 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -1478,6 +1493,8 @@ void OnTick()
    AdvanceSequentialOwnerIfFlat();
    // v6.73: Prune released-ticket list (auto-clean closed entries)
    PrunePrevHedgedTickets();
+   // v6.74: Prune released gen+side locks (auto-clear when gen-side flat)
+   PruneReleasedGenSideLocks();
    // v6.63: Watchdog — alert if owner-gen orders are missing Broker TP
    AuditUnTPedOwnerOrders();
    // v6.65: Watchdog — alert if hedge set lots are inflated vs bound orders
@@ -4089,7 +4106,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.73 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.73 [ZZ]" : "Gold Miner EA v6.73 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.74 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.74 [ZZ]" : "Gold Miner EA v6.74 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -4702,6 +4719,23 @@ void DisplayDashboard()
                                       " | INIT=" + ((lgB > 0 || lgS > 0) ? "BLOCK" : "ALLOW");
                    color guardCol = (lgB > 0 || lgS > 0) ? clrYellow : clrLime;
                    DrawTableRow(row, "ReEntryGuard", guardInfo, guardCol, COLOR_SECTION_HEDGE); row++;
+                }
+                // v6.74: Released Gen+Side lock status row
+                if(InpHedge_NoReHedgeGenSide && g_releasedGenSideCount > 0)
+                {
+                   string lockInfo = "";
+                   int shown = 0;
+                   for(int li = 0; li < g_releasedGenSideCount && shown < 4; li++)
+                   {
+                      if(!g_releasedGenSide[li].active) continue;
+                      if(shown > 0) lockInfo += ", ";
+                      lockInfo += "GM" + IntegerToString(g_releasedGenSide[li].generation) +
+                                  (g_releasedGenSide[li].side == POSITION_TYPE_BUY ? " B" : " S");
+                      shown++;
+                   }
+                   if(shown == 0) lockInfo = "(none)";
+                   else lockInfo = IntegerToString(shown) + " locked: " + lockInfo;
+                   DrawTableRow(row, "NoReHedgeLock", lockInfo, clrOrange, COLOR_SECTION_HEDGE); row++;
                 }
              }
 
@@ -8440,18 +8474,127 @@ void PrunePrevHedgedTickets()
    g_prevHedgedCount = w;
 }
 
+//+------------------------------------------------------------------+
+//| v6.74: Released Gen+Side lock helpers                              |
+//+------------------------------------------------------------------+
+bool IsReleasedGenSideLocked(int gen, ENUM_POSITION_TYPE side)
+{
+   if(!InpHedge_NoReHedgeGenSide) return false;
+   if(gen < 1) return false;
+   for(int i = 0; i < g_releasedGenSideCount; i++)
+   {
+      if(!g_releasedGenSide[i].active) continue;
+      if(g_releasedGenSide[i].generation == gen && g_releasedGenSide[i].side == side)
+         return true;
+   }
+   return false;
+}
+
+void MarkGenSideReleased(int gen, ENUM_POSITION_TYPE side, string reason)
+{
+   if(!InpHedge_NoReHedgeGenSide) return;
+   if(gen < 1) return;
+   // Skip duplicates
+   for(int i = 0; i < g_releasedGenSideCount; i++)
+   {
+      if(g_releasedGenSide[i].active &&
+         g_releasedGenSide[i].generation == gen &&
+         g_releasedGenSide[i].side == side)
+         return;
+   }
+   if(g_releasedGenSideCount >= MAX_RELEASED_LOCKS)
+   {
+      Print("v6.74 WARNING: g_releasedGenSide[] full (", MAX_RELEASED_LOCKS, ") — cannot lock Gen", gen);
+      return;
+   }
+   g_releasedGenSide[g_releasedGenSideCount].generation = gen;
+   g_releasedGenSide[g_releasedGenSideCount].side       = side;
+   g_releasedGenSide[g_releasedGenSideCount].lockedAt   = TimeCurrent();
+   g_releasedGenSide[g_releasedGenSideCount].active     = true;
+   g_releasedGenSideCount++;
+   Print("v6.74 GEN-SIDE LOCK: Gen", gen, " ", (side == POSITION_TYPE_BUY ? "BUY" : "SELL"),
+         " released → no re-hedge (", reason, ")");
+}
+
+// Count live normal/recovery orders for a specific (gen, side). Excludes hedge comments.
+int CountLiveOrdersForGenSide(int gen, ENUM_POSITION_TYPE side)
+{
+   int cnt = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
+      string cmt = PositionGetString(POSITION_COMMENT);
+      if(IsHedgeComment(cmt)) continue;
+      int og = ExtractGeneration(cmt);
+      if(og != gen) continue;
+      cnt++;
+   }
+   return cnt;
+}
+
+void PruneReleasedGenSideLocks()
+{
+   static datetime lastPrune = 0;
+   if(TimeCurrent() - lastPrune < 5) return;
+   lastPrune = TimeCurrent();
+   if(g_releasedGenSideCount <= 0) return;
+   int w = 0;
+   for(int r = 0; r < g_releasedGenSideCount; r++)
+   {
+      if(!g_releasedGenSide[r].active) continue;
+      int live = CountLiveOrdersForGenSide(g_releasedGenSide[r].generation, g_releasedGenSide[r].side);
+      if(live <= 0)
+      {
+         Print("v6.74 GEN-SIDE LOCK CLEAR: Gen", g_releasedGenSide[r].generation, " ",
+               (g_releasedGenSide[r].side == POSITION_TYPE_BUY ? "BUY" : "SELL"),
+               " is now flat → lock removed");
+         g_releasedGenSide[r].active = false;
+         continue;
+      }
+      if(r != w)
+         g_releasedGenSide[w] = g_releasedGenSide[r];
+      w++;
+   }
+   g_releasedGenSideCount = w;
+}
+
+void ClearAllReleasedGenSideLocks()
+{
+   for(int i = 0; i < MAX_RELEASED_LOCKS; i++)
+      g_releasedGenSide[i].active = false;
+   g_releasedGenSideCount = 0;
+}
+
 void SaveBoundTicketsToPrevHedged(int idx)
 {
    // v6.73: when InpHedge_NoReHedgeReleased=true, mark ALL released tickets (any trigger type)
    // so they never get re-hedged — grid loss/profit must recover them.
    // Legacy behavior (DD-only) when toggle is off.
-   if(!InpHedge_NoReHedgeReleased && g_hedgeSets[idx].triggerType != 1) return;
-   for(int b = 0; b < g_hedgeSets[idx].boundTicketCount; b++)
+   bool ticketGuardActive = (InpHedge_NoReHedgeReleased || g_hedgeSets[idx].triggerType == 1);
+   if(ticketGuardActive)
    {
-      ulong tk = g_hedgeSets[idx].boundTickets[b];
-      if(tk == 0) continue;
-      if(PositionSelectByTicket(tk))
-         AddPrevHedgedTicket(tk);
+      for(int b = 0; b < g_hedgeSets[idx].boundTicketCount; b++)
+      {
+         ulong tk = g_hedgeSets[idx].boundTickets[b];
+         if(tk == 0) continue;
+         if(PositionSelectByTicket(tk))
+            AddPrevHedgedTicket(tk);
+      }
+   }
+   // v6.74: Lock the entire (boundGeneration, counterSide) from being hedged again.
+   //        This is what stops "ชุดเดิมโดน hedge ซ้ำ" after the first release —
+   //        even if new GL/GP orders open inside that gen-side later.
+   if(InpHedge_NoReHedgeGenSide)
+   {
+      int gen = g_hedgeSets[idx].boundGeneration;
+      ENUM_POSITION_TYPE side = g_hedgeSets[idx].counterSide;
+      string trigName = (g_hedgeSets[idx].triggerType == 1 ? "DD" :
+                        (g_hedgeSets[idx].triggerType == 2 ? "Vol" : "Exp"));
+      MarkGenSideReleased(gen, side, "Set#" + IntegerToString(idx + 1) + " released (" + trigName + ")");
    }
 }
 
@@ -8474,6 +8617,7 @@ void TryResetCycleStateIfFlat(string reason)
       SaveCycleGeneration();  // v6.53: persist reset
       g_hedgeSetCount = 0;
       ClearPrevHedgedTickets();
+      ClearAllReleasedGenSideLocks();   // v6.74
       g_lastHedgeBuyTime = 0;   // v6.39: reset side pause
       g_lastHedgeSellTime = 0;  // v6.39: reset side pause
       UpdateDynamicBalanceGuardTarget();  // v6.31: update target immediately when flat
@@ -8571,6 +8715,7 @@ void CheckBalanceGuard()
        g_cycleGeneration = 1;  // v6.62: restart at GM1
        SaveCycleGeneration();  // v6.53: persist reset
        ClearPrevHedgedTickets();
+       ClearAllReleasedGenSideLocks();   // v6.74
        g_lastHedgeBuyTime = 0;   // v6.39: reset side pause
        g_lastHedgeSellTime = 0;  // v6.39: reset side pause
        Print("v6.31 Balance Guard: Full reset complete — ready for fresh cycle");
@@ -8773,6 +8918,22 @@ int CountUnboundOrders(ENUM_POSITION_TYPE side, double &totalLots, double &total
    int count = 0;
    totalLots = 0;
    totalPL = 0;
+   // v6.74: If this (gen, counterSide) was already released from a hedge once,
+   //        report ZERO eligible orders so CheckAndOpenHedge / OpenDDHedge
+   //        cannot open another hedge for the same ชุดเดิม. Grid recovery
+   //        will handle these orders until the gen-side goes flat.
+   if(InpHedge_NoReHedgeGenSide && genFilter >= 1 && IsReleasedGenSideLocked(genFilter, side))
+   {
+      static datetime lastBlockLog = 0;
+      if(TimeCurrent() - lastBlockLog >= 30)
+      {
+         Print("v6.74 RE-HEDGE BLOCKED: Gen", genFilter, " ",
+               (side == POSITION_TYPE_BUY ? "BUY" : "SELL"),
+               " was already released once → grid recovery only");
+         lastBlockLog = TimeCurrent();
+      }
+      return 0;
+   }
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       ulong ticket = PositionGetTicket(i);
