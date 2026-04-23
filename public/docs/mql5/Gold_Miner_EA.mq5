@@ -8455,18 +8455,127 @@ void PrunePrevHedgedTickets()
    g_prevHedgedCount = w;
 }
 
+//+------------------------------------------------------------------+
+//| v6.74: Released Gen+Side lock helpers                              |
+//+------------------------------------------------------------------+
+bool IsReleasedGenSideLocked(int gen, ENUM_POSITION_TYPE side)
+{
+   if(!InpHedge_NoReHedgeGenSide) return false;
+   if(gen < 1) return false;
+   for(int i = 0; i < g_releasedGenSideCount; i++)
+   {
+      if(!g_releasedGenSide[i].active) continue;
+      if(g_releasedGenSide[i].generation == gen && g_releasedGenSide[i].side == side)
+         return true;
+   }
+   return false;
+}
+
+void MarkGenSideReleased(int gen, ENUM_POSITION_TYPE side, string reason)
+{
+   if(!InpHedge_NoReHedgeGenSide) return;
+   if(gen < 1) return;
+   // Skip duplicates
+   for(int i = 0; i < g_releasedGenSideCount; i++)
+   {
+      if(g_releasedGenSide[i].active &&
+         g_releasedGenSide[i].generation == gen &&
+         g_releasedGenSide[i].side == side)
+         return;
+   }
+   if(g_releasedGenSideCount >= MAX_RELEASED_LOCKS)
+   {
+      Print("v6.74 WARNING: g_releasedGenSide[] full (", MAX_RELEASED_LOCKS, ") — cannot lock Gen", gen);
+      return;
+   }
+   g_releasedGenSide[g_releasedGenSideCount].generation = gen;
+   g_releasedGenSide[g_releasedGenSideCount].side       = side;
+   g_releasedGenSide[g_releasedGenSideCount].lockedAt   = TimeCurrent();
+   g_releasedGenSide[g_releasedGenSideCount].active     = true;
+   g_releasedGenSideCount++;
+   Print("v6.74 GEN-SIDE LOCK: Gen", gen, " ", (side == POSITION_TYPE_BUY ? "BUY" : "SELL"),
+         " released → no re-hedge (", reason, ")");
+}
+
+// Count live normal/recovery orders for a specific (gen, side). Excludes hedge comments.
+int CountLiveOrdersForGenSide(int gen, ENUM_POSITION_TYPE side)
+{
+   int cnt = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
+      string cmt = PositionGetString(POSITION_COMMENT);
+      if(IsHedgeComment(cmt)) continue;
+      int og = ExtractGeneration(cmt);
+      if(og != gen) continue;
+      cnt++;
+   }
+   return cnt;
+}
+
+void PruneReleasedGenSideLocks()
+{
+   static datetime lastPrune = 0;
+   if(TimeCurrent() - lastPrune < 5) return;
+   lastPrune = TimeCurrent();
+   if(g_releasedGenSideCount <= 0) return;
+   int w = 0;
+   for(int r = 0; r < g_releasedGenSideCount; r++)
+   {
+      if(!g_releasedGenSide[r].active) continue;
+      int live = CountLiveOrdersForGenSide(g_releasedGenSide[r].generation, g_releasedGenSide[r].side);
+      if(live <= 0)
+      {
+         Print("v6.74 GEN-SIDE LOCK CLEAR: Gen", g_releasedGenSide[r].generation, " ",
+               (g_releasedGenSide[r].side == POSITION_TYPE_BUY ? "BUY" : "SELL"),
+               " is now flat → lock removed");
+         g_releasedGenSide[r].active = false;
+         continue;
+      }
+      if(r != w)
+         g_releasedGenSide[w] = g_releasedGenSide[r];
+      w++;
+   }
+   g_releasedGenSideCount = w;
+}
+
+void ClearAllReleasedGenSideLocks()
+{
+   for(int i = 0; i < MAX_RELEASED_LOCKS; i++)
+      g_releasedGenSide[i].active = false;
+   g_releasedGenSideCount = 0;
+}
+
 void SaveBoundTicketsToPrevHedged(int idx)
 {
    // v6.73: when InpHedge_NoReHedgeReleased=true, mark ALL released tickets (any trigger type)
    // so they never get re-hedged — grid loss/profit must recover them.
    // Legacy behavior (DD-only) when toggle is off.
-   if(!InpHedge_NoReHedgeReleased && g_hedgeSets[idx].triggerType != 1) return;
-   for(int b = 0; b < g_hedgeSets[idx].boundTicketCount; b++)
+   bool ticketGuardActive = (InpHedge_NoReHedgeReleased || g_hedgeSets[idx].triggerType == 1);
+   if(ticketGuardActive)
    {
-      ulong tk = g_hedgeSets[idx].boundTickets[b];
-      if(tk == 0) continue;
-      if(PositionSelectByTicket(tk))
-         AddPrevHedgedTicket(tk);
+      for(int b = 0; b < g_hedgeSets[idx].boundTicketCount; b++)
+      {
+         ulong tk = g_hedgeSets[idx].boundTickets[b];
+         if(tk == 0) continue;
+         if(PositionSelectByTicket(tk))
+            AddPrevHedgedTicket(tk);
+      }
+   }
+   // v6.74: Lock the entire (boundGeneration, counterSide) from being hedged again.
+   //        This is what stops "ชุดเดิมโดน hedge ซ้ำ" after the first release —
+   //        even if new GL/GP orders open inside that gen-side later.
+   if(InpHedge_NoReHedgeGenSide)
+   {
+      int gen = g_hedgeSets[idx].boundGeneration;
+      ENUM_POSITION_TYPE side = g_hedgeSets[idx].counterSide;
+      string trigName = (g_hedgeSets[idx].triggerType == 1 ? "DD" :
+                        (g_hedgeSets[idx].triggerType == 2 ? "Vol" : "Exp"));
+      MarkGenSideReleased(gen, side, "Set#" + IntegerToString(idx + 1) + " released (" + trigName + ")");
    }
 }
 
