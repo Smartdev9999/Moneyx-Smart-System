@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.71 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.72 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.71"
-#property description "Gold Miner EA v6.71 - v6.70 + Grid comment numbering uses MAX(maxLevel+1, count+1) — no duplicate GL#/GP# after hedge unlock"
+#property version   "6.72"
+#property description "Gold Miner EA v6.72 - v6.71 + Force-clear broker TP/SL on bound tickets immediately at hedge open + per-tick safety sweep"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -987,7 +987,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.70 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.72 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min");
@@ -1047,7 +1047,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.70 deinitialized");
+   Print("Gold Miner EA v6.72 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -1509,6 +1509,10 @@ void OnTick()
     if(EntryMode == ENTRY_SMA || EntryMode == ENTRY_INSTANT)
        ManageTPSL();
     // ZigZag mode: per-TF TP/SL + shared accumulate handled in OnTickZigZagMTF()
+
+     //--- v6.72: Per-tick safety sweep — guarantees no bound ticket keeps a stale
+     //          broker TP/SL even if all TP modes are disabled or the 2s timer is late.
+     EnforceClearTPOnAllBound();
 
      //--- v6.44: Broker-Level TP/SL sync (every 2 seconds) — covers ALL TP modes
      if(UseTP_Points || UseTP_Dollar || UseTP_PercentBalance || (EnableSL && UseSL_Points))
@@ -2492,6 +2496,83 @@ void ClearBrokerTPSL()
    g_lastBrokerTP_Sell  = 0;
    g_lastBrokerSL_Sell  = 0;
     }
+
+//+------------------------------------------------------------------+
+//| v6.72: Force-clear broker TP/SL of every bound ticket in a set     |
+//| Called immediately when a hedge opens & binds counter-side orders  |
+//| Independent of TP-mode gates and the 2s sync timer                 |
+//+------------------------------------------------------------------+
+void ClearBrokerTPSLForSet(int slot)
+{
+   if(slot < 0 || slot >= MAX_HEDGE_SETS) return;
+   if(!g_hedgeSets[slot].active) return;
+   int cleared = 0;
+   for(int b = 0; b < g_hedgeSets[slot].boundTicketCount; b++)
+   {
+      ulong tk = g_hedgeSets[slot].boundTickets[b];
+      if(tk == 0) continue;
+      if(!PositionSelectByTicket(tk)) continue;
+      double curTP = PositionGetDouble(POSITION_TP);
+      double curSL = PositionGetDouble(POSITION_SL);
+      if(curTP == 0 && curSL == 0) continue;
+      if(trade.PositionModify(tk, 0, 0))
+      {
+         cleared++;
+         Print("v6.72 ClearTP-OnBind: set#", slot + 1, " ticket #", tk,
+               " TP=", DoubleToString(curTP, _Digits), "->0 SL=",
+               DoubleToString(curSL, _Digits), "->0");
+      }
+      else
+      {
+         Print("v6.72 ClearTP-OnBind FAILED: set#", slot + 1, " ticket #", tk,
+               " err=", GetLastError());
+      }
+   }
+   if(cleared > 0)
+   {
+      // Force next SyncBrokerTPSL to re-evaluate from scratch
+      g_lastBrokerTP_Buy   = -1;
+      g_lastBrokerTP_Sell  = -1;
+      g_lastBrokerSL_Buy   = -1;
+      g_lastBrokerSL_Sell  = -1;
+      g_lastBrokerTPSLSync = 0;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| v6.72: Per-tick safety sweep — guarantees no bound ticket keeps   |
+//| a stale broker TP/SL even if all TP modes are disabled or sync    |
+//| timer is delayed. Runs unconditionally each tick.                  |
+//+------------------------------------------------------------------+
+void EnforceClearTPOnAllBound()
+{
+   for(int h = 0; h < MAX_HEDGE_SETS; h++)
+   {
+      if(!g_hedgeSets[h].active) continue;
+      if(g_hedgeSets[h].boundTicketCount <= 0) continue;
+      for(int b = 0; b < g_hedgeSets[h].boundTicketCount; b++)
+      {
+         ulong tk = g_hedgeSets[h].boundTickets[b];
+         if(tk == 0) continue;
+         if(!PositionSelectByTicket(tk)) continue;
+         // Skip recovery-owner generation tickets — they have their own TP path
+         if(g_sequentialRecoveryActive)
+         {
+            string c = PositionGetString(POSITION_COMMENT);
+            int og = ExtractGeneration(c);
+            if(og == g_sequentialRecoveryGen) continue;
+            if(IsRecoverySeedTicket(tk) && GetRecoverySeedGen(tk) == g_sequentialRecoveryGen) continue;
+         }
+         double curTP = PositionGetDouble(POSITION_TP);
+         double curSL = PositionGetDouble(POSITION_SL);
+         if(curTP == 0 && curSL == 0) continue;
+         if(trade.PositionModify(tk, 0, 0))
+            Print("v6.72 ClearTP-Sweep: set#", h + 1, " ticket #", tk,
+                  " TP=", DoubleToString(curTP, _Digits), "->0 SL=",
+                  DoubleToString(curSL, _Digits), "->0");
+      }
+   }
+}
 
 void ManageTPSL()
 {
@@ -3980,7 +4061,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.70 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.70 [ZZ]" : "Gold Miner EA v6.70 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.72 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.72 [ZZ]" : "Gold Miner EA v6.72 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -8710,6 +8791,10 @@ void CheckAndOpenHedge()
          g_hedgeSets[slot].boundTicketCount = bc + 1;
        }
 
+       // v6.72: Force-clear broker TP/SL on every freshly-bound ticket so
+       // price cannot run into a stale TP and break the hedge lock.
+       ClearBrokerTPSLForSet(slot);
+
        // Store bound generation BEFORE incrementing
        g_hedgeSets[slot].boundGeneration = g_cycleGeneration;
 
@@ -8964,7 +9049,11 @@ bool OpenDDHedge(ENUM_POSITION_TYPE counterSide, ENUM_POSITION_TYPE hedgeSide, i
       g_hedgeSets[slot].boundTickets[bc] = ticket;
       g_hedgeSets[slot].boundTicketCount = bc + 1;
    }
-   
+
+   // v6.72: Force-clear broker TP/SL on every freshly-bound ticket so
+   // price cannot run into a stale TP and break the hedge lock.
+   ClearBrokerTPSLForSet(slot);
+
     g_hedgeSets[slot].boundGeneration = bindGen;  // v6.37: use snapshot gen, not current
    g_cycleGeneration++;
    SaveCycleGeneration();  // v6.53: persist after increment
@@ -9242,6 +9331,9 @@ void RecoverHedgeSets()
       
       Print("RECOVER: Set#", h + 1, " bound ", g_hedgeSets[h].boundTicketCount,
             " counter-side orders (boundGen=", g_hedgeSets[h].boundGeneration, ")");
+
+      // v6.72: Force-clear stale broker TP/SL of recovered bound tickets
+      ClearBrokerTPSLForSet(h);
    }
    
    // Step 3: Clean up orphan GM_HG orders that have no active main hedge
