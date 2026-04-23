@@ -9327,6 +9327,9 @@ void RecoverHedgeSets()
       
       Print("RECOVER: Set#", h + 1, " bound ", g_hedgeSets[h].boundTicketCount,
             " counter-side orders (boundGen=", g_hedgeSets[h].boundGeneration, ")");
+
+      // v6.72: Force-clear stale broker TP/SL of recovered bound tickets
+      ClearBrokerTPSLForSet(h);
    }
    
    // Step 3: Clean up orphan GM_HG orders that have no active main hedge
