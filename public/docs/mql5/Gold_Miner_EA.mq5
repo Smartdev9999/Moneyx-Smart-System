@@ -4658,9 +4658,27 @@ void DisplayDashboard()
                 else
                 {
                    DrawTableRow(row, "Hedge Delay", "READY (mode=" + modeStrD + ", " + IntegerToString(InpHedge_OpenDelayMin) + "m)", clrLime, COLOR_SECTION_HEDGE); row++;
-                }
-             }
-            
+                 }
+              }
+
+              // v6.79: Stuck-TP Scanner status
+              if(InpStuckTP_ScanEnable && InpStuckTP_ScanIntervalMin > 0)
+              {
+                 datetime nowS = TimeCurrent();
+                 int intervalSec = InpStuckTP_ScanIntervalMin * 60;
+                 int elapsedS = (int)(nowS - g_lastStuckTPScan);
+                 int nextInS  = intervalSec - elapsedS; if(nextInS < 0) nextInS = 0;
+                 string scanStr = "Every " + IntegerToString(InpStuckTP_ScanIntervalMin) + "m"
+                                + " | Next " + IntegerToString(nextInS/60) + "m" + IntegerToString(nextInS%60) + "s"
+                                + " | Last " + IntegerToString(g_stuckTPClearedLastRun)
+                                + " | Total " + IntegerToString(g_stuckTPClearedTotal);
+                 DrawTableRow(row, "StuckTP Scan", scanStr, clrAqua, COLOR_SECTION_HEDGE); row++;
+              }
+              else
+              {
+                 DrawTableRow(row, "StuckTP Scan", "OFF", clrGray, COLOR_SECTION_HEDGE); row++;
+              }
+             
             // v6.40: Grid Loss Candle Confirmation display
             if(GridLoss_CandleConfirm > 0)
             {
