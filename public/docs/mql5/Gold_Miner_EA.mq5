@@ -2035,6 +2035,49 @@ bool OpenOrder(ENUM_ORDER_TYPE orderType, double lots, string comment)
 {
    double price = (orderType == ORDER_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
 
+   // === v6.76: Cross-generation INIT re-entry guard ===
+   // Block opening a new GMx_INIT order while older-gen normal orders of the
+   // same side are still alive. This prevents the system from spawning a fresh
+   // generation cycle (e.g. GM4_INIT) while GM2_*/GM3_* legs of the same side
+   // are still floating after a hedge release / partial flat.
+   //
+   // Rationale: CountPositions() filters by g_cycleGeneration only, so once
+   // the cycle gen is bumped, the entry logic incorrectly sees the side as
+   // "empty" even though older-gen legs remain. This guard is a defense-in-
+   // depth check that does NOT modify trading strategy or order execution.
+   if(g_v676_initGuardEnabled && !IsHedgeComment(comment)
+      && StringFind(comment, "_INIT") >= 0)
+   {
+      ENUM_POSITION_TYPE entrySide = (orderType == ORDER_TYPE_BUY) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
+      int legacyCnt = CountAllGenNormalOrdersOnSide(entrySide);
+      if(legacyCnt > 0)
+      {
+         static datetime s_lastV676BlkBuy  = 0;
+         static datetime s_lastV676BlkSell = 0;
+         datetime nowV676 = TimeCurrent();
+         if(entrySide == POSITION_TYPE_BUY)
+         {
+            if(nowV676 - s_lastV676BlkBuy >= 30)
+            {
+               Print("v6.76 INIT BLOCKED: BUY re-entry denied — ", legacyCnt,
+                     " legacy normal order(s) still active on BUY across older generation(s). Comment=", comment);
+               s_lastV676BlkBuy = nowV676;
+            }
+         }
+         else
+         {
+            if(nowV676 - s_lastV676BlkSell >= 30)
+            {
+               Print("v6.76 INIT BLOCKED: SELL re-entry denied — ", legacyCnt,
+                     " legacy normal order(s) still active on SELL across older generation(s). Comment=", comment);
+               s_lastV676BlkSell = nowV676;
+            }
+         }
+         return false;
+      }
+   }
+
+
    //--- v6.56: Bollinger Band Entry Filter (Block New Orders Only — exempt hedge orders)
    if(BB_FilterEnable && !IsHedgeComment(comment))
    {
