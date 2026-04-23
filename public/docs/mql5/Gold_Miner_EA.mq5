@@ -4469,6 +4469,9 @@ void DisplayDashboard()
              DrawTableRow(row, "  DD Trig", ddInfo, clrAqua, COLOR_SECTION_HEDGE); row++;
             string scopeInfo = "Scope: " + GetCommentPrefix() + " (Gen " + IntegerToString(g_cycleGeneration) + ")";
             DrawTableRow(row, "  DD Scope", scopeInfo, clrYellow, COLOR_SECTION_HEDGE); row++;
+            // v6.72: One Hedge Per Gen/Side toggle status
+            string opgStatus = InpHedge_OnePerGenSide ? "ENABLED (1/gen/side)" : "DISABLED";
+            DrawTableRow(row, "  OnePerGen", opgStatus, InpHedge_OnePerGenSide ? clrLime : clrGray, COLOR_SECTION_HEDGE); row++;
          }
         
         // Orphan warning
