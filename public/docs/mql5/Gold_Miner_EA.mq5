@@ -8057,7 +8057,12 @@ void AuditHedgeSetIntegrity()
    static datetime s_lastIntegrityLog = 0;
    if(TimeCurrent() - s_lastIntegrityLog < 30) return;  // throttle 30s
 
+   datetime now = TimeCurrent();
    int warnCnt = 0, critCnt = 0;
+   double minLot  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   if(lotStep <= 0) lotStep = 0.01;
+
    for(int h = 0; h < MAX_HEDGE_SETS; h++)
    {
       if(!g_hedgeSets[h].active) continue;
@@ -8076,30 +8081,135 @@ void AuditHedgeSetIntegrity()
       double hLots = g_hedgeSets[h].hedgeLots;
       int gen = g_hedgeSets[h].boundGeneration;
 
-      // CRITICAL: hedge open but no bound orders at all
+      // ===== Branch A: ORPHAN — hedge open but no bound orders =====
       if(g_hedgeSets[h].boundTicketCount == 0 && hLots > 0)
       {
          critCnt++;
-         Print("v6.65 HEDGE INTEGRITY CRITICAL: set#", h, " gen=", gen,
-               " hedgeLots=", DoubleToString(hLots, 2),
-               " has NO bound orders (orphan hedge — manual review required)");
+         if(g_hedgeSets[h].orphanDetectedAt == 0)
+         {
+            g_hedgeSets[h].orphanDetectedAt = now;
+            Print("v6.73 HEDGE INTEGRITY CRITICAL: set#", h, " gen=", gen,
+                  " hedgeLots=", DoubleToString(hLots, 2),
+                  " has NO bound orders (orphan hedge detected — grace ",
+                  InpHedge_OrphanGraceSec, "s before auto-close)");
+         }
+         else if(InpHedge_AutoCloseOrphan &&
+                 (now - g_hedgeSets[h].orphanDetectedAt) >= InpHedge_OrphanGraceSec)
+         {
+            // Verify hedge ticket still alive
+            ulong hTk = g_hedgeSets[h].hedgeTicket;
+            if(hTk > 0 && PositionSelectByTicket(hTk))
+            {
+               double closeVol = PositionGetDouble(POSITION_VOLUME);
+               if(trade.PositionClose(hTk))
+               {
+                  Print("v6.73 ORPHAN HEDGE AUTO-CLOSED: set#", h, " gen=", gen,
+                        " ticket=", hTk, " lots=", DoubleToString(closeVol, 2),
+                        " (no bound orders for ", (int)(now - g_hedgeSets[h].orphanDetectedAt), "s)");
+                  // Reset slot
+                  g_hedgeSets[h].active = false;
+                  g_hedgeSets[h].hedgeTicket = 0;
+                  g_hedgeSets[h].hedgeLots = 0;
+                  g_hedgeSets[h].originalTotalLots = 0;
+                  g_hedgeSets[h].gridMode = false;
+                  g_hedgeSets[h].gridLevel = 0;
+                  g_hedgeSets[h].gridTicketCount = 0;
+                  ArrayResize(g_hedgeSets[h].gridTickets, 0);
+                  g_hedgeSets[h].boundTicketCount = 0;
+                  ArrayResize(g_hedgeSets[h].boundTickets, 0);
+                  g_hedgeSets[h].triggerType = 0;
+                  g_hedgeSets[h].hedgeOpenTime = 0;
+                  g_hedgeSets[h].orphanDetectedAt = 0;
+                  g_hedgeSets[h].inflationDetectedAt = 0;
+                  g_lastHedgeCloseTime = now;  // arm cooldown like normal close
+               }
+               else
+               {
+                  Print("v6.73 ORPHAN AUTO-CLOSE FAILED: set#", h, " ticket=", hTk,
+                        " err=", GetLastError(), " — will retry next cycle");
+               }
+            }
+            else
+            {
+               // Hedge ticket already gone — just clear the slot
+               Print("v6.73 ORPHAN slot cleanup: set#", h, " hedge ticket missing → reset slot");
+               g_hedgeSets[h].active = false;
+               g_hedgeSets[h].hedgeTicket = 0;
+               g_hedgeSets[h].hedgeLots = 0;
+               g_hedgeSets[h].boundTicketCount = 0;
+               ArrayResize(g_hedgeSets[h].boundTickets, 0);
+               g_hedgeSets[h].orphanDetectedAt = 0;
+               g_hedgeSets[h].inflationDetectedAt = 0;
+            }
+         }
          continue;
       }
+      else
+      {
+         // Bound orders present → clear orphan timer
+         g_hedgeSets[h].orphanDetectedAt = 0;
+      }
 
-      // WARN: hedge volume more than 2x of actual bound coverage
+      // ===== Branch B: INFLATION — hedge volume >> bound coverage =====
       if(boundLotsActual > 0 && hLots > boundLotsActual * 2.0)
       {
          warnCnt++;
-         Print("v6.65 HEDGE INTEGRITY WARN: set#", h, " gen=", gen,
-               " hedgeLots=", DoubleToString(hLots, 2),
-               " >> boundLots=", DoubleToString(boundLotsActual, 2),
-               " (>2x — possible lot inflation)");
+         if(g_hedgeSets[h].inflationDetectedAt == 0)
+         {
+            g_hedgeSets[h].inflationDetectedAt = now;
+            Print("v6.73 HEDGE INTEGRITY WARN: set#", h, " gen=", gen,
+                  " hedgeLots=", DoubleToString(hLots, 2),
+                  " >> boundLots=", DoubleToString(boundLotsActual, 2),
+                  " (>2x — possible lot inflation, grace ",
+                  InpHedge_OrphanGraceSec, "s before auto-trim)");
+         }
+         else if(InpHedge_AutoTrimInflated &&
+                 (now - g_hedgeSets[h].inflationDetectedAt) >= InpHedge_OrphanGraceSec)
+         {
+            ulong hTk = g_hedgeSets[h].hedgeTicket;
+            if(hTk > 0 && PositionSelectByTicket(hTk))
+            {
+               double curVol = PositionGetDouble(POSITION_VOLUME);
+               double targetLots = boundLotsActual * InpHedge_TrimToleranceMult;
+               // round target to lot step
+               targetLots = MathFloor(targetLots / lotStep) * lotStep;
+               if(targetLots < minLot) targetLots = minLot;
+               double excess = curVol - targetLots;
+               // round excess down to step
+               excess = MathFloor(excess / lotStep) * lotStep;
+
+               if(excess >= minLot && excess < curVol)
+               {
+                  if(trade.PositionClosePartial(hTk, excess))
+                  {
+                     g_hedgeSets[h].hedgeLots = curVol - excess;
+                     g_hedgeSets[h].inflationDetectedAt = 0;
+                     Print("v6.73 HEDGE TRIMMED: set#", h, " gen=", gen,
+                           " hedgeLots ", DoubleToString(curVol, 2), "→",
+                           DoubleToString(curVol - excess, 2),
+                           " (target=", DoubleToString(targetLots, 2),
+                           ", boundLots=", DoubleToString(boundLotsActual, 2), ")");
+                  }
+                  else
+                  {
+                     Print("v6.73 HEDGE TRIM FAILED: set#", h, " excess=",
+                           DoubleToString(excess, 2), " err=", GetLastError(),
+                           " — will retry next cycle");
+                  }
+               }
+            }
+         }
+      }
+      else
+      {
+         // No inflation → clear timer
+         g_hedgeSets[h].inflationDetectedAt = 0;
       }
    }
 
    g_hedgeIntegrityWarnCount = warnCnt;
    g_hedgeIntegrityCriticalCount = critCnt;
-   s_lastIntegrityLog = TimeCurrent();
+   s_lastIntegrityLog = now;
 }
 
 //+------------------------------------------------------------------+
