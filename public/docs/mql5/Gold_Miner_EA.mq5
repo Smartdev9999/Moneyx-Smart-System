@@ -728,6 +728,12 @@ datetime g_lastStuckTPScan         = 0;  // last time the scheduled scanner ran
 int      g_stuckTPClearedTotal     = 0;  // running total of TPs cleared by scanner
 int      g_stuckTPClearedLastRun   = 0;  // count cleared in the most recent run
 
+// === v6.80: Stuck-Hedge Scanner state ===
+datetime g_lastStuckHedgeScan         = 0;
+int      g_stuckHedgeDetectedLastRun  = 0;
+int      g_stuckHedgeHealedTotal      = 0;
+string   g_stuckHedgeLastDiag         = "";  // short diag string for dashboard
+
 // === v6.49: Deferred Sync Flags ===
 bool     g_pendingSyncOrderOpen   = false;
 bool     g_pendingSyncOrderClose  = false;
