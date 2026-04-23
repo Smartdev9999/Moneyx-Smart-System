@@ -8295,7 +8295,10 @@ double FindCumulativeSeedLot(int gen, ENUM_POSITION_TYPE side, double targetLots
 
 void SaveBoundTicketsToPrevHedged(int idx)
 {
-   if(g_hedgeSets[idx].triggerType != 1) return;  // only DD-triggered sets
+   // v6.73: when InpHedge_NoReHedgeReleased=true, mark ALL released tickets (any trigger type)
+   // so they never get re-hedged — grid loss/profit must recover them.
+   // Legacy behavior (DD-only) when toggle is off.
+   if(!InpHedge_NoReHedgeReleased && g_hedgeSets[idx].triggerType != 1) return;
    for(int b = 0; b < g_hedgeSets[idx].boundTicketCount; b++)
    {
       ulong tk = g_hedgeSets[idx].boundTickets[b];
