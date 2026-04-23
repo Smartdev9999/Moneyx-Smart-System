@@ -368,6 +368,11 @@ input int      InpHedge_SidePauseMin         = 0;     // v6.39: Pause hedged sid
 input double   InpHedge_DDTriggerDollar      = 500.0; // v6.25: DD$ to trigger hedge (per side)
 input bool     InpHedge_UseMatchingClose     = true;  // v6.51: Enable Hedge Recovery (false=only Balance Guard closes hedge)
 input bool     InpHedge_OnePerGenSide        = true;  // v6.72: Allow only 1 DD hedge per generation per side
+// v6.73: Hedge integrity auto-heal
+input bool     InpHedge_AutoCloseOrphan      = true;  // v6.73: Auto-close hedge with 0 bound orders (orphan recovery)
+input int      InpHedge_OrphanGraceSec       = 30;    // v6.73: Wait this many seconds before auto-closing orphan hedge
+input bool     InpHedge_AutoTrimInflated     = true;  // v6.73: Auto partial-close hedge when hedgeLots > boundLots * 2
+input double   InpHedge_TrimToleranceMult    = 1.10;  // v6.73: Trim hedge down to boundLots * this multiplier (10% buffer)
 // v6.28: Balance Guard — close all when equity recovers to target
 input bool     InpBalanceGuard_Enable        = false;  // Balance Guard: Enable
 input ENUM_BALGUARD_MODE InpBalanceGuard_Mode = BALGUARD_FIXED; // Balance Guard: Mode (Fixed / Dynamic)
@@ -589,6 +594,9 @@ struct HedgeSet
    int      triggerType;               // 0 = expansion, 1 = DD%
    // === v6.57: Sequential Recovery ordering ===
    datetime hedgeOpenTime;             // open time of main hedge order (FIFO ordering)
+   // === v6.73: Hedge integrity auto-heal timestamps ===
+   datetime orphanDetectedAt;          // when orphan condition first observed (boundCount=0)
+   datetime inflationDetectedAt;       // when inflation condition first observed (hedgeLots > boundLots*2)
 };
 HedgeSet g_hedgeSets[MAX_HEDGE_SETS];
 int      g_hedgeSetCount = 0;
@@ -958,6 +966,9 @@ int OnInit()
        g_hedgeSets[h].oldestBoundPrice = 0;
        // v6.16: Trigger type init
        g_hedgeSets[h].triggerType = 0;
+       // v6.73: Integrity auto-heal init
+       g_hedgeSets[h].orphanDetectedAt = 0;
+       g_hedgeSets[h].inflationDetectedAt = 0;
        g_hedgeSets[h].hedgeOpenTime = 0;  // v6.57
      }
      g_hedgeSetCount = 0;
@@ -2290,6 +2301,8 @@ void CloseAllPositions()
       // v6.16: Reset trigger type
       g_hedgeSets[h].triggerType = 0;
       g_hedgeSets[h].hedgeOpenTime = 0;  // v6.57
+      g_hedgeSets[h].orphanDetectedAt = 0;     // v6.73
+      g_hedgeSets[h].inflationDetectedAt = 0;  // v6.73
    }
    g_hedgeSetCount = 0;
    // v6.16: Reset DD triggers on full close
