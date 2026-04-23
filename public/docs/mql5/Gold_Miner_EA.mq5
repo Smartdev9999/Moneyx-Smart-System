@@ -4504,6 +4504,21 @@ void DisplayDashboard()
             color intClr = (g_hedgeIntegrityCriticalCount > 0) ? clrRed :
                            (g_hedgeIntegrityWarnCount > 0 ? clrOrange : clrLime);
             DrawTableRow(row, "  Integrity", intCnt, intClr, COLOR_SECTION_HEDGE); row++;
+            // v6.74: Generation flow mutex status
+            string genMutexStatus = InpHedge_GenFlowMutex
+               ? ("ON CD:" + IntegerToString(InpHedge_PostReleaseGenBlockSec) + "s")
+               : "OFF";
+            int relRemain = 0;
+            if(g_lastReleasedGen >= 0 && InpHedge_PostReleaseGenBlockSec > 0)
+            {
+               int el = (int)(TimeCurrent() - g_lastReleasedGenTime);
+               if(el < InpHedge_PostReleaseGenBlockSec) relRemain = InpHedge_PostReleaseGenBlockSec - el;
+            }
+            string genMutexInfo = genMutexStatus
+               + " | LastGen:" + (g_lastReleasedGen < 0 ? "-" : IntegerToString(g_lastReleasedGen))
+               + " | Remain:" + IntegerToString(relRemain) + "s";
+            color genMutexClr = InpHedge_GenFlowMutex ? (relRemain > 0 ? clrOrange : clrLime) : clrGray;
+            DrawTableRow(row, "  GenMutex", genMutexInfo, genMutexClr, COLOR_SECTION_HEDGE); row++;
          }
         
         // Orphan warning
