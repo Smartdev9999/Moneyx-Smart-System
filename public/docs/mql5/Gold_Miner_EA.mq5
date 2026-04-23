@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.73 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.74 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.73"
-#property description "Gold Miner EA v6.73 - v6.72 + Auto-heal Orphan/Inflated hedges (auto-close hedges with no/insufficient bound orders)"
+#property version   "6.74"
+#property description "Gold Miner EA v6.74 - v6.73 + Generation-level mutex: blocks duplicate DD hedge & recovery grid on same gen during transition"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -373,6 +373,9 @@ input bool     InpHedge_AutoCloseOrphan      = true;  // v6.73: Auto-close hedge
 input int      InpHedge_OrphanGraceSec       = 30;    // v6.73: Wait this many seconds before auto-closing orphan hedge
 input bool     InpHedge_AutoTrimInflated     = true;  // v6.73: Auto partial-close hedge when hedgeLots > boundLots * 2
 input double   InpHedge_TrimToleranceMult    = 1.10;  // v6.73: Trim hedge down to boundLots * this multiplier (10% buffer)
+// v6.74: Generation-level mutex (prevents DD hedge + recovery grid colliding on same generation)
+input bool     InpHedge_GenFlowMutex         = true;  // v6.74: Block DD hedge & recovery grid from racing on same generation
+input int      InpHedge_PostReleaseGenBlockSec = 60;  // v6.74: After releasing a DD hedge, block same generation (DD hedge re-open + recovery grid) for N seconds
 // v6.28: Balance Guard — close all when equity recovers to target
 input bool     InpBalanceGuard_Enable        = false;  // Balance Guard: Enable
 input ENUM_BALGUARD_MODE InpBalanceGuard_Mode = BALGUARD_FIXED; // Balance Guard: Mode (Fixed / Dynamic)
@@ -647,6 +650,10 @@ double   g_nextBuyDDTrigger  = 5.0;    // DD% threshold for next BUY-side hedge
 double   g_nextSellDDTrigger = 5.0;    // DD% threshold for next SELL-side hedge
 datetime g_lastDDHedgeTime   = 0;      // cooldown tracker
 datetime g_lastHedgeCloseTime = 0;     // v6.25: cooldown after hedge set close
+// v6.74: per-generation post-release tracking (gen-scoped cooldown after a DD hedge of that gen was released)
+int      g_lastReleasedGen     = -1;
+datetime g_lastReleasedGenTime = 0;
+string   g_lastGenBlockReason  = "";   // diagnostic: last reason a gen-flow block fired
 
 // === v6.39: Hedge Side Pause State ===
 datetime g_lastHedgeBuyTime  = 0;   // last time BUY orders got hedged → pause BUY entries
