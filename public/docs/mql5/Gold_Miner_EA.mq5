@@ -1510,6 +1510,10 @@ void OnTick()
        ManageTPSL();
     // ZigZag mode: per-TF TP/SL + shared accumulate handled in OnTickZigZagMTF()
 
+     //--- v6.72: Per-tick safety sweep — guarantees no bound ticket keeps a stale
+     //          broker TP/SL even if all TP modes are disabled or the 2s timer is late.
+     EnforceClearTPOnAllBound();
+
      //--- v6.44: Broker-Level TP/SL sync (every 2 seconds) — covers ALL TP modes
      if(UseTP_Points || UseTP_Dollar || UseTP_PercentBalance || (EnableSL && UseSL_Points))
      {
