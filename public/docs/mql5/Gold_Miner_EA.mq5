@@ -8931,6 +8931,12 @@ void CheckAndOpenHedgeByDD()
 bool OpenDDHedge(ENUM_POSITION_TYPE counterSide, ENUM_POSITION_TYPE hedgeSide, int bindGen)
 {
    // v6.37: Use bindGen (snapshot) instead of g_cycleGeneration to prevent race condition
+   // v6.72: Defense-in-depth — block 2nd hedge for same gen+side
+   if(InpHedge_OnePerGenSide && HasActiveHedgeForGenSide(bindGen, counterSide))
+   {
+      Print("v6.72 OpenDDHedge BLOCKED: Gen", bindGen, " ", EnumToString(counterSide), " already hedged → skip");
+      return false;
+   }
    double counterLots = 0, counterPL = 0;
    int counterCount = CountUnboundOrders(counterSide, counterLots, counterPL, bindGen);
    if(counterCount == 0 || counterLots <= 0) return false;
