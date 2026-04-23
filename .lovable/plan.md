@@ -1,86 +1,116 @@
 
 
-## v6.80 — Stuck-Hedge Scanner (วินิจฉัย + Auto-Heal hedge ที่ไม่ขยับ)
+## v6.81 — Older-Gen Bound-Side Grid Continuation + Hedge-Grid Filters/AvgTP
 
-### ปัญหาจากภาพ
-ภาพแสดง `Hedge #1: BUY 0.55L PnL:$1703.90 B:5` พร้อม `Gate T:DD% Cy:Ready Z:OUT OK 3097pts` — แปลว่าราคาผ่าน Triple Gate (Cycle ready, Zone OUT, Distance OK) และ hedge กำไรอยู่ +$1703 แต่ **set ไม่ release / ไม่ match / ไม่กรีดต่อ** ค้างนิ่งอยู่อย่างนั้น
+รวม 2 หัวข้อในเวอร์ชันเดียว:
+- **ส่วน A:** กรีดต่อชุดเก่าที่โดน Hedge-Lock (จากภาพชุดที่ 5/6)
+- **ส่วน B:** แก้ Hedge-Grid (`GM_HG#_GL`) ออกรัวๆ + ไม่มี Broker TP avg
 
-สาเหตุที่เป็นไปได้ (จากการอ่านโค้ด `ManageHedgeSets`):
-1. **FIFO Block** — มี set อื่นเก่ากว่า (oldest) ที่ยังไม่จบ → set นี้ถูก defer
-2. **Owner Lock** — `g_sequentialRecoveryActive = true` ของ gen อื่น → block ทุก set ที่ไม่ใช่ oldest
-3. **Unlock Delay** — `IsSequentialUnlockDelayActive()` ค้าง
-4. **Stale flag** — `matchingDone = true` ค้าง (ปกติถูก reset ทุก tick v6.64 แล้ว แต่เป็นไปได้ในบาง path)
-5. **seenExpansionSinceHedge ไม่ trigger** — แม้ dashboard โชว์ Cy:Ready แต่ flag จริงยังไม่ติด
-6. **Owner gen ไม่มีออเดอร์เหลือแล้ว** แต่ `ClearSequentialRecoveryOwner` ไม่ได้ถูกเรียก
+### ปัญหาที่จะแก้
+
+**A. Older-Gen ไม่กรีดต่อ**
+ภาพแรก (Gen5/Gen6): หลังเปิด `GM_Hedge_D5` ระบบ advance ไป Gen6 → `GM6_INIT` เปิดได้ แต่ `GM5_GL#3` ไม่ออกอีกเลย เพราะ `CheckGridLoss` filter `orderGen != g_cycleGeneration` + ใช้ `GetCommentPrefix()` (= GM6) → Gen5 ไม่มีกรีดเฉลี่ย ปิดยากมาก
+
+**B. Hedge-Grid ออกรัวๆ + ไม่มี Broker TP**
+ภาพ `GM_HG2_GL1..GL9` ราคาห่างกันแค่ ~50pts ออก 9 ไม้ติดกัน:
+1. `ManageHedgeGridMode()` (line 11811) **ไม่เคารพ** `GridLoss_OnlyNewCandle` / `GridLoss_DontSameCandle` / `GridLoss_CandleConfirm` / `GridLoss_MinGapPoints` — ใช้แค่ `g_lastHedgeGridTime < 5s` cooldown
+2. ใช้ `currentGridCount + 1` สำหรับ `GetGridDistance()` แทนที่จะเป็น `nextLevel` (= `gridLevel + currentGridCount`) → distance รีเซ็ตเหมือนเริ่มที่ระดับ 1 ทุกครั้ง → ระยะใกล้เกิน
+3. **ไม่มี broker TP** บนไม้ `GM_HG#_GL*` → ไม่ถูกรวมเข้าค่าเฉลี่ย → ราคาวิ่งชน TP รายตัวก็ไม่ปิด ต้องรอ matching close ที่ถี่เกินไป
 
 ### ไฟล์ที่จะแก้
 - `public/docs/mql5/Gold_Miner_EA.mq5`
 
-### สิ่งที่จะเพิ่ม
+---
 
-**1) Inputs ใหม่ (อยู่หมวดเดียวกับ v6.79 StuckTP Scanner)**
-- `InpStuckHedge_ScanEnable` (bool, default `true`) — เปิด scanner
-- `InpStuckHedge_ScanIntervalMin` (int, default `5`) — รอบสแกน (นาที) — ใช้ค่าเดียวกับ StuckTP ได้/แยกได้
-- `InpStuckHedge_StuckThresholdMin` (int, default `15`) — set ต้องนิ่ง ≥ N นาที (ไม่มี action ใดเกิดขึ้น) ถึงจะถือว่า "ตกหล่น"
-- `InpStuckHedge_AutoHeal` (bool, default `true`) — เปิด auto-heal (clear stale flags ถ้าตรวจพบ)
-- `InpStuckHedge_LogVerbose` (bool, default `true`)
+### ส่วน A — Older-Gen Bound-Side Grid Continuation
 
-**2) State ใหม่ใน `HedgeSet` struct**
-- `datetime lastActionTime` — อัปเดตทุกครั้งที่ set ทำ action (matching, avg TP, partial, grid step) → ใช้วัด "นิ่งไปกี่นาทีแล้ว"
+**Inputs ใหม่ (หมวด Grid Loss Side)**
+- `InpLegacyGen_GridContinue` (bool, default `true`) — กรีดต่อ gen เก่าที่ยังมี hedge bound
+- `InpLegacyGen_OnlyBoundSide` (bool, default `true`) — เฉพาะ side ที่ตรงกับ `counterSide` ของ hedge set ที่ active เท่านั้น
+- `InpLegacyGen_LogVerbose` (bool, default `true`)
 
-**3) Helper ใหม่: `ScanAndDiagnoseStuckHedgeSets()`**
-- เรียกใน `OnTick()` time-gated เหมือน StuckTP scanner
-- วน `g_hedgeSets[]` ที่ active:
-  - คำนวณ `idleSec = TimeCurrent() - lastActionTime`
-  - ถ้า `idleSec < InpStuckHedge_StuckThresholdMin*60` → ข้าม
-  - ประเมินสภาพ set:
-    - `gateOK = IsHedgeCloseAllowed(h)`
-    - `oldestIdx = FindOldestActiveHedgeSet()`
-    - `isOldest = (h == oldestIdx)`
-    - `ownerActive = g_sequentialRecoveryActive`
-    - `ownerOrdersLeft = ownerActive ? CountSequentialOwnerOrders(g_sequentialRecoveryGen) : 0`
-    - `unlockDelay = IsSequentialUnlockDelayActive()`
-    - `hedgePnL` ปัจจุบัน
-  - **จำแนก blocker** แล้ว log:
-    - `STUCK#1 (FIFO): Set#3 idle 22m | gate=PASS pnl=+$1703 | blocked by oldest Set#1`
-    - `STUCK#2 (OWNER): Set#3 | owner=Gen2 ordersLeft=0 → STALE OWNER`
-    - `STUCK#3 (UNLOCK_DELAY): remain 47s`
-    - `STUCK#4 (GATE_FAIL): seenExp=false zone=IN distPts=200`
-    - `STUCK#5 (NO_ACTION_CLEAR): gate=PASS isOldest=Y ownerActive=N → matchingDone stuck?`
-  - **Auto-Heal (ถ้า `InpStuckHedge_AutoHeal=true`)**:
-    - Case `STALE OWNER` (`ownerActive && ownerOrdersLeft==0`) → เรียก `ClearSequentialRecoveryOwner("v6.80 stuck-heal: owner ordersLeft=0")`
-    - Case `NO_ACTION_CLEAR` (gate ผ่าน, isOldest, ownerInactive, idle ≥ threshold) → reset `matchingDone=false` + `seenExpansionSinceHedge=true` (force re-eval)
-    - Case `UNLOCK_DELAY` ที่ค้างเกิน 2× threshold → log warning (ไม่ heal — เพราะอาจจะ user ตั้งจริง)
-    - Case `FIFO BLOCK` → ไม่ heal (ทำงานตามดีไซน์ — แค่ log ให้ user รู้)
-  - อัปเดต `lastActionTime = TimeCurrent()` ทุกที่ที่ set ทำ action จริง (เพิ่ม hook 4–5 จุด: `ManageHedgeMatchingClose`, `ManageHedgeBoundAvgTP`, `ManageHedgePartialClose`, `ManageHedgeGridMode`, `OpenDDHedge`/`OpenHedgeOrder` ตอน bind)
+**Helpers ใหม่**
+- `CollectActiveBoundGens(int &gens[], int &sides[])` — สแกน `g_hedgeSets[]` เก็บ `(boundGeneration, counterSide)` ที่ active + `boundTicketCount > 0` + ไม่ใช่ current gen
+- `CountOrdersByGenSide(gen, side, &glCount, &lastPrice, &lastTime, &initPrice)` — สแกนตาม comment `GM{gen}_INIT` / `GM{gen}_GL#`
+- `CheckGridLossLegacy(gen, side)` — copy logic ของ `CheckGridLoss` แต่ใช้ค่าจากพารามิเตอร์ + comment `GM{gen}_GL#{nextLevel}` (`nextLevel = max(maxLvl+1, glCount+1)` คงระบบ v6.71)
 
-**4) Dashboard**
-- เพิ่มแถว `StuckHedge Scan`: `Every 5m | Threshold 15m | Next 2m18s | Detected: 1 | Healed: 0` (หรือ `OFF`)
-- เมื่อ scan รอบนั้นเจอ stuck set → แถวเตือน `⚠ Stuck Set#3 idle 22m (FIFO)` (สีส้ม)
+**Hook ใน OnTick** (หลัง block `CheckGridLoss` ปกติ):
+```
+if(InpLegacyGen_GridContinue && !g_newOrderBlocked) {
+   int gens[], sides[];
+   CollectActiveBoundGens(gens, sides);
+   for each → CheckGridLossLegacy(gen, side);
+}
+```
+- เคารพ `NormalOrderCount() < MaxOpenOrders`, `GridLoss_MaxTrades` per-gen, `GridLoss_OnlyNewCandle` (per-set ผ่าน `g_hedgeSets[h].lastLegacyGridCandle` field ใหม่), `GridLoss_DontSameCandle`
 
-**5) Version bump → v6.80**
-- `#property version`, `#property description`, header, `OnInit` print, dashboard header
+**Dashboard:** เพิ่ม `Legacy Grid Continue: ON | Active gens: [5,4]` + ในแถว `Hedge #N` แสดง `Legacy GL: 2`
 
-### สิ่งที่ "ไม่เปลี่ยนแปลง"
-- ไม่แก้ `OrderSend / trade.Buy / trade.Sell / trade.PositionClose`
-- ไม่แก้ `ManageHedgeMatchingClose / ManageHedgeBoundAvgTP / ManageHedgePartialClose / ManageHedgeGridMode` ตรรกะภายใน — แค่เพิ่ม `lastActionTime = TimeCurrent()` 1 บรรทัดในแต่ละฟังก์ชัน
-- ไม่แก้ `IsHedgeCloseAllowed / IsSequentialRecoveryComplete / FindOldestActiveHedgeSet`
-- ไม่แก้ Triple Gate / FIFO / Owner / Unlock Delay logic — scanner เพียงวินิจฉัยและล้าง stale flag เท่านั้น
-- ไม่แก้ DD threshold / Hedge Open Delay (v6.78) / NoReHedge (v6.74) / StuckTP Scanner (v6.79)
-- ไม่แก้ License / News / Time filter
+---
+
+### ส่วน B — Hedge-Grid Filters + Broker TP (Avg Pool)
+
+**Inputs ใหม่ (หมวด === Hedge Grid Filters ===)**
+- `InpHedgeGrid_OnlyNewCandle` (bool, default `true`) — บังคับเปิดได้ 1 ไม้ต่อแท่ง (per set)
+- `InpHedgeGrid_DontSameCandle` (bool, default `true`) — ห้ามไม้ใหม่อยู่แท่งเดียวกับไม้กรีดล่าสุดของ set
+- `InpHedgeGrid_CandleConfirm` (int, default `1`) — ต้องมี N แท่งยืนยันทิศก่อนกรีด (0=off)
+- `InpHedgeGrid_MinGapPoints` (int, default `200`) — gap ขั้นต่ำ override `GridLoss_MinGapPoints` ของ hedge grid โดยเฉพาะ
+- `InpHedgeGrid_CooldownSec` (int, default `30`) — เพิ่มจาก hard-coded 5s
+- `InpHedgeGrid_AvgTP_Enable` (bool, default `true`) — sync broker TP เฉลี่ยรวม hedge + grid
+- `InpHedgeGrid_AvgTP_Points` (int, default `300`) — TP distance points จาก avg
+
+**Field ใหม่ใน `HedgeSet`**
+- `datetime lastGridCandleTime` — สำหรับ OnlyNewCandle / DontSameCandle per-set
+- `double lastBrokerAvgTP` — กัน re-sync ซ้ำเมื่อ avg ไม่เปลี่ยน
+
+**แก้ `ManageHedgeGridMode()` (line 11811-12021) — เพิ่ม guard ก่อน open**
+1. ก่อนคำนวณ distance:
+   - `if(InpHedgeGrid_OnlyNewCandle && iTime(_Symbol,PERIOD_CURRENT,0) == g_hedgeSets[idx].lastGridCandleTime) return;`
+   - `if(InpHedgeGrid_DontSameCandle)` — เช็ค last grid order time vs current bar
+   - `if(InpHedgeGrid_CandleConfirm > 0)` — เรียก `HasCandleConfirmation(hedgeSide, PERIOD_CURRENT, InpHedgeGrid_CandleConfirm)`
+2. แทนที่ hard-coded `g_lastHedgeGridTime < 5` → `< InpHedgeGrid_CooldownSec`
+3. แก้ distance call (line 11958): ใช้ `nextLevel = g_hedgeSets[idx].gridLevel + currentGridCount + 1` แทน `currentGridCount + 1` → distance scale ตามระดับจริง
+4. enforce `requiredGap = MathMax(requiredGap, InpHedgeGrid_MinGapPoints)`
+5. หลัง `OpenOrder` สำเร็จ → set `lastGridCandleTime = iTime(_Symbol,PERIOD_CURRENT,0)` + เรียก `SyncHedgeSetAvgTP(idx)` ทันที
+
+**Helper ใหม่: `SyncHedgeSetAvgTP(int idx)`**
+- รวม weighted avg ของ: main hedge (`hedgeTicket`) + ทุกไม้ `GM_HG{idx+1}*` ที่ side เดียวกับ hedge
+- คำนวณ `avgPrice = Σ(price*lots) / Σlots`
+- `tpPrice = avgPrice ± InpHedgeGrid_AvgTP_Points * _Point` (ทิศตาม hedgeSide)
+- ถ้า `MathAbs(tpPrice - g_hedgeSets[idx].lastBrokerAvgTP) > _Point` → loop เรียก `trade.PositionModify(tk, currentSL, tpPrice)` ทุก ticket ใน pool
+- บันทึก `lastBrokerAvgTP = tpPrice`
+- เรียกที่:
+  - หลัง grid order เปิดสำเร็จ (ใน `ManageHedgeGridMode`)
+  - หลัง partial close main hedge สำเร็จ (line 11893)
+  - ทุก tick (ภายใน `ManageHedgeGridMode` แต่ throttle ด้วย `basketChanged`-style เหมือน v6.64)
+
+**ข้อสำคัญ — exempt จาก v6.79 Stuck-TP Scanner:**
+- v6.79 `ScanAndClearStuckHedgeLockTP` clears TP บน bound tickets ที่อยู่ใน `g_hedgeSets[].boundTickets[]` เท่านั้น → ไม่กระทบ TP บน hedge grid (ไม่ได้อยู่ใน boundTickets) ✓
+- v6.72 `EnforceClearTPOnAllBound` ก็เช่นกัน → ไม่กระทบ ✓
+
+**Dashboard:** ในแถว `Hedge #N Grid:Lx` เพิ่ม `| AvgTP:4612.5 | Pool:5(0.45L)`
+
+---
+
+### Version bump → v6.81
+- `#property version "6.81"`, `#property description`, header comment, `OnInit` print, dashboard header
+
+### สิ่งที่ "ไม่เปลี่ยนแปลง" (ตามกฎเหล็ก)
+- **ไม่แก้** `OrderSend / trade.Buy / trade.Sell / trade.PositionClose` — ใช้ `OpenOrder()` / `trade.PositionModify` เดิม
+- **ไม่แก้** logic ของ `CheckGridLoss()` ปัจจุบัน (เพิ่ม `CheckGridLossLegacy()` แยก)
+- **ไม่แก้** ตรรกะภายใน `ManageHedgeMatchingClose / ManageHedgeBoundAvgTP / ManageHedgePartialClose / IsHedgeCloseAllowed` — แค่เพิ่ม guard + sync TP
+- **ไม่แก้** Triple Gate / Sequential Recovery / FIFO / Owner / Unlock Delay
+- **ไม่แก้** Hedge Open Delay (v6.78) / Stuck-TP Scanner (v6.79) / Stuck-Hedge Scanner (v6.80) / Cross-Gen INIT Guard (v6.76) / NoReHedge (v6.74)
+- **ไม่แก้** License / News / Time filter / Balance Guard / Daily Target
 
 ### ผลลัพธ์ที่คาดหวัง
-- ทุก 5 นาที (ตั้งได้) ระบบไล่ตรวจ set ที่ "นิ่งเกิน 15 นาที" → log ระบุชัดว่าติดเพราะอะไร (FIFO / Owner / Gate / Stale)
-- `STALE OWNER` (ออเดอร์ owner gen ปิดไปแล้วแต่ flag ค้าง) → auto-clear → set ถัดไปได้ทำงานทันที
-- `NO_ACTION_CLEAR` (gate ผ่านแล้วแต่ matchingDone ค้าง) → reset → set พร้อม match รอบถัดไป
-- `FIFO BLOCK` → log ให้ user เห็นว่า set อื่นเก่ากว่ายังต้องจบก่อน (ตามดีไซน์)
-- ในเคสภาพที่แชร์มา → จะเห็น log บอกชัดว่าทำไม Hedge #1 ที่ +$1703 ไม่ release
+- **A:** Gen5 ที่โดน lock จะกรีด `GM5_GL#3, #4, ...` ต่อจน max หรือ matching close → ปิดได้แล้วค่อยไป Gen6
+- **B1:** `GM_HG2_GL` จะเปิดทีละ 1 ไม้ต่อแท่ง (ไม่ใช่ 9 ไม้ในไม่กี่นาที) + ระยะ gap จริงตามระดับ
+- **B2:** ทุกไม้ใน hedge pool (main hedge + grids) มี Broker TP avg ตรงกัน → broker ปิดให้อัตโนมัติเมื่อราคาแตะ avg+TP → ไม่ต้องรอ matching loop
 
 ### ความเสี่ยง & Mitigation
-- **Risk:** Auto-heal ล้าง flag ผิดจังหวะ → กระทบ matching cycle
-- **Mitigation:** heal เฉพาะกรณีที่ idle ≥ threshold (default 15 นาที) + ปิดได้ด้วย `InpStuckHedge_AutoHeal=false` (เหลือแค่ log)
-- **Risk:** log spam ถ้า threshold ต่ำเกิน
-- **Mitigation:** default 15 นาที + LogVerbose toggle + log สรุปครั้งเดียวต่อ scan รอบ
-- **Risk:** `lastActionTime` ไม่ถูก set ตอน restart
-- **Mitigation:** init = `TimeCurrent()` ตอน hedge เปิด/ตอน OnInit detect set ที่ active อยู่แล้ว
+- **A Risk:** กรีด legacy เกิน margin → enforce `NormalOrderCount < MaxOpenOrders` + `GridLoss_MaxTrades` per-gen
+- **B Risk:** AvgTP บีบจน main hedge ปิดก่อน grids กำไร → default TP=300pts ปรับได้ + ปิดด้วย `InpHedgeGrid_AvgTP_Enable=false`
+- **B Risk:** broker reject modify → log + retry รอบถัดไป (basketChanged trigger)
+- ทั้งหมดมี toggle ปิดได้ (`InpLegacyGen_GridContinue=false` / `InpHedgeGrid_AvgTP_Enable=false`) → กลับเป็นพฤติกรรม v6.80 ทุกประการ
 
