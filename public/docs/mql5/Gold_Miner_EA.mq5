@@ -4720,6 +4720,23 @@ void DisplayDashboard()
                    color guardCol = (lgB > 0 || lgS > 0) ? clrYellow : clrLime;
                    DrawTableRow(row, "ReEntryGuard", guardInfo, guardCol, COLOR_SECTION_HEDGE); row++;
                 }
+                // v6.74: Released Gen+Side lock status row
+                if(InpHedge_NoReHedgeGenSide && g_releasedGenSideCount > 0)
+                {
+                   string lockInfo = "";
+                   int shown = 0;
+                   for(int li = 0; li < g_releasedGenSideCount && shown < 4; li++)
+                   {
+                      if(!g_releasedGenSide[li].active) continue;
+                      if(shown > 0) lockInfo += ", ";
+                      lockInfo += "GM" + IntegerToString(g_releasedGenSide[li].generation) +
+                                  (g_releasedGenSide[li].side == POSITION_TYPE_BUY ? " B" : " S");
+                      shown++;
+                   }
+                   if(shown == 0) lockInfo = "(none)";
+                   else lockInfo = IntegerToString(shown) + " locked: " + lockInfo;
+                   DrawTableRow(row, "NoReHedgeLock", lockInfo, clrOrange, COLOR_SECTION_HEDGE); row++;
+                }
              }
 
              // v6.57: Recovery Grid mode indicator
