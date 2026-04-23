@@ -155,6 +155,23 @@ input ENUM_ATR_REF   GridLoss_ATR_Reference  = ATR_REF_DYNAMIC; // ATR Reference
 input int            GridLoss_MinGapPoints   = 100;             // Minimum Grid Gap (points)
 input int            GridLoss_CandleConfirm  = 0;               // v6.40: Require N confirming candles before GL (0=Off)
 
+//--- v6.81: Older-Gen Bound-Side Grid Continuation
+input group "=== Legacy Gen Grid Continuation (v6.81) ==="
+input bool           InpLegacyGen_GridContinue   = true;   // Continue grid on older gens still hedge-locked
+input bool           InpLegacyGen_OnlyBoundSide  = true;   // Only the side that matches active hedge counterSide
+input bool           InpLegacyGen_LogVerbose     = true;   // Verbose log for legacy grid
+
+//--- v6.81: Hedge Grid Filters + Average TP
+input group "=== Hedge Grid Filters + AvgTP (v6.81) ==="
+input bool           InpHedgeGrid_OnlyNewCandle  = true;   // Hedge-Grid: 1 order per candle (per set)
+input bool           InpHedgeGrid_DontSameCandle = true;   // Hedge-Grid: skip if last grid same candle
+input int            InpHedgeGrid_CandleConfirm  = 1;      // Hedge-Grid: N confirming candles (0=Off)
+input int            InpHedgeGrid_MinGapPoints   = 200;    // Hedge-Grid: minimum gap override (points)
+input int            InpHedgeGrid_CooldownSec    = 30;     // Hedge-Grid: cooldown between grid orders (sec)
+input bool           InpHedgeGrid_AvgTP_Enable   = true;   // Hedge-Grid: sync broker TP to pool average
+input int            InpHedgeGrid_AvgTP_Points   = 300;    // Hedge-Grid: TP distance from avg (points)
+
+
 //--- Max Grid Average Trailing Stop (v6.41, v6.54)
 input group "=== Max Grid Average Trailing Stop ==="
 input bool           MaxGrid_TrailEnable     = false;             // Enable Max Grid Avg Trailing
@@ -615,6 +632,10 @@ struct HedgeSet
    datetime hedgeOpenTime;             // open time of main hedge order (FIFO ordering)
    // === v6.80: Stuck-Hedge tracking ===
    datetime lastActionTime;            // last time this set performed an action (matching/avgTP/partial/grid)
+   // === v6.81: Hedge-Grid filters + AvgTP ===
+   datetime lastGridCandleTime;        // candle bar time of last hedge grid order open (per set)
+   double   lastBrokerAvgTP;           // last avg-TP price synced to broker (anti-thrash)
+   datetime lastLegacyGridCandle;      // candle bar time of last legacy gen grid open driven by this set
 };
 HedgeSet g_hedgeSets[MAX_HEDGE_SETS];
 int      g_hedgeSetCount = 0;
@@ -1007,6 +1028,10 @@ int OnInit()
        g_hedgeSets[h].zoneLowerPrice = 0;
        g_hedgeSets[h].hedgeOpenPrice = 0;
        g_hedgeSets[h].oldestBoundPrice = 0;
+       // v6.81: Hedge-Grid + Legacy init
+       g_hedgeSets[h].lastGridCandleTime = 0;
+       g_hedgeSets[h].lastBrokerAvgTP = 0;
+       g_hedgeSets[h].lastLegacyGridCandle = 0;
        // v6.16: Trigger type init
        g_hedgeSets[h].triggerType = 0;
        g_hedgeSets[h].hedgeOpenTime = 0;  // v6.57
@@ -1040,13 +1065,16 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.80 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.81 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min",
           " | HedgeOpenDelay=", InpHedge_OpenDelayMin, "min (mode=", (int)InpHedge_OpenDelayMode, ")",
           " | StuckTPScan=", (InpStuckTP_ScanEnable ? IntegerToString(InpStuckTP_ScanIntervalMin) + "min" : "OFF"),
-          " | StuckHedgeScan=", (InpStuckHedge_ScanEnable ? IntegerToString(InpStuckHedge_ScanIntervalMin) + "m/idle" + IntegerToString(InpStuckHedge_StuckThresholdMin) + "m" + (InpStuckHedge_AutoHeal ? "+heal" : "") : "OFF"));
+          " | StuckHedgeScan=", (InpStuckHedge_ScanEnable ? IntegerToString(InpStuckHedge_ScanIntervalMin) + "m/idle" + IntegerToString(InpStuckHedge_StuckThresholdMin) + "m" + (InpStuckHedge_AutoHeal ? "+heal" : "") : "OFF"),
+          " | LegacyGridContinue=", (InpLegacyGen_GridContinue ? "ON" : "OFF"),
+          " | HedgeGridFilters=", (InpHedgeGrid_OnlyNewCandle ? "NewCandle " : ""), (InpHedgeGrid_CandleConfirm > 0 ? ("Confirm" + IntegerToString(InpHedgeGrid_CandleConfirm) + " ") : ""), "Cooldown", InpHedgeGrid_CooldownSec, "s",
+          " | HedgeGridAvgTP=", (InpHedgeGrid_AvgTP_Enable ? IntegerToString(InpHedgeGrid_AvgTP_Points) + "pts" : "OFF"));
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -1686,6 +1714,8 @@ void OnTick()
              {
                 CheckGridLoss(POSITION_TYPE_SELL, gridLossSell);
              }
+             // v6.81: Continue grid on older gens still hedge-locked
+             if(InpLegacyGen_GridContinue) RunLegacyGenGridContinuation();
           }
 
          //--- Grid Profit management - blocked by News/Time/Squeeze filter
@@ -1824,6 +1854,8 @@ void OnTick()
              CheckGridLoss(POSITION_TYPE_BUY, gridLossBuy);
           if(!sellHedgePaused && !g_squeezeSellBlocked && (hasInitialSell || g_initialSellPrice > 0 || gridLossSell > 0) && gridLossSell < GridLoss_MaxTrades && sellCount > 0)
              CheckGridLoss(POSITION_TYPE_SELL, gridLossSell);
+          // v6.81: Continue grid on older gens still hedge-locked
+          if(InpLegacyGen_GridContinue) RunLegacyGenGridContinuation();
        }
 
        // Grid Profit management
