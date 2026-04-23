@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.73 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.74 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.73"
-#property description "Gold Miner EA v6.73 - v6.72 + Auto-heal Orphan/Inflated hedges (auto-close hedges with no/insufficient bound orders)"
+#property version   "6.74"
+#property description "Gold Miner EA v6.74 - v6.73 + Generation-level mutex: blocks duplicate DD hedge & recovery grid on same gen during transition"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -373,6 +373,9 @@ input bool     InpHedge_AutoCloseOrphan      = true;  // v6.73: Auto-close hedge
 input int      InpHedge_OrphanGraceSec       = 30;    // v6.73: Wait this many seconds before auto-closing orphan hedge
 input bool     InpHedge_AutoTrimInflated     = true;  // v6.73: Auto partial-close hedge when hedgeLots > boundLots * 2
 input double   InpHedge_TrimToleranceMult    = 1.10;  // v6.73: Trim hedge down to boundLots * this multiplier (10% buffer)
+// v6.74: Generation-level mutex (prevents DD hedge + recovery grid colliding on same generation)
+input bool     InpHedge_GenFlowMutex         = true;  // v6.74: Block DD hedge & recovery grid from racing on same generation
+input int      InpHedge_PostReleaseGenBlockSec = 60;  // v6.74: After releasing a DD hedge, block same generation (DD hedge re-open + recovery grid) for N seconds
 // v6.28: Balance Guard — close all when equity recovers to target
 input bool     InpBalanceGuard_Enable        = false;  // Balance Guard: Enable
 input ENUM_BALGUARD_MODE InpBalanceGuard_Mode = BALGUARD_FIXED; // Balance Guard: Mode (Fixed / Dynamic)
@@ -647,6 +650,10 @@ double   g_nextBuyDDTrigger  = 5.0;    // DD% threshold for next BUY-side hedge
 double   g_nextSellDDTrigger = 5.0;    // DD% threshold for next SELL-side hedge
 datetime g_lastDDHedgeTime   = 0;      // cooldown tracker
 datetime g_lastHedgeCloseTime = 0;     // v6.25: cooldown after hedge set close
+// v6.74: per-generation post-release tracking (gen-scoped cooldown after a DD hedge of that gen was released)
+int      g_lastReleasedGen     = -1;
+datetime g_lastReleasedGenTime = 0;
+string   g_lastGenBlockReason  = "";   // diagnostic: last reason a gen-flow block fired
 
 // === v6.39: Hedge Side Pause State ===
 datetime g_lastHedgeBuyTime  = 0;   // last time BUY orders got hedged → pause BUY entries
@@ -999,7 +1006,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.73 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.74 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min");
@@ -1059,7 +1066,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.73 deinitialized");
+   Print("Gold Miner EA v6.74 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -4030,7 +4037,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.73 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.73 [ZZ]" : "Gold Miner EA v6.73 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.74 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.74 [ZZ]" : "Gold Miner EA v6.74 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -4497,6 +4504,21 @@ void DisplayDashboard()
             color intClr = (g_hedgeIntegrityCriticalCount > 0) ? clrRed :
                            (g_hedgeIntegrityWarnCount > 0 ? clrOrange : clrLime);
             DrawTableRow(row, "  Integrity", intCnt, intClr, COLOR_SECTION_HEDGE); row++;
+            // v6.74: Generation flow mutex status
+            string genMutexStatus = InpHedge_GenFlowMutex
+               ? ("ON CD:" + IntegerToString(InpHedge_PostReleaseGenBlockSec) + "s")
+               : "OFF";
+            int relRemain = 0;
+            if(g_lastReleasedGen >= 0 && InpHedge_PostReleaseGenBlockSec > 0)
+            {
+               int el = (int)(TimeCurrent() - g_lastReleasedGenTime);
+               if(el < InpHedge_PostReleaseGenBlockSec) relRemain = InpHedge_PostReleaseGenBlockSec - el;
+            }
+            string genMutexInfo = genMutexStatus
+               + " | LastGen:" + (g_lastReleasedGen < 0 ? "-" : IntegerToString(g_lastReleasedGen))
+               + " | Remain:" + IntegerToString(relRemain) + "s";
+            color genMutexClr = InpHedge_GenFlowMutex ? (relRemain > 0 ? clrOrange : clrLime) : clrGray;
+            DrawTableRow(row, "  GenMutex", genMutexInfo, genMutexClr, COLOR_SECTION_HEDGE); row++;
          }
         
         // Orphan warning
@@ -8134,6 +8156,7 @@ void AuditHedgeSetIntegrity()
                   g_hedgeSets[h].orphanDetectedAt = 0;
                   g_hedgeSets[h].inflationDetectedAt = 0;
                   g_lastHedgeCloseTime = now;  // arm cooldown like normal close
+                  MarkGenReleasedFromHedge(gen, "orphan auto-close");  // v6.74
                }
                else
                {
@@ -8934,6 +8957,99 @@ bool HasActiveHedgeForGenSide(int bindGen, ENUM_POSITION_TYPE counterSide)
 }
 
 //+------------------------------------------------------------------+
+//| v6.74: Generation-level mutex helpers                             |
+//| Prevent DD hedge re-opening AND recovery grid from racing on the  |
+//| same generation during the transition window after a hedge close. |
+//+------------------------------------------------------------------+
+bool HasAnyActiveHedgeForGen(int gen)
+{
+   if(gen < 0) return false;
+   for(int h = 0; h < MAX_HEDGE_SETS; h++)
+   {
+      if(!g_hedgeSets[h].active) continue;
+      if(g_hedgeSets[h].boundGeneration == gen) return true;
+   }
+   return false;
+}
+
+bool IsGenerationInRecoveryFlow(int gen)
+{
+   if(gen < 0) return false;
+   // Sequential recovery owner of this gen
+   if(g_sequentialRecoveryActive && g_sequentialRecoveryGen == gen) return true;
+   // Recovery seed registered for this gen and still alive
+   for(int s = 0; s < g_recoverySeedCount; s++)
+   {
+      if(g_recoverySeedGen[s] == gen && PositionSelectByTicket(g_recoverySeedTickets[s])) return true;
+   }
+   // Recovery set tracker not yet flat
+   if(!IsRecoverySetFlat(gen)) return true;
+   // Orphan group active for this gen
+   for(int g2 = 0; g2 < MAX_ORPHAN_GROUPS; g2++)
+   {
+      if(g_orphanGroups[g2].active && g_orphanGroups[g2].generation == gen) return true;
+   }
+   return false;
+}
+
+bool IsGenInPostReleaseCooldown(int gen)
+{
+   if(!InpHedge_GenFlowMutex) return false;
+   if(InpHedge_PostReleaseGenBlockSec <= 0) return false;
+   if(g_lastReleasedGen != gen) return false;
+   if(g_lastReleasedGenTime <= 0) return false;
+   return ((TimeCurrent() - g_lastReleasedGenTime) < InpHedge_PostReleaseGenBlockSec);
+}
+
+// Mark a generation as "just released from a DD hedge" — arms gen-scoped cooldown.
+void MarkGenReleasedFromHedge(int gen, string reason)
+{
+   if(gen < 0) return;
+   g_lastReleasedGen     = gen;
+   g_lastReleasedGenTime = TimeCurrent();
+   Print("v6.74 GEN RELEASED: Gen", gen, " (", reason,
+         ") — block DD re-open + recovery grid for ", InpHedge_PostReleaseGenBlockSec, "s");
+}
+
+// True if a DD hedge for this gen+side should be blocked (beyond the existing OnePerGen rule).
+bool ShouldBlockDDHedgeForGen(int gen, ENUM_POSITION_TYPE counterSide)
+{
+   if(!InpHedge_GenFlowMutex) return false;
+   if(IsGenerationInRecoveryFlow(gen))
+   {
+      g_lastGenBlockReason = "DD blocked: Gen" + IntegerToString(gen) + " in recovery flow";
+      return true;
+   }
+   if(IsGenInPostReleaseCooldown(gen))
+   {
+      int remain = InpHedge_PostReleaseGenBlockSec - (int)(TimeCurrent() - g_lastReleasedGenTime);
+      g_lastGenBlockReason = "DD blocked: Gen" + IntegerToString(gen) +
+                             " post-release cooldown " + IntegerToString(remain) + "s";
+      return true;
+   }
+   return false;
+}
+
+// True if recovery/orphan grid for this gen should be blocked.
+bool ShouldBlockRecoveryGridForGen(int gen)
+{
+   if(!InpHedge_GenFlowMutex) return false;
+   if(HasAnyActiveHedgeForGen(gen))
+   {
+      g_lastGenBlockReason = "Recovery blocked: Gen" + IntegerToString(gen) + " still has active hedge";
+      return true;
+   }
+   if(IsGenInPostReleaseCooldown(gen))
+   {
+      int remain = InpHedge_PostReleaseGenBlockSec - (int)(TimeCurrent() - g_lastReleasedGenTime);
+      g_lastGenBlockReason = "Recovery blocked: Gen" + IntegerToString(gen) +
+                             " post-release cooldown " + IntegerToString(remain) + "s";
+      return true;
+   }
+   return false;
+}
+
+//+------------------------------------------------------------------+
 //| v6.16: Check DD% per side and open hedge if threshold reached      |
 //+------------------------------------------------------------------+
 void CheckAndOpenHedgeByDD()
@@ -8988,11 +9104,12 @@ void CheckAndOpenHedgeByDD()
       
       if(buyLossAbs >= InpHedge_DDTriggerDollar)
       {
-         if(InpHedge_OnePerGenSide && HasActiveHedgeForGenSide(curGen, POSITION_TYPE_BUY))
+         if((InpHedge_OnePerGenSide && HasActiveHedgeForGenSide(curGen, POSITION_TYPE_BUY))
+             || ShouldBlockDDHedgeForGen(curGen, POSITION_TYPE_BUY))
          {
             static datetime _lastBlkBuyD = 0;
             if(now - _lastBlkBuyD > 60)
-            { Print("v6.72 DD$ HEDGE BLOCKED: BUY side of Gen", curGen, " already has active hedge → no 2nd hedge"); _lastBlkBuyD = now; }
+            { Print("v6.74 DD$ HEDGE BLOCKED: BUY side of Gen", curGen, " — ", g_lastGenBlockReason); _lastBlkBuyD = now; }
          }
          else if(OpenDDHedge(POSITION_TYPE_BUY, POSITION_TYPE_SELL, curGen))  // v6.37: pass snapshot gen
           {
@@ -9005,11 +9122,12 @@ void CheckAndOpenHedgeByDD()
       
       if(sellLossAbs >= InpHedge_DDTriggerDollar)
       {
-         if(InpHedge_OnePerGenSide && HasActiveHedgeForGenSide(curGen, POSITION_TYPE_SELL))
+         if((InpHedge_OnePerGenSide && HasActiveHedgeForGenSide(curGen, POSITION_TYPE_SELL))
+             || ShouldBlockDDHedgeForGen(curGen, POSITION_TYPE_SELL))
          {
             static datetime _lastBlkSellD = 0;
             if(now - _lastBlkSellD > 60)
-            { Print("v6.72 DD$ HEDGE BLOCKED: SELL side of Gen", curGen, " already has active hedge → no 2nd hedge"); _lastBlkSellD = now; }
+            { Print("v6.74 DD$ HEDGE BLOCKED: SELL side of Gen", curGen, " — ", g_lastGenBlockReason); _lastBlkSellD = now; }
          }
          else if(OpenDDHedge(POSITION_TYPE_SELL, POSITION_TYPE_BUY, curGen))  // v6.37: pass snapshot gen
          {
@@ -9028,11 +9146,12 @@ void CheckAndOpenHedgeByDD()
       
       if(buyDDPct >= InpHedge_DDTriggerPct)
       {
-         if(InpHedge_OnePerGenSide && HasActiveHedgeForGenSide(curGen, POSITION_TYPE_BUY))
+         if((InpHedge_OnePerGenSide && HasActiveHedgeForGenSide(curGen, POSITION_TYPE_BUY))
+             || ShouldBlockDDHedgeForGen(curGen, POSITION_TYPE_BUY))
          {
             static datetime _lastBlkBuyP = 0;
             if(now - _lastBlkBuyP > 60)
-            { Print("v6.72 DD% HEDGE BLOCKED: BUY side of Gen", curGen, " already has active hedge → no 2nd hedge"); _lastBlkBuyP = now; }
+            { Print("v6.74 DD% HEDGE BLOCKED: BUY side of Gen", curGen, " — ", g_lastGenBlockReason); _lastBlkBuyP = now; }
          }
          else if(OpenDDHedge(POSITION_TYPE_BUY, POSITION_TYPE_SELL, curGen))  // v6.37: pass snapshot gen
          {
@@ -9045,11 +9164,12 @@ void CheckAndOpenHedgeByDD()
       
       if(sellDDPct >= InpHedge_DDTriggerPct)
       {
-         if(InpHedge_OnePerGenSide && HasActiveHedgeForGenSide(curGen, POSITION_TYPE_SELL))
+         if((InpHedge_OnePerGenSide && HasActiveHedgeForGenSide(curGen, POSITION_TYPE_SELL))
+             || ShouldBlockDDHedgeForGen(curGen, POSITION_TYPE_SELL))
          {
             static datetime _lastBlkSellP = 0;
             if(now - _lastBlkSellP > 60)
-            { Print("v6.72 DD% HEDGE BLOCKED: SELL side of Gen", curGen, " already has active hedge → no 2nd hedge"); _lastBlkSellP = now; }
+            { Print("v6.74 DD% HEDGE BLOCKED: SELL side of Gen", curGen, " — ", g_lastGenBlockReason); _lastBlkSellP = now; }
          }
          else if(OpenDDHedge(POSITION_TYPE_SELL, POSITION_TYPE_BUY, curGen))  // v6.37: pass snapshot gen
          {
@@ -9073,6 +9193,12 @@ bool OpenDDHedge(ENUM_POSITION_TYPE counterSide, ENUM_POSITION_TYPE hedgeSide, i
    if(InpHedge_OnePerGenSide && HasActiveHedgeForGenSide(bindGen, counterSide))
    {
       Print("v6.72 OpenDDHedge BLOCKED: Gen", bindGen, " ", EnumToString(counterSide), " already hedged → skip");
+      return false;
+   }
+   // v6.74: Defense-in-depth — gen-flow mutex (recovery flow / post-release cooldown)
+   if(ShouldBlockDDHedgeForGen(bindGen, counterSide))
+   {
+      Print("v6.74 OpenDDHedge BLOCKED: ", g_lastGenBlockReason);
       return false;
    }
    double counterLots = 0, counterPL = 0;
@@ -9846,8 +9972,20 @@ void ManageOrphanGrid()
          }
          continue;
       }
+      // v6.74: Generation-level mutex — block recovery grid if gen still has active hedge
+      //        or is within post-release cooldown (prevents recovery+hedge collision)
+      if(ShouldBlockRecoveryGridForGen(gen))
+      {
+         static datetime s_lastGenMutexLog = 0;
+         if(TimeCurrent() - s_lastGenMutexLog >= 30)
+         {
+            Print("v6.74 RECOVERY GRID BLOCKED: ", g_lastGenBlockReason);
+            s_lastGenMutexLog = TimeCurrent();
+         }
+         continue;
+      }
       string prefix = GenPrefix(gen);
-      
+
       // Re-count fresh each tick to detect if orders were closed
       int bc = 0, sc = 0, glb = 0, gls = 0, mglb = 0, mgls = 0;
       CountOrphanPositions(gen, bc, sc, glb, gls, mglb, mgls);
@@ -10059,6 +10197,7 @@ void ManageHedgeSets()
          ArrayResize(g_hedgeSets[h].boundTickets, 0);
             g_hedgeSetCount--;
             g_lastHedgeCloseTime = TimeCurrent();  // v6.25: cooldown after set close
+            MarkGenReleasedFromHedge(extGen, "external close");  // v6.74
             // v6.59: claim recovery owner if released bound orders remain open
             SetSequentialRecoveryOwner(h, extGen);
             // v6.27: Safe reset — only if truly flat
@@ -10817,6 +10956,7 @@ bool ManageHedgeBoundAvgTP(int idx)
    ArrayResize(g_hedgeSets[idx].boundTickets, 0);
    g_hedgeSetCount--;
    g_lastHedgeCloseTime = TimeCurrent();
+   MarkGenReleasedFromHedge(avgGen, "AvgTP release");  // v6.74
    SetSequentialRecoveryOwner(idx, avgGen);  // v6.59: claim recovery owner
    TryResetCycleStateIfFlat("AvgTP release");
    Sleep(100);
@@ -10986,6 +11126,7 @@ void ManageHedgeMatchingClose(int idx)
          ArrayResize(g_hedgeSets[idx].boundTickets, 0);
            g_hedgeSetCount--;
            g_lastHedgeCloseTime = TimeCurrent();  // v6.25: cooldown after set close
+           MarkGenReleasedFromHedge(matchGen, "matching close");  // v6.74
            SetSequentialRecoveryOwner(idx, matchGen);  // v6.59: claim recovery owner
            // v6.27: Safe reset — only if truly flat
            TryResetCycleStateIfFlat("matching close");
@@ -11009,6 +11150,7 @@ void ManageHedgeMatchingClose(int idx)
           g_hedgeSets[idx].gridMode = false;
           g_hedgeSetCount--;
            g_lastHedgeCloseTime = TimeCurrent();  // v6.25: cooldown after set close
+           MarkGenReleasedFromHedge(relGen, "release close");  // v6.74
            SetSequentialRecoveryOwner(idx, relGen);  // v6.59: claim recovery owner
            // v6.27: Safe reset — only if truly flat
            TryResetCycleStateIfFlat("release close");
@@ -11142,6 +11284,7 @@ void ManageHedgePartialClose(int idx)
       ArrayResize(g_hedgeSets[idx].boundTickets, 0);
       g_hedgeSetCount--;
       g_lastHedgeCloseTime = TimeCurrent();
+      MarkGenReleasedFromHedge(gen, "shred hedge full");  // v6.74
       SetSequentialRecoveryOwner(idx, gen);
       TryResetCycleStateIfFlat("shred hedge full");
       Sleep(100);
@@ -11274,6 +11417,7 @@ void ManageHedgeGridMode(int idx)
                  g_hedgeSets[idx].active = false;
                  g_hedgeSetCount--;
                   g_lastHedgeCloseTime = TimeCurrent();  // v6.25: cooldown after set close
+                  MarkGenReleasedFromHedge(gridGen, "grid recover");  // v6.74
                   SetSequentialRecoveryOwner(idx, gridGen);  // v6.59
                   // v6.27: Safe reset — only if truly flat
                   TryResetCycleStateIfFlat("grid recover");
@@ -11310,6 +11454,7 @@ void ManageHedgeGridMode(int idx)
        g_hedgeSets[idx].active = false;
          g_hedgeSetCount--;
          g_lastHedgeCloseTime = TimeCurrent();  // v6.25: cooldown after set close
+         MarkGenReleasedFromHedge(cleanupGen, "grid cleanup");  // v6.74
          SetSequentialRecoveryOwner(idx, cleanupGen);  // v6.59
          // v6.27: Safe reset — only if truly flat
          TryResetCycleStateIfFlat("grid cleanup");
