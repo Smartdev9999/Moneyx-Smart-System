@@ -1,98 +1,107 @@
 
 
-## v6.71 — แก้ปัญหา Grid Comment ซ้อน/ย้อนเลขหลัง Hedge ปลดล็อค
+## v6.70 — บังคับ Strict FIFO ของ Hedge Set (ห้ามข้ามเซต แม้กำไร)
 
-### วินิจฉัย (จาก image-949)
+### วินิจฉัยปัญหาจากภาพ
 
-ออเดอร์เปิดอยู่: `GM1_GL#6, #7, #8, #9` (ฝั่ง Buy, Set#1)
-ออเดอร์ใหม่ที่เพิ่งออก: `GM1_GL#5` ← **เลขย้อนหลังต่ำกว่าของเดิม**
+ภาพ image-948 แสดงชัดว่า:
+- **GM1_INIT/GL#1–9** (Set#1 ฝั่ง sell) ยังค้างอยู่ ขาดทุนหนัก
+- **GM_Hedge_D3** (Set#3) ถูกปิดไปแล้ว และ **GM3_GL#1–5** กำลังรันอยู่ (กำไร)
+- ระบบกระโดดไปปิด Set#3 ก่อน Set#1 → ผิดลำดับ FIFO
 
-**Root cause** อยู่ที่ `CheckGridLoss()` บรรทัด 3361–3463:
+### Root Cause
+
+ใน `ManageHedgeSets()` (บรรทัด 9819–9891):
 
 ```cpp
-void CheckGridLoss(ENUM_POSITION_TYPE side, int currentGridCount)
-{
-   ...
-   string comment = GetCommentPrefix() + "_GL#" + IntegerToString(currentGridCount + 1);
+// ปัจจุบัน: Profit Bypass ข้าม FIFO ทั้งดุ้น
+bool seqBypass_profitClose = false;
+if(_hPnL > InpHedge_MatchMinProfit) seqBypass_profitClose = true;
+
+if(InpHedge_SequentialRecovery && !seqBypass_profitClose) {
+   // ✅ ตรงนี้เช็ค oldest set
+   if(g_sequentialRecoveryActive) continue;
+   if(h != oldestActiveIdx) continue;
+}
+else if(seqBypass_profitClose) {
+   // ❌ ตรงนี้ไม่เช็ค oldest set — ปล่อยให้ปิดได้เลย!
+   // ❌ ไม่เช็ค g_sequentialRecoveryActive — ข้าม owner ด้วย
 }
 ```
 
-`currentGridCount` คือ **จำนวน GL ที่เปิดอยู่ตอนนี้** (นับจาก `gridLossBuy` ที่ line 1863) ไม่ใช่ "เลข GL สูงสุดที่เคยใช้"
+**สรุป**: เมื่อ Set#3 หรือ Set#4 มีกำไร > `InpHedge_MatchMinProfit` ระบบปิดทันทีโดยไม่สนว่า Set#1 ยังค้าง — นี่คือการ "ปลดข้ามชุด" ที่ user เจอ
 
-ผลที่เกิด:
-- ก่อนปลด hedge: เคยมี GL#1–#9 ครบ
-- หลัง matching-close หรือ partial-close ของ hedge ทำให้ GL#1–#5 ปิดไป → เหลือเปิด 4 ตัว (GL#6–#9)
-- เมื่อราคาเลื่อนพอเปิดกริดถัดไป: `currentGridCount = 4` → comment = `GL#5`
-- **ซ้ำกับเลขที่เคย ใช้** (GL#5 ที่ปิดไปแล้ว) และ "ต่ำกว่า" GL#6–9 ที่ยังเปิดอยู่ → ลำดับเลขไม่สอดคล้อง สับสน และมีโอกาสที่ logic อื่นที่อ้าง comment จะเข้าใจผิด (เช่น matching pool, FIFO, log)
-- Lot size ยังถูกอยู่เพราะใช้ `FindMaxLotOnSide` (บรรทัด 3446) → ตรงกับที่ user สังเกต
+นอกจากนี้ใน v6.67–v6.69 logic profit-bypass ถูกใส่เพื่อ "ลดความเสี่ยง" แต่ขัดเจตนา FIFO ของ user โดยตรง
 
-ปัญหาเดียวกันมีใน:
-- `CheckGridLoss()` บรรทัด 3456 (gen ปัจจุบัน, GL)
-- `CheckGridProfit()` บรรทัด 3528 (gen ปัจจุบัน, GP)
-- `CheckGridLossTF()` บรรทัด 5192 (TF mode, GL)
-- `CheckGridProfitTF()` บรรทัด 5263 (TF mode, GP)
-
-### แผนแก้ (Fix-only, ไม่แตะ trading logic)
+### แผนแก้ v6.70 (Fix-only)
 
 ไฟล์: `public/docs/mql5/Gold_Miner_EA.mq5`
 
-#### 1) เพิ่ม helper ใหม่ `FindMaxGridLevelOnSide(side, suffix)`
-สแกน positions ของ MagicNumber + symbol + side + generation ปัจจุบัน + comment ที่ลงท้าย `_GL#N` หรือ `_GP#N` แล้วคืน "เลข N สูงสุด" ที่ยังเปิดอยู่ (skip hedge/bound, เช็ค `ExtractGeneration == g_cycleGeneration`)
-
-ใช้ pattern เดียวกับที่มีอยู่แล้วใน `CountOrphanPositions()` (line 9329–9333) → extract เลขหลัง `#`
-
-#### 2) แก้การตั้ง comment ให้ใช้ "max level + 1" แทน "count + 1"
-
-ใน `CheckGridLoss()` (line 3456):
+#### 1) เพิ่ม Input toggle สำหรับ Profit Bypass
 ```cpp
-int maxLevel = FindMaxGridLevelOnSide(side, "_GL");
-int nextLevel = MathMax(maxLevel + 1, currentGridCount + 1);
-string comment = GetCommentPrefix() + "_GL#" + IntegerToString(nextLevel);
+input bool InpHedge_AllowProfitBypass = false; // true=ให้ hedge กำไรปิดข้าม FIFO ได้, false=บังคับ FIFO เคร่งครัด (default)
 ```
-- ใช้ `MathMax` กันกรณี edge เช่น hedge ปิด GL#9 ลำพังเหลือ GL#1–#8 → max+1=9 ซ้ำ → fallback เป็น count+1=9 ก็ยัง OK (และเรา block ซ้ำเพิ่มในข้อ 3)
+- **Default = false** → กลับไปใช้ FIFO เคร่งครัดตามที่ user ต้องการ
+- ใครต้องการพฤติกรรม v6.67–v6.69 เดิม สามารถเปิด `true` ได้เอง
 
-จริงๆ ที่เหมาะสมที่สุดคือใช้ `maxLevel + 1` เป็นหลักเสมอ เพราะ hedge ที่ปลดล็อคจะปิดเรียงจาก GL#1 ขึ้นไป (FIFO) → max ของ GL ที่เหลือคือ "เลขสุดท้ายที่เคยเปิด" → +1 ได้เลขใหม่ที่ไม่ซ้ำเสมอ
+#### 2) ปรับ logic ใน `ManageHedgeSets()` (line ~9819–9891)
+- ถ้า `InpHedge_AllowProfitBypass = false` → `seqBypass_profitClose` จะเป็น `false` เสมอ (ปิดบายพาสทั้งหมด)
+- เซตทั้งหมดที่ไม่ใช่ oldest จะถูก `continue` ไม่ว่าจะกำไรแค่ไหน
+- Owner ของ Gen ก่อนหน้ายัง active → ทุกเซตถูกบล็อกหมด รวมเซตที่กำไรด้วย
+- เพิ่ม log: `v6.70 STRICT FIFO BLOCK: Set#X profit=$Y deferred until Set#1 completes`
 
-#### 3) ใช้ pattern เดียวกันกับอีก 3 จุด
-- `CheckGridProfit()` line 3528 → ใช้ `FindMaxGridLevelOnSide(side, "_GP")`
-- `CheckGridLossTF()` line 5192 → ใช้ helper version TF (อ่าน prefix ของ TF set)
-- `CheckGridProfitTF()` line 5263 → เช่นเดียวกัน
+#### 3) เพิ่มการเช็ค "oldest set" แม้ใน bypass path (กรณี user เปิด bypass)
+แม้เปิด `InpHedge_AllowProfitBypass = true` เซตที่จะ bypass ได้ต้องเป็น oldest ที่กำไรเท่านั้น — ไม่ใช่ใครก็ได้ที่กำไร เพื่อกันการกระโดดข้ามชุดยังคงอยู่บางส่วน
 
-(สำหรับ TF: helper รับ `tfPrefix` เพิ่มเพื่อ match prefix ที่ถูกต้อง)
+#### 4) ตรวจ `FindOldestActiveHedgeSet()` ให้แน่ใจว่า fallback ถูกต้อง
+- บรรทัด 8405: เงื่อนไข `(t > 0 && t < oldestTime) || oldestTime == 0` อาจเลือก set ที่มี `hedgeOpenTime = 0` เป็น oldest โดยผิด → ถ้า fallback ดึงจาก ticket แล้วยัง 0 ให้ใช้ `boundGeneration` ต่ำสุดเป็น tiebreaker
+- เพิ่ม helper เสริม: ถ้า `hedgeOpenTime` เท่ากันให้เปรียบ `boundGeneration` (gen ต่ำกว่า = เก่ากว่า)
 
-#### 4) เพิ่ม log debug
-```cpp
-Print("v6.71 GRID NEXT-LEVEL: side=", EnumToString(side),
-      " openGL=", currentGridCount, " maxLevel=", maxLevel,
-      " → nextLevel=", nextLevel, " comment=", comment);
-```
-ช่วย verify ว่าหลังแก้แล้วเลขใหม่ > เลขที่เปิดอยู่ทั้งหมดเสมอ
+#### 5) Dashboard เพิ่มข้อมูล FIFO position
+แถว Hedge Recovery แสดง:
+- `Strict FIFO | Next: Set#1 (Gen1) | Waiting: Set#2,3,4`
+- ถ้ามี cooldown: `Strict FIFO | Cooldown 0m45s | Next: Set#1`
 
-#### 5) Version bump → v6.71
-- `#property version "6.71"`
+#### 6) Version bump → v6.70
+- `#property version "6.70"`
 - `#property description`
 - Header comment block
-- Dashboard version string
+- Dashboard display
 
 ### สิ่งที่ไม่เปลี่ยนแปลง
-- ไม่แก้ `OpenOrder / trade.Buy / trade.Sell / OrderSend`
-- ไม่แก้ entry condition (`shouldOpen`, distance, ATR, signal filter)
-- ไม่แก้ `CalculateGridLot` / `FindMaxLotOnSide` (lot ยังถูกต้องอยู่แล้ว)
-- ไม่แก้ Hedge logic / Match-Close pool / Sequential FIFO (v6.70)
-- ไม่แก้ Sequential Unlock Delay (v6.69)
-- ไม่แก้ Triple Gate / DD trigger / Generation lifecycle
-- ไม่แก้ License / News / Time filter
+- ไม่แก้ `trade.Buy / trade.Sell / trade.PositionClose / OrderSend`
+- ไม่แก้ signal/strategy/grid/TP/SL
+- ไม่แก้ Triple Gate (`IsHedgeCloseAllowed`)
+- ไม่แก้ Match-Close pool คำนวณ (v6.61)
+- ไม่แก้ Sequential Recovery Owner core
+- ไม่แก้ Sequential Unlock Delay (v6.69) — ยังทำงานทับอีกชั้น
+- ไม่แก้ DD trigger / hedge opening / generation recycle
+- ไม่แก้ News/Time Filter/License
 
 ### ผลลัพธ์ที่คาดหวัง
-1. หลัง hedge ปลดล็อคและ GL#1–#5 ปิดไป → grid ใหม่จะเป็น `GL#10`, `GL#11`, ... ต่อจาก max ที่ยังเปิด (GL#9)
-2. Lot size ยังถูกเหมือนเดิม (ใช้ `FindMaxLotOnSide`)
-3. ไม่มี comment ซ้ำกับที่เคยใช้ → log/dashboard/match pool อ่านลำดับได้ถูกต้อง
-4. ไม่กระทบกริด generation อื่น (GM, GM2, ...) เพราะ helper เช็ค `ExtractGeneration`
+1. Set#1 ต้องปิดให้เสร็จ 100% ก่อน Set#2 เริ่มปลด
+2. Set#3, Set#4 ที่กำไรอยู่จะ "ค้าง" รอจนกว่า Set#1 จบ — **ไม่ปิดข้ามอีก**
+3. Owner Gen lock ยังคุมต่อ ห้ามเซตอื่นแทรก
+4. Cooldown 1–2 นาที (v6.69) ยังทำงานต่อระหว่างเซต
+5. ถ้า user ต้องการพฤติกรรมเดิม → เปิด `InpHedge_AllowProfitBypass = true`
+
+### รายละเอียดเทคนิค
+
+ลำดับใหม่:
+```text
+Tick:
+  1. หา oldest set (FIFO) จาก hedgeOpenTime
+  2. ถ้า g_sequentialRecoveryActive → block ทุกเซต
+  3. ถ้า in cooldown (v6.69) → block ทุกเซต
+  4. ถ้า h != oldest → block (ไม่ว่ากำไรหรือไม่ — strict mode)
+  5. ถ้า h == oldest → ทำ matching/release ปกติ
+  6. ตั้ง sequentialActed=true, ใส่ cooldown ถ้ามีการปิด
+```
 
 ### ความเสี่ยง & Mitigation
-- **Risk**: ถ้า `GridLoss_MaxTrades = 10` แต่ max level เคยขึ้นถึง 10 แล้วบางตัวปิดไป → `maxLevel+1 = 11` เกิน MaxTrades  
-  **Mitigation**: gate `if(currentGridCount >= GridLoss_MaxTrades) return;` ที่ line 3363 ยังทำงานปกติ (นับจำนวนเปิดอยู่) → จะไม่เปิดเพิ่มเกิน MaxTrades แต่เลข comment สูงขึ้นได้ (เพื่อหลีกเลี่ยงซ้ำ) — พฤติกรรมที่ user ต้องการ
+- **Risk**: เซตที่กำไรหนักจะถูกค้างไว้ ราคาอาจกลับมาทำให้กำไรหาย
+- **Mitigation**: ทำเป็น input toggle (`InpHedge_AllowProfitBypass`) ให้ user เลือกได้
 
-- **Risk**: ถ้า user ต้องการให้เลขรีเซ็ตเป็น 1 หลัง matching close ทุกครั้ง  
-  **Mitigation**: ไม่ใช่ความตั้งใจตาม report → ถ้าต้องการพฤติกรรมเดิม ค่อยเพิ่ม input toggle ภายหลัง
+- **Risk**: ถ้า Set#1 ค้างนานมาก เซตหลังจะรอนาน
+- **Mitigation**: นี่คือพฤติกรรมที่ user ขอชัดเจน ("ไม่ให้ปลดทันที", "ตามลำดับ") — Triple Gate และ DD recovery ยังทำให้ Set#1 ปิดได้เร็วขึ้นเอง
 
