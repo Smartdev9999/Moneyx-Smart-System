@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.74 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.78 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "6.74"
-#property description "Gold Miner EA v6.74 - v6.73 + Released Gen-Side Lock (กัน hedge ซ้ำชุดเดิมหลังปลดล็อค — ปล่อยให้กรีดแก้ต่อจนจบ)"
+#property version   "6.78"
+#property description "Gold Miner EA v6.78 - v6.74 + Hedge Open Delay (นาที) กัน False Signal — รอครบเวลาก่อนเปิด hedge รอบใหม่"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -24,6 +24,14 @@ enum ENUM_BALGUARD_MODE
 {
    BALGUARD_FIXED   = 0,  // Fixed Target ($)
    BALGUARD_DYNAMIC = 1   // Dynamic (last flat balance)
+};
+
+// v6.78: Hedge Open Delay reference mode
+enum ENUM_HEDGE_DELAY_MODE
+{
+   HDELAY_AFTER_LAST_OPEN  = 0,  // After last hedge OPEN
+   HDELAY_AFTER_LAST_CLOSE = 1,  // After last hedge CLOSE
+   HDELAY_BOTH             = 2   // Both (use the longer remaining time)
 };
 
 enum ENUM_GAP_TYPE
@@ -365,6 +373,9 @@ input double   InpHedge_DDTriggerPct         = 5.0;   // DD% to trigger first he
 input double   InpHedge_DDStepPct            = 5.0;   // [LEGACY] DD% step — not used since v6.21 (constant threshold per gen)
 input int      InpHedge_DDCooldownSec        = 60;    // Min seconds between DD hedges
 input int      InpHedge_SidePauseMin         = 0;     // v6.39: Pause hedged side entries (minutes, 0=Off)
+// v6.78: Hedge Open Delay (นาที) — กัน false signal โดยบังคับรอเวลาก่อนเปิด hedge รอบใหม่
+input int                   InpHedge_OpenDelayMin  = 0;                  // v6.78: Hedge Open Delay (minutes, 0=Off, e.g. 30)
+input ENUM_HEDGE_DELAY_MODE InpHedge_OpenDelayMode = HDELAY_BOTH;        // v6.78: Delay reference (Open/Close/Both)
 input double   InpHedge_DDTriggerDollar      = 500.0; // v6.25: DD$ to trigger hedge (per side)
 input bool     InpHedge_UseMatchingClose     = true;  // v6.51: Enable Hedge Recovery (false=only Balance Guard closes hedge)
 // v6.28: Balance Guard — close all when equity recovers to target
@@ -1005,10 +1016,11 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.74 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.78 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
-          " | SidePause=", InpHedge_SidePauseMin, "min");
+          " | SidePause=", InpHedge_SidePauseMin, "min",
+          " | HedgeOpenDelay=", InpHedge_OpenDelayMin, "min (mode=", (int)InpHedge_OpenDelayMode, ")");
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -4608,9 +4620,27 @@ void DisplayDashboard()
                     int remS = InpHedge_SidePauseMin * 60 - (int)(nowDash - g_lastHedgeSellTime);
                     pauseStr += "SELL PAUSED " + IntegerToString(remS/60) + "m" + IntegerToString(remS%60) + "s";
                  }
-                 DrawTableRow(row, "Side Pause", pauseStr, clrOrange, COLOR_SECTION_HEDGE); row++;
-              }
-            }
+                  DrawTableRow(row, "Side Pause", pauseStr, clrOrange, COLOR_SECTION_HEDGE); row++;
+               }
+             }
+
+             // v6.78: Hedge Open Delay status
+             if(InpHedge_OpenDelayMin > 0)
+             {
+                int remSecD = 0;
+                string modeStrD = (InpHedge_OpenDelayMode == HDELAY_AFTER_LAST_OPEN) ? "Open"
+                                : (InpHedge_OpenDelayMode == HDELAY_AFTER_LAST_CLOSE) ? "Close" : "Both";
+                if(IsHedgeOpenDelayActive(remSecD))
+                {
+                   string delayStr = "WAIT " + IntegerToString(remSecD/60) + "m" + IntegerToString(remSecD%60) + "s"
+                                    + " (mode=" + modeStrD + ", " + IntegerToString(InpHedge_OpenDelayMin) + "m)";
+                   DrawTableRow(row, "Hedge Delay", delayStr, clrOrange, COLOR_SECTION_HEDGE); row++;
+                }
+                else
+                {
+                   DrawTableRow(row, "Hedge Delay", "READY (mode=" + modeStrD + ", " + IntegerToString(InpHedge_OpenDelayMin) + "m)", clrLime, COLOR_SECTION_HEDGE); row++;
+                }
+             }
             
             // v6.40: Grid Loss Candle Confirmation display
             if(GridLoss_CandleConfirm > 0)
@@ -9007,11 +9037,62 @@ int FindFreeHedgeSlot()
 }
 
 //+------------------------------------------------------------------+
+//| v6.78: Hedge Open Delay (minutes) — guard against false signals  |
+//| Returns true if delay is still active; remainSec = seconds left   |
+//+------------------------------------------------------------------+
+datetime g_lastHedgeDelayLog = 0;
+bool IsHedgeOpenDelayActive(int &remainSec)
+{
+   remainSec = 0;
+   if(InpHedge_OpenDelayMin <= 0) return false;
+   datetime now = TimeCurrent();
+   long delaySec = (long)InpHedge_OpenDelayMin * 60;
+
+   long remainOpen = 0, remainClose = 0;
+   datetime lastOpen = (g_lastHedgeBuyTime > g_lastHedgeSellTime) ? g_lastHedgeBuyTime : g_lastHedgeSellTime;
+   if(lastOpen > 0)
+   {
+      long elapsed = (long)(now - lastOpen);
+      if(elapsed < delaySec) remainOpen = delaySec - elapsed;
+   }
+   if(g_lastHedgeCloseTime > 0)
+   {
+      long elapsed = (long)(now - g_lastHedgeCloseTime);
+      if(elapsed < delaySec) remainClose = delaySec - elapsed;
+   }
+
+   long rem = 0;
+   if(InpHedge_OpenDelayMode == HDELAY_AFTER_LAST_OPEN)       rem = remainOpen;
+   else if(InpHedge_OpenDelayMode == HDELAY_AFTER_LAST_CLOSE) rem = remainClose;
+   else                                                        rem = (remainOpen > remainClose) ? remainOpen : remainClose;
+
+   if(rem <= 0) return false;
+   remainSec = (int)rem;
+   return true;
+}
+
+//+------------------------------------------------------------------+
 //| Check expansion and open hedge if needed                           |
 //| Now supports multiple hedge sets on same side (unbound orders)     |
 //+------------------------------------------------------------------+
 void CheckAndOpenHedge()
 {
+   // v6.78: Hedge Open Delay guard (กัน false signal)
+   {
+      int remSec = 0;
+      if(IsHedgeOpenDelayActive(remSec))
+      {
+         datetime nw = TimeCurrent();
+         if(nw - g_lastHedgeDelayLog >= 60)
+         {
+            g_lastHedgeDelayLog = nw;
+            PrintFormat("v6.78 HEDGE DELAY (Expansion): wait %dm%02ds before next hedge (mode=%d, cfg=%dm)",
+                        remSec/60, remSec%60, (int)InpHedge_OpenDelayMode, InpHedge_OpenDelayMin);
+         }
+         return;
+      }
+   }
+
    // v6.14: Determine expansion direction — all expansion TFs must agree
    int bestDir = 0;
    int expCount = CountDirectionalExpansion(bestDir);
@@ -9174,7 +9255,23 @@ void CheckAndOpenHedgeByDD()
 {
    if(!InpHedge_Enable) return;
    if(InpHedge_TriggerMode != HEDGE_TRIGGER_DD_PERCENT && InpHedge_TriggerMode != HEDGE_TRIGGER_DD_DOLLAR) return;
-   
+
+   // v6.78: Hedge Open Delay guard (กัน false signal)
+   {
+      int remSec = 0;
+      if(IsHedgeOpenDelayActive(remSec))
+      {
+         datetime nwd = TimeCurrent();
+         if(nwd - g_lastHedgeDelayLog >= 60)
+         {
+            g_lastHedgeDelayLog = nwd;
+            PrintFormat("v6.78 HEDGE DELAY (DD): wait %dm%02ds before next hedge (mode=%d, cfg=%dm)",
+                        remSec/60, remSec%60, (int)InpHedge_OpenDelayMode, InpHedge_OpenDelayMin);
+         }
+         return;
+      }
+   }
+
    // Cooldown check — both DD hedge cooldown and post-close cooldown
    datetime now = TimeCurrent();
    if(now - g_lastDDHedgeTime < InpHedge_DDCooldownSec) return;
