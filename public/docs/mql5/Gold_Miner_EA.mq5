@@ -8909,6 +8909,91 @@ int FindOldestActiveHedgeSet()
    return oldest;
 }
 
+//+------------------------------------------------------------------+
+//| v6.79: Scheduled Stuck-TP Scanner                                 |
+//| ทำงานเป็นรอบเวลา (default 5 นาที) ไล่ตรวจทุก hedge set ที่ active |
+//| เคลียร์ TP/SL ของออเดอร์ที่ "ยังถูก hedge-lock อยู่จริง" เท่านั้น |
+//| ข้าม: ออเดอร์ที่กำลัง sequential recovery (กรีดแก้ต่อ),            |
+//|       recovery seed ของ gen ที่กำลัง recover,                     |
+//|       set ที่ฝั่ง hedge ปิดไปแล้ว (กำลัง release/closing)           |
+//| นับเฉพาะ tickets ที่อยู่ใน boundTickets[] ของระบบเท่านั้น           |
+//+------------------------------------------------------------------+
+void ScanAndClearStuckHedgeLockTP()
+{
+   g_lastStuckTPScan = TimeCurrent();
+   g_stuckTPClearedLastRun = 0;
+   int scanned = 0;
+   int cleared = 0;
+   int skippedRecovery = 0;
+   int skippedNoHedge = 0;
+
+   for(int h = 0; h < MAX_HEDGE_SETS; h++)
+   {
+      if(!g_hedgeSets[h].active) continue;
+      if(g_hedgeSets[h].boundTicketCount <= 0) continue;
+
+      // ตรวจว่า set นี้ยังมีออเดอร์ฝั่ง hedge อยู่จริงหรือไม่
+      // (hedge อาจถูกปิดไปแล้วในระหว่าง release — ห้ามแตะ TP ของ bound เพราะอาจกำลังจะปิดเอง)
+      bool hedgeStillAlive = false;
+      ulong mainHedge = g_hedgeSets[h].hedgeTicket;
+      if(mainHedge > 0 && PositionSelectByTicket(mainHedge))
+         hedgeStillAlive = true;
+      if(!hedgeStillAlive)
+      {
+         for(int g = 0; g < g_hedgeSets[h].gridTicketCount; g++)
+         {
+            if(PositionSelectByTicket(g_hedgeSets[h].gridTickets[g])) { hedgeStillAlive = true; break; }
+         }
+      }
+      if(!hedgeStillAlive)
+      {
+         skippedNoHedge += g_hedgeSets[h].boundTicketCount;
+         continue;
+      }
+
+      for(int b = 0; b < g_hedgeSets[h].boundTicketCount; b++)
+      {
+         ulong tk = g_hedgeSets[h].boundTickets[b];
+         if(tk == 0) continue;
+         if(!PositionSelectByTicket(tk)) continue;
+         scanned++;
+
+         // ข้ามออเดอร์ที่กำลัง sequential recovery (กรีดแก้ต่อ)
+         if(g_sequentialRecoveryActive)
+         {
+            string c = PositionGetString(POSITION_COMMENT);
+            int og = ExtractGeneration(c);
+            if(og == g_sequentialRecoveryGen) { skippedRecovery++; continue; }
+            if(IsRecoverySeedTicket(tk) && GetRecoverySeedGen(tk) == g_sequentialRecoveryGen)
+            { skippedRecovery++; continue; }
+         }
+
+         double curTP = PositionGetDouble(POSITION_TP);
+         double curSL = PositionGetDouble(POSITION_SL);
+         if(curTP == 0 && curSL == 0) continue;
+
+         if(trade.PositionModify(tk, 0, 0))
+         {
+            cleared++;
+            g_stuckTPClearedTotal++;
+            if(InpStuckTP_LogVerbose)
+               PrintFormat("v6.79 StuckTP-Scan: set#%d ticket #%I64u TP=%s->0 SL=%s->0",
+                           h + 1, tk,
+                           DoubleToString(curTP, _Digits),
+                           DoubleToString(curSL, _Digits));
+         }
+      }
+   }
+
+   g_stuckTPClearedLastRun = cleared;
+   if(cleared > 0 || InpStuckTP_LogVerbose)
+   {
+      PrintFormat("v6.79 StuckTP-Scan summary: scanned=%d cleared=%d skipRecovery=%d skipNoHedge=%d (interval=%dm, totalCleared=%d)",
+                  scanned, cleared, skippedRecovery, skippedNoHedge,
+                  InpStuckTP_ScanIntervalMin, g_stuckTPClearedTotal);
+   }
+}
+
 
 //| Get lot cap for new orders when hedge set has bound orders          |
 //| Returns -1 if no hedge set exists for this side (no cap)           |
