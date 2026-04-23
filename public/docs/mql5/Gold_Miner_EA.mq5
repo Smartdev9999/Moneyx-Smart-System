@@ -4693,6 +4693,16 @@ void DisplayDashboard()
                    string phInfo = IntegerToString(g_prevHedgedCount) + " ticket(s) locked from re-hedge";
                    DrawTableRow(row, "PrevHedged", phInfo, clrOrange, COLOR_SECTION_HEDGE); row++;
                 }
+                // v6.73: Cross-gen INIT guard status row
+                if(InpCrossGen_InitGuard && g_cycleGeneration > 1)
+                {
+                   int lgB = CountFreeOlderGenOnSide(POSITION_TYPE_BUY);
+                   int lgS = CountFreeOlderGenOnSide(POSITION_TYPE_SELL);
+                   string guardInfo = "LegacyB=" + IntegerToString(lgB) + " LegacyS=" + IntegerToString(lgS) +
+                                      " | INIT=" + ((lgB > 0 || lgS > 0) ? "BLOCK" : "ALLOW");
+                   color guardCol = (lgB > 0 || lgS > 0) ? clrYellow : clrLime;
+                   DrawTableRow(row, "ReEntryGuard", guardInfo, guardCol, COLOR_SECTION_HEDGE); row++;
+                }
              }
 
              // v6.57: Recovery Grid mode indicator
