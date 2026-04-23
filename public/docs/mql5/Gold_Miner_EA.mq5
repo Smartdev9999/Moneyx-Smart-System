@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.78 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.79 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
 #property version   "6.78"
-#property description "Gold Miner EA v6.78 - v6.74 + Hedge Open Delay (นาที) กัน False Signal — รอครบเวลาก่อนเปิด hedge รอบใหม่"
+#property description "Gold Miner EA v6.79 - v6.78 + Scheduled Stuck-TP Scanner (สแกน TP ค้างของออเดอร์ที่ยัง hedge-lock อยู่ ทุก N นาที)"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -376,6 +376,10 @@ input int      InpHedge_SidePauseMin         = 0;     // v6.39: Pause hedged sid
 // v6.78: Hedge Open Delay (นาที) — กัน false signal โดยบังคับรอเวลาก่อนเปิด hedge รอบใหม่
 input int                   InpHedge_OpenDelayMin  = 0;                  // v6.78: Hedge Open Delay (minutes, 0=Off, e.g. 30)
 input ENUM_HEDGE_DELAY_MODE InpHedge_OpenDelayMode = HDELAY_BOTH;        // v6.78: Delay reference (Open/Close/Both)
+// v6.79: Scheduled Stuck-TP Scanner — กวาด TP/SL ค้างของออเดอร์ที่ยังถูก hedge-lock อยู่จริงเป็นรอบเวลา
+input bool     InpStuckTP_ScanEnable      = true;  // v6.79: Enable scheduled stuck-TP scanner
+input int      InpStuckTP_ScanIntervalMin = 5;     // v6.79: Scan interval (minutes, e.g. 5)
+input bool     InpStuckTP_LogVerbose      = true;  // v6.79: Log each cleared ticket
 input double   InpHedge_DDTriggerDollar      = 500.0; // v6.25: DD$ to trigger hedge (per side)
 input bool     InpHedge_UseMatchingClose     = true;  // v6.51: Enable Hedge Recovery (false=only Balance Guard closes hedge)
 // v6.28: Balance Guard — close all when equity recovers to target
@@ -711,6 +715,11 @@ double   g_lastBrokerTP_Sell       = 0;  // last TP price set for SELL
 double   g_lastBrokerSL_Buy        = 0;  // last SL price set for BUY
 double   g_lastBrokerSL_Sell       = 0;  // last SL price set for SELL
 
+// === v6.79: Stuck-TP Scanner state ===
+datetime g_lastStuckTPScan         = 0;  // last time the scheduled scanner ran
+int      g_stuckTPClearedTotal     = 0;  // running total of TPs cleared by scanner
+int      g_stuckTPClearedLastRun   = 0;  // count cleared in the most recent run
+
 // === v6.49: Deferred Sync Flags ===
 bool     g_pendingSyncOrderOpen   = false;
 bool     g_pendingSyncOrderClose  = false;
@@ -1016,11 +1025,12 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.78 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.79 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min",
-          " | HedgeOpenDelay=", InpHedge_OpenDelayMin, "min (mode=", (int)InpHedge_OpenDelayMode, ")");
+          " | HedgeOpenDelay=", InpHedge_OpenDelayMin, "min (mode=", (int)InpHedge_OpenDelayMode, ")",
+          " | StuckTPScan=", (InpStuckTP_ScanEnable ? IntegerToString(InpStuckTP_ScanIntervalMin) + "min" : "OFF"));
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -1549,6 +1559,15 @@ void OnTick()
      //--- v6.72: Per-tick safety sweep — guarantees no bound ticket keeps a stale
      //          broker TP/SL even if all TP modes are disabled or the 2s timer is late.
      EnforceClearTPOnAllBound();
+
+     //--- v6.79: Scheduled Stuck-TP Scanner (default every 5 min) — เสริม per-tick sweep
+     //          ไล่หาออเดอร์ที่ยังมีคู่ hedge-lock จริงแต่ TP/SL ยังค้างอยู่ และเคลียร์ออก
+     //          ข้ามออเดอร์ที่กำลัง recovery (กรีดแก้) และออเดอร์ของ cycle ใหม่
+     if(InpStuckTP_ScanEnable && InpStuckTP_ScanIntervalMin > 0)
+     {
+        if(TimeCurrent() - g_lastStuckTPScan >= (datetime)(InpStuckTP_ScanIntervalMin * 60))
+           ScanAndClearStuckHedgeLockTP();
+     }
 
      //--- v6.44: Broker-Level TP/SL sync (every 2 seconds) — covers ALL TP modes
      if(UseTP_Points || UseTP_Dollar || UseTP_PercentBalance || (EnableSL && UseSL_Points))
