@@ -1,12 +1,14 @@
 //+------------------------------------------------------------------+
-//|                                           Gold_Miner_SQ_EA.mq5   |
+//|                                                    Golden_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.81 - MTF ZigZag+CDC+Grid+License |
+//|        Golden EA v1.0 - 14 Modules: License/News/Squeeze/Match/  |
+//|        SMA/GridLoss/GridProfit/InitLot/MaxGridTrail/TP/SL/       |
+//|        Dashboard/TimeFilter/CounterTrendHedging + Data Sync      |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "6.81"
-#property description "Gold Miner EA v6.81 - v6.80 + Older-Gen Bound-Side Grid Continuation + Hedge-Grid Filters/AvgTP"
+#property version   "1.00"
+#property description "Golden EA v1.0 - Curated 14-Module Build (License + News + Squeeze + Matching Close + SMA + Grid L/P + Initial Lot + MaxGrid Trailing + TP/SL + Dashboard + Time Filter + Counter-Trend Hedging) + Data Sync"
 #property strict
 
 #include <Trade/Trade.mqh>
