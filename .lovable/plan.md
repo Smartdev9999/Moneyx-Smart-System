@@ -1,98 +1,112 @@
 
 
-## v6.71 — แก้ปัญหา Grid Comment ซ้อน/ย้อนเลขหลัง Hedge ปลดล็อค
+## v6.72 — One Hedge Per Generation (ห้าม DD Hedge ครั้งที่ 2 ต่อ generation)
 
-### วินิจฉัย (จาก image-949)
+### วินิจฉัยจากภาพ (image-951)
+- ออเดอร์ Buy 3 ไม้ของ `Set#2 (GM2)`: `GM2_GL#5 (0.16)`, `GM2_GL#6 (0.22)`, `GM2_GL#7 (0.31)`
+- Hedge: `GM_Hedge_D2` (sell 0.53) — **D = DD-triggered, suffix `2` = bound generation 2**
+- `0.16 + 0.22 + 0.31 = 0.69 ≠ 0.53` → แสดงว่า hedge ตัวนี้ถูกเปิดตอนที่ Buy ยังไม่ครบ (น่าจะตอนมีแค่ #5+#6 = 0.38 หรือใกล้เคียง) แล้วหลังจากนั้น GL#7 เปิดเพิ่ม
+- **ปัญหาที่ user รายงาน**: เมื่อระบบออกกริดเพิ่ม (GL#7) แล้ว DD ของ side Buy พุ่งใหม่ → ระบบมีแนวโน้มออก hedge "รอบที่ 2" ของ generation เดิม → ผู้ใช้ไม่ต้องการพฤติกรรมนี้
+- **ความต้องการที่ user ยืนยัน**: "ห้ามไม่ให้ออก hedge ครั้งที่ 2 ตั้งแต่แรก" → 1 generation = 1 hedge ต่อ side เท่านั้น
 
-ออเดอร์เปิดอยู่: `GM1_GL#6, #7, #8, #9` (ฝั่ง Buy, Set#1)
-ออเดอร์ใหม่ที่เพิ่งออก: `GM1_GL#5` ← **เลขย้อนหลังต่ำกว่าของเดิม**
+### Root Cause
+ที่ `CheckAndOpenHedgeByDD()` (line 8783–8883):
+- มี cooldown (`g_lastDDHedgeTime`, `g_lastHedgeCloseTime`)
+- มี per-side pause (`InpHedge_SidePauseMin` → `g_lastHedgeBuyTime/SellTime`)
+- มี cap `InpHedge_MaxSets`
 
-**Root cause** อยู่ที่ `CheckGridLoss()` บรรทัด 3361–3463:
-
-```cpp
-void CheckGridLoss(ENUM_POSITION_TYPE side, int currentGridCount)
-{
-   ...
-   string comment = GetCommentPrefix() + "_GL#" + IntegerToString(currentGridCount + 1);
-}
-```
-
-`currentGridCount` คือ **จำนวน GL ที่เปิดอยู่ตอนนี้** (นับจาก `gridLossBuy` ที่ line 1863) ไม่ใช่ "เลข GL สูงสุดที่เคยใช้"
-
-ผลที่เกิด:
-- ก่อนปลด hedge: เคยมี GL#1–#9 ครบ
-- หลัง matching-close หรือ partial-close ของ hedge ทำให้ GL#1–#5 ปิดไป → เหลือเปิด 4 ตัว (GL#6–#9)
-- เมื่อราคาเลื่อนพอเปิดกริดถัดไป: `currentGridCount = 4` → comment = `GL#5`
-- **ซ้ำกับเลขที่เคย ใช้** (GL#5 ที่ปิดไปแล้ว) และ "ต่ำกว่า" GL#6–9 ที่ยังเปิดอยู่ → ลำดับเลขไม่สอดคล้อง สับสน และมีโอกาสที่ logic อื่นที่อ้าง comment จะเข้าใจผิด (เช่น matching pool, FIFO, log)
-- Lot size ยังถูกอยู่เพราะใช้ `FindMaxLotOnSide` (บรรทัด 3446) → ตรงกับที่ user สังเกต
-
-ปัญหาเดียวกันมีใน:
-- `CheckGridLoss()` บรรทัด 3456 (gen ปัจจุบัน, GL)
-- `CheckGridProfit()` บรรทัด 3528 (gen ปัจจุบัน, GP)
-- `CheckGridLossTF()` บรรทัด 5192 (TF mode, GL)
-- `CheckGridProfitTF()` บรรทัด 5263 (TF mode, GP)
+แต่ **ไม่มี guard ที่เช็คว่า "generation นี้ + side นี้ มี hedge active อยู่แล้วหรือยัง"**
+ผลคือ ถ้า side Buy ของ Gen2 มี `GM_Hedge_D2` อยู่แล้ว แต่ DD ของ Buy พุ่งเกิน threshold อีกครั้ง (เพราะ GL ใหม่เพิ่ม loss) → ระบบสามารถเปิด hedge ตัวที่ 2 สำหรับ Gen2 ได้ (จะเป็น `GM_Hedge_D2` อีกตัวใน slot อื่น) — ไม่ตรงตามเจตนา user
 
 ### แผนแก้ (Fix-only, ไม่แตะ trading logic)
 
 ไฟล์: `public/docs/mql5/Gold_Miner_EA.mq5`
 
-#### 1) เพิ่ม helper ใหม่ `FindMaxGridLevelOnSide(side, suffix)`
-สแกน positions ของ MagicNumber + symbol + side + generation ปัจจุบัน + comment ที่ลงท้าย `_GL#N` หรือ `_GP#N` แล้วคืน "เลข N สูงสุด" ที่ยังเปิดอยู่ (skip hedge/bound, เช็ค `ExtractGeneration == g_cycleGeneration`)
+#### 1) เพิ่ม helper ใหม่ `HasActiveHedgeForGenSide(bindGen, hedgedCounterSide)`
+สแกน `g_hedgeSets[]` คืน `true` ถ้ามี set ใดที่:
+- `active == true`
+- `boundGeneration == bindGen`
+- `counterSide == hedgedCounterSide` (ฝั่งที่ขาดทุนซึ่งถูก hedge — เช่น Buy เป็น counter เมื่อ hedge เป็น Sell)
 
-ใช้ pattern เดียวกับที่มีอยู่แล้วใน `CountOrphanPositions()` (line 9329–9333) → extract เลขหลัง `#`
-
-#### 2) แก้การตั้ง comment ให้ใช้ "max level + 1" แทน "count + 1"
-
-ใน `CheckGridLoss()` (line 3456):
+#### 2) เพิ่ม input toggle ใหม่
 ```cpp
-int maxLevel = FindMaxGridLevelOnSide(side, "_GL");
-int nextLevel = MathMax(maxLevel + 1, currentGridCount + 1);
-string comment = GetCommentPrefix() + "_GL#" + IntegerToString(nextLevel);
+input bool InpHedge_OnePerGenSide = true; // v6.72: Allow only 1 DD hedge per generation per side
 ```
-- ใช้ `MathMax` กันกรณี edge เช่น hedge ปิด GL#9 ลำพังเหลือ GL#1–#8 → max+1=9 ซ้ำ → fallback เป็น count+1=9 ก็ยัง OK (และเรา block ซ้ำเพิ่มในข้อ 3)
+- Default `true` ตามที่ user ต้องการ
+- ถ้าตั้ง `false` พฤติกรรมจะกลับมาเหมือน v6.71
 
-จริงๆ ที่เหมาะสมที่สุดคือใช้ `maxLevel + 1` เป็นหลักเสมอ เพราะ hedge ที่ปลดล็อคจะปิดเรียงจาก GL#1 ขึ้นไป (FIFO) → max ของ GL ที่เหลือคือ "เลขสุดท้ายที่เคยเปิด" → +1 ได้เลขใหม่ที่ไม่ซ้ำเสมอ
-
-#### 3) ใช้ pattern เดียวกันกับอีก 3 จุด
-- `CheckGridProfit()` line 3528 → ใช้ `FindMaxGridLevelOnSide(side, "_GP")`
-- `CheckGridLossTF()` line 5192 → ใช้ helper version TF (อ่าน prefix ของ TF set)
-- `CheckGridProfitTF()` line 5263 → เช่นเดียวกัน
-
-(สำหรับ TF: helper รับ `tfPrefix` เพิ่มเพื่อ match prefix ที่ถูกต้อง)
-
-#### 4) เพิ่ม log debug
+#### 3) ใส่ guard ใน `CheckAndOpenHedgeByDD()` ก่อนเรียก `OpenDDHedge(...)` ทั้ง 4 จุด (Dollar mode 2 จุด + Percent mode 2 จุด)
+ตัวอย่างฝั่ง Buy:
 ```cpp
-Print("v6.71 GRID NEXT-LEVEL: side=", EnumToString(side),
-      " openGL=", currentGridCount, " maxLevel=", maxLevel,
-      " → nextLevel=", nextLevel, " comment=", comment);
+if(buyLossAbs >= InpHedge_DDTriggerDollar)
+{
+   if(InpHedge_OnePerGenSide && HasActiveHedgeForGenSide(curGen, POSITION_TYPE_BUY))
+   {
+      // throttled log every 60s
+      static datetime lastLog = 0;
+      if(now - lastLog > 60) {
+         Print("v6.72 DD HEDGE BLOCKED: BUY side of Gen", curGen, 
+               " already has active hedge → no 2nd hedge");
+         lastLog = now;
+      }
+   }
+   else if(OpenDDHedge(POSITION_TYPE_BUY, POSITION_TYPE_SELL, curGen)) { ... }
+}
 ```
-ช่วย verify ว่าหลังแก้แล้วเลขใหม่ > เลขที่เปิดอยู่ทั้งหมดเสมอ
+ทำซ้ำกับ Sell side และ Percent mode
 
-#### 5) Version bump → v6.71
-- `#property version "6.71"`
+#### 4) เพิ่ม guard ลำดับสองใน `OpenDDHedge()` (defense-in-depth)
+ก่อน `FindFreeHedgeSlot()` ใส่:
+```cpp
+if(InpHedge_OnePerGenSide && HasActiveHedgeForGenSide(bindGen, counterSide))
+{
+   Print("v6.72 OpenDDHedge BLOCKED: Gen", bindGen, " ", 
+         EnumToString(counterSide), " already hedged");
+   return false;
+}
+```
+ป้องกันกรณีถูกเรียกจากที่อื่นในอนาคต
+
+#### 5) Dashboard
+เพิ่มแถวใหม่ในหมวด Hedge:
+```
+"OnePerGen": "ENABLED" / "DISABLED"
+```
+
+#### 6) Log diagnostics ช่วยตรวจสอบสาเหตุที่ "ไม่ออกออเดอร์เพิ่ม"
+ใน `CheckGridLoss()` (gen ปัจจุบัน) เพิ่ม throttled log (ทุก 60s) เมื่อ `shouldOpen == false` ระบุ:
+- ระยะปัจจุบันจาก max GL price
+- distance threshold ที่ต้องเกิน
+- Hedge Side Pause active หรือไม่
+- BB filter block หรือไม่
+
+ช่วยให้ user (และเรา) เห็นชัดว่าทำไมไม่มี GL#8 ออกหลัง hedge
+
+#### 7) Version bump → v6.72
+- `#property version "6.72"`
 - `#property description`
 - Header comment block
 - Dashboard version string
 
 ### สิ่งที่ไม่เปลี่ยนแปลง
 - ไม่แก้ `OpenOrder / trade.Buy / trade.Sell / OrderSend`
-- ไม่แก้ entry condition (`shouldOpen`, distance, ATR, signal filter)
-- ไม่แก้ `CalculateGridLot` / `FindMaxLotOnSide` (lot ยังถูกต้องอยู่แล้ว)
-- ไม่แก้ Hedge logic / Match-Close pool / Sequential FIFO (v6.70)
-- ไม่แก้ Sequential Unlock Delay (v6.69)
-- ไม่แก้ Triple Gate / DD trigger / Generation lifecycle
-- ไม่แก้ License / News / Time filter
+- ไม่แก้ entry condition ของ initial/grid (`shouldOpen`, distance, ATR, signal filter)
+- ไม่แก้ `CalculateGridLot` / `FindMaxLotOnSide`
+- ไม่แก้ Hedge Matching Close / Reverse Hedge / Bound logic
+- ไม่แก้ Sequential FIFO (v6.70), Sequential Unlock Delay (v6.69), Grid Comment Max-Level (v6.71)
+- ไม่แก้ Triple Gate / DD threshold calculation / Generation lifecycle
+- ไม่แก้ License / News / Time filter / BB filter
 
 ### ผลลัพธ์ที่คาดหวัง
-1. หลัง hedge ปลดล็อคและ GL#1–#5 ปิดไป → grid ใหม่จะเป็น `GL#10`, `GL#11`, ... ต่อจาก max ที่ยังเปิด (GL#9)
-2. Lot size ยังถูกเหมือนเดิม (ใช้ `FindMaxLotOnSide`)
-3. ไม่มี comment ซ้ำกับที่เคยใช้ → log/dashboard/match pool อ่านลำดับได้ถูกต้อง
-4. ไม่กระทบกริด generation อื่น (GM, GM2, ...) เพราะ helper เช็ค `ExtractGeneration`
+1. เมื่อ `Gen2 BUY` มี `GM_Hedge_D2` active อยู่แล้ว → แม้ DD พุ่งเกิน threshold อีก ระบบจะ **ไม่** ออก hedge ตัวที่ 2 ของ Gen2 BUY
+2. ถ้า hedge เซต Gen2 ปิดเรียบร้อย (matching close) → ค่อยเริ่ม cycle ใหม่ (Gen3) hedge ใหม่ได้ตามปกติ
+3. Set อื่น generation อื่น (Gen1, Gen3, ...) ยัง hedge ได้อิสระตามเดิม
+4. ฝั่ง Sell ของ Gen เดียวกันก็ hedge ได้อิสระจากฝั่ง Buy (เพราะ guard เช็ค side ด้วย)
+5. มี log ใน Experts tab อธิบายชัดเจนว่าทำไมไม่ออกอีก hedge / ทำไมไม่ออก GL ถัดไป
 
 ### ความเสี่ยง & Mitigation
-- **Risk**: ถ้า `GridLoss_MaxTrades = 10` แต่ max level เคยขึ้นถึง 10 แล้วบางตัวปิดไป → `maxLevel+1 = 11` เกิน MaxTrades  
-  **Mitigation**: gate `if(currentGridCount >= GridLoss_MaxTrades) return;` ที่ line 3363 ยังทำงานปกติ (นับจำนวนเปิดอยู่) → จะไม่เปิดเพิ่มเกิน MaxTrades แต่เลข comment สูงขึ้นได้ (เพื่อหลีกเลี่ยงซ้ำ) — พฤติกรรมที่ user ต้องการ
-
-- **Risk**: ถ้า user ต้องการให้เลขรีเซ็ตเป็น 1 หลัง matching close ทุกครั้ง  
-  **Mitigation**: ไม่ใช่ความตั้งใจตาม report → ถ้าต้องการพฤติกรรมเดิม ค่อยเพิ่ม input toggle ภายหลัง
+- **Risk**: ถ้า DD ของ side ที่ถูก hedge แล้วยังเพิ่มขึ้นเรื่อย ๆ ระบบจะไม่ป้องกันเพิ่ม
+  **Mitigation**: เป็นเจตนาตามที่ user ขอ → exposure ที่เหลือจัดการด้วย Triple Gate / Matching Close / Balance Guard เดิม + user ปรับ `InpHedge_OnePerGenSide = false` ได้ถ้าต้องการพฤติกรรมเก่า
+- **Risk**: User เปลี่ยนใจอยากให้ hedge เพิ่มได้ภายหลัง
+  **Mitigation**: toggle input — สลับได้ทันทีโดยไม่ต้อง recompile
 
