@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.70 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.71 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.70"
-#property description "Gold Miner EA v6.70 - v6.69 + Strict FIFO hedge close (no out-of-order release; profit-bypass gated by toggle)"
+#property version   "6.71"
+#property description "Gold Miner EA v6.71 - v6.70 + Grid comment numbering uses MAX(maxLevel+1, count+1) — no duplicate GL#/GP# after hedge unlock"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -3483,7 +3483,10 @@ void CheckGridLoss(ENUM_POSITION_TYPE side, int currentGridCount)
          // LOT_CUSTOM: keep level-based calculation
       }
       
-      string comment = GetCommentPrefix() + "_GL#" + IntegerToString(currentGridCount + 1);
+      // v6.71: never reuse a level number that's already open after hedge unlock
+      int _maxLvlGL = FindMaxGridLevelOnSide(side, "_GL");
+      int _nextLvlGL = (int)MathMax(_maxLvlGL + 1, currentGridCount + 1);
+      string comment = GetCommentPrefix() + "_GL#" + IntegerToString(_nextLvlGL);
       ENUM_ORDER_TYPE orderType = (side == POSITION_TYPE_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
       if(OpenOrder(orderType, lots, comment))
       {
@@ -3555,7 +3558,10 @@ void CheckGridProfit(ENUM_POSITION_TYPE side, int currentGridCount)
    if(shouldOpen)
    {
       double lots = CalculateGridLot(currentGridCount, false);
-      string comment = GetCommentPrefix() + "_GP#" + IntegerToString(currentGridCount + 1);
+      // v6.71: never reuse a level number that's already open
+      int _maxLvlGP = FindMaxGridLevelOnSide(side, "_GP");
+      int _nextLvlGP = (int)MathMax(_maxLvlGP + 1, currentGridCount + 1);
+      string comment = GetCommentPrefix() + "_GP#" + IntegerToString(_nextLvlGP);
       ENUM_ORDER_TYPE orderType = (side == POSITION_TYPE_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
       if(OpenOrder(orderType, lots, comment))
       {
