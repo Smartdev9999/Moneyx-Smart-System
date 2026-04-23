@@ -9956,8 +9956,20 @@ void ManageOrphanGrid()
          }
          continue;
       }
+      // v6.74: Generation-level mutex — block recovery grid if gen still has active hedge
+      //        or is within post-release cooldown (prevents recovery+hedge collision)
+      if(ShouldBlockRecoveryGridForGen(gen))
+      {
+         static datetime s_lastGenMutexLog = 0;
+         if(TimeCurrent() - s_lastGenMutexLog >= 30)
+         {
+            Print("v6.74 RECOVERY GRID BLOCKED: ", g_lastGenBlockReason);
+            s_lastGenMutexLog = TimeCurrent();
+         }
+         continue;
+      }
       string prefix = GenPrefix(gen);
-      
+
       // Re-count fresh each tick to detect if orders were closed
       int bc = 0, sc = 0, glb = 0, gls = 0, mglb = 0, mgls = 0;
       CountOrphanPositions(gen, bc, sc, glb, gls, mglb, mgls);
