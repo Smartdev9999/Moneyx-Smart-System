@@ -1474,6 +1474,10 @@ void OnTick()
    // v6.61: Prune recovery seeds + check unified avg TP for current owner
    PruneRecoverySeeds();
    ManageRecoveryOwnerAvgTP();
+   // v6.73: Auto-advance owner to next remaining gen when current owner is flat
+   AdvanceSequentialOwnerIfFlat();
+   // v6.73: Prune released-ticket list (auto-clean closed entries)
+   PrunePrevHedgedTickets();
    // v6.63: Watchdog — alert if owner-gen orders are missing Broker TP
    AuditUnTPedOwnerOrders();
    // v6.65: Watchdog — alert if hedge set lots are inflated vs bound orders
@@ -1992,6 +1996,27 @@ bool IsBBBlockingSell()
 bool OpenOrder(ENUM_ORDER_TYPE orderType, double lots, string comment)
 {
    double price = (orderType == ORDER_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
+
+   //--- v6.73: Cross-gen INIT guard — block new-gen INIT while older-gen same-side
+   //          orders are still free (not hedged, can self-close normally).
+   //          Prevents GM1 + GM2 same-side mixing after a hedge is opened.
+   if(InpCrossGen_InitGuard && !IsHedgeComment(comment) && StringFind(comment, "_INIT") >= 0)
+   {
+      ENUM_POSITION_TYPE psd = (orderType == ORDER_TYPE_BUY) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
+      int legacyFree = CountFreeOlderGenOnSide(psd);
+      if(legacyFree > 0)
+      {
+         static datetime lastBlockLog = 0;
+         if(TimeCurrent() - lastBlockLog >= 30)
+         {
+            Print("v6.73 INIT BLOCKED: ", comment, " (", EnumToString(psd), ") — ",
+                  legacyFree, " older-gen order(s) still free on this side. ",
+                  "Wait for them to self-close before opening new-gen INIT.");
+            lastBlockLog = TimeCurrent();
+         }
+         return false;
+      }
+   }
 
    //--- v6.56: Bollinger Band Entry Filter (Block New Orders Only — exempt hedge orders)
    if(BB_FilterEnable && !IsHedgeComment(comment))
