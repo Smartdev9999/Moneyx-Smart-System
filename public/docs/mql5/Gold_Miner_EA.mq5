@@ -4485,6 +4485,18 @@ void DisplayDashboard()
             // v6.72: One Hedge Per Gen/Side toggle status
             string opgStatus = InpHedge_OnePerGenSide ? "ENABLED (1/gen/side)" : "DISABLED";
             DrawTableRow(row, "  OnePerGen", opgStatus, InpHedge_OnePerGenSide ? clrLime : clrGray, COLOR_SECTION_HEDGE); row++;
+            // v6.73: Auto-heal orphan/inflated hedges
+            string healStatus = "Orphan:" + (InpHedge_AutoCloseOrphan ? "ON" : "OFF") +
+                                " Trim:" + (InpHedge_AutoTrimInflated ? "ON" : "OFF") +
+                                " Grace:" + IntegerToString(InpHedge_OrphanGraceSec) + "s";
+            color healClr = (InpHedge_AutoCloseOrphan || InpHedge_AutoTrimInflated) ? clrLime : clrGray;
+            DrawTableRow(row, "  AutoHeal", healStatus, healClr, COLOR_SECTION_HEDGE); row++;
+            // v6.73: Integrity counters (orphan / inflated active right now)
+            string intCnt = "Orphan:" + IntegerToString(g_hedgeIntegrityCriticalCount) +
+                            " Inflated:" + IntegerToString(g_hedgeIntegrityWarnCount);
+            color intClr = (g_hedgeIntegrityCriticalCount > 0) ? clrRed :
+                           (g_hedgeIntegrityWarnCount > 0 ? clrOrange : clrLime);
+            DrawTableRow(row, "  Integrity", intCnt, intClr, COLOR_SECTION_HEDGE); row++;
          }
         
         // Orphan warning
