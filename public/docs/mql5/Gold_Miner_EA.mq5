@@ -8293,6 +8293,118 @@ double FindCumulativeSeedLot(int gen, ENUM_POSITION_TYPE side, double targetLots
    return pickedLot;
 }
 
+//+------------------------------------------------------------------+
+//| v6.73: Count "free" older-gen normal orders on a side             |
+//| Free = not hedge comment, not bound, gen >= 1 && gen < currentGen |
+//| Used as guard: while older-gen orders can self-close, do not open |
+//| a new gen INIT on the same side (avoid GM1+GM2 same-side mixing). |
+//+------------------------------------------------------------------+
+int CountFreeOlderGenOnSide(ENUM_POSITION_TYPE side)
+{
+   int cnt = 0;
+   if(g_cycleGeneration <= 1) return 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
+      string cmt = PositionGetString(POSITION_COMMENT);
+      if(IsHedgeComment(cmt)) continue;
+      if(IsTicketBound(tk)) continue;          // bound = hedge is handling it
+      int og = ExtractGeneration(cmt);
+      if(og < 1) continue;
+      if(og >= g_cycleGeneration) continue;    // only OLDER gens
+      cnt++;
+   }
+   return cnt;
+}
+
+//+------------------------------------------------------------------+
+//| v6.73: Auto-advance Sequential Recovery owner to next remaining   |
+//| generation when the current owner gen is flat. Called from OnTick.|
+//+------------------------------------------------------------------+
+void AdvanceSequentialOwnerIfFlat()
+{
+   if(!InpOwnerAutoAdvance) return;
+   if(!InpHedge_SequentialRecovery) return;
+   if(!g_sequentialRecoveryActive) return;
+   if(!IsSequentialRecoveryComplete()) return;
+
+   static datetime lastAdvance = 0;
+   if(TimeCurrent() - lastAdvance < 1) return;
+   lastAdvance = TimeCurrent();
+
+   int oldGen = g_sequentialRecoveryGen;
+
+   // Find next gen with remaining normal (non-hedge) orders, gen > oldGen
+   int nextGen = -1;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      string cmt = PositionGetString(POSITION_COMMENT);
+      if(IsHedgeComment(cmt)) continue;
+      int og = ExtractGeneration(cmt);
+      if(og <= oldGen) continue;
+      if(nextGen < 0 || og < nextGen) nextGen = og;
+   }
+
+   if(nextGen < 0)
+   {
+      // No newer gen pending — just clear, normal flow takes over
+      ClearSequentialRecoveryOwner("v6.73 owner-advance: no newer gen pending");
+      return;
+   }
+
+   // Find a hedge set bound to nextGen, if any
+   int nextSlot = -1;
+   for(int h = 0; h < g_hedgeSetCount; h++)
+   {
+      if(!g_hedgeSets[h].active) continue;
+      if(g_hedgeSets[h].boundGeneration == nextGen) { nextSlot = h; break; }
+   }
+
+   ClearSequentialRecoveryOwner("v6.73 owner-advance: Gen" + IntegerToString(oldGen) + " flat → Gen" + IntegerToString(nextGen));
+   if(nextSlot >= 0)
+   {
+      SetSequentialRecoveryOwner(nextSlot, nextGen);
+      Print("v6.73 OWNER ADVANCE: Gen", oldGen, " → Gen", nextGen, " (set#", nextSlot + 1, ")");
+   }
+   else
+   {
+      Print("v6.73 OWNER ADVANCE: Gen", oldGen, " flat → Gen", nextGen,
+            " has no active hedge set (continuing as free recovery)");
+   }
+}
+
+//+------------------------------------------------------------------+
+//| v6.73: Prune g_prevHedgedTickets entries whose tickets are gone   |
+//| Keeps the array tight; cycle reset still flushes everything.      |
+//+------------------------------------------------------------------+
+void PrunePrevHedgedTickets()
+{
+   static datetime lastPrune = 0;
+   if(TimeCurrent() - lastPrune < 5) return;
+   lastPrune = TimeCurrent();
+   if(g_prevHedgedCount <= 0) return;
+   int w = 0;
+   for(int r = 0; r < g_prevHedgedCount; r++)
+   {
+      ulong tk = g_prevHedgedTickets[r];
+      if(tk != 0 && PositionSelectByTicket(tk))
+      {
+         g_prevHedgedTickets[w] = tk;
+         w++;
+      }
+   }
+   for(int j = w; j < g_prevHedgedCount; j++) g_prevHedgedTickets[j] = 0;
+   g_prevHedgedCount = w;
+}
+
 void SaveBoundTicketsToPrevHedged(int idx)
 {
    // v6.73: when InpHedge_NoReHedgeReleased=true, mark ALL released tickets (any trigger type)
