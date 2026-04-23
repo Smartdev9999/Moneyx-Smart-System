@@ -8787,6 +8787,10 @@ void CheckAndOpenHedge()
          g_hedgeSets[slot].boundTicketCount = bc + 1;
        }
 
+       // v6.72: Force-clear broker TP/SL on every freshly-bound ticket so
+       // price cannot run into a stale TP and break the hedge lock.
+       ClearBrokerTPSLForSet(slot);
+
        // Store bound generation BEFORE incrementing
        g_hedgeSets[slot].boundGeneration = g_cycleGeneration;
 
