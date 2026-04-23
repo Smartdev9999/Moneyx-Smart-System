@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.81 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.78 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "6.81"
-#property description "Gold Miner EA v6.81 - v6.80 + Older-Gen Bound-Side Grid Continuation + Hedge-Grid Filters/AvgTP"
+#property version   "6.78"
+#property description "Gold Miner EA v6.78 - v6.74 + Hedge Open Delay (นาที) กัน False Signal — รอครบเวลาก่อนเปิด hedge รอบใหม่"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -154,23 +154,6 @@ input double         GridLoss_ATR_Multiplier = 1.5;        // ATR Multiplier
 input ENUM_ATR_REF   GridLoss_ATR_Reference  = ATR_REF_DYNAMIC; // ATR Reference Point
 input int            GridLoss_MinGapPoints   = 100;             // Minimum Grid Gap (points)
 input int            GridLoss_CandleConfirm  = 0;               // v6.40: Require N confirming candles before GL (0=Off)
-
-//--- v6.81: Older-Gen Bound-Side Grid Continuation
-input group "=== Legacy Gen Grid Continuation (v6.81) ==="
-input bool           InpLegacyGen_GridContinue   = true;   // Continue grid on older gens still hedge-locked
-input bool           InpLegacyGen_OnlyBoundSide  = true;   // Only the side that matches active hedge counterSide
-input bool           InpLegacyGen_LogVerbose     = true;   // Verbose log for legacy grid
-
-//--- v6.81: Hedge Grid Filters + Average TP
-input group "=== Hedge Grid Filters + AvgTP (v6.81) ==="
-input bool           InpHedgeGrid_OnlyNewCandle  = true;   // Hedge-Grid: 1 order per candle (per set)
-input bool           InpHedgeGrid_DontSameCandle = true;   // Hedge-Grid: skip if last grid same candle
-input int            InpHedgeGrid_CandleConfirm  = 1;      // Hedge-Grid: N confirming candles (0=Off)
-input int            InpHedgeGrid_MinGapPoints   = 200;    // Hedge-Grid: minimum gap override (points)
-input int            InpHedgeGrid_CooldownSec    = 30;     // Hedge-Grid: cooldown between grid orders (sec)
-input bool           InpHedgeGrid_AvgTP_Enable   = true;   // Hedge-Grid: sync broker TP to pool average
-input int            InpHedgeGrid_AvgTP_Points   = 300;    // Hedge-Grid: TP distance from avg (points)
-
 
 //--- Max Grid Average Trailing Stop (v6.41, v6.54)
 input group "=== Max Grid Average Trailing Stop ==="
@@ -393,16 +376,6 @@ input int      InpHedge_SidePauseMin         = 0;     // v6.39: Pause hedged sid
 // v6.78: Hedge Open Delay (นาที) — กัน false signal โดยบังคับรอเวลาก่อนเปิด hedge รอบใหม่
 input int                   InpHedge_OpenDelayMin  = 0;                  // v6.78: Hedge Open Delay (minutes, 0=Off, e.g. 30)
 input ENUM_HEDGE_DELAY_MODE InpHedge_OpenDelayMode = HDELAY_BOTH;        // v6.78: Delay reference (Open/Close/Both)
-// v6.79: Scheduled Stuck-TP Scanner — กวาด TP/SL ค้างของออเดอร์ที่ยังถูก hedge-lock อยู่จริงเป็นรอบเวลา
-input bool     InpStuckTP_ScanEnable      = true;  // v6.79: Enable scheduled stuck-TP scanner
-input int      InpStuckTP_ScanIntervalMin = 5;     // v6.79: Scan interval (minutes, e.g. 5)
-input bool     InpStuckTP_LogVerbose      = true;  // v6.79: Log each cleared ticket
-// v6.80: Stuck-Hedge Scanner — วินิจฉัย hedge set ที่นิ่งเกินเกณฑ์ + auto-heal stale flags
-input bool     InpStuckHedge_ScanEnable        = true;  // v6.80: Enable stuck-hedge scanner
-input int      InpStuckHedge_ScanIntervalMin   = 5;     // v6.80: Scan interval (minutes)
-input int      InpStuckHedge_StuckThresholdMin = 15;    // v6.80: Idle threshold (minutes) before flagging
-input bool     InpStuckHedge_AutoHeal          = true;  // v6.80: Auto-clear stale owner / matchingDone flags
-input bool     InpStuckHedge_LogVerbose        = true;  // v6.80: Log diagnosis details
 input double   InpHedge_DDTriggerDollar      = 500.0; // v6.25: DD$ to trigger hedge (per side)
 input bool     InpHedge_UseMatchingClose     = true;  // v6.51: Enable Hedge Recovery (false=only Balance Guard closes hedge)
 // v6.28: Balance Guard — close all when equity recovers to target
@@ -630,12 +603,6 @@ struct HedgeSet
    int      triggerType;               // 0 = expansion, 1 = DD%
    // === v6.57: Sequential Recovery ordering ===
    datetime hedgeOpenTime;             // open time of main hedge order (FIFO ordering)
-   // === v6.80: Stuck-Hedge tracking ===
-   datetime lastActionTime;            // last time this set performed an action (matching/avgTP/partial/grid)
-   // === v6.81: Hedge-Grid filters + AvgTP ===
-   datetime lastGridCandleTime;        // candle bar time of last hedge grid order open (per set)
-   double   lastBrokerAvgTP;           // last avg-TP price synced to broker (anti-thrash)
-   datetime lastLegacyGridCandle;      // candle bar time of last legacy gen grid open driven by this set
 };
 HedgeSet g_hedgeSets[MAX_HEDGE_SETS];
 int      g_hedgeSetCount = 0;
@@ -743,17 +710,6 @@ double   g_lastBrokerTP_Buy        = 0;  // last TP price set for BUY
 double   g_lastBrokerTP_Sell       = 0;  // last TP price set for SELL
 double   g_lastBrokerSL_Buy        = 0;  // last SL price set for BUY
 double   g_lastBrokerSL_Sell       = 0;  // last SL price set for SELL
-
-// === v6.79: Stuck-TP Scanner state ===
-datetime g_lastStuckTPScan         = 0;  // last time the scheduled scanner ran
-int      g_stuckTPClearedTotal     = 0;  // running total of TPs cleared by scanner
-int      g_stuckTPClearedLastRun   = 0;  // count cleared in the most recent run
-
-// === v6.80: Stuck-Hedge Scanner state ===
-datetime g_lastStuckHedgeScan         = 0;
-int      g_stuckHedgeDetectedLastRun  = 0;
-int      g_stuckHedgeHealedTotal      = 0;
-string   g_stuckHedgeLastDiag         = "";  // short diag string for dashboard
 
 // === v6.49: Deferred Sync Flags ===
 bool     g_pendingSyncOrderOpen   = false;
@@ -1028,14 +984,9 @@ int OnInit()
        g_hedgeSets[h].zoneLowerPrice = 0;
        g_hedgeSets[h].hedgeOpenPrice = 0;
        g_hedgeSets[h].oldestBoundPrice = 0;
-       // v6.81: Hedge-Grid + Legacy init
-       g_hedgeSets[h].lastGridCandleTime = 0;
-       g_hedgeSets[h].lastBrokerAvgTP = 0;
-       g_hedgeSets[h].lastLegacyGridCandle = 0;
        // v6.16: Trigger type init
        g_hedgeSets[h].triggerType = 0;
        g_hedgeSets[h].hedgeOpenTime = 0;  // v6.57
-       g_hedgeSets[h].lastActionTime = 0; // v6.80
      }
      g_hedgeSetCount = 0;
 
@@ -1065,16 +1016,11 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.81 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.78 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min",
-          " | HedgeOpenDelay=", InpHedge_OpenDelayMin, "min (mode=", (int)InpHedge_OpenDelayMode, ")",
-          " | StuckTPScan=", (InpStuckTP_ScanEnable ? IntegerToString(InpStuckTP_ScanIntervalMin) + "min" : "OFF"),
-          " | StuckHedgeScan=", (InpStuckHedge_ScanEnable ? IntegerToString(InpStuckHedge_ScanIntervalMin) + "m/idle" + IntegerToString(InpStuckHedge_StuckThresholdMin) + "m" + (InpStuckHedge_AutoHeal ? "+heal" : "") : "OFF"),
-          " | LegacyGridContinue=", (InpLegacyGen_GridContinue ? "ON" : "OFF"),
-          " | HedgeGridFilters=", (InpHedgeGrid_OnlyNewCandle ? "NewCandle " : ""), (InpHedgeGrid_CandleConfirm > 0 ? ("Confirm" + IntegerToString(InpHedgeGrid_CandleConfirm) + " ") : ""), "Cooldown", InpHedgeGrid_CooldownSec, "s",
-          " | HedgeGridAvgTP=", (InpHedgeGrid_AvgTP_Enable ? IntegerToString(InpHedgeGrid_AvgTP_Points) + "pts" : "OFF"));
+          " | HedgeOpenDelay=", InpHedge_OpenDelayMin, "min (mode=", (int)InpHedge_OpenDelayMode, ")");
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -1131,7 +1077,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.81 deinitialized");
+   Print("Gold Miner EA v6.74 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -1604,22 +1550,6 @@ void OnTick()
      //          broker TP/SL even if all TP modes are disabled or the 2s timer is late.
      EnforceClearTPOnAllBound();
 
-     //--- v6.79: Scheduled Stuck-TP Scanner (default every 5 min) — เสริม per-tick sweep
-     //          ไล่หาออเดอร์ที่ยังมีคู่ hedge-lock จริงแต่ TP/SL ยังค้างอยู่ และเคลียร์ออก
-     //          ข้ามออเดอร์ที่กำลัง recovery (กรีดแก้) และออเดอร์ของ cycle ใหม่
-     if(InpStuckTP_ScanEnable && InpStuckTP_ScanIntervalMin > 0)
-     {
-        if(TimeCurrent() - g_lastStuckTPScan >= (datetime)(InpStuckTP_ScanIntervalMin * 60))
-           ScanAndClearStuckHedgeLockTP();
-     }
-
-     //--- v6.80: Stuck-Hedge Scanner — วินิจฉัย hedge set ที่นิ่งเกินเกณฑ์ + auto-heal stale flags
-     if(InpStuckHedge_ScanEnable && InpStuckHedge_ScanIntervalMin > 0)
-     {
-        if(TimeCurrent() - g_lastStuckHedgeScan >= (datetime)(InpStuckHedge_ScanIntervalMin * 60))
-           ScanAndDiagnoseStuckHedgeSets();
-     }
-
      //--- v6.44: Broker-Level TP/SL sync (every 2 seconds) — covers ALL TP modes
      if(UseTP_Points || UseTP_Dollar || UseTP_PercentBalance || (EnableSL && UseSL_Points))
      {
@@ -1714,8 +1644,6 @@ void OnTick()
              {
                 CheckGridLoss(POSITION_TYPE_SELL, gridLossSell);
              }
-             // v6.81: Continue grid on older gens still hedge-locked
-             if(InpLegacyGen_GridContinue) RunLegacyGenGridContinuation();
           }
 
          //--- Grid Profit management - blocked by News/Time/Squeeze filter
@@ -1854,8 +1782,6 @@ void OnTick()
              CheckGridLoss(POSITION_TYPE_BUY, gridLossBuy);
           if(!sellHedgePaused && !g_squeezeSellBlocked && (hasInitialSell || g_initialSellPrice > 0 || gridLossSell > 0) && gridLossSell < GridLoss_MaxTrades && sellCount > 0)
              CheckGridLoss(POSITION_TYPE_SELL, gridLossSell);
-          // v6.81: Continue grid on older gens still hedge-locked
-          if(InpLegacyGen_GridContinue) RunLegacyGenGridContinuation();
        }
 
        // Grid Profit management
@@ -2424,7 +2350,6 @@ void CloseAllPositions()
       // v6.16: Reset trigger type
       g_hedgeSets[h].triggerType = 0;
       g_hedgeSets[h].hedgeOpenTime = 0;  // v6.57
-      g_hedgeSets[h].lastActionTime = 0; // v6.80
    }
    g_hedgeSetCount = 0;
    // v6.16: Reset DD triggers on full close
@@ -4714,52 +4639,9 @@ void DisplayDashboard()
                 else
                 {
                    DrawTableRow(row, "Hedge Delay", "READY (mode=" + modeStrD + ", " + IntegerToString(InpHedge_OpenDelayMin) + "m)", clrLime, COLOR_SECTION_HEDGE); row++;
-                 }
-              }
-
-              // v6.79: Stuck-TP Scanner status
-              if(InpStuckTP_ScanEnable && InpStuckTP_ScanIntervalMin > 0)
-              {
-                 datetime nowS = TimeCurrent();
-                 int intervalSec = InpStuckTP_ScanIntervalMin * 60;
-                 int elapsedS = (int)(nowS - g_lastStuckTPScan);
-                 int nextInS  = intervalSec - elapsedS; if(nextInS < 0) nextInS = 0;
-                 string scanStr = "Every " + IntegerToString(InpStuckTP_ScanIntervalMin) + "m"
-                                + " | Next " + IntegerToString(nextInS/60) + "m" + IntegerToString(nextInS%60) + "s"
-                                + " | Last " + IntegerToString(g_stuckTPClearedLastRun)
-                                + " | Total " + IntegerToString(g_stuckTPClearedTotal);
-                 DrawTableRow(row, "StuckTP Scan", scanStr, clrAqua, COLOR_SECTION_HEDGE); row++;
-              }
-              else
-              {
-                 DrawTableRow(row, "StuckTP Scan", "OFF", clrGray, COLOR_SECTION_HEDGE); row++;
-              }
-
-              // v6.80: Stuck-Hedge Scanner status
-              if(InpStuckHedge_ScanEnable && InpStuckHedge_ScanIntervalMin > 0)
-              {
-                 datetime nowH = TimeCurrent();
-                 int intH = InpStuckHedge_ScanIntervalMin * 60;
-                 int elapH = (int)(nowH - g_lastStuckHedgeScan);
-                 int nextH = intH - elapH; if(nextH < 0) nextH = 0;
-                 string hScan = "Every " + IntegerToString(InpStuckHedge_ScanIntervalMin) + "m"
-                              + " | Idle>=" + IntegerToString(InpStuckHedge_StuckThresholdMin) + "m"
-                              + " | Next " + IntegerToString(nextH/60) + "m" + IntegerToString(nextH%60) + "s"
-                              + " | Detect " + IntegerToString(g_stuckHedgeDetectedLastRun)
-                              + " | Heal " + IntegerToString(g_stuckHedgeHealedTotal)
-                              + (InpStuckHedge_AutoHeal ? " | Heal:ON" : " | Heal:OFF");
-                 color hClr = (g_stuckHedgeDetectedLastRun > 0) ? clrOrange : clrAqua;
-                 DrawTableRow(row, "StuckHedge Scan", hScan, hClr, COLOR_SECTION_HEDGE); row++;
-                 if(g_stuckHedgeLastDiag != "")
-                 {
-                    DrawTableRow(row, "  ↳ Last Diag", g_stuckHedgeLastDiag, clrOrange, COLOR_SECTION_HEDGE); row++;
-                 }
-              }
-              else
-              {
-                 DrawTableRow(row, "StuckHedge Scan", "OFF", clrGray, COLOR_SECTION_HEDGE); row++;
-              }
-             
+                }
+             }
+            
             // v6.40: Grid Loss Candle Confirmation display
             if(GridLoss_CandleConfirm > 0)
             {
@@ -9008,215 +8890,6 @@ int FindOldestActiveHedgeSet()
    return oldest;
 }
 
-//+------------------------------------------------------------------+
-//| v6.79: Scheduled Stuck-TP Scanner                                 |
-//| ทำงานเป็นรอบเวลา (default 5 นาที) ไล่ตรวจทุก hedge set ที่ active |
-//| เคลียร์ TP/SL ของออเดอร์ที่ "ยังถูก hedge-lock อยู่จริง" เท่านั้น |
-//| ข้าม: ออเดอร์ที่กำลัง sequential recovery (กรีดแก้ต่อ),            |
-//|       recovery seed ของ gen ที่กำลัง recover,                     |
-//|       set ที่ฝั่ง hedge ปิดไปแล้ว (กำลัง release/closing)           |
-//| นับเฉพาะ tickets ที่อยู่ใน boundTickets[] ของระบบเท่านั้น           |
-//+------------------------------------------------------------------+
-void ScanAndClearStuckHedgeLockTP()
-{
-   g_lastStuckTPScan = TimeCurrent();
-   g_stuckTPClearedLastRun = 0;
-   int scanned = 0;
-   int cleared = 0;
-   int skippedRecovery = 0;
-   int skippedNoHedge = 0;
-
-   for(int h = 0; h < MAX_HEDGE_SETS; h++)
-   {
-      if(!g_hedgeSets[h].active) continue;
-      if(g_hedgeSets[h].boundTicketCount <= 0) continue;
-
-      // ตรวจว่า set นี้ยังมีออเดอร์ฝั่ง hedge อยู่จริงหรือไม่
-      // (hedge อาจถูกปิดไปแล้วในระหว่าง release — ห้ามแตะ TP ของ bound เพราะอาจกำลังจะปิดเอง)
-      bool hedgeStillAlive = false;
-      ulong mainHedge = g_hedgeSets[h].hedgeTicket;
-      if(mainHedge > 0 && PositionSelectByTicket(mainHedge))
-         hedgeStillAlive = true;
-      if(!hedgeStillAlive)
-      {
-         for(int g = 0; g < g_hedgeSets[h].gridTicketCount; g++)
-         {
-            if(PositionSelectByTicket(g_hedgeSets[h].gridTickets[g])) { hedgeStillAlive = true; break; }
-         }
-      }
-      if(!hedgeStillAlive)
-      {
-         skippedNoHedge += g_hedgeSets[h].boundTicketCount;
-         continue;
-      }
-
-      for(int b = 0; b < g_hedgeSets[h].boundTicketCount; b++)
-      {
-         ulong tk = g_hedgeSets[h].boundTickets[b];
-         if(tk == 0) continue;
-         if(!PositionSelectByTicket(tk)) continue;
-         scanned++;
-
-         // ข้ามออเดอร์ที่กำลัง sequential recovery (กรีดแก้ต่อ)
-         if(g_sequentialRecoveryActive)
-         {
-            string c = PositionGetString(POSITION_COMMENT);
-            int og = ExtractGeneration(c);
-            if(og == g_sequentialRecoveryGen) { skippedRecovery++; continue; }
-            if(IsRecoverySeedTicket(tk) && GetRecoverySeedGen(tk) == g_sequentialRecoveryGen)
-            { skippedRecovery++; continue; }
-         }
-
-         double curTP = PositionGetDouble(POSITION_TP);
-         double curSL = PositionGetDouble(POSITION_SL);
-         if(curTP == 0 && curSL == 0) continue;
-
-         if(trade.PositionModify(tk, 0, 0))
-         {
-            cleared++;
-            g_stuckTPClearedTotal++;
-            if(InpStuckTP_LogVerbose)
-               PrintFormat("v6.79 StuckTP-Scan: set#%d ticket #%I64u TP=%s->0 SL=%s->0",
-                           h + 1, tk,
-                           DoubleToString(curTP, _Digits),
-                           DoubleToString(curSL, _Digits));
-         }
-      }
-   }
-
-   g_stuckTPClearedLastRun = cleared;
-   if(cleared > 0 || InpStuckTP_LogVerbose)
-   {
-      PrintFormat("v6.79 StuckTP-Scan summary: scanned=%d cleared=%d skipRecovery=%d skipNoHedge=%d (interval=%dm, totalCleared=%d)",
-                  scanned, cleared, skippedRecovery, skippedNoHedge,
-                  InpStuckTP_ScanIntervalMin, g_stuckTPClearedTotal);
-   }
-}
-
-//+------------------------------------------------------------------+
-//| v6.80: Stuck-Hedge Scanner — diagnoses idle hedge sets            |
-//| - STALE_OWNER: owner flag held but ownerOrdersLeft==0  → heal     |
-//| - UNLOCK_DELAY stuck > 2x threshold → log warn                    |
-//| - GATE_FAIL / FIFO_BLOCK / OWNER_LOCK → log only (per design)     |
-//| - NO_ACTION (gate ok + oldest + no owner) → reset stale flags     |
-//+------------------------------------------------------------------+
-void ScanAndDiagnoseStuckHedgeSets()
-{
-   g_lastStuckHedgeScan = TimeCurrent();
-   g_stuckHedgeDetectedLastRun = 0;
-   g_stuckHedgeLastDiag = "";
-
-   int thresholdSec = InpStuckHedge_StuckThresholdMin * 60;
-   if(thresholdSec <= 0) thresholdSec = 900;
-
-   int oldestIdx = FindOldestActiveHedgeSet();
-   bool ownerActive = g_sequentialRecoveryActive;
-   int ownerGen = g_sequentialRecoveryGen;
-   int ownerOrdersLeft = ownerActive ? CountSequentialOwnerOrders(ownerGen) : 0;
-   bool unlockDelay = IsSequentialUnlockDelayActive();
-   int unlockRemain = unlockDelay ? GetSequentialUnlockRemainSec() : 0;
-
-   // Heal #A: STALE OWNER
-   if(ownerActive && ownerOrdersLeft == 0)
-   {
-      string diagA = StringFormat("STALE_OWNER: Gen%d ordersLeft=0", ownerGen);
-      g_stuckHedgeDetectedLastRun++;
-      g_stuckHedgeLastDiag = diagA;
-      if(InpStuckHedge_LogVerbose)
-         PrintFormat("v6.80 StuckHedge DETECT %s", diagA);
-      if(InpStuckHedge_AutoHeal)
-      {
-         ClearSequentialRecoveryOwner("v6.80 stuck-heal: owner ordersLeft=0");
-         g_stuckHedgeHealedTotal++;
-         PrintFormat("v6.80 StuckHedge HEAL: cleared stale owner Gen%d", ownerGen);
-         ownerActive = g_sequentialRecoveryActive;
-         ownerGen = g_sequentialRecoveryGen;
-         ownerOrdersLeft = 0;
-      }
-   }
-
-   // Warn #B: UNLOCK_DELAY stuck > 2x threshold
-   if(unlockDelay && unlockRemain > thresholdSec * 2)
-   {
-      string diagB = StringFormat("UNLOCK_DELAY: remain=%ds (>2x threshold) reason=%s",
-                                   unlockRemain, g_sequentialUnlockReason);
-      g_stuckHedgeDetectedLastRun++;
-      if(g_stuckHedgeLastDiag == "") g_stuckHedgeLastDiag = diagB;
-      if(InpStuckHedge_LogVerbose)
-         PrintFormat("v6.80 StuckHedge WARN %s", diagB);
-   }
-
-   // Per-set diagnosis
-   int scanned = 0;
-   int detected = 0;
-   for(int h = 0; h < MAX_HEDGE_SETS; h++)
-   {
-      if(!g_hedgeSets[h].active) continue;
-      scanned++;
-
-      datetime lat = g_hedgeSets[h].lastActionTime;
-      if(lat == 0) { g_hedgeSets[h].lastActionTime = TimeCurrent(); continue; }
-
-      int idleSec = (int)(TimeCurrent() - lat);
-      if(idleSec < thresholdSec) continue;
-
-      bool gateOK = IsHedgeCloseAllowed(h);
-      bool isOldest = (h == oldestIdx);
-      double pnl = 0;
-      if(g_hedgeSets[h].hedgeTicket > 0 && PositionSelectByTicket(g_hedgeSets[h].hedgeTicket))
-         pnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
-
-      string reason = "";
-      if(!gateOK)
-         reason = StringFormat("GATE_FAIL: seenExp=%s zoneSet=%s",
-                               g_hedgeSets[h].seenExpansionSinceHedge ? "Y" : "N",
-                               (g_hedgeSets[h].zoneUpperPrice > 0 ? "Y" : "N"));
-      else if(ownerActive && !isOldest)
-         reason = StringFormat("OWNER_LOCK: ownerGen=%d (not oldest)", ownerGen);
-      else if(!isOldest)
-         reason = StringFormat("FIFO_BLOCK: oldest=Set#%d", oldestIdx + 1);
-      else if(unlockDelay)
-         reason = StringFormat("UNLOCK_DELAY: remain=%ds", unlockRemain);
-      else
-      {
-         reason = StringFormat("NO_ACTION: matchingDone=%s pnl=$%s",
-                               g_hedgeSets[h].matchingDone ? "Y" : "N",
-                               DoubleToString(pnl, 2));
-         if(InpStuckHedge_AutoHeal)
-         {
-            g_hedgeSets[h].matchingDone = false;
-            if(!g_hedgeSets[h].seenExpansionSinceHedge)
-               g_hedgeSets[h].seenExpansionSinceHedge = true;
-            g_hedgeSets[h].lastActionTime = TimeCurrent();
-            g_stuckHedgeHealedTotal++;
-            PrintFormat("v6.80 StuckHedge HEAL: Set#%d cleared stale matchingDone + forced seenExpansion (was idle %dm)",
-                        h + 1, idleSec / 60);
-         }
-      }
-
-      detected++;
-      string diag = StringFormat("Set#%d idle=%dm gate=%s oldest=%s pnl=$%s | %s",
-                                 h + 1, idleSec / 60,
-                                 gateOK ? "PASS" : "FAIL",
-                                 isOldest ? "Y" : "N",
-                                 DoubleToString(pnl, 2),
-                                 reason);
-      if(g_stuckHedgeLastDiag == "") g_stuckHedgeLastDiag = diag;
-      if(InpStuckHedge_LogVerbose)
-         PrintFormat("v6.80 StuckHedge DETECT %s", diag);
-   }
-
-   g_stuckHedgeDetectedLastRun += detected;
-
-   if(detected > 0 || InpStuckHedge_LogVerbose)
-   {
-      PrintFormat("v6.80 StuckHedge-Scan summary: scanned=%d detected=%d healedTotal=%d (interval=%dm, threshold=%dm, autoHeal=%s)",
-                  scanned, detected, g_stuckHedgeHealedTotal,
-                  InpStuckHedge_ScanIntervalMin, InpStuckHedge_StuckThresholdMin,
-                  InpStuckHedge_AutoHeal ? "ON" : "OFF");
-   }
-}
-
 
 //| Get lot cap for new orders when hedge set has bound orders          |
 //| Returns -1 if no hedge set exists for this side (no cap)           |
@@ -9463,7 +9136,6 @@ void CheckAndOpenHedge()
    if(OpenOrder(orderType, counterLots, comment))
    {
       g_hedgeSets[slot].active = true;
-      g_hedgeSets[slot].lastActionTime = TimeCurrent();  // v6.80
       g_hedgeSets[slot].hedgeSide = hedgeSide;
       g_hedgeSets[slot].counterSide = counterSide;
       g_hedgeSets[slot].hedgeLots = counterLots;
@@ -9745,7 +9417,6 @@ bool OpenDDHedge(ENUM_POSITION_TYPE counterSide, ENUM_POSITION_TYPE hedgeSide, i
    g_hedgeSets[slot].commentPrefix = comment;
    g_hedgeSets[slot].triggerType = 1;  // DD-triggered
    g_hedgeSets[slot].hedgeOpenTime = TimeCurrent();  // v6.57: temporary; refined after ticket lookup
-   g_hedgeSets[slot].lastActionTime = TimeCurrent(); // v6.80
    
    // Find the hedge ticket
    g_hedgeSets[slot].hedgeTicket = 0;
@@ -11406,7 +11077,6 @@ bool ManageHedgeBoundAvgTP(int idx)
 {
    if(InpHedge_BoundAvgTPPoints <= 0) return false;
    if(g_hedgeSets[idx].boundTicketCount == 0) return false;
-   g_hedgeSets[idx].lastActionTime = TimeCurrent();  // v6.80: mark active
    if(!g_hedgeSets[idx].active) return false;
 
    // Calculate weighted average price of bound orders
@@ -11468,7 +11138,6 @@ bool ManageHedgeBoundAvgTP(int idx)
 //+------------------------------------------------------------------+
 void ManageHedgeMatchingClose(int idx)
 {
-   g_hedgeSets[idx].lastActionTime = TimeCurrent();  // v6.80: mark active
    if(!PositionSelectByTicket(g_hedgeSets[idx].hedgeTicket)) return;
 
    double hedgeProfit = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
@@ -11661,7 +11330,6 @@ void ManageHedgeMatchingClose(int idx)
 //+------------------------------------------------------------------+
 void ManageHedgePartialClose(int idx)
 {
-   g_hedgeSets[idx].lastActionTime = TimeCurrent();  // v6.80: mark active
    // v6.61: SHRED hedge using bound profit (oldest profit-takers first)
    if(!InpHedge_ShredHedgeOnProfit) return;
    if(!PositionSelectByTicket(g_hedgeSets[idx].hedgeTicket)) return;
@@ -11838,268 +11506,10 @@ int CalculateEquivGridLevel(double remainingLots)
 }
 
 //+------------------------------------------------------------------+
-//| v6.81: Sync broker TP across hedge + hedge-grid pool to weighted   |
-//| average price + InpHedgeGrid_AvgTP_Points. Anti-thrash via         |
-//| g_hedgeSets[idx].lastBrokerAvgTP comparison.                       |
-//+------------------------------------------------------------------+
-void SyncHedgeSetAvgTP(int idx)
-{
-   if(idx < 0 || idx >= MAX_HEDGE_SETS) return;
-   if(!g_hedgeSets[idx].active) return;
-   if(!InpHedgeGrid_AvgTP_Enable) return;
-   if(InpHedgeGrid_AvgTP_Points <= 0) return;
-
-   ENUM_POSITION_TYPE hSide = g_hedgeSets[idx].hedgeSide;
-   double totalLots = 0;
-   double weighted  = 0;
-   ulong  poolTickets[];
-   int    poolCount = 0;
-   string prefix = "GM_HG" + IntegerToString(idx + 1);
-
-   for(int i = PositionsTotal() - 1; i >= 0; i--)
-   {
-      ulong tk = PositionGetTicket(i);
-      if(tk == 0) continue;
-      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
-      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
-      ENUM_POSITION_TYPE pt = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
-      if(pt != hSide) continue;
-
-      bool include = false;
-      if(tk == g_hedgeSets[idx].hedgeTicket) include = true;
-      else
-      {
-         string c = PositionGetString(POSITION_COMMENT);
-         if(StringFind(c, prefix) >= 0) include = true;
-      }
-      if(!include) continue;
-
-      double lots  = PositionGetDouble(POSITION_VOLUME);
-      double price = PositionGetDouble(POSITION_PRICE_OPEN);
-      totalLots += lots;
-      weighted  += lots * price;
-      ArrayResize(poolTickets, poolCount + 1);
-      poolTickets[poolCount++] = tk;
-   }
-
-   if(totalLots <= 0 || poolCount == 0) return;
-
-   double avgPrice = weighted / totalLots;
-   double tpDist   = InpHedgeGrid_AvgTP_Points * _Point;
-   double tpPrice  = (hSide == POSITION_TYPE_BUY)
-                     ? NormalizeDouble(avgPrice + tpDist, _Digits)
-                     : NormalizeDouble(avgPrice - tpDist, _Digits);
-
-   // Anti-thrash: only modify when avg-TP moved more than 1 point
-   if(MathAbs(tpPrice - g_hedgeSets[idx].lastBrokerAvgTP) <= _Point) return;
-
-   int modified = 0;
-   for(int p = 0; p < poolCount; p++)
-   {
-      ulong tk = poolTickets[p];
-      if(!PositionSelectByTicket(tk)) continue;
-      double curSL = PositionGetDouble(POSITION_SL);
-      double curTP = PositionGetDouble(POSITION_TP);
-      if(MathAbs(curTP - tpPrice) <= _Point) continue;
-      if(trade.PositionModify(tk, curSL, tpPrice)) modified++;
-   }
-   g_hedgeSets[idx].lastBrokerAvgTP = tpPrice;
-   if(modified > 0)
-      Print("v6.81 HedgeGrid AvgTP Set#", idx + 1, " avg=", DoubleToString(avgPrice, _Digits),
-            " TP=", DoubleToString(tpPrice, _Digits),
-            " pool=", poolCount, " modified=", modified);
-}
-
-//+------------------------------------------------------------------+
-//| v6.81: Continue grid on older generations still hedge-locked.     |
-//| Iterates active hedge sets whose boundGeneration != current gen,  |
-//| and (optionally) only on the side matching counterSide. Uses the  |
-//| same grid distance / lot rules as CheckGridLoss but anchored to   |
-//| the older gen's INIT/GL prices and comment prefix.                |
-//+------------------------------------------------------------------+
-void CheckGridLossLegacy(int gen, ENUM_POSITION_TYPE side, int hedgeIdx);
-
-void RunLegacyGenGridContinuation()
-{
-   if(!InpLegacyGen_GridContinue) return;
-   if(g_newOrderBlocked) return;
-   if(NormalOrderCount() >= MaxOpenOrders) return;
-
-   for(int h = 0; h < MAX_HEDGE_SETS; h++)
-   {
-      if(!g_hedgeSets[h].active) continue;
-      if(g_hedgeSets[h].boundTicketCount <= 0) continue;
-      int gen = g_hedgeSets[h].boundGeneration;
-      if(gen <= 0) continue;
-      if(gen == g_cycleGeneration) continue;  // current gen handled by CheckGridLoss
-      ENUM_POSITION_TYPE side = g_hedgeSets[h].counterSide;
-      if(InpLegacyGen_OnlyBoundSide)
-      {
-         CheckGridLossLegacy(gen, side, h);
-      }
-      else
-      {
-         CheckGridLossLegacy(gen, POSITION_TYPE_BUY, h);
-         CheckGridLossLegacy(gen, POSITION_TYPE_SELL, h);
-      }
-   }
-}
-
-//+------------------------------------------------------------------+
-//| Scan a specific (gen,side) for INIT/GL orders, returning count,   |
-//| last price/time and recovered INIT price.                          |
-//+------------------------------------------------------------------+
-void CountOrdersByGenSide(int gen, ENUM_POSITION_TYPE side,
-                          int &glCount, double &lastPrice, datetime &lastTime,
-                          double &initPrice, int &totalCount)
-{
-   glCount = 0; lastPrice = 0; lastTime = 0; initPrice = 0; totalCount = 0;
-   for(int i = PositionsTotal() - 1; i >= 0; i--)
-   {
-      ulong tk = PositionGetTicket(i);
-      if(tk == 0) continue;
-      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
-      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
-      ENUM_POSITION_TYPE pt = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
-      if(pt != side) continue;
-      string c = PositionGetString(POSITION_COMMENT);
-      if(IsHedgeComment(c)) continue;
-      int og = ExtractGeneration(c);
-      if(og != gen) continue;
-      bool isInit = (StringFind(c, "_INIT") >= 0);
-      bool isGL   = (StringFind(c, "_GL")   >= 0);
-      if(!isInit && !isGL) continue;
-
-      double pr = PositionGetDouble(POSITION_PRICE_OPEN);
-      datetime tm = (datetime)PositionGetInteger(POSITION_TIME);
-      totalCount++;
-      if(isInit && initPrice == 0) initPrice = pr;
-      if(isGL) glCount++;
-
-      // "lastPrice" = furthest price in adverse direction
-      if(side == POSITION_TYPE_BUY)
-      {
-         if(lastPrice == 0 || pr < lastPrice) { lastPrice = pr; }
-      }
-      else
-      {
-         if(lastPrice == 0 || pr > lastPrice) { lastPrice = pr; }
-      }
-      if(tm > lastTime) lastTime = tm;
-   }
-}
-
-void CheckGridLossLegacy(int gen, ENUM_POSITION_TYPE side, int hedgeIdx)
-{
-   if(NormalOrderCount() >= MaxOpenOrders) return;
-
-   int glCount = 0, totalCount = 0;
-   double lastPrice = 0, initPrice = 0;
-   datetime lastTime = 0;
-   CountOrdersByGenSide(gen, side, glCount, lastPrice, lastTime, initPrice, totalCount);
-
-   if(totalCount == 0) return;                       // nothing of this gen+side left
-   if(glCount >= GridLoss_MaxTrades) return;         // capped
-   if(lastPrice <= 0 && initPrice > 0) lastPrice = initPrice;
-   if(lastPrice <= 0) return;
-
-   // Anchor candle filters per hedge set (per-set throttle)
-   datetime curBar = iTime(_Symbol, PERIOD_CURRENT, 0);
-   if(GridLoss_OnlyNewCandle && hedgeIdx >= 0 && g_hedgeSets[hedgeIdx].lastLegacyGridCandle == curBar) return;
-   if(GridLoss_DontSameCandle && lastTime >= curBar) return;
-   if(GridLoss_CandleConfirm > 0 && !HasCandleConfirmation(side, PERIOD_CURRENT, GridLoss_CandleConfirm)) return;
-
-   double distance = GetGridDistance(glCount, true);
-   if(distance <= 0) return;
-   if(GridLoss_MinGapPoints > 0)
-      distance = MathMax(distance, (double)GridLoss_MinGapPoints);
-
-   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
-   double currentPrice = (side == POSITION_TYPE_BUY)
-                         ? SymbolInfoDouble(_Symbol, SYMBOL_ASK)
-                         : SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   bool shouldOpen = false;
-   if(GridLoss_GapType == GAP_ATR && GridLoss_ATR_Reference == ATR_REF_INITIAL && initPrice > 0)
-   {
-      double total = distance * (glCount + 1);
-      shouldOpen = (side == POSITION_TYPE_BUY)
-                   ? (currentPrice <= initPrice - total * point)
-                   : (currentPrice >= initPrice + total * point);
-   }
-   else
-   {
-      shouldOpen = (side == POSITION_TYPE_BUY)
-                   ? (currentPrice <= lastPrice - distance * point)
-                   : (currentPrice >= lastPrice + distance * point);
-   }
-   if(!shouldOpen) return;
-
-   double lots = CalculateGridLot(glCount, true);
-   // Ensure lot continues from max existing lot (parity with CheckGridLoss)
-   double maxExisting = 0;
-   for(int i = PositionsTotal() - 1; i >= 0; i--)
-   {
-      ulong tk = PositionGetTicket(i);
-      if(tk == 0) continue;
-      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
-      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
-      ENUM_POSITION_TYPE pt = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
-      if(pt != side) continue;
-      string c = PositionGetString(POSITION_COMMENT);
-      if(IsHedgeComment(c)) continue;
-      int og = ExtractGeneration(c);
-      if(og != gen) continue;
-      double l = PositionGetDouble(POSITION_VOLUME);
-      if(l > maxExisting) maxExisting = l;
-   }
-   if(maxExisting > 0 && lots <= maxExisting)
-   {
-      if(GridLoss_LotMode == LOT_MULTIPLY)
-         lots = maxExisting * GridLoss_MultiplyFactor;
-      else if(GridLoss_LotMode == LOT_ADD)
-         lots = maxExisting + InitialLotSize * GridLoss_AddLotPerLevel;
-   }
-
-   // Determine next grid level for the legacy gen (avoid reusing existing _GL#)
-   int maxLvl = 0;
-   for(int i = PositionsTotal() - 1; i >= 0; i--)
-   {
-      ulong tk = PositionGetTicket(i);
-      if(tk == 0) continue;
-      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
-      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
-      ENUM_POSITION_TYPE pt = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
-      if(pt != side) continue;
-      string c = PositionGetString(POSITION_COMMENT);
-      int og = ExtractGeneration(c);
-      if(og != gen) continue;
-      int gp = StringFind(c, "_GL#");
-      if(gp >= 0)
-      {
-         string num = StringSubstr(c, gp + 4);
-         int lvl = (int)StringToInteger(num);
-         if(lvl > maxLvl) maxLvl = lvl;
-      }
-   }
-   int nextLvl = (int)MathMax(maxLvl + 1, glCount + 1);
-   string comment = "GM" + IntegerToString(gen) + "_GL#" + IntegerToString(nextLvl);
-   ENUM_ORDER_TYPE orderType = (side == POSITION_TYPE_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
-   if(OpenOrder(orderType, lots, comment))
-   {
-      if(hedgeIdx >= 0) g_hedgeSets[hedgeIdx].lastLegacyGridCandle = curBar;
-      if(InpLegacyGen_LogVerbose)
-         Print("v6.81 LEGACY GRID gen=", gen, " side=", (side == POSITION_TYPE_BUY ? "BUY" : "SELL"),
-               " ", comment, " lots=", DoubleToString(lots, 2),
-               " dist=", DoubleToString(distance, 0), "pts hedgeSet#", hedgeIdx + 1);
-   }
-}
-
-//+------------------------------------------------------------------+
 //| Hedge Grid Mode: original orders gone, manage hedge recovery       |
 //+------------------------------------------------------------------+
 void ManageHedgeGridMode(int idx)
 {
-   g_hedgeSets[idx].lastActionTime = TimeCurrent();  // v6.80: mark active
    // Verify main hedge ticket
    bool mainHedgeExists = false;
    double mainHedgePnL = 0;
@@ -12232,14 +11642,7 @@ void ManageHedgeGridMode(int idx)
 
    if(currentGridCount < GridLoss_MaxTrades && currentGridCount <= g_hedgeSets[idx].gridLevel + 3)
    {
-      // v6.81: Hedge-Grid filters — OnlyNewCandle / DontSameCandle / CandleConfirm / Cooldown
-      datetime curBar = iTime(_Symbol, PERIOD_CURRENT, 0);
-      if(InpHedgeGrid_OnlyNewCandle && g_hedgeSets[idx].lastGridCandleTime == curBar) return;
-      if(InpHedgeGrid_CandleConfirm > 0
-         && !HasCandleConfirmation(g_hedgeSets[idx].hedgeSide, PERIOD_CURRENT, InpHedgeGrid_CandleConfirm))
-         return;
-
-      // v6.81: nextLevel uses absolute grid level (gridLevel + currentGridCount), not "+1 of zero"
+      // Calculate next grid lot
       int nextLevel = g_hedgeSets[idx].gridLevel + currentGridCount + 1;
       double nextLot = InitialLotSize;
       if(GridLoss_LotMode == LOT_MULTIPLY)
@@ -12247,25 +11650,18 @@ void ManageHedgeGridMode(int idx)
       else if(GridLoss_LotMode == LOT_ADD)
          nextLot = InitialLotSize + (GridLoss_AddLotPerLevel * InitialLotSize) * nextLevel;
 
-      // v6.81: configurable cooldown (was hard-coded 5s)
-      int cdSec = (InpHedgeGrid_CooldownSec > 0) ? InpHedgeGrid_CooldownSec : 5;
-      if(TimeCurrent() - g_lastHedgeGridTime < cdSec) return;
+      // Cooldown to prevent rapid-fire orders
+      if(TimeCurrent() - g_lastHedgeGridTime < 5) return;
 
-      // v6.81: distance calculation uses true level + min-gap floor
-      double requiredGap = GetGridDistance(nextLevel, true);
+      // Check grid distance using proper ATR/Custom calculation
+      double requiredGap = GetGridDistance(currentGridCount + 1, true);
       if(requiredGap <= 0) return;
-      if(InpHedgeGrid_MinGapPoints > 0)
-         requiredGap = MathMax(requiredGap, (double)InpHedgeGrid_MinGapPoints);
 
       double lastPrice = 0;
-      datetime lastGridTime = 0;
       if(PositionSelectByTicket(g_hedgeSets[idx].hedgeTicket))
-      {
          lastPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-         lastGridTime = (datetime)PositionGetInteger(POSITION_TIME);
-      }
 
-      // Find last grid order price + time
+      // Find last grid order price
       for(int i = PositionsTotal() - 1; i >= 0; i--)
       {
          ulong ticket = PositionGetTicket(i);
@@ -12277,7 +11673,6 @@ void ManageHedgeGridMode(int idx)
          if(StringFind(comment, prefix) >= 0)
          {
             double gPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-            datetime gTime = (datetime)PositionGetInteger(POSITION_TIME);
             if(g_hedgeSets[idx].hedgeSide == POSITION_TYPE_BUY)
             {
                if(gPrice < lastPrice || lastPrice == 0) lastPrice = gPrice;
@@ -12286,27 +11681,25 @@ void ManageHedgeGridMode(int idx)
             {
                if(gPrice > lastPrice || lastPrice == 0) lastPrice = gPrice;
             }
-            if(gTime > lastGridTime) lastGridTime = gTime;
          }
       }
-
-      // v6.81: DontSameCandle — block if last grid order is in same bar
-      if(InpHedgeGrid_DontSameCandle && lastGridTime >= curBar) return;
 
       if(lastPrice <= 0) return;
 
       double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
       // Directional distance: only trigger when price moves AGAINST the hedge (losing direction)
+      // Hedge SELL → grid opens when price goes UP (Bid > lastPrice)
+      // Hedge BUY  → grid opens when price goes DOWN (Ask < lastPrice)
       double distance = 0;
       if(g_hedgeSets[idx].hedgeSide == POSITION_TYPE_SELL)
       {
          double currentBid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-         distance = (currentBid - lastPrice) / point;
+         distance = (currentBid - lastPrice) / point;  // positive = price went up
       }
-      else
+      else // BUY hedge
       {
          double currentAsk = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-         distance = (lastPrice - currentAsk) / point;
+         distance = (lastPrice - currentAsk) / point;  // positive = price went down
       }
 
       if(distance >= requiredGap && distance > 0)
@@ -12318,19 +11711,12 @@ void ManageHedgeGridMode(int idx)
          if(OpenOrder(orderType, nextLot, comment))
          {
             g_lastHedgeGridTime = TimeCurrent();
-            g_hedgeSets[idx].lastGridCandleTime = curBar;  // v6.81
             Print("HEDGE GRID Set#", idx + 1, " opened grid L", currentGridCount + 1,
-                  " lvl=", nextLevel,
                   " lots=", DoubleToString(nextLot, 2),
                   " gap=", DoubleToString(distance, 0), "/", DoubleToString(requiredGap, 0));
-            // v6.81: sync broker TP across hedge+grid pool
-            if(InpHedgeGrid_AvgTP_Enable) SyncHedgeSetAvgTP(idx);
          }
       }
    }
-
-   // v6.81: keep AvgTP synced even when no new grid (e.g. main hedge partial close changed lots)
-   if(InpHedgeGrid_AvgTP_Enable) SyncHedgeSetAvgTP(idx);
 }
 
 //+------------------------------------------------------------------+
