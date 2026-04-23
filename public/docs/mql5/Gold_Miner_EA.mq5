@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.74 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.78 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "6.74"
-#property description "Gold Miner EA v6.74 - v6.73 + Released Gen-Side Lock (กัน hedge ซ้ำชุดเดิมหลังปลดล็อค — ปล่อยให้กรีดแก้ต่อจนจบ)"
+#property version   "6.78"
+#property description "Gold Miner EA v6.78 - v6.74 + Hedge Open Delay (นาที) กัน False Signal — รอครบเวลาก่อนเปิด hedge รอบใหม่"
 #property strict
 
 #include <Trade/Trade.mqh>
