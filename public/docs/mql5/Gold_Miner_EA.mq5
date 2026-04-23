@@ -1034,12 +1034,13 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.79 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.80 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min",
           " | HedgeOpenDelay=", InpHedge_OpenDelayMin, "min (mode=", (int)InpHedge_OpenDelayMode, ")",
-          " | StuckTPScan=", (InpStuckTP_ScanEnable ? IntegerToString(InpStuckTP_ScanIntervalMin) + "min" : "OFF"));
+          " | StuckTPScan=", (InpStuckTP_ScanEnable ? IntegerToString(InpStuckTP_ScanIntervalMin) + "min" : "OFF"),
+          " | StuckHedgeScan=", (InpStuckHedge_ScanEnable ? IntegerToString(InpStuckHedge_ScanIntervalMin) + "m/idle" + IntegerToString(InpStuckHedge_StuckThresholdMin) + "m" + (InpStuckHedge_AutoHeal ? "+heal" : "") : "OFF"));
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -1576,6 +1577,13 @@ void OnTick()
      {
         if(TimeCurrent() - g_lastStuckTPScan >= (datetime)(InpStuckTP_ScanIntervalMin * 60))
            ScanAndClearStuckHedgeLockTP();
+     }
+
+     //--- v6.80: Stuck-Hedge Scanner — วินิจฉัย hedge set ที่นิ่งเกินเกณฑ์ + auto-heal stale flags
+     if(InpStuckHedge_ScanEnable && InpStuckHedge_ScanIntervalMin > 0)
+     {
+        if(TimeCurrent() - g_lastStuckHedgeScan >= (datetime)(InpStuckHedge_ScanIntervalMin * 60))
+           ScanAndDiagnoseStuckHedgeSets();
      }
 
      //--- v6.44: Broker-Level TP/SL sync (every 2 seconds) — covers ALL TP modes
@@ -4687,6 +4695,31 @@ void DisplayDashboard()
               else
               {
                  DrawTableRow(row, "StuckTP Scan", "OFF", clrGray, COLOR_SECTION_HEDGE); row++;
+              }
+
+              // v6.80: Stuck-Hedge Scanner status
+              if(InpStuckHedge_ScanEnable && InpStuckHedge_ScanIntervalMin > 0)
+              {
+                 datetime nowH = TimeCurrent();
+                 int intH = InpStuckHedge_ScanIntervalMin * 60;
+                 int elapH = (int)(nowH - g_lastStuckHedgeScan);
+                 int nextH = intH - elapH; if(nextH < 0) nextH = 0;
+                 string hScan = "Every " + IntegerToString(InpStuckHedge_ScanIntervalMin) + "m"
+                              + " | Idle>=" + IntegerToString(InpStuckHedge_StuckThresholdMin) + "m"
+                              + " | Next " + IntegerToString(nextH/60) + "m" + IntegerToString(nextH%60) + "s"
+                              + " | Detect " + IntegerToString(g_stuckHedgeDetectedLastRun)
+                              + " | Heal " + IntegerToString(g_stuckHedgeHealedTotal)
+                              + (InpStuckHedge_AutoHeal ? " | Heal:ON" : " | Heal:OFF");
+                 color hClr = (g_stuckHedgeDetectedLastRun > 0) ? clrOrange : clrAqua;
+                 DrawTableRow(row, "StuckHedge Scan", hScan, hClr, COLOR_SECTION_HEDGE); row++;
+                 if(g_stuckHedgeLastDiag != "")
+                 {
+                    DrawTableRow(row, "  ↳ Last Diag", g_stuckHedgeLastDiag, clrOrange, COLOR_SECTION_HEDGE); row++;
+                 }
+              }
+              else
+              {
+                 DrawTableRow(row, "StuckHedge Scan", "OFF", clrGray, COLOR_SECTION_HEDGE); row++;
               }
              
             // v6.40: Grid Loss Candle Confirmation display
