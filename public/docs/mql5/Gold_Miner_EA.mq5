@@ -373,6 +373,9 @@ input double   InpHedge_DDTriggerPct         = 5.0;   // DD% to trigger first he
 input double   InpHedge_DDStepPct            = 5.0;   // [LEGACY] DD% step — not used since v6.21 (constant threshold per gen)
 input int      InpHedge_DDCooldownSec        = 60;    // Min seconds between DD hedges
 input int      InpHedge_SidePauseMin         = 0;     // v6.39: Pause hedged side entries (minutes, 0=Off)
+// v6.78: Hedge Open Delay (นาที) — กัน false signal โดยบังคับรอเวลาก่อนเปิด hedge รอบใหม่
+input int                   InpHedge_OpenDelayMin  = 0;                  // v6.78: Hedge Open Delay (minutes, 0=Off, e.g. 30)
+input ENUM_HEDGE_DELAY_MODE InpHedge_OpenDelayMode = HDELAY_BOTH;        // v6.78: Delay reference (Open/Close/Both)
 input double   InpHedge_DDTriggerDollar      = 500.0; // v6.25: DD$ to trigger hedge (per side)
 input bool     InpHedge_UseMatchingClose     = true;  // v6.51: Enable Hedge Recovery (false=only Balance Guard closes hedge)
 // v6.28: Balance Guard — close all when equity recovers to target
