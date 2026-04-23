@@ -11838,6 +11838,263 @@ int CalculateEquivGridLevel(double remainingLots)
 }
 
 //+------------------------------------------------------------------+
+//| v6.81: Sync broker TP across hedge + hedge-grid pool to weighted   |
+//| average price + InpHedgeGrid_AvgTP_Points. Anti-thrash via         |
+//| g_hedgeSets[idx].lastBrokerAvgTP comparison.                       |
+//+------------------------------------------------------------------+
+void SyncHedgeSetAvgTP(int idx)
+{
+   if(idx < 0 || idx >= MAX_HEDGE_SETS) return;
+   if(!g_hedgeSets[idx].active) return;
+   if(!InpHedgeGrid_AvgTP_Enable) return;
+   if(InpHedgeGrid_AvgTP_Points <= 0) return;
+
+   ENUM_POSITION_TYPE hSide = g_hedgeSets[idx].hedgeSide;
+   double totalLots = 0;
+   double weighted  = 0;
+   ulong  poolTickets[];
+   int    poolCount = 0;
+   string prefix = "GM_HG" + IntegerToString(idx + 1);
+
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      ENUM_POSITION_TYPE pt = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+      if(pt != hSide) continue;
+
+      bool include = false;
+      if(tk == g_hedgeSets[idx].hedgeTicket) include = true;
+      else
+      {
+         string c = PositionGetString(POSITION_COMMENT);
+         if(StringFind(c, prefix) >= 0) include = true;
+      }
+      if(!include) continue;
+
+      double lots  = PositionGetDouble(POSITION_VOLUME);
+      double price = PositionGetDouble(POSITION_PRICE_OPEN);
+      totalLots += lots;
+      weighted  += lots * price;
+      ArrayResize(poolTickets, poolCount + 1);
+      poolTickets[poolCount++] = tk;
+   }
+
+   if(totalLots <= 0 || poolCount == 0) return;
+
+   double avgPrice = weighted / totalLots;
+   double tpDist   = InpHedgeGrid_AvgTP_Points * _Point;
+   double tpPrice  = (hSide == POSITION_TYPE_BUY)
+                     ? NormalizeDouble(avgPrice + tpDist, _Digits)
+                     : NormalizeDouble(avgPrice - tpDist, _Digits);
+
+   // Anti-thrash: only modify when avg-TP moved more than 1 point
+   if(MathAbs(tpPrice - g_hedgeSets[idx].lastBrokerAvgTP) <= _Point) return;
+
+   int modified = 0;
+   for(int p = 0; p < poolCount; p++)
+   {
+      ulong tk = poolTickets[p];
+      if(!PositionSelectByTicket(tk)) continue;
+      double curSL = PositionGetDouble(POSITION_SL);
+      double curTP = PositionGetDouble(POSITION_TP);
+      if(MathAbs(curTP - tpPrice) <= _Point) continue;
+      if(trade.PositionModify(tk, curSL, tpPrice)) modified++;
+   }
+   g_hedgeSets[idx].lastBrokerAvgTP = tpPrice;
+   if(modified > 0)
+      Print("v6.81 HedgeGrid AvgTP Set#", idx + 1, " avg=", DoubleToString(avgPrice, _Digits),
+            " TP=", DoubleToString(tpPrice, _Digits),
+            " pool=", poolCount, " modified=", modified);
+}
+
+//+------------------------------------------------------------------+
+//| v6.81: Continue grid on older generations still hedge-locked.     |
+//| Iterates active hedge sets whose boundGeneration != current gen,  |
+//| and (optionally) only on the side matching counterSide. Uses the  |
+//| same grid distance / lot rules as CheckGridLoss but anchored to   |
+//| the older gen's INIT/GL prices and comment prefix.                |
+//+------------------------------------------------------------------+
+void CheckGridLossLegacy(int gen, ENUM_POSITION_TYPE side, int hedgeIdx);
+
+void RunLegacyGenGridContinuation()
+{
+   if(!InpLegacyGen_GridContinue) return;
+   if(g_newOrderBlocked) return;
+   if(NormalOrderCount() >= MaxOpenOrders) return;
+
+   for(int h = 0; h < MAX_HEDGE_SETS; h++)
+   {
+      if(!g_hedgeSets[h].active) continue;
+      if(g_hedgeSets[h].boundTicketCount <= 0) continue;
+      int gen = g_hedgeSets[h].boundGeneration;
+      if(gen <= 0) continue;
+      if(gen == g_cycleGeneration) continue;  // current gen handled by CheckGridLoss
+      ENUM_POSITION_TYPE side = g_hedgeSets[h].counterSide;
+      if(InpLegacyGen_OnlyBoundSide)
+      {
+         CheckGridLossLegacy(gen, side, h);
+      }
+      else
+      {
+         CheckGridLossLegacy(gen, POSITION_TYPE_BUY, h);
+         CheckGridLossLegacy(gen, POSITION_TYPE_SELL, h);
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Scan a specific (gen,side) for INIT/GL orders, returning count,   |
+//| last price/time and recovered INIT price.                          |
+//+------------------------------------------------------------------+
+void CountOrdersByGenSide(int gen, ENUM_POSITION_TYPE side,
+                          int &glCount, double &lastPrice, datetime &lastTime,
+                          double &initPrice, int &totalCount)
+{
+   glCount = 0; lastPrice = 0; lastTime = 0; initPrice = 0; totalCount = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      ENUM_POSITION_TYPE pt = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+      if(pt != side) continue;
+      string c = PositionGetString(POSITION_COMMENT);
+      if(IsHedgeComment(c)) continue;
+      int og = ExtractGeneration(c);
+      if(og != gen) continue;
+      bool isInit = (StringFind(c, "_INIT") >= 0);
+      bool isGL   = (StringFind(c, "_GL")   >= 0);
+      if(!isInit && !isGL) continue;
+
+      double pr = PositionGetDouble(POSITION_PRICE_OPEN);
+      datetime tm = (datetime)PositionGetInteger(POSITION_TIME);
+      totalCount++;
+      if(isInit && initPrice == 0) initPrice = pr;
+      if(isGL) glCount++;
+
+      // "lastPrice" = furthest price in adverse direction
+      if(side == POSITION_TYPE_BUY)
+      {
+         if(lastPrice == 0 || pr < lastPrice) { lastPrice = pr; }
+      }
+      else
+      {
+         if(lastPrice == 0 || pr > lastPrice) { lastPrice = pr; }
+      }
+      if(tm > lastTime) lastTime = tm;
+   }
+}
+
+void CheckGridLossLegacy(int gen, ENUM_POSITION_TYPE side, int hedgeIdx)
+{
+   if(NormalOrderCount() >= MaxOpenOrders) return;
+
+   int glCount = 0, totalCount = 0;
+   double lastPrice = 0, initPrice = 0;
+   datetime lastTime = 0;
+   CountOrdersByGenSide(gen, side, glCount, lastPrice, lastTime, initPrice, totalCount);
+
+   if(totalCount == 0) return;                       // nothing of this gen+side left
+   if(glCount >= GridLoss_MaxTrades) return;         // capped
+   if(lastPrice <= 0 && initPrice > 0) lastPrice = initPrice;
+   if(lastPrice <= 0) return;
+
+   // Anchor candle filters per hedge set (per-set throttle)
+   datetime curBar = iTime(_Symbol, PERIOD_CURRENT, 0);
+   if(GridLoss_OnlyNewCandle && hedgeIdx >= 0 && g_hedgeSets[hedgeIdx].lastLegacyGridCandle == curBar) return;
+   if(GridLoss_DontSameCandle && lastTime >= curBar) return;
+   if(GridLoss_CandleConfirm > 0 && !HasCandleConfirmation(side, PERIOD_CURRENT, GridLoss_CandleConfirm)) return;
+
+   double distance = GetGridDistance(glCount, true);
+   if(distance <= 0) return;
+   if(GridLoss_MinGapPoints > 0)
+      distance = MathMax(distance, (double)GridLoss_MinGapPoints);
+
+   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   double currentPrice = (side == POSITION_TYPE_BUY)
+                         ? SymbolInfoDouble(_Symbol, SYMBOL_ASK)
+                         : SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   bool shouldOpen = false;
+   if(GridLoss_GapType == GAP_ATR && GridLoss_ATR_Reference == ATR_REF_INITIAL && initPrice > 0)
+   {
+      double total = distance * (glCount + 1);
+      shouldOpen = (side == POSITION_TYPE_BUY)
+                   ? (currentPrice <= initPrice - total * point)
+                   : (currentPrice >= initPrice + total * point);
+   }
+   else
+   {
+      shouldOpen = (side == POSITION_TYPE_BUY)
+                   ? (currentPrice <= lastPrice - distance * point)
+                   : (currentPrice >= lastPrice + distance * point);
+   }
+   if(!shouldOpen) return;
+
+   double lots = CalculateGridLot(glCount, true);
+   // Ensure lot continues from max existing lot (parity with CheckGridLoss)
+   double maxExisting = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      ENUM_POSITION_TYPE pt = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+      if(pt != side) continue;
+      string c = PositionGetString(POSITION_COMMENT);
+      if(IsHedgeComment(c)) continue;
+      int og = ExtractGeneration(c);
+      if(og != gen) continue;
+      double l = PositionGetDouble(POSITION_VOLUME);
+      if(l > maxExisting) maxExisting = l;
+   }
+   if(maxExisting > 0 && lots <= maxExisting)
+   {
+      if(GridLoss_LotMode == LOT_MULTIPLY)
+         lots = maxExisting * GridLoss_MultiplyFactor;
+      else if(GridLoss_LotMode == LOT_ADD)
+         lots = maxExisting + InitialLotSize * GridLoss_AddLotPerLevel;
+   }
+
+   // Determine next grid level for the legacy gen (avoid reusing existing _GL#)
+   int maxLvl = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      ENUM_POSITION_TYPE pt = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+      if(pt != side) continue;
+      string c = PositionGetString(POSITION_COMMENT);
+      int og = ExtractGeneration(c);
+      if(og != gen) continue;
+      int gp = StringFind(c, "_GL#");
+      if(gp >= 0)
+      {
+         string num = StringSubstr(c, gp + 4);
+         int lvl = (int)StringToInteger(num);
+         if(lvl > maxLvl) maxLvl = lvl;
+      }
+   }
+   int nextLvl = (int)MathMax(maxLvl + 1, glCount + 1);
+   string comment = "GM" + IntegerToString(gen) + "_GL#" + IntegerToString(nextLvl);
+   ENUM_ORDER_TYPE orderType = (side == POSITION_TYPE_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+   if(OpenOrder(orderType, lots, comment))
+   {
+      if(hedgeIdx >= 0) g_hedgeSets[hedgeIdx].lastLegacyGridCandle = curBar;
+      if(InpLegacyGen_LogVerbose)
+         Print("v6.81 LEGACY GRID gen=", gen, " side=", (side == POSITION_TYPE_BUY ? "BUY" : "SELL"),
+               " ", comment, " lots=", DoubleToString(lots, 2),
+               " dist=", DoubleToString(distance, 0), "pts hedgeSet#", hedgeIdx + 1);
+   }
+}
+
+//+------------------------------------------------------------------+
 //| Hedge Grid Mode: original orders gone, manage hedge recovery       |
 //+------------------------------------------------------------------+
 void ManageHedgeGridMode(int idx)
@@ -11975,7 +12232,14 @@ void ManageHedgeGridMode(int idx)
 
    if(currentGridCount < GridLoss_MaxTrades && currentGridCount <= g_hedgeSets[idx].gridLevel + 3)
    {
-      // Calculate next grid lot
+      // v6.81: Hedge-Grid filters — OnlyNewCandle / DontSameCandle / CandleConfirm / Cooldown
+      datetime curBar = iTime(_Symbol, PERIOD_CURRENT, 0);
+      if(InpHedgeGrid_OnlyNewCandle && g_hedgeSets[idx].lastGridCandleTime == curBar) return;
+      if(InpHedgeGrid_CandleConfirm > 0
+         && !HasCandleConfirmation(g_hedgeSets[idx].hedgeSide, PERIOD_CURRENT, InpHedgeGrid_CandleConfirm))
+         return;
+
+      // v6.81: nextLevel uses absolute grid level (gridLevel + currentGridCount), not "+1 of zero"
       int nextLevel = g_hedgeSets[idx].gridLevel + currentGridCount + 1;
       double nextLot = InitialLotSize;
       if(GridLoss_LotMode == LOT_MULTIPLY)
@@ -11983,18 +12247,25 @@ void ManageHedgeGridMode(int idx)
       else if(GridLoss_LotMode == LOT_ADD)
          nextLot = InitialLotSize + (GridLoss_AddLotPerLevel * InitialLotSize) * nextLevel;
 
-      // Cooldown to prevent rapid-fire orders
-      if(TimeCurrent() - g_lastHedgeGridTime < 5) return;
+      // v6.81: configurable cooldown (was hard-coded 5s)
+      int cdSec = (InpHedgeGrid_CooldownSec > 0) ? InpHedgeGrid_CooldownSec : 5;
+      if(TimeCurrent() - g_lastHedgeGridTime < cdSec) return;
 
-      // Check grid distance using proper ATR/Custom calculation
-      double requiredGap = GetGridDistance(currentGridCount + 1, true);
+      // v6.81: distance calculation uses true level + min-gap floor
+      double requiredGap = GetGridDistance(nextLevel, true);
       if(requiredGap <= 0) return;
+      if(InpHedgeGrid_MinGapPoints > 0)
+         requiredGap = MathMax(requiredGap, (double)InpHedgeGrid_MinGapPoints);
 
       double lastPrice = 0;
+      datetime lastGridTime = 0;
       if(PositionSelectByTicket(g_hedgeSets[idx].hedgeTicket))
+      {
          lastPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+         lastGridTime = (datetime)PositionGetInteger(POSITION_TIME);
+      }
 
-      // Find last grid order price
+      // Find last grid order price + time
       for(int i = PositionsTotal() - 1; i >= 0; i--)
       {
          ulong ticket = PositionGetTicket(i);
@@ -12006,6 +12277,7 @@ void ManageHedgeGridMode(int idx)
          if(StringFind(comment, prefix) >= 0)
          {
             double gPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+            datetime gTime = (datetime)PositionGetInteger(POSITION_TIME);
             if(g_hedgeSets[idx].hedgeSide == POSITION_TYPE_BUY)
             {
                if(gPrice < lastPrice || lastPrice == 0) lastPrice = gPrice;
@@ -12014,25 +12286,27 @@ void ManageHedgeGridMode(int idx)
             {
                if(gPrice > lastPrice || lastPrice == 0) lastPrice = gPrice;
             }
+            if(gTime > lastGridTime) lastGridTime = gTime;
          }
       }
+
+      // v6.81: DontSameCandle — block if last grid order is in same bar
+      if(InpHedgeGrid_DontSameCandle && lastGridTime >= curBar) return;
 
       if(lastPrice <= 0) return;
 
       double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
       // Directional distance: only trigger when price moves AGAINST the hedge (losing direction)
-      // Hedge SELL → grid opens when price goes UP (Bid > lastPrice)
-      // Hedge BUY  → grid opens when price goes DOWN (Ask < lastPrice)
       double distance = 0;
       if(g_hedgeSets[idx].hedgeSide == POSITION_TYPE_SELL)
       {
          double currentBid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-         distance = (currentBid - lastPrice) / point;  // positive = price went up
+         distance = (currentBid - lastPrice) / point;
       }
-      else // BUY hedge
+      else
       {
          double currentAsk = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-         distance = (lastPrice - currentAsk) / point;  // positive = price went down
+         distance = (lastPrice - currentAsk) / point;
       }
 
       if(distance >= requiredGap && distance > 0)
@@ -12044,12 +12318,19 @@ void ManageHedgeGridMode(int idx)
          if(OpenOrder(orderType, nextLot, comment))
          {
             g_lastHedgeGridTime = TimeCurrent();
+            g_hedgeSets[idx].lastGridCandleTime = curBar;  // v6.81
             Print("HEDGE GRID Set#", idx + 1, " opened grid L", currentGridCount + 1,
+                  " lvl=", nextLevel,
                   " lots=", DoubleToString(nextLot, 2),
                   " gap=", DoubleToString(distance, 0), "/", DoubleToString(requiredGap, 0));
+            // v6.81: sync broker TP across hedge+grid pool
+            if(InpHedgeGrid_AvgTP_Enable) SyncHedgeSetAvgTP(idx);
          }
       }
    }
+
+   // v6.81: keep AvgTP synced even when no new grid (e.g. main hedge partial close changed lots)
+   if(InpHedgeGrid_AvgTP_Enable) SyncHedgeSetAvgTP(idx);
 }
 
 //+------------------------------------------------------------------+
