@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.71 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.72 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.71"
-#property description "Gold Miner EA v6.71 - v6.70 + Grid comment continues from max-level (no duplicate/back-numbered GL/GP after hedge unlock)"
+#property version   "6.72"
+#property description "Gold Miner EA v6.72 - v6.71 + One DD Hedge per generation/side (block 2nd hedge while 1st still active)"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -367,6 +367,7 @@ input int      InpHedge_DDCooldownSec        = 60;    // Min seconds between DD 
 input int      InpHedge_SidePauseMin         = 0;     // v6.39: Pause hedged side entries (minutes, 0=Off)
 input double   InpHedge_DDTriggerDollar      = 500.0; // v6.25: DD$ to trigger hedge (per side)
 input bool     InpHedge_UseMatchingClose     = true;  // v6.51: Enable Hedge Recovery (false=only Balance Guard closes hedge)
+input bool     InpHedge_OnePerGenSide        = true;  // v6.72: Allow only 1 DD hedge per generation per side
 // v6.28: Balance Guard — close all when equity recovers to target
 input bool     InpBalanceGuard_Enable        = false;  // Balance Guard: Enable
 input ENUM_BALGUARD_MODE InpBalanceGuard_Mode = BALGUARD_FIXED; // Balance Guard: Mode (Fixed / Dynamic)
@@ -987,7 +988,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.71 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.72 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min");
@@ -1047,7 +1048,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.71 deinitialized");
+   Print("Gold Miner EA v6.72 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -4016,7 +4017,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.71 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.71 [ZZ]" : "Gold Miner EA v6.71 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.72 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.72 [ZZ]" : "Gold Miner EA v6.72 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
