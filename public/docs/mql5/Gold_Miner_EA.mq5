@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.72 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.73 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.72"
-#property description "Gold Miner EA v6.72 - v6.71 + One DD Hedge per generation/side (block 2nd hedge while 1st still active)"
+#property version   "6.73"
+#property description "Gold Miner EA v6.73 - v6.72 + Auto-heal Orphan/Inflated hedges (auto-close hedges with no/insufficient bound orders)"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -368,6 +368,11 @@ input int      InpHedge_SidePauseMin         = 0;     // v6.39: Pause hedged sid
 input double   InpHedge_DDTriggerDollar      = 500.0; // v6.25: DD$ to trigger hedge (per side)
 input bool     InpHedge_UseMatchingClose     = true;  // v6.51: Enable Hedge Recovery (false=only Balance Guard closes hedge)
 input bool     InpHedge_OnePerGenSide        = true;  // v6.72: Allow only 1 DD hedge per generation per side
+// v6.73: Hedge integrity auto-heal
+input bool     InpHedge_AutoCloseOrphan      = true;  // v6.73: Auto-close hedge with 0 bound orders (orphan recovery)
+input int      InpHedge_OrphanGraceSec       = 30;    // v6.73: Wait this many seconds before auto-closing orphan hedge
+input bool     InpHedge_AutoTrimInflated     = true;  // v6.73: Auto partial-close hedge when hedgeLots > boundLots * 2
+input double   InpHedge_TrimToleranceMult    = 1.10;  // v6.73: Trim hedge down to boundLots * this multiplier (10% buffer)
 // v6.28: Balance Guard — close all when equity recovers to target
 input bool     InpBalanceGuard_Enable        = false;  // Balance Guard: Enable
 input ENUM_BALGUARD_MODE InpBalanceGuard_Mode = BALGUARD_FIXED; // Balance Guard: Mode (Fixed / Dynamic)
@@ -589,6 +594,9 @@ struct HedgeSet
    int      triggerType;               // 0 = expansion, 1 = DD%
    // === v6.57: Sequential Recovery ordering ===
    datetime hedgeOpenTime;             // open time of main hedge order (FIFO ordering)
+   // === v6.73: Hedge integrity auto-heal timestamps ===
+   datetime orphanDetectedAt;          // when orphan condition first observed (boundCount=0)
+   datetime inflationDetectedAt;       // when inflation condition first observed (hedgeLots > boundLots*2)
 };
 HedgeSet g_hedgeSets[MAX_HEDGE_SETS];
 int      g_hedgeSetCount = 0;
@@ -958,6 +966,9 @@ int OnInit()
        g_hedgeSets[h].oldestBoundPrice = 0;
        // v6.16: Trigger type init
        g_hedgeSets[h].triggerType = 0;
+       // v6.73: Integrity auto-heal init
+       g_hedgeSets[h].orphanDetectedAt = 0;
+       g_hedgeSets[h].inflationDetectedAt = 0;
        g_hedgeSets[h].hedgeOpenTime = 0;  // v6.57
      }
      g_hedgeSetCount = 0;
@@ -988,7 +999,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.72 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.73 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min");
@@ -1048,7 +1059,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.72 deinitialized");
+   Print("Gold Miner EA v6.73 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -2290,6 +2301,8 @@ void CloseAllPositions()
       // v6.16: Reset trigger type
       g_hedgeSets[h].triggerType = 0;
       g_hedgeSets[h].hedgeOpenTime = 0;  // v6.57
+      g_hedgeSets[h].orphanDetectedAt = 0;     // v6.73
+      g_hedgeSets[h].inflationDetectedAt = 0;  // v6.73
    }
    g_hedgeSetCount = 0;
    // v6.16: Reset DD triggers on full close
@@ -4017,7 +4030,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.72 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.72 [ZZ]" : "Gold Miner EA v6.72 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.73 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.73 [ZZ]" : "Gold Miner EA v6.73 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -4472,6 +4485,18 @@ void DisplayDashboard()
             // v6.72: One Hedge Per Gen/Side toggle status
             string opgStatus = InpHedge_OnePerGenSide ? "ENABLED (1/gen/side)" : "DISABLED";
             DrawTableRow(row, "  OnePerGen", opgStatus, InpHedge_OnePerGenSide ? clrLime : clrGray, COLOR_SECTION_HEDGE); row++;
+            // v6.73: Auto-heal orphan/inflated hedges
+            string healStatus = "Orphan:" + (InpHedge_AutoCloseOrphan ? "ON" : "OFF") +
+                                " Trim:" + (InpHedge_AutoTrimInflated ? "ON" : "OFF") +
+                                " Grace:" + IntegerToString(InpHedge_OrphanGraceSec) + "s";
+            color healClr = (InpHedge_AutoCloseOrphan || InpHedge_AutoTrimInflated) ? clrLime : clrGray;
+            DrawTableRow(row, "  AutoHeal", healStatus, healClr, COLOR_SECTION_HEDGE); row++;
+            // v6.73: Integrity counters (orphan / inflated active right now)
+            string intCnt = "Orphan:" + IntegerToString(g_hedgeIntegrityCriticalCount) +
+                            " Inflated:" + IntegerToString(g_hedgeIntegrityWarnCount);
+            color intClr = (g_hedgeIntegrityCriticalCount > 0) ? clrRed :
+                           (g_hedgeIntegrityWarnCount > 0 ? clrOrange : clrLime);
+            DrawTableRow(row, "  Integrity", intCnt, intClr, COLOR_SECTION_HEDGE); row++;
          }
         
         // Orphan warning
@@ -8044,7 +8069,12 @@ void AuditHedgeSetIntegrity()
    static datetime s_lastIntegrityLog = 0;
    if(TimeCurrent() - s_lastIntegrityLog < 30) return;  // throttle 30s
 
+   datetime now = TimeCurrent();
    int warnCnt = 0, critCnt = 0;
+   double minLot  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   double lotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   if(lotStep <= 0) lotStep = 0.01;
+
    for(int h = 0; h < MAX_HEDGE_SETS; h++)
    {
       if(!g_hedgeSets[h].active) continue;
@@ -8063,30 +8093,135 @@ void AuditHedgeSetIntegrity()
       double hLots = g_hedgeSets[h].hedgeLots;
       int gen = g_hedgeSets[h].boundGeneration;
 
-      // CRITICAL: hedge open but no bound orders at all
+      // ===== Branch A: ORPHAN — hedge open but no bound orders =====
       if(g_hedgeSets[h].boundTicketCount == 0 && hLots > 0)
       {
          critCnt++;
-         Print("v6.65 HEDGE INTEGRITY CRITICAL: set#", h, " gen=", gen,
-               " hedgeLots=", DoubleToString(hLots, 2),
-               " has NO bound orders (orphan hedge — manual review required)");
+         if(g_hedgeSets[h].orphanDetectedAt == 0)
+         {
+            g_hedgeSets[h].orphanDetectedAt = now;
+            Print("v6.73 HEDGE INTEGRITY CRITICAL: set#", h, " gen=", gen,
+                  " hedgeLots=", DoubleToString(hLots, 2),
+                  " has NO bound orders (orphan hedge detected — grace ",
+                  InpHedge_OrphanGraceSec, "s before auto-close)");
+         }
+         else if(InpHedge_AutoCloseOrphan &&
+                 (now - g_hedgeSets[h].orphanDetectedAt) >= InpHedge_OrphanGraceSec)
+         {
+            // Verify hedge ticket still alive
+            ulong hTk = g_hedgeSets[h].hedgeTicket;
+            if(hTk > 0 && PositionSelectByTicket(hTk))
+            {
+               double closeVol = PositionGetDouble(POSITION_VOLUME);
+               if(trade.PositionClose(hTk))
+               {
+                  Print("v6.73 ORPHAN HEDGE AUTO-CLOSED: set#", h, " gen=", gen,
+                        " ticket=", hTk, " lots=", DoubleToString(closeVol, 2),
+                        " (no bound orders for ", (int)(now - g_hedgeSets[h].orphanDetectedAt), "s)");
+                  // Reset slot
+                  g_hedgeSets[h].active = false;
+                  g_hedgeSets[h].hedgeTicket = 0;
+                  g_hedgeSets[h].hedgeLots = 0;
+                  g_hedgeSets[h].originalTotalLots = 0;
+                  g_hedgeSets[h].gridMode = false;
+                  g_hedgeSets[h].gridLevel = 0;
+                  g_hedgeSets[h].gridTicketCount = 0;
+                  ArrayResize(g_hedgeSets[h].gridTickets, 0);
+                  g_hedgeSets[h].boundTicketCount = 0;
+                  ArrayResize(g_hedgeSets[h].boundTickets, 0);
+                  g_hedgeSets[h].triggerType = 0;
+                  g_hedgeSets[h].hedgeOpenTime = 0;
+                  g_hedgeSets[h].orphanDetectedAt = 0;
+                  g_hedgeSets[h].inflationDetectedAt = 0;
+                  g_lastHedgeCloseTime = now;  // arm cooldown like normal close
+               }
+               else
+               {
+                  Print("v6.73 ORPHAN AUTO-CLOSE FAILED: set#", h, " ticket=", hTk,
+                        " err=", GetLastError(), " — will retry next cycle");
+               }
+            }
+            else
+            {
+               // Hedge ticket already gone — just clear the slot
+               Print("v6.73 ORPHAN slot cleanup: set#", h, " hedge ticket missing → reset slot");
+               g_hedgeSets[h].active = false;
+               g_hedgeSets[h].hedgeTicket = 0;
+               g_hedgeSets[h].hedgeLots = 0;
+               g_hedgeSets[h].boundTicketCount = 0;
+               ArrayResize(g_hedgeSets[h].boundTickets, 0);
+               g_hedgeSets[h].orphanDetectedAt = 0;
+               g_hedgeSets[h].inflationDetectedAt = 0;
+            }
+         }
          continue;
       }
+      else
+      {
+         // Bound orders present → clear orphan timer
+         g_hedgeSets[h].orphanDetectedAt = 0;
+      }
 
-      // WARN: hedge volume more than 2x of actual bound coverage
+      // ===== Branch B: INFLATION — hedge volume >> bound coverage =====
       if(boundLotsActual > 0 && hLots > boundLotsActual * 2.0)
       {
          warnCnt++;
-         Print("v6.65 HEDGE INTEGRITY WARN: set#", h, " gen=", gen,
-               " hedgeLots=", DoubleToString(hLots, 2),
-               " >> boundLots=", DoubleToString(boundLotsActual, 2),
-               " (>2x — possible lot inflation)");
+         if(g_hedgeSets[h].inflationDetectedAt == 0)
+         {
+            g_hedgeSets[h].inflationDetectedAt = now;
+            Print("v6.73 HEDGE INTEGRITY WARN: set#", h, " gen=", gen,
+                  " hedgeLots=", DoubleToString(hLots, 2),
+                  " >> boundLots=", DoubleToString(boundLotsActual, 2),
+                  " (>2x — possible lot inflation, grace ",
+                  InpHedge_OrphanGraceSec, "s before auto-trim)");
+         }
+         else if(InpHedge_AutoTrimInflated &&
+                 (now - g_hedgeSets[h].inflationDetectedAt) >= InpHedge_OrphanGraceSec)
+         {
+            ulong hTk = g_hedgeSets[h].hedgeTicket;
+            if(hTk > 0 && PositionSelectByTicket(hTk))
+            {
+               double curVol = PositionGetDouble(POSITION_VOLUME);
+               double targetLots = boundLotsActual * InpHedge_TrimToleranceMult;
+               // round target to lot step
+               targetLots = MathFloor(targetLots / lotStep) * lotStep;
+               if(targetLots < minLot) targetLots = minLot;
+               double excess = curVol - targetLots;
+               // round excess down to step
+               excess = MathFloor(excess / lotStep) * lotStep;
+
+               if(excess >= minLot && excess < curVol)
+               {
+                  if(trade.PositionClosePartial(hTk, excess))
+                  {
+                     g_hedgeSets[h].hedgeLots = curVol - excess;
+                     g_hedgeSets[h].inflationDetectedAt = 0;
+                     Print("v6.73 HEDGE TRIMMED: set#", h, " gen=", gen,
+                           " hedgeLots ", DoubleToString(curVol, 2), "→",
+                           DoubleToString(curVol - excess, 2),
+                           " (target=", DoubleToString(targetLots, 2),
+                           ", boundLots=", DoubleToString(boundLotsActual, 2), ")");
+                  }
+                  else
+                  {
+                     Print("v6.73 HEDGE TRIM FAILED: set#", h, " excess=",
+                           DoubleToString(excess, 2), " err=", GetLastError(),
+                           " — will retry next cycle");
+                  }
+               }
+            }
+         }
+      }
+      else
+      {
+         // No inflation → clear timer
+         g_hedgeSets[h].inflationDetectedAt = 0;
       }
    }
 
    g_hedgeIntegrityWarnCount = warnCnt;
    g_hedgeIntegrityCriticalCount = critCnt;
-   s_lastIntegrityLog = TimeCurrent();
+   s_lastIntegrityLog = now;
 }
 
 //+------------------------------------------------------------------+
