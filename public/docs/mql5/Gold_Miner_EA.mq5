@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.72 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.73 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
-#property copyright "Copyright 2025, MoneyX Smart System"
-#property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.72"
-#property description "Gold Miner EA v6.72 - v6.71 + Force-clear broker TP/SL on bound tickets immediately at hedge open + per-tick safety sweep"
+#property copyright "MoneyX"
+#property link      "https://moneyx.com"
+#property version   "6.73"
+#property description "Gold Miner EA v6.73 - v6.72 + Cross-gen INIT guard + Owner auto skip-forward + Universal No-Re-Hedge of released tickets (let grid recover)"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -404,6 +404,9 @@ input group "=== Sequential Hedge Recovery ==="
 input bool   InpHedge_SequentialRecovery = true;   // true=close oldest hedge set first (H1→H2→H3), false=close any (legacy)
 input int    InpHedge_SequentialUnlockDelayMin = 1; // v6.69: Delay before next hedge set unlock after previous set/owner closes (minutes, 0=Off)
 input bool   InpHedge_AllowProfitBypass = false;   // v6.70: true=allow profitable hedge to close out of FIFO order, false=STRICT FIFO (default)
+input bool   InpCrossGen_InitGuard      = true;    // v6.73: block new-gen INIT while older-gen same-side orders are still free (not hedged)
+input bool   InpOwnerAutoAdvance        = true;    // v6.73: auto-advance sequential recovery owner to next remaining gen when current gen flat
+input bool   InpHedge_NoReHedgeReleased = true;    // v6.73: tickets released from any hedge set never get re-hedged (let grid recover)
 
 // === v6.61: Recovery Shred & Seed ===
 input group "=== Recovery Shred & Seed (v6.61) ==="
@@ -987,7 +990,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.72 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.73 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min");
@@ -1047,7 +1050,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.72 deinitialized");
+   Print("Gold Miner EA v6.73 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -1471,6 +1474,10 @@ void OnTick()
    // v6.61: Prune recovery seeds + check unified avg TP for current owner
    PruneRecoverySeeds();
    ManageRecoveryOwnerAvgTP();
+   // v6.73: Auto-advance owner to next remaining gen when current owner is flat
+   AdvanceSequentialOwnerIfFlat();
+   // v6.73: Prune released-ticket list (auto-clean closed entries)
+   PrunePrevHedgedTickets();
    // v6.63: Watchdog — alert if owner-gen orders are missing Broker TP
    AuditUnTPedOwnerOrders();
    // v6.65: Watchdog — alert if hedge set lots are inflated vs bound orders
@@ -1989,6 +1996,27 @@ bool IsBBBlockingSell()
 bool OpenOrder(ENUM_ORDER_TYPE orderType, double lots, string comment)
 {
    double price = (orderType == ORDER_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
+
+   //--- v6.73: Cross-gen INIT guard — block new-gen INIT while older-gen same-side
+   //          orders are still free (not hedged, can self-close normally).
+   //          Prevents GM1 + GM2 same-side mixing after a hedge is opened.
+   if(InpCrossGen_InitGuard && !IsHedgeComment(comment) && StringFind(comment, "_INIT") >= 0)
+   {
+      ENUM_POSITION_TYPE psd = (orderType == ORDER_TYPE_BUY) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
+      int legacyFree = CountFreeOlderGenOnSide(psd);
+      if(legacyFree > 0)
+      {
+         static datetime lastBlockLog = 0;
+         if(TimeCurrent() - lastBlockLog >= 30)
+         {
+            Print("v6.73 INIT BLOCKED: ", comment, " (", EnumToString(psd), ") — ",
+                  legacyFree, " older-gen order(s) still free on this side. ",
+                  "Wait for them to self-close before opening new-gen INIT.");
+            lastBlockLog = TimeCurrent();
+         }
+         return false;
+      }
+   }
 
    //--- v6.56: Bollinger Band Entry Filter (Block New Orders Only — exempt hedge orders)
    if(BB_FilterEnable && !IsHedgeComment(comment))
@@ -4061,7 +4089,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.72 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.72 [ZZ]" : "Gold Miner EA v6.72 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.73 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.73 [ZZ]" : "Gold Miner EA v6.73 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -4664,6 +4692,16 @@ void DisplayDashboard()
                 {
                    string phInfo = IntegerToString(g_prevHedgedCount) + " ticket(s) locked from re-hedge";
                    DrawTableRow(row, "PrevHedged", phInfo, clrOrange, COLOR_SECTION_HEDGE); row++;
+                }
+                // v6.73: Cross-gen INIT guard status row
+                if(InpCrossGen_InitGuard && g_cycleGeneration > 1)
+                {
+                   int lgB = CountFreeOlderGenOnSide(POSITION_TYPE_BUY);
+                   int lgS = CountFreeOlderGenOnSide(POSITION_TYPE_SELL);
+                   string guardInfo = "LegacyB=" + IntegerToString(lgB) + " LegacyS=" + IntegerToString(lgS) +
+                                      " | INIT=" + ((lgB > 0 || lgS > 0) ? "BLOCK" : "ALLOW");
+                   color guardCol = (lgB > 0 || lgS > 0) ? clrYellow : clrLime;
+                   DrawTableRow(row, "ReEntryGuard", guardInfo, guardCol, COLOR_SECTION_HEDGE); row++;
                 }
              }
 
@@ -8290,9 +8328,124 @@ double FindCumulativeSeedLot(int gen, ENUM_POSITION_TYPE side, double targetLots
    return pickedLot;
 }
 
+//+------------------------------------------------------------------+
+//| v6.73: Count "free" older-gen normal orders on a side             |
+//| Free = not hedge comment, not bound, gen >= 1 && gen < currentGen |
+//| Used as guard: while older-gen orders can self-close, do not open |
+//| a new gen INIT on the same side (avoid GM1+GM2 same-side mixing). |
+//+------------------------------------------------------------------+
+int CountFreeOlderGenOnSide(ENUM_POSITION_TYPE side)
+{
+   int cnt = 0;
+   if(g_cycleGeneration <= 1) return 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
+      string cmt = PositionGetString(POSITION_COMMENT);
+      if(IsHedgeComment(cmt)) continue;
+      if(IsTicketBound(tk)) continue;          // bound = hedge is handling it
+      int og = ExtractGeneration(cmt);
+      if(og < 1) continue;
+      if(og >= g_cycleGeneration) continue;    // only OLDER gens
+      cnt++;
+   }
+   return cnt;
+}
+
+//+------------------------------------------------------------------+
+//| v6.73: Auto-advance Sequential Recovery owner to next remaining   |
+//| generation when the current owner gen is flat. Called from OnTick.|
+//+------------------------------------------------------------------+
+void AdvanceSequentialOwnerIfFlat()
+{
+   if(!InpOwnerAutoAdvance) return;
+   if(!InpHedge_SequentialRecovery) return;
+   if(!g_sequentialRecoveryActive) return;
+   if(!IsSequentialRecoveryComplete()) return;
+
+   static datetime lastAdvance = 0;
+   if(TimeCurrent() - lastAdvance < 1) return;
+   lastAdvance = TimeCurrent();
+
+   int oldGen = g_sequentialRecoveryGen;
+
+   // Find next gen with remaining normal (non-hedge) orders, gen > oldGen
+   int nextGen = -1;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      string cmt = PositionGetString(POSITION_COMMENT);
+      if(IsHedgeComment(cmt)) continue;
+      int og = ExtractGeneration(cmt);
+      if(og <= oldGen) continue;
+      if(nextGen < 0 || og < nextGen) nextGen = og;
+   }
+
+   if(nextGen < 0)
+   {
+      // No newer gen pending — just clear, normal flow takes over
+      ClearSequentialRecoveryOwner("v6.73 owner-advance: no newer gen pending");
+      return;
+   }
+
+   // Find a hedge set bound to nextGen, if any
+   int nextSlot = -1;
+   for(int h = 0; h < g_hedgeSetCount; h++)
+   {
+      if(!g_hedgeSets[h].active) continue;
+      if(g_hedgeSets[h].boundGeneration == nextGen) { nextSlot = h; break; }
+   }
+
+   ClearSequentialRecoveryOwner("v6.73 owner-advance: Gen" + IntegerToString(oldGen) + " flat → Gen" + IntegerToString(nextGen));
+   if(nextSlot >= 0)
+   {
+      SetSequentialRecoveryOwner(nextSlot, nextGen);
+      Print("v6.73 OWNER ADVANCE: Gen", oldGen, " → Gen", nextGen, " (set#", nextSlot + 1, ")");
+   }
+   else
+   {
+      Print("v6.73 OWNER ADVANCE: Gen", oldGen, " flat → Gen", nextGen,
+            " has no active hedge set (continuing as free recovery)");
+   }
+}
+
+//+------------------------------------------------------------------+
+//| v6.73: Prune g_prevHedgedTickets entries whose tickets are gone   |
+//| Keeps the array tight; cycle reset still flushes everything.      |
+//+------------------------------------------------------------------+
+void PrunePrevHedgedTickets()
+{
+   static datetime lastPrune = 0;
+   if(TimeCurrent() - lastPrune < 5) return;
+   lastPrune = TimeCurrent();
+   if(g_prevHedgedCount <= 0) return;
+   int w = 0;
+   for(int r = 0; r < g_prevHedgedCount; r++)
+   {
+      ulong tk = g_prevHedgedTickets[r];
+      if(tk != 0 && PositionSelectByTicket(tk))
+      {
+         g_prevHedgedTickets[w] = tk;
+         w++;
+      }
+   }
+   for(int j = w; j < g_prevHedgedCount; j++) g_prevHedgedTickets[j] = 0;
+   g_prevHedgedCount = w;
+}
+
 void SaveBoundTicketsToPrevHedged(int idx)
 {
-   if(g_hedgeSets[idx].triggerType != 1) return;  // only DD-triggered sets
+   // v6.73: when InpHedge_NoReHedgeReleased=true, mark ALL released tickets (any trigger type)
+   // so they never get re-hedged — grid loss/profit must recover them.
+   // Legacy behavior (DD-only) when toggle is off.
+   if(!InpHedge_NoReHedgeReleased && g_hedgeSets[idx].triggerType != 1) return;
    for(int b = 0; b < g_hedgeSets[idx].boundTicketCount; b++)
    {
       ulong tk = g_hedgeSets[idx].boundTickets[b];
