@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.79 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.80 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
 #property version   "6.78"
-#property description "Gold Miner EA v6.79 - v6.78 + Scheduled Stuck-TP Scanner (สแกน TP ค้างของออเดอร์ที่ยัง hedge-lock อยู่ ทุก N นาที)"
+#property description "Gold Miner EA v6.80 - v6.79 + Stuck-Hedge Scanner (วินิจฉัย hedge set ที่นิ่งเกินเกณฑ์ + auto-heal stale flags)"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -380,6 +380,12 @@ input ENUM_HEDGE_DELAY_MODE InpHedge_OpenDelayMode = HDELAY_BOTH;        // v6.7
 input bool     InpStuckTP_ScanEnable      = true;  // v6.79: Enable scheduled stuck-TP scanner
 input int      InpStuckTP_ScanIntervalMin = 5;     // v6.79: Scan interval (minutes, e.g. 5)
 input bool     InpStuckTP_LogVerbose      = true;  // v6.79: Log each cleared ticket
+// v6.80: Stuck-Hedge Scanner — วินิจฉัย hedge set ที่นิ่งเกินเกณฑ์ + auto-heal stale flags
+input bool     InpStuckHedge_ScanEnable        = true;  // v6.80: Enable stuck-hedge scanner
+input int      InpStuckHedge_ScanIntervalMin   = 5;     // v6.80: Scan interval (minutes)
+input int      InpStuckHedge_StuckThresholdMin = 15;    // v6.80: Idle threshold (minutes) before flagging
+input bool     InpStuckHedge_AutoHeal          = true;  // v6.80: Auto-clear stale owner / matchingDone flags
+input bool     InpStuckHedge_LogVerbose        = true;  // v6.80: Log diagnosis details
 input double   InpHedge_DDTriggerDollar      = 500.0; // v6.25: DD$ to trigger hedge (per side)
 input bool     InpHedge_UseMatchingClose     = true;  // v6.51: Enable Hedge Recovery (false=only Balance Guard closes hedge)
 // v6.28: Balance Guard — close all when equity recovers to target
@@ -607,6 +613,8 @@ struct HedgeSet
    int      triggerType;               // 0 = expansion, 1 = DD%
    // === v6.57: Sequential Recovery ordering ===
    datetime hedgeOpenTime;             // open time of main hedge order (FIFO ordering)
+   // === v6.80: Stuck-Hedge tracking ===
+   datetime lastActionTime;            // last time this set performed an action (matching/avgTP/partial/grid)
 };
 HedgeSet g_hedgeSets[MAX_HEDGE_SETS];
 int      g_hedgeSetCount = 0;
