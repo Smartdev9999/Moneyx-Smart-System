@@ -8850,7 +8850,13 @@ void CheckAndOpenHedgeByDD()
       
       if(buyLossAbs >= InpHedge_DDTriggerDollar)
       {
-         if(OpenDDHedge(POSITION_TYPE_BUY, POSITION_TYPE_SELL, curGen))  // v6.37: pass snapshot gen
+         if(InpHedge_OnePerGenSide && HasActiveHedgeForGenSide(curGen, POSITION_TYPE_BUY))
+         {
+            static datetime _lastBlkBuyD = 0;
+            if(now - _lastBlkBuyD > 60)
+            { Print("v6.72 DD$ HEDGE BLOCKED: BUY side of Gen", curGen, " already has active hedge → no 2nd hedge"); _lastBlkBuyD = now; }
+         }
+         else if(OpenDDHedge(POSITION_TYPE_BUY, POSITION_TYPE_SELL, curGen))  // v6.37: pass snapshot gen
           {
              g_lastDDHedgeTime = now;
              g_lastHedgeBuyTime = now;  // v6.39: BUY orders got hedged → pause BUY entries
@@ -8861,7 +8867,13 @@ void CheckAndOpenHedgeByDD()
       
       if(sellLossAbs >= InpHedge_DDTriggerDollar)
       {
-         if(OpenDDHedge(POSITION_TYPE_SELL, POSITION_TYPE_BUY, curGen))  // v6.37: pass snapshot gen
+         if(InpHedge_OnePerGenSide && HasActiveHedgeForGenSide(curGen, POSITION_TYPE_SELL))
+         {
+            static datetime _lastBlkSellD = 0;
+            if(now - _lastBlkSellD > 60)
+            { Print("v6.72 DD$ HEDGE BLOCKED: SELL side of Gen", curGen, " already has active hedge → no 2nd hedge"); _lastBlkSellD = now; }
+         }
+         else if(OpenDDHedge(POSITION_TYPE_SELL, POSITION_TYPE_BUY, curGen))  // v6.37: pass snapshot gen
          {
              g_lastDDHedgeTime = now;
              g_lastHedgeSellTime = now;  // v6.39: SELL orders got hedged → pause SELL entries
@@ -8878,7 +8890,13 @@ void CheckAndOpenHedgeByDD()
       
       if(buyDDPct >= InpHedge_DDTriggerPct)
       {
-         if(OpenDDHedge(POSITION_TYPE_BUY, POSITION_TYPE_SELL, curGen))  // v6.37: pass snapshot gen
+         if(InpHedge_OnePerGenSide && HasActiveHedgeForGenSide(curGen, POSITION_TYPE_BUY))
+         {
+            static datetime _lastBlkBuyP = 0;
+            if(now - _lastBlkBuyP > 60)
+            { Print("v6.72 DD% HEDGE BLOCKED: BUY side of Gen", curGen, " already has active hedge → no 2nd hedge"); _lastBlkBuyP = now; }
+         }
+         else if(OpenDDHedge(POSITION_TYPE_BUY, POSITION_TYPE_SELL, curGen))  // v6.37: pass snapshot gen
          {
              g_lastDDHedgeTime = now;
              g_lastHedgeBuyTime = now;  // v6.39: BUY orders got hedged → pause BUY entries
@@ -8889,7 +8907,13 @@ void CheckAndOpenHedgeByDD()
       
       if(sellDDPct >= InpHedge_DDTriggerPct)
       {
-         if(OpenDDHedge(POSITION_TYPE_SELL, POSITION_TYPE_BUY, curGen))  // v6.37: pass snapshot gen
+         if(InpHedge_OnePerGenSide && HasActiveHedgeForGenSide(curGen, POSITION_TYPE_SELL))
+         {
+            static datetime _lastBlkSellP = 0;
+            if(now - _lastBlkSellP > 60)
+            { Print("v6.72 DD% HEDGE BLOCKED: SELL side of Gen", curGen, " already has active hedge → no 2nd hedge"); _lastBlkSellP = now; }
+         }
+         else if(OpenDDHedge(POSITION_TYPE_SELL, POSITION_TYPE_BUY, curGen))  // v6.37: pass snapshot gen
          {
              g_lastDDHedgeTime = now;
              g_lastHedgeSellTime = now;  // v6.39: SELL orders got hedged → pause SELL entries
