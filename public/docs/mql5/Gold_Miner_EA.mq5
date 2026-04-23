@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.80 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.81 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "6.78"
-#property description "Gold Miner EA v6.80 - v6.79 + Stuck-Hedge Scanner (วินิจฉัย hedge set ที่นิ่งเกินเกณฑ์ + auto-heal stale flags)"
+#property version   "6.81"
+#property description "Gold Miner EA v6.81 - v6.80 + Older-Gen Bound-Side Grid Continuation + Hedge-Grid Filters/AvgTP"
 #property strict
 
 #include <Trade/Trade.mqh>
