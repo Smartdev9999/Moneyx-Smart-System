@@ -1933,6 +1933,36 @@ int NormalOrderCount()
 }
 
 //+------------------------------------------------------------------+
+//| v6.76: Cross-generation re-entry guard helper                      |
+//| Returns the number of NORMAL (non-hedge, non-bound) open positions |
+//| for a given side, ACROSS ALL generations (no g_cycleGeneration     |
+//| filter). Used only by INIT entry guard to prevent opening a new    |
+//| GMx_INIT while older-gen orders of the same side are still alive.  |
+//+------------------------------------------------------------------+
+int CountAllGenNormalOrdersOnSide(ENUM_POSITION_TYPE side)
+{
+   int count = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
+      string comment = PositionGetString(POSITION_COMMENT);
+      if(IsHedgeComment(comment)) continue;          // hedge orders managed separately
+      if(IsTicketBound(ticket)) continue;            // bound to a hedge set
+      // NOTE: intentionally NO generation filter — we want to see legacy gens too
+      count++;
+   }
+   return count;
+}
+
+// v6.76: Cross-gen INIT re-entry guard input (always-on guard, no toggle exposed
+// to keep behavior strict; toggle can be added later if needed).
+bool   g_v676_initGuardEnabled = true;
+
+//+------------------------------------------------------------------+
 //| Open order                                                         |
 //+------------------------------------------------------------------+
 //+------------------------------------------------------------------+
