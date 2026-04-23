@@ -4592,6 +4592,16 @@ void DisplayDashboard()
                + " | Remain:" + IntegerToString(relRemain) + "s";
             color genMutexClr = InpHedge_GenFlowMutex ? (relRemain > 0 ? clrOrange : clrLime) : clrGray;
             DrawTableRow(row, "  GenMutex", genMutexInfo, genMutexClr, COLOR_SECTION_HEDGE); row++;
+            // v6.76: Cross-gen INIT re-entry guard status
+            int legB676 = CountAllGenNormalOrdersOnSide(POSITION_TYPE_BUY);
+            int legS676 = CountAllGenNormalOrdersOnSide(POSITION_TYPE_SELL);
+            string g676Status = g_v676_initGuardEnabled ? "ON" : "OFF";
+            string g676Info = g676Status + " | LegacyB:" + IntegerToString(legB676)
+                            + " LegacyS:" + IntegerToString(legS676)
+                            + ((legB676 > 0 || legS676 > 0) ? "  -> INIT BLOCKED on legacy side" : "");
+            color  g676Clr = (g_v676_initGuardEnabled && (legB676 > 0 || legS676 > 0)) ? clrOrange
+                            : (g_v676_initGuardEnabled ? clrLime : clrGray);
+            DrawTableRow(row, "  ReEntryGuard", g676Info, g676Clr, COLOR_SECTION_HEDGE); row++;
          }
         
         // Orphan warning
