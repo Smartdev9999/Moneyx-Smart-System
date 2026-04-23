@@ -1004,6 +1004,7 @@ int OnInit()
        // v6.16: Trigger type init
        g_hedgeSets[h].triggerType = 0;
        g_hedgeSets[h].hedgeOpenTime = 0;  // v6.57
+       g_hedgeSets[h].lastActionTime = 0; // v6.80
      }
      g_hedgeSetCount = 0;
 
@@ -2377,6 +2378,7 @@ void CloseAllPositions()
       // v6.16: Reset trigger type
       g_hedgeSets[h].triggerType = 0;
       g_hedgeSets[h].hedgeOpenTime = 0;  // v6.57
+      g_hedgeSets[h].lastActionTime = 0; // v6.80
    }
    g_hedgeSetCount = 0;
    // v6.16: Reset DD triggers on full close
@@ -9266,6 +9268,7 @@ void CheckAndOpenHedge()
    if(OpenOrder(orderType, counterLots, comment))
    {
       g_hedgeSets[slot].active = true;
+      g_hedgeSets[slot].lastActionTime = TimeCurrent();  // v6.80
       g_hedgeSets[slot].hedgeSide = hedgeSide;
       g_hedgeSets[slot].counterSide = counterSide;
       g_hedgeSets[slot].hedgeLots = counterLots;
@@ -9547,6 +9550,7 @@ bool OpenDDHedge(ENUM_POSITION_TYPE counterSide, ENUM_POSITION_TYPE hedgeSide, i
    g_hedgeSets[slot].commentPrefix = comment;
    g_hedgeSets[slot].triggerType = 1;  // DD-triggered
    g_hedgeSets[slot].hedgeOpenTime = TimeCurrent();  // v6.57: temporary; refined after ticket lookup
+   g_hedgeSets[slot].lastActionTime = TimeCurrent(); // v6.80
    
    // Find the hedge ticket
    g_hedgeSets[slot].hedgeTicket = 0;
@@ -11207,6 +11211,7 @@ bool ManageHedgeBoundAvgTP(int idx)
 {
    if(InpHedge_BoundAvgTPPoints <= 0) return false;
    if(g_hedgeSets[idx].boundTicketCount == 0) return false;
+   g_hedgeSets[idx].lastActionTime = TimeCurrent();  // v6.80: mark active
    if(!g_hedgeSets[idx].active) return false;
 
    // Calculate weighted average price of bound orders
@@ -11268,6 +11273,7 @@ bool ManageHedgeBoundAvgTP(int idx)
 //+------------------------------------------------------------------+
 void ManageHedgeMatchingClose(int idx)
 {
+   g_hedgeSets[idx].lastActionTime = TimeCurrent();  // v6.80: mark active
    if(!PositionSelectByTicket(g_hedgeSets[idx].hedgeTicket)) return;
 
    double hedgeProfit = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
@@ -11460,6 +11466,7 @@ void ManageHedgeMatchingClose(int idx)
 //+------------------------------------------------------------------+
 void ManageHedgePartialClose(int idx)
 {
+   g_hedgeSets[idx].lastActionTime = TimeCurrent();  // v6.80: mark active
    // v6.61: SHRED hedge using bound profit (oldest profit-takers first)
    if(!InpHedge_ShredHedgeOnProfit) return;
    if(!PositionSelectByTicket(g_hedgeSets[idx].hedgeTicket)) return;
@@ -11640,6 +11647,7 @@ int CalculateEquivGridLevel(double remainingLots)
 //+------------------------------------------------------------------+
 void ManageHedgeGridMode(int idx)
 {
+   g_hedgeSets[idx].lastActionTime = TimeCurrent();  // v6.80: mark active
    // Verify main hedge ticket
    bool mainHedgeExists = false;
    double mainHedgePnL = 0;
