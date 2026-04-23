@@ -3083,6 +3083,36 @@ double FindMaxLotOnSide(ENUM_POSITION_TYPE side)
 }
 
 //+------------------------------------------------------------------+
+//| v6.71: Find max grid level number on side for current generation   |
+//| suffix: "_GL" or "_GP". Returns 0 if none found.                   |
+//+------------------------------------------------------------------+
+int FindMaxGridLevelOnSide(ENUM_POSITION_TYPE side, string suffix)
+{
+   int maxLevel = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
+      if(IsTicketBound(ticket)) continue;
+      string comment = PositionGetString(POSITION_COMMENT);
+      if(IsHedgeComment(comment)) continue;
+      // Only current generation
+      int orderGen = ExtractGeneration(comment);
+      if(orderGen >= 0 && orderGen != g_cycleGeneration) continue;
+      if(!MatchGMSuffix(comment, suffix)) continue;
+      // Extract number after '#'
+      int hashPos = StringFind(comment, "#");
+      if(hashPos < 0) continue;
+      int level = (int)StringToInteger(StringSubstr(comment, hashPos + 1));
+      if(level > maxLevel) maxLevel = level;
+   }
+   return maxLevel;
+}
+
+//+------------------------------------------------------------------+
 //| v6.41: Count GL orders for a specific generation + side            |
 //+------------------------------------------------------------------+
 int CountGenGridLoss(int gen, ENUM_POSITION_TYPE side)
