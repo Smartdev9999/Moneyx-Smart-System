@@ -9018,11 +9018,62 @@ int FindFreeHedgeSlot()
 }
 
 //+------------------------------------------------------------------+
+//| v6.78: Hedge Open Delay (minutes) — guard against false signals  |
+//| Returns true if delay is still active; remainSec = seconds left   |
+//+------------------------------------------------------------------+
+datetime g_lastHedgeDelayLog = 0;
+bool IsHedgeOpenDelayActive(int &remainSec)
+{
+   remainSec = 0;
+   if(InpHedge_OpenDelayMin <= 0) return false;
+   datetime now = TimeCurrent();
+   long delaySec = (long)InpHedge_OpenDelayMin * 60;
+
+   long remainOpen = 0, remainClose = 0;
+   datetime lastOpen = (g_lastHedgeBuyTime > g_lastHedgeSellTime) ? g_lastHedgeBuyTime : g_lastHedgeSellTime;
+   if(lastOpen > 0)
+   {
+      long elapsed = (long)(now - lastOpen);
+      if(elapsed < delaySec) remainOpen = delaySec - elapsed;
+   }
+   if(g_lastHedgeCloseTime > 0)
+   {
+      long elapsed = (long)(now - g_lastHedgeCloseTime);
+      if(elapsed < delaySec) remainClose = delaySec - elapsed;
+   }
+
+   long rem = 0;
+   if(InpHedge_OpenDelayMode == HDELAY_AFTER_LAST_OPEN)       rem = remainOpen;
+   else if(InpHedge_OpenDelayMode == HDELAY_AFTER_LAST_CLOSE) rem = remainClose;
+   else                                                        rem = (remainOpen > remainClose) ? remainOpen : remainClose;
+
+   if(rem <= 0) return false;
+   remainSec = (int)rem;
+   return true;
+}
+
+//+------------------------------------------------------------------+
 //| Check expansion and open hedge if needed                           |
 //| Now supports multiple hedge sets on same side (unbound orders)     |
 //+------------------------------------------------------------------+
 void CheckAndOpenHedge()
 {
+   // v6.78: Hedge Open Delay guard (กัน false signal)
+   {
+      int remSec = 0;
+      if(IsHedgeOpenDelayActive(remSec))
+      {
+         datetime nw = TimeCurrent();
+         if(nw - g_lastHedgeDelayLog >= 60)
+         {
+            g_lastHedgeDelayLog = nw;
+            PrintFormat("v6.78 HEDGE DELAY (Expansion): wait %dm%02ds before next hedge (mode=%d, cfg=%dm)",
+                        remSec/60, remSec%60, (int)InpHedge_OpenDelayMode, InpHedge_OpenDelayMin);
+         }
+         return;
+      }
+   }
+
    // v6.14: Determine expansion direction — all expansion TFs must agree
    int bestDir = 0;
    int expCount = CountDirectionalExpansion(bestDir);
