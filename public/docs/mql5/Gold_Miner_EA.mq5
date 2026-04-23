@@ -2493,6 +2493,83 @@ void ClearBrokerTPSL()
    g_lastBrokerSL_Sell  = 0;
     }
 
+//+------------------------------------------------------------------+
+//| v6.72: Force-clear broker TP/SL of every bound ticket in a set     |
+//| Called immediately when a hedge opens & binds counter-side orders  |
+//| Independent of TP-mode gates and the 2s sync timer                 |
+//+------------------------------------------------------------------+
+void ClearBrokerTPSLForSet(int slot)
+{
+   if(slot < 0 || slot >= MAX_HEDGE_SETS) return;
+   if(!g_hedgeSets[slot].active) return;
+   int cleared = 0;
+   for(int b = 0; b < g_hedgeSets[slot].boundTicketCount; b++)
+   {
+      ulong tk = g_hedgeSets[slot].boundTickets[b];
+      if(tk == 0) continue;
+      if(!PositionSelectByTicket(tk)) continue;
+      double curTP = PositionGetDouble(POSITION_TP);
+      double curSL = PositionGetDouble(POSITION_SL);
+      if(curTP == 0 && curSL == 0) continue;
+      if(trade.PositionModify(tk, 0, 0))
+      {
+         cleared++;
+         Print("v6.72 ClearTP-OnBind: set#", slot + 1, " ticket #", tk,
+               " TP=", DoubleToString(curTP, _Digits), "->0 SL=",
+               DoubleToString(curSL, _Digits), "->0");
+      }
+      else
+      {
+         Print("v6.72 ClearTP-OnBind FAILED: set#", slot + 1, " ticket #", tk,
+               " err=", GetLastError());
+      }
+   }
+   if(cleared > 0)
+   {
+      // Force next SyncBrokerTPSL to re-evaluate from scratch
+      g_lastBrokerTP_Buy   = -1;
+      g_lastBrokerTP_Sell  = -1;
+      g_lastBrokerSL_Buy   = -1;
+      g_lastBrokerSL_Sell  = -1;
+      g_lastBrokerTPSLSync = 0;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| v6.72: Per-tick safety sweep — guarantees no bound ticket keeps   |
+//| a stale broker TP/SL even if all TP modes are disabled or sync    |
+//| timer is delayed. Runs unconditionally each tick.                  |
+//+------------------------------------------------------------------+
+void EnforceClearTPOnAllBound()
+{
+   for(int h = 0; h < MAX_HEDGE_SETS; h++)
+   {
+      if(!g_hedgeSets[h].active) continue;
+      if(g_hedgeSets[h].boundTicketCount <= 0) continue;
+      for(int b = 0; b < g_hedgeSets[h].boundTicketCount; b++)
+      {
+         ulong tk = g_hedgeSets[h].boundTickets[b];
+         if(tk == 0) continue;
+         if(!PositionSelectByTicket(tk)) continue;
+         // Skip recovery-owner generation tickets — they have their own TP path
+         if(g_sequentialRecoveryActive)
+         {
+            string c = PositionGetString(POSITION_COMMENT);
+            int og = ExtractGeneration(c);
+            if(og == g_sequentialRecoveryGen) continue;
+            if(IsRecoverySeedTicket(tk) && GetRecoverySeedGen(tk) == g_sequentialRecoveryGen) continue;
+         }
+         double curTP = PositionGetDouble(POSITION_TP);
+         double curSL = PositionGetDouble(POSITION_SL);
+         if(curTP == 0 && curSL == 0) continue;
+         if(trade.PositionModify(tk, 0, 0))
+            Print("v6.72 ClearTP-Sweep: set#", h + 1, " ticket #", tk,
+                  " TP=", DoubleToString(curTP, _Digits), "->0 SL=",
+                  DoubleToString(curSL, _Digits), "->0");
+      }
+   }
+}
+
 void ManageTPSL()
 {
    // v6.11: Skip TP/SL when hedge balanced lock is active (both sides equal)
