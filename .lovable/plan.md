@@ -1,73 +1,93 @@
 
 
-## v6.71 — Fix: comment ของ GL/GP ซ้ำเลขเดิมหลัง Hedge ปลดปิดไม้กลาง
+## v6.77 — บังคับเคลียร์ Broker TP/SL ของออเดอร์ที่ถูก Bound ทันทีเมื่อเปิด Hedge
 
-### วินิจฉัยจากภาพ
-ในภาพออเดอร์ฝั่ง buy ของ Set#2 มีลำดับ:
-- GM2_GL#5, GM2_GL#6, GM2_GL#7, GM2_GL#8, GM2_GL#9, GM2_GL#10
-- จากนั้น EA เปิดเพิ่ม: **GM2_GL#7, GM2_GL#8, GM2_GL#9** (ซ้ำเลขเดิม!)
-
-เกิดเพราะหลัง hedge matching/partial close ปิดไม้ระดับล่าง (GL#1–#4) ทำให้ `currentGridCount` ลดลง พอ EA จะเปิด GL ใหม่ จะใช้ `currentGridCount + 1` → ได้เลขที่ **เคยใช้ไปแล้ว** และยังเปิดอยู่ (#7, #8, #9) → ซ้ำ
+### วินิจฉัยจากภาพ image-962
+ในภาพออเดอร์ฝั่ง buy (GM1_INIT, GM1_GL#1..#7) **ทุกตัวยังมีค่า TP = 5359.50** ทั้งที่ตอนนี้ระบบเปิด `GM_Hedge_E1` (sell 1.04 lot) เพื่อล็อคแล้ว → ราคามีโอกาสวิ่งขึ้นไปชน TP 5359.50 แล้วโบรกเกอร์จะปิดบางออเดอร์ของฝั่ง buy ออกไปเอง ทำให้การ lock พัง (boundLots ลด แต่ hedgeLots คงเดิม → เกิด lot inflation ตามที่ `AuditHedgeSetIntegrity` คอยเตือน)
 
 ### Root Cause
-ใน `Gold_Miner_EA.mq5` ทั้ง 4 จุดยังใช้ `currentGridCount + 1` ตรงๆ:
-- บรรทัด 3456 `CheckGridLoss` → `"_GL#" + (currentGridCount + 1)`
-- บรรทัด 3528 `CheckGridProfit` → `"_GP#" + (currentGridCount + 1)`
-- บรรทัด 5192 `CheckGridLossTF` → `"GL#" + (currentGridCount + 1)`
-- บรรทัด 5263 `CheckGridProfitTF` → `"GP#" + (currentGridCount + 1)`
 
-แม้เคยมีแผน v6.71 (memory `grid-comment-max-level-v6-71`) แต่ **โค้ดจริงไม่เคยถูกแก้** — ยังเป็นพฤติกรรมเดิม
+ใน `Gold_Miner_EA.mq5`:
 
-### แผนแก้ v6.71 (Fix-only)
+1. ตอน `OpenOrder()` ทุกออเดอร์ปกติ (INIT/GL/GP) ถูกตั้ง **broker TP** ทันทีจาก `preTP` (บรรทัด ~2052–2089) และยิ่งเปิดไม้ใหม่ ทุกตัวจะถูก `SyncBrokerTPSL()` อัปเดตให้ใช้ avg TP เดียวกัน (5359.50 ในภาพ)
+2. ตอนเปิด hedge ที่บรรทัด 8688–8711 มีการ bind ตั๋วเก่าทั้งหมดเข้า set → set กลายเป็น active
+3. หลังจาก bind **โค้ดไม่ได้สั่ง `PositionModify(ticket, 0, 0)` ทันที** เพื่อเคลียร์ TP/SL ของตั๋วที่เพิ่ง bind
+4. การเคลียร์ TP/SL ของ bound จะรอให้ `SyncBrokerTPSL()` รอบถัดไปเรียก `ClearBrokerTPSL()` ซึ่ง:
+   - ติด **gate timer 2 วินาที** (`g_brokerTPSLIntervalSec = 2`)
+   - ติด **gate โหมด TP**: ถ้า user ไม่ได้เปิด `UseTP_Points/Dollar/PercentBalance` หรือ SL_Points → loop ที่บรรทัด 1514 ไม่ทำงานเลย → **TP เก่าค้างถาวร**
+   - แม้จะรัน ก็ยังมีช่วง 0–2 วิที่ราคาอาจวิ่งชน TP เก่าก่อน
+
+### แผนแก้ v6.77 (Fix-only)
 
 ไฟล์: `public/docs/mql5/Gold_Miner_EA.mq5`
 
-#### 1) เพิ่ม helper `FindMaxGridLevelOnSide(side, suffix)`
-สแกนทุก position ของ MagicNumber + symbol + side ปัจจุบัน เลือกเฉพาะ generation เดียวกับ `g_cycleGeneration` และที่มี suffix `_GL` หรือ `_GP` แล้วดึงเลขหลัง `#` มาหาค่า max
-- ข้าม hedge comments (`IsHedgeComment`)
-- ข้าม bound tickets (`IsTicketBound`)
-- ใช้ `ExtractGeneration(comment)` กรอง gen ตรง
+#### 1) เพิ่ม helper `ClearBrokerTPSLForSet(int slot)`
+- รับ slot ของ hedge set
+- วน `boundTickets[]` ของ slot นั้น
+- สำหรับแต่ละ ticket: ถ้า `POSITION_TP != 0 || POSITION_SL != 0` → `trade.PositionModify(ticket, 0, 0)`
+- log: `v6.77 ClearTP-OnBind: set#X ticket #Y TP=A→0 SL=B→0`
+- ไม่แตะ hedge ticket, ไม่แตะออเดอร์อื่นนอก set
 
-#### 2) เพิ่ม helper `FindMaxGridLevelOnSideTF(tfIdx, side, suffix)`
-สำหรับโหมด TF — กรองด้วย prefix ของ TF (เหมือน `FindLastOrderTF`)
+#### 2) เรียก `ClearBrokerTPSLForSet(slot)` **ทันทีหลัง bind ในจุดที่เปิด hedge**
 
-#### 3) แก้ comment ที่ 4 จุด
-แทนที่:
+เรียกเพิ่มที่ทุกจุดที่มี bind loop:
+- หลังบรรทัด ~8711 (จุดเปิด DD hedge หลัก) — เรียกก่อน increment generation
+- หลังบรรทัด ~8964 (path เปิด hedge อีก path)
+- หลังบรรทัด ~9186 (path สามที่ bind)
+- หลังบรรทัด ~9864 (path เปิด hedge ผ่าน reverse-binding)
+
+โดยเรียกหลังจาก `boundTicketCount` ถูกเซ็ตเสร็จ และก่อน `g_hedgeSetCount++`
+
+#### 3) เพิ่ม Safety Sweep ใน `OnTick` (ทุก tick)
+เพิ่ม helper `EnforceClearTPOnAllBound()`:
+- วนทุก hedge set ที่ `active`
+- เคลียร์ TP/SL ของ bound ticket ใดก็ตามที่ยังเหลือค่า ≠ 0
+- เรียกจาก `OnTick` **ก่อน** `SyncBrokerTPSL()` และ **ไม่มี gate timer / TP-mode**
+- ป้องกันกรณีที่ user ปิดทุกโหมด TP/SL → block 2s + missed sync จะไม่ทำให้ TP ค้าง
+
+ตำแหน่งเรียก: ใน `OnTick()` ใกล้บรรทัด ~1513 ก่อน `if(UseTP_Points || ...)` block
+
+#### 4) Reset `g_lastBrokerTP_Buy/Sell` cache หลัง bind
+หลังเรียก `ClearBrokerTPSLForSet`:
 ```cpp
-"_GL#" + IntegerToString(currentGridCount + 1)
+g_lastBrokerTP_Buy = -1;
+g_lastBrokerTP_Sell = -1;
+g_lastBrokerSL_Buy = -1;
+g_lastBrokerSL_Sell = -1;
+g_lastBrokerTPSLSync = 0;
 ```
-ด้วย:
-```cpp
-int maxLvl = FindMaxGridLevelOnSide(side, "_GL");
-int nextLvl = MathMax(maxLvl + 1, currentGridCount + 1);
-"_GL#" + IntegerToString(nextLvl)
-```
-ทำเหมือนกันสำหรับ `_GP`, และ TF version
+เพื่อให้ next sync บังคับเช็คใหม่จริง ไม่ใช้ cache เก่า
 
-#### 4) สิ่งที่ไม่เปลี่ยนแปลง (ตามกฎเหล็ก)
-- ไม่แก้ `OpenOrder / OpenOrderTF / trade.Buy / trade.Sell / trade.PositionClose`
-- ไม่แก้เงื่อนไขเปิด GL/GP (distance, ATR, candle, BB filter)
-- ไม่แก้ `CalculateGridLot / FindMaxLotOnSide` — lot ยังคงใช้ค่าเดิมตาม max existing lot
-- ไม่แก้ Hedge / Sequential FIFO / Cooldown / Strict FIFO (v6.70)
-- ไม่แก้ MaxOpenOrders / MaxTrades gate
-- ไม่แก้ Triple Gate, Match-Close pool, Owner lock
-- ไม่แก้ License/News/Time filter
-
-#### 5) Version bump → v6.71
-- `#property version "6.71"`
-- `#property description "Gold Miner EA v6.71 - v6.70 + Grid comment numbering uses MAX(maxLevel+1, count+1) — no duplicate GL#/GP# after hedge unlock"`
+#### 5) Version bump → v6.77
+- `#property version "6.77"`
+- `#property description "Gold Miner EA v6.77 - v6.76 + force-clear broker TP/SL on bound tickets immediately at hedge open + per-tick safety sweep"`
 - Header comment block
-- Dashboard footer string
+- Dashboard footer
+
+### สิ่งที่ไม่เปลี่ยนแปลง (กฎเหล็ก)
+- ไม่แก้ `OpenOrder / OpenOrderTF / trade.Buy / trade.Sell / trade.PositionClose`
+- ไม่แก้เงื่อนไขเปิด hedge / DD / Triple Gate / Sequential FIFO / Strict FIFO
+- ไม่แก้ `CalculateGridLot / FindMaxLotOnSide / lot sizing`
+- ไม่แก้ `ManageRecoveryOwnerAvgTP` (ตั๋ว owner-gen ยัง bypass การเคลียร์ตามเดิมเพราะ `IsTicketBound=false`)
+- ไม่แก้เงื่อนไขเปิด GL/GP, BB filter, distance, ATR, candle confirmation
+- ไม่แก้ License / News / Time filter
+- ไม่แตะ MaxOpenOrders / MaxTrades / Match-Close pool
+- การ matching/release/cooldown ของ hedge ยังทำงานเหมือนเดิม
 
 ### ผลลัพธ์ที่คาดหวัง
-จากภาพ: maxLevel ปัจจุบัน = 10 (GM2_GL#10) → ไม้ถัดไปจะเป็น **GM2_GL#11** เสมอ ไม่ว่า count จริงเหลือกี่ไม้หลัง hedge ปิดไป
-- ไม่มีการซ้ำเลข GL#/GP# ภายในเซตเดียวกัน อีก
-- รักษา property: เลขเรียงเพิ่มขึ้นเสมอ ภายใน gen เดียวกัน
-- Lot sizing คงใช้ `FindMaxLotOnSide` เดิม → lot ยังคงต่อเนื่อง
-- MaxTrades gate ยังคุมจำนวนรวม ไม่ทำให้เกินลิมิต
+- ทันทีที่ hedge เปิดและ bind ตั๋วเก่า → ทุกตั๋วที่ bound จะถูก `PositionModify(ticket, 0, 0)` ทันใน tick เดียวกัน
+- ราคาวิ่งไปชน 5359.50 จะ **ไม่ทำให้โบรกเกอร์ปิดออเดอร์ใดเลย** เพราะ TP=0 แล้ว
+- การ lock สมบูรณ์ — `boundLots` ไม่ลดแบบไม่คาดคิด → ไม่มี lot inflation
+- Per-tick sweep รับประกันว่าแม้ user ปิดโหมด TP ทุกประเภท หรือ sync 2s plays late → bound ticket TP ก็ยัง = 0 ตลอดเวลา
+- เมื่อ hedge set ถูก release/closed ทั้งหมด → `IsTicketBound=false` → `SyncBrokerTPSL` กลับมาตั้ง avg TP ใหม่ตามปกติ
 
 ### ความเสี่ยง & Mitigation
-- **Risk**: ถ้า user ปิดเองด้วยมือทั้งหมด แล้วเริ่มใหม่ใน gen เดิม → maxLevel = 0 → เริ่มที่ #1 ปกติ ไม่มีปัญหา
-- **Risk**: ตัวเลขอาจขึ้นเลย `MaxTrades` เช่น #15 ขณะที่นับจริงเหลือ 6 → เป็นเลข label เท่านั้น ไม่กระทบ logic เพราะ gate ใช้ count ไม่ใช่ level
-- **Risk**: TF mode มี prefix ต่างจาก standard → helper TF version ใช้ตัวกรอง prefix แยกตาม `FindLastOrderTF` pattern เพื่อไม่ปนข้าม TF
+- **Risk**: เคลียร์ TP ของ bound แล้ว ถ้า hedge หลุดไปเอง ตั๋วเก่าจะไม่มี TP ทันที
+- **Mitigation**: เมื่อ set deactivate → ตั๋วไม่ถูก bound อีก → `SyncBrokerTPSL` รอบถัดไป (สูงสุด 2 วิ) จะตั้ง avg TP คืน — พฤติกรรมเดียวกับ v6.46–v6.76 อยู่แล้ว
+
+- **Risk**: Per-tick sweep อาจเรียก `PositionModify` บ่อย
+- **Mitigation**: sweep จะ skip ทุก ticket ที่ TP=0 และ SL=0 อยู่แล้ว → modify ครั้งเดียวต่อตั๋วต่อ bind, ไม่สแปม
+
+- **Risk**: ถ้า broker reject `PositionModify(0,0)`
+- **Mitigation**: log error + retry ทุก tick จนสำเร็จ (sweep จะลองซ้ำเอง)
 
