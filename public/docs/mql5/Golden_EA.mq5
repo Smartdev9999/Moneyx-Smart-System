@@ -858,14 +858,14 @@ int OnInit()
 
    if(g_isTesterMode)
    {
-      Print("GOLD MINER EA - TESTER MODE");
+      Print("GOLDEN EA - TESTER MODE");
       Print("License check skipped for backtesting");
       g_isLicenseValid = true;
       g_licenseStatus = LICENSE_VALID;
    }
    else
    {
-      Print("GOLD MINER EA - LIVE TRADING MODE");
+      Print("GOLDEN EA - LIVE TRADING MODE");
       if(!InitLicense(InpLicenseServer, InpLicenseCheckMinutes, InpDataSyncMinutes))
          Print("License initialization failed: ", g_lastLicenseError);
       ShowLicensePopup(g_licenseStatus);
@@ -7325,7 +7325,7 @@ void SaveNewsCacheToFile()
       return;
    }
    
-   FileWriteString(handle, "# GoldMiner News Cache - " + TimeToString(TimeCurrent()) + "\n");
+   FileWriteString(handle, "# GoldenEA News Cache - " + TimeToString(TimeCurrent()) + "\n");
    FileWriteString(handle, "# Count: " + IntegerToString(g_newsEventCount) + "\n");
    
    for(int i = 0; i < g_newsEventCount; i++)
