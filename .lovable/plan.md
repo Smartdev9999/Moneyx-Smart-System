@@ -1,112 +1,192 @@
 
+## v6.74 — กัน “Recovery Grid + DD Hedge ซ้อนในเจนเดียวกัน” หลังปลด/เคลียร์ชุดเดิม
 
-## v6.73 — Orphan Hedge Auto-Close + Lot Inflation Guard
+### ปัญหาที่เกิดขึ้นจาก log + รูป
+จากภาพและ log ล่าสุด เหตุการณ์เป็นลำดับนี้:
 
-### วินิจฉัยจากภาพ image-952 + image-953
+1. `GM2_GL#8` ถูกเปิดเพิ่มก่อน
+2. จากนั้นมี `GM2_GL#1` ฝั่ง sell ถูกเปิดเป็น recovery/orphan grid
+3. ต่อมามีการปิดบางไม้ของชุดเดิม
+4. สุดท้ายระบบเปิด `GM_Hedge_D2` ขึ้นมาอีก
 
-**ภาพ orders:**
-- Set#1 (Buy): `GM1_INIT 0.03` + `GM1_GL#1 0.04` + `GM1_GL#2 0.06` = **0.13 lot**
-- Hedge: `GM_Hedge_D1` (sell) **3.19 lot** ← ใหญ่กว่า Buy ที่มันควร hedge **24.5 เท่า**
-- ทำให้ floating ติดลบ **-14,648 USD** ทั้งที่ฝั่ง buy แค่ -800 USD
+ผลคือ **generation 2 โดนทั้ง recovery grid และ DD hedge พร้อมกัน** ซึ่งเป็นพฤติกรรมที่ user บอกว่า “สิ่งที่ใส่ไปยังแก้ไม่หาย”
 
-**Log บอกชัด:**
-```
-v6.65 HEDGE INTEGRITY CRITICAL: set#0 gen=1 hedgeLots=3.19 has NO bound orders 
-(orphan hedge — manual review required)
-GetHedgeLotCap: skip set#0 boundGen=1 != currentGen=2
-```
-- ระบบ "รู้" ว่า hedge นี้กำพร้า (bound orders ที่ผูกไว้ปิดไปหมดแล้วจาก SL/TP)
-- แต่ **แค่ print เตือน — ไม่ทำอะไร** (`manual review required`)
-- Cycle เคลื่อนเป็น Gen2 แล้ว → `GetHedgeLotCap` ก็ skip → ไม่มีกลไกปิด/จัดการ hedge 3.19 lot ที่ค้างอยู่
-- ออเดอร์ Buy รุ่นใหม่ (GM1_GL#1..5 ของ gen ใหม่ + GM2_*) เลยลอยอิสระ ไม่ถูก cap → ขนาดดูปกติ แต่ hedge เก่ายังเททับอยู่
+### Root cause ที่ชัดเจน
+ปัญหาไม่ได้อยู่ที่ guard `OnePerGenSide` อย่างเดียว แต่เกิดจาก “ช่องว่างของสถานะ generation” ดังนี้:
 
-### Root Cause
+#### A. `ManageOrphanGrid()` ยังเปิดไม้ recovery ของ Gen2 ได้
+ใน log มี:
+- `v6.64 RECOV TP RECALC: Gen2 ...`
+- `v6.71 GRID NEXT-LEVEL ... comment=GM2_GL#8`
+- ต่อด้วย `v6.71 GRID NEXT-LEVEL ... comment=GM2_GL#1`
+- และมี `ORPHAN SCAN: No orphan generations found.` อยู่ใกล้กัน
 
-ที่ `AuditHedgeSetIntegrity()` (line 8042–8090):
-- Detect orphan hedge ได้ถูกต้อง
-- แต่ **action = แค่ Print()** ไม่มี auto-recovery
-- ทำให้ hedge ที่ "หลุดสมอ" (bound orders โดน TP/SL ปิดหมดก่อน hedge) ค้างเป็น exposure ขนาดมหึมา
+แปลว่า order ของ Gen2 ถูกมองเป็น “owner/recovery basket” และยังถูก feed ผ่าน recovery path ได้ แม้กำลังอยู่ในช่วงเปลี่ยนผ่านหลัง hedge/release
 
-### แผนแก้ (Fix-only — ไม่แตะ trading strategy / order execution)
+#### B. `CheckAndOpenHedgeByDD()` คำนวณ DD ของ `g_cycleGeneration` จาก order ที่ “ไม่ bound แล้ว”
+โค้ดปัจจุบันนับ DD จาก:
+- ไม่ใช่ hedge
+- ไม่ใช่ bound
+- ไม่ใช่ prevHedged
+- `orderGen == curGen`
+
+ดังนั้นถ้า order ของ Gen2 หลุดมาเป็น unbound/recovery owner แล้ว แต่ยังอยู่ generation เดิม ระบบ DD hedge ยังเห็นพวกนี้เป็น candidate สำหรับ hedge ได้อีก
+
+#### C. ระบบยังไม่มี “generation-level mutual exclusion”
+ตอนนี้มีแค่:
+- ห้าม hedge ซ้ำถ้ายังมี active hedge set เดิม (`HasActiveHedgeForGenSide`)
+- cooldown หลังปิด hedge (`g_lastHedgeCloseTime`)
+- prevHedged lock เฉพาะ ticket เดิม
+
+แต่ยัง **ไม่มี guard ว่า**
+- ถ้า generation นี้กำลังอยู่ใน recovery owner flow / orphan recovery flow
+- ห้ามเปิด DD hedge ใหม่สำหรับ generation เดียวกัน
+- และในทางกลับกัน ถ้า generation นี้ยังมี/เพิ่งมี DD hedge set
+- ห้าม recovery grid ของ generation เดียวกันวิ่งแทรก
+
+นี่คือสาเหตุที่ทำให้เกิด “GM2_GL เพิ่ม แล้ว GM_Hedge_D2 ซ้ำ”
+
+---
+
+## แผนแก้
 
 ไฟล์: `public/docs/mql5/Gold_Miner_EA.mq5`
 
-#### 1) เพิ่ม input toggles ใหม่
+### 1) เพิ่ม helper ระดับ generation เพื่อกัน flow ชนกัน
+เพิ่ม helper ใหม่ เช่น:
+
 ```cpp
-input bool   InpHedge_AutoCloseOrphan       = true;   // v6.73: Auto-close hedge with 0 bound orders
-input int    InpHedge_OrphanGraceSec        = 30;     // v6.73: wait this long after detect before close (avoid race with OnTradeTransaction)
-input bool   InpHedge_AutoTrimInflated      = true;   // v6.73: Auto partial-close hedge if hedgeLots > boundLots*2
-input double InpHedge_TrimToleranceMult     = 1.10;   // v6.73: trim down to boundLots * tolerance (10% buffer)
+bool HasAnyActiveHedgeForGen(int gen);
+bool IsGenerationInRecoveryFlow(int gen);
+bool ShouldBlockDDHedgeForGen(int gen, ENUM_POSITION_TYPE counterSide);
+bool ShouldBlockRecoveryGridForGen(int gen);
 ```
 
-#### 2) ขยาย `AuditHedgeSetIntegrity()` ให้มี action จริง
+หน้าที่:
+- `HasAnyActiveHedgeForGen(gen)` → มี hedge set active ผูกกับ gen นี้ไหม
+- `IsGenerationInRecoveryFlow(gen)` → gen นี้เป็น sequential owner / recovery seed / recovery set tracker / orphan group active อยู่ไหม
+- `ShouldBlockDDHedgeForGen(...)` → รวม guard ว่า gen นี้อยู่ใน recovery flow หรือเพิ่งถูกปล่อยจาก hedge หรือไม่
+- `ShouldBlockRecoveryGridForGen(gen)` → ถ้า gen นี้ยังเป็น source/target ของ active DD hedge หรืออยู่ใน post-release cooldown ให้ recovery grid หยุด
 
-**Branch A — Orphan (boundCount==0, hedgeLots>0):**
-- Log ครั้งแรก → set timestamp `g_hedgeSets[h].orphanDetectedAt = now`
-- เมื่อ `now - orphanDetectedAt >= InpHedge_OrphanGraceSec` และ `InpHedge_AutoCloseOrphan == true`:
-  - `trade.PositionClose(g_hedgeSets[h].hedgeTicket)` — ปิดเฉพาะตัว hedge
-  - Log: `v6.73 ORPHAN HEDGE AUTO-CLOSED: set#h gen=N ticket=T lots=X`
-  - Reset slot (`active=false`, ล้างทุกฟิลด์ตามแพทเทิร์นเดิม line 937–945)
-- ถ้า `InpHedge_AutoCloseOrphan == false` → คงพฤติกรรมเดิม (แค่เตือน)
+### 2) ปิด DD hedge สำหรับ generation ที่อยู่ใน recovery flow
+แก้ `CheckAndOpenHedgeByDD()` และ `OpenDDHedge()` ให้ block ไม่ใช่แค่ “มี hedge เดิมไหม” แต่รวมถึง:
 
-**Branch B — Inflated (hedgeLots > boundLots * 2):**
-- Log ครั้งแรก → set `g_hedgeSets[h].inflationDetectedAt = now`
-- เมื่อ grace ผ่าน และ `InpHedge_AutoTrimInflated == true`:
-  - คำนวณ `targetLots = boundLotsActual * InpHedge_TrimToleranceMult`
-  - `excessLots = hedgeLots - targetLots` (round ตาม `SYMBOL_VOLUME_STEP`)
-  - ถ้า `excessLots >= minLot`: `trade.PositionClosePartial(hedgeTicket, excessLots)`
-  - อัปเดต `g_hedgeSets[h].hedgeLots = hedgeLots - excessLots`
-  - Log: `v6.73 HEDGE TRIMMED: set#h hedgeLots X→Y (boundLots=Z)`
-- ถ้าหลัง trim เหลือ ≤ 0 → ปิดทิ้งทั้งตัว + reset slot
+- ถ้า `curGen` เป็น `g_sequentialRecoveryGen`
+- หรือ `curGen` มี recovery seed/recovery set ยังไม่ flat
+- หรือ `curGen` อยู่ใน orphan recovery flow
+- หรือ gen นี้เพิ่งถูก release จาก DD hedge และยังอยู่ cooldown window
 
-**Reset condition:** ถ้ารอบถัดไปพบว่า bound orders กลับมา (เช่น recovery system bind ใหม่) → clear `orphanDetectedAt / inflationDetectedAt = 0`
+ให้ **skip การเปิด DD hedge ทันที**
 
-#### 3) เพิ่ม struct fields ใน `HedgeSet` (บรรทัด ~562)
+ตัวอย่างแนวคิด:
 ```cpp
-datetime orphanDetectedAt;     // v6.73
-datetime inflationDetectedAt;  // v6.73
-```
-- ตั้งค่า = 0 ทุกที่ที่ reset slot (3 จุด: line 937, 2271, และ branch close ใหม่)
-
-#### 4) Dashboard เพิ่ม
-```
-"AutoHealOrphan": "ENABLED" / "DISABLED"
-"AutoTrimInflated": "ENABLED" / "DISABLED"
-"OrphanCnt": <count>  (ใช้ g_hedgeIntegrityCriticalCount เดิม)
-"InflatedCnt": <count> (ใช้ g_hedgeIntegrityWarnCount เดิม)
+if(ShouldBlockDDHedgeForGen(curGen, POSITION_TYPE_BUY)) return;
 ```
 
-#### 5) Triple Gate exempt
-ถ้าฟีเจอร์ Triple Gate gate การปิด hedge → bypass สำหรับ orphan/trim เพราะนี่คือ integrity-recovery ไม่ใช่ matching-close ปกติ
-(ตรวจใน `ManageHedgeMatchingClose` — orphan auto-close จะข้าม Triple Gate โดยตรง)
+ผลที่ต้องการ:
+- Gen2 ที่กำลัง recover อยู่ จะไม่ถูก hedge ซ้ำเป็น `GM_Hedge_D2` อีกรอบ
 
-#### 6) Version bump → v6.73
-- `#property version "6.73"`
-- `#property description` เพิ่ม "v6.73: Auto-heal orphan/inflated hedges"
-- Header comment + Dashboard string
+### 3) ปิด recovery/orphan grid สำหรับ generation ที่ยังไม่ควร recover
+แก้ `ManageOrphanGrid()` ให้เพิ่ม guard ก่อนเปิด `prefix_GL#N`:
 
-### สิ่งที่ไม่เปลี่ยนแปลง
-- ไม่แก้ `OpenOrder / trade.Buy / trade.Sell` (ใช้ `trade.PositionClose / PositionClosePartial` ที่มีอยู่แล้ว)
-- ไม่แก้ entry condition / grid logic / signal filter
-- ไม่แก้ `CalculateGridLot` / `CalculateHedgeLot`
-- ไม่แก้ Hedge Matching Close, Reverse Hedge, Bound logic, Recovery System
-- ไม่แก้ DD threshold / Generation lifecycle / Triple Gate logic เอง
-- ไม่แก้ One-Per-Gen (v6.72), Sequential FIFO (v6.70), Grid Comment Max-Level (v6.71)
-- ไม่แก้ License / News / Time / BB filter
+- ถ้า gen นี้ยังมี active hedge set ผูกอยู่ → ห้ามเปิด orphan/recovery grid
+- ถ้า gen นี้เพิ่งถูกปล่อยจาก hedge ในรอบเดียวกัน / ยังอยู่ cooldown → ห้ามเปิด orphan/recovery grid
+- ถ้า gen นี้เป็น `g_cycleGeneration` และยังเข้าข่าย DD hedge domain → ไม่ให้ recovery flow มาวิ่งชน normal flow
 
-### ผลลัพธ์ที่คาดหวัง
-1. กรณีเดียวกับภาพ: หลังเริ่ม EA v6.73 ระบบจะ detect orphan hedge `set#0 hedgeLots=3.19, boundCount=0` → รอ 30s → ปิด `GM_Hedge_D1` อัตโนมัติ → exposure -14,648 ลดลงเหลือเท่ากับ buy ฝั่งเดียว
-2. ถ้า hedge ใหญ่กว่า bound 2x ขึ้นไป (เช่น bound บางตัว TP ไป 50%) → trim ให้เหลือ ~1.1x ของ bound จริง
-3. Slot ที่ถูกปิดกลับเข้า pool ให้ generation ใหม่ใช้ได้
-4. มี toggle สลับเปิด/ปิดได้ทันที
+เป้าคือกันเคสแบบใน log:
+- recovery path เปิด `GM2_GL#1`
+- แล้ว DD path เห็น Gen2 ยังติดลบ จึง hedge รอบสอง
 
-### ความเสี่ยง & Mitigation
-- **Risk:** Auto-close orphan ขณะ OnTradeTransaction ยังไม่ทัน update `boundTickets`  
-  **Mitigation:** Grace period 30s + `RefreshBoundTickets(h)` ก่อนตัดสินใจ + throttle 30s เดิม
-- **Risk:** Trim partial close ผิด step volume  
-  **Mitigation:** Round ตาม `SYMBOL_VOLUME_STEP` และเช็ค `>= SYMBOL_VOLUME_MIN`
-- **Risk:** ปิด hedge แล้ว recovery system งง  
-  **Mitigation:** ใช้ flow reset slot เดียวกับ matching-close (line 937–945), `IsPrevHedgedTicket` ไม่กระทบเพราะไม่มี bound ticket อยู่แล้ว
-- **Risk:** User ไม่อยากให้ระบบปิดเอง  
-  **Mitigation:** `InpHedge_AutoCloseOrphan = false` กลับเป็นพฤติกรรม v6.72
+### 4) เพิ่ม “post-release generation cooldown” แบบผูกกับ gen ไม่ใช่แค่ global
+ปัจจุบันมี `g_lastHedgeCloseTime` เป็น global ทั้งระบบ ซึ่งยังหยาบเกินไป
 
+เพิ่ม state ใหม่ระดับ generation เช่น:
+```cpp
+int      g_lastReleasedGen = -1;
+datetime g_lastReleasedGenTime = 0;
+input int InpHedge_PostReleaseGenBlockSec = 60;
+```
+
+แล้วอัปเดตทุกจุดที่ deactive DD hedge set:
+- matching close
+- release close
+- shred hedge full
+- external close
+- orphan auto-close cleanup ที่เกี่ยวกับ DD set
+
+ใช้เพื่อ block ทั้ง:
+- DD hedge reopen ของ gen เดิม
+- orphan/recovery grid ของ gen เดิม
+ในช่วงเปลี่ยนผ่าน
+
+### 5) เพิ่ม log diagnostic ให้รู้ชัดว่า “ถูก block เพราะอะไร”
+ตอนนี้ log บอกได้แค่ blocked by active hedge บางกรณี
+ควรเพิ่ม log แยกสาเหตุ เช่น:
+
+```cpp
+v6.74 DD HEDGE BLOCKED: Gen2 in recovery-owner flow
+v6.74 DD HEDGE BLOCKED: Gen2 within post-release cooldown 42s
+v6.74 RECOVERY GRID BLOCKED: Gen2 still associated with active/recent DD hedge
+```
+
+จะช่วยตอบคำถาม user ในรอบถัดไปได้ทันทีว่า
+- ทำไมไม่ hedge
+- ทำไมไม่เปิด recovery grid
+- หรือ flow ไหนเป็นคน block
+
+### 6) Dashboard เพิ่มสถานะ debug สั้น ๆ
+เพิ่มในส่วน Hedge/Recovery เช่น:
+- `GenFlowBlock`
+- `ReleasedGen`
+- `ReleaseCD`
+- `RecoveryOwnerGen`
+
+เพื่อดูบนชาร์ตว่า generation ไหนกำลังถูก lock อยู่
+
+### 7) bump version เป็น v6.74
+อัปเดต:
+- `#property version`
+- `#property description`
+- header comment
+- dashboard/version display
+
+---
+
+## สิ่งที่ไม่เปลี่ยนแปลง
+- ไม่แก้ trading strategy logic
+- ไม่แก้ signal entry
+- ไม่แก้สูตร lot ของ grid ปกติ
+- ไม่แก้ order execution primitives (`OpenOrder`, `trade.Buy`, `trade.Sell`, `trade.PositionClose`) นอกจากเรียกใช้ตาม flow เดิม
+- ไม่แก้ TP/SL core logic
+- ไม่แก้ news filter core
+- ไม่แก้ license/data sync
+- ไม่แก้ matching-close budget logic หลัก
+- ไม่แก้ one-per-gen v6.72 แต่จะเสริม guard ระดับ generation ให้ครบ
+- ไม่แก้ orphan auto-heal v6.73 หลัก แต่จะผูกสถานะ release/cooldown ให้สอดคล้อง
+
+---
+
+## ผลลัพธ์ที่คาดหวัง
+กรณีเดียวกับที่ user เจอ:
+1. ชุดเดิมถูกเคลียร์/ปล่อยบางส่วน
+2. Gen2 เข้าช่วง recovery transition
+3. ถ้า recovery grid จะเปิดเพิ่ม หรือ DD hedge จะเปิดซ้ำ
+   ระบบจะให้ **ผ่านได้ทางเดียวเท่านั้น**
+4. จะไม่เกิดเหตุการณ์:
+   - `GM2_GL#...` เปิดเพิ่ม
+   - แล้วตามด้วย `GM_Hedge_D2` ซ้ำใน generation เดิม
+
+---
+
+## ความเสี่ยง & Mitigation
+- Risk: block มากเกินไปจน recovery ช้าลง  
+  Mitigation: ใช้ gen-based cooldown ระยะสั้นและ log ชัดเจน ไม่ block ถาวร
+
+- Risk: orphan generation เก่าที่ควร recover ถูก block ผิด  
+  Mitigation: guard จะผูกเฉพาะ gen ที่ active/recently-released จาก DD hedge ไม่กระทบ orphan gen อื่น
+
+- Risk: state ค้างหลัง restart EA  
+  Mitigation: helper จะอิงสถานะจริงจาก `g_hedgeSets`, `g_sequentialRecovery*`, recovery seeds/tracker เป็นหลัก และใช้ released-gen state เป็นตัวเสริม
+
+- Risk: user ยังเจอเคสพิเศษจาก transaction timing  
+  Mitigation: เพิ่ม diagnostic logs ระบุเหตุผล block ทุกทาง เพื่อให้ trace รอบถัดไปได้ตรงจุด
