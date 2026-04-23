@@ -9236,7 +9236,23 @@ void CheckAndOpenHedgeByDD()
 {
    if(!InpHedge_Enable) return;
    if(InpHedge_TriggerMode != HEDGE_TRIGGER_DD_PERCENT && InpHedge_TriggerMode != HEDGE_TRIGGER_DD_DOLLAR) return;
-   
+
+   // v6.78: Hedge Open Delay guard (กัน false signal)
+   {
+      int remSec = 0;
+      if(IsHedgeOpenDelayActive(remSec))
+      {
+         datetime nwd = TimeCurrent();
+         if(nwd - g_lastHedgeDelayLog >= 60)
+         {
+            g_lastHedgeDelayLog = nwd;
+            PrintFormat("v6.78 HEDGE DELAY (DD): wait %dm%02ds before next hedge (mode=%d, cfg=%dm)",
+                        remSec/60, remSec%60, (int)InpHedge_OpenDelayMode, InpHedge_OpenDelayMin);
+         }
+         return;
+      }
+   }
+
    // Cooldown check — both DD hedge cooldown and post-close cooldown
    datetime now = TimeCurrent();
    if(now - g_lastDDHedgeTime < InpHedge_DDCooldownSec) return;
