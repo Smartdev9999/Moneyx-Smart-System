@@ -4619,9 +4619,27 @@ void DisplayDashboard()
                     int remS = InpHedge_SidePauseMin * 60 - (int)(nowDash - g_lastHedgeSellTime);
                     pauseStr += "SELL PAUSED " + IntegerToString(remS/60) + "m" + IntegerToString(remS%60) + "s";
                  }
-                 DrawTableRow(row, "Side Pause", pauseStr, clrOrange, COLOR_SECTION_HEDGE); row++;
-              }
-            }
+                  DrawTableRow(row, "Side Pause", pauseStr, clrOrange, COLOR_SECTION_HEDGE); row++;
+               }
+             }
+
+             // v6.78: Hedge Open Delay status
+             if(InpHedge_OpenDelayMin > 0)
+             {
+                int remSecD = 0;
+                string modeStrD = (InpHedge_OpenDelayMode == HDELAY_AFTER_LAST_OPEN) ? "Open"
+                                : (InpHedge_OpenDelayMode == HDELAY_AFTER_LAST_CLOSE) ? "Close" : "Both";
+                if(IsHedgeOpenDelayActive(remSecD))
+                {
+                   string delayStr = "WAIT " + IntegerToString(remSecD/60) + "m" + IntegerToString(remSecD%60) + "s"
+                                    + " (mode=" + modeStrD + ", " + IntegerToString(InpHedge_OpenDelayMin) + "m)";
+                   DrawTableRow(row, "Hedge Delay", delayStr, clrOrange, COLOR_SECTION_HEDGE); row++;
+                }
+                else
+                {
+                   DrawTableRow(row, "Hedge Delay", "READY (mode=" + modeStrD + ", " + IntegerToString(InpHedge_OpenDelayMin) + "m)", clrLime, COLOR_SECTION_HEDGE); row++;
+                }
+             }
             
             // v6.40: Grid Loss Candle Confirmation display
             if(GridLoss_CandleConfirm > 0)
