@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.75 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.76 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.75"
-#property description "Gold Miner EA v6.75 - v6.74 + Mutex fix: allow DD hedge for current trading generation (recovery-flow check applies only to past gens)"
+#property version   "6.76"
+#property description "Gold Miner EA v6.76 - v6.75 + Cross-gen INIT re-entry guard: block GMx_INIT while older-gen normal orders still alive on same side"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -1006,7 +1006,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.75 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.76 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min");
@@ -1066,7 +1066,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.75 deinitialized");
+   Print("Gold Miner EA v6.76 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -1933,6 +1933,36 @@ int NormalOrderCount()
 }
 
 //+------------------------------------------------------------------+
+//| v6.76: Cross-generation re-entry guard helper                      |
+//| Returns the number of NORMAL (non-hedge, non-bound) open positions |
+//| for a given side, ACROSS ALL generations (no g_cycleGeneration     |
+//| filter). Used only by INIT entry guard to prevent opening a new    |
+//| GMx_INIT while older-gen orders of the same side are still alive.  |
+//+------------------------------------------------------------------+
+int CountAllGenNormalOrdersOnSide(ENUM_POSITION_TYPE side)
+{
+   int count = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
+      string comment = PositionGetString(POSITION_COMMENT);
+      if(IsHedgeComment(comment)) continue;          // hedge orders managed separately
+      if(IsTicketBound(ticket)) continue;            // bound to a hedge set
+      // NOTE: intentionally NO generation filter — we want to see legacy gens too
+      count++;
+   }
+   return count;
+}
+
+// v6.76: Cross-gen INIT re-entry guard input (always-on guard, no toggle exposed
+// to keep behavior strict; toggle can be added later if needed).
+bool   g_v676_initGuardEnabled = true;
+
+//+------------------------------------------------------------------+
 //| Open order                                                         |
 //+------------------------------------------------------------------+
 //+------------------------------------------------------------------+
@@ -2004,6 +2034,49 @@ bool IsBBBlockingSell()
 bool OpenOrder(ENUM_ORDER_TYPE orderType, double lots, string comment)
 {
    double price = (orderType == ORDER_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
+
+   // === v6.76: Cross-generation INIT re-entry guard ===
+   // Block opening a new GMx_INIT order while older-gen normal orders of the
+   // same side are still alive. This prevents the system from spawning a fresh
+   // generation cycle (e.g. GM4_INIT) while GM2_*/GM3_* legs of the same side
+   // are still floating after a hedge release / partial flat.
+   //
+   // Rationale: CountPositions() filters by g_cycleGeneration only, so once
+   // the cycle gen is bumped, the entry logic incorrectly sees the side as
+   // "empty" even though older-gen legs remain. This guard is a defense-in-
+   // depth check that does NOT modify trading strategy or order execution.
+   if(g_v676_initGuardEnabled && !IsHedgeComment(comment)
+      && StringFind(comment, "_INIT") >= 0)
+   {
+      ENUM_POSITION_TYPE entrySide = (orderType == ORDER_TYPE_BUY) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
+      int legacyCnt = CountAllGenNormalOrdersOnSide(entrySide);
+      if(legacyCnt > 0)
+      {
+         static datetime s_lastV676BlkBuy  = 0;
+         static datetime s_lastV676BlkSell = 0;
+         datetime nowV676 = TimeCurrent();
+         if(entrySide == POSITION_TYPE_BUY)
+         {
+            if(nowV676 - s_lastV676BlkBuy >= 30)
+            {
+               Print("v6.76 INIT BLOCKED: BUY re-entry denied — ", legacyCnt,
+                     " legacy normal order(s) still active on BUY across older generation(s). Comment=", comment);
+               s_lastV676BlkBuy = nowV676;
+            }
+         }
+         else
+         {
+            if(nowV676 - s_lastV676BlkSell >= 30)
+            {
+               Print("v6.76 INIT BLOCKED: SELL re-entry denied — ", legacyCnt,
+                     " legacy normal order(s) still active on SELL across older generation(s). Comment=", comment);
+               s_lastV676BlkSell = nowV676;
+            }
+         }
+         return false;
+      }
+   }
+
 
    //--- v6.56: Bollinger Band Entry Filter (Block New Orders Only — exempt hedge orders)
    if(BB_FilterEnable && !IsHedgeComment(comment))
@@ -4037,7 +4110,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.75 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.75 [ZZ]" : "Gold Miner EA v6.75 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.76 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.76 [ZZ]" : "Gold Miner EA v6.76 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -4519,6 +4592,16 @@ void DisplayDashboard()
                + " | Remain:" + IntegerToString(relRemain) + "s";
             color genMutexClr = InpHedge_GenFlowMutex ? (relRemain > 0 ? clrOrange : clrLime) : clrGray;
             DrawTableRow(row, "  GenMutex", genMutexInfo, genMutexClr, COLOR_SECTION_HEDGE); row++;
+            // v6.76: Cross-gen INIT re-entry guard status
+            int legB676 = CountAllGenNormalOrdersOnSide(POSITION_TYPE_BUY);
+            int legS676 = CountAllGenNormalOrdersOnSide(POSITION_TYPE_SELL);
+            string g676Status = g_v676_initGuardEnabled ? "ON" : "OFF";
+            string g676Info = g676Status + " | LegacyB:" + IntegerToString(legB676)
+                            + " LegacyS:" + IntegerToString(legS676)
+                            + ((legB676 > 0 || legS676 > 0) ? "  -> INIT BLOCKED on legacy side" : "");
+            color  g676Clr = (g_v676_initGuardEnabled && (legB676 > 0 || legS676 > 0)) ? clrOrange
+                            : (g_v676_initGuardEnabled ? clrLime : clrGray);
+            DrawTableRow(row, "  ReEntryGuard", g676Info, g676Clr, COLOR_SECTION_HEDGE); row++;
          }
         
         // Orphan warning
