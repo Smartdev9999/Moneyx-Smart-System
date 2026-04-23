@@ -5252,7 +5252,10 @@ void CheckGridLossTF(int tfIdx, ENUM_POSITION_TYPE side, int currentGridCount)
          // LOT_CUSTOM: keep level-based calculation
       }
       
-      string suffix = "GL#" + IntegerToString(currentGridCount + 1);
+      // v6.71: never reuse a level number that's already open after hedge unlock
+      int _maxLvlGLTF = FindMaxGridLevelOnSideTF(tfIdx, side, "GL");
+      int _nextLvlGLTF = (int)MathMax(_maxLvlGLTF + 1, currentGridCount + 1);
+      string suffix = "GL#" + IntegerToString(_nextLvlGLTF);
       ENUM_ORDER_TYPE orderType = (side == POSITION_TYPE_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
       if(OpenOrderTF(tfIdx, orderType, lots, suffix))
       {
@@ -5323,7 +5326,10 @@ void CheckGridProfitTF(int tfIdx, ENUM_POSITION_TYPE side, int currentGridCount)
    if(shouldOpen)
    {
       double lots = CalculateGridLot(currentGridCount, false);
-      string suffix = "GP#" + IntegerToString(currentGridCount + 1);
+      // v6.71: never reuse a level number that's already open
+      int _maxLvlGPTF = FindMaxGridLevelOnSideTF(tfIdx, side, "GP");
+      int _nextLvlGPTF = (int)MathMax(_maxLvlGPTF + 1, currentGridCount + 1);
+      string suffix = "GP#" + IntegerToString(_nextLvlGPTF);
       ENUM_ORDER_TYPE orderType = (side == POSITION_TYPE_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
       if(OpenOrderTF(tfIdx, orderType, lots, suffix))
       {
