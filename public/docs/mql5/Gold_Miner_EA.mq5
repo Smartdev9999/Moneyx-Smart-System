@@ -8779,6 +8779,23 @@ void CheckAndOpenHedge()
 }
 
 //+------------------------------------------------------------------+
+//| v6.72: Check whether an active hedge already exists for           |
+//|        a given generation + counter side (the losing side).       |
+//|        Used to enforce "1 DD hedge per gen/side" rule.            |
+//+------------------------------------------------------------------+
+bool HasActiveHedgeForGenSide(int bindGen, ENUM_POSITION_TYPE counterSide)
+{
+   for(int h = 0; h < MAX_HEDGE_SETS; h++)
+   {
+      if(!g_hedgeSets[h].active) continue;
+      if(g_hedgeSets[h].boundGeneration != bindGen) continue;
+      if(g_hedgeSets[h].counterSide != counterSide) continue;
+      return true;
+   }
+   return false;
+}
+
+//+------------------------------------------------------------------+
 //| v6.16: Check DD% per side and open hedge if threshold reached      |
 //+------------------------------------------------------------------+
 void CheckAndOpenHedgeByDD()
