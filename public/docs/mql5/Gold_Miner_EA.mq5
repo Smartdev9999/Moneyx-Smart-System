@@ -9088,11 +9088,12 @@ void CheckAndOpenHedgeByDD()
       
       if(buyLossAbs >= InpHedge_DDTriggerDollar)
       {
-         if(InpHedge_OnePerGenSide && HasActiveHedgeForGenSide(curGen, POSITION_TYPE_BUY))
+         if((InpHedge_OnePerGenSide && HasActiveHedgeForGenSide(curGen, POSITION_TYPE_BUY))
+             || ShouldBlockDDHedgeForGen(curGen, POSITION_TYPE_BUY))
          {
             static datetime _lastBlkBuyD = 0;
             if(now - _lastBlkBuyD > 60)
-            { Print("v6.72 DD$ HEDGE BLOCKED: BUY side of Gen", curGen, " already has active hedge → no 2nd hedge"); _lastBlkBuyD = now; }
+            { Print("v6.74 DD$ HEDGE BLOCKED: BUY side of Gen", curGen, " — ", g_lastGenBlockReason); _lastBlkBuyD = now; }
          }
          else if(OpenDDHedge(POSITION_TYPE_BUY, POSITION_TYPE_SELL, curGen))  // v6.37: pass snapshot gen
           {
@@ -9105,11 +9106,12 @@ void CheckAndOpenHedgeByDD()
       
       if(sellLossAbs >= InpHedge_DDTriggerDollar)
       {
-         if(InpHedge_OnePerGenSide && HasActiveHedgeForGenSide(curGen, POSITION_TYPE_SELL))
+         if((InpHedge_OnePerGenSide && HasActiveHedgeForGenSide(curGen, POSITION_TYPE_SELL))
+             || ShouldBlockDDHedgeForGen(curGen, POSITION_TYPE_SELL))
          {
             static datetime _lastBlkSellD = 0;
             if(now - _lastBlkSellD > 60)
-            { Print("v6.72 DD$ HEDGE BLOCKED: SELL side of Gen", curGen, " already has active hedge → no 2nd hedge"); _lastBlkSellD = now; }
+            { Print("v6.74 DD$ HEDGE BLOCKED: SELL side of Gen", curGen, " — ", g_lastGenBlockReason); _lastBlkSellD = now; }
          }
          else if(OpenDDHedge(POSITION_TYPE_SELL, POSITION_TYPE_BUY, curGen))  // v6.37: pass snapshot gen
          {
@@ -9128,11 +9130,12 @@ void CheckAndOpenHedgeByDD()
       
       if(buyDDPct >= InpHedge_DDTriggerPct)
       {
-         if(InpHedge_OnePerGenSide && HasActiveHedgeForGenSide(curGen, POSITION_TYPE_BUY))
+         if((InpHedge_OnePerGenSide && HasActiveHedgeForGenSide(curGen, POSITION_TYPE_BUY))
+             || ShouldBlockDDHedgeForGen(curGen, POSITION_TYPE_BUY))
          {
             static datetime _lastBlkBuyP = 0;
             if(now - _lastBlkBuyP > 60)
-            { Print("v6.72 DD% HEDGE BLOCKED: BUY side of Gen", curGen, " already has active hedge → no 2nd hedge"); _lastBlkBuyP = now; }
+            { Print("v6.74 DD% HEDGE BLOCKED: BUY side of Gen", curGen, " — ", g_lastGenBlockReason); _lastBlkBuyP = now; }
          }
          else if(OpenDDHedge(POSITION_TYPE_BUY, POSITION_TYPE_SELL, curGen))  // v6.37: pass snapshot gen
          {
@@ -9145,11 +9148,12 @@ void CheckAndOpenHedgeByDD()
       
       if(sellDDPct >= InpHedge_DDTriggerPct)
       {
-         if(InpHedge_OnePerGenSide && HasActiveHedgeForGenSide(curGen, POSITION_TYPE_SELL))
+         if((InpHedge_OnePerGenSide && HasActiveHedgeForGenSide(curGen, POSITION_TYPE_SELL))
+             || ShouldBlockDDHedgeForGen(curGen, POSITION_TYPE_SELL))
          {
             static datetime _lastBlkSellP = 0;
             if(now - _lastBlkSellP > 60)
-            { Print("v6.72 DD% HEDGE BLOCKED: SELL side of Gen", curGen, " already has active hedge → no 2nd hedge"); _lastBlkSellP = now; }
+            { Print("v6.74 DD% HEDGE BLOCKED: SELL side of Gen", curGen, " — ", g_lastGenBlockReason); _lastBlkSellP = now; }
          }
          else if(OpenDDHedge(POSITION_TYPE_SELL, POSITION_TYPE_BUY, curGen))  // v6.37: pass snapshot gen
          {
@@ -9173,6 +9177,12 @@ bool OpenDDHedge(ENUM_POSITION_TYPE counterSide, ENUM_POSITION_TYPE hedgeSide, i
    if(InpHedge_OnePerGenSide && HasActiveHedgeForGenSide(bindGen, counterSide))
    {
       Print("v6.72 OpenDDHedge BLOCKED: Gen", bindGen, " ", EnumToString(counterSide), " already hedged → skip");
+      return false;
+   }
+   // v6.74: Defense-in-depth — gen-flow mutex (recovery flow / post-release cooldown)
+   if(ShouldBlockDDHedgeForGen(bindGen, counterSide))
+   {
+      Print("v6.74 OpenDDHedge BLOCKED: ", g_lastGenBlockReason);
       return false;
    }
    double counterLots = 0, counterPL = 0;
