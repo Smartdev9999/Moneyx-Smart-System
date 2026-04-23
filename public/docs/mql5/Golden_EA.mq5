@@ -6593,7 +6593,7 @@ bool OnTickLicense()
 //+------------------------------------------------------------------+
 void ShowLicensePopup(ENUM_LICENSE_STATUS status)
 {
-   string title = "Gold Miner EA - License";
+   string title = "Golden EA - License";
    string message = "";
    uint flags = MB_OK;
    
