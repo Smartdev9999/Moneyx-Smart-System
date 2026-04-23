@@ -9015,7 +9015,12 @@ void MarkGenReleasedFromHedge(int gen, string reason)
 bool ShouldBlockDDHedgeForGen(int gen, ENUM_POSITION_TYPE counterSide)
 {
    if(!InpHedge_GenFlowMutex) return false;
-   if(IsGenerationInRecoveryFlow(gen))
+   // v6.75: Skip recovery-flow check for the CURRENT trading generation.
+   //        New orders in current gen are normal trades (not recovery grid).
+   //        OnePerGenSide guard (v6.72) still prevents duplicate hedge per gen+side.
+   //        Post-release cooldown (below) still prevents immediate re-hedge after release.
+   bool isCurrentGen = (gen == g_cycleGeneration);
+   if(!isCurrentGen && IsGenerationInRecoveryFlow(gen))
    {
       g_lastGenBlockReason = "DD blocked: Gen" + IntegerToString(gen) + " in recovery flow";
       return true;
