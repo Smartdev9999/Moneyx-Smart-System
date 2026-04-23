@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.71 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.72 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.71"
-#property description "Gold Miner EA v6.71 - v6.70 + Grid comment continues from max-level (no duplicate/back-numbered GL/GP after hedge unlock)"
+#property version   "6.72"
+#property description "Gold Miner EA v6.72 - v6.71 + One DD Hedge per generation/side (block 2nd hedge while 1st still active)"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -367,6 +367,7 @@ input int      InpHedge_DDCooldownSec        = 60;    // Min seconds between DD 
 input int      InpHedge_SidePauseMin         = 0;     // v6.39: Pause hedged side entries (minutes, 0=Off)
 input double   InpHedge_DDTriggerDollar      = 500.0; // v6.25: DD$ to trigger hedge (per side)
 input bool     InpHedge_UseMatchingClose     = true;  // v6.51: Enable Hedge Recovery (false=only Balance Guard closes hedge)
+input bool     InpHedge_OnePerGenSide        = true;  // v6.72: Allow only 1 DD hedge per generation per side
 // v6.28: Balance Guard — close all when equity recovers to target
 input bool     InpBalanceGuard_Enable        = false;  // Balance Guard: Enable
 input ENUM_BALGUARD_MODE InpBalanceGuard_Mode = BALGUARD_FIXED; // Balance Guard: Mode (Fixed / Dynamic)
@@ -987,7 +988,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.71 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+    Print("Gold Miner EA v6.72 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min");
@@ -1047,7 +1048,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.71 deinitialized");
+   Print("Gold Miner EA v6.72 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -4016,7 +4017,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.71 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.71 [ZZ]" : "Gold Miner EA v6.71 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.72 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.72 [ZZ]" : "Gold Miner EA v6.72 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -4468,6 +4469,9 @@ void DisplayDashboard()
              DrawTableRow(row, "  DD Trig", ddInfo, clrAqua, COLOR_SECTION_HEDGE); row++;
             string scopeInfo = "Scope: " + GetCommentPrefix() + " (Gen " + IntegerToString(g_cycleGeneration) + ")";
             DrawTableRow(row, "  DD Scope", scopeInfo, clrYellow, COLOR_SECTION_HEDGE); row++;
+            // v6.72: One Hedge Per Gen/Side toggle status
+            string opgStatus = InpHedge_OnePerGenSide ? "ENABLED (1/gen/side)" : "DISABLED";
+            DrawTableRow(row, "  OnePerGen", opgStatus, InpHedge_OnePerGenSide ? clrLime : clrGray, COLOR_SECTION_HEDGE); row++;
          }
         
         // Orphan warning
@@ -8778,6 +8782,23 @@ void CheckAndOpenHedge()
 }
 
 //+------------------------------------------------------------------+
+//| v6.72: Check whether an active hedge already exists for           |
+//|        a given generation + counter side (the losing side).       |
+//|        Used to enforce "1 DD hedge per gen/side" rule.            |
+//+------------------------------------------------------------------+
+bool HasActiveHedgeForGenSide(int bindGen, ENUM_POSITION_TYPE counterSide)
+{
+   for(int h = 0; h < MAX_HEDGE_SETS; h++)
+   {
+      if(!g_hedgeSets[h].active) continue;
+      if(g_hedgeSets[h].boundGeneration != bindGen) continue;
+      if(g_hedgeSets[h].counterSide != counterSide) continue;
+      return true;
+   }
+   return false;
+}
+
+//+------------------------------------------------------------------+
 //| v6.16: Check DD% per side and open hedge if threshold reached      |
 //+------------------------------------------------------------------+
 void CheckAndOpenHedgeByDD()
@@ -8832,7 +8853,13 @@ void CheckAndOpenHedgeByDD()
       
       if(buyLossAbs >= InpHedge_DDTriggerDollar)
       {
-         if(OpenDDHedge(POSITION_TYPE_BUY, POSITION_TYPE_SELL, curGen))  // v6.37: pass snapshot gen
+         if(InpHedge_OnePerGenSide && HasActiveHedgeForGenSide(curGen, POSITION_TYPE_BUY))
+         {
+            static datetime _lastBlkBuyD = 0;
+            if(now - _lastBlkBuyD > 60)
+            { Print("v6.72 DD$ HEDGE BLOCKED: BUY side of Gen", curGen, " already has active hedge → no 2nd hedge"); _lastBlkBuyD = now; }
+         }
+         else if(OpenDDHedge(POSITION_TYPE_BUY, POSITION_TYPE_SELL, curGen))  // v6.37: pass snapshot gen
           {
              g_lastDDHedgeTime = now;
              g_lastHedgeBuyTime = now;  // v6.39: BUY orders got hedged → pause BUY entries
@@ -8843,7 +8870,13 @@ void CheckAndOpenHedgeByDD()
       
       if(sellLossAbs >= InpHedge_DDTriggerDollar)
       {
-         if(OpenDDHedge(POSITION_TYPE_SELL, POSITION_TYPE_BUY, curGen))  // v6.37: pass snapshot gen
+         if(InpHedge_OnePerGenSide && HasActiveHedgeForGenSide(curGen, POSITION_TYPE_SELL))
+         {
+            static datetime _lastBlkSellD = 0;
+            if(now - _lastBlkSellD > 60)
+            { Print("v6.72 DD$ HEDGE BLOCKED: SELL side of Gen", curGen, " already has active hedge → no 2nd hedge"); _lastBlkSellD = now; }
+         }
+         else if(OpenDDHedge(POSITION_TYPE_SELL, POSITION_TYPE_BUY, curGen))  // v6.37: pass snapshot gen
          {
              g_lastDDHedgeTime = now;
              g_lastHedgeSellTime = now;  // v6.39: SELL orders got hedged → pause SELL entries
@@ -8860,7 +8893,13 @@ void CheckAndOpenHedgeByDD()
       
       if(buyDDPct >= InpHedge_DDTriggerPct)
       {
-         if(OpenDDHedge(POSITION_TYPE_BUY, POSITION_TYPE_SELL, curGen))  // v6.37: pass snapshot gen
+         if(InpHedge_OnePerGenSide && HasActiveHedgeForGenSide(curGen, POSITION_TYPE_BUY))
+         {
+            static datetime _lastBlkBuyP = 0;
+            if(now - _lastBlkBuyP > 60)
+            { Print("v6.72 DD% HEDGE BLOCKED: BUY side of Gen", curGen, " already has active hedge → no 2nd hedge"); _lastBlkBuyP = now; }
+         }
+         else if(OpenDDHedge(POSITION_TYPE_BUY, POSITION_TYPE_SELL, curGen))  // v6.37: pass snapshot gen
          {
              g_lastDDHedgeTime = now;
              g_lastHedgeBuyTime = now;  // v6.39: BUY orders got hedged → pause BUY entries
@@ -8871,7 +8910,13 @@ void CheckAndOpenHedgeByDD()
       
       if(sellDDPct >= InpHedge_DDTriggerPct)
       {
-         if(OpenDDHedge(POSITION_TYPE_SELL, POSITION_TYPE_BUY, curGen))  // v6.37: pass snapshot gen
+         if(InpHedge_OnePerGenSide && HasActiveHedgeForGenSide(curGen, POSITION_TYPE_SELL))
+         {
+            static datetime _lastBlkSellP = 0;
+            if(now - _lastBlkSellP > 60)
+            { Print("v6.72 DD% HEDGE BLOCKED: SELL side of Gen", curGen, " already has active hedge → no 2nd hedge"); _lastBlkSellP = now; }
+         }
+         else if(OpenDDHedge(POSITION_TYPE_SELL, POSITION_TYPE_BUY, curGen))  // v6.37: pass snapshot gen
          {
              g_lastDDHedgeTime = now;
              g_lastHedgeSellTime = now;  // v6.39: SELL orders got hedged → pause SELL entries
@@ -8889,6 +8934,12 @@ void CheckAndOpenHedgeByDD()
 bool OpenDDHedge(ENUM_POSITION_TYPE counterSide, ENUM_POSITION_TYPE hedgeSide, int bindGen)
 {
    // v6.37: Use bindGen (snapshot) instead of g_cycleGeneration to prevent race condition
+   // v6.72: Defense-in-depth — block 2nd hedge for same gen+side
+   if(InpHedge_OnePerGenSide && HasActiveHedgeForGenSide(bindGen, counterSide))
+   {
+      Print("v6.72 OpenDDHedge BLOCKED: Gen", bindGen, " ", EnumToString(counterSide), " already hedged → skip");
+      return false;
+   }
    double counterLots = 0, counterPL = 0;
    int counterCount = CountUnboundOrders(counterSide, counterLots, counterPL, bindGen);
    if(counterCount == 0 || counterLots <= 0) return false;
