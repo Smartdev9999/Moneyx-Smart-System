@@ -5111,7 +5111,34 @@ void FindLastOrderTF(int tfIdx, ENUM_POSITION_TYPE side, string suffix1, string 
 }
 
 //+------------------------------------------------------------------+
-//| Close all positions for one side of one TF                         |
+//| v6.71: Find max grid level number on TF + side (current generation)|
+//| suffix: "GL" or "GP". Returns 0 if none found.                     |
+//+------------------------------------------------------------------+
+int FindMaxGridLevelOnSideTF(int tfIdx, ENUM_POSITION_TYPE side, string suffix)
+{
+   string tfLabel = g_tfStates[tfIdx].tfLabel;
+   int maxLevel = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
+      string comment = PositionGetString(POSITION_COMMENT);
+      int orderGen = ExtractGeneration(comment);
+      if(orderGen >= 0 && orderGen != g_cycleGeneration) continue;
+      if(!MatchTFPrefix(comment, tfLabel)) continue;
+      // Look for "_<suffix>#" segment (e.g. "_GL#")
+      string needle = "_" + suffix + "#";
+      int p = StringFind(comment, needle);
+      if(p < 0) continue;
+      int hashPos = p + StringLen(needle) - 1;
+      int level = (int)StringToInteger(StringSubstr(comment, hashPos + 1));
+      if(level > maxLevel) maxLevel = level;
+   }
+   return maxLevel;
+}
 //+------------------------------------------------------------------+
 void CloseAllSideTF(int tfIdx, ENUM_POSITION_TYPE side)
 {
