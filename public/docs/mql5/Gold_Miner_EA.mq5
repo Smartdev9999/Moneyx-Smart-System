@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.71 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.72 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.71"
-#property description "Gold Miner EA v6.71 - v6.70 + Grid comment numbering uses MAX(maxLevel+1, count+1) — no duplicate GL#/GP# after hedge unlock"
+#property version   "6.72"
+#property description "Gold Miner EA v6.72 - v6.71 + Force-clear broker TP/SL on bound tickets immediately at hedge open + per-tick safety sweep"
 #property strict
 
 #include <Trade/Trade.mqh>
