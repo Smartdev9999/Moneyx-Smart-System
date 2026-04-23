@@ -9061,6 +9061,130 @@ void ScanAndClearStuckHedgeLockTP()
    }
 }
 
+//+------------------------------------------------------------------+
+//| v6.80: Stuck-Hedge Scanner — diagnoses idle hedge sets            |
+//| - STALE_OWNER: owner flag held but ownerOrdersLeft==0  → heal     |
+//| - UNLOCK_DELAY stuck > 2x threshold → log warn                    |
+//| - GATE_FAIL / FIFO_BLOCK / OWNER_LOCK → log only (per design)     |
+//| - NO_ACTION (gate ok + oldest + no owner) → reset stale flags     |
+//+------------------------------------------------------------------+
+void ScanAndDiagnoseStuckHedgeSets()
+{
+   g_lastStuckHedgeScan = TimeCurrent();
+   g_stuckHedgeDetectedLastRun = 0;
+   g_stuckHedgeLastDiag = "";
+
+   int thresholdSec = InpStuckHedge_StuckThresholdMin * 60;
+   if(thresholdSec <= 0) thresholdSec = 900;
+
+   int oldestIdx = FindOldestActiveHedgeSet();
+   bool ownerActive = g_sequentialRecoveryActive;
+   int ownerGen = g_sequentialRecoveryGen;
+   int ownerOrdersLeft = ownerActive ? CountSequentialOwnerOrders(ownerGen) : 0;
+   bool unlockDelay = IsSequentialUnlockDelayActive();
+   int unlockRemain = unlockDelay ? GetSequentialUnlockRemainSec() : 0;
+
+   // Heal #A: STALE OWNER
+   if(ownerActive && ownerOrdersLeft == 0)
+   {
+      string diagA = StringFormat("STALE_OWNER: Gen%d ordersLeft=0", ownerGen);
+      g_stuckHedgeDetectedLastRun++;
+      g_stuckHedgeLastDiag = diagA;
+      if(InpStuckHedge_LogVerbose)
+         PrintFormat("v6.80 StuckHedge DETECT %s", diagA);
+      if(InpStuckHedge_AutoHeal)
+      {
+         ClearSequentialRecoveryOwner("v6.80 stuck-heal: owner ordersLeft=0");
+         g_stuckHedgeHealedTotal++;
+         PrintFormat("v6.80 StuckHedge HEAL: cleared stale owner Gen%d", ownerGen);
+         ownerActive = g_sequentialRecoveryActive;
+         ownerGen = g_sequentialRecoveryGen;
+         ownerOrdersLeft = 0;
+      }
+   }
+
+   // Warn #B: UNLOCK_DELAY stuck > 2x threshold
+   if(unlockDelay && unlockRemain > thresholdSec * 2)
+   {
+      string diagB = StringFormat("UNLOCK_DELAY: remain=%ds (>2x threshold) reason=%s",
+                                   unlockRemain, g_sequentialUnlockReason);
+      g_stuckHedgeDetectedLastRun++;
+      if(g_stuckHedgeLastDiag == "") g_stuckHedgeLastDiag = diagB;
+      if(InpStuckHedge_LogVerbose)
+         PrintFormat("v6.80 StuckHedge WARN %s", diagB);
+   }
+
+   // Per-set diagnosis
+   int scanned = 0;
+   int detected = 0;
+   for(int h = 0; h < MAX_HEDGE_SETS; h++)
+   {
+      if(!g_hedgeSets[h].active) continue;
+      scanned++;
+
+      datetime lat = g_hedgeSets[h].lastActionTime;
+      if(lat == 0) { g_hedgeSets[h].lastActionTime = TimeCurrent(); continue; }
+
+      int idleSec = (int)(TimeCurrent() - lat);
+      if(idleSec < thresholdSec) continue;
+
+      bool gateOK = IsHedgeCloseAllowed(h);
+      bool isOldest = (h == oldestIdx);
+      double pnl = 0;
+      if(g_hedgeSets[h].hedgeTicket > 0 && PositionSelectByTicket(g_hedgeSets[h].hedgeTicket))
+         pnl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+
+      string reason = "";
+      if(!gateOK)
+         reason = StringFormat("GATE_FAIL: seenExp=%s zoneSet=%s",
+                               g_hedgeSets[h].seenExpansionSinceHedge ? "Y" : "N",
+                               (g_hedgeSets[h].zoneUpperPrice > 0 ? "Y" : "N"));
+      else if(ownerActive && !isOldest)
+         reason = StringFormat("OWNER_LOCK: ownerGen=%d (not oldest)", ownerGen);
+      else if(!isOldest)
+         reason = StringFormat("FIFO_BLOCK: oldest=Set#%d", oldestIdx + 1);
+      else if(unlockDelay)
+         reason = StringFormat("UNLOCK_DELAY: remain=%ds", unlockRemain);
+      else
+      {
+         reason = StringFormat("NO_ACTION: matchingDone=%s pnl=$%s",
+                               g_hedgeSets[h].matchingDone ? "Y" : "N",
+                               DoubleToString(pnl, 2));
+         if(InpStuckHedge_AutoHeal)
+         {
+            g_hedgeSets[h].matchingDone = false;
+            if(!g_hedgeSets[h].seenExpansionSinceHedge)
+               g_hedgeSets[h].seenExpansionSinceHedge = true;
+            g_hedgeSets[h].lastActionTime = TimeCurrent();
+            g_stuckHedgeHealedTotal++;
+            PrintFormat("v6.80 StuckHedge HEAL: Set#%d cleared stale matchingDone + forced seenExpansion (was idle %dm)",
+                        h + 1, idleSec / 60);
+         }
+      }
+
+      detected++;
+      string diag = StringFormat("Set#%d idle=%dm gate=%s oldest=%s pnl=$%s | %s",
+                                 h + 1, idleSec / 60,
+                                 gateOK ? "PASS" : "FAIL",
+                                 isOldest ? "Y" : "N",
+                                 DoubleToString(pnl, 2),
+                                 reason);
+      if(g_stuckHedgeLastDiag == "") g_stuckHedgeLastDiag = diag;
+      if(InpStuckHedge_LogVerbose)
+         PrintFormat("v6.80 StuckHedge DETECT %s", diag);
+   }
+
+   g_stuckHedgeDetectedLastRun += detected;
+
+   if(detected > 0 || InpStuckHedge_LogVerbose)
+   {
+      PrintFormat("v6.80 StuckHedge-Scan summary: scanned=%d detected=%d healedTotal=%d (interval=%dm, threshold=%dm, autoHeal=%s)",
+                  scanned, detected, g_stuckHedgeHealedTotal,
+                  InpStuckHedge_ScanIntervalMin, InpStuckHedge_StuckThresholdMin,
+                  InpStuckHedge_AutoHeal ? "ON" : "OFF");
+   }
+}
+
 
 //| Get lot cap for new orders when hedge set has bound orders          |
 //| Returns -1 if no hedge set exists for this side (no cap)           |
