@@ -404,6 +404,9 @@ input group "=== Sequential Hedge Recovery ==="
 input bool   InpHedge_SequentialRecovery = true;   // true=close oldest hedge set first (H1→H2→H3), false=close any (legacy)
 input int    InpHedge_SequentialUnlockDelayMin = 1; // v6.69: Delay before next hedge set unlock after previous set/owner closes (minutes, 0=Off)
 input bool   InpHedge_AllowProfitBypass = false;   // v6.70: true=allow profitable hedge to close out of FIFO order, false=STRICT FIFO (default)
+input bool   InpCrossGen_InitGuard      = true;    // v6.73: block new-gen INIT while older-gen same-side orders are still free (not hedged)
+input bool   InpOwnerAutoAdvance        = true;    // v6.73: auto-advance sequential recovery owner to next remaining gen when current gen flat
+input bool   InpHedge_NoReHedgeReleased = true;    // v6.73: tickets released from any hedge set never get re-hedged (let grid recover)
 
 // === v6.61: Recovery Shred & Seed ===
 input group "=== Recovery Shred & Seed (v6.61) ==="
