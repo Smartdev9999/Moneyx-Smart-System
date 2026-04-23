@@ -8941,6 +8941,99 @@ bool HasActiveHedgeForGenSide(int bindGen, ENUM_POSITION_TYPE counterSide)
 }
 
 //+------------------------------------------------------------------+
+//| v6.74: Generation-level mutex helpers                             |
+//| Prevent DD hedge re-opening AND recovery grid from racing on the  |
+//| same generation during the transition window after a hedge close. |
+//+------------------------------------------------------------------+
+bool HasAnyActiveHedgeForGen(int gen)
+{
+   if(gen < 0) return false;
+   for(int h = 0; h < MAX_HEDGE_SETS; h++)
+   {
+      if(!g_hedgeSets[h].active) continue;
+      if(g_hedgeSets[h].boundGeneration == gen) return true;
+   }
+   return false;
+}
+
+bool IsGenerationInRecoveryFlow(int gen)
+{
+   if(gen < 0) return false;
+   // Sequential recovery owner of this gen
+   if(g_sequentialRecoveryActive && g_sequentialRecoveryGen == gen) return true;
+   // Recovery seed registered for this gen and still alive
+   for(int s = 0; s < g_recoverySeedCount; s++)
+   {
+      if(g_recoverySeedGen[s] == gen && PositionSelectByTicket(g_recoverySeedTickets[s])) return true;
+   }
+   // Recovery set tracker not yet flat
+   if(!IsRecoverySetFlat(gen)) return true;
+   // Orphan group active for this gen
+   for(int g2 = 0; g2 < MAX_ORPHAN_GROUPS; g2++)
+   {
+      if(g_orphanGroups[g2].active && g_orphanGroups[g2].generation == gen) return true;
+   }
+   return false;
+}
+
+bool IsGenInPostReleaseCooldown(int gen)
+{
+   if(!InpHedge_GenFlowMutex) return false;
+   if(InpHedge_PostReleaseGenBlockSec <= 0) return false;
+   if(g_lastReleasedGen != gen) return false;
+   if(g_lastReleasedGenTime <= 0) return false;
+   return ((TimeCurrent() - g_lastReleasedGenTime) < InpHedge_PostReleaseGenBlockSec);
+}
+
+// Mark a generation as "just released from a DD hedge" — arms gen-scoped cooldown.
+void MarkGenReleasedFromHedge(int gen, string reason)
+{
+   if(gen < 0) return;
+   g_lastReleasedGen     = gen;
+   g_lastReleasedGenTime = TimeCurrent();
+   Print("v6.74 GEN RELEASED: Gen", gen, " (", reason,
+         ") — block DD re-open + recovery grid for ", InpHedge_PostReleaseGenBlockSec, "s");
+}
+
+// True if a DD hedge for this gen+side should be blocked (beyond the existing OnePerGen rule).
+bool ShouldBlockDDHedgeForGen(int gen, ENUM_POSITION_TYPE counterSide)
+{
+   if(!InpHedge_GenFlowMutex) return false;
+   if(IsGenerationInRecoveryFlow(gen))
+   {
+      g_lastGenBlockReason = "DD blocked: Gen" + IntegerToString(gen) + " in recovery flow";
+      return true;
+   }
+   if(IsGenInPostReleaseCooldown(gen))
+   {
+      int remain = InpHedge_PostReleaseGenBlockSec - (int)(TimeCurrent() - g_lastReleasedGenTime);
+      g_lastGenBlockReason = "DD blocked: Gen" + IntegerToString(gen) +
+                             " post-release cooldown " + IntegerToString(remain) + "s";
+      return true;
+   }
+   return false;
+}
+
+// True if recovery/orphan grid for this gen should be blocked.
+bool ShouldBlockRecoveryGridForGen(int gen)
+{
+   if(!InpHedge_GenFlowMutex) return false;
+   if(HasAnyActiveHedgeForGen(gen))
+   {
+      g_lastGenBlockReason = "Recovery blocked: Gen" + IntegerToString(gen) + " still has active hedge";
+      return true;
+   }
+   if(IsGenInPostReleaseCooldown(gen))
+   {
+      int remain = InpHedge_PostReleaseGenBlockSec - (int)(TimeCurrent() - g_lastReleasedGenTime);
+      g_lastGenBlockReason = "Recovery blocked: Gen" + IntegerToString(gen) +
+                             " post-release cooldown " + IntegerToString(remain) + "s";
+      return true;
+   }
+   return false;
+}
+
+//+------------------------------------------------------------------+
 //| v6.16: Check DD% per side and open hedge if threshold reached      |
 //+------------------------------------------------------------------+
 void CheckAndOpenHedgeByDD()
