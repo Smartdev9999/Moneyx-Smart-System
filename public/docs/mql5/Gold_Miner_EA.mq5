@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.73 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.74 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "6.73"
-#property description "Gold Miner EA v6.73 - v6.72 + Cross-gen INIT guard + Owner auto skip-forward + Universal No-Re-Hedge of released tickets (let grid recover)"
+#property version   "6.74"
+#property description "Gold Miner EA v6.74 - v6.73 + Released Gen-Side Lock (กัน hedge ซ้ำชุดเดิมหลังปลดล็อค — ปล่อยให้กรีดแก้ต่อจนจบ)"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -407,6 +407,7 @@ input bool   InpHedge_AllowProfitBypass = false;   // v6.70: true=allow profitab
 input bool   InpCrossGen_InitGuard      = true;    // v6.73: block new-gen INIT while older-gen same-side orders are still free (not hedged)
 input bool   InpOwnerAutoAdvance        = true;    // v6.73: auto-advance sequential recovery owner to next remaining gen when current gen flat
 input bool   InpHedge_NoReHedgeReleased = true;    // v6.73: tickets released from any hedge set never get re-hedged (let grid recover)
+input bool   InpHedge_NoReHedgeGenSide  = true;    // v6.74: ทั้ง gen+side ที่เคย hedge แล้วถูกปล่อยจะไม่ถูก hedge ซ้ำอีกจน flat
 
 // === v6.61: Recovery Shred & Seed ===
 input group "=== Recovery Shred & Seed (v6.61) ==="
@@ -650,6 +651,20 @@ datetime g_lastHedgeSellTime = 0;   // last time SELL orders got hedged → paus
 #define MAX_PREV_HEDGED 200
 ulong    g_prevHedgedTickets[MAX_PREV_HEDGED];
 int      g_prevHedgedCount = 0;
+
+// === v6.74: Released Gen+Side Lock — prevent re-hedge of an entire (gen,side) ===
+// Once a hedge set is released and bound orders go back to grid recovery, the
+// SAME (boundGeneration, counterSide) is locked from being hedged again.
+// Lock auto-clears when that gen+side has no live normal/recovery orders left.
+#define MAX_RELEASED_LOCKS 100
+struct ReleasedGenSideLock {
+   int                 generation;
+   ENUM_POSITION_TYPE  side;
+   datetime            lockedAt;
+   bool                active;
+};
+ReleasedGenSideLock g_releasedGenSide[MAX_RELEASED_LOCKS];
+int      g_releasedGenSideCount = 0;
 
 // === v6.28: Balance Guard State ===
 bool g_balanceGuardActive = false;  // activated when hedge set opens
