@@ -8141,6 +8141,7 @@ void AuditHedgeSetIntegrity()
                   g_hedgeSets[h].orphanDetectedAt = 0;
                   g_hedgeSets[h].inflationDetectedAt = 0;
                   g_lastHedgeCloseTime = now;  // arm cooldown like normal close
+                  MarkGenReleasedFromHedge(gen, "orphan auto-close");  // v6.74
                }
                else
                {
@@ -10181,6 +10182,7 @@ void ManageHedgeSets()
          ArrayResize(g_hedgeSets[h].boundTickets, 0);
             g_hedgeSetCount--;
             g_lastHedgeCloseTime = TimeCurrent();  // v6.25: cooldown after set close
+            MarkGenReleasedFromHedge(extGen, "external close");  // v6.74
             // v6.59: claim recovery owner if released bound orders remain open
             SetSequentialRecoveryOwner(h, extGen);
             // v6.27: Safe reset — only if truly flat
@@ -10939,6 +10941,7 @@ bool ManageHedgeBoundAvgTP(int idx)
    ArrayResize(g_hedgeSets[idx].boundTickets, 0);
    g_hedgeSetCount--;
    g_lastHedgeCloseTime = TimeCurrent();
+   MarkGenReleasedFromHedge(avgGen, "AvgTP release");  // v6.74
    SetSequentialRecoveryOwner(idx, avgGen);  // v6.59: claim recovery owner
    TryResetCycleStateIfFlat("AvgTP release");
    Sleep(100);
@@ -11108,6 +11111,7 @@ void ManageHedgeMatchingClose(int idx)
          ArrayResize(g_hedgeSets[idx].boundTickets, 0);
            g_hedgeSetCount--;
            g_lastHedgeCloseTime = TimeCurrent();  // v6.25: cooldown after set close
+           MarkGenReleasedFromHedge(matchGen, "matching close");  // v6.74
            SetSequentialRecoveryOwner(idx, matchGen);  // v6.59: claim recovery owner
            // v6.27: Safe reset — only if truly flat
            TryResetCycleStateIfFlat("matching close");
@@ -11131,6 +11135,7 @@ void ManageHedgeMatchingClose(int idx)
           g_hedgeSets[idx].gridMode = false;
           g_hedgeSetCount--;
            g_lastHedgeCloseTime = TimeCurrent();  // v6.25: cooldown after set close
+           MarkGenReleasedFromHedge(relGen, "release close");  // v6.74
            SetSequentialRecoveryOwner(idx, relGen);  // v6.59: claim recovery owner
            // v6.27: Safe reset — only if truly flat
            TryResetCycleStateIfFlat("release close");
@@ -11264,6 +11269,7 @@ void ManageHedgePartialClose(int idx)
       ArrayResize(g_hedgeSets[idx].boundTickets, 0);
       g_hedgeSetCount--;
       g_lastHedgeCloseTime = TimeCurrent();
+      MarkGenReleasedFromHedge(gen, "shred hedge full");  // v6.74
       SetSequentialRecoveryOwner(idx, gen);
       TryResetCycleStateIfFlat("shred hedge full");
       Sleep(100);
@@ -11396,6 +11402,7 @@ void ManageHedgeGridMode(int idx)
                  g_hedgeSets[idx].active = false;
                  g_hedgeSetCount--;
                   g_lastHedgeCloseTime = TimeCurrent();  // v6.25: cooldown after set close
+                  MarkGenReleasedFromHedge(gridGen, "grid recover");  // v6.74
                   SetSequentialRecoveryOwner(idx, gridGen);  // v6.59
                   // v6.27: Safe reset — only if truly flat
                   TryResetCycleStateIfFlat("grid recover");
@@ -11432,6 +11439,7 @@ void ManageHedgeGridMode(int idx)
        g_hedgeSets[idx].active = false;
          g_hedgeSetCount--;
          g_lastHedgeCloseTime = TimeCurrent();  // v6.25: cooldown after set close
+         MarkGenReleasedFromHedge(cleanupGen, "grid cleanup");  // v6.74
          SetSequentialRecoveryOwner(idx, cleanupGen);  // v6.59
          // v6.27: Safe reset — only if truly flat
          TryResetCycleStateIfFlat("grid cleanup");
