@@ -9045,7 +9045,11 @@ bool OpenDDHedge(ENUM_POSITION_TYPE counterSide, ENUM_POSITION_TYPE hedgeSide, i
       g_hedgeSets[slot].boundTickets[bc] = ticket;
       g_hedgeSets[slot].boundTicketCount = bc + 1;
    }
-   
+
+   // v6.72: Force-clear broker TP/SL on every freshly-bound ticket so
+   // price cannot run into a stale TP and break the hedge lock.
+   ClearBrokerTPSLForSet(slot);
+
     g_hedgeSets[slot].boundGeneration = bindGen;  // v6.37: use snapshot gen, not current
    g_cycleGeneration++;
    SaveCycleGeneration();  // v6.53: persist after increment
