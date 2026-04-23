@@ -26,6 +26,14 @@ enum ENUM_BALGUARD_MODE
    BALGUARD_DYNAMIC = 1   // Dynamic (last flat balance)
 };
 
+// v6.78: Hedge Open Delay reference mode
+enum ENUM_HEDGE_DELAY_MODE
+{
+   HDELAY_AFTER_LAST_OPEN  = 0,  // After last hedge OPEN
+   HDELAY_AFTER_LAST_CLOSE = 1,  // After last hedge CLOSE
+   HDELAY_BOTH             = 2   // Both (use the longer remaining time)
+};
+
 enum ENUM_GAP_TYPE
 {
    GAP_FIXED   = 0,  // Fixed Points
