@@ -1,112 +1,112 @@
 
 
-## v6.72 — One Hedge Per Generation (ห้าม DD Hedge ครั้งที่ 2 ต่อ generation)
+## v6.73 — Orphan Hedge Auto-Close + Lot Inflation Guard
 
-### วินิจฉัยจากภาพ (image-951)
-- ออเดอร์ Buy 3 ไม้ของ `Set#2 (GM2)`: `GM2_GL#5 (0.16)`, `GM2_GL#6 (0.22)`, `GM2_GL#7 (0.31)`
-- Hedge: `GM_Hedge_D2` (sell 0.53) — **D = DD-triggered, suffix `2` = bound generation 2**
-- `0.16 + 0.22 + 0.31 = 0.69 ≠ 0.53` → แสดงว่า hedge ตัวนี้ถูกเปิดตอนที่ Buy ยังไม่ครบ (น่าจะตอนมีแค่ #5+#6 = 0.38 หรือใกล้เคียง) แล้วหลังจากนั้น GL#7 เปิดเพิ่ม
-- **ปัญหาที่ user รายงาน**: เมื่อระบบออกกริดเพิ่ม (GL#7) แล้ว DD ของ side Buy พุ่งใหม่ → ระบบมีแนวโน้มออก hedge "รอบที่ 2" ของ generation เดิม → ผู้ใช้ไม่ต้องการพฤติกรรมนี้
-- **ความต้องการที่ user ยืนยัน**: "ห้ามไม่ให้ออก hedge ครั้งที่ 2 ตั้งแต่แรก" → 1 generation = 1 hedge ต่อ side เท่านั้น
+### วินิจฉัยจากภาพ image-952 + image-953
+
+**ภาพ orders:**
+- Set#1 (Buy): `GM1_INIT 0.03` + `GM1_GL#1 0.04` + `GM1_GL#2 0.06` = **0.13 lot**
+- Hedge: `GM_Hedge_D1` (sell) **3.19 lot** ← ใหญ่กว่า Buy ที่มันควร hedge **24.5 เท่า**
+- ทำให้ floating ติดลบ **-14,648 USD** ทั้งที่ฝั่ง buy แค่ -800 USD
+
+**Log บอกชัด:**
+```
+v6.65 HEDGE INTEGRITY CRITICAL: set#0 gen=1 hedgeLots=3.19 has NO bound orders 
+(orphan hedge — manual review required)
+GetHedgeLotCap: skip set#0 boundGen=1 != currentGen=2
+```
+- ระบบ "รู้" ว่า hedge นี้กำพร้า (bound orders ที่ผูกไว้ปิดไปหมดแล้วจาก SL/TP)
+- แต่ **แค่ print เตือน — ไม่ทำอะไร** (`manual review required`)
+- Cycle เคลื่อนเป็น Gen2 แล้ว → `GetHedgeLotCap` ก็ skip → ไม่มีกลไกปิด/จัดการ hedge 3.19 lot ที่ค้างอยู่
+- ออเดอร์ Buy รุ่นใหม่ (GM1_GL#1..5 ของ gen ใหม่ + GM2_*) เลยลอยอิสระ ไม่ถูก cap → ขนาดดูปกติ แต่ hedge เก่ายังเททับอยู่
 
 ### Root Cause
-ที่ `CheckAndOpenHedgeByDD()` (line 8783–8883):
-- มี cooldown (`g_lastDDHedgeTime`, `g_lastHedgeCloseTime`)
-- มี per-side pause (`InpHedge_SidePauseMin` → `g_lastHedgeBuyTime/SellTime`)
-- มี cap `InpHedge_MaxSets`
 
-แต่ **ไม่มี guard ที่เช็คว่า "generation นี้ + side นี้ มี hedge active อยู่แล้วหรือยัง"**
-ผลคือ ถ้า side Buy ของ Gen2 มี `GM_Hedge_D2` อยู่แล้ว แต่ DD ของ Buy พุ่งเกิน threshold อีกครั้ง (เพราะ GL ใหม่เพิ่ม loss) → ระบบสามารถเปิด hedge ตัวที่ 2 สำหรับ Gen2 ได้ (จะเป็น `GM_Hedge_D2` อีกตัวใน slot อื่น) — ไม่ตรงตามเจตนา user
+ที่ `AuditHedgeSetIntegrity()` (line 8042–8090):
+- Detect orphan hedge ได้ถูกต้อง
+- แต่ **action = แค่ Print()** ไม่มี auto-recovery
+- ทำให้ hedge ที่ "หลุดสมอ" (bound orders โดน TP/SL ปิดหมดก่อน hedge) ค้างเป็น exposure ขนาดมหึมา
 
-### แผนแก้ (Fix-only, ไม่แตะ trading logic)
+### แผนแก้ (Fix-only — ไม่แตะ trading strategy / order execution)
 
 ไฟล์: `public/docs/mql5/Gold_Miner_EA.mq5`
 
-#### 1) เพิ่ม helper ใหม่ `HasActiveHedgeForGenSide(bindGen, hedgedCounterSide)`
-สแกน `g_hedgeSets[]` คืน `true` ถ้ามี set ใดที่:
-- `active == true`
-- `boundGeneration == bindGen`
-- `counterSide == hedgedCounterSide` (ฝั่งที่ขาดทุนซึ่งถูก hedge — เช่น Buy เป็น counter เมื่อ hedge เป็น Sell)
-
-#### 2) เพิ่ม input toggle ใหม่
+#### 1) เพิ่ม input toggles ใหม่
 ```cpp
-input bool InpHedge_OnePerGenSide = true; // v6.72: Allow only 1 DD hedge per generation per side
+input bool   InpHedge_AutoCloseOrphan       = true;   // v6.73: Auto-close hedge with 0 bound orders
+input int    InpHedge_OrphanGraceSec        = 30;     // v6.73: wait this long after detect before close (avoid race with OnTradeTransaction)
+input bool   InpHedge_AutoTrimInflated      = true;   // v6.73: Auto partial-close hedge if hedgeLots > boundLots*2
+input double InpHedge_TrimToleranceMult     = 1.10;   // v6.73: trim down to boundLots * tolerance (10% buffer)
 ```
-- Default `true` ตามที่ user ต้องการ
-- ถ้าตั้ง `false` พฤติกรรมจะกลับมาเหมือน v6.71
 
-#### 3) ใส่ guard ใน `CheckAndOpenHedgeByDD()` ก่อนเรียก `OpenDDHedge(...)` ทั้ง 4 จุด (Dollar mode 2 จุด + Percent mode 2 จุด)
-ตัวอย่างฝั่ง Buy:
+#### 2) ขยาย `AuditHedgeSetIntegrity()` ให้มี action จริง
+
+**Branch A — Orphan (boundCount==0, hedgeLots>0):**
+- Log ครั้งแรก → set timestamp `g_hedgeSets[h].orphanDetectedAt = now`
+- เมื่อ `now - orphanDetectedAt >= InpHedge_OrphanGraceSec` และ `InpHedge_AutoCloseOrphan == true`:
+  - `trade.PositionClose(g_hedgeSets[h].hedgeTicket)` — ปิดเฉพาะตัว hedge
+  - Log: `v6.73 ORPHAN HEDGE AUTO-CLOSED: set#h gen=N ticket=T lots=X`
+  - Reset slot (`active=false`, ล้างทุกฟิลด์ตามแพทเทิร์นเดิม line 937–945)
+- ถ้า `InpHedge_AutoCloseOrphan == false` → คงพฤติกรรมเดิม (แค่เตือน)
+
+**Branch B — Inflated (hedgeLots > boundLots * 2):**
+- Log ครั้งแรก → set `g_hedgeSets[h].inflationDetectedAt = now`
+- เมื่อ grace ผ่าน และ `InpHedge_AutoTrimInflated == true`:
+  - คำนวณ `targetLots = boundLotsActual * InpHedge_TrimToleranceMult`
+  - `excessLots = hedgeLots - targetLots` (round ตาม `SYMBOL_VOLUME_STEP`)
+  - ถ้า `excessLots >= minLot`: `trade.PositionClosePartial(hedgeTicket, excessLots)`
+  - อัปเดต `g_hedgeSets[h].hedgeLots = hedgeLots - excessLots`
+  - Log: `v6.73 HEDGE TRIMMED: set#h hedgeLots X→Y (boundLots=Z)`
+- ถ้าหลัง trim เหลือ ≤ 0 → ปิดทิ้งทั้งตัว + reset slot
+
+**Reset condition:** ถ้ารอบถัดไปพบว่า bound orders กลับมา (เช่น recovery system bind ใหม่) → clear `orphanDetectedAt / inflationDetectedAt = 0`
+
+#### 3) เพิ่ม struct fields ใน `HedgeSet` (บรรทัด ~562)
 ```cpp
-if(buyLossAbs >= InpHedge_DDTriggerDollar)
-{
-   if(InpHedge_OnePerGenSide && HasActiveHedgeForGenSide(curGen, POSITION_TYPE_BUY))
-   {
-      // throttled log every 60s
-      static datetime lastLog = 0;
-      if(now - lastLog > 60) {
-         Print("v6.72 DD HEDGE BLOCKED: BUY side of Gen", curGen, 
-               " already has active hedge → no 2nd hedge");
-         lastLog = now;
-      }
-   }
-   else if(OpenDDHedge(POSITION_TYPE_BUY, POSITION_TYPE_SELL, curGen)) { ... }
-}
+datetime orphanDetectedAt;     // v6.73
+datetime inflationDetectedAt;  // v6.73
 ```
-ทำซ้ำกับ Sell side และ Percent mode
+- ตั้งค่า = 0 ทุกที่ที่ reset slot (3 จุด: line 937, 2271, และ branch close ใหม่)
 
-#### 4) เพิ่ม guard ลำดับสองใน `OpenDDHedge()` (defense-in-depth)
-ก่อน `FindFreeHedgeSlot()` ใส่:
-```cpp
-if(InpHedge_OnePerGenSide && HasActiveHedgeForGenSide(bindGen, counterSide))
-{
-   Print("v6.72 OpenDDHedge BLOCKED: Gen", bindGen, " ", 
-         EnumToString(counterSide), " already hedged");
-   return false;
-}
+#### 4) Dashboard เพิ่ม
 ```
-ป้องกันกรณีถูกเรียกจากที่อื่นในอนาคต
-
-#### 5) Dashboard
-เพิ่มแถวใหม่ในหมวด Hedge:
-```
-"OnePerGen": "ENABLED" / "DISABLED"
+"AutoHealOrphan": "ENABLED" / "DISABLED"
+"AutoTrimInflated": "ENABLED" / "DISABLED"
+"OrphanCnt": <count>  (ใช้ g_hedgeIntegrityCriticalCount เดิม)
+"InflatedCnt": <count> (ใช้ g_hedgeIntegrityWarnCount เดิม)
 ```
 
-#### 6) Log diagnostics ช่วยตรวจสอบสาเหตุที่ "ไม่ออกออเดอร์เพิ่ม"
-ใน `CheckGridLoss()` (gen ปัจจุบัน) เพิ่ม throttled log (ทุก 60s) เมื่อ `shouldOpen == false` ระบุ:
-- ระยะปัจจุบันจาก max GL price
-- distance threshold ที่ต้องเกิน
-- Hedge Side Pause active หรือไม่
-- BB filter block หรือไม่
+#### 5) Triple Gate exempt
+ถ้าฟีเจอร์ Triple Gate gate การปิด hedge → bypass สำหรับ orphan/trim เพราะนี่คือ integrity-recovery ไม่ใช่ matching-close ปกติ
+(ตรวจใน `ManageHedgeMatchingClose` — orphan auto-close จะข้าม Triple Gate โดยตรง)
 
-ช่วยให้ user (และเรา) เห็นชัดว่าทำไมไม่มี GL#8 ออกหลัง hedge
-
-#### 7) Version bump → v6.72
-- `#property version "6.72"`
-- `#property description`
-- Header comment block
-- Dashboard version string
+#### 6) Version bump → v6.73
+- `#property version "6.73"`
+- `#property description` เพิ่ม "v6.73: Auto-heal orphan/inflated hedges"
+- Header comment + Dashboard string
 
 ### สิ่งที่ไม่เปลี่ยนแปลง
-- ไม่แก้ `OpenOrder / trade.Buy / trade.Sell / OrderSend`
-- ไม่แก้ entry condition ของ initial/grid (`shouldOpen`, distance, ATR, signal filter)
-- ไม่แก้ `CalculateGridLot` / `FindMaxLotOnSide`
-- ไม่แก้ Hedge Matching Close / Reverse Hedge / Bound logic
-- ไม่แก้ Sequential FIFO (v6.70), Sequential Unlock Delay (v6.69), Grid Comment Max-Level (v6.71)
-- ไม่แก้ Triple Gate / DD threshold calculation / Generation lifecycle
-- ไม่แก้ License / News / Time filter / BB filter
+- ไม่แก้ `OpenOrder / trade.Buy / trade.Sell` (ใช้ `trade.PositionClose / PositionClosePartial` ที่มีอยู่แล้ว)
+- ไม่แก้ entry condition / grid logic / signal filter
+- ไม่แก้ `CalculateGridLot` / `CalculateHedgeLot`
+- ไม่แก้ Hedge Matching Close, Reverse Hedge, Bound logic, Recovery System
+- ไม่แก้ DD threshold / Generation lifecycle / Triple Gate logic เอง
+- ไม่แก้ One-Per-Gen (v6.72), Sequential FIFO (v6.70), Grid Comment Max-Level (v6.71)
+- ไม่แก้ License / News / Time / BB filter
 
 ### ผลลัพธ์ที่คาดหวัง
-1. เมื่อ `Gen2 BUY` มี `GM_Hedge_D2` active อยู่แล้ว → แม้ DD พุ่งเกิน threshold อีก ระบบจะ **ไม่** ออก hedge ตัวที่ 2 ของ Gen2 BUY
-2. ถ้า hedge เซต Gen2 ปิดเรียบร้อย (matching close) → ค่อยเริ่ม cycle ใหม่ (Gen3) hedge ใหม่ได้ตามปกติ
-3. Set อื่น generation อื่น (Gen1, Gen3, ...) ยัง hedge ได้อิสระตามเดิม
-4. ฝั่ง Sell ของ Gen เดียวกันก็ hedge ได้อิสระจากฝั่ง Buy (เพราะ guard เช็ค side ด้วย)
-5. มี log ใน Experts tab อธิบายชัดเจนว่าทำไมไม่ออกอีก hedge / ทำไมไม่ออก GL ถัดไป
+1. กรณีเดียวกับภาพ: หลังเริ่ม EA v6.73 ระบบจะ detect orphan hedge `set#0 hedgeLots=3.19, boundCount=0` → รอ 30s → ปิด `GM_Hedge_D1` อัตโนมัติ → exposure -14,648 ลดลงเหลือเท่ากับ buy ฝั่งเดียว
+2. ถ้า hedge ใหญ่กว่า bound 2x ขึ้นไป (เช่น bound บางตัว TP ไป 50%) → trim ให้เหลือ ~1.1x ของ bound จริง
+3. Slot ที่ถูกปิดกลับเข้า pool ให้ generation ใหม่ใช้ได้
+4. มี toggle สลับเปิด/ปิดได้ทันที
 
 ### ความเสี่ยง & Mitigation
-- **Risk**: ถ้า DD ของ side ที่ถูก hedge แล้วยังเพิ่มขึ้นเรื่อย ๆ ระบบจะไม่ป้องกันเพิ่ม
-  **Mitigation**: เป็นเจตนาตามที่ user ขอ → exposure ที่เหลือจัดการด้วย Triple Gate / Matching Close / Balance Guard เดิม + user ปรับ `InpHedge_OnePerGenSide = false` ได้ถ้าต้องการพฤติกรรมเก่า
-- **Risk**: User เปลี่ยนใจอยากให้ hedge เพิ่มได้ภายหลัง
-  **Mitigation**: toggle input — สลับได้ทันทีโดยไม่ต้อง recompile
+- **Risk:** Auto-close orphan ขณะ OnTradeTransaction ยังไม่ทัน update `boundTickets`  
+  **Mitigation:** Grace period 30s + `RefreshBoundTickets(h)` ก่อนตัดสินใจ + throttle 30s เดิม
+- **Risk:** Trim partial close ผิด step volume  
+  **Mitigation:** Round ตาม `SYMBOL_VOLUME_STEP` และเช็ค `>= SYMBOL_VOLUME_MIN`
+- **Risk:** ปิด hedge แล้ว recovery system งง  
+  **Mitigation:** ใช้ flow reset slot เดียวกับ matching-close (line 937–945), `IsPrevHedgedTicket` ไม่กระทบเพราะไม่มี bound ticket อยู่แล้ว
+- **Risk:** User ไม่อยากให้ระบบปิดเอง  
+  **Mitigation:** `InpHedge_AutoCloseOrphan = false` กลับเป็นพฤติกรรม v6.72
 
