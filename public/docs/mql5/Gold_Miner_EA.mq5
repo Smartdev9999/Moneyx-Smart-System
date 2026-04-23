@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.74 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.75 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "Copyright 2025, MoneyX Smart System"
 #property link      "https://moneyxsmartsystem.lovable.app"
-#property version   "6.74"
-#property description "Gold Miner EA v6.74 - v6.73 + Generation-level mutex: blocks duplicate DD hedge & recovery grid on same gen during transition"
+#property version   "6.75"
+#property description "Gold Miner EA v6.75 - v6.74 + Mutex fix: allow DD hedge for current trading generation (recovery-flow check applies only to past gens)"
 #property strict
 
 #include <Trade/Trade.mqh>
