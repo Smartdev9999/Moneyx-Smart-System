@@ -17,6 +17,14 @@ CTrade trade;
 //================ ENUMS ================
 enum ENUM_SIDE { SIDE_BUY=0, SIDE_SELL=1 };
 
+// [v1.7] Initial frame side mode
+enum ENUM_INIT_SIDE_MODE
+{
+   INIT_BOTH      = 0, // Both sides (Buy Stop + Sell Stop)
+   INIT_BUY_ONLY  = 1, // Buy Stop only
+   INIT_SELL_ONLY = 2  // Sell Stop only
+};
+
 enum ENUM_HEDGE_DELAY_MODE_G2
 {
    G2_HDELAY_AFTER_LAST_OPEN  = 0,
