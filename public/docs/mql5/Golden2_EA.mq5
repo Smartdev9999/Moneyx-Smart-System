@@ -2487,6 +2487,7 @@ int OnInit(){
                GridLoss_Enable?"ON":"OFF", InpSQ_Enable?"ON":"OFF", InpExitTripleGate_Enable?"ON":"OFF",
                InpInitTrailOnBarClose?"ON":"OFF",
                InpTP_UseAccumulateClose?"ON":"OFF",
+               InpTP_AccumCooldownSec,
                InpGroup_RequireFullLockBeforeNext?"ON":"OFF");
    return INIT_SUCCEEDED;
 }
