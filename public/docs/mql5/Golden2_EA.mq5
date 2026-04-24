@@ -2790,6 +2790,38 @@ double GroupAggLotSell(){
 }
 
 //================ INIT / DEINIT / TICK ================
+
+// [v2.73] Strip every indicator the Tester template glued onto the chart so
+// backtests (especially visual mode) don't waste cycles redrawing BB/ATR/ZigZag.
+// EA-internal handles (iBands/iATR/iMA used by Squeeze + Exit + GridLoss/Profit)
+// keep computing in the background — only chart graphics are removed.
+void CleanupChartIndicatorsInTester(){
+   if(!g_isTesterMode) return;
+   if(!InpTester_CleanChart) return;
+   long chart = 0;
+   int removed = 0;
+   int totalWindows = (int)ChartGetInteger(chart, CHART_WINDOWS_TOTAL);
+   for(int win = totalWindows - 1; win >= 0; win--){
+      int cnt = ChartIndicatorsTotal(chart, win);
+      for(int idx = cnt - 1; idx >= 0; idx--){
+         string nm = ChartIndicatorName(chart, win, idx);
+         if(nm == "") continue;
+         if(ChartIndicatorDelete(chart, win, nm)) removed++;
+      }
+   }
+   // Hide remaining visual noise.
+   ChartSetInteger(chart, CHART_SHOW_GRID, false);
+   ChartSetInteger(chart, CHART_SHOW_PERIOD_SEP, false);
+   ChartSetInteger(chart, CHART_SHOW_VOLUMES, CHART_VOLUME_HIDE);
+   if(!g_isVisualMode){
+      ChartSetInteger(chart, CHART_SHOW_TRADE_LEVELS, false);
+      ChartSetInteger(chart, CHART_AUTOSCROLL, false);
+   }
+   ChartRedraw(chart);
+   PrintFormat("[v2.73] Tester chart cleanup: removed %d indicator(s) across %d window(s) | CleanChart=%s Visual=%s",
+               removed, totalWindows, InpTester_CleanChart?"ON":"OFF", g_isVisualMode?"YES":"NO");
+}
+
 int OnInit(){
    g_point  = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
    g_digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
