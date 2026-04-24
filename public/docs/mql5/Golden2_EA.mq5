@@ -786,9 +786,12 @@ ulong FindInitialPendingTicket(int g, int side){
    return 0;
 }
 
-// [v1.8] Bar-close trail: every InpInitTrailTF bar close, drag the IN pending
-//        on the side that price moved AWAY from, so the frame distance stays
-//        consistent. The side price is approaching is left alone.
+// [v2.5] Bar-close trail: ONE-WAY toward-price only.
+//        BuyStop pending sits ABOVE market. We drag it DOWN (closer to price)
+//        only when ask falls so frame distance grew beyond InpFrameUpperPips.
+//        We NEVER move BuyStop UP (away from price) — if price approaches,
+//        the pending stays put so it can trigger as designed.
+//        SellStop pending sits BELOW market — symmetric: drag UP only.
 void ManageInitialTrailOnBarClose(int g){
    if(!InpInitTrailOnBarClose) return;
    // [v2.3] Freeze initial-frame trail as soon as ANY hedge position exists
@@ -813,40 +816,25 @@ void ManageInitialTrailOnBarClose(int g){
 
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   double mid = (ask + bid) * 0.5;
 
-   // [v2.4] Symmetric recenter mode: both BuyStop and SellStop are dragged
-   //        toward the current market mid every bar close so the frame stays
-   //        InpFrameUpper/Lower pips around price. The previous asymmetric
-   //        behaviour (only trail the side price ran AWAY from) caused the
-   //        opposite stop to sit still and get hit on a retrace, producing
-   //        an orphan IN fill that blocked next-group advancement.
-   double recenterMin = MathMax(InpFrameRecenterMinPips, 1) * g_point;
+   // [v2.5] Threshold guards micro modifications. Only drag toward price when
+   //        the frame distance has grown by more than this many points.
+   double minStep = MathMax(InpFrameRecenterMinPips, 1) * g_point;
 
-   // ---- BUY pending ----
+   // ---- BUY pending (BuyStop sits ABOVE market) ----
    if(tBuy != 0 && buyPos == 0 && (sellPos > 0 || tSell != 0)){
-      double newPxSym  = NormalizeDouble(mid + InpFrameUpperPips * g_point, g_digits); // [v2.4] recenter on mid
-      double newPxAsym = NormalizeDouble(ask + InpFrameUpperPips * g_point, g_digits); // legacy: only when ask falls
       if(OrderSelect(tBuy)){
          double oldPx = OrderGetDouble(ORDER_PRICE_OPEN);
          double oldTP = OrderGetDouble(ORDER_TP);
          double oldSL = OrderGetDouble(ORDER_SL);
-         double newPx = oldPx;
-         bool   doMove = false;
-         if(InpFrameSymmetricTrail){
-            // move whenever mid shifted enough in EITHER direction
-            if(MathAbs(newPxSym - oldPx) > recenterMin){
-               newPx = newPxSym; doMove = true;
-            }
-         } else {
-            // legacy v2.2 behaviour: only drag DOWN when ask falls
-            if(newPxAsym < oldPx - g_point){
-               newPx = newPxAsym; doMove = true;
-            }
-         }
-         if(doMove){
-            // [v2.2] Preserve existing TP/SL. Shift by entry delta when InitialTP is on,
-            //        otherwise forward the broker-side values verbatim (Average-TP mode).
+         // Target = the "ideal" frame distance above current ask.
+         double targetPx = NormalizeDouble(ask + InpFrameUpperPips * g_point, g_digits);
+         // Drag DOWN (toward price) ONLY when target is meaningfully BELOW current pending.
+         // = ask has fallen, frame distance grew → pull BuyStop down.
+         // If targetPx >= oldPx → price approaching or stable → DO NOT MOVE (stay put to be triggered).
+         if(targetPx < oldPx - minStep){
+            double newPx = targetPx;
+            // [v2.2] Preserve TP/SL: shift by entry delta when InitialTP is on, else forward verbatim.
             double tp, sl;
             if(InpInitialTPPips > 0){
                tp = (oldTP > 0) ? NormalizeDouble(oldTP + (newPx - oldPx), g_digits) : 0;
@@ -859,35 +847,27 @@ void ManageInitialTrailOnBarClose(int g){
                sl = oldSL;
             }
             if(trade.OrderModify(tBuy, newPx, sl, tp, ORDER_TIME_GTC, 0)){
-               if(InpVerboseLog) PrintFormat("Golden2 v2.4: %sTrail BuyStop G%d %.5f -> %.5f mid=%.5f tp=%.5f sl=%.5f",
-                                             InpFrameSymmetricTrail?"Recenter":"Bar", g, oldPx, newPx, mid, tp, sl);
+               if(InpVerboseLog) PrintFormat("Golden2 v2.5: TrailIn BuyStop G%d %.5f -> %.5f ask=%.5f tp=%.5f sl=%.5f",
+                                             g, oldPx, newPx, ask, tp, sl);
             } else {
-               PrintFormat("Golden2 v2.4: BuyStop modify FAIL G%d err=%d", g, GetLastError());
+               PrintFormat("Golden2 v2.5: BuyStop modify FAIL G%d err=%d", g, GetLastError());
             }
          }
       }
    }
 
-   // ---- SELL pending ----
+   // ---- SELL pending (SellStop sits BELOW market) ----
    if(tSell != 0 && sellPos == 0 && (buyPos > 0 || tBuy != 0)){
-      double newPxSym  = NormalizeDouble(mid - InpFrameLowerPips * g_point, g_digits); // [v2.4] recenter on mid
-      double newPxAsym = NormalizeDouble(bid - InpFrameLowerPips * g_point, g_digits); // legacy: only when bid rises
       if(OrderSelect(tSell)){
          double oldPx = OrderGetDouble(ORDER_PRICE_OPEN);
          double oldTP = OrderGetDouble(ORDER_TP);
          double oldSL = OrderGetDouble(ORDER_SL);
-         double newPx = oldPx;
-         bool   doMove = false;
-         if(InpFrameSymmetricTrail){
-            if(MathAbs(newPxSym - oldPx) > recenterMin){
-               newPx = newPxSym; doMove = true;
-            }
-         } else {
-            if(newPxAsym > oldPx + g_point){
-               newPx = newPxAsym; doMove = true;
-            }
-         }
-         if(doMove){
+         double targetPx = NormalizeDouble(bid - InpFrameLowerPips * g_point, g_digits);
+         // Drag UP (toward price) ONLY when target is meaningfully ABOVE current pending.
+         // = bid has risen, frame distance grew → pull SellStop up.
+         // If targetPx <= oldPx → price approaching or stable → DO NOT MOVE.
+         if(targetPx > oldPx + minStep){
+            double newPx = targetPx;
             double tp, sl;
             if(InpInitialTPPips > 0){
                tp = (oldTP > 0) ? NormalizeDouble(oldTP + (newPx - oldPx), g_digits) : 0;
@@ -900,10 +880,10 @@ void ManageInitialTrailOnBarClose(int g){
                sl = oldSL;
             }
             if(trade.OrderModify(tSell, newPx, sl, tp, ORDER_TIME_GTC, 0)){
-               if(InpVerboseLog) PrintFormat("Golden2 v2.4: %sTrail SellStop G%d %.5f -> %.5f mid=%.5f tp=%.5f sl=%.5f",
-                                             InpFrameSymmetricTrail?"Recenter":"Bar", g, oldPx, newPx, mid, tp, sl);
+               if(InpVerboseLog) PrintFormat("Golden2 v2.5: TrailIn SellStop G%d %.5f -> %.5f bid=%.5f tp=%.5f sl=%.5f",
+                                             g, oldPx, newPx, bid, tp, sl);
             } else {
-               PrintFormat("Golden2 v2.4: SellStop modify FAIL G%d err=%d", g, GetLastError());
+               PrintFormat("Golden2 v2.5: SellStop modify FAIL G%d err=%d", g, GetLastError());
             }
          }
       }
