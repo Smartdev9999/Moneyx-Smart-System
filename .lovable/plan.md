@@ -1,59 +1,112 @@
-## Golden2 EA v2.2 — Preserve Pending TP/SL on Trail + Robust Group Advance
+## Golden2 EA v2.30 — Fix ระบบหยุดออกออเดอร์หลัง Hedging Group 1
 
-แก้ 2 ปัญหาตามภาพและคำอธิบาย user
+แก้ปัญหาที่ Group 2 ไม่ถูกเปิดหลัง G1 hedge แล้ว โดยอาการที่เห็นตรงกับ log/screenshot:
+- `hold G1->G2 (cur safe=0 ... BUY=1 SELL=13 hedgeBuy=13 hedgeSell=0)`
+- มี `G1_IN` ฝั่ง Buy ค้าง/ถูกยิงขึ้นมาหลัง hedge แล้ว ทำให้ระบบมองว่า G1 ยังมี main ฝั่ง Buy ที่ “ไม่ถูก lock” จึงบล็อกการ advance ไป G2 ตลอด
 
-### ปัญหาที่พบ
+### ไฟล์ที่จะแก้
+- `public/docs/mql5/Golden2_EA.mq5` — bump version `2.20` → `2.30`
 
-**1. Stop Order TP/SL หายไปหลังถูกแก้ไข (ภาพที่ 2)**
-- ภาพ 1: BuyStop/SellStop ตอนแรกมี T/P ครบ (4622.04 / 4606.23)
-- ภาพ 2: หลัง trail SellStop ขยับ → T/P ผิด (4599.77 = 9.45 จากราคา แทนที่จะเป็น 3.00 ตาม `InpInitialTPPips` ตอนแรก) และในกรณีที่ user ใช้ Average TP (`InpInitialTPPips=0`), trail จะส่ง `tp=0, sl=0` เข้า `OrderModify` → **ลบ TP/SL ที่ broker จำไว้ทิ้ง**
-- สาเหตุ: ใน `ManageInitialTrailOnBarClose` (บรรทัด 813–814, 827–828) คำนวณ TP/SL ใหม่จาก `InpInitialTPPips` ทุกครั้ง โดยไม่อ่านค่าเดิมจาก order
+### สิ่งที่ไม่เปลี่ยนแปลง
+- ไม่แตะ `OrderSend / trade.Buy / trade.Sell / trade.PositionClose`
+- ไม่แตะสูตร Grid Loss / Grid Profit / Frame distance / Multiplier
+- ไม่แตะ Average TP/SL core logic
+- ไม่แตะ Triple-Gate core exit logic
+- ไม่แตะ Accumulate Close logic
+- แก้เฉพาะ guard, state tracking, pending cleanup, และ advance condition เพื่อให้ flow หลัง hedge เดินต่อได้ตามเดิม
 
-**2. Group 3 ไม่ออก หลัง Group 1 และ Group 2 โดน Hedging**
-- `IsGroupSafeToAdvance(g)` (บรรทัด 2112–2119) บังคับเงื่อนไข `hh && hb && hs` (มี hedge + main BUY + main SELL ครบ) จึงจะ "ปลอดภัย"
-- ในชีวิตจริง หลัง hedge match แล้ว Triple-Gate อาจปิด main ฝั่งหนึ่งบางส่วน → เหลือแค่ main ฝั่งเดียว → `hb && hs` = false → block ตลอดไป
-- ผลคือ Group 2 hedge แล้ว แต่ Group 3 ไม่ออก IN frame ใหม่
+## สิ่งที่จะทำ
 
-### สิ่งที่ "ไม่เปลี่ยนแปลง"
-- ไม่แตะ `OrderSend / trade.Buy / trade.Sell / trade.PositionClose / trade.BuyStop / trade.SellStop`
-- ไม่แตะกลยุทธ์ Grid Loss / Grid Profit / Hedging entry / Average TP / Triple-Gate
-- ไม่แตะ Accumulate Close cooldown ของ v2.1
-- ไม่แตะเงื่อนไข trail (เลื่อนเฉพาะฝั่งที่ราคาวิ่งหนี / M1 bar close) — แค่แก้วิธีคำนวณ TP/SL ที่จะป้อนกลับเข้า `OrderModify`
+### 1) Freeze initial-frame maintenance ทันทีเมื่อ “มี hedge position แล้ว”
+ตอนนี้บางส่วนยังอาศัย `IsGroupHedgeMatched(g)` ทำให้มีช่องที่ `IN` pending/re-arm ยังถูกขยับหรือสร้างใหม่ได้หลัง hedge เริ่มทำงานแล้ว
 
----
+จะเปลี่ยน guard ของฟังก์ชันพวก initial-frame ให้หยุดทันทีเมื่อ group นั้นมี hedge position อย่างน้อย 1 ตัว เช่น:
+- `ManageInitialTrailOnBarClose()`
+- `ManageInitialTrail()`
+- `ManageInitialReArm()`
 
-### แก้ไข — ไฟล์เดียว: `public/docs/mql5/Golden2_EA.mq5`
+ผลลัพธ์:
+- หลัง hedge เริ่มแล้ว จะไม่ trail initial stop ต่อ
+- จะไม่ re-arm `Gx_IN` ใหม่หลัง hedge แล้ว
+- ลดโอกาสเกิด orphan `G1_IN` หลัง hedge
 
-#### แก้ 1: `ManageInitialTrailOnBarClose` รักษา TP/SL เดิมเสมอ
-- อ่าน `OrderGetDouble(ORDER_TP)` และ `OrderGetDouble(ORDER_SL)` ของ pending ปัจจุบันก่อนแก้ไข
-- คำนวณค่าใหม่ "เฉพาะเมื่อ" `InpInitialTPPips > 0` (Initial-TP mode), shift TP/SL ตามระยะ entry ใหม่ (รักษาช่อง TP/SL เดิม):
-  - `newTP = oldTP + (newPx - oldPx)` (เลื่อนตามแท่ง pending)
-  - `newSL = oldSL + (newPx - oldPx)`
-- ถ้า `InpInitialTPPips == 0` → **ส่งค่า TP/SL เดิมเข้า `OrderModify` ตรงๆ** ไม่ใช้ 0 (ป้องกันการลบ Average-TP ที่ broker)
-- เพิ่ม guard: ถ้า `oldTP == 0` ก็ส่ง 0 เหมือนเดิม (ไม่บังคับสร้าง TP)
+### 2) ลบ leftover initial pending ของ group ทันทีหลัง hedge เริ่ม active
+เพิ่ม helper ใหม่ประมาณนี้:
+- `DeleteLeftoverInitialPendingsAfterHedge(g)`
 
-#### แก้ 2: `IsGroupSafeToAdvance` ผ่อนเงื่อนไข + scan ทุก group ก่อนหน้า
-- เปลี่ยนตรรกะใน `IsGroupSafeToAdvance(g)` ให้ "ปลอดภัย" เมื่อ:
-  - main ฝั่งใดที่ "ยังเปิดอยู่" จะต้องถูก lock ด้วย hedge ที่ active แล้ว (ไม่ใช่บังคับว่าต้องมีทั้งสองฝั่ง)
-  - กล่าวคือ ใช้รูปแบบ: `(buyMain == 0 || hedgeBuyLocked) && (sellMain == 0 || hedgeSellLocked)`
-  - เพิ่ม helper `HasHedgeLockingSide(g, side)` — ตรวจว่ามี hedge position ของ side ตรงข้ามที่ครอบ main side นี้อยู่
-- เพิ่ม `AreAllPriorGroupsSafe(curG)` — loop จาก 1..curG ตรวจทุก group ก่อนหน้า; ใช้ใน `TryAdvanceToNextGroup` เพื่อกัน group กลางๆ ที่ยังค้าง
-- ใน `TryAdvanceToNextGroup`:
-  - ย้ายเงื่อนไข advance ออกจาก `if(GroupHedgeJustActivated(cur))` → ตรวจทุก tick ว่า "cur hedge active + ทุก group ก่อนหน้า safe + cur safe" → ค่อยสั่ง `PlaceInitialFrame(next)`
-  - คงไว้ที่ idle log throttling (60s) เพื่อกัน log spam
+หน้าที่:
+- ลบเฉพาะ main pending ที่เป็น tag `IN`
+- ไม่แตะ hedge pending/hedge position
+- ไม่แตะ grid/main positions ที่เปิดแล้ว
 
-#### Inputs ใหม่ (1 ตัว)
+เหตุผล:
+- ถ้ายังปล่อย `G1_IN` pending ค้างไว้ มันอาจโดนราคา trigger ภายหลังและกลายเป็น orphan main position ที่ไม่มี hedge คู่ตรงข้าม
+
+### 3) ทำ advance check ให้ “tag-aware” และไม่ติด residual post-hedge `IN`
+ปรับ `IsGroupSafeToAdvance(g)` จากการนับจำนวนฝั่งแบบกว้าง ๆ เป็นการมองเฉพาะ exposure ที่ควรใช้บล็อกจริง
+
+จะเพิ่ม helper แนวนี้:
+- `IsResidualPostHedgeInitialOrphan(...)`
+- `CountBlockingMainPositionsForAdvance(g, side)`
+
+กติกาใหม่:
+- main ที่ยังต้องใช้บล็อก advance = main exposure ปกติที่ยังไม่ถูก hedge-lock
+- แต่ `IN` residual ที่เกิดหลัง hedge active แล้ว และเป็น leftover จาก initial frame จะไม่นับเป็น blocker ของการเปิด group ถัดไป
+- จะมี log แยกชัดเจนว่าพบ residual orphan อะไรบ้าง เพื่อ debug backtest ง่ายขึ้น
+
+ผลลัพธ์:
+- เคสแบบในรูป `BUY=1 SELL=13 hedgeBuy=13 hedgeSell=0` จะไม่ค้างทั้งระบบเพียงเพราะ `G1_IN` residue 1 ไม้
+- G2 จะเปิดได้เมื่อ exposure หลักของ G1 ถูก lock แล้วจริง
+
+### 4) เพิ่ม diagnostic log ให้เห็นสาเหตุการ hold แบบละเอียด
+เวลาระบบ hold `G1->G2` จะ log เพิ่มว่า blocker มาจากอะไร เช่น:
+- ticket ไหน
+- comment/tag อะไร (`IN`, `GL#n`, `GP#n`)
+- เป็น main หรือ hedge
+- ถูกจัดเป็น residual orphan หรือ blocker จริง
+
+จะช่วยแยกได้ชัดว่าเป็น:
+- leftover initial
+- unmatched main จริง
+- หรือ prior group ยังไม่ safe จริง
+
+### 5) Version bump → v2.30
+อัปเดตทุกจุดที่แสดง version:
+- `#property version`
+- `#property description`
+- header comment block
+- `OnInit` log / startup print
+- dashboard title (`Golden2 EA v2.3` / `v2.30` ให้ตรงกันทั้งไฟล์)
+
+## Technical details
+
+### Root cause
+ปัญหาไม่ได้อยู่ที่การเปิด hedge order เอง แต่เกิดจาก flow หลัง hedge:
+1. G1 hedge เปิดแล้ว
+2. ยังมี `G1_IN` pending หรือ re-arm logic ทำงานต่อ
+3. `G1_IN` ถูก trigger กลายเป็น main Buy เพิ่มหลัง hedge
+4. `IsGroupSafeToAdvance()` มองว่าฝั่ง Buy main ยังไม่มี sell-hedge มาล็อก
+5. ระบบ hold `G1->G2` ตลอด แม้ฝั่ง loss-side หลักจะถูก hedge แล้ว
+
+### แนวทางแก้เชิงโครงสร้าง
+```text
+Before:
+hedge active -> initial logic ยังอาจวิ่ง -> IN residue โผล่ -> safe=false -> G2 ไม่เปิด
+
+After:
+hedge active
+  -> freeze initial logic
+  -> delete leftover IN pendings
+  -> advance check ไม่นับ residual post-hedge IN เป็น blocker
+  -> G2 เปิดต่อได้
 ```
-input bool InpGroup_AdvancePerTick = true;   // v2.2: retry advance every tick (not only on hedge edge)
-```
 
-### Version Bump → 2.20
-อัปเดต `#property version`, `#property description`, header comment, `Print` ใน `OnInit`, dashboard `L_TITLE` → `Golden2 EA v2.2`
+### Input ใหม่
+ยังไม่จำเป็นต้องเพิ่ม input ถ้า logic fix นี้ควรเป็น default behavior ที่ถูกต้อง
+ถ้าระหว่างแก้พบว่าควรเปิด/ปิดได้ จะเพิ่มเฉพาะกรณีจำเป็นจริงเท่านั้น
 
-### บันทึก Memory
-สร้าง `mem://trading/golden2-ea/v2-2-preserve-pendingtpsl-and-robust-advance.md` พร้อมอัปเดต `mem://index.md`
+### Memory
+บันทึก memory ใหม่:
+- `mem://trading/golden2-ea/v2-3-post-hedge-in-orphan-advance-fix.md`
 
-### ผลที่คาดหวัง
-- หลัง bar-close trail: pending stop ยังคงมี T/P (และ S/L) ตาม spec เดิม — ไม่หายไปจาก Toolbox
-- เมื่อ Group N โดน hedge แล้ว main ฝั่งใดฝั่งหนึ่งถูกปิด/ลด → ระบบยังเปิด Group N+1 ได้ ตราบใดที่ฝั่งที่เหลือถูก hedge lock ครอบอยู่
-- Group 3 จะออก IN frame ตามปกติหลัง Group 2 เข้า hedge state
+หาก approve ผมจะ implement ตามแผนนี้ใน `public/docs/mql5/Golden2_EA.mq5` เท่านั้น.
