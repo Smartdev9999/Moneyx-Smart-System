@@ -950,8 +950,52 @@ void ManageInitialTrail(int g){
 // [v1.7] Re-arm a fresh IN stop on a side after that side empties (TP hit) while
 //        the OPPOSITE side still has open positions. New stop is placed at
 //        current market ± InpInitReArmDistancePips. Side mode is respected.
+// [v2.6] Returns true if there is at least one CLOSED deal in history for this
+// group + side (main, non-hedge), meaning the initial pending was triggered and
+// later closed (TP/SL/manual). Used as the gate for Re-entry-on-Close so we do
+// not place a re-entry pending before the very first initial fill.
+bool HasClosedMainOnSide(int g, int side){
+   if(!HistorySelect(g_accumResetTime>0 ? g_accumResetTime : (TimeCurrent()-7*24*3600), TimeCurrent()))
+      return false;
+   int total = HistoryDealsTotal();
+   for(int i=total-1;i>=0;i--){
+      ulong tk = HistoryDealGetTicket(i);
+      if(tk==0) continue;
+      if((long)HistoryDealGetInteger(tk, DEAL_MAGIC) != InpMagic) continue;
+      if(HistoryDealGetString(tk, DEAL_SYMBOL) != _Symbol) continue;
+      if(HistoryDealGetInteger(tk, DEAL_ENTRY) != DEAL_ENTRY_OUT) continue;
+      string c = HistoryDealGetString(tk, DEAL_COMMENT);
+      // Broker may rewrite comment on TP/SL; fall back to position comment lookup.
+      int gp; bool hd; string tag;
+      bool parsed = ParseComment(c, gp, hd, tag);
+      if(!parsed){
+         ulong posId = HistoryDealGetInteger(tk, DEAL_POSITION_ID);
+         if(posId>0 && HistorySelectByPosition(posId)){
+            int dn = HistoryDealsTotal();
+            for(int j=0;j<dn;j++){
+               ulong dtk = HistoryDealGetTicket(j);
+               if(dtk==0) continue;
+               if(HistoryDealGetInteger(dtk, DEAL_ENTRY) != DEAL_ENTRY_IN) continue;
+               string ic = HistoryDealGetString(dtk, DEAL_COMMENT);
+               if(ParseComment(ic, gp, hd, tag)){ parsed = true; break; }
+            }
+            HistorySelect(g_accumResetTime>0 ? g_accumResetTime : (TimeCurrent()-7*24*3600), TimeCurrent());
+         }
+      }
+      if(!parsed) continue;
+      if(gp != g) continue;
+      if(hd) continue;
+      long dealType = HistoryDealGetInteger(tk, DEAL_TYPE);
+      // On exit: deal type is opposite of position side. BUY position → SELL deal to close.
+      int posSide = (dealType == DEAL_TYPE_SELL) ? 0 : 1;
+      if(posSide != side) continue;
+      return true;
+   }
+   return false;
+}
+
 void ManageInitialReArm(int g){
-   if(!InpInitReArmAfterTP) return;
+   if(!InpInitReArmAfterTP && !InpInitReEntryOnClose) return;
    // [v2.3] Do not re-arm a fresh G_IN stop once the group is hedging — that
    //         was the source of the post-hedge orphan main that blocked
    //         advancement to the next group.
@@ -971,24 +1015,33 @@ void ManageInitialReArm(int g){
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
    double dist = InpInitReArmDistancePips * g_point;
 
-   // Re-arm BUY: side empty + pending missing + opposite (sell) has positions
-   if(buyAllowed && buyPos==0 && tBuyPend==0 && sellPos>0){
+   // [v2.6] Re-entry trigger condition for BUY side:
+   //   - v1.7 path: opposite (sell) has open position (original re-arm)
+   //   - v2.6 path: this side previously closed (TP/SL) in this group → re-enter
+   //                regardless of what the opposite side currently is.
+   bool buyTrigger  = (sellPos > 0) ||
+                      (InpInitReEntryOnClose && HasClosedMainOnSide(g, 0));
+   bool sellTrigger = (buyPos  > 0) ||
+                      (InpInitReEntryOnClose && HasClosedMainOnSide(g, 1));
+
+   // Re-arm BUY: side empty + pending missing + trigger condition met
+   if(buyAllowed && buyPos==0 && tBuyPend==0 && buyTrigger){
       double upPx = NormalizeDouble(ask + dist, g_digits);
       double tp   = (InpInitialTPPips>0)? NormalizeDouble(upPx + InpInitialTPPips*g_point, g_digits) : 0;
       double sl   = (InpInitialSLPips>0)? NormalizeDouble(upPx - InpInitialSLPips*g_point, g_digits) : 0;
       string c    = MakeComment(g, false, "IN");
       if(trade.BuyStop(InpInitialLot, upPx, _Symbol, sl, tp, ORDER_TIME_GTC, 0, c)){
-         if(InpVerboseLog) PrintFormat("Golden2 v1.7: ReArm BuyStop G%d at %.5f", g, upPx);
+         if(InpVerboseLog) PrintFormat("Golden2 v2.6: Re-entry BuyStop G%d at %.5f (sellPos=%d)", g, upPx, sellPos);
       }
    }
-   // Re-arm SELL: side empty + pending missing + opposite (buy) has positions
-   if(sellAllowed && sellPos==0 && tSellPend==0 && buyPos>0){
+   // Re-arm SELL: side empty + pending missing + trigger condition met
+   if(sellAllowed && sellPos==0 && tSellPend==0 && sellTrigger){
       double dnPx = NormalizeDouble(bid - dist, g_digits);
       double tp   = (InpInitialTPPips>0)? NormalizeDouble(dnPx - InpInitialTPPips*g_point, g_digits) : 0;
       double sl   = (InpInitialSLPips>0)? NormalizeDouble(dnPx + InpInitialSLPips*g_point, g_digits) : 0;
       string c    = MakeComment(g, false, "IN");
       if(trade.SellStop(InpInitialLot, dnPx, _Symbol, sl, tp, ORDER_TIME_GTC, 0, c)){
-         if(InpVerboseLog) PrintFormat("Golden2 v1.7: ReArm SellStop G%d at %.5f", g, dnPx);
+         if(InpVerboseLog) PrintFormat("Golden2 v2.6: Re-entry SellStop G%d at %.5f (buyPos=%d)", g, dnPx, buyPos);
       }
    }
 }
