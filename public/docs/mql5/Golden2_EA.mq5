@@ -74,8 +74,22 @@ input int     InpFrameLowerPips       = 200;                         // SELL_STO
 input int     InpInitialTPPips        = 300;                         // Initial TP (points) (0=off)
 input int     InpInitialSLPips        = 0;                           // Initial SL (points) (0=off)
 
+//--- === Frame & Initial Order ===
+input string  __sec_frame__           = "=== Frame & Initial Order ==="; // ---
+input ENUM_INIT_SIDE_MODE InpInitSideMode = INIT_BOTH;                   // [v1.7] Initial side mode (Both/Buy/Sell)
+input double  InpInitialLot           = 0.01;                            // Initial lot (G_IN)
+input int     InpFrameUpperPips       = 200;                             // BUY_STOP distance from mid (points)
+input int     InpFrameLowerPips       = 200;                             // SELL_STOP distance from mid (points)
+input int     InpInitialTPPips        = 300;                             // Initial TP (points) (0=off)
+input int     InpInitialSLPips        = 0;                               // Initial SL (points) (0=off)
+input bool    InpInitTrailOpposite    = true;                            // [v1.7] Trail opposite stop when one stop runs away
+input int     InpInitTrailTriggerPips = 200;                             // [v1.7] Trail trigger: when distance from mid > this (points)
+input bool    InpInitReArmAfterTP     = true;                            // [v1.7] Re-arm side stop after that side empties (TP hit)
+input int     InpInitReArmDistancePips= 200;                             // [v1.7] Re-arm distance from current price (points)
+
 //--- === Grid Loss Side === (Gold Miner-style)
 input string  __sec_grid_loss__       = "=== Grid Loss Side ===";    // ---
+input bool           GridLoss_Enable          = true;                 // [v1.7] Enable Grid Loss (off = Initial only)
 input int            GridLoss_MaxTrades       = 30;                  // Max Grid Loss Trades
 input ENUM_LOT_MODE_G2 GridLoss_LotMode       = G2_LOT_MULTIPLY;     // Grid Loss Lot Mode
 input string         GridLoss_CustomLots      = "0.01;0.01;0.01;0.01;0.01;0.01;0.01;0.01;0.01;0.01"; // Custom Lots (semicolon)
