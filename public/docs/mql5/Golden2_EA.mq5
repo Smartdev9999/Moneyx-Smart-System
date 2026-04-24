@@ -1565,6 +1565,7 @@ void CleanupAllLinesByPrefix(){
 
 //================ MATCHING CLOSE (Triple Gate) ================
 void TryMatchingCloseForGroup(int g){
+   if(!InpExitTripleGate_Enable) return; // [v1.6] master toggle for Triple-Gate
    if(!IsExpansionToNormal()) return;
 
    double avgMain  = GroupAveragePrice(g, -1, 0);
