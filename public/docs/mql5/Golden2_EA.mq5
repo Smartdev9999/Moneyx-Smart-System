@@ -1115,7 +1115,7 @@ void SyncSideTPSLToBroker(int g, int side){
                   g, side, modified, tpPrice, slPrice, cnt);
 }
 
-
+void CloseMainSideOfGroup(int g, int side){
    int total = PositionsTotal();
    for(int i=total-1;i>=0;i--){
       ulong tk = PositionGetTicket(i);
