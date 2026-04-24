@@ -160,10 +160,12 @@ input color   InpSL_LineColor         = clrBlack;                    // SL Line 
 
 //--- === Hedging ===
 input string  __sec_hedge__           = "=== Hedging ===";           // ---
+input bool    InpHedge_Enabled        = true;                        // Enable Hedging system (master switch)
 input double  InpHedgeTriggerUSD      = 1000.0;                      // Hedge trigger (USD floating loss target)
+input double  InpHedge_BlockNewOrderPercent = 75.0;                  // Block new grid orders when DD% >= this (0=off)
 input double  InpHedgeArmPercent      = 80.0;                        // Arm pending hedge when DD% reaches
 input double  InpHedgeDisarmPercent   = 70.0;                        // Disarm pending hedge when DD% drops below
-input bool    InpHedgeLotMatch1to1    = true;                        // Hedge lots match opposite side 1:1
+input bool    InpHedgeLotMatch1to1    = true;                        // Hedge lots match opposite side 1:1 (mirror tag+lot)
 input int     InpHedge_OpenDelayMin   = 0;                           // Cooldown minutes between hedges (0=off)
 input ENUM_HEDGE_DELAY_MODE_G2 InpHedge_OpenDelayMode = G2_HDELAY_BOTH; // Cooldown reference
 
