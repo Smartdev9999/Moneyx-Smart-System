@@ -78,6 +78,9 @@ input bool    InpInitTrailOpposite    = true;                            // [v1.
 input int     InpInitTrailTriggerPips = 200;                             // [v1.7] Trail trigger: when distance from mid > this (points)
 input bool    InpInitReArmAfterTP     = true;                            // [v1.7] Re-arm side stop after that side empties (TP hit)
 input int     InpInitReArmDistancePips= 200;                             // [v1.7] Re-arm distance from current price (points)
+input bool            InpInitTrailOnBarClose      = true;                  // [v1.8] Trail opposite stop on every bar close (overrides v1.7 trigger trail)
+input ENUM_TIMEFRAMES InpInitTrailTF              = PERIOD_M1;             // [v1.8] Trail timer TF (default M1)
+input bool            InpGL_ImmediateAfterInitial = true;                  // [v1.8] Fire GL#1 immediately after Initial fill (bypass candle guards on first GL)
 
 //--- === Grid Loss Side === (Gold Miner-style)
 input string  __sec_grid_loss__       = "=== Grid Loss Side ===";    // ---
