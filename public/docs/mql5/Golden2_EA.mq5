@@ -1,16 +1,17 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|     Golden2 EA v2.4 - Symmetric Initial Frame Trail:           |
-//|     trail BOTH BuyStop & SellStop together to follow market     |
-//|     mid (recenter) so the side price is running INTO no longer  |
-//|     gets hit while only the opposite side trails. Fixes G3+     |
-//|     orphan IN fill that blocked group advancement.              |
+//|     Golden2 EA v2.5 - One-Way Toward-Price Trail:               |
+//|     pending BuyStop is dragged DOWN only when price falls away  |
+//|     (target = ask + UpperPips below current pending). SellStop  |
+//|     is dragged UP only when price rises away. Pending NEVER     |
+//|     moves AWAY from price -> price approaching always triggers  |
+//|     the order. Replaces v2.4 symmetric/recenter behaviour.      |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.40"
-#property description "Golden2 EA v2.4 - Symmetric Initial Frame Trail. ManageInitialTrailOnBarClose now recenters BOTH BuyStop and SellStop pendings on the current market mid every bar close (controlled by InpFrameSymmetricTrail, threshold InpFrameRecenterMinPips). Previous asymmetric trail only dragged the stop on the side price was running away from, so the opposite stop sat still and got hit on retrace -> orphan IN fill that blocked next-group advancement. v2.3 hedge-state freeze, post-hedge IN cleanup, and orphan-aware advance guard preserved unchanged. Order execution, hedging, grid logic, and triple-gate exits untouched."
+#property version   "2.50"
+#property description "Golden2 EA v2.5 - One-Way Toward-Price Trail. ManageInitialTrailOnBarClose now drags BuyStop DOWN only (when ask falls so frame distance grows) and SellStop UP only (when bid rises so frame distance grows). Pendings never move AWAY from market, so price approaching always triggers the order as designed. Threshold = InpFrameRecenterMinPips (points). Fixes v2.4 mistake where pendings recenter-followed price like a shadow and got hit too easily. v2.3 hedge-state freeze, post-hedge IN cleanup, orphan-aware advance guard, and v2.2 TP/SL preservation all retained. Order execution, hedging, grid logic, triple-gate exits untouched."
 #property strict
 
 #include <Trade/Trade.mqh>
