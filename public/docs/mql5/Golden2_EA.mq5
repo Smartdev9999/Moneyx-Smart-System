@@ -601,7 +601,7 @@ int FindActiveTradingGroup(){
 void PlaceInitialFrame(int g){
    // [v1.6] Squeeze block: don't place initial frame on volatile expansion
    if(InpSQ_Enable && InpSQ_BlockNewOrders && g_sqExpCount >= InpSQ_MinExpansionTFs && SqueezeBlocksAny()){
-      if(InpVerboseLog) PrintFormat("Golden2 v1.6: Squeeze BLOCK initial G%d (%s)", g, SqueezeStatusString());
+      if(InpVerboseLog) PrintFormat("Golden2 v1.7: Squeeze BLOCK initial G%d (%s)", g, SqueezeStatusString());
       return;
    }
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
@@ -620,15 +620,29 @@ void PlaceInitialFrame(int g){
    string cBuy  = MakeComment(g, false, "IN");
    string cSell = MakeComment(g, false, "IN");
 
-   if(!trade.BuyStop(InpInitialLot, upPx, _Symbol, slUp, tpUp, ORDER_TIME_GTC, 0, cBuy))
-      PrintFormat("Golden2 v1.1: BuyStop failed G%d err=%d", g, GetLastError());
-   if(!trade.SellStop(InpInitialLot, dnPx, _Symbol, slDn, tpDn, ORDER_TIME_GTC, 0, cSell))
-      PrintFormat("Golden2 v1.1: SellStop failed G%d err=%d", g, GetLastError());
+   bool placeBuy  = (InpInitSideMode == INIT_BOTH || InpInitSideMode == INIT_BUY_ONLY);
+   bool placeSell = (InpInitSideMode == INIT_BOTH || InpInitSideMode == INIT_SELL_ONLY);
+
+   if(placeBuy){
+      if(!trade.BuyStop(InpInitialLot, upPx, _Symbol, slUp, tpUp, ORDER_TIME_GTC, 0, cBuy))
+         PrintFormat("Golden2 v1.7: BuyStop failed G%d err=%d", g, GetLastError());
+   }
+   if(placeSell){
+      if(!trade.SellStop(InpInitialLot, dnPx, _Symbol, slDn, tpDn, ORDER_TIME_GTC, 0, cSell))
+         PrintFormat("Golden2 v1.7: SellStop failed G%d err=%d", g, GetLastError());
+   }
    if(InpVerboseLog)
-      PrintFormat("Golden2 v1.1: Placed initial frame G%d mid=%.5f up=%.5f dn=%.5f", g, mid, upPx, dnPx);
+      PrintFormat("Golden2 v1.7: Placed initial frame G%d mode=%d mid=%.5f up=%s dn=%s",
+                  g, (int)InpInitSideMode, mid,
+                  placeBuy?DoubleToString(upPx,g_digits):"-",
+                  placeSell?DoubleToString(dnPx,g_digits):"-");
 }
 
+// [v1.7] EnforceFrameMutualExclusion: only delete the opposite-side IN pending in
+//        single-side modes (Buy-only / Sell-only). In BOTH mode we KEEP the
+//        opposite stop alive so the user gets a real two-side hedge frame.
 void EnforceFrameMutualExclusion(int g){
+   if(InpInitSideMode == INIT_BOTH) return; // keep both pendings live
    bool hasBuyPos  = (CountGroupPositions(g, 0, 0) > 0);
    bool hasSellPos = (CountGroupPositions(g, 1, 0) > 0);
    if(!hasBuyPos && !hasSellPos) return;
@@ -650,6 +664,121 @@ void EnforceFrameMutualExclusion(int g){
       bool isSellPending = (ot==ORDER_TYPE_SELL_STOP|| ot==ORDER_TYPE_SELL_LIMIT);
       if(hasBuyPos && isSellPending) trade.OrderDelete(tk);
       if(hasSellPos && isBuyPending) trade.OrderDelete(tk);
+   }
+}
+
+// [v1.7] Find the IN pending ticket for a given side (Buy=0/Sell=1). Returns 0 if none.
+ulong FindInitialPendingTicket(int g, int side){
+   int total = OrdersTotal();
+   for(int i=0;i<total;i++){
+      ulong tk = OrderGetTicket(i);
+      if(tk==0) continue;
+      if(!OrderSelect(tk)) continue;
+      if((long)OrderGetInteger(ORDER_MAGIC) != InpMagic) continue;
+      if(OrderGetString(ORDER_SYMBOL) != _Symbol) continue;
+      string c = OrderGetString(ORDER_COMMENT);
+      int gp; bool hd; string tag;
+      if(!ParseComment(c, gp, hd, tag)) continue;
+      if(gp != g || hd || tag != "IN") continue;
+      ENUM_ORDER_TYPE ot = (ENUM_ORDER_TYPE)OrderGetInteger(ORDER_TYPE);
+      if(side==0 && (ot==ORDER_TYPE_BUY_STOP || ot==ORDER_TYPE_BUY_LIMIT)) return tk;
+      if(side==1 && (ot==ORDER_TYPE_SELL_STOP|| ot==ORDER_TYPE_SELL_LIMIT)) return tk;
+   }
+   return 0;
+}
+
+// [v1.7] Auto-trail opposite IN stop while no position has filled yet.
+//        If price runs UP by > InpInitTrailTriggerPips beyond mid (i.e. closer to
+//        BuyStop), the SellStop is moved UP to keep it InpFrameLowerPips below market.
+//        Symmetric for downward moves. Only operates while BOTH IN pendings exist.
+void ManageInitialTrail(int g){
+   if(!InpInitTrailOpposite) return;
+   if(InpInitSideMode != INIT_BOTH) return; // need both stops
+   if(CountGroupPositions(g,-1,0) > 0) return; // a side already filled
+   if(IsGroupHedgeMatched(g)) return;
+
+   ulong tBuy  = FindInitialPendingTicket(g, 0);
+   ulong tSell = FindInitialPendingTicket(g, 1);
+   if(tBuy==0 || tSell==0) return; // need both alive to trail
+
+   if(!OrderSelect(tBuy)) return;
+   double buyPx  = OrderGetDouble(ORDER_PRICE_OPEN);
+   if(!OrderSelect(tSell)) return;
+   double sellPx = OrderGetDouble(ORDER_PRICE_OPEN);
+
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double trigger = InpInitTrailTriggerPips * g_point;
+
+   // Price moving UP toward Buy stop → drag Sell stop up
+   double distBuy = buyPx - ask;     // points until BuyStop trips
+   if(distBuy < InpFrameUpperPips*g_point - trigger){
+      double newSellPx = NormalizeDouble(bid - InpFrameLowerPips*g_point, g_digits);
+      if(newSellPx > sellPx + g_point){
+         if(!OrderSelect(tSell)) return;
+         double sl = OrderGetDouble(ORDER_SL);
+         double tp = (InpInitialTPPips>0)? NormalizeDouble(newSellPx - InpInitialTPPips*g_point, g_digits) : 0;
+         double newSL = (InpInitialSLPips>0)? NormalizeDouble(newSellPx + InpInitialSLPips*g_point, g_digits) : sl;
+         if(trade.OrderModify(tSell, newSellPx, newSL, tp, ORDER_TIME_GTC, 0)){
+            if(InpVerboseLog) PrintFormat("Golden2 v1.7: Trail SellStop G%d %.5f -> %.5f", g, sellPx, newSellPx);
+         }
+      }
+   }
+   // Price moving DOWN toward Sell stop → drag Buy stop down
+   double distSell = bid - sellPx;
+   if(distSell < InpFrameLowerPips*g_point - trigger){
+      double newBuyPx = NormalizeDouble(ask + InpFrameUpperPips*g_point, g_digits);
+      if(newBuyPx < buyPx - g_point){
+         if(!OrderSelect(tBuy)) return;
+         double sl = OrderGetDouble(ORDER_SL);
+         double tp = (InpInitialTPPips>0)? NormalizeDouble(newBuyPx + InpInitialTPPips*g_point, g_digits) : 0;
+         double newSL = (InpInitialSLPips>0)? NormalizeDouble(newBuyPx - InpInitialSLPips*g_point, g_digits) : sl;
+         if(trade.OrderModify(tBuy, newBuyPx, newSL, tp, ORDER_TIME_GTC, 0)){
+            if(InpVerboseLog) PrintFormat("Golden2 v1.7: Trail BuyStop G%d %.5f -> %.5f", g, buyPx, newBuyPx);
+         }
+      }
+   }
+}
+
+// [v1.7] Re-arm a fresh IN stop on a side after that side empties (TP hit) while
+//        the OPPOSITE side still has open positions. New stop is placed at
+//        current market ± InpInitReArmDistancePips. Side mode is respected.
+void ManageInitialReArm(int g){
+   if(!InpInitReArmAfterTP) return;
+   if(IsGroupHedgeMatched(g)) return;
+   if(g_blockNewOrders[g]) return;
+
+   bool buyAllowed  = (InpInitSideMode == INIT_BOTH || InpInitSideMode == INIT_BUY_ONLY);
+   bool sellAllowed = (InpInitSideMode == INIT_BOTH || InpInitSideMode == INIT_SELL_ONLY);
+
+   int buyPos  = CountGroupPositions(g, 0, 0);
+   int sellPos = CountGroupPositions(g, 1, 0);
+   ulong tBuyPend  = FindInitialPendingTicket(g, 0);
+   ulong tSellPend = FindInitialPendingTicket(g, 1);
+
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double dist = InpInitReArmDistancePips * g_point;
+
+   // Re-arm BUY: side empty + pending missing + opposite (sell) has positions
+   if(buyAllowed && buyPos==0 && tBuyPend==0 && sellPos>0){
+      double upPx = NormalizeDouble(ask + dist, g_digits);
+      double tp   = (InpInitialTPPips>0)? NormalizeDouble(upPx + InpInitialTPPips*g_point, g_digits) : 0;
+      double sl   = (InpInitialSLPips>0)? NormalizeDouble(upPx - InpInitialSLPips*g_point, g_digits) : 0;
+      string c    = MakeComment(g, false, "IN");
+      if(trade.BuyStop(InpInitialLot, upPx, _Symbol, sl, tp, ORDER_TIME_GTC, 0, c)){
+         if(InpVerboseLog) PrintFormat("Golden2 v1.7: ReArm BuyStop G%d at %.5f", g, upPx);
+      }
+   }
+   // Re-arm SELL: side empty + pending missing + opposite (buy) has positions
+   if(sellAllowed && sellPos==0 && tSellPend==0 && buyPos>0){
+      double dnPx = NormalizeDouble(bid - dist, g_digits);
+      double tp   = (InpInitialTPPips>0)? NormalizeDouble(dnPx - InpInitialTPPips*g_point, g_digits) : 0;
+      double sl   = (InpInitialSLPips>0)? NormalizeDouble(dnPx + InpInitialSLPips*g_point, g_digits) : 0;
+      string c    = MakeComment(g, false, "IN");
+      if(trade.SellStop(InpInitialLot, dnPx, _Symbol, sl, tp, ORDER_TIME_GTC, 0, c)){
+         if(InpVerboseLog) PrintFormat("Golden2 v1.7: ReArm SellStop G%d at %.5f", g, dnPx);
+      }
    }
 }
 
