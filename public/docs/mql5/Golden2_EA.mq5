@@ -1983,30 +1983,51 @@ void DrawDashboard(){
    }
    double maxPct = (InpHedgeTriggerUSD>0) ? (peakLossUSD*100.0/InpHedgeTriggerUSD) : 0;
 
+   // Build mode label
+   string modeLbl = "BOTH";
+   if(InpInitSideMode == INIT_BUY_ONLY)  modeLbl = "BUY-only";
+   if(InpInitSideMode == INIT_SELL_ONLY) modeLbl = "SELL-only";
+
    // Header
-   DashHeader("L_TITLE", x, y, w, rowH+2, " Golden2 EA v1.6    Mode: Group", InpDashAccent);
+   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v1.7    Side: %s", modeLbl), InpDashAccent);
    y += rowH+2;
 
-   // Rows
+   // ==== Account section ====
+   DashHeader("L_S_ACC", x, y, w, rowH, " === ACCOUNT ===", InpDashAccent); y+=rowH;
    DashRow("L_BAL",   x, y, w, rowH, "Balance",          StringFormat("$%.2f", bal), InpDashColor);  y+=rowH;
    DashRow("L_EQ",    x, y, w, rowH, "Equity",           StringFormat("$%.2f", eq),  InpDashColor);  y+=rowH;
    DashRow("L_FLT",   x, y, w, rowH, "Floating P/L",     StringFormat("$%.2f", flt), flt>=0?InpDashGood:InpDashBad); y+=rowH;
-   DashRow("L_PB",    x, y, w, rowH, "Position BUY",     StringFormat("$%.2f  %.2fL  %dord", plBuy,  GroupAggLotBuy(),  totBuyPos),  plBuy>=0?InpDashGood:InpDashBad);  y+=rowH;
-   DashRow("L_PS",    x, y, w, rowH, "Position SELL",    StringFormat("$%.2f  %.2fL  %dord", plSell, GroupAggLotSell(), totSellPos), plSell>=0?InpDashGood:InpDashBad); y+=rowH;
-   DashRow("L_DD",    x, y, w, rowH, "Current DD% (max)", StringFormat("%.2f%% / %.0f%%", maxPct, InpHedgeArmPercent), maxPct>=InpHedgeArmPercent?InpDashBad:(maxPct>=InpHedge_BlockNewOrderPercent?InpDashAccent:InpDashColor)); y+=rowH;
+
+   // ==== Position section ====
+   DashHeader("L_S_POS", x, y, w, rowH, " === POSITIONS ===", InpDashAccent); y+=rowH;
+   DashRow("L_PB",    x, y, w, rowH, "BUY  P/L  Lot  Ord",  StringFormat("$%.2f  %.2fL  %dord", plBuy,  GroupAggLotBuy(),  totBuyPos),  plBuy>=0?InpDashGood:InpDashBad);  y+=rowH;
+   DashRow("L_PS",    x, y, w, rowH, "SELL P/L  Lot  Ord",  StringFormat("$%.2f  %.2fL  %dord", plSell, GroupAggLotSell(), totSellPos), plSell>=0?InpDashGood:InpDashBad); y+=rowH;
    DashRow("L_TOTLOT",x, y, w, rowH, "Total Cur. Lot",   StringFormat("%.2f L", totMainLot+totHedgeLot), InpDashColor); y+=rowH;
    DashRow("L_GRP",   x, y, w, rowH, "Active / Matched", StringFormat("%d / %d", activeGroups, matchedGroups), InpDashAccent); y+=rowH;
-   DashRow("L_QUEUE", x, y, w, rowH, "Queue Mutex",      g_activeOpsGroup<0?"IDLE":StringFormat("G%d", g_activeOpsGroup), InpDashColor); y+=rowH;
-   DashRow("L_STRIP", x, y, w, rowH, "TP-Stripped",      StrippedListString(), InpDashColor); y+=rowH;
+   DashRow("L_DD",    x, y, w, rowH, "Current DD% (max)", StringFormat("%.2f%% / %.0f%%", maxPct, InpHedgeArmPercent), maxPct>=InpHedgeArmPercent?InpDashBad:(maxPct>=InpHedge_BlockNewOrderPercent?InpDashAccent:InpDashColor)); y+=rowH;
 
-   int rem=0;
-   string hd = IsHedgeOpenDelayActive(rem) ? StringFormat("WAIT %dm%02ds", rem/60, rem%60) : "READY";
-   DashRow("L_HDLY",  x, y, w, rowH, "Hedge Delay",      hd, InpDashColor); y+=rowH;
+   // ==== Module status section ====
+   DashHeader("L_S_MOD", x, y, w, rowH, " === MODULES ===", InpDashAccent); y+=rowH;
+   DashRow("L_INIT",  x, y, w, rowH, "Initial Side",     StringFormat("%s  Trail:%s  ReArm:%s",
+                          modeLbl,
+                          InpInitTrailOpposite?"ON":"OFF",
+                          InpInitReArmAfterTP ?"ON":"OFF"),
+                          InpDashColor); y+=rowH;
+   DashRow("L_GL",    x, y, w, rowH, "Grid Loss",        GridLoss_Enable?"ON":"OFF", GridLoss_Enable?InpDashGood:InpDashBad); y+=rowH;
+   DashRow("L_GP",    x, y, w, rowH, "Grid Profit",      GridProfit_Enable?"ON":"OFF", GridProfit_Enable?InpDashGood:InpDashBad); y+=rowH;
    DashRow("L_TRAIL", x, y, w, rowH, "MaxGrid Trail",    StringFormat("%s (Mode %d)", MaxGrid_TrailEnable?"ON":"OFF", MaxGrid_TrailMode), MaxGrid_TrailEnable?InpDashGood:InpDashColor); y+=rowH;
    DashRow("L_HEDGE", x, y, w, rowH, "Hedging",          InpHedge_Enabled?"ON":"OFF", InpHedge_Enabled?InpDashGood:InpDashBad); y+=rowH;
    DashRow("L_BLK",   x, y, w, rowH, "Pre-Hedge Block",  StringFormat("%d grp(s)", blockedGroups), blockedGroups>0?InpDashAccent:InpDashColor); y+=rowH;
+   int rem=0;
+   string hd = IsHedgeOpenDelayActive(rem) ? StringFormat("WAIT %dm%02ds", rem/60, rem%60) : "READY";
+   DashRow("L_HDLY",  x, y, w, rowH, "Hedge Delay",      hd, InpDashColor); y+=rowH;
    DashRow("L_TG",    x, y, w, rowH, "Triple-Gate",      InpExitTripleGate_Enable?"ON":"OFF", InpExitTripleGate_Enable?InpDashGood:InpDashBad); y+=rowH;
    DashRow("L_SQ",    x, y, w, rowH, "Squeeze",          SqueezeStatusString(), (g_sqBlockBuy||g_sqBlockSell)?InpDashBad:(InpSQ_Enable?InpDashGood:InpDashColor)); y+=rowH;
+
+   // ==== Footer ====
+   DashHeader("L_S_SYS", x, y, w, rowH, " === SYSTEM ===", InpDashAccent); y+=rowH;
+   DashRow("L_QUEUE", x, y, w, rowH, "Queue Mutex",      g_activeOpsGroup<0?"IDLE":StringFormat("G%d", g_activeOpsGroup), InpDashColor); y+=rowH;
+   DashRow("L_STRIP", x, y, w, rowH, "TP-Stripped",      StrippedListString(), InpDashColor); y+=rowH;
    DashRow("L_STAT",  x, y, w, rowH, "System Status",    InpAllowTrade?"Working":"Paused", InpAllowTrade?InpDashGood:InpDashBad); y+=rowH;
 
    //==== RIGHT PANEL: Hedging table (only when Hedging is ON) ====
