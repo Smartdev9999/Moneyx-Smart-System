@@ -1336,13 +1336,15 @@ string StrippedListString(){
 
 void DrawDashboard(){
    if(!InpShowDashboard) return;
-   string txt = "Golden2 EA v1.1\n";
+   string txt = "Golden2 EA v1.2\n";
    txt += StringFormat("Symbol: %s  Magic: %I64d\n", _Symbol, (long)InpMagic);
    int rem = 0;
    if(IsHedgeOpenDelayActive(rem)) txt += StringFormat("HedgeDelay: WAIT %dm%02ds\n", rem/60, rem%60);
    else txt += "HedgeDelay: READY\n";
    txt += StringFormat("Queue mutex: %s\n", g_activeOpsGroup<0?"IDLE":StringFormat("G%d", g_activeOpsGroup));
    txt += StringFormat("TP-Stripped: %s\n", StrippedListString());
+   txt += StringFormat("MaxGridTrail: %s (Mode %d)\n",
+                       MaxGrid_TrailEnable?"ON":"OFF", MaxGrid_TrailMode);
    txt += "------------------------------\n";
    for(int g=1; g<=InpMaxGroups; g++){
       if(!GroupHasAnyPositions(g) && !GroupHasAnyPendings(g)) continue;
@@ -1353,13 +1355,24 @@ void DrawDashboard(){
       if(lossUSD<0) lossUSD=0;
       double pct = (InpHedgeTriggerUSD>0) ? (lossUSD*100.0/InpHedgeTriggerUSD) : 0;
       string match = IsGroupHedgeMatched(g) ? " [MATCHED]" : "";
+      int glB = HighestGridLevel(g, SIDE_BUY,  false, "GL");
+      int glS = HighestGridLevel(g, SIDE_SELL, false, "GL");
+      int gpB = HighestGridLevel(g, SIDE_BUY,  false, "GP");
+      int gpS = HighestGridLevel(g, SIDE_SELL, false, "GP");
       txt += StringFormat("G%d  mainL=%.2f hdgL=%.2f  PL=%.2f  arm=%.0f%%%s\n",
                           g, mainL, hedgeL, pl, pct, match);
+      txt += StringFormat("  GL B%d/%d S%d/%d  GP B%d/%d S%d/%d\n",
+                          glB, GridLoss_MaxTrades, glS, GridLoss_MaxTrades,
+                          gpB, GridProfit_MaxTrades, gpS, GridProfit_MaxTrades);
       if(!IsGroupHedgeMatched(g) && GroupHasAnyPositions(g)){
          double avgB = GroupAveragePrice(g, 0, 0);
          double avgS = GroupAveragePrice(g, 1, 0);
-         if(avgB>0) txt += StringFormat("  B avg=%.5f tp=%.5f\n", avgB, ComputeAvgTPPrice(g,0));
-         if(avgS>0) txt += StringFormat("  S avg=%.5f tp=%.5f\n", avgS, ComputeAvgTPPrice(g,1));
+         if(avgB>0) txt += StringFormat("  B avg=%.5f tp=%.5f", avgB, ComputeAvgTPPrice(g,0));
+         if(avgB>0 && g_maxGridTrailArmed[g][0]) txt += StringFormat(" trail=%.5f", g_maxGridTrailSL[g][0]);
+         if(avgB>0) txt += "\n";
+         if(avgS>0) txt += StringFormat("  S avg=%.5f tp=%.5f", avgS, ComputeAvgTPPrice(g,1));
+         if(avgS>0 && g_maxGridTrailArmed[g][1]) txt += StringFormat(" trail=%.5f", g_maxGridTrailSL[g][1]);
+         if(avgS>0) txt += "\n";
       }
    }
    if(ObjectFind(0, g_dashName) < 0){
@@ -1382,16 +1395,28 @@ int OnInit(){
    trade.SetExpertMagicNumber(InpMagic);
    trade.SetDeviationInPoints(InpSlippage);
 
-   for(int i=0;i<51;i++){ g_stripped[i]=false; g_maxDDPerSide[i][0]=0.0; g_maxDDPerSide[i][1]=0.0; }
+   for(int i=0;i<51;i++){
+      g_stripped[i]=false;
+      g_maxDDPerSide[i][0]=0.0; g_maxDDPerSide[i][1]=0.0;
+      g_atrAtLastGridLoss[i][0]=0.0; g_atrAtLastGridLoss[i][1]=0.0;
+      g_atrAtLastGridProfit[i][0]=0.0; g_atrAtLastGridProfit[i][1]=0.0;
+      g_initialCandleTime[i][0]=0; g_initialCandleTime[i][1]=0;
+      g_lastGridCandleLoss[i][0]=0; g_lastGridCandleLoss[i][1]=0;
+      g_lastGridCandleProfit[i][0]=0; g_lastGridCandleProfit[i][1]=0;
+      g_maxGridTrailSL[i][0]=0; g_maxGridTrailSL[i][1]=0;
+      g_maxGridTrailArmed[i][0]=false; g_maxGridTrailArmed[i][1]=false;
+   }
 
    g_bbHandle  = iBands(_Symbol, InpExitTF, InpExitBBPeriod, 0, InpExitBBDev, PRICE_CLOSE);
    g_atrHandle = iATR(_Symbol, InpExitTF, InpExitKeltnerATR);
+   g_atrLossHandle   = iATR(_Symbol, GridLoss_ATR_TF,   GridLoss_ATR_Period);
+   g_atrProfitHandle = iATR(_Symbol, GridProfit_ATR_TF, GridProfit_ATR_Period);
    if(g_bbHandle == INVALID_HANDLE || g_atrHandle == INVALID_HANDLE){
-      Print("Golden2 v1.1: indicator init failed");
+      Print("Golden2 v1.2: indicator init failed");
       return INIT_FAILED;
    }
 
-   PrintFormat("Golden2 EA v1.1 initialized | Magic=%I64d | MaxGroups=%d", (long)InpMagic, InpMaxGroups);
+   PrintFormat("Golden2 EA v1.2 initialized | Magic=%I64d | MaxGroups=%d", (long)InpMagic, InpMaxGroups);
    return INIT_SUCCEEDED;
 }
 
@@ -1400,6 +1425,22 @@ void OnDeinit(const int reason){
    CleanupAllLinesByPrefix();
    if(g_bbHandle != INVALID_HANDLE) IndicatorRelease(g_bbHandle);
    if(g_atrHandle != INVALID_HANDLE) IndicatorRelease(g_atrHandle);
+   if(g_atrLossHandle != INVALID_HANDLE)   IndicatorRelease(g_atrLossHandle);
+   if(g_atrProfitHandle != INVALID_HANDLE) IndicatorRelease(g_atrProfitHandle);
+}
+
+// Track first-position candle for "DontSameCandle" guard
+void TrackInitialCandle(int g){
+   datetime curBar = iTime(_Symbol, PERIOD_CURRENT, 0);
+   for(int sd=0; sd<2; sd++){
+      int cnt = CountGroupPositions(g, sd, 0);
+      if(cnt == 0){
+         g_initialCandleTime[g][sd] = 0;
+      } else if(g_initialCandleTime[g][sd] == 0){
+         // First time we see a position on this side → record the bar
+         g_initialCandleTime[g][sd] = curBar;
+      }
+   }
 }
 
 void OnTick(){
@@ -1412,10 +1453,15 @@ void OnTick(){
          // group empty: reset trackers
          if(g_stripped[g]) g_stripped[g] = false;
          ResetMaxDDPerSide(g);
+         g_initialCandleTime[g][0]=0; g_initialCandleTime[g][1]=0;
+         g_maxGridTrailSL[g][0]=0;    g_maxGridTrailSL[g][1]=0;
+         g_maxGridTrailArmed[g][0]=false; g_maxGridTrailArmed[g][1]=false;
          continue;
       }
       EnforceFrameMutualExclusion(g);
+      TrackInitialCandle(g);
       TryPlaceGridLoss(g);
+      TryPlaceGridProfit(g);
       ManageGroupHedgeArm(g);
 
       // Auto-strip broker TP/SL when main + hedge coexist (matched set)
@@ -1425,6 +1471,9 @@ void OnTick(){
 
       // Update max DD per side (only useful pre-match)
       UpdateMaxDDPerSide(g);
+
+      // Max Grid Average Trailing Stop (pre-match only)
+      ManageMaxGridTrailing(g);
 
       // Average TP/SL Manager (only acts pre-match)
       CheckAndCloseByAverageTP(g);
