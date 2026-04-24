@@ -2987,6 +2987,14 @@ int ComputeLoopUpperBound(){
 }
 
 void OnTick(){
+   // [v2.74] Periodic sweep — Tester sometimes spawns aux chart tabs after init.
+   if(g_isTesterMode && InpTester_HideAuxCharts){
+      datetime now = TimeCurrent();
+      if(now - g_lastAuxChartSweep >= 60){
+         HideAuxiliaryTesterCharts();
+         g_lastAuxChartSweep = now;
+      }
+   }
    if(!InpAllowTrade){ RenderDashboardThrottled(); return; }
    RefreshSqueezeStateThrottled(); // [v2.72] one refresh per new M1 bar
 
