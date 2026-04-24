@@ -1078,13 +1078,16 @@ void TryPlaceGridLoss(int g){
       else      trigger = (bid >= lastPrice + gapPts*g_point);
       if(!trigger) continue;
 
+      // [v1.8] Bypass candle guards on GL#1 right after Initial fill (immediate trigger)
+      bool bypassGuards = (InpGL_ImmediateAfterInitial && gl == 0);
+
       // OnlyNewCandle / DontSameCandle guards
       datetime curBar = iTime(_Symbol, PERIOD_CURRENT, 0);
-      if(GridLoss_OnlyNewCandle && g_lastGridCandleLoss[g][sd] == curBar) continue;
-      if(GridLoss_DontSameCandle && g_initialCandleTime[g][sd] == curBar) continue;
+      if(!bypassGuards && GridLoss_OnlyNewCandle && g_lastGridCandleLoss[g][sd] == curBar) continue;
+      if(!bypassGuards && GridLoss_DontSameCandle && g_initialCandleTime[g][sd] == curBar) continue;
 
       // Candle confirmation (N consecutive closed candles in the loss direction)
-      if(GridLoss_CandleConfirm > 0){
+      if(!bypassGuards && GridLoss_CandleConfirm > 0){
          int dir = (sd==0) ? -1 : +1; // BUY losing → bears, SELL losing → bulls
          if(CountConfirmingCandles(dir, GridLoss_CandleConfirm) < GridLoss_CandleConfirm) continue;
       }
