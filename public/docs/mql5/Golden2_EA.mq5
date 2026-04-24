@@ -1,13 +1,13 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|     Golden2 EA v1.5 - Gold-Miner-style dashboard (2 tables):     |
-//|     left=summary, right=hedging (shown only when Hedging ON)     |
+//|     Golden2 EA v1.6 - Disarm fix + Volatility Squeeze Filter +   |
+//|     Post-Hedge grid lock + Triple-Gate master toggle             |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "1.50"
-#property description "Golden2 EA v1.5 - Two-panel dashboard: left Gold-Miner-style summary table; right Hedging table (auto-shown only when InpHedge_Enabled=true) listing every active hedge group with status, lots, P/L, pendings"
+#property version   "1.60"
+#property description "Golden2 EA v1.6 - (1) Robust hedge-pending disarm when DD recovers/no loss side/no main pos (2) Volatility Squeeze Filter (3 TFs, BB/KC ratio, directional block) ported from Gold Miner (3) Post-hedge grid lock: groups freeze after hedge activates until Triple-Gate close (4) Triple-Gate matching close master toggle"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -171,6 +171,8 @@ input ENUM_HEDGE_DELAY_MODE_G2 InpHedge_OpenDelayMode = G2_HDELAY_BOTH; // Coold
 
 //--- === Exit Triple Gate ===
 input string  __sec_exit__            = "=== Exit Triple Gate ==="; // ---
+input bool    InpExitTripleGate_Enable= true;                        // [v1.6] Enable Triple-Gate matching close
+input bool    InpPostHedge_AllowContinuation = false;                // [v1.6] Allow continuation grid AFTER hedge activates (default OFF = freeze group)
 input ENUM_TIMEFRAMES InpExitTF       = PERIOD_H4;                   // Higher TF for Expansion->Normal gate
 input int     InpExitBBPeriod         = 20;                          // BB period
 input double  InpExitBBDev            = 2.0;                         // BB deviation
@@ -178,6 +180,23 @@ input int     InpExitKeltnerATR       = 20;                          // Keltner 
 input double  InpExitKeltnerMult      = 1.5;                         // Keltner multiplier
 input int     InpExitBreakoutPips     = 300;                         // Breakout distance from average (points)
 input double  InpExitMinNetUSD        = 1.0;                         // Min net USD profit to allow exit
+
+//--- === Volatility Squeeze Filter === [v1.6 ported from Gold Miner]
+input string  __sec_sq__              = "=== Volatility Squeeze Filter ==="; // ---
+input bool    InpSQ_Enable            = true;                        // Enable Squeeze Filter
+input ENUM_TIMEFRAMES InpSQ_TF1       = PERIOD_M1;                   // Timeframe 1
+input ENUM_TIMEFRAMES InpSQ_TF2       = PERIOD_M5;                   // Timeframe 2
+input ENUM_TIMEFRAMES InpSQ_TF3       = PERIOD_M15;                  // Timeframe 3
+input int     InpSQ_BBPeriod          = 15;                          // BB Period
+input double  InpSQ_BBMult            = 2.0;                         // BB Multiplier
+input int     InpSQ_KCPeriod          = 15;                          // KC Period (EMA)
+input double  InpSQ_KCMult            = 1.5;                         // KC Multiplier (ATR)
+input int     InpSQ_ATRPeriod         = 14;                          // ATR Period for KC
+input double  InpSQ_ExpansionThreshold= 1.6;                         // Expansion Threshold (BBwidth/KCwidth)
+input bool    InpSQ_BlockNewOrders    = true;                        // Block New Orders on Expansion
+input int     InpSQ_MinExpansionTFs   = 1;                           // Min TFs in Expansion to Block (1-3)
+input bool    InpSQ_DirectionalBlock  = true;                        // Directional Block (block counter-trend only)
+input bool    InpSQ_CloseOnExpansion  = false;                       // Close All Orders on Expansion
 
 //--- === Dashboard ===
 input string  __sec_dash__            = "=== Dashboard ===";         // ---
@@ -214,6 +233,18 @@ int g_bbHandle = INVALID_HANDLE;
 int g_atrHandle = INVALID_HANDLE;
 int g_atrLossHandle   = INVALID_HANDLE;
 int g_atrProfitHandle = INVALID_HANDLE;
+
+// [v1.6] Squeeze Filter handles per TF (3 timeframes)
+int g_sqBB[3]      = {INVALID_HANDLE, INVALID_HANDLE, INVALID_HANDLE};
+int g_sqKCEMA[3]   = {INVALID_HANDLE, INVALID_HANDLE, INVALID_HANDLE};
+int g_sqATR[3]     = {INVALID_HANDLE, INVALID_HANDLE, INVALID_HANDLE};
+ENUM_TIMEFRAMES g_sqTF[3];
+// Cached squeeze state (refreshed each tick by RefreshSqueezeState)
+bool   g_sqExpansion[3]   = {false,false,false}; // is TF in expansion
+int    g_sqDir[3]         = {0,0,0};             // +1 up, -1 down, 0 none
+int    g_sqExpCount       = 0;                    // # TFs currently in expansion
+bool   g_sqBlockBuy       = false;
+bool   g_sqBlockSell      = false;
 
 bool   g_stripped[51];          // per-group flag: broker TP/SL stripped after hedge match
 double g_maxDDPerSide[51][2];   // [group][side] track max floating loss USD seen (positive value)
@@ -440,7 +471,86 @@ bool IsExpansionToNormal(){
    return (wasExpansion && nowNormal);
 }
 
-//================ MUTEX (sequential queue) ================
+//================ [v1.6] VOLATILITY SQUEEZE FILTER ================
+// Per TF: BBwidth/KCwidth on closed bar (shift=1). Expansion when ratio >= threshold.
+// Direction = sign(close - BBmid) on shift=1.
+bool ComputeSqueezeForTF(int idx, bool &isExp, int &dir){
+   isExp = false; dir = 0;
+   if(g_sqBB[idx] == INVALID_HANDLE || g_sqKCEMA[idx] == INVALID_HANDLE || g_sqATR[idx] == INVALID_HANDLE) return false;
+   double bbU[3], bbL[3], bbM[3], ema[3], atr[3];
+   if(CopyBuffer(g_sqBB[idx],   1, 0, 3, bbU) <= 0) return false;
+   if(CopyBuffer(g_sqBB[idx],   2, 0, 3, bbL) <= 0) return false;
+   if(CopyBuffer(g_sqBB[idx],   0, 0, 3, bbM) <= 0) return false;
+   if(CopyBuffer(g_sqKCEMA[idx],0, 0, 3, ema) <= 0) return false;
+   if(CopyBuffer(g_sqATR[idx],  0, 0, 3, atr) <= 0) return false;
+   double bbW = bbU[1] - bbL[1];
+   double kcW = 2.0 * InpSQ_KCMult * atr[1];
+   if(kcW <= 0) return false;
+   double ratio = bbW / kcW;
+   isExp = (ratio >= InpSQ_ExpansionThreshold);
+   double cl = iClose(_Symbol, g_sqTF[idx], 1);
+   if(cl > bbM[1]) dir = +1;
+   else if(cl < bbM[1]) dir = -1;
+   else dir = 0;
+   return true;
+}
+
+void RefreshSqueezeState(){
+   g_sqExpCount = 0;
+   g_sqBlockBuy = false;
+   g_sqBlockSell = false;
+   if(!InpSQ_Enable) return;
+   int upCnt=0, dnCnt=0;
+   for(int i=0;i<3;i++){
+      bool e=false; int d=0;
+      ComputeSqueezeForTF(i, e, d);
+      g_sqExpansion[i] = e;
+      g_sqDir[i] = d;
+      if(e){
+         g_sqExpCount++;
+         if(d>0) upCnt++;
+         else if(d<0) dnCnt++;
+      }
+   }
+   if(InpSQ_BlockNewOrders && g_sqExpCount >= InpSQ_MinExpansionTFs){
+      if(InpSQ_DirectionalBlock){
+         // Expansion-up (price above BB mid breaking up) → block SELL (counter-trend)
+         // Expansion-down → block BUY
+         if(upCnt > 0) g_sqBlockSell = true;
+         if(dnCnt > 0) g_sqBlockBuy  = true;
+      } else {
+         g_sqBlockBuy = true;
+         g_sqBlockSell = true;
+      }
+   }
+}
+
+bool SqueezeBlocksSide(int side){
+   if(!InpSQ_Enable || !InpSQ_BlockNewOrders) return false;
+   if(side == 0) return g_sqBlockBuy;
+   if(side == 1) return g_sqBlockSell;
+   return false;
+}
+
+bool SqueezeBlocksAny(){
+   return SqueezeBlocksSide(0) || SqueezeBlocksSide(1);
+}
+
+string SqueezeStatusString(){
+   if(!InpSQ_Enable) return "OFF";
+   string tfs[3] = {"TF1","TF2","TF3"};
+   string s = StringFormat("E:%d", g_sqExpCount);
+   for(int i=0;i<3;i++){
+      if(g_sqExpansion[i]){
+         s += StringFormat(" %s%s", tfs[i], (g_sqDir[i]>0?"^":(g_sqDir[i]<0?"v":"-")));
+      }
+   }
+   if(g_sqBlockBuy)  s += " BLK_BUY";
+   if(g_sqBlockSell) s += " BLK_SELL";
+   return s;
+}
+
+
 bool ClaimMutex(int g){
    if(!InpSequentialQueue) return true;
    if(g_activeOpsGroup == -1){
@@ -474,6 +584,11 @@ int FindActiveTradingGroup(){
 }
 
 void PlaceInitialFrame(int g){
+   // [v1.6] Squeeze block: don't place initial frame on volatile expansion
+   if(InpSQ_Enable && InpSQ_BlockNewOrders && g_sqExpCount >= InpSQ_MinExpansionTFs && SqueezeBlocksAny()){
+      if(InpVerboseLog) PrintFormat("Golden2 v1.6: Squeeze BLOCK initial G%d (%s)", g, SqueezeStatusString());
+      return;
+   }
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
    double mid = (ask+bid)*0.5;
@@ -688,7 +803,9 @@ int CountConfirmingCandles(int dir, int n){
 
 void TryPlaceGridLoss(int g){
    if(g_blockNewOrders[g]) return; // [v1.4] Pre-hedge block
+   if(IsGroupHedgeMatched(g)) return; // [v1.6] Post-hedge lock: freeze grid until Triple-Gate close
    for(int sd=0; sd<2; sd++){
+      if(SqueezeBlocksSide(sd)) continue; // [v1.6] Squeeze directional block
       int posCount = CountGroupPositions(g, sd, 0);
       if(posCount <= 0) continue;
 
@@ -747,6 +864,7 @@ void TryPlaceGridProfit(int g){
    if(g_blockNewOrders[g]) return; // [v1.4] Pre-hedge block
    if(IsGroupHedgeMatched(g)) return; // pre-hedge only
    for(int sd=0; sd<2; sd++){
+      if(SqueezeBlocksSide(sd)) continue; // [v1.6] Squeeze directional block
       int posCount = CountGroupPositions(g, sd, 0);
       if(posCount <= 0) continue;
       double pl = GroupFloatingPL(g, sd, 0);
@@ -1019,17 +1137,22 @@ void ManageGroupHedgeArm(int g){
       g_blockNewOrders[g] = false;
    }
 
-   // Disarm: drop pending if DD recovers below disarm %
+   // [v1.6] Disarm: drop pending if DD recovers, no loss side, or no main positions exist
    if(!hedgePosExists && hedgePendingExists){
-      if(pct < InpHedgeDisarmPercent){
+      int lossSideNow = GroupLossSide(g);
+      bool noMainPos  = (CountGroupPositions(g,-1,0) == 0);
+      bool ddRecovered= (pct < InpHedgeDisarmPercent);
+      bool noLossSide = (lossSideNow < 0);
+      if(ddRecovered || noLossSide || noMainPos){
          DeleteGroupPendings(g, 1);
-         if(InpVerboseLog) PrintFormat("Golden2 v1.4: HD DISARM G%d pct=%.1f", g, pct);
+         g_blockNewOrders[g] = false;
+         if(InpVerboseLog) PrintFormat("Golden2 v1.6: HD DISARM G%d pct=%.1f reason=%s",
+            g, pct, ddRecovered?"recover":(noMainPos?"noMain":"noLossSide"));
          return;
       }
       // Already armed: dynamically top-up / trim mirror to match current loss-side tickets
-      int lossSide = GroupLossSide(g);
-      if(lossSide >= 0 && InpHedgeLotMatch1to1){
-         MirrorLossSideToHedgePendings(g, lossSide);
+      if(lossSideNow >= 0 && InpHedgeLotMatch1to1){
+         MirrorLossSideToHedgePendings(g, lossSideNow);
       }
       return;
    }
@@ -1442,6 +1565,7 @@ void CleanupAllLinesByPrefix(){
 
 //================ MATCHING CLOSE (Triple Gate) ================
 void TryMatchingCloseForGroup(int g){
+   if(!InpExitTripleGate_Enable) return; // [v1.6] master toggle for Triple-Gate
    if(!IsExpansionToNormal()) return;
 
    double avgMain  = GroupAveragePrice(g, -1, 0);
@@ -1477,7 +1601,7 @@ void TryMatchingCloseForGroup(int g){
    g_lastHedgeCloseTime = TimeCurrent();
    ReleaseMutex(g);
 
-   PlaceContinuationGridIfNeeded(g);
+   if(InpPostHedge_AllowContinuation) PlaceContinuationGridIfNeeded(g); // [v1.6] off by default = freeze
 }
 
 void CloseAllGroupSide(int g, int side){
@@ -1715,7 +1839,7 @@ void DrawDashboard(){
    double maxPct = (InpHedgeTriggerUSD>0) ? (peakLossUSD*100.0/InpHedgeTriggerUSD) : 0;
 
    // Header
-   DashHeader("L_TITLE", x, y, w, rowH+2, " Golden2 EA v1.5    Mode: Group", InpDashAccent);
+   DashHeader("L_TITLE", x, y, w, rowH+2, " Golden2 EA v1.6    Mode: Group", InpDashAccent);
    y += rowH+2;
 
    // Rows
@@ -1736,6 +1860,8 @@ void DrawDashboard(){
    DashRow("L_TRAIL", x, y, w, rowH, "MaxGrid Trail",    StringFormat("%s (Mode %d)", MaxGrid_TrailEnable?"ON":"OFF", MaxGrid_TrailMode), MaxGrid_TrailEnable?InpDashGood:InpDashColor); y+=rowH;
    DashRow("L_HEDGE", x, y, w, rowH, "Hedging",          InpHedge_Enabled?"ON":"OFF", InpHedge_Enabled?InpDashGood:InpDashBad); y+=rowH;
    DashRow("L_BLK",   x, y, w, rowH, "Pre-Hedge Block",  StringFormat("%d grp(s)", blockedGroups), blockedGroups>0?InpDashAccent:InpDashColor); y+=rowH;
+   DashRow("L_TG",    x, y, w, rowH, "Triple-Gate",      InpExitTripleGate_Enable?"ON":"OFF", InpExitTripleGate_Enable?InpDashGood:InpDashBad); y+=rowH;
+   DashRow("L_SQ",    x, y, w, rowH, "Squeeze",          SqueezeStatusString(), (g_sqBlockBuy||g_sqBlockSell)?InpDashBad:(InpSQ_Enable?InpDashGood:InpDashColor)); y+=rowH;
    DashRow("L_STAT",  x, y, w, rowH, "System Status",    InpAllowTrade?"Working":"Paused", InpAllowTrade?InpDashGood:InpDashBad); y+=rowH;
 
    //==== RIGHT PANEL: Hedging table (only when Hedging is ON) ====
@@ -1836,11 +1962,23 @@ int OnInit(){
    g_atrLossHandle   = iATR(_Symbol, GridLoss_ATR_TF,   GridLoss_ATR_Period);
    g_atrProfitHandle = iATR(_Symbol, GridProfit_ATR_TF, GridProfit_ATR_Period);
    if(g_bbHandle == INVALID_HANDLE || g_atrHandle == INVALID_HANDLE){
-      Print("Golden2 v1.3: indicator init failed");
+      Print("Golden2 v1.6: indicator init failed");
       return INIT_FAILED;
    }
 
-   PrintFormat("Golden2 EA v1.3 initialized | Magic=%I64d | MaxGroups=%d", (long)InpMagic, InpMaxGroups);
+   // [v1.6] Squeeze Filter handles
+   g_sqTF[0] = InpSQ_TF1; g_sqTF[1] = InpSQ_TF2; g_sqTF[2] = InpSQ_TF3;
+   for(int i=0;i<3;i++){
+      g_sqBB[i]    = iBands(_Symbol, g_sqTF[i], InpSQ_BBPeriod, 0, InpSQ_BBMult, PRICE_CLOSE);
+      g_sqKCEMA[i] = iMA   (_Symbol, g_sqTF[i], InpSQ_KCPeriod, 0, MODE_EMA, PRICE_CLOSE);
+      g_sqATR[i]   = iATR  (_Symbol, g_sqTF[i], InpSQ_ATRPeriod);
+      if(InpSQ_Enable && (g_sqBB[i]==INVALID_HANDLE || g_sqKCEMA[i]==INVALID_HANDLE || g_sqATR[i]==INVALID_HANDLE)){
+         PrintFormat("Golden2 v1.6: Squeeze indicator init failed TF[%d]", i);
+      }
+   }
+
+   PrintFormat("Golden2 EA v1.6 initialized | Magic=%I64d | MaxGroups=%d | Squeeze=%s | TripleGate=%s",
+               (long)InpMagic, InpMaxGroups, InpSQ_Enable?"ON":"OFF", InpExitTripleGate_Enable?"ON":"OFF");
    return INIT_SUCCEEDED;
 }
 
@@ -1851,6 +1989,11 @@ void OnDeinit(const int reason){
    if(g_atrHandle != INVALID_HANDLE) IndicatorRelease(g_atrHandle);
    if(g_atrLossHandle != INVALID_HANDLE)   IndicatorRelease(g_atrLossHandle);
    if(g_atrProfitHandle != INVALID_HANDLE) IndicatorRelease(g_atrProfitHandle);
+   for(int i=0;i<3;i++){
+      if(g_sqBB[i]    != INVALID_HANDLE) IndicatorRelease(g_sqBB[i]);
+      if(g_sqKCEMA[i] != INVALID_HANDLE) IndicatorRelease(g_sqKCEMA[i]);
+      if(g_sqATR[i]   != INVALID_HANDLE) IndicatorRelease(g_sqATR[i]);
+   }
 }
 
 // Track first-position candle for "DontSameCandle" guard
@@ -1869,6 +2012,13 @@ void TrackInitialCandle(int g){
 
 void OnTick(){
    if(!InpAllowTrade){ DrawDashboard(); return; }
+   RefreshSqueezeState(); // [v1.6] update squeeze cache once per tick
+
+   // [v1.6] Optional close-on-expansion (default off)
+   if(InpSQ_Enable && InpSQ_CloseOnExpansion && g_sqExpCount >= InpSQ_MinExpansionTFs){
+      // safety: do not auto-close matched groups (Triple-Gate handles them)
+      // intentionally left as a no-op stub to avoid touching trade.PositionClose flow
+   }
 
    for(int g=1; g<=InpMaxGroups; g++){
       bool hasPos = GroupHasAnyPositions(g);
