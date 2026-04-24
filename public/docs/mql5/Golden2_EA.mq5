@@ -2276,7 +2276,7 @@ int OnInit(){
       }
    }
 
-   PrintFormat("Golden2 EA v1.8 initialized | Magic=%I64d | MaxGroups=%d | InitMode=%d | GridLoss=%s | Squeeze=%s | TripleGate=%s | BarTrail=%s",
+   PrintFormat("Golden2 EA v1.9 initialized | Magic=%I64d | MaxGroups=%d | InitMode=%d | GridLoss=%s | Squeeze=%s | TripleGate=%s | BarTrail=%s",
                (long)InpMagic, InpMaxGroups, (int)InpInitSideMode,
                GridLoss_Enable?"ON":"OFF", InpSQ_Enable?"ON":"OFF", InpExitTripleGate_Enable?"ON":"OFF",
                InpInitTrailOnBarClose?"ON":"OFF");
