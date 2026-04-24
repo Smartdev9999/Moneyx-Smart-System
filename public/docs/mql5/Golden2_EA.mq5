@@ -680,8 +680,49 @@ void PlaceInitialFrame(int g){
       if(InpVerboseLog) PrintFormat("Golden2 v2.1: Squeeze BLOCK initial G%d (%s)", g, SqueezeStatusString());
       return;
    }
+
+   // [v2.6.1] Validate side mode and pre-compute place flags BEFORE any work or
+   //          log spam. If the enum value is corrupted (e.g. .set file overrode
+   //          to a non-enum value like 5000), fall back to INIT_BOTH so the EA
+   //          never silently sits idle.
+   int sideMode = (int)InpInitSideMode;
+   if(sideMode != (int)INIT_BOTH && sideMode != (int)INIT_BUY_ONLY && sideMode != (int)INIT_SELL_ONLY){
+      static datetime lastBadModeWarn = 0;
+      if(TimeCurrent() - lastBadModeWarn >= 60){
+         PrintFormat("Golden2 v2.6.1: INVALID InpInitSideMode=%d — falling back to INIT_BOTH (0). Check inputs/.set file.", sideMode);
+         lastBadModeWarn = TimeCurrent();
+      }
+      sideMode = (int)INIT_BOTH;
+   }
+   bool placeBuy  = (sideMode == (int)INIT_BOTH || sideMode == (int)INIT_BUY_ONLY);
+   bool placeSell = (sideMode == (int)INIT_BOTH || sideMode == (int)INIT_SELL_ONLY);
+   if(!placeBuy && !placeSell){
+      static datetime lastNoSideWarn = 0;
+      if(TimeCurrent() - lastNoSideWarn >= 60){
+         PrintFormat("Golden2 v2.6.1: PlaceInitialFrame G%d skipped — no side enabled (mode=%d)", g, sideMode);
+         lastNoSideWarn = TimeCurrent();
+      }
+      return;
+   }
+
+   // [v2.6.1] Per-group cooldown to stop per-tick re-fire when the previous
+   //          attempt failed (e.g. invalid stops, off-quotes, market closed).
+   //          Without this, FindLowestIdleGroup keeps returning g and we spam
+   //          OrderSend every tick.
+   static datetime s_lastAttempt[51];
+   static datetime s_lastFailLog[51];
+   int gi = (g >= 0 && g < 51) ? g : 0;
+   if(s_lastAttempt[gi] != 0 && TimeCurrent() - s_lastAttempt[gi] < 5){
+      return; // 5s cooldown between attempts
+   }
+   s_lastAttempt[gi] = TimeCurrent();
+
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   if(ask <= 0 || bid <= 0){
+      if(InpVerboseLog) PrintFormat("Golden2 v2.6.1: PlaceInitialFrame G%d skipped — no quotes (ask=%.5f bid=%.5f)", g, ask, bid);
+      return;
+   }
    double mid = (ask+bid)*0.5;
    double upPx = NormalizeDouble(mid + InpFrameUpperPips * g_point, g_digits);
    double dnPx = NormalizeDouble(mid - InpFrameLowerPips * g_point, g_digits);
@@ -689,6 +730,28 @@ void PlaceInitialFrame(int g){
    // [v2.0] Honour broker stops level when computing initial TP/SL.
    long stopsLvl = (long)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
    double minDist = (stopsLvl > 0) ? stopsLvl * g_point : 0.0;
+
+   // [v2.6.1] Reject pending price that violates broker minimum stop distance
+   //          (BuyStop must be >= ask + minDist, SellStop must be <= bid - minDist).
+   //          Also catches the case where InpFrameUpperPips/InpFrameLowerPips are
+   //          set to zero or below stops level.
+   if(placeBuy && (upPx - ask) < minDist + g_point){
+      if(TimeCurrent() - s_lastFailLog[gi] >= 60){
+         PrintFormat("Golden2 v2.6.1: BuyStop G%d distance %.*f below stops level %.*f (FrameUpperPips=%d) — skipping",
+                     g, g_digits, upPx-ask, g_digits, minDist, InpFrameUpperPips);
+         s_lastFailLog[gi] = TimeCurrent();
+      }
+      placeBuy = false;
+   }
+   if(placeSell && (bid - dnPx) < minDist + g_point){
+      if(TimeCurrent() - s_lastFailLog[gi] >= 60){
+         PrintFormat("Golden2 v2.6.1: SellStop G%d distance %.*f below stops level %.*f (FrameLowerPips=%d) — skipping",
+                     g, g_digits, bid-dnPx, g_digits, minDist, InpFrameLowerPips);
+         s_lastFailLog[gi] = TimeCurrent();
+      }
+      placeSell = false;
+   }
+   if(!placeBuy && !placeSell) return;
 
    double tpUp = 0.0, slUp = 0.0, tpDn = 0.0, slDn = 0.0;
    if(InpInitialTPPips > 0){
@@ -708,7 +771,7 @@ void PlaceInitialFrame(int g){
    if(tpUp > 0 && tpUp <= upPx){ PrintFormat("Golden2 v2.0: invalid BuyStop TP %.*f<=%.*f, force 0", g_digits, tpUp, g_digits, upPx); tpUp = 0; }
    if(slUp > 0 && slUp >= upPx){ PrintFormat("Golden2 v2.0: invalid BuyStop SL %.*f>=%.*f, force 0", g_digits, slUp, g_digits, upPx); slUp = 0; }
    if(tpDn > 0 && tpDn >= dnPx){ PrintFormat("Golden2 v2.0: invalid SellStop TP %.*f>=%.*f, force 0", g_digits, tpDn, g_digits, dnPx); tpDn = 0; }
-   if(slDn > 0 && slDn <= dnPx){ PrintFormat("Golden2 v2.0: invalid SellStop SL %.*f<=%.*f, force 0", g_digits, slDn, g_digits, dnPx); slDn = 0; }
+   if(slDn > 0 && slDn <= dnPx){ PrintFormat("Golden2 v2.0: invalid SellStop SL %.*f>=%.*f, force 0", g_digits, slDn, g_digits, dnPx); slDn = 0; }
 
    trade.SetExpertMagicNumber(InpMagic);
    trade.SetDeviationInPoints(InpSlippage);
@@ -716,24 +779,35 @@ void PlaceInitialFrame(int g){
    string cBuy  = MakeComment(g, false, "IN");
    string cSell = MakeComment(g, false, "IN");
 
-   bool placeBuy  = (InpInitSideMode == INIT_BOTH || InpInitSideMode == INIT_BUY_ONLY);
-   bool placeSell = (InpInitSideMode == INIT_BOTH || InpInitSideMode == INIT_SELL_ONLY);
-
+   bool anySent = false;
    if(placeBuy){
-      if(!trade.BuyStop(InpInitialLot, upPx, _Symbol, slUp, tpUp, ORDER_TIME_GTC, 0, cBuy))
-         PrintFormat("Golden2 v2.0: BuyStop failed G%d err=%d", g, GetLastError());
-      else if(InpVerboseLog)
-         PrintFormat("Golden2 v2.0: BuyStop G%d open=%.*f tp=%.*f sl=%.*f", g, g_digits, upPx, g_digits, tpUp, g_digits, slUp);
+      if(!trade.BuyStop(InpInitialLot, upPx, _Symbol, slUp, tpUp, ORDER_TIME_GTC, 0, cBuy)){
+         PrintFormat("Golden2 v2.6.1: BuyStop FAIL G%d err=%d retcode=%d open=%.*f tp=%.*f sl=%.*f",
+                     g, GetLastError(), trade.ResultRetcode(), g_digits, upPx, g_digits, tpUp, g_digits, slUp);
+      } else {
+         anySent = true;
+         if(InpVerboseLog)
+            PrintFormat("Golden2 v2.6.1: BuyStop G%d open=%.*f tp=%.*f sl=%.*f", g, g_digits, upPx, g_digits, tpUp, g_digits, slUp);
+      }
    }
    if(placeSell){
-      if(!trade.SellStop(InpInitialLot, dnPx, _Symbol, slDn, tpDn, ORDER_TIME_GTC, 0, cSell))
-         PrintFormat("Golden2 v2.0: SellStop failed G%d err=%d", g, GetLastError());
-      else if(InpVerboseLog)
-         PrintFormat("Golden2 v2.0: SellStop G%d open=%.*f tp=%.*f sl=%.*f", g, g_digits, dnPx, g_digits, tpDn, g_digits, slDn);
+      if(!trade.SellStop(InpInitialLot, dnPx, _Symbol, slDn, tpDn, ORDER_TIME_GTC, 0, cSell)){
+         PrintFormat("Golden2 v2.6.1: SellStop FAIL G%d err=%d retcode=%d open=%.*f tp=%.*f sl=%.*f",
+                     g, GetLastError(), trade.ResultRetcode(), g_digits, dnPx, g_digits, tpDn, g_digits, slDn);
+      } else {
+         anySent = true;
+         if(InpVerboseLog)
+            PrintFormat("Golden2 v2.6.1: SellStop G%d open=%.*f tp=%.*f sl=%.*f", g, g_digits, dnPx, g_digits, tpDn, g_digits, slDn);
+      }
+   }
+   if(!anySent){
+      // Both attempts failed — extend cooldown to 30s so we don't spam.
+      s_lastAttempt[gi] = TimeCurrent() + 25;
+      return;
    }
    if(InpVerboseLog)
-      PrintFormat("Golden2 v2.0: Placed initial frame G%d mode=%d mid=%.5f up=%s dn=%s",
-                  g, (int)InpInitSideMode, mid,
+      PrintFormat("Golden2 v2.6.1: Placed initial frame G%d mode=%d mid=%.5f up=%s dn=%s",
+                  g, sideMode, mid,
                   placeBuy?DoubleToString(upPx,g_digits):"-",
                   placeSell?DoubleToString(dnPx,g_digits):"-");
 }
