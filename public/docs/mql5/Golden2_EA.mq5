@@ -2458,7 +2458,7 @@ void DrawDashboard(){
    if(InpInitSideMode == INIT_SELL_ONLY) modeLbl = "SELL-only";
 
    // Header
-   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.3    Side: %s", modeLbl), InpDashAccent);
+   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.4    Side: %s", modeLbl), InpDashAccent);
    y += rowH+2;
 
    // ==== Account section ====
