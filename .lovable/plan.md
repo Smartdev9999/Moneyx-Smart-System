@@ -1,128 +1,89 @@
 
 
-## Golden2 EA v1.2 — Grid Settings เหมือน Gold Miner (Grid Loss / Max Grid Trailing / Grid Profit)
+## Golden2 EA v1.3 — Initial TP เฉพาะตอน 1 ไม้ + Auto-Switch เป็น Average TP/SL บน Broker
 
-ขยายระบบกริดของ Golden2 ให้มีโครงสร้าง input และความสามารถเหมือน Gold Miner ครบทั้ง **3 กลุ่ม** โดยไม่แตะ logic เปิด/ปิดออเดอร์เดิม (ปรับเฉพาะส่วนคำนวณ lot/gap/level เพื่อรองรับ input ใหม่)
+ปรับลอจิก **TP ฝั่ง Pre-Hedge** ให้สลับโหมดอัตโนมัติตามจำนวนไม้ในฝั่งนั้น โดยวาง TP/SL บน Broker ทุกไม้เหมือน Gold Miner
 
 ### ไฟล์ที่จะแก้
 - `public/docs/mql5/Golden2_EA.mq5` (ไฟล์เดียว)
 
-### 1) เพิ่ม Enums (เลียนแบบ Gold Miner)
-```cpp
-enum ENUM_LOT_MODE_G2  { G2_LOT_CUSTOM=0, G2_LOT_ADD=1, G2_LOT_MULTIPLY=2 };
-enum ENUM_GAP_TYPE_G2  { G2_GAP_FIXED=0,  G2_GAP_CUSTOM=1, G2_GAP_ATR=2 };
-enum ENUM_ATR_REF_G2   { G2_ATR_REF_DYNAMIC=0, G2_ATR_REF_LAST_GRID=1 };
+### Logic ใหม่ (Per Group, Per Side, Pre-Hedge เท่านั้น)
+
+```text
+ถ้า count(side) == 1 ไม้ (ยังไม่มี GL/GP เพิ่ม):
+   → ใช้ Initial TP/SL เดิมของไม้นั้น (broker TP ติดอยู่จาก PlaceInitialFrame)
+   → ไม่แตะอะไร
+
+ถ้า count(side) >= 2 ไม้ (มี GL หรือ GP เพิ่มเข้ามา):
+   → คำนวณ Average Price ของฝั่งนั้น
+   → คำนวณ Average TP price = avg ± TP_PointsFromAverage × _Point
+     (Buy: avg + 500pt, Sell: avg - 500pt)
+   → คำนวณ Average SL price (ถ้าเปิดใช้)
+   → SyncBrokerTPSL: เรียก PositionModify ทุกไม้ในฝั่งนั้น
+     ให้ TP/SL = ราคา avg-TP/SL จุดเดียวกันทุกไม้
+   → ไม้ที่ติดลบที่ TP นั้นจะถูกปิดพร้อมกัน → ผลรวมเป็นบวก
 ```
 
-### 2) แทนที่บล็อก `=== Grid ===` เดิม ด้วย 3 กลุ่มใหม่
+### การเปลี่ยนแปลง
 
-**=== Grid Loss Side ===**
-- `GridLoss_MaxTrades` (30) — Max Grid Loss Trades
-- `GridLoss_LotMode` (G2_LOT_MULTIPLY) — Custom / Add / Multiply
-- `GridLoss_CustomLots` ("0.01;0.01;0.01;…") — semicolon separated
-- `GridLoss_AddLotPerLevel` (0.4) — multiplied by InpInitialLot
-- `GridLoss_MultiplyFactor` (1.4) — for Multiply mode
-- `GridLoss_GapType` (G2_GAP_FIXED)
-- `GridLoss_Points` (50) — Fixed gap (points)
-- `GridLoss_CustomDistance` ("100;200;300;…") — Custom gap per level
-- `GridLoss_ATR_TF` (PERIOD_H1), `GridLoss_ATR_Period` (14), `GridLoss_ATR_Multiplier` (2.0), `GridLoss_ATR_Reference` (G2_ATR_REF_LAST_GRID)
-- `GridLoss_MinGapPoints` (50)
-- `GridLoss_CandleConfirm` (1) — N candles confirm before GL
-- `GridLoss_OnlyInSignal` (false)
-- `GridLoss_OnlyNewCandle` (true)
-- `GridLoss_DontSameCandle` (true)
+**1) ฟังก์ชันใหม่: `SyncAverageTPSLToBroker(int g, int side)`**
+- เงื่อนไขเข้าทำงาน: `CountGroupSide(g, side, false) >= 2` AND group ยัง **ไม่ถูก hedge match** (ก่อน strip)
+- คำนวณ avg จาก positions ทั้งหมดของ (group, side, hedge=false)
+- คำนวณ tpPrice / slPrice จาก inputs `TPAvg_PointsFromAvg` / `SLAvg_PointsFromAvg`
+- Loop ทุก ticket ในฝั่งนั้น → `trade.PositionModify(tk, slPrice, tpPrice)`
+- มี guard: ถ้า broker TP/SL ปัจจุบัน = ค่าใหม่ (within 1 point) → ข้าม (ลด traffic)
+- เก็บ state `g_avgTPSyncedPrice[51][2]` เพื่อรู้ว่า sync ไปที่ราคาไหนล่าสุด
+- ถ้า avg เปลี่ยน (ไม้ใหม่เพิ่ม) → re-sync ทุกไม้ใหม่อัตโนมัติ
 
-**=== Max Grid Average Trailing Stop ===**
-- `MaxGrid_TrailEnable` (false)
-- `MaxGrid_TrailMode` (1) — 0=Max Order Grid, 1=Start Order Grid
-- `MaxGrid_StartOrders` (8)
-- `MaxGrid_TrailActivation` (100) — points from average (0=off)
-- `MaxGrid_TrailStep` (50)
-- `MaxGrid_BreakevenBuffer` (10)
+**2) ฟังก์ชันใหม่: `RestoreInitialTPIfSingle(int g, int side)`**
+- เงื่อนไข: `count == 1` แต่เคย sync avg ไปแล้ว (ฝั่งหลุดมาเหลือ 1 จาก shred-close)
+- คืนค่า TP เดิมจาก `InpInitialTP_Points` (คำนวณจาก entry price ของไม้นั้น)
+- หรือถ้า user ปิด initial TP → เคลียร์ TP/SL = 0
 
-**=== Grid Profit Side ===**
-- `GridProfit_Enable` (false)
-- `GridProfit_MaxTrades` (2)
-- `GridProfit_LotMode` (G2_LOT_MULTIPLY)
-- `GridProfit_CustomLots` ("0.01;0.01;…")
-- `GridProfit_AddLotPerLevel` (0.2)
-- `GridProfit_MultiplyFactor` (1.4)
-- `GridProfit_GapType` (G2_GAP_FIXED)
-- `GridProfit_Points` (100)
-- `GridProfit_CustomDistance` ("100;200;500")
-- `GridProfit_ATR_TF` (PERIOD_H1), `GridProfit_ATR_Period` (14), `GridProfit_ATR_Multiplier` (2.0), `GridProfit_ATR_Reference` (G2_ATR_REF_LAST_GRID)
-- `GridProfit_MinGapPoints` (100)
-- `GridProfit_OnlyNewCandle` (true)
+**3) เรียกใน `OnTick()` — ต่อจาก v1.1 Average TP/SL Manager**
+```cpp
+for(int g=1; g<=50; g++){
+   if(g_groupActive[g] && !g_stripped[g]){
+      SyncAverageTPSLToBroker(g, 0); // Buy
+      SyncAverageTPSLToBroker(g, 1); // Sell
+      RestoreInitialTPIfSingle(g, 0);
+      RestoreInitialTPIfSingle(g, 1);
+   }
+}
+```
 
-### 3) Helper functions ใหม่ (รองรับ inputs ใหม่)
-- `ParseCSVDouble(str, idx, fallback)` / `ParseCSVInt(str, idx, fallback)` — อ่านค่าจาก semicolon list
-- `ResolveLot(level, mode, customStr, addPerLvl, mulFactor)` — แทนที่ `LotForLevel()` เดิม (ฝั่ง Loss/Profit ใช้ตัวเดียวกัน)
-- `ResolveGapPoints(level, gapType, fixedPts, customStr, atrTF, atrPeriod, atrMult, atrRef, lastGridPrice, minGap)` — คำนวณระยะห่าง grid
-- `GetATRPoints(tf, period, mult)` — copy ATR ผ่าน handle (cache เพื่อกัน leak)
-- `IsNewCandleSinceLast(g, side, hedge, family)` — สำหรับ OnlyNewCandle / DontSameCandle / CandleConfirm
-- `CountConfirmingCandles(side, n)` — เช็ค N candles ฝั่งเดียวกันก่อน GL
+**4) Inputs ใหม่ (กลุ่ม `=== Take Profit (Average) ===` ที่มีอยู่แล้ว v1.1)**
+- เพิ่ม `TPAvg_AutoSyncToBroker` (bool, default `true`) — เปิด/ปิด auto-sync TP/SL บน broker
+- ใช้ `TPAvg_PointsFromAvg` เดิม (default 500) เป็นจุดอ้างอิง
+- ใช้ `SLAvg_PointsFromAvg` เดิม (default 0 = off)
+- เพิ่ม `TPAvg_MinTicketsToActivate` (int, default 2) — ขั้นต่ำไม้ที่จะ trigger avg mode
 
-### 4) อัปเดตการเรียกใช้ใน `TryPlaceGridLoss(g)`
-- เปลี่ยน `if(gl >= InpMaxGridLevels)` → ใช้ `GridLoss_MaxTrades`
-- เปลี่ยน `LotForLevel(gl+1)` → `ResolveLot(gl+1, GridLoss_LotMode, …)`
-- เปลี่ยน `InpGridStepPips*g_point` → `ResolveGapPoints(gl+1, GridLoss_GapType, …)*g_point`
-- เพิ่ม guard:
-  - `GridLoss_OnlyNewCandle` / `GridLoss_DontSameCandle`
-  - `GridLoss_CandleConfirm` (ถ้า >0)
-  - `GridLoss_OnlyInSignal` (ตอนนี้ Golden2 ยังไม่มี signal — จะ map ไปเป็น "ฝั่งที่ floating loss" เพื่อความเข้ากันได้)
-- คงโครงสร้างเปิด market order เดิม (`trade.Buy/Sell`) — ไม่แตะ execution
+**5) ความสัมพันธ์กับระบบเดิม**
+- ✅ v1.1 `CheckAndCloseByAverageTP/SL` (modes Fixed Dollar / % Balance / Accumulate / DD%) — ยังทำงานเหมือนเดิม เป็น "soft close" by market
+- ✅ v1.3 ใหม่: เพิ่ม "hard TP/SL บน broker" สำหรับ mode Points-from-Average โดยเฉพาะ → ปิดเร็วกว่า ไม่ต้องรอ tick
+- ✅ `StripBrokerTPSL_OnHedgeMatch` (v1.1) — ทำงานก่อน v1.3 sync เสมอ (ถ้า stripped → skip sync)
+- ✅ HLine display (v1.1) — ใช้ค่าเดียวกัน ไม่ต้องเพิ่ม object
 
-### 5) เพิ่มฟังก์ชัน `TryPlaceGridProfit(g)` (ใหม่)
-- ทำงานเมื่อ `GridProfit_Enable=true` และฝั่งนั้น floating > 0
-- ใช้ `ResolveLot/ResolveGapPoints` ของชุด Profit
-- เปิดตามทิศทางเดียวกับฝั่งกำไร เมื่อราคาวิ่งไปต่ออีก gap
-- เรียกใน `OnTick()` หลัง `TryPlaceGridLoss(g)`
+**6) Dashboard เพิ่ม**
+- "G[n] Buy TP-Mode: INITIAL(1) / AVG_BROKER(N ไม้) | TP@xxxx.xx"
+- "G[n] Sell TP-Mode: ..."
 
-### 6) เพิ่มฟังก์ชัน `ManageMaxGridTrailing(g)` (ใหม่)
-- คำนวณ avg ของฝั่งที่กริดเปิดเยอะสุด
-- เงื่อนไข Activation:
-  - **Mode 0** (Max Order Grid): ทำงานเมื่อจำนวนกริด = `GridLoss_MaxTrades`
-  - **Mode 1** (Start Order Grid): ทำงานเมื่อจำนวนกริด ≥ `MaxGrid_StartOrders`
-- เมื่อราคาวิ่งจาก avg ≥ `MaxGrid_TrailActivation` → set virtual SL = `avg ± MaxGrid_BreakevenBuffer`
-- ขยับตาม `MaxGrid_TrailStep`
-- ปิดทั้งฝั่งเมื่อราคาแตะ virtual SL (ใช้ market close — ไม่แก้ broker SL เพราะกฎหลัง hedge match strip TP/SL)
-- เก็บ state ใน `double g_maxGridTrailSL[51][2]` (group × side)
-- เรียกใน `OnTick()` ถ้า `MaxGrid_TrailEnable`
-
-### 7) Dashboard เพิ่มบรรทัด
-- "GL Trades: x/MAX | GP Trades: x/MAX"
-- "MaxGrid Trail: ON/OFF (Mode N) | Virtual SL: …"
-
-### 8) Version Bump → v1.2
-- `#property version "1.20"`
-- `#property description` อัปเดต
-- Header comment block, dashboard, log prints ทุกจุด
+**7) Version Bump → v1.3**
+- `#property version "1.30"`
+- `#property description` + Header + Dashboard อัปเดต
 
 ### สิ่งที่ "ไม่เปลี่ยนแปลง"
-- ❌ ไม่แตะ `PlaceInitialFrame` (frame เปิด BUY_STOP/SELL_STOP)
-- ❌ ไม่แตะ `PlaceHedgePendingSet`, `ManageGroupHedgeArm`, hedge cooldown, mutex
-- ❌ ไม่แตะ `TryMatchingCloseForGroup` (Triple-Gate), shred-close
-- ❌ ไม่แตะ Average TP/SL Manager (v1.1) และ `StripBrokerTPSL_OnHedgeMatch`
-- ❌ ไม่แตะ group lifecycle / sequential queue
-- ❌ ไม่แก้ไข execution function (`trade.Buy/Sell/BuyStop/SellStop/PositionClose`)
-- ✅ แก้เฉพาะ "วิธีคำนวณ lot/gap/level" และเพิ่ม guard ก่อนเรียก execution
-
-### ความเสี่ยง & Mitigation
-- input ใหม่จำนวนมาก → user งง: คงค่า default ที่ปลอดภัย (Multiply 1.4, MaxTrades 30, candle confirm 1)
-- ATR handle leak: cache handle เป็น static + release ใน `OnDeinit`
-- Profit grid อาจเร่งให้ DD รวมโต: default `Enable=false`
-- Max Grid Trailing virtual SL อาจขัดกับ Triple-Gate: ทำงานเฉพาะตอน group **ยังไม่มี hedge** เท่านั้น (เหมือน Average TP/SL)
+- ❌ ไม่แตะ `PlaceInitialFrame` (initial TP บน pending order ยังเหมือนเดิม)
+- ❌ ไม่แตะ Order execution ทั้งหมด (`trade.Buy/Sell/BuyStop/SellStop/PositionClose`)
+- ❌ ไม่แตะ Grid Loss / Grid Profit / Max Grid Trail (v1.2)
+- ❌ ไม่แตะ Hedge logic, Triple-Gate, Strip-on-match (v1.0/v1.1)
+- ❌ ไม่แตะ Group lifecycle / sequential queue
+- ✅ เพิ่มเฉพาะ "broker TP/SL synchronization layer" — เรียก `PositionModify` เท่านั้น (ไม่ใช่ open/close)
 
 ### Technical Detail
-- Lot resolve:
-  - CUSTOM: `ParseCSVDouble(GridLoss_CustomLots, level-1, InpInitialLot)`
-  - ADD: `InpInitialLot + (level × GridLoss_AddLotPerLevel × InpInitialLot)`
-  - MULTIPLY: `InpInitialLot × pow(GridLoss_MultiplyFactor, level)`
-- Gap resolve:
-  - FIXED: `GridLoss_Points`
-  - CUSTOM: `ParseCSVInt(GridLoss_CustomDistance, level-1, GridLoss_Points)`
-  - ATR: `(int)(ATR_value × GridLoss_ATR_Multiplier / _Point)` แล้ว `MathMax(result, GridLoss_MinGapPoints)`
-- ATR ref:
-  - `DYNAMIC`: ATR ปัจจุบัน
-  - `LAST_GRID`: ATR ณ เวลาเปิดไม้ก่อนหน้า (cache `g_atrAtLastGrid[51][2]`)
+- ใช้ `trade.PositionModify(ticket, sl, tp)` — ปลอดภัย ไม่กระทบ execution
+- Tolerance check: `MathAbs(currentTP - newTP) > _Point` ถึง modify (กัน spam)
+- สำหรับ broker บางเจ้าที่ reject TP ใกล้ราคา: เช็ค `SymbolInfoInteger(SYMBOL_TRADE_STOPS_LEVEL)` แล้วบังคับ TP ห่างขั้นต่ำ
+- Re-sync trigger: เก็บ `g_lastSyncedAvg[51][2]`, ถ้า avg ใหม่ ≠ เดิม → modify ใหม่ทุกไม้
+- SL=0 case: ถ้า `SLAvg_PointsFromAvg=0` → ส่ง SL=0.0 (no SL)
 
