@@ -1,17 +1,19 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|     Golden2 EA v2.5 - One-Way Toward-Price Trail:               |
-//|     pending BuyStop is dragged DOWN only when price falls away  |
-//|     (target = ask + UpperPips below current pending). SellStop  |
-//|     is dragged UP only when price rises away. Pending NEVER     |
-//|     moves AWAY from price -> price approaching always triggers  |
-//|     the order. Replaces v2.4 symmetric/recenter behaviour.      |
+//|     Golden2 EA v2.7.2 - Per-Side Squeeze Block + Backtest Speed |
+//|     PlaceInitialFrame now uses per-side Squeeze block (BUY block |
+//|     stops only BuyStop, SELL block stops only SellStop). Adds    |
+//|     Tester/Visual mode detection, dashboard render throttle,     |
+//|     skips chart objects in non-visual tester, refreshes Squeeze  |
+//|     state once per new M1 bar instead of every tick, caches the  |
+//|     HasClosedMainOnSide history scan for ~2s, and bounds the     |
+//|     per-tick group loop to the highest active group + 1.         |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.61"
-#property description "Golden2 EA v2.6.1 - Hardened PlaceInitialFrame. Validates InpInitSideMode (auto-fallback to INIT_BOTH if .set file holds garbage like 5000), rejects pending prices below broker SYMBOL_TRADE_STOPS_LEVEL, adds 5s per-group cooldown + 30s back-off when both BuyStop and SellStop OrderSend fail (stops the per-tick re-fire spam seen when mode/distance is misconfigured). Logs include retcode + GetLastError on failure. v2.6 Re-entry on Close, v2.5 toward-price trail, v2.3 hedge freeze, v2.2 TP/SL preserve all retained. Order execution unchanged — only adds guards and richer error logs."
+#property version   "2.72"
+#property description "Golden2 EA v2.7.2 - Per-Side Squeeze Block + Backtest Speed. PlaceInitialFrame's Squeeze guard switched from 'block whole group' (SqueezeBlocksAny) to per-side flags so a BUY block only suppresses the BuyStop and SellStop still fires (mirrors Grid Loss/Profit). Backtest accel: detects MQL_TESTER/MQL_VISUAL_MODE in OnInit, throttles DrawDashboard via InpDashRenderIntervalSec (skipped entirely in non-visual tester/optimization), skips DrawAverageAndTPLinesForGroup in non-visual tester, RefreshSqueezeState now runs once per new M1 bar, HasClosedMainOnSide cached ~2s per (group,side), per-tick group loop bounded to g_highestActiveGroup+1. Trading logic, OrderSend, hedge, grid, triple-gate, accumulate, v2.6 re-entry, v2.5 toward-price trail all preserved unchanged."
 #property strict
 
 #include <Trade/Trade.mqh>
