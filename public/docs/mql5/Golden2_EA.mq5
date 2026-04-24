@@ -1072,56 +1072,152 @@ bool HasClosedMainOnSide(int g, int side){
    return false;
 }
 
-void ManageInitialReArm(int g){
-   if(!InpInitReArmAfterTP && !InpInitReEntryOnClose) return;
-   // [v2.3] Do not re-arm a fresh G_IN stop once the group is hedging — that
-   //         was the source of the post-hedge orphan main that blocked
-   //         advancement to the next group.
+// [v2.70] Continuous Frame Maintenance — replaces v1.7 ManageInitialReArm and
+//         v2.6 Re-entry-on-Close logic. Concept:
+//         - The two-sided BuyStop/SellStop "frame" must always exist on a
+//           pre-hedge group, regardless of WHY a side became empty (initial
+//           trigger, broker cancel, TP/SL close, manual delete).
+//         - As soon as a side has no live position AND no pending IN order,
+//           re-place a fresh stop at the configured frame distance from the
+//           CURRENT market price.
+//         - Distance comes from InpFrameUpperPips / InpFrameLowerPips (same as
+//           PlaceInitialFrame), so the user only ever tunes ONE pair of inputs.
+//         - Per-(group,side) cooldown (5s normal / 30s after fail) prevents
+//           per-tick OrderSend spam when the broker rejects (off-quotes,
+//           STOPS_LEVEL, market closed, etc.).
+//         - Frozen the moment any hedge position exists for the group (v2.3).
+//         - Respects InpInitSideMode, g_blockNewOrders, Squeeze directional
+//           block — all without touching execution primitives.
+//
+// NOTE: ManageInitialReArm() name is kept (called from OnTick loop) so the
+//       call site does not change. ManageInitialReArm just delegates here.
+void ManageInitialFrameMaintenance(int g){
+   // [v2.3] Freeze maintenance once the group has any hedge position.
    if(CountGroupPositions(g, -1, 1) > 0) return;
    if(IsGroupHedgeMatched(g)) return;
+   // Pre-hedge block (DD near arm threshold) still suppresses NEW pendings.
    if(g_blockNewOrders[g]) return;
+   // Accumulate-close cooldown still applies.
+   if(g_accumJustTriggered) return;
 
-   bool buyAllowed  = (InpInitSideMode == INIT_BOTH || InpInitSideMode == INIT_BUY_ONLY);
-   bool sellAllowed = (InpInitSideMode == INIT_BOTH || InpInitSideMode == INIT_SELL_ONLY);
+   int sideMode = (int)InpInitSideMode;
+   if(sideMode != (int)INIT_BOTH && sideMode != (int)INIT_BUY_ONLY && sideMode != (int)INIT_SELL_ONLY)
+      sideMode = (int)INIT_BOTH;
+   bool buyAllowed  = (sideMode == (int)INIT_BOTH || sideMode == (int)INIT_BUY_ONLY);
+   bool sellAllowed = (sideMode == (int)INIT_BOTH || sideMode == (int)INIT_SELL_ONLY);
 
    int buyPos  = CountGroupPositions(g, 0, 0);
    int sellPos = CountGroupPositions(g, 1, 0);
    ulong tBuyPend  = FindInitialPendingTicket(g, 0);
    ulong tSellPend = FindInitialPendingTicket(g, 1);
 
+   bool needBuy  = buyAllowed  && buyPos  == 0 && tBuyPend  == 0;
+   bool needSell = sellAllowed && sellPos == 0 && tSellPend == 0;
+   if(!needBuy && !needSell) return;
+
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   double dist = InpInitReArmDistancePips * g_point;
+   if(ask <= 0 || bid <= 0) return;
 
-   // [v2.6] Re-entry trigger condition for BUY side:
-   //   - v1.7 path: opposite (sell) has open position (original re-arm)
-   //   - v2.6 path: this side previously closed (TP/SL) in this group → re-enter
-   //                regardless of what the opposite side currently is.
-   bool buyTrigger  = (sellPos > 0) ||
-                      (InpInitReEntryOnClose && HasClosedMainOnSide(g, 0));
-   bool sellTrigger = (buyPos  > 0) ||
-                      (InpInitReEntryOnClose && HasClosedMainOnSide(g, 1));
+   long stopsLvl = (long)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   double minDist = (stopsLvl > 0) ? stopsLvl * g_point : 0.0;
 
-   // Re-arm BUY: side empty + pending missing + trigger condition met
-   if(buyAllowed && buyPos==0 && tBuyPend==0 && buyTrigger){
-      double upPx = NormalizeDouble(ask + dist, g_digits);
-      double tp   = (InpInitialTPPips>0)? NormalizeDouble(upPx + InpInitialTPPips*g_point, g_digits) : 0;
-      double sl   = (InpInitialSLPips>0)? NormalizeDouble(upPx - InpInitialSLPips*g_point, g_digits) : 0;
-      string c    = MakeComment(g, false, "IN");
-      if(trade.BuyStop(InpInitialLot, upPx, _Symbol, sl, tp, ORDER_TIME_GTC, 0, c)){
-         if(InpVerboseLog) PrintFormat("Golden2 v2.6: Re-entry BuyStop G%d at %.5f (sellPos=%d)", g, upPx, sellPos);
+   // Per-(group,side) cooldown to stop per-tick re-fire on rejection.
+   // Index = g*2+side  (side 0 = buy, 1 = sell)
+   static datetime s_attempt[102];
+   static datetime s_failLog[102];
+   int idxBuy  = ((g >= 0 && g < 51) ? g : 0) * 2 + 0;
+   int idxSell = ((g >= 0 && g < 51) ? g : 0) * 2 + 1;
+   datetime now = TimeCurrent();
+
+   trade.SetExpertMagicNumber(InpMagic);
+   trade.SetDeviationInPoints(InpSlippage);
+
+   // ---- Re-fill BUY side ----
+   if(needBuy){
+      // [v1.6] Squeeze directional block — skip but do NOT mark cooldown.
+      bool sqBlk = (InpSQ_Enable && InpSQ_BlockNewOrders &&
+                    g_sqExpCount >= InpSQ_MinExpansionTFs && SqueezeBlocksSide(0));
+      if(sqBlk){
+         // suppress placement this tick
+      } else if(s_attempt[idxBuy] != 0 && now - s_attempt[idxBuy] < 5){
+         // cooldown active, wait
+      } else {
+         s_attempt[idxBuy] = now;
+         double upPx = NormalizeDouble(ask + InpFrameUpperPips * g_point, g_digits);
+         if(upPx - ask < minDist + g_point){
+            if(now - s_failLog[idxBuy] >= 60){
+               PrintFormat("Golden2 v2.70: maintenance BuyStop G%d distance %.*f below stops level %.*f (FrameUpperPips=%d) — skip",
+                           g, g_digits, upPx-ask, g_digits, minDist, InpFrameUpperPips);
+               s_failLog[idxBuy] = now;
+            }
+            s_attempt[idxBuy] = now + 25;
+         } else {
+            double tpDistUp = (InpInitialTPPips > 0) ? MathMax(InpInitialTPPips * g_point, minDist + g_point) : 0;
+            double slDistUp = (InpInitialSLPips > 0) ? MathMax(InpInitialSLPips * g_point, minDist + g_point) : 0;
+            double tp = (tpDistUp > 0) ? NormalizeDouble(upPx + tpDistUp, g_digits) : 0;
+            double sl = (slDistUp > 0) ? NormalizeDouble(upPx - slDistUp, g_digits) : 0;
+            string c  = MakeComment(g, false, "IN");
+            if(trade.BuyStop(InpInitialLot, upPx, _Symbol, sl, tp, ORDER_TIME_GTC, 0, c)){
+               if(InpVerboseLog)
+                  PrintFormat("Golden2 v2.70: Re-fill BuyStop G%d open=%.5f tp=%.5f sl=%.5f (buyPos=0,sellPos=%d)",
+                              g, upPx, tp, sl, sellPos);
+            } else {
+               if(now - s_failLog[idxBuy] >= 60){
+                  PrintFormat("Golden2 v2.70: Re-fill BuyStop FAIL G%d err=%d retcode=%d open=%.5f",
+                              g, GetLastError(), trade.ResultRetcode(), upPx);
+                  s_failLog[idxBuy] = now;
+               }
+               s_attempt[idxBuy] = now + 25;
+            }
+         }
       }
    }
-   // Re-arm SELL: side empty + pending missing + trigger condition met
-   if(sellAllowed && sellPos==0 && tSellPend==0 && sellTrigger){
-      double dnPx = NormalizeDouble(bid - dist, g_digits);
-      double tp   = (InpInitialTPPips>0)? NormalizeDouble(dnPx - InpInitialTPPips*g_point, g_digits) : 0;
-      double sl   = (InpInitialSLPips>0)? NormalizeDouble(dnPx + InpInitialSLPips*g_point, g_digits) : 0;
-      string c    = MakeComment(g, false, "IN");
-      if(trade.SellStop(InpInitialLot, dnPx, _Symbol, sl, tp, ORDER_TIME_GTC, 0, c)){
-         if(InpVerboseLog) PrintFormat("Golden2 v2.6: Re-entry SellStop G%d at %.5f (buyPos=%d)", g, dnPx, buyPos);
+
+   // ---- Re-fill SELL side ----
+   if(needSell){
+      bool sqBlk = (InpSQ_Enable && InpSQ_BlockNewOrders &&
+                    g_sqExpCount >= InpSQ_MinExpansionTFs && SqueezeBlocksSide(1));
+      if(sqBlk){
+         // suppress placement this tick
+      } else if(s_attempt[idxSell] != 0 && now - s_attempt[idxSell] < 5){
+         // cooldown active, wait
+      } else {
+         s_attempt[idxSell] = now;
+         double dnPx = NormalizeDouble(bid - InpFrameLowerPips * g_point, g_digits);
+         if(bid - dnPx < minDist + g_point){
+            if(now - s_failLog[idxSell] >= 60){
+               PrintFormat("Golden2 v2.70: maintenance SellStop G%d distance %.*f below stops level %.*f (FrameLowerPips=%d) — skip",
+                           g, g_digits, bid-dnPx, g_digits, minDist, InpFrameLowerPips);
+               s_failLog[idxSell] = now;
+            }
+            s_attempt[idxSell] = now + 25;
+         } else {
+            double tpDistDn = (InpInitialTPPips > 0) ? MathMax(InpInitialTPPips * g_point, minDist + g_point) : 0;
+            double slDistDn = (InpInitialSLPips > 0) ? MathMax(InpInitialSLPips * g_point, minDist + g_point) : 0;
+            double tp = (tpDistDn > 0) ? NormalizeDouble(dnPx - tpDistDn, g_digits) : 0;
+            double sl = (slDistDn > 0) ? NormalizeDouble(dnPx + slDistDn, g_digits) : 0;
+            string c  = MakeComment(g, false, "IN");
+            if(trade.SellStop(InpInitialLot, dnPx, _Symbol, sl, tp, ORDER_TIME_GTC, 0, c)){
+               if(InpVerboseLog)
+                  PrintFormat("Golden2 v2.70: Re-fill SellStop G%d open=%.5f tp=%.5f sl=%.5f (sellPos=0,buyPos=%d)",
+                              g, dnPx, tp, sl, buyPos);
+            } else {
+               if(now - s_failLog[idxSell] >= 60){
+                  PrintFormat("Golden2 v2.70: Re-fill SellStop FAIL G%d err=%d retcode=%d open=%.5f",
+                              g, GetLastError(), trade.ResultRetcode(), dnPx);
+                  s_failLog[idxSell] = now;
+               }
+               s_attempt[idxSell] = now + 25;
+            }
+         }
       }
    }
+}
+
+// [v2.70] Thin wrapper — old call site `ManageInitialReArm(g)` still works.
+void ManageInitialReArm(int g){
+   ManageInitialFrameMaintenance(g);
 }
 
 //================ MAIN GRID ================
