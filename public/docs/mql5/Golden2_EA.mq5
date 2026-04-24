@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|     Golden2 EA v2.0 - Global Accumulate Close (account-wide) +  |
-//|     Group Sequencing Lock (no advance until prior group locked) |
-//|     + Bold solid Avg Price line + Initial Pending TP/SL guards. |
+//|     Golden2 EA v2.1 - Accumulate Close cooldown (no re-trigger |
+//|     loop after CloseEverythingNow) + PlaceInitialFrame block   |
+//|     during cooldown. Bar-close trail v1.8 unchanged.           |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.00"
-#property description "Golden2 EA v2.0 - Global Accumulate Close (sums realized+floating across ALL groups, resets on no-orders), Group Sequencing Lock (next group blocked until prior group is fully hedge-locked or empty), Bold solid Average Price lines, Initial pending TP/SL sanity guards (fixes BuyStop closing immediately on fill). Bar-close trail, Immediate GL#1, Squeeze panel — unchanged."
+#property version   "2.10"
+#property description "Golden2 EA v2.1 - Adds Accumulate Close cooldown so CloseEverythingNow() cannot re-trigger every tick while broker history still reports the just-realized profit. PlaceInitialFrame is blocked during the cooldown window so no new initial frame is placed until the cycle truly resets to zero orders. All other v2.0 logic (global accumulate, group sequencing lock, bold avg lines, BuyStop TP guards, bar-close trail, immediate GL#1) unchanged."
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -153,6 +153,7 @@ input bool    InpTP_UsePctBalance     = false;                       // Use TP %
 input double  InpTP_PctBalance        = 26.0;                        // TP % of Balance
 input bool    InpTP_UseAccumulateClose= false;                       // Use Accumulate Close (group-wide)
 input double  InpTP_AccumulateTarget  = 1000.0;                      // Accumulate Target ($)
+input int     InpTP_AccumCooldownSec  = 30;                          // [v2.1] Accumulate cooldown after close (sec) — blocks re-trigger & new frames
 input bool    InpTP_UsePctMaxDD       = false;                       // Use TP % of Max Drawdown (per side)
 input double  InpTP_PctMaxDD          = 50.0;                        // TP DD % (target = X% of max DD)
 input bool    InpTP_ShowAvgLine       = true;                        // Show Average Price Line
@@ -296,6 +297,11 @@ datetime g_accumResetTime          = 0;
 bool     g_hadAnyOrderLastTick     = false;
 double   g_accumNetCached          = 0.0;
 double   g_accumFloatingCached     = 0.0;
+// [v2.1] Cooldown after Accumulate Close fires — prevents re-trigger loop
+//        while broker history still reports the just-realized profit, and
+//        blocks PlaceInitialFrame so no new frame is opened mid-cooldown.
+bool     g_accumJustTriggered      = false;
+datetime g_accumTriggerTime        = 0;
 
 //================ HELPERS: comments / parsing ================
 string SidePrefix(ENUM_SIDE s){ return (s==SIDE_BUY?"B":"S"); }
@@ -653,9 +659,18 @@ int FindActiveTradingGroup(){
 }
 
 void PlaceInitialFrame(int g){
+   // [v2.1] Accumulate cooldown guard — after CloseEverythingNow() fires, do
+   //        NOT open a new frame until the cooldown elapses AND the cycle has
+   //        truly reset (handled in ManageGlobalAccumulateClose). This breaks
+   //        the per-tick close→reopen→close loop seen when broker history is
+   //        slow to reflect the just-realized profit.
+   if(g_accumJustTriggered){
+      if(InpVerboseLog) PrintFormat("Golden2 v2.1: PlaceInitialFrame G%d skipped (accum cooldown active)", g);
+      return;
+   }
    // [v1.6] Squeeze block: don't place initial frame on volatile expansion
    if(InpSQ_Enable && InpSQ_BlockNewOrders && g_sqExpCount >= InpSQ_MinExpansionTFs && SqueezeBlocksAny()){
-      if(InpVerboseLog) PrintFormat("Golden2 v2.0: Squeeze BLOCK initial G%d (%s)", g, SqueezeStatusString());
+      if(InpVerboseLog) PrintFormat("Golden2 v2.1: Squeeze BLOCK initial G%d (%s)", g, SqueezeStatusString());
       return;
    }
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
@@ -2041,13 +2056,36 @@ void ManageGlobalAccumulateClose(){
    if(any){
       for(int g=1; g<=InpMaxGroups; g++) floating += GroupFloatingPL(g,-1,-1);
    }
-   // Reset point: transition from "had orders" -> "none"
+
+   // [v2.1] Cooldown branch — after CloseEverythingNow() we sit here until the
+   //        account is truly empty AND cooldown elapsed, then force-reset the
+   //        cycle so the next legitimate accumulation starts at zero.
+   if(g_accumJustTriggered){
+      bool cooldownDone = (InpTP_AccumCooldownSec <= 0) ||
+                          (TimeCurrent() - g_accumTriggerTime >= InpTP_AccumCooldownSec);
+      if(!any && cooldownDone){
+         g_accumRealizedSinceReset = 0.0;
+         g_accumResetTime          = TimeCurrent();
+         g_accumNetCached          = 0.0;
+         g_accumFloatingCached     = 0.0;
+         g_accumJustTriggered      = false;
+         if(InpVerboseLog) Print("Golden2 v2.1: Accumulate cooldown DONE — cycle reset, trading resumes");
+      } else {
+         // Still cooling down — refresh dashboard cache only, do not re-trigger.
+         g_accumFloatingCached = floating;
+         g_accumNetCached      = g_accumRealizedSinceReset + floating;
+         g_hadAnyOrderLastTick = any;
+         return;
+      }
+   }
+
+   // Reset point: transition from "had orders" -> "none" (normal cycle end)
    if(!any && g_hadAnyOrderLastTick){
       g_accumRealizedSinceReset = 0.0;
       g_accumResetTime          = TimeCurrent();
       g_accumNetCached          = 0.0;
       g_accumFloatingCached     = 0.0;
-      if(InpVerboseLog) Print("Golden2 v2.0: Accumulate cycle RESET (no orders in system)");
+      if(InpVerboseLog) Print("Golden2 v2.1: Accumulate cycle RESET (no orders in system)");
    }
    if(g_accumResetTime == 0) g_accumResetTime = TimeCurrent();
 
@@ -2057,9 +2095,12 @@ void ManageGlobalAccumulateClose(){
    g_accumNetCached          = realized + floating;
 
    if(InpTP_UseAccumulateClose && any && g_accumNetCached >= InpTP_AccumulateTarget){
-      PrintFormat("Golden2 v2.0: GLOBAL Accumulate Close net=%.2f >= %.2f (realized=%.2f float=%.2f)",
-                  g_accumNetCached, InpTP_AccumulateTarget, realized, floating);
+      PrintFormat("Golden2 v2.1: GLOBAL Accumulate Close net=%.2f >= %.2f (realized=%.2f float=%.2f) — cooldown %ds",
+                  g_accumNetCached, InpTP_AccumulateTarget, realized, floating, InpTP_AccumCooldownSec);
       CloseEverythingNow();
+      // Arm cooldown so PlaceInitialFrame/this function will not loop.
+      g_accumJustTriggered = true;
+      g_accumTriggerTime   = TimeCurrent();
    }
 
    g_hadAnyOrderLastTick = any;
@@ -2250,7 +2291,7 @@ void DrawDashboard(){
    if(InpInitSideMode == INIT_SELL_ONLY) modeLbl = "SELL-only";
 
    // Header
-   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.0    Side: %s", modeLbl), InpDashAccent);
+   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.1    Side: %s", modeLbl), InpDashAccent);
    y += rowH+2;
 
    // ==== Account section ====
@@ -2441,11 +2482,12 @@ int OnInit(){
       }
    }
 
-   PrintFormat("Golden2 EA v2.0 initialized | Magic=%I64d | MaxGroups=%d | InitMode=%d | GridLoss=%s | Squeeze=%s | TripleGate=%s | BarTrail=%s | Accum=%s | GroupLock=%s",
+   PrintFormat("Golden2 EA v2.1 initialized | Magic=%I64d | MaxGroups=%d | InitMode=%d | GridLoss=%s | Squeeze=%s | TripleGate=%s | BarTrail=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s",
                (long)InpMagic, InpMaxGroups, (int)InpInitSideMode,
                GridLoss_Enable?"ON":"OFF", InpSQ_Enable?"ON":"OFF", InpExitTripleGate_Enable?"ON":"OFF",
                InpInitTrailOnBarClose?"ON":"OFF",
                InpTP_UseAccumulateClose?"ON":"OFF",
+               InpTP_AccumCooldownSec,
                InpGroup_RequireFullLockBeforeNext?"ON":"OFF");
    return INIT_SUCCEEDED;
 }
