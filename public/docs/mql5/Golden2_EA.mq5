@@ -1960,11 +1960,23 @@ int OnInit(){
    g_atrLossHandle   = iATR(_Symbol, GridLoss_ATR_TF,   GridLoss_ATR_Period);
    g_atrProfitHandle = iATR(_Symbol, GridProfit_ATR_TF, GridProfit_ATR_Period);
    if(g_bbHandle == INVALID_HANDLE || g_atrHandle == INVALID_HANDLE){
-      Print("Golden2 v1.3: indicator init failed");
+      Print("Golden2 v1.6: indicator init failed");
       return INIT_FAILED;
    }
 
-   PrintFormat("Golden2 EA v1.3 initialized | Magic=%I64d | MaxGroups=%d", (long)InpMagic, InpMaxGroups);
+   // [v1.6] Squeeze Filter handles
+   g_sqTF[0] = InpSQ_TF1; g_sqTF[1] = InpSQ_TF2; g_sqTF[2] = InpSQ_TF3;
+   for(int i=0;i<3;i++){
+      g_sqBB[i]    = iBands(_Symbol, g_sqTF[i], InpSQ_BBPeriod, 0, InpSQ_BBMult, PRICE_CLOSE);
+      g_sqKCEMA[i] = iMA   (_Symbol, g_sqTF[i], InpSQ_KCPeriod, 0, MODE_EMA, PRICE_CLOSE);
+      g_sqATR[i]   = iATR  (_Symbol, g_sqTF[i], InpSQ_ATRPeriod);
+      if(InpSQ_Enable && (g_sqBB[i]==INVALID_HANDLE || g_sqKCEMA[i]==INVALID_HANDLE || g_sqATR[i]==INVALID_HANDLE)){
+         PrintFormat("Golden2 v1.6: Squeeze indicator init failed TF[%d]", i);
+      }
+   }
+
+   PrintFormat("Golden2 EA v1.6 initialized | Magic=%I64d | MaxGroups=%d | Squeeze=%s | TripleGate=%s",
+               (long)InpMagic, InpMaxGroups, InpSQ_Enable?"ON":"OFF", InpExitTripleGate_Enable?"ON":"OFF");
    return INIT_SUCCEEDED;
 }
 
@@ -1975,6 +1987,11 @@ void OnDeinit(const int reason){
    if(g_atrHandle != INVALID_HANDLE) IndicatorRelease(g_atrHandle);
    if(g_atrLossHandle != INVALID_HANDLE)   IndicatorRelease(g_atrLossHandle);
    if(g_atrProfitHandle != INVALID_HANDLE) IndicatorRelease(g_atrProfitHandle);
+   for(int i=0;i<3;i++){
+      if(g_sqBB[i]    != INVALID_HANDLE) IndicatorRelease(g_sqBB[i]);
+      if(g_sqKCEMA[i] != INVALID_HANDLE) IndicatorRelease(g_sqKCEMA[i]);
+      if(g_sqATR[i]   != INVALID_HANDLE) IndicatorRelease(g_sqATR[i]);
+   }
 }
 
 // Track first-position candle for "DontSameCandle" guard
@@ -1993,6 +2010,13 @@ void TrackInitialCandle(int g){
 
 void OnTick(){
    if(!InpAllowTrade){ DrawDashboard(); return; }
+   RefreshSqueezeState(); // [v1.6] update squeeze cache once per tick
+
+   // [v1.6] Optional close-on-expansion (default off)
+   if(InpSQ_Enable && InpSQ_CloseOnExpansion && g_sqExpCount >= InpSQ_MinExpansionTFs){
+      // safety: do not auto-close matched groups (Triple-Gate handles them)
+      // intentionally left as a no-op stub to avoid touching trade.PositionClose flow
+   }
 
    for(int g=1; g<=InpMaxGroups; g++){
       bool hasPos = GroupHasAnyPositions(g);
