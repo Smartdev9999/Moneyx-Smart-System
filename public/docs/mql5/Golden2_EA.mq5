@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|     Golden2 EA v2.1 - Accumulate Close cooldown (no re-trigger |
-//|     loop after CloseEverythingNow) + PlaceInitialFrame block   |
-//|     during cooldown. Bar-close trail v1.8 unchanged.           |
+//|     Golden2 EA v2.2 - Trail preserves existing pending TP/SL  |
+//|     (no more disappearing data after OrderModify) and group   |
+//|     advance retries per-tick with per-side hedge-lock check.  |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.10"
-#property description "Golden2 EA v2.1 - Adds Accumulate Close cooldown so CloseEverythingNow() cannot re-trigger every tick while broker history still reports the just-realized profit. PlaceInitialFrame is blocked during the cooldown window so no new initial frame is placed until the cycle truly resets to zero orders. All other v2.0 logic (global accumulate, group sequencing lock, bold avg lines, BuyStop TP guards, bar-close trail, immediate GL#1) unchanged."
+#property version   "2.20"
+#property description "Golden2 EA v2.2 - Bar-close trail no longer wipes existing TP/SL on the pending stop: when InpInitialTPPips=0 (Average-TP mode) the previous TP/SL is forwarded into OrderModify; when >0 the TP/SL is shifted by the same delta as the entry price. Group advance now runs every tick (not only on hedge edge) and IsGroupSafeToAdvance() uses a per-side hedge-lock check so Group N+1 opens even when only one side of Group N is still alive but already hedge-locked. v2.1 Accumulate Close cooldown unchanged."
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -142,6 +142,7 @@ input string  __sec_group__           = "=== Group / Queue ===";     // ---
 input int     InpMaxGroups            = 50;                          // Max active groups (1..50)
 input bool    InpSequentialQueue      = true;                        // Process one group at a time
 input bool    InpGroup_RequireFullLockBeforeNext = true;             // [v2.0] Block next group until prior group is fully hedge-locked or empty
+input bool    InpGroup_AdvancePerTick            = true;             // [v2.2] Retry group advance every tick (not only on hedge edge)
 
 //--- === Take Profit (Average) ===
 input string  __sec_tp__              = "=== Take Profit (Average) ==="; // ---
@@ -809,11 +810,26 @@ void ManageInitialTrailOnBarClose(int g){
       double newPx = NormalizeDouble(ask + InpFrameUpperPips*g_point, g_digits);
       if(OrderSelect(tBuy)){
          double oldPx = OrderGetDouble(ORDER_PRICE_OPEN);
+         double oldTP = OrderGetDouble(ORDER_TP);
+         double oldSL = OrderGetDouble(ORDER_SL);
          if(newPx < oldPx - g_point){
-            double tp = (InpInitialTPPips>0)? NormalizeDouble(newPx + InpInitialTPPips*g_point, g_digits) : 0;
-            double sl = (InpInitialSLPips>0)? NormalizeDouble(newPx - InpInitialSLPips*g_point, g_digits) : 0;
+            // [v2.2] Preserve existing TP/SL. Shift by entry delta when InitialTP is on,
+            //        otherwise forward the broker-side values verbatim (Average-TP mode).
+            double tp, sl;
+            if(InpInitialTPPips > 0){
+               tp = (oldTP > 0) ? NormalizeDouble(oldTP + (newPx - oldPx), g_digits) : 0;
+            } else {
+               tp = oldTP; // keep existing (could be Average-TP set by manager, or 0)
+            }
+            if(InpInitialSLPips > 0){
+               sl = (oldSL > 0) ? NormalizeDouble(oldSL + (newPx - oldPx), g_digits) : 0;
+            } else {
+               sl = oldSL;
+            }
             if(trade.OrderModify(tBuy, newPx, sl, tp, ORDER_TIME_GTC, 0)){
-               if(InpVerboseLog) PrintFormat("Golden2 v1.8: BarTrail BuyStop G%d %.5f -> %.5f", g, oldPx, newPx);
+               if(InpVerboseLog) PrintFormat("Golden2 v2.2: BarTrail BuyStop G%d %.5f -> %.5f tp=%.5f sl=%.5f", g, oldPx, newPx, tp, sl);
+            } else {
+               PrintFormat("Golden2 v2.2: BarTrail BuyStop modify FAIL G%d err=%d", g, GetLastError());
             }
          }
       }
@@ -823,11 +839,25 @@ void ManageInitialTrailOnBarClose(int g){
       double newPx = NormalizeDouble(bid - InpFrameLowerPips*g_point, g_digits);
       if(OrderSelect(tSell)){
          double oldPx = OrderGetDouble(ORDER_PRICE_OPEN);
+         double oldTP = OrderGetDouble(ORDER_TP);
+         double oldSL = OrderGetDouble(ORDER_SL);
          if(newPx > oldPx + g_point){
-            double tp = (InpInitialTPPips>0)? NormalizeDouble(newPx - InpInitialTPPips*g_point, g_digits) : 0;
-            double sl = (InpInitialSLPips>0)? NormalizeDouble(newPx + InpInitialSLPips*g_point, g_digits) : 0;
+            // [v2.2] Preserve existing TP/SL (see BUY branch above for rationale).
+            double tp, sl;
+            if(InpInitialTPPips > 0){
+               tp = (oldTP > 0) ? NormalizeDouble(oldTP + (newPx - oldPx), g_digits) : 0;
+            } else {
+               tp = oldTP;
+            }
+            if(InpInitialSLPips > 0){
+               sl = (oldSL > 0) ? NormalizeDouble(oldSL + (newPx - oldPx), g_digits) : 0;
+            } else {
+               sl = oldSL;
+            }
             if(trade.OrderModify(tSell, newPx, sl, tp, ORDER_TIME_GTC, 0)){
-               if(InpVerboseLog) PrintFormat("Golden2 v1.8: BarTrail SellStop G%d %.5f -> %.5f", g, oldPx, newPx);
+               if(InpVerboseLog) PrintFormat("Golden2 v2.2: BarTrail SellStop G%d %.5f -> %.5f tp=%.5f sl=%.5f", g, oldPx, newPx, tp, sl);
+            } else {
+               PrintFormat("Golden2 v2.2: BarTrail SellStop modify FAIL G%d err=%d", g, GetLastError());
             }
          }
       }
@@ -2106,16 +2136,29 @@ void ManageGlobalAccumulateClose(){
    g_hadAnyOrderLastTick = any;
 }
 
-// [v2.0] Group is "safe to advance to next" if it has no main positions
-// OR has hedge-matched both sides (Triple-Gate handles exit). Otherwise
-// it still has unlocked main exposure that must be resolved first.
+// [v2.2] Group is "safe to advance to next" using PER-SIDE hedge-lock check.
+// Each surviving main side must be covered by hedge positions; sides that have
+// already emptied (TP hit / Triple-Gate close) do not need a hedge counterpart.
 bool IsGroupSafeToAdvance(int g){
-   bool hb = (CountGroupPositions(g, 0, 0) > 0);
-   bool hs = (CountGroupPositions(g, 1, 0) > 0);
-   if(!hb && !hs) return true;                            // no main left
-   bool hh = (CountGroupPositions(g, -1, 1) > 0);
-   if(hh && hb && hs) return true;                        // both sides locked by hedge
-   return false;
+   int buyMain  = CountGroupPositions(g, 0, 0);
+   int sellMain = CountGroupPositions(g, 1, 0);
+   if(buyMain == 0 && sellMain == 0) return true;        // no main exposure left
+   bool hedgeAny = (CountGroupPositions(g, -1, 1) > 0);
+   if(!hedgeAny) return false;                           // unlocked main with zero hedge
+   // Each non-empty main side must be locked by an opposing hedge position.
+   bool buyOK  = (buyMain  == 0) || (CountGroupPositions(g, 1, 1) > 0); // sell-side hedge locks BUY main
+   bool sellOK = (sellMain == 0) || (CountGroupPositions(g, 0, 1) > 0); // buy-side hedge locks SELL main
+   return (buyOK && sellOK);
+}
+
+// [v2.2] Verify every group BEFORE curG is also safe (no orphan unlocked main
+// in groups 1..curG-1). Prevents skipping past a stuck older group.
+bool AreAllPriorGroupsSafe(int curG){
+   for(int i=1; i<curG; i++){
+      if(!GroupHasAnyPositions(i)) continue; // empty group is fine
+      if(!IsGroupSafeToAdvance(i)) return false;
+   }
+   return true;
 }
 
 void TryAdvanceToNextGroup(){
@@ -2125,29 +2168,39 @@ void TryAdvanceToNextGroup(){
       if(g >= 1) PlaceInitialFrame(g);
       return;
    }
-   if(GroupHedgeJustActivated(cur)){
-      // [v2.0] Don't advance until prior group is fully locked or emptied
-      if(InpGroup_RequireFullLockBeforeNext && !IsGroupSafeToAdvance(cur)){
+   // [v2.2] Advance condition: cur has hedge active AND (lock-guard off OR cur+priors safe).
+   //        Runs every tick when InpGroup_AdvancePerTick=true so a transient block (e.g.
+   //        partial close in progress) is retried instead of being lost forever.
+   bool hedgeActive = GroupHedgeJustActivated(cur);
+   if(!hedgeActive) return;
+   if(!InpGroup_AdvancePerTick){
+      // legacy edge-only behaviour preserved for users who want v2.1 semantics
+   }
+   if(InpGroup_RequireFullLockBeforeNext){
+      if(!IsGroupSafeToAdvance(cur) || !AreAllPriorGroupsSafe(cur)){
          static datetime lastHoldLog = 0;
          if(InpVerboseLog && TimeCurrent() - lastHoldLog >= 60){
-            PrintFormat("Golden2 v2.0: hold G%d->G%d (G%d still has unlocked main BUY=%d SELL=%d)",
-                        cur, cur+1, cur,
-                        CountGroupPositions(cur,0,0), CountGroupPositions(cur,1,0));
+            PrintFormat("Golden2 v2.2: hold G%d->G%d (cur safe=%d priors safe=%d BUY=%d SELL=%d hedgeBuy=%d hedgeSell=%d)",
+                        cur, cur+1,
+                        IsGroupSafeToAdvance(cur), AreAllPriorGroupsSafe(cur),
+                        CountGroupPositions(cur,0,0), CountGroupPositions(cur,1,0),
+                        CountGroupPositions(cur,0,1), CountGroupPositions(cur,1,1));
             lastHoldLog = TimeCurrent();
          }
          return;
       }
-      if(cur < InpMaxGroups){
-         int next = cur + 1;
-         if(!GroupHasAnyPositions(next) && !GroupHasAnyPendings(next)){
-            PlaceInitialFrame(next);
-         }
-      } else {
-         static datetime lastWarn = 0;
-         if(TimeCurrent() - lastWarn >= 300){
-            Print("Golden2 v2.0: Reached InpMaxGroups limit, no new group will be opened.");
-            lastWarn = TimeCurrent();
-         }
+   }
+   if(cur < InpMaxGroups){
+      int next = cur + 1;
+      if(!GroupHasAnyPositions(next) && !GroupHasAnyPendings(next)){
+         if(InpVerboseLog) PrintFormat("Golden2 v2.2: advance G%d -> G%d (placing initial frame)", cur, next);
+         PlaceInitialFrame(next);
+      }
+   } else {
+      static datetime lastWarn = 0;
+      if(TimeCurrent() - lastWarn >= 300){
+         Print("Golden2 v2.2: Reached InpMaxGroups limit, no new group will be opened.");
+         lastWarn = TimeCurrent();
       }
    }
 }
@@ -2291,7 +2344,7 @@ void DrawDashboard(){
    if(InpInitSideMode == INIT_SELL_ONLY) modeLbl = "SELL-only";
 
    // Header
-   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.1    Side: %s", modeLbl), InpDashAccent);
+   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.2    Side: %s", modeLbl), InpDashAccent);
    y += rowH+2;
 
    // ==== Account section ====
@@ -2482,13 +2535,14 @@ int OnInit(){
       }
    }
 
-   PrintFormat("Golden2 EA v2.1 initialized | Magic=%I64d | MaxGroups=%d | InitMode=%d | GridLoss=%s | Squeeze=%s | TripleGate=%s | BarTrail=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s",
+   PrintFormat("Golden2 EA v2.2 initialized | Magic=%I64d | MaxGroups=%d | InitMode=%d | GridLoss=%s | Squeeze=%s | TripleGate=%s | BarTrail=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s",
                (long)InpMagic, InpMaxGroups, (int)InpInitSideMode,
                GridLoss_Enable?"ON":"OFF", InpSQ_Enable?"ON":"OFF", InpExitTripleGate_Enable?"ON":"OFF",
                InpInitTrailOnBarClose?"ON":"OFF",
                InpTP_UseAccumulateClose?"ON":"OFF",
                InpTP_AccumCooldownSec,
-               InpGroup_RequireFullLockBeforeNext?"ON":"OFF");
+               InpGroup_RequireFullLockBeforeNext?"ON":"OFF",
+               InpGroup_AdvancePerTick?"ON":"OFF");
    return INIT_SUCCEEDED;
 }
 
