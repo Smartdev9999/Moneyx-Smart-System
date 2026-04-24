@@ -288,6 +288,7 @@ bool     g_isOptimization        = false;          // MQL_OPTIMIZATION
 datetime g_lastDashRender        = 0;              // throttle DrawDashboard
 datetime g_lastSqueezeBar        = 0;              // refresh Squeeze on new M1 bar only
 int      g_highestActiveGroup    = 0;              // bound per-tick group loop
+datetime g_lastAuxChartSweep     = 0;              // [v2.74] throttle HideAuxiliaryTesterCharts in OnTick
 // HasClosedMainOnSide cache: per (group, side)
 datetime g_hcmCacheTime[51][2];                    // last time the cache was filled
 bool     g_hcmCacheValue[51][2];                   // cached result
@@ -2823,6 +2824,28 @@ void CleanupChartIndicatorsInTester(){
                removed, totalWindows, InpTester_CleanChart?"ON":"OFF", g_isVisualMode?"YES":"NO");
 }
 
+// [v2.74] Strategy Tester spawns auxiliary chart windows whenever the EA
+// requests indicator handles on non-primary timeframes (Squeeze BB/KC/ATR on
+// M5/M15 etc.). Closing those auxiliary charts does NOT release the indicator
+// handles — handles bind to (symbol, timeframe), so Squeeze/ATR/BB calculations
+// keep running in the background while we save rendering + memory cost of the
+// extra chart tabs. Returns the number of charts closed.
+int HideAuxiliaryTesterCharts(){
+   if(!g_isTesterMode) return 0;
+   if(!InpTester_HideAuxCharts) return 0;
+   long mainId = ChartID();
+   int closed = 0;
+   long id = ChartFirst();
+   while(id >= 0){
+      long nxt = ChartNext(id);
+      if(id != mainId){
+         if(ChartClose(id)) closed++;
+      }
+      id = nxt;
+   }
+   return closed;
+}
+
 int OnInit(){
    g_point  = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
    g_digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
@@ -2838,6 +2861,15 @@ int OnInit(){
    g_lastSqueezeBar = 0;
    // [v2.73] Strip Tester chart template indicators ASAP for fastest backtest.
    CleanupChartIndicatorsInTester();
+   // [v2.74] Close any auxiliary tester chart tabs (M5/M15/etc. spawned for
+   // Squeeze handles). Indicator handles stay alive — only chart UI is closed.
+   {
+      int auxClosed = HideAuxiliaryTesterCharts();
+      if(auxClosed > 0)
+         PrintFormat("[v2.74] Hidden %d auxiliary tester chart(s) | HideAuxCharts=%s",
+                     auxClosed, InpTester_HideAuxCharts?"ON":"OFF");
+   }
+   g_lastAuxChartSweep = TimeCurrent();
    g_highestActiveGroup = 0;
    for(int hi=0; hi<51; hi++){
       g_hcmCacheTime[hi][0] = 0;        g_hcmCacheTime[hi][1] = 0;
@@ -2880,7 +2912,7 @@ int OnInit(){
       }
    }
 
-   PrintFormat("Golden2 EA v2.7.3 initialized | Magic=%I64d | MaxGroups=%d | InitMode=%d | GridLoss=%s | Squeeze=%s SqueezePerSide=ON | TripleGate=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | Tester=%s Visual=%s Opt=%s DashInterval=%ds TesterCleanChart=%s",
+   PrintFormat("Golden2 EA v2.7.4 initialized | Magic=%I64d | MaxGroups=%d | InitMode=%d | GridLoss=%s | Squeeze=%s SqueezePerSide=ON | TripleGate=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | Tester=%s Visual=%s Opt=%s DashInterval=%ds TesterCleanChart=%s HideAuxCharts=%s",
                (long)InpMagic, InpMaxGroups, (int)InpInitSideMode,
                GridLoss_Enable?"ON":"OFF", InpSQ_Enable?"ON":"OFF", InpExitTripleGate_Enable?"ON":"OFF",
                InpInitTrailOnBarClose?"ON":"OFF",
@@ -2892,7 +2924,8 @@ int OnInit(){
                InpGroup_AdvancePerTick?"ON":"OFF",
                g_isTesterMode?"YES":"NO", g_isVisualMode?"YES":"NO", g_isOptimization?"YES":"NO",
                InpDashRenderIntervalSec,
-               InpTester_CleanChart?"ON":"OFF");
+               InpTester_CleanChart?"ON":"OFF",
+               InpTester_HideAuxCharts?"ON":"OFF");
    return INIT_SUCCEEDED;
 }
 
