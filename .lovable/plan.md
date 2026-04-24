@@ -1,85 +1,98 @@
 
 
-## Golden2 EA v1.4 — Hedging Master Toggle + Lot Mirror Fix + Pre-Hedge Block + Dynamic Top-Up
+## Golden2 EA v1.6 — Disarm Fix + Volatility Squeeze Filter + Post-Hedge Grid Lock + Triple-Gate Toggle
 
-ปรับลอจิก Hedging ทั้งระบบให้ตรงกับพฤติกรรม Gold Miner: Hedge ต้อง mirror ออเดอร์ฝั่งตรงข้ามแบบ 1:1 จริง (ทั้ง lot และ comment), เพิ่ม master toggle, หยุดออกออเดอร์ใหม่เมื่อใกล้แตะเกณฑ์ hedge, และ top-up pending hedge ทุกครั้งที่ฝั่ง loss มีไม้เพิ่ม
+แก้ 3 ปัญหาที่พบจากการเทรดจริง พร้อมพอร์ตฟีเจอร์ Volatility Squeeze จาก Gold Miner เข้ามา
 
 ### ไฟล์ที่จะแก้
 - `public/docs/mql5/Golden2_EA.mq5` (ไฟล์เดียว)
 
 ### สิ่งที่ "ไม่เปลี่ยนแปลง" (ยืนยันไม่กระทบ trading logic)
-- ไม่แตะ `OrderSend / trade.Buy / trade.Sell / trade.PositionClose` ในส่วน strategy หลัก
-- ไม่แตะลอจิก Grid Loss / Grid Profit / Max-Grid Trailing
-- ไม่แตะ Triple-Gate Matching Close, Average TP/SL sync (v1.3), Strip-Broker-TPSL
-- ไม่แตะ License/News/Time filter
-- ไม่เปลี่ยนสูตรคำนวณ DD% ที่ใช้ trigger hedge (ยังเป็น `lossUSD/InpHedgeTriggerUSD × 100`)
+- ไม่แตะ `OrderSend / trade.Buy / trade.Sell / trade.PositionClose` ใน strategy หลัก
+- ไม่แตะสูตร Grid Loss / Grid Profit / Max-Grid Trailing / Initial Frame
+- ไม่แตะ Average TP/SL sync (v1.3), Mirror 1:1 (v1.4), Strip-Broker-TPSL
+- ไม่แตะ License/News/Time filter, Dashboard 2-panel (v1.5)
+- ไม่แตะสูตรคำนวณ DD% (`lossUSD/InpHedgeTriggerUSD × 100`)
 
 ---
 
-### 1) Master Toggle เปิด/ปิด Hedging
-เพิ่ม input ใหม่:
+### 1) แก้บั๊ก Disarm Pending Hedge (กรุ๊ปดีดกลับ < 70% แต่ไม่ลบ pending)
+
+**Root cause:** ใน `ManageGroupHedgeArm` ลำดับเงื่อนไข `if(!hedgePosExists && hedgePendingExists){ ... }` ทำงานถูกต้องเฉพาะเมื่อกรุ๊ปนั้น **ยังไม่มีhedge position activate**. แต่ภาพที่ user ส่งมา G1 hedge activate แล้ว ทำให้ลูป arm ของ G2 อาจถูกข้ามด้วย mutex/queue หรือเงื่อนไข sequential. นอกจากนี้ `hedgePendingExists` ถูกเช็คก่อน `pct` recalc ทุก tick — แต่ถ้า `g_blockNewOrders[g]` ค้าง = true จากรอบก่อน อาจไม่มีปัญหาตรงนี้
+
+**Fix:**
+- ปรับเงื่อนไข disarm ให้เป็น **unconditional pre-check** ที่ต้นฟังก์ชัน (ก่อน `hedgePosExists` early return): ถ้า `hedgePendingExists && !hedgePosExists && pct < InpHedgeDisarmPercent` → ลบทันที + reset `g_blockNewOrders[g]=false` + return
+- เพิ่ม secondary disarm trigger: ถ้า `GroupLossSide(g) < 0` (ทั้ง 2 ฝั่งกำไรแล้ว) → ลบ pending hedge ทิ้ง
+- เพิ่ม log: `"Golden2 v1.6: HD DISARM G%d pct=%.1f reason=%s (recover|noLossSide)"`
+
+### 2) เพิ่ม Volatility Squeeze Filter (พอร์ตจาก Gold Miner)
+
+เพิ่ม input group `=== Volatility Squeeze Filter ===` ตรงตามภาพ user upload:
 ```
-input bool InpHedge_Enabled = true;   // Enable Hedging system (master switch)
+input bool   InpSQ_Enable             = true;   // Enable Squeeze Filter
+input ENUM_TIMEFRAMES InpSQ_TF1       = PERIOD_M1;
+input ENUM_TIMEFRAMES InpSQ_TF2       = PERIOD_M5;
+input ENUM_TIMEFRAMES InpSQ_TF3       = PERIOD_M15;
+input int    InpSQ_BBPeriod           = 15;
+input double InpSQ_BBMult             = 2.0;
+input int    InpSQ_KCPeriod           = 15;
+input double InpSQ_KCMult             = 1.5;
+input int    InpSQ_ATRPeriod          = 14;
+input double InpSQ_ExpansionThreshold = 1.6;     // BBwidth/KCwidth ≥ this = Expansion
+input bool   InpSQ_BlockNewOrders     = true;    // Block new orders on Expansion
+input int    InpSQ_MinExpansionTFs    = 1;       // 1..3 TFs in expansion = block
+input bool   InpSQ_DirectionalBlock   = true;    // Only block counter-trend
+input bool   InpSQ_CloseOnExpansion   = false;   // Close all on expansion (default off)
 ```
-- ถ้า `false`: ข้าม `ManageGroupHedgeArm`, ไม่วาง pending hedge ใหม่, ไม่ block new orders จาก pre-hedge guard, dashboard แสดง `HEDGE: OFF`
-- ถ้ามี pending hedge ค้างอยู่ตอนปิด toggle → ลบทิ้งอัตโนมัติครั้งเดียว (ไม่ปิดไม้ hedge ที่ activate แล้ว — ปลอดภัย)
 
-### 2) แก้บั๊กขนาดล็อต Hedge 1:1 (Mirror จริง)
-**ปัญหาปัจจุบัน:** `PlaceHedgePendingSet` ใช้ `LotForLevel(lvl)` (สูตร multiply ของ grid ใหม่) → ทำให้ pending hedge ใหญ่กว่าฝั่งตรงข้ามมาก
+**Implementation (พอร์ต logic จาก Gold Miner v6.14):**
+- Helper `IsSqueezeExpansion(tf, &dirUp)`: คำนวณ BB/KC บน bar index 1 (closed bar เพื่อ stability v6.13), return true ถ้า `BBwidth/KCwidth ≥ Threshold` + ทิศทาง = sign(close − BBmid)
+- Helper `CountExpansionTFs(&blockBuy, &blockSell)`: นับว่า TF ใดอยู่ใน expansion พร้อมตั้ง flag block ตาม direction (ถ้า `DirectionalBlock=true`: expansion-up บล็อก SELL, expansion-down บล็อก BUY; ถ้า false บล็อกทั้ง 2)
+- Guard ที่ "ทางเข้า" — เพิ่มแถวเดียวต้นฟังก์ชัน (ไม่แตะลอจิกข้างใน):
+  - `PlaceInitialFrame(g)`: ถ้า expansion ≥ MinExpansionTFs → return
+  - `TryPlaceGridLoss(g)`: ถ้า block ฝั่งนั้น → continue
+  - `TryPlaceGridProfit(g)`: ถ้า block ฝั่งนั้น → continue
+- ถ้า `InpSQ_CloseOnExpansion=true` → ปิดทุกออเดอร์ของกรุ๊ปที่ยังไม่ matched (ใช้ใน emergency เท่านั้น default off)
+- **ยกเว้น**: pending hedge mirror (1:1) ไม่ถูกบล็อกโดย squeeze (เหมือน Gold Miner v6.56 ที่ exempt hedge orders)
+- Cache handle ต่อ TF เพื่อไม่ recreate ทุก tick: `g_sqBB[3], g_sqKC_EMA[3], g_sqATR[3]` สร้างใน `OnInit`, release ใน `OnDeinit`
 
-**แก้ใหม่:** สแกนไม้ฝั่ง loss ทุกตัว (ทั้ง IN และ GL#1..GL#N) แล้วสร้าง pending hedge **1 ตัวต่อ 1 ไม้** โดย:
-- `lot ของ pending hedge[i] = lot ของไม้ loss[i]` (mirror ตรง ๆ ตามที่ user ต้องการ)
-- `comment ของ pending hedge[i] = "G{g}_HD_" + (tag ของไม้ loss[i])` เช่น loss `G1_IN` → hedge `G1_HD_IN`, loss `G1_GL#7` → hedge `G1_HD_GL#7`
-- Sort ไม้ loss ตามราคา open เพื่อให้ pending วางเป็นแนวชัดเจน
-- ใช้ `InpHedgeLotMatch1to1` เป็น gate: ถ้า `false` → fallback เก่า (แต่แก้ให้ใช้ lot ของไม้ loss แทน LotForLevel)
+### 3) Post-Hedge Grid Lock (กรุ๊ปที่ hedge activate แล้ว ห้ามออก grid ต่อ จนกว่าจะผ่าน Triple-Gate)
 
-### 3) Dynamic Top-Up Pending Hedge
-เมื่อ pending set ถูกวางแล้ว และฝั่ง loss มีไม้ใหม่เพิ่ม (เช่นจาก 10 → 11 ไม้):
-- ทุก tick ใน `ManageGroupHedgeArm`: เปรียบเทียบ `count(loss positions)` กับ `count(hedge pendings)`
-- ถ้า loss > hedge pending → เพิ่ม pending hedge ใหม่เฉพาะไม้ที่ยังไม่มี comment match (เช็ค `G1_HD_GL#11` ว่ามีอยู่ไหม)
-- lot/comment ตาม rule ข้อ 2
-- ถ้า loss < hedge pending (ไม้ loss ปิดไปก่อน) → ลบ pending hedge ที่ comment ไม่มี match แล้ว
-- ทำเฉพาะตอน `hedgePosExists == false` (ยังไม่ activate); ถ้า activate แล้วไม่ยุ่ง
+**ปัญหา:** ปัจจุบัน `PlaceContinuationGridIfNeeded(g)` ถูกเรียกใน flow matching close (line 1480) — เปิด grid ต่อทันทีหลัง partial match. user ต้องการให้ **เมื่อ hedge activate แล้ว หยุด grid ใหม่** จนกว่าจะมีการ matching close (Triple Gate) ผ่าน
 
-### 4) Pre-Hedge Block New Orders
+**Fix:**
+- ใน `TryPlaceGridLoss` และ `TryPlaceGridProfit`: เพิ่ม guard `if(IsGroupHedgeMatched(g)) return;` ที่ต้นฟังก์ชัน (Grid Profit มีอยู่แล้ว, Grid Loss ยังขาด)
+- ใน `ManageMaxGridTrailing` มี check แล้ว ✓
+- `PlaceContinuationGridIfNeeded` (line 1480): เพิ่ม input toggle `InpPostHedge_AllowContinuation` (default `false`) — ถ้า false → return; ถ้า true → ทำงานเดิม
+- ผลลัพธ์: หลัง hedge activate, ทั้งกรุ๊ปจะ "freeze" รอ Triple-Gate matching close เท่านั้น (ตาม Gold Miner behavior)
+
+### 4) Triple-Gate Master Toggle เปิด/ปิดได้
+
 เพิ่ม input:
 ```
-input double InpHedge_BlockNewOrderPercent = 75.0;  // Block new grid orders when DD% reaches (0=off, < ArmPercent)
+input bool InpExitTripleGate_Enable = true;   // Enable Triple-Gate matching close
 ```
-- เมื่อ `pct >= InpHedge_BlockNewOrderPercent` ในกรุ๊ปใด → set `g_blockNewOrders[g] = true`
-- ผลกระทบ (เพิ่ม guard ที่ "ทางเข้า" ฟังก์ชันที่เปิดไม้ใหม่ ไม่แตะ logic การคำนวณ):
-  - `TryPlaceGridLoss(g)` → return ถ้า block
-  - `TryPlaceGridProfit(g)` → return ถ้า block
-  - การวางกรุ๊ปถัดไป (`PlaceInitialFrame(next)` ใน sequential queue) → return ถ้ากรุ๊ปปัจจุบัน block
-- ปลด block เมื่อ `pct < InpHedge_BlockNewOrderPercent - 5` (hysteresis 5%) — กัน flap
-- Disarm 70% (มีอยู่แล้ว) ยังทำงานเหมือนเดิม → ลบ pending hedge เมื่อ DD ลดลง
-- Dashboard ต่อกรุ๊ป: เพิ่ม flag `BLK` เมื่อ block อยู่
+- ถ้า `false`: 
+  - `IsExpansionToNormal()` return `true` (bypass gate — ใช้แค่ Average TP/SL + broker TP เท่านั้น)
+  - หรือ early-return ใน `TryMatchingCloseForGroup(g)` เพื่อปิดทั้ง flow
+  - เลือกแบบ early-return เพื่อให้ user ตัดทั้ง matching close ออกถ้าต้องการ
+- Dashboard ฝั่งซ้ายเพิ่มแถว `Triple-Gate: ON/OFF`
 
-### 5) Cross-Group Activation (มีอยู่แล้ว — แค่ยืนยัน)
-เมื่อราคาวิ่งทะลุชน pending hedge ของกรุ๊ปปัจจุบัน → hedge activate → `g_stripped[g]=true` → กรุ๊ปนี้เข้าโหมด matching close
-Sequential queue เดิมจะตรวจและเปิด **กรุ๊ปใหม่ (g+1)** อัตโนมัติด้วย input ชุดเดิม — ทำงานแยกกรุ๊ป **ไม่ต้องแก้** เพราะมีอยู่แล้วใน `OnTick` (`PlaceInitialFrame(next)`)
-
-ยืนยันว่า: pre-hedge block ของกรุ๊ป g **ไม่ block** การเปิดกรุ๊ป g+1 หลัง hedge activate (เพราะกรุ๊ป g เข้าโหมด stripped/matching แล้ว ไม่นับเป็น pre-hedge)
-
-### 6) Dashboard
-เพิ่มต่อกรุ๊ปที่ active:
-```
-G1: DD 65% [BLK] HEDGE:ARMED(11p)  AVG-BR(B:11) INIT(S:1)
-```
-- `DD%` = pct ของกรุ๊ป
-- `[BLK]` = pre-hedge block อยู่
-- `HEDGE: OFF | IDLE | ARMED(Np) | ACTIVE` ; `Np` = จำนวน pending hedge
+### 5) Dashboard อัปเดต
+- ฝั่งซ้าย: เพิ่ม `Squeeze: TF_M1/M5/M15 [E:1↑] BLK_BUY` แสดงสถานะ expansion ของแต่ละ TF + ทิศทาง block
+- ฝั่งซ้าย: เพิ่ม `Triple-Gate: ON/OFF`
+- ฝั่งขวา (Hedging table): เพิ่มคอลัมน์ `LOCK` แสดง `Y` เมื่อกรุ๊ปนั้น hedge activated และถูก post-hedge lock
 
 ### Inputs ใหม่ (สรุป)
 ```
-input bool   InpHedge_Enabled              = true;   // Master Hedging on/off
-input double InpHedge_BlockNewOrderPercent = 75.0;   // Stop new grid when DD% ≥ this (0=off)
+input bool InpExitTripleGate_Enable        = true;   // Triple-Gate master on/off
+input bool InpPostHedge_AllowContinuation  = false;  // Allow continuation grid after hedge activate
+// + Squeeze group ทั้งบล็อก (ข้อ 2)
 ```
-(คงเดิมทั้งหมด: `InpHedgeTriggerUSD`, `InpHedgeArmPercent=80`, `InpHedgeDisarmPercent=70`, `InpHedgeLotMatch1to1`, `InpHedge_OpenDelayMin`)
 
 ### Technical Detail
-- `MirrorLossSideToHedgePendings(g, lossSide)`: scan loss positions → build map `tag→lot` → for each tag, ถ้ายังไม่มี pending `HD_<tag>` ให้สร้าง; ถ้ามี pending ไม่ตรง tag loss แล้วให้ลบ
-- ราคา pending: ใช้ราคาเดียวกันทั้ง set (anchor ห่างจาก market `MathMax(50, InpGridStepPips/4)` points ฝั่งตรงข้าม) — เหมือนภาพที่ user แสดง (ทุกไม้ pending วางใกล้ราคาเดียวกัน) เพื่อให้ activate พร้อมกันเมื่อราคาทะลุ
-- Block guard: เพิ่มบรรทัดเดียวที่ต้นฟังก์ชัน Try* — ไม่แตะลอจิกข้างใน
-- Bump version → `1.40` ทุกจุด (`#property version`, `description`, header, dashboard)
+- Squeeze BB calc: `BB = iBands(_Symbol, tf, period, 0, mult, PRICE_CLOSE)`, `KC_mid = iMA(EMA, period)`, `KC_width = 2 × mult × ATR(period)`. expansion = `(BBupper − BBlower)/KCwidth ≥ Threshold` บน shift=1
+- Disarm fix: ย้าย disarm block ขึ้นไปก่อน `if(hedgePosExists) return` เพื่อ guarantee execution
+- Bump version → `1.60` ทุกจุด (`#property version`, `description`, header, dashboard)
+- บันทึก memory: `mem://trading/golden2-ea/v1-6-disarm-squeeze-postlock.md`
 
