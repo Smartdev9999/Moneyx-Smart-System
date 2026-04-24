@@ -2182,6 +2182,8 @@ void OnTick(){
       }
       EnforceFrameMutualExclusion(g);
       TrackInitialCandle(g);
+      ManageInitialTrail(g);   // [v1.7] trail opposite stop
+      ManageInitialReArm(g);   // [v1.7] re-arm side stop after TP
       TryPlaceGridLoss(g);
       TryPlaceGridProfit(g);
       ManageGroupHedgeArm(g);
