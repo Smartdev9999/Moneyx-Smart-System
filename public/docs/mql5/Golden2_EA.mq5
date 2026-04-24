@@ -234,6 +234,18 @@ int g_atrHandle = INVALID_HANDLE;
 int g_atrLossHandle   = INVALID_HANDLE;
 int g_atrProfitHandle = INVALID_HANDLE;
 
+// [v1.6] Squeeze Filter handles per TF (3 timeframes)
+int g_sqBB[3]      = {INVALID_HANDLE, INVALID_HANDLE, INVALID_HANDLE};
+int g_sqKCEMA[3]   = {INVALID_HANDLE, INVALID_HANDLE, INVALID_HANDLE};
+int g_sqATR[3]     = {INVALID_HANDLE, INVALID_HANDLE, INVALID_HANDLE};
+ENUM_TIMEFRAMES g_sqTF[3];
+// Cached squeeze state (refreshed each tick by RefreshSqueezeState)
+bool   g_sqExpansion[3]   = {false,false,false}; // is TF in expansion
+int    g_sqDir[3]         = {0,0,0};             // +1 up, -1 down, 0 none
+int    g_sqExpCount       = 0;                    // # TFs currently in expansion
+bool   g_sqBlockBuy       = false;
+bool   g_sqBlockSell      = false;
+
 bool   g_stripped[51];          // per-group flag: broker TP/SL stripped after hedge match
 double g_maxDDPerSide[51][2];   // [group][side] track max floating loss USD seen (positive value)
 bool   g_blockNewOrders[51];    // per-group: pre-hedge block (DD% near arm threshold)
