@@ -1609,8 +1609,16 @@ void DrawDashboard(){
       int glS = HighestGridLevel(g, SIDE_SELL, false, "GL");
       int gpB = HighestGridLevel(g, SIDE_BUY,  false, "GP");
       int gpS = HighestGridLevel(g, SIDE_SELL, false, "GP");
-      txt += StringFormat("G%d  mainL=%.2f hdgL=%.2f  PL=%.2f  arm=%.0f%%%s\n",
-                          g, mainL, hedgeL, pl, pct, match);
+      int hPend = CountGroupPendingsByTagPrefix(g, true, "");
+      int hPos  = CountGroupPositions(g, -1, 1);
+      string hStat;
+      if(!InpHedge_Enabled)        hStat = "OFF";
+      else if(hPos > 0)            hStat = "ACTIVE";
+      else if(hPend > 0)           hStat = StringFormat("ARMED(%dp)", hPend);
+      else                         hStat = "IDLE";
+      string blk = g_blockNewOrders[g] ? " [BLK]" : "";
+      txt += StringFormat("G%d  mainL=%.2f hdgL=%.2f  PL=%.2f  arm=%.0f%%%s%s  HEDGE:%s\n",
+                          g, mainL, hedgeL, pl, pct, match, blk, hStat);
       txt += StringFormat("  GL B%d/%d S%d/%d  GP B%d/%d S%d/%d\n",
                           glB, GridLoss_MaxTrades, glS, GridLoss_MaxTrades,
                           gpB, GridProfit_MaxTrades, gpS, GridProfit_MaxTrades);
