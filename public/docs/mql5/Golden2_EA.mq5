@@ -1845,7 +1845,7 @@ int OnInit(){
 }
 
 void OnDeinit(const int reason){
-   ObjectDelete(0, g_dashName);
+   DashCleanupAll();
    CleanupAllLinesByPrefix();
    if(g_bbHandle != INVALID_HANDLE) IndicatorRelease(g_bbHandle);
    if(g_atrHandle != INVALID_HANDLE) IndicatorRelease(g_atrHandle);
