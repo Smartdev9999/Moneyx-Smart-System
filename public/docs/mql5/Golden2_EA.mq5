@@ -2630,11 +2630,11 @@ int OnInit(){
       }
    }
 
-   PrintFormat("Golden2 EA v2.4 initialized | Magic=%I64d | MaxGroups=%d | InitMode=%d | GridLoss=%s | Squeeze=%s | TripleGate=%s | BarTrail=%s | SymTrail=%s | Recenter>=%dpt | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s",
+   PrintFormat("Golden2 EA v2.5 initialized | Magic=%I64d | MaxGroups=%d | InitMode=%d | GridLoss=%s | Squeeze=%s | TripleGate=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s",
                (long)InpMagic, InpMaxGroups, (int)InpInitSideMode,
                GridLoss_Enable?"ON":"OFF", InpSQ_Enable?"ON":"OFF", InpExitTripleGate_Enable?"ON":"OFF",
                InpInitTrailOnBarClose?"ON":"OFF",
-               InpFrameSymmetricTrail?"ON":"OFF", InpFrameRecenterMinPips,
+               InpFrameRecenterMinPips,
                InpTP_UseAccumulateClose?"ON":"OFF",
                InpTP_AccumCooldownSec,
                InpGroup_RequireFullLockBeforeNext?"ON":"OFF",
