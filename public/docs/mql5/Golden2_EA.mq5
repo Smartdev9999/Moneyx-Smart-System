@@ -6,8 +6,8 @@
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "1.20"
-#property description "Golden2 EA v1.2 - Pending frame + Gold-Miner-style Grid (Loss/Profit/Max-Grid-Trailing) + Group-based Pending Hedge (arm/disarm) + Average TP/SL Manager + Auto-strip Broker TP/SL on hedge match + Triple-Gate Matching Close + Sequential Queue (max 50 groups)"
+#property version   "1.30"
+#property description "Golden2 EA v1.3 - Initial TP (1-order) + Auto-switch to Average TP/SL on Broker (>=2 orders, Gold-Miner style) + Gold-Miner Grid (Loss/Profit/Max-Grid-Trailing) + Group-based Pending Hedge + Auto-strip Broker TP/SL on hedge match + Triple-Gate Matching Close + Sequential Queue (max 50 groups)"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -142,6 +142,8 @@ input color   InpTP_AvgBuyColor       = clrDodgerBlue;               // Average 
 input color   InpTP_AvgSellColor      = clrOrangeRed;                // Average Sell Line Color
 input color   InpTP_BuyLineColor      = clrLime;                     // TP Buy Line Color
 input color   InpTP_SellLineColor     = clrMagenta;                  // TP Sell Line Color
+input bool    InpTPAvg_AutoSyncToBroker = true;                      // [v1.3] Auto-sync Avg TP/SL to Broker (>=N orders)
+input int     InpTPAvg_MinTicketsToActivate = 2;                     // [v1.3] Min tickets/side to switch from Initial TP to Avg TP
 
 //--- === Stop Loss (Average) ===
 input string  __sec_sl__              = "=== Stop Loss (Average) ==="; // ---
@@ -216,6 +218,10 @@ datetime g_lastGridCandleProfit[51][2];
 // Max Grid Avg Trailing virtual SL state (per group, side)
 double   g_maxGridTrailSL[51][2];   // 0 = inactive
 bool     g_maxGridTrailArmed[51][2];
+
+// [v1.3] Track last avg-TP price synced to broker per (group, side); 0 = none synced (Initial-TP mode)
+double   g_avgTPSynced[51][2];
+double   g_avgSLSynced[51][2];
 
 //================ HELPERS: comments / parsing ================
 string SidePrefix(ENUM_SIDE s){ return (s==SIDE_BUY?"B":"S"); }
@@ -986,7 +992,130 @@ double ComputeAvgSLPrice(int g, int side){
    return NormalizeDouble((side==0) ? (avg - off) : (avg + off), g_digits);
 }
 
-void CloseMainSideOfGroup(int g, int side){
+//================ [v1.3] AVG TP/SL → BROKER SYNC (Gold-Miner style) ================
+// Logic per (group, side, hedge=false):
+//   count == 1 ticket  → keep Initial TP that PlaceInitialFrame set; if previously
+//                        synced to avg, restore Initial TP recomputed from entry.
+//   count >= MinTickets→ compute Avg TP price (and optional Avg SL price) and
+//                        push the SAME tp/sl onto every broker ticket on that side.
+// Skips groups where hedge already matched (g_stripped takes over).
+
+double InitialTPPriceForTicket(ulong tk){
+   if(InpInitialTPPips <= 0) return 0.0;
+   if(!PositionSelectByTicket(tk)) return 0.0;
+   double entry = PositionGetDouble(POSITION_PRICE_OPEN);
+   bool isBuy   = (PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY);
+   double off   = InpInitialTPPips * g_point;
+   return NormalizeDouble(isBuy ? (entry+off) : (entry-off), g_digits);
+}
+double InitialSLPriceForTicket(ulong tk){
+   if(InpInitialSLPips <= 0) return 0.0;
+   if(!PositionSelectByTicket(tk)) return 0.0;
+   double entry = PositionGetDouble(POSITION_PRICE_OPEN);
+   bool isBuy   = (PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY);
+   double off   = InpInitialSLPips * g_point;
+   return NormalizeDouble(isBuy ? (entry-off) : (entry+off), g_digits);
+}
+
+bool ModifyIfDifferent(ulong tk, double newSL, double newTP){
+   if(!PositionSelectByTicket(tk)) return false;
+   double curTP = PositionGetDouble(POSITION_TP);
+   double curSL = PositionGetDouble(POSITION_SL);
+   double tol   = g_point; // 1 point tolerance
+   if(MathAbs(curTP-newTP) <= tol && MathAbs(curSL-newSL) <= tol) return true;
+   if(!trade.PositionModify(tk, newSL, newTP)){
+      if(InpVerboseLog)
+         PrintFormat("Golden2 v1.3: PositionModify fail tk=%I64u sl=%.5f tp=%.5f err=%d",
+                     tk, newSL, newTP, GetLastError());
+      return false;
+   }
+   return true;
+}
+
+void SyncSideTPSLToBroker(int g, int side){
+   if(!InpTPAvg_AutoSyncToBroker) return;
+   if(g_stripped[g]) return;                        // hedge already matched
+   if(IsGroupHedgeMatched(g)) return;
+   int cnt = CountGroupPositions(g, side, 0);
+   if(cnt <= 0){
+      g_avgTPSynced[g][side] = 0; g_avgSLSynced[g][side] = 0;
+      return;
+   }
+
+   if(cnt < InpTPAvg_MinTicketsToActivate){
+      // === INITIAL-TP MODE ===
+      // If previously synced to avg, restore each ticket's Initial TP/SL based on its own entry
+      if(g_avgTPSynced[g][side] != 0.0 || g_avgSLSynced[g][side] != 0.0){
+         int total = PositionsTotal();
+         for(int i=0;i<total;i++){
+            ulong tk = PositionGetTicket(i);
+            if(tk==0) continue;
+            if(!PositionSelectByTicket(tk)) continue;
+            if((long)PositionGetInteger(POSITION_MAGIC) != InpMagic) continue;
+            if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+            string c = PositionGetString(POSITION_COMMENT);
+            int gp; bool hd; string tag;
+            if(!ParseComment(c, gp, hd, tag)) continue;
+            if(gp != g || hd) continue;
+            int sd = (PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY)?0:1;
+            if(sd != side) continue;
+            double itp = InitialTPPriceForTicket(tk);
+            double isl = InitialSLPriceForTicket(tk);
+            ModifyIfDifferent(tk, isl, itp);
+         }
+         g_avgTPSynced[g][side] = 0;
+         g_avgSLSynced[g][side] = 0;
+         if(InpVerboseLog)
+            PrintFormat("Golden2 v1.3: G%d side=%d back to INITIAL-TP mode (count=%d)", g, side, cnt);
+      }
+      return;
+   }
+
+   // === AVERAGE-TP/SL MODE === (count >= MinTickets)
+   if(!InpTP_UsePointsFromAvg) return; // only this mode pushes broker TP from average
+   double tpPrice = ComputeAvgTPPrice(g, side);
+   double slPrice = (InpSL_Enable && InpSL_UsePointsFromAvg) ? ComputeAvgSLPrice(g, side) : 0.0;
+   if(tpPrice <= 0) return;
+
+   // Respect broker stops level
+   long stopsLvl = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   double minDist = stopsLvl * g_point;
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   if(side==0){ // BUY: TP must be > bid + minDist
+      if(tpPrice < bid + minDist) tpPrice = NormalizeDouble(bid + minDist + g_point, g_digits);
+      if(slPrice>0 && slPrice > bid - minDist) slPrice = NormalizeDouble(bid - minDist - g_point, g_digits);
+   } else {     // SELL: TP must be < ask - minDist
+      if(tpPrice > ask - minDist) tpPrice = NormalizeDouble(ask - minDist - g_point, g_digits);
+      if(slPrice>0 && slPrice < ask + minDist) slPrice = NormalizeDouble(ask + minDist + g_point, g_digits);
+   }
+
+   bool changed = (MathAbs(g_avgTPSynced[g][side]-tpPrice) > g_point) ||
+                  (MathAbs(g_avgSLSynced[g][side]-slPrice) > g_point);
+   int total = PositionsTotal();
+   int modified = 0;
+   for(int i=0;i<total;i++){
+      ulong tk = PositionGetTicket(i);
+      if(tk==0) continue;
+      if(!PositionSelectByTicket(tk)) continue;
+      if((long)PositionGetInteger(POSITION_MAGIC) != InpMagic) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      string c = PositionGetString(POSITION_COMMENT);
+      int gp; bool hd; string tag;
+      if(!ParseComment(c, gp, hd, tag)) continue;
+      if(gp != g || hd) continue;
+      int sd = (PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY)?0:1;
+      if(sd != side) continue;
+      if(ModifyIfDifferent(tk, slPrice, tpPrice)) modified++;
+   }
+   g_avgTPSynced[g][side] = tpPrice;
+   g_avgSLSynced[g][side] = slPrice;
+   if(InpVerboseLog && changed && modified>0)
+      PrintFormat("Golden2 v1.3: G%d side=%d AVG-TP synced -> %d ticket(s) tp=%.5f sl=%.5f (count=%d)",
+                  g, side, modified, tpPrice, slPrice, cnt);
+}
+
+
    int total = PositionsTotal();
    for(int i=total-1;i>=0;i--){
       ulong tk = PositionGetTicket(i);
@@ -1336,7 +1465,7 @@ string StrippedListString(){
 
 void DrawDashboard(){
    if(!InpShowDashboard) return;
-   string txt = "Golden2 EA v1.2\n";
+   string txt = "Golden2 EA v1.3\n";
    txt += StringFormat("Symbol: %s  Magic: %I64d\n", _Symbol, (long)InpMagic);
    int rem = 0;
    if(IsHedgeOpenDelayActive(rem)) txt += StringFormat("HedgeDelay: WAIT %dm%02ds\n", rem/60, rem%60);
@@ -1367,10 +1496,14 @@ void DrawDashboard(){
       if(!IsGroupHedgeMatched(g) && GroupHasAnyPositions(g)){
          double avgB = GroupAveragePrice(g, 0, 0);
          double avgS = GroupAveragePrice(g, 1, 0);
-         if(avgB>0) txt += StringFormat("  B avg=%.5f tp=%.5f", avgB, ComputeAvgTPPrice(g,0));
+         int cB = CountGroupPositions(g, 0, 0);
+         int cS = CountGroupPositions(g, 1, 0);
+         string mB = (cB>=InpTPAvg_MinTicketsToActivate) ? StringFormat("AVG-BR(%d)",cB) : (cB==1?"INIT(1)":"-");
+         string mS = (cS>=InpTPAvg_MinTicketsToActivate) ? StringFormat("AVG-BR(%d)",cS) : (cS==1?"INIT(1)":"-");
+         if(avgB>0) txt += StringFormat("  B[%s] avg=%.5f tp=%.5f", mB, avgB, ComputeAvgTPPrice(g,0));
          if(avgB>0 && g_maxGridTrailArmed[g][0]) txt += StringFormat(" trail=%.5f", g_maxGridTrailSL[g][0]);
          if(avgB>0) txt += "\n";
-         if(avgS>0) txt += StringFormat("  S avg=%.5f tp=%.5f", avgS, ComputeAvgTPPrice(g,1));
+         if(avgS>0) txt += StringFormat("  S[%s] avg=%.5f tp=%.5f", mS, avgS, ComputeAvgTPPrice(g,1));
          if(avgS>0 && g_maxGridTrailArmed[g][1]) txt += StringFormat(" trail=%.5f", g_maxGridTrailSL[g][1]);
          if(avgS>0) txt += "\n";
       }
@@ -1405,6 +1538,8 @@ int OnInit(){
       g_lastGridCandleProfit[i][0]=0; g_lastGridCandleProfit[i][1]=0;
       g_maxGridTrailSL[i][0]=0; g_maxGridTrailSL[i][1]=0;
       g_maxGridTrailArmed[i][0]=false; g_maxGridTrailArmed[i][1]=false;
+      g_avgTPSynced[i][0]=0; g_avgTPSynced[i][1]=0;
+      g_avgSLSynced[i][0]=0; g_avgSLSynced[i][1]=0;
    }
 
    g_bbHandle  = iBands(_Symbol, InpExitTF, InpExitBBPeriod, 0, InpExitBBDev, PRICE_CLOSE);
@@ -1412,11 +1547,11 @@ int OnInit(){
    g_atrLossHandle   = iATR(_Symbol, GridLoss_ATR_TF,   GridLoss_ATR_Period);
    g_atrProfitHandle = iATR(_Symbol, GridProfit_ATR_TF, GridProfit_ATR_Period);
    if(g_bbHandle == INVALID_HANDLE || g_atrHandle == INVALID_HANDLE){
-      Print("Golden2 v1.2: indicator init failed");
+      Print("Golden2 v1.3: indicator init failed");
       return INIT_FAILED;
    }
 
-   PrintFormat("Golden2 EA v1.2 initialized | Magic=%I64d | MaxGroups=%d", (long)InpMagic, InpMaxGroups);
+   PrintFormat("Golden2 EA v1.3 initialized | Magic=%I64d | MaxGroups=%d", (long)InpMagic, InpMaxGroups);
    return INIT_SUCCEEDED;
 }
 
@@ -1456,6 +1591,8 @@ void OnTick(){
          g_initialCandleTime[g][0]=0; g_initialCandleTime[g][1]=0;
          g_maxGridTrailSL[g][0]=0;    g_maxGridTrailSL[g][1]=0;
          g_maxGridTrailArmed[g][0]=false; g_maxGridTrailArmed[g][1]=false;
+         g_avgTPSynced[g][0]=0; g_avgTPSynced[g][1]=0;
+         g_avgSLSynced[g][0]=0; g_avgSLSynced[g][1]=0;
          continue;
       }
       EnforceFrameMutualExclusion(g);
@@ -1478,6 +1615,10 @@ void OnTick(){
       // Average TP/SL Manager (only acts pre-match)
       CheckAndCloseByAverageTP(g);
       CheckAndCloseByAverageSL(g);
+
+      // [v1.3] Sync Avg TP/SL → Broker (or restore Initial TP when count<MinTickets)
+      SyncSideTPSLToBroker(g, 0);
+      SyncSideTPSLToBroker(g, 1);
 
       // Triple-Gate Matching Close (only acts when matched)
       TryMatchingCloseForGroup(g);
