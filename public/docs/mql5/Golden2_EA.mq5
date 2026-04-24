@@ -2091,7 +2091,7 @@ void DrawDashboard(){
    if(InpInitSideMode == INIT_SELL_ONLY) modeLbl = "SELL-only";
 
    // Header
-   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v1.7    Side: %s", modeLbl), InpDashAccent);
+   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v1.8    Side: %s", modeLbl), InpDashAccent);
    y += rowH+2;
 
    // ==== Account section ====
@@ -2124,7 +2124,25 @@ void DrawDashboard(){
    string hd = IsHedgeOpenDelayActive(rem) ? StringFormat("WAIT %dm%02ds", rem/60, rem%60) : "READY";
    DashRow("L_HDLY",  x, y, w, rowH, "Hedge Delay",      hd, InpDashColor); y+=rowH;
    DashRow("L_TG",    x, y, w, rowH, "Triple-Gate",      InpExitTripleGate_Enable?"ON":"OFF", InpExitTripleGate_Enable?InpDashGood:InpDashBad); y+=rowH;
-   DashRow("L_SQ",    x, y, w, rowH, "Squeeze",          SqueezeStatusString(), (g_sqBlockBuy||g_sqBlockSell)?InpDashBad:(InpSQ_Enable?InpDashGood:InpDashColor)); y+=rowH;
+   // ==== [v1.8] Gold-Miner-style Squeeze panel (multi-row) ====
+   if(InpSQ_Enable){
+      DashHeader("L_S_SQ", x, y, w, rowH, " === SQUEEZE ===", InpDashAccent); y+=rowH;
+      for(int si=0; si<3; si++){
+         string lbl = SqueezeTFLabel(si);
+         string st  = SqueezeStateLabel(si);
+         string val = StringFormat("%-15s %.2f %s", st, g_sqRatio[si], SqueezeBarString(g_sqRatio[si]));
+         color  cc;
+         if(!g_sqExpansion[si]) cc = InpDashColor;
+         else if((g_sqDir[si]>0 && g_sqBlockSell) || (g_sqDir[si]<0 && g_sqBlockBuy)) cc = InpDashBad;
+         else cc = InpDashAccent;
+         DashRow(StringFormat("L_SQ_%d", si), x, y, w, rowH, lbl, val, cc); y+=rowH;
+      }
+      string ov = SqueezeOverallLabel();
+      color  ovC = (ov=="READY")? InpDashGood : InpDashBad;
+      DashRow("L_SQ_ST", x, y, w, rowH, "Squeeze Status", ov, ovC); y+=rowH;
+   } else {
+      DashRow("L_SQ",   x, y, w, rowH, "Squeeze", "OFF", InpDashColor); y+=rowH;
+   }
 
    // ==== Footer ====
    DashHeader("L_S_SYS", x, y, w, rowH, " === SYSTEM ===", InpDashAccent); y+=rowH;
@@ -2219,6 +2237,7 @@ int OnInit(){
       g_initialCandleTime[i][0]=0; g_initialCandleTime[i][1]=0;
       g_lastGridCandleLoss[i][0]=0; g_lastGridCandleLoss[i][1]=0;
       g_lastGridCandleProfit[i][0]=0; g_lastGridCandleProfit[i][1]=0;
+      g_lastTrailBar[i] = 0; // [v1.8]
       g_maxGridTrailSL[i][0]=0; g_maxGridTrailSL[i][1]=0;
       g_maxGridTrailArmed[i][0]=false; g_maxGridTrailArmed[i][1]=false;
       g_avgTPSynced[i][0]=0; g_avgTPSynced[i][1]=0;
@@ -2245,9 +2264,10 @@ int OnInit(){
       }
    }
 
-   PrintFormat("Golden2 EA v1.7 initialized | Magic=%I64d | MaxGroups=%d | InitMode=%d | GridLoss=%s | Squeeze=%s | TripleGate=%s",
+   PrintFormat("Golden2 EA v1.8 initialized | Magic=%I64d | MaxGroups=%d | InitMode=%d | GridLoss=%s | Squeeze=%s | TripleGate=%s | BarTrail=%s",
                (long)InpMagic, InpMaxGroups, (int)InpInitSideMode,
-               GridLoss_Enable?"ON":"OFF", InpSQ_Enable?"ON":"OFF", InpExitTripleGate_Enable?"ON":"OFF");
+               GridLoss_Enable?"ON":"OFF", InpSQ_Enable?"ON":"OFF", InpExitTripleGate_Enable?"ON":"OFF",
+               InpInitTrailOnBarClose?"ON":"OFF");
    return INIT_SUCCEEDED;
 }
 
@@ -2306,7 +2326,8 @@ void OnTick(){
       }
       EnforceFrameMutualExclusion(g);
       TrackInitialCandle(g);
-      ManageInitialTrail(g);   // [v1.7] trail opposite stop
+      ManageInitialTrailOnBarClose(g); // [v1.8] bar-close trail (preferred)
+      ManageInitialTrail(g);   // [v1.7] legacy trigger trail (skipped if bar-close ON)
       ManageInitialReArm(g);   // [v1.7] re-arm side stop after TP
       TryPlaceGridLoss(g);
       TryPlaceGridProfit(g);
