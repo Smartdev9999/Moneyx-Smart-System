@@ -68,14 +68,6 @@ input bool    InpVerboseLog           = true;                        // Verbose 
 
 //--- === Frame & Initial Order ===
 input string  __sec_frame__           = "=== Frame & Initial Order ==="; // ---
-input double  InpInitialLot           = 0.01;                        // Initial lot (G_IN)
-input int     InpFrameUpperPips       = 200;                         // BUY_STOP distance from mid (points)
-input int     InpFrameLowerPips       = 200;                         // SELL_STOP distance from mid (points)
-input int     InpInitialTPPips        = 300;                         // Initial TP (points) (0=off)
-input int     InpInitialSLPips        = 0;                           // Initial SL (points) (0=off)
-
-//--- === Frame & Initial Order ===
-input string  __sec_frame__           = "=== Frame & Initial Order ==="; // ---
 input ENUM_INIT_SIDE_MODE InpInitSideMode = INIT_BOTH;                   // [v1.7] Initial side mode (Both/Buy/Sell)
 input double  InpInitialLot           = 0.01;                            // Initial lot (G_IN)
 input int     InpFrameUpperPips       = 200;                             // BUY_STOP distance from mid (points)
