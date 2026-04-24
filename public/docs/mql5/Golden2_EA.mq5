@@ -506,6 +506,7 @@ bool ComputeSqueezeForTF(int idx, bool &isExp, int &dir){
    double kcW = 2.0 * InpSQ_KCMult * atr[1];
    if(kcW <= 0) return false;
    double ratio = bbW / kcW;
+   g_sqRatio[idx] = ratio; // [v1.8] expose for dashboard
    isExp = (ratio >= InpSQ_ExpansionThreshold);
    double cl = iClose(_Symbol, g_sqTF[idx], 1);
    if(cl > bbM[1]) dir = +1;
