@@ -1,30 +1,30 @@
-## Golden2 EA v2.73 — Tester Chart Cleanup
+## Golden2 EA v2.74 — Hide Auxiliary Tester Chart Windows
 
-ไฟล์เดียวที่แก้: `public/docs/mql5/Golden2_EA.mq5`
+ไฟล์เดียว: `public/docs/mql5/Golden2_EA.mq5`
 
-### A) Auto-remove chart indicators ใน Tester
-- เพิ่ม `CleanupChartIndicatorsInTester()` เรียกใน `OnInit` เมื่อ `g_isTesterMode == true` และ `InpTester_CleanChart == true`
-- วน `ChartIndicatorsTotal(0, win)` จาก sub-window สูงสุดลงมา 0 → `ChartIndicatorDelete(0, win, name)`
-- ลบทั้ง main chart indicators (BB, MA, ZigZag) + sub-window indicators (ATR, MACD ฯลฯ) ที่ template ดึงมา
-- log: `[v2.73] Tester chart cleanup: removed N indicators`
+### A) ฟังก์ชันใหม่ `HideAuxiliaryTesterCharts()`
+- เรียกใน `OnInit` หลัง `CleanupChartIndicatorsInTester()` เมื่อ `g_isTesterMode && InpTester_HideAuxCharts`
+- วน `ChartFirst()` / `ChartNext()` ทุก chart
+- `ChartClose(id)` ทุกตัวยกเว้น `ChartID()` (chart หลักที่ EA ทำงาน)
+- log: `[v2.74] Hidden N auxiliary tester chart(s)`
 
-### B) ปิด chart visual ที่ไม่จำเป็นใน Tester
-- `CHART_SHOW_GRID = false`
-- `CHART_SHOW_PERIOD_SEP = false`
-- `CHART_SHOW_VOLUMES = CHART_VOLUME_HIDE`
-- ใน non-visual tester เพิ่ม: `CHART_SHOW_TRADE_LEVELS = false`, `CHART_AUTOSCROLL = false`
+### B) Periodic re-run ใน OnTick
+- ทุก 60 วินาที (gated ด้วย `g_isTesterMode` + `InpTester_HideAuxCharts`)
+- กันกรณี Tester spawn chart เพิ่มกลางทาง (เช่นเมื่อ EA ขอ TF ใหม่ runtime)
 
 ### C) Input ใหม่
-- `input bool InpTester_CleanChart = true;` — toggle (default ON)
+- `input bool InpTester_HideAuxCharts = true;` (default ON)
 
-### D) Version bump → **v2.73**
-- `#property version "2.73"`, header block, OnInit log, Dashboard `L_TITLE`
-- log เพิ่ม: `TesterCleanChart=ON/OFF`
+### D) Version bump → **v2.74**
+- `#property version "2.74"`, header block, OnInit log, Dashboard `L_TITLE`
+- log เพิ่ม: `HideAuxCharts=ON/OFF`
 
-### สิ่งที่ "ไม่เปลี่ยน"
+### หลักการสำคัญ
+Indicator handles (`iBands`, `iATR` บน M5/M15 สำหรับ Squeeze) **ผูกกับ symbol+timeframe ไม่ใช่ chart window** → ปิด chart window ไม่กระทบ background calculation ใดๆ Tester ยัง generate bars ตาม TF ปกติ Squeeze/ATR ยังทำงานครบ
+
+### ✅ สิ่งที่ "ไม่เปลี่ยน"
 - ❌ ไม่แตะ `OrderSend` / trade logic / Entry / Exit / TP / SL
-- ❌ ไม่แตะ Grid Loss/Profit / Hedge / Triple-Gate / Accumulate
-- ❌ ไม่แตะ Squeeze math (BB/KC/ATR ภายใน EA ยังคำนวณปกติผ่าน handle = background)
-- ❌ ไม่แตะ v2.5 Trail / v2.6 Re-entry / v2.70 Continuous Frame / v2.72 Per-Side Squeeze + Speed
-- ❌ ไม่แตะ License/News/Sync
-- ✅ Output trade เหมือนเดิม 100% — แค่ชาร์ต Tester สะอาด → เร็วขึ้น 2-5x ใน visual mode
+- ❌ ไม่แตะ Squeeze math / Grid Loss/Profit / Hedge / Triple-Gate / Accumulate
+- ❌ ไม่แตะ v2.5 Trail / v2.6 Re-entry / v2.70 Frame / v2.72 Per-Side / v2.73 Cleanup
+- ❌ ไม่แตะ License/News/Sync/Dashboard layout
+- ✅ Output trade เหมือนเดิม 100% — แค่เหลือ chart window เดียวใน Tester → เร็วขึ้น 2-5x ใน visual mode
