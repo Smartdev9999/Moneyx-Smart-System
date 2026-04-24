@@ -1,13 +1,13 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|     Golden2 EA v1.4 - Hedging master toggle + 1:1 lot mirror     |
-//|     + dynamic top-up + pre-hedge block new orders                |
+//|     Golden2 EA v1.5 - Gold-Miner-style dashboard (2 tables):     |
+//|     left=summary, right=hedging (shown only when Hedging ON)     |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "1.40"
-#property description "Golden2 EA v1.4 - Hedging master toggle + 1:1 lot/comment mirror to opposite main + dynamic top-up of pending hedge when loss side grows + pre-hedge block new grid orders (DD% threshold) + v1.3 Avg TP/SL broker sync"
+#property version   "1.50"
+#property description "Golden2 EA v1.5 - Two-panel dashboard: left Gold-Miner-style summary table; right Hedging table (auto-shown only when InpHedge_Enabled=true) listing every active hedge group with status, lots, P/L, pendings"
 #property strict
 
 #include <Trade/Trade.mqh>
