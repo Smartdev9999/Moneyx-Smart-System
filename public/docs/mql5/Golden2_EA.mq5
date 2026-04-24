@@ -2835,6 +2835,8 @@ int OnInit(){
    g_isOptimization = (bool)MQLInfoInteger(MQL_OPTIMIZATION);
    g_lastDashRender = 0;
    g_lastSqueezeBar = 0;
+   // [v2.73] Strip Tester chart template indicators ASAP for fastest backtest.
+   CleanupChartIndicatorsInTester();
    g_highestActiveGroup = 0;
    for(int hi=0; hi<51; hi++){
       g_hcmCacheTime[hi][0] = 0;        g_hcmCacheTime[hi][1] = 0;
@@ -2877,7 +2879,7 @@ int OnInit(){
       }
    }
 
-   PrintFormat("Golden2 EA v2.7.2 initialized | Magic=%I64d | MaxGroups=%d | InitMode=%d | GridLoss=%s | Squeeze=%s SqueezePerSide=ON | TripleGate=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | Tester=%s Visual=%s Opt=%s DashInterval=%ds",
+   PrintFormat("Golden2 EA v2.7.3 initialized | Magic=%I64d | MaxGroups=%d | InitMode=%d | GridLoss=%s | Squeeze=%s SqueezePerSide=ON | TripleGate=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | Tester=%s Visual=%s Opt=%s DashInterval=%ds TesterCleanChart=%s",
                (long)InpMagic, InpMaxGroups, (int)InpInitSideMode,
                GridLoss_Enable?"ON":"OFF", InpSQ_Enable?"ON":"OFF", InpExitTripleGate_Enable?"ON":"OFF",
                InpInitTrailOnBarClose?"ON":"OFF",
@@ -2888,7 +2890,8 @@ int OnInit(){
                InpGroup_RequireFullLockBeforeNext?"ON":"OFF",
                InpGroup_AdvancePerTick?"ON":"OFF",
                g_isTesterMode?"YES":"NO", g_isVisualMode?"YES":"NO", g_isOptimization?"YES":"NO",
-               InpDashRenderIntervalSec);
+               InpDashRenderIntervalSec,
+               InpTester_CleanChart?"ON":"OFF");
    return INIT_SUCCEEDED;
 }
 
