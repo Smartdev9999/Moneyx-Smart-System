@@ -1,13 +1,13 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|     Golden2 EA v1.2 - Gold-Miner-style Grid Settings             |
-//|     (Grid Loss / Max Grid Trailing / Grid Profit) + v1.1 features|
+//|     Golden2 EA v1.4 - Hedging master toggle + 1:1 lot mirror     |
+//|     + dynamic top-up + pre-hedge block new orders                |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "1.30"
-#property description "Golden2 EA v1.3 - Initial TP (1-order) + Auto-switch to Average TP/SL on Broker (>=2 orders, Gold-Miner style) + Gold-Miner Grid (Loss/Profit/Max-Grid-Trailing) + Group-based Pending Hedge + Auto-strip Broker TP/SL on hedge match + Triple-Gate Matching Close + Sequential Queue (max 50 groups)"
+#property version   "1.40"
+#property description "Golden2 EA v1.4 - Hedging master toggle + 1:1 lot/comment mirror to opposite main + dynamic top-up of pending hedge when loss side grows + pre-hedge block new grid orders (DD% threshold) + v1.3 Avg TP/SL broker sync"
 #property strict
 
 #include <Trade/Trade.mqh>
