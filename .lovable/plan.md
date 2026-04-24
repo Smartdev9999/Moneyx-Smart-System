@@ -1,89 +1,85 @@
 
 
-## Golden2 EA v1.3 — Initial TP เฉพาะตอน 1 ไม้ + Auto-Switch เป็น Average TP/SL บน Broker
+## Golden2 EA v1.4 — Hedging Master Toggle + Lot Mirror Fix + Pre-Hedge Block + Dynamic Top-Up
 
-ปรับลอจิก **TP ฝั่ง Pre-Hedge** ให้สลับโหมดอัตโนมัติตามจำนวนไม้ในฝั่งนั้น โดยวาง TP/SL บน Broker ทุกไม้เหมือน Gold Miner
+ปรับลอจิก Hedging ทั้งระบบให้ตรงกับพฤติกรรม Gold Miner: Hedge ต้อง mirror ออเดอร์ฝั่งตรงข้ามแบบ 1:1 จริง (ทั้ง lot และ comment), เพิ่ม master toggle, หยุดออกออเดอร์ใหม่เมื่อใกล้แตะเกณฑ์ hedge, และ top-up pending hedge ทุกครั้งที่ฝั่ง loss มีไม้เพิ่ม
 
 ### ไฟล์ที่จะแก้
 - `public/docs/mql5/Golden2_EA.mq5` (ไฟล์เดียว)
 
-### Logic ใหม่ (Per Group, Per Side, Pre-Hedge เท่านั้น)
+### สิ่งที่ "ไม่เปลี่ยนแปลง" (ยืนยันไม่กระทบ trading logic)
+- ไม่แตะ `OrderSend / trade.Buy / trade.Sell / trade.PositionClose` ในส่วน strategy หลัก
+- ไม่แตะลอจิก Grid Loss / Grid Profit / Max-Grid Trailing
+- ไม่แตะ Triple-Gate Matching Close, Average TP/SL sync (v1.3), Strip-Broker-TPSL
+- ไม่แตะ License/News/Time filter
+- ไม่เปลี่ยนสูตรคำนวณ DD% ที่ใช้ trigger hedge (ยังเป็น `lossUSD/InpHedgeTriggerUSD × 100`)
 
-```text
-ถ้า count(side) == 1 ไม้ (ยังไม่มี GL/GP เพิ่ม):
-   → ใช้ Initial TP/SL เดิมของไม้นั้น (broker TP ติดอยู่จาก PlaceInitialFrame)
-   → ไม่แตะอะไร
+---
 
-ถ้า count(side) >= 2 ไม้ (มี GL หรือ GP เพิ่มเข้ามา):
-   → คำนวณ Average Price ของฝั่งนั้น
-   → คำนวณ Average TP price = avg ± TP_PointsFromAverage × _Point
-     (Buy: avg + 500pt, Sell: avg - 500pt)
-   → คำนวณ Average SL price (ถ้าเปิดใช้)
-   → SyncBrokerTPSL: เรียก PositionModify ทุกไม้ในฝั่งนั้น
-     ให้ TP/SL = ราคา avg-TP/SL จุดเดียวกันทุกไม้
-   → ไม้ที่ติดลบที่ TP นั้นจะถูกปิดพร้อมกัน → ผลรวมเป็นบวก
+### 1) Master Toggle เปิด/ปิด Hedging
+เพิ่ม input ใหม่:
 ```
-
-### การเปลี่ยนแปลง
-
-**1) ฟังก์ชันใหม่: `SyncAverageTPSLToBroker(int g, int side)`**
-- เงื่อนไขเข้าทำงาน: `CountGroupSide(g, side, false) >= 2` AND group ยัง **ไม่ถูก hedge match** (ก่อน strip)
-- คำนวณ avg จาก positions ทั้งหมดของ (group, side, hedge=false)
-- คำนวณ tpPrice / slPrice จาก inputs `TPAvg_PointsFromAvg` / `SLAvg_PointsFromAvg`
-- Loop ทุก ticket ในฝั่งนั้น → `trade.PositionModify(tk, slPrice, tpPrice)`
-- มี guard: ถ้า broker TP/SL ปัจจุบัน = ค่าใหม่ (within 1 point) → ข้าม (ลด traffic)
-- เก็บ state `g_avgTPSyncedPrice[51][2]` เพื่อรู้ว่า sync ไปที่ราคาไหนล่าสุด
-- ถ้า avg เปลี่ยน (ไม้ใหม่เพิ่ม) → re-sync ทุกไม้ใหม่อัตโนมัติ
-
-**2) ฟังก์ชันใหม่: `RestoreInitialTPIfSingle(int g, int side)`**
-- เงื่อนไข: `count == 1` แต่เคย sync avg ไปแล้ว (ฝั่งหลุดมาเหลือ 1 จาก shred-close)
-- คืนค่า TP เดิมจาก `InpInitialTP_Points` (คำนวณจาก entry price ของไม้นั้น)
-- หรือถ้า user ปิด initial TP → เคลียร์ TP/SL = 0
-
-**3) เรียกใน `OnTick()` — ต่อจาก v1.1 Average TP/SL Manager**
-```cpp
-for(int g=1; g<=50; g++){
-   if(g_groupActive[g] && !g_stripped[g]){
-      SyncAverageTPSLToBroker(g, 0); // Buy
-      SyncAverageTPSLToBroker(g, 1); // Sell
-      RestoreInitialTPIfSingle(g, 0);
-      RestoreInitialTPIfSingle(g, 1);
-   }
-}
+input bool InpHedge_Enabled = true;   // Enable Hedging system (master switch)
 ```
+- ถ้า `false`: ข้าม `ManageGroupHedgeArm`, ไม่วาง pending hedge ใหม่, ไม่ block new orders จาก pre-hedge guard, dashboard แสดง `HEDGE: OFF`
+- ถ้ามี pending hedge ค้างอยู่ตอนปิด toggle → ลบทิ้งอัตโนมัติครั้งเดียว (ไม่ปิดไม้ hedge ที่ activate แล้ว — ปลอดภัย)
 
-**4) Inputs ใหม่ (กลุ่ม `=== Take Profit (Average) ===` ที่มีอยู่แล้ว v1.1)**
-- เพิ่ม `TPAvg_AutoSyncToBroker` (bool, default `true`) — เปิด/ปิด auto-sync TP/SL บน broker
-- ใช้ `TPAvg_PointsFromAvg` เดิม (default 500) เป็นจุดอ้างอิง
-- ใช้ `SLAvg_PointsFromAvg` เดิม (default 0 = off)
-- เพิ่ม `TPAvg_MinTicketsToActivate` (int, default 2) — ขั้นต่ำไม้ที่จะ trigger avg mode
+### 2) แก้บั๊กขนาดล็อต Hedge 1:1 (Mirror จริง)
+**ปัญหาปัจจุบัน:** `PlaceHedgePendingSet` ใช้ `LotForLevel(lvl)` (สูตร multiply ของ grid ใหม่) → ทำให้ pending hedge ใหญ่กว่าฝั่งตรงข้ามมาก
 
-**5) ความสัมพันธ์กับระบบเดิม**
-- ✅ v1.1 `CheckAndCloseByAverageTP/SL` (modes Fixed Dollar / % Balance / Accumulate / DD%) — ยังทำงานเหมือนเดิม เป็น "soft close" by market
-- ✅ v1.3 ใหม่: เพิ่ม "hard TP/SL บน broker" สำหรับ mode Points-from-Average โดยเฉพาะ → ปิดเร็วกว่า ไม่ต้องรอ tick
-- ✅ `StripBrokerTPSL_OnHedgeMatch` (v1.1) — ทำงานก่อน v1.3 sync เสมอ (ถ้า stripped → skip sync)
-- ✅ HLine display (v1.1) — ใช้ค่าเดียวกัน ไม่ต้องเพิ่ม object
+**แก้ใหม่:** สแกนไม้ฝั่ง loss ทุกตัว (ทั้ง IN และ GL#1..GL#N) แล้วสร้าง pending hedge **1 ตัวต่อ 1 ไม้** โดย:
+- `lot ของ pending hedge[i] = lot ของไม้ loss[i]` (mirror ตรง ๆ ตามที่ user ต้องการ)
+- `comment ของ pending hedge[i] = "G{g}_HD_" + (tag ของไม้ loss[i])` เช่น loss `G1_IN` → hedge `G1_HD_IN`, loss `G1_GL#7` → hedge `G1_HD_GL#7`
+- Sort ไม้ loss ตามราคา open เพื่อให้ pending วางเป็นแนวชัดเจน
+- ใช้ `InpHedgeLotMatch1to1` เป็น gate: ถ้า `false` → fallback เก่า (แต่แก้ให้ใช้ lot ของไม้ loss แทน LotForLevel)
 
-**6) Dashboard เพิ่ม**
-- "G[n] Buy TP-Mode: INITIAL(1) / AVG_BROKER(N ไม้) | TP@xxxx.xx"
-- "G[n] Sell TP-Mode: ..."
+### 3) Dynamic Top-Up Pending Hedge
+เมื่อ pending set ถูกวางแล้ว และฝั่ง loss มีไม้ใหม่เพิ่ม (เช่นจาก 10 → 11 ไม้):
+- ทุก tick ใน `ManageGroupHedgeArm`: เปรียบเทียบ `count(loss positions)` กับ `count(hedge pendings)`
+- ถ้า loss > hedge pending → เพิ่ม pending hedge ใหม่เฉพาะไม้ที่ยังไม่มี comment match (เช็ค `G1_HD_GL#11` ว่ามีอยู่ไหม)
+- lot/comment ตาม rule ข้อ 2
+- ถ้า loss < hedge pending (ไม้ loss ปิดไปก่อน) → ลบ pending hedge ที่ comment ไม่มี match แล้ว
+- ทำเฉพาะตอน `hedgePosExists == false` (ยังไม่ activate); ถ้า activate แล้วไม่ยุ่ง
 
-**7) Version Bump → v1.3**
-- `#property version "1.30"`
-- `#property description` + Header + Dashboard อัปเดต
+### 4) Pre-Hedge Block New Orders
+เพิ่ม input:
+```
+input double InpHedge_BlockNewOrderPercent = 75.0;  // Block new grid orders when DD% reaches (0=off, < ArmPercent)
+```
+- เมื่อ `pct >= InpHedge_BlockNewOrderPercent` ในกรุ๊ปใด → set `g_blockNewOrders[g] = true`
+- ผลกระทบ (เพิ่ม guard ที่ "ทางเข้า" ฟังก์ชันที่เปิดไม้ใหม่ ไม่แตะ logic การคำนวณ):
+  - `TryPlaceGridLoss(g)` → return ถ้า block
+  - `TryPlaceGridProfit(g)` → return ถ้า block
+  - การวางกรุ๊ปถัดไป (`PlaceInitialFrame(next)` ใน sequential queue) → return ถ้ากรุ๊ปปัจจุบัน block
+- ปลด block เมื่อ `pct < InpHedge_BlockNewOrderPercent - 5` (hysteresis 5%) — กัน flap
+- Disarm 70% (มีอยู่แล้ว) ยังทำงานเหมือนเดิม → ลบ pending hedge เมื่อ DD ลดลง
+- Dashboard ต่อกรุ๊ป: เพิ่ม flag `BLK` เมื่อ block อยู่
 
-### สิ่งที่ "ไม่เปลี่ยนแปลง"
-- ❌ ไม่แตะ `PlaceInitialFrame` (initial TP บน pending order ยังเหมือนเดิม)
-- ❌ ไม่แตะ Order execution ทั้งหมด (`trade.Buy/Sell/BuyStop/SellStop/PositionClose`)
-- ❌ ไม่แตะ Grid Loss / Grid Profit / Max Grid Trail (v1.2)
-- ❌ ไม่แตะ Hedge logic, Triple-Gate, Strip-on-match (v1.0/v1.1)
-- ❌ ไม่แตะ Group lifecycle / sequential queue
-- ✅ เพิ่มเฉพาะ "broker TP/SL synchronization layer" — เรียก `PositionModify` เท่านั้น (ไม่ใช่ open/close)
+### 5) Cross-Group Activation (มีอยู่แล้ว — แค่ยืนยัน)
+เมื่อราคาวิ่งทะลุชน pending hedge ของกรุ๊ปปัจจุบัน → hedge activate → `g_stripped[g]=true` → กรุ๊ปนี้เข้าโหมด matching close
+Sequential queue เดิมจะตรวจและเปิด **กรุ๊ปใหม่ (g+1)** อัตโนมัติด้วย input ชุดเดิม — ทำงานแยกกรุ๊ป **ไม่ต้องแก้** เพราะมีอยู่แล้วใน `OnTick` (`PlaceInitialFrame(next)`)
+
+ยืนยันว่า: pre-hedge block ของกรุ๊ป g **ไม่ block** การเปิดกรุ๊ป g+1 หลัง hedge activate (เพราะกรุ๊ป g เข้าโหมด stripped/matching แล้ว ไม่นับเป็น pre-hedge)
+
+### 6) Dashboard
+เพิ่มต่อกรุ๊ปที่ active:
+```
+G1: DD 65% [BLK] HEDGE:ARMED(11p)  AVG-BR(B:11) INIT(S:1)
+```
+- `DD%` = pct ของกรุ๊ป
+- `[BLK]` = pre-hedge block อยู่
+- `HEDGE: OFF | IDLE | ARMED(Np) | ACTIVE` ; `Np` = จำนวน pending hedge
+
+### Inputs ใหม่ (สรุป)
+```
+input bool   InpHedge_Enabled              = true;   // Master Hedging on/off
+input double InpHedge_BlockNewOrderPercent = 75.0;   // Stop new grid when DD% ≥ this (0=off)
+```
+(คงเดิมทั้งหมด: `InpHedgeTriggerUSD`, `InpHedgeArmPercent=80`, `InpHedgeDisarmPercent=70`, `InpHedgeLotMatch1to1`, `InpHedge_OpenDelayMin`)
 
 ### Technical Detail
-- ใช้ `trade.PositionModify(ticket, sl, tp)` — ปลอดภัย ไม่กระทบ execution
-- Tolerance check: `MathAbs(currentTP - newTP) > _Point` ถึง modify (กัน spam)
-- สำหรับ broker บางเจ้าที่ reject TP ใกล้ราคา: เช็ค `SymbolInfoInteger(SYMBOL_TRADE_STOPS_LEVEL)` แล้วบังคับ TP ห่างขั้นต่ำ
-- Re-sync trigger: เก็บ `g_lastSyncedAvg[51][2]`, ถ้า avg ใหม่ ≠ เดิม → modify ใหม่ทุกไม้
-- SL=0 case: ถ้า `SLAvg_PointsFromAvg=0` → ส่ง SL=0.0 (no SL)
+- `MirrorLossSideToHedgePendings(g, lossSide)`: scan loss positions → build map `tag→lot` → for each tag, ถ้ายังไม่มี pending `HD_<tag>` ให้สร้าง; ถ้ามี pending ไม่ตรง tag loss แล้วให้ลบ
+- ราคา pending: ใช้ราคาเดียวกันทั้ง set (anchor ห่างจาก market `MathMax(50, InpGridStepPips/4)` points ฝั่งตรงข้าม) — เหมือนภาพที่ user แสดง (ทุกไม้ pending วางใกล้ราคาเดียวกัน) เพื่อให้ activate พร้อมกันเมื่อราคาทะลุ
+- Block guard: เพิ่มบรรทัดเดียวที่ต้นฟังก์ชัน Try* — ไม่แตะลอจิกข้างใน
+- Bump version → `1.40` ทุกจุด (`#property version`, `description`, header, dashboard)
 
