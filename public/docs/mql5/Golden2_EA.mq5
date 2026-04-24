@@ -647,6 +647,17 @@ string SqueezeOverallLabel(){
    return "READY";
 }
 
+// [v2.72] Throttle wrapper — RefreshSqueezeState recomputes BB/KC for 3 TFs
+//         (CopyBuffer + iATR + iMA) on every tick, which dominates backtest
+//         CPU. The Squeeze decision only changes on closed bars, so refresh
+//         once per new M1 bar (smallest TF used). First tick still refreshes.
+void RefreshSqueezeStateThrottled(){
+   datetime cur = iTime(_Symbol, PERIOD_M1, 0);
+   if(cur == 0) cur = TimeCurrent(); // safety
+   if(g_lastSqueezeBar != 0 && cur == g_lastSqueezeBar) return;
+   g_lastSqueezeBar = cur;
+   RefreshSqueezeState();
+}
 
 bool ClaimMutex(int g){
    if(!InpSequentialQueue) return true;
