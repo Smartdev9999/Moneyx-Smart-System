@@ -734,6 +734,7 @@ void TryPlaceGridLoss(int g){
 
 void TryPlaceGridProfit(int g){
    if(!GridProfit_Enable) return;
+   if(g_blockNewOrders[g]) return; // [v1.4] Pre-hedge block
    if(IsGroupHedgeMatched(g)) return; // pre-hedge only
    for(int sd=0; sd<2; sd++){
       int posCount = CountGroupPositions(g, sd, 0);
