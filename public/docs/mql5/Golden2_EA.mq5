@@ -1137,17 +1137,22 @@ void ManageGroupHedgeArm(int g){
       g_blockNewOrders[g] = false;
    }
 
-   // Disarm: drop pending if DD recovers below disarm %
+   // [v1.6] Disarm: drop pending if DD recovers, no loss side, or no main positions exist
    if(!hedgePosExists && hedgePendingExists){
-      if(pct < InpHedgeDisarmPercent){
+      int lossSideNow = GroupLossSide(g);
+      bool noMainPos  = (CountGroupPositions(g,-1,0) == 0);
+      bool ddRecovered= (pct < InpHedgeDisarmPercent);
+      bool noLossSide = (lossSideNow < 0);
+      if(ddRecovered || noLossSide || noMainPos){
          DeleteGroupPendings(g, 1);
-         if(InpVerboseLog) PrintFormat("Golden2 v1.4: HD DISARM G%d pct=%.1f", g, pct);
+         g_blockNewOrders[g] = false;
+         if(InpVerboseLog) PrintFormat("Golden2 v1.6: HD DISARM G%d pct=%.1f reason=%s",
+            g, pct, ddRecovered?"recover":(noMainPos?"noMain":"noLossSide"));
          return;
       }
       // Already armed: dynamically top-up / trim mirror to match current loss-side tickets
-      int lossSide = GroupLossSide(g);
-      if(lossSide >= 0 && InpHedgeLotMatch1to1){
-         MirrorLossSideToHedgePendings(g, lossSide);
+      if(lossSideNow >= 0 && InpHedgeLotMatch1to1){
+         MirrorLossSideToHedgePendings(g, lossSideNow);
       }
       return;
    }
