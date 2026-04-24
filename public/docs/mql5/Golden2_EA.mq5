@@ -1,13 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|     Golden2 EA v1.8 - Bar-close frame trail + Immediate GL +     |
-//|     Gold-Miner-style Squeeze panel                               |
+//|     Golden2 EA v1.9 - New-Candle guard fix (require fully closed |
+//|     bar before next Grid order — was firing on first tick of     |
+//|     next bar). Also applied to Grid Profit OnlyNewCandle guard.  |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "1.80"
-#property description "Golden2 EA v1.8 - (1) Bar-close opposite-stop trail (every M1 close, only the side price ran away from gets dragged) (2) Grid Loss fires immediately after Initial fill (bypass candle guards on GL#1) (3) Gold-Miner-style multi-row Squeeze panel with per-TF ratio bars + overall Squeeze Status"
+#property version   "1.90"
+#property description "Golden2 EA v1.9 - Fix: GridLoss_OnlyNewCandle / GridProfit_OnlyNewCandle now correctly wait for the previous candle to FULLY close before allowing the next grid order (previously fired on first tick of the next bar). DontSameCandle guard hardened with same closed-bar comparison. Bar-close frame trail, Immediate GL#1, Squeeze panel — unchanged."
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -1082,9 +1083,17 @@ void TryPlaceGridLoss(int g){
       bool bypassGuards = (InpGL_ImmediateAfterInitial && gl == 0);
 
       // OnlyNewCandle / DontSameCandle guards
-      datetime curBar = iTime(_Symbol, PERIOD_CURRENT, 0);
-      if(!bypassGuards && GridLoss_OnlyNewCandle && g_lastGridCandleLoss[g][sd] == curBar) continue;
-      if(!bypassGuards && GridLoss_DontSameCandle && g_initialCandleTime[g][sd] == curBar) continue;
+      // [v1.9] OnlyNewCandle now waits for the last grid/initial bar to FULLY CLOSE
+      //        Previous logic only blocked re-fire within the same open bar, so a
+      //        trigger on the very first tick of the next bar still fired (too fast).
+      //        Now we require iTime(...,1) (last CLOSED bar) > stored bar — guarantees
+      //        at least one completed candle between consecutive grid orders.
+      datetime curBar      = iTime(_Symbol, PERIOD_CURRENT, 0);
+      datetime lastClosed  = iTime(_Symbol, PERIOD_CURRENT, 1);
+      if(!bypassGuards && GridLoss_OnlyNewCandle && g_lastGridCandleLoss[g][sd] != 0
+         && lastClosed <= g_lastGridCandleLoss[g][sd]) continue;
+      if(!bypassGuards && GridLoss_DontSameCandle && g_initialCandleTime[g][sd] != 0
+         && lastClosed < g_initialCandleTime[g][sd]) continue;
 
       // Candle confirmation (N consecutive closed candles in the loss direction)
       if(!bypassGuards && GridLoss_CandleConfirm > 0){
@@ -1136,8 +1145,11 @@ void TryPlaceGridProfit(int g){
       else      trigger = (bid <= lastPrice - gapPts*g_point);
       if(!trigger) continue;
 
-      datetime curBar = iTime(_Symbol, PERIOD_CURRENT, 0);
-      if(GridProfit_OnlyNewCandle && g_lastGridCandleProfit[g][sd] == curBar) continue;
+      // [v1.9] OnlyNewCandle: require at least one fully-closed bar since last GP
+      datetime curBar     = iTime(_Symbol, PERIOD_CURRENT, 0);
+      datetime lastClosed = iTime(_Symbol, PERIOD_CURRENT, 1);
+      if(GridProfit_OnlyNewCandle && g_lastGridCandleProfit[g][sd] != 0
+         && lastClosed <= g_lastGridCandleProfit[g][sd]) continue;
 
       double lot = ResolveLot(gp+1, GridProfit_LotMode, GridProfit_CustomLots,
                               GridProfit_AddLotPerLevel, GridProfit_MultiplyFactor);
@@ -2091,7 +2103,7 @@ void DrawDashboard(){
    if(InpInitSideMode == INIT_SELL_ONLY) modeLbl = "SELL-only";
 
    // Header
-   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v1.8    Side: %s", modeLbl), InpDashAccent);
+   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v1.9    Side: %s", modeLbl), InpDashAccent);
    y += rowH+2;
 
    // ==== Account section ====
@@ -2264,7 +2276,7 @@ int OnInit(){
       }
    }
 
-   PrintFormat("Golden2 EA v1.8 initialized | Magic=%I64d | MaxGroups=%d | InitMode=%d | GridLoss=%s | Squeeze=%s | TripleGate=%s | BarTrail=%s",
+   PrintFormat("Golden2 EA v1.9 initialized | Magic=%I64d | MaxGroups=%d | InitMode=%d | GridLoss=%s | Squeeze=%s | TripleGate=%s | BarTrail=%s",
                (long)InpMagic, InpMaxGroups, (int)InpInitSideMode,
                GridLoss_Enable?"ON":"OFF", InpSQ_Enable?"ON":"OFF", InpExitTripleGate_Enable?"ON":"OFF",
                InpInitTrailOnBarClose?"ON":"OFF");
