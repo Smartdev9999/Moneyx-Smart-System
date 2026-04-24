@@ -206,8 +206,9 @@ datetime g_lastHedgeOpenTime  = 0;
 datetime g_lastHedgeCloseTime = 0;
 datetime g_lastDelayLog       = 0;
 
-string g_dashName = "Golden2_DASH";
-string g_linePrefix = "G2L_";  // chart line objects prefix
+string g_dashName    = "Golden2_DASH";   // legacy single-label (kept for cleanup)
+string g_dashPrefix  = "G2DASH_";         // [v1.5] prefix for all dashboard label objects
+string g_linePrefix  = "G2L_";            // chart line objects prefix
 
 int g_bbHandle = INVALID_HANDLE;
 int g_atrHandle = INVALID_HANDLE;
