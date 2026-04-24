@@ -862,21 +862,103 @@ int GroupLossSide(int g){
    return -1;
 }
 
-void PlaceHedgePendingSet(int g, int lossSide){
-   int hedgeSide = (lossSide==0)?1:0;
+// Return anchor price for hedge pending set (just beyond market on hedge side)
+double HedgePendingAnchorPrice(int hedgeSide){
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
    double offsetPts = MathMax(50, InpGridStepPips/4);
-   double price;
-   if(hedgeSide==1) price = NormalizeDouble(bid - offsetPts*g_point, g_digits);
-   else             price = NormalizeDouble(ask + offsetPts*g_point, g_digits);
+   if(hedgeSide==1) return NormalizeDouble(bid - offsetPts*g_point, g_digits);
+   else             return NormalizeDouble(ask + offsetPts*g_point, g_digits);
+}
 
+// Check if a pending hedge with comment exists (exact match)
+bool HasPendingByComment(string targetComment){
+   int total = OrdersTotal();
+   for(int i=0;i<total;i++){
+      ulong tk = OrderGetTicket(i);
+      if(tk==0) continue;
+      if(!OrderSelect(tk)) continue;
+      if((long)OrderGetInteger(ORDER_MAGIC) != InpMagic) continue;
+      if(OrderGetString(ORDER_SYMBOL) != _Symbol) continue;
+      if(OrderGetString(ORDER_COMMENT) == targetComment) return true;
+   }
+   return false;
+}
+
+// Mirror loss-side positions to hedge-side pending stops (1:1 lot+tag).
+// Adds missing pendings, removes pendings whose source loss tag no longer exists.
+void MirrorLossSideToHedgePendings(int g, int lossSide){
+   int hedgeSide = (lossSide==0)?1:0;
+   double anchor = HedgePendingAnchorPrice(hedgeSide);
+
+   // Build set of current loss-side tags (e.g. "IN", "GL#1", "GL#7", "GP#2") with their lots
+   string  lossTags[];
+   double  lossLots[];
+   int total = PositionsTotal();
+   for(int i=0;i<total;i++){
+      ulong tk = PositionGetTicket(i);
+      if(tk==0) continue;
+      if(!PositionSelectByTicket(tk)) continue;
+      if((long)PositionGetInteger(POSITION_MAGIC) != InpMagic) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      string c = PositionGetString(POSITION_COMMENT);
+      int gp; bool hd; string tag;
+      if(!ParseComment(c, gp, hd, tag)) continue;
+      if(gp != g || hd) continue;
+      int sd = (PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY)?0:1;
+      if(sd != lossSide) continue;
+      int n = ArraySize(lossTags);
+      ArrayResize(lossTags, n+1);
+      ArrayResize(lossLots, n+1);
+      lossTags[n] = tag;
+      lossLots[n] = PositionGetDouble(POSITION_VOLUME);
+   }
+
+   // 1) Remove orphan hedge pendings (tag not in loss set)
+   int ot = OrdersTotal();
+   for(int i=ot-1;i>=0;i--){
+      ulong tk = OrderGetTicket(i);
+      if(tk==0) continue;
+      if(!OrderSelect(tk)) continue;
+      if((long)OrderGetInteger(ORDER_MAGIC) != InpMagic) continue;
+      if(OrderGetString(ORDER_SYMBOL) != _Symbol) continue;
+      string c = OrderGetString(ORDER_COMMENT);
+      int gp; bool hd; string tag;
+      if(!ParseComment(c, gp, hd, tag)) continue;
+      if(gp != g || !hd) continue;
+      bool keep = false;
+      for(int k=0;k<ArraySize(lossTags);k++){
+         if(lossTags[k] == tag){ keep = true; break; }
+      }
+      if(!keep){
+         trade.OrderDelete(tk);
+         if(InpVerboseLog) PrintFormat("Golden2 v1.4: HD trim G%d %s (loss tag gone)", g, c);
+      }
+   }
+
+   // 2) Add missing hedge pendings for each loss tag
+   for(int k=0;k<ArraySize(lossTags);k++){
+      string newC = MakeComment(g, true, lossTags[k]);
+      if(HasPendingByComment(newC)) continue;
+      double lot = lossLots[k];
+      bool ok;
+      if(hedgeSide==1) ok = trade.SellStop(lot, anchor, _Symbol, 0, 0, ORDER_TIME_GTC, 0, newC);
+      else             ok = trade.BuyStop (lot, anchor, _Symbol, 0, 0, ORDER_TIME_GTC, 0, newC);
+      if(InpVerboseLog) PrintFormat("Golden2 v1.4: HD mirror G%d %s lot=%.2f price=%.5f comment=%s ok=%d",
+         g, hedgeSide==1?"SELL_STOP":"BUY_STOP", lot, anchor, newC, ok);
+   }
+}
+
+// Legacy fallback (used only when InpHedgeLotMatch1to1==false)
+void PlaceHedgePendingSet_Legacy(int g, int lossSide){
+   int hedgeSide = (lossSide==0)?1:0;
+   double price = HedgePendingAnchorPrice(hedgeSide);
    double lotIN = InpInitialLot;
    string c = MakeComment(g, true, "IN");
    bool ok;
    if(hedgeSide==1) ok = trade.SellStop(lotIN, price, _Symbol, 0, 0, ORDER_TIME_GTC, 0, c);
    else             ok = trade.BuyStop (lotIN, price, _Symbol, 0, 0, ORDER_TIME_GTC, 0, c);
-   if(InpVerboseLog) PrintFormat("Golden2 v1.1: HD_IN G%d %s lot=%.2f price=%.5f ok=%d",
+   if(InpVerboseLog) PrintFormat("Golden2 v1.4: HD_IN(legacy) G%d %s lot=%.2f price=%.5f ok=%d",
       g, hedgeSide==1?"SELL_STOP":"BUY_STOP", lotIN, price, ok);
    int oppMaxLvl = HighestGridLevel(g, (ENUM_SIDE)lossSide, false, "GL");
    for(int lvl=1; lvl<=oppMaxLvl; lvl++){
@@ -887,12 +969,29 @@ void PlaceHedgePendingSet(int g, int lossSide){
       pStack = NormalizeDouble(pStack, g_digits);
       if(hedgeSide==1) ok2 = trade.SellStop(lot, pStack, _Symbol, 0, 0, ORDER_TIME_GTC, 0, cg);
       else             ok2 = trade.BuyStop (lot, pStack, _Symbol, 0, 0, ORDER_TIME_GTC, 0, cg);
-      if(InpVerboseLog) PrintFormat("Golden2 v1.1: HD_GL#%d G%d lot=%.2f price=%.5f ok=%d", lvl, g, lot, pStack, ok2);
+      if(InpVerboseLog) PrintFormat("Golden2 v1.4: HD_GL#%d(legacy) G%d lot=%.2f price=%.5f ok=%d", lvl, g, lot, pStack, ok2);
    }
+}
+
+void PlaceHedgePendingSet(int g, int lossSide){
+   if(InpHedgeLotMatch1to1) MirrorLossSideToHedgePendings(g, lossSide);
+   else                     PlaceHedgePendingSet_Legacy(g, lossSide);
    g_lastHedgeOpenTime = TimeCurrent();
 }
 
 void ManageGroupHedgeArm(int g){
+   // Master toggle OFF: one-shot cleanup of any pending hedges, then bail
+   if(!InpHedge_Enabled){
+      if(!g_hedgeMasterCleared){
+         for(int gi=1; gi<=InpMaxGroups; gi++) DeleteGroupPendings(gi, 1);
+         g_hedgeMasterCleared = true;
+         if(InpVerboseLog) Print("Golden2 v1.4: HEDGE MASTER OFF - cleared all pending hedges");
+      }
+      g_blockNewOrders[g] = false;
+      return;
+   }
+   g_hedgeMasterCleared = false;
+
    bool hedgePosExists = (CountGroupPositions(g,-1,1) > 0);
    bool hedgePendingExists = (CountGroupPendingsByTagPrefix(g, true, "") > 0);
 
@@ -900,10 +999,25 @@ void ManageGroupHedgeArm(int g){
    if(lossUSD < 0) lossUSD = 0;
    double pct = (InpHedgeTriggerUSD>0) ? (lossUSD * 100.0 / InpHedgeTriggerUSD) : 0.0;
 
+   // Pre-hedge block-new-orders flag (hysteresis 5%); only meaningful pre-match
+   if(!hedgePosExists && InpHedge_BlockNewOrderPercent > 0){
+      if(pct >= InpHedge_BlockNewOrderPercent)               g_blockNewOrders[g] = true;
+      else if(pct < InpHedge_BlockNewOrderPercent - 5.0)     g_blockNewOrders[g] = false;
+   } else {
+      g_blockNewOrders[g] = false;
+   }
+
+   // Disarm: drop pending if DD recovers below disarm %
    if(!hedgePosExists && hedgePendingExists){
       if(pct < InpHedgeDisarmPercent){
          DeleteGroupPendings(g, 1);
-         if(InpVerboseLog) PrintFormat("Golden2 v1.1: HD DISARM G%d pct=%.1f", g, pct);
+         if(InpVerboseLog) PrintFormat("Golden2 v1.4: HD DISARM G%d pct=%.1f", g, pct);
+         return;
+      }
+      // Already armed: dynamically top-up / trim mirror to match current loss-side tickets
+      int lossSide = GroupLossSide(g);
+      if(lossSide >= 0 && InpHedgeLotMatch1to1){
+         MirrorLossSideToHedgePendings(g, lossSide);
       }
       return;
    }
@@ -913,7 +1027,7 @@ void ManageGroupHedgeArm(int g){
       int rem = 0;
       if(IsHedgeOpenDelayActive(rem)){
          if(TimeCurrent() - g_lastDelayLog >= 60){
-            PrintFormat("Golden2 v1.1: HEDGE DELAY wait %dm%02ds before arming new hedge", rem/60, rem%60);
+            PrintFormat("Golden2 v1.4: HEDGE DELAY wait %dm%02ds before arming new hedge", rem/60, rem%60);
             g_lastDelayLog = TimeCurrent();
          }
          return;
