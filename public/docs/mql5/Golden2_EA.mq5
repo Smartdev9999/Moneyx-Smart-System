@@ -207,6 +207,8 @@ int g_atrProfitHandle = INVALID_HANDLE;
 
 bool   g_stripped[51];          // per-group flag: broker TP/SL stripped after hedge match
 double g_maxDDPerSide[51][2];   // [group][side] track max floating loss USD seen (positive value)
+bool   g_blockNewOrders[51];    // per-group: pre-hedge block (DD% near arm threshold)
+bool   g_hedgeMasterCleared = false; // one-shot cleanup when master toggle is OFF
 
 // Snapshot of ATR (in points) at the moment last grid order was placed (per group, side, family 0=GL/1=GP)
 double   g_atrAtLastGridLoss[51][2];
