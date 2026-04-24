@@ -1,13 +1,13 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|     Golden2 EA v1.1 - Group Settings + Average TP/SL +           |
-//|     Auto-Strip Broker TP/SL on Hedge Match                       |
+//|     Golden2 EA v1.2 - Gold-Miner-style Grid Settings             |
+//|     (Grid Loss / Max Grid Trailing / Grid Profit) + v1.1 features|
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "1.10"
-#property description "Golden2 EA v1.1 - Pending frame + Multiplier Grid + Group-based Pending Hedge (arm/disarm) + Average TP/SL Manager + Auto-strip Broker TP/SL when hedge matched + Triple-Gate Matching Close + Sequential Queue (max 50 groups)"
+#property version   "1.20"
+#property description "Golden2 EA v1.2 - Pending frame + Gold-Miner-style Grid (Loss/Profit/Max-Grid-Trailing) + Group-based Pending Hedge (arm/disarm) + Average TP/SL Manager + Auto-strip Broker TP/SL on hedge match + Triple-Gate Matching Close + Sequential Queue (max 50 groups)"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -29,6 +29,27 @@ enum ENUM_SL_ACTION_G2
    SL_CLOSE_POSITIONS = 0   // Close Positions (Stop Loss)
 };
 
+// Gold-Miner style enums (G2 prefix to avoid clash)
+enum ENUM_LOT_MODE_G2
+{
+   G2_LOT_CUSTOM   = 0,  // Custom Lots (semicolon list)
+   G2_LOT_ADD      = 1,  // Add per level (Initial + level*Add*Initial)
+   G2_LOT_MULTIPLY = 2   // Multiply per level (Initial * factor^level)
+};
+
+enum ENUM_GAP_TYPE_G2
+{
+   G2_GAP_FIXED  = 0,    // Fixed Points
+   G2_GAP_CUSTOM = 1,    // Custom Distance (semicolon list)
+   G2_GAP_ATR    = 2     // ATR-based
+};
+
+enum ENUM_ATR_REF_G2
+{
+   G2_ATR_REF_DYNAMIC   = 0,  // Current ATR
+   G2_ATR_REF_LAST_GRID = 1   // ATR snapshot at last grid order
+};
+
 //================ INPUTS ================
 //--- === General ===
 input string  __sec_general__         = "=== General ===";          // ---
@@ -45,12 +66,58 @@ input int     InpFrameLowerPips       = 200;                         // SELL_STO
 input int     InpInitialTPPips        = 300;                         // Initial TP (points) (0=off)
 input int     InpInitialSLPips        = 0;                           // Initial SL (points) (0=off)
 
-//--- === Grid ===
-input string  __sec_grid__            = "=== Grid ===";              // ---
-input double  InpMultiplier           = 2.0;                         // Multiplier per grid level
-input int     InpMaxGridLevels        = 4;                           // Max grid loss levels (GL#1..#N)
-input int     InpGridStepPips         = 200;                         // Grid step (points)
-input int     InpGridProfitTPPips     = 300;                         // Grid TP (points)
+//--- === Grid Loss Side === (Gold Miner-style)
+input string  __sec_grid_loss__       = "=== Grid Loss Side ===";    // ---
+input int            GridLoss_MaxTrades       = 30;                  // Max Grid Loss Trades
+input ENUM_LOT_MODE_G2 GridLoss_LotMode       = G2_LOT_MULTIPLY;     // Grid Loss Lot Mode
+input string         GridLoss_CustomLots      = "0.01;0.01;0.01;0.01;0.01;0.01;0.01;0.01;0.01;0.01"; // Custom Lots (semicolon)
+input double         GridLoss_AddLotPerLevel  = 0.4;                 // Add Lot per Level (× InitialLot)
+input double         GridLoss_MultiplyFactor  = 1.4;                 // Multiply Factor (for Multiply mode)
+input ENUM_GAP_TYPE_G2 GridLoss_GapType       = G2_GAP_FIXED;        // Grid Loss Gap Type
+input int            GridLoss_Points          = 50;                  // Grid Loss Distance (points)
+input string         GridLoss_CustomDistance  = "100;200;300;400;500;600;700;800;900;1000"; // Custom Distance (points, semicolon)
+input ENUM_TIMEFRAMES GridLoss_ATR_TF         = PERIOD_H1;           // ATR Timeframe
+input int            GridLoss_ATR_Period      = 14;                  // ATR Period
+input double         GridLoss_ATR_Multiplier  = 2.0;                 // ATR Multiplier
+input ENUM_ATR_REF_G2 GridLoss_ATR_Reference  = G2_ATR_REF_LAST_GRID;// ATR Reference Point
+input int            GridLoss_MinGapPoints    = 50;                  // Minimum Grid Gap (points)
+input int            GridLoss_CandleConfirm   = 1;                   // Require N confirming candles before GL (0=Off)
+input bool           GridLoss_OnlyInSignal    = false;               // Grid Only in Signal (loss-side) Direction
+input bool           GridLoss_OnlyNewCandle   = true;                // Grid Only on New Candle
+input bool           GridLoss_DontSameCandle  = true;                // Don't Open Grid in Same Candle as Initial
+
+//--- === Max Grid Average Trailing Stop ===
+input string  __sec_maxgrid_trail__   = "=== Max Grid Average Trailing Stop ==="; // ---
+input bool           MaxGrid_TrailEnable      = false;               // Enable Max Grid Avg Trailing
+input int            MaxGrid_TrailMode        = 1;                   // Mode: 0=Max Order Grid, 1=Start Order Grid
+input int            MaxGrid_StartOrders      = 8;                   // Start Trail at N orders (Mode 1)
+input int            MaxGrid_TrailActivation  = 100;                 // Activation (points from average, 0=Off)
+input int            MaxGrid_TrailStep        = 50;                  // Trailing Step (points)
+input int            MaxGrid_BreakevenBuffer  = 10;                  // Breakeven Buffer (points above/below avg)
+
+//--- === Grid Profit Side === (Gold Miner-style)
+input string  __sec_grid_profit__     = "=== Grid Profit Side ===";  // ---
+input bool           GridProfit_Enable        = false;               // Enable Profit Grid
+input int            GridProfit_MaxTrades     = 2;                   // Max Grid Profit Trades
+input ENUM_LOT_MODE_G2 GridProfit_LotMode     = G2_LOT_MULTIPLY;     // Grid Profit Lot Mode
+input string         GridProfit_CustomLots    = "0.01;0.01;0.01;0.01;0.01"; // Custom Lots
+input double         GridProfit_AddLotPerLevel= 0.2;                 // Add Lot per Level
+input double         GridProfit_MultiplyFactor= 1.4;                 // Multiply Factor
+input ENUM_GAP_TYPE_G2 GridProfit_GapType     = G2_GAP_FIXED;        // Grid Profit Gap Type
+input int            GridProfit_Points        = 100;                 // Grid Profit Distance (points)
+input string         GridProfit_CustomDistance= "100;200;500";       // Custom Distance
+input ENUM_TIMEFRAMES GridProfit_ATR_TF       = PERIOD_H1;           // ATR Timeframe
+input int            GridProfit_ATR_Period    = 14;                  // ATR Period
+input double         GridProfit_ATR_Multiplier= 2.0;                 // ATR Multiplier
+input ENUM_ATR_REF_G2 GridProfit_ATR_Reference= G2_ATR_REF_LAST_GRID;// ATR Reference Point
+input int            GridProfit_MinGapPoints  = 100;                 // Minimum Grid Gap (points)
+input bool           GridProfit_OnlyNewCandle = true;                // Grid Only on New Candle
+
+// Legacy v1.1 inputs (kept for backward-compat / hedge stack & continuation)
+input int     InpMaxGridLevels        = 4;                           // [Legacy] Max levels for hedge stack & continuation
+input double  InpMultiplier           = 2.0;                         // [Legacy] Multiplier (used by hedge stack lot)
+input int     InpGridStepPips         = 200;                         // [Legacy] Step used by hedge stack offset
+input int     InpGridProfitTPPips     = 300;                         // [Legacy] Reserved
 
 //--- === Group / Queue ===
 input string  __sec_group__           = "=== Group / Queue ===";     // ---
@@ -131,9 +198,24 @@ string g_linePrefix = "G2L_";  // chart line objects prefix
 
 int g_bbHandle = INVALID_HANDLE;
 int g_atrHandle = INVALID_HANDLE;
+int g_atrLossHandle   = INVALID_HANDLE;
+int g_atrProfitHandle = INVALID_HANDLE;
 
 bool   g_stripped[51];          // per-group flag: broker TP/SL stripped after hedge match
 double g_maxDDPerSide[51][2];   // [group][side] track max floating loss USD seen (positive value)
+
+// Snapshot of ATR (in points) at the moment last grid order was placed (per group, side, family 0=GL/1=GP)
+double   g_atrAtLastGridLoss[51][2];
+double   g_atrAtLastGridProfit[51][2];
+// Track last "initial" candle time per group (for DontSameCandle guard)
+datetime g_initialCandleTime[51][2];
+// Track last grid placement candle (for OnlyNewCandle guard)
+datetime g_lastGridCandleLoss[51][2];
+datetime g_lastGridCandleProfit[51][2];
+
+// Max Grid Avg Trailing virtual SL state (per group, side)
+double   g_maxGridTrailSL[51][2];   // 0 = inactive
+bool     g_maxGridTrailArmed[51][2];
 
 //================ HELPERS: comments / parsing ================
 string SidePrefix(ENUM_SIDE s){ return (s==SIDE_BUY?"B":"S"); }
@@ -422,6 +504,7 @@ void EnforceFrameMutualExclusion(int g){
 }
 
 //================ MAIN GRID ================
+// Legacy lot ladder (used by hedge stack & continuation logic — DO NOT TOUCH)
 double LotForLevel(int level){
    double l = InpInitialLot;
    for(int i=0;i<level;i++) l *= InpMultiplier;
@@ -430,6 +513,73 @@ double LotForLevel(int level){
    if(step>0) l = MathRound(l/step)*step;
    if(l<minL) l = minL;
    return NormalizeDouble(l, 2);
+}
+
+//----- Gold-Miner-style helpers -----
+// Parse semicolon-separated double list; returns fallback when index missing
+double ParseCSVDouble(const string s, int idx, double fallback){
+   string parts[];
+   int n = StringSplit(s, ';', parts);
+   if(idx < 0 || idx >= n) return fallback;
+   string v = parts[idx];
+   StringTrimLeft(v); StringTrimRight(v);
+   if(StringLen(v) == 0) return fallback;
+   return StringToDouble(v);
+}
+int ParseCSVInt(const string s, int idx, int fallback){
+   double d = ParseCSVDouble(s, idx, (double)fallback);
+   return (int)d;
+}
+
+double NormalizeLot(double l){
+   double minL = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   double maxL = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+   double step = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   if(step>0) l = MathRound(l/step)*step;
+   if(l<minL) l = minL;
+   if(maxL>0 && l>maxL) l = maxL;
+   return NormalizeDouble(l, 2);
+}
+
+// Resolve lot for a given grid level (level=1..MaxTrades) with the chosen mode
+double ResolveLot(int level, ENUM_LOT_MODE_G2 mode, const string customStr,
+                  double addPerLvl, double mulFactor){
+   double l = InpInitialLot;
+   if(mode == G2_LOT_CUSTOM){
+      l = ParseCSVDouble(customStr, level-1, InpInitialLot);
+   } else if(mode == G2_LOT_ADD){
+      l = InpInitialLot + (double)level * addPerLvl * InpInitialLot;
+   } else { // MULTIPLY
+      l = InpInitialLot * MathPow(mulFactor, (double)level);
+   }
+   return NormalizeLot(l);
+}
+
+double GetATRPoints(int handle){
+   if(handle == INVALID_HANDLE) return 0.0;
+   double buf[2];
+   if(CopyBuffer(handle, 0, 0, 2, buf) <= 0) return 0.0;
+   if(buf[0] <= 0) return 0.0;
+   return buf[0] / g_point; // ATR in points
+}
+
+// Resolve gap in points for next grid level
+int ResolveGapPoints(int level, ENUM_GAP_TYPE_G2 gapType, int fixedPts,
+                     const string customStr, int atrHandle, double atrMult,
+                     ENUM_ATR_REF_G2 atrRef, double atrSnapshotPts, int minGap){
+   int gap = fixedPts;
+   if(gapType == G2_GAP_FIXED){
+      gap = fixedPts;
+   } else if(gapType == G2_GAP_CUSTOM){
+      gap = ParseCSVInt(customStr, level-1, fixedPts);
+   } else { // ATR
+      double atrPts = (atrRef == G2_ATR_REF_LAST_GRID && atrSnapshotPts>0)
+                       ? atrSnapshotPts
+                       : GetATRPoints(atrHandle);
+      gap = (int)(atrPts * atrMult);
+   }
+   if(gap < minGap) gap = minGap;
+   return gap;
 }
 
 int HighestGridLevel(int g, ENUM_SIDE side, bool hedge, string family){
@@ -480,26 +630,215 @@ double LastEntryPrice(int g, int sideFilter, bool hedge){
    return price;
 }
 
+datetime LastEntryCandleTime(int g, int sideFilter, bool hedge, ENUM_TIMEFRAMES tf){
+   double px;
+   datetime newest = 0;
+   int total = PositionsTotal();
+   for(int i=0;i<total;i++){
+      ulong tk = PositionGetTicket(i);
+      if(tk==0) continue;
+      if(!PositionSelectByTicket(tk)) continue;
+      if((long)PositionGetInteger(POSITION_MAGIC) != InpMagic) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      string c = PositionGetString(POSITION_COMMENT);
+      int gp; bool hd; string tag;
+      if(!ParseComment(c, gp, hd, tag)) continue;
+      if(gp != g) continue;
+      if(hd != hedge) continue;
+      int sd = (PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY)?0:1;
+      if(sd != sideFilter) continue;
+      datetime t = (datetime)PositionGetInteger(POSITION_TIME);
+      if(t > newest) newest = t;
+   }
+   if(newest == 0) return 0;
+   return iTime(_Symbol, tf, iBarShift(_Symbol, tf, newest));
+}
+
+// Count consecutive recent CLOSED candles in given direction (1=bull, -1=bear)
+int CountConfirmingCandles(int dir, int n){
+   int found = 0;
+   for(int i=1; i<=n; i++){
+      double o = iOpen(_Symbol, PERIOD_CURRENT, i);
+      double c = iClose(_Symbol, PERIOD_CURRENT, i);
+      if(dir > 0){ if(c >  o) found++; else break; }
+      else       { if(c <  o) found++; else break; }
+   }
+   return found;
+}
+
 void TryPlaceGridLoss(int g){
    for(int sd=0; sd<2; sd++){
       int posCount = CountGroupPositions(g, sd, 0);
       if(posCount <= 0) continue;
+
       int gl = HighestGridLevel(g, (ENUM_SIDE)sd, false, "GL");
-      if(gl >= InpMaxGridLevels) continue;
+      if(gl >= GridLoss_MaxTrades) continue;
+
+      // OnlyInSignal → only grid the loss-side
+      if(GridLoss_OnlyInSignal){
+         int loseSide = GroupLossSide(g);
+         if(loseSide != -1 && loseSide != sd) continue;
+      }
+
       double lastPrice = LastEntryPrice(g, sd, false);
       if(lastPrice <= 0) continue;
+
+      // Resolve gap
+      int gapPts = ResolveGapPoints(gl+1, GridLoss_GapType, GridLoss_Points,
+                                    GridLoss_CustomDistance, g_atrLossHandle,
+                                    GridLoss_ATR_Multiplier, GridLoss_ATR_Reference,
+                                    g_atrAtLastGridLoss[g][sd], GridLoss_MinGapPoints);
+
       double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
       double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
       bool trigger = false;
-      if(sd==0) trigger = (ask <= lastPrice - InpGridStepPips*g_point);
-      else      trigger = (bid >= lastPrice + InpGridStepPips*g_point);
+      if(sd==0) trigger = (ask <= lastPrice - gapPts*g_point);
+      else      trigger = (bid >= lastPrice + gapPts*g_point);
       if(!trigger) continue;
-      double lot = LotForLevel(gl+1);
+
+      // OnlyNewCandle / DontSameCandle guards
+      datetime curBar = iTime(_Symbol, PERIOD_CURRENT, 0);
+      if(GridLoss_OnlyNewCandle && g_lastGridCandleLoss[g][sd] == curBar) continue;
+      if(GridLoss_DontSameCandle && g_initialCandleTime[g][sd] == curBar) continue;
+
+      // Candle confirmation (N consecutive closed candles in the loss direction)
+      if(GridLoss_CandleConfirm > 0){
+         int dir = (sd==0) ? -1 : +1; // BUY losing → bears, SELL losing → bulls
+         if(CountConfirmingCandles(dir, GridLoss_CandleConfirm) < GridLoss_CandleConfirm) continue;
+      }
+
+      double lot = ResolveLot(gl+1, GridLoss_LotMode, GridLoss_CustomLots,
+                              GridLoss_AddLotPerLevel, GridLoss_MultiplyFactor);
       string c = MakeComment(g, false, StringFormat("GL#%d", gl+1));
-      double tp = 0.0;
-      bool ok = (sd==0) ? trade.Buy(lot, _Symbol, ask, 0, tp, c)
-                        : trade.Sell(lot, _Symbol, bid, 0, tp, c);
-      if(InpVerboseLog) PrintFormat("Golden2 v1.1: GL#%d %s G%d lot=%.2f ok=%d", gl+1, sd==0?"BUY":"SELL", g, lot, ok);
+      bool ok = (sd==0) ? trade.Buy(lot, _Symbol, ask, 0, 0, c)
+                        : trade.Sell(lot, _Symbol, bid, 0, 0, c);
+      if(ok){
+         g_lastGridCandleLoss[g][sd] = curBar;
+         g_atrAtLastGridLoss[g][sd]  = GetATRPoints(g_atrLossHandle);
+      }
+      if(InpVerboseLog) PrintFormat("Golden2 v1.2: GL#%d %s G%d lot=%.2f gap=%dpts ok=%d",
+                                    gl+1, sd==0?"BUY":"SELL", g, lot, gapPts, ok);
+   }
+}
+
+void TryPlaceGridProfit(int g){
+   if(!GridProfit_Enable) return;
+   if(IsGroupHedgeMatched(g)) return; // pre-hedge only
+   for(int sd=0; sd<2; sd++){
+      int posCount = CountGroupPositions(g, sd, 0);
+      if(posCount <= 0) continue;
+      double pl = GroupFloatingPL(g, sd, 0);
+      if(pl <= 0) continue; // only winning side
+
+      int gp = HighestGridLevel(g, (ENUM_SIDE)sd, false, "GP");
+      if(gp >= GridProfit_MaxTrades) continue;
+
+      double lastPrice = LastEntryPrice(g, sd, false);
+      if(lastPrice <= 0) continue;
+
+      int gapPts = ResolveGapPoints(gp+1, GridProfit_GapType, GridProfit_Points,
+                                    GridProfit_CustomDistance, g_atrProfitHandle,
+                                    GridProfit_ATR_Multiplier, GridProfit_ATR_Reference,
+                                    g_atrAtLastGridProfit[g][sd], GridProfit_MinGapPoints);
+
+      double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+      double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+      bool trigger = false;
+      // Profit grid: BUY → price went UP from lastPrice; SELL → price went DOWN
+      if(sd==0) trigger = (ask >= lastPrice + gapPts*g_point);
+      else      trigger = (bid <= lastPrice - gapPts*g_point);
+      if(!trigger) continue;
+
+      datetime curBar = iTime(_Symbol, PERIOD_CURRENT, 0);
+      if(GridProfit_OnlyNewCandle && g_lastGridCandleProfit[g][sd] == curBar) continue;
+
+      double lot = ResolveLot(gp+1, GridProfit_LotMode, GridProfit_CustomLots,
+                              GridProfit_AddLotPerLevel, GridProfit_MultiplyFactor);
+      string c = MakeComment(g, false, StringFormat("GP#%d", gp+1));
+      bool ok = (sd==0) ? trade.Buy(lot, _Symbol, ask, 0, 0, c)
+                        : trade.Sell(lot, _Symbol, bid, 0, 0, c);
+      if(ok){
+         g_lastGridCandleProfit[g][sd] = curBar;
+         g_atrAtLastGridProfit[g][sd]  = GetATRPoints(g_atrProfitHandle);
+      }
+      if(InpVerboseLog) PrintFormat("Golden2 v1.2: GP#%d %s G%d lot=%.2f gap=%dpts ok=%d",
+                                    gp+1, sd==0?"BUY":"SELL", g, lot, gapPts, ok);
+   }
+}
+
+//================ MAX GRID AVERAGE TRAILING STOP ================
+void ManageMaxGridTrailing(int g){
+   if(!MaxGrid_TrailEnable) return;
+   if(IsGroupHedgeMatched(g)) return; // only pre-hedge
+   if(MaxGrid_TrailActivation <= 0) return;
+
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+
+   for(int sd=0; sd<2; sd++){
+      int cnt = CountGroupPositions(g, sd, 0);
+      if(cnt <= 0){
+         g_maxGridTrailSL[g][sd] = 0;
+         g_maxGridTrailArmed[g][sd] = false;
+         continue;
+      }
+      // Activation gate per mode
+      bool gateOk = false;
+      if(MaxGrid_TrailMode == 0){
+         gateOk = (cnt >= GridLoss_MaxTrades); // require maxed out
+      } else {
+         gateOk = (cnt >= MaxGrid_StartOrders);
+      }
+      if(!gateOk){
+         g_maxGridTrailSL[g][sd] = 0;
+         g_maxGridTrailArmed[g][sd] = false;
+         continue;
+      }
+      double avg = GroupAveragePrice(g, sd, 0);
+      if(avg <= 0) continue;
+
+      double price = (sd==0) ? bid : ask;
+      double moveFromAvg = (sd==0) ? (price - avg) : (avg - price);
+      double activation = MaxGrid_TrailActivation * g_point;
+      double buffer     = MaxGrid_BreakevenBuffer * g_point;
+      double step       = MaxGrid_TrailStep * g_point;
+
+      if(moveFromAvg < activation) continue;
+
+      double desiredSL;
+      if(sd==0) desiredSL = NormalizeDouble(price - step, g_digits);
+      else      desiredSL = NormalizeDouble(price + step, g_digits);
+
+      // never below avg+buffer (BUY) / above avg-buffer (SELL)
+      double floorSL = (sd==0) ? (avg + buffer) : (avg - buffer);
+      if(sd==0 && desiredSL < floorSL) desiredSL = floorSL;
+      if(sd==1 && desiredSL > floorSL) desiredSL = floorSL;
+
+      // Move only in profit direction
+      double curSL = g_maxGridTrailSL[g][sd];
+      bool update = false;
+      if(curSL <= 0) update = true;
+      else if(sd==0 && desiredSL > curSL) update = true;
+      else if(sd==1 && desiredSL < curSL) update = true;
+
+      if(update){
+         g_maxGridTrailSL[g][sd] = desiredSL;
+         g_maxGridTrailArmed[g][sd] = true;
+         if(InpVerboseLog) PrintFormat("Golden2 v1.2: MaxGridTrail G%d %s virtSL=%.5f (avg=%.5f)",
+                                       g, sd==0?"BUY":"SELL", desiredSL, avg);
+      }
+
+      // Trigger check (virtual SL)
+      bool hit = false;
+      if(sd==0 && bid <= g_maxGridTrailSL[g][sd]) hit = true;
+      if(sd==1 && ask >= g_maxGridTrailSL[g][sd]) hit = true;
+      if(hit && g_maxGridTrailArmed[g][sd]){
+         if(InpVerboseLog) PrintFormat("Golden2 v1.2: MaxGridTrail G%d %s HIT virtSL=%.5f -> close side",
+                                       g, sd==0?"BUY":"SELL", g_maxGridTrailSL[g][sd]);
+         CloseMainSideOfGroup(g, sd);
+         g_maxGridTrailSL[g][sd] = 0;
+         g_maxGridTrailArmed[g][sd] = false;
+      }
    }
 }
 
@@ -997,13 +1336,15 @@ string StrippedListString(){
 
 void DrawDashboard(){
    if(!InpShowDashboard) return;
-   string txt = "Golden2 EA v1.1\n";
+   string txt = "Golden2 EA v1.2\n";
    txt += StringFormat("Symbol: %s  Magic: %I64d\n", _Symbol, (long)InpMagic);
    int rem = 0;
    if(IsHedgeOpenDelayActive(rem)) txt += StringFormat("HedgeDelay: WAIT %dm%02ds\n", rem/60, rem%60);
    else txt += "HedgeDelay: READY\n";
    txt += StringFormat("Queue mutex: %s\n", g_activeOpsGroup<0?"IDLE":StringFormat("G%d", g_activeOpsGroup));
    txt += StringFormat("TP-Stripped: %s\n", StrippedListString());
+   txt += StringFormat("MaxGridTrail: %s (Mode %d)\n",
+                       MaxGrid_TrailEnable?"ON":"OFF", MaxGrid_TrailMode);
    txt += "------------------------------\n";
    for(int g=1; g<=InpMaxGroups; g++){
       if(!GroupHasAnyPositions(g) && !GroupHasAnyPendings(g)) continue;
@@ -1014,13 +1355,24 @@ void DrawDashboard(){
       if(lossUSD<0) lossUSD=0;
       double pct = (InpHedgeTriggerUSD>0) ? (lossUSD*100.0/InpHedgeTriggerUSD) : 0;
       string match = IsGroupHedgeMatched(g) ? " [MATCHED]" : "";
+      int glB = HighestGridLevel(g, SIDE_BUY,  false, "GL");
+      int glS = HighestGridLevel(g, SIDE_SELL, false, "GL");
+      int gpB = HighestGridLevel(g, SIDE_BUY,  false, "GP");
+      int gpS = HighestGridLevel(g, SIDE_SELL, false, "GP");
       txt += StringFormat("G%d  mainL=%.2f hdgL=%.2f  PL=%.2f  arm=%.0f%%%s\n",
                           g, mainL, hedgeL, pl, pct, match);
+      txt += StringFormat("  GL B%d/%d S%d/%d  GP B%d/%d S%d/%d\n",
+                          glB, GridLoss_MaxTrades, glS, GridLoss_MaxTrades,
+                          gpB, GridProfit_MaxTrades, gpS, GridProfit_MaxTrades);
       if(!IsGroupHedgeMatched(g) && GroupHasAnyPositions(g)){
          double avgB = GroupAveragePrice(g, 0, 0);
          double avgS = GroupAveragePrice(g, 1, 0);
-         if(avgB>0) txt += StringFormat("  B avg=%.5f tp=%.5f\n", avgB, ComputeAvgTPPrice(g,0));
-         if(avgS>0) txt += StringFormat("  S avg=%.5f tp=%.5f\n", avgS, ComputeAvgTPPrice(g,1));
+         if(avgB>0) txt += StringFormat("  B avg=%.5f tp=%.5f", avgB, ComputeAvgTPPrice(g,0));
+         if(avgB>0 && g_maxGridTrailArmed[g][0]) txt += StringFormat(" trail=%.5f", g_maxGridTrailSL[g][0]);
+         if(avgB>0) txt += "\n";
+         if(avgS>0) txt += StringFormat("  S avg=%.5f tp=%.5f", avgS, ComputeAvgTPPrice(g,1));
+         if(avgS>0 && g_maxGridTrailArmed[g][1]) txt += StringFormat(" trail=%.5f", g_maxGridTrailSL[g][1]);
+         if(avgS>0) txt += "\n";
       }
    }
    if(ObjectFind(0, g_dashName) < 0){
@@ -1043,16 +1395,28 @@ int OnInit(){
    trade.SetExpertMagicNumber(InpMagic);
    trade.SetDeviationInPoints(InpSlippage);
 
-   for(int i=0;i<51;i++){ g_stripped[i]=false; g_maxDDPerSide[i][0]=0.0; g_maxDDPerSide[i][1]=0.0; }
+   for(int i=0;i<51;i++){
+      g_stripped[i]=false;
+      g_maxDDPerSide[i][0]=0.0; g_maxDDPerSide[i][1]=0.0;
+      g_atrAtLastGridLoss[i][0]=0.0; g_atrAtLastGridLoss[i][1]=0.0;
+      g_atrAtLastGridProfit[i][0]=0.0; g_atrAtLastGridProfit[i][1]=0.0;
+      g_initialCandleTime[i][0]=0; g_initialCandleTime[i][1]=0;
+      g_lastGridCandleLoss[i][0]=0; g_lastGridCandleLoss[i][1]=0;
+      g_lastGridCandleProfit[i][0]=0; g_lastGridCandleProfit[i][1]=0;
+      g_maxGridTrailSL[i][0]=0; g_maxGridTrailSL[i][1]=0;
+      g_maxGridTrailArmed[i][0]=false; g_maxGridTrailArmed[i][1]=false;
+   }
 
    g_bbHandle  = iBands(_Symbol, InpExitTF, InpExitBBPeriod, 0, InpExitBBDev, PRICE_CLOSE);
    g_atrHandle = iATR(_Symbol, InpExitTF, InpExitKeltnerATR);
+   g_atrLossHandle   = iATR(_Symbol, GridLoss_ATR_TF,   GridLoss_ATR_Period);
+   g_atrProfitHandle = iATR(_Symbol, GridProfit_ATR_TF, GridProfit_ATR_Period);
    if(g_bbHandle == INVALID_HANDLE || g_atrHandle == INVALID_HANDLE){
-      Print("Golden2 v1.1: indicator init failed");
+      Print("Golden2 v1.2: indicator init failed");
       return INIT_FAILED;
    }
 
-   PrintFormat("Golden2 EA v1.1 initialized | Magic=%I64d | MaxGroups=%d", (long)InpMagic, InpMaxGroups);
+   PrintFormat("Golden2 EA v1.2 initialized | Magic=%I64d | MaxGroups=%d", (long)InpMagic, InpMaxGroups);
    return INIT_SUCCEEDED;
 }
 
@@ -1061,6 +1425,22 @@ void OnDeinit(const int reason){
    CleanupAllLinesByPrefix();
    if(g_bbHandle != INVALID_HANDLE) IndicatorRelease(g_bbHandle);
    if(g_atrHandle != INVALID_HANDLE) IndicatorRelease(g_atrHandle);
+   if(g_atrLossHandle != INVALID_HANDLE)   IndicatorRelease(g_atrLossHandle);
+   if(g_atrProfitHandle != INVALID_HANDLE) IndicatorRelease(g_atrProfitHandle);
+}
+
+// Track first-position candle for "DontSameCandle" guard
+void TrackInitialCandle(int g){
+   datetime curBar = iTime(_Symbol, PERIOD_CURRENT, 0);
+   for(int sd=0; sd<2; sd++){
+      int cnt = CountGroupPositions(g, sd, 0);
+      if(cnt == 0){
+         g_initialCandleTime[g][sd] = 0;
+      } else if(g_initialCandleTime[g][sd] == 0){
+         // First time we see a position on this side → record the bar
+         g_initialCandleTime[g][sd] = curBar;
+      }
+   }
 }
 
 void OnTick(){
@@ -1073,10 +1453,15 @@ void OnTick(){
          // group empty: reset trackers
          if(g_stripped[g]) g_stripped[g] = false;
          ResetMaxDDPerSide(g);
+         g_initialCandleTime[g][0]=0; g_initialCandleTime[g][1]=0;
+         g_maxGridTrailSL[g][0]=0;    g_maxGridTrailSL[g][1]=0;
+         g_maxGridTrailArmed[g][0]=false; g_maxGridTrailArmed[g][1]=false;
          continue;
       }
       EnforceFrameMutualExclusion(g);
+      TrackInitialCandle(g);
       TryPlaceGridLoss(g);
+      TryPlaceGridProfit(g);
       ManageGroupHedgeArm(g);
 
       // Auto-strip broker TP/SL when main + hedge coexist (matched set)
@@ -1086,6 +1471,9 @@ void OnTick(){
 
       // Update max DD per side (only useful pre-match)
       UpdateMaxDDPerSide(g);
+
+      // Max Grid Average Trailing Stop (pre-match only)
+      ManageMaxGridTrailing(g);
 
       // Average TP/SL Manager (only acts pre-match)
       CheckAndCloseByAverageTP(g);
