@@ -1,78 +1,108 @@
-# Golden2 EA v2.4 — Symmetric Initial Frame Trail
+# Golden2 EA v2.5 — One-Way Trail (Toward-Price Only)
 
-## ที่มาของปัญหา (จากภาพ backtest)
+## ผมเข้าใจผิดใน v2.4
 
-หลัง G2 hedge MATCHED ระบบ advance ไป G3 ตอน 08:44:57 วาง:
-- BuyStop #125 @ 4601.01 (TP 4604.01)
-- SellStop #126 @ 4591.01 (TP 4588.01)
+ใน v2.4 ผมทำให้ pending **recenter ตาม mid market** = ขยับทั้ง 2 ทิศ (เข้าหา **และ** ออกห่าง) → ผิดครับ
 
-จากนั้นราคาวิ่ง **ขึ้น** จาก ~4591 → ~4601:
-- SellStop #126 ถูก trail ขึ้นตามราคา (4591 → 4597) ✅
-- **BuyStop #125 ไม่เคยถูก trail** ❌ → โดนชนที่ 09:04:45 ที่ 4601.04
-- กลายเป็น G3_IN BUY orphan position → `IsGroupSafeToAdvance(G3)=false` → G4 ไม่ถูกเปิด
-- 09:06:45 TP hit @ 4604.01 → ปิดด้วย opposite (#127) → ดูในตารางเหมือน "BuyStop หาย"
+จากภาพ log จะเห็นว่า BuyStop @ 4612.21 ถูกลากลงเรื่อยๆ ตามราคาที่ลง: 4612 → 4611 → 4610 → 4608 → 4607 → 4606 → 4604 → 4606 (เด้งขึ้นก็ตาม) → ทำให้ pending ไล่ตามราคาเหมือนเงาตามตัว และจะโดนชนเร็วเกินไป
 
-## Root Cause
+## ความเข้าใจที่ถูกต้อง (จาก user)
 
-`ManageInitialTrailOnBarClose` (บรรทัด 789-872) ปัจจุบันออกแบบ trail แบบ **asymmetric**:
-- BuyStop: trail เฉพาะเมื่อ `newPx < oldPx` (ราคาลง → ดึง BuyStop ลง)
-- SellStop: trail เฉพาะเมื่อ `newPx > oldPx` (ราคาขึ้น → ดึง SellStop ขึ้น)
+**Pending order จะขยับ "เข้าหาราคา" เท่านั้น เมื่อราคาวิ่งออกห่าง**
+**ห้ามขยับ "ออกห่างจากราคา" เมื่อราคาวิ่งเข้าหา**
 
-→ ฝั่งที่ราคา **วิ่งเข้าหา** จะอยู่นิ่งและโดนชน แทนที่จะเลื่อนหนีเพื่อรักษาระยะกรอบ
+### ตัวอย่าง BuyStop (อยู่เหนือราคา)
+- ราคา**ลงห่าง** BuyStop → **ลาก BuyStop ลงเข้าหาราคา** ✅ (เพื่อให้มีโอกาสโดน trigger)
+- ราคา**ขึ้นเข้าหา** BuyStop → **อยู่นิ่ง ห้ามขยับขึ้นหนี** ✅ (ปล่อยให้โดน trigger)
 
-## เป้าหมาย v2.4
+### ตัวอย่าง SellStop (อยู่ใต้ราคา)
+- ราคา**ขึ้นห่าง** SellStop → **ลาก SellStop ขึ้นเข้าหาราคา** ✅
+- ราคา**ลงเข้าหา** SellStop → **อยู่นิ่ง ห้ามขยับลงหนี** ✅
 
-ทำให้กรอบ Initial Frame "เลื่อนตามราคา" (recenter) — ทั้ง BuyStop และ SellStop ขยับพร้อมกันให้ห่างจาก mid market ตามค่า `InpFrameUpperPips` / `InpFrameLowerPips` ตลอดเวลา จนกว่าจะมีฝั่งใดฝั่งหนึ่ง trigger
+### ระยะห่างขั้นต่ำ
+ขยับเข้าหาให้คงระยะ `InpFrameUpperPips` / `InpFrameLowerPips` จากราคาปัจจุบัน (ไม่ขยับเข้ามาใกล้กว่านี้)
 
-## การแก้ไข (เฉพาะใน `ManageInitialTrailOnBarClose`)
+## เปรียบเทียบ Logic
 
-### 1. Symmetric trail — เลื่อนทั้ง 2 stop ให้ห่าง mid เท่าเดิม
-- คำนวณ `mid = (ask+bid)/2` ทุก bar close
-- BuyStop ใหม่: `mid + InpFrameUpperPips`
-- SellStop ใหม่: `mid - InpFrameLowerPips`
-- เลื่อนเมื่อ `|newPx - oldPx| > InpFrameRecenterMinPips * point` (default 50 pip = 0.5$ ของทอง) เพื่อกัน micro-move
+| สถานการณ์ | v1.8 (เดิม) | v2.4 (ตอนนี้ ผิด) | v2.5 (ที่ถูก) |
+|---|---|---|---|
+| ราคาลง, BuyStop เหนือราคา | ลากลง ✅ | ลากลง ✅ | **ลากลง** ✅ |
+| ราคาขึ้น, BuyStop เหนือราคา | นิ่ง ✅ | **ลากขึ้น** ❌ | **นิ่ง** ✅ |
+| ราคาขึ้น, SellStop ใต้ราคา | ลากขึ้น ✅ | ลากขึ้น ✅ | **ลากขึ้น** ✅ |
+| ราคาลง, SellStop ใต้ราคา | นิ่ง ✅ | **ลากลง** ❌ | **นิ่ง** ✅ |
 
-### 2. เพิ่ม Input ใหม่
+→ **v1.8 logic ถูกต้องอยู่แล้ว** ผมแค่ต้องย้อนกลับและเก็บ improvement อื่นของ v2.4 ไว้
+
+## การแก้ใน v2.5 (เฉพาะ `ManageInitialTrailOnBarClose`, บรรทัด 791-910)
+
+### 1. เปลี่ยน symmetric trail → **toward-price-only trail**
+
+**BUY pending (BuyStop เหนือราคา):**
 ```cpp
-input bool InpFrameSymmetricTrail   = true;  // v2.4: trail both pendings to recenter on market
-input int  InpFrameRecenterMinPips  = 50;    // v2.4: min mid-shift (in pips) before recentering
+double targetPx = NormalizeDouble(ask + InpFrameUpperPips * g_point, g_digits);
+// ลากลงเฉพาะเมื่อ target อยู่ "ต่ำกว่า" pending ปัจจุบัน
+// (= ราคาลงไปแล้ว, BuyStop ห่างเกินไป, ต้องลากลงเข้าหา)
+if(targetPx < oldPx - recenterMin){
+   newPx = targetPx; doMove = true;
+}
+// ถ้า targetPx >= oldPx → ราคาขึ้นเข้าหา → อยู่นิ่ง ไม่แตะ
 ```
 
-### 3. รักษา TP/SL เดิม (logic เดียวกับ v2.2)
-- ถ้า `InpInitialTPPips > 0` → shift TP/SL ตาม delta (newPx - oldPx)
-- ถ้าไม่ใช่ → forward ค่าเดิม
+**SELL pending (SellStop ใต้ราคา):**
+```cpp
+double targetPx = NormalizeDouble(bid - InpFrameLowerPips * g_point, g_digits);
+// ลากขึ้นเฉพาะเมื่อ target อยู่ "สูงกว่า" pending ปัจจุบัน
+if(targetPx > oldPx + recenterMin){
+   newPx = targetPx; doMove = true;
+}
+```
 
-### 4. Diagnostic Log
-เพิ่ม log: `Golden2 v2.4: Recenter G%d mid=%.5f BuyStop %.5f->%.5f SellStop %.5f->%.5f`
+### 2. ปรับ Input
+- `InpFrameSymmetricTrail` → **เลิกใช้** (เปลี่ยน default = `false` และไม่อ้างอิงในโค้ดอีก หรือเปลี่ยน comment เป็น deprecated)
+  - หรือทางเลือก: ตัดทิ้งเลย แต่จะเลือก **เก็บไว้แต่บังคับเป็น false** เพื่อไม่กระทบ saved set ของ user
+- `InpFrameRecenterMinPips` → **คงไว้** ใช้เป็น threshold ป้องกัน micro-move (ขยับขั้นต่ำกี่ pip ถึงจะ modify)
 
-## สิ่งที่ไม่เปลี่ยนแปลง (ตามกฎเหล็ก)
+### 3. คงไว้ทุกอย่างของ v2.2/v2.3
+- ✅ Hedge-state freeze (v2.3): `if(CountGroupPositions(g, -1, 1) > 0) return;`
+- ✅ Hedge matched freeze: `if(IsGroupHedgeMatched(g)) return;`
+- ✅ Block-new-orders guard
+- ✅ TP/SL preservation ด้วย delta shift (v2.2): `tp = oldTP + (newPx - oldPx)`
+- ✅ ใช้ `ask` สำหรับ BuyStop และ `bid` สำหรับ SellStop (ไม่ใช้ mid)
 
-✅ **ไม่แตะ Order Execution Logic** — ไม่แก้ `trade.BuyStop`, `trade.SellStop`, `trade.OrderSend`
-✅ **ไม่แตะ Trading Strategy** — Grid Loss/Profit, Hedging, Triple-Gate, Accumulate Close ไม่เปลี่ยน
-✅ **ไม่แตะ Core Modules** — License, News, Time filter ไม่เปลี่ยน
-✅ **ไม่แตะ `PlaceInitialFrame`** — สูตร Frame Upper/Lower เดิม
-✅ **ไม่แตะ `IsGroupSafeToAdvance` / hedge guard** ของ v2.3
-✅ **ไม่แตะ `ManageInitialTrail` (legacy)** — ยังคง freeze หลังมี hedge
+### 4. Diagnostic log
+```
+Golden2 v2.5: TrailIn BuyStop G%d %.5f -> %.5f ask=%.5f tp=%.5f sl=%.5f
+Golden2 v2.5: TrailIn SellStop G%d %.5f -> %.5f bid=%.5f tp=%.5f sl=%.5f
+```
+
+### 5. Version bump → 2.5
+- `#property version "2.50"`
+- `#property description` อธิบาย one-way toward-price trail
+- Header comment block
+- Dashboard `L_TITLE` → `"Golden2 v2.5"`
+- `OnInit` log
+
+## สิ่งที่ไม่เปลี่ยนแปลง (กฎเหล็ก)
+
+- ✅ ไม่แตะ Order Execution: `trade.BuyStop`, `trade.SellStop`, `OrderSend`
+- ✅ ไม่แตะ Trading Strategy: Grid Loss/Profit, Hedging, Triple-Gate, Accumulate Close
+- ✅ ไม่แตะ Core Modules: License, News, Time filter
+- ✅ ไม่แตะ `PlaceInitialFrame` (สูตรกรอบเดิม)
+- ✅ ไม่แตะ `IsGroupSafeToAdvance` / orphan-aware advance ของ v2.3
+- ✅ ไม่แตะ `ManageInitialTrail` (legacy) และ `ManageInitialReArm`
+- ✅ ไม่แตะ Hedge freeze guard
+- ✅ ไม่แตะ TP/SL preservation logic ของ v2.2
 
 ## ผลที่คาดหวัง
 
-- BuyStop และ SellStop ของกรอบ Initial เลื่อนพร้อมกันตาม mid market
-- ราคาเด้งกลับมา 600+ pip จะไม่ "ชน" pending stop ที่อยู่นิ่ง
-- ลด orphan IN position หลัง advance group
-- G3, G4, G5 ... จะไม่ค้างเพราะกรอบโดนชนทันทีหลัง place
-
-## Version Bump
-
-อัปเดตเป็น **v2.4** ที่:
-- Header comment block
-- `#property version "2.40"`
-- `#property description`
-- Dashboard `L_TITLE` ("Golden2 v2.4")
-- `OnInit` log
+- BuyStop/SellStop จะ "ตามเข้าหาราคา" เมื่อราคาวิ่งหนี (รักษาระยะ Frame ที่กำหนด)
+- เมื่อราคาวิ่งกลับมาหา pending จะ **อยู่นิ่ง** → trigger ตามแผน
+- ไม่มีอาการ "ไล่ตามราคาเหมือนเงา" แบบใน log v2.4
+- ลดโอกาสเกิด orphan position หลัง advance group
 
 ## ไฟล์ที่แก้
 
 - `public/docs/mql5/Golden2_EA.mq5`
-- บันทึก memory `mem://trading/golden2-ea/v2-4-symmetric-frame-trail.md`
+- บันทึก `mem://trading/golden2-ea/v2-5-toward-price-only-trail.md` (และ deprecate v2-4 memo)
 
-ขออนุมัติเพื่อเริ่ม implement ครับ
+ขออนุมัติเพื่อ implement v2.5 ครับ
