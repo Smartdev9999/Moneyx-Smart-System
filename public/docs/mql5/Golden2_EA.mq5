@@ -12,8 +12,8 @@
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.73"
-#property description "Golden2 EA v2.7.3 - Tester Chart Cleanup (auto-removes BB/ATR/ZigZag and other template indicators in Strategy Tester to speed up backtests, especially visual mode). Also disables grid/period-sep/volumes (and trade levels + autoscroll in non-visual tester). All EA-internal indicator handles (iBands/iATR/iMA for Squeeze + Exit + GridLoss/Profit ATR) keep computing in the background — only the chart graphics are removed. Inherits v2.7.2: Per-Side Squeeze Block + Backtest Speed (DashRenderInterval throttle, M1-bar Squeeze refresh, HasClosedMainOnSide cache, group-loop bound). Trading logic, OrderSend, hedge, grid, triple-gate, accumulate, v2.6 re-entry, v2.5 toward-price trail all preserved unchanged."
+#property version   "2.74"
+#property description "Golden2 EA v2.7.4 - Hide Auxiliary Tester Chart Windows. Strategy Tester spawns extra chart tabs (e.g. M5/M15) whenever EA requests indicator handles on non-primary timeframes (Squeeze BB/KC/ATR on M5+M15). v2.74 closes every chart except the EA's own ChartID() in OnInit and re-checks every 60s in OnTick to handle late-spawned tabs. Indicator handles stay alive (handles bind to symbol+TF, not chart window) so Squeeze/ATR/BB keep computing in background. Toggle InpTester_HideAuxCharts (default ON). Inherits v2.7.3 chart-template indicator cleanup, v2.7.2 per-side Squeeze + speed throttles. Trading logic, OrderSend, hedge, grid, triple-gate, accumulate, v2.6 re-entry, v2.5 toward-price trail all preserved unchanged."
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -245,6 +245,7 @@ input int     InpDashFontSize         = 9;                           // Font siz
 input string  InpDashFont             = "Consolas";                  // Font name (monospaced recommended)
 input int     InpDashRenderIntervalSec= 1;                           // [v2.72] Dashboard render interval (sec). Higher = faster backtest.
 input bool    InpTester_CleanChart    = true;                        // [v2.73] In Strategy Tester, auto-remove all chart indicators (BB/ATR/ZigZag/etc.) for faster backtest. EA's internal Squeeze/ATR/BB still compute in background.
+input bool    InpTester_HideAuxCharts = true;                        // [v2.74] In Strategy Tester, close auxiliary chart windows (M5/M15 etc.) spawned for indicator handles. Indicator math still runs in background.
 
 //================ GLOBALS ================
 double g_point;
@@ -2641,7 +2642,7 @@ void DrawDashboard(){
    if(InpInitSideMode == INIT_SELL_ONLY) modeLbl = "SELL-only";
 
    // Header
-   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.7.3    Side: %s", modeLbl), InpDashAccent);
+   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.7.4    Side: %s", modeLbl), InpDashAccent);
    y += rowH+2;
 
    // ==== Account section ====
