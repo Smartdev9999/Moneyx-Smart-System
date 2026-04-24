@@ -570,6 +570,45 @@ string SqueezeStatusString(){
    return s;
 }
 
+// [v1.8] Gold-Miner-style helpers for multi-row Squeeze panel
+string SqueezeTFLabel(int i){
+   ENUM_TIMEFRAMES tf = g_sqTF[i];
+   switch(tf){
+      case PERIOD_M1:  return "M1";
+      case PERIOD_M5:  return "M5";
+      case PERIOD_M15: return "M15";
+      case PERIOD_M30: return "M30";
+      case PERIOD_H1:  return "H1";
+      case PERIOD_H4:  return "H4";
+      case PERIOD_D1:  return "D1";
+   }
+   return EnumToString(tf);
+}
+string SqueezeStateLabel(int i){
+   if(!g_sqExpansion[i]) return "NORMAL";
+   if(g_sqDir[i] > 0) return "EXPANSION BUY";
+   if(g_sqDir[i] < 0) return "EXPANSION SELL";
+   return "EXPANSION";
+}
+string SqueezeBarString(double ratio){
+   double thr = (InpSQ_ExpansionThreshold>0)? InpSQ_ExpansionThreshold : 1.0;
+   int fill = (int)MathFloor(ratio / thr * 10.0);
+   if(fill < 0) fill = 0;
+   if(fill > 10) fill = 10;
+   string bar = "|";
+   for(int k=0; k<fill; k++) bar += "#";
+   for(int k=fill; k<10; k++) bar += ".";
+   bar += "|";
+   return bar;
+}
+string SqueezeOverallLabel(){
+   if(!InpSQ_Enable) return "OFF";
+   if(g_sqBlockBuy && g_sqBlockSell) return "BOTH BLOCKED";
+   if(g_sqBlockBuy)  return "BUY BLOCKED";
+   if(g_sqBlockSell) return "SELL BLOCKED";
+   return "READY";
+}
+
 
 bool ClaimMutex(int g){
    if(!InpSequentialQueue) return true;
