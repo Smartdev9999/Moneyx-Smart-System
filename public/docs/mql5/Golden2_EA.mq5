@@ -1587,6 +1587,8 @@ void OnTick(){
          g_initialCandleTime[g][0]=0; g_initialCandleTime[g][1]=0;
          g_maxGridTrailSL[g][0]=0;    g_maxGridTrailSL[g][1]=0;
          g_maxGridTrailArmed[g][0]=false; g_maxGridTrailArmed[g][1]=false;
+         g_avgTPSynced[g][0]=0; g_avgTPSynced[g][1]=0;
+         g_avgSLSynced[g][0]=0; g_avgSLSynced[g][1]=0;
          continue;
       }
       EnforceFrameMutualExclusion(g);
