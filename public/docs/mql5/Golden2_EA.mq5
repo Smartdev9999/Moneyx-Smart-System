@@ -29,6 +29,27 @@ enum ENUM_SL_ACTION_G2
    SL_CLOSE_POSITIONS = 0   // Close Positions (Stop Loss)
 };
 
+// Gold-Miner style enums (G2 prefix to avoid clash)
+enum ENUM_LOT_MODE_G2
+{
+   G2_LOT_CUSTOM   = 0,  // Custom Lots (semicolon list)
+   G2_LOT_ADD      = 1,  // Add per level (Initial + level*Add*Initial)
+   G2_LOT_MULTIPLY = 2   // Multiply per level (Initial * factor^level)
+};
+
+enum ENUM_GAP_TYPE_G2
+{
+   G2_GAP_FIXED  = 0,    // Fixed Points
+   G2_GAP_CUSTOM = 1,    // Custom Distance (semicolon list)
+   G2_GAP_ATR    = 2     // ATR-based
+};
+
+enum ENUM_ATR_REF_G2
+{
+   G2_ATR_REF_DYNAMIC   = 0,  // Current ATR
+   G2_ATR_REF_LAST_GRID = 1   // ATR snapshot at last grid order
+};
+
 //================ INPUTS ================
 //--- === General ===
 input string  __sec_general__         = "=== General ===";          // ---
