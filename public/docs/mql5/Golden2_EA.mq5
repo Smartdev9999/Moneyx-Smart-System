@@ -1,16 +1,16 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|     Golden2 EA v2.3 - Stop "stuck after Group 1 hedge":         |
-//|     freeze initial-frame logic the moment a hedge position      |
-//|     exists, delete leftover G_IN pendings, and let the group    |
-//|     advance check ignore residual post-hedge IN orphans so the  |
-//|     next group always opens.                                    |
+//|     Golden2 EA v2.4 - Symmetric Initial Frame Trail:           |
+//|     trail BOTH BuyStop & SellStop together to follow market     |
+//|     mid (recenter) so the side price is running INTO no longer  |
+//|     gets hit while only the opposite side trails. Fixes G3+     |
+//|     orphan IN fill that blocked group advancement.              |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.30"
-#property description "Golden2 EA v2.3 - Fix: system stops opening new orders after Group 1 hedge. Initial-frame management (bar-close trail / legacy trail / re-arm) now freezes as soon as ANY hedge position exists for the group (previously only after a fully matched main+hedge set). Leftover G_IN pendings are auto-cancelled once the group has a hedge position so they cannot trigger a post-hedge orphan main. IsGroupSafeToAdvance() now ignores a single residual post-hedge IN main on a side that is otherwise empty, so Group N+1 opens even when only a stray initial fill remains. v2.1 Accumulate Close cooldown and v2.2 pending TP/SL preservation unchanged."
+#property version   "2.40"
+#property description "Golden2 EA v2.4 - Symmetric Initial Frame Trail. ManageInitialTrailOnBarClose now recenters BOTH BuyStop and SellStop pendings on the current market mid every bar close (controlled by InpFrameSymmetricTrail, threshold InpFrameRecenterMinPips). Previous asymmetric trail only dragged the stop on the side price was running away from, so the opposite stop sat still and got hit on retrace -> orphan IN fill that blocked next-group advancement. v2.3 hedge-state freeze, post-hedge IN cleanup, and orphan-aware advance guard preserved unchanged. Order execution, hedging, grid logic, and triple-gate exits untouched."
 #property strict
 
 #include <Trade/Trade.mqh>
