@@ -141,6 +141,7 @@ input int     InpGridProfitTPPips     = 300;                         // [Legacy]
 input string  __sec_group__           = "=== Group / Queue ===";     // ---
 input int     InpMaxGroups            = 50;                          // Max active groups (1..50)
 input bool    InpSequentialQueue      = true;                        // Process one group at a time
+input bool    InpGroup_RequireFullLockBeforeNext = true;             // [v2.0] Block next group until prior group is fully hedge-locked or empty
 
 //--- === Take Profit (Average) ===
 input string  __sec_tp__              = "=== Take Profit (Average) ==="; // ---
