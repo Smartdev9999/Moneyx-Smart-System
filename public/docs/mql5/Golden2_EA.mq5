@@ -142,6 +142,8 @@ input color   InpTP_AvgBuyColor       = clrDodgerBlue;               // Average 
 input color   InpTP_AvgSellColor      = clrOrangeRed;                // Average Sell Line Color
 input color   InpTP_BuyLineColor      = clrLime;                     // TP Buy Line Color
 input color   InpTP_SellLineColor     = clrMagenta;                  // TP Sell Line Color
+input bool    InpTPAvg_AutoSyncToBroker = true;                      // [v1.3] Auto-sync Avg TP/SL to Broker (>=N orders)
+input int     InpTPAvg_MinTicketsToActivate = 2;                     // [v1.3] Min tickets/side to switch from Initial TP to Avg TP
 
 //--- === Stop Loss (Average) ===
 input string  __sec_sl__              = "=== Stop Loss (Average) ==="; // ---
