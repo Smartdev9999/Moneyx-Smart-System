@@ -2887,9 +2887,38 @@ void TrackInitialCandle(int g){
    }
 }
 
+// [v2.72] Throttled dashboard render — skip in optimization, throttle to
+//         InpDashRenderIntervalSec elsewhere (DrawDashboard internally also
+//         skips non-visual tester). Keeps "paused" rendering intact for live.
+void RenderDashboardThrottled(){
+   if(!InpShowDashboard) return;
+   if(g_isOptimization) return;
+   if(g_isTesterMode && !g_isVisualMode) return;
+   int interval = InpDashRenderIntervalSec;
+   if(interval < 0) interval = 0;
+   if(g_lastDashRender != 0 && TimeCurrent() - g_lastDashRender < interval) return;
+   g_lastDashRender = TimeCurrent();
+   DrawDashboard();
+}
+
+// [v2.72] Track highest active group so the per-tick loop can exit early
+//         once it reaches an empty tail. Updated each tick.
+int ComputeLoopUpperBound(){
+   int hi = 0;
+   for(int g=InpMaxGroups; g>=1; g--){
+      if(GroupHasAnyPositions(g) || GroupHasAnyPendings(g)){ hi = g; break; }
+   }
+   g_highestActiveGroup = hi;
+   // +1 so we still allow placing/advancing into the next idle group.
+   int upper = hi + 1;
+   if(upper < 1) upper = 1;
+   if(upper > InpMaxGroups) upper = InpMaxGroups;
+   return upper;
+}
+
 void OnTick(){
-   if(!InpAllowTrade){ DrawDashboard(); return; }
-   RefreshSqueezeState(); // [v1.6] update squeeze cache once per tick
+   if(!InpAllowTrade){ RenderDashboardThrottled(); return; }
+   RefreshSqueezeStateThrottled(); // [v2.72] one refresh per new M1 bar
 
    // [v1.6] Optional close-on-expansion (default off)
    if(InpSQ_Enable && InpSQ_CloseOnExpansion && g_sqExpCount >= InpSQ_MinExpansionTFs){
@@ -2897,7 +2926,8 @@ void OnTick(){
       // intentionally left as a no-op stub to avoid touching trade.PositionClose flow
    }
 
-   for(int g=1; g<=InpMaxGroups; g++){
+   int upper = ComputeLoopUpperBound(); // [v2.72] bound loop to active range +1
+   for(int g=1; g<=upper; g++){
       bool hasPos = GroupHasAnyPositions(g);
       bool hasPend= GroupHasAnyPendings(g);
       if(!hasPos && !hasPend){
@@ -2943,11 +2973,11 @@ void OnTick(){
       // Triple-Gate Matching Close (only acts when matched)
       TryMatchingCloseForGroup(g);
 
-      // Chart visualization
+      // Chart visualization (internally skipped in tester non-visual)
       DrawAverageAndTPLinesForGroup(g);
    }
 
    ManageGlobalAccumulateClose(); // [v2.0] account-wide accumulate close + dashboard cache
    TryAdvanceToNextGroup();
-   DrawDashboard();
+   RenderDashboardThrottled();    // [v2.72] throttled
 }
