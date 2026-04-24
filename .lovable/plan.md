@@ -1,92 +1,59 @@
+## Golden2 EA v2.2 — Preserve Pending TP/SL on Trail + Robust Group Advance
 
-## Golden2 EA v2.1 — Accumulate Close Re-trigger Loop Fix + Harden Bar-Close Trail
+แก้ 2 ปัญหาตามภาพและคำอธิบาย user
 
-### Root cause (จาก Journal log ของ user)
-ในภาพ Journal ทุก tick (03:47:20 → 21 → 22) มี pattern ซ้ำ:
-```
-Golden2 v2.0: GLOBAL Accumulate Close net=1000.32 >= 1000
-order canceled [#1879 sell stop ... at 4599.45]
-order canceled [#1878 buy stop  ... at 4609.45]
-buy stop  ... at 4609.43 tp 4612.43
-sell stop ... at 4599.43 tp 4596.43
-Golden2 v2.0: Placed initial frame G1 mid=4604.43...
-Golden2 v2.0: GLOBAL Accumulate Close net=1000.32 >= 1000   ← ยิงอีก!
-```
+### ปัญหาที่พบ
 
-**สาเหตุที่แท้จริง:** Accumulate Close trigger สำเร็จ → `CloseEverythingNow()` ลบ pending+ปิด position → tick ถัดไป `AnyOrderInSystem()`=false ครู่หนึ่ง แต่ **`SumRealizedSince()` ยังอ่าน realized=1000.32 จาก history** → tick ถัดไปอีก `PlaceInitialFrame()` วาง pending ใหม่ → `AnyOrderInSystem()` กลับเป็น true ทันที (ก่อนที่ branch reset จะทัน) → `g_accumRealizedSinceReset` ไม่เคย reset → `net ≥ 1000` ตลอดเวลา → **ปิด/เปิดวนทุก tick ทั้งสองฝั่ง**
+**1. Stop Order TP/SL หายไปหลังถูกแก้ไข (ภาพที่ 2)**
+- ภาพ 1: BuyStop/SellStop ตอนแรกมี T/P ครบ (4622.04 / 4606.23)
+- ภาพ 2: หลัง trail SellStop ขยับ → T/P ผิด (4599.77 = 9.45 จากราคา แทนที่จะเป็น 3.00 ตาม `InpInitialTPPips` ตอนแรก) และในกรณีที่ user ใช้ Average TP (`InpInitialTPPips=0`), trail จะส่ง `tp=0, sl=0` เข้า `OrderModify` → **ลบ TP/SL ที่ broker จำไว้ทิ้ง**
+- สาเหตุ: ใน `ManageInitialTrailOnBarClose` (บรรทัด 813–814, 827–828) คำนวณ TP/SL ใหม่จาก `InpInitialTPPips` ทุกครั้ง โดยไม่อ่านค่าเดิมจาก order
 
-ที่ user เห็นว่า "stop ขยับทุก tick ทั้งสองฝั่ง" ไม่ใช่ trail bug — เป็นการ **ปิด+ยิงใหม่ทั้งกรอบ initial** จาก loop นี้ Trail v1.8 (bar-close, ฝั่งที่ไกลออก) ทำงานถูกอยู่แล้ว แต่ถูกบดบังด้วย loop ที่ยิงทุก tick
+**2. Group 3 ไม่ออก หลัง Group 1 และ Group 2 โดน Hedging**
+- `IsGroupSafeToAdvance(g)` (บรรทัด 2112–2119) บังคับเงื่อนไข `hh && hb && hs` (มี hedge + main BUY + main SELL ครบ) จึงจะ "ปลอดภัย"
+- ในชีวิตจริง หลัง hedge match แล้ว Triple-Gate อาจปิด main ฝั่งหนึ่งบางส่วน → เหลือแค่ main ฝั่งเดียว → `hb && hs` = false → block ตลอดไป
+- ผลคือ Group 2 hedge แล้ว แต่ Group 3 ไม่ออก IN frame ใหม่
 
----
-
-### ไฟล์ที่จะแก้
-- `public/docs/mql5/Golden2_EA.mq5` — bump version → `2.10`
-
-### สิ่งที่ "ไม่เปลี่ยนแปลง" (ยืนยันไม่กระทบ trading logic)
-- ไม่แตะ `OrderSend / trade.Buy / trade.Sell / trade.PositionClose`
-- ไม่แตะสูตร Grid Loss / Grid Profit / Frame distance / Hedging mirror / Avg TP-SL / Triple-Gate / Squeeze / License / News / Time filter / Group sequencing / BuyStop TP fix
-- ไม่แตะค่า target accumulate / สูตร realized + floating
-- ไม่แตะ `ManageInitialTrailOnBarClose` (bar-close trail v1.8 ทำงานถูกแล้ว — แค่เพิ่ม guard กันยิงซ้ำในรอบเดียวกัน)
+### สิ่งที่ "ไม่เปลี่ยนแปลง"
+- ไม่แตะ `OrderSend / trade.Buy / trade.Sell / trade.PositionClose / trade.BuyStop / trade.SellStop`
+- ไม่แตะกลยุทธ์ Grid Loss / Grid Profit / Hedging entry / Average TP / Triple-Gate
+- ไม่แตะ Accumulate Close cooldown ของ v2.1
+- ไม่แตะเงื่อนไข trail (เลื่อนเฉพาะฝั่งที่ราคาวิ่งหนี / M1 bar close) — แค่แก้วิธีคำนวณ TP/SL ที่จะป้อนกลับเข้า `OrderModify`
 
 ---
 
-### Fix 1 — Accumulate Close Re-trigger Guard (จุดหลัก)
+### แก้ไข — ไฟล์เดียว: `public/docs/mql5/Golden2_EA.mq5`
 
-**คอนเซ็ปต์:** หลัง `CloseEverythingNow()` ทำงาน → **ห้าม trigger อีก** จนกว่าจะเห็น "no orders" จริงๆ และ "เริ่ม cycle ใหม่" ครบรอบ + บล็อกการยิง initial frame ใหม่ในช่วง cooldown
+#### แก้ 1: `ManageInitialTrailOnBarClose` รักษา TP/SL เดิมเสมอ
+- อ่าน `OrderGetDouble(ORDER_TP)` และ `OrderGetDouble(ORDER_SL)` ของ pending ปัจจุบันก่อนแก้ไข
+- คำนวณค่าใหม่ "เฉพาะเมื่อ" `InpInitialTPPips > 0` (Initial-TP mode), shift TP/SL ตามระยะ entry ใหม่ (รักษาช่อง TP/SL เดิม):
+  - `newTP = oldTP + (newPx - oldPx)` (เลื่อนตามแท่ง pending)
+  - `newSL = oldSL + (newPx - oldPx)`
+- ถ้า `InpInitialTPPips == 0` → **ส่งค่า TP/SL เดิมเข้า `OrderModify` ตรงๆ** ไม่ใช้ 0 (ป้องกันการลบ Average-TP ที่ broker)
+- เพิ่ม guard: ถ้า `oldTP == 0` ก็ส่ง 0 เหมือนเดิม (ไม่บังคับสร้าง TP)
 
-**เพิ่ม global state:**
-```cpp
-bool     g_accumJustTriggered = false;   // ตั้ง true หลัง CloseEverythingNow()
-datetime g_accumTriggerTime   = 0;       // เวลาที่ trigger
-input int InpTP_AccumCooldownSec = 30;   // [v2.1] cooldown หลังปิด accumulate (วินาที)
+#### แก้ 2: `IsGroupSafeToAdvance` ผ่อนเงื่อนไข + scan ทุก group ก่อนหน้า
+- เปลี่ยนตรรกะใน `IsGroupSafeToAdvance(g)` ให้ "ปลอดภัย" เมื่อ:
+  - main ฝั่งใดที่ "ยังเปิดอยู่" จะต้องถูก lock ด้วย hedge ที่ active แล้ว (ไม่ใช่บังคับว่าต้องมีทั้งสองฝั่ง)
+  - กล่าวคือ ใช้รูปแบบ: `(buyMain == 0 || hedgeBuyLocked) && (sellMain == 0 || hedgeSellLocked)`
+  - เพิ่ม helper `HasHedgeLockingSide(g, side)` — ตรวจว่ามี hedge position ของ side ตรงข้ามที่ครอบ main side นี้อยู่
+- เพิ่ม `AreAllPriorGroupsSafe(curG)` — loop จาก 1..curG ตรวจทุก group ก่อนหน้า; ใช้ใน `TryAdvanceToNextGroup` เพื่อกัน group กลางๆ ที่ยังค้าง
+- ใน `TryAdvanceToNextGroup`:
+  - ย้ายเงื่อนไข advance ออกจาก `if(GroupHedgeJustActivated(cur))` → ตรวจทุก tick ว่า "cur hedge active + ทุก group ก่อนหน้า safe + cur safe" → ค่อยสั่ง `PlaceInitialFrame(next)`
+  - คงไว้ที่ idle log throttling (60s) เพื่อกัน log spam
+
+#### Inputs ใหม่ (1 ตัว)
+```
+input bool InpGroup_AdvancePerTick = true;   // v2.2: retry advance every tick (not only on hedge edge)
 ```
 
-**แก้ `ManageGlobalAccumulateClose()`:**
-1. ถ้า `g_accumJustTriggered == true`:
-   - **ถ้ายังมี order ในระบบ** (ปิดยังไม่หมด เช่นช่วง 1-2 tick แรก) → ไม่ทำอะไร return
-   - **ถ้าไม่มี order แล้ว** → force reset: `g_accumRealizedSinceReset=0`, `g_accumResetTime=TimeCurrent()`, `g_accumNetCached=0`, `g_accumFloatingCached=0`, `g_accumJustTriggered=false` (จบ cooldown)
-   - **ระหว่าง cooldown `InpTP_AccumCooldownSec`** → เช็ค `TimeCurrent() - g_accumTriggerTime < InpTP_AccumCooldownSec` → return ก่อน trigger ตรวจ ≥ target
-2. หลัง `CloseEverythingNow()` สำเร็จ → ตั้ง `g_accumJustTriggered=true; g_accumTriggerTime=TimeCurrent();`
-
-**บล็อกการยิง initial frame ระหว่าง cooldown:**
-- ใน `PlaceInitialFrame(g)` เพิ่ม guard ที่ต้นฟังก์ชัน:
-  ```cpp
-  if(g_accumJustTriggered) {
-     if(InpVerboseLog) PrintFormat("Golden2 v2.1: PlaceInitialFrame G%d skipped (accum cooldown)", g);
-     return;
-  }
-  ```
-- แบบนี้แม้ history อ่าน realized ค้าง → ก็ไม่ trigger ซ้ำ + ไม่วาง pending ใหม่ → รอจน `AnyOrderInSystem()`=false 1 tick → reset → resume normally
-
----
-
-### Fix 2 — Harden Bar-Close Trail (กันการยิงซ้ำในแท่งเดิม)
-
-`ManageInitialTrailOnBarClose` ใช้ `g_lastTrailBar[g] == curBar` เป็น guard อยู่แล้ว (line 778) ดังนั้น trail เองไม่ได้ยิงทุก tick อยู่แล้ว — **ไม่ต้องแก้ logic** แค่เพิ่มความชัดเจน:
-- เพิ่ม VerboseLog เมื่อ "skip เพราะ side ที่เข้าใกล้" เพื่อ debug ครั้งหน้า
-- ยืนยันว่ายัง: ขยับเฉพาะฝั่งที่ราคาวิ่ง **ห่างออก** (newPx ผ่าน threshold เฉพาะทิศทางที่ห่าง) + เฉพาะ M1 bar close (`InpInitTrailTF=PERIOD_M1`)
-
-ไม่มีการแก้ตรรกะ trail (เพราะมันถูกอยู่แล้วตาม spec ที่ user ต้องการ)
-
----
-
-### Inputs ใหม่ (สรุป)
-```cpp
-input int InpTP_AccumCooldownSec = 30;  // [v2.1] cooldown หลัง Accumulate Close (วินาที)
-```
-
-### Version Bump → 2.10
-- `#property version "2.10"`, `#property description`, header comment, `Print` ใน `OnInit`, dashboard `L_TITLE` → `Golden2 EA v2.1`
+### Version Bump → 2.20
+อัปเดต `#property version`, `#property description`, header comment, `Print` ใน `OnInit`, dashboard `L_TITLE` → `Golden2 EA v2.2`
 
 ### บันทึก Memory
-- `mem://trading/golden2-ea/v2-1-accum-cooldown-trail-harden.md`
+สร้าง `mem://trading/golden2-ea/v2-2-preserve-pendingtpsl-and-robust-advance.md` พร้อมอัปเดต `mem://index.md`
 
----
-
-### สรุปสำหรับ user (ภาษาไทย)
-
-ปัญหาที่เห็น "stop ขยับทุก tick ทั้งสองฝั่ง" จริงๆ แล้ว **ไม่ใช่ trail bug** ครับ — เป็น Accumulate Close ปิดทำกำไร $1000.32 สำเร็จแล้ว แต่ **trigger ซ้ำทุก tick** เพราะ history ของ broker ส่งค่ากำไรกลับมาช้ากว่าที่ EA ยิง initial frame ใหม่ → วน loop ปิด-เปิดไม่หยุด
-
-แก้โดย: หลัง Accumulate Close ปิดทุกอย่าง → ใส่ **cooldown 30 วินาที** + บล็อกการวาง initial frame ใหม่ในช่วงนี้ → รอ "no orders" จริง → reset cycle → กลับมาเทรดปกติ
-
-Trail logic v1.8 (ขยับเฉพาะฝั่งที่ราคาทิ้งห่าง, M1 bar close) ทำงานถูกตาม spec อยู่แล้ว — ไม่ต้องแก้
+### ผลที่คาดหวัง
+- หลัง bar-close trail: pending stop ยังคงมี T/P (และ S/L) ตาม spec เดิม — ไม่หายไปจาก Toolbox
+- เมื่อ Group N โดน hedge แล้ว main ฝั่งใดฝั่งหนึ่งถูกปิด/ลด → ระบบยังเปิด Group N+1 ได้ ตราบใดที่ฝั่งที่เหลือถูก hedge lock ครอบอยู่
+- Group 3 จะออก IN frame ตามปกติหลัง Group 2 เข้า hedge state
