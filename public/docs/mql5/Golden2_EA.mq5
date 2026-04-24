@@ -2143,8 +2143,9 @@ int OnInit(){
       }
    }
 
-   PrintFormat("Golden2 EA v1.6 initialized | Magic=%I64d | MaxGroups=%d | Squeeze=%s | TripleGate=%s",
-               (long)InpMagic, InpMaxGroups, InpSQ_Enable?"ON":"OFF", InpExitTripleGate_Enable?"ON":"OFF");
+   PrintFormat("Golden2 EA v1.7 initialized | Magic=%I64d | MaxGroups=%d | InitMode=%d | GridLoss=%s | Squeeze=%s | TripleGate=%s",
+               (long)InpMagic, InpMaxGroups, (int)InpInitSideMode,
+               GridLoss_Enable?"ON":"OFF", InpSQ_Enable?"ON":"OFF", InpExitTripleGate_Enable?"ON":"OFF");
    return INIT_SUCCEEDED;
 }
 
