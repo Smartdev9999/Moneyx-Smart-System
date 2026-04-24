@@ -2250,7 +2250,7 @@ void DrawDashboard(){
    if(InpInitSideMode == INIT_SELL_ONLY) modeLbl = "SELL-only";
 
    // Header
-   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v1.9    Side: %s", modeLbl), InpDashAccent);
+   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.0    Side: %s", modeLbl), InpDashAccent);
    y += rowH+2;
 
    // ==== Account section ====
@@ -2258,6 +2258,24 @@ void DrawDashboard(){
    DashRow("L_BAL",   x, y, w, rowH, "Balance",          StringFormat("$%.2f", bal), InpDashColor);  y+=rowH;
    DashRow("L_EQ",    x, y, w, rowH, "Equity",           StringFormat("$%.2f", eq),  InpDashColor);  y+=rowH;
    DashRow("L_FLT",   x, y, w, rowH, "Floating P/L",     StringFormat("$%.2f", flt), flt>=0?InpDashGood:InpDashBad); y+=rowH;
+
+   // ==== [v2.0] Accumulate section ====
+   if(InpTP_UseAccumulateClose){
+      DashHeader("L_S_ACC2", x, y, w, rowH, " === ACCUMULATE ===", InpDashAccent); y+=rowH;
+      DashRow("L_AC_ST",  x, y, w, rowH, "Status",   "ON", InpDashGood); y+=rowH;
+      DashRow("L_AC_TGT", x, y, w, rowH, "Target",   StringFormat("$%.2f", InpTP_AccumulateTarget), InpDashColor); y+=rowH;
+      DashRow("L_AC_RLZ", x, y, w, rowH, "Realized (cycle)", StringFormat("$%.2f", g_accumRealizedSinceReset),
+              g_accumRealizedSinceReset>=0?InpDashGood:InpDashBad); y+=rowH;
+      DashRow("L_AC_FLT", x, y, w, rowH, "Floating", StringFormat("$%.2f", g_accumFloatingCached),
+              g_accumFloatingCached>=0?InpDashGood:InpDashBad); y+=rowH;
+      DashRow("L_AC_NET", x, y, w, rowH, "Accum Net", StringFormat("$%.2f", g_accumNetCached),
+              g_accumNetCached>=0?InpDashGood:InpDashBad); y+=rowH;
+      double pct = (InpTP_AccumulateTarget>0) ? (g_accumNetCached*100.0/InpTP_AccumulateTarget) : 0;
+      DashRow("L_AC_PCT", x, y, w, rowH, "Progress", StringFormat("%.1f%%", pct),
+              pct>=100?InpDashGood:(pct>=50?InpDashAccent:InpDashColor)); y+=rowH;
+   } else {
+      DashRow("L_AC_OFF", x, y, w, rowH, "Accumulate", "OFF", InpDashColor); y+=rowH;
+   }
 
    // ==== Position section ====
    DashHeader("L_S_POS", x, y, w, rowH, " === POSITIONS ===", InpDashAccent); y+=rowH;
@@ -2423,10 +2441,12 @@ int OnInit(){
       }
    }
 
-   PrintFormat("Golden2 EA v1.9 initialized | Magic=%I64d | MaxGroups=%d | InitMode=%d | GridLoss=%s | Squeeze=%s | TripleGate=%s | BarTrail=%s",
+   PrintFormat("Golden2 EA v2.0 initialized | Magic=%I64d | MaxGroups=%d | InitMode=%d | GridLoss=%s | Squeeze=%s | TripleGate=%s | BarTrail=%s | Accum=%s | GroupLock=%s",
                (long)InpMagic, InpMaxGroups, (int)InpInitSideMode,
                GridLoss_Enable?"ON":"OFF", InpSQ_Enable?"ON":"OFF", InpExitTripleGate_Enable?"ON":"OFF",
-               InpInitTrailOnBarClose?"ON":"OFF");
+               InpInitTrailOnBarClose?"ON":"OFF",
+               InpTP_UseAccumulateClose?"ON":"OFF",
+               InpGroup_RequireFullLockBeforeNext?"ON":"OFF");
    return INIT_SUCCEEDED;
 }
 
@@ -2518,6 +2538,7 @@ void OnTick(){
       DrawAverageAndTPLinesForGroup(g);
    }
 
+   ManageGlobalAccumulateClose(); // [v2.0] account-wide accumulate close + dashboard cache
    TryAdvanceToNextGroup();
    DrawDashboard();
 }
