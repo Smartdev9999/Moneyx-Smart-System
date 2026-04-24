@@ -66,12 +66,58 @@ input int     InpFrameLowerPips       = 200;                         // SELL_STO
 input int     InpInitialTPPips        = 300;                         // Initial TP (points) (0=off)
 input int     InpInitialSLPips        = 0;                           // Initial SL (points) (0=off)
 
-//--- === Grid ===
-input string  __sec_grid__            = "=== Grid ===";              // ---
-input double  InpMultiplier           = 2.0;                         // Multiplier per grid level
-input int     InpMaxGridLevels        = 4;                           // Max grid loss levels (GL#1..#N)
-input int     InpGridStepPips         = 200;                         // Grid step (points)
-input int     InpGridProfitTPPips     = 300;                         // Grid TP (points)
+//--- === Grid Loss Side === (Gold Miner-style)
+input string  __sec_grid_loss__       = "=== Grid Loss Side ===";    // ---
+input int            GridLoss_MaxTrades       = 30;                  // Max Grid Loss Trades
+input ENUM_LOT_MODE_G2 GridLoss_LotMode       = G2_LOT_MULTIPLY;     // Grid Loss Lot Mode
+input string         GridLoss_CustomLots      = "0.01;0.01;0.01;0.01;0.01;0.01;0.01;0.01;0.01;0.01"; // Custom Lots (semicolon)
+input double         GridLoss_AddLotPerLevel  = 0.4;                 // Add Lot per Level (× InitialLot)
+input double         GridLoss_MultiplyFactor  = 1.4;                 // Multiply Factor (for Multiply mode)
+input ENUM_GAP_TYPE_G2 GridLoss_GapType       = G2_GAP_FIXED;        // Grid Loss Gap Type
+input int            GridLoss_Points          = 50;                  // Grid Loss Distance (points)
+input string         GridLoss_CustomDistance  = "100;200;300;400;500;600;700;800;900;1000"; // Custom Distance (points, semicolon)
+input ENUM_TIMEFRAMES GridLoss_ATR_TF         = PERIOD_H1;           // ATR Timeframe
+input int            GridLoss_ATR_Period      = 14;                  // ATR Period
+input double         GridLoss_ATR_Multiplier  = 2.0;                 // ATR Multiplier
+input ENUM_ATR_REF_G2 GridLoss_ATR_Reference  = G2_ATR_REF_LAST_GRID;// ATR Reference Point
+input int            GridLoss_MinGapPoints    = 50;                  // Minimum Grid Gap (points)
+input int            GridLoss_CandleConfirm   = 1;                   // Require N confirming candles before GL (0=Off)
+input bool           GridLoss_OnlyInSignal    = false;               // Grid Only in Signal (loss-side) Direction
+input bool           GridLoss_OnlyNewCandle   = true;                // Grid Only on New Candle
+input bool           GridLoss_DontSameCandle  = true;                // Don't Open Grid in Same Candle as Initial
+
+//--- === Max Grid Average Trailing Stop ===
+input string  __sec_maxgrid_trail__   = "=== Max Grid Average Trailing Stop ==="; // ---
+input bool           MaxGrid_TrailEnable      = false;               // Enable Max Grid Avg Trailing
+input int            MaxGrid_TrailMode        = 1;                   // Mode: 0=Max Order Grid, 1=Start Order Grid
+input int            MaxGrid_StartOrders      = 8;                   // Start Trail at N orders (Mode 1)
+input int            MaxGrid_TrailActivation  = 100;                 // Activation (points from average, 0=Off)
+input int            MaxGrid_TrailStep        = 50;                  // Trailing Step (points)
+input int            MaxGrid_BreakevenBuffer  = 10;                  // Breakeven Buffer (points above/below avg)
+
+//--- === Grid Profit Side === (Gold Miner-style)
+input string  __sec_grid_profit__     = "=== Grid Profit Side ===";  // ---
+input bool           GridProfit_Enable        = false;               // Enable Profit Grid
+input int            GridProfit_MaxTrades     = 2;                   // Max Grid Profit Trades
+input ENUM_LOT_MODE_G2 GridProfit_LotMode     = G2_LOT_MULTIPLY;     // Grid Profit Lot Mode
+input string         GridProfit_CustomLots    = "0.01;0.01;0.01;0.01;0.01"; // Custom Lots
+input double         GridProfit_AddLotPerLevel= 0.2;                 // Add Lot per Level
+input double         GridProfit_MultiplyFactor= 1.4;                 // Multiply Factor
+input ENUM_GAP_TYPE_G2 GridProfit_GapType     = G2_GAP_FIXED;        // Grid Profit Gap Type
+input int            GridProfit_Points        = 100;                 // Grid Profit Distance (points)
+input string         GridProfit_CustomDistance= "100;200;500";       // Custom Distance
+input ENUM_TIMEFRAMES GridProfit_ATR_TF       = PERIOD_H1;           // ATR Timeframe
+input int            GridProfit_ATR_Period    = 14;                  // ATR Period
+input double         GridProfit_ATR_Multiplier= 2.0;                 // ATR Multiplier
+input ENUM_ATR_REF_G2 GridProfit_ATR_Reference= G2_ATR_REF_LAST_GRID;// ATR Reference Point
+input int            GridProfit_MinGapPoints  = 100;                 // Minimum Grid Gap (points)
+input bool           GridProfit_OnlyNewCandle = true;                // Grid Only on New Candle
+
+// Legacy v1.1 inputs (kept for backward-compat / hedge stack & continuation)
+input int     InpMaxGridLevels        = 4;                           // [Legacy] Max levels for hedge stack & continuation
+input double  InpMultiplier           = 2.0;                         // [Legacy] Multiplier (used by hedge stack lot)
+input int     InpGridStepPips         = 200;                         // [Legacy] Step used by hedge stack offset
+input int     InpGridProfitTPPips     = 300;                         // [Legacy] Reserved
 
 //--- === Group / Queue ===
 input string  __sec_group__           = "=== Group / Queue ===";     // ---
