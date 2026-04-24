@@ -1716,6 +1716,7 @@ void OnTick(){
       if(!hasPos && !hasPend){
          // group empty: reset trackers
          if(g_stripped[g]) g_stripped[g] = false;
+         g_blockNewOrders[g] = false;
          ResetMaxDDPerSide(g);
          g_initialCandleTime[g][0]=0; g_initialCandleTime[g][1]=0;
          g_maxGridTrailSL[g][0]=0;    g_maxGridTrailSL[g][1]=0;
