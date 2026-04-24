@@ -219,6 +219,10 @@ datetime g_lastGridCandleProfit[51][2];
 double   g_maxGridTrailSL[51][2];   // 0 = inactive
 bool     g_maxGridTrailArmed[51][2];
 
+// [v1.3] Track last avg-TP price synced to broker per (group, side); 0 = none synced (Initial-TP mode)
+double   g_avgTPSynced[51][2];
+double   g_avgSLSynced[51][2];
+
 //================ HELPERS: comments / parsing ================
 string SidePrefix(ENUM_SIDE s){ return (s==SIDE_BUY?"B":"S"); }
 
