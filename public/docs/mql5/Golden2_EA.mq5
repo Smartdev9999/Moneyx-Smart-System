@@ -10,8 +10,8 @@
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.60"
-#property description "Golden2 EA v2.6 - Re-entry on Close. When an initial-frame position closes by TP or SL, the same-side BuyStop/SellStop is automatically re-placed at current price ± InpInitReArmDistancePips, even if the opposite side has only a pending (no live position). Gated by HasClosedMainOnSide (history check) so re-entry never fires before the very first initial trigger. Frozen as soon as any hedge exists in that group (v2.3 retained). Adds InpInitReEntryOnClose toggle. v2.5 one-way toward-price trail, v2.3 hedge-state freeze, v2.2 TP/SL preservation all retained. Order execution, hedging, grid logic, triple-gate exits untouched."
+#property version   "2.61"
+#property description "Golden2 EA v2.6.1 - Hardened PlaceInitialFrame. Validates InpInitSideMode (auto-fallback to INIT_BOTH if .set file holds garbage like 5000), rejects pending prices below broker SYMBOL_TRADE_STOPS_LEVEL, adds 5s per-group cooldown + 30s back-off when both BuyStop and SellStop OrderSend fail (stops the per-tick re-fire spam seen when mode/distance is misconfigured). Logs include retcode + GetLastError on failure. v2.6 Re-entry on Close, v2.5 toward-price trail, v2.3 hedge freeze, v2.2 TP/SL preserve all retained. Order execution unchanged — only adds guards and richer error logs."
 #property strict
 
 #include <Trade/Trade.mqh>
