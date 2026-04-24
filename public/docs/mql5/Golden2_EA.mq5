@@ -243,6 +243,7 @@ input color   InpDashGood             = clrLime;                     // Positive
 input color   InpDashBad              = clrTomato;                   // Negative/warning color
 input int     InpDashFontSize         = 9;                           // Font size
 input string  InpDashFont             = "Consolas";                  // Font name (monospaced recommended)
+input int     InpDashRenderIntervalSec= 1;                           // [v2.72] Dashboard render interval (sec). Higher = faster backtest.
 
 //================ GLOBALS ================
 double g_point;
@@ -277,6 +278,18 @@ bool   g_sqBlockBuy       = false;
 bool   g_sqBlockSell      = false;
 double g_sqRatio[3]       = {0.0, 0.0, 0.0};      // [v1.8] BBwidth/KCwidth ratio per TF (for dashboard)
 datetime g_lastTrailBar[51];                      // [v1.8] last bar time we ran bar-close trail (per group)
+
+// [v2.72] Backtest speed accel — Tester/Visual mode + throttles + caches
+bool     g_isTesterMode          = false;          // MQL_TESTER
+bool     g_isVisualMode          = false;          // MQL_VISUAL_MODE
+bool     g_isOptimization        = false;          // MQL_OPTIMIZATION
+datetime g_lastDashRender        = 0;              // throttle DrawDashboard
+datetime g_lastSqueezeBar        = 0;              // refresh Squeeze on new M1 bar only
+int      g_highestActiveGroup    = 0;              // bound per-tick group loop
+// HasClosedMainOnSide cache: per (group, side)
+datetime g_hcmCacheTime[51][2];                    // last time the cache was filled
+bool     g_hcmCacheValue[51][2];                   // cached result
+int      g_hcmCacheLastTotal[51][2];               // HistoryDealsTotal at fill time (invalidate if changed)
 
 bool   g_stripped[51];          // per-group flag: broker TP/SL stripped after hedge match
 double g_maxDDPerSide[51][2];   // [group][side] track max floating loss USD seen (positive value)
