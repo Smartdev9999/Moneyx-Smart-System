@@ -1,119 +1,104 @@
 
 
-## Golden2 EA v1.0 — Multiplier Pending-Stop Hedging EA (สร้างไฟล์ใหม่)
+## Golden2 EA v1.1 — Group Settings + Average TP/SL + Auto-Strip Broker TP/SL on Hedge Match
 
-สร้าง EA ตัวใหม่แยกจาก Gold Miner ทั้งหมด ไม่แตะของเดิมแม้แต่บรรทัดเดียว — เป็นระบบ **Pending Stop Hedging แบบต่อเนื่อง** ที่วาง pending order ทั้งสองฝั่งของกรอบ และเปิด hedge เป็น "ชุด pending" รอเมื่อ DD ฝั่งใดฝั่งหนึ่งถึง 80% ของ trigger ที่กำหนด
+จัดระเบียบ inputs ใหม่เป็น 3 กลุ่มย่อยสำหรับ **TP / SL / Hedging**, เพิ่มระบบบริหาร TP/SL แบบ **Average Price** เลียนแบบ Gold Miner, และเพิ่มกลไก **ถอด Broker TP/SL อัตโนมัติทันทีเมื่อมีการ "จับคู่" เป็น Hedging set**
 
-### ไฟล์ที่จะสร้าง
-- `public/docs/mql5/Golden2_EA.mq5` (ไฟล์ใหม่ ไฟล์เดียว)
+### ไฟล์ที่จะแก้
+- `public/docs/mql5/Golden2_EA.mq5` (ไฟล์เดียว)
 
-### โครงสร้าง Order Comment
-- Initial: `G{n}_IN` (1 lot)
-- Grid Loss: `G{n}_GL#1` (2 lot), `G{n}_GL#2` (4 lot), `G{n}_GL#3` (8 lot), `G{n}_GL#4` (16 lot)
-- Grid Profit: `G{n}_GP#1..#k`
-- Hedge Initial: `G{n}_HD_IN`
-- Hedge Grid Loss: `G{n}_HD_GL#1..#k` (lot ตรงกับฝั่งตรงข้าม 1:1)
-- Hedge Grid Profit: `G{n}_HD_GP#1..#k`
+### 1) จัดกลุ่ม Settings ใหม่ (ใช้ comment header `===` ให้ MT5 จัดเป็น collapsible group)
 
-`{n}` คือหมายเลข Group ตั้งแต่ 1..50 (`InpMaxGroups`)
+```
+=== General ===
+=== Frame & Initial Order ===
+=== Grid ===
+=== Group / Queue ===
+=== Take Profit (Average) ===          ← ใหม่
+=== Stop Loss (Average) ===            ← ใหม่
+=== Hedging ===                        ← รวม inputs hedge ทั้งหมดมาไว้ที่นี่
+=== Exit Triple Gate ===
+=== Dashboard ===
+```
+*ไม่ลบ input เดิม*, แค่ย้าย/เพิ่ม comment header เพื่อให้ MT5 แสดงเป็นกลุ่ม
 
-### Inputs หลัก
-1. **Entry & Frame**
-   - `InpFrameUpperPips` / `InpFrameLowerPips` — ระยะวาง Buy Stop / Sell Stop จากราคากลาง
-   - `InpInitialLot = 1.0`, `InpMultiplier = 2.0`, `InpMaxGridLevels = 4`
-   - `InpInitialTPPips`, `InpInitialSLPips` (SL = 0 = ไม่ใช้)
-2. **Grid**
-   - `InpGridStepPips` (ระยะระหว่างไม้ grid)
-   - `InpGridProfitTPPips`, `InpGridLossEnable`
-3. **Hedging**
-   - `InpHedgeTriggerUSD = 1000.0` (จุดที่ DD ฝั่งนั้นจะ "ครบเกณฑ์")
-   - `InpHedgeArmPercent = 80.0` (วาง pending hedge เมื่อ DD ถึง 80% ของ trigger)
-   - `InpHedgeDisarmPercent = 70.0` (ถอน pending hedge เมื่อ DD กลับลงต่ำกว่า 70%)
-   - `InpHedgeLotMatch1to1 = true` (lot hedge = lot ฝั่งตรงข้าม ไม้ต่อไม้)
-   - `InpHedge_OpenDelayMin = 0` (cooldown แบบเดียวกับ Gold Miner v6.78)
-4. **Group & Sequencing**
-   - `InpMaxGroups = 50`
-   - `InpSequentialQueue = true` (จัดการทีละ group ตามคิว 1→2→3 ห้ามปิด/แก้พร้อมกัน)
-5. **Exit Triple Gate** (เลียนแบบ Gold Miner)
-   - `InpExitTF = PERIOD_H4` (ต้องผ่าน Expansion → Normal บน TF ใหญ่)
-   - `InpExitBreakoutPips = 300` (ราคาต้องออกนอกกรอบจาก average ฝั่ง buy/hedge)
-   - `InpExitMinNetUSD` (กำไรสุทธิขั้นต่ำที่จะอนุญาตปิด)
-6. **General**
-   - `InpMagic = 22220001`, `InpSlippage`, `InpAllowTrade`
+### 2) เพิ่ม Inputs ใหม่: TP / SL แบบ Average Price (เลียนแบบ Gold Miner)
 
-### Logic Flow
+**Take Profit Group**
+- `InpTP_UseFixedDollar` (bool, false) + `InpTP_DollarAmount` (100)
+- `InpTP_UsePointsFromAvg` (bool, true) + `InpTP_PointsFromAvg` (1000)
+- `InpTP_UsePctBalance` (bool, false) + `InpTP_PctBalance` (26.0)
+- `InpTP_UseAccumulateClose` (bool, false) + `InpTP_AccumulateTarget` (1000)
+- `InpTP_UsePctMaxDD` (bool, false) + `InpTP_PctMaxDD` (50.0)
+- `InpTP_ShowAvgLine` (true), `InpTP_ShowTPLine` (true)
+- สี: `InpTP_AvgBuyColor` (DodgerBlue), `InpTP_AvgSellColor` (OrangeRed), `InpTP_BuyLineColor` (Lime), `InpTP_SellLineColor` (Magenta)
 
-**1) Frame & Initial Pending (Group ปัจจุบัน)**
-- เมื่อไม่มี Group active → คำนวณ mid price → วาง `BUY_STOP` ที่ mid+upper, `SELL_STOP` ที่ mid-lower (1 lot ทั้งคู่) คอมเมนต์ `G{n}_IN`
-- ทั้งสองฝั่งมี TP ตั้งล่วงหน้า; ฝั่งที่ trigger ก่อน → ฝั่งตรงข้ามถูกลบ
-- เมื่อ trigger แล้วราคาไม่ถึง TP และวิ่งสวน → วาง grid `G{n}_GL#1..#k` ตาม `InpGridStepPips` × `InpMultiplier`
+**Stop Loss Group**
+- `InpSL_Enable` (false)
+- `InpSL_ActionMode` enum: `SL_CLOSE_POSITIONS` (Stop Loss action)
+- `InpSL_UseFixedDollar` (false) + `InpSL_DollarAmount` (50)
+- `InpSL_UsePointsFromAvg` (false) + `InpSL_PointsFromAvg` (1000)
+- `InpSL_UsePctBalance` (false) + `InpSL_PctBalance` (3.0)
+- `InpSL_ShowSLLine` (true), `InpSL_LineColor` (Black)
 
-**2) Hedge Arming (ต่อ Group)**
-- คำนวณ `floatLossSide = SUM(profit ของฝั่งหลักใน group นี้ ที่เป็นลบ)`
-- เมื่อ `|floatLoss| >= InpHedgeTriggerUSD * InpHedgeArmPercent/100`:
-  - คำนวณราคาที่ "ถ้าเปิด ณ จุดนี้แล้ว floating รวมของ group = `InpHedgeTriggerUSD`"
-  - วาง pending stop ฝั่งตรงข้ามทั้งชุด (1, 2, 4, 8, 16 lot) **ที่ราคาเดียวกันทั้งหมด** (วางซ้อนจุดเดียว) — comment `G{n}_HD_IN`, `G{n}_HD_GL#1..#k`
-- ถ้า DD กลับลงต่ำกว่า `InpHedgeDisarmPercent` ก่อนชน → **ลบ pending hedge ทั้งชุด** (disarm)
-- ถ้า DD ถึง 100% → pending จะ trigger เอง → ระบบยืนยันว่า "ติด hedge" → เปิด **Group ใหม่ (n+1)** ทันทีตามขั้นตอนข้อ 1
-- รองรับสูงสุด `InpMaxGroups` = 50 ชุด
+### 3) ระบบ Average TP/SL Manager (ใหม่)
 
-**3) Sequential Queue (กันชนกัน)**
-- มี `g_activeOpsGroup` (-1 = ว่าง). ทุก action ที่จะปิด/แก้ต้อง claim mutex นี้ก่อน
-- คิวทำงานเรียง group 1 → 2 → ... ห้ามทำพร้อมกัน เพื่อจำกัด DD spike ตอนปิด
+ฟังก์ชันหลักที่จะเพิ่ม:
+- `ComputeGroupAveragePerSide(g, side, hedgeFilter)` — ค่าเฉลี่ยน้ำหนักด้วย lot
+- `ComputeAvgTPPrice(g, side, hedgeFilter)` — average + `InpTP_PointsFromAvg` (Buy บวก / Sell ลบ)
+- `ComputeAvgSLPrice(g, side, hedgeFilter)` — average ± `InpSL_PointsFromAvg`
+- `CheckAndCloseByAverageTP(g)` — เช็ค **per side** ของแต่ละ group ทั้ง main และ hedge แยกกัน เรียงตามลำดับ:
+  1. ถ้า `InpTP_UseFixedDollar` → ปิดทั้ง side เมื่อ floating ≥ amount
+  2. ถ้า `InpTP_UsePointsFromAvg` → ปิดทั้ง side เมื่อราคา ≥/≤ avg ± points
+  3. `InpTP_UsePctBalance` → ปิดเมื่อ floating ≥ balance × pct/100
+  4. `InpTP_UseAccumulateClose` → รวม PL ทั้ง group ≥ target → ปิดทั้ง group
+  5. `InpTP_UsePctMaxDD` → ปิดเมื่อ floating ≥ maxDD × pct/100
+- `CheckAndCloseByAverageSL(g)` — โครงสร้างเดียวกัน ใช้ตอน loss ถึงเกณฑ์
+- `DrawAverageAndTPLines(g)` — วาดเส้น Avg Buy / Avg Sell / TP Buy / TP Sell / SL บนชาร์ต ใช้ `OBJ_HLINE` มี object name เช่น `G2_AVG_B_G%d`, `G2_TP_B_G%d`
 
-**4) Recovery / Matching Close (Triple Gate)**
-- Gate A: TF ใหญ่ผ่าน Expansion → Normal (ใช้ BB vs Keltner เหมือน Gold Miner)
-- Gate B: ราคา breakout เกินกรอบจาก average ของฝั่ง main vs hedge ≥ `InpExitBreakoutPips`
-- Gate C: net USD ≥ `InpExitMinNetUSD`
-- เมื่อผ่านครบ:
-  - ฝั่งกำไร (เช่นราคาขึ้น → ฝั่ง buy กำไร) ปิด **ทั้งชุด 5 ไม้**
-  - กำไรที่ได้ → ใช้ "ซอยปิด" ฝั่งตรงข้าม (hedge sell) จากไม้กำไรที่สุด → จนเหลือไม้ติดลบน้อยที่สุดที่กำไรรวมยังเป็น ≥ `InpExitMinNetUSD`
-  - ไม้ที่เหลือ (เช่น `G{n}_HD_GL#3`, `#4`) → ใช้ **ลำดับล่าสุด** เป็นเกณฑ์ → grid ต่อไปจะเป็น `G{n}_HD_GL#5` (32 lot) ตาม multiplier
-  - คำนวณ average รวม "ไม้เหลือ + ไม้ grid ใหม่" → วาง TP ใหม่ห่าง average ตาม `InpExitBreakoutPips`
-- ทำงานเหมือนกันถ้าราคาวิ่งลง (hedge เป็นฝ่ายกำไร, main คือฝ่ายเหลือ)
-- จัดการทีละ group ตามคิว
+**สำคัญ**: เงื่อนไข TP/SL average จะ **ทำงานก็ต่อเมื่อ group ยังไม่มี hedge** (main ฝั่งเดียว) — ถ้ามี hedge แล้ว ปล่อยให้ **Triple-Gate Matching Close** เป็นคนจัดการเหมือนเดิม (ไม่ทับ logic เก่า)
 
-### Helper Modules ที่ต้องสร้าง
-- `BuildGroupComment(int g, string suffix)`
-- `CountGroupOrders(int g, ENUM side, bool hedgeOnly)`
-- `GroupFloatingPL(int g, ENUM side)` / `GroupAveragePrice(int g, ENUM side)`
-- `ComputeHedgeArmPrice(int g)` — แก้สมการให้ floating รวม = `InpHedgeTriggerUSD`
-- `PlaceHedgePendingSet(int g)` / `RemoveHedgePendingSet(int g)`
-- `IsExpansionToNormal(ENUM_TIMEFRAMES tf)` — BB/Keltner gate
-- `TryMatchingCloseForGroup(int g)` — Triple gate + ซอยปิด + grid ต่อ
-- `AdvanceQueue()` — เลื่อน mutex ไป group ถัดไปเมื่อ idle
-- Dashboard แสดง: Group active, lot ของแต่ละ comment, floating, hedge arm %, queue state, version
+### 4) ถอด Broker TP/SL อัตโนมัติเมื่อจับคู่ Hedge
 
-### Safety Guards
-- Mutex `g_activeOpsGroup` กัน race
-- Hedge cooldown (`InpHedge_OpenDelayMin`) กัน false signal
-- Disarm pending เมื่อ DD ลด — ไม่ให้ hedge ค้างเปล่าๆ
-- Max 50 groups — ถึง limit แล้วหยุดเปิด initial ใหม่ + log เตือน
-- Magic + comment prefix ป้องกันชนกับ EA อื่น
+ฟังก์ชันใหม่:
+```cpp
+void StripBrokerTPSL_OnHedgeMatch(int g);
+```
 
-### Dashboard
-- Header: `Golden2 EA v1.0 | Magic: 22220001`
-- ตาราง 50 แถว (เฉพาะ group active): `G{n} | mainLot | hedgeLot | floatPL | armPct | queue | gateA/B/C`
-- Hedge cooldown remaining (ถ้ามี)
+**Trigger**: เรียกทันทีเมื่อ `CountGroupPositions(g, -1, 1) > 0` (มี hedge position) **และ** `CountGroupPositions(g, -1, 0) > 0` (มี main position) — คือ "matched set"
 
-### สิ่งที่ "ไม่เปลี่ยนแปลง"
-- ไม่แตะไฟล์ `Gold_Miner_EA.mq5`, `Asset_Miner_EA.mq5`, `Jutlameasu_EA.mq5`, `Harmony_*`
-- ไม่แตะ React app, Supabase, edge functions
-- เป็นไฟล์ MQL5 ใหม่ standalone — ใช้ `<trade/Trade.mqh>` เท่านั้น
-- ไม่ผูก license module (เพิ่มภายหลังได้)
+**Action**: วน positions ทั้ง main + hedge ของ group นั้น → ใช้ `trade.PositionModify(ticket, 0, 0)` set ทั้ง SL=0 และ TP=0
 
-### Versioning
-- `#property version "1.00"`, header block, dashboard → **Golden2 v1.0**
+**ตำแหน่งเรียก**:
+- ใน `OnTick()` หลัง loop จัดการ group: เพิ่ม `if (IsGroupHedgeMatched(g)) StripBrokerTPSL_OnHedgeMatch(g);`
+- มี guard `g_stripped[g]` (bool array ขนาด 51) กันเรียกซ้ำทุก tick → set true หลังถอดสำเร็จ, reset เมื่อ group หมดออเดอร์
 
-### ผลลัพธ์ที่คาดหวัง
-- EA ใหม่ทำงานเป็น "ชุดต่อชุด" สูงสุด 50 ชุด, ทุกชุดมี main + hedge แบบ pending 1:1, ระบบ arm/disarm hedge ตาม DD%, ปิดด้วย Triple Gate + ซอยปิด + ออก grid ต่อ ตามที่อธิบาย
-- จัดการทีละ group ตามคิว ลด DD spike
+หมายเหตุ: หลังถอดแล้ว → ระบบรอสัญญาณจาก **Average TP/SL Manager** หรือ **Triple-Gate Matching Close** เป็นผู้สั่งปิดทีหลัง (ตามที่ user ต้องการ)
+
+### 5) Dashboard เพิ่ม
+- บรรทัดแสดง avg/TP/SL แต่ละ side ของ group ที่ active
+- บรรทัด "TP-Stripped: G1,G3" แสดง group ที่ถอด broker TP/SL แล้ว
+
+### 6) Version Bump → v1.1
+- `#property version "1.10"`
+- `#property description` อัปเดต
+- Header comment block, dashboard text, log prints ทุกจุด
+
+### สิ่งที่ "ไม่เปลี่ยนแปลง" (ตามกฎเหล็ก)
+- **ไม่แตะ** logic เปิดออเดอร์: `PlaceInitialFrame`, `TryPlaceGridLoss`, `PlaceHedgePendingSet`, `PlaceContinuationGridIfNeeded`
+- **ไม่แตะ** Hedge arm/disarm thresholds, mutex, cooldown
+- **ไม่แตะ** `TryMatchingCloseForGroup` (Triple Gate), `ShredCloseLosingSide`, `IsExpansionToNormal`
+- **ไม่แตะ** `TryAdvanceToNextGroup` (group lifecycle)
+- ไม่แตะไฟล์อื่นใน `public/docs/mql5/` หรือ React/Supabase
 
 ### ความเสี่ยง & Mitigation
-- **Risk:** ขนาด lot ทบทวีคูณ (1→2→4→8→16→32) → margin หนักมาก
-- **Mitigation:** input ปรับ multiplier/maxLevels ได้, แนะนำเริ่ม `InpInitialLot=0.01`
-- **Risk:** Pending hedge วางจุดเดียวกัน 5 ไม้ — บาง broker จำกัด
-- **Mitigation:** offset 1 point ระหว่างไม้อัตโนมัติถ้า broker reject (fallback)
-- **Risk:** ระบบใหม่ ยังไม่ผ่านการทดสอบ
-- **Mitigation:** เริ่มที่ demo + lot เล็ก, มี `InpAllowTrade` toggle หยุดเทรดทันที
+- Average TP/SL อาจปิดก่อน Triple Gate → จำกัดให้ทำงาน "ก่อนมี hedge" เท่านั้น
+- ถอด broker TP/SL = สูญเสีย safety net ถ้าระบบ crash → log ทุกครั้งที่ strip + dashboard แสดงสถานะ + user ปิด `InpAllowTrade` ก็หยุดได้
+
+### Technical Detail
+- Average price: `Σ(price × lot) / Σ(lot)` per (group, side, hedge?) — ฟังก์ชัน `GroupAveragePrice` มีอยู่แล้ว ใช้ซ้ำได้
+- TP price (Buy): `avg + points × _Point`; (Sell): `avg - points × _Point`
+- Strip TP/SL: `MqlTradeRequest` action `TRADE_ACTION_SLTP` หรือ `CTrade::PositionModify(ticket, 0.0, 0.0)`
+- HLine objects: ใช้ prefix `G2L_` แล้วลบ/อัปเดตทุก tick ตาม group ที่ active
+- Dashboard ขยายอีก ~3 บรรทัดต่อ group active
 
