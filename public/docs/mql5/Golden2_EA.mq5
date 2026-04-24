@@ -1967,6 +1967,18 @@ void PlaceContinuationGridIfNeeded(int g){
 }
 
 //================ CYCLE / GROUP LIFECYCLE ================
+// [v2.0] Group is "safe to advance to next" if it has no main positions
+// OR has hedge-matched both sides (Triple-Gate handles exit). Otherwise
+// it still has unlocked main exposure that must be resolved first.
+bool IsGroupSafeToAdvance(int g){
+   bool hb = (CountGroupPositions(g, 0, 0) > 0);
+   bool hs = (CountGroupPositions(g, 1, 0) > 0);
+   if(!hb && !hs) return true;                            // no main left
+   bool hh = (CountGroupPositions(g, -1, 1) > 0);
+   if(hh && hb && hs) return true;                        // both sides locked by hedge
+   return false;
+}
+
 void TryAdvanceToNextGroup(){
    int cur = FindActiveTradingGroup();
    if(cur < 1) {
@@ -1975,6 +1987,17 @@ void TryAdvanceToNextGroup(){
       return;
    }
    if(GroupHedgeJustActivated(cur)){
+      // [v2.0] Don't advance until prior group is fully locked or emptied
+      if(InpGroup_RequireFullLockBeforeNext && !IsGroupSafeToAdvance(cur)){
+         static datetime lastHoldLog = 0;
+         if(InpVerboseLog && TimeCurrent() - lastHoldLog >= 60){
+            PrintFormat("Golden2 v2.0: hold G%d->G%d (G%d still has unlocked main BUY=%d SELL=%d)",
+                        cur, cur+1, cur,
+                        CountGroupPositions(cur,0,0), CountGroupPositions(cur,1,0));
+            lastHoldLog = TimeCurrent();
+         }
+         return;
+      }
       if(cur < InpMaxGroups){
          int next = cur + 1;
          if(!GroupHasAnyPositions(next) && !GroupHasAnyPendings(next)){
@@ -1983,7 +2006,7 @@ void TryAdvanceToNextGroup(){
       } else {
          static datetime lastWarn = 0;
          if(TimeCurrent() - lastWarn >= 300){
-            Print("Golden2 v1.1: Reached InpMaxGroups limit, no new group will be opened.");
+            Print("Golden2 v2.0: Reached InpMaxGroups limit, no new group will be opened.");
             lastWarn = TimeCurrent();
          }
       }
