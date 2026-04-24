@@ -1082,9 +1082,17 @@ void TryPlaceGridLoss(int g){
       bool bypassGuards = (InpGL_ImmediateAfterInitial && gl == 0);
 
       // OnlyNewCandle / DontSameCandle guards
-      datetime curBar = iTime(_Symbol, PERIOD_CURRENT, 0);
-      if(!bypassGuards && GridLoss_OnlyNewCandle && g_lastGridCandleLoss[g][sd] == curBar) continue;
-      if(!bypassGuards && GridLoss_DontSameCandle && g_initialCandleTime[g][sd] == curBar) continue;
+      // [v1.9] OnlyNewCandle now waits for the last grid/initial bar to FULLY CLOSE
+      //        Previous logic only blocked re-fire within the same open bar, so a
+      //        trigger on the very first tick of the next bar still fired (too fast).
+      //        Now we require iTime(...,1) (last CLOSED bar) > stored bar — guarantees
+      //        at least one completed candle between consecutive grid orders.
+      datetime curBar      = iTime(_Symbol, PERIOD_CURRENT, 0);
+      datetime lastClosed  = iTime(_Symbol, PERIOD_CURRENT, 1);
+      if(!bypassGuards && GridLoss_OnlyNewCandle && g_lastGridCandleLoss[g][sd] != 0
+         && lastClosed <= g_lastGridCandleLoss[g][sd]) continue;
+      if(!bypassGuards && GridLoss_DontSameCandle && g_initialCandleTime[g][sd] != 0
+         && lastClosed < g_initialCandleTime[g][sd]) continue;
 
       // Candle confirmation (N consecutive closed candles in the loss direction)
       if(!bypassGuards && GridLoss_CandleConfirm > 0){
