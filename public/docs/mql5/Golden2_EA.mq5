@@ -2076,6 +2076,9 @@ void DrawHLine(string name, double price, color clr, ENUM_LINE_STYLE style=STYLE
 }
 
 void DrawAverageAndTPLinesForGroup(int g){
+   // [v2.72] No chart in optimization / non-visual tester — skip line objects.
+   if(g_isOptimization) return;
+   if(g_isTesterMode && !g_isVisualMode) return;
    // Skip if hedge matched (Triple-Gate is in charge)
    if(IsGroupHedgeMatched(g)){ DeleteLinesForGroup(g); return; }
    if(!GroupHasAnyPositions(g)){ DeleteLinesForGroup(g); return; }
