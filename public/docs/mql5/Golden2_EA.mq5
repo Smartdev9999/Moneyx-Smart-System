@@ -677,6 +677,7 @@ int CountConfirmingCandles(int dir, int n){
 }
 
 void TryPlaceGridLoss(int g){
+   if(g_blockNewOrders[g]) return; // [v1.4] Pre-hedge block
    for(int sd=0; sd<2; sd++){
       int posCount = CountGroupPositions(g, sd, 0);
       if(posCount <= 0) continue;
