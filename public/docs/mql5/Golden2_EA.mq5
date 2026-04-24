@@ -1585,8 +1585,9 @@ string StrippedListString(){
 
 void DrawDashboard(){
    if(!InpShowDashboard) return;
-   string txt = "Golden2 EA v1.3\n";
+   string txt = "Golden2 EA v1.4\n";
    txt += StringFormat("Symbol: %s  Magic: %I64d\n", _Symbol, (long)InpMagic);
+   txt += StringFormat("Hedging: %s\n", InpHedge_Enabled?"ON":"OFF");
    int rem = 0;
    if(IsHedgeOpenDelayActive(rem)) txt += StringFormat("HedgeDelay: WAIT %dm%02ds\n", rem/60, rem%60);
    else txt += "HedgeDelay: READY\n";
