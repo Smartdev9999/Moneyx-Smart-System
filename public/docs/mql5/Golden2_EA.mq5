@@ -1144,8 +1144,11 @@ void TryPlaceGridProfit(int g){
       else      trigger = (bid <= lastPrice - gapPts*g_point);
       if(!trigger) continue;
 
-      datetime curBar = iTime(_Symbol, PERIOD_CURRENT, 0);
-      if(GridProfit_OnlyNewCandle && g_lastGridCandleProfit[g][sd] == curBar) continue;
+      // [v1.9] OnlyNewCandle: require at least one fully-closed bar since last GP
+      datetime curBar     = iTime(_Symbol, PERIOD_CURRENT, 0);
+      datetime lastClosed = iTime(_Symbol, PERIOD_CURRENT, 1);
+      if(GridProfit_OnlyNewCandle && g_lastGridCandleProfit[g][sd] != 0
+         && lastClosed <= g_lastGridCandleProfit[g][sd]) continue;
 
       double lot = ResolveLot(gp+1, GridProfit_LotMode, GridProfit_CustomLots,
                               GridProfit_AddLotPerLevel, GridProfit_MultiplyFactor);
