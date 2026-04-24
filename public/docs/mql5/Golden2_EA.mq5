@@ -290,6 +290,13 @@ bool     g_maxGridTrailArmed[51][2];
 double   g_avgTPSynced[51][2];
 double   g_avgSLSynced[51][2];
 
+// [v2.0] Global Accumulate Close state (account-wide, sums realized + floating)
+double   g_accumRealizedSinceReset = 0.0;
+datetime g_accumResetTime          = 0;
+bool     g_hadAnyOrderLastTick     = false;
+double   g_accumNetCached          = 0.0;
+double   g_accumFloatingCached     = 0.0;
+
 //================ HELPERS: comments / parsing ================
 string SidePrefix(ENUM_SIDE s){ return (s==SIDE_BUY?"B":"S"); }
 
@@ -648,7 +655,7 @@ int FindActiveTradingGroup(){
 void PlaceInitialFrame(int g){
    // [v1.6] Squeeze block: don't place initial frame on volatile expansion
    if(InpSQ_Enable && InpSQ_BlockNewOrders && g_sqExpCount >= InpSQ_MinExpansionTFs && SqueezeBlocksAny()){
-      if(InpVerboseLog) PrintFormat("Golden2 v1.7: Squeeze BLOCK initial G%d (%s)", g, SqueezeStatusString());
+      if(InpVerboseLog) PrintFormat("Golden2 v2.0: Squeeze BLOCK initial G%d (%s)", g, SqueezeStatusString());
       return;
    }
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
@@ -656,10 +663,30 @@ void PlaceInitialFrame(int g){
    double mid = (ask+bid)*0.5;
    double upPx = NormalizeDouble(mid + InpFrameUpperPips * g_point, g_digits);
    double dnPx = NormalizeDouble(mid - InpFrameLowerPips * g_point, g_digits);
-   double tpUp = (InpInitialTPPips>0) ? NormalizeDouble(upPx + InpInitialTPPips*g_point, g_digits) : 0.0;
-   double slUp = (InpInitialSLPips>0) ? NormalizeDouble(upPx - InpInitialSLPips*g_point, g_digits) : 0.0;
-   double tpDn = (InpInitialTPPips>0) ? NormalizeDouble(dnPx - InpInitialTPPips*g_point, g_digits) : 0.0;
-   double slDn = (InpInitialSLPips>0) ? NormalizeDouble(dnPx + InpInitialSLPips*g_point, g_digits) : 0.0;
+
+   // [v2.0] Honour broker stops level when computing initial TP/SL.
+   long stopsLvl = (long)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   double minDist = (stopsLvl > 0) ? stopsLvl * g_point : 0.0;
+
+   double tpUp = 0.0, slUp = 0.0, tpDn = 0.0, slDn = 0.0;
+   if(InpInitialTPPips > 0){
+      double tpDistUp = MathMax(InpInitialTPPips * g_point, minDist + g_point);
+      tpUp = NormalizeDouble(upPx + tpDistUp, g_digits);
+      double tpDistDn = MathMax(InpInitialTPPips * g_point, minDist + g_point);
+      tpDn = NormalizeDouble(dnPx - tpDistDn, g_digits);
+   }
+   if(InpInitialSLPips > 0){
+      double slDistUp = MathMax(InpInitialSLPips * g_point, minDist + g_point);
+      slUp = NormalizeDouble(upPx - slDistUp, g_digits);
+      double slDistDn = MathMax(InpInitialSLPips * g_point, minDist + g_point);
+      slDn = NormalizeDouble(dnPx + slDistDn, g_digits);
+   }
+
+   // [v2.0] Sanity guards — never let TP land at/under entry for BUY (or above entry for SELL).
+   if(tpUp > 0 && tpUp <= upPx){ PrintFormat("Golden2 v2.0: invalid BuyStop TP %.*f<=%.*f, force 0", g_digits, tpUp, g_digits, upPx); tpUp = 0; }
+   if(slUp > 0 && slUp >= upPx){ PrintFormat("Golden2 v2.0: invalid BuyStop SL %.*f>=%.*f, force 0", g_digits, slUp, g_digits, upPx); slUp = 0; }
+   if(tpDn > 0 && tpDn >= dnPx){ PrintFormat("Golden2 v2.0: invalid SellStop TP %.*f>=%.*f, force 0", g_digits, tpDn, g_digits, dnPx); tpDn = 0; }
+   if(slDn > 0 && slDn <= dnPx){ PrintFormat("Golden2 v2.0: invalid SellStop SL %.*f<=%.*f, force 0", g_digits, slDn, g_digits, dnPx); slDn = 0; }
 
    trade.SetExpertMagicNumber(InpMagic);
    trade.SetDeviationInPoints(InpSlippage);
@@ -672,14 +699,18 @@ void PlaceInitialFrame(int g){
 
    if(placeBuy){
       if(!trade.BuyStop(InpInitialLot, upPx, _Symbol, slUp, tpUp, ORDER_TIME_GTC, 0, cBuy))
-         PrintFormat("Golden2 v1.7: BuyStop failed G%d err=%d", g, GetLastError());
+         PrintFormat("Golden2 v2.0: BuyStop failed G%d err=%d", g, GetLastError());
+      else if(InpVerboseLog)
+         PrintFormat("Golden2 v2.0: BuyStop G%d open=%.*f tp=%.*f sl=%.*f", g, g_digits, upPx, g_digits, tpUp, g_digits, slUp);
    }
    if(placeSell){
       if(!trade.SellStop(InpInitialLot, dnPx, _Symbol, slDn, tpDn, ORDER_TIME_GTC, 0, cSell))
-         PrintFormat("Golden2 v1.7: SellStop failed G%d err=%d", g, GetLastError());
+         PrintFormat("Golden2 v2.0: SellStop failed G%d err=%d", g, GetLastError());
+      else if(InpVerboseLog)
+         PrintFormat("Golden2 v2.0: SellStop G%d open=%.*f tp=%.*f sl=%.*f", g, g_digits, dnPx, g_digits, tpDn, g_digits, slDn);
    }
    if(InpVerboseLog)
-      PrintFormat("Golden2 v1.7: Placed initial frame G%d mode=%d mid=%.5f up=%s dn=%s",
+      PrintFormat("Golden2 v2.0: Placed initial frame G%d mode=%d mid=%.5f up=%s dn=%s",
                   g, (int)InpInitSideMode, mid,
                   placeBuy?DoubleToString(upPx,g_digits):"-",
                   placeSell?DoubleToString(dnPx,g_digits):"-");
@@ -1670,15 +1701,8 @@ void CheckAndCloseByAverageTP(int g){
 
    double bal = AccountInfoDouble(ACCOUNT_BALANCE);
 
-   // 5) Accumulate close (group-wide)
-   if(InpTP_UseAccumulateClose){
-      double netGroup = GroupFloatingPL(g,-1,-1);
-      if(netGroup >= InpTP_AccumulateTarget){
-         if(InpVerboseLog) PrintFormat("Golden2 v1.1: TP AccumClose G%d net=%.2f >= %.2f", g, netGroup, InpTP_AccumulateTarget);
-         CloseAllPositionsOfGroup(g);
-         return;
-      }
-   }
+   // [v2.0] Per-group accumulate-close removed — handled globally in
+   //        ManageGlobalAccumulateClose() (account-wide, includes realized).
 
    for(int sd=0; sd<2; sd++){
       int cnt = CountGroupPositions(g, sd, 0);
@@ -1768,14 +1792,14 @@ void DeleteLinesForGroup(int g){
    }
 }
 
-void DrawHLine(string name, double price, color clr){
+void DrawHLine(string name, double price, color clr, ENUM_LINE_STYLE style=STYLE_DOT, int width=1){
    if(price <= 0) return;
    if(ObjectFind(0, name) < 0){
       ObjectCreate(0, name, OBJ_HLINE, 0, 0, price);
-      ObjectSetInteger(0, name, OBJPROP_STYLE, STYLE_DOT);
-      ObjectSetInteger(0, name, OBJPROP_WIDTH, 1);
       ObjectSetInteger(0, name, OBJPROP_BACK, true);
    }
+   ObjectSetInteger(0, name, OBJPROP_STYLE, style);
+   ObjectSetInteger(0, name, OBJPROP_WIDTH, width);
    ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
    ObjectSetDouble(0, name, OBJPROP_PRICE, price);
 }
@@ -1800,7 +1824,7 @@ void DrawAverageAndTPLinesForGroup(int g){
          continue;
       }
       double avg = GroupAveragePrice(g, sd, 0);
-      if(InpTP_ShowAvgLine) DrawHLine(nmAvg, avg, sd==0?InpTP_AvgBuyColor:InpTP_AvgSellColor);
+      if(InpTP_ShowAvgLine) DrawHLine(nmAvg, avg, sd==0?InpTP_AvgBuyColor:InpTP_AvgSellColor, STYLE_SOLID, MathMax(1, InpTP_AvgLineWidth));
       else if(ObjectFind(0,nmAvg)>=0) ObjectDelete(0,nmAvg);
 
       if(InpTP_ShowTPLine && InpTP_UsePointsFromAvg){
