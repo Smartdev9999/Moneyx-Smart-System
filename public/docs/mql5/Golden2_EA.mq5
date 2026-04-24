@@ -156,6 +156,7 @@ input bool    InpTP_UsePctMaxDD       = false;                       // Use TP %
 input double  InpTP_PctMaxDD          = 50.0;                        // TP DD % (target = X% of max DD)
 input bool    InpTP_ShowAvgLine       = true;                        // Show Average Price Line
 input bool    InpTP_ShowTPLine        = true;                        // Show TP Line
+input int     InpTP_AvgLineWidth      = 3;                           // [v2.0] Average Line Width (pixels)
 input color   InpTP_AvgBuyColor       = clrDodgerBlue;               // Average Buy Line Color
 input color   InpTP_AvgSellColor      = clrOrangeRed;                // Average Sell Line Color
 input color   InpTP_BuyLineColor      = clrLime;                     // TP Buy Line Color
