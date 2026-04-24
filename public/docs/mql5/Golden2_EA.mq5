@@ -198,9 +198,24 @@ string g_linePrefix = "G2L_";  // chart line objects prefix
 
 int g_bbHandle = INVALID_HANDLE;
 int g_atrHandle = INVALID_HANDLE;
+int g_atrLossHandle   = INVALID_HANDLE;
+int g_atrProfitHandle = INVALID_HANDLE;
 
 bool   g_stripped[51];          // per-group flag: broker TP/SL stripped after hedge match
 double g_maxDDPerSide[51][2];   // [group][side] track max floating loss USD seen (positive value)
+
+// Snapshot of ATR (in points) at the moment last grid order was placed (per group, side, family 0=GL/1=GP)
+double   g_atrAtLastGridLoss[51][2];
+double   g_atrAtLastGridProfit[51][2];
+// Track last "initial" candle time per group (for DontSameCandle guard)
+datetime g_initialCandleTime[51][2];
+// Track last grid placement candle (for OnlyNewCandle guard)
+datetime g_lastGridCandleLoss[51][2];
+datetime g_lastGridCandleProfit[51][2];
+
+// Max Grid Avg Trailing virtual SL state (per group, side)
+double   g_maxGridTrailSL[51][2];   // 0 = inactive
+bool     g_maxGridTrailArmed[51][2];
 
 //================ HELPERS: comments / parsing ================
 string SidePrefix(ENUM_SIDE s){ return (s==SIDE_BUY?"B":"S"); }
