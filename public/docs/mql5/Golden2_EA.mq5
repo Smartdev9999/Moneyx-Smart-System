@@ -2149,16 +2149,76 @@ void ManageGlobalAccumulateClose(){
    g_hadAnyOrderLastTick = any;
 }
 
-// [v2.2] Group is "safe to advance to next" using PER-SIDE hedge-lock check.
+// [v2.3] Count main positions on a side that should BLOCK group advancement.
+// A residual post-hedge "IN" position (the lone initial fill that landed AFTER
+// the hedge was already armed) does not block advancement when:
+//   - the group already has hedge positions (hedge cycle is in progress), AND
+//   - the IN position is the only main position on that side.
+// In that case the IN is treated as an isolated leftover, not unhedged exposure.
+int CountBlockingMainPositionsForAdvance(int g, int side){
+   int total = PositionsTotal();
+   int blocking = 0;
+   int inCount  = 0;
+   bool hedgeAny = (CountGroupPositions(g, -1, 1) > 0);
+   for(int i=0;i<total;i++){
+      ulong tk = PositionGetTicket(i);
+      if(tk==0) continue;
+      if(!PositionSelectByTicket(tk)) continue;
+      if((long)PositionGetInteger(POSITION_MAGIC) != InpMagic) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      string c = PositionGetString(POSITION_COMMENT);
+      int gp; bool hd; string tag;
+      if(!ParseComment(c, gp, hd, tag)) continue;
+      if(gp != g) continue;
+      if(hd) continue; // hedge side handled elsewhere
+      int sd = (PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY)?0:1;
+      if(sd != side) continue;
+      if(hedgeAny && tag == "IN") { inCount++; continue; }
+      blocking++;
+   }
+   // Allow up to one residual IN orphan to be ignored when hedge is active.
+   // If multiple non-IN main positions exist alongside, IN is no longer "isolated"
+   // and its absence from blocking is still safe (hedge already covers them).
+   return blocking;
+}
+
+// [v2.3] Cancel any leftover G_IN pendings on a group that has already begun
+// hedging. Keeps hedge pendings/positions and main grid positions untouched.
+// This prevents a stray BuyStop/SellStop from being triggered after the hedge
+// frame is set up, which would create an orphan main with no opposing hedge.
+void DeleteLeftoverInitialPendingsAfterHedge(int g){
+   if(CountGroupPositions(g, -1, 1) <= 0) return; // no hedge yet, nothing to do
+   int total = OrdersTotal();
+   for(int i=total-1;i>=0;i--){
+      ulong tk = OrderGetTicket(i);
+      if(tk==0) continue;
+      if(!OrderSelect(tk)) continue;
+      if((long)OrderGetInteger(ORDER_MAGIC) != InpMagic) continue;
+      if(OrderGetString(ORDER_SYMBOL) != _Symbol) continue;
+      string c = OrderGetString(ORDER_COMMENT);
+      int gp; bool hd; string tag;
+      if(!ParseComment(c, gp, hd, tag)) continue;
+      if(gp != g) continue;
+      if(hd) continue;            // never delete hedge pendings
+      if(tag != "IN") continue;   // only target initial-frame pendings
+      if(trade.OrderDelete(tk)){
+         if(InpVerboseLog) PrintFormat("Golden2 v2.3: post-hedge cleanup G%d deleted leftover IN pending #%I64u", g, tk);
+      } else {
+         PrintFormat("Golden2 v2.3: post-hedge cleanup G%d delete IN #%I64u FAIL err=%d", g, tk, GetLastError());
+      }
+   }
+}
+
+// [v2.3] Group is "safe to advance to next" using PER-SIDE hedge-lock check.
 // Each surviving main side must be covered by hedge positions; sides that have
 // already emptied (TP hit / Triple-Gate close) do not need a hedge counterpart.
+// Residual post-hedge IN orphans are ignored (see CountBlockingMainPositionsForAdvance).
 bool IsGroupSafeToAdvance(int g){
-   int buyMain  = CountGroupPositions(g, 0, 0);
-   int sellMain = CountGroupPositions(g, 1, 0);
-   if(buyMain == 0 && sellMain == 0) return true;        // no main exposure left
+   int buyMain  = CountBlockingMainPositionsForAdvance(g, 0);
+   int sellMain = CountBlockingMainPositionsForAdvance(g, 1);
+   if(buyMain == 0 && sellMain == 0) return true;        // no blocking main exposure
    bool hedgeAny = (CountGroupPositions(g, -1, 1) > 0);
    if(!hedgeAny) return false;                           // unlocked main with zero hedge
-   // Each non-empty main side must be locked by an opposing hedge position.
    bool buyOK  = (buyMain  == 0) || (CountGroupPositions(g, 1, 1) > 0); // sell-side hedge locks BUY main
    bool sellOK = (sellMain == 0) || (CountGroupPositions(g, 0, 1) > 0); // buy-side hedge locks SELL main
    return (buyOK && sellOK);
@@ -2181,9 +2241,11 @@ void TryAdvanceToNextGroup(){
       if(g >= 1) PlaceInitialFrame(g);
       return;
    }
-   // [v2.2] Advance condition: cur has hedge active AND (lock-guard off OR cur+priors safe).
-   //        Runs every tick when InpGroup_AdvancePerTick=true so a transient block (e.g.
-   //        partial close in progress) is retried instead of being lost forever.
+   // [v2.3] As soon as cur is hedging, sweep any leftover IN pendings so a
+   //        late stop trigger cannot drop a new orphan main into the group.
+   DeleteLeftoverInitialPendingsAfterHedge(cur);
+
+   // [v2.2/v2.3] Advance condition: cur has hedge active AND (lock-guard off OR cur+priors safe).
    bool hedgeActive = GroupHedgeJustActivated(cur);
    if(!hedgeActive) return;
    if(!InpGroup_AdvancePerTick){
@@ -2193,9 +2255,10 @@ void TryAdvanceToNextGroup(){
       if(!IsGroupSafeToAdvance(cur) || !AreAllPriorGroupsSafe(cur)){
          static datetime lastHoldLog = 0;
          if(InpVerboseLog && TimeCurrent() - lastHoldLog >= 60){
-            PrintFormat("Golden2 v2.2: hold G%d->G%d (cur safe=%d priors safe=%d BUY=%d SELL=%d hedgeBuy=%d hedgeSell=%d)",
+            PrintFormat("Golden2 v2.3: hold G%d->G%d (cur safe=%d priors safe=%d blkBUY=%d blkSELL=%d rawBUY=%d rawSELL=%d hedgeBuy=%d hedgeSell=%d)",
                         cur, cur+1,
                         IsGroupSafeToAdvance(cur), AreAllPriorGroupsSafe(cur),
+                        CountBlockingMainPositionsForAdvance(cur,0), CountBlockingMainPositionsForAdvance(cur,1),
                         CountGroupPositions(cur,0,0), CountGroupPositions(cur,1,0),
                         CountGroupPositions(cur,0,1), CountGroupPositions(cur,1,1));
             lastHoldLog = TimeCurrent();
@@ -2206,13 +2269,13 @@ void TryAdvanceToNextGroup(){
    if(cur < InpMaxGroups){
       int next = cur + 1;
       if(!GroupHasAnyPositions(next) && !GroupHasAnyPendings(next)){
-         if(InpVerboseLog) PrintFormat("Golden2 v2.2: advance G%d -> G%d (placing initial frame)", cur, next);
+         if(InpVerboseLog) PrintFormat("Golden2 v2.3: advance G%d -> G%d (placing initial frame)", cur, next);
          PlaceInitialFrame(next);
       }
    } else {
       static datetime lastWarn = 0;
       if(TimeCurrent() - lastWarn >= 300){
-         Print("Golden2 v2.2: Reached InpMaxGroups limit, no new group will be opened.");
+         Print("Golden2 v2.3: Reached InpMaxGroups limit, no new group will be opened.");
          lastWarn = TimeCurrent();
       }
    }
