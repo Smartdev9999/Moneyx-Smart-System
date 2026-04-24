@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|     Golden2 EA v1.9 - New-Candle guard fix (require fully closed |
-//|     bar before next Grid order — was firing on first tick of     |
-//|     next bar). Also applied to Grid Profit OnlyNewCandle guard.  |
+//|     Golden2 EA v2.0 - Global Accumulate Close (account-wide) +  |
+//|     Group Sequencing Lock (no advance until prior group locked) |
+//|     + Bold solid Avg Price line + Initial Pending TP/SL guards. |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "1.90"
-#property description "Golden2 EA v1.9 - Fix: GridLoss_OnlyNewCandle / GridProfit_OnlyNewCandle now correctly wait for the previous candle to FULLY close before allowing the next grid order (previously fired on first tick of the next bar). DontSameCandle guard hardened with same closed-bar comparison. Bar-close frame trail, Immediate GL#1, Squeeze panel — unchanged."
+#property version   "2.00"
+#property description "Golden2 EA v2.0 - Global Accumulate Close (sums realized+floating across ALL groups, resets on no-orders), Group Sequencing Lock (next group blocked until prior group is fully hedge-locked or empty), Bold solid Average Price lines, Initial pending TP/SL sanity guards (fixes BuyStop closing immediately on fill). Bar-close trail, Immediate GL#1, Squeeze panel — unchanged."
 #property strict
 
 #include <Trade/Trade.mqh>
