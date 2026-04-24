@@ -1,13 +1,13 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|     Golden2 EA v1.5 - Gold-Miner-style dashboard (2 tables):     |
-//|     left=summary, right=hedging (shown only when Hedging ON)     |
+//|     Golden2 EA v1.6 - Disarm fix + Volatility Squeeze Filter +   |
+//|     Post-Hedge grid lock + Triple-Gate master toggle             |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "1.50"
-#property description "Golden2 EA v1.5 - Two-panel dashboard: left Gold-Miner-style summary table; right Hedging table (auto-shown only when InpHedge_Enabled=true) listing every active hedge group with status, lots, P/L, pendings"
+#property version   "1.60"
+#property description "Golden2 EA v1.6 - (1) Robust hedge-pending disarm when DD recovers/no loss side/no main pos (2) Volatility Squeeze Filter (3 TFs, BB/KC ratio, directional block) ported from Gold Miner (3) Post-hedge grid lock: groups freeze after hedge activates until Triple-Gate close (4) Triple-Gate matching close master toggle"
 #property strict
 
 #include <Trade/Trade.mqh>
