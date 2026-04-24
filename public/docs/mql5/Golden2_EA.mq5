@@ -1601,7 +1601,7 @@ void TryMatchingCloseForGroup(int g){
    g_lastHedgeCloseTime = TimeCurrent();
    ReleaseMutex(g);
 
-   PlaceContinuationGridIfNeeded(g);
+   if(InpPostHedge_AllowContinuation) PlaceContinuationGridIfNeeded(g); // [v1.6] off by default = freeze
 }
 
 void CloseAllGroupSide(int g, int side){
