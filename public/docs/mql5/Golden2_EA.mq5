@@ -1,14 +1,16 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|     Golden2 EA v2.2 - Trail preserves existing pending TP/SL  |
-//|     (no more disappearing data after OrderModify) and group   |
-//|     advance retries per-tick with per-side hedge-lock check.  |
+//|     Golden2 EA v2.3 - Stop "stuck after Group 1 hedge":         |
+//|     freeze initial-frame logic the moment a hedge position      |
+//|     exists, delete leftover G_IN pendings, and let the group    |
+//|     advance check ignore residual post-hedge IN orphans so the  |
+//|     next group always opens.                                    |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.20"
-#property description "Golden2 EA v2.2 - Bar-close trail no longer wipes existing TP/SL on the pending stop: when InpInitialTPPips=0 (Average-TP mode) the previous TP/SL is forwarded into OrderModify; when >0 the TP/SL is shifted by the same delta as the entry price. Group advance now runs every tick (not only on hedge edge) and IsGroupSafeToAdvance() uses a per-side hedge-lock check so Group N+1 opens even when only one side of Group N is still alive but already hedge-locked. v2.1 Accumulate Close cooldown unchanged."
+#property version   "2.30"
+#property description "Golden2 EA v2.3 - Fix: system stops opening new orders after Group 1 hedge. Initial-frame management (bar-close trail / legacy trail / re-arm) now freezes as soon as ANY hedge position exists for the group (previously only after a fully matched main+hedge set). Leftover G_IN pendings are auto-cancelled once the group has a hedge position so they cannot trigger a post-hedge orphan main. IsGroupSafeToAdvance() now ignores a single residual post-hedge IN main on a side that is otherwise empty, so Group N+1 opens even when only a stray initial fill remains. v2.1 Accumulate Close cooldown and v2.2 pending TP/SL preservation unchanged."
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -786,6 +788,11 @@ ulong FindInitialPendingTicket(int g, int side){
 //        consistent. The side price is approaching is left alone.
 void ManageInitialTrailOnBarClose(int g){
    if(!InpInitTrailOnBarClose) return;
+   // [v2.3] Freeze initial-frame trail as soon as ANY hedge position exists
+   //         for this group (don't wait for a fully matched set). Prevents
+   //         post-hedge IN trail/re-arm from creating orphan main positions
+   //         that would block group advancement.
+   if(CountGroupPositions(g, -1, 1) > 0) return;
    if(IsGroupHedgeMatched(g)) return;
    if(g_blockNewOrders[g]) return;
 
@@ -873,6 +880,8 @@ void ManageInitialTrail(int g){
    if(!InpInitTrailOpposite) return;
    if(InpInitSideMode != INIT_BOTH) return; // need both stops
    if(CountGroupPositions(g,-1,0) > 0) return; // a side already filled
+   // [v2.3] Same hedge-active freeze as bar-close trail.
+   if(CountGroupPositions(g, -1, 1) > 0) return;
    if(IsGroupHedgeMatched(g)) return;
 
    ulong tBuy  = FindInitialPendingTicket(g, 0);
@@ -923,6 +932,10 @@ void ManageInitialTrail(int g){
 //        current market ± InpInitReArmDistancePips. Side mode is respected.
 void ManageInitialReArm(int g){
    if(!InpInitReArmAfterTP) return;
+   // [v2.3] Do not re-arm a fresh G_IN stop once the group is hedging — that
+   //         was the source of the post-hedge orphan main that blocked
+   //         advancement to the next group.
+   if(CountGroupPositions(g, -1, 1) > 0) return;
    if(IsGroupHedgeMatched(g)) return;
    if(g_blockNewOrders[g]) return;
 
