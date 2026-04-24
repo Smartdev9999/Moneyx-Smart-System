@@ -690,11 +690,10 @@ void PlaceInitialFrame(int g){
       if(InpVerboseLog) PrintFormat("Golden2 v2.1: PlaceInitialFrame G%d skipped (accum cooldown active)", g);
       return;
    }
-   // [v1.6] Squeeze block: don't place initial frame on volatile expansion
-   if(InpSQ_Enable && InpSQ_BlockNewOrders && g_sqExpCount >= InpSQ_MinExpansionTFs && SqueezeBlocksAny()){
-      if(InpVerboseLog) PrintFormat("Golden2 v2.1: Squeeze BLOCK initial G%d (%s)", g, SqueezeStatusString());
-      return;
-   }
+   // [v2.72] Squeeze block moved to per-side and applied AFTER placeBuy/placeSell
+   //         are computed (see below). The old "block whole group" guard
+   //         (SqueezeBlocksAny -> return) is removed so a BUY-only block no
+   //         longer suppresses the SellStop side, mirroring Grid Loss/Profit.
 
    // [v2.6.1] Validate side mode and pre-compute place flags BEFORE any work or
    //          log spam. If the enum value is corrupted (e.g. .set file overrode
