@@ -1612,6 +1612,10 @@ void OnTick(){
       CheckAndCloseByAverageTP(g);
       CheckAndCloseByAverageSL(g);
 
+      // [v1.3] Sync Avg TP/SL → Broker (or restore Initial TP when count<MinTickets)
+      SyncSideTPSLToBroker(g, 0);
+      SyncSideTPSLToBroker(g, 1);
+
       // Triple-Gate Matching Close (only acts when matched)
       TryMatchingCloseForGroup(g);
 
