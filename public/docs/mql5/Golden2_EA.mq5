@@ -736,6 +736,7 @@ ulong FindInitialPendingTicket(int g, int side){
 //        BuyStop), the SellStop is moved UP to keep it InpFrameLowerPips below market.
 //        Symmetric for downward moves. Only operates while BOTH IN pendings exist.
 void ManageInitialTrail(int g){
+   if(InpInitTrailOnBarClose) return; // [v1.8] superseded by bar-close trail
    if(!InpInitTrailOpposite) return;
    if(InpInitSideMode != INIT_BOTH) return; // need both stops
    if(CountGroupPositions(g,-1,0) > 0) return; // a side already filled
