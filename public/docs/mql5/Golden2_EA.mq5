@@ -10,8 +10,8 @@
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.50"
-#property description "Golden2 EA v2.5 - One-Way Toward-Price Trail. ManageInitialTrailOnBarClose now drags BuyStop DOWN only (when ask falls so frame distance grows) and SellStop UP only (when bid rises so frame distance grows). Pendings never move AWAY from market, so price approaching always triggers the order as designed. Threshold = InpFrameRecenterMinPips (points). Fixes v2.4 mistake where pendings recenter-followed price like a shadow and got hit too easily. v2.3 hedge-state freeze, post-hedge IN cleanup, orphan-aware advance guard, and v2.2 TP/SL preservation all retained. Order execution, hedging, grid logic, triple-gate exits untouched."
+#property version   "2.60"
+#property description "Golden2 EA v2.6 - Re-entry on Close. When an initial-frame position closes by TP or SL, the same-side BuyStop/SellStop is automatically re-placed at current price ± InpInitReArmDistancePips, even if the opposite side has only a pending (no live position). Gated by HasClosedMainOnSide (history check) so re-entry never fires before the very first initial trigger. Frozen as soon as any hedge exists in that group (v2.3 retained). Adds InpInitReEntryOnClose toggle. v2.5 one-way toward-price trail, v2.3 hedge-state freeze, v2.2 TP/SL preservation all retained. Order execution, hedging, grid logic, triple-gate exits untouched."
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -2493,7 +2493,7 @@ void DrawDashboard(){
    if(InpInitSideMode == INIT_SELL_ONLY) modeLbl = "SELL-only";
 
    // Header
-   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.5    Side: %s", modeLbl), InpDashAccent);
+   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.6    Side: %s", modeLbl), InpDashAccent);
    y += rowH+2;
 
    // ==== Account section ====
@@ -2684,7 +2684,7 @@ int OnInit(){
       }
    }
 
-   PrintFormat("Golden2 EA v2.5 initialized | Magic=%I64d | MaxGroups=%d | InitMode=%d | GridLoss=%s | Squeeze=%s | TripleGate=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s",
+   PrintFormat("Golden2 EA v2.6 initialized | Magic=%I64d | MaxGroups=%d | InitMode=%d | GridLoss=%s | Squeeze=%s | TripleGate=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s",
                (long)InpMagic, InpMaxGroups, (int)InpInitSideMode,
                GridLoss_Enable?"ON":"OFF", InpSQ_Enable?"ON":"OFF", InpExitTripleGate_Enable?"ON":"OFF",
                InpInitTrailOnBarClose?"ON":"OFF",
