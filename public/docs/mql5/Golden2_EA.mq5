@@ -1,14 +1,13 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|     Golden2 EA v1.7 - Initial Side Mode (Both/Buy/Sell) +        |
-//|     Auto-trail opposite stop + Re-arm after TP +                 |
-//|     Grid Loss enable toggle + Polished 2-panel dashboard         |
+//|     Golden2 EA v1.8 - Bar-close frame trail + Immediate GL +     |
+//|     Gold-Miner-style Squeeze panel                               |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "1.70"
-#property description "Golden2 EA v1.7 - (1) Initial side mode: Both / Buy-only / Sell-only (2) Auto-trail opposite Stop when one side runs away (3) Re-arm a fresh Stop after a side TPs (4) Grid Loss master enable toggle (off = Initial-only mode) (5) Polished 2-panel dashboard with sectioned headers"
+#property version   "1.80"
+#property description "Golden2 EA v1.8 - (1) Bar-close opposite-stop trail (every M1 close, only the side price ran away from gets dragged) (2) Grid Loss fires immediately after Initial fill (bypass candle guards on GL#1) (3) Gold-Miner-style multi-row Squeeze panel with per-TF ratio bars + overall Squeeze Status"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -79,6 +78,9 @@ input bool    InpInitTrailOpposite    = true;                            // [v1.
 input int     InpInitTrailTriggerPips = 200;                             // [v1.7] Trail trigger: when distance from mid > this (points)
 input bool    InpInitReArmAfterTP     = true;                            // [v1.7] Re-arm side stop after that side empties (TP hit)
 input int     InpInitReArmDistancePips= 200;                             // [v1.7] Re-arm distance from current price (points)
+input bool            InpInitTrailOnBarClose      = true;                  // [v1.8] Trail opposite stop on every bar close (overrides v1.7 trigger trail)
+input ENUM_TIMEFRAMES InpInitTrailTF              = PERIOD_M1;             // [v1.8] Trail timer TF (default M1)
+input bool            InpGL_ImmediateAfterInitial = true;                  // [v1.8] Fire GL#1 immediately after Initial fill (bypass candle guards on first GL)
 
 //--- === Grid Loss Side === (Gold Miner-style)
 input string  __sec_grid_loss__       = "=== Grid Loss Side ===";    // ---
@@ -260,6 +262,8 @@ int    g_sqDir[3]         = {0,0,0};             // +1 up, -1 down, 0 none
 int    g_sqExpCount       = 0;                    // # TFs currently in expansion
 bool   g_sqBlockBuy       = false;
 bool   g_sqBlockSell      = false;
+double g_sqRatio[3]       = {0.0, 0.0, 0.0};      // [v1.8] BBwidth/KCwidth ratio per TF (for dashboard)
+datetime g_lastTrailBar[51];                      // [v1.8] last bar time we ran bar-close trail (per group)
 
 bool   g_stripped[51];          // per-group flag: broker TP/SL stripped after hedge match
 double g_maxDDPerSide[51][2];   // [group][side] track max floating loss USD seen (positive value)
@@ -502,6 +506,7 @@ bool ComputeSqueezeForTF(int idx, bool &isExp, int &dir){
    double kcW = 2.0 * InpSQ_KCMult * atr[1];
    if(kcW <= 0) return false;
    double ratio = bbW / kcW;
+   g_sqRatio[idx] = ratio; // [v1.8] expose for dashboard
    isExp = (ratio >= InpSQ_ExpansionThreshold);
    double cl = iClose(_Symbol, g_sqTF[idx], 1);
    if(cl > bbM[1]) dir = +1;
@@ -563,6 +568,45 @@ string SqueezeStatusString(){
    if(g_sqBlockBuy)  s += " BLK_BUY";
    if(g_sqBlockSell) s += " BLK_SELL";
    return s;
+}
+
+// [v1.8] Gold-Miner-style helpers for multi-row Squeeze panel
+string SqueezeTFLabel(int i){
+   ENUM_TIMEFRAMES tf = g_sqTF[i];
+   switch(tf){
+      case PERIOD_M1:  return "M1";
+      case PERIOD_M5:  return "M5";
+      case PERIOD_M15: return "M15";
+      case PERIOD_M30: return "M30";
+      case PERIOD_H1:  return "H1";
+      case PERIOD_H4:  return "H4";
+      case PERIOD_D1:  return "D1";
+   }
+   return EnumToString(tf);
+}
+string SqueezeStateLabel(int i){
+   if(!g_sqExpansion[i]) return "NORMAL";
+   if(g_sqDir[i] > 0) return "EXPANSION BUY";
+   if(g_sqDir[i] < 0) return "EXPANSION SELL";
+   return "EXPANSION";
+}
+string SqueezeBarString(double ratio){
+   double thr = (InpSQ_ExpansionThreshold>0)? InpSQ_ExpansionThreshold : 1.0;
+   int fill = (int)MathFloor(ratio / thr * 10.0);
+   if(fill < 0) fill = 0;
+   if(fill > 10) fill = 10;
+   string bar = "|";
+   for(int k=0; k<fill; k++) bar += "#";
+   for(int k=fill; k<10; k++) bar += ".";
+   bar += "|";
+   return bar;
+}
+string SqueezeOverallLabel(){
+   if(!InpSQ_Enable) return "OFF";
+   if(g_sqBlockBuy && g_sqBlockSell) return "BOTH BLOCKED";
+   if(g_sqBlockBuy)  return "BUY BLOCKED";
+   if(g_sqBlockSell) return "SELL BLOCKED";
+   return "READY";
 }
 
 
@@ -687,11 +731,66 @@ ulong FindInitialPendingTicket(int g, int side){
    return 0;
 }
 
+// [v1.8] Bar-close trail: every InpInitTrailTF bar close, drag the IN pending
+//        on the side that price moved AWAY from, so the frame distance stays
+//        consistent. The side price is approaching is left alone.
+void ManageInitialTrailOnBarClose(int g){
+   if(!InpInitTrailOnBarClose) return;
+   if(IsGroupHedgeMatched(g)) return;
+   if(g_blockNewOrders[g]) return;
+
+   datetime curBar = iTime(_Symbol, InpInitTrailTF, 0);
+   if(curBar == 0) return;
+   if(g_lastTrailBar[g] == curBar) return;
+   g_lastTrailBar[g] = curBar;
+
+   if(!GroupHasAnyPositions(g) && !GroupHasAnyPendings(g)) return;
+
+   ulong tBuy  = FindInitialPendingTicket(g, 0);
+   ulong tSell = FindInitialPendingTicket(g, 1);
+   int buyPos  = CountGroupPositions(g, 0, 0);
+   int sellPos = CountGroupPositions(g, 1, 0);
+
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+
+   // BUY pending: trail only when newPx moves DOWN (price ran away upward leaves
+   // buy stop above; if price ran DOWN, newPx<oldPx → drag down to stay 200pt away)
+   if(tBuy != 0 && buyPos == 0 && (sellPos > 0 || tSell != 0)){
+      double newPx = NormalizeDouble(ask + InpFrameUpperPips*g_point, g_digits);
+      if(OrderSelect(tBuy)){
+         double oldPx = OrderGetDouble(ORDER_PRICE_OPEN);
+         if(newPx < oldPx - g_point){
+            double tp = (InpInitialTPPips>0)? NormalizeDouble(newPx + InpInitialTPPips*g_point, g_digits) : 0;
+            double sl = (InpInitialSLPips>0)? NormalizeDouble(newPx - InpInitialSLPips*g_point, g_digits) : 0;
+            if(trade.OrderModify(tBuy, newPx, sl, tp, ORDER_TIME_GTC, 0)){
+               if(InpVerboseLog) PrintFormat("Golden2 v1.8: BarTrail BuyStop G%d %.5f -> %.5f", g, oldPx, newPx);
+            }
+         }
+      }
+   }
+   // SELL pending: trail only when newPx moves UP (price ran away upward → drag sell up)
+   if(tSell != 0 && sellPos == 0 && (buyPos > 0 || tBuy != 0)){
+      double newPx = NormalizeDouble(bid - InpFrameLowerPips*g_point, g_digits);
+      if(OrderSelect(tSell)){
+         double oldPx = OrderGetDouble(ORDER_PRICE_OPEN);
+         if(newPx > oldPx + g_point){
+            double tp = (InpInitialTPPips>0)? NormalizeDouble(newPx - InpInitialTPPips*g_point, g_digits) : 0;
+            double sl = (InpInitialSLPips>0)? NormalizeDouble(newPx + InpInitialSLPips*g_point, g_digits) : 0;
+            if(trade.OrderModify(tSell, newPx, sl, tp, ORDER_TIME_GTC, 0)){
+               if(InpVerboseLog) PrintFormat("Golden2 v1.8: BarTrail SellStop G%d %.5f -> %.5f", g, oldPx, newPx);
+            }
+         }
+      }
+   }
+}
+
 // [v1.7] Auto-trail opposite IN stop while no position has filled yet.
 //        If price runs UP by > InpInitTrailTriggerPips beyond mid (i.e. closer to
 //        BuyStop), the SellStop is moved UP to keep it InpFrameLowerPips below market.
 //        Symmetric for downward moves. Only operates while BOTH IN pendings exist.
 void ManageInitialTrail(int g){
+   if(InpInitTrailOnBarClose) return; // [v1.8] superseded by bar-close trail
    if(!InpInitTrailOpposite) return;
    if(InpInitSideMode != INIT_BOTH) return; // need both stops
    if(CountGroupPositions(g,-1,0) > 0) return; // a side already filled
@@ -979,13 +1078,16 @@ void TryPlaceGridLoss(int g){
       else      trigger = (bid >= lastPrice + gapPts*g_point);
       if(!trigger) continue;
 
+      // [v1.8] Bypass candle guards on GL#1 right after Initial fill (immediate trigger)
+      bool bypassGuards = (InpGL_ImmediateAfterInitial && gl == 0);
+
       // OnlyNewCandle / DontSameCandle guards
       datetime curBar = iTime(_Symbol, PERIOD_CURRENT, 0);
-      if(GridLoss_OnlyNewCandle && g_lastGridCandleLoss[g][sd] == curBar) continue;
-      if(GridLoss_DontSameCandle && g_initialCandleTime[g][sd] == curBar) continue;
+      if(!bypassGuards && GridLoss_OnlyNewCandle && g_lastGridCandleLoss[g][sd] == curBar) continue;
+      if(!bypassGuards && GridLoss_DontSameCandle && g_initialCandleTime[g][sd] == curBar) continue;
 
       // Candle confirmation (N consecutive closed candles in the loss direction)
-      if(GridLoss_CandleConfirm > 0){
+      if(!bypassGuards && GridLoss_CandleConfirm > 0){
          int dir = (sd==0) ? -1 : +1; // BUY losing → bears, SELL losing → bulls
          if(CountConfirmingCandles(dir, GridLoss_CandleConfirm) < GridLoss_CandleConfirm) continue;
       }
@@ -1989,7 +2091,7 @@ void DrawDashboard(){
    if(InpInitSideMode == INIT_SELL_ONLY) modeLbl = "SELL-only";
 
    // Header
-   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v1.7    Side: %s", modeLbl), InpDashAccent);
+   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v1.8    Side: %s", modeLbl), InpDashAccent);
    y += rowH+2;
 
    // ==== Account section ====
@@ -2022,7 +2124,25 @@ void DrawDashboard(){
    string hd = IsHedgeOpenDelayActive(rem) ? StringFormat("WAIT %dm%02ds", rem/60, rem%60) : "READY";
    DashRow("L_HDLY",  x, y, w, rowH, "Hedge Delay",      hd, InpDashColor); y+=rowH;
    DashRow("L_TG",    x, y, w, rowH, "Triple-Gate",      InpExitTripleGate_Enable?"ON":"OFF", InpExitTripleGate_Enable?InpDashGood:InpDashBad); y+=rowH;
-   DashRow("L_SQ",    x, y, w, rowH, "Squeeze",          SqueezeStatusString(), (g_sqBlockBuy||g_sqBlockSell)?InpDashBad:(InpSQ_Enable?InpDashGood:InpDashColor)); y+=rowH;
+   // ==== [v1.8] Gold-Miner-style Squeeze panel (multi-row) ====
+   if(InpSQ_Enable){
+      DashHeader("L_S_SQ", x, y, w, rowH, " === SQUEEZE ===", InpDashAccent); y+=rowH;
+      for(int si=0; si<3; si++){
+         string lbl = SqueezeTFLabel(si);
+         string st  = SqueezeStateLabel(si);
+         string val = StringFormat("%-15s %.2f %s", st, g_sqRatio[si], SqueezeBarString(g_sqRatio[si]));
+         color  cc;
+         if(!g_sqExpansion[si]) cc = InpDashColor;
+         else if((g_sqDir[si]>0 && g_sqBlockSell) || (g_sqDir[si]<0 && g_sqBlockBuy)) cc = InpDashBad;
+         else cc = InpDashAccent;
+         DashRow(StringFormat("L_SQ_%d", si), x, y, w, rowH, lbl, val, cc); y+=rowH;
+      }
+      string ov = SqueezeOverallLabel();
+      color  ovC = (ov=="READY")? InpDashGood : InpDashBad;
+      DashRow("L_SQ_ST", x, y, w, rowH, "Squeeze Status", ov, ovC); y+=rowH;
+   } else {
+      DashRow("L_SQ",   x, y, w, rowH, "Squeeze", "OFF", InpDashColor); y+=rowH;
+   }
 
    // ==== Footer ====
    DashHeader("L_S_SYS", x, y, w, rowH, " === SYSTEM ===", InpDashAccent); y+=rowH;
@@ -2117,6 +2237,7 @@ int OnInit(){
       g_initialCandleTime[i][0]=0; g_initialCandleTime[i][1]=0;
       g_lastGridCandleLoss[i][0]=0; g_lastGridCandleLoss[i][1]=0;
       g_lastGridCandleProfit[i][0]=0; g_lastGridCandleProfit[i][1]=0;
+      g_lastTrailBar[i] = 0; // [v1.8]
       g_maxGridTrailSL[i][0]=0; g_maxGridTrailSL[i][1]=0;
       g_maxGridTrailArmed[i][0]=false; g_maxGridTrailArmed[i][1]=false;
       g_avgTPSynced[i][0]=0; g_avgTPSynced[i][1]=0;
@@ -2143,9 +2264,10 @@ int OnInit(){
       }
    }
 
-   PrintFormat("Golden2 EA v1.7 initialized | Magic=%I64d | MaxGroups=%d | InitMode=%d | GridLoss=%s | Squeeze=%s | TripleGate=%s",
+   PrintFormat("Golden2 EA v1.8 initialized | Magic=%I64d | MaxGroups=%d | InitMode=%d | GridLoss=%s | Squeeze=%s | TripleGate=%s | BarTrail=%s",
                (long)InpMagic, InpMaxGroups, (int)InpInitSideMode,
-               GridLoss_Enable?"ON":"OFF", InpSQ_Enable?"ON":"OFF", InpExitTripleGate_Enable?"ON":"OFF");
+               GridLoss_Enable?"ON":"OFF", InpSQ_Enable?"ON":"OFF", InpExitTripleGate_Enable?"ON":"OFF",
+               InpInitTrailOnBarClose?"ON":"OFF");
    return INIT_SUCCEEDED;
 }
 
@@ -2204,7 +2326,8 @@ void OnTick(){
       }
       EnforceFrameMutualExclusion(g);
       TrackInitialCandle(g);
-      ManageInitialTrail(g);   // [v1.7] trail opposite stop
+      ManageInitialTrailOnBarClose(g); // [v1.8] bar-close trail (preferred)
+      ManageInitialTrail(g);   // [v1.7] legacy trigger trail (skipped if bar-close ON)
       ManageInitialReArm(g);   // [v1.7] re-arm side stop after TP
       TryPlaceGridLoss(g);
       TryPlaceGridProfit(g);
