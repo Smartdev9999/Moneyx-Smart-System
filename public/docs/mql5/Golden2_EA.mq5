@@ -584,6 +584,11 @@ int FindActiveTradingGroup(){
 }
 
 void PlaceInitialFrame(int g){
+   // [v1.6] Squeeze block: don't place initial frame on volatile expansion
+   if(InpSQ_Enable && InpSQ_BlockNewOrders && g_sqExpCount >= InpSQ_MinExpansionTFs && SqueezeBlocksAny()){
+      if(InpVerboseLog) PrintFormat("Golden2 v1.6: Squeeze BLOCK initial G%d (%s)", g, SqueezeStatusString());
+      return;
+   }
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
    double mid = (ask+bid)*0.5;
@@ -798,7 +803,9 @@ int CountConfirmingCandles(int dir, int n){
 
 void TryPlaceGridLoss(int g){
    if(g_blockNewOrders[g]) return; // [v1.4] Pre-hedge block
+   if(IsGroupHedgeMatched(g)) return; // [v1.6] Post-hedge lock: freeze grid until Triple-Gate close
    for(int sd=0; sd<2; sd++){
+      if(SqueezeBlocksSide(sd)) continue; // [v1.6] Squeeze directional block
       int posCount = CountGroupPositions(g, sd, 0);
       if(posCount <= 0) continue;
 
@@ -857,6 +864,7 @@ void TryPlaceGridProfit(int g){
    if(g_blockNewOrders[g]) return; // [v1.4] Pre-hedge block
    if(IsGroupHedgeMatched(g)) return; // pre-hedge only
    for(int sd=0; sd<2; sd++){
+      if(SqueezeBlocksSide(sd)) continue; // [v1.6] Squeeze directional block
       int posCount = CountGroupPositions(g, sd, 0);
       if(posCount <= 0) continue;
       double pl = GroupFloatingPL(g, sd, 0);
