@@ -262,6 +262,8 @@ int    g_sqDir[3]         = {0,0,0};             // +1 up, -1 down, 0 none
 int    g_sqExpCount       = 0;                    // # TFs currently in expansion
 bool   g_sqBlockBuy       = false;
 bool   g_sqBlockSell      = false;
+double g_sqRatio[3]       = {0.0, 0.0, 0.0};      // [v1.8] BBwidth/KCwidth ratio per TF (for dashboard)
+datetime g_lastTrailBar[51];                      // [v1.8] last bar time we ran bar-close trail (per group)
 
 bool   g_stripped[51];          // per-group flag: broker TP/SL stripped after hedge match
 double g_maxDDPerSide[51][2];   // [group][side] track max floating loss USD seen (positive value)
