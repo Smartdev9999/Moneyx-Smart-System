@@ -2128,7 +2128,7 @@ int OnInit(){
    g_atrLossHandle   = iATR(_Symbol, GridLoss_ATR_TF,   GridLoss_ATR_Period);
    g_atrProfitHandle = iATR(_Symbol, GridProfit_ATR_TF, GridProfit_ATR_Period);
    if(g_bbHandle == INVALID_HANDLE || g_atrHandle == INVALID_HANDLE){
-      Print("Golden2 v1.6: indicator init failed");
+      Print("Golden2 v1.7: indicator init failed");
       return INIT_FAILED;
    }
 
