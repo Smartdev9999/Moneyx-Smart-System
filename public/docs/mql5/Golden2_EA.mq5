@@ -1839,7 +1839,7 @@ void DrawDashboard(){
    double maxPct = (InpHedgeTriggerUSD>0) ? (peakLossUSD*100.0/InpHedgeTriggerUSD) : 0;
 
    // Header
-   DashHeader("L_TITLE", x, y, w, rowH+2, " Golden2 EA v1.5    Mode: Group", InpDashAccent);
+   DashHeader("L_TITLE", x, y, w, rowH+2, " Golden2 EA v1.6    Mode: Group", InpDashAccent);
    y += rowH+2;
 
    // Rows
@@ -1860,6 +1860,8 @@ void DrawDashboard(){
    DashRow("L_TRAIL", x, y, w, rowH, "MaxGrid Trail",    StringFormat("%s (Mode %d)", MaxGrid_TrailEnable?"ON":"OFF", MaxGrid_TrailMode), MaxGrid_TrailEnable?InpDashGood:InpDashColor); y+=rowH;
    DashRow("L_HEDGE", x, y, w, rowH, "Hedging",          InpHedge_Enabled?"ON":"OFF", InpHedge_Enabled?InpDashGood:InpDashBad); y+=rowH;
    DashRow("L_BLK",   x, y, w, rowH, "Pre-Hedge Block",  StringFormat("%d grp(s)", blockedGroups), blockedGroups>0?InpDashAccent:InpDashColor); y+=rowH;
+   DashRow("L_TG",    x, y, w, rowH, "Triple-Gate",      InpExitTripleGate_Enable?"ON":"OFF", InpExitTripleGate_Enable?InpDashGood:InpDashBad); y+=rowH;
+   DashRow("L_SQ",    x, y, w, rowH, "Squeeze",          SqueezeStatusString(), (g_sqBlockBuy||g_sqBlockSell)?InpDashBad:(InpSQ_Enable?InpDashGood:InpDashColor)); y+=rowH;
    DashRow("L_STAT",  x, y, w, rowH, "System Status",    InpAllowTrade?"Working":"Paused", InpAllowTrade?InpDashGood:InpDashBad); y+=rowH;
 
    //==== RIGHT PANEL: Hedging table (only when Hedging is ON) ====
