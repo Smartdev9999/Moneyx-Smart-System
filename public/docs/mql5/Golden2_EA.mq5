@@ -1072,7 +1072,7 @@ void ManageInitialTrail(int g){
 // group + side (main, non-hedge), meaning the initial pending was triggered and
 // later closed (TP/SL/manual). Used as the gate for Re-entry-on-Close so we do
 // not place a re-entry pending before the very first initial fill.
-bool HasClosedMainOnSide(int g, int side){
+bool HasClosedMainOnSide_Raw(int g, int side){
    if(!HistorySelect(g_accumResetTime>0 ? g_accumResetTime : (TimeCurrent()-7*24*3600), TimeCurrent()))
       return false;
    int total = HistoryDealsTotal();
@@ -1110,6 +1110,28 @@ bool HasClosedMainOnSide(int g, int side){
       return true;
    }
    return false;
+}
+
+// [v2.72] Cached wrapper — HistorySelect every tick across N groups was the
+//         dominant CPU cost in v2.6.x. Cache per (group,side) for ~2s and
+//         invalidate when HistoryDealsTotal changes (a new deal happened).
+//         Behaviour identical to the raw scan; only frequency differs.
+bool HasClosedMainOnSide(int g, int side){
+   if(g < 0 || g > 50) return HasClosedMainOnSide_Raw(g, side);
+   if(side != 0 && side != 1) return false;
+   datetime now = TimeCurrent();
+   // Cheap invalidation probe — total deals across history.
+   HistorySelect(0, now);
+   int curTotal = HistoryDealsTotal();
+   bool stale = (g_hcmCacheTime[g][side] == 0) ||
+                (now - g_hcmCacheTime[g][side] >= 2) ||
+                (g_hcmCacheLastTotal[g][side] != curTotal);
+   if(!stale) return g_hcmCacheValue[g][side];
+   bool v = HasClosedMainOnSide_Raw(g, side);
+   g_hcmCacheValue[g][side]     = v;
+   g_hcmCacheTime[g][side]      = now;
+   g_hcmCacheLastTotal[g][side] = curTotal;
+   return v;
 }
 
 void ManageInitialReArm(int g){
