@@ -1,41 +1,30 @@
-## Golden2 EA v2.72 — Combined: Backtest Speed Optimizations + Per-Side Squeeze Block
+## Golden2 EA v2.73 — Tester Chart Cleanup
 
 ไฟล์เดียวที่แก้: `public/docs/mql5/Golden2_EA.mq5`
 
-### A) Per-Side Squeeze Block (เดิม v2.62)
-- ใน `PlaceInitialFrame()` แทนที่ `SqueezeBlocksAny()` (block ทั้งกลุ่ม) ด้วยการตรวจ **per-side**:
-  - `if(SqueezeBlocksSide(0)) placeBuy=false;`
-  - `if(SqueezeBlocksSide(1)) placeSell=false;`
-  - `if(!placeBuy && !placeSell) return;`
-- พฤติกรรม: ถ้า Squeeze บล็อกฝั่ง BUY → ยังออก SellStop ได้ปกติ และกลับกัน
-- ตรงกับ Grid Loss/Profit ที่ใช้ per-side อยู่แล้ว
+### A) Auto-remove chart indicators ใน Tester
+- เพิ่ม `CleanupChartIndicatorsInTester()` เรียกใน `OnInit` เมื่อ `g_isTesterMode == true` และ `InpTester_CleanChart == true`
+- วน `ChartIndicatorsTotal(0, win)` จาก sub-window สูงสุดลงมา 0 → `ChartIndicatorDelete(0, win, name)`
+- ลบทั้ง main chart indicators (BB, MA, ZigZag) + sub-window indicators (ATR, MACD ฯลฯ) ที่ template ดึงมา
+- log: `[v2.73] Tester chart cleanup: removed N indicators`
 
-### B) Backtest Speed Optimizations (เดิม v2.71)
-1. **Tester / Visual detect**
-   - `g_isTesterMode = (bool)MQLInfoInteger(MQL_TESTER);`
-   - `g_isVisualMode = (bool)MQLInfoInteger(MQL_VISUAL_MODE);`
-2. **Dashboard throttle**
-   - Input ใหม่ `InpDashRenderIntervalSec` (default 1)
-   - ใน Tester non-visual → skip `DrawDashboard()` ทั้งหมด
-   - ใน live/visual → render ทุก N วินาทีเท่านั้น
-3. **Chart objects (avg / TP lines)**
-   - Skip `DrawAverageAndTPLinesForGroup()` เมื่อ tester non-visual
-4. **Squeeze refresh**
-   - `RefreshSqueezeState()` คำนวณเฉพาะตอน **new bar (M1)** แทนทุก tick
-5. **History scan cache**
-   - Cache ผลของ `HasClosedMainOnSide(g, side)` ไว้ ~2s ต่อ (group,side) เพื่อลด `HistorySelect`
-6. **Group loop bound**
-   - แทน `for(gi=1..InpMaxGroups)` ด้วย `for(gi=1..MathMin(g_highestActiveGroup+1, InpMaxGroups))` ในลูปจัดการกลุ่ม
+### B) ปิด chart visual ที่ไม่จำเป็นใน Tester
+- `CHART_SHOW_GRID = false`
+- `CHART_SHOW_PERIOD_SEP = false`
+- `CHART_SHOW_VOLUMES = CHART_VOLUME_HIDE`
+- ใน non-visual tester เพิ่ม: `CHART_SHOW_TRADE_LEVELS = false`, `CHART_AUTOSCROLL = false`
 
-### Version
-- Bump → **2.72** ทุกจุด (`#property version`, header block, `OnInit` log, Dashboard `L_TITLE`)
-- เพิ่มบรรทัด log: `ReEntryOnClose / SqueezePerSide / TesterMode / VisualMode / DashInterval`
+### C) Input ใหม่
+- `input bool InpTester_CleanChart = true;` — toggle (default ON)
 
-### สิ่งที่ "ไม่เปลี่ยน" (ยืนยัน)
-- ❌ ไม่แตะ `OrderSend` / `trade.*`
-- ❌ ไม่แตะเงื่อนไข Entry / Exit / TP / SL
-- ❌ ไม่แตะ Grid Loss / Grid Profit / Hedge / Triple-Gate / Accumulate
-- ❌ ไม่แตะ v2.5 Toward-Price Trail, v2.6 Re-entry, v2.70 Continuous Frame
-- ❌ ไม่แตะ Squeeze indicator math (BB/KC) — แค่เปลี่ยน "ใช้ผลยังไง" และความถี่ refresh
-- ❌ ไม่แตะ License/News/Sync modules
-- ✅ Output trade เหมือนเดิม 100% — เปลี่ยนแค่ความเร็วการประมวลผล + การ block ฝั่งของ Squeeze
+### D) Version bump → **v2.73**
+- `#property version "2.73"`, header block, OnInit log, Dashboard `L_TITLE`
+- log เพิ่ม: `TesterCleanChart=ON/OFF`
+
+### สิ่งที่ "ไม่เปลี่ยน"
+- ❌ ไม่แตะ `OrderSend` / trade logic / Entry / Exit / TP / SL
+- ❌ ไม่แตะ Grid Loss/Profit / Hedge / Triple-Gate / Accumulate
+- ❌ ไม่แตะ Squeeze math (BB/KC/ATR ภายใน EA ยังคำนวณปกติผ่าน handle = background)
+- ❌ ไม่แตะ v2.5 Trail / v2.6 Re-entry / v2.70 Continuous Frame / v2.72 Per-Side Squeeze + Speed
+- ❌ ไม่แตะ License/News/Sync
+- ✅ Output trade เหมือนเดิม 100% — แค่ชาร์ต Tester สะอาด → เร็วขึ้น 2-5x ใน visual mode
