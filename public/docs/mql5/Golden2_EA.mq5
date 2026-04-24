@@ -1496,10 +1496,14 @@ void DrawDashboard(){
       if(!IsGroupHedgeMatched(g) && GroupHasAnyPositions(g)){
          double avgB = GroupAveragePrice(g, 0, 0);
          double avgS = GroupAveragePrice(g, 1, 0);
-         if(avgB>0) txt += StringFormat("  B avg=%.5f tp=%.5f", avgB, ComputeAvgTPPrice(g,0));
+         int cB = CountGroupPositions(g, 0, 0);
+         int cS = CountGroupPositions(g, 1, 0);
+         string mB = (cB>=InpTPAvg_MinTicketsToActivate) ? StringFormat("AVG-BR(%d)",cB) : (cB==1?"INIT(1)":"-");
+         string mS = (cS>=InpTPAvg_MinTicketsToActivate) ? StringFormat("AVG-BR(%d)",cS) : (cS==1?"INIT(1)":"-");
+         if(avgB>0) txt += StringFormat("  B[%s] avg=%.5f tp=%.5f", mB, avgB, ComputeAvgTPPrice(g,0));
          if(avgB>0 && g_maxGridTrailArmed[g][0]) txt += StringFormat(" trail=%.5f", g_maxGridTrailSL[g][0]);
          if(avgB>0) txt += "\n";
-         if(avgS>0) txt += StringFormat("  S avg=%.5f tp=%.5f", avgS, ComputeAvgTPPrice(g,1));
+         if(avgS>0) txt += StringFormat("  S[%s] avg=%.5f tp=%.5f", mS, avgS, ComputeAvgTPPrice(g,1));
          if(avgS>0 && g_maxGridTrailArmed[g][1]) txt += StringFormat(" trail=%.5f", g_maxGridTrailSL[g][1]);
          if(avgS>0) txt += "\n";
       }
