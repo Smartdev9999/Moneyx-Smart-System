@@ -2796,6 +2796,19 @@ int OnInit(){
    trade.SetExpertMagicNumber(InpMagic);
    trade.SetDeviationInPoints(InpSlippage);
 
+   // [v2.72] Tester / Visual / Optimization detection — guards expensive UI work.
+   g_isTesterMode   = (bool)MQLInfoInteger(MQL_TESTER);
+   g_isVisualMode   = (bool)MQLInfoInteger(MQL_VISUAL_MODE);
+   g_isOptimization = (bool)MQLInfoInteger(MQL_OPTIMIZATION);
+   g_lastDashRender = 0;
+   g_lastSqueezeBar = 0;
+   g_highestActiveGroup = 0;
+   for(int hi=0; hi<51; hi++){
+      g_hcmCacheTime[hi][0] = 0;        g_hcmCacheTime[hi][1] = 0;
+      g_hcmCacheValue[hi][0] = false;   g_hcmCacheValue[hi][1] = false;
+      g_hcmCacheLastTotal[hi][0] = -1;  g_hcmCacheLastTotal[hi][1] = -1;
+   }
+
    for(int i=0;i<51;i++){
       g_stripped[i]=false;
       g_maxDDPerSide[i][0]=0.0; g_maxDDPerSide[i][1]=0.0;
@@ -2831,7 +2844,7 @@ int OnInit(){
       }
    }
 
-   PrintFormat("Golden2 EA v2.6.1 initialized | Magic=%I64d | MaxGroups=%d | InitMode=%d | GridLoss=%s | Squeeze=%s | TripleGate=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s",
+   PrintFormat("Golden2 EA v2.7.2 initialized | Magic=%I64d | MaxGroups=%d | InitMode=%d | GridLoss=%s | Squeeze=%s SqueezePerSide=ON | TripleGate=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | Tester=%s Visual=%s Opt=%s DashInterval=%ds",
                (long)InpMagic, InpMaxGroups, (int)InpInitSideMode,
                GridLoss_Enable?"ON":"OFF", InpSQ_Enable?"ON":"OFF", InpExitTripleGate_Enable?"ON":"OFF",
                InpInitTrailOnBarClose?"ON":"OFF",
@@ -2840,7 +2853,9 @@ int OnInit(){
                InpTP_UseAccumulateClose?"ON":"OFF",
                InpTP_AccumCooldownSec,
                InpGroup_RequireFullLockBeforeNext?"ON":"OFF",
-               InpGroup_AdvancePerTick?"ON":"OFF");
+               InpGroup_AdvancePerTick?"ON":"OFF",
+               g_isTesterMode?"YES":"NO", g_isVisualMode?"YES":"NO", g_isOptimization?"YES":"NO",
+               InpDashRenderIntervalSec);
    return INIT_SUCCEEDED;
 }
 
