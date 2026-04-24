@@ -171,6 +171,8 @@ input ENUM_HEDGE_DELAY_MODE_G2 InpHedge_OpenDelayMode = G2_HDELAY_BOTH; // Coold
 
 //--- === Exit Triple Gate ===
 input string  __sec_exit__            = "=== Exit Triple Gate ==="; // ---
+input bool    InpExitTripleGate_Enable= true;                        // [v1.6] Enable Triple-Gate matching close
+input bool    InpPostHedge_AllowContinuation = false;                // [v1.6] Allow continuation grid AFTER hedge activates (default OFF = freeze group)
 input ENUM_TIMEFRAMES InpExitTF       = PERIOD_H4;                   // Higher TF for Expansion->Normal gate
 input int     InpExitBBPeriod         = 20;                          // BB period
 input double  InpExitBBDev            = 2.0;                         // BB deviation
@@ -178,6 +180,23 @@ input int     InpExitKeltnerATR       = 20;                          // Keltner 
 input double  InpExitKeltnerMult      = 1.5;                         // Keltner multiplier
 input int     InpExitBreakoutPips     = 300;                         // Breakout distance from average (points)
 input double  InpExitMinNetUSD        = 1.0;                         // Min net USD profit to allow exit
+
+//--- === Volatility Squeeze Filter === [v1.6 ported from Gold Miner]
+input string  __sec_sq__              = "=== Volatility Squeeze Filter ==="; // ---
+input bool    InpSQ_Enable            = true;                        // Enable Squeeze Filter
+input ENUM_TIMEFRAMES InpSQ_TF1       = PERIOD_M1;                   // Timeframe 1
+input ENUM_TIMEFRAMES InpSQ_TF2       = PERIOD_M5;                   // Timeframe 2
+input ENUM_TIMEFRAMES InpSQ_TF3       = PERIOD_M15;                  // Timeframe 3
+input int     InpSQ_BBPeriod          = 15;                          // BB Period
+input double  InpSQ_BBMult            = 2.0;                         // BB Multiplier
+input int     InpSQ_KCPeriod          = 15;                          // KC Period (EMA)
+input double  InpSQ_KCMult            = 1.5;                         // KC Multiplier (ATR)
+input int     InpSQ_ATRPeriod         = 14;                          // ATR Period for KC
+input double  InpSQ_ExpansionThreshold= 1.6;                         // Expansion Threshold (BBwidth/KCwidth)
+input bool    InpSQ_BlockNewOrders    = true;                        // Block New Orders on Expansion
+input int     InpSQ_MinExpansionTFs   = 1;                           // Min TFs in Expansion to Block (1-3)
+input bool    InpSQ_DirectionalBlock  = true;                        // Directional Block (block counter-trend only)
+input bool    InpSQ_CloseOnExpansion  = false;                       // Close All Orders on Expansion
 
 //--- === Dashboard ===
 input string  __sec_dash__            = "=== Dashboard ===";         // ---
