@@ -1,13 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|     Golden2 EA v1.6 - Disarm fix + Volatility Squeeze Filter +   |
-//|     Post-Hedge grid lock + Triple-Gate master toggle             |
+//|     Golden2 EA v1.7 - Initial Side Mode (Both/Buy/Sell) +        |
+//|     Auto-trail opposite stop + Re-arm after TP +                 |
+//|     Grid Loss enable toggle + Polished 2-panel dashboard         |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "1.60"
-#property description "Golden2 EA v1.6 - (1) Robust hedge-pending disarm when DD recovers/no loss side/no main pos (2) Volatility Squeeze Filter (3 TFs, BB/KC ratio, directional block) ported from Gold Miner (3) Post-hedge grid lock: groups freeze after hedge activates until Triple-Gate close (4) Triple-Gate matching close master toggle"
+#property version   "1.70"
+#property description "Golden2 EA v1.7 - (1) Initial side mode: Both / Buy-only / Sell-only (2) Auto-trail opposite Stop when one side runs away (3) Re-arm a fresh Stop after a side TPs (4) Grid Loss master enable toggle (off = Initial-only mode) (5) Polished 2-panel dashboard with sectioned headers"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -16,6 +17,14 @@ CTrade trade;
 
 //================ ENUMS ================
 enum ENUM_SIDE { SIDE_BUY=0, SIDE_SELL=1 };
+
+// [v1.7] Initial frame side mode
+enum ENUM_INIT_SIDE_MODE
+{
+   INIT_BOTH      = 0, // Both sides (Buy Stop + Sell Stop)
+   INIT_BUY_ONLY  = 1, // Buy Stop only
+   INIT_SELL_ONLY = 2  // Sell Stop only
+};
 
 enum ENUM_HEDGE_DELAY_MODE_G2
 {
@@ -60,14 +69,20 @@ input bool    InpVerboseLog           = true;                        // Verbose 
 
 //--- === Frame & Initial Order ===
 input string  __sec_frame__           = "=== Frame & Initial Order ==="; // ---
-input double  InpInitialLot           = 0.01;                        // Initial lot (G_IN)
-input int     InpFrameUpperPips       = 200;                         // BUY_STOP distance from mid (points)
-input int     InpFrameLowerPips       = 200;                         // SELL_STOP distance from mid (points)
-input int     InpInitialTPPips        = 300;                         // Initial TP (points) (0=off)
-input int     InpInitialSLPips        = 0;                           // Initial SL (points) (0=off)
+input ENUM_INIT_SIDE_MODE InpInitSideMode = INIT_BOTH;                   // [v1.7] Initial side mode (Both/Buy/Sell)
+input double  InpInitialLot           = 0.01;                            // Initial lot (G_IN)
+input int     InpFrameUpperPips       = 200;                             // BUY_STOP distance from mid (points)
+input int     InpFrameLowerPips       = 200;                             // SELL_STOP distance from mid (points)
+input int     InpInitialTPPips        = 300;                             // Initial TP (points) (0=off)
+input int     InpInitialSLPips        = 0;                               // Initial SL (points) (0=off)
+input bool    InpInitTrailOpposite    = true;                            // [v1.7] Trail opposite stop when one stop runs away
+input int     InpInitTrailTriggerPips = 200;                             // [v1.7] Trail trigger: when distance from mid > this (points)
+input bool    InpInitReArmAfterTP     = true;                            // [v1.7] Re-arm side stop after that side empties (TP hit)
+input int     InpInitReArmDistancePips= 200;                             // [v1.7] Re-arm distance from current price (points)
 
 //--- === Grid Loss Side === (Gold Miner-style)
 input string  __sec_grid_loss__       = "=== Grid Loss Side ===";    // ---
+input bool           GridLoss_Enable          = true;                 // [v1.7] Enable Grid Loss (off = Initial only)
 input int            GridLoss_MaxTrades       = 30;                  // Max Grid Loss Trades
 input ENUM_LOT_MODE_G2 GridLoss_LotMode       = G2_LOT_MULTIPLY;     // Grid Loss Lot Mode
 input string         GridLoss_CustomLots      = "0.01;0.01;0.01;0.01;0.01;0.01;0.01;0.01;0.01;0.01"; // Custom Lots (semicolon)
@@ -586,7 +601,7 @@ int FindActiveTradingGroup(){
 void PlaceInitialFrame(int g){
    // [v1.6] Squeeze block: don't place initial frame on volatile expansion
    if(InpSQ_Enable && InpSQ_BlockNewOrders && g_sqExpCount >= InpSQ_MinExpansionTFs && SqueezeBlocksAny()){
-      if(InpVerboseLog) PrintFormat("Golden2 v1.6: Squeeze BLOCK initial G%d (%s)", g, SqueezeStatusString());
+      if(InpVerboseLog) PrintFormat("Golden2 v1.7: Squeeze BLOCK initial G%d (%s)", g, SqueezeStatusString());
       return;
    }
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
@@ -605,15 +620,29 @@ void PlaceInitialFrame(int g){
    string cBuy  = MakeComment(g, false, "IN");
    string cSell = MakeComment(g, false, "IN");
 
-   if(!trade.BuyStop(InpInitialLot, upPx, _Symbol, slUp, tpUp, ORDER_TIME_GTC, 0, cBuy))
-      PrintFormat("Golden2 v1.1: BuyStop failed G%d err=%d", g, GetLastError());
-   if(!trade.SellStop(InpInitialLot, dnPx, _Symbol, slDn, tpDn, ORDER_TIME_GTC, 0, cSell))
-      PrintFormat("Golden2 v1.1: SellStop failed G%d err=%d", g, GetLastError());
+   bool placeBuy  = (InpInitSideMode == INIT_BOTH || InpInitSideMode == INIT_BUY_ONLY);
+   bool placeSell = (InpInitSideMode == INIT_BOTH || InpInitSideMode == INIT_SELL_ONLY);
+
+   if(placeBuy){
+      if(!trade.BuyStop(InpInitialLot, upPx, _Symbol, slUp, tpUp, ORDER_TIME_GTC, 0, cBuy))
+         PrintFormat("Golden2 v1.7: BuyStop failed G%d err=%d", g, GetLastError());
+   }
+   if(placeSell){
+      if(!trade.SellStop(InpInitialLot, dnPx, _Symbol, slDn, tpDn, ORDER_TIME_GTC, 0, cSell))
+         PrintFormat("Golden2 v1.7: SellStop failed G%d err=%d", g, GetLastError());
+   }
    if(InpVerboseLog)
-      PrintFormat("Golden2 v1.1: Placed initial frame G%d mid=%.5f up=%.5f dn=%.5f", g, mid, upPx, dnPx);
+      PrintFormat("Golden2 v1.7: Placed initial frame G%d mode=%d mid=%.5f up=%s dn=%s",
+                  g, (int)InpInitSideMode, mid,
+                  placeBuy?DoubleToString(upPx,g_digits):"-",
+                  placeSell?DoubleToString(dnPx,g_digits):"-");
 }
 
+// [v1.7] EnforceFrameMutualExclusion: only delete the opposite-side IN pending in
+//        single-side modes (Buy-only / Sell-only). In BOTH mode we KEEP the
+//        opposite stop alive so the user gets a real two-side hedge frame.
 void EnforceFrameMutualExclusion(int g){
+   if(InpInitSideMode == INIT_BOTH) return; // keep both pendings live
    bool hasBuyPos  = (CountGroupPositions(g, 0, 0) > 0);
    bool hasSellPos = (CountGroupPositions(g, 1, 0) > 0);
    if(!hasBuyPos && !hasSellPos) return;
@@ -635,6 +664,121 @@ void EnforceFrameMutualExclusion(int g){
       bool isSellPending = (ot==ORDER_TYPE_SELL_STOP|| ot==ORDER_TYPE_SELL_LIMIT);
       if(hasBuyPos && isSellPending) trade.OrderDelete(tk);
       if(hasSellPos && isBuyPending) trade.OrderDelete(tk);
+   }
+}
+
+// [v1.7] Find the IN pending ticket for a given side (Buy=0/Sell=1). Returns 0 if none.
+ulong FindInitialPendingTicket(int g, int side){
+   int total = OrdersTotal();
+   for(int i=0;i<total;i++){
+      ulong tk = OrderGetTicket(i);
+      if(tk==0) continue;
+      if(!OrderSelect(tk)) continue;
+      if((long)OrderGetInteger(ORDER_MAGIC) != InpMagic) continue;
+      if(OrderGetString(ORDER_SYMBOL) != _Symbol) continue;
+      string c = OrderGetString(ORDER_COMMENT);
+      int gp; bool hd; string tag;
+      if(!ParseComment(c, gp, hd, tag)) continue;
+      if(gp != g || hd || tag != "IN") continue;
+      ENUM_ORDER_TYPE ot = (ENUM_ORDER_TYPE)OrderGetInteger(ORDER_TYPE);
+      if(side==0 && (ot==ORDER_TYPE_BUY_STOP || ot==ORDER_TYPE_BUY_LIMIT)) return tk;
+      if(side==1 && (ot==ORDER_TYPE_SELL_STOP|| ot==ORDER_TYPE_SELL_LIMIT)) return tk;
+   }
+   return 0;
+}
+
+// [v1.7] Auto-trail opposite IN stop while no position has filled yet.
+//        If price runs UP by > InpInitTrailTriggerPips beyond mid (i.e. closer to
+//        BuyStop), the SellStop is moved UP to keep it InpFrameLowerPips below market.
+//        Symmetric for downward moves. Only operates while BOTH IN pendings exist.
+void ManageInitialTrail(int g){
+   if(!InpInitTrailOpposite) return;
+   if(InpInitSideMode != INIT_BOTH) return; // need both stops
+   if(CountGroupPositions(g,-1,0) > 0) return; // a side already filled
+   if(IsGroupHedgeMatched(g)) return;
+
+   ulong tBuy  = FindInitialPendingTicket(g, 0);
+   ulong tSell = FindInitialPendingTicket(g, 1);
+   if(tBuy==0 || tSell==0) return; // need both alive to trail
+
+   if(!OrderSelect(tBuy)) return;
+   double buyPx  = OrderGetDouble(ORDER_PRICE_OPEN);
+   if(!OrderSelect(tSell)) return;
+   double sellPx = OrderGetDouble(ORDER_PRICE_OPEN);
+
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double trigger = InpInitTrailTriggerPips * g_point;
+
+   // Price moving UP toward Buy stop → drag Sell stop up
+   double distBuy = buyPx - ask;     // points until BuyStop trips
+   if(distBuy < InpFrameUpperPips*g_point - trigger){
+      double newSellPx = NormalizeDouble(bid - InpFrameLowerPips*g_point, g_digits);
+      if(newSellPx > sellPx + g_point){
+         if(!OrderSelect(tSell)) return;
+         double sl = OrderGetDouble(ORDER_SL);
+         double tp = (InpInitialTPPips>0)? NormalizeDouble(newSellPx - InpInitialTPPips*g_point, g_digits) : 0;
+         double newSL = (InpInitialSLPips>0)? NormalizeDouble(newSellPx + InpInitialSLPips*g_point, g_digits) : sl;
+         if(trade.OrderModify(tSell, newSellPx, newSL, tp, ORDER_TIME_GTC, 0)){
+            if(InpVerboseLog) PrintFormat("Golden2 v1.7: Trail SellStop G%d %.5f -> %.5f", g, sellPx, newSellPx);
+         }
+      }
+   }
+   // Price moving DOWN toward Sell stop → drag Buy stop down
+   double distSell = bid - sellPx;
+   if(distSell < InpFrameLowerPips*g_point - trigger){
+      double newBuyPx = NormalizeDouble(ask + InpFrameUpperPips*g_point, g_digits);
+      if(newBuyPx < buyPx - g_point){
+         if(!OrderSelect(tBuy)) return;
+         double sl = OrderGetDouble(ORDER_SL);
+         double tp = (InpInitialTPPips>0)? NormalizeDouble(newBuyPx + InpInitialTPPips*g_point, g_digits) : 0;
+         double newSL = (InpInitialSLPips>0)? NormalizeDouble(newBuyPx - InpInitialSLPips*g_point, g_digits) : sl;
+         if(trade.OrderModify(tBuy, newBuyPx, newSL, tp, ORDER_TIME_GTC, 0)){
+            if(InpVerboseLog) PrintFormat("Golden2 v1.7: Trail BuyStop G%d %.5f -> %.5f", g, buyPx, newBuyPx);
+         }
+      }
+   }
+}
+
+// [v1.7] Re-arm a fresh IN stop on a side after that side empties (TP hit) while
+//        the OPPOSITE side still has open positions. New stop is placed at
+//        current market ± InpInitReArmDistancePips. Side mode is respected.
+void ManageInitialReArm(int g){
+   if(!InpInitReArmAfterTP) return;
+   if(IsGroupHedgeMatched(g)) return;
+   if(g_blockNewOrders[g]) return;
+
+   bool buyAllowed  = (InpInitSideMode == INIT_BOTH || InpInitSideMode == INIT_BUY_ONLY);
+   bool sellAllowed = (InpInitSideMode == INIT_BOTH || InpInitSideMode == INIT_SELL_ONLY);
+
+   int buyPos  = CountGroupPositions(g, 0, 0);
+   int sellPos = CountGroupPositions(g, 1, 0);
+   ulong tBuyPend  = FindInitialPendingTicket(g, 0);
+   ulong tSellPend = FindInitialPendingTicket(g, 1);
+
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double dist = InpInitReArmDistancePips * g_point;
+
+   // Re-arm BUY: side empty + pending missing + opposite (sell) has positions
+   if(buyAllowed && buyPos==0 && tBuyPend==0 && sellPos>0){
+      double upPx = NormalizeDouble(ask + dist, g_digits);
+      double tp   = (InpInitialTPPips>0)? NormalizeDouble(upPx + InpInitialTPPips*g_point, g_digits) : 0;
+      double sl   = (InpInitialSLPips>0)? NormalizeDouble(upPx - InpInitialSLPips*g_point, g_digits) : 0;
+      string c    = MakeComment(g, false, "IN");
+      if(trade.BuyStop(InpInitialLot, upPx, _Symbol, sl, tp, ORDER_TIME_GTC, 0, c)){
+         if(InpVerboseLog) PrintFormat("Golden2 v1.7: ReArm BuyStop G%d at %.5f", g, upPx);
+      }
+   }
+   // Re-arm SELL: side empty + pending missing + opposite (buy) has positions
+   if(sellAllowed && sellPos==0 && tSellPend==0 && buyPos>0){
+      double dnPx = NormalizeDouble(bid - dist, g_digits);
+      double tp   = (InpInitialTPPips>0)? NormalizeDouble(dnPx - InpInitialTPPips*g_point, g_digits) : 0;
+      double sl   = (InpInitialSLPips>0)? NormalizeDouble(dnPx + InpInitialSLPips*g_point, g_digits) : 0;
+      string c    = MakeComment(g, false, "IN");
+      if(trade.SellStop(InpInitialLot, dnPx, _Symbol, sl, tp, ORDER_TIME_GTC, 0, c)){
+         if(InpVerboseLog) PrintFormat("Golden2 v1.7: ReArm SellStop G%d at %.5f", g, dnPx);
+      }
    }
 }
 
@@ -802,6 +946,7 @@ int CountConfirmingCandles(int dir, int n){
 }
 
 void TryPlaceGridLoss(int g){
+   if(!GridLoss_Enable) return; // [v1.7] Master toggle: disable grid → Initial-only mode
    if(g_blockNewOrders[g]) return; // [v1.4] Pre-hedge block
    if(IsGroupHedgeMatched(g)) return; // [v1.6] Post-hedge lock: freeze grid until Triple-Gate close
    for(int sd=0; sd<2; sd++){
@@ -1838,30 +1983,51 @@ void DrawDashboard(){
    }
    double maxPct = (InpHedgeTriggerUSD>0) ? (peakLossUSD*100.0/InpHedgeTriggerUSD) : 0;
 
+   // Build mode label
+   string modeLbl = "BOTH";
+   if(InpInitSideMode == INIT_BUY_ONLY)  modeLbl = "BUY-only";
+   if(InpInitSideMode == INIT_SELL_ONLY) modeLbl = "SELL-only";
+
    // Header
-   DashHeader("L_TITLE", x, y, w, rowH+2, " Golden2 EA v1.6    Mode: Group", InpDashAccent);
+   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v1.7    Side: %s", modeLbl), InpDashAccent);
    y += rowH+2;
 
-   // Rows
+   // ==== Account section ====
+   DashHeader("L_S_ACC", x, y, w, rowH, " === ACCOUNT ===", InpDashAccent); y+=rowH;
    DashRow("L_BAL",   x, y, w, rowH, "Balance",          StringFormat("$%.2f", bal), InpDashColor);  y+=rowH;
    DashRow("L_EQ",    x, y, w, rowH, "Equity",           StringFormat("$%.2f", eq),  InpDashColor);  y+=rowH;
    DashRow("L_FLT",   x, y, w, rowH, "Floating P/L",     StringFormat("$%.2f", flt), flt>=0?InpDashGood:InpDashBad); y+=rowH;
-   DashRow("L_PB",    x, y, w, rowH, "Position BUY",     StringFormat("$%.2f  %.2fL  %dord", plBuy,  GroupAggLotBuy(),  totBuyPos),  plBuy>=0?InpDashGood:InpDashBad);  y+=rowH;
-   DashRow("L_PS",    x, y, w, rowH, "Position SELL",    StringFormat("$%.2f  %.2fL  %dord", plSell, GroupAggLotSell(), totSellPos), plSell>=0?InpDashGood:InpDashBad); y+=rowH;
-   DashRow("L_DD",    x, y, w, rowH, "Current DD% (max)", StringFormat("%.2f%% / %.0f%%", maxPct, InpHedgeArmPercent), maxPct>=InpHedgeArmPercent?InpDashBad:(maxPct>=InpHedge_BlockNewOrderPercent?InpDashAccent:InpDashColor)); y+=rowH;
+
+   // ==== Position section ====
+   DashHeader("L_S_POS", x, y, w, rowH, " === POSITIONS ===", InpDashAccent); y+=rowH;
+   DashRow("L_PB",    x, y, w, rowH, "BUY  P/L  Lot  Ord",  StringFormat("$%.2f  %.2fL  %dord", plBuy,  GroupAggLotBuy(),  totBuyPos),  plBuy>=0?InpDashGood:InpDashBad);  y+=rowH;
+   DashRow("L_PS",    x, y, w, rowH, "SELL P/L  Lot  Ord",  StringFormat("$%.2f  %.2fL  %dord", plSell, GroupAggLotSell(), totSellPos), plSell>=0?InpDashGood:InpDashBad); y+=rowH;
    DashRow("L_TOTLOT",x, y, w, rowH, "Total Cur. Lot",   StringFormat("%.2f L", totMainLot+totHedgeLot), InpDashColor); y+=rowH;
    DashRow("L_GRP",   x, y, w, rowH, "Active / Matched", StringFormat("%d / %d", activeGroups, matchedGroups), InpDashAccent); y+=rowH;
-   DashRow("L_QUEUE", x, y, w, rowH, "Queue Mutex",      g_activeOpsGroup<0?"IDLE":StringFormat("G%d", g_activeOpsGroup), InpDashColor); y+=rowH;
-   DashRow("L_STRIP", x, y, w, rowH, "TP-Stripped",      StrippedListString(), InpDashColor); y+=rowH;
+   DashRow("L_DD",    x, y, w, rowH, "Current DD% (max)", StringFormat("%.2f%% / %.0f%%", maxPct, InpHedgeArmPercent), maxPct>=InpHedgeArmPercent?InpDashBad:(maxPct>=InpHedge_BlockNewOrderPercent?InpDashAccent:InpDashColor)); y+=rowH;
 
-   int rem=0;
-   string hd = IsHedgeOpenDelayActive(rem) ? StringFormat("WAIT %dm%02ds", rem/60, rem%60) : "READY";
-   DashRow("L_HDLY",  x, y, w, rowH, "Hedge Delay",      hd, InpDashColor); y+=rowH;
+   // ==== Module status section ====
+   DashHeader("L_S_MOD", x, y, w, rowH, " === MODULES ===", InpDashAccent); y+=rowH;
+   DashRow("L_INIT",  x, y, w, rowH, "Initial Side",     StringFormat("%s  Trail:%s  ReArm:%s",
+                          modeLbl,
+                          InpInitTrailOpposite?"ON":"OFF",
+                          InpInitReArmAfterTP ?"ON":"OFF"),
+                          InpDashColor); y+=rowH;
+   DashRow("L_GL",    x, y, w, rowH, "Grid Loss",        GridLoss_Enable?"ON":"OFF", GridLoss_Enable?InpDashGood:InpDashBad); y+=rowH;
+   DashRow("L_GP",    x, y, w, rowH, "Grid Profit",      GridProfit_Enable?"ON":"OFF", GridProfit_Enable?InpDashGood:InpDashBad); y+=rowH;
    DashRow("L_TRAIL", x, y, w, rowH, "MaxGrid Trail",    StringFormat("%s (Mode %d)", MaxGrid_TrailEnable?"ON":"OFF", MaxGrid_TrailMode), MaxGrid_TrailEnable?InpDashGood:InpDashColor); y+=rowH;
    DashRow("L_HEDGE", x, y, w, rowH, "Hedging",          InpHedge_Enabled?"ON":"OFF", InpHedge_Enabled?InpDashGood:InpDashBad); y+=rowH;
    DashRow("L_BLK",   x, y, w, rowH, "Pre-Hedge Block",  StringFormat("%d grp(s)", blockedGroups), blockedGroups>0?InpDashAccent:InpDashColor); y+=rowH;
+   int rem=0;
+   string hd = IsHedgeOpenDelayActive(rem) ? StringFormat("WAIT %dm%02ds", rem/60, rem%60) : "READY";
+   DashRow("L_HDLY",  x, y, w, rowH, "Hedge Delay",      hd, InpDashColor); y+=rowH;
    DashRow("L_TG",    x, y, w, rowH, "Triple-Gate",      InpExitTripleGate_Enable?"ON":"OFF", InpExitTripleGate_Enable?InpDashGood:InpDashBad); y+=rowH;
    DashRow("L_SQ",    x, y, w, rowH, "Squeeze",          SqueezeStatusString(), (g_sqBlockBuy||g_sqBlockSell)?InpDashBad:(InpSQ_Enable?InpDashGood:InpDashColor)); y+=rowH;
+
+   // ==== Footer ====
+   DashHeader("L_S_SYS", x, y, w, rowH, " === SYSTEM ===", InpDashAccent); y+=rowH;
+   DashRow("L_QUEUE", x, y, w, rowH, "Queue Mutex",      g_activeOpsGroup<0?"IDLE":StringFormat("G%d", g_activeOpsGroup), InpDashColor); y+=rowH;
+   DashRow("L_STRIP", x, y, w, rowH, "TP-Stripped",      StrippedListString(), InpDashColor); y+=rowH;
    DashRow("L_STAT",  x, y, w, rowH, "System Status",    InpAllowTrade?"Working":"Paused", InpAllowTrade?InpDashGood:InpDashBad); y+=rowH;
 
    //==== RIGHT PANEL: Hedging table (only when Hedging is ON) ====
@@ -1962,7 +2128,7 @@ int OnInit(){
    g_atrLossHandle   = iATR(_Symbol, GridLoss_ATR_TF,   GridLoss_ATR_Period);
    g_atrProfitHandle = iATR(_Symbol, GridProfit_ATR_TF, GridProfit_ATR_Period);
    if(g_bbHandle == INVALID_HANDLE || g_atrHandle == INVALID_HANDLE){
-      Print("Golden2 v1.6: indicator init failed");
+      Print("Golden2 v1.7: indicator init failed");
       return INIT_FAILED;
    }
 
@@ -1977,8 +2143,9 @@ int OnInit(){
       }
    }
 
-   PrintFormat("Golden2 EA v1.6 initialized | Magic=%I64d | MaxGroups=%d | Squeeze=%s | TripleGate=%s",
-               (long)InpMagic, InpMaxGroups, InpSQ_Enable?"ON":"OFF", InpExitTripleGate_Enable?"ON":"OFF");
+   PrintFormat("Golden2 EA v1.7 initialized | Magic=%I64d | MaxGroups=%d | InitMode=%d | GridLoss=%s | Squeeze=%s | TripleGate=%s",
+               (long)InpMagic, InpMaxGroups, (int)InpInitSideMode,
+               GridLoss_Enable?"ON":"OFF", InpSQ_Enable?"ON":"OFF", InpExitTripleGate_Enable?"ON":"OFF");
    return INIT_SUCCEEDED;
 }
 
@@ -2037,6 +2204,8 @@ void OnTick(){
       }
       EnforceFrameMutualExclusion(g);
       TrackInitialCandle(g);
+      ManageInitialTrail(g);   // [v1.7] trail opposite stop
+      ManageInitialReArm(g);   // [v1.7] re-arm side stop after TP
       TryPlaceGridLoss(g);
       TryPlaceGridProfit(g);
       ManageGroupHedgeArm(g);
