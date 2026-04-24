@@ -85,8 +85,8 @@ input int     InpInitReArmDistancePips= 200;                             // [v1.
 input bool            InpInitTrailOnBarClose      = true;                  // [v1.8] Trail opposite stop on every bar close (overrides v1.7 trigger trail)
 input ENUM_TIMEFRAMES InpInitTrailTF              = PERIOD_M1;             // [v1.8] Trail timer TF (default M1)
 input bool            InpGL_ImmediateAfterInitial = true;                  // [v1.8] Fire GL#1 immediately after Initial fill (bypass candle guards on first GL)
-input bool            InpFrameSymmetricTrail      = true;                  // [v2.4] Trail BOTH BuyStop & SellStop together to recenter on market mid
-input int             InpFrameRecenterMinPips     = 50;                    // [v2.4] Min mid-shift (points) before recentering both pendings
+input bool            InpFrameSymmetricTrail      = false;                 // [v2.5] DEPRECATED - kept for input compatibility, ignored. v2.5 always uses one-way toward-price trail.
+input int             InpFrameRecenterMinPips     = 50;                    // [v2.5] Min frame-distance growth (points) before dragging pending toward price
 
 //--- === Grid Loss Side === (Gold Miner-style)
 input string  __sec_grid_loss__       = "=== Grid Loss Side ===";    // ---
