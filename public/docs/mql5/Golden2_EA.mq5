@@ -1,14 +1,13 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|     Golden2 EA v1.7 - Initial Side Mode (Both/Buy/Sell) +        |
-//|     Auto-trail opposite stop + Re-arm after TP +                 |
-//|     Grid Loss enable toggle + Polished 2-panel dashboard         |
+//|     Golden2 EA v1.8 - Bar-close frame trail + Immediate GL +     |
+//|     Gold-Miner-style Squeeze panel                               |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "1.70"
-#property description "Golden2 EA v1.7 - (1) Initial side mode: Both / Buy-only / Sell-only (2) Auto-trail opposite Stop when one side runs away (3) Re-arm a fresh Stop after a side TPs (4) Grid Loss master enable toggle (off = Initial-only mode) (5) Polished 2-panel dashboard with sectioned headers"
+#property version   "1.80"
+#property description "Golden2 EA v1.8 - (1) Bar-close opposite-stop trail (every M1 close, only the side price ran away from gets dragged) (2) Grid Loss fires immediately after Initial fill (bypass candle guards on GL#1) (3) Gold-Miner-style multi-row Squeeze panel with per-TF ratio bars + overall Squeeze Status"
 #property strict
 
 #include <Trade/Trade.mqh>
