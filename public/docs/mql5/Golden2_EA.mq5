@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|     Golden2 EA v1.9 - New-Candle guard fix (require fully closed |
-//|     bar before next Grid order — was firing on first tick of     |
-//|     next bar). Also applied to Grid Profit OnlyNewCandle guard.  |
+//|     Golden2 EA v2.0 - Global Accumulate Close (account-wide) +  |
+//|     Group Sequencing Lock (no advance until prior group locked) |
+//|     + Bold solid Avg Price line + Initial Pending TP/SL guards. |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "1.90"
-#property description "Golden2 EA v1.9 - Fix: GridLoss_OnlyNewCandle / GridProfit_OnlyNewCandle now correctly wait for the previous candle to FULLY close before allowing the next grid order (previously fired on first tick of the next bar). DontSameCandle guard hardened with same closed-bar comparison. Bar-close frame trail, Immediate GL#1, Squeeze panel — unchanged."
+#property version   "2.00"
+#property description "Golden2 EA v2.0 - Global Accumulate Close (sums realized+floating across ALL groups, resets on no-orders), Group Sequencing Lock (next group blocked until prior group is fully hedge-locked or empty), Bold solid Average Price lines, Initial pending TP/SL sanity guards (fixes BuyStop closing immediately on fill). Bar-close trail, Immediate GL#1, Squeeze panel — unchanged."
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -141,6 +141,7 @@ input int     InpGridProfitTPPips     = 300;                         // [Legacy]
 input string  __sec_group__           = "=== Group / Queue ===";     // ---
 input int     InpMaxGroups            = 50;                          // Max active groups (1..50)
 input bool    InpSequentialQueue      = true;                        // Process one group at a time
+input bool    InpGroup_RequireFullLockBeforeNext = true;             // [v2.0] Block next group until prior group is fully hedge-locked or empty
 
 //--- === Take Profit (Average) ===
 input string  __sec_tp__              = "=== Take Profit (Average) ==="; // ---
@@ -156,6 +157,7 @@ input bool    InpTP_UsePctMaxDD       = false;                       // Use TP %
 input double  InpTP_PctMaxDD          = 50.0;                        // TP DD % (target = X% of max DD)
 input bool    InpTP_ShowAvgLine       = true;                        // Show Average Price Line
 input bool    InpTP_ShowTPLine        = true;                        // Show TP Line
+input int     InpTP_AvgLineWidth      = 3;                           // [v2.0] Average Line Width (pixels)
 input color   InpTP_AvgBuyColor       = clrDodgerBlue;               // Average Buy Line Color
 input color   InpTP_AvgSellColor      = clrOrangeRed;                // Average Sell Line Color
 input color   InpTP_BuyLineColor      = clrLime;                     // TP Buy Line Color
@@ -287,6 +289,13 @@ bool     g_maxGridTrailArmed[51][2];
 // [v1.3] Track last avg-TP price synced to broker per (group, side); 0 = none synced (Initial-TP mode)
 double   g_avgTPSynced[51][2];
 double   g_avgSLSynced[51][2];
+
+// [v2.0] Global Accumulate Close state (account-wide, sums realized + floating)
+double   g_accumRealizedSinceReset = 0.0;
+datetime g_accumResetTime          = 0;
+bool     g_hadAnyOrderLastTick     = false;
+double   g_accumNetCached          = 0.0;
+double   g_accumFloatingCached     = 0.0;
 
 //================ HELPERS: comments / parsing ================
 string SidePrefix(ENUM_SIDE s){ return (s==SIDE_BUY?"B":"S"); }
@@ -646,7 +655,7 @@ int FindActiveTradingGroup(){
 void PlaceInitialFrame(int g){
    // [v1.6] Squeeze block: don't place initial frame on volatile expansion
    if(InpSQ_Enable && InpSQ_BlockNewOrders && g_sqExpCount >= InpSQ_MinExpansionTFs && SqueezeBlocksAny()){
-      if(InpVerboseLog) PrintFormat("Golden2 v1.7: Squeeze BLOCK initial G%d (%s)", g, SqueezeStatusString());
+      if(InpVerboseLog) PrintFormat("Golden2 v2.0: Squeeze BLOCK initial G%d (%s)", g, SqueezeStatusString());
       return;
    }
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
@@ -654,10 +663,30 @@ void PlaceInitialFrame(int g){
    double mid = (ask+bid)*0.5;
    double upPx = NormalizeDouble(mid + InpFrameUpperPips * g_point, g_digits);
    double dnPx = NormalizeDouble(mid - InpFrameLowerPips * g_point, g_digits);
-   double tpUp = (InpInitialTPPips>0) ? NormalizeDouble(upPx + InpInitialTPPips*g_point, g_digits) : 0.0;
-   double slUp = (InpInitialSLPips>0) ? NormalizeDouble(upPx - InpInitialSLPips*g_point, g_digits) : 0.0;
-   double tpDn = (InpInitialTPPips>0) ? NormalizeDouble(dnPx - InpInitialTPPips*g_point, g_digits) : 0.0;
-   double slDn = (InpInitialSLPips>0) ? NormalizeDouble(dnPx + InpInitialSLPips*g_point, g_digits) : 0.0;
+
+   // [v2.0] Honour broker stops level when computing initial TP/SL.
+   long stopsLvl = (long)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   double minDist = (stopsLvl > 0) ? stopsLvl * g_point : 0.0;
+
+   double tpUp = 0.0, slUp = 0.0, tpDn = 0.0, slDn = 0.0;
+   if(InpInitialTPPips > 0){
+      double tpDistUp = MathMax(InpInitialTPPips * g_point, minDist + g_point);
+      tpUp = NormalizeDouble(upPx + tpDistUp, g_digits);
+      double tpDistDn = MathMax(InpInitialTPPips * g_point, minDist + g_point);
+      tpDn = NormalizeDouble(dnPx - tpDistDn, g_digits);
+   }
+   if(InpInitialSLPips > 0){
+      double slDistUp = MathMax(InpInitialSLPips * g_point, minDist + g_point);
+      slUp = NormalizeDouble(upPx - slDistUp, g_digits);
+      double slDistDn = MathMax(InpInitialSLPips * g_point, minDist + g_point);
+      slDn = NormalizeDouble(dnPx + slDistDn, g_digits);
+   }
+
+   // [v2.0] Sanity guards — never let TP land at/under entry for BUY (or above entry for SELL).
+   if(tpUp > 0 && tpUp <= upPx){ PrintFormat("Golden2 v2.0: invalid BuyStop TP %.*f<=%.*f, force 0", g_digits, tpUp, g_digits, upPx); tpUp = 0; }
+   if(slUp > 0 && slUp >= upPx){ PrintFormat("Golden2 v2.0: invalid BuyStop SL %.*f>=%.*f, force 0", g_digits, slUp, g_digits, upPx); slUp = 0; }
+   if(tpDn > 0 && tpDn >= dnPx){ PrintFormat("Golden2 v2.0: invalid SellStop TP %.*f>=%.*f, force 0", g_digits, tpDn, g_digits, dnPx); tpDn = 0; }
+   if(slDn > 0 && slDn <= dnPx){ PrintFormat("Golden2 v2.0: invalid SellStop SL %.*f<=%.*f, force 0", g_digits, slDn, g_digits, dnPx); slDn = 0; }
 
    trade.SetExpertMagicNumber(InpMagic);
    trade.SetDeviationInPoints(InpSlippage);
@@ -670,14 +699,18 @@ void PlaceInitialFrame(int g){
 
    if(placeBuy){
       if(!trade.BuyStop(InpInitialLot, upPx, _Symbol, slUp, tpUp, ORDER_TIME_GTC, 0, cBuy))
-         PrintFormat("Golden2 v1.7: BuyStop failed G%d err=%d", g, GetLastError());
+         PrintFormat("Golden2 v2.0: BuyStop failed G%d err=%d", g, GetLastError());
+      else if(InpVerboseLog)
+         PrintFormat("Golden2 v2.0: BuyStop G%d open=%.*f tp=%.*f sl=%.*f", g, g_digits, upPx, g_digits, tpUp, g_digits, slUp);
    }
    if(placeSell){
       if(!trade.SellStop(InpInitialLot, dnPx, _Symbol, slDn, tpDn, ORDER_TIME_GTC, 0, cSell))
-         PrintFormat("Golden2 v1.7: SellStop failed G%d err=%d", g, GetLastError());
+         PrintFormat("Golden2 v2.0: SellStop failed G%d err=%d", g, GetLastError());
+      else if(InpVerboseLog)
+         PrintFormat("Golden2 v2.0: SellStop G%d open=%.*f tp=%.*f sl=%.*f", g, g_digits, dnPx, g_digits, tpDn, g_digits, slDn);
    }
    if(InpVerboseLog)
-      PrintFormat("Golden2 v1.7: Placed initial frame G%d mode=%d mid=%.5f up=%s dn=%s",
+      PrintFormat("Golden2 v2.0: Placed initial frame G%d mode=%d mid=%.5f up=%s dn=%s",
                   g, (int)InpInitSideMode, mid,
                   placeBuy?DoubleToString(upPx,g_digits):"-",
                   placeSell?DoubleToString(dnPx,g_digits):"-");
@@ -1668,15 +1701,8 @@ void CheckAndCloseByAverageTP(int g){
 
    double bal = AccountInfoDouble(ACCOUNT_BALANCE);
 
-   // 5) Accumulate close (group-wide)
-   if(InpTP_UseAccumulateClose){
-      double netGroup = GroupFloatingPL(g,-1,-1);
-      if(netGroup >= InpTP_AccumulateTarget){
-         if(InpVerboseLog) PrintFormat("Golden2 v1.1: TP AccumClose G%d net=%.2f >= %.2f", g, netGroup, InpTP_AccumulateTarget);
-         CloseAllPositionsOfGroup(g);
-         return;
-      }
-   }
+   // [v2.0] Per-group accumulate-close removed — handled globally in
+   //        ManageGlobalAccumulateClose() (account-wide, includes realized).
 
    for(int sd=0; sd<2; sd++){
       int cnt = CountGroupPositions(g, sd, 0);
@@ -1766,14 +1792,14 @@ void DeleteLinesForGroup(int g){
    }
 }
 
-void DrawHLine(string name, double price, color clr){
+void DrawHLine(string name, double price, color clr, ENUM_LINE_STYLE style=STYLE_DOT, int width=1){
    if(price <= 0) return;
    if(ObjectFind(0, name) < 0){
       ObjectCreate(0, name, OBJ_HLINE, 0, 0, price);
-      ObjectSetInteger(0, name, OBJPROP_STYLE, STYLE_DOT);
-      ObjectSetInteger(0, name, OBJPROP_WIDTH, 1);
       ObjectSetInteger(0, name, OBJPROP_BACK, true);
    }
+   ObjectSetInteger(0, name, OBJPROP_STYLE, style);
+   ObjectSetInteger(0, name, OBJPROP_WIDTH, width);
    ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
    ObjectSetDouble(0, name, OBJPROP_PRICE, price);
 }
@@ -1798,7 +1824,7 @@ void DrawAverageAndTPLinesForGroup(int g){
          continue;
       }
       double avg = GroupAveragePrice(g, sd, 0);
-      if(InpTP_ShowAvgLine) DrawHLine(nmAvg, avg, sd==0?InpTP_AvgBuyColor:InpTP_AvgSellColor);
+      if(InpTP_ShowAvgLine) DrawHLine(nmAvg, avg, sd==0?InpTP_AvgBuyColor:InpTP_AvgSellColor, STYLE_SOLID, MathMax(1, InpTP_AvgLineWidth));
       else if(ObjectFind(0,nmAvg)>=0) ObjectDelete(0,nmAvg);
 
       if(InpTP_ShowTPLine && InpTP_UsePointsFromAvg){
@@ -1941,6 +1967,116 @@ void PlaceContinuationGridIfNeeded(int g){
 }
 
 //================ CYCLE / GROUP LIFECYCLE ================
+
+// [v2.0] Account-wide accumulate-close: sums realized (since last reset) +
+// floating across ALL groups + sides. Resets to 0 each time the account
+// holds zero positions and zero pendings of this magic.
+bool AnyOrderInSystem(){
+   int p = PositionsTotal();
+   for(int i=0;i<p;i++){
+      ulong tk = PositionGetTicket(i);
+      if(tk==0) continue;
+      if(!PositionSelectByTicket(tk)) continue;
+      if((long)PositionGetInteger(POSITION_MAGIC) != InpMagic) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      return true;
+   }
+   int o = OrdersTotal();
+   for(int i=0;i<o;i++){
+      ulong tk = OrderGetTicket(i);
+      if(tk==0) continue;
+      if(!OrderSelect(tk)) continue;
+      if((long)OrderGetInteger(ORDER_MAGIC) != InpMagic) continue;
+      if(OrderGetString(ORDER_SYMBOL) != _Symbol) continue;
+      return true;
+   }
+   return false;
+}
+
+double SumRealizedSince(datetime since){
+   double sum = 0.0;
+   if(!HistorySelect(since, TimeCurrent())) return 0.0;
+   int total = HistoryDealsTotal();
+   for(int i=0;i<total;i++){
+      ulong tk = HistoryDealGetTicket(i);
+      if(tk==0) continue;
+      if((long)HistoryDealGetInteger(tk, DEAL_MAGIC) != InpMagic) continue;
+      if(HistoryDealGetString(tk, DEAL_SYMBOL) != _Symbol) continue;
+      long entry = HistoryDealGetInteger(tk, DEAL_ENTRY);
+      if(entry != DEAL_ENTRY_OUT && entry != DEAL_ENTRY_INOUT && entry != DEAL_ENTRY_OUT_BY) continue;
+      sum += HistoryDealGetDouble(tk, DEAL_PROFIT);
+      sum += HistoryDealGetDouble(tk, DEAL_SWAP);
+      sum += HistoryDealGetDouble(tk, DEAL_COMMISSION);
+   }
+   return sum;
+}
+
+void CloseEverythingNow(){
+   // Close all positions of this magic
+   for(int pass=0; pass<3; pass++){
+      int p = PositionsTotal();
+      for(int i=p-1;i>=0;i--){
+         ulong tk = PositionGetTicket(i);
+         if(tk==0) continue;
+         if(!PositionSelectByTicket(tk)) continue;
+         if((long)PositionGetInteger(POSITION_MAGIC) != InpMagic) continue;
+         if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+         trade.PositionClose(tk);
+      }
+      int o = OrdersTotal();
+      for(int i=o-1;i>=0;i--){
+         ulong tk = OrderGetTicket(i);
+         if(tk==0) continue;
+         if(!OrderSelect(tk)) continue;
+         if((long)OrderGetInteger(ORDER_MAGIC) != InpMagic) continue;
+         if(OrderGetString(ORDER_SYMBOL) != _Symbol) continue;
+         trade.OrderDelete(tk);
+      }
+   }
+}
+
+void ManageGlobalAccumulateClose(){
+   bool any = AnyOrderInSystem();
+   double floating = 0.0;
+   if(any){
+      for(int g=1; g<=InpMaxGroups; g++) floating += GroupFloatingPL(g,-1,-1);
+   }
+   // Reset point: transition from "had orders" -> "none"
+   if(!any && g_hadAnyOrderLastTick){
+      g_accumRealizedSinceReset = 0.0;
+      g_accumResetTime          = TimeCurrent();
+      g_accumNetCached          = 0.0;
+      g_accumFloatingCached     = 0.0;
+      if(InpVerboseLog) Print("Golden2 v2.0: Accumulate cycle RESET (no orders in system)");
+   }
+   if(g_accumResetTime == 0) g_accumResetTime = TimeCurrent();
+
+   double realized = SumRealizedSince(g_accumResetTime);
+   g_accumRealizedSinceReset = realized;
+   g_accumFloatingCached     = floating;
+   g_accumNetCached          = realized + floating;
+
+   if(InpTP_UseAccumulateClose && any && g_accumNetCached >= InpTP_AccumulateTarget){
+      PrintFormat("Golden2 v2.0: GLOBAL Accumulate Close net=%.2f >= %.2f (realized=%.2f float=%.2f)",
+                  g_accumNetCached, InpTP_AccumulateTarget, realized, floating);
+      CloseEverythingNow();
+   }
+
+   g_hadAnyOrderLastTick = any;
+}
+
+// [v2.0] Group is "safe to advance to next" if it has no main positions
+// OR has hedge-matched both sides (Triple-Gate handles exit). Otherwise
+// it still has unlocked main exposure that must be resolved first.
+bool IsGroupSafeToAdvance(int g){
+   bool hb = (CountGroupPositions(g, 0, 0) > 0);
+   bool hs = (CountGroupPositions(g, 1, 0) > 0);
+   if(!hb && !hs) return true;                            // no main left
+   bool hh = (CountGroupPositions(g, -1, 1) > 0);
+   if(hh && hb && hs) return true;                        // both sides locked by hedge
+   return false;
+}
+
 void TryAdvanceToNextGroup(){
    int cur = FindActiveTradingGroup();
    if(cur < 1) {
@@ -1949,6 +2085,17 @@ void TryAdvanceToNextGroup(){
       return;
    }
    if(GroupHedgeJustActivated(cur)){
+      // [v2.0] Don't advance until prior group is fully locked or emptied
+      if(InpGroup_RequireFullLockBeforeNext && !IsGroupSafeToAdvance(cur)){
+         static datetime lastHoldLog = 0;
+         if(InpVerboseLog && TimeCurrent() - lastHoldLog >= 60){
+            PrintFormat("Golden2 v2.0: hold G%d->G%d (G%d still has unlocked main BUY=%d SELL=%d)",
+                        cur, cur+1, cur,
+                        CountGroupPositions(cur,0,0), CountGroupPositions(cur,1,0));
+            lastHoldLog = TimeCurrent();
+         }
+         return;
+      }
       if(cur < InpMaxGroups){
          int next = cur + 1;
          if(!GroupHasAnyPositions(next) && !GroupHasAnyPendings(next)){
@@ -1957,7 +2104,7 @@ void TryAdvanceToNextGroup(){
       } else {
          static datetime lastWarn = 0;
          if(TimeCurrent() - lastWarn >= 300){
-            Print("Golden2 v1.1: Reached InpMaxGroups limit, no new group will be opened.");
+            Print("Golden2 v2.0: Reached InpMaxGroups limit, no new group will be opened.");
             lastWarn = TimeCurrent();
          }
       }
@@ -2103,7 +2250,7 @@ void DrawDashboard(){
    if(InpInitSideMode == INIT_SELL_ONLY) modeLbl = "SELL-only";
 
    // Header
-   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v1.9    Side: %s", modeLbl), InpDashAccent);
+   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.0    Side: %s", modeLbl), InpDashAccent);
    y += rowH+2;
 
    // ==== Account section ====
@@ -2111,6 +2258,24 @@ void DrawDashboard(){
    DashRow("L_BAL",   x, y, w, rowH, "Balance",          StringFormat("$%.2f", bal), InpDashColor);  y+=rowH;
    DashRow("L_EQ",    x, y, w, rowH, "Equity",           StringFormat("$%.2f", eq),  InpDashColor);  y+=rowH;
    DashRow("L_FLT",   x, y, w, rowH, "Floating P/L",     StringFormat("$%.2f", flt), flt>=0?InpDashGood:InpDashBad); y+=rowH;
+
+   // ==== [v2.0] Accumulate section ====
+   if(InpTP_UseAccumulateClose){
+      DashHeader("L_S_ACC2", x, y, w, rowH, " === ACCUMULATE ===", InpDashAccent); y+=rowH;
+      DashRow("L_AC_ST",  x, y, w, rowH, "Status",   "ON", InpDashGood); y+=rowH;
+      DashRow("L_AC_TGT", x, y, w, rowH, "Target",   StringFormat("$%.2f", InpTP_AccumulateTarget), InpDashColor); y+=rowH;
+      DashRow("L_AC_RLZ", x, y, w, rowH, "Realized (cycle)", StringFormat("$%.2f", g_accumRealizedSinceReset),
+              g_accumRealizedSinceReset>=0?InpDashGood:InpDashBad); y+=rowH;
+      DashRow("L_AC_FLT", x, y, w, rowH, "Floating", StringFormat("$%.2f", g_accumFloatingCached),
+              g_accumFloatingCached>=0?InpDashGood:InpDashBad); y+=rowH;
+      DashRow("L_AC_NET", x, y, w, rowH, "Accum Net", StringFormat("$%.2f", g_accumNetCached),
+              g_accumNetCached>=0?InpDashGood:InpDashBad); y+=rowH;
+      double pct = (InpTP_AccumulateTarget>0) ? (g_accumNetCached*100.0/InpTP_AccumulateTarget) : 0;
+      DashRow("L_AC_PCT", x, y, w, rowH, "Progress", StringFormat("%.1f%%", pct),
+              pct>=100?InpDashGood:(pct>=50?InpDashAccent:InpDashColor)); y+=rowH;
+   } else {
+      DashRow("L_AC_OFF", x, y, w, rowH, "Accumulate", "OFF", InpDashColor); y+=rowH;
+   }
 
    // ==== Position section ====
    DashHeader("L_S_POS", x, y, w, rowH, " === POSITIONS ===", InpDashAccent); y+=rowH;
@@ -2276,10 +2441,12 @@ int OnInit(){
       }
    }
 
-   PrintFormat("Golden2 EA v1.9 initialized | Magic=%I64d | MaxGroups=%d | InitMode=%d | GridLoss=%s | Squeeze=%s | TripleGate=%s | BarTrail=%s",
+   PrintFormat("Golden2 EA v2.0 initialized | Magic=%I64d | MaxGroups=%d | InitMode=%d | GridLoss=%s | Squeeze=%s | TripleGate=%s | BarTrail=%s | Accum=%s | GroupLock=%s",
                (long)InpMagic, InpMaxGroups, (int)InpInitSideMode,
                GridLoss_Enable?"ON":"OFF", InpSQ_Enable?"ON":"OFF", InpExitTripleGate_Enable?"ON":"OFF",
-               InpInitTrailOnBarClose?"ON":"OFF");
+               InpInitTrailOnBarClose?"ON":"OFF",
+               InpTP_UseAccumulateClose?"ON":"OFF",
+               InpGroup_RequireFullLockBeforeNext?"ON":"OFF");
    return INIT_SUCCEEDED;
 }
 
@@ -2371,6 +2538,7 @@ void OnTick(){
       DrawAverageAndTPLinesForGroup(g);
    }
 
+   ManageGlobalAccumulateClose(); // [v2.0] account-wide accumulate close + dashboard cache
    TryAdvanceToNextGroup();
    DrawDashboard();
 }
