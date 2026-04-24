@@ -897,7 +897,10 @@ void ManageInitialTrailOnBarClose(int g){
    double minStep = MathMax(InpFrameRecenterMinPips, 1) * g_point;
 
    // ---- BUY pending (BuyStop sits ABOVE market) ----
-   if(tBuy != 0 && buyPos == 0 && (sellPos > 0 || tSell != 0)){
+   // [v2.70] Removed v2.5 condition (sellPos>0 || tSell!=0). With continuous
+   //         frame maintenance, BuyStop should trail toward price whenever it
+   //         exists, regardless of opposite side state.
+   if(tBuy != 0 && buyPos == 0){
       if(OrderSelect(tBuy)){
          double oldPx = OrderGetDouble(ORDER_PRICE_OPEN);
          double oldTP = OrderGetDouble(ORDER_TP);
@@ -932,7 +935,8 @@ void ManageInitialTrailOnBarClose(int g){
    }
 
    // ---- SELL pending (SellStop sits BELOW market) ----
-   if(tSell != 0 && sellPos == 0 && (buyPos > 0 || tBuy != 0)){
+   // [v2.70] Removed v2.5 condition — see BUY trail above.
+   if(tSell != 0 && sellPos == 0){
       if(OrderSelect(tSell)){
          double oldPx = OrderGetDouble(ORDER_PRICE_OPEN);
          double oldTP = OrderGetDouble(ORDER_TP);
