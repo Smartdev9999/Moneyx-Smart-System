@@ -1967,6 +1967,104 @@ void PlaceContinuationGridIfNeeded(int g){
 }
 
 //================ CYCLE / GROUP LIFECYCLE ================
+
+// [v2.0] Account-wide accumulate-close: sums realized (since last reset) +
+// floating across ALL groups + sides. Resets to 0 each time the account
+// holds zero positions and zero pendings of this magic.
+bool AnyOrderInSystem(){
+   int p = PositionsTotal();
+   for(int i=0;i<p;i++){
+      ulong tk = PositionGetTicket(i);
+      if(tk==0) continue;
+      if(!PositionSelectByTicket(tk)) continue;
+      if((long)PositionGetInteger(POSITION_MAGIC) != InpMagic) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      return true;
+   }
+   int o = OrdersTotal();
+   for(int i=0;i<o;i++){
+      ulong tk = OrderGetTicket(i);
+      if(tk==0) continue;
+      if(!OrderSelect(tk)) continue;
+      if((long)OrderGetInteger(ORDER_MAGIC) != InpMagic) continue;
+      if(OrderGetString(ORDER_SYMBOL) != _Symbol) continue;
+      return true;
+   }
+   return false;
+}
+
+double SumRealizedSince(datetime since){
+   double sum = 0.0;
+   if(!HistorySelect(since, TimeCurrent())) return 0.0;
+   int total = HistoryDealsTotal();
+   for(int i=0;i<total;i++){
+      ulong tk = HistoryDealGetTicket(i);
+      if(tk==0) continue;
+      if((long)HistoryDealGetInteger(tk, DEAL_MAGIC) != InpMagic) continue;
+      if(HistoryDealGetString(tk, DEAL_SYMBOL) != _Symbol) continue;
+      long entry = HistoryDealGetInteger(tk, DEAL_ENTRY);
+      if(entry != DEAL_ENTRY_OUT && entry != DEAL_ENTRY_INOUT && entry != DEAL_ENTRY_OUT_BY) continue;
+      sum += HistoryDealGetDouble(tk, DEAL_PROFIT);
+      sum += HistoryDealGetDouble(tk, DEAL_SWAP);
+      sum += HistoryDealGetDouble(tk, DEAL_COMMISSION);
+   }
+   return sum;
+}
+
+void CloseEverythingNow(){
+   // Close all positions of this magic
+   for(int pass=0; pass<3; pass++){
+      int p = PositionsTotal();
+      for(int i=p-1;i>=0;i--){
+         ulong tk = PositionGetTicket(i);
+         if(tk==0) continue;
+         if(!PositionSelectByTicket(tk)) continue;
+         if((long)PositionGetInteger(POSITION_MAGIC) != InpMagic) continue;
+         if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+         trade.PositionClose(tk);
+      }
+      int o = OrdersTotal();
+      for(int i=o-1;i>=0;i--){
+         ulong tk = OrderGetTicket(i);
+         if(tk==0) continue;
+         if(!OrderSelect(tk)) continue;
+         if((long)OrderGetInteger(ORDER_MAGIC) != InpMagic) continue;
+         if(OrderGetString(ORDER_SYMBOL) != _Symbol) continue;
+         trade.OrderDelete(tk);
+      }
+   }
+}
+
+void ManageGlobalAccumulateClose(){
+   bool any = AnyOrderInSystem();
+   double floating = 0.0;
+   if(any){
+      for(int g=1; g<=InpMaxGroups; g++) floating += GroupFloatingPL(g,-1,-1);
+   }
+   // Reset point: transition from "had orders" -> "none"
+   if(!any && g_hadAnyOrderLastTick){
+      g_accumRealizedSinceReset = 0.0;
+      g_accumResetTime          = TimeCurrent();
+      g_accumNetCached          = 0.0;
+      g_accumFloatingCached     = 0.0;
+      if(InpVerboseLog) Print("Golden2 v2.0: Accumulate cycle RESET (no orders in system)");
+   }
+   if(g_accumResetTime == 0) g_accumResetTime = TimeCurrent();
+
+   double realized = SumRealizedSince(g_accumResetTime);
+   g_accumRealizedSinceReset = realized;
+   g_accumFloatingCached     = floating;
+   g_accumNetCached          = realized + floating;
+
+   if(InpTP_UseAccumulateClose && any && g_accumNetCached >= InpTP_AccumulateTarget){
+      PrintFormat("Golden2 v2.0: GLOBAL Accumulate Close net=%.2f >= %.2f (realized=%.2f float=%.2f)",
+                  g_accumNetCached, InpTP_AccumulateTarget, realized, floating);
+      CloseEverythingNow();
+   }
+
+   g_hadAnyOrderLastTick = any;
+}
+
 // [v2.0] Group is "safe to advance to next" if it has no main positions
 // OR has hedge-matched both sides (Triple-Gate handles exit). Otherwise
 // it still has unlocked main exposure that must be resolved first.
