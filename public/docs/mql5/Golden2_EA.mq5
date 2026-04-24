@@ -1543,11 +1543,11 @@ int OnInit(){
    g_atrLossHandle   = iATR(_Symbol, GridLoss_ATR_TF,   GridLoss_ATR_Period);
    g_atrProfitHandle = iATR(_Symbol, GridProfit_ATR_TF, GridProfit_ATR_Period);
    if(g_bbHandle == INVALID_HANDLE || g_atrHandle == INVALID_HANDLE){
-      Print("Golden2 v1.2: indicator init failed");
+      Print("Golden2 v1.3: indicator init failed");
       return INIT_FAILED;
    }
 
-   PrintFormat("Golden2 EA v1.2 initialized | Magic=%I64d | MaxGroups=%d", (long)InpMagic, InpMaxGroups);
+   PrintFormat("Golden2 EA v1.3 initialized | Magic=%I64d | MaxGroups=%d", (long)InpMagic, InpMaxGroups);
    return INIT_SUCCEEDED;
 }
 
