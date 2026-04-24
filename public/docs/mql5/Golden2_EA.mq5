@@ -12,8 +12,8 @@
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.72"
-#property description "Golden2 EA v2.7.2 - Per-Side Squeeze Block + Backtest Speed. PlaceInitialFrame's Squeeze guard switched from 'block whole group' (SqueezeBlocksAny) to per-side flags so a BUY block only suppresses the BuyStop and SellStop still fires (mirrors Grid Loss/Profit). Backtest accel: detects MQL_TESTER/MQL_VISUAL_MODE in OnInit, throttles DrawDashboard via InpDashRenderIntervalSec (skipped entirely in non-visual tester/optimization), skips DrawAverageAndTPLinesForGroup in non-visual tester, RefreshSqueezeState now runs once per new M1 bar, HasClosedMainOnSide cached ~2s per (group,side), per-tick group loop bounded to g_highestActiveGroup+1. Trading logic, OrderSend, hedge, grid, triple-gate, accumulate, v2.6 re-entry, v2.5 toward-price trail all preserved unchanged."
+#property version   "2.73"
+#property description "Golden2 EA v2.7.3 - Tester Chart Cleanup (auto-removes BB/ATR/ZigZag and other template indicators in Strategy Tester to speed up backtests, especially visual mode). Also disables grid/period-sep/volumes (and trade levels + autoscroll in non-visual tester). All EA-internal indicator handles (iBands/iATR/iMA for Squeeze + Exit + GridLoss/Profit ATR) keep computing in the background — only the chart graphics are removed. Inherits v2.7.2: Per-Side Squeeze Block + Backtest Speed (DashRenderInterval throttle, M1-bar Squeeze refresh, HasClosedMainOnSide cache, group-loop bound). Trading logic, OrderSend, hedge, grid, triple-gate, accumulate, v2.6 re-entry, v2.5 toward-price trail all preserved unchanged."
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -244,6 +244,7 @@ input color   InpDashBad              = clrTomato;                   // Negative
 input int     InpDashFontSize         = 9;                           // Font size
 input string  InpDashFont             = "Consolas";                  // Font name (monospaced recommended)
 input int     InpDashRenderIntervalSec= 1;                           // [v2.72] Dashboard render interval (sec). Higher = faster backtest.
+input bool    InpTester_CleanChart    = true;                        // [v2.73] In Strategy Tester, auto-remove all chart indicators (BB/ATR/ZigZag/etc.) for faster backtest. EA's internal Squeeze/ATR/BB still compute in background.
 
 //================ GLOBALS ================
 double g_point;
@@ -2640,7 +2641,7 @@ void DrawDashboard(){
    if(InpInitSideMode == INIT_SELL_ONLY) modeLbl = "SELL-only";
 
    // Header
-   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.7.2    Side: %s", modeLbl), InpDashAccent);
+   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.7.3    Side: %s", modeLbl), InpDashAccent);
    y += rowH+2;
 
    // ==== Account section ====
@@ -2789,6 +2790,38 @@ double GroupAggLotSell(){
 }
 
 //================ INIT / DEINIT / TICK ================
+
+// [v2.73] Strip every indicator the Tester template glued onto the chart so
+// backtests (especially visual mode) don't waste cycles redrawing BB/ATR/ZigZag.
+// EA-internal handles (iBands/iATR/iMA used by Squeeze + Exit + GridLoss/Profit)
+// keep computing in the background — only chart graphics are removed.
+void CleanupChartIndicatorsInTester(){
+   if(!g_isTesterMode) return;
+   if(!InpTester_CleanChart) return;
+   long chart = 0;
+   int removed = 0;
+   int totalWindows = (int)ChartGetInteger(chart, CHART_WINDOWS_TOTAL);
+   for(int win = totalWindows - 1; win >= 0; win--){
+      int cnt = ChartIndicatorsTotal(chart, win);
+      for(int idx = cnt - 1; idx >= 0; idx--){
+         string nm = ChartIndicatorName(chart, win, idx);
+         if(nm == "") continue;
+         if(ChartIndicatorDelete(chart, win, nm)) removed++;
+      }
+   }
+   // Hide remaining visual noise.
+   ChartSetInteger(chart, CHART_SHOW_GRID, false);
+   ChartSetInteger(chart, CHART_SHOW_PERIOD_SEP, false);
+   ChartSetInteger(chart, CHART_SHOW_VOLUMES, CHART_VOLUME_HIDE);
+   if(!g_isVisualMode){
+      ChartSetInteger(chart, CHART_SHOW_TRADE_LEVELS, false);
+      ChartSetInteger(chart, CHART_AUTOSCROLL, false);
+   }
+   ChartRedraw(chart);
+   PrintFormat("[v2.73] Tester chart cleanup: removed %d indicator(s) across %d window(s) | CleanChart=%s Visual=%s",
+               removed, totalWindows, InpTester_CleanChart?"ON":"OFF", g_isVisualMode?"YES":"NO");
+}
+
 int OnInit(){
    g_point  = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
    g_digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
@@ -2802,6 +2835,8 @@ int OnInit(){
    g_isOptimization = (bool)MQLInfoInteger(MQL_OPTIMIZATION);
    g_lastDashRender = 0;
    g_lastSqueezeBar = 0;
+   // [v2.73] Strip Tester chart template indicators ASAP for fastest backtest.
+   CleanupChartIndicatorsInTester();
    g_highestActiveGroup = 0;
    for(int hi=0; hi<51; hi++){
       g_hcmCacheTime[hi][0] = 0;        g_hcmCacheTime[hi][1] = 0;
@@ -2844,7 +2879,7 @@ int OnInit(){
       }
    }
 
-   PrintFormat("Golden2 EA v2.7.2 initialized | Magic=%I64d | MaxGroups=%d | InitMode=%d | GridLoss=%s | Squeeze=%s SqueezePerSide=ON | TripleGate=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | Tester=%s Visual=%s Opt=%s DashInterval=%ds",
+   PrintFormat("Golden2 EA v2.7.3 initialized | Magic=%I64d | MaxGroups=%d | InitMode=%d | GridLoss=%s | Squeeze=%s SqueezePerSide=ON | TripleGate=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | Tester=%s Visual=%s Opt=%s DashInterval=%ds TesterCleanChart=%s",
                (long)InpMagic, InpMaxGroups, (int)InpInitSideMode,
                GridLoss_Enable?"ON":"OFF", InpSQ_Enable?"ON":"OFF", InpExitTripleGate_Enable?"ON":"OFF",
                InpInitTrailOnBarClose?"ON":"OFF",
@@ -2855,7 +2890,8 @@ int OnInit(){
                InpGroup_RequireFullLockBeforeNext?"ON":"OFF",
                InpGroup_AdvancePerTick?"ON":"OFF",
                g_isTesterMode?"YES":"NO", g_isVisualMode?"YES":"NO", g_isOptimization?"YES":"NO",
-               InpDashRenderIntervalSec);
+               InpDashRenderIntervalSec,
+               InpTester_CleanChart?"ON":"OFF");
    return INIT_SUCCEEDED;
 }
 
