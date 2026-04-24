@@ -6,8 +6,8 @@
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "1.20"
-#property description "Golden2 EA v1.2 - Pending frame + Gold-Miner-style Grid (Loss/Profit/Max-Grid-Trailing) + Group-based Pending Hedge (arm/disarm) + Average TP/SL Manager + Auto-strip Broker TP/SL on hedge match + Triple-Gate Matching Close + Sequential Queue (max 50 groups)"
+#property version   "1.30"
+#property description "Golden2 EA v1.3 - Initial TP (1-order) + Auto-switch to Average TP/SL on Broker (>=2 orders, Gold-Miner style) + Gold-Miner Grid (Loss/Profit/Max-Grid-Trailing) + Group-based Pending Hedge + Auto-strip Broker TP/SL on hedge match + Triple-Gate Matching Close + Sequential Queue (max 50 groups)"
 #property strict
 
 #include <Trade/Trade.mqh>
