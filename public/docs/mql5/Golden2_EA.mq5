@@ -504,6 +504,7 @@ void EnforceFrameMutualExclusion(int g){
 }
 
 //================ MAIN GRID ================
+// Legacy lot ladder (used by hedge stack & continuation logic — DO NOT TOUCH)
 double LotForLevel(int level){
    double l = InpInitialLot;
    for(int i=0;i<level;i++) l *= InpMultiplier;
@@ -512,6 +513,73 @@ double LotForLevel(int level){
    if(step>0) l = MathRound(l/step)*step;
    if(l<minL) l = minL;
    return NormalizeDouble(l, 2);
+}
+
+//----- Gold-Miner-style helpers -----
+// Parse semicolon-separated double list; returns fallback when index missing
+double ParseCSVDouble(const string s, int idx, double fallback){
+   string parts[];
+   int n = StringSplit(s, ';', parts);
+   if(idx < 0 || idx >= n) return fallback;
+   string v = parts[idx];
+   StringTrimLeft(v); StringTrimRight(v);
+   if(StringLen(v) == 0) return fallback;
+   return StringToDouble(v);
+}
+int ParseCSVInt(const string s, int idx, int fallback){
+   double d = ParseCSVDouble(s, idx, (double)fallback);
+   return (int)d;
+}
+
+double NormalizeLot(double l){
+   double minL = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   double maxL = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+   double step = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   if(step>0) l = MathRound(l/step)*step;
+   if(l<minL) l = minL;
+   if(maxL>0 && l>maxL) l = maxL;
+   return NormalizeDouble(l, 2);
+}
+
+// Resolve lot for a given grid level (level=1..MaxTrades) with the chosen mode
+double ResolveLot(int level, ENUM_LOT_MODE_G2 mode, const string customStr,
+                  double addPerLvl, double mulFactor){
+   double l = InpInitialLot;
+   if(mode == G2_LOT_CUSTOM){
+      l = ParseCSVDouble(customStr, level-1, InpInitialLot);
+   } else if(mode == G2_LOT_ADD){
+      l = InpInitialLot + (double)level * addPerLvl * InpInitialLot;
+   } else { // MULTIPLY
+      l = InpInitialLot * MathPow(mulFactor, (double)level);
+   }
+   return NormalizeLot(l);
+}
+
+double GetATRPoints(int handle){
+   if(handle == INVALID_HANDLE) return 0.0;
+   double buf[2];
+   if(CopyBuffer(handle, 0, 0, 2, buf) <= 0) return 0.0;
+   if(buf[0] <= 0) return 0.0;
+   return buf[0] / g_point; // ATR in points
+}
+
+// Resolve gap in points for next grid level
+int ResolveGapPoints(int level, ENUM_GAP_TYPE_G2 gapType, int fixedPts,
+                     const string customStr, int atrHandle, double atrMult,
+                     ENUM_ATR_REF_G2 atrRef, double atrSnapshotPts, int minGap){
+   int gap = fixedPts;
+   if(gapType == G2_GAP_FIXED){
+      gap = fixedPts;
+   } else if(gapType == G2_GAP_CUSTOM){
+      gap = ParseCSVInt(customStr, level-1, fixedPts);
+   } else { // ATR
+      double atrPts = (atrRef == G2_ATR_REF_LAST_GRID && atrSnapshotPts>0)
+                       ? atrSnapshotPts
+                       : GetATRPoints(atrHandle);
+      gap = (int)(atrPts * atrMult);
+   }
+   if(gap < minGap) gap = minGap;
+   return gap;
 }
 
 int HighestGridLevel(int g, ENUM_SIDE side, bool hedge, string family){
@@ -562,26 +630,215 @@ double LastEntryPrice(int g, int sideFilter, bool hedge){
    return price;
 }
 
+datetime LastEntryCandleTime(int g, int sideFilter, bool hedge, ENUM_TIMEFRAMES tf){
+   double px;
+   datetime newest = 0;
+   int total = PositionsTotal();
+   for(int i=0;i<total;i++){
+      ulong tk = PositionGetTicket(i);
+      if(tk==0) continue;
+      if(!PositionSelectByTicket(tk)) continue;
+      if((long)PositionGetInteger(POSITION_MAGIC) != InpMagic) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      string c = PositionGetString(POSITION_COMMENT);
+      int gp; bool hd; string tag;
+      if(!ParseComment(c, gp, hd, tag)) continue;
+      if(gp != g) continue;
+      if(hd != hedge) continue;
+      int sd = (PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY)?0:1;
+      if(sd != sideFilter) continue;
+      datetime t = (datetime)PositionGetInteger(POSITION_TIME);
+      if(t > newest) newest = t;
+   }
+   if(newest == 0) return 0;
+   return iTime(_Symbol, tf, iBarShift(_Symbol, tf, newest));
+}
+
+// Count consecutive recent CLOSED candles in given direction (1=bull, -1=bear)
+int CountConfirmingCandles(int dir, int n){
+   int found = 0;
+   for(int i=1; i<=n; i++){
+      double o = iOpen(_Symbol, PERIOD_CURRENT, i);
+      double c = iClose(_Symbol, PERIOD_CURRENT, i);
+      if(dir > 0){ if(c >  o) found++; else break; }
+      else       { if(c <  o) found++; else break; }
+   }
+   return found;
+}
+
 void TryPlaceGridLoss(int g){
    for(int sd=0; sd<2; sd++){
       int posCount = CountGroupPositions(g, sd, 0);
       if(posCount <= 0) continue;
+
       int gl = HighestGridLevel(g, (ENUM_SIDE)sd, false, "GL");
-      if(gl >= InpMaxGridLevels) continue;
+      if(gl >= GridLoss_MaxTrades) continue;
+
+      // OnlyInSignal → only grid the loss-side
+      if(GridLoss_OnlyInSignal){
+         int loseSide = GroupLossSide(g);
+         if(loseSide != -1 && loseSide != sd) continue;
+      }
+
       double lastPrice = LastEntryPrice(g, sd, false);
       if(lastPrice <= 0) continue;
+
+      // Resolve gap
+      int gapPts = ResolveGapPoints(gl+1, GridLoss_GapType, GridLoss_Points,
+                                    GridLoss_CustomDistance, g_atrLossHandle,
+                                    GridLoss_ATR_Multiplier, GridLoss_ATR_Reference,
+                                    g_atrAtLastGridLoss[g][sd], GridLoss_MinGapPoints);
+
       double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
       double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
       bool trigger = false;
-      if(sd==0) trigger = (ask <= lastPrice - InpGridStepPips*g_point);
-      else      trigger = (bid >= lastPrice + InpGridStepPips*g_point);
+      if(sd==0) trigger = (ask <= lastPrice - gapPts*g_point);
+      else      trigger = (bid >= lastPrice + gapPts*g_point);
       if(!trigger) continue;
-      double lot = LotForLevel(gl+1);
+
+      // OnlyNewCandle / DontSameCandle guards
+      datetime curBar = iTime(_Symbol, PERIOD_CURRENT, 0);
+      if(GridLoss_OnlyNewCandle && g_lastGridCandleLoss[g][sd] == curBar) continue;
+      if(GridLoss_DontSameCandle && g_initialCandleTime[g][sd] == curBar) continue;
+
+      // Candle confirmation (N consecutive closed candles in the loss direction)
+      if(GridLoss_CandleConfirm > 0){
+         int dir = (sd==0) ? -1 : +1; // BUY losing → bears, SELL losing → bulls
+         if(CountConfirmingCandles(dir, GridLoss_CandleConfirm) < GridLoss_CandleConfirm) continue;
+      }
+
+      double lot = ResolveLot(gl+1, GridLoss_LotMode, GridLoss_CustomLots,
+                              GridLoss_AddLotPerLevel, GridLoss_MultiplyFactor);
       string c = MakeComment(g, false, StringFormat("GL#%d", gl+1));
-      double tp = 0.0;
-      bool ok = (sd==0) ? trade.Buy(lot, _Symbol, ask, 0, tp, c)
-                        : trade.Sell(lot, _Symbol, bid, 0, tp, c);
-      if(InpVerboseLog) PrintFormat("Golden2 v1.1: GL#%d %s G%d lot=%.2f ok=%d", gl+1, sd==0?"BUY":"SELL", g, lot, ok);
+      bool ok = (sd==0) ? trade.Buy(lot, _Symbol, ask, 0, 0, c)
+                        : trade.Sell(lot, _Symbol, bid, 0, 0, c);
+      if(ok){
+         g_lastGridCandleLoss[g][sd] = curBar;
+         g_atrAtLastGridLoss[g][sd]  = GetATRPoints(g_atrLossHandle);
+      }
+      if(InpVerboseLog) PrintFormat("Golden2 v1.2: GL#%d %s G%d lot=%.2f gap=%dpts ok=%d",
+                                    gl+1, sd==0?"BUY":"SELL", g, lot, gapPts, ok);
+   }
+}
+
+void TryPlaceGridProfit(int g){
+   if(!GridProfit_Enable) return;
+   if(IsGroupHedgeMatched(g)) return; // pre-hedge only
+   for(int sd=0; sd<2; sd++){
+      int posCount = CountGroupPositions(g, sd, 0);
+      if(posCount <= 0) continue;
+      double pl = GroupFloatingPL(g, sd, 0);
+      if(pl <= 0) continue; // only winning side
+
+      int gp = HighestGridLevel(g, (ENUM_SIDE)sd, false, "GP");
+      if(gp >= GridProfit_MaxTrades) continue;
+
+      double lastPrice = LastEntryPrice(g, sd, false);
+      if(lastPrice <= 0) continue;
+
+      int gapPts = ResolveGapPoints(gp+1, GridProfit_GapType, GridProfit_Points,
+                                    GridProfit_CustomDistance, g_atrProfitHandle,
+                                    GridProfit_ATR_Multiplier, GridProfit_ATR_Reference,
+                                    g_atrAtLastGridProfit[g][sd], GridProfit_MinGapPoints);
+
+      double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+      double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+      bool trigger = false;
+      // Profit grid: BUY → price went UP from lastPrice; SELL → price went DOWN
+      if(sd==0) trigger = (ask >= lastPrice + gapPts*g_point);
+      else      trigger = (bid <= lastPrice - gapPts*g_point);
+      if(!trigger) continue;
+
+      datetime curBar = iTime(_Symbol, PERIOD_CURRENT, 0);
+      if(GridProfit_OnlyNewCandle && g_lastGridCandleProfit[g][sd] == curBar) continue;
+
+      double lot = ResolveLot(gp+1, GridProfit_LotMode, GridProfit_CustomLots,
+                              GridProfit_AddLotPerLevel, GridProfit_MultiplyFactor);
+      string c = MakeComment(g, false, StringFormat("GP#%d", gp+1));
+      bool ok = (sd==0) ? trade.Buy(lot, _Symbol, ask, 0, 0, c)
+                        : trade.Sell(lot, _Symbol, bid, 0, 0, c);
+      if(ok){
+         g_lastGridCandleProfit[g][sd] = curBar;
+         g_atrAtLastGridProfit[g][sd]  = GetATRPoints(g_atrProfitHandle);
+      }
+      if(InpVerboseLog) PrintFormat("Golden2 v1.2: GP#%d %s G%d lot=%.2f gap=%dpts ok=%d",
+                                    gp+1, sd==0?"BUY":"SELL", g, lot, gapPts, ok);
+   }
+}
+
+//================ MAX GRID AVERAGE TRAILING STOP ================
+void ManageMaxGridTrailing(int g){
+   if(!MaxGrid_TrailEnable) return;
+   if(IsGroupHedgeMatched(g)) return; // only pre-hedge
+   if(MaxGrid_TrailActivation <= 0) return;
+
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+
+   for(int sd=0; sd<2; sd++){
+      int cnt = CountGroupPositions(g, sd, 0);
+      if(cnt <= 0){
+         g_maxGridTrailSL[g][sd] = 0;
+         g_maxGridTrailArmed[g][sd] = false;
+         continue;
+      }
+      // Activation gate per mode
+      bool gateOk = false;
+      if(MaxGrid_TrailMode == 0){
+         gateOk = (cnt >= GridLoss_MaxTrades); // require maxed out
+      } else {
+         gateOk = (cnt >= MaxGrid_StartOrders);
+      }
+      if(!gateOk){
+         g_maxGridTrailSL[g][sd] = 0;
+         g_maxGridTrailArmed[g][sd] = false;
+         continue;
+      }
+      double avg = GroupAveragePrice(g, sd, 0);
+      if(avg <= 0) continue;
+
+      double price = (sd==0) ? bid : ask;
+      double moveFromAvg = (sd==0) ? (price - avg) : (avg - price);
+      double activation = MaxGrid_TrailActivation * g_point;
+      double buffer     = MaxGrid_BreakevenBuffer * g_point;
+      double step       = MaxGrid_TrailStep * g_point;
+
+      if(moveFromAvg < activation) continue;
+
+      double desiredSL;
+      if(sd==0) desiredSL = NormalizeDouble(price - step, g_digits);
+      else      desiredSL = NormalizeDouble(price + step, g_digits);
+
+      // never below avg+buffer (BUY) / above avg-buffer (SELL)
+      double floorSL = (sd==0) ? (avg + buffer) : (avg - buffer);
+      if(sd==0 && desiredSL < floorSL) desiredSL = floorSL;
+      if(sd==1 && desiredSL > floorSL) desiredSL = floorSL;
+
+      // Move only in profit direction
+      double curSL = g_maxGridTrailSL[g][sd];
+      bool update = false;
+      if(curSL <= 0) update = true;
+      else if(sd==0 && desiredSL > curSL) update = true;
+      else if(sd==1 && desiredSL < curSL) update = true;
+
+      if(update){
+         g_maxGridTrailSL[g][sd] = desiredSL;
+         g_maxGridTrailArmed[g][sd] = true;
+         if(InpVerboseLog) PrintFormat("Golden2 v1.2: MaxGridTrail G%d %s virtSL=%.5f (avg=%.5f)",
+                                       g, sd==0?"BUY":"SELL", desiredSL, avg);
+      }
+
+      // Trigger check (virtual SL)
+      bool hit = false;
+      if(sd==0 && bid <= g_maxGridTrailSL[g][sd]) hit = true;
+      if(sd==1 && ask >= g_maxGridTrailSL[g][sd]) hit = true;
+      if(hit && g_maxGridTrailArmed[g][sd]){
+         if(InpVerboseLog) PrintFormat("Golden2 v1.2: MaxGridTrail G%d %s HIT virtSL=%.5f -> close side",
+                                       g, sd==0?"BUY":"SELL", g_maxGridTrailSL[g][sd]);
+         CloseMainSideOfGroup(g, sd);
+         g_maxGridTrailSL[g][sd] = 0;
+         g_maxGridTrailArmed[g][sd] = false;
+      }
    }
 }
 
