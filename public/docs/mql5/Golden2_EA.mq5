@@ -1,17 +1,19 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|     Golden2 EA v2.5 - One-Way Toward-Price Trail:               |
-//|     pending BuyStop is dragged DOWN only when price falls away  |
-//|     (target = ask + UpperPips below current pending). SellStop  |
-//|     is dragged UP only when price rises away. Pending NEVER     |
-//|     moves AWAY from price -> price approaching always triggers  |
-//|     the order. Replaces v2.4 symmetric/recenter behaviour.      |
+//|     Golden2 EA v2.7.2 - Per-Side Squeeze Block + Backtest Speed |
+//|     PlaceInitialFrame now uses per-side Squeeze block (BUY block |
+//|     stops only BuyStop, SELL block stops only SellStop). Adds    |
+//|     Tester/Visual mode detection, dashboard render throttle,     |
+//|     skips chart objects in non-visual tester, refreshes Squeeze  |
+//|     state once per new M1 bar instead of every tick, caches the  |
+//|     HasClosedMainOnSide history scan for ~2s, and bounds the     |
+//|     per-tick group loop to the highest active group + 1.         |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.61"
-#property description "Golden2 EA v2.6.1 - Hardened PlaceInitialFrame. Validates InpInitSideMode (auto-fallback to INIT_BOTH if .set file holds garbage like 5000), rejects pending prices below broker SYMBOL_TRADE_STOPS_LEVEL, adds 5s per-group cooldown + 30s back-off when both BuyStop and SellStop OrderSend fail (stops the per-tick re-fire spam seen when mode/distance is misconfigured). Logs include retcode + GetLastError on failure. v2.6 Re-entry on Close, v2.5 toward-price trail, v2.3 hedge freeze, v2.2 TP/SL preserve all retained. Order execution unchanged — only adds guards and richer error logs."
+#property version   "2.72"
+#property description "Golden2 EA v2.7.2 - Per-Side Squeeze Block + Backtest Speed. PlaceInitialFrame's Squeeze guard switched from 'block whole group' (SqueezeBlocksAny) to per-side flags so a BUY block only suppresses the BuyStop and SellStop still fires (mirrors Grid Loss/Profit). Backtest accel: detects MQL_TESTER/MQL_VISUAL_MODE in OnInit, throttles DrawDashboard via InpDashRenderIntervalSec (skipped entirely in non-visual tester/optimization), skips DrawAverageAndTPLinesForGroup in non-visual tester, RefreshSqueezeState now runs once per new M1 bar, HasClosedMainOnSide cached ~2s per (group,side), per-tick group loop bounded to g_highestActiveGroup+1. Trading logic, OrderSend, hedge, grid, triple-gate, accumulate, v2.6 re-entry, v2.5 toward-price trail all preserved unchanged."
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -241,6 +243,7 @@ input color   InpDashGood             = clrLime;                     // Positive
 input color   InpDashBad              = clrTomato;                   // Negative/warning color
 input int     InpDashFontSize         = 9;                           // Font size
 input string  InpDashFont             = "Consolas";                  // Font name (monospaced recommended)
+input int     InpDashRenderIntervalSec= 1;                           // [v2.72] Dashboard render interval (sec). Higher = faster backtest.
 
 //================ GLOBALS ================
 double g_point;
@@ -275,6 +278,18 @@ bool   g_sqBlockBuy       = false;
 bool   g_sqBlockSell      = false;
 double g_sqRatio[3]       = {0.0, 0.0, 0.0};      // [v1.8] BBwidth/KCwidth ratio per TF (for dashboard)
 datetime g_lastTrailBar[51];                      // [v1.8] last bar time we ran bar-close trail (per group)
+
+// [v2.72] Backtest speed accel — Tester/Visual mode + throttles + caches
+bool     g_isTesterMode          = false;          // MQL_TESTER
+bool     g_isVisualMode          = false;          // MQL_VISUAL_MODE
+bool     g_isOptimization        = false;          // MQL_OPTIMIZATION
+datetime g_lastDashRender        = 0;              // throttle DrawDashboard
+datetime g_lastSqueezeBar        = 0;              // refresh Squeeze on new M1 bar only
+int      g_highestActiveGroup    = 0;              // bound per-tick group loop
+// HasClosedMainOnSide cache: per (group, side)
+datetime g_hcmCacheTime[51][2];                    // last time the cache was filled
+bool     g_hcmCacheValue[51][2];                   // cached result
+int      g_hcmCacheLastTotal[51][2];               // HistoryDealsTotal at fill time (invalidate if changed)
 
 bool   g_stripped[51];          // per-group flag: broker TP/SL stripped after hedge match
 double g_maxDDPerSide[51][2];   // [group][side] track max floating loss USD seen (positive value)
@@ -632,6 +647,17 @@ string SqueezeOverallLabel(){
    return "READY";
 }
 
+// [v2.72] Throttle wrapper — RefreshSqueezeState recomputes BB/KC for 3 TFs
+//         (CopyBuffer + iATR + iMA) on every tick, which dominates backtest
+//         CPU. The Squeeze decision only changes on closed bars, so refresh
+//         once per new M1 bar (smallest TF used). First tick still refreshes.
+void RefreshSqueezeStateThrottled(){
+   datetime cur = iTime(_Symbol, PERIOD_M1, 0);
+   if(cur == 0) cur = TimeCurrent(); // safety
+   if(g_lastSqueezeBar != 0 && cur == g_lastSqueezeBar) return;
+   g_lastSqueezeBar = cur;
+   RefreshSqueezeState();
+}
 
 bool ClaimMutex(int g){
    if(!InpSequentialQueue) return true;
@@ -675,11 +701,10 @@ void PlaceInitialFrame(int g){
       if(InpVerboseLog) PrintFormat("Golden2 v2.1: PlaceInitialFrame G%d skipped (accum cooldown active)", g);
       return;
    }
-   // [v1.6] Squeeze block: don't place initial frame on volatile expansion
-   if(InpSQ_Enable && InpSQ_BlockNewOrders && g_sqExpCount >= InpSQ_MinExpansionTFs && SqueezeBlocksAny()){
-      if(InpVerboseLog) PrintFormat("Golden2 v2.1: Squeeze BLOCK initial G%d (%s)", g, SqueezeStatusString());
-      return;
-   }
+   // [v2.72] Squeeze block moved to per-side and applied AFTER placeBuy/placeSell
+   //         are computed (see below). The old "block whole group" guard
+   //         (SqueezeBlocksAny -> return) is removed so a BUY-only block no
+   //         longer suppresses the SellStop side, mirroring Grid Loss/Profit.
 
    // [v2.6.1] Validate side mode and pre-compute place flags BEFORE any work or
    //          log spam. If the enum value is corrupted (e.g. .set file overrode
@@ -703,6 +728,25 @@ void PlaceInitialFrame(int g){
          lastNoSideWarn = TimeCurrent();
       }
       return;
+   }
+
+   // [v2.72] Per-side Squeeze block — counter-trend side only.
+   // BUY block  -> suppress BuyStop only, SellStop still fires.
+   // SELL block -> suppress SellStop only, BuyStop still fires.
+   // Mirrors Grid Loss/Profit (which already use SqueezeBlocksSide).
+   if(InpSQ_Enable && InpSQ_BlockNewOrders){
+      if(placeBuy && SqueezeBlocksSide(0)){
+         placeBuy = false;
+         if(InpVerboseLog) PrintFormat("Golden2 v2.72: Squeeze BLOCK BUY G%d (%s) — SELL still allowed", g, SqueezeStatusString());
+      }
+      if(placeSell && SqueezeBlocksSide(1)){
+         placeSell = false;
+         if(InpVerboseLog) PrintFormat("Golden2 v2.72: Squeeze BLOCK SELL G%d (%s) — BUY still allowed", g, SqueezeStatusString());
+      }
+      if(!placeBuy && !placeSell){
+         if(InpVerboseLog) PrintFormat("Golden2 v2.72: Squeeze BLOCK BOTH G%d (%s) — frame skipped", g, SqueezeStatusString());
+         return;
+      }
    }
 
    // [v2.6.1] Per-group cooldown to stop per-tick re-fire when the previous
@@ -1028,7 +1072,7 @@ void ManageInitialTrail(int g){
 // group + side (main, non-hedge), meaning the initial pending was triggered and
 // later closed (TP/SL/manual). Used as the gate for Re-entry-on-Close so we do
 // not place a re-entry pending before the very first initial fill.
-bool HasClosedMainOnSide(int g, int side){
+bool HasClosedMainOnSide_Raw(int g, int side){
    if(!HistorySelect(g_accumResetTime>0 ? g_accumResetTime : (TimeCurrent()-7*24*3600), TimeCurrent()))
       return false;
    int total = HistoryDealsTotal();
@@ -1066,6 +1110,28 @@ bool HasClosedMainOnSide(int g, int side){
       return true;
    }
    return false;
+}
+
+// [v2.72] Cached wrapper — HistorySelect every tick across N groups was the
+//         dominant CPU cost in v2.6.x. Cache per (group,side) for ~2s and
+//         invalidate when HistoryDealsTotal changes (a new deal happened).
+//         Behaviour identical to the raw scan; only frequency differs.
+bool HasClosedMainOnSide(int g, int side){
+   if(g < 0 || g > 50) return HasClosedMainOnSide_Raw(g, side);
+   if(side != 0 && side != 1) return false;
+   datetime now = TimeCurrent();
+   // Cheap invalidation probe — total deals across history.
+   HistorySelect(0, now);
+   int curTotal = HistoryDealsTotal();
+   bool stale = (g_hcmCacheTime[g][side] == 0) ||
+                (now - g_hcmCacheTime[g][side] >= 2) ||
+                (g_hcmCacheLastTotal[g][side] != curTotal);
+   if(!stale) return g_hcmCacheValue[g][side];
+   bool v = HasClosedMainOnSide_Raw(g, side);
+   g_hcmCacheValue[g][side]     = v;
+   g_hcmCacheTime[g][side]      = now;
+   g_hcmCacheLastTotal[g][side] = curTotal;
+   return v;
 }
 
 void ManageInitialReArm(int g){
@@ -2010,6 +2076,9 @@ void DrawHLine(string name, double price, color clr, ENUM_LINE_STYLE style=STYLE
 }
 
 void DrawAverageAndTPLinesForGroup(int g){
+   // [v2.72] No chart in optimization / non-visual tester — skip line objects.
+   if(g_isOptimization) return;
+   if(g_isTesterMode && !g_isVisualMode) return;
    // Skip if hedge matched (Triple-Gate is in charge)
    if(IsGroupHedgeMatched(g)){ DeleteLinesForGroup(g); return; }
    if(!GroupHasAnyPositions(g)){ DeleteLinesForGroup(g); return; }
@@ -2523,6 +2592,10 @@ void DashHeader(string id, int x, int y, int w, int rowH, string text, color clr
 
 void DrawDashboard(){
    if(!InpShowDashboard){ DashCleanupAll(); return; }
+   // [v2.72] Skip dashboard entirely in optimization mode and in non-visual
+   //         tester runs — chart objects do not exist in those modes anyway.
+   if(g_isOptimization) return;
+   if(g_isTesterMode && !g_isVisualMode) return;
    ArrayResize(g_dashAlive, 0);
 
    //==== LEFT PANEL: Gold-Miner-style summary ====
@@ -2567,7 +2640,7 @@ void DrawDashboard(){
    if(InpInitSideMode == INIT_SELL_ONLY) modeLbl = "SELL-only";
 
    // Header
-   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.6.1    Side: %s", modeLbl), InpDashAccent);
+   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.7.2    Side: %s", modeLbl), InpDashAccent);
    y += rowH+2;
 
    // ==== Account section ====
@@ -2723,6 +2796,19 @@ int OnInit(){
    trade.SetExpertMagicNumber(InpMagic);
    trade.SetDeviationInPoints(InpSlippage);
 
+   // [v2.72] Tester / Visual / Optimization detection — guards expensive UI work.
+   g_isTesterMode   = (bool)MQLInfoInteger(MQL_TESTER);
+   g_isVisualMode   = (bool)MQLInfoInteger(MQL_VISUAL_MODE);
+   g_isOptimization = (bool)MQLInfoInteger(MQL_OPTIMIZATION);
+   g_lastDashRender = 0;
+   g_lastSqueezeBar = 0;
+   g_highestActiveGroup = 0;
+   for(int hi=0; hi<51; hi++){
+      g_hcmCacheTime[hi][0] = 0;        g_hcmCacheTime[hi][1] = 0;
+      g_hcmCacheValue[hi][0] = false;   g_hcmCacheValue[hi][1] = false;
+      g_hcmCacheLastTotal[hi][0] = -1;  g_hcmCacheLastTotal[hi][1] = -1;
+   }
+
    for(int i=0;i<51;i++){
       g_stripped[i]=false;
       g_maxDDPerSide[i][0]=0.0; g_maxDDPerSide[i][1]=0.0;
@@ -2758,7 +2844,7 @@ int OnInit(){
       }
    }
 
-   PrintFormat("Golden2 EA v2.6.1 initialized | Magic=%I64d | MaxGroups=%d | InitMode=%d | GridLoss=%s | Squeeze=%s | TripleGate=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s",
+   PrintFormat("Golden2 EA v2.7.2 initialized | Magic=%I64d | MaxGroups=%d | InitMode=%d | GridLoss=%s | Squeeze=%s SqueezePerSide=ON | TripleGate=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | Tester=%s Visual=%s Opt=%s DashInterval=%ds",
                (long)InpMagic, InpMaxGroups, (int)InpInitSideMode,
                GridLoss_Enable?"ON":"OFF", InpSQ_Enable?"ON":"OFF", InpExitTripleGate_Enable?"ON":"OFF",
                InpInitTrailOnBarClose?"ON":"OFF",
@@ -2767,7 +2853,9 @@ int OnInit(){
                InpTP_UseAccumulateClose?"ON":"OFF",
                InpTP_AccumCooldownSec,
                InpGroup_RequireFullLockBeforeNext?"ON":"OFF",
-               InpGroup_AdvancePerTick?"ON":"OFF");
+               InpGroup_AdvancePerTick?"ON":"OFF",
+               g_isTesterMode?"YES":"NO", g_isVisualMode?"YES":"NO", g_isOptimization?"YES":"NO",
+               InpDashRenderIntervalSec);
    return INIT_SUCCEEDED;
 }
 
@@ -2799,9 +2887,38 @@ void TrackInitialCandle(int g){
    }
 }
 
+// [v2.72] Throttled dashboard render — skip in optimization, throttle to
+//         InpDashRenderIntervalSec elsewhere (DrawDashboard internally also
+//         skips non-visual tester). Keeps "paused" rendering intact for live.
+void RenderDashboardThrottled(){
+   if(!InpShowDashboard) return;
+   if(g_isOptimization) return;
+   if(g_isTesterMode && !g_isVisualMode) return;
+   int interval = InpDashRenderIntervalSec;
+   if(interval < 0) interval = 0;
+   if(g_lastDashRender != 0 && TimeCurrent() - g_lastDashRender < interval) return;
+   g_lastDashRender = TimeCurrent();
+   DrawDashboard();
+}
+
+// [v2.72] Track highest active group so the per-tick loop can exit early
+//         once it reaches an empty tail. Updated each tick.
+int ComputeLoopUpperBound(){
+   int hi = 0;
+   for(int g=InpMaxGroups; g>=1; g--){
+      if(GroupHasAnyPositions(g) || GroupHasAnyPendings(g)){ hi = g; break; }
+   }
+   g_highestActiveGroup = hi;
+   // +1 so we still allow placing/advancing into the next idle group.
+   int upper = hi + 1;
+   if(upper < 1) upper = 1;
+   if(upper > InpMaxGroups) upper = InpMaxGroups;
+   return upper;
+}
+
 void OnTick(){
-   if(!InpAllowTrade){ DrawDashboard(); return; }
-   RefreshSqueezeState(); // [v1.6] update squeeze cache once per tick
+   if(!InpAllowTrade){ RenderDashboardThrottled(); return; }
+   RefreshSqueezeStateThrottled(); // [v2.72] one refresh per new M1 bar
 
    // [v1.6] Optional close-on-expansion (default off)
    if(InpSQ_Enable && InpSQ_CloseOnExpansion && g_sqExpCount >= InpSQ_MinExpansionTFs){
@@ -2809,7 +2926,8 @@ void OnTick(){
       // intentionally left as a no-op stub to avoid touching trade.PositionClose flow
    }
 
-   for(int g=1; g<=InpMaxGroups; g++){
+   int upper = ComputeLoopUpperBound(); // [v2.72] bound loop to active range +1
+   for(int g=1; g<=upper; g++){
       bool hasPos = GroupHasAnyPositions(g);
       bool hasPend= GroupHasAnyPendings(g);
       if(!hasPos && !hasPend){
@@ -2855,11 +2973,11 @@ void OnTick(){
       // Triple-Gate Matching Close (only acts when matched)
       TryMatchingCloseForGroup(g);
 
-      // Chart visualization
+      // Chart visualization (internally skipped in tester non-visual)
       DrawAverageAndTPLinesForGroup(g);
    }
 
    ManageGlobalAccumulateClose(); // [v2.0] account-wide accumulate close + dashboard cache
    TryAdvanceToNextGroup();
-   DrawDashboard();
+   RenderDashboardThrottled();    // [v2.72] throttled
 }
