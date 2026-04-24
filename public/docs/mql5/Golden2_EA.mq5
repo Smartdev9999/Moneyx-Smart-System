@@ -10,8 +10,8 @@
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.50"
-#property description "Golden2 EA v2.5 - One-Way Toward-Price Trail. ManageInitialTrailOnBarClose now drags BuyStop DOWN only (when ask falls so frame distance grows) and SellStop UP only (when bid rises so frame distance grows). Pendings never move AWAY from market, so price approaching always triggers the order as designed. Threshold = InpFrameRecenterMinPips (points). Fixes v2.4 mistake where pendings recenter-followed price like a shadow and got hit too easily. v2.3 hedge-state freeze, post-hedge IN cleanup, orphan-aware advance guard, and v2.2 TP/SL preservation all retained. Order execution, hedging, grid logic, triple-gate exits untouched."
+#property version   "2.60"
+#property description "Golden2 EA v2.6 - Re-entry on Close. When an initial-frame position closes by TP or SL, the same-side BuyStop/SellStop is automatically re-placed at current price ± InpInitReArmDistancePips, even if the opposite side has only a pending (no live position). Gated by HasClosedMainOnSide (history check) so re-entry never fires before the very first initial trigger. Frozen as soon as any hedge exists in that group (v2.3 retained). Adds InpInitReEntryOnClose toggle. v2.5 one-way toward-price trail, v2.3 hedge-state freeze, v2.2 TP/SL preservation all retained. Order execution, hedging, grid logic, triple-gate exits untouched."
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -82,6 +82,7 @@ input bool    InpInitTrailOpposite    = true;                            // [v1.
 input int     InpInitTrailTriggerPips = 200;                             // [v1.7] Trail trigger: when distance from mid > this (points)
 input bool    InpInitReArmAfterTP     = true;                            // [v1.7] Re-arm side stop after that side empties (TP hit)
 input int     InpInitReArmDistancePips= 200;                             // [v1.7] Re-arm distance from current price (points)
+input bool    InpInitReEntryOnClose   = true;                            // [v2.6] Re-entry: place pending stop again whenever an initial-side closes (TP/SL), even if opposite side has no live position (only pending). Requires the side has been previously triggered in this group.
 input bool            InpInitTrailOnBarClose      = true;                  // [v1.8] Trail opposite stop on every bar close (overrides v1.7 trigger trail)
 input ENUM_TIMEFRAMES InpInitTrailTF              = PERIOD_M1;             // [v1.8] Trail timer TF (default M1)
 input bool            InpGL_ImmediateAfterInitial = true;                  // [v1.8] Fire GL#1 immediately after Initial fill (bypass candle guards on first GL)
@@ -949,8 +950,52 @@ void ManageInitialTrail(int g){
 // [v1.7] Re-arm a fresh IN stop on a side after that side empties (TP hit) while
 //        the OPPOSITE side still has open positions. New stop is placed at
 //        current market ± InpInitReArmDistancePips. Side mode is respected.
+// [v2.6] Returns true if there is at least one CLOSED deal in history for this
+// group + side (main, non-hedge), meaning the initial pending was triggered and
+// later closed (TP/SL/manual). Used as the gate for Re-entry-on-Close so we do
+// not place a re-entry pending before the very first initial fill.
+bool HasClosedMainOnSide(int g, int side){
+   if(!HistorySelect(g_accumResetTime>0 ? g_accumResetTime : (TimeCurrent()-7*24*3600), TimeCurrent()))
+      return false;
+   int total = HistoryDealsTotal();
+   for(int i=total-1;i>=0;i--){
+      ulong tk = HistoryDealGetTicket(i);
+      if(tk==0) continue;
+      if((long)HistoryDealGetInteger(tk, DEAL_MAGIC) != InpMagic) continue;
+      if(HistoryDealGetString(tk, DEAL_SYMBOL) != _Symbol) continue;
+      if(HistoryDealGetInteger(tk, DEAL_ENTRY) != DEAL_ENTRY_OUT) continue;
+      string c = HistoryDealGetString(tk, DEAL_COMMENT);
+      // Broker may rewrite comment on TP/SL; fall back to position comment lookup.
+      int gp; bool hd; string tag;
+      bool parsed = ParseComment(c, gp, hd, tag);
+      if(!parsed){
+         ulong posId = HistoryDealGetInteger(tk, DEAL_POSITION_ID);
+         if(posId>0 && HistorySelectByPosition(posId)){
+            int dn = HistoryDealsTotal();
+            for(int j=0;j<dn;j++){
+               ulong dtk = HistoryDealGetTicket(j);
+               if(dtk==0) continue;
+               if(HistoryDealGetInteger(dtk, DEAL_ENTRY) != DEAL_ENTRY_IN) continue;
+               string ic = HistoryDealGetString(dtk, DEAL_COMMENT);
+               if(ParseComment(ic, gp, hd, tag)){ parsed = true; break; }
+            }
+            HistorySelect(g_accumResetTime>0 ? g_accumResetTime : (TimeCurrent()-7*24*3600), TimeCurrent());
+         }
+      }
+      if(!parsed) continue;
+      if(gp != g) continue;
+      if(hd) continue;
+      long dealType = HistoryDealGetInteger(tk, DEAL_TYPE);
+      // On exit: deal type is opposite of position side. BUY position → SELL deal to close.
+      int posSide = (dealType == DEAL_TYPE_SELL) ? 0 : 1;
+      if(posSide != side) continue;
+      return true;
+   }
+   return false;
+}
+
 void ManageInitialReArm(int g){
-   if(!InpInitReArmAfterTP) return;
+   if(!InpInitReArmAfterTP && !InpInitReEntryOnClose) return;
    // [v2.3] Do not re-arm a fresh G_IN stop once the group is hedging — that
    //         was the source of the post-hedge orphan main that blocked
    //         advancement to the next group.
@@ -970,24 +1015,33 @@ void ManageInitialReArm(int g){
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
    double dist = InpInitReArmDistancePips * g_point;
 
-   // Re-arm BUY: side empty + pending missing + opposite (sell) has positions
-   if(buyAllowed && buyPos==0 && tBuyPend==0 && sellPos>0){
+   // [v2.6] Re-entry trigger condition for BUY side:
+   //   - v1.7 path: opposite (sell) has open position (original re-arm)
+   //   - v2.6 path: this side previously closed (TP/SL) in this group → re-enter
+   //                regardless of what the opposite side currently is.
+   bool buyTrigger  = (sellPos > 0) ||
+                      (InpInitReEntryOnClose && HasClosedMainOnSide(g, 0));
+   bool sellTrigger = (buyPos  > 0) ||
+                      (InpInitReEntryOnClose && HasClosedMainOnSide(g, 1));
+
+   // Re-arm BUY: side empty + pending missing + trigger condition met
+   if(buyAllowed && buyPos==0 && tBuyPend==0 && buyTrigger){
       double upPx = NormalizeDouble(ask + dist, g_digits);
       double tp   = (InpInitialTPPips>0)? NormalizeDouble(upPx + InpInitialTPPips*g_point, g_digits) : 0;
       double sl   = (InpInitialSLPips>0)? NormalizeDouble(upPx - InpInitialSLPips*g_point, g_digits) : 0;
       string c    = MakeComment(g, false, "IN");
       if(trade.BuyStop(InpInitialLot, upPx, _Symbol, sl, tp, ORDER_TIME_GTC, 0, c)){
-         if(InpVerboseLog) PrintFormat("Golden2 v1.7: ReArm BuyStop G%d at %.5f", g, upPx);
+         if(InpVerboseLog) PrintFormat("Golden2 v2.6: Re-entry BuyStop G%d at %.5f (sellPos=%d)", g, upPx, sellPos);
       }
    }
-   // Re-arm SELL: side empty + pending missing + opposite (buy) has positions
-   if(sellAllowed && sellPos==0 && tSellPend==0 && buyPos>0){
+   // Re-arm SELL: side empty + pending missing + trigger condition met
+   if(sellAllowed && sellPos==0 && tSellPend==0 && sellTrigger){
       double dnPx = NormalizeDouble(bid - dist, g_digits);
       double tp   = (InpInitialTPPips>0)? NormalizeDouble(dnPx - InpInitialTPPips*g_point, g_digits) : 0;
       double sl   = (InpInitialSLPips>0)? NormalizeDouble(dnPx + InpInitialSLPips*g_point, g_digits) : 0;
       string c    = MakeComment(g, false, "IN");
       if(trade.SellStop(InpInitialLot, dnPx, _Symbol, sl, tp, ORDER_TIME_GTC, 0, c)){
-         if(InpVerboseLog) PrintFormat("Golden2 v1.7: ReArm SellStop G%d at %.5f", g, dnPx);
+         if(InpVerboseLog) PrintFormat("Golden2 v2.6: Re-entry SellStop G%d at %.5f (buyPos=%d)", g, dnPx, buyPos);
       }
    }
 }
@@ -2439,7 +2493,7 @@ void DrawDashboard(){
    if(InpInitSideMode == INIT_SELL_ONLY) modeLbl = "SELL-only";
 
    // Header
-   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.5    Side: %s", modeLbl), InpDashAccent);
+   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.6    Side: %s", modeLbl), InpDashAccent);
    y += rowH+2;
 
    // ==== Account section ====
@@ -2630,11 +2684,12 @@ int OnInit(){
       }
    }
 
-   PrintFormat("Golden2 EA v2.5 initialized | Magic=%I64d | MaxGroups=%d | InitMode=%d | GridLoss=%s | Squeeze=%s | TripleGate=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s",
+   PrintFormat("Golden2 EA v2.6 initialized | Magic=%I64d | MaxGroups=%d | InitMode=%d | GridLoss=%s | Squeeze=%s | TripleGate=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s",
                (long)InpMagic, InpMaxGroups, (int)InpInitSideMode,
                GridLoss_Enable?"ON":"OFF", InpSQ_Enable?"ON":"OFF", InpExitTripleGate_Enable?"ON":"OFF",
                InpInitTrailOnBarClose?"ON":"OFF",
                InpFrameRecenterMinPips,
+               InpInitReEntryOnClose?"ON":"OFF",
                InpTP_UseAccumulateClose?"ON":"OFF",
                InpTP_AccumCooldownSec,
                InpGroup_RequireFullLockBeforeNext?"ON":"OFF",
