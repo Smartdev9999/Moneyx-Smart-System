@@ -946,6 +946,7 @@ int CountConfirmingCandles(int dir, int n){
 }
 
 void TryPlaceGridLoss(int g){
+   if(!GridLoss_Enable) return; // [v1.7] Master toggle: disable grid → Initial-only mode
    if(g_blockNewOrders[g]) return; // [v1.4] Pre-hedge block
    if(IsGroupHedgeMatched(g)) return; // [v1.6] Post-hedge lock: freeze grid until Triple-Gate close
    for(int sd=0; sd<2; sd++){
