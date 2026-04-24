@@ -1,13 +1,13 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|     Golden2 EA v1.1 - Group Settings + Average TP/SL +           |
-//|     Auto-Strip Broker TP/SL on Hedge Match                       |
+//|     Golden2 EA v1.2 - Gold-Miner-style Grid Settings             |
+//|     (Grid Loss / Max Grid Trailing / Grid Profit) + v1.1 features|
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "1.10"
-#property description "Golden2 EA v1.1 - Pending frame + Multiplier Grid + Group-based Pending Hedge (arm/disarm) + Average TP/SL Manager + Auto-strip Broker TP/SL when hedge matched + Triple-Gate Matching Close + Sequential Queue (max 50 groups)"
+#property version   "1.20"
+#property description "Golden2 EA v1.2 - Pending frame + Gold-Miner-style Grid (Loss/Profit/Max-Grid-Trailing) + Group-based Pending Hedge (arm/disarm) + Average TP/SL Manager + Auto-strip Broker TP/SL on hedge match + Triple-Gate Matching Close + Sequential Queue (max 50 groups)"
 #property strict
 
 #include <Trade/Trade.mqh>
