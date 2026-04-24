@@ -719,6 +719,25 @@ void PlaceInitialFrame(int g){
       return;
    }
 
+   // [v2.72] Per-side Squeeze block — counter-trend side only.
+   // BUY block  -> suppress BuyStop only, SellStop still fires.
+   // SELL block -> suppress SellStop only, BuyStop still fires.
+   // Mirrors Grid Loss/Profit (which already use SqueezeBlocksSide).
+   if(InpSQ_Enable && InpSQ_BlockNewOrders){
+      if(placeBuy && SqueezeBlocksSide(0)){
+         placeBuy = false;
+         if(InpVerboseLog) PrintFormat("Golden2 v2.72: Squeeze BLOCK BUY G%d (%s) — SELL still allowed", g, SqueezeStatusString());
+      }
+      if(placeSell && SqueezeBlocksSide(1)){
+         placeSell = false;
+         if(InpVerboseLog) PrintFormat("Golden2 v2.72: Squeeze BLOCK SELL G%d (%s) — BUY still allowed", g, SqueezeStatusString());
+      }
+      if(!placeBuy && !placeSell){
+         if(InpVerboseLog) PrintFormat("Golden2 v2.72: Squeeze BLOCK BOTH G%d (%s) — frame skipped", g, SqueezeStatusString());
+         return;
+      }
+   }
+
    // [v2.6.1] Per-group cooldown to stop per-tick re-fire when the previous
    //          attempt failed (e.g. invalid stops, off-quotes, market closed).
    //          Without this, FindLowestIdleGroup keeps returning g and we spam
