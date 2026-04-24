@@ -182,9 +182,18 @@ input double  InpExitMinNetUSD        = 1.0;                         // Min net 
 //--- === Dashboard ===
 input string  __sec_dash__            = "=== Dashboard ===";         // ---
 input bool    InpShowDashboard        = true;                        // Show dashboard
-input int     InpDashX                = 10;                          // Dashboard X
-input int     InpDashY                = 20;                          // Dashboard Y
-input color   InpDashColor            = clrWhite;                    // Dashboard color
+input int     InpDashX                = 10;                          // Dashboard X (left panel)
+input int     InpDashY                = 20;                          // Dashboard Y (left panel)
+input int     InpDashLeftWidth        = 360;                         // Left panel width (px)
+input int     InpDashHedgeGap         = 12;                          // Gap between left and right panels (px)
+input color   InpDashColor            = clrWhite;                    // Dashboard text color (default)
+input color   InpDashHeaderBg         = C'40,40,80';                 // Header background
+input color   InpDashRowBg            = C'20,20,30';                 // Row background
+input color   InpDashAccent           = clrGold;                     // Accent (titles, totals)
+input color   InpDashGood             = clrLime;                     // Positive value color
+input color   InpDashBad              = clrTomato;                   // Negative/warning color
+input int     InpDashFontSize         = 9;                           // Font size
+input string  InpDashFont             = "Consolas";                  // Font name (monospaced recommended)
 
 //================ GLOBALS ================
 double g_point;
