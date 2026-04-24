@@ -731,6 +731,60 @@ ulong FindInitialPendingTicket(int g, int side){
    return 0;
 }
 
+// [v1.8] Bar-close trail: every InpInitTrailTF bar close, drag the IN pending
+//        on the side that price moved AWAY from, so the frame distance stays
+//        consistent. The side price is approaching is left alone.
+void ManageInitialTrailOnBarClose(int g){
+   if(!InpInitTrailOnBarClose) return;
+   if(IsGroupHedgeMatched(g)) return;
+   if(g_blockNewOrders[g]) return;
+
+   datetime curBar = iTime(_Symbol, InpInitTrailTF, 0);
+   if(curBar == 0) return;
+   if(g_lastTrailBar[g] == curBar) return;
+   g_lastTrailBar[g] = curBar;
+
+   if(!GroupHasAnyPositions(g) && !GroupHasAnyPendings(g)) return;
+
+   ulong tBuy  = FindInitialPendingTicket(g, 0);
+   ulong tSell = FindInitialPendingTicket(g, 1);
+   int buyPos  = CountGroupPositions(g, 0, 0);
+   int sellPos = CountGroupPositions(g, 1, 0);
+
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+
+   // BUY pending: trail only when newPx moves DOWN (price ran away upward leaves
+   // buy stop above; if price ran DOWN, newPx<oldPx → drag down to stay 200pt away)
+   if(tBuy != 0 && buyPos == 0 && (sellPos > 0 || tSell != 0)){
+      double newPx = NormalizeDouble(ask + InpFrameUpperPips*g_point, g_digits);
+      if(OrderSelect(tBuy)){
+         double oldPx = OrderGetDouble(ORDER_PRICE_OPEN);
+         if(newPx < oldPx - g_point){
+            double tp = (InpInitialTPPips>0)? NormalizeDouble(newPx + InpInitialTPPips*g_point, g_digits) : 0;
+            double sl = (InpInitialSLPips>0)? NormalizeDouble(newPx - InpInitialSLPips*g_point, g_digits) : 0;
+            if(trade.OrderModify(tBuy, newPx, sl, tp, ORDER_TIME_GTC, 0)){
+               if(InpVerboseLog) PrintFormat("Golden2 v1.8: BarTrail BuyStop G%d %.5f -> %.5f", g, oldPx, newPx);
+            }
+         }
+      }
+   }
+   // SELL pending: trail only when newPx moves UP (price ran away upward → drag sell up)
+   if(tSell != 0 && sellPos == 0 && (buyPos > 0 || tBuy != 0)){
+      double newPx = NormalizeDouble(bid - InpFrameLowerPips*g_point, g_digits);
+      if(OrderSelect(tSell)){
+         double oldPx = OrderGetDouble(ORDER_PRICE_OPEN);
+         if(newPx > oldPx + g_point){
+            double tp = (InpInitialTPPips>0)? NormalizeDouble(newPx - InpInitialTPPips*g_point, g_digits) : 0;
+            double sl = (InpInitialSLPips>0)? NormalizeDouble(newPx + InpInitialSLPips*g_point, g_digits) : 0;
+            if(trade.OrderModify(tSell, newPx, sl, tp, ORDER_TIME_GTC, 0)){
+               if(InpVerboseLog) PrintFormat("Golden2 v1.8: BarTrail SellStop G%d %.5f -> %.5f", g, oldPx, newPx);
+            }
+         }
+      }
+   }
+}
+
 // [v1.7] Auto-trail opposite IN stop while no position has filled yet.
 //        If price runs UP by > InpInitTrailTriggerPips beyond mid (i.e. closer to
 //        BuyStop), the SellStop is moved UP to keep it InpFrameLowerPips below market.
