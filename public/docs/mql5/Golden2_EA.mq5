@@ -2589,6 +2589,10 @@ void DashHeader(string id, int x, int y, int w, int rowH, string text, color clr
 
 void DrawDashboard(){
    if(!InpShowDashboard){ DashCleanupAll(); return; }
+   // [v2.72] Skip dashboard entirely in optimization mode and in non-visual
+   //         tester runs — chart objects do not exist in those modes anyway.
+   if(g_isOptimization) return;
+   if(g_isTesterMode && !g_isVisualMode) return;
    ArrayResize(g_dashAlive, 0);
 
    //==== LEFT PANEL: Gold-Miner-style summary ====
@@ -2633,7 +2637,7 @@ void DrawDashboard(){
    if(InpInitSideMode == INIT_SELL_ONLY) modeLbl = "SELL-only";
 
    // Header
-   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.6.1    Side: %s", modeLbl), InpDashAccent);
+   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.7.2    Side: %s", modeLbl), InpDashAccent);
    y += rowH+2;
 
    // ==== Account section ====
