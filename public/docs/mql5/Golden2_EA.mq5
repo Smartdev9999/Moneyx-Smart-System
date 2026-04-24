@@ -1593,70 +1593,220 @@ string StrippedListString(){
    return (StringLen(s)==0) ? "-" : s;
 }
 
-void DrawDashboard(){
-   if(!InpShowDashboard) return;
-   string txt = "Golden2 EA v1.4\n";
-   txt += StringFormat("Symbol: %s  Magic: %I64d\n", _Symbol, (long)InpMagic);
-   txt += StringFormat("Hedging: %s\n", InpHedge_Enabled?"ON":"OFF");
-   int rem = 0;
-   if(IsHedgeOpenDelayActive(rem)) txt += StringFormat("HedgeDelay: WAIT %dm%02ds\n", rem/60, rem%60);
-   else txt += "HedgeDelay: READY\n";
-   txt += StringFormat("Queue mutex: %s\n", g_activeOpsGroup<0?"IDLE":StringFormat("G%d", g_activeOpsGroup));
-   txt += StringFormat("TP-Stripped: %s\n", StrippedListString());
-   txt += StringFormat("MaxGridTrail: %s (Mode %d)\n",
-                       MaxGrid_TrailEnable?"ON":"OFF", MaxGrid_TrailMode);
-   txt += "------------------------------\n";
-   for(int g=1; g<=InpMaxGroups; g++){
-      if(!GroupHasAnyPositions(g) && !GroupHasAnyPendings(g)) continue;
-      double mainL = GroupTotalLot(g,-1,0);
-      double hedgeL= GroupTotalLot(g,-1,1);
-      double pl    = GroupFloatingPL(g,-1,-1);
-      double lossUSD = -MathMin(GroupFloatingPL(g,0,0), GroupFloatingPL(g,1,0));
-      if(lossUSD<0) lossUSD=0;
-      double pct = (InpHedgeTriggerUSD>0) ? (lossUSD*100.0/InpHedgeTriggerUSD) : 0;
-      string match = IsGroupHedgeMatched(g) ? " [MATCHED]" : "";
-      int glB = HighestGridLevel(g, SIDE_BUY,  false, "GL");
-      int glS = HighestGridLevel(g, SIDE_SELL, false, "GL");
-      int gpB = HighestGridLevel(g, SIDE_BUY,  false, "GP");
-      int gpS = HighestGridLevel(g, SIDE_SELL, false, "GP");
-      int hPend = CountGroupPendingsByTagPrefix(g, true, "");
-      int hPos  = CountGroupPositions(g, -1, 1);
-      string hStat;
-      if(!InpHedge_Enabled)        hStat = "OFF";
-      else if(hPos > 0)            hStat = "ACTIVE";
-      else if(hPend > 0)           hStat = StringFormat("ARMED(%dp)", hPend);
-      else                         hStat = "IDLE";
-      string blk = g_blockNewOrders[g] ? " [BLK]" : "";
-      txt += StringFormat("G%d  mainL=%.2f hdgL=%.2f  PL=%.2f  arm=%.0f%%%s%s  HEDGE:%s\n",
-                          g, mainL, hedgeL, pl, pct, match, blk, hStat);
-      txt += StringFormat("  GL B%d/%d S%d/%d  GP B%d/%d S%d/%d\n",
-                          glB, GridLoss_MaxTrades, glS, GridLoss_MaxTrades,
-                          gpB, GridProfit_MaxTrades, gpS, GridProfit_MaxTrades);
-      if(!IsGroupHedgeMatched(g) && GroupHasAnyPositions(g)){
-         double avgB = GroupAveragePrice(g, 0, 0);
-         double avgS = GroupAveragePrice(g, 1, 0);
-         int cB = CountGroupPositions(g, 0, 0);
-         int cS = CountGroupPositions(g, 1, 0);
-         string mB = (cB>=InpTPAvg_MinTicketsToActivate) ? StringFormat("AVG-BR(%d)",cB) : (cB==1?"INIT(1)":"-");
-         string mS = (cS>=InpTPAvg_MinTicketsToActivate) ? StringFormat("AVG-BR(%d)",cS) : (cS==1?"INIT(1)":"-");
-         if(avgB>0) txt += StringFormat("  B[%s] avg=%.5f tp=%.5f", mB, avgB, ComputeAvgTPPrice(g,0));
-         if(avgB>0 && g_maxGridTrailArmed[g][0]) txt += StringFormat(" trail=%.5f", g_maxGridTrailSL[g][0]);
-         if(avgB>0) txt += "\n";
-         if(avgS>0) txt += StringFormat("  S[%s] avg=%.5f tp=%.5f", mS, avgS, ComputeAvgTPPrice(g,1));
-         if(avgS>0 && g_maxGridTrailArmed[g][1]) txt += StringFormat(" trail=%.5f", g_maxGridTrailSL[g][1]);
-         if(avgS>0) txt += "\n";
+// ---------- Dashboard helpers (v1.5: 2-panel Gold-Miner-style) ----------
+void DashCleanupAll(){
+   int total = ObjectsTotal(0,-1,-1);
+   for(int i=total-1;i>=0;i--){
+      string nm = ObjectName(0, i, -1, -1);
+      if(StringFind(nm, g_dashPrefix) == 0) ObjectDelete(0, nm);
+   }
+   if(ObjectFind(0, g_dashName) >= 0) ObjectDelete(0, g_dashName);
+}
+
+void DashRect(string name, int x, int y, int w, int h, color bg){
+   if(ObjectFind(0, name) < 0){
+      ObjectCreate(0, name, OBJ_RECTANGLE_LABEL, 0, 0, 0);
+      ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+      ObjectSetInteger(0, name, OBJPROP_BORDER_TYPE, BORDER_FLAT);
+      ObjectSetInteger(0, name, OBJPROP_BACK, false);
+      ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+   }
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
+   ObjectSetInteger(0, name, OBJPROP_XSIZE, w);
+   ObjectSetInteger(0, name, OBJPROP_YSIZE, h);
+   ObjectSetInteger(0, name, OBJPROP_BGCOLOR, bg);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, bg);
+}
+
+void DashLabel(string name, int x, int y, string text, color clr){
+   if(ObjectFind(0, name) < 0){
+      ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
+      ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+      ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+      ObjectSetInteger(0, name, OBJPROP_FONTSIZE, InpDashFontSize);
+      ObjectSetString (0, name, OBJPROP_FONT, InpDashFont);
+   }
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
+   ObjectSetString (0, name, OBJPROP_TEXT, text);
+}
+
+// Track names rendered each frame so we can sweep stale ones
+string g_dashAlive[];
+void DashTrack(string name){
+   int n = ArraySize(g_dashAlive);
+   ArrayResize(g_dashAlive, n+1);
+   g_dashAlive[n] = name;
+}
+void DashSweepStale(){
+   int total = ObjectsTotal(0,-1,-1);
+   for(int i=total-1;i>=0;i--){
+      string nm = ObjectName(0, i, -1, -1);
+      if(StringFind(nm, g_dashPrefix) != 0) continue;
+      bool keep = false;
+      for(int k=0;k<ArraySize(g_dashAlive);k++){
+         if(g_dashAlive[k] == nm){ keep=true; break; }
       }
+      if(!keep) ObjectDelete(0, nm);
    }
-   if(ObjectFind(0, g_dashName) < 0){
-      ObjectCreate(0, g_dashName, OBJ_LABEL, 0, 0, 0);
-      ObjectSetInteger(0, g_dashName, OBJPROP_CORNER, CORNER_LEFT_UPPER);
-      ObjectSetInteger(0, g_dashName, OBJPROP_XDISTANCE, InpDashX);
-      ObjectSetInteger(0, g_dashName, OBJPROP_YDISTANCE, InpDashY);
-      ObjectSetInteger(0, g_dashName, OBJPROP_COLOR, InpDashColor);
-      ObjectSetInteger(0, g_dashName, OBJPROP_FONTSIZE, 9);
-      ObjectSetString (0, g_dashName, OBJPROP_FONT, "Consolas");
+}
+
+// One-row helper: bg rect + key label (left) + value label (right)
+void DashRow(string keyId, int x, int y, int w, int rowH,
+             string keyText, string valText, color valColor){
+   string bgN  = g_dashPrefix + "BG_"  + keyId;
+   string keyN = g_dashPrefix + "K_"   + keyId;
+   string valN = g_dashPrefix + "V_"   + keyId;
+   DashRect (bgN, x, y, w, rowH, InpDashRowBg);                         DashTrack(bgN);
+   DashLabel(keyN, x+6, y+3, keyText, InpDashColor);                    DashTrack(keyN);
+   DashLabel(valN, x+w/2, y+3, valText, valColor);                      DashTrack(valN);
+}
+
+// Header bar
+void DashHeader(string id, int x, int y, int w, int rowH, string text, color clr){
+   string bgN = g_dashPrefix + "HBG_" + id;
+   string txN = g_dashPrefix + "HTX_" + id;
+   DashRect (bgN, x, y, w, rowH, InpDashHeaderBg);   DashTrack(bgN);
+   DashLabel(txN, x+6, y+3, text, clr);              DashTrack(txN);
+}
+
+void DrawDashboard(){
+   if(!InpShowDashboard){ DashCleanupAll(); return; }
+   ArrayResize(g_dashAlive, 0);
+
+   //==== LEFT PANEL: Gold-Miner-style summary ====
+   int x = InpDashX;
+   int y = InpDashY;
+   int w = InpDashLeftWidth;
+   int rowH = 18;
+
+   double bal   = AccountInfoDouble(ACCOUNT_BALANCE);
+   double eq    = AccountInfoDouble(ACCOUNT_EQUITY);
+   double flt   = eq - bal;
+
+   // Aggregates across all groups
+   double totMainLot=0, totHedgeLot=0, totPL=0, totLossUSD=0, peakLossUSD=0;
+   int    activeGroups=0, matchedGroups=0, blockedGroups=0;
+   int    totBuyPos=0, totSellPos=0, totHedgePos=0, totHedgePend=0;
+   double plBuy=0, plSell=0;
+   for(int g=1; g<=InpMaxGroups; g++){
+      bool hp = GroupHasAnyPositions(g), he = GroupHasAnyPendings(g);
+      if(!hp && !he) continue;
+      activeGroups++;
+      if(IsGroupHedgeMatched(g)) matchedGroups++;
+      if(g_blockNewOrders[g])    blockedGroups++;
+      totMainLot  += GroupTotalLot(g,-1,0);
+      totHedgeLot += GroupTotalLot(g,-1,1);
+      totPL       += GroupFloatingPL(g,-1,-1);
+      double lUSD = -MathMin(GroupFloatingPL(g,0,0), GroupFloatingPL(g,1,0));
+      if(lUSD>0) totLossUSD += lUSD;
+      if(lUSD>peakLossUSD) peakLossUSD = lUSD;
+      totBuyPos    += CountGroupPositions(g,0,0);
+      totSellPos   += CountGroupPositions(g,1,0);
+      totHedgePos  += CountGroupPositions(g,-1,1);
+      totHedgePend += CountGroupPendingsByTagPrefix(g, true, "");
+      plBuy        += GroupFloatingPL(g,0,0);
+      plSell       += GroupFloatingPL(g,1,0);
    }
-   ObjectSetString(0, g_dashName, OBJPROP_TEXT, txt);
+   double maxPct = (InpHedgeTriggerUSD>0) ? (peakLossUSD*100.0/InpHedgeTriggerUSD) : 0;
+
+   // Header
+   DashHeader("L_TITLE", x, y, w, rowH+2, " Golden2 EA v1.5    Mode: Group", InpDashAccent);
+   y += rowH+2;
+
+   // Rows
+   DashRow("L_BAL",   x, y, w, rowH, "Balance",          StringFormat("$%.2f", bal), InpDashColor);  y+=rowH;
+   DashRow("L_EQ",    x, y, w, rowH, "Equity",           StringFormat("$%.2f", eq),  InpDashColor);  y+=rowH;
+   DashRow("L_FLT",   x, y, w, rowH, "Floating P/L",     StringFormat("$%.2f", flt), flt>=0?InpDashGood:InpDashBad); y+=rowH;
+   DashRow("L_PB",    x, y, w, rowH, "Position BUY",     StringFormat("$%.2f  %.2fL  %dord", plBuy,  GroupAggLotBuy(),  totBuyPos),  plBuy>=0?InpDashGood:InpDashBad);  y+=rowH;
+   DashRow("L_PS",    x, y, w, rowH, "Position SELL",    StringFormat("$%.2f  %.2fL  %dord", plSell, GroupAggLotSell(), totSellPos), plSell>=0?InpDashGood:InpDashBad); y+=rowH;
+   DashRow("L_DD",    x, y, w, rowH, "Current DD% (max)", StringFormat("%.2f%% / %.0f%%", maxPct, InpHedgeArmPercent), maxPct>=InpHedgeArmPercent?InpDashBad:(maxPct>=InpHedge_BlockNewOrderPercent?InpDashAccent:InpDashColor)); y+=rowH;
+   DashRow("L_TOTLOT",x, y, w, rowH, "Total Cur. Lot",   StringFormat("%.2f L", totMainLot+totHedgeLot), InpDashColor); y+=rowH;
+   DashRow("L_GRP",   x, y, w, rowH, "Active / Matched", StringFormat("%d / %d", activeGroups, matchedGroups), InpDashAccent); y+=rowH;
+   DashRow("L_QUEUE", x, y, w, rowH, "Queue Mutex",      g_activeOpsGroup<0?"IDLE":StringFormat("G%d", g_activeOpsGroup), InpDashColor); y+=rowH;
+   DashRow("L_STRIP", x, y, w, rowH, "TP-Stripped",      StrippedListString(), InpDashColor); y+=rowH;
+
+   int rem=0;
+   string hd = IsHedgeOpenDelayActive(rem) ? StringFormat("WAIT %dm%02ds", rem/60, rem%60) : "READY";
+   DashRow("L_HDLY",  x, y, w, rowH, "Hedge Delay",      hd, InpDashColor); y+=rowH;
+   DashRow("L_TRAIL", x, y, w, rowH, "MaxGrid Trail",    StringFormat("%s (Mode %d)", MaxGrid_TrailEnable?"ON":"OFF", MaxGrid_TrailMode), MaxGrid_TrailEnable?InpDashGood:InpDashColor); y+=rowH;
+   DashRow("L_HEDGE", x, y, w, rowH, "Hedging",          InpHedge_Enabled?"ON":"OFF", InpHedge_Enabled?InpDashGood:InpDashBad); y+=rowH;
+   DashRow("L_BLK",   x, y, w, rowH, "Pre-Hedge Block",  StringFormat("%d grp(s)", blockedGroups), blockedGroups>0?InpDashAccent:InpDashColor); y+=rowH;
+   DashRow("L_STAT",  x, y, w, rowH, "System Status",    InpAllowTrade?"Working":"Paused", InpAllowTrade?InpDashGood:InpDashBad); y+=rowH;
+
+   //==== RIGHT PANEL: Hedging table (only when Hedging is ON) ====
+   if(InpHedge_Enabled){
+      int xR = InpDashX + InpDashLeftWidth + InpDashHedgeGap;
+      int yR = InpDashY;
+      int wR = 380;
+
+      DashHeader("R_TITLE", xR, yR, wR, rowH+2, StringFormat(" Hedging Table (%d/%d)", activeGroups, InpMaxGroups), InpDashAccent);
+      yR += rowH+2;
+
+      // Column header
+      string hdr = StringFormat("%-4s %-9s %-6s %-6s %-9s %-5s",
+                                "Grp", "Status", "MainL", "HdgL", "P/L", "Pend");
+      DashRow("R_HDR", xR, yR, wR, rowH, "G/Status", "MainL  HdgL   P/L   Pend  DD%", InpDashAccent);
+      yR += rowH;
+
+      bool any=false;
+      for(int g=1; g<=InpMaxGroups; g++){
+         if(!GroupHasAnyPositions(g) && !GroupHasAnyPendings(g)) continue;
+         any=true;
+         double mL  = GroupTotalLot(g,-1,0);
+         double hL  = GroupTotalLot(g,-1,1);
+         double pl  = GroupFloatingPL(g,-1,-1);
+         double lU  = -MathMin(GroupFloatingPL(g,0,0), GroupFloatingPL(g,1,0));
+         if(lU<0) lU=0;
+         double pct = (InpHedgeTriggerUSD>0) ? (lU*100.0/InpHedgeTriggerUSD) : 0;
+         int hPend  = CountGroupPendingsByTagPrefix(g, true, "");
+         int hPos   = CountGroupPositions(g,-1,1);
+         string st;
+         color  stClr;
+         if(hPos > 0)              { st = "ACTIVE";              stClr = InpDashBad; }
+         else if(hPend > 0)        { st = StringFormat("ARMED%d", hPend); stClr = InpDashAccent; }
+         else if(g_blockNewOrders[g]){ st = "BLOCK";              stClr = InpDashAccent; }
+         else                      { st = "IDLE";                stClr = InpDashColor; }
+         string match = IsGroupHedgeMatched(g) ? "*" : " ";
+
+         string keyTxt = StringFormat("G%d%s %s", g, match, st);
+         string valTxt = StringFormat("%5.2f %5.2f %7.2f %3d  %5.1f%%",
+                                       mL, hL, pl, hPend, pct);
+         color rowClr  = (pl>=0)?InpDashGood:InpDashBad;
+         DashRow(StringFormat("R_G%d", g), xR, yR, wR, rowH, keyTxt, valTxt, rowClr);
+         // Override key color separately
+         ObjectSetInteger(0, g_dashPrefix + "K_" + StringFormat("R_G%d", g), OBJPROP_COLOR, stClr);
+         yR += rowH;
+      }
+      if(!any){
+         DashRow("R_EMPTY", xR, yR, wR, rowH, "(no active groups)", "-", InpDashColor);
+         yR += rowH;
+      }
+
+      // Totals footer
+      DashHeader("R_FOOT", xR, yR, wR, rowH+2, StringFormat(" TOTAL  Main=%.2fL  Hdg=%.2fL  P/L=$%.2f  Pend=%d",
+                          totMainLot, totHedgeLot, totPL, totHedgePend),
+                          totPL>=0?InpDashGood:InpDashBad);
+      yR += rowH+2;
+   }
+
+   DashSweepStale();
+}
+
+// Helpers used by dashboard above
+double GroupAggLotBuy(){
+   double s=0;
+   for(int g=1; g<=InpMaxGroups; g++) s += GroupTotalLot(g, 0, 0);
+   return s;
+}
+double GroupAggLotSell(){
+   double s=0;
+   for(int g=1; g<=InpMaxGroups; g++) s += GroupTotalLot(g, 1, 0);
+   return s;
 }
 
 //================ INIT / DEINIT / TICK ================
