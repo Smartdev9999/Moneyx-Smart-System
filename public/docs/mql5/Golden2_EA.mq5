@@ -10,8 +10,8 @@
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.61"
-#property description "Golden2 EA v2.6.1 - Hardened PlaceInitialFrame. Validates InpInitSideMode (auto-fallback to INIT_BOTH if .set file holds garbage like 5000), rejects pending prices below broker SYMBOL_TRADE_STOPS_LEVEL, adds 5s per-group cooldown + 30s back-off when both BuyStop and SellStop OrderSend fail (stops the per-tick re-fire spam seen when mode/distance is misconfigured). Logs include retcode + GetLastError on failure. v2.6 Re-entry on Close, v2.5 toward-price trail, v2.3 hedge freeze, v2.2 TP/SL preserve all retained. Order execution unchanged — only adds guards and richer error logs."
+#property version   "2.70"
+#property description "Golden2 EA v2.70 - Continuous Frame Maintenance. Two-sided BuyStop/SellStop frame is kept ALIVE at all times: any side that becomes empty (no pending + no position) is immediately re-filled at Ask+InpFrameUpperPips / Bid-InpFrameLowerPips, with NO requirement for the opposite side to have a live position. Toward-price-only M1 trail (v2.5) and v2.3 hedge-active freeze retained. Re-arm/Re-entry/legacy-trail inputs deprecated (no-op, kept for .set file compatibility). Per-side cooldown + STOPS_LEVEL guards from v2.61 retained. Order execution, grid logic, hedging, Triple-Gate, Avg TP/SL, Accumulate, Squeeze — all untouched."
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -78,15 +78,15 @@ input int     InpFrameUpperPips       = 200;                             // BUY_
 input int     InpFrameLowerPips       = 200;                             // SELL_STOP distance from mid (points)
 input int     InpInitialTPPips        = 300;                             // Initial TP (points) (0=off)
 input int     InpInitialSLPips        = 0;                               // Initial SL (points) (0=off)
-input bool    InpInitTrailOpposite    = true;                            // [v1.7] Trail opposite stop when one stop runs away
-input int     InpInitTrailTriggerPips = 200;                             // [v1.7] Trail trigger: when distance from mid > this (points)
-input bool    InpInitReArmAfterTP     = true;                            // [v1.7] Re-arm side stop after that side empties (TP hit)
-input int     InpInitReArmDistancePips= 200;                             // [v1.7] Re-arm distance from current price (points)
-input bool    InpInitReEntryOnClose   = true;                            // [v2.6] Re-entry: place pending stop again whenever an initial-side closes (TP/SL), even if opposite side has no live position (only pending). Requires the side has been previously triggered in this group.
-input bool            InpInitTrailOnBarClose      = true;                  // [v1.8] Trail opposite stop on every bar close (overrides v1.7 trigger trail)
+input bool    InpInitTrailOpposite    = true;                            // [v2.70 DEPRECATED — no-op, kept for .set file compat]
+input int     InpInitTrailTriggerPips = 200;                             // [v2.70 DEPRECATED — no-op]
+input bool    InpInitReArmAfterTP     = true;                            // [v2.70 DEPRECATED — superseded by continuous frame maintenance (always ON)]
+input int     InpInitReArmDistancePips= 200;                             // [v2.70 DEPRECATED — re-fill uses InpFrameUpperPips/LowerPips instead]
+input bool    InpInitReEntryOnClose   = true;                            // [v2.70 DEPRECATED — superseded by continuous frame maintenance (always ON)]
+input bool            InpInitTrailOnBarClose      = true;                  // [v2.70 DEPRECATED — bar-close trail always ON]
 input ENUM_TIMEFRAMES InpInitTrailTF              = PERIOD_M1;             // [v1.8] Trail timer TF (default M1)
 input bool            InpGL_ImmediateAfterInitial = true;                  // [v1.8] Fire GL#1 immediately after Initial fill (bypass candle guards on first GL)
-input bool            InpFrameSymmetricTrail      = false;                 // [v2.5] DEPRECATED - kept for input compatibility, ignored. v2.5 always uses one-way toward-price trail.
+input bool            InpFrameSymmetricTrail      = false;                 // [v2.70 DEPRECATED — toward-price-only trail always]
 input int             InpFrameRecenterMinPips     = 50;                    // [v2.5] Min frame-distance growth (points) before dragging pending toward price
 
 //--- === Grid Loss Side === (Gold Miner-style)
