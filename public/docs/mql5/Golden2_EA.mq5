@@ -471,7 +471,86 @@ bool IsExpansionToNormal(){
    return (wasExpansion && nowNormal);
 }
 
-//================ MUTEX (sequential queue) ================
+//================ [v1.6] VOLATILITY SQUEEZE FILTER ================
+// Per TF: BBwidth/KCwidth on closed bar (shift=1). Expansion when ratio >= threshold.
+// Direction = sign(close - BBmid) on shift=1.
+bool ComputeSqueezeForTF(int idx, bool &isExp, int &dir){
+   isExp = false; dir = 0;
+   if(g_sqBB[idx] == INVALID_HANDLE || g_sqKCEMA[idx] == INVALID_HANDLE || g_sqATR[idx] == INVALID_HANDLE) return false;
+   double bbU[3], bbL[3], bbM[3], ema[3], atr[3];
+   if(CopyBuffer(g_sqBB[idx],   1, 0, 3, bbU) <= 0) return false;
+   if(CopyBuffer(g_sqBB[idx],   2, 0, 3, bbL) <= 0) return false;
+   if(CopyBuffer(g_sqBB[idx],   0, 0, 3, bbM) <= 0) return false;
+   if(CopyBuffer(g_sqKCEMA[idx],0, 0, 3, ema) <= 0) return false;
+   if(CopyBuffer(g_sqATR[idx],  0, 0, 3, atr) <= 0) return false;
+   double bbW = bbU[1] - bbL[1];
+   double kcW = 2.0 * InpSQ_KCMult * atr[1];
+   if(kcW <= 0) return false;
+   double ratio = bbW / kcW;
+   isExp = (ratio >= InpSQ_ExpansionThreshold);
+   double cl = iClose(_Symbol, g_sqTF[idx], 1);
+   if(cl > bbM[1]) dir = +1;
+   else if(cl < bbM[1]) dir = -1;
+   else dir = 0;
+   return true;
+}
+
+void RefreshSqueezeState(){
+   g_sqExpCount = 0;
+   g_sqBlockBuy = false;
+   g_sqBlockSell = false;
+   if(!InpSQ_Enable) return;
+   int upCnt=0, dnCnt=0;
+   for(int i=0;i<3;i++){
+      bool e=false; int d=0;
+      ComputeSqueezeForTF(i, e, d);
+      g_sqExpansion[i] = e;
+      g_sqDir[i] = d;
+      if(e){
+         g_sqExpCount++;
+         if(d>0) upCnt++;
+         else if(d<0) dnCnt++;
+      }
+   }
+   if(InpSQ_BlockNewOrders && g_sqExpCount >= InpSQ_MinExpansionTFs){
+      if(InpSQ_DirectionalBlock){
+         // Expansion-up (price above BB mid breaking up) → block SELL (counter-trend)
+         // Expansion-down → block BUY
+         if(upCnt > 0) g_sqBlockSell = true;
+         if(dnCnt > 0) g_sqBlockBuy  = true;
+      } else {
+         g_sqBlockBuy = true;
+         g_sqBlockSell = true;
+      }
+   }
+}
+
+bool SqueezeBlocksSide(int side){
+   if(!InpSQ_Enable || !InpSQ_BlockNewOrders) return false;
+   if(side == 0) return g_sqBlockBuy;
+   if(side == 1) return g_sqBlockSell;
+   return false;
+}
+
+bool SqueezeBlocksAny(){
+   return SqueezeBlocksSide(0) || SqueezeBlocksSide(1);
+}
+
+string SqueezeStatusString(){
+   if(!InpSQ_Enable) return "OFF";
+   string tfs[3] = {"TF1","TF2","TF3"};
+   string s = StringFormat("E:%d", g_sqExpCount);
+   for(int i=0;i<3;i++){
+      if(g_sqExpansion[i]){
+         s += StringFormat(" %s%s", tfs[i], (g_sqDir[i]>0?"^":(g_sqDir[i]<0?"v":"-")));
+      }
+   }
+   if(g_sqBlockBuy)  s += " BLK_BUY";
+   if(g_sqBlockSell) s += " BLK_SELL";
+   return s;
+}
+
+
 bool ClaimMutex(int g){
    if(!InpSequentialQueue) return true;
    if(g_activeOpsGroup == -1){
