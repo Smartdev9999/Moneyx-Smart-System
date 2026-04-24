@@ -1,16 +1,16 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|     Golden2 EA v2.3 - Stop "stuck after Group 1 hedge":         |
-//|     freeze initial-frame logic the moment a hedge position      |
-//|     exists, delete leftover G_IN pendings, and let the group    |
-//|     advance check ignore residual post-hedge IN orphans so the  |
-//|     next group always opens.                                    |
+//|     Golden2 EA v2.4 - Symmetric Initial Frame Trail:           |
+//|     trail BOTH BuyStop & SellStop together to follow market     |
+//|     mid (recenter) so the side price is running INTO no longer  |
+//|     gets hit while only the opposite side trails. Fixes G3+     |
+//|     orphan IN fill that blocked group advancement.              |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.30"
-#property description "Golden2 EA v2.3 - Fix: system stops opening new orders after Group 1 hedge. Initial-frame management (bar-close trail / legacy trail / re-arm) now freezes as soon as ANY hedge position exists for the group (previously only after a fully matched main+hedge set). Leftover G_IN pendings are auto-cancelled once the group has a hedge position so they cannot trigger a post-hedge orphan main. IsGroupSafeToAdvance() now ignores a single residual post-hedge IN main on a side that is otherwise empty, so Group N+1 opens even when only a stray initial fill remains. v2.1 Accumulate Close cooldown and v2.2 pending TP/SL preservation unchanged."
+#property version   "2.40"
+#property description "Golden2 EA v2.4 - Symmetric Initial Frame Trail. ManageInitialTrailOnBarClose now recenters BOTH BuyStop and SellStop pendings on the current market mid every bar close (controlled by InpFrameSymmetricTrail, threshold InpFrameRecenterMinPips). Previous asymmetric trail only dragged the stop on the side price was running away from, so the opposite stop sat still and got hit on retrace -> orphan IN fill that blocked next-group advancement. v2.3 hedge-state freeze, post-hedge IN cleanup, and orphan-aware advance guard preserved unchanged. Order execution, hedging, grid logic, and triple-gate exits untouched."
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -84,6 +84,8 @@ input int     InpInitReArmDistancePips= 200;                             // [v1.
 input bool            InpInitTrailOnBarClose      = true;                  // [v1.8] Trail opposite stop on every bar close (overrides v1.7 trigger trail)
 input ENUM_TIMEFRAMES InpInitTrailTF              = PERIOD_M1;             // [v1.8] Trail timer TF (default M1)
 input bool            InpGL_ImmediateAfterInitial = true;                  // [v1.8] Fire GL#1 immediately after Initial fill (bypass candle guards on first GL)
+input bool            InpFrameSymmetricTrail      = true;                  // [v2.4] Trail BOTH BuyStop & SellStop together to recenter on market mid
+input int             InpFrameRecenterMinPips     = 50;                    // [v2.4] Min mid-shift (points) before recentering both pendings
 
 //--- === Grid Loss Side === (Gold Miner-style)
 input string  __sec_grid_loss__       = "=== Grid Loss Side ===";    // ---
@@ -810,23 +812,45 @@ void ManageInitialTrailOnBarClose(int g){
 
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double mid = (ask + bid) * 0.5;
 
-   // BUY pending: trail only when newPx moves DOWN (price ran away upward leaves
-   // buy stop above; if price ran DOWN, newPx<oldPx → drag down to stay 200pt away)
+   // [v2.4] Symmetric recenter mode: both BuyStop and SellStop are dragged
+   //        toward the current market mid every bar close so the frame stays
+   //        InpFrameUpper/Lower pips around price. The previous asymmetric
+   //        behaviour (only trail the side price ran AWAY from) caused the
+   //        opposite stop to sit still and get hit on a retrace, producing
+   //        an orphan IN fill that blocked next-group advancement.
+   double recenterMin = MathMax(InpFrameRecenterMinPips, 1) * g_point;
+
+   // ---- BUY pending ----
    if(tBuy != 0 && buyPos == 0 && (sellPos > 0 || tSell != 0)){
-      double newPx = NormalizeDouble(ask + InpFrameUpperPips*g_point, g_digits);
+      double newPxSym  = NormalizeDouble(mid + InpFrameUpperPips * g_point, g_digits); // [v2.4] recenter on mid
+      double newPxAsym = NormalizeDouble(ask + InpFrameUpperPips * g_point, g_digits); // legacy: only when ask falls
       if(OrderSelect(tBuy)){
          double oldPx = OrderGetDouble(ORDER_PRICE_OPEN);
          double oldTP = OrderGetDouble(ORDER_TP);
          double oldSL = OrderGetDouble(ORDER_SL);
-         if(newPx < oldPx - g_point){
+         double newPx = oldPx;
+         bool   doMove = false;
+         if(InpFrameSymmetricTrail){
+            // move whenever mid shifted enough in EITHER direction
+            if(MathAbs(newPxSym - oldPx) > recenterMin){
+               newPx = newPxSym; doMove = true;
+            }
+         } else {
+            // legacy v2.2 behaviour: only drag DOWN when ask falls
+            if(newPxAsym < oldPx - g_point){
+               newPx = newPxAsym; doMove = true;
+            }
+         }
+         if(doMove){
             // [v2.2] Preserve existing TP/SL. Shift by entry delta when InitialTP is on,
             //        otherwise forward the broker-side values verbatim (Average-TP mode).
             double tp, sl;
             if(InpInitialTPPips > 0){
                tp = (oldTP > 0) ? NormalizeDouble(oldTP + (newPx - oldPx), g_digits) : 0;
             } else {
-               tp = oldTP; // keep existing (could be Average-TP set by manager, or 0)
+               tp = oldTP;
             }
             if(InpInitialSLPips > 0){
                sl = (oldSL > 0) ? NormalizeDouble(oldSL + (newPx - oldPx), g_digits) : 0;
@@ -834,22 +858,35 @@ void ManageInitialTrailOnBarClose(int g){
                sl = oldSL;
             }
             if(trade.OrderModify(tBuy, newPx, sl, tp, ORDER_TIME_GTC, 0)){
-               if(InpVerboseLog) PrintFormat("Golden2 v2.2: BarTrail BuyStop G%d %.5f -> %.5f tp=%.5f sl=%.5f", g, oldPx, newPx, tp, sl);
+               if(InpVerboseLog) PrintFormat("Golden2 v2.4: %sTrail BuyStop G%d %.5f -> %.5f mid=%.5f tp=%.5f sl=%.5f",
+                                             InpFrameSymmetricTrail?"Recenter":"Bar", g, oldPx, newPx, mid, tp, sl);
             } else {
-               PrintFormat("Golden2 v2.2: BarTrail BuyStop modify FAIL G%d err=%d", g, GetLastError());
+               PrintFormat("Golden2 v2.4: BuyStop modify FAIL G%d err=%d", g, GetLastError());
             }
          }
       }
    }
-   // SELL pending: trail only when newPx moves UP (price ran away upward → drag sell up)
+
+   // ---- SELL pending ----
    if(tSell != 0 && sellPos == 0 && (buyPos > 0 || tBuy != 0)){
-      double newPx = NormalizeDouble(bid - InpFrameLowerPips*g_point, g_digits);
+      double newPxSym  = NormalizeDouble(mid - InpFrameLowerPips * g_point, g_digits); // [v2.4] recenter on mid
+      double newPxAsym = NormalizeDouble(bid - InpFrameLowerPips * g_point, g_digits); // legacy: only when bid rises
       if(OrderSelect(tSell)){
          double oldPx = OrderGetDouble(ORDER_PRICE_OPEN);
          double oldTP = OrderGetDouble(ORDER_TP);
          double oldSL = OrderGetDouble(ORDER_SL);
-         if(newPx > oldPx + g_point){
-            // [v2.2] Preserve existing TP/SL (see BUY branch above for rationale).
+         double newPx = oldPx;
+         bool   doMove = false;
+         if(InpFrameSymmetricTrail){
+            if(MathAbs(newPxSym - oldPx) > recenterMin){
+               newPx = newPxSym; doMove = true;
+            }
+         } else {
+            if(newPxAsym > oldPx + g_point){
+               newPx = newPxAsym; doMove = true;
+            }
+         }
+         if(doMove){
             double tp, sl;
             if(InpInitialTPPips > 0){
                tp = (oldTP > 0) ? NormalizeDouble(oldTP + (newPx - oldPx), g_digits) : 0;
@@ -862,9 +899,10 @@ void ManageInitialTrailOnBarClose(int g){
                sl = oldSL;
             }
             if(trade.OrderModify(tSell, newPx, sl, tp, ORDER_TIME_GTC, 0)){
-               if(InpVerboseLog) PrintFormat("Golden2 v2.2: BarTrail SellStop G%d %.5f -> %.5f tp=%.5f sl=%.5f", g, oldPx, newPx, tp, sl);
+               if(InpVerboseLog) PrintFormat("Golden2 v2.4: %sTrail SellStop G%d %.5f -> %.5f mid=%.5f tp=%.5f sl=%.5f",
+                                             InpFrameSymmetricTrail?"Recenter":"Bar", g, oldPx, newPx, mid, tp, sl);
             } else {
-               PrintFormat("Golden2 v2.2: BarTrail SellStop modify FAIL G%d err=%d", g, GetLastError());
+               PrintFormat("Golden2 v2.4: SellStop modify FAIL G%d err=%d", g, GetLastError());
             }
          }
       }
@@ -2420,7 +2458,7 @@ void DrawDashboard(){
    if(InpInitSideMode == INIT_SELL_ONLY) modeLbl = "SELL-only";
 
    // Header
-   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.3    Side: %s", modeLbl), InpDashAccent);
+   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.4    Side: %s", modeLbl), InpDashAccent);
    y += rowH+2;
 
    // ==== Account section ====
@@ -2611,10 +2649,11 @@ int OnInit(){
       }
    }
 
-   PrintFormat("Golden2 EA v2.3 initialized | Magic=%I64d | MaxGroups=%d | InitMode=%d | GridLoss=%s | Squeeze=%s | TripleGate=%s | BarTrail=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s",
+   PrintFormat("Golden2 EA v2.4 initialized | Magic=%I64d | MaxGroups=%d | InitMode=%d | GridLoss=%s | Squeeze=%s | TripleGate=%s | BarTrail=%s | SymTrail=%s | Recenter>=%dpt | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s",
                (long)InpMagic, InpMaxGroups, (int)InpInitSideMode,
                GridLoss_Enable?"ON":"OFF", InpSQ_Enable?"ON":"OFF", InpExitTripleGate_Enable?"ON":"OFF",
                InpInitTrailOnBarClose?"ON":"OFF",
+               InpFrameSymmetricTrail?"ON":"OFF", InpFrameRecenterMinPips,
                InpTP_UseAccumulateClose?"ON":"OFF",
                InpTP_AccumCooldownSec,
                InpGroup_RequireFullLockBeforeNext?"ON":"OFF",
