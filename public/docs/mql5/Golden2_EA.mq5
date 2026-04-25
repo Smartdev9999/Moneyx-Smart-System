@@ -297,6 +297,14 @@ int    g_sqExpCount       = 0;                    // # TFs currently in expansio
 bool   g_sqBlockBuy       = false;
 bool   g_sqBlockSell      = false;
 double g_sqRatio[3]       = {0.0, 0.0, 0.0};      // [v1.8] BBwidth/KCwidth ratio per TF (for dashboard)
+// [v2.7.7] Extra confirm indicator handles + per-stage pass flags (for dashboard)
+int    g_sqADX[3]         = {INVALID_HANDLE, INVALID_HANDLE, INVALID_HANDLE};
+int    g_sqEMA[3]         = {INVALID_HANDLE, INVALID_HANDLE, INVALID_HANDLE};
+bool   g_sqPassBB[3]      = {false,false,false};
+bool   g_sqPassADX[3]     = {false,false,false};
+bool   g_sqPassATR[3]     = {false,false,false};
+bool   g_sqPassEMA[3]     = {false,false,false};
+double g_sqADXVal[3]      = {0.0, 0.0, 0.0};
 datetime g_lastTrailBar[51];                      // [v1.8] last bar time we ran bar-close trail (per group)
 
 // [v2.72] Backtest speed accel — Tester/Visual mode + throttles + caches
