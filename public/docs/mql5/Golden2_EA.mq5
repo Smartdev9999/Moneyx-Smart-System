@@ -1,18 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|     Golden2 EA v2.7.4 - Allow Group Advance When Unhedged Side  |
-//|     Is Profitable (INSTANT/SMA fix). G1 in INSTANT/SMA was       |
-//|     deadlocking G2 because hedge mirror only locks the losing    |
-//|     side; the profitable side remained "blocking". v2.7.4 treats |
-//|     a profitable unhedged side as effectively safe so G_(N+1)    |
-//|     can open. Toggle InpAdvance_AllowProfitSideUnhedged=false    |
-//|     restores v2.7.3 behaviour exactly. PENDING mode unchanged.   |
+//|     Golden2 EA v2.7.5 — Entry Mode Hard-Gate                     |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.74"
-#property description "Golden2 EA v2.7.4 - Group-advance fix for INSTANT/SMA. IsGroupSafeToAdvance now treats a profitable unhedged side as effectively safe via new helper IsSideEffectivelySafeForAdvance() and toggle InpAdvance_AllowProfitSideUnhedged (default ON). Fixes G1 deadlock seen in INSTANT/SMA where one side hedges and the opposite (profitable) side never gets a hedge — previously the group held forever and G2 never opened. Hold-log now also reports plBUY/plSELL. PENDING mode behaviour unchanged because both sides typically end up hedged via the BuyStop/SellStop frame. v2.73 Entry Mode, v2.72 Squeeze per-side + Backtest accel, v2.70 Continuous Frame, v2.6 Re-entry, v2.5 Toward-Price Trail, hedge / grid / triple-gate / accumulate all preserved."
+#property version   "2.75"
+#property description "Golden2 EA v2.7.5 — Entry Mode hard-gate. SMA/INSTANT no longer place BuyStop/SellStop via re-arm path. PENDING mode unchanged."
 #property strict
 
 #include <Trade/Trade.mqh>
