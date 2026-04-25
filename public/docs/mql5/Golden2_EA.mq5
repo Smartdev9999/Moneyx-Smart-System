@@ -165,6 +165,7 @@ input int     InpMaxGroups            = 50;                          // Max acti
 input bool    InpSequentialQueue      = true;                        // Process one group at a time
 input bool    InpGroup_RequireFullLockBeforeNext = true;             // [v2.0] Block next group until prior group is fully hedge-locked or empty
 input bool    InpGroup_AdvancePerTick            = true;             // [v2.2] Retry group advance every tick (not only on hedge edge)
+input bool    InpAdvance_AllowProfitSideUnhedged = true;             // [v2.7.4] Allow advance when an unhedged main side is currently in profit (fixes INSTANT/SMA deadlock)
 
 //--- === Take Profit (Average) ===
 input string  __sec_tp__              = "=== Take Profit (Average) ==="; // ---
