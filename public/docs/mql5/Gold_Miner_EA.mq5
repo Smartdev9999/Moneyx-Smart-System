@@ -8940,6 +8940,68 @@ double GetHedgeLotCap(ENUM_POSITION_TYPE side)
    return minCap;
 }
 
+//+------------------------------------------------------------------+
+//| v6.81: Close opposite-side survivors of same generation           |
+//| Called right after a hedge opens (before g_cycleGeneration++) so   |
+//| the orphan profitable side does not block new-gen INIT via the     |
+//| Cross-Gen INIT Guard (v6.76).                                      |
+//+------------------------------------------------------------------+
+void CloseOppositeSurvivorsOfGen(int gen, ENUM_POSITION_TYPE hedgeSide)
+{
+   if(!InpHedge_CloseOppositeSurvivors) return;
+
+   ENUM_POSITION_TYPE oppSide = (hedgeSide == POSITION_TYPE_BUY)
+                                ? POSITION_TYPE_SELL
+                                : POSITION_TYPE_BUY;
+
+   int closed = 0;
+   double totalPL = 0.0;
+
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(!PositionSelectByTicket(ticket)) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != oppSide) continue;
+
+      string comment = PositionGetString(POSITION_COMMENT);
+      if(IsHedgeComment(comment)) continue;          // never touch hedge orders
+      if(IsTicketBound(ticket)) continue;            // never touch bound tickets
+
+      int orderGen = ExtractGeneration(comment);
+      if(orderGen != gen) continue;                  // only same generation
+
+      double pl = PositionGetDouble(POSITION_PROFIT)
+                + PositionGetDouble(POSITION_SWAP);
+
+      // Lock from re-hedge so v6.74 / v6.73 logic stays consistent
+      AddPrevHedgedTicket(ticket);
+
+      if(trade.PositionClose(ticket))
+      {
+         closed++;
+         totalPL += pl;
+         PrintFormat("OPP-SURVIVOR CLOSE gen=%d side=%s ticket=%I64u profit=%.2f comment=%s",
+                     gen,
+                     (oppSide == POSITION_TYPE_BUY ? "BUY" : "SELL"),
+                     ticket, pl, comment);
+      }
+      else
+      {
+         PrintFormat("OPP-SURVIVOR CLOSE FAILED gen=%d ticket=%I64u err=%d",
+                     gen, ticket, GetLastError());
+      }
+   }
+
+   if(closed > 0)
+      PrintFormat("OPP-SURVIVOR SUMMARY gen=%d hedgeSide=%s closed=%d totalPL=%.2f",
+                  gen,
+                  (hedgeSide == POSITION_TYPE_BUY ? "BUY" : "SELL"),
+                  closed, totalPL);
+}
+
 
 //+------------------------------------------------------------------+
 //| Count unbound orders (not tied to any hedge set) for a side        |
