@@ -2742,7 +2742,70 @@ bool AreAllPriorGroupsSafe(int curG){
    return true;
 }
 
-void TryAdvanceToNextGroup(){
+// [v2.7.8] Force-close opposite unhedged main side when group is hedge-locked.
+// Logic: if hedge BUY is active in group g, the SELL main side is the "locked"
+// (covered) side; any remaining BUY main positions in the same group are NOT
+// matching the hedge → close them immediately regardless of P/L so the group
+// becomes a clean { lossSide-main + oppositeSide-hedge } pair, freeing
+// IsGroupSafeToAdvance to allow advancing to the next group.
+// Mirror logic for hedge SELL active.
+// Honours InpHedge_ForceCloseDelaySec to avoid race with the just-fired hedge.
+void ForceCloseUnhedgedOppositeSide(int g){
+   if(!InpHedge_ForceCloseOppUnhedged) return;
+   int hedgeBuy  = CountGroupPositions(g, 0, 1); // hedge BUY positions
+   int hedgeSell = CountGroupPositions(g, 1, 1); // hedge SELL positions
+   if(hedgeBuy == 0 && hedgeSell == 0){
+      g_groupHedgeFirstSeen[g] = 0; // reset when no hedge
+      return;
+   }
+   // Track first-seen timestamp for delay
+   datetime now = TimeCurrent();
+   if(g_groupHedgeFirstSeen[g] == 0) g_groupHedgeFirstSeen[g] = now;
+   if((int)(now - g_groupHedgeFirstSeen[g]) < InpHedge_ForceCloseDelaySec) return;
+
+   // Determine which MAIN side to force-close.
+   // hedge BUY covers main SELL → unmatched side to close = main BUY (opposite of hedge direction is what was hedged; hedge mirrors loss → close the OTHER main side that hedge does NOT cover)
+   // Concretely: hedge BUY active → close any leftover main BUY (they have no hedge SELL coverage)
+   //             hedge SELL active → close any leftover main SELL
+   int sideToClose = -1;
+   if(hedgeBuy  > 0 && hedgeSell == 0) sideToClose = 0; // close main BUY
+   else if(hedgeSell > 0 && hedgeBuy == 0) sideToClose = 1; // close main SELL
+   else if(hedgeBuy > 0 && hedgeSell > 0) {
+      // Both hedges active (rare two-way hedge): close BOTH unmatched mains by running twice
+      ForceCloseSideMain(g, 0);
+      ForceCloseSideMain(g, 1);
+      return;
+   }
+   if(sideToClose < 0) return;
+   ForceCloseSideMain(g, sideToClose);
+}
+
+void ForceCloseSideMain(int g, int side){
+   int total = PositionsTotal();
+   for(int i = total - 1; i >= 0; i--){
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0) continue;
+      if(!PositionSelectByTicket(tk)) continue;
+      if((long)PositionGetInteger(POSITION_MAGIC) != InpMagic) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      string c = PositionGetString(POSITION_COMMENT);
+      int gp; bool hd; string tag;
+      if(!ParseComment(c, gp, hd, tag)) continue;
+      if(gp != g) continue;
+      if(hd) continue; // never touch hedge positions
+      int sd = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? 0 : 1;
+      if(sd != side) continue;
+      double pl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+      if(trade.PositionClose(tk)){
+         PrintFormat("Golden2 v2.7.8: G%d force-close opp main #%I64u side=%s tag=%s pl=%.2f (hedge-lock cleanup)",
+                     g, tk, (side==0?"BUY":"SELL"), tag, pl);
+      } else {
+         PrintFormat("Golden2 v2.7.8: G%d force-close FAIL #%I64u err=%d", g, tk, GetLastError());
+      }
+   }
+}
+
+
    int cur = FindActiveTradingGroup();
    if(cur < 1) {
       int g = FindLowestIdleGroup();
