@@ -3130,9 +3130,16 @@ int OnInit(){
       g_sqBB[i]    = iBands(_Symbol, g_sqTF[i], InpSQ_BBPeriod, 0, InpSQ_BBMult, PRICE_CLOSE);
       g_sqKCEMA[i] = iMA   (_Symbol, g_sqTF[i], InpSQ_KCPeriod, 0, MODE_EMA, PRICE_CLOSE);
       g_sqATR[i]   = iATR  (_Symbol, g_sqTF[i], InpSQ_ATRPeriod);
+      // [v2.7.7] ADX + EMA per TF
+      g_sqADX[i]   = iADX  (_Symbol, g_sqTF[i], InpSQ_ADXPeriod);
+      g_sqEMA[i]   = iMA   (_Symbol, g_sqTF[i], InpSQ_EMAPeriod, 0, MODE_EMA, InpSQ_EMAPrice);
       if(InpSQ_Enable && (g_sqBB[i]==INVALID_HANDLE || g_sqKCEMA[i]==INVALID_HANDLE || g_sqATR[i]==INVALID_HANDLE)){
          PrintFormat("Golden2 v1.6: Squeeze indicator init failed TF[%d]", i);
       }
+      if(InpSQ_Enable && InpSQ_UseADX && g_sqADX[i]==INVALID_HANDLE)
+         PrintFormat("Golden2 v2.7.7: ADX init failed TF[%d]", i);
+      if(InpSQ_Enable && InpSQ_UseEMA && g_sqEMA[i]==INVALID_HANDLE)
+         PrintFormat("Golden2 v2.7.7: EMA init failed TF[%d]", i);
    }
 
    // [v2.73] SMA handle for ENTRY_SMA mode (skip if not used to save resources).
