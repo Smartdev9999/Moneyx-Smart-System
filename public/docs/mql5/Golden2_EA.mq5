@@ -295,6 +295,7 @@ double g_sqRatio[3]       = {0.0, 0.0, 0.0};      // [v1.8] BBwidth/KCwidth rati
 datetime g_lastTrailBar[51];                      // [v1.8] last bar time we ran bar-close trail (per group)
 
 // [v2.72] Backtest speed accel — Tester/Visual mode + throttles + caches
+int      g_smaHandle             = INVALID_HANDLE; // [v2.73] SMA handle for ENTRY_SMA mode
 bool     g_isTesterMode          = false;          // MQL_TESTER
 bool     g_isVisualMode          = false;          // MQL_VISUAL_MODE
 bool     g_isOptimization        = false;          // MQL_OPTIMIZATION
