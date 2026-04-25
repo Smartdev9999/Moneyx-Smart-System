@@ -1,19 +1,19 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|     Golden2 EA v2.7.2 - Per-Side Squeeze Block + Backtest Speed |
-//|     PlaceInitialFrame now uses per-side Squeeze block (BUY block |
-//|     stops only BuyStop, SELL block stops only SellStop). Adds    |
-//|     Tester/Visual mode detection, dashboard render throttle,     |
-//|     skips chart objects in non-visual tester, refreshes Squeeze  |
-//|     state once per new M1 bar instead of every tick, caches the  |
-//|     HasClosedMainOnSide history scan for ~2s, and bounds the     |
-//|     per-tick group loop to the highest active group + 1.         |
+//|     Golden2 EA v2.7.3 - Entry Mode: PENDING / SMA / INSTANT      |
+//|     Adds InpEntryMode (default G2_ENTRY_PENDING = original BuyStop|
+//|     /SellStop frame). G2_ENTRY_SMA opens market BUY when price >  |
+//|     SMA and SELL when price < SMA (per-side, ported from Gold     |
+//|     Miner). G2_ENTRY_INSTANT opens both BUY+SELL market orders    |
+//|     immediately (no indicator). Per-side Squeeze block, Re-entry  |
+//|     on close, post-hedge freeze, all v2.72 backtest accel paths,  |
+//|     hedge / grid / triple-gate / accumulate logic UNCHANGED.      |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.72"
-#property description "Golden2 EA v2.7.2 - Per-Side Squeeze Block + Backtest Speed. PlaceInitialFrame's Squeeze guard switched from 'block whole group' (SqueezeBlocksAny) to per-side flags so a BUY block only suppresses the BuyStop and SellStop still fires (mirrors Grid Loss/Profit). Backtest accel: detects MQL_TESTER/MQL_VISUAL_MODE in OnInit, throttles DrawDashboard via InpDashRenderIntervalSec (skipped entirely in non-visual tester/optimization), skips DrawAverageAndTPLinesForGroup in non-visual tester, RefreshSqueezeState now runs once per new M1 bar, HasClosedMainOnSide cached ~2s per (group,side), per-tick group loop bounded to g_highestActiveGroup+1. Trading logic, OrderSend, hedge, grid, triple-gate, accumulate, v2.6 re-entry, v2.5 toward-price trail all preserved unchanged."
+#property version   "2.73"
+#property description "Golden2 EA v2.7.3 - Entry Mode (PENDING/SMA/INSTANT). New input InpEntryMode selects how the initial frame opens: G2_ENTRY_PENDING = original BuyStop+SellStop frame at mid +/- FrameUpper/Lower (default, fully backward compatible); G2_ENTRY_SMA = market entry per side filtered by SMA (BUY only when price > SMA, SELL only when price < SMA), ported from Gold Miner; G2_ENTRY_INSTANT = market BUY+SELL fired immediately at current Ask/Bid with no indicator. Per-side Squeeze block / InpInitSideMode / hedge mirror / grid loss / grid profit / triple-gate / accumulate close / v2.72 backtest accel all preserved."
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -64,6 +64,14 @@ enum ENUM_ATR_REF_G2
    G2_ATR_REF_LAST_GRID = 1   // ATR snapshot at last grid order
 };
 
+// [v2.73] Entry execution mode (ported concept from Gold Miner)
+enum ENUM_ENTRY_MODE_G2
+{
+   G2_ENTRY_PENDING = 0,  // Pending Frame (BuyStop + SellStop) — original
+   G2_ENTRY_SMA     = 1,  // SMA Filter (Market: BUY if price>SMA, SELL if price<SMA)
+   G2_ENTRY_INSTANT = 2   // Instant Market (BUY + SELL immediately, no indicator)
+};
+
 //================ INPUTS ================
 //--- === General ===
 input string  __sec_general__         = "=== General ===";          // ---
@@ -90,6 +98,13 @@ input ENUM_TIMEFRAMES InpInitTrailTF              = PERIOD_M1;             // [v
 input bool            InpGL_ImmediateAfterInitial = true;                  // [v1.8] Fire GL#1 immediately after Initial fill (bypass candle guards on first GL)
 input bool            InpFrameSymmetricTrail      = false;                 // [v2.5] DEPRECATED - kept for input compatibility, ignored. v2.5 always uses one-way toward-price trail.
 input int             InpFrameRecenterMinPips     = 50;                    // [v2.5] Min frame-distance growth (points) before dragging pending toward price
+
+//--- === [v2.73] Entry Mode (Pending / SMA / Instant) ===
+input string  __sec_entrymode__       = "=== Entry Mode (v2.73) ===";    // ---
+input ENUM_ENTRY_MODE_G2 InpEntryMode = G2_ENTRY_PENDING;                 // [v2.73] Entry mode: PENDING(default)=BuyStop+SellStop frame, SMA=market+SMA filter, INSTANT=market both sides
+input int             InpSMA_Period   = 20;                               // [v2.73] SMA period (used when EntryMode=SMA)
+input ENUM_TIMEFRAMES InpSMA_TF       = PERIOD_CURRENT;                   // [v2.73] SMA timeframe
+input ENUM_APPLIED_PRICE InpSMA_AppliedPrice = PRICE_CLOSE;               // [v2.73] SMA applied price
 
 //--- === Grid Loss Side === (Gold Miner-style)
 input string  __sec_grid_loss__       = "=== Grid Loss Side ===";    // ---
@@ -280,6 +295,7 @@ double g_sqRatio[3]       = {0.0, 0.0, 0.0};      // [v1.8] BBwidth/KCwidth rati
 datetime g_lastTrailBar[51];                      // [v1.8] last bar time we ran bar-close trail (per group)
 
 // [v2.72] Backtest speed accel — Tester/Visual mode + throttles + caches
+int      g_smaHandle             = INVALID_HANDLE; // [v2.73] SMA handle for ENTRY_SMA mode
 bool     g_isTesterMode          = false;          // MQL_TESTER
 bool     g_isVisualMode          = false;          // MQL_VISUAL_MODE
 bool     g_isOptimization        = false;          // MQL_OPTIMIZATION
@@ -691,6 +707,121 @@ int FindActiveTradingGroup(){
    return -1;
 }
 
+// [v2.73] Read SMA value (returns 0 on failure). Uses cached g_smaHandle.
+double GetSMAValue_G2(){
+   if(g_smaHandle == INVALID_HANDLE) return 0.0;
+   double buf[];
+   ArraySetAsSeries(buf, true);
+   if(CopyBuffer(g_smaHandle, 0, 0, 2, buf) < 2) return 0.0;
+   return buf[0];
+}
+
+// [v2.73] Market entry path for ENTRY_SMA / ENTRY_INSTANT modes.
+// Mirrors PlaceInitialFrame guard order: per-group cooldown -> Squeeze per-side ->
+// SMA filter (only for SMA mode) -> trade.Buy / trade.Sell at market.
+// Initial TP/SL respect broker stops level. Same MakeComment("IN") tag so all
+// downstream logic (grid, hedge, triple-gate, accumulate, dashboard) is unchanged.
+void PlaceInitialMarket(int g, bool placeBuy, bool placeSell){
+   // Per-group cooldown (5s) — same idea as PlaceInitialFrame to avoid per-tick spam.
+   static datetime s_lastMktAttempt[51];
+   static datetime s_lastMktFailLog[51];
+   int gi = (g >= 0 && g < 51) ? g : 0;
+   if(s_lastMktAttempt[gi] != 0 && TimeCurrent() - s_lastMktAttempt[gi] < 5) return;
+   s_lastMktAttempt[gi] = TimeCurrent();
+
+   // Per-side Squeeze block (mirror of v2.72 PENDING path).
+   if(InpSQ_Enable && InpSQ_BlockNewOrders){
+      if(placeBuy && SqueezeBlocksSide(0)){
+         placeBuy = false;
+         if(InpVerboseLog) PrintFormat("Golden2 v2.73: [MKT] Squeeze BLOCK BUY G%d (%s)", g, SqueezeStatusString());
+      }
+      if(placeSell && SqueezeBlocksSide(1)){
+         placeSell = false;
+         if(InpVerboseLog) PrintFormat("Golden2 v2.73: [MKT] Squeeze BLOCK SELL G%d (%s)", g, SqueezeStatusString());
+      }
+      if(!placeBuy && !placeSell) return;
+   }
+
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   if(ask <= 0 || bid <= 0){
+      if(InpVerboseLog) PrintFormat("Golden2 v2.73: [MKT] G%d skipped — no quotes", g);
+      return;
+   }
+
+   // SMA filter for ENTRY_SMA mode only.
+   if(InpEntryMode == G2_ENTRY_SMA){
+      double sma = GetSMAValue_G2();
+      if(sma <= 0.0){
+         if(TimeCurrent() - s_lastMktFailLog[gi] >= 30){
+            PrintFormat("Golden2 v2.73: [MKT-SMA] G%d skipped — SMA not ready", g);
+            s_lastMktFailLog[gi] = TimeCurrent();
+         }
+         s_lastMktAttempt[gi] = TimeCurrent() - 3; // retry in 2s
+         return;
+      }
+      // Price > SMA -> only BUY allowed; Price < SMA -> only SELL allowed.
+      // Use bid as reference (same as Gold Miner currentPrice).
+      if(placeBuy  && bid <= sma){
+         if(InpVerboseLog) PrintFormat("Golden2 v2.73: [MKT-SMA] G%d skip BUY (bid=%.*f <= SMA=%.*f)", g, g_digits, bid, g_digits, sma);
+         placeBuy = false;
+      }
+      if(placeSell && bid >= sma){
+         if(InpVerboseLog) PrintFormat("Golden2 v2.73: [MKT-SMA] G%d skip SELL (bid=%.*f >= SMA=%.*f)", g, g_digits, bid, g_digits, sma);
+         placeSell = false;
+      }
+      if(!placeBuy && !placeSell) return;
+   }
+
+   long stopsLvl = (long)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   double minDist = (stopsLvl > 0) ? stopsLvl * g_point : 0.0;
+
+   trade.SetExpertMagicNumber(InpMagic);
+   trade.SetDeviationInPoints(InpSlippage);
+
+   string cBuy  = MakeComment(g, false, "IN");
+   string cSell = MakeComment(g, false, "IN");
+
+   bool anySent = false;
+   if(placeBuy){
+      double tp = 0.0, sl = 0.0;
+      if(InpInitialTPPips > 0){
+         double d = MathMax(InpInitialTPPips * g_point, minDist + g_point);
+         tp = NormalizeDouble(ask + d, g_digits);
+      }
+      if(InpInitialSLPips > 0){
+         double d = MathMax(InpInitialSLPips * g_point, minDist + g_point);
+         sl = NormalizeDouble(ask - d, g_digits);
+      }
+      if(!trade.Buy(InpInitialLot, _Symbol, ask, sl, tp, cBuy)){
+         PrintFormat("Golden2 v2.73: [MKT] BUY FAIL G%d err=%d retcode=%d", g, GetLastError(), trade.ResultRetcode());
+      } else {
+         anySent = true;
+         if(InpVerboseLog) PrintFormat("Golden2 v2.73: [MKT] BUY G%d ask=%.*f tp=%.*f sl=%.*f", g, g_digits, ask, g_digits, tp, g_digits, sl);
+      }
+   }
+   if(placeSell){
+      double tp = 0.0, sl = 0.0;
+      if(InpInitialTPPips > 0){
+         double d = MathMax(InpInitialTPPips * g_point, minDist + g_point);
+         tp = NormalizeDouble(bid - d, g_digits);
+      }
+      if(InpInitialSLPips > 0){
+         double d = MathMax(InpInitialSLPips * g_point, minDist + g_point);
+         sl = NormalizeDouble(bid + d, g_digits);
+      }
+      if(!trade.Sell(InpInitialLot, _Symbol, bid, sl, tp, cSell)){
+         PrintFormat("Golden2 v2.73: [MKT] SELL FAIL G%d err=%d retcode=%d", g, GetLastError(), trade.ResultRetcode());
+      } else {
+         anySent = true;
+         if(InpVerboseLog) PrintFormat("Golden2 v2.73: [MKT] SELL G%d bid=%.*f tp=%.*f sl=%.*f", g, g_digits, bid, g_digits, tp, g_digits, sl);
+      }
+   }
+   if(!anySent){
+      s_lastMktAttempt[gi] = TimeCurrent() + 25;
+   }
+}
+
 void PlaceInitialFrame(int g){
    // [v2.1] Accumulate cooldown guard — after CloseEverythingNow() fires, do
    //        NOT open a new frame until the cooldown elapses AND the cycle has
@@ -727,6 +858,14 @@ void PlaceInitialFrame(int g){
          PrintFormat("Golden2 v2.6.1: PlaceInitialFrame G%d skipped — no side enabled (mode=%d)", g, sideMode);
          lastNoSideWarn = TimeCurrent();
       }
+      return;
+   }
+
+   // [v2.73] Entry Mode dispatch — non-PENDING modes use market-entry path
+   //         (SMA filter or Instant). PENDING mode (default) keeps original
+   //         BuyStop/SellStop frame logic below unchanged.
+   if(InpEntryMode == G2_ENTRY_SMA || InpEntryMode == G2_ENTRY_INSTANT){
+      PlaceInitialMarket(g, placeBuy, placeSell);
       return;
    }
 
@@ -2640,7 +2779,8 @@ void DrawDashboard(){
    if(InpInitSideMode == INIT_SELL_ONLY) modeLbl = "SELL-only";
 
    // Header
-   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.7.2    Side: %s", modeLbl), InpDashAccent);
+   string entryLbl = (InpEntryMode == G2_ENTRY_PENDING) ? "PENDING" : (InpEntryMode == G2_ENTRY_SMA) ? "SMA" : "INSTANT"; // [v2.73]
+   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.7.3    Entry: %s    Side: %s", entryLbl, modeLbl), InpDashAccent);
    y += rowH+2;
 
    // ==== Account section ====
@@ -2844,8 +2984,17 @@ int OnInit(){
       }
    }
 
-   PrintFormat("Golden2 EA v2.7.2 initialized | Magic=%I64d | MaxGroups=%d | InitMode=%d | GridLoss=%s | Squeeze=%s SqueezePerSide=ON | TripleGate=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | Tester=%s Visual=%s Opt=%s DashInterval=%ds",
-               (long)InpMagic, InpMaxGroups, (int)InpInitSideMode,
+   // [v2.73] SMA handle for ENTRY_SMA mode (skip if not used to save resources).
+   if(InpEntryMode == G2_ENTRY_SMA){
+      g_smaHandle = iMA(_Symbol, InpSMA_TF, InpSMA_Period, 0, MODE_SMA, InpSMA_AppliedPrice);
+      if(g_smaHandle == INVALID_HANDLE)
+         PrintFormat("Golden2 v2.73: SMA handle init FAILED (period=%d tf=%d)", InpSMA_Period, (int)InpSMA_TF);
+   }
+
+   string entryModeLbl = (InpEntryMode == G2_ENTRY_PENDING) ? "PENDING" :
+                         (InpEntryMode == G2_ENTRY_SMA)     ? "SMA"     : "INSTANT";
+   PrintFormat("Golden2 EA v2.7.3 initialized | Magic=%I64d | MaxGroups=%d | EntryMode=%s | InitMode=%d | GridLoss=%s | Squeeze=%s SqueezePerSide=ON | TripleGate=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | Tester=%s Visual=%s Opt=%s DashInterval=%ds",
+               (long)InpMagic, InpMaxGroups, entryModeLbl, (int)InpInitSideMode,
                GridLoss_Enable?"ON":"OFF", InpSQ_Enable?"ON":"OFF", InpExitTripleGate_Enable?"ON":"OFF",
                InpInitTrailOnBarClose?"ON":"OFF",
                InpFrameRecenterMinPips,
@@ -2871,6 +3020,7 @@ void OnDeinit(const int reason){
       if(g_sqKCEMA[i] != INVALID_HANDLE) IndicatorRelease(g_sqKCEMA[i]);
       if(g_sqATR[i]   != INVALID_HANDLE) IndicatorRelease(g_sqATR[i]);
    }
+   if(g_smaHandle != INVALID_HANDLE){ IndicatorRelease(g_smaHandle); g_smaHandle = INVALID_HANDLE; } // [v2.73]
 }
 
 // Track first-position candle for "DontSameCandle" guard
