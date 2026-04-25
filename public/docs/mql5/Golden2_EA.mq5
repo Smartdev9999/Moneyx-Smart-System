@@ -580,9 +580,7 @@ bool ComputeSqueezeForTF(int idx, bool &isExp, int &dir){
    if(CopyBuffer(g_sqBB[idx],   0, 0, 3,       bbM) <= 0) return false;
    if(CopyBuffer(g_sqKCEMA[idx],0, 0, 3,       ema) <= 0) return false;
    if(CopyBuffer(g_sqATR[idx],  0, 0, atrNeed, atr) <= 0) return false;
-   double bbW = bbU[0] - bbL[0]; // shift=1 มาอยู่ index 0 หลัง series
-   // หมายเหตุ: เปลี่ยนเป็น series, index 0 = current bar(0). เราต้อง shift=1 → index 1
-   bbW = bbU[1] - bbL[1];
+   double bbW = bbU[1] - bbL[1]; // shift=1 = closed bar
    double kcW = 2.0 * InpSQ_KCMult * atr[1];
    if(kcW <= 0) return false;
    double ratio = bbW / kcW;
