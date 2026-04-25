@@ -9257,8 +9257,11 @@ void CheckAndOpenHedge()
        // Store bound generation BEFORE incrementing
        g_hedgeSets[slot].boundGeneration = g_cycleGeneration;
 
-       // Increment cycle generation — new orders will use new prefix (GM1_, GM2_, etc.)
-       g_cycleGeneration++;
+        // v6.81: close opposite-side survivors of same gen BEFORE advancing
+        CloseOppositeSurvivorsOfGen(g_cycleGeneration, hedgeSide);
+
+        // Increment cycle generation — new orders will use new prefix (GM1_, GM2_, etc.)
+        g_cycleGeneration++;
        SaveCycleGeneration();  // v6.53: persist after increment
        Print("CYCLE GENERATION incremented to ", g_cycleGeneration, " — new orders use prefix: ", GetCommentPrefix());
 
