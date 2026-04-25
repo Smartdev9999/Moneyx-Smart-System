@@ -3153,7 +3153,10 @@ int OnInit(){
                          (InpEntryMode == G2_ENTRY_SMA)     ? "SMA"     : "INSTANT";
    PrintFormat("Golden2 EA v2.7.7 initialized | Magic=%I64d | MaxGroups=%d | EntryMode=%s | InitMode=%d | GridLoss=%s | Squeeze=%s [BB:%s ADX:%s(>=%.1f) ATR:%s EMA:%s(P=%d)] | TripleGate=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | ProfitSideUnhedgedAdv=%s | Tester=%s Visual=%s Opt=%s DashInterval=%ds",
                (long)InpMagic, InpMaxGroups, entryModeLbl, (int)InpInitSideMode,
-               GridLoss_Enable?"ON":"OFF", InpSQ_Enable?"ON":"OFF", InpExitTripleGate_Enable?"ON":"OFF",
+               GridLoss_Enable?"ON":"OFF", InpSQ_Enable?"ON":"OFF",
+               InpSQ_UseBBBreakout?"ON":"OFF", InpSQ_UseADX?"ON":"OFF", InpSQ_ADXThreshold,
+               InpSQ_UseATRConfirm?"ON":"OFF", InpSQ_UseEMA?"ON":"OFF", InpSQ_EMAPeriod,
+               InpExitTripleGate_Enable?"ON":"OFF",
                InpInitTrailOnBarClose?"ON":"OFF",
                InpFrameRecenterMinPips,
                InpInitReEntryOnClose?"ON":"OFF",
