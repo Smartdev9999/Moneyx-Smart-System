@@ -1323,6 +1323,39 @@ void ManageInitialReArm(int g){
    }
 }
 
+// [v2.7.6] Per-side market re-entry for INSTANT / SMA modes.
+// When one side closes by TP/SL but the other side still has a live position
+// in the same group, refill the missing side at market so the group stays
+// "two-sided" until hedge activates. PENDING mode is untouched (uses ManageInitialReArm).
+void ManageInitialMarketReEntry(int g){
+   if(InpEntryMode == G2_ENTRY_PENDING) return;
+   if(g_accumJustTriggered) return;
+   if(IsGroupHedgeMatched(g)) return;
+   if(CountGroupPositions(g, -1, 1) > 0) return;   // hedge position exists -> freeze
+   if(g_blockNewOrders[g]) return;                 // pre-hedge DD% block
+   if(g_stripped[g]) return;                       // group already locked
+
+   // Pending hedge present? freeze (mirrors v2.3 post-hedge behaviour)
+   if(CountGroupPendingsByTagPrefix(g, true, "") > 0) return;
+
+   bool buyAllowed  = (InpInitSideMode == INIT_BOTH || InpInitSideMode == INIT_BUY_ONLY);
+   bool sellAllowed = (InpInitSideMode == INIT_BOTH || InpInitSideMode == INIT_SELL_ONLY);
+
+   int buyPos  = CountGroupPositions(g, 0, 0);
+   int sellPos = CountGroupPositions(g, 1, 0);
+
+   // Group must have at least one main side already filled (so we are mid-cycle,
+   // not before the very first entry — that case is handled by PlaceInitialFrame).
+   if(buyPos == 0 && sellPos == 0) return;
+
+   bool needBuy  = buyAllowed  && (buyPos  == 0);
+   bool needSell = sellAllowed && (sellPos == 0);
+   if(!needBuy && !needSell) return;
+
+   if(InpVerboseLog) PrintFormat("Golden2 v2.7.6: market re-entry G%d needBuy=%d needSell=%d (buyPos=%d sellPos=%d)", g, needBuy, needSell, buyPos, sellPos);
+   PlaceInitialMarket(g, needBuy, needSell);
+}
+
 //================ MAIN GRID ================
 // Legacy lot ladder (used by hedge stack & continuation logic — DO NOT TOUCH)
 double LotForLevel(int level){
