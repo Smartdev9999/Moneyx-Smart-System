@@ -99,6 +99,13 @@ input bool            InpGL_ImmediateAfterInitial = true;                  // [v
 input bool            InpFrameSymmetricTrail      = false;                 // [v2.5] DEPRECATED - kept for input compatibility, ignored. v2.5 always uses one-way toward-price trail.
 input int             InpFrameRecenterMinPips     = 50;                    // [v2.5] Min frame-distance growth (points) before dragging pending toward price
 
+//--- === [v2.73] Entry Mode (Pending / SMA / Instant) ===
+input string  __sec_entrymode__       = "=== Entry Mode (v2.73) ===";    // ---
+input ENUM_ENTRY_MODE_G2 InpEntryMode = G2_ENTRY_PENDING;                 // [v2.73] Entry mode: PENDING(default)=BuyStop+SellStop frame, SMA=market+SMA filter, INSTANT=market both sides
+input int             InpSMA_Period   = 20;                               // [v2.73] SMA period (used when EntryMode=SMA)
+input ENUM_TIMEFRAMES InpSMA_TF       = PERIOD_CURRENT;                   // [v2.73] SMA timeframe
+input ENUM_APPLIED_PRICE InpSMA_AppliedPrice = PRICE_CLOSE;               // [v2.73] SMA applied price
+
 //--- === Grid Loss Side === (Gold Miner-style)
 input string  __sec_grid_loss__       = "=== Grid Loss Side ===";    // ---
 input bool           GridLoss_Enable          = true;                 // [v1.7] Enable Grid Loss (off = Initial only)
