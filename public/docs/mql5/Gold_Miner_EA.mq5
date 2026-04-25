@@ -9533,6 +9533,10 @@ bool OpenDDHedge(ENUM_POSITION_TYPE counterSide, ENUM_POSITION_TYPE hedgeSide, i
    ClearBrokerTPSLForSet(slot);
 
     g_hedgeSets[slot].boundGeneration = bindGen;  // v6.37: use snapshot gen, not current
+
+   // v6.81: close opposite-side survivors of same gen BEFORE advancing
+   CloseOppositeSurvivorsOfGen(g_cycleGeneration, hedgeSide);
+
    g_cycleGeneration++;
    SaveCycleGeneration();  // v6.53: persist after increment
    Print("CYCLE GENERATION incremented to ", g_cycleGeneration, " — new orders use prefix: ", GetCommentPrefix());
