@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|     Golden2 EA v2.7.7 — Squeeze + ADX/EMA Multi-Confirm          |
+//|     Golden2 EA v2.7.8 — Force-Close Opp Unhedged on Lock         |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.77"
-#property description "Golden2 EA v2.7.7 — Squeeze Filter + ADX/EMA/ATR/BB-Breakout multi-confirm"
+#property version   "2.78"
+#property description "Golden2 EA v2.7.8 — Force-close opposite unhedged main side when group is hedge-locked, freeing next group to open"
 #property strict
 
 #include <Trade/Trade.mqh>
