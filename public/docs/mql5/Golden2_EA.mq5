@@ -746,6 +746,14 @@ void PlaceInitialFrame(int g){
       return;
    }
 
+   // [v2.73] Entry Mode dispatch — non-PENDING modes use market-entry path
+   //         (SMA filter or Instant). PENDING mode (default) keeps original
+   //         BuyStop/SellStop frame logic below unchanged.
+   if(InpEntryMode == G2_ENTRY_SMA || InpEntryMode == G2_ENTRY_INSTANT){
+      PlaceInitialMarket(g, placeBuy, placeSell);
+      return;
+   }
+
    // [v2.72] Per-side Squeeze block — counter-trend side only.
    // BUY block  -> suppress BuyStop only, SellStop still fires.
    // SELL block -> suppress SellStop only, BuyStop still fires.
