@@ -4742,7 +4742,14 @@ void DisplayDashboard()
                 {
                    string phInfo = IntegerToString(g_prevHedgedCount) + " ticket(s) locked from re-hedge";
                    DrawTableRow(row, "PrevHedged", phInfo, clrOrange, COLOR_SECTION_HEDGE); row++;
-                }
+                 }
+                 // v6.81: Opposite-side survivor close status
+                 {
+                    string oppStr = InpHedge_CloseOppositeSurvivors ? "ON (close opp side on hedge)" : "OFF";
+                    color oppCol = InpHedge_CloseOppositeSurvivors ? clrLime : clrGray;
+                    DrawTableRow(row, "OppSurv Close", oppStr, oppCol, COLOR_SECTION_HEDGE); row++;
+                 }
+                 {
                 // v6.73: Cross-gen INIT guard status row
                 if(InpCrossGen_InitGuard && g_cycleGeneration > 1)
                 {
