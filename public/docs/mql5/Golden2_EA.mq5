@@ -2636,12 +2636,14 @@ void TryAdvanceToNextGroup(){
       if(!IsGroupSafeToAdvance(cur) || !AreAllPriorGroupsSafe(cur)){
          static datetime lastHoldLog = 0;
          if(InpVerboseLog && TimeCurrent() - lastHoldLog >= 60){
-            PrintFormat("Golden2 v2.3: hold G%d->G%d (cur safe=%d priors safe=%d blkBUY=%d blkSELL=%d rawBUY=%d rawSELL=%d hedgeBuy=%d hedgeSell=%d)",
+            PrintFormat("Golden2 v2.7.4: hold G%d->G%d (cur safe=%d priors safe=%d blkBUY=%d blkSELL=%d rawBUY=%d rawSELL=%d hedgeBuy=%d hedgeSell=%d plBUY=%.2f plSELL=%.2f profitBypass=%s)",
                         cur, cur+1,
                         IsGroupSafeToAdvance(cur), AreAllPriorGroupsSafe(cur),
                         CountBlockingMainPositionsForAdvance(cur,0), CountBlockingMainPositionsForAdvance(cur,1),
                         CountGroupPositions(cur,0,0), CountGroupPositions(cur,1,0),
-                        CountGroupPositions(cur,0,1), CountGroupPositions(cur,1,1));
+                        CountGroupPositions(cur,0,1), CountGroupPositions(cur,1,1),
+                        GroupFloatingPL(cur,0,0), GroupFloatingPL(cur,1,0),
+                        InpAdvance_AllowProfitSideUnhedged?"ON":"OFF");
             lastHoldLog = TimeCurrent();
          }
          return;
