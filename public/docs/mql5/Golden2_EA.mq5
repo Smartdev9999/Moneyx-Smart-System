@@ -2994,6 +2994,13 @@ void DrawDashboard(){
          else if((g_sqDir[si]>0 && g_sqBlockSell) || (g_sqDir[si]<0 && g_sqBlockBuy)) cc = InpDashBad;
          else cc = InpDashAccent;
          DashRow(StringFormat("L_SQ_%d", si), x, y, w, rowH, lbl, val, cc); y+=rowH;
+         // [v2.7.7] confirm-stage summary row per TF
+         string cf = StringFormat("BB:%s ADX:%s(%.1f) ATR:%s EMA:%s",
+                        g_sqPassBB[si]?"v":"x",
+                        g_sqPassADX[si]?"v":"x", g_sqADXVal[si],
+                        g_sqPassATR[si]?"v":"x",
+                        g_sqPassEMA[si]?"v":"x");
+         DashRow(StringFormat("L_SQ_CF_%d", si), x, y, w, rowH, "  Confirm", cf, InpDashColor); y+=rowH;
       }
       string ov = SqueezeOverallLabel();
       color  ovC = (ov=="READY")? InpDashGood : InpDashBad;
