@@ -2805,7 +2805,7 @@ void ForceCloseSideMain(int g, int side){
    }
 }
 
-
+void TryAdvanceToNextGroup(){
    int cur = FindActiveTradingGroup();
    if(cur < 1) {
       int g = FindLowestIdleGroup();
@@ -2815,6 +2815,8 @@ void ForceCloseSideMain(int g, int side){
    // [v2.3] As soon as cur is hedging, sweep any leftover IN pendings so a
    //        late stop trigger cannot drop a new orphan main into the group.
    DeleteLeftoverInitialPendingsAfterHedge(cur);
+   // [v2.7.8] Force-close any unhedged opposite main in the group so hedge becomes clean.
+   ForceCloseUnhedgedOppositeSide(cur);
 
    // [v2.2/v2.3] Advance condition: cur has hedge active AND (lock-guard off OR cur+priors safe).
    bool hedgeActive = GroupHedgeJustActivated(cur);
