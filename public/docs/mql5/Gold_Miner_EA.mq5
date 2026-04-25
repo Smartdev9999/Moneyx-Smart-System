@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.78 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.81 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "6.78"
-#property description "Gold Miner EA v6.78 - v6.74 + Hedge Open Delay (นาที) กัน False Signal — รอครบเวลาก่อนเปิด hedge รอบใหม่"
+#property version   "6.81"
+#property description "Gold Miner EA v6.81 - v6.78 + Auto-Close Opposite-Side Survivors of Same Gen on Hedge Open (fix Cross-Gen INIT Guard block)"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -419,6 +419,8 @@ input bool   InpCrossGen_InitGuard      = true;    // v6.73: block new-gen INIT 
 input bool   InpOwnerAutoAdvance        = true;    // v6.73: auto-advance sequential recovery owner to next remaining gen when current gen flat
 input bool   InpHedge_NoReHedgeReleased = true;    // v6.73: tickets released from any hedge set never get re-hedged (let grid recover)
 input bool   InpHedge_NoReHedgeGenSide  = true;    // v6.74: ทั้ง gen+side ที่เคย hedge แล้วถูกปล่อยจะไม่ถูก hedge ซ้ำอีกจน flat
+input bool   InpHedge_CloseOppositeSurvivors = false; // v6.81: Close opposite-side survivors of same gen on hedge open (fix Cross-Gen INIT block)
+input string InpHedge_CloseOppSurvivorsNote  = "Closes BUY survivors of GM4 when SELL hedge fires on GM4 -> next gen starts clean";
 
 // === v6.61: Recovery Shred & Seed ===
 input group "=== Recovery Shred & Seed (v6.61) ==="
@@ -1016,11 +1018,12 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-    Print("Gold Miner EA v6.78 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+     Print("Gold Miner EA v6.81 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min",
-          " | HedgeOpenDelay=", InpHedge_OpenDelayMin, "min (mode=", (int)InpHedge_OpenDelayMode, ")");
+          " | HedgeOpenDelay=", InpHedge_OpenDelayMin, "min (mode=", (int)InpHedge_OpenDelayMode, ")",
+          " | OppSurvClose=", InpHedge_CloseOppositeSurvivors ? "ON" : "OFF");
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -1077,7 +1080,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.74 deinitialized");
+   Print("Gold Miner EA v6.81 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -4118,7 +4121,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.74 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.74 [ZZ]" : "Gold Miner EA v6.74 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.81 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.81 [ZZ]" : "Gold Miner EA v6.81 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -4739,8 +4742,14 @@ void DisplayDashboard()
                 {
                    string phInfo = IntegerToString(g_prevHedgedCount) + " ticket(s) locked from re-hedge";
                    DrawTableRow(row, "PrevHedged", phInfo, clrOrange, COLOR_SECTION_HEDGE); row++;
-                }
-                // v6.73: Cross-gen INIT guard status row
+                 }
+                 // v6.81: Opposite-side survivor close status
+                 {
+                    string oppStr = InpHedge_CloseOppositeSurvivors ? "ON (close opp side on hedge)" : "OFF";
+                    color oppCol = InpHedge_CloseOppositeSurvivors ? clrLime : clrGray;
+                    DrawTableRow(row, "OppSurv Close", oppStr, oppCol, COLOR_SECTION_HEDGE); row++;
+                 }
+                 // v6.73: Cross-gen INIT guard status row
                 if(InpCrossGen_InitGuard && g_cycleGeneration > 1)
                 {
                    int lgB = CountFreeOlderGenOnSide(POSITION_TYPE_BUY);
@@ -8938,6 +8947,68 @@ double GetHedgeLotCap(ENUM_POSITION_TYPE side)
    return minCap;
 }
 
+//+------------------------------------------------------------------+
+//| v6.81: Close opposite-side survivors of same generation           |
+//| Called right after a hedge opens (before g_cycleGeneration++) so   |
+//| the orphan profitable side does not block new-gen INIT via the     |
+//| Cross-Gen INIT Guard (v6.76).                                      |
+//+------------------------------------------------------------------+
+void CloseOppositeSurvivorsOfGen(int gen, ENUM_POSITION_TYPE hedgeSide)
+{
+   if(!InpHedge_CloseOppositeSurvivors) return;
+
+   ENUM_POSITION_TYPE oppSide = (hedgeSide == POSITION_TYPE_BUY)
+                                ? POSITION_TYPE_SELL
+                                : POSITION_TYPE_BUY;
+
+   int closed = 0;
+   double totalPL = 0.0;
+
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(!PositionSelectByTicket(ticket)) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != oppSide) continue;
+
+      string comment = PositionGetString(POSITION_COMMENT);
+      if(IsHedgeComment(comment)) continue;          // never touch hedge orders
+      if(IsTicketBound(ticket)) continue;            // never touch bound tickets
+
+      int orderGen = ExtractGeneration(comment);
+      if(orderGen != gen) continue;                  // only same generation
+
+      double pl = PositionGetDouble(POSITION_PROFIT)
+                + PositionGetDouble(POSITION_SWAP);
+
+      // Lock from re-hedge so v6.74 / v6.73 logic stays consistent
+      AddPrevHedgedTicket(ticket);
+
+      if(trade.PositionClose(ticket))
+      {
+         closed++;
+         totalPL += pl;
+         PrintFormat("OPP-SURVIVOR CLOSE gen=%d side=%s ticket=%I64u profit=%.2f comment=%s",
+                     gen,
+                     (oppSide == POSITION_TYPE_BUY ? "BUY" : "SELL"),
+                     ticket, pl, comment);
+      }
+      else
+      {
+         PrintFormat("OPP-SURVIVOR CLOSE FAILED gen=%d ticket=%I64u err=%d",
+                     gen, ticket, GetLastError());
+      }
+   }
+
+   if(closed > 0)
+      PrintFormat("OPP-SURVIVOR SUMMARY gen=%d hedgeSide=%s closed=%d totalPL=%.2f",
+                  gen,
+                  (hedgeSide == POSITION_TYPE_BUY ? "BUY" : "SELL"),
+                  closed, totalPL);
+}
+
 
 //+------------------------------------------------------------------+
 //| Count unbound orders (not tied to any hedge set) for a side        |
@@ -9193,8 +9264,11 @@ void CheckAndOpenHedge()
        // Store bound generation BEFORE incrementing
        g_hedgeSets[slot].boundGeneration = g_cycleGeneration;
 
-       // Increment cycle generation — new orders will use new prefix (GM1_, GM2_, etc.)
-       g_cycleGeneration++;
+        // v6.81: close opposite-side survivors of same gen BEFORE advancing
+        CloseOppositeSurvivorsOfGen(g_cycleGeneration, hedgeSide);
+
+        // Increment cycle generation — new orders will use new prefix (GM1_, GM2_, etc.)
+        g_cycleGeneration++;
        SaveCycleGeneration();  // v6.53: persist after increment
        Print("CYCLE GENERATION incremented to ", g_cycleGeneration, " — new orders use prefix: ", GetCommentPrefix());
 
@@ -9466,6 +9540,10 @@ bool OpenDDHedge(ENUM_POSITION_TYPE counterSide, ENUM_POSITION_TYPE hedgeSide, i
    ClearBrokerTPSLForSet(slot);
 
     g_hedgeSets[slot].boundGeneration = bindGen;  // v6.37: use snapshot gen, not current
+
+   // v6.81: close opposite-side survivors of same gen BEFORE advancing
+   CloseOppositeSurvivorsOfGen(g_cycleGeneration, hedgeSide);
+
    g_cycleGeneration++;
    SaveCycleGeneration();  // v6.53: persist after increment
    Print("CYCLE GENERATION incremented to ", g_cycleGeneration, " — new orders use prefix: ", GetCommentPrefix());
