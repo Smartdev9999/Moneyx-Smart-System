@@ -1,19 +1,19 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|     Golden2 EA v2.7.2 - Per-Side Squeeze Block + Backtest Speed |
-//|     PlaceInitialFrame now uses per-side Squeeze block (BUY block |
-//|     stops only BuyStop, SELL block stops only SellStop). Adds    |
-//|     Tester/Visual mode detection, dashboard render throttle,     |
-//|     skips chart objects in non-visual tester, refreshes Squeeze  |
-//|     state once per new M1 bar instead of every tick, caches the  |
-//|     HasClosedMainOnSide history scan for ~2s, and bounds the     |
-//|     per-tick group loop to the highest active group + 1.         |
+//|     Golden2 EA v2.7.3 - Entry Mode: PENDING / SMA / INSTANT      |
+//|     Adds InpEntryMode (default G2_ENTRY_PENDING = original BuyStop|
+//|     /SellStop frame). G2_ENTRY_SMA opens market BUY when price >  |
+//|     SMA and SELL when price < SMA (per-side, ported from Gold     |
+//|     Miner). G2_ENTRY_INSTANT opens both BUY+SELL market orders    |
+//|     immediately (no indicator). Per-side Squeeze block, Re-entry  |
+//|     on close, post-hedge freeze, all v2.72 backtest accel paths,  |
+//|     hedge / grid / triple-gate / accumulate logic UNCHANGED.      |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.72"
-#property description "Golden2 EA v2.7.2 - Per-Side Squeeze Block + Backtest Speed. PlaceInitialFrame's Squeeze guard switched from 'block whole group' (SqueezeBlocksAny) to per-side flags so a BUY block only suppresses the BuyStop and SellStop still fires (mirrors Grid Loss/Profit). Backtest accel: detects MQL_TESTER/MQL_VISUAL_MODE in OnInit, throttles DrawDashboard via InpDashRenderIntervalSec (skipped entirely in non-visual tester/optimization), skips DrawAverageAndTPLinesForGroup in non-visual tester, RefreshSqueezeState now runs once per new M1 bar, HasClosedMainOnSide cached ~2s per (group,side), per-tick group loop bounded to g_highestActiveGroup+1. Trading logic, OrderSend, hedge, grid, triple-gate, accumulate, v2.6 re-entry, v2.5 toward-price trail all preserved unchanged."
+#property version   "2.73"
+#property description "Golden2 EA v2.7.3 - Entry Mode (PENDING/SMA/INSTANT). New input InpEntryMode selects how the initial frame opens: G2_ENTRY_PENDING = original BuyStop+SellStop frame at mid +/- FrameUpper/Lower (default, fully backward compatible); G2_ENTRY_SMA = market entry per side filtered by SMA (BUY only when price > SMA, SELL only when price < SMA), ported from Gold Miner; G2_ENTRY_INSTANT = market BUY+SELL fired immediately at current Ask/Bid with no indicator. Per-side Squeeze block / InpInitSideMode / hedge mirror / grid loss / grid profit / triple-gate / accumulate close / v2.72 backtest accel all preserved."
 #property strict
 
 #include <Trade/Trade.mqh>
