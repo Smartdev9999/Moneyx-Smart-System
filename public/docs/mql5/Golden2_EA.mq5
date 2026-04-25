@@ -3019,6 +3019,7 @@ void OnDeinit(const int reason){
       if(g_sqKCEMA[i] != INVALID_HANDLE) IndicatorRelease(g_sqKCEMA[i]);
       if(g_sqATR[i]   != INVALID_HANDLE) IndicatorRelease(g_sqATR[i]);
    }
+   if(g_smaHandle != INVALID_HANDLE){ IndicatorRelease(g_smaHandle); g_smaHandle = INVALID_HANDLE; } // [v2.73]
 }
 
 // Track first-position candle for "DontSameCandle" guard
