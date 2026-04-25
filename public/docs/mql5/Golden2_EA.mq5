@@ -207,6 +207,9 @@ input double  InpHedgeDisarmPercent   = 70.0;                        // Disarm p
 input bool    InpHedgeLotMatch1to1    = true;                        // Hedge lots match opposite side 1:1 (mirror tag+lot)
 input int     InpHedge_OpenDelayMin   = 0;                           // Cooldown minutes between hedges (0=off)
 input ENUM_HEDGE_DELAY_MODE_G2 InpHedge_OpenDelayMode = G2_HDELAY_BOTH; // Cooldown reference
+// [v2.7.8] Force-close opposite unhedged side when group is hedge-locked
+input bool    InpHedge_ForceCloseOppUnhedged = true;                 // [v2.7.8] Force-close opposite main side when hedge locks the other side (any P/L)
+input int     InpHedge_ForceCloseDelaySec    = 3;                    // [v2.7.8] Delay before force-close (sec) — avoids race when hedge just opened
 
 //--- === Exit Triple Gate ===
 input string  __sec_exit__            = "=== Exit Triple Gate ==="; // ---
