@@ -1,18 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|     Golden2 EA v2.7.4 - Allow Group Advance When Unhedged Side  |
-//|     Is Profitable (INSTANT/SMA fix). G1 in INSTANT/SMA was       |
-//|     deadlocking G2 because hedge mirror only locks the losing    |
-//|     side; the profitable side remained "blocking". v2.7.4 treats |
-//|     a profitable unhedged side as effectively safe so G_(N+1)    |
-//|     can open. Toggle InpAdvance_AllowProfitSideUnhedged=false    |
-//|     restores v2.7.3 behaviour exactly. PENDING mode unchanged.   |
+//|     Golden2 EA v2.7.5 — Entry Mode Hard-Gate                     |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.74"
-#property description "Golden2 EA v2.7.4 - Group-advance fix for INSTANT/SMA. IsGroupSafeToAdvance now treats a profitable unhedged side as effectively safe via new helper IsSideEffectivelySafeForAdvance() and toggle InpAdvance_AllowProfitSideUnhedged (default ON). Fixes G1 deadlock seen in INSTANT/SMA where one side hedges and the opposite (profitable) side never gets a hedge — previously the group held forever and G2 never opened. Hold-log now also reports plBUY/plSELL. PENDING mode behaviour unchanged because both sides typically end up hedged via the BuyStop/SellStop frame. v2.73 Entry Mode, v2.72 Squeeze per-side + Backtest accel, v2.70 Continuous Frame, v2.6 Re-entry, v2.5 Toward-Price Trail, hedge / grid / triple-gate / accumulate all preserved."
+#property version   "2.75"
+#property description "Golden2 EA v2.7.5 — Entry Mode hard-gate. SMA/INSTANT no longer place BuyStop/SellStop via re-arm path. PENDING mode unchanged."
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -1275,6 +1269,10 @@ bool HasClosedMainOnSide(int g, int side){
 
 void ManageInitialReArm(int g){
    if(!InpInitReArmAfterTP && !InpInitReEntryOnClose) return;
+   // [v2.7.5] Re-arm uses BuyStop/SellStop pendings — only valid in PENDING mode.
+   // SMA/INSTANT re-entry is handled by PlaceInitialMarket via the idle-group
+   // loop in OnTick (no pending stops should ever appear in those modes).
+   if(InpEntryMode != G2_ENTRY_PENDING) return;
    // [v2.3] Do not re-arm a fresh G_IN stop once the group is hedging — that
    //         was the source of the post-hedge orphan main that blocked
    //         advancement to the next group.
@@ -2808,7 +2806,7 @@ void DrawDashboard(){
 
    // Header
    string entryLbl = (InpEntryMode == G2_ENTRY_PENDING) ? "PENDING" : (InpEntryMode == G2_ENTRY_SMA) ? "SMA" : "INSTANT"; // [v2.73]
-   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.7.4    Entry: %s    Side: %s", entryLbl, modeLbl), InpDashAccent);
+   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.7.5    Entry: %s    Side: %s", entryLbl, modeLbl), InpDashAccent);
    y += rowH+2;
 
    // ==== Account section ====
@@ -3021,7 +3019,7 @@ int OnInit(){
 
    string entryModeLbl = (InpEntryMode == G2_ENTRY_PENDING) ? "PENDING" :
                          (InpEntryMode == G2_ENTRY_SMA)     ? "SMA"     : "INSTANT";
-   PrintFormat("Golden2 EA v2.7.4 initialized | Magic=%I64d | MaxGroups=%d | EntryMode=%s | InitMode=%d | GridLoss=%s | Squeeze=%s SqueezePerSide=ON | TripleGate=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | ProfitSideUnhedgedAdv=%s | Tester=%s Visual=%s Opt=%s DashInterval=%ds",
+   PrintFormat("Golden2 EA v2.7.5 initialized | Magic=%I64d | MaxGroups=%d | EntryMode=%s | InitMode=%d | GridLoss=%s | Squeeze=%s SqueezePerSide=ON | TripleGate=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | ProfitSideUnhedgedAdv=%s | Tester=%s Visual=%s Opt=%s DashInterval=%ds",
                (long)InpMagic, InpMaxGroups, entryModeLbl, (int)InpInitSideMode,
                GridLoss_Enable?"ON":"OFF", InpSQ_Enable?"ON":"OFF", InpExitTripleGate_Enable?"ON":"OFF",
                InpInitTrailOnBarClose?"ON":"OFF",
