@@ -64,6 +64,14 @@ enum ENUM_ATR_REF_G2
    G2_ATR_REF_LAST_GRID = 1   // ATR snapshot at last grid order
 };
 
+// [v2.73] Entry execution mode (ported concept from Gold Miner)
+enum ENUM_ENTRY_MODE_G2
+{
+   G2_ENTRY_PENDING = 0,  // Pending Frame (BuyStop + SellStop) — original
+   G2_ENTRY_SMA     = 1,  // SMA Filter (Market: BUY if price>SMA, SELL if price<SMA)
+   G2_ENTRY_INSTANT = 2   // Instant Market (BUY + SELL immediately, no indicator)
+};
+
 //================ INPUTS ================
 //--- === General ===
 input string  __sec_general__         = "=== General ===";          // ---
