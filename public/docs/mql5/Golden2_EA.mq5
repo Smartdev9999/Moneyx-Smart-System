@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|     Golden2 EA v2.7.5 — Entry Mode Hard-Gate                     |
+//|     Golden2 EA v2.7.6 — INSTANT/SMA Per-Side Re-entry            |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.75"
-#property description "Golden2 EA v2.7.5 — Entry Mode hard-gate. SMA/INSTANT no longer place BuyStop/SellStop via re-arm path. PENDING mode unchanged."
+#property version   "2.76"
+#property description "Golden2 EA v2.7.6 — INSTANT/SMA per-side re-entry. Closed side reopens immediately while other side still active in same group."
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -1321,6 +1321,39 @@ void ManageInitialReArm(int g){
          if(InpVerboseLog) PrintFormat("Golden2 v2.6: Re-entry SellStop G%d at %.5f (buyPos=%d)", g, dnPx, buyPos);
       }
    }
+}
+
+// [v2.7.6] Per-side market re-entry for INSTANT / SMA modes.
+// When one side closes by TP/SL but the other side still has a live position
+// in the same group, refill the missing side at market so the group stays
+// "two-sided" until hedge activates. PENDING mode is untouched (uses ManageInitialReArm).
+void ManageInitialMarketReEntry(int g){
+   if(InpEntryMode == G2_ENTRY_PENDING) return;
+   if(g_accumJustTriggered) return;
+   if(IsGroupHedgeMatched(g)) return;
+   if(CountGroupPositions(g, -1, 1) > 0) return;   // hedge position exists -> freeze
+   if(g_blockNewOrders[g]) return;                 // pre-hedge DD% block
+   if(g_stripped[g]) return;                       // group already locked
+
+   // Pending hedge present? freeze (mirrors v2.3 post-hedge behaviour)
+   if(CountGroupPendingsByTagPrefix(g, true, "") > 0) return;
+
+   bool buyAllowed  = (InpInitSideMode == INIT_BOTH || InpInitSideMode == INIT_BUY_ONLY);
+   bool sellAllowed = (InpInitSideMode == INIT_BOTH || InpInitSideMode == INIT_SELL_ONLY);
+
+   int buyPos  = CountGroupPositions(g, 0, 0);
+   int sellPos = CountGroupPositions(g, 1, 0);
+
+   // Group must have at least one main side already filled (so we are mid-cycle,
+   // not before the very first entry — that case is handled by PlaceInitialFrame).
+   if(buyPos == 0 && sellPos == 0) return;
+
+   bool needBuy  = buyAllowed  && (buyPos  == 0);
+   bool needSell = sellAllowed && (sellPos == 0);
+   if(!needBuy && !needSell) return;
+
+   if(InpVerboseLog) PrintFormat("Golden2 v2.7.6: market re-entry G%d needBuy=%d needSell=%d (buyPos=%d sellPos=%d)", g, needBuy, needSell, buyPos, sellPos);
+   PlaceInitialMarket(g, needBuy, needSell);
 }
 
 //================ MAIN GRID ================
@@ -2806,7 +2839,7 @@ void DrawDashboard(){
 
    // Header
    string entryLbl = (InpEntryMode == G2_ENTRY_PENDING) ? "PENDING" : (InpEntryMode == G2_ENTRY_SMA) ? "SMA" : "INSTANT"; // [v2.73]
-   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.7.5    Entry: %s    Side: %s", entryLbl, modeLbl), InpDashAccent);
+   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.7.6    Entry: %s    Side: %s", entryLbl, modeLbl), InpDashAccent);
    y += rowH+2;
 
    // ==== Account section ====
@@ -3019,7 +3052,7 @@ int OnInit(){
 
    string entryModeLbl = (InpEntryMode == G2_ENTRY_PENDING) ? "PENDING" :
                          (InpEntryMode == G2_ENTRY_SMA)     ? "SMA"     : "INSTANT";
-   PrintFormat("Golden2 EA v2.7.5 initialized | Magic=%I64d | MaxGroups=%d | EntryMode=%s | InitMode=%d | GridLoss=%s | Squeeze=%s SqueezePerSide=ON | TripleGate=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | ProfitSideUnhedgedAdv=%s | Tester=%s Visual=%s Opt=%s DashInterval=%ds",
+   PrintFormat("Golden2 EA v2.7.6 initialized | Magic=%I64d | MaxGroups=%d | EntryMode=%s | InitMode=%d | GridLoss=%s | Squeeze=%s SqueezePerSide=ON | TripleGate=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | ProfitSideUnhedgedAdv=%s | Tester=%s Visual=%s Opt=%s DashInterval=%ds",
                (long)InpMagic, InpMaxGroups, entryModeLbl, (int)InpInitSideMode,
                GridLoss_Enable?"ON":"OFF", InpSQ_Enable?"ON":"OFF", InpExitTripleGate_Enable?"ON":"OFF",
                InpInitTrailOnBarClose?"ON":"OFF",
@@ -3123,7 +3156,8 @@ void OnTick(){
       TrackInitialCandle(g);
       ManageInitialTrailOnBarClose(g); // [v1.8] bar-close trail (preferred)
       ManageInitialTrail(g);   // [v1.7] legacy trigger trail (skipped if bar-close ON)
-      ManageInitialReArm(g);   // [v1.7] re-arm side stop after TP
+      ManageInitialReArm(g);   // [v1.7] re-arm side stop after TP (PENDING mode)
+      ManageInitialMarketReEntry(g); // [v2.7.6] re-entry market for INSTANT/SMA
       TryPlaceGridLoss(g);
       TryPlaceGridProfit(g);
       ManageGroupHedgeArm(g);
