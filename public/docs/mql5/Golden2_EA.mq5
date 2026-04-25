@@ -3181,6 +3181,8 @@ void OnDeinit(const int reason){
       if(g_sqBB[i]    != INVALID_HANDLE) IndicatorRelease(g_sqBB[i]);
       if(g_sqKCEMA[i] != INVALID_HANDLE) IndicatorRelease(g_sqKCEMA[i]);
       if(g_sqATR[i]   != INVALID_HANDLE) IndicatorRelease(g_sqATR[i]);
+      if(g_sqADX[i]   != INVALID_HANDLE) IndicatorRelease(g_sqADX[i]); // [v2.7.7]
+      if(g_sqEMA[i]   != INVALID_HANDLE) IndicatorRelease(g_sqEMA[i]); // [v2.7.7]
    }
    if(g_smaHandle != INVALID_HANDLE){ IndicatorRelease(g_smaHandle); g_smaHandle = INVALID_HANDLE; } // [v2.73]
 }
