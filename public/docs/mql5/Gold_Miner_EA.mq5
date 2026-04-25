@@ -5,8 +5,8 @@
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "6.78"
-#property description "Gold Miner EA v6.78 - v6.74 + Hedge Open Delay (นาที) กัน False Signal — รอครบเวลาก่อนเปิด hedge รอบใหม่"
+#property version   "6.81"
+#property description "Gold Miner EA v6.81 - v6.78 + Auto-Close Opposite-Side Survivors of Same Gen on Hedge Open (fix Cross-Gen INIT Guard block)"
 #property strict
 
 #include <Trade/Trade.mqh>
