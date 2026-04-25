@@ -4749,8 +4749,7 @@ void DisplayDashboard()
                     color oppCol = InpHedge_CloseOppositeSurvivors ? clrLime : clrGray;
                     DrawTableRow(row, "OppSurv Close", oppStr, oppCol, COLOR_SECTION_HEDGE); row++;
                  }
-                 {
-                // v6.73: Cross-gen INIT guard status row
+                 // v6.73: Cross-gen INIT guard status row
                 if(InpCrossGen_InitGuard && g_cycleGeneration > 1)
                 {
                    int lgB = CountFreeOlderGenOnSide(POSITION_TYPE_BUY);
