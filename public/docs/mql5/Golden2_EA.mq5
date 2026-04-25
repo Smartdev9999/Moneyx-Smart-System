@@ -1,19 +1,18 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|     Golden2 EA v2.7.3 - Entry Mode: PENDING / SMA / INSTANT      |
-//|     Adds InpEntryMode (default G2_ENTRY_PENDING = original BuyStop|
-//|     /SellStop frame). G2_ENTRY_SMA opens market BUY when price >  |
-//|     SMA and SELL when price < SMA (per-side, ported from Gold     |
-//|     Miner). G2_ENTRY_INSTANT opens both BUY+SELL market orders    |
-//|     immediately (no indicator). Per-side Squeeze block, Re-entry  |
-//|     on close, post-hedge freeze, all v2.72 backtest accel paths,  |
-//|     hedge / grid / triple-gate / accumulate logic UNCHANGED.      |
+//|     Golden2 EA v2.7.4 - Allow Group Advance When Unhedged Side  |
+//|     Is Profitable (INSTANT/SMA fix). G1 in INSTANT/SMA was       |
+//|     deadlocking G2 because hedge mirror only locks the losing    |
+//|     side; the profitable side remained "blocking". v2.7.4 treats |
+//|     a profitable unhedged side as effectively safe so G_(N+1)    |
+//|     can open. Toggle InpAdvance_AllowProfitSideUnhedged=false    |
+//|     restores v2.7.3 behaviour exactly. PENDING mode unchanged.   |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.73"
-#property description "Golden2 EA v2.7.3 - Entry Mode (PENDING/SMA/INSTANT). New input InpEntryMode selects how the initial frame opens: G2_ENTRY_PENDING = original BuyStop+SellStop frame at mid +/- FrameUpper/Lower (default, fully backward compatible); G2_ENTRY_SMA = market entry per side filtered by SMA (BUY only when price > SMA, SELL only when price < SMA), ported from Gold Miner; G2_ENTRY_INSTANT = market BUY+SELL fired immediately at current Ask/Bid with no indicator. Per-side Squeeze block / InpInitSideMode / hedge mirror / grid loss / grid profit / triple-gate / accumulate close / v2.72 backtest accel all preserved."
+#property version   "2.74"
+#property description "Golden2 EA v2.7.4 - Group-advance fix for INSTANT/SMA. IsGroupSafeToAdvance now treats a profitable unhedged side as effectively safe via new helper IsSideEffectivelySafeForAdvance() and toggle InpAdvance_AllowProfitSideUnhedged (default ON). Fixes G1 deadlock seen in INSTANT/SMA where one side hedges and the opposite (profitable) side never gets a hedge — previously the group held forever and G2 never opened. Hold-log now also reports plBUY/plSELL. PENDING mode behaviour unchanged because both sides typically end up hedged via the BuyStop/SellStop frame. v2.73 Entry Mode, v2.72 Squeeze per-side + Backtest accel, v2.70 Continuous Frame, v2.6 Re-entry, v2.5 Toward-Price Trail, hedge / grid / triple-gate / accumulate all preserved."
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -166,6 +165,7 @@ input int     InpMaxGroups            = 50;                          // Max acti
 input bool    InpSequentialQueue      = true;                        // Process one group at a time
 input bool    InpGroup_RequireFullLockBeforeNext = true;             // [v2.0] Block next group until prior group is fully hedge-locked or empty
 input bool    InpGroup_AdvancePerTick            = true;             // [v2.2] Retry group advance every tick (not only on hedge edge)
+input bool    InpAdvance_AllowProfitSideUnhedged = true;             // [v2.7.4] Allow advance when an unhedged main side is currently in profit (fixes INSTANT/SMA deadlock)
 
 //--- === Take Profit (Average) ===
 input string  __sec_tp__              = "=== Take Profit (Average) ==="; // ---
@@ -2564,18 +2564,44 @@ void DeleteLeftoverInitialPendingsAfterHedge(int g){
    }
 }
 
+// [v2.7.4] Per-side safety check used by IsGroupSafeToAdvance.
+// A side is "effectively safe" when:
+//   1) it holds no blocking main position (count==0), OR
+//   2) it is hedge-locked by an opposite-side hedge position (v2.3 logic), OR
+//   3) toggle InpAdvance_AllowProfitSideUnhedged==true AND its current floating
+//      P/L is non-negative — an unhedged main side that is in profit is not a
+//      risk to advancing because the existing DD% trigger will arm a hedge as
+//      soon as the side dips into loss (logic untouched).
+// Rationale: in INSTANT/SMA modes only the losing side gets mirrored, leaving
+// the profitable side permanently "blocking" — which deadlocked G_(N+1).
+bool IsSideEffectivelySafeForAdvance(int g, int side){
+   int blocking = CountBlockingMainPositionsForAdvance(g, side);
+   if(blocking == 0) return true;
+   // Opposite-side hedge present locks this side (v2.3 invariant).
+   int oppositeHedge = CountGroupPositions(g, 1 - side, 1);
+   if(oppositeHedge > 0) return true;
+   // [v2.7.4] Profitable unhedged side bypass.
+   if(InpAdvance_AllowProfitSideUnhedged){
+      double pl = GroupFloatingPL(g, side, 0); // main only, this side
+      if(pl >= 0.0) return true;
+   }
+   return false;
+}
+
 // [v2.3] Group is "safe to advance to next" using PER-SIDE hedge-lock check.
 // Each surviving main side must be covered by hedge positions; sides that have
 // already emptied (TP hit / Triple-Gate close) do not need a hedge counterpart.
 // Residual post-hedge IN orphans are ignored (see CountBlockingMainPositionsForAdvance).
+// [v2.7.4] Now delegates per-side decision to IsSideEffectivelySafeForAdvance
+// so a profitable unhedged side does not block advance (INSTANT/SMA fix).
 bool IsGroupSafeToAdvance(int g){
    int buyMain  = CountBlockingMainPositionsForAdvance(g, 0);
    int sellMain = CountBlockingMainPositionsForAdvance(g, 1);
-   if(buyMain == 0 && sellMain == 0) return true;        // no blocking main exposure
+   if(buyMain == 0 && sellMain == 0) return true;
    bool hedgeAny = (CountGroupPositions(g, -1, 1) > 0);
-   if(!hedgeAny) return false;                           // unlocked main with zero hedge
-   bool buyOK  = (buyMain  == 0) || (CountGroupPositions(g, 1, 1) > 0); // sell-side hedge locks BUY main
-   bool sellOK = (sellMain == 0) || (CountGroupPositions(g, 0, 1) > 0); // buy-side hedge locks SELL main
+   if(!hedgeAny) return false; // unlocked main with zero hedge anywhere = always unsafe
+   bool buyOK  = IsSideEffectivelySafeForAdvance(g, 0);
+   bool sellOK = IsSideEffectivelySafeForAdvance(g, 1);
    return (buyOK && sellOK);
 }
 
@@ -2610,12 +2636,14 @@ void TryAdvanceToNextGroup(){
       if(!IsGroupSafeToAdvance(cur) || !AreAllPriorGroupsSafe(cur)){
          static datetime lastHoldLog = 0;
          if(InpVerboseLog && TimeCurrent() - lastHoldLog >= 60){
-            PrintFormat("Golden2 v2.3: hold G%d->G%d (cur safe=%d priors safe=%d blkBUY=%d blkSELL=%d rawBUY=%d rawSELL=%d hedgeBuy=%d hedgeSell=%d)",
+            PrintFormat("Golden2 v2.7.4: hold G%d->G%d (cur safe=%d priors safe=%d blkBUY=%d blkSELL=%d rawBUY=%d rawSELL=%d hedgeBuy=%d hedgeSell=%d plBUY=%.2f plSELL=%.2f profitBypass=%s)",
                         cur, cur+1,
                         IsGroupSafeToAdvance(cur), AreAllPriorGroupsSafe(cur),
                         CountBlockingMainPositionsForAdvance(cur,0), CountBlockingMainPositionsForAdvance(cur,1),
                         CountGroupPositions(cur,0,0), CountGroupPositions(cur,1,0),
-                        CountGroupPositions(cur,0,1), CountGroupPositions(cur,1,1));
+                        CountGroupPositions(cur,0,1), CountGroupPositions(cur,1,1),
+                        GroupFloatingPL(cur,0,0), GroupFloatingPL(cur,1,0),
+                        InpAdvance_AllowProfitSideUnhedged?"ON":"OFF");
             lastHoldLog = TimeCurrent();
          }
          return;
@@ -2780,7 +2808,7 @@ void DrawDashboard(){
 
    // Header
    string entryLbl = (InpEntryMode == G2_ENTRY_PENDING) ? "PENDING" : (InpEntryMode == G2_ENTRY_SMA) ? "SMA" : "INSTANT"; // [v2.73]
-   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.7.3    Entry: %s    Side: %s", entryLbl, modeLbl), InpDashAccent);
+   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.7.4    Entry: %s    Side: %s", entryLbl, modeLbl), InpDashAccent);
    y += rowH+2;
 
    // ==== Account section ====
@@ -2993,7 +3021,7 @@ int OnInit(){
 
    string entryModeLbl = (InpEntryMode == G2_ENTRY_PENDING) ? "PENDING" :
                          (InpEntryMode == G2_ENTRY_SMA)     ? "SMA"     : "INSTANT";
-   PrintFormat("Golden2 EA v2.7.3 initialized | Magic=%I64d | MaxGroups=%d | EntryMode=%s | InitMode=%d | GridLoss=%s | Squeeze=%s SqueezePerSide=ON | TripleGate=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | Tester=%s Visual=%s Opt=%s DashInterval=%ds",
+   PrintFormat("Golden2 EA v2.7.4 initialized | Magic=%I64d | MaxGroups=%d | EntryMode=%s | InitMode=%d | GridLoss=%s | Squeeze=%s SqueezePerSide=ON | TripleGate=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | ProfitSideUnhedgedAdv=%s | Tester=%s Visual=%s Opt=%s DashInterval=%ds",
                (long)InpMagic, InpMaxGroups, entryModeLbl, (int)InpInitSideMode,
                GridLoss_Enable?"ON":"OFF", InpSQ_Enable?"ON":"OFF", InpExitTripleGate_Enable?"ON":"OFF",
                InpInitTrailOnBarClose?"ON":"OFF",
@@ -3003,6 +3031,7 @@ int OnInit(){
                InpTP_AccumCooldownSec,
                InpGroup_RequireFullLockBeforeNext?"ON":"OFF",
                InpGroup_AdvancePerTick?"ON":"OFF",
+               InpAdvance_AllowProfitSideUnhedged?"ON":"OFF",
                g_isTesterMode?"YES":"NO", g_isVisualMode?"YES":"NO", g_isOptimization?"YES":"NO",
                InpDashRenderIntervalSec);
    return INIT_SUCCEEDED;
