@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|     Golden2 EA v2.7.6 — INSTANT/SMA Per-Side Re-entry            |
+//|     Golden2 EA v2.7.7 — Squeeze + ADX/EMA Multi-Confirm          |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.76"
-#property description "Golden2 EA v2.7.6 — INSTANT/SMA per-side re-entry. Closed side reopens immediately while other side still active in same group."
+#property version   "2.77"
+#property description "Golden2 EA v2.7.7 — Squeeze Filter + ADX/EMA/ATR/BB-Breakout multi-confirm"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -236,6 +236,17 @@ input bool    InpSQ_BlockNewOrders    = true;                        // Block Ne
 input int     InpSQ_MinExpansionTFs   = 1;                           // Min TFs in Expansion to Block (1-3)
 input bool    InpSQ_DirectionalBlock  = true;                        // Directional Block (block counter-trend only)
 input bool    InpSQ_CloseOnExpansion  = false;                       // Close All Orders on Expansion
+// [v2.7.7] Multi-confirm filters — all enabled checks must pass to confirm Expansion
+input bool    InpSQ_UseBBBreakout     = true;                        // [v2.7.7] Require close beyond BB Upper/Lower
+input bool    InpSQ_UseADX            = true;                        // [v2.7.7] Use ADX trend strength confirm
+input int     InpSQ_ADXPeriod         = 14;                          // [v2.7.7] ADX Period
+input double  InpSQ_ADXThreshold      = 25.0;                        // [v2.7.7] ADX min threshold (std=25)
+input bool    InpSQ_UseATRConfirm     = true;                        // [v2.7.7] Require ATR > ATR-MA * mult
+input int     InpSQ_ATRMAPeriod       = 20;                          // [v2.7.7] ATR moving avg period
+input double  InpSQ_ATRMult           = 1.0;                         // [v2.7.7] ATR multiplier vs MA
+input bool    InpSQ_UseEMA            = true;                        // [v2.7.7] EMA trend direction confirm
+input int     InpSQ_EMAPeriod         = 50;                          // [v2.7.7] EMA period
+input ENUM_APPLIED_PRICE InpSQ_EMAPrice = PRICE_CLOSE;               // [v2.7.7] EMA applied price
 
 //--- === Dashboard ===
 input string  __sec_dash__            = "=== Dashboard ===";         // ---
@@ -286,6 +297,14 @@ int    g_sqExpCount       = 0;                    // # TFs currently in expansio
 bool   g_sqBlockBuy       = false;
 bool   g_sqBlockSell      = false;
 double g_sqRatio[3]       = {0.0, 0.0, 0.0};      // [v1.8] BBwidth/KCwidth ratio per TF (for dashboard)
+// [v2.7.7] Extra confirm indicator handles + per-stage pass flags (for dashboard)
+int    g_sqADX[3]         = {INVALID_HANDLE, INVALID_HANDLE, INVALID_HANDLE};
+int    g_sqEMA[3]         = {INVALID_HANDLE, INVALID_HANDLE, INVALID_HANDLE};
+bool   g_sqPassBB[3]      = {false,false,false};
+bool   g_sqPassADX[3]     = {false,false,false};
+bool   g_sqPassATR[3]     = {false,false,false};
+bool   g_sqPassEMA[3]     = {false,false,false};
+double g_sqADXVal[3]      = {0.0, 0.0, 0.0};
 datetime g_lastTrailBar[51];                      // [v1.8] last bar time we ran bar-close trail (per group)
 
 // [v2.72] Backtest speed accel — Tester/Visual mode + throttles + caches
@@ -543,23 +562,96 @@ bool IsExpansionToNormal(){
 // Direction = sign(close - BBmid) on shift=1.
 bool ComputeSqueezeForTF(int idx, bool &isExp, int &dir){
    isExp = false; dir = 0;
+   // [v2.7.7] reset per-stage flags
+   g_sqPassBB[idx]  = false;
+   g_sqPassADX[idx] = false;
+   g_sqPassATR[idx] = false;
+   g_sqPassEMA[idx] = false;
+   g_sqADXVal[idx]  = 0.0;
+
    if(g_sqBB[idx] == INVALID_HANDLE || g_sqKCEMA[idx] == INVALID_HANDLE || g_sqATR[idx] == INVALID_HANDLE) return false;
-   double bbU[3], bbL[3], bbM[3], ema[3], atr[3];
-   if(CopyBuffer(g_sqBB[idx],   1, 0, 3, bbU) <= 0) return false;
-   if(CopyBuffer(g_sqBB[idx],   2, 0, 3, bbL) <= 0) return false;
-   if(CopyBuffer(g_sqBB[idx],   0, 0, 3, bbM) <= 0) return false;
-   if(CopyBuffer(g_sqKCEMA[idx],0, 0, 3, ema) <= 0) return false;
-   if(CopyBuffer(g_sqATR[idx],  0, 0, 3, atr) <= 0) return false;
-   double bbW = bbU[1] - bbL[1];
+   // ATR-MA ต้องอ่านอย่างน้อย ATRMAPeriod แท่งจาก shift=1
+   int atrNeed = MathMax(3, InpSQ_ATRMAPeriod + 2);
+   double bbU[], bbL[], bbM[], ema[], atr[];
+   ArraySetAsSeries(bbU,true); ArraySetAsSeries(bbL,true); ArraySetAsSeries(bbM,true);
+   ArraySetAsSeries(ema,true); ArraySetAsSeries(atr,true);
+   if(CopyBuffer(g_sqBB[idx],   1, 0, 3,       bbU) <= 0) return false;
+   if(CopyBuffer(g_sqBB[idx],   2, 0, 3,       bbL) <= 0) return false;
+   if(CopyBuffer(g_sqBB[idx],   0, 0, 3,       bbM) <= 0) return false;
+   if(CopyBuffer(g_sqKCEMA[idx],0, 0, 3,       ema) <= 0) return false;
+   if(CopyBuffer(g_sqATR[idx],  0, 0, atrNeed, atr) <= 0) return false;
+   double bbW = bbU[1] - bbL[1]; // shift=1 = closed bar
    double kcW = 2.0 * InpSQ_KCMult * atr[1];
    if(kcW <= 0) return false;
    double ratio = bbW / kcW;
-   g_sqRatio[idx] = ratio; // [v1.8] expose for dashboard
-   isExp = (ratio >= InpSQ_ExpansionThreshold);
+   g_sqRatio[idx] = ratio;
+
+   // ===== Stage 1: BB vs KC ratio =====
+   bool passRatio = (ratio >= InpSQ_ExpansionThreshold);
+
+   // ทิศทางพื้นฐานจาก BB-mid (ใช้ตอนยังไม่ได้เปิด BB-Breakout)
    double cl = iClose(_Symbol, g_sqTF[idx], 1);
-   if(cl > bbM[1]) dir = +1;
-   else if(cl < bbM[1]) dir = -1;
-   else dir = 0;
+   int bbDir = 0;
+   if(cl > bbM[1]) bbDir = +1;
+   else if(cl < bbM[1]) bbDir = -1;
+   dir = bbDir;
+
+   // ===== Stage 2: BB Breakout (close beyond Upper/Lower) =====
+   bool passBB = true;
+   if(InpSQ_UseBBBreakout){
+      if(cl > bbU[1])      { passBB = true;  dir = +1; }
+      else if(cl < bbL[1]) { passBB = true;  dir = -1; }
+      else                 { passBB = false; }
+   }
+   g_sqPassBB[idx] = passBB;
+
+   // ===== Stage 3: ADX strength + DI direction =====
+   bool passADX = true;
+   if(InpSQ_UseADX && g_sqADX[idx] != INVALID_HANDLE){
+      double adxMain[], adxPlus[], adxMinus[];
+      ArraySetAsSeries(adxMain,true); ArraySetAsSeries(adxPlus,true); ArraySetAsSeries(adxMinus,true);
+      if(CopyBuffer(g_sqADX[idx], 0, 0, 3, adxMain)  > 0 &&
+         CopyBuffer(g_sqADX[idx], 1, 0, 3, adxPlus)  > 0 &&
+         CopyBuffer(g_sqADX[idx], 2, 0, 3, adxMinus) > 0){
+         g_sqADXVal[idx] = adxMain[1];
+         bool strong = (adxMain[1] >= InpSQ_ADXThreshold);
+         bool diDirOK = true;
+         if(dir > 0)      diDirOK = (adxPlus[1] > adxMinus[1]);
+         else if(dir < 0) diDirOK = (adxMinus[1] > adxPlus[1]);
+         else             diDirOK = false;
+         passADX = (strong && diDirOK);
+      } else passADX = false;
+   }
+   g_sqPassADX[idx] = passADX;
+
+   // ===== Stage 4: ATR > ATR-MA * mult =====
+   bool passATR = true;
+   if(InpSQ_UseATRConfirm){
+      int N = MathMax(2, InpSQ_ATRMAPeriod);
+      double sum = 0.0; int cnt = 0;
+      // ค่าเฉลี่ย ATR ของ N แท่งก่อนหน้า shift=1
+      for(int k=1; k<=N && k<atrNeed; k++){ sum += atr[k]; cnt++; }
+      double atrMA = (cnt>0) ? (sum / cnt) : 0.0;
+      passATR = (atrMA > 0 && atr[1] >= atrMA * InpSQ_ATRMult);
+   }
+   g_sqPassATR[idx] = passATR;
+
+   // ===== Stage 5: EMA trend confirm =====
+   bool passEMA = true;
+   if(InpSQ_UseEMA && g_sqEMA[idx] != INVALID_HANDLE){
+      double emaBuf[];
+      ArraySetAsSeries(emaBuf,true);
+      if(CopyBuffer(g_sqEMA[idx], 0, 0, 3, emaBuf) > 0){
+         if(dir > 0)      passEMA = (cl > emaBuf[1]);
+         else if(dir < 0) passEMA = (cl < emaBuf[1]);
+         else             passEMA = false;
+      } else passEMA = false;
+   }
+   g_sqPassEMA[idx] = passEMA;
+
+   // ===== Final: AND ของทุก stage ที่ enable =====
+   isExp = passRatio && passBB && passADX && passATR && passEMA;
+   if(!isExp) dir = 0;
    return true;
 }
 
@@ -2839,7 +2931,7 @@ void DrawDashboard(){
 
    // Header
    string entryLbl = (InpEntryMode == G2_ENTRY_PENDING) ? "PENDING" : (InpEntryMode == G2_ENTRY_SMA) ? "SMA" : "INSTANT"; // [v2.73]
-   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.7.6    Entry: %s    Side: %s", entryLbl, modeLbl), InpDashAccent);
+   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.7.7    Entry: %s    Side: %s", entryLbl, modeLbl), InpDashAccent);
    y += rowH+2;
 
    // ==== Account section ====
@@ -2902,6 +2994,13 @@ void DrawDashboard(){
          else if((g_sqDir[si]>0 && g_sqBlockSell) || (g_sqDir[si]<0 && g_sqBlockBuy)) cc = InpDashBad;
          else cc = InpDashAccent;
          DashRow(StringFormat("L_SQ_%d", si), x, y, w, rowH, lbl, val, cc); y+=rowH;
+         // [v2.7.7] confirm-stage summary row per TF
+         string cf = StringFormat("BB:%s ADX:%s(%.1f) ATR:%s EMA:%s",
+                        g_sqPassBB[si]?"v":"x",
+                        g_sqPassADX[si]?"v":"x", g_sqADXVal[si],
+                        g_sqPassATR[si]?"v":"x",
+                        g_sqPassEMA[si]?"v":"x");
+         DashRow(StringFormat("L_SQ_CF_%d", si), x, y, w, rowH, "  Confirm", cf, InpDashColor); y+=rowH;
       }
       string ov = SqueezeOverallLabel();
       color  ovC = (ov=="READY")? InpDashGood : InpDashBad;
@@ -3038,9 +3137,16 @@ int OnInit(){
       g_sqBB[i]    = iBands(_Symbol, g_sqTF[i], InpSQ_BBPeriod, 0, InpSQ_BBMult, PRICE_CLOSE);
       g_sqKCEMA[i] = iMA   (_Symbol, g_sqTF[i], InpSQ_KCPeriod, 0, MODE_EMA, PRICE_CLOSE);
       g_sqATR[i]   = iATR  (_Symbol, g_sqTF[i], InpSQ_ATRPeriod);
+      // [v2.7.7] ADX + EMA per TF
+      g_sqADX[i]   = iADX  (_Symbol, g_sqTF[i], InpSQ_ADXPeriod);
+      g_sqEMA[i]   = iMA   (_Symbol, g_sqTF[i], InpSQ_EMAPeriod, 0, MODE_EMA, InpSQ_EMAPrice);
       if(InpSQ_Enable && (g_sqBB[i]==INVALID_HANDLE || g_sqKCEMA[i]==INVALID_HANDLE || g_sqATR[i]==INVALID_HANDLE)){
          PrintFormat("Golden2 v1.6: Squeeze indicator init failed TF[%d]", i);
       }
+      if(InpSQ_Enable && InpSQ_UseADX && g_sqADX[i]==INVALID_HANDLE)
+         PrintFormat("Golden2 v2.7.7: ADX init failed TF[%d]", i);
+      if(InpSQ_Enable && InpSQ_UseEMA && g_sqEMA[i]==INVALID_HANDLE)
+         PrintFormat("Golden2 v2.7.7: EMA init failed TF[%d]", i);
    }
 
    // [v2.73] SMA handle for ENTRY_SMA mode (skip if not used to save resources).
@@ -3052,9 +3158,12 @@ int OnInit(){
 
    string entryModeLbl = (InpEntryMode == G2_ENTRY_PENDING) ? "PENDING" :
                          (InpEntryMode == G2_ENTRY_SMA)     ? "SMA"     : "INSTANT";
-   PrintFormat("Golden2 EA v2.7.6 initialized | Magic=%I64d | MaxGroups=%d | EntryMode=%s | InitMode=%d | GridLoss=%s | Squeeze=%s SqueezePerSide=ON | TripleGate=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | ProfitSideUnhedgedAdv=%s | Tester=%s Visual=%s Opt=%s DashInterval=%ds",
+   PrintFormat("Golden2 EA v2.7.7 initialized | Magic=%I64d | MaxGroups=%d | EntryMode=%s | InitMode=%d | GridLoss=%s | Squeeze=%s [BB:%s ADX:%s(>=%.1f) ATR:%s EMA:%s(P=%d)] | TripleGate=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | ProfitSideUnhedgedAdv=%s | Tester=%s Visual=%s Opt=%s DashInterval=%ds",
                (long)InpMagic, InpMaxGroups, entryModeLbl, (int)InpInitSideMode,
-               GridLoss_Enable?"ON":"OFF", InpSQ_Enable?"ON":"OFF", InpExitTripleGate_Enable?"ON":"OFF",
+               GridLoss_Enable?"ON":"OFF", InpSQ_Enable?"ON":"OFF",
+               InpSQ_UseBBBreakout?"ON":"OFF", InpSQ_UseADX?"ON":"OFF", InpSQ_ADXThreshold,
+               InpSQ_UseATRConfirm?"ON":"OFF", InpSQ_UseEMA?"ON":"OFF", InpSQ_EMAPeriod,
+               InpExitTripleGate_Enable?"ON":"OFF",
                InpInitTrailOnBarClose?"ON":"OFF",
                InpFrameRecenterMinPips,
                InpInitReEntryOnClose?"ON":"OFF",
@@ -3079,6 +3188,8 @@ void OnDeinit(const int reason){
       if(g_sqBB[i]    != INVALID_HANDLE) IndicatorRelease(g_sqBB[i]);
       if(g_sqKCEMA[i] != INVALID_HANDLE) IndicatorRelease(g_sqKCEMA[i]);
       if(g_sqATR[i]   != INVALID_HANDLE) IndicatorRelease(g_sqATR[i]);
+      if(g_sqADX[i]   != INVALID_HANDLE) IndicatorRelease(g_sqADX[i]); // [v2.7.7]
+      if(g_sqEMA[i]   != INVALID_HANDLE) IndicatorRelease(g_sqEMA[i]); // [v2.7.7]
    }
    if(g_smaHandle != INVALID_HANDLE){ IndicatorRelease(g_smaHandle); g_smaHandle = INVALID_HANDLE; } // [v2.73]
 }
