@@ -3021,7 +3021,7 @@ int OnInit(){
 
    string entryModeLbl = (InpEntryMode == G2_ENTRY_PENDING) ? "PENDING" :
                          (InpEntryMode == G2_ENTRY_SMA)     ? "SMA"     : "INSTANT";
-   PrintFormat("Golden2 EA v2.7.3 initialized | Magic=%I64d | MaxGroups=%d | EntryMode=%s | InitMode=%d | GridLoss=%s | Squeeze=%s SqueezePerSide=ON | TripleGate=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | Tester=%s Visual=%s Opt=%s DashInterval=%ds",
+   PrintFormat("Golden2 EA v2.7.4 initialized | Magic=%I64d | MaxGroups=%d | EntryMode=%s | InitMode=%d | GridLoss=%s | Squeeze=%s SqueezePerSide=ON | TripleGate=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | ProfitSideUnhedgedAdv=%s | Tester=%s Visual=%s Opt=%s DashInterval=%ds",
                (long)InpMagic, InpMaxGroups, entryModeLbl, (int)InpInitSideMode,
                GridLoss_Enable?"ON":"OFF", InpSQ_Enable?"ON":"OFF", InpExitTripleGate_Enable?"ON":"OFF",
                InpInitTrailOnBarClose?"ON":"OFF",
@@ -3031,6 +3031,7 @@ int OnInit(){
                InpTP_AccumCooldownSec,
                InpGroup_RequireFullLockBeforeNext?"ON":"OFF",
                InpGroup_AdvancePerTick?"ON":"OFF",
+               InpAdvance_AllowProfitSideUnhedged?"ON":"OFF",
                g_isTesterMode?"YES":"NO", g_isVisualMode?"YES":"NO", g_isOptimization?"YES":"NO",
                InpDashRenderIntervalSec);
    return INIT_SUCCEEDED;
