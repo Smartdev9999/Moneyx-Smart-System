@@ -1,19 +1,18 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|     Golden2 EA v2.7.3 - Entry Mode: PENDING / SMA / INSTANT      |
-//|     Adds InpEntryMode (default G2_ENTRY_PENDING = original BuyStop|
-//|     /SellStop frame). G2_ENTRY_SMA opens market BUY when price >  |
-//|     SMA and SELL when price < SMA (per-side, ported from Gold     |
-//|     Miner). G2_ENTRY_INSTANT opens both BUY+SELL market orders    |
-//|     immediately (no indicator). Per-side Squeeze block, Re-entry  |
-//|     on close, post-hedge freeze, all v2.72 backtest accel paths,  |
-//|     hedge / grid / triple-gate / accumulate logic UNCHANGED.      |
+//|     Golden2 EA v2.7.4 - Allow Group Advance When Unhedged Side  |
+//|     Is Profitable (INSTANT/SMA fix). G1 in INSTANT/SMA was       |
+//|     deadlocking G2 because hedge mirror only locks the losing    |
+//|     side; the profitable side remained "blocking". v2.7.4 treats |
+//|     a profitable unhedged side as effectively safe so G_(N+1)    |
+//|     can open. Toggle InpAdvance_AllowProfitSideUnhedged=false    |
+//|     restores v2.7.3 behaviour exactly. PENDING mode unchanged.   |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.73"
-#property description "Golden2 EA v2.7.3 - Entry Mode (PENDING/SMA/INSTANT). New input InpEntryMode selects how the initial frame opens: G2_ENTRY_PENDING = original BuyStop+SellStop frame at mid +/- FrameUpper/Lower (default, fully backward compatible); G2_ENTRY_SMA = market entry per side filtered by SMA (BUY only when price > SMA, SELL only when price < SMA), ported from Gold Miner; G2_ENTRY_INSTANT = market BUY+SELL fired immediately at current Ask/Bid with no indicator. Per-side Squeeze block / InpInitSideMode / hedge mirror / grid loss / grid profit / triple-gate / accumulate close / v2.72 backtest accel all preserved."
+#property version   "2.74"
+#property description "Golden2 EA v2.7.4 - Group-advance fix for INSTANT/SMA. IsGroupSafeToAdvance now treats a profitable unhedged side as effectively safe via new helper IsSideEffectivelySafeForAdvance() and toggle InpAdvance_AllowProfitSideUnhedged (default ON). Fixes G1 deadlock seen in INSTANT/SMA where one side hedges and the opposite (profitable) side never gets a hedge — previously the group held forever and G2 never opened. Hold-log now also reports plBUY/plSELL. PENDING mode behaviour unchanged because both sides typically end up hedged via the BuyStop/SellStop frame. v2.73 Entry Mode, v2.72 Squeeze per-side + Backtest accel, v2.70 Continuous Frame, v2.6 Re-entry, v2.5 Toward-Price Trail, hedge / grid / triple-gate / accumulate all preserved."
 #property strict
 
 #include <Trade/Trade.mqh>
