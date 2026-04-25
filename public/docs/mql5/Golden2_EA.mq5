@@ -707,6 +707,121 @@ int FindActiveTradingGroup(){
    return -1;
 }
 
+// [v2.73] Read SMA value (returns 0 on failure). Uses cached g_smaHandle.
+double GetSMAValue_G2(){
+   if(g_smaHandle == INVALID_HANDLE) return 0.0;
+   double buf[];
+   ArraySetAsSeries(buf, true);
+   if(CopyBuffer(g_smaHandle, 0, 0, 2, buf) < 2) return 0.0;
+   return buf[0];
+}
+
+// [v2.73] Market entry path for ENTRY_SMA / ENTRY_INSTANT modes.
+// Mirrors PlaceInitialFrame guard order: per-group cooldown -> Squeeze per-side ->
+// SMA filter (only for SMA mode) -> trade.Buy / trade.Sell at market.
+// Initial TP/SL respect broker stops level. Same MakeComment("IN") tag so all
+// downstream logic (grid, hedge, triple-gate, accumulate, dashboard) is unchanged.
+void PlaceInitialMarket(int g, bool placeBuy, bool placeSell){
+   // Per-group cooldown (5s) — same idea as PlaceInitialFrame to avoid per-tick spam.
+   static datetime s_lastMktAttempt[51];
+   static datetime s_lastMktFailLog[51];
+   int gi = (g >= 0 && g < 51) ? g : 0;
+   if(s_lastMktAttempt[gi] != 0 && TimeCurrent() - s_lastMktAttempt[gi] < 5) return;
+   s_lastMktAttempt[gi] = TimeCurrent();
+
+   // Per-side Squeeze block (mirror of v2.72 PENDING path).
+   if(InpSQ_Enable && InpSQ_BlockNewOrders){
+      if(placeBuy && SqueezeBlocksSide(0)){
+         placeBuy = false;
+         if(InpVerboseLog) PrintFormat("Golden2 v2.73: [MKT] Squeeze BLOCK BUY G%d (%s)", g, SqueezeStatusString());
+      }
+      if(placeSell && SqueezeBlocksSide(1)){
+         placeSell = false;
+         if(InpVerboseLog) PrintFormat("Golden2 v2.73: [MKT] Squeeze BLOCK SELL G%d (%s)", g, SqueezeStatusString());
+      }
+      if(!placeBuy && !placeSell) return;
+   }
+
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   if(ask <= 0 || bid <= 0){
+      if(InpVerboseLog) PrintFormat("Golden2 v2.73: [MKT] G%d skipped — no quotes", g);
+      return;
+   }
+
+   // SMA filter for ENTRY_SMA mode only.
+   if(InpEntryMode == G2_ENTRY_SMA){
+      double sma = GetSMAValue_G2();
+      if(sma <= 0.0){
+         if(TimeCurrent() - s_lastMktFailLog[gi] >= 30){
+            PrintFormat("Golden2 v2.73: [MKT-SMA] G%d skipped — SMA not ready", g);
+            s_lastMktFailLog[gi] = TimeCurrent();
+         }
+         s_lastMktAttempt[gi] = TimeCurrent() - 3; // retry in 2s
+         return;
+      }
+      // Price > SMA -> only BUY allowed; Price < SMA -> only SELL allowed.
+      // Use bid as reference (same as Gold Miner currentPrice).
+      if(placeBuy  && bid <= sma){
+         if(InpVerboseLog) PrintFormat("Golden2 v2.73: [MKT-SMA] G%d skip BUY (bid=%.*f <= SMA=%.*f)", g, g_digits, bid, g_digits, sma);
+         placeBuy = false;
+      }
+      if(placeSell && bid >= sma){
+         if(InpVerboseLog) PrintFormat("Golden2 v2.73: [MKT-SMA] G%d skip SELL (bid=%.*f >= SMA=%.*f)", g, g_digits, bid, g_digits, sma);
+         placeSell = false;
+      }
+      if(!placeBuy && !placeSell) return;
+   }
+
+   long stopsLvl = (long)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   double minDist = (stopsLvl > 0) ? stopsLvl * g_point : 0.0;
+
+   trade.SetExpertMagicNumber(InpMagic);
+   trade.SetDeviationInPoints(InpSlippage);
+
+   string cBuy  = MakeComment(g, false, "IN");
+   string cSell = MakeComment(g, false, "IN");
+
+   bool anySent = false;
+   if(placeBuy){
+      double tp = 0.0, sl = 0.0;
+      if(InpInitialTPPips > 0){
+         double d = MathMax(InpInitialTPPips * g_point, minDist + g_point);
+         tp = NormalizeDouble(ask + d, g_digits);
+      }
+      if(InpInitialSLPips > 0){
+         double d = MathMax(InpInitialSLPips * g_point, minDist + g_point);
+         sl = NormalizeDouble(ask - d, g_digits);
+      }
+      if(!trade.Buy(InpInitialLot, _Symbol, ask, sl, tp, cBuy)){
+         PrintFormat("Golden2 v2.73: [MKT] BUY FAIL G%d err=%d retcode=%d", g, GetLastError(), trade.ResultRetcode());
+      } else {
+         anySent = true;
+         if(InpVerboseLog) PrintFormat("Golden2 v2.73: [MKT] BUY G%d ask=%.*f tp=%.*f sl=%.*f", g, g_digits, ask, g_digits, tp, g_digits, sl);
+      }
+   }
+   if(placeSell){
+      double tp = 0.0, sl = 0.0;
+      if(InpInitialTPPips > 0){
+         double d = MathMax(InpInitialTPPips * g_point, minDist + g_point);
+         tp = NormalizeDouble(bid - d, g_digits);
+      }
+      if(InpInitialSLPips > 0){
+         double d = MathMax(InpInitialSLPips * g_point, minDist + g_point);
+         sl = NormalizeDouble(bid + d, g_digits);
+      }
+      if(!trade.Sell(InpInitialLot, _Symbol, bid, sl, tp, cSell)){
+         PrintFormat("Golden2 v2.73: [MKT] SELL FAIL G%d err=%d retcode=%d", g, GetLastError(), trade.ResultRetcode());
+      } else {
+         anySent = true;
+         if(InpVerboseLog) PrintFormat("Golden2 v2.73: [MKT] SELL G%d bid=%.*f tp=%.*f sl=%.*f", g, g_digits, bid, g_digits, tp, g_digits, sl);
+      }
+   }
+   if(!anySent){
+      s_lastMktAttempt[gi] = TimeCurrent() + 25;
+   }
+}
+
 void PlaceInitialFrame(int g){
    // [v2.1] Accumulate cooldown guard — after CloseEverythingNow() fires, do
    //        NOT open a new frame until the cooldown elapses AND the cycle has
