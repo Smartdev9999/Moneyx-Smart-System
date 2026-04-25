@@ -1,86 +1,65 @@
-
-# Golden2 EA v2.7.7 — Squeeze Filter + ADX/EMA Multi-Confirm
+## Golden2 EA v2.7.8 — Force-Close Unhedged Opposite Side on Hedge Lock
 
 ไฟล์: `public/docs/mql5/Golden2_EA.mq5`
 
-## เป้าหมาย
-เพิ่มความแม่นยำการกรอง State (Squeeze / Normal / Expansion) ของ Volatility Squeeze Filter โดยเพิ่ม **ADX + EMA** เป็นตัวคอนเฟิร์มทิศทางเทรนด์ ก่อนจะตัดสินว่าเป็น Expansion จริง
+### ปัญหา
+จาก log: `G2 hold G2->G3 ... blkBUY=2 blkSELL=12 hedgeBuy=13 hedgeSell=0 plBUY=+270 plSELL=-13927`
+- ฝั่ง SELL ติดลบ → ถูก hedge ด้วย BUY 13 ไม้ (locked OK)
+- ฝั่ง BUY มี main 2 ไม้ที่เปิดในกรุ๊ปเดียวกัน **ไม่มี hedge SELL คุม**
+- ทำให้ G3 ออกไม่ได้ และยังเสี่ยงทำให้ hedge ไม่สมบูรณ์
 
-## หลักการตอบคำถาม
-- **Expansion = เทรนด์ขาขึ้น/ขาลง?** ✅ ใช่ — ratio (BBwidth/KCwidth) ≥ threshold = ตลาดกำลังขยายตัว และ `dir = sign(close − BBmid)` บอกทิศทาง (ขึ้น/ลง)
-- ปัจจุบันใช้แค่ BB vs KC + ทิศจาก BB-mid → บางครั้ง **false expansion** (spike สั้นๆ) ทำให้บล็อกฝั่งผิด
-- เพิ่ม ADX (วัดความแรงเทรนด์) + EMA (ยืนยันทิศ) ต่อ TF เพื่อกรองสัญญาณหลอก
+User ต้องการ: **เมื่อกรุ๊ปใดถูก hedge-lock ฝั่งใดฝั่งหนึ่ง → ปิด main ฝั่งตรงข้ามที่ไม่ matching ทิ้งทันที** (ไม่สนกำไร/ขาดทุน) เพื่อให้ hedge สมบูรณ์ และระบบไป G ใหม่ได้
 
-## Pipeline ใหม่ (ต่อ TF)
-ลำดับการเช็คแบบ **AND** (ทุกตัวต้องผ่าน → จึงเป็น Expansion จริง):
+### สิ่งที่ทำ
 
-1. **BB vs KC ratio** (เดิม) → ratio ≥ `InpSQ_ExpansionThreshold` (default 1.6)
-2. **BB Position Check** (ใหม่) → close[1] อยู่ **เหนือ BB Upper** (ขึ้น) หรือ **ใต้ BB Lower** (ลง) — ดูราคาทะลุจริง ไม่ใช่แค่กว้าง
-3. **ADX Strength** (ใหม่) → ADX[1] ≥ `InpSQ_ADXThreshold` (default **25**) + ทิศจาก +DI/-DI ตรงกับ BB direction
-4. **ATR Confirm** (ใหม่) → ATR[1] ≥ ATR-MA(N) × `InpSQ_ATRMult` (ATR ปัจจุบันสูงกว่าค่าเฉลี่ย = volatility ขยายจริง)
-5. **EMA Trend Confirm** (ใหม่) → close[1] **เหนือ EMA(N)** = ขึ้น / **ใต้ EMA(N)** = ลง — ทิศต้องตรงกับขั้นที่ 2-3
-
-→ Expansion จริง **เมื่อทั้ง 5 ผ่านและทิศทางตรงกัน** ไม่งั้น = Normal/Squeeze
-
-## Inputs ใหม่ (เพิ่มในกลุ่ม Squeeze เดิม)
+**1. Input ใหม่ (default ON)**
 ```cpp
-input bool   InpSQ_UseADX            = true;   // Use ADX confirmation
-input int    InpSQ_ADXPeriod         = 14;     // ADX Period
-input double InpSQ_ADXThreshold      = 25.0;   // ADX min for trend (std=25)
-
-input bool   InpSQ_UseBBBreakout     = true;   // Require close beyond BB Upper/Lower
-input bool   InpSQ_UseATRConfirm     = true;   // Require ATR > ATR-MA * mult
-input int    InpSQ_ATRMAPeriod       = 20;     // ATR moving avg period
-input double InpSQ_ATRMult           = 1.0;    // ATR multiplier vs MA
-
-input bool   InpSQ_UseEMA            = true;   // Use EMA trend confirm
-input int    InpSQ_EMAPeriod         = 50;     // EMA period
-input ENUM_APPLIED_PRICE InpSQ_EMAPrice = PRICE_CLOSE;
+input group   "=== Hedge: Force-Close Opposite Unhedged ==="
+input bool    InpHedge_ForceCloseOppUnhedged   = true;  // [v2.7.8] เมื่อกรุ๊ปถูก hedge-lock ฝั่งใดฝั่งหนึ่ง ปิด main ฝั่งตรงข้ามที่ไม่ถูก hedge ทิ้งทันที
+input int     InpHedge_ForceCloseDelaySec      = 3;     // [v2.7.8] หน่วงก่อนปิด (กัน race condition ตอน hedge เพิ่งเปิด)
 ```
 
-ค่าเริ่มต้นมาตรฐาน: ADX 14/25, EMA 50, ATR-MA 20×1.0 — ผู้ใช้ปรับได้ภายหลัง
+**2. ฟังก์ชันใหม่ `ForceCloseUnhedgedOppositeSide(int g)`**
+- เงื่อนไขทำงาน: `InpHedge_ForceCloseOppUnhedged==true` AND กรุ๊ป g มี hedge position อย่างน้อย 1 ไม้
+- ตรวจ "ฝั่งที่ถูก hedge": ฝั่งที่มี hedge ฝั่งตรงข้ามคุม
+  - ถ้า `CountGroupPositions(g, 1, 1) > 0` (hedge SELL ทำงาน) → main BUY ถูก lock → ฝั่งตรงข้ามที่ต้องปิด = main SELL (แต่ปกติ SELL ไม่มีในกรณีนี้)
+  - ถ้า `CountGroupPositions(g, 0, 1) > 0` (hedge BUY ทำงาน) → main SELL ถูก lock → **ฝั่งตรงข้ามที่ต้องปิด = main BUY ที่เหลือใน G เดียวกัน**
+- ลูปปิด `trade.PositionClose(ticket)` เฉพาะ main (`hd==false`) ฝั่งตรงข้าม + `tag != "IN"` ไม่บังคับ (ปิดทุกแบบ GL/GP/IN)
+- **ไม่แตะ hedge positions / ไม่แตะ pendings** (pending hedge frame ที่รอ activate และ pending IN/GL ฝั่งตรงข้ามถูกจัดการโดย v2.3 `DeleteLeftoverInitialPendingsAfterHedge` อยู่แล้ว)
+- log throttle ต่อ ticket ปิด
 
-## Implementation
-### 1. Handles ใหม่ (3 TFs × 2 indicator)
+**3. Hook ใน `TryAdvanceToNextGroup()`**
+- เพิ่มเรียก `ForceCloseUnhedgedOppositeSide(cur)` **หลัง** `DeleteLeftoverInitialPendingsAfterHedge(cur)` และ **ก่อน** เช็ค `IsGroupSafeToAdvance`
+- หน่วง `InpHedge_ForceCloseDelaySec` วินาทีจาก `g_groupHedgeFirstSeen[g]` (เก็บ timestamp ครั้งแรกที่เห็น hedge)
+
+**4. Variable ใหม่**
 ```cpp
-int g_sqADX[3];   // iADX
-int g_sqEMA[3];   // iMA EMA
-// ATR-MA ใช้ MathMean ของ ATR buffer ที่มีอยู่แล้ว (ไม่ต้องสร้าง handle ใหม่)
+datetime g_groupHedgeFirstSeen[MAX_GROUPS+1];  // ตอน group เริ่มมี hedge ครั้งแรก (สำหรับ delay)
 ```
-Init ใน `OnInit` ต่อจาก `g_sqATR[i]` เดิม (line ~3040)
+อัปเดตใน `TryAdvanceToNextGroup()` ก่อน hook ใหม่
 
-### 2. ขยาย `ComputeSqueezeForTF(int idx, bool &isExp, int &dir)`
-- คำนวณ ratio + bbDir เดิม
-- ถ้า `InpSQ_UseBBBreakout`: ต้อง close[1] > bbU[1] (dir=+1) หรือ < bbL[1] (dir=-1)
-- ถ้า `InpSQ_UseADX`: อ่าน ADX main + +DI + -DI → ต้อง ADX≥thr และ DI ทิศตรงกับ dir
-- ถ้า `InpSQ_UseATRConfirm`: copy ATR[1..N] → คำนวณค่าเฉลี่ย → ต้อง atr[1] ≥ mean × mult
-- ถ้า `InpSQ_UseEMA`: ต้อง close[1] อยู่ฝั่งเดียวกับ EMA ตาม dir
-- เก็บผลแต่ละด่านไว้ใน array ใหม่สำหรับ Dashboard:
-  ```cpp
-  bool g_sqPassBB[3], g_sqPassADX[3], g_sqPassATR[3], g_sqPassEMA[3];
-  double g_sqADXVal[3];
-  ```
-- `isExp = pass1 && pass2 && pass3 && pass4 && pass5` (เฉพาะที่ enable)
+**5. Dashboard**
+- เพิ่มแถวใน Hedging panel: `Force-Close Opp: ON (3s)` / `OFF`
 
-### 3. Dashboard (Squeeze panel)
-- คงแถวเดิม (TF1/TF2/TF3 + Overall) 
-- เพิ่มสรุปต่อ TF: `BB:✓ ADX:25.3✓ ATR:✓ EMA:✓` (ย่อให้พอดี)
-- Overall ยังเหมือนเดิม (Block Buy/Sell)
+**6. Version & Logs**
+- `#property version "2.78"`, `#property description` อัปเดต
+- Header comment block (v2.7.8 เพิ่ม "Force-close opposite unhedged side on hedge lock")
+- Dashboard `L_TITLE = "Golden2 v2.7.8"`
+- `OnInit` log
+- log เมื่อปิด: `Golden2 v2.7.8: G%d force-close opp main #%I64u side=%s pl=%.2f (hedge-lock cleanup)`
 
-### 4. Version Bump
-- `#property version "2.77"`
-- description: `"Golden2 EA v2.7.7 — Squeeze Filter + ADX/EMA/ATR/BB-Breakout multi-confirm"`
-- Header comment, OnInit log, Dashboard L_TITLE → `Golden2 EA v2.7.7`
+### สิ่งที่ "ไม่เปลี่ยนแปลง" (ตามกฎเหล็ก)
+- ❌ ไม่แตะ Order execution (OrderSend, trade.Buy/Sell, trade.PositionClose ใช้ตามเดิมแค่เรียกในฟังก์ชันใหม่)
+- ❌ ไม่แตะ Trading strategy logic (SMA/INSTANT/PENDING entry, Grid loss/profit, TP/SL/Trailing, Accumulate close, DD trigger, hedge mirror)
+- ❌ ไม่แตะ License/News/Time/Sync modules
+- ❌ ไม่แตะ `IsGroupSafeToAdvance` / `IsSideEffectivelySafeForAdvance` / `CountBlockingMainPositionsForAdvance` (ฟังก์ชันใหม่ทำงานก่อนให้กรุ๊ป "สะอาด" เอง)
+- ❌ ไม่แตะ Squeeze v2.7.7 multi-confirm
+- ❌ ไม่แตะ v2.3 `DeleteLeftoverInitialPendingsAfterHedge`
+- ✅ Backward compatible 100% (input ใหม่มี default; ปิด `InpHedge_ForceCloseOppUnhedged=false` = พฤติกรรม v2.7.7 เดิม)
 
-## สิ่งที่ไม่เปลี่ยนแปลง
-- ❌ ไม่แตะ `trade.Buy/Sell/PositionClose` หรือ Order execution
-- ❌ ไม่แตะ Hedge mirror, Grid Loss/Profit, Triple-Gate, Accumulate, Initial Frame
-- ❌ ไม่แตะ `RefreshSqueezeStateThrottled` (ยัง 1 ครั้ง/แท่ง M1 เหมือนเดิม)
-- ❌ ไม่แตะ logic ของ `SqueezeBlocksSide` / Per-side block / Directional block
-- ❌ ไม่แตะ Entry mode (PENDING/SMA/INSTANT) v2.7.5–v2.7.6
-- ✅ เพิ่มเฉพาะตัวกรองชั้นบน → ถ้าทุก confirm ปิด (UseADX/EMA/ATR/BBBreakout=false) จะกลับมาเป็นพฤติกรรมเดิม v2.7.6 100%
-- ✅ Backward compatible กับ .set ไฟล์เดิม (input ใหม่มี default แล้ว)
+### ผลลัพธ์ที่คาดหวัง
+จาก log ตัวอย่าง: G2 hedgeBuy=13 + main BUY 2 ไม้ค้าง → 3 วินาทีหลัง hedge เกิด ระบบจะปิด BUY 2 ไม้นั้นทิ้ง (ไม่สน +270) → G2 เหลือเฉพาะ {main SELL 12 + hedge BUY 13} = matched clean → G3 เปิดได้ทันที
 
-## Memory
-- สร้าง `mem://trading/golden2-ea/v2-7-7-squeeze-multi-confirm.md`
+### Memory & Index
+- สร้าง `mem://trading/golden2-ea/v2-7-8-force-close-opp-unhedged.md`
 - อัปเดต `mem://index.md`
