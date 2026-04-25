@@ -2564,18 +2564,44 @@ void DeleteLeftoverInitialPendingsAfterHedge(int g){
    }
 }
 
+// [v2.7.4] Per-side safety check used by IsGroupSafeToAdvance.
+// A side is "effectively safe" when:
+//   1) it holds no blocking main position (count==0), OR
+//   2) it is hedge-locked by an opposite-side hedge position (v2.3 logic), OR
+//   3) toggle InpAdvance_AllowProfitSideUnhedged==true AND its current floating
+//      P/L is non-negative — an unhedged main side that is in profit is not a
+//      risk to advancing because the existing DD% trigger will arm a hedge as
+//      soon as the side dips into loss (logic untouched).
+// Rationale: in INSTANT/SMA modes only the losing side gets mirrored, leaving
+// the profitable side permanently "blocking" — which deadlocked G_(N+1).
+bool IsSideEffectivelySafeForAdvance(int g, int side){
+   int blocking = CountBlockingMainPositionsForAdvance(g, side);
+   if(blocking == 0) return true;
+   // Opposite-side hedge present locks this side (v2.3 invariant).
+   int oppositeHedge = CountGroupPositions(g, 1 - side, 1);
+   if(oppositeHedge > 0) return true;
+   // [v2.7.4] Profitable unhedged side bypass.
+   if(InpAdvance_AllowProfitSideUnhedged){
+      double pl = GroupFloatingPL(g, side, 0); // main only, this side
+      if(pl >= 0.0) return true;
+   }
+   return false;
+}
+
 // [v2.3] Group is "safe to advance to next" using PER-SIDE hedge-lock check.
 // Each surviving main side must be covered by hedge positions; sides that have
 // already emptied (TP hit / Triple-Gate close) do not need a hedge counterpart.
 // Residual post-hedge IN orphans are ignored (see CountBlockingMainPositionsForAdvance).
+// [v2.7.4] Now delegates per-side decision to IsSideEffectivelySafeForAdvance
+// so a profitable unhedged side does not block advance (INSTANT/SMA fix).
 bool IsGroupSafeToAdvance(int g){
    int buyMain  = CountBlockingMainPositionsForAdvance(g, 0);
    int sellMain = CountBlockingMainPositionsForAdvance(g, 1);
-   if(buyMain == 0 && sellMain == 0) return true;        // no blocking main exposure
+   if(buyMain == 0 && sellMain == 0) return true;
    bool hedgeAny = (CountGroupPositions(g, -1, 1) > 0);
-   if(!hedgeAny) return false;                           // unlocked main with zero hedge
-   bool buyOK  = (buyMain  == 0) || (CountGroupPositions(g, 1, 1) > 0); // sell-side hedge locks BUY main
-   bool sellOK = (sellMain == 0) || (CountGroupPositions(g, 0, 1) > 0); // buy-side hedge locks SELL main
+   if(!hedgeAny) return false; // unlocked main with zero hedge anywhere = always unsafe
+   bool buyOK  = IsSideEffectivelySafeForAdvance(g, 0);
+   bool sellOK = IsSideEffectivelySafeForAdvance(g, 1);
    return (buyOK && sellOK);
 }
 
