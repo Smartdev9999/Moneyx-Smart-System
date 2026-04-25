@@ -1,7 +1,7 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|     Golden2 EA v2.7.5 — Entry Mode Hard-Gate                     |
+//|     Golden2 EA v2.7.6 — INSTANT/SMA Per-Side Re-entry            |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
