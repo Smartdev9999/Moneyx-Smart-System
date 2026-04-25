@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|     Golden2 EA v2.7.6 — INSTANT/SMA Per-Side Re-entry            |
+//|     Golden2 EA v2.7.7 — Squeeze + ADX/EMA Multi-Confirm          |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.76"
-#property description "Golden2 EA v2.7.6 — INSTANT/SMA per-side re-entry. Closed side reopens immediately while other side still active in same group."
+#property version   "2.77"
+#property description "Golden2 EA v2.7.7 — Squeeze Filter + ADX/EMA/ATR/BB-Breakout multi-confirm"
 #property strict
 
 #include <Trade/Trade.mqh>
