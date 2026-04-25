@@ -419,6 +419,8 @@ input bool   InpCrossGen_InitGuard      = true;    // v6.73: block new-gen INIT 
 input bool   InpOwnerAutoAdvance        = true;    // v6.73: auto-advance sequential recovery owner to next remaining gen when current gen flat
 input bool   InpHedge_NoReHedgeReleased = true;    // v6.73: tickets released from any hedge set never get re-hedged (let grid recover)
 input bool   InpHedge_NoReHedgeGenSide  = true;    // v6.74: ทั้ง gen+side ที่เคย hedge แล้วถูกปล่อยจะไม่ถูก hedge ซ้ำอีกจน flat
+input bool   InpHedge_CloseOppositeSurvivors = false; // v6.81: Close opposite-side survivors of same gen on hedge open (fix Cross-Gen INIT block)
+input string InpHedge_CloseOppSurvivorsNote  = "Closes BUY survivors of GM4 when SELL hedge fires on GM4 -> next gen starts clean";
 
 // === v6.61: Recovery Shred & Seed ===
 input group "=== Recovery Shred & Seed (v6.61) ==="
