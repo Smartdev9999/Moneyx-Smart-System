@@ -3241,6 +3241,7 @@ int OnInit(){
                InpGroup_RequireFullLockBeforeNext?"ON":"OFF",
                InpGroup_AdvancePerTick?"ON":"OFF",
                InpAdvance_AllowProfitSideUnhedged?"ON":"OFF",
+               InpHedge_ForceCloseOppUnhedged?"ON":"OFF", InpHedge_ForceCloseDelaySec,
                g_isTesterMode?"YES":"NO", g_isVisualMode?"YES":"NO", g_isOptimization?"YES":"NO",
                InpDashRenderIntervalSec);
    return INIT_SUCCEEDED;
