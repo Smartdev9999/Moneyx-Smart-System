@@ -236,6 +236,17 @@ input bool    InpSQ_BlockNewOrders    = true;                        // Block Ne
 input int     InpSQ_MinExpansionTFs   = 1;                           // Min TFs in Expansion to Block (1-3)
 input bool    InpSQ_DirectionalBlock  = true;                        // Directional Block (block counter-trend only)
 input bool    InpSQ_CloseOnExpansion  = false;                       // Close All Orders on Expansion
+// [v2.7.7] Multi-confirm filters — all enabled checks must pass to confirm Expansion
+input bool    InpSQ_UseBBBreakout     = true;                        // [v2.7.7] Require close beyond BB Upper/Lower
+input bool    InpSQ_UseADX            = true;                        // [v2.7.7] Use ADX trend strength confirm
+input int     InpSQ_ADXPeriod         = 14;                          // [v2.7.7] ADX Period
+input double  InpSQ_ADXThreshold      = 25.0;                        // [v2.7.7] ADX min threshold (std=25)
+input bool    InpSQ_UseATRConfirm     = true;                        // [v2.7.7] Require ATR > ATR-MA * mult
+input int     InpSQ_ATRMAPeriod       = 20;                          // [v2.7.7] ATR moving avg period
+input double  InpSQ_ATRMult           = 1.0;                         // [v2.7.7] ATR multiplier vs MA
+input bool    InpSQ_UseEMA            = true;                        // [v2.7.7] EMA trend direction confirm
+input int     InpSQ_EMAPeriod         = 50;                          // [v2.7.7] EMA period
+input ENUM_APPLIED_PRICE InpSQ_EMAPrice = PRICE_CLOSE;               // [v2.7.7] EMA applied price
 
 //--- === Dashboard ===
 input string  __sec_dash__            = "=== Dashboard ===";         // ---
