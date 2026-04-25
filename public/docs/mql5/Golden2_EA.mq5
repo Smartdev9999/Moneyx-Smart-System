@@ -2983,8 +2983,17 @@ int OnInit(){
       }
    }
 
-   PrintFormat("Golden2 EA v2.7.2 initialized | Magic=%I64d | MaxGroups=%d | InitMode=%d | GridLoss=%s | Squeeze=%s SqueezePerSide=ON | TripleGate=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | Tester=%s Visual=%s Opt=%s DashInterval=%ds",
-               (long)InpMagic, InpMaxGroups, (int)InpInitSideMode,
+   // [v2.73] SMA handle for ENTRY_SMA mode (skip if not used to save resources).
+   if(InpEntryMode == G2_ENTRY_SMA){
+      g_smaHandle = iMA(_Symbol, InpSMA_TF, InpSMA_Period, 0, MODE_SMA, InpSMA_AppliedPrice);
+      if(g_smaHandle == INVALID_HANDLE)
+         PrintFormat("Golden2 v2.73: SMA handle init FAILED (period=%d tf=%d)", InpSMA_Period, (int)InpSMA_TF);
+   }
+
+   string entryModeLbl = (InpEntryMode == G2_ENTRY_PENDING) ? "PENDING" :
+                         (InpEntryMode == G2_ENTRY_SMA)     ? "SMA"     : "INSTANT";
+   PrintFormat("Golden2 EA v2.7.3 initialized | Magic=%I64d | MaxGroups=%d | EntryMode=%s | InitMode=%d | GridLoss=%s | Squeeze=%s SqueezePerSide=ON | TripleGate=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | Tester=%s Visual=%s Opt=%s DashInterval=%ds",
+               (long)InpMagic, InpMaxGroups, entryModeLbl, (int)InpInitSideMode,
                GridLoss_Enable?"ON":"OFF", InpSQ_Enable?"ON":"OFF", InpExitTripleGate_Enable?"ON":"OFF",
                InpInitTrailOnBarClose?"ON":"OFF",
                InpFrameRecenterMinPips,
