@@ -3050,6 +3050,9 @@ void DrawDashboard(){
    int rem=0;
    string hd = IsHedgeOpenDelayActive(rem) ? StringFormat("WAIT %dm%02ds", rem/60, rem%60) : "READY";
    DashRow("L_HDLY",  x, y, w, rowH, "Hedge Delay",      hd, InpDashColor); y+=rowH;
+   // [v2.7.8] Force-close opposite unhedged side
+   string fc = InpHedge_ForceCloseOppUnhedged ? StringFormat("ON (%ds)", InpHedge_ForceCloseDelaySec) : "OFF";
+   DashRow("L_FCOPP", x, y, w, rowH, "Force-Close Opp",  fc, InpHedge_ForceCloseOppUnhedged?InpDashGood:InpDashColor); y+=rowH;
    DashRow("L_TG",    x, y, w, rowH, "Triple-Gate",      InpExitTripleGate_Enable?"ON":"OFF", InpExitTripleGate_Enable?InpDashGood:InpDashBad); y+=rowH;
    // ==== [v1.8] Gold-Miner-style Squeeze panel (multi-row) ====
    if(InpSQ_Enable){
