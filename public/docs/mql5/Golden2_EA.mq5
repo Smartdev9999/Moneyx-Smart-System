@@ -1269,6 +1269,10 @@ bool HasClosedMainOnSide(int g, int side){
 
 void ManageInitialReArm(int g){
    if(!InpInitReArmAfterTP && !InpInitReEntryOnClose) return;
+   // [v2.7.5] Re-arm uses BuyStop/SellStop pendings — only valid in PENDING mode.
+   // SMA/INSTANT re-entry is handled by PlaceInitialMarket via the idle-group
+   // loop in OnTick (no pending stops should ever appear in those modes).
+   if(InpEntryMode != G2_ENTRY_PENDING) return;
    // [v2.3] Do not re-arm a fresh G_IN stop once the group is hedging — that
    //         was the source of the post-hedge orphan main that blocked
    //         advancement to the next group.
