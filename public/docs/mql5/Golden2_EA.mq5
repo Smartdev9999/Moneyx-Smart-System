@@ -3156,7 +3156,8 @@ void OnTick(){
       TrackInitialCandle(g);
       ManageInitialTrailOnBarClose(g); // [v1.8] bar-close trail (preferred)
       ManageInitialTrail(g);   // [v1.7] legacy trigger trail (skipped if bar-close ON)
-      ManageInitialReArm(g);   // [v1.7] re-arm side stop after TP
+      ManageInitialReArm(g);   // [v1.7] re-arm side stop after TP (PENDING mode)
+      ManageInitialMarketReEntry(g); // [v2.7.6] re-entry market for INSTANT/SMA
       TryPlaceGridLoss(g);
       TryPlaceGridProfit(g);
       ManageGroupHedgeArm(g);
