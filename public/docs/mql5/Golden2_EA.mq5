@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|     Golden2 EA v2.7.7 — Squeeze + ADX/EMA Multi-Confirm          |
+//|     Golden2 EA v2.7.8 — Force-Close Opp Unhedged on Lock         |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.77"
-#property description "Golden2 EA v2.7.7 — Squeeze Filter + ADX/EMA/ATR/BB-Breakout multi-confirm"
+#property version   "2.78"
+#property description "Golden2 EA v2.7.8 — Force-close opposite unhedged main side when group is hedge-locked, freeing next group to open"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -207,6 +207,9 @@ input double  InpHedgeDisarmPercent   = 70.0;                        // Disarm p
 input bool    InpHedgeLotMatch1to1    = true;                        // Hedge lots match opposite side 1:1 (mirror tag+lot)
 input int     InpHedge_OpenDelayMin   = 0;                           // Cooldown minutes between hedges (0=off)
 input ENUM_HEDGE_DELAY_MODE_G2 InpHedge_OpenDelayMode = G2_HDELAY_BOTH; // Cooldown reference
+// [v2.7.8] Force-close opposite unhedged side when group is hedge-locked
+input bool    InpHedge_ForceCloseOppUnhedged = true;                 // [v2.7.8] Force-close opposite main side when hedge locks the other side (any P/L)
+input int     InpHedge_ForceCloseDelaySec    = 3;                    // [v2.7.8] Delay before force-close (sec) — avoids race when hedge just opened
 
 //--- === Exit Triple Gate ===
 input string  __sec_exit__            = "=== Exit Triple Gate ==="; // ---
@@ -324,6 +327,7 @@ bool   g_stripped[51];          // per-group flag: broker TP/SL stripped after h
 double g_maxDDPerSide[51][2];   // [group][side] track max floating loss USD seen (positive value)
 bool   g_blockNewOrders[51];    // per-group: pre-hedge block (DD% near arm threshold)
 bool   g_hedgeMasterCleared = false; // one-shot cleanup when master toggle is OFF
+datetime g_groupHedgeFirstSeen[51]; // [v2.7.8] timestamp when group first observed any hedge position (for force-close delay)
 
 // Snapshot of ATR (in points) at the moment last grid order was placed (per group, side, family 0=GL/1=GP)
 double   g_atrAtLastGridLoss[51][2];
@@ -2738,6 +2742,69 @@ bool AreAllPriorGroupsSafe(int curG){
    return true;
 }
 
+// [v2.7.8] Force-close opposite unhedged main side when group is hedge-locked.
+// Logic: if hedge BUY is active in group g, the SELL main side is the "locked"
+// (covered) side; any remaining BUY main positions in the same group are NOT
+// matching the hedge → close them immediately regardless of P/L so the group
+// becomes a clean { lossSide-main + oppositeSide-hedge } pair, freeing
+// IsGroupSafeToAdvance to allow advancing to the next group.
+// Mirror logic for hedge SELL active.
+// Honours InpHedge_ForceCloseDelaySec to avoid race with the just-fired hedge.
+void ForceCloseUnhedgedOppositeSide(int g){
+   if(!InpHedge_ForceCloseOppUnhedged) return;
+   int hedgeBuy  = CountGroupPositions(g, 0, 1); // hedge BUY positions
+   int hedgeSell = CountGroupPositions(g, 1, 1); // hedge SELL positions
+   if(hedgeBuy == 0 && hedgeSell == 0){
+      g_groupHedgeFirstSeen[g] = 0; // reset when no hedge
+      return;
+   }
+   // Track first-seen timestamp for delay
+   datetime now = TimeCurrent();
+   if(g_groupHedgeFirstSeen[g] == 0) g_groupHedgeFirstSeen[g] = now;
+   if((int)(now - g_groupHedgeFirstSeen[g]) < InpHedge_ForceCloseDelaySec) return;
+
+   // Determine which MAIN side to force-close.
+   // hedge BUY covers main SELL → unmatched side to close = main BUY (opposite of hedge direction is what was hedged; hedge mirrors loss → close the OTHER main side that hedge does NOT cover)
+   // Concretely: hedge BUY active → close any leftover main BUY (they have no hedge SELL coverage)
+   //             hedge SELL active → close any leftover main SELL
+   int sideToClose = -1;
+   if(hedgeBuy  > 0 && hedgeSell == 0) sideToClose = 0; // close main BUY
+   else if(hedgeSell > 0 && hedgeBuy == 0) sideToClose = 1; // close main SELL
+   else if(hedgeBuy > 0 && hedgeSell > 0) {
+      // Both hedges active (rare two-way hedge): close BOTH unmatched mains by running twice
+      ForceCloseSideMain(g, 0);
+      ForceCloseSideMain(g, 1);
+      return;
+   }
+   if(sideToClose < 0) return;
+   ForceCloseSideMain(g, sideToClose);
+}
+
+void ForceCloseSideMain(int g, int side){
+   int total = PositionsTotal();
+   for(int i = total - 1; i >= 0; i--){
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0) continue;
+      if(!PositionSelectByTicket(tk)) continue;
+      if((long)PositionGetInteger(POSITION_MAGIC) != InpMagic) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      string c = PositionGetString(POSITION_COMMENT);
+      int gp; bool hd; string tag;
+      if(!ParseComment(c, gp, hd, tag)) continue;
+      if(gp != g) continue;
+      if(hd) continue; // never touch hedge positions
+      int sd = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? 0 : 1;
+      if(sd != side) continue;
+      double pl = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+      if(trade.PositionClose(tk)){
+         PrintFormat("Golden2 v2.7.8: G%d force-close opp main #%I64u side=%s tag=%s pl=%.2f (hedge-lock cleanup)",
+                     g, tk, (side==0?"BUY":"SELL"), tag, pl);
+      } else {
+         PrintFormat("Golden2 v2.7.8: G%d force-close FAIL #%I64u err=%d", g, tk, GetLastError());
+      }
+   }
+}
+
 void TryAdvanceToNextGroup(){
    int cur = FindActiveTradingGroup();
    if(cur < 1) {
@@ -2748,6 +2815,8 @@ void TryAdvanceToNextGroup(){
    // [v2.3] As soon as cur is hedging, sweep any leftover IN pendings so a
    //        late stop trigger cannot drop a new orphan main into the group.
    DeleteLeftoverInitialPendingsAfterHedge(cur);
+   // [v2.7.8] Force-close any unhedged opposite main in the group so hedge becomes clean.
+   ForceCloseUnhedgedOppositeSide(cur);
 
    // [v2.2/v2.3] Advance condition: cur has hedge active AND (lock-guard off OR cur+priors safe).
    bool hedgeActive = GroupHedgeJustActivated(cur);
@@ -2931,7 +3000,7 @@ void DrawDashboard(){
 
    // Header
    string entryLbl = (InpEntryMode == G2_ENTRY_PENDING) ? "PENDING" : (InpEntryMode == G2_ENTRY_SMA) ? "SMA" : "INSTANT"; // [v2.73]
-   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.7.7    Entry: %s    Side: %s", entryLbl, modeLbl), InpDashAccent);
+   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.7.8    Entry: %s    Side: %s", entryLbl, modeLbl), InpDashAccent);
    y += rowH+2;
 
    // ==== Account section ====
@@ -2981,6 +3050,9 @@ void DrawDashboard(){
    int rem=0;
    string hd = IsHedgeOpenDelayActive(rem) ? StringFormat("WAIT %dm%02ds", rem/60, rem%60) : "READY";
    DashRow("L_HDLY",  x, y, w, rowH, "Hedge Delay",      hd, InpDashColor); y+=rowH;
+   // [v2.7.8] Force-close opposite unhedged side
+   string fc = InpHedge_ForceCloseOppUnhedged ? StringFormat("ON (%ds)", InpHedge_ForceCloseDelaySec) : "OFF";
+   DashRow("L_FCOPP", x, y, w, rowH, "Force-Close Opp",  fc, InpHedge_ForceCloseOppUnhedged?InpDashGood:InpDashColor); y+=rowH;
    DashRow("L_TG",    x, y, w, rowH, "Triple-Gate",      InpExitTripleGate_Enable?"ON":"OFF", InpExitTripleGate_Enable?InpDashGood:InpDashBad); y+=rowH;
    // ==== [v1.8] Gold-Miner-style Squeeze panel (multi-row) ====
    if(InpSQ_Enable){
@@ -3158,7 +3230,7 @@ int OnInit(){
 
    string entryModeLbl = (InpEntryMode == G2_ENTRY_PENDING) ? "PENDING" :
                          (InpEntryMode == G2_ENTRY_SMA)     ? "SMA"     : "INSTANT";
-   PrintFormat("Golden2 EA v2.7.7 initialized | Magic=%I64d | MaxGroups=%d | EntryMode=%s | InitMode=%d | GridLoss=%s | Squeeze=%s [BB:%s ADX:%s(>=%.1f) ATR:%s EMA:%s(P=%d)] | TripleGate=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | ProfitSideUnhedgedAdv=%s | Tester=%s Visual=%s Opt=%s DashInterval=%ds",
+   PrintFormat("Golden2 EA v2.7.8 initialized | Magic=%I64d | MaxGroups=%d | EntryMode=%s | InitMode=%d | GridLoss=%s | Squeeze=%s [BB:%s ADX:%s(>=%.1f) ATR:%s EMA:%s(P=%d)] | TripleGate=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | ProfitSideUnhedgedAdv=%s | ForceCloseOppUnhedged=%s(%ds) | Tester=%s Visual=%s Opt=%s DashInterval=%ds",
                (long)InpMagic, InpMaxGroups, entryModeLbl, (int)InpInitSideMode,
                GridLoss_Enable?"ON":"OFF", InpSQ_Enable?"ON":"OFF",
                InpSQ_UseBBBreakout?"ON":"OFF", InpSQ_UseADX?"ON":"OFF", InpSQ_ADXThreshold,
@@ -3172,6 +3244,7 @@ int OnInit(){
                InpGroup_RequireFullLockBeforeNext?"ON":"OFF",
                InpGroup_AdvancePerTick?"ON":"OFF",
                InpAdvance_AllowProfitSideUnhedged?"ON":"OFF",
+               InpHedge_ForceCloseOppUnhedged?"ON":"OFF", InpHedge_ForceCloseDelaySec,
                g_isTesterMode?"YES":"NO", g_isVisualMode?"YES":"NO", g_isOptimization?"YES":"NO",
                InpDashRenderIntervalSec);
    return INIT_SUCCEEDED;
