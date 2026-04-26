@@ -5826,8 +5826,8 @@ void ManageTrailingStop_TF(int tfIdx)
          Print("TRAILING SL HIT (", g_tfStates[tfIdx].tfLabel, " SELL): SL=", g_tfStates[tfIdx].trailSL_Sell);
          CloseAllSideTF(tfIdx, POSITION_TYPE_SELL);
          g_tfStates[tfIdx].initialSellPrice = 0;
-         ResetTrailingStateTF(tfIdx);
-         return;
+         // v6.84: per-side reset (preserve BUY state)
+         ResetTrailingStateTFSell(tfIdx);
       }
    }
    else
