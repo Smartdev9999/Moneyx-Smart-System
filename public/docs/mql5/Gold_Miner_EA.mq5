@@ -6,7 +6,7 @@
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
 #property version   "6.85"
-#property description "Gold Miner EA v6.85 - Per-side trailing reset fix (Buy/Sell trailing now run independently when both sides are open)"
+#property description "Gold Miner EA v6.85 - Average Trailing SL pushed as broker-side SL (SyncBrokerTPSL no longer overwrites trailing/breakeven SL)"
 #property strict
 
 #include <Trade/Trade.mqh>
