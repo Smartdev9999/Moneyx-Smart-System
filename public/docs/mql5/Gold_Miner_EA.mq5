@@ -6,7 +6,7 @@
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
 #property version   "6.84"
-#property description "Gold Miner EA v6.84 - Trailing Stop Throttle (skip redundant PositionModify, push SL only when step reached)"
+#property description "Gold Miner EA v6.84 - Per-side trailing reset fix (Buy/Sell trailing now run independently when both sides are open)"
 #property strict
 
 #include <Trade/Trade.mqh>
