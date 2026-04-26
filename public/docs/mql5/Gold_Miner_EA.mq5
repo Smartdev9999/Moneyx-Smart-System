@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.81 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.82 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "6.81"
-#property description "Gold Miner EA v6.81 - v6.78 + Auto-Close Opposite-Side Survivors of Same Gen on Hedge Open (fix Cross-Gen INIT Guard block)"
+#property version   "6.82"
+#property description "Gold Miner EA v6.82 - Grid Profit Candle Confirmation (mirror of v6.40 GL CandleConfirm)"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -184,6 +184,7 @@ input double         GridProfit_ATR_Multiplier= 1.0;       // ATR Multiplier
 input ENUM_ATR_REF   GridProfit_ATR_Reference = ATR_REF_DYNAMIC; // ATR Reference Point
 input int            GridProfit_MinGapPoints  = 100;             // Minimum Grid Gap (points)
 input bool           GridProfit_OnlyNewCandle= true;       // Grid Only on New Candle
+input int            GridProfit_CandleConfirm= 0;          // v6.82: Require N confirming candles before GP (0=Off)
 
 //--- Take Profit
 input group "=== Take Profit ==="
@@ -1018,7 +1019,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-     Print("Gold Miner EA v6.81 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+     Print("Gold Miner EA v6.82 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min",
@@ -1080,7 +1081,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.81 deinitialized");
+   Print("Gold Miner EA v6.82 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -3651,6 +3652,12 @@ void CheckGridProfit(ENUM_POSITION_TYPE side, int currentGridCount)
       if(barTime == lastGridProfitCandleTime) return;
    }
 
+   //--- v6.82: Candle Confirmation check (mirror of GL CandleConfirm)
+   if(GridProfit_CandleConfirm > 0)
+   {
+      if(!HasCandleConfirmation(side, PERIOD_CURRENT, GridProfit_CandleConfirm)) return;
+   }
+
    //--- Find the last order of this side (initial or grid profit)
    double lastPrice = 0;
    datetime lastTime = 0;
@@ -4121,7 +4128,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.81 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.81 [ZZ]" : "Gold Miner EA v6.81 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.82 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.82 [ZZ]" : "Gold Miner EA v6.82 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -4649,6 +4656,12 @@ void DisplayDashboard()
             if(GridLoss_CandleConfirm > 0)
             {
                DrawTableRow(row, "GL CandleConfirm", IntegerToString(GridLoss_CandleConfirm) + " candle(s)", clrCyan, COLOR_SECTION_HEDGE); row++;
+             }
+
+             // v6.82: Grid Profit Candle Confirmation display
+             if(GridProfit_CandleConfirm > 0)
+             {
+                DrawTableRow(row, "GP CandleConfirm", IntegerToString(GridProfit_CandleConfirm) + " candle(s)", clrCyan, COLOR_SECTION_HEDGE); row++;
              }
              
              // v6.41: Max Grid Average Trailing Stop display
@@ -5468,6 +5481,12 @@ void CheckGridProfitTF(int tfIdx, ENUM_POSITION_TYPE side, int currentGridCount)
    {
       datetime barTime = iTime(_Symbol, g_tfStates[tfIdx].tf, 0);
       if(barTime == g_tfStates[tfIdx].lastGridProfitCandle) return;
+   }
+
+   //--- v6.82: Candle Confirmation check (mirror of GL CandleConfirm)
+   if(GridProfit_CandleConfirm > 0)
+   {
+      if(!HasCandleConfirmation(side, g_tfStates[tfIdx].tf, GridProfit_CandleConfirm)) return;
    }
 
    double lastPrice = 0;
@@ -8897,9 +8916,7 @@ int FindOldestActiveHedgeSet()
       }
    }
    return oldest;
-}
-
-
+   }
 //| Get lot cap for new orders when hedge set has bound orders          |
 //| Returns -1 if no hedge set exists for this side (no cap)           |
 //| Returns allowedLots = hedgeLots - remainingBoundLots               |

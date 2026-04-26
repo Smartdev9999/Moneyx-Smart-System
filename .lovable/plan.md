@@ -1,11 +1,11 @@
-# Golden2 EA v2.7.8 — Force-Close Opp Unhedged on Hedge Lock (DONE)
+# Gold Miner EA v6.82 — Grid Profit Candle Confirmation (DONE)
 
-ไฟล์: `public/docs/mql5/Golden2_EA.mq5`
+ไฟล์: `public/docs/mql5/Gold_Miner_EA.mq5`
 
-เมื่อกรุ๊ปถูก hedge-lock ฝั่งใดฝั่งหนึ่ง → ระบบปิด main ฝั่งตรงข้ามที่ไม่ถูกคุมโดย hedge ทันที (ไม่สนกำไร/ขาดทุน) เพื่อให้ hedge สะอาด และ G ใหม่เปิดต่อได้
+มิเรอร์ logic จาก v6.40 (GL CandleConfirm) มาฝั่ง Grid Profit สมมาตร
 
-- Inputs: `InpHedge_ForceCloseOppUnhedged` (ON), `InpHedge_ForceCloseDelaySec` (3s)
-- ฟังก์ชันใหม่: `ForceCloseUnhedgedOppositeSide(g)` + `ForceCloseSideMain(g, side)`
-- Hook: ใน `TryAdvanceToNextGroup()` หลัง `DeleteLeftoverInitialPendingsAfterHedge`
-- Dashboard: แถว "Force-Close Opp"
-- Version: v2.7.8 (header, #property, L_TITLE, OnInit log)
+- Input ใหม่: `GridProfit_CandleConfirm` (default 0)
+- เช็คใน `CheckGridProfit` + `CheckGridProfitTF` (MTF)
+- Dashboard: แถว "GP CandleConfirm"
+- Reuse `HasCandleConfirmation()` เดิม
+- Version bump: v6.81 → v6.82 (header, #property, OnInit log, Deinit log, Dashboard headerVersion)
