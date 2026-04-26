@@ -5013,6 +5013,21 @@ void ResetTrailingStateTF(int tfIdx)
    g_tfStates[tfIdx].beDone_Sell = false;
 }
 
+// v6.84: Per-side reset (MTF) so closing one side doesn't wipe other side's trailing state
+void ResetTrailingStateTFBuy(int tfIdx)
+{
+   g_tfStates[tfIdx].trailSL_Buy      = 0;
+   g_tfStates[tfIdx].trailActive_Buy  = false;
+   g_tfStates[tfIdx].beDone_Buy       = false;
+}
+
+void ResetTrailingStateTFSell(int tfIdx)
+{
+   g_tfStates[tfIdx].trailSL_Sell     = 0;
+   g_tfStates[tfIdx].trailActive_Sell = false;
+   g_tfStates[tfIdx].beDone_Sell      = false;
+}
+
 //+------------------------------------------------------------------+
 //| Recover TF initial prices from existing positions                  |
 //+------------------------------------------------------------------+
