@@ -2482,26 +2482,40 @@ void SyncBrokerTPSL()
 
        if(posType == POSITION_TYPE_BUY && avgBuy > 0)
        {
-          if(NormalizeDouble(curTP, digits) != tpBuy || NormalizeDouble(curSL, digits) != slBuy)
+          // v6.85: Respect Average Trailing Stop SL — do NOT overwrite trailing/breakeven SL with 0
+          double effectiveSlBuy = slBuy;
+          if(EnableTrailingStop && g_trailingActive_Buy && g_trailingSL_Buy > 0)
+             effectiveSlBuy = g_trailingSL_Buy;
+          else if(slBuy == 0 && curSL > 0)
+             effectiveSlBuy = curSL; // preserve existing broker SL (e.g. breakeven)
+
+          if(NormalizeDouble(curTP, digits) != tpBuy || NormalizeDouble(curSL, digits) != NormalizeDouble(effectiveSlBuy, digits))
           {
-             if(trade.PositionModify(ticket, slBuy, tpBuy))
-                Print("v6.48 BrokerTP: SET BUY #", ticket, " TP=", tpBuy, " SL=", slBuy);
+             if(trade.PositionModify(ticket, effectiveSlBuy, tpBuy))
+                Print("v6.85 BrokerTP: SET BUY #", ticket, " TP=", tpBuy, " SL=", effectiveSlBuy);
              else
              {
-                Print("v6.48 BrokerTP: Modify BUY #", ticket, " failed: ", GetLastError());
+                Print("v6.85 BrokerTP: Modify BUY #", ticket, " failed: ", GetLastError());
                 buyModifyOK = false;
              }
           }
        }
        else if(posType == POSITION_TYPE_SELL && avgSell > 0)
        {
-          if(NormalizeDouble(curTP, digits) != tpSell || NormalizeDouble(curSL, digits) != slSell)
+          // v6.85: Respect Average Trailing Stop SL — do NOT overwrite trailing/breakeven SL with 0
+          double effectiveSlSell = slSell;
+          if(EnableTrailingStop && g_trailingActive_Sell && g_trailingSL_Sell > 0)
+             effectiveSlSell = g_trailingSL_Sell;
+          else if(slSell == 0 && curSL > 0)
+             effectiveSlSell = curSL; // preserve existing broker SL
+
+          if(NormalizeDouble(curTP, digits) != tpSell || NormalizeDouble(curSL, digits) != NormalizeDouble(effectiveSlSell, digits))
           {
-             if(trade.PositionModify(ticket, slSell, tpSell))
-                Print("v6.48 BrokerTP: SET SELL #", ticket, " TP=", tpSell, " SL=", slSell);
+             if(trade.PositionModify(ticket, effectiveSlSell, tpSell))
+                Print("v6.85 BrokerTP: SET SELL #", ticket, " TP=", tpSell, " SL=", effectiveSlSell);
              else
              {
-                Print("v6.48 BrokerTP: Modify SELL #", ticket, " failed: ", GetLastError());
+                Print("v6.85 BrokerTP: Modify SELL #", ticket, " failed: ", GetLastError());
                 sellModifyOK = false;
              }
           }
