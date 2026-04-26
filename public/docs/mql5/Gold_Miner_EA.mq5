@@ -4657,6 +4657,12 @@ void DisplayDashboard()
             {
                DrawTableRow(row, "GL CandleConfirm", IntegerToString(GridLoss_CandleConfirm) + " candle(s)", clrCyan, COLOR_SECTION_HEDGE); row++;
              }
+
+             // v6.82: Grid Profit Candle Confirmation display
+             if(GridProfit_CandleConfirm > 0)
+             {
+                DrawTableRow(row, "GP CandleConfirm", IntegerToString(GridProfit_CandleConfirm) + " candle(s)", clrCyan, COLOR_SECTION_HEDGE); row++;
+             }
              
              // v6.41: Max Grid Average Trailing Stop display
              if(MaxGrid_TrailEnable)
