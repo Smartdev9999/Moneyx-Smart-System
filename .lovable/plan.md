@@ -1,17 +1,16 @@
-# Gold Miner EA v6.84 — Per-Side Trailing Reset Fix (DONE)
+# Gold Miner EA v6.85 — Avg Trailing as Broker SL (DONE)
 
 ไฟล์: `public/docs/mql5/Gold_Miner_EA.mq5`
 
 ## บั๊ก
-- `ResetTrailingState()` ล้างทั้ง Buy + Sell พร้อมกัน → ฝั่งที่เหลือถูกรีเซ็ตเมื่ออีกฝั่ง trail-out
-- `return;` หลัง BUY hit ทำให้ SELL section ไม่ถูกประมวลผลใน tick เดียวกัน
-- บั๊กเดียวกันใน MTF (`ResetTrailingStateTF` + `ManageTrailingStop_TF`)
+ภาพแสดง S/L = 0.00 ทุก ticket → `SyncBrokerTPSL()` เขียนทับ broker SL ที่ `ApplyTrailingSL()` เพิ่ง push ด้วย 0 ทุก ~2s
 
 ## แก้
-- เพิ่ม `ResetTrailingStateBuy/Sell()` + `ResetTrailingStateTFBuy/Sell(idx)` (per-side)
-- `ManageTrailingStop()` BUY hit: ใช้ Buy reset และลบ `return;` / SELL hit: ใช้ Sell reset
-- `ManageTrailingStop_TF()`: เช่นเดียวกัน
-- ตัวเก่า (`ResetTrailingState`/`ResetTrailingStateTF`) ยังอยู่ครบสำหรับ cycle reset
+1. `SyncBrokerTPSL()` BUY/SELL — ใช้ `g_trailingSL_Buy/Sell` แทน slBuy/Sell เมื่อ trailing active; preserve `curSL` เมื่อ slBuy/Sell=0 และ ticket มี SL อยู่
+2. `ApplyTrailingSL()` — sync `g_lastBrokerSL_Buy/Sell` cache หลัง modify สำเร็จ
 
 ## Version
-v6.83 → v6.84 (header, #property version+description, OnInit/Deinit log, Dashboard headerVersion)
+v6.84 → v6.85 (header, #property version+description, OnInit/Deinit log, Dashboard headerVersion)
+
+## Memory
+`mem://trading/gold-miner-ea/avg-trailing-broker-sl-v6-85.md`

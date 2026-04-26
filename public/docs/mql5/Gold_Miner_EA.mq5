@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.84 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.85 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "6.84"
-#property description "Gold Miner EA v6.84 - Per-side trailing reset fix (Buy/Sell trailing now run independently when both sides are open)"
+#property version   "6.85"
+#property description "Gold Miner EA v6.85 - Average Trailing SL pushed as broker-side SL (SyncBrokerTPSL no longer overwrites trailing/breakeven SL)"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -1019,7 +1019,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-     Print("Gold Miner EA v6.84 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+     Print("Gold Miner EA v6.85 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min",
@@ -1081,7 +1081,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.84 deinitialized");
+   Print("Gold Miner EA v6.85 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -2482,26 +2482,40 @@ void SyncBrokerTPSL()
 
        if(posType == POSITION_TYPE_BUY && avgBuy > 0)
        {
-          if(NormalizeDouble(curTP, digits) != tpBuy || NormalizeDouble(curSL, digits) != slBuy)
+          // v6.85: Respect Average Trailing Stop SL — do NOT overwrite trailing/breakeven SL with 0
+          double effectiveSlBuy = slBuy;
+          if(EnableTrailingStop && g_trailingActive_Buy && g_trailingSL_Buy > 0)
+             effectiveSlBuy = g_trailingSL_Buy;
+          else if(slBuy == 0 && curSL > 0)
+             effectiveSlBuy = curSL; // preserve existing broker SL (e.g. breakeven)
+
+          if(NormalizeDouble(curTP, digits) != tpBuy || NormalizeDouble(curSL, digits) != NormalizeDouble(effectiveSlBuy, digits))
           {
-             if(trade.PositionModify(ticket, slBuy, tpBuy))
-                Print("v6.48 BrokerTP: SET BUY #", ticket, " TP=", tpBuy, " SL=", slBuy);
+             if(trade.PositionModify(ticket, effectiveSlBuy, tpBuy))
+                Print("v6.85 BrokerTP: SET BUY #", ticket, " TP=", tpBuy, " SL=", effectiveSlBuy);
              else
              {
-                Print("v6.48 BrokerTP: Modify BUY #", ticket, " failed: ", GetLastError());
+                Print("v6.85 BrokerTP: Modify BUY #", ticket, " failed: ", GetLastError());
                 buyModifyOK = false;
              }
           }
        }
        else if(posType == POSITION_TYPE_SELL && avgSell > 0)
        {
-          if(NormalizeDouble(curTP, digits) != tpSell || NormalizeDouble(curSL, digits) != slSell)
+          // v6.85: Respect Average Trailing Stop SL — do NOT overwrite trailing/breakeven SL with 0
+          double effectiveSlSell = slSell;
+          if(EnableTrailingStop && g_trailingActive_Sell && g_trailingSL_Sell > 0)
+             effectiveSlSell = g_trailingSL_Sell;
+          else if(slSell == 0 && curSL > 0)
+             effectiveSlSell = curSL; // preserve existing broker SL
+
+          if(NormalizeDouble(curTP, digits) != tpSell || NormalizeDouble(curSL, digits) != NormalizeDouble(effectiveSlSell, digits))
           {
-             if(trade.PositionModify(ticket, slSell, tpSell))
-                Print("v6.48 BrokerTP: SET SELL #", ticket, " TP=", tpSell, " SL=", slSell);
+             if(trade.PositionModify(ticket, effectiveSlSell, tpSell))
+                Print("v6.85 BrokerTP: SET SELL #", ticket, " TP=", tpSell, " SL=", effectiveSlSell);
              else
              {
-                Print("v6.48 BrokerTP: Modify SELL #", ticket, " failed: ", GetLastError());
+                Print("v6.85 BrokerTP: Modify SELL #", ticket, " failed: ", GetLastError());
                 sellModifyOK = false;
              }
           }
@@ -3111,6 +3125,7 @@ void ApplyTrailingSL(ENUM_POSITION_TYPE side, double slPrice)
    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
    slPrice = NormalizeDouble(slPrice, digits);
 
+   bool anyModified = false;
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       ulong ticket = PositionGetTicket(i);
@@ -3129,16 +3144,23 @@ void ApplyTrailingSL(ENUM_POSITION_TYPE side, double slPrice)
       {
          if(currentSL == 0 || slPrice > currentSL)
          {
-            trade.PositionModify(ticket, slPrice, tp);
+            if(trade.PositionModify(ticket, slPrice, tp)) anyModified = true;
          }
       }
       else
       {
          if(currentSL == 0 || slPrice < currentSL)
          {
-            trade.PositionModify(ticket, slPrice, tp);
+            if(trade.PositionModify(ticket, slPrice, tp)) anyModified = true;
          }
       }
+   }
+
+   // v6.85: Sync SyncBrokerTPSL cache so next sync sees this SL as "current" and won't trigger another modify
+   if(anyModified)
+   {
+      if(side == POSITION_TYPE_BUY)  g_lastBrokerSL_Buy  = slPrice;
+      else                            g_lastBrokerSL_Sell = slPrice;
    }
 }
 
@@ -4154,7 +4176,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.84 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.84 [ZZ]" : "Gold Miner EA v6.84 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.85 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.85 [ZZ]" : "Gold Miner EA v6.85 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
