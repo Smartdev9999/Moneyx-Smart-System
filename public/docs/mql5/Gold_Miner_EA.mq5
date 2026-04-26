@@ -5477,6 +5477,12 @@ void CheckGridProfitTF(int tfIdx, ENUM_POSITION_TYPE side, int currentGridCount)
       if(barTime == g_tfStates[tfIdx].lastGridProfitCandle) return;
    }
 
+   //--- v6.82: Candle Confirmation check (mirror of GL CandleConfirm)
+   if(GridProfit_CandleConfirm > 0)
+   {
+      if(!HasCandleConfirmation(side, g_tfStates[tfIdx].tf, GridProfit_CandleConfirm)) return;
+   }
+
    double lastPrice = 0;
    datetime lastTime = 0;
    FindLastOrderTF(tfIdx, side, "INIT", "GP", lastPrice, lastTime);
