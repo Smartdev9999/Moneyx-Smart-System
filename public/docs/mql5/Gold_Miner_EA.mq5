@@ -2925,7 +2925,8 @@ void ManagePerOrderTrailing()
                // Broker stop level check
                double maxSL = NormalizeDouble(ask + stopLevel * point, digits);
                double finalBE = MathMax(beLevel, maxSL);
-               if(currentSL == 0 || finalBE < currentSL)
+               if((currentSL == 0 || finalBE < currentSL) &&
+                  (currentSL == 0 || MathAbs(currentSL - finalBE) >= point)) // v6.83: skip identical SL
                {
                   if(trade.PositionModify(ticket, finalBE, tp))
                   {
