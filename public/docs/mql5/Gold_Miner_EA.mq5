@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.82 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.83 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "6.82"
-#property description "Gold Miner EA v6.82 - Grid Profit Candle Confirmation (mirror of v6.40 GL CandleConfirm)"
+#property version   "6.83"
+#property description "Gold Miner EA v6.83 - Trailing Stop Throttle (skip redundant PositionModify, push SL only when step reached)"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -1019,7 +1019,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-     Print("Gold Miner EA v6.82 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+     Print("Gold Miner EA v6.83 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min",
@@ -1081,7 +1081,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.82 deinitialized");
+   Print("Gold Miner EA v6.83 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -2871,7 +2871,8 @@ void ManagePerOrderTrailing()
                // Broker stop level check
                double minSL = NormalizeDouble(bid - stopLevel * point, digits);
                double finalBE = MathMin(beLevel, minSL);
-               if(finalBE > currentSL || currentSL == 0)
+               if((finalBE > currentSL || currentSL == 0) &&
+                  (currentSL == 0 || MathAbs(currentSL - finalBE) >= point)) // v6.83: skip identical SL
                {
                   if(trade.PositionModify(ticket, finalBE, tp))
                   {
@@ -2924,7 +2925,8 @@ void ManagePerOrderTrailing()
                // Broker stop level check
                double maxSL = NormalizeDouble(ask + stopLevel * point, digits);
                double finalBE = MathMax(beLevel, maxSL);
-               if(currentSL == 0 || finalBE < currentSL)
+               if((currentSL == 0 || finalBE < currentSL) &&
+                  (currentSL == 0 || MathAbs(currentSL - finalBE) >= point)) // v6.83: skip identical SL
                {
                   if(trade.PositionModify(ticket, finalBE, tp))
                   {
@@ -2994,7 +2996,10 @@ void ManageTrailingStop()
             double newSL = bid - TrailingStep * point;
             newSL = MathMax(newSL, beLevel); // never below breakeven
 
-            if(newSL > g_trailingSL_Buy)
+            // v6.83: Only push to broker when SL moves at least TrailingStep points (or first activation)
+            bool firstApply = (g_trailingSL_Buy == 0);
+            bool stepReached = (newSL >= g_trailingSL_Buy + TrailingStep * point);
+            if(firstApply || stepReached)
             {
                g_trailingSL_Buy = newSL;
                ApplyTrailingSL(POSITION_TYPE_BUY, g_trailingSL_Buy);
@@ -3052,7 +3057,10 @@ void ManageTrailingStop()
             double newSL = ask + TrailingStep * point;
             newSL = MathMin(newSL, beLevelSell); // never above breakeven
 
-            if(g_trailingSL_Sell == 0 || newSL < g_trailingSL_Sell)
+            // v6.83: Only push to broker when SL moves at least TrailingStep points (or first activation)
+            bool firstApplyS = (g_trailingSL_Sell == 0);
+            bool stepReachedS = (newSL <= g_trailingSL_Sell - TrailingStep * point);
+            if(firstApplyS || stepReachedS)
             {
                g_trailingSL_Sell = newSL;
                ApplyTrailingSL(POSITION_TYPE_SELL, g_trailingSL_Sell);
@@ -3101,6 +3109,7 @@ void ManageTrailingStop()
 void ApplyTrailingSL(ENUM_POSITION_TYPE side, double slPrice)
 {
    int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
    slPrice = NormalizeDouble(slPrice, digits);
 
    for(int i = PositionsTotal() - 1; i >= 0; i--)
@@ -3113,6 +3122,9 @@ void ApplyTrailingSL(ENUM_POSITION_TYPE side, double slPrice)
 
       double currentSL = PositionGetDouble(POSITION_SL);
       double tp = PositionGetDouble(POSITION_TP);
+
+      // v6.83: Skip if broker SL already matches target (avoid redundant PositionModify spam)
+      if(currentSL > 0 && MathAbs(currentSL - slPrice) < point) continue;
 
       if(side == POSITION_TYPE_BUY)
       {
@@ -4128,7 +4140,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.82 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.82 [ZZ]" : "Gold Miner EA v6.82 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.83 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.83 [ZZ]" : "Gold Miner EA v6.83 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
