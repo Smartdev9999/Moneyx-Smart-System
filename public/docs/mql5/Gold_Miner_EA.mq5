@@ -184,6 +184,7 @@ input double         GridProfit_ATR_Multiplier= 1.0;       // ATR Multiplier
 input ENUM_ATR_REF   GridProfit_ATR_Reference = ATR_REF_DYNAMIC; // ATR Reference Point
 input int            GridProfit_MinGapPoints  = 100;             // Minimum Grid Gap (points)
 input bool           GridProfit_OnlyNewCandle= true;       // Grid Only on New Candle
+input int            GridProfit_CandleConfirm= 0;          // v6.82: Require N confirming candles before GP (0=Off)
 
 //--- Take Profit
 input group "=== Take Profit ==="
