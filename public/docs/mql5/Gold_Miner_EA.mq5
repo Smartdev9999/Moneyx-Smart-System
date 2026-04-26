@@ -3652,6 +3652,12 @@ void CheckGridProfit(ENUM_POSITION_TYPE side, int currentGridCount)
       if(barTime == lastGridProfitCandleTime) return;
    }
 
+   //--- v6.82: Candle Confirmation check (mirror of GL CandleConfirm)
+   if(GridProfit_CandleConfirm > 0)
+   {
+      if(!HasCandleConfirmation(side, PERIOD_CURRENT, GridProfit_CandleConfirm)) return;
+   }
+
    //--- Find the last order of this side (initial or grid profit)
    double lastPrice = 0;
    datetime lastTime = 0;
