@@ -1,17 +1,17 @@
-# Gold Miner EA v6.83 — Trailing Stop Throttle (DONE)
+# Gold Miner EA v6.84 — Per-Side Trailing Reset Fix (DONE)
 
 ไฟล์: `public/docs/mql5/Gold_Miner_EA.mq5`
 
-## ปัญหา
-ทุก tick ระบบยิง PositionModify ทุก ticket (24 ticket × หลาย tick/วินาที) — โหลด server หนัก
+## บั๊ก
+- `ResetTrailingState()` ล้างทั้ง Buy + Sell พร้อมกัน → ฝั่งที่เหลือถูกรีเซ็ตเมื่ออีกฝั่ง trail-out
+- `return;` หลัง BUY hit ทำให้ SELL section ไม่ถูกประมวลผลใน tick เดียวกัน
+- บั๊กเดียวกันใน MTF (`ResetTrailingStateTF` + `ManageTrailingStop_TF`)
 
-## แก้ไข
-1. `ManageTrailingStop` (Average-Based) BUY/SELL: push SL เฉพาะเมื่อขยับครบ `TrailingStep` points
-2. `ApplyTrailingSL`: skip ticket ที่ broker SL ตรงกับ target อยู่แล้ว (`MathAbs(currentSL-slPrice) < point`)
-3. `ManagePerOrderTrailing` Breakeven BUY/SELL: เสริม epsilon guard กัน round-trip ที่เท่ากัน
+## แก้
+- เพิ่ม `ResetTrailingStateBuy/Sell()` + `ResetTrailingStateTFBuy/Sell(idx)` (per-side)
+- `ManageTrailingStop()` BUY hit: ใช้ Buy reset และลบ `return;` / SELL hit: ใช้ Sell reset
+- `ManageTrailingStop_TF()`: เช่นเดียวกัน
+- ตัวเก่า (`ResetTrailingState`/`ResetTrailingStateTF`) ยังอยู่ครบสำหรับ cycle reset
 
 ## Version
-v6.82 → v6.83 (header, #property version+description, OnInit log, Deinit log, Dashboard headerVersion)
-
-## Memory
-`mem://trading/gold-miner-ea/trailing-modify-throttle-v6-83.md`
+v6.83 → v6.84 (header, #property version+description, OnInit/Deinit log, Dashboard headerVersion)

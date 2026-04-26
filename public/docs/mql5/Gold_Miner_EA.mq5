@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.83 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.84 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "6.83"
-#property description "Gold Miner EA v6.83 - Trailing Stop Throttle (skip redundant PositionModify, push SL only when step reached)"
+#property version   "6.84"
+#property description "Gold Miner EA v6.84 - Per-side trailing reset fix (Buy/Sell trailing now run independently when both sides are open)"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -1019,7 +1019,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-     Print("Gold Miner EA v6.83 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+     Print("Gold Miner EA v6.84 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min",
@@ -1081,7 +1081,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.83 deinitialized");
+   Print("Gold Miner EA v6.84 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -3029,9 +3029,9 @@ void ManageTrailingStop()
          CloseAllSide(POSITION_TYPE_BUY);
          justClosedBuy = true;
          g_initialBuyPrice = 0;
-         // No manual accumulate increment - baseline handles it
-         ResetTrailingState();
-         return;
+         // v6.84: per-side reset so SELL trailing state is preserved
+         ResetTrailingStateBuy();
+         // v6.84: NO return — let SELL section continue processing this tick
       }
    }
    else
@@ -3090,9 +3090,8 @@ void ManageTrailingStop()
          CloseAllSide(POSITION_TYPE_SELL);
          justClosedSell = true;
          g_initialSellPrice = 0;
-         // No manual accumulate increment - baseline handles it
-         ResetTrailingState();
-         return;
+         // v6.84: per-side reset so BUY trailing state is preserved
+         ResetTrailingStateSell();
       }
    }
    else
@@ -3154,6 +3153,21 @@ void ResetTrailingState()
    g_trailingActive_Sell = false;
    g_breakevenDone_Buy = false;
    g_breakevenDone_Sell = false;
+}
+
+// v6.84: Per-side reset so closing one side doesn't wipe the other side's trailing state
+void ResetTrailingStateBuy()
+{
+   g_trailingSL_Buy      = 0;
+   g_trailingActive_Buy  = false;
+   g_breakevenDone_Buy   = false;
+}
+
+void ResetTrailingStateSell()
+{
+   g_trailingSL_Sell     = 0;
+   g_trailingActive_Sell = false;
+   g_breakevenDone_Sell  = false;
 }
 
 //+------------------------------------------------------------------+
@@ -4140,7 +4154,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.83 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.83 [ZZ]" : "Gold Miner EA v6.83 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.84 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.84 [ZZ]" : "Gold Miner EA v6.84 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -4999,6 +5013,21 @@ void ResetTrailingStateTF(int tfIdx)
    g_tfStates[tfIdx].beDone_Sell = false;
 }
 
+// v6.84: Per-side reset (MTF) so closing one side doesn't wipe other side's trailing state
+void ResetTrailingStateTFBuy(int tfIdx)
+{
+   g_tfStates[tfIdx].trailSL_Buy      = 0;
+   g_tfStates[tfIdx].trailActive_Buy  = false;
+   g_tfStates[tfIdx].beDone_Buy       = false;
+}
+
+void ResetTrailingStateTFSell(int tfIdx)
+{
+   g_tfStates[tfIdx].trailSL_Sell     = 0;
+   g_tfStates[tfIdx].trailActive_Sell = false;
+   g_tfStates[tfIdx].beDone_Sell      = false;
+}
+
 //+------------------------------------------------------------------+
 //| Recover TF initial prices from existing positions                  |
 //+------------------------------------------------------------------+
@@ -5745,8 +5774,8 @@ void ManageTrailingStop_TF(int tfIdx)
          Print("TRAILING SL HIT (", g_tfStates[tfIdx].tfLabel, " BUY): SL=", g_tfStates[tfIdx].trailSL_Buy);
          CloseAllSideTF(tfIdx, POSITION_TYPE_BUY);
          g_tfStates[tfIdx].initialBuyPrice = 0;
-         ResetTrailingStateTF(tfIdx);
-         return;
+         // v6.84: per-side reset + NO return so SELL continues processing this tick
+         ResetTrailingStateTFBuy(tfIdx);
       }
    }
    else
@@ -5797,8 +5826,8 @@ void ManageTrailingStop_TF(int tfIdx)
          Print("TRAILING SL HIT (", g_tfStates[tfIdx].tfLabel, " SELL): SL=", g_tfStates[tfIdx].trailSL_Sell);
          CloseAllSideTF(tfIdx, POSITION_TYPE_SELL);
          g_tfStates[tfIdx].initialSellPrice = 0;
-         ResetTrailingStateTF(tfIdx);
-         return;
+         // v6.84: per-side reset (preserve BUY state)
+         ResetTrailingStateTFSell(tfIdx);
       }
    }
    else
