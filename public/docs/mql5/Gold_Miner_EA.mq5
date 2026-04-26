@@ -3055,7 +3055,10 @@ void ManageTrailingStop()
             double newSL = ask + TrailingStep * point;
             newSL = MathMin(newSL, beLevelSell); // never above breakeven
 
-            if(g_trailingSL_Sell == 0 || newSL < g_trailingSL_Sell)
+            // v6.83: Only push to broker when SL moves at least TrailingStep points (or first activation)
+            bool firstApplyS = (g_trailingSL_Sell == 0);
+            bool stepReachedS = (newSL <= g_trailingSL_Sell - TrailingStep * point);
+            if(firstApplyS || stepReachedS)
             {
                g_trailingSL_Sell = newSL;
                ApplyTrailingSL(POSITION_TYPE_SELL, g_trailingSL_Sell);
