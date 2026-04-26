@@ -6,7 +6,7 @@
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
 #property version   "6.83"
-#property description "Gold Miner EA v6.83 - Grid Profit Candle Confirmation (mirror of v6.40 GL CandleConfirm)"
+#property description "Gold Miner EA v6.83 - Trailing Stop Throttle (skip redundant PositionModify, push SL only when step reached)"
 #property strict
 
 #include <Trade/Trade.mqh>
