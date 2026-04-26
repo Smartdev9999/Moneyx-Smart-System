@@ -3156,6 +3156,21 @@ void ResetTrailingState()
    g_breakevenDone_Sell = false;
 }
 
+// v6.84: Per-side reset so closing one side doesn't wipe the other side's trailing state
+void ResetTrailingStateBuy()
+{
+   g_trailingSL_Buy      = 0;
+   g_trailingActive_Buy  = false;
+   g_breakevenDone_Buy   = false;
+}
+
+void ResetTrailingStateSell()
+{
+   g_trailingSL_Sell     = 0;
+   g_trailingActive_Sell = false;
+   g_breakevenDone_Sell  = false;
+}
+
 //+------------------------------------------------------------------+
 //| Check Drawdown Exit                                                |
 //+------------------------------------------------------------------+
