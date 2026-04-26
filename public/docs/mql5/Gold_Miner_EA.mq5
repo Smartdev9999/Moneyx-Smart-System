@@ -8898,8 +8898,13 @@ int FindOldestActiveHedgeSet()
       }
    }
    return oldest;
-}
+   }
 
+   //--- v6.82: Candle Confirmation check (mirror of GL CandleConfirm)
+   if(GridProfit_CandleConfirm > 0)
+   {
+      if(!HasCandleConfirmation(side, PERIOD_CURRENT, GridProfit_CandleConfirm)) return;
+   }
 
 //| Get lot cap for new orders when hedge set has bound orders          |
 //| Returns -1 if no hedge set exists for this side (no cap)           |
