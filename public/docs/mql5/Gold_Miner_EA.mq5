@@ -3125,6 +3125,7 @@ void ApplyTrailingSL(ENUM_POSITION_TYPE side, double slPrice)
    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
    slPrice = NormalizeDouble(slPrice, digits);
 
+   bool anyModified = false;
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       ulong ticket = PositionGetTicket(i);
@@ -3143,16 +3144,23 @@ void ApplyTrailingSL(ENUM_POSITION_TYPE side, double slPrice)
       {
          if(currentSL == 0 || slPrice > currentSL)
          {
-            trade.PositionModify(ticket, slPrice, tp);
+            if(trade.PositionModify(ticket, slPrice, tp)) anyModified = true;
          }
       }
       else
       {
          if(currentSL == 0 || slPrice < currentSL)
          {
-            trade.PositionModify(ticket, slPrice, tp);
+            if(trade.PositionModify(ticket, slPrice, tp)) anyModified = true;
          }
       }
+   }
+
+   // v6.85: Sync SyncBrokerTPSL cache so next sync sees this SL as "current" and won't trigger another modify
+   if(anyModified)
+   {
+      if(side == POSITION_TYPE_BUY)  g_lastBrokerSL_Buy  = slPrice;
+      else                            g_lastBrokerSL_Sell = slPrice;
    }
 }
 
