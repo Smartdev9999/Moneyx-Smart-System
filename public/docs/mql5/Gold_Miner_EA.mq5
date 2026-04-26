@@ -3029,9 +3029,9 @@ void ManageTrailingStop()
          CloseAllSide(POSITION_TYPE_BUY);
          justClosedBuy = true;
          g_initialBuyPrice = 0;
-         // No manual accumulate increment - baseline handles it
-         ResetTrailingState();
-         return;
+         // v6.84: per-side reset so SELL trailing state is preserved
+         ResetTrailingStateBuy();
+         // v6.84: NO return — let SELL section continue processing this tick
       }
    }
    else
