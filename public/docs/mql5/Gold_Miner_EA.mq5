@@ -3107,6 +3107,7 @@ void ManageTrailingStop()
 void ApplyTrailingSL(ENUM_POSITION_TYPE side, double slPrice)
 {
    int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
    slPrice = NormalizeDouble(slPrice, digits);
 
    for(int i = PositionsTotal() - 1; i >= 0; i--)
@@ -3119,6 +3120,9 @@ void ApplyTrailingSL(ENUM_POSITION_TYPE side, double slPrice)
 
       double currentSL = PositionGetDouble(POSITION_SL);
       double tp = PositionGetDouble(POSITION_TP);
+
+      // v6.83: Skip if broker SL already matches target (avoid redundant PositionModify spam)
+      if(currentSL > 0 && MathAbs(currentSL - slPrice) < point) continue;
 
       if(side == POSITION_TYPE_BUY)
       {
