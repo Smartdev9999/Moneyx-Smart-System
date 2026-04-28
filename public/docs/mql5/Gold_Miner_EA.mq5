@@ -3138,6 +3138,8 @@ bool IsSqueezePausingTrailing()
 
 void ApplyTrailingSL(ENUM_POSITION_TYPE side, double slPrice)
 {
+   // v6.87: Squeeze Pause guard (defense-in-depth — callers already gated)
+   if(IsSqueezePausingTrailing()) return;
    int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
    slPrice = NormalizeDouble(slPrice, digits);
@@ -5900,6 +5902,8 @@ void ManageTrailingStop_TF(int tfIdx)
 //+------------------------------------------------------------------+
 void ApplyTrailingSL_TF(int tfIdx, ENUM_POSITION_TYPE side, double slPrice)
 {
+   // v6.87: Squeeze Pause guard (defense-in-depth)
+   if(IsSqueezePausingTrailing()) return;
    string tfLabel = g_tfStates[tfIdx].tfLabel;
    int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
    slPrice = NormalizeDouble(slPrice, digits);
