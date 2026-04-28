@@ -5097,6 +5097,22 @@ void DisplayDashboard()
        }
     }
 
+   //--- v6.86: Refill Slots row (only when feature enabled)
+   if(EnableGridRefill)
+   {
+      int rfBuy = 0, rfSell = 0;
+      int rfN = ArraySize(g_refillSlots);
+      for(int rf = 0; rf < rfN; rf++)
+      {
+         if(!g_refillSlots[rf].active) continue;
+         if(g_refillSlots[rf].side == POSITION_TYPE_BUY) rfBuy++;
+         else rfSell++;
+      }
+      string rfInfo = "B:" + IntegerToString(rfBuy) + "  S:" + IntegerToString(rfSell);
+      color rfColor = (rfBuy + rfSell > 0) ? clrYellow : clrLime;
+      DrawTableRow(row, "Refill Slots", rfInfo, rfColor, COLOR_SECTION_GRID); row++;
+   }
+
    //--- Cleanup stale rows from previous tick (prevents flicker)
    for(int r = row; r < g_lastDashboardRowCount; r++)
    {
