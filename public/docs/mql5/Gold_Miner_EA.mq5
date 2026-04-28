@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.85 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.86 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "6.85"
-#property description "Gold Miner EA v6.85 - Average Trailing SL pushed as broker-side SL (SyncBrokerTPSL no longer overwrites trailing/breakeven SL)"
+#property version   "6.86"
+#property description "Gold Miner EA v6.86 - Max Grid Avg Trailing now includes Grid Profit orders in the same generation (avg price + close set)"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -1019,7 +1019,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-     Print("Gold Miner EA v6.85 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+     Print("Gold Miner EA v6.86 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min",
@@ -1081,7 +1081,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.85 deinitialized");
+   Print("Gold Miner EA v6.86 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -3327,7 +3327,9 @@ int CountGenGridLoss(int gen, ENUM_POSITION_TYPE side)
 }
 
 //+------------------------------------------------------------------+
-//| v6.41: Calc average price for gen + side (INIT + GL only)          |
+//| v6.86: Calc average price for gen + side (INIT + GL + GP)          |
+//| v6.41 originally counted INIT+GL only; v6.86 includes GP so the    |
+//| trailing avg reflects the full basket of the same generation.      |
 //+------------------------------------------------------------------+
 double CalcGenAveragePrice(int gen, ENUM_POSITION_TYPE side)
 {
@@ -3346,8 +3348,10 @@ double CalcGenAveragePrice(int gen, ENUM_POSITION_TYPE side)
       if(IsTicketBound(ticket)) continue;
       int orderGen = ExtractGeneration(comment);
       if(orderGen != gen) continue;
-      // Include INIT and GL only
-      if(StringFind(comment, "_INIT") < 0 && StringFind(comment, "_GL") < 0) continue;
+      // v6.86: Include INIT, GL and GP (same generation, same side)
+      if(StringFind(comment, "_INIT") < 0
+         && StringFind(comment, "_GL") < 0
+         && StringFind(comment, "_GP") < 0) continue;
       double lots = PositionGetDouble(POSITION_VOLUME);
       double price = PositionGetDouble(POSITION_PRICE_OPEN);
       totalPrice += price * lots;
@@ -3358,7 +3362,9 @@ double CalcGenAveragePrice(int gen, ENUM_POSITION_TYPE side)
 }
 
 //+------------------------------------------------------------------+
-//| v6.41: Count total INIT+GL orders for gen + side                   |
+//| v6.86: Count total INIT+GL+GP orders for gen + side                |
+//| Used by MaxGridTrailing auto-advance: if a gen still has GP only,  |
+//| we must keep monitoring it instead of skipping forward.            |
 //+------------------------------------------------------------------+
 int CountGenOrders(int gen, ENUM_POSITION_TYPE side)
 {
@@ -3375,13 +3381,18 @@ int CountGenOrders(int gen, ENUM_POSITION_TYPE side)
       if(IsTicketBound(ticket)) continue;
       int orderGen = ExtractGeneration(comment);
       if(orderGen != gen) continue;
-      if(StringFind(comment, "_INIT") >= 0 || StringFind(comment, "_GL") >= 0) count++;
+      // v6.86: count INIT, GL and GP
+      if(StringFind(comment, "_INIT") >= 0
+         || StringFind(comment, "_GL") >= 0
+         || StringFind(comment, "_GP") >= 0) count++;
    }
    return count;
 }
 
 //+------------------------------------------------------------------+
-//| v6.41: Close all orders of a specific generation + side            |
+//| v6.86: Close all orders of a specific generation + side            |
+//| Now closes INIT + GL + GP so trailing-SL hit flattens the entire   |
+//| same-generation basket on that side (was INIT+GL only in v6.41).   |
 //+------------------------------------------------------------------+
 void CloseGenSide(int gen, ENUM_POSITION_TYPE side)
 {
@@ -3397,10 +3408,13 @@ void CloseGenSide(int gen, ENUM_POSITION_TYPE side)
       if(IsTicketBound(ticket)) continue;
       int orderGen = ExtractGeneration(comment);
       if(orderGen != gen) continue;
-      if(StringFind(comment, "_INIT") >= 0 || StringFind(comment, "_GL") >= 0)
+      // v6.86: include _GP so the trailing close flattens the full basket
+      if(StringFind(comment, "_INIT") >= 0
+         || StringFind(comment, "_GL") >= 0
+         || StringFind(comment, "_GP") >= 0)
          trade.PositionClose(ticket);
    }
-   Print("v6.41 MaxGridTrail: Closed Gen", gen, " side=", (side == POSITION_TYPE_BUY ? "BUY" : "SELL"));
+   Print("v6.86 MaxGridTrail: Closed Gen", gen, " side=", (side == POSITION_TYPE_BUY ? "BUY" : "SELL"), " (INIT+GL+GP)");
 }
 
 //+------------------------------------------------------------------+
@@ -4176,7 +4190,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.85 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.85 [ZZ]" : "Gold Miner EA v6.85 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.86 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.86 [ZZ]" : "Gold Miner EA v6.86 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
