@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.86 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.87 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "6.86"
-#property description "Gold Miner EA v6.86 - Max Grid Avg Trailing now includes Grid Profit orders in the same generation (avg price + close set)"
+#property version   "6.87"
+#property description "Gold Miner EA v6.87 - Squeeze Pause Trailing: all trailing/breakeven SL updates pause during Volatility Expansion, resume when Normal"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -356,6 +356,7 @@ input bool             InpSqueeze_BlockOnExpansion = true;         // Block New 
 input int              InpSqueeze_MinTFExpansion = 1;              // Min TFs in Expansion to Block (1-3)
 input bool             InpSqueeze_DirectionalBlock = false;        // Directional Block (block counter-trend only)
 input bool             InpSqueeze_CloseOnExpansion = false;        // Close All Orders on Expansion
+input bool             InpSqueeze_PauseTrailing    = true;         // v6.87: Pause Trailing Stop on Expansion (resume when Normal)
 
 //--- Counter-Trend Hedging
 input group "=== Counter-Trend Hedging ==="
@@ -1019,7 +1020,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-     Print("Gold Miner EA v6.86 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+     Print("Gold Miner EA v6.87 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min",
@@ -1081,7 +1082,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.86 deinitialized");
+   Print("Gold Miner EA v6.87 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -2853,6 +2854,8 @@ void ManageTPSL()
 //+------------------------------------------------------------------+
 void ManagePerOrderTrailing()
 {
+   // v6.87: Squeeze Pause — skip all SL updates while in Expansion (TP/Grid/Hedge unaffected)
+   if(IsSqueezePausingTrailing()) return;
    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
@@ -3119,8 +3122,24 @@ void ManageTrailingStop()
 //+------------------------------------------------------------------+
 //| Apply trailing SL to all positions of a side (modify broker SL)    |
 //+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| v6.87: Squeeze Pause Trailing                                     |
+//| Returns true when Volatility Squeeze Filter is enabled, the pause |
+//| toggle is on, and the market is currently in Expansion (any side).|
+//| When true, ALL trailing/breakeven SL writers must skip updates    |
+//| (does NOT block new orders / grid / hedge / TP / accumulate).     |
+//+------------------------------------------------------------------+
+bool IsSqueezePausingTrailing()
+{
+   if(!InpUseSqueezeFilter) return false;
+   if(!InpSqueeze_PauseTrailing) return false;
+   return (g_squeezeBlocked || g_squeezeBuyBlocked || g_squeezeSellBlocked);
+}
+
 void ApplyTrailingSL(ENUM_POSITION_TYPE side, double slPrice)
 {
+   // v6.87: Squeeze Pause guard (defense-in-depth — callers already gated)
+   if(IsSqueezePausingTrailing()) return;
    int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
    slPrice = NormalizeDouble(slPrice, digits);
@@ -3422,6 +3441,8 @@ void CloseGenSide(int gen, ENUM_POSITION_TYPE side)
 //+------------------------------------------------------------------+
 void ManageMaxGridTrailing()
 {
+   // v6.87: Squeeze Pause — skip avg-trailing updates while in Expansion (state preserved)
+   if(IsSqueezePausingTrailing()) return;
    // Reset if no orders at all
    if(TotalOrderCount() == 0)
    {
@@ -4190,7 +4211,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.86 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.86 [ZZ]" : "Gold Miner EA v6.86 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.87 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.87 [ZZ]" : "Gold Miner EA v6.87 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -5765,6 +5786,8 @@ void ManageTPSL_TF(int tfIdx)
 //+------------------------------------------------------------------+
 void ManageTrailingStop_TF(int tfIdx)
 {
+   // v6.87: Squeeze Pause — skip MTF avg-trailing updates while in Expansion
+   if(IsSqueezePausingTrailing()) return;
    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
@@ -5879,6 +5902,8 @@ void ManageTrailingStop_TF(int tfIdx)
 //+------------------------------------------------------------------+
 void ApplyTrailingSL_TF(int tfIdx, ENUM_POSITION_TYPE side, double slPrice)
 {
+   // v6.87: Squeeze Pause guard (defense-in-depth)
+   if(IsSqueezePausingTrailing()) return;
    string tfLabel = g_tfStates[tfIdx].tfLabel;
    int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
    slPrice = NormalizeDouble(slPrice, digits);
