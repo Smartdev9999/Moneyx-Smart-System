@@ -1,16 +1,15 @@
-# Gold Miner EA v6.85 — Avg Trailing as Broker SL (DONE)
+# Gold Miner EA v6.86 — Max Grid Avg Trailing นับ Grid Profit (DONE)
 
 ไฟล์: `public/docs/mql5/Gold_Miner_EA.mq5`
 
-## บั๊ก
-ภาพแสดง S/L = 0.00 ทุก ticket → `SyncBrokerTPSL()` เขียนทับ broker SL ที่ `ApplyTrailingSL()` เพิ่ง push ด้วย 0 ทุก ~2s
-
 ## แก้
-1. `SyncBrokerTPSL()` BUY/SELL — ใช้ `g_trailingSL_Buy/Sell` แทน slBuy/Sell เมื่อ trailing active; preserve `curSL` เมื่อ slBuy/Sell=0 และ ticket มี SL อยู่
-2. `ApplyTrailingSL()` — sync `g_lastBrokerSL_Buy/Sell` cache หลัง modify สำเร็จ
+- `CalcGenAveragePrice` รวม `_INIT + _GL + _GP` (weighted avg)
+- `CountGenOrders` รวม `_GP` (auto-advance ไม่ข้าม gen ที่เหลือแต่ GP)
+- `CloseGenSide` ปิด `_GP` ด้วยเมื่อ trailing SL hit
+- `CountGenGridLoss` ไม่แตะ (ยังเป็น trigger เฉพาะ GL)
 
 ## Version
-v6.84 → v6.85 (header, #property version+description, OnInit/Deinit log, Dashboard headerVersion)
+v6.85 → v6.86 (header, #property, OnInit/Deinit log, Dashboard headerVersion)
 
 ## Memory
-`mem://trading/gold-miner-ea/avg-trailing-broker-sl-v6-85.md`
+`mem://trading/gold-miner-ea/maxgrid-trail-include-gp-v6-86.md`
