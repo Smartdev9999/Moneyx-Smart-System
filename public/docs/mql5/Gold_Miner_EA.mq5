@@ -480,6 +480,7 @@ struct GridRefillSlot
    long     side;         // POSITION_TYPE_BUY / SELL
    string   kind;         // "GL" or "GP"
    int      level;        // grid level extracted from comment
+   string   genPrefix;    // v6.87: generation prefix the order belonged to (e.g. GM, GM1, GM2)
    datetime closedAt;     // when we recorded the close
    bool     active;       // false = consumed/expired
 };
@@ -490,7 +491,9 @@ double         g_trackedLots[];
 long           g_trackedSides[];
 string         g_trackedKinds[];
 int            g_trackedLevels[];
+string         g_trackedGenPref[];   // v6.87: generation prefix per tracked ticket
 datetime       g_lastRefillCleanup = 0;
+datetime       g_lastRefillRejectLog = 0; // v6.87: throttled diagnostic log
 
 
 // Dashboard Control Variables (v2.9)
