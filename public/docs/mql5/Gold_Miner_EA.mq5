@@ -5,8 +5,8 @@
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "6.85"
-#property description "Gold Miner EA v6.85 - Average Trailing SL pushed as broker-side SL (SyncBrokerTPSL no longer overwrites trailing/breakeven SL)"
+#property version   "6.86"
+#property description "Gold Miner EA v6.86 - Grid Refill: re-open GL/GP at price levels closed by Per-Order Trailing/Breakeven (gap-fill, no overlap)"
 #property strict
 
 #include <Trade/Trade.mqh>
