@@ -6786,10 +6786,93 @@ void OnTradeTransaction(const MqlTradeTransaction& trans,
              {
                 // v6.49: Deferred sync — set flag only
                 g_pendingSyncOrderClose = true;
+
+                // v6.87: Refill fallback — capture closed grid orders here too
+                // (covers cases where tick-based diff in RefillScanAndDetectCloses misses)
+                if(EnableGridRefill)
+                {
+                   ENUM_DEAL_REASON dealReason = (ENUM_DEAL_REASON)HistoryDealGetInteger(trans.deal, DEAL_REASON);
+                   string dealComment = HistoryDealGetString(trans.deal, DEAL_COMMENT);
+                   string dealSymbol = HistoryDealGetString(trans.deal, DEAL_SYMBOL);
+                   ulong  posId = (ulong)HistoryDealGetInteger(trans.deal, DEAL_POSITION_ID);
+
+                   if(dealSymbol == _Symbol &&
+                      (dealReason == DEAL_REASON_SL || dealReason == DEAL_REASON_TP || dealReason == DEAL_REASON_EXPERT))
+                   {
+                      // Look up the original opening deal to get the entry price/lots/side/comment
+                      RefillCaptureFromHistory(posId);
+                   }
+                }
              }
          }
       }
    }
+}
+
+//+------------------------------------------------------------------+
+//| v6.87: Capture closed grid order from history into refill slot    |
+//+------------------------------------------------------------------+
+void RefillCaptureFromHistory(ulong posId)
+{
+   if(!EnableGridRefill) return;
+   if(posId == 0) return;
+   if(!HistorySelectByPosition(posId)) return;
+
+   int total = HistoryDealsTotal();
+   double openPrice = 0; double lots = 0; long side = -1; string comment = "";
+   for(int i = 0; i < total; i++)
+   {
+      ulong dealTk = HistoryDealGetTicket(i);
+      if(dealTk == 0) continue;
+      if((ENUM_DEAL_ENTRY)HistoryDealGetInteger(dealTk, DEAL_ENTRY) != DEAL_ENTRY_IN) continue;
+      openPrice = HistoryDealGetDouble(dealTk, DEAL_PRICE);
+      lots      = HistoryDealGetDouble(dealTk, DEAL_VOLUME);
+      side      = (HistoryDealGetInteger(dealTk, DEAL_TYPE) == DEAL_TYPE_BUY) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
+      comment   = HistoryDealGetString(dealTk, DEAL_COMMENT);
+      break;
+   }
+   if(openPrice == 0 || lots == 0 || side == -1) return;
+   if(IsHedgeComment(comment)) return;
+
+   string kind = "";
+   int lvl = -1;
+   if(GridRefill_GL && IsGridKindComment(comment, "GL")) { kind = "GL"; lvl = ExtractGridLevel(comment, "GL"); }
+   else if(GridRefill_GP && IsGridKindComment(comment, "GP")) { kind = "GP"; lvl = ExtractGridLevel(comment, "GP"); }
+   else return;
+
+   string ownGen = "GM";
+   int us = StringFind(comment, "_");
+   if(us > 0) ownGen = StringSubstr(comment, 0, us);
+
+   // Skip if a slot already exists for this position
+   int n = ArraySize(g_refillSlots);
+   for(int i = 0; i < n; i++)
+   {
+      if(g_refillSlots[i].active &&
+         g_refillSlots[i].side == side &&
+         g_refillSlots[i].kind == kind &&
+         MathAbs(g_refillSlots[i].price - openPrice) < SymbolInfoDouble(_Symbol, SYMBOL_POINT))
+         return;
+   }
+
+   if(GridRefill_MaxSlots > 0 && n >= GridRefill_MaxSlots * 2) return;
+
+   ArrayResize(g_refillSlots, n + 1);
+   g_refillSlots[n].ticket    = posId;
+   g_refillSlots[n].price     = openPrice;
+   g_refillSlots[n].lots      = lots;
+   g_refillSlots[n].side      = side;
+   g_refillSlots[n].kind      = kind;
+   g_refillSlots[n].level     = lvl;
+   g_refillSlots[n].genPrefix = ownGen;
+   g_refillSlots[n].closedAt  = TimeCurrent();
+   g_refillSlots[n].active    = true;
+
+   Print("v6.87 RefillSlot ADD (history): pos=", posId, " ", kind,
+         " gen=", ownGen, " lvl=", lvl,
+         " side=", (side == POSITION_TYPE_BUY ? "BUY" : "SELL"),
+         " price=", DoubleToString(openPrice, _Digits),
+         " lots=", DoubleToString(lots, 2));
 }
 
 //+------------------------------------------------------------------+
