@@ -6,7 +6,7 @@
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
 #property version   "6.87"
-#property description "Gold Miner EA v6.87 - Grid Refill: re-open GL/GP at price levels closed by Per-Order Trailing/Breakeven (gap-fill, no overlap)"
+#property description "Gold Miner EA v6.87 - Grid Refill FIX: tracks all generations + bound orders + OnTradeTransaction fallback (Breakeven-only mode now triggers refill)"
 #property strict
 
 #include <Trade/Trade.mqh>
