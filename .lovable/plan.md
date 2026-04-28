@@ -1,15 +1,16 @@
-# Gold Miner EA v6.88 — Grid Refill Decoupled (DONE)
+# Gold Miner EA v6.85 — Avg Trailing as Broker SL (DONE)
 
 ไฟล์: `public/docs/mql5/Gold_Miner_EA.mq5`
 
-## ปัญหา
-v6.87 Refill ไม่ทำงาน เพราะ `TryRefillGridSlot()` ถูกเรียกใน `CheckGridLoss/Profit()` ซึ่งถูก gate โดย `MaxTrades`, `buyCount>0`
+## บั๊ก
+ภาพแสดง S/L = 0.00 ทุก ticket → `SyncBrokerTPSL()` เขียนทับ broker SL ที่ `ApplyTrailingSL()` เพิ่ง push ด้วย 0 ทุก ~2s
 
 ## แก้
-- เพิ่ม `ManageGridRefill()` ใน OnTick หลัง `RefillScanAndDetectCloses()` — รัน refill ทุก tick ไม่สนใจ grid gate
-- `TryRefillGridSlot()`: preserve original level# (`useLvl = lvl > 0 ? lvl : maxLvl+1`)
-- Verbose reject logs throttled 30s: MaxOpenOrders, g_newOrderBlocked, overlap, OpenOrder failed
-- Version bump v6.87 → **v6.88** (header, #property, OnInit/Deinit, Dashboard)
+1. `SyncBrokerTPSL()` BUY/SELL — ใช้ `g_trailingSL_Buy/Sell` แทน slBuy/Sell เมื่อ trailing active; preserve `curSL` เมื่อ slBuy/Sell=0 และ ticket มี SL อยู่
+2. `ApplyTrailingSL()` — sync `g_lastBrokerSL_Buy/Sell` cache หลัง modify สำเร็จ
+
+## Version
+v6.84 → v6.85 (header, #property version+description, OnInit/Deinit log, Dashboard headerVersion)
 
 ## Memory
-`mem://trading/gold-miner-ea/grid-refill-decoupled-v6-88.md`
+`mem://trading/gold-miner-ea/avg-trailing-broker-sl-v6-85.md`

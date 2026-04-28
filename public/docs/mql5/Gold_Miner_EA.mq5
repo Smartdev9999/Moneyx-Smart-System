@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.88 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.85 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "6.88"
-#property description "Gold Miner EA v6.88 - Grid Refill DECOUPLED: ManageGridRefill() runs every tick independent of MaxTrades/grid gate; preserves original level; verbose reject logs"
+#property version   "6.85"
+#property description "Gold Miner EA v6.85 - Average Trailing SL pushed as broker-side SL (SyncBrokerTPSL no longer overwrites trailing/breakeven SL)"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -237,14 +237,6 @@ input bool     InpEnableTrailing         = true;     // Enable Trailing
 input int      InpTrailingStop           = 200;      // Trailing Distance (points from current price)
 input int      InpTrailingStep           = 10;       // Trailing Step (min SL movement in points)
 
-//--- v6.87: Grid Refill After Trailing Close (re-open GL/GP at gaps left by trailing/breakeven)
-input bool     EnableGridRefill          = false;    // v6.87: Enable Grid Refill after trailing close
-input bool     GridRefill_GL             = true;     // v6.87: Refill Grid Loss orders
-input bool     GridRefill_GP             = true;     // v6.87: Refill Grid Profit orders
-input int      GridRefill_TolerancePts   = 50;       // v6.87: Tolerance to consider price "back" (points)
-input int      GridRefill_MaxSlots       = 20;       // v6.87: Max remembered closed slots per side
-input int      GridRefill_ExpireMin      = 0;        // v6.87: Expire slot after N minutes (0=never)
-
 //--- v6.56: Bollinger Band Entry Filter
 input group "=== Bollinger Band Entry Filter (v6.56) ==="
 input bool             BB_FilterEnable    = false;       // Enable BB Entry Filter
@@ -470,31 +462,6 @@ double         g_maxDD;             // Track max drawdown
 bool           g_hadPositions;      // Track if we had positions (for accumulate auto-reset)
 double         g_maxDDBuy;          // Max drawdown (most negative PL) of BUY side - for DD% TP
 double         g_maxDDSell;         // Max drawdown (most negative PL) of SELL side - for DD% TP
-
-// === v6.87: Grid Refill After Trailing Close ===
-struct GridRefillSlot
-{
-   ulong    ticket;       // original ticket id (closed)
-   double   price;        // open price of the closed grid order
-   double   lots;         // original lot size
-   long     side;         // POSITION_TYPE_BUY / SELL
-   string   kind;         // "GL" or "GP"
-   int      level;        // grid level extracted from comment
-   string   genPrefix;    // v6.87: generation prefix the order belonged to (e.g. GM, GM1, GM2)
-   datetime closedAt;     // when we recorded the close
-   bool     active;       // false = consumed/expired
-};
-GridRefillSlot g_refillSlots[];
-ulong          g_trackedTickets[];   // tickets currently open that we monitor
-double         g_trackedPrices[];
-double         g_trackedLots[];
-long           g_trackedSides[];
-string         g_trackedKinds[];
-int            g_trackedLevels[];
-string         g_trackedGenPref[];   // v6.87: generation prefix per tracked ticket
-datetime       g_lastRefillCleanup = 0;
-datetime       g_lastRefillRejectLog = 0; // v6.87: throttled diagnostic log
-
 
 // Dashboard Control Variables (v2.9)
 bool           g_eaIsPaused = false;           // EA Pause State (manual)
@@ -1052,7 +1019,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-     Print("Gold Miner EA v6.88 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+     Print("Gold Miner EA v6.85 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min",
@@ -1114,7 +1081,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.88 deinitialized");
+   Print("Gold Miner EA v6.85 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -1551,14 +1518,6 @@ void OnTick()
 
    // === ORIGINAL TRADING LOGIC (unchanged) ===
    if(g_eaStopped) return;
-
-   //--- v6.88: Scan tracked tickets and detect closes BEFORE trailing runs (capture ticket info before broker SL closes them)
-   //           Then run ManageGridRefill() decoupled from grid gate so refill can fire even if grid is "full" or buyCount==0
-   if(EnableGridRefill)
-   {
-      RefillScanAndDetectCloses();
-      ManageGridRefill();
-   }
 
    //--- Every tick: Per-Order Trailing (works for both modes - individual positions)
    if(EnablePerOrderTrailing)
@@ -3224,8 +3183,6 @@ void ResetTrailingStateBuy()
    g_trailingSL_Buy      = 0;
    g_trailingActive_Buy  = false;
    g_breakevenDone_Buy   = false;
-   // v6.87: clear refill slots for this side (whole side closed via avg trailing)
-   if(EnableGridRefill) RefillResetSide(POSITION_TYPE_BUY);
 }
 
 void ResetTrailingStateSell()
@@ -3233,8 +3190,6 @@ void ResetTrailingStateSell()
    g_trailingSL_Sell     = 0;
    g_trailingActive_Sell = false;
    g_breakevenDone_Sell  = false;
-   // v6.87: clear refill slots for this side
-   if(EnableGridRefill) RefillResetSide(POSITION_TYPE_SELL);
 }
 
 //+------------------------------------------------------------------+
@@ -3623,283 +3578,8 @@ bool HasCandleConfirmation(ENUM_POSITION_TYPE side, ENUM_TIMEFRAMES tf, int requ
 }
 
 //+------------------------------------------------------------------+
-//| v6.87: Grid Refill After Trailing Close — Helper Functions       |
-//+------------------------------------------------------------------+
-
-// Extract grid level number from comment like "GM1_GL#3" -> 3, returns -1 if none
-int ExtractGridLevel(string comment, string kind)
-{
-   string tag = "_" + kind + "#";
-   int p = StringFind(comment, tag);
-   if(p < 0) return -1;
-   string num = StringSubstr(comment, p + StringLen(tag));
-   return (int)StringToInteger(num);
-}
-
-bool IsGridKindComment(string comment, string kind)
-{
-   return (StringFind(comment, "_" + kind + "#") >= 0);
-}
-
-void RefillCleanupSlots()
-{
-   int n = ArraySize(g_refillSlots);
-   GridRefillSlot kept[];
-   int keptN = 0;
-   for(int i = 0; i < n; i++)
-   {
-      if(!g_refillSlots[i].active) continue;
-      if(GridRefill_ExpireMin > 0 &&
-         (TimeCurrent() - g_refillSlots[i].closedAt) >= (long)GridRefill_ExpireMin * 60) continue;
-      ArrayResize(kept, keptN + 1);
-      kept[keptN] = g_refillSlots[i];
-      keptN++;
-   }
-   ArrayResize(g_refillSlots, keptN);
-   for(int j = 0; j < keptN; j++) g_refillSlots[j] = kept[j];
-}
-
-// Refresh tracked tickets and detect closes
-void RefillScanAndDetectCloses()
-{
-   if(!EnableGridRefill) return;
-   ulong    curTickets[]; double curPrices[]; double curLots[];
-   long     curSides[];   string curKinds[]; int curLevels[];
-   string   curGenPref[];
-   int      curN = 0;
-
-   for(int i = PositionsTotal() - 1; i >= 0; i--)
-   {
-      ulong tk = PositionGetTicket(i);
-      if(tk == 0) continue;
-      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
-      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
-      string c = PositionGetString(POSITION_COMMENT);
-      if(IsHedgeComment(c)) continue;
-      // v6.87: REMOVED genPrefix filter and IsTicketBound filter — track ALL GL/GP across all generations
-      // (BE/Trailing can close orders in any generation, including bound ones)
-
-      string kind = "";
-      int lvl = -1;
-      if(GridRefill_GL && IsGridKindComment(c, "GL")) { kind = "GL"; lvl = ExtractGridLevel(c, "GL"); }
-      else if(GridRefill_GP && IsGridKindComment(c, "GP")) { kind = "GP"; lvl = ExtractGridLevel(c, "GP"); }
-      else continue;
-
-      // v6.87: extract generation prefix from comment (e.g. "GM2_GL#3" -> "GM2")
-      string ownGen = "GM";
-      int us = StringFind(c, "_");
-      if(us > 0) ownGen = StringSubstr(c, 0, us);
-
-      ArrayResize(curTickets, curN + 1); ArrayResize(curPrices, curN + 1);
-      ArrayResize(curLots, curN + 1);    ArrayResize(curSides, curN + 1);
-      ArrayResize(curKinds, curN + 1);   ArrayResize(curLevels, curN + 1);
-      ArrayResize(curGenPref, curN + 1);
-      curTickets[curN] = tk;
-      curPrices[curN]  = PositionGetDouble(POSITION_PRICE_OPEN);
-      curLots[curN]    = PositionGetDouble(POSITION_VOLUME);
-      curSides[curN]   = PositionGetInteger(POSITION_TYPE);
-      curKinds[curN]   = kind;
-      curLevels[curN]  = lvl;
-      curGenPref[curN] = ownGen;
-      curN++;
-   }
-
-   int prevN = ArraySize(g_trackedTickets);
-   for(int j = 0; j < prevN; j++)
-   {
-      ulong oldTk = g_trackedTickets[j];
-      bool stillOpen = false;
-      for(int k = 0; k < curN; k++) { if(curTickets[k] == oldTk) { stillOpen = true; break; } }
-      if(stillOpen) continue;
-
-      // v6.87: confirm the ticket is truly closed (not just pending/disappeared) via HistoryOrderSelect
-      // — use deal close reason if available; if not, treat as closed anyway (safer than missing)
-
-      int slotN = ArraySize(g_refillSlots);
-      if(GridRefill_MaxSlots > 0 && slotN >= GridRefill_MaxSlots * 2) continue;
-
-      ArrayResize(g_refillSlots, slotN + 1);
-      g_refillSlots[slotN].ticket    = oldTk;
-      g_refillSlots[slotN].price     = g_trackedPrices[j];
-      g_refillSlots[slotN].lots      = g_trackedLots[j];
-      g_refillSlots[slotN].side      = g_trackedSides[j];
-      g_refillSlots[slotN].kind      = g_trackedKinds[j];
-      g_refillSlots[slotN].level     = g_trackedLevels[j];
-      g_refillSlots[slotN].genPrefix = g_trackedGenPref[j];
-      g_refillSlots[slotN].closedAt  = TimeCurrent();
-      g_refillSlots[slotN].active    = true;
-
-      Print("v6.87 RefillSlot ADD: #", oldTk, " ", g_trackedKinds[j],
-            " gen=", g_trackedGenPref[j],
-            " lvl=", g_trackedLevels[j],
-            " side=", (g_trackedSides[j] == POSITION_TYPE_BUY ? "BUY" : "SELL"),
-            " price=", DoubleToString(g_trackedPrices[j], _Digits),
-            " lots=", DoubleToString(g_trackedLots[j], 2));
-   }
-
-   ArrayResize(g_trackedTickets, curN); ArrayResize(g_trackedPrices, curN);
-   ArrayResize(g_trackedLots, curN);    ArrayResize(g_trackedSides, curN);
-   ArrayResize(g_trackedKinds, curN);   ArrayResize(g_trackedLevels, curN);
-   ArrayResize(g_trackedGenPref, curN);
-   for(int m = 0; m < curN; m++)
-   {
-      g_trackedTickets[m] = curTickets[m]; g_trackedPrices[m] = curPrices[m];
-      g_trackedLots[m]    = curLots[m];    g_trackedSides[m]  = curSides[m];
-      g_trackedKinds[m]   = curKinds[m];   g_trackedLevels[m] = curLevels[m];
-      g_trackedGenPref[m] = curGenPref[m];
-   }
-
-   if(TimeCurrent() - g_lastRefillCleanup >= 30)
-   {
-      g_lastRefillCleanup = TimeCurrent();
-      RefillCleanupSlots();
-   }
-}
-
-void RefillResetSide(long side)
-{
-   int n = ArraySize(g_refillSlots);
-   for(int i = 0; i < n; i++)
-      if(g_refillSlots[i].side == side) g_refillSlots[i].active = false;
-}
-
-bool TryRefillGridSlot(ENUM_POSITION_TYPE side, string kind)
-{
-   if(!EnableGridRefill) return false;
-   if(kind == "GL" && !GridRefill_GL) return false;
-   if(kind == "GP" && !GridRefill_GP) return false;
-   if(NormalOrderCount() >= MaxOpenOrders)
-   {
-      if(TimeCurrent() - g_lastRefillRejectLog >= 30)
-      {
-         g_lastRefillRejectLog = TimeCurrent();
-         Print("v6.88 RefillFire SKIP: NormalOrderCount(", NormalOrderCount(), ") >= MaxOpenOrders(", MaxOpenOrders, ")");
-      }
-      return false;
-   }
-   if(g_newOrderBlocked)
-   {
-      if(TimeCurrent() - g_lastRefillRejectLog >= 30)
-      {
-         g_lastRefillRejectLog = TimeCurrent();
-         Print("v6.88 RefillFire SKIP: g_newOrderBlocked=true (News/Time/Squeeze filter)");
-      }
-      return false;
-   }
-
-   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
-   double tolPx = GridRefill_TolerancePts * point;
-   double curPrice = (side == POSITION_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_ASK)
-                                                  : SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   int n = ArraySize(g_refillSlots);
-   for(int i = 0; i < n; i++)
-   {
-      if(!g_refillSlots[i].active) continue;
-      if(g_refillSlots[i].side != side) continue;
-      if(g_refillSlots[i].kind != kind) continue;
-      if(GridRefill_ExpireMin > 0 &&
-         (TimeCurrent() - g_refillSlots[i].closedAt) >= (long)GridRefill_ExpireMin * 60)
-      { g_refillSlots[i].active = false; continue; }
-
-      if(MathAbs(curPrice - g_refillSlots[i].price) > tolPx) continue;
-
-      // anti-overlap: skip if existing same-side order within tolerance of slot price
-      bool overlap = false;
-      for(int p = PositionsTotal() - 1; p >= 0; p--)
-      {
-         ulong tk = PositionGetTicket(p);
-         if(tk == 0) continue;
-         if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
-         if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
-         if(PositionGetInteger(POSITION_TYPE) != side) continue;
-         if(IsTicketBound(tk)) continue;
-         string c = PositionGetString(POSITION_COMMENT);
-         if(IsHedgeComment(c)) continue;
-         double op = PositionGetDouble(POSITION_PRICE_OPEN);
-         if(MathAbs(op - g_refillSlots[i].price) <= tolPx) { overlap = true; break; }
-      }
-      if(overlap)
-      {
-         if(TimeCurrent() - g_lastRefillRejectLog >= 30)
-         {
-            g_lastRefillRejectLog = TimeCurrent();
-            Print("v6.88 RefillFire SKIP overlap: slotPx=", DoubleToString(g_refillSlots[i].price, _Digits),
-                  " — existing same-side order within tolerance, will not stack");
-         }
-         continue;
-      }
-
-      double lots = g_refillSlots[i].lots;
-      int lvl = g_refillSlots[i].level;
-      string ownGen = (g_refillSlots[i].genPrefix == "") ? GetCommentPrefix() : g_refillSlots[i].genPrefix;
-      // v6.88: PRESERVE original level number — refill is "filling the gap", not a new grid step
-      int useLvl = (lvl > 0) ? lvl : (FindMaxGridLevelOnSide(side, "_" + kind) + 1);
-      string comment = ownGen + "_" + kind + "#" + IntegerToString(useLvl);
-      ENUM_ORDER_TYPE ot = (side == POSITION_TYPE_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
-
-      Print("v6.88 RefillFire: ", kind, " ", (side == POSITION_TYPE_BUY ? "BUY" : "SELL"),
-            " gen=", ownGen,
-            " slotPx=", DoubleToString(g_refillSlots[i].price, _Digits),
-            " curPx=", DoubleToString(curPrice, _Digits),
-            " lots=", DoubleToString(lots, 2), " cmt=", comment);
-
-      if(OpenOrder(ot, lots, comment))
-      {
-         g_refillSlots[i].active = false;
-         return true;
-      }
-      else
-      {
-         if(TimeCurrent() - g_lastRefillRejectLog >= 10)
-         {
-            g_lastRefillRejectLog = TimeCurrent();
-            Print("v6.88 RefillFire FAILED: OpenOrder() returned false (check BB filter / cross-gen INIT guard / hedge pause)");
-         }
-      }
-    }
-    return false;
-}
-
-//+------------------------------------------------------------------+
-//| v6.88: ManageGridRefill — decoupled from CheckGridLoss/Profit     |
-//| Runs every tick; iterates all active slots and tries to refill    |
-//| regardless of MaxTrades / buyCount==0 / grid gates.               |
-//+------------------------------------------------------------------+
-void ManageGridRefill()
-{
-   if(!EnableGridRefill) return;
-   int n = ArraySize(g_refillSlots);
-   if(n == 0) return;
-
-   // Track which (side,kind) combos still have active slots, then attempt refill once per combo per tick
-   bool tryBuyGL = false, trySellGL = false, tryBuyGP = false, trySellGP = false;
-   for(int i = 0; i < n; i++)
-   {
-      if(!g_refillSlots[i].active) continue;
-      if(g_refillSlots[i].kind == "GL")
-      {
-         if(g_refillSlots[i].side == POSITION_TYPE_BUY)  tryBuyGL  = true;
-         else                                            trySellGL = true;
-      }
-      else if(g_refillSlots[i].kind == "GP")
-      {
-         if(g_refillSlots[i].side == POSITION_TYPE_BUY)  tryBuyGP  = true;
-         else                                            trySellGP = true;
-      }
-   }
-
-   if(GridRefill_GL && tryBuyGL)  TryRefillGridSlot(POSITION_TYPE_BUY,  "GL");
-   if(GridRefill_GL && trySellGL) TryRefillGridSlot(POSITION_TYPE_SELL, "GL");
-   if(GridRefill_GP && tryBuyGP)  TryRefillGridSlot(POSITION_TYPE_BUY,  "GP");
-   if(GridRefill_GP && trySellGP) TryRefillGridSlot(POSITION_TYPE_SELL, "GP");
-}
-
-//+------------------------------------------------------------------+
 void CheckGridLoss(ENUM_POSITION_TYPE side, int currentGridCount)
 {
-   // v6.87: Try refill BEFORE the MaxTrades gate so we can fill gaps even when grid is "full"
-   if(EnableGridRefill && GridRefill_GL) TryRefillGridSlot(side, "GL");
-
    if(currentGridCount >= GridLoss_MaxTrades) return;
    if(NormalOrderCount() >= MaxOpenOrders) return;
 
@@ -4010,9 +3690,6 @@ void CheckGridLoss(ENUM_POSITION_TYPE side, int currentGridCount)
 //+------------------------------------------------------------------+
 void CheckGridProfit(ENUM_POSITION_TYPE side, int currentGridCount)
 {
-   // v6.87: Try refill BEFORE the MaxTrades gate
-   if(EnableGridRefill && GridRefill_GP) TryRefillGridSlot(side, "GP");
-
    if(currentGridCount >= GridProfit_MaxTrades) return;
    if(NormalOrderCount() >= MaxOpenOrders) return;
 
@@ -4499,7 +4176,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.88 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.88 [ZZ]" : "Gold Miner EA v6.88 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.85 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.85 [ZZ]" : "Gold Miner EA v6.85 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -5187,22 +4864,6 @@ void DisplayDashboard()
           DrawTableRow(row, genLabel, info, clrOrange, COLOR_SECTION_ORPHAN); row++;
        }
     }
-
-   //--- v6.87: Refill Slots row (only when feature enabled)
-   if(EnableGridRefill)
-   {
-      int rfBuy = 0, rfSell = 0;
-      int rfN = ArraySize(g_refillSlots);
-      for(int rf = 0; rf < rfN; rf++)
-      {
-         if(!g_refillSlots[rf].active) continue;
-         if(g_refillSlots[rf].side == POSITION_TYPE_BUY) rfBuy++;
-         else rfSell++;
-      }
-      string rfInfo = "B:" + IntegerToString(rfBuy) + "  S:" + IntegerToString(rfSell);
-      color rfColor = (rfBuy + rfSell > 0) ? clrYellow : clrLime;
-      DrawTableRow(row, "Refill Slots", rfInfo, rfColor, COLOR_SECTION_ORPHAN); row++;
-   }
 
    //--- Cleanup stale rows from previous tick (prevents flicker)
    for(int r = row; r < g_lastDashboardRowCount; r++)
@@ -6849,93 +6510,10 @@ void OnTradeTransaction(const MqlTradeTransaction& trans,
              {
                 // v6.49: Deferred sync — set flag only
                 g_pendingSyncOrderClose = true;
-
-                // v6.87: Refill fallback — capture closed grid orders here too
-                // (covers cases where tick-based diff in RefillScanAndDetectCloses misses)
-                if(EnableGridRefill)
-                {
-                   ENUM_DEAL_REASON dealReason = (ENUM_DEAL_REASON)HistoryDealGetInteger(trans.deal, DEAL_REASON);
-                   string dealComment = HistoryDealGetString(trans.deal, DEAL_COMMENT);
-                   string dealSymbol = HistoryDealGetString(trans.deal, DEAL_SYMBOL);
-                   ulong  posId = (ulong)HistoryDealGetInteger(trans.deal, DEAL_POSITION_ID);
-
-                   if(dealSymbol == _Symbol &&
-                      (dealReason == DEAL_REASON_SL || dealReason == DEAL_REASON_TP || dealReason == DEAL_REASON_EXPERT))
-                   {
-                      // Look up the original opening deal to get the entry price/lots/side/comment
-                      RefillCaptureFromHistory(posId);
-                   }
-                }
              }
          }
       }
    }
-}
-
-//+------------------------------------------------------------------+
-//| v6.87: Capture closed grid order from history into refill slot    |
-//+------------------------------------------------------------------+
-void RefillCaptureFromHistory(ulong posId)
-{
-   if(!EnableGridRefill) return;
-   if(posId == 0) return;
-   if(!HistorySelectByPosition(posId)) return;
-
-   int total = HistoryDealsTotal();
-   double openPrice = 0; double lots = 0; long side = -1; string comment = "";
-   for(int i = 0; i < total; i++)
-   {
-      ulong dealTk = HistoryDealGetTicket(i);
-      if(dealTk == 0) continue;
-      if((ENUM_DEAL_ENTRY)HistoryDealGetInteger(dealTk, DEAL_ENTRY) != DEAL_ENTRY_IN) continue;
-      openPrice = HistoryDealGetDouble(dealTk, DEAL_PRICE);
-      lots      = HistoryDealGetDouble(dealTk, DEAL_VOLUME);
-      side      = (HistoryDealGetInteger(dealTk, DEAL_TYPE) == DEAL_TYPE_BUY) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
-      comment   = HistoryDealGetString(dealTk, DEAL_COMMENT);
-      break;
-   }
-   if(openPrice == 0 || lots == 0 || side == -1) return;
-   if(IsHedgeComment(comment)) return;
-
-   string kind = "";
-   int lvl = -1;
-   if(GridRefill_GL && IsGridKindComment(comment, "GL")) { kind = "GL"; lvl = ExtractGridLevel(comment, "GL"); }
-   else if(GridRefill_GP && IsGridKindComment(comment, "GP")) { kind = "GP"; lvl = ExtractGridLevel(comment, "GP"); }
-   else return;
-
-   string ownGen = "GM";
-   int us = StringFind(comment, "_");
-   if(us > 0) ownGen = StringSubstr(comment, 0, us);
-
-   // Skip if a slot already exists for this position
-   int n = ArraySize(g_refillSlots);
-   for(int i = 0; i < n; i++)
-   {
-      if(g_refillSlots[i].active &&
-         g_refillSlots[i].side == side &&
-         g_refillSlots[i].kind == kind &&
-         MathAbs(g_refillSlots[i].price - openPrice) < SymbolInfoDouble(_Symbol, SYMBOL_POINT))
-         return;
-   }
-
-   if(GridRefill_MaxSlots > 0 && n >= GridRefill_MaxSlots * 2) return;
-
-   ArrayResize(g_refillSlots, n + 1);
-   g_refillSlots[n].ticket    = posId;
-   g_refillSlots[n].price     = openPrice;
-   g_refillSlots[n].lots      = lots;
-   g_refillSlots[n].side      = side;
-   g_refillSlots[n].kind      = kind;
-   g_refillSlots[n].level     = lvl;
-   g_refillSlots[n].genPrefix = ownGen;
-   g_refillSlots[n].closedAt  = TimeCurrent();
-   g_refillSlots[n].active    = true;
-
-   Print("v6.87 RefillSlot ADD (history): pos=", posId, " ", kind,
-         " gen=", ownGen, " lvl=", lvl,
-         " side=", (side == POSITION_TYPE_BUY ? "BUY" : "SELL"),
-         " price=", DoubleToString(openPrice, _Digits),
-         " lots=", DoubleToString(lots, 2));
 }
 
 //+------------------------------------------------------------------+
