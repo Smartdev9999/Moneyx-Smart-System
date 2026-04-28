@@ -5110,7 +5110,7 @@ void DisplayDashboard()
       }
       string rfInfo = "B:" + IntegerToString(rfBuy) + "  S:" + IntegerToString(rfSell);
       color rfColor = (rfBuy + rfSell > 0) ? clrYellow : clrLime;
-      DrawTableRow(row, "Refill Slots", rfInfo, rfColor, COLOR_SECTION_GRID); row++;
+      DrawTableRow(row, "Refill Slots", rfInfo, rfColor, COLOR_SECTION_ORPHAN); row++;
    }
 
    //--- Cleanup stale rows from previous tick (prevents flicker)
