@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.87 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.88 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "6.87"
-#property description "Gold Miner EA v6.87 - Grid Refill FIX: tracks all generations + bound orders + OnTradeTransaction fallback (Breakeven-only mode now triggers refill)"
+#property version   "6.88"
+#property description "Gold Miner EA v6.88 - Grid Refill DECOUPLED: ManageGridRefill() runs every tick independent of MaxTrades/grid gate; preserves original level; verbose reject logs"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -1052,7 +1052,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-     Print("Gold Miner EA v6.87 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+     Print("Gold Miner EA v6.88 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min",
@@ -1114,7 +1114,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.87 deinitialized");
+   Print("Gold Miner EA v6.88 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -1552,8 +1552,13 @@ void OnTick()
    // === ORIGINAL TRADING LOGIC (unchanged) ===
    if(g_eaStopped) return;
 
-   //--- v6.87: Scan tracked tickets and detect closes BEFORE trailing runs (so we capture ticket info before broker SL closes them)
-   if(EnableGridRefill) RefillScanAndDetectCloses();
+   //--- v6.88: Scan tracked tickets and detect closes BEFORE trailing runs (capture ticket info before broker SL closes them)
+   //           Then run ManageGridRefill() decoupled from grid gate so refill can fire even if grid is "full" or buyCount==0
+   if(EnableGridRefill)
+   {
+      RefillScanAndDetectCloses();
+      ManageGridRefill();
+   }
 
    //--- Every tick: Per-Order Trailing (works for both modes - individual positions)
    if(EnablePerOrderTrailing)
@@ -3763,8 +3768,24 @@ bool TryRefillGridSlot(ENUM_POSITION_TYPE side, string kind)
    if(!EnableGridRefill) return false;
    if(kind == "GL" && !GridRefill_GL) return false;
    if(kind == "GP" && !GridRefill_GP) return false;
-   if(NormalOrderCount() >= MaxOpenOrders) return false;
-   if(g_newOrderBlocked) return false;
+   if(NormalOrderCount() >= MaxOpenOrders)
+   {
+      if(TimeCurrent() - g_lastRefillRejectLog >= 30)
+      {
+         g_lastRefillRejectLog = TimeCurrent();
+         Print("v6.88 RefillFire SKIP: NormalOrderCount(", NormalOrderCount(), ") >= MaxOpenOrders(", MaxOpenOrders, ")");
+      }
+      return false;
+   }
+   if(g_newOrderBlocked)
+   {
+      if(TimeCurrent() - g_lastRefillRejectLog >= 30)
+      {
+         g_lastRefillRejectLog = TimeCurrent();
+         Print("v6.88 RefillFire SKIP: g_newOrderBlocked=true (News/Time/Squeeze filter)");
+      }
+      return false;
+   }
 
    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
    double tolPx = GridRefill_TolerancePts * point;
@@ -3797,18 +3818,26 @@ bool TryRefillGridSlot(ENUM_POSITION_TYPE side, string kind)
          double op = PositionGetDouble(POSITION_PRICE_OPEN);
          if(MathAbs(op - g_refillSlots[i].price) <= tolPx) { overlap = true; break; }
       }
-      if(overlap) continue;
+      if(overlap)
+      {
+         if(TimeCurrent() - g_lastRefillRejectLog >= 30)
+         {
+            g_lastRefillRejectLog = TimeCurrent();
+            Print("v6.88 RefillFire SKIP overlap: slotPx=", DoubleToString(g_refillSlots[i].price, _Digits),
+                  " — existing same-side order within tolerance, will not stack");
+         }
+         continue;
+      }
 
       double lots = g_refillSlots[i].lots;
       int lvl = g_refillSlots[i].level;
       string ownGen = (g_refillSlots[i].genPrefix == "") ? GetCommentPrefix() : g_refillSlots[i].genPrefix;
-      int maxLvl = FindMaxGridLevelOnSide(side, "_" + kind);
-      int useLvl = (lvl > 0 && lvl <= maxLvl) ? (maxLvl + 1) : (lvl > 0 ? lvl : maxLvl + 1);
-      // v6.87: respect ORIGINAL generation when re-opening (not the current generation)
+      // v6.88: PRESERVE original level number — refill is "filling the gap", not a new grid step
+      int useLvl = (lvl > 0) ? lvl : (FindMaxGridLevelOnSide(side, "_" + kind) + 1);
       string comment = ownGen + "_" + kind + "#" + IntegerToString(useLvl);
       ENUM_ORDER_TYPE ot = (side == POSITION_TYPE_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
 
-      Print("v6.87 RefillFire: ", kind, " ", (side == POSITION_TYPE_BUY ? "BUY" : "SELL"),
+      Print("v6.88 RefillFire: ", kind, " ", (side == POSITION_TYPE_BUY ? "BUY" : "SELL"),
             " gen=", ownGen,
             " slotPx=", DoubleToString(g_refillSlots[i].price, _Digits),
             " curPx=", DoubleToString(curPrice, _Digits),
@@ -3824,11 +3853,45 @@ bool TryRefillGridSlot(ENUM_POSITION_TYPE side, string kind)
          if(TimeCurrent() - g_lastRefillRejectLog >= 10)
          {
             g_lastRefillRejectLog = TimeCurrent();
-            Print("v6.87 RefillFire FAILED: OpenOrder() returned false (check BB filter / candle confirm / MaxOpenOrders / hedge pause)");
+            Print("v6.88 RefillFire FAILED: OpenOrder() returned false (check BB filter / cross-gen INIT guard / hedge pause)");
          }
       }
     }
     return false;
+}
+
+//+------------------------------------------------------------------+
+//| v6.88: ManageGridRefill — decoupled from CheckGridLoss/Profit     |
+//| Runs every tick; iterates all active slots and tries to refill    |
+//| regardless of MaxTrades / buyCount==0 / grid gates.               |
+//+------------------------------------------------------------------+
+void ManageGridRefill()
+{
+   if(!EnableGridRefill) return;
+   int n = ArraySize(g_refillSlots);
+   if(n == 0) return;
+
+   // Track which (side,kind) combos still have active slots, then attempt refill once per combo per tick
+   bool tryBuyGL = false, trySellGL = false, tryBuyGP = false, trySellGP = false;
+   for(int i = 0; i < n; i++)
+   {
+      if(!g_refillSlots[i].active) continue;
+      if(g_refillSlots[i].kind == "GL")
+      {
+         if(g_refillSlots[i].side == POSITION_TYPE_BUY)  tryBuyGL  = true;
+         else                                            trySellGL = true;
+      }
+      else if(g_refillSlots[i].kind == "GP")
+      {
+         if(g_refillSlots[i].side == POSITION_TYPE_BUY)  tryBuyGP  = true;
+         else                                            trySellGP = true;
+      }
+   }
+
+   if(GridRefill_GL && tryBuyGL)  TryRefillGridSlot(POSITION_TYPE_BUY,  "GL");
+   if(GridRefill_GL && trySellGL) TryRefillGridSlot(POSITION_TYPE_SELL, "GL");
+   if(GridRefill_GP && tryBuyGP)  TryRefillGridSlot(POSITION_TYPE_BUY,  "GP");
+   if(GridRefill_GP && trySellGP) TryRefillGridSlot(POSITION_TYPE_SELL, "GP");
 }
 
 //+------------------------------------------------------------------+
@@ -4436,7 +4499,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.87 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.87 [ZZ]" : "Gold Miner EA v6.87 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.88 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.88 [ZZ]" : "Gold Miner EA v6.88 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
