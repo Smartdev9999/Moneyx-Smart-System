@@ -237,6 +237,14 @@ input bool     InpEnableTrailing         = true;     // Enable Trailing
 input int      InpTrailingStop           = 200;      // Trailing Distance (points from current price)
 input int      InpTrailingStep           = 10;       // Trailing Step (min SL movement in points)
 
+//--- v6.86: Grid Refill After Trailing Close (re-open GL/GP at gaps left by trailing/breakeven)
+input bool     EnableGridRefill          = false;    // v6.86: Enable Grid Refill after trailing close
+input bool     GridRefill_GL             = true;     // v6.86: Refill Grid Loss orders
+input bool     GridRefill_GP             = true;     // v6.86: Refill Grid Profit orders
+input int      GridRefill_TolerancePts   = 50;       // v6.86: Tolerance to consider price "back" (points)
+input int      GridRefill_MaxSlots       = 20;       // v6.86: Max remembered closed slots per side
+input int      GridRefill_ExpireMin      = 0;        // v6.86: Expire slot after N minutes (0=never)
+
 //--- v6.56: Bollinger Band Entry Filter
 input group "=== Bollinger Band Entry Filter (v6.56) ==="
 input bool             BB_FilterEnable    = false;       // Enable BB Entry Filter
