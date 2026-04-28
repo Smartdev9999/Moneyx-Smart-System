@@ -2854,6 +2854,8 @@ void ManageTPSL()
 //+------------------------------------------------------------------+
 void ManagePerOrderTrailing()
 {
+   // v6.87: Squeeze Pause — skip all SL updates while in Expansion (TP/Grid/Hedge unaffected)
+   if(IsSqueezePausingTrailing()) return;
    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
@@ -3437,6 +3439,8 @@ void CloseGenSide(int gen, ENUM_POSITION_TYPE side)
 //+------------------------------------------------------------------+
 void ManageMaxGridTrailing()
 {
+   // v6.87: Squeeze Pause — skip avg-trailing updates while in Expansion (state preserved)
+   if(IsSqueezePausingTrailing()) return;
    // Reset if no orders at all
    if(TotalOrderCount() == 0)
    {
@@ -5780,6 +5784,8 @@ void ManageTPSL_TF(int tfIdx)
 //+------------------------------------------------------------------+
 void ManageTrailingStop_TF(int tfIdx)
 {
+   // v6.87: Squeeze Pause — skip MTF avg-trailing updates while in Expansion
+   if(IsSqueezePausingTrailing()) return;
    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
