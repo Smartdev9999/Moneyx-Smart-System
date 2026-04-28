@@ -3801,12 +3801,15 @@ bool TryRefillGridSlot(ENUM_POSITION_TYPE side, string kind)
 
       double lots = g_refillSlots[i].lots;
       int lvl = g_refillSlots[i].level;
+      string ownGen = (g_refillSlots[i].genPrefix == "") ? GetCommentPrefix() : g_refillSlots[i].genPrefix;
       int maxLvl = FindMaxGridLevelOnSide(side, "_" + kind);
       int useLvl = (lvl > 0 && lvl <= maxLvl) ? (maxLvl + 1) : (lvl > 0 ? lvl : maxLvl + 1);
-      string comment = GetCommentPrefix() + "_" + kind + "#" + IntegerToString(useLvl);
+      // v6.87: respect ORIGINAL generation when re-opening (not the current generation)
+      string comment = ownGen + "_" + kind + "#" + IntegerToString(useLvl);
       ENUM_ORDER_TYPE ot = (side == POSITION_TYPE_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
 
-      Print("v6.86 RefillFire: ", kind, " ", (side == POSITION_TYPE_BUY ? "BUY" : "SELL"),
+      Print("v6.87 RefillFire: ", kind, " ", (side == POSITION_TYPE_BUY ? "BUY" : "SELL"),
+            " gen=", ownGen,
             " slotPx=", DoubleToString(g_refillSlots[i].price, _Digits),
             " curPx=", DoubleToString(curPrice, _Digits),
             " lots=", DoubleToString(lots, 2), " cmt=", comment);
@@ -3816,8 +3819,16 @@ bool TryRefillGridSlot(ENUM_POSITION_TYPE side, string kind)
          g_refillSlots[i].active = false;
          return true;
       }
-   }
-   return false;
+      else
+      {
+         if(TimeCurrent() - g_lastRefillRejectLog >= 10)
+         {
+            g_lastRefillRejectLog = TimeCurrent();
+            Print("v6.87 RefillFire FAILED: OpenOrder() returned false (check BB filter / candle confirm / MaxOpenOrders / hedge pause)");
+         }
+      }
+    }
+    return false;
 }
 
 //+------------------------------------------------------------------+
