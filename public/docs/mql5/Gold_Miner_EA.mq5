@@ -3768,8 +3768,24 @@ bool TryRefillGridSlot(ENUM_POSITION_TYPE side, string kind)
    if(!EnableGridRefill) return false;
    if(kind == "GL" && !GridRefill_GL) return false;
    if(kind == "GP" && !GridRefill_GP) return false;
-   if(NormalOrderCount() >= MaxOpenOrders) return false;
-   if(g_newOrderBlocked) return false;
+   if(NormalOrderCount() >= MaxOpenOrders)
+   {
+      if(TimeCurrent() - g_lastRefillRejectLog >= 30)
+      {
+         g_lastRefillRejectLog = TimeCurrent();
+         Print("v6.88 RefillFire SKIP: NormalOrderCount(", NormalOrderCount(), ") >= MaxOpenOrders(", MaxOpenOrders, ")");
+      }
+      return false;
+   }
+   if(g_newOrderBlocked)
+   {
+      if(TimeCurrent() - g_lastRefillRejectLog >= 30)
+      {
+         g_lastRefillRejectLog = TimeCurrent();
+         Print("v6.88 RefillFire SKIP: g_newOrderBlocked=true (News/Time/Squeeze filter)");
+      }
+      return false;
+   }
 
    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
    double tolPx = GridRefill_TolerancePts * point;
@@ -3802,18 +3818,26 @@ bool TryRefillGridSlot(ENUM_POSITION_TYPE side, string kind)
          double op = PositionGetDouble(POSITION_PRICE_OPEN);
          if(MathAbs(op - g_refillSlots[i].price) <= tolPx) { overlap = true; break; }
       }
-      if(overlap) continue;
+      if(overlap)
+      {
+         if(TimeCurrent() - g_lastRefillRejectLog >= 30)
+         {
+            g_lastRefillRejectLog = TimeCurrent();
+            Print("v6.88 RefillFire SKIP overlap: slotPx=", DoubleToString(g_refillSlots[i].price, _Digits),
+                  " — existing same-side order within tolerance, will not stack");
+         }
+         continue;
+      }
 
       double lots = g_refillSlots[i].lots;
       int lvl = g_refillSlots[i].level;
       string ownGen = (g_refillSlots[i].genPrefix == "") ? GetCommentPrefix() : g_refillSlots[i].genPrefix;
-      int maxLvl = FindMaxGridLevelOnSide(side, "_" + kind);
-      int useLvl = (lvl > 0 && lvl <= maxLvl) ? (maxLvl + 1) : (lvl > 0 ? lvl : maxLvl + 1);
-      // v6.87: respect ORIGINAL generation when re-opening (not the current generation)
+      // v6.88: PRESERVE original level number — refill is "filling the gap", not a new grid step
+      int useLvl = (lvl > 0) ? lvl : (FindMaxGridLevelOnSide(side, "_" + kind) + 1);
       string comment = ownGen + "_" + kind + "#" + IntegerToString(useLvl);
       ENUM_ORDER_TYPE ot = (side == POSITION_TYPE_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
 
-      Print("v6.87 RefillFire: ", kind, " ", (side == POSITION_TYPE_BUY ? "BUY" : "SELL"),
+      Print("v6.88 RefillFire: ", kind, " ", (side == POSITION_TYPE_BUY ? "BUY" : "SELL"),
             " gen=", ownGen,
             " slotPx=", DoubleToString(g_refillSlots[i].price, _Digits),
             " curPx=", DoubleToString(curPrice, _Digits),
@@ -3829,11 +3853,45 @@ bool TryRefillGridSlot(ENUM_POSITION_TYPE side, string kind)
          if(TimeCurrent() - g_lastRefillRejectLog >= 10)
          {
             g_lastRefillRejectLog = TimeCurrent();
-            Print("v6.87 RefillFire FAILED: OpenOrder() returned false (check BB filter / candle confirm / MaxOpenOrders / hedge pause)");
+            Print("v6.88 RefillFire FAILED: OpenOrder() returned false (check BB filter / cross-gen INIT guard / hedge pause)");
          }
       }
     }
     return false;
+}
+
+//+------------------------------------------------------------------+
+//| v6.88: ManageGridRefill — decoupled from CheckGridLoss/Profit     |
+//| Runs every tick; iterates all active slots and tries to refill    |
+//| regardless of MaxTrades / buyCount==0 / grid gates.               |
+//+------------------------------------------------------------------+
+void ManageGridRefill()
+{
+   if(!EnableGridRefill) return;
+   int n = ArraySize(g_refillSlots);
+   if(n == 0) return;
+
+   // Track which (side,kind) combos still have active slots, then attempt refill once per combo per tick
+   bool tryBuyGL = false, trySellGL = false, tryBuyGP = false, trySellGP = false;
+   for(int i = 0; i < n; i++)
+   {
+      if(!g_refillSlots[i].active) continue;
+      if(g_refillSlots[i].kind == "GL")
+      {
+         if(g_refillSlots[i].side == POSITION_TYPE_BUY)  tryBuyGL  = true;
+         else                                            trySellGL = true;
+      }
+      else if(g_refillSlots[i].kind == "GP")
+      {
+         if(g_refillSlots[i].side == POSITION_TYPE_BUY)  tryBuyGP  = true;
+         else                                            trySellGP = true;
+      }
+   }
+
+   if(GridRefill_GL && tryBuyGL)  TryRefillGridSlot(POSITION_TYPE_BUY,  "GL");
+   if(GridRefill_GL && trySellGL) TryRefillGridSlot(POSITION_TYPE_SELL, "GL");
+   if(GridRefill_GP && tryBuyGP)  TryRefillGridSlot(POSITION_TYPE_BUY,  "GP");
+   if(GridRefill_GP && trySellGP) TryRefillGridSlot(POSITION_TYPE_SELL, "GP");
 }
 
 //+------------------------------------------------------------------+
