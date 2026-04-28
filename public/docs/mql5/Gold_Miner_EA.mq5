@@ -3799,6 +3799,9 @@ bool TryRefillGridSlot(ENUM_POSITION_TYPE side, string kind)
 //+------------------------------------------------------------------+
 void CheckGridLoss(ENUM_POSITION_TYPE side, int currentGridCount)
 {
+   // v6.86: Try refill BEFORE the MaxTrades gate so we can fill gaps even when grid is "full"
+   if(EnableGridRefill && GridRefill_GL) TryRefillGridSlot(side, "GL");
+
    if(currentGridCount >= GridLoss_MaxTrades) return;
    if(NormalOrderCount() >= MaxOpenOrders) return;
 
