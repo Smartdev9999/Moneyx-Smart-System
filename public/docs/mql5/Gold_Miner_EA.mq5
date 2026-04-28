@@ -3216,6 +3216,8 @@ void ResetTrailingStateBuy()
    g_trailingSL_Buy      = 0;
    g_trailingActive_Buy  = false;
    g_breakevenDone_Buy   = false;
+   // v6.86: clear refill slots for this side (whole side closed via avg trailing)
+   if(EnableGridRefill) RefillResetSide(POSITION_TYPE_BUY);
 }
 
 void ResetTrailingStateSell()
@@ -3223,6 +3225,8 @@ void ResetTrailingStateSell()
    g_trailingSL_Sell     = 0;
    g_trailingActive_Sell = false;
    g_breakevenDone_Sell  = false;
+   // v6.86: clear refill slots for this side
+   if(EnableGridRefill) RefillResetSide(POSITION_TYPE_SELL);
 }
 
 //+------------------------------------------------------------------+
