@@ -3912,6 +3912,9 @@ void CheckGridLoss(ENUM_POSITION_TYPE side, int currentGridCount)
 //+------------------------------------------------------------------+
 void CheckGridProfit(ENUM_POSITION_TYPE side, int currentGridCount)
 {
+   // v6.86: Try refill BEFORE the MaxTrades gate
+   if(EnableGridRefill && GridRefill_GP) TryRefillGridSlot(side, "GP");
+
    if(currentGridCount >= GridProfit_MaxTrades) return;
    if(NormalOrderCount() >= MaxOpenOrders) return;
 
