@@ -74,3 +74,4 @@ Updated: today
 - [ATR Dynamic Grid](mem://trading/atr-dynamic-grid-v2) — ATR grid spacing
 - [Shared CDC Logic](mem://trading/shared-cdc-reliability-logic-v1-7-0) — Decoupled trend filter
 - [Scalper Init](mem://project/moneyx-precision-scalper-init) — XAUUSD SMC scalper
+- [GM Grid Refill Decoupled v6.88](mem://trading/gold-miner-ea/grid-refill-decoupled-v6-88) — ManageGridRefill() runs every tick decoupled from CheckGridLoss/Profit gates; preserves original level#; throttled reject logs
