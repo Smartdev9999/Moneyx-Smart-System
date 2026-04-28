@@ -2,6 +2,7 @@
 Updated: today
 
 # Project Memory
+- [Grid Refill Fix v6.87](mem://trading/gold-miner-ea/grid-refill-fix-v6-87) — Tracks all gens + bound orders, OnTradeTransaction fallback, fixes Breakeven-only mode not refilling
 
 ## Core
 - **Parity**: Absolute parity between backtest and live trading. Restore grid states and positions identically across EA restarts.
