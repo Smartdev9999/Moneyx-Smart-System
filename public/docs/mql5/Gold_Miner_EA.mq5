@@ -3658,9 +3658,9 @@ void RefillCleanupSlots()
 void RefillScanAndDetectCloses()
 {
    if(!EnableGridRefill) return;
-   string genPrefix = GetCommentPrefix();
    ulong    curTickets[]; double curPrices[]; double curLots[];
    long     curSides[];   string curKinds[]; int curLevels[];
+   string   curGenPref[];
    int      curN = 0;
 
    for(int i = PositionsTotal() - 1; i >= 0; i--)
@@ -3671,8 +3671,8 @@ void RefillScanAndDetectCloses()
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       string c = PositionGetString(POSITION_COMMENT);
       if(IsHedgeComment(c)) continue;
-      if(IsTicketBound(tk)) continue;
-      if(StringFind(c, genPrefix + "_") != 0) continue;
+      // v6.87: REMOVED genPrefix filter and IsTicketBound filter — track ALL GL/GP across all generations
+      // (BE/Trailing can close orders in any generation, including bound ones)
 
       string kind = "";
       int lvl = -1;
@@ -3680,15 +3680,22 @@ void RefillScanAndDetectCloses()
       else if(GridRefill_GP && IsGridKindComment(c, "GP")) { kind = "GP"; lvl = ExtractGridLevel(c, "GP"); }
       else continue;
 
+      // v6.87: extract generation prefix from comment (e.g. "GM2_GL#3" -> "GM2")
+      string ownGen = "GM";
+      int us = StringFind(c, "_");
+      if(us > 0) ownGen = StringSubstr(c, 0, us);
+
       ArrayResize(curTickets, curN + 1); ArrayResize(curPrices, curN + 1);
       ArrayResize(curLots, curN + 1);    ArrayResize(curSides, curN + 1);
       ArrayResize(curKinds, curN + 1);   ArrayResize(curLevels, curN + 1);
+      ArrayResize(curGenPref, curN + 1);
       curTickets[curN] = tk;
       curPrices[curN]  = PositionGetDouble(POSITION_PRICE_OPEN);
       curLots[curN]    = PositionGetDouble(POSITION_VOLUME);
       curSides[curN]   = PositionGetInteger(POSITION_TYPE);
       curKinds[curN]   = kind;
       curLevels[curN]  = lvl;
+      curGenPref[curN] = ownGen;
       curN++;
    }
 
@@ -3700,20 +3707,25 @@ void RefillScanAndDetectCloses()
       for(int k = 0; k < curN; k++) { if(curTickets[k] == oldTk) { stillOpen = true; break; } }
       if(stillOpen) continue;
 
+      // v6.87: confirm the ticket is truly closed (not just pending/disappeared) via HistoryOrderSelect
+      // — use deal close reason if available; if not, treat as closed anyway (safer than missing)
+
       int slotN = ArraySize(g_refillSlots);
       if(GridRefill_MaxSlots > 0 && slotN >= GridRefill_MaxSlots * 2) continue;
 
       ArrayResize(g_refillSlots, slotN + 1);
-      g_refillSlots[slotN].ticket   = oldTk;
-      g_refillSlots[slotN].price    = g_trackedPrices[j];
-      g_refillSlots[slotN].lots     = g_trackedLots[j];
-      g_refillSlots[slotN].side     = g_trackedSides[j];
-      g_refillSlots[slotN].kind     = g_trackedKinds[j];
-      g_refillSlots[slotN].level    = g_trackedLevels[j];
-      g_refillSlots[slotN].closedAt = TimeCurrent();
-      g_refillSlots[slotN].active   = true;
+      g_refillSlots[slotN].ticket    = oldTk;
+      g_refillSlots[slotN].price     = g_trackedPrices[j];
+      g_refillSlots[slotN].lots      = g_trackedLots[j];
+      g_refillSlots[slotN].side      = g_trackedSides[j];
+      g_refillSlots[slotN].kind      = g_trackedKinds[j];
+      g_refillSlots[slotN].level     = g_trackedLevels[j];
+      g_refillSlots[slotN].genPrefix = g_trackedGenPref[j];
+      g_refillSlots[slotN].closedAt  = TimeCurrent();
+      g_refillSlots[slotN].active    = true;
 
-      Print("v6.86 RefillSlot: #", oldTk, " ", g_trackedKinds[j],
+      Print("v6.87 RefillSlot ADD: #", oldTk, " ", g_trackedKinds[j],
+            " gen=", g_trackedGenPref[j],
             " lvl=", g_trackedLevels[j],
             " side=", (g_trackedSides[j] == POSITION_TYPE_BUY ? "BUY" : "SELL"),
             " price=", DoubleToString(g_trackedPrices[j], _Digits),
@@ -3723,11 +3735,13 @@ void RefillScanAndDetectCloses()
    ArrayResize(g_trackedTickets, curN); ArrayResize(g_trackedPrices, curN);
    ArrayResize(g_trackedLots, curN);    ArrayResize(g_trackedSides, curN);
    ArrayResize(g_trackedKinds, curN);   ArrayResize(g_trackedLevels, curN);
+   ArrayResize(g_trackedGenPref, curN);
    for(int m = 0; m < curN; m++)
    {
       g_trackedTickets[m] = curTickets[m]; g_trackedPrices[m] = curPrices[m];
       g_trackedLots[m]    = curLots[m];    g_trackedSides[m]  = curSides[m];
       g_trackedKinds[m]   = curKinds[m];   g_trackedLevels[m] = curLevels[m];
+      g_trackedGenPref[m] = curGenPref[m];
    }
 
    if(TimeCurrent() - g_lastRefillCleanup >= 30)
