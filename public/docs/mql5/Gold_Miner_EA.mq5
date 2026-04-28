@@ -1549,6 +1549,9 @@ void OnTick()
    // === ORIGINAL TRADING LOGIC (unchanged) ===
    if(g_eaStopped) return;
 
+   //--- v6.86: Scan tracked tickets and detect closes BEFORE trailing runs (so we capture ticket info before broker SL closes them)
+   if(EnableGridRefill) RefillScanAndDetectCloses();
+
    //--- Every tick: Per-Order Trailing (works for both modes - individual positions)
    if(EnablePerOrderTrailing)
    {
