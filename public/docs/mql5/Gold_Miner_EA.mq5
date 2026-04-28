@@ -3120,6 +3120,20 @@ void ManageTrailingStop()
 //+------------------------------------------------------------------+
 //| Apply trailing SL to all positions of a side (modify broker SL)    |
 //+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| v6.87: Squeeze Pause Trailing                                     |
+//| Returns true when Volatility Squeeze Filter is enabled, the pause |
+//| toggle is on, and the market is currently in Expansion (any side).|
+//| When true, ALL trailing/breakeven SL writers must skip updates    |
+//| (does NOT block new orders / grid / hedge / TP / accumulate).     |
+//+------------------------------------------------------------------+
+bool IsSqueezePausingTrailing()
+{
+   if(!InpUseSqueezeFilter) return false;
+   if(!InpSqueeze_PauseTrailing) return false;
+   return (g_squeezeBlocked || g_squeezeBuyBlocked || g_squeezeSellBlocked);
+}
+
 void ApplyTrailingSL(ENUM_POSITION_TYPE side, double slPrice)
 {
    int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
