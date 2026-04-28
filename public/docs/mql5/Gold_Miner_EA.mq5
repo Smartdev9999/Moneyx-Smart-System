@@ -471,6 +471,28 @@ bool           g_hadPositions;      // Track if we had positions (for accumulate
 double         g_maxDDBuy;          // Max drawdown (most negative PL) of BUY side - for DD% TP
 double         g_maxDDSell;         // Max drawdown (most negative PL) of SELL side - for DD% TP
 
+// === v6.86: Grid Refill After Trailing Close ===
+struct GridRefillSlot
+{
+   ulong    ticket;       // original ticket id (closed)
+   double   price;        // open price of the closed grid order
+   double   lots;         // original lot size
+   long     side;         // POSITION_TYPE_BUY / SELL
+   string   kind;         // "GL" or "GP"
+   int      level;        // grid level extracted from comment
+   datetime closedAt;     // when we recorded the close
+   bool     active;       // false = consumed/expired
+};
+GridRefillSlot g_refillSlots[];
+ulong          g_trackedTickets[];   // tickets currently open that we monitor
+double         g_trackedPrices[];
+double         g_trackedLots[];
+long           g_trackedSides[];
+string         g_trackedKinds[];
+int            g_trackedLevels[];
+datetime       g_lastRefillCleanup = 0;
+
+
 // Dashboard Control Variables (v2.9)
 bool           g_eaIsPaused = false;           // EA Pause State (manual)
 bool           g_atrChartHidden = false;       // ATR subwindow hidden flag (backtest)
