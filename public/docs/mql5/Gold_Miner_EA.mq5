@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.88 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.89 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "6.88"
-#property description "Gold Miner EA v6.88 - Independent Squeeze Pause Trailing: pause uses its own TF threshold (InpSqueeze_PauseTrail_MinTF), no longer tied to Block New Orders"
+#property version   "6.89"
+#property description "Gold Miner EA v6.89 - Pause Trailing Strip SL: on Squeeze Expansion edge, strips broker SL from trailing-owned tickets and resets trailing state; ManageTrailingStop() guard added"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -358,6 +358,7 @@ input bool             InpSqueeze_DirectionalBlock = false;        // Directiona
 input bool             InpSqueeze_CloseOnExpansion = false;        // Close All Orders on Expansion
 input bool             InpSqueeze_PauseTrailing    = true;         // v6.87: Pause Trailing Stop on Expansion (resume when Normal)
 input int              InpSqueeze_PauseTrail_MinTF = 1;            // v6.88: Min TFs in Expansion to Pause Trailing (1-3, independent of Block)
+input bool             InpSqueeze_PauseTrail_StripSL = true;       // v6.89: On Pause edge, strip broker SL from trailing-owned tickets (INIT/GL/GP)
 
 //--- Counter-Trend Hedging
 input group "=== Counter-Trend Hedging ==="
@@ -698,6 +699,9 @@ double   g_maxGridTrailSL_Sell = 0;
 bool     g_maxGridTrailActive_Buy  = false;
 bool     g_maxGridTrailActive_Sell = false;
 int      g_maxGridMonitorGen = 0;  // generation currently being monitored
+
+// === v6.89: Squeeze Pause Trailing edge state (true while in pause) ===
+bool     g_squeezePauseTrailingActive = false;
 
 // === v6.42: Dashboard History Cache ===
 datetime g_lastDashHistoryCalcTime = 0;
