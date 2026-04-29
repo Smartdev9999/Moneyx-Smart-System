@@ -2489,8 +2489,11 @@ void SyncBrokerTPSL()
        if(posType == POSITION_TYPE_BUY && avgBuy > 0)
        {
           // v6.85: Respect Average Trailing Stop SL — do NOT overwrite trailing/breakeven SL with 0
+          // v6.89: When Squeeze Pause Trailing is active, force SL=0 (do NOT preserve curSL)
           double effectiveSlBuy = slBuy;
-          if(EnableTrailingStop && g_trailingActive_Buy && g_trailingSL_Buy > 0)
+          if(g_squeezePauseTrailingActive && InpSqueeze_PauseTrail_StripSL)
+             effectiveSlBuy = 0; // force-clear during pause; trailing will rebuild on resume
+          else if(EnableTrailingStop && g_trailingActive_Buy && g_trailingSL_Buy > 0)
              effectiveSlBuy = g_trailingSL_Buy;
           else if(slBuy == 0 && curSL > 0)
              effectiveSlBuy = curSL; // preserve existing broker SL (e.g. breakeven)
@@ -2509,8 +2512,11 @@ void SyncBrokerTPSL()
        else if(posType == POSITION_TYPE_SELL && avgSell > 0)
        {
           // v6.85: Respect Average Trailing Stop SL — do NOT overwrite trailing/breakeven SL with 0
+          // v6.89: When Squeeze Pause Trailing is active, force SL=0 (do NOT preserve curSL)
           double effectiveSlSell = slSell;
-          if(EnableTrailingStop && g_trailingActive_Sell && g_trailingSL_Sell > 0)
+          if(g_squeezePauseTrailingActive && InpSqueeze_PauseTrail_StripSL)
+             effectiveSlSell = 0;
+          else if(EnableTrailingStop && g_trailingActive_Sell && g_trailingSL_Sell > 0)
              effectiveSlSell = g_trailingSL_Sell;
           else if(slSell == 0 && curSL > 0)
              effectiveSlSell = curSL; // preserve existing broker SL
