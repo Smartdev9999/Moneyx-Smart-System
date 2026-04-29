@@ -360,6 +360,9 @@ input bool             InpSqueeze_PauseTrailing    = true;         // v6.87: Pau
 input int              InpSqueeze_PauseTrail_MinTF = 1;            // v6.88: Min TFs in Expansion to Pause Trailing (1-3, independent of Block)
 input bool             InpSqueeze_PauseTrail_StripSL = true;       // v6.89: On Pause edge, strip broker SL from trailing-owned tickets (INIT/GL/GP)
 input bool             InpMaxGridTrail_IncludeINITGP = true;       // v6.90: MaxGridTrail trigger counts INIT+GL+GP (false = GL only, v6.89 behavior)
+input string           ___MaxGrid_2Cross___ = "===== Max Grid Trail 2-Cross ARM (v6.91) =====";
+input bool             InpMaxGridArm_Strict2Cross    = true;       // v6.91: Require price to first cross BELOW avg before ARM (true = safety net mode)
+input int              InpMaxGridArm_UnderAvgBuffer  = 0;          // v6.91: Points BELOW avg required to mark ARM-READY (0 = touching avg is enough)
 
 //--- Counter-Trend Hedging
 input group "=== Counter-Trend Hedging ==="
