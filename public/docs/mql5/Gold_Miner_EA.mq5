@@ -4880,9 +4880,17 @@ void DisplayDashboard()
                 {
                    DrawTableRow(row, "MG BUY Trail", "ACTIVE SL=" + DoubleToString(g_maxGridTrailSL_Buy, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)), clrLime, COLOR_SECTION_MAXTRAIL); row++;
                 }
+                else if(InpMaxGridArm_Strict2Cross && g_maxGridArmReady_Buy)  // v6.91
+                {
+                   DrawTableRow(row, "MG BUY Trail", "READY (waiting cross-up)", clrYellow, COLOR_SECTION_MAXTRAIL); row++;
+                }
                 if(g_maxGridTrailActive_Sell)
                 {
                    DrawTableRow(row, "MG SELL Trail", "ACTIVE SL=" + DoubleToString(g_maxGridTrailSL_Sell, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)), clrLime, COLOR_SECTION_MAXTRAIL); row++;
+                }
+                else if(InpMaxGridArm_Strict2Cross && g_maxGridArmReady_Sell)  // v6.91
+                {
+                   DrawTableRow(row, "MG SELL Trail", "READY (waiting cross-down)", clrYellow, COLOR_SECTION_MAXTRAIL); row++;
                 }
              }
 
