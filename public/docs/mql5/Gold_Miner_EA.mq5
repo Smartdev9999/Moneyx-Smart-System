@@ -3555,7 +3555,7 @@ void ManageMaxGridTrailing()
                {
                   g_maxGridTrailActive_Buy = true;
                   g_maxGridTrailSL_Buy = avgPrice + MaxGrid_BreakevenBuffer * point;
-                  Print("v6.41 MaxGridTrail BUY ACTIVATED: Gen=", gen, " AvgPrice=", avgPrice, " SL=", g_maxGridTrailSL_Buy);
+                  Print("v6.90 MaxGridTrail BUY ACTIVATED: Gen=", gen, " AvgPrice=", avgPrice, " SL=", g_maxGridTrailSL_Buy, " count=", glCount, " mode=", (InpMaxGridTrail_IncludeINITGP ? "ALL" : "GL_ONLY"));
                }
             }
             else
@@ -3610,7 +3610,7 @@ void ManageMaxGridTrailing()
                {
                   g_maxGridTrailActive_Sell = true;
                   g_maxGridTrailSL_Sell = avgPrice - MaxGrid_BreakevenBuffer * point;
-                  Print("v6.41 MaxGridTrail SELL ACTIVATED: Gen=", gen, " AvgPrice=", avgPrice, " SL=", g_maxGridTrailSL_Sell);
+                  Print("v6.90 MaxGridTrail SELL ACTIVATED: Gen=", gen, " AvgPrice=", avgPrice, " SL=", g_maxGridTrailSL_Sell, " count=", glCount, " mode=", (InpMaxGridTrail_IncludeINITGP ? "ALL" : "GL_ONLY"));
                }
             }
             else
