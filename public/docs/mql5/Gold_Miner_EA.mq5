@@ -3536,7 +3536,10 @@ void ManageMaxGridTrailing()
    
    // === BUY side trailing ===
    {
-      int glCount = CountGenGridLoss(gen, POSITION_TYPE_BUY);
+      // v6.90: trigger gate counts INIT+GL+GP (toggle to revert to GL-only)
+      int glCount = InpMaxGridTrail_IncludeINITGP
+                       ? CountGenGridAll(gen, POSITION_TYPE_BUY)
+                       : CountGenGridLoss(gen, POSITION_TYPE_BUY);
       int requiredOrders_Buy = (MaxGrid_TrailMode == 1) ? MaxGrid_StartOrders : GridLoss_MaxTrades;  // v6.54
       if(glCount >= requiredOrders_Buy)
       {
@@ -3588,7 +3591,10 @@ void ManageMaxGridTrailing()
    
    // === SELL side trailing ===
    {
-      int glCount = CountGenGridLoss(gen, POSITION_TYPE_SELL);
+      // v6.90: trigger gate counts INIT+GL+GP (toggle to revert to GL-only)
+      int glCount = InpMaxGridTrail_IncludeINITGP
+                       ? CountGenGridAll(gen, POSITION_TYPE_SELL)
+                       : CountGenGridLoss(gen, POSITION_TYPE_SELL);
       int requiredOrders_Sell = (MaxGrid_TrailMode == 1) ? MaxGrid_StartOrders : GridLoss_MaxTrades;  // v6.54
       if(glCount >= requiredOrders_Sell)
       {
