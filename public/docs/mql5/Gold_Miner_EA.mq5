@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.87 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.88 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "6.87"
-#property description "Gold Miner EA v6.87 - Squeeze Pause Trailing: all trailing/breakeven SL updates pause during Volatility Expansion, resume when Normal"
+#property version   "6.88"
+#property description "Gold Miner EA v6.88 - Independent Squeeze Pause Trailing: pause uses its own TF threshold (InpSqueeze_PauseTrail_MinTF), no longer tied to Block New Orders"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -357,6 +357,7 @@ input int              InpSqueeze_MinTFExpansion = 1;              // Min TFs in
 input bool             InpSqueeze_DirectionalBlock = false;        // Directional Block (block counter-trend only)
 input bool             InpSqueeze_CloseOnExpansion = false;        // Close All Orders on Expansion
 input bool             InpSqueeze_PauseTrailing    = true;         // v6.87: Pause Trailing Stop on Expansion (resume when Normal)
+input int              InpSqueeze_PauseTrail_MinTF = 1;            // v6.88: Min TFs in Expansion to Pause Trailing (1-3, independent of Block)
 
 //--- Counter-Trend Hedging
 input group "=== Counter-Trend Hedging ==="
@@ -3123,9 +3124,11 @@ void ManageTrailingStop()
 //| Apply trailing SL to all positions of a side (modify broker SL)    |
 //+------------------------------------------------------------------+
 //+------------------------------------------------------------------+
-//| v6.87: Squeeze Pause Trailing                                     |
-//| Returns true when Volatility Squeeze Filter is enabled, the pause |
-//| toggle is on, and the market is currently in Expansion (any side).|
+//| v6.88: Independent Squeeze Pause Trailing                         |
+//| Counts EXPANSION TFs directly from g_squeeze[].state — completely |
+//| independent of Block-New-Orders flags (g_squeezeBlocked*) and of  |
+//| InpSqueeze_BlockOnExpansion / InpSqueeze_MinTFExpansion.          |
+//| Triggers when EXPANSION TF count >= InpSqueeze_PauseTrail_MinTF.  |
 //| When true, ALL trailing/breakeven SL writers must skip updates    |
 //| (does NOT block new orders / grid / hedge / TP / accumulate).     |
 //+------------------------------------------------------------------+
@@ -3133,7 +3136,16 @@ bool IsSqueezePausingTrailing()
 {
    if(!InpUseSqueezeFilter) return false;
    if(!InpSqueeze_PauseTrailing) return false;
-   return (g_squeezeBlocked || g_squeezeBuyBlocked || g_squeezeSellBlocked);
+
+   int expCount = 0;
+   for(int sq = 0; sq < 3; sq++)
+      if(g_squeeze[sq].state == 2) expCount++;
+
+   int minTF = InpSqueeze_PauseTrail_MinTF;
+   if(minTF < 1) minTF = 1;
+   if(minTF > 3) minTF = 3;
+
+   return (expCount >= minTF);
 }
 
 void ApplyTrailingSL(ENUM_POSITION_TYPE side, double slPrice)
