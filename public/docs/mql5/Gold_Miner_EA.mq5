@@ -704,6 +704,11 @@ bool     g_maxGridTrailActive_Buy  = false;
 bool     g_maxGridTrailActive_Sell = false;
 int      g_maxGridMonitorGen = 0;  // generation currently being monitored
 
+// === v6.91: Max Grid Trail Strict 2-Cross ARM state ===
+bool     g_maxGridArmReady_Buy  = false;   // true once price has crossed BELOW avg for current monitored gen
+bool     g_maxGridArmReady_Sell = false;   // true once price has crossed ABOVE avg for current monitored gen
+int      g_maxGridArmReadyGen   = -1;      // gen that armReady flags refer to (auto-resets on gen change)
+
 // === v6.89: Squeeze Pause Trailing edge state (true while in pause) ===
 bool     g_squeezePauseTrailingActive = false;
 
