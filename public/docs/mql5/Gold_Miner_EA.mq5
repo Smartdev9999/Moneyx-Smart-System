@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.90 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.91 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "6.90"
-#property description "Gold Miner EA v6.90 - MaxGridTrail trigger now counts INIT+GL+GP (was GL only), aligning with CalcGenAveragePrice basket; toggle InpMaxGridTrail_IncludeINITGP to revert to GL-only behavior"
+#property version   "6.91"
+#property description "Gold Miner EA v6.91 - MaxGridTrail Strict 2-Cross ARM: price must first cross BELOW avg (basket truly stuck) before ARM is allowed when price crosses BACK above avg+activation; prevents instant ARM when count threshold opens while price is already above activation"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -360,6 +360,9 @@ input bool             InpSqueeze_PauseTrailing    = true;         // v6.87: Pau
 input int              InpSqueeze_PauseTrail_MinTF = 1;            // v6.88: Min TFs in Expansion to Pause Trailing (1-3, independent of Block)
 input bool             InpSqueeze_PauseTrail_StripSL = true;       // v6.89: On Pause edge, strip broker SL from trailing-owned tickets (INIT/GL/GP)
 input bool             InpMaxGridTrail_IncludeINITGP = true;       // v6.90: MaxGridTrail trigger counts INIT+GL+GP (false = GL only, v6.89 behavior)
+input string           ___MaxGrid_2Cross___ = "===== Max Grid Trail 2-Cross ARM (v6.91) =====";
+input bool             InpMaxGridArm_Strict2Cross    = true;       // v6.91: Require price to first cross BELOW avg before ARM (true = safety net mode)
+input int              InpMaxGridArm_UnderAvgBuffer  = 0;          // v6.91: Points BELOW avg required to mark ARM-READY (0 = touching avg is enough)
 
 //--- Counter-Trend Hedging
 input group "=== Counter-Trend Hedging ==="
@@ -701,6 +704,11 @@ bool     g_maxGridTrailActive_Buy  = false;
 bool     g_maxGridTrailActive_Sell = false;
 int      g_maxGridMonitorGen = 0;  // generation currently being monitored
 
+// === v6.91: Max Grid Trail Strict 2-Cross ARM state ===
+bool     g_maxGridArmReady_Buy  = false;   // true once price has crossed BELOW avg for current monitored gen
+bool     g_maxGridArmReady_Sell = false;   // true once price has crossed ABOVE avg for current monitored gen
+int      g_maxGridArmReadyGen   = -1;      // gen that armReady flags refer to (auto-resets on gen change)
+
 // === v6.89: Squeeze Pause Trailing edge state (true while in pause) ===
 bool     g_squeezePauseTrailingActive = false;
 
@@ -1026,7 +1034,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-     Print("Gold Miner EA v6.90 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+     Print("Gold Miner EA v6.91 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min",
@@ -1088,7 +1096,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.90 deinitialized");
+   Print("Gold Miner EA v6.91 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -3546,16 +3554,42 @@ void ManageMaxGridTrailing()
          double avgPrice = CalcGenAveragePrice(gen, POSITION_TYPE_BUY);
          if(avgPrice > 0)
          {
+            // v6.91: reset armReady flags when monitored gen changes
+            if(g_maxGridArmReadyGen != gen)
+            {
+               g_maxGridArmReady_Buy  = false;
+               g_maxGridArmReady_Sell = false;
+               g_maxGridArmReadyGen   = gen;
+            }
+
+            // v6.91 STEP 1: price must first cross BELOW avg (basket truly stuck)
+            //               before ARM is allowed. Skip when Strict2Cross=false.
+            if(InpMaxGridArm_Strict2Cross && !g_maxGridArmReady_Buy)
+            {
+               double underThreshold = avgPrice - InpMaxGridArm_UnderAvgBuffer * point;
+               if(bid <= underThreshold)
+               {
+                  g_maxGridArmReady_Buy = true;
+                  Print("v6.91 MaxGridTrail BUY ARM-READY: Gen=", gen,
+                        " bid=", bid, " <= avgUnder=", underThreshold,
+                        " (waiting for cross-up to avg+", MaxGrid_TrailActivation, "pts)");
+               }
+            }
+
             double activationPrice = avgPrice + MaxGrid_TrailActivation * point;
-            
+
             if(!g_maxGridTrailActive_Buy)
             {
-               // Check if price reached activation level
-               if(bid >= activationPrice)
+               // v6.91 STEP 2: ARM only when armReady (or Strict2Cross=false) AND bid >= activation
+               bool armGate = (!InpMaxGridArm_Strict2Cross) || g_maxGridArmReady_Buy;
+               if(armGate && bid >= activationPrice)
                {
                   g_maxGridTrailActive_Buy = true;
                   g_maxGridTrailSL_Buy = avgPrice + MaxGrid_BreakevenBuffer * point;
-                  Print("v6.90 MaxGridTrail BUY ACTIVATED: Gen=", gen, " AvgPrice=", avgPrice, " SL=", g_maxGridTrailSL_Buy, " count=", glCount, " mode=", (InpMaxGridTrail_IncludeINITGP ? "ALL" : "GL_ONLY"));
+                  Print("v6.91 MaxGridTrail BUY ACTIVATED: Gen=", gen, " AvgPrice=", avgPrice,
+                        " SL=", g_maxGridTrailSL_Buy, " count=", glCount,
+                        " mode=", (InpMaxGridTrail_IncludeINITGP ? "ALL" : "GL_ONLY"),
+                        (InpMaxGridArm_Strict2Cross ? " (2-cross confirmed)" : " (legacy ARM)"));
                }
             }
             else
@@ -3574,6 +3608,7 @@ void ManageMaxGridTrailing()
                   CloseGenSide(gen, POSITION_TYPE_BUY);
                   g_maxGridTrailActive_Buy = false;
                   g_maxGridTrailSL_Buy = 0;
+                  g_maxGridArmReady_Buy = false;  // v6.91: reset for next cycle
                }
             }
          }
@@ -3586,6 +3621,7 @@ void ManageMaxGridTrailing()
             g_maxGridTrailActive_Buy = false;
             g_maxGridTrailSL_Buy = 0;
          }
+         g_maxGridArmReady_Buy = false;  // v6.91: count dropped → reset cross state
       }
    }
    
@@ -3601,16 +3637,41 @@ void ManageMaxGridTrailing()
          double avgPrice = CalcGenAveragePrice(gen, POSITION_TYPE_SELL);
          if(avgPrice > 0)
          {
+            // v6.91: reset armReady flags when monitored gen changes
+            if(g_maxGridArmReadyGen != gen)
+            {
+               g_maxGridArmReady_Buy  = false;
+               g_maxGridArmReady_Sell = false;
+               g_maxGridArmReadyGen   = gen;
+            }
+
+            // v6.91 STEP 1 (SELL): price must first cross ABOVE avg before ARM allowed
+            if(InpMaxGridArm_Strict2Cross && !g_maxGridArmReady_Sell)
+            {
+               double overThreshold = avgPrice + InpMaxGridArm_UnderAvgBuffer * point;
+               if(ask >= overThreshold)
+               {
+                  g_maxGridArmReady_Sell = true;
+                  Print("v6.91 MaxGridTrail SELL ARM-READY: Gen=", gen,
+                        " ask=", ask, " >= avgOver=", overThreshold,
+                        " (waiting for cross-down to avg-", MaxGrid_TrailActivation, "pts)");
+               }
+            }
+
             double activationPrice = avgPrice - MaxGrid_TrailActivation * point;
-            
+
             if(!g_maxGridTrailActive_Sell)
             {
-               // Check if price reached activation level (for SELL, price must go below avg)
-               if(ask <= activationPrice)
+               // v6.91 STEP 2 (SELL): ARM only when armReady AND ask <= activation
+               bool armGate = (!InpMaxGridArm_Strict2Cross) || g_maxGridArmReady_Sell;
+               if(armGate && ask <= activationPrice)
                {
                   g_maxGridTrailActive_Sell = true;
                   g_maxGridTrailSL_Sell = avgPrice - MaxGrid_BreakevenBuffer * point;
-                  Print("v6.90 MaxGridTrail SELL ACTIVATED: Gen=", gen, " AvgPrice=", avgPrice, " SL=", g_maxGridTrailSL_Sell, " count=", glCount, " mode=", (InpMaxGridTrail_IncludeINITGP ? "ALL" : "GL_ONLY"));
+                  Print("v6.91 MaxGridTrail SELL ACTIVATED: Gen=", gen, " AvgPrice=", avgPrice,
+                        " SL=", g_maxGridTrailSL_Sell, " count=", glCount,
+                        " mode=", (InpMaxGridTrail_IncludeINITGP ? "ALL" : "GL_ONLY"),
+                        (InpMaxGridArm_Strict2Cross ? " (2-cross confirmed)" : " (legacy ARM)"));
                }
             }
             else
@@ -3629,6 +3690,7 @@ void ManageMaxGridTrailing()
                   CloseGenSide(gen, POSITION_TYPE_SELL);
                   g_maxGridTrailActive_Sell = false;
                   g_maxGridTrailSL_Sell = 0;
+                  g_maxGridArmReady_Sell = false;  // v6.91: reset for next cycle
                }
             }
          }
@@ -3641,6 +3703,7 @@ void ManageMaxGridTrailing()
             g_maxGridTrailActive_Sell = false;
             g_maxGridTrailSL_Sell = 0;
          }
+         g_maxGridArmReady_Sell = false;  // v6.91: count dropped → reset cross state
       }
    }
 }
@@ -4269,7 +4332,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.90 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.90 [ZZ]" : "Gold Miner EA v6.90 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.91 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.91 [ZZ]" : "Gold Miner EA v6.91 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -4817,9 +4880,17 @@ void DisplayDashboard()
                 {
                    DrawTableRow(row, "MG BUY Trail", "ACTIVE SL=" + DoubleToString(g_maxGridTrailSL_Buy, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)), clrLime, COLOR_SECTION_MAXTRAIL); row++;
                 }
+                else if(InpMaxGridArm_Strict2Cross && g_maxGridArmReady_Buy)  // v6.91
+                {
+                   DrawTableRow(row, "MG BUY Trail", "READY (waiting cross-up)", clrYellow, COLOR_SECTION_MAXTRAIL); row++;
+                }
                 if(g_maxGridTrailActive_Sell)
                 {
                    DrawTableRow(row, "MG SELL Trail", "ACTIVE SL=" + DoubleToString(g_maxGridTrailSL_Sell, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS)), clrLime, COLOR_SECTION_MAXTRAIL); row++;
+                }
+                else if(InpMaxGridArm_Strict2Cross && g_maxGridArmReady_Sell)  // v6.91
+                {
+                   DrawTableRow(row, "MG SELL Trail", "READY (waiting cross-down)", clrYellow, COLOR_SECTION_MAXTRAIL); row++;
                 }
              }
 
@@ -9249,6 +9320,9 @@ bool IsTrailingPausedAndHandleEdge()
       g_maxGridTrailActive_Sell = false;
       g_maxGridTrailSL_Buy  = 0;
       g_maxGridTrailSL_Sell = 0;
+      // v6.91: also reset 2-cross armReady so re-arm requires a fresh cross-below avg after pause
+      g_maxGridArmReady_Buy  = false;
+      g_maxGridArmReady_Sell = false;
 
       if(InpSqueeze_PauseTrail_StripSL)
          StripTrailingBrokerSL();
