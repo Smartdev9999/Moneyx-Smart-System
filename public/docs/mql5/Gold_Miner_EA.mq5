@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.90 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.91 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "6.90"
-#property description "Gold Miner EA v6.90 - MaxGridTrail trigger now counts INIT+GL+GP (was GL only), aligning with CalcGenAveragePrice basket; toggle InpMaxGridTrail_IncludeINITGP to revert to GL-only behavior"
+#property version   "6.91"
+#property description "Gold Miner EA v6.91 - MaxGridTrail Strict 2-Cross ARM: price must first cross BELOW avg (basket truly stuck) before ARM is allowed when price crosses BACK above avg+activation; prevents instant ARM when count threshold opens while price is already above activation"
 #property strict
 
 #include <Trade/Trade.mqh>
