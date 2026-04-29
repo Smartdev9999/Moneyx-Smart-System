@@ -9144,6 +9144,83 @@ void CloseOppositeSurvivorsOfGen(int gen, ENUM_POSITION_TYPE hedgeSide)
                   closed, totalPL);
 }
 
+//+------------------------------------------------------------------+
+//| v6.89: Strip broker SL from trailing-owned tickets               |
+//| Called once on Normal->Pause edge. Targets EA-magic positions    |
+//| with comments _INIT / _GL / _GP only. Skips GM_HEDGE_* / GM_HD*  |
+//| (Triple-Gate hedge tickets have their own SL/TP lifecycle).      |
+//| Sets SL=0 while preserving current TP.                            |
+//+------------------------------------------------------------------+
+void StripTrailingBrokerSL()
+{
+   int stripped = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(!PositionSelectByTicket(ticket)) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if((long)PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+
+      string comment = PositionGetString(POSITION_COMMENT);
+      // Skip hedge tickets — Triple-Gate owns their SL/TP
+      if(StringFind(comment, "GM_HEDGE_") >= 0) continue;
+      if(StringFind(comment, "GM_HD")     >= 0) continue;
+      // Only strip trailing-owned tickets
+      if(StringFind(comment, "_INIT") < 0 &&
+         StringFind(comment, "_GL")   < 0 &&
+         StringFind(comment, "_GP")   < 0) continue;
+
+      double curSL = PositionGetDouble(POSITION_SL);
+      if(curSL <= 0) continue; // already no SL
+
+      double curTP = PositionGetDouble(POSITION_TP);
+      if(trade.PositionModify(ticket, 0.0, curTP))
+         stripped++;
+      else
+         Print("v6.89 StripSL: Modify #", ticket, " failed: ", GetLastError());
+   }
+   if(stripped > 0)
+      Print("v6.89 SQUEEZE PAUSE: Stripped broker SL from ", stripped, " trailing-owned tickets");
+}
+
+//+------------------------------------------------------------------+
+//| v6.89: Edge-aware pause check used by ALL trailing managers       |
+//| Returns true when paused (caller must `return`).                  |
+//| On Normal->Pause edge: optionally strip SL + reset trailing state |
+//| (so v6.85 SyncBrokerTPSL won't re-apply old SL via g_trailingSL_*)|
+//| On Pause->Normal edge: log resume                                 |
+//+------------------------------------------------------------------+
+bool IsTrailingPausedAndHandleEdge()
+{
+   bool pausing = IsSqueezePausingTrailing();
+
+   if(pausing && !g_squeezePauseTrailingActive)
+   {
+      g_squeezePauseTrailingActive = true;
+      // Reset trailing state so SyncBrokerTPSL stops re-applying via g_trailingSL_*
+      g_trailingActive_Buy  = false;
+      g_trailingActive_Sell = false;
+      g_trailingSL_Buy  = 0;
+      g_trailingSL_Sell = 0;
+      g_maxGridTrailActive_Buy  = false;
+      g_maxGridTrailActive_Sell = false;
+      g_maxGridTrailSL_Buy  = 0;
+      g_maxGridTrailSL_Sell = 0;
+
+      if(InpSqueeze_PauseTrail_StripSL)
+         StripTrailingBrokerSL();
+      else
+         Print("v6.89 SQUEEZE PAUSE: Trailing frozen (StripSL=OFF, broker SL kept)");
+   }
+   else if(!pausing && g_squeezePauseTrailingActive)
+   {
+      g_squeezePauseTrailingActive = false;
+      Print("v6.89 SQUEEZE PAUSE END: Trailing resumes from current price (state cleared)");
+   }
+   return pausing;
+}
+
 
 //+------------------------------------------------------------------+
 //| Count unbound orders (not tied to any hedge set) for a side        |
