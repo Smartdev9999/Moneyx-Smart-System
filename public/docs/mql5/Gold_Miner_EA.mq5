@@ -9312,6 +9312,9 @@ bool IsTrailingPausedAndHandleEdge()
       g_maxGridTrailActive_Sell = false;
       g_maxGridTrailSL_Buy  = 0;
       g_maxGridTrailSL_Sell = 0;
+      // v6.91: also reset 2-cross armReady so re-arm requires a fresh cross-below avg after pause
+      g_maxGridArmReady_Buy  = false;
+      g_maxGridArmReady_Sell = false;
 
       if(InpSqueeze_PauseTrail_StripSL)
          StripTrailingBrokerSL();
