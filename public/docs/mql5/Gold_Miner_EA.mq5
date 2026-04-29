@@ -3371,6 +3371,33 @@ int CountGenGridLoss(int gen, ENUM_POSITION_TYPE side)
 }
 
 //+------------------------------------------------------------------+
+//| v6.90: Count INIT + GL + GP for gen + side (mirrors avg-price)   |
+//| Used by ManageMaxGridTrailing trigger gate so trailing activates  |
+//| when the FULL basket (not just GL) reaches the threshold.         |
+//+------------------------------------------------------------------+
+int CountGenGridAll(int gen, ENUM_POSITION_TYPE side)
+{
+   int count = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
+      string comment = PositionGetString(POSITION_COMMENT);
+      if(IsHedgeComment(comment)) continue;
+      if(IsTicketBound(ticket)) continue;
+      int orderGen = ExtractGeneration(comment);
+      if(orderGen != gen) continue;
+      if(StringFind(comment, "_INIT") >= 0
+         || StringFind(comment, "_GL") >= 0
+         || StringFind(comment, "_GP") >= 0) count++;
+   }
+   return count;
+}
+
+//+------------------------------------------------------------------+
 //| v6.86: Calc average price for gen + side (INIT + GL + GP)          |
 //| v6.41 originally counted INIT+GL only; v6.86 includes GP so the    |
 //| trailing avg reflects the full basket of the same generation.      |
