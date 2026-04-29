@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.88 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.89 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "6.88"
-#property description "Gold Miner EA v6.88 - Independent Squeeze Pause Trailing: pause uses its own TF threshold (InpSqueeze_PauseTrail_MinTF), no longer tied to Block New Orders"
+#property version   "6.89"
+#property description "Gold Miner EA v6.89 - Pause Trailing Strip SL: on Squeeze Expansion edge, strips broker SL from trailing-owned tickets and resets trailing state; ManageTrailingStop() guard added"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -358,6 +358,7 @@ input bool             InpSqueeze_DirectionalBlock = false;        // Directiona
 input bool             InpSqueeze_CloseOnExpansion = false;        // Close All Orders on Expansion
 input bool             InpSqueeze_PauseTrailing    = true;         // v6.87: Pause Trailing Stop on Expansion (resume when Normal)
 input int              InpSqueeze_PauseTrail_MinTF = 1;            // v6.88: Min TFs in Expansion to Pause Trailing (1-3, independent of Block)
+input bool             InpSqueeze_PauseTrail_StripSL = true;       // v6.89: On Pause edge, strip broker SL from trailing-owned tickets (INIT/GL/GP)
 
 //--- Counter-Trend Hedging
 input group "=== Counter-Trend Hedging ==="
@@ -699,6 +700,9 @@ bool     g_maxGridTrailActive_Buy  = false;
 bool     g_maxGridTrailActive_Sell = false;
 int      g_maxGridMonitorGen = 0;  // generation currently being monitored
 
+// === v6.89: Squeeze Pause Trailing edge state (true while in pause) ===
+bool     g_squeezePauseTrailingActive = false;
+
 // === v6.42: Dashboard History Cache ===
 datetime g_lastDashHistoryCalcTime = 0;
 int      g_dashCacheIntervalSec    = 5;  // recalculate every 5 seconds
@@ -1021,7 +1025,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-     Print("Gold Miner EA v6.88 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+     Print("Gold Miner EA v6.89 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min",
@@ -1083,7 +1087,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.88 deinitialized");
+   Print("Gold Miner EA v6.89 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -2485,8 +2489,11 @@ void SyncBrokerTPSL()
        if(posType == POSITION_TYPE_BUY && avgBuy > 0)
        {
           // v6.85: Respect Average Trailing Stop SL — do NOT overwrite trailing/breakeven SL with 0
+          // v6.89: When Squeeze Pause Trailing is active, force SL=0 (do NOT preserve curSL)
           double effectiveSlBuy = slBuy;
-          if(EnableTrailingStop && g_trailingActive_Buy && g_trailingSL_Buy > 0)
+          if(g_squeezePauseTrailingActive && InpSqueeze_PauseTrail_StripSL)
+             effectiveSlBuy = 0; // force-clear during pause; trailing will rebuild on resume
+          else if(EnableTrailingStop && g_trailingActive_Buy && g_trailingSL_Buy > 0)
              effectiveSlBuy = g_trailingSL_Buy;
           else if(slBuy == 0 && curSL > 0)
              effectiveSlBuy = curSL; // preserve existing broker SL (e.g. breakeven)
@@ -2505,8 +2512,11 @@ void SyncBrokerTPSL()
        else if(posType == POSITION_TYPE_SELL && avgSell > 0)
        {
           // v6.85: Respect Average Trailing Stop SL — do NOT overwrite trailing/breakeven SL with 0
+          // v6.89: When Squeeze Pause Trailing is active, force SL=0 (do NOT preserve curSL)
           double effectiveSlSell = slSell;
-          if(EnableTrailingStop && g_trailingActive_Sell && g_trailingSL_Sell > 0)
+          if(g_squeezePauseTrailingActive && InpSqueeze_PauseTrail_StripSL)
+             effectiveSlSell = 0;
+          else if(EnableTrailingStop && g_trailingActive_Sell && g_trailingSL_Sell > 0)
              effectiveSlSell = g_trailingSL_Sell;
           else if(slSell == 0 && curSL > 0)
              effectiveSlSell = curSL; // preserve existing broker SL
@@ -2855,8 +2865,8 @@ void ManageTPSL()
 //+------------------------------------------------------------------+
 void ManagePerOrderTrailing()
 {
-   // v6.87: Squeeze Pause — skip all SL updates while in Expansion (TP/Grid/Hedge unaffected)
-   if(IsSqueezePausingTrailing()) return;
+   // v6.89: Squeeze Pause — strip broker SL on edge + skip updates while in Expansion
+   if(IsTrailingPausedAndHandleEdge()) return;
    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
@@ -2994,6 +3004,8 @@ void ManagePerOrderTrailing()
 //+------------------------------------------------------------------+
 void ManageTrailingStop()
 {
+   // v6.89: Squeeze Pause guard (was missing — caused trailing to keep modifying SL during Expansion)
+   if(IsTrailingPausedAndHandleEdge()) return;
    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
@@ -3453,8 +3465,8 @@ void CloseGenSide(int gen, ENUM_POSITION_TYPE side)
 //+------------------------------------------------------------------+
 void ManageMaxGridTrailing()
 {
-   // v6.87: Squeeze Pause — skip avg-trailing updates while in Expansion (state preserved)
-   if(IsSqueezePausingTrailing()) return;
+   // v6.89: Squeeze Pause — strip broker SL on edge + skip avg-trailing while in Expansion
+   if(IsTrailingPausedAndHandleEdge()) return;
    // Reset if no orders at all
    if(TotalOrderCount() == 0)
    {
@@ -4223,7 +4235,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.88 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.88 [ZZ]" : "Gold Miner EA v6.88 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.89 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.89 [ZZ]" : "Gold Miner EA v6.89 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -5798,8 +5810,8 @@ void ManageTPSL_TF(int tfIdx)
 //+------------------------------------------------------------------+
 void ManageTrailingStop_TF(int tfIdx)
 {
-   // v6.87: Squeeze Pause — skip MTF avg-trailing updates while in Expansion
-   if(IsSqueezePausingTrailing()) return;
+   // v6.89: Squeeze Pause — strip broker SL on edge + skip MTF avg-trailing while in Expansion
+   if(IsTrailingPausedAndHandleEdge()) return;
    double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
@@ -9138,6 +9150,83 @@ void CloseOppositeSurvivorsOfGen(int gen, ENUM_POSITION_TYPE hedgeSide)
                   gen,
                   (hedgeSide == POSITION_TYPE_BUY ? "BUY" : "SELL"),
                   closed, totalPL);
+}
+
+//+------------------------------------------------------------------+
+//| v6.89: Strip broker SL from trailing-owned tickets               |
+//| Called once on Normal->Pause edge. Targets EA-magic positions    |
+//| with comments _INIT / _GL / _GP only. Skips GM_HEDGE_* / GM_HD*  |
+//| (Triple-Gate hedge tickets have their own SL/TP lifecycle).      |
+//| Sets SL=0 while preserving current TP.                            |
+//+------------------------------------------------------------------+
+void StripTrailingBrokerSL()
+{
+   int stripped = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(!PositionSelectByTicket(ticket)) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if((long)PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+
+      string comment = PositionGetString(POSITION_COMMENT);
+      // Skip hedge tickets — Triple-Gate owns their SL/TP
+      if(StringFind(comment, "GM_HEDGE_") >= 0) continue;
+      if(StringFind(comment, "GM_HD")     >= 0) continue;
+      // Only strip trailing-owned tickets
+      if(StringFind(comment, "_INIT") < 0 &&
+         StringFind(comment, "_GL")   < 0 &&
+         StringFind(comment, "_GP")   < 0) continue;
+
+      double curSL = PositionGetDouble(POSITION_SL);
+      if(curSL <= 0) continue; // already no SL
+
+      double curTP = PositionGetDouble(POSITION_TP);
+      if(trade.PositionModify(ticket, 0.0, curTP))
+         stripped++;
+      else
+         Print("v6.89 StripSL: Modify #", ticket, " failed: ", GetLastError());
+   }
+   if(stripped > 0)
+      Print("v6.89 SQUEEZE PAUSE: Stripped broker SL from ", stripped, " trailing-owned tickets");
+}
+
+//+------------------------------------------------------------------+
+//| v6.89: Edge-aware pause check used by ALL trailing managers       |
+//| Returns true when paused (caller must `return`).                  |
+//| On Normal->Pause edge: optionally strip SL + reset trailing state |
+//| (so v6.85 SyncBrokerTPSL won't re-apply old SL via g_trailingSL_*)|
+//| On Pause->Normal edge: log resume                                 |
+//+------------------------------------------------------------------+
+bool IsTrailingPausedAndHandleEdge()
+{
+   bool pausing = IsSqueezePausingTrailing();
+
+   if(pausing && !g_squeezePauseTrailingActive)
+   {
+      g_squeezePauseTrailingActive = true;
+      // Reset trailing state so SyncBrokerTPSL stops re-applying via g_trailingSL_*
+      g_trailingActive_Buy  = false;
+      g_trailingActive_Sell = false;
+      g_trailingSL_Buy  = 0;
+      g_trailingSL_Sell = 0;
+      g_maxGridTrailActive_Buy  = false;
+      g_maxGridTrailActive_Sell = false;
+      g_maxGridTrailSL_Buy  = 0;
+      g_maxGridTrailSL_Sell = 0;
+
+      if(InpSqueeze_PauseTrail_StripSL)
+         StripTrailingBrokerSL();
+      else
+         Print("v6.89 SQUEEZE PAUSE: Trailing frozen (StripSL=OFF, broker SL kept)");
+   }
+   else if(!pausing && g_squeezePauseTrailingActive)
+   {
+      g_squeezePauseTrailingActive = false;
+      Print("v6.89 SQUEEZE PAUSE END: Trailing resumes from current price (state cleared)");
+   }
+   return pausing;
 }
 
 
