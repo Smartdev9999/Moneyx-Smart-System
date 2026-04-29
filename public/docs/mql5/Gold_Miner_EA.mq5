@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.89 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.90 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "6.89"
-#property description "Gold Miner EA v6.89 - Pause Trailing Strip SL: on Squeeze Expansion edge, strips broker SL from trailing-owned tickets and resets trailing state; ManageTrailingStop() guard added"
+#property version   "6.90"
+#property description "Gold Miner EA v6.90 - MaxGridTrail trigger now counts INIT+GL+GP (was GL only), aligning with CalcGenAveragePrice basket; toggle InpMaxGridTrail_IncludeINITGP to revert to GL-only behavior"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -359,6 +359,7 @@ input bool             InpSqueeze_CloseOnExpansion = false;        // Close All 
 input bool             InpSqueeze_PauseTrailing    = true;         // v6.87: Pause Trailing Stop on Expansion (resume when Normal)
 input int              InpSqueeze_PauseTrail_MinTF = 1;            // v6.88: Min TFs in Expansion to Pause Trailing (1-3, independent of Block)
 input bool             InpSqueeze_PauseTrail_StripSL = true;       // v6.89: On Pause edge, strip broker SL from trailing-owned tickets (INIT/GL/GP)
+input bool             InpMaxGridTrail_IncludeINITGP = true;       // v6.90: MaxGridTrail trigger counts INIT+GL+GP (false = GL only, v6.89 behavior)
 
 //--- Counter-Trend Hedging
 input group "=== Counter-Trend Hedging ==="
@@ -1025,7 +1026,7 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    
-     Print("Gold Miner EA v6.89 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+     Print("Gold Miner EA v6.90 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min",
@@ -1087,7 +1088,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.89 deinitialized");
+   Print("Gold Miner EA v6.90 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -3370,6 +3371,33 @@ int CountGenGridLoss(int gen, ENUM_POSITION_TYPE side)
 }
 
 //+------------------------------------------------------------------+
+//| v6.90: Count INIT + GL + GP for gen + side (mirrors avg-price)   |
+//| Used by ManageMaxGridTrailing trigger gate so trailing activates  |
+//| when the FULL basket (not just GL) reaches the threshold.         |
+//+------------------------------------------------------------------+
+int CountGenGridAll(int gen, ENUM_POSITION_TYPE side)
+{
+   int count = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
+      string comment = PositionGetString(POSITION_COMMENT);
+      if(IsHedgeComment(comment)) continue;
+      if(IsTicketBound(ticket)) continue;
+      int orderGen = ExtractGeneration(comment);
+      if(orderGen != gen) continue;
+      if(StringFind(comment, "_INIT") >= 0
+         || StringFind(comment, "_GL") >= 0
+         || StringFind(comment, "_GP") >= 0) count++;
+   }
+   return count;
+}
+
+//+------------------------------------------------------------------+
 //| v6.86: Calc average price for gen + side (INIT + GL + GP)          |
 //| v6.41 originally counted INIT+GL only; v6.86 includes GP so the    |
 //| trailing avg reflects the full basket of the same generation.      |
@@ -3508,7 +3536,10 @@ void ManageMaxGridTrailing()
    
    // === BUY side trailing ===
    {
-      int glCount = CountGenGridLoss(gen, POSITION_TYPE_BUY);
+      // v6.90: trigger gate counts INIT+GL+GP (toggle to revert to GL-only)
+      int glCount = InpMaxGridTrail_IncludeINITGP
+                       ? CountGenGridAll(gen, POSITION_TYPE_BUY)
+                       : CountGenGridLoss(gen, POSITION_TYPE_BUY);
       int requiredOrders_Buy = (MaxGrid_TrailMode == 1) ? MaxGrid_StartOrders : GridLoss_MaxTrades;  // v6.54
       if(glCount >= requiredOrders_Buy)
       {
@@ -3524,7 +3555,7 @@ void ManageMaxGridTrailing()
                {
                   g_maxGridTrailActive_Buy = true;
                   g_maxGridTrailSL_Buy = avgPrice + MaxGrid_BreakevenBuffer * point;
-                  Print("v6.41 MaxGridTrail BUY ACTIVATED: Gen=", gen, " AvgPrice=", avgPrice, " SL=", g_maxGridTrailSL_Buy);
+                  Print("v6.90 MaxGridTrail BUY ACTIVATED: Gen=", gen, " AvgPrice=", avgPrice, " SL=", g_maxGridTrailSL_Buy, " count=", glCount, " mode=", (InpMaxGridTrail_IncludeINITGP ? "ALL" : "GL_ONLY"));
                }
             }
             else
@@ -3560,7 +3591,10 @@ void ManageMaxGridTrailing()
    
    // === SELL side trailing ===
    {
-      int glCount = CountGenGridLoss(gen, POSITION_TYPE_SELL);
+      // v6.90: trigger gate counts INIT+GL+GP (toggle to revert to GL-only)
+      int glCount = InpMaxGridTrail_IncludeINITGP
+                       ? CountGenGridAll(gen, POSITION_TYPE_SELL)
+                       : CountGenGridLoss(gen, POSITION_TYPE_SELL);
       int requiredOrders_Sell = (MaxGrid_TrailMode == 1) ? MaxGrid_StartOrders : GridLoss_MaxTrades;  // v6.54
       if(glCount >= requiredOrders_Sell)
       {
@@ -3576,7 +3610,7 @@ void ManageMaxGridTrailing()
                {
                   g_maxGridTrailActive_Sell = true;
                   g_maxGridTrailSL_Sell = avgPrice - MaxGrid_BreakevenBuffer * point;
-                  Print("v6.41 MaxGridTrail SELL ACTIVATED: Gen=", gen, " AvgPrice=", avgPrice, " SL=", g_maxGridTrailSL_Sell);
+                  Print("v6.90 MaxGridTrail SELL ACTIVATED: Gen=", gen, " AvgPrice=", avgPrice, " SL=", g_maxGridTrailSL_Sell, " count=", glCount, " mode=", (InpMaxGridTrail_IncludeINITGP ? "ALL" : "GL_ONLY"));
                }
             }
             else
@@ -4235,7 +4269,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.89 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.89 [ZZ]" : "Gold Miner EA v6.89 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.90 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.90 [ZZ]" : "Gold Miner EA v6.90 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
