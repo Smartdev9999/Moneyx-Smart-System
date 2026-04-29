@@ -3554,16 +3554,42 @@ void ManageMaxGridTrailing()
          double avgPrice = CalcGenAveragePrice(gen, POSITION_TYPE_BUY);
          if(avgPrice > 0)
          {
+            // v6.91: reset armReady flags when monitored gen changes
+            if(g_maxGridArmReadyGen != gen)
+            {
+               g_maxGridArmReady_Buy  = false;
+               g_maxGridArmReady_Sell = false;
+               g_maxGridArmReadyGen   = gen;
+            }
+
+            // v6.91 STEP 1: price must first cross BELOW avg (basket truly stuck)
+            //               before ARM is allowed. Skip when Strict2Cross=false.
+            if(InpMaxGridArm_Strict2Cross && !g_maxGridArmReady_Buy)
+            {
+               double underThreshold = avgPrice - InpMaxGridArm_UnderAvgBuffer * point;
+               if(bid <= underThreshold)
+               {
+                  g_maxGridArmReady_Buy = true;
+                  Print("v6.91 MaxGridTrail BUY ARM-READY: Gen=", gen,
+                        " bid=", bid, " <= avgUnder=", underThreshold,
+                        " (waiting for cross-up to avg+", MaxGrid_TrailActivation, "pts)");
+               }
+            }
+
             double activationPrice = avgPrice + MaxGrid_TrailActivation * point;
-            
+
             if(!g_maxGridTrailActive_Buy)
             {
-               // Check if price reached activation level
-               if(bid >= activationPrice)
+               // v6.91 STEP 2: ARM only when armReady (or Strict2Cross=false) AND bid >= activation
+               bool armGate = (!InpMaxGridArm_Strict2Cross) || g_maxGridArmReady_Buy;
+               if(armGate && bid >= activationPrice)
                {
                   g_maxGridTrailActive_Buy = true;
                   g_maxGridTrailSL_Buy = avgPrice + MaxGrid_BreakevenBuffer * point;
-                  Print("v6.90 MaxGridTrail BUY ACTIVATED: Gen=", gen, " AvgPrice=", avgPrice, " SL=", g_maxGridTrailSL_Buy, " count=", glCount, " mode=", (InpMaxGridTrail_IncludeINITGP ? "ALL" : "GL_ONLY"));
+                  Print("v6.91 MaxGridTrail BUY ACTIVATED: Gen=", gen, " AvgPrice=", avgPrice,
+                        " SL=", g_maxGridTrailSL_Buy, " count=", glCount,
+                        " mode=", (InpMaxGridTrail_IncludeINITGP ? "ALL" : "GL_ONLY"),
+                        (InpMaxGridArm_Strict2Cross ? " (2-cross confirmed)" : " (legacy ARM)"));
                }
             }
             else
@@ -3582,6 +3608,7 @@ void ManageMaxGridTrailing()
                   CloseGenSide(gen, POSITION_TYPE_BUY);
                   g_maxGridTrailActive_Buy = false;
                   g_maxGridTrailSL_Buy = 0;
+                  g_maxGridArmReady_Buy = false;  // v6.91: reset for next cycle
                }
             }
          }
@@ -3594,6 +3621,7 @@ void ManageMaxGridTrailing()
             g_maxGridTrailActive_Buy = false;
             g_maxGridTrailSL_Buy = 0;
          }
+         g_maxGridArmReady_Buy = false;  // v6.91: count dropped → reset cross state
       }
    }
    
@@ -3609,16 +3637,41 @@ void ManageMaxGridTrailing()
          double avgPrice = CalcGenAveragePrice(gen, POSITION_TYPE_SELL);
          if(avgPrice > 0)
          {
+            // v6.91: reset armReady flags when monitored gen changes
+            if(g_maxGridArmReadyGen != gen)
+            {
+               g_maxGridArmReady_Buy  = false;
+               g_maxGridArmReady_Sell = false;
+               g_maxGridArmReadyGen   = gen;
+            }
+
+            // v6.91 STEP 1 (SELL): price must first cross ABOVE avg before ARM allowed
+            if(InpMaxGridArm_Strict2Cross && !g_maxGridArmReady_Sell)
+            {
+               double overThreshold = avgPrice + InpMaxGridArm_UnderAvgBuffer * point;
+               if(ask >= overThreshold)
+               {
+                  g_maxGridArmReady_Sell = true;
+                  Print("v6.91 MaxGridTrail SELL ARM-READY: Gen=", gen,
+                        " ask=", ask, " >= avgOver=", overThreshold,
+                        " (waiting for cross-down to avg-", MaxGrid_TrailActivation, "pts)");
+               }
+            }
+
             double activationPrice = avgPrice - MaxGrid_TrailActivation * point;
-            
+
             if(!g_maxGridTrailActive_Sell)
             {
-               // Check if price reached activation level (for SELL, price must go below avg)
-               if(ask <= activationPrice)
+               // v6.91 STEP 2 (SELL): ARM only when armReady AND ask <= activation
+               bool armGate = (!InpMaxGridArm_Strict2Cross) || g_maxGridArmReady_Sell;
+               if(armGate && ask <= activationPrice)
                {
                   g_maxGridTrailActive_Sell = true;
                   g_maxGridTrailSL_Sell = avgPrice - MaxGrid_BreakevenBuffer * point;
-                  Print("v6.90 MaxGridTrail SELL ACTIVATED: Gen=", gen, " AvgPrice=", avgPrice, " SL=", g_maxGridTrailSL_Sell, " count=", glCount, " mode=", (InpMaxGridTrail_IncludeINITGP ? "ALL" : "GL_ONLY"));
+                  Print("v6.91 MaxGridTrail SELL ACTIVATED: Gen=", gen, " AvgPrice=", avgPrice,
+                        " SL=", g_maxGridTrailSL_Sell, " count=", glCount,
+                        " mode=", (InpMaxGridTrail_IncludeINITGP ? "ALL" : "GL_ONLY"),
+                        (InpMaxGridArm_Strict2Cross ? " (2-cross confirmed)" : " (legacy ARM)"));
                }
             }
             else
@@ -3637,6 +3690,7 @@ void ManageMaxGridTrailing()
                   CloseGenSide(gen, POSITION_TYPE_SELL);
                   g_maxGridTrailActive_Sell = false;
                   g_maxGridTrailSL_Sell = 0;
+                  g_maxGridArmReady_Sell = false;  // v6.91: reset for next cycle
                }
             }
          }
@@ -3649,6 +3703,7 @@ void ManageMaxGridTrailing()
             g_maxGridTrailActive_Sell = false;
             g_maxGridTrailSL_Sell = 0;
          }
+         g_maxGridArmReady_Sell = false;  // v6.91: count dropped → reset cross state
       }
    }
 }
