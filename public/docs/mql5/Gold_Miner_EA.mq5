@@ -2440,6 +2440,7 @@ void CloseAllSide(ENUM_POSITION_TYPE side)
       // Skip hedge orders — let the Hedge system manage their lifecycle
       if(IsHedgeComment(PositionGetString(POSITION_COMMENT))) continue;
       if(IsTicketBound(ticket)) continue;  // bound orders managed by Hedge system only
+      if(IsHeroTicket(ticket)) continue;   // v6.92: keep Hero, only flatten basket
       
       trade.PositionClose(ticket);
    }
@@ -2453,6 +2454,11 @@ void CloseAllSide(ENUM_POSITION_TYPE side)
    {
       justClosedSell = true;
       g_maxDDSell = 0;
+   }
+   // v6.92: signal opposite-side Hero close
+   if(InpHero_Enabled && InpHero_CloseWithOpposite) {
+      g_heroOppCloseSide = (side == POSITION_TYPE_BUY) ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
+      g_heroOppCloseTime = TimeCurrent();
    }
 }
 
