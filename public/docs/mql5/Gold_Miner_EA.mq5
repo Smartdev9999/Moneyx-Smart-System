@@ -2500,9 +2500,10 @@ void CloseAllSide(ENUM_POSITION_TYPE side)
       justClosedSell = true;
       g_maxDDSell = 0;
    }
-   // v6.92: signal opposite-side Hero close
+   // v6.93 FIX: signal SAME-side Hero close (was opposite-side in v6.92 — wrong direction).
+   // user spec: Hero closes WITH the same-side basket trail/TP that just succeeded.
    if(InpHero_Enabled && InpHero_CloseWithOpposite) {
-      g_heroOppCloseSide = (side == POSITION_TYPE_BUY) ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
+      g_heroOppCloseSide = (int)side; // SAME side as the basket that just closed
       g_heroOppCloseTime = TimeCurrent();
    }
 }
