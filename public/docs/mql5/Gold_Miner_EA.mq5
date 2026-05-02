@@ -2729,6 +2729,11 @@ double CalculateTotalLots(ENUM_POSITION_TYPE side)
 //+------------------------------------------------------------------+
 void CloseAllSide(ENUM_POSITION_TYPE side)
 {
+   // v6.96: Hero opposite-helper hook — if THIS side is the basket that's about to close
+   //        and the OPPOSITE side holds Heroes in BE_GUARD, close those Heroes first.
+   //        This realises the primary closure path: Hero closes WITH opposite-side basket.
+   CloseOppositeHeroOnBasketClose(side);
+
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       ulong ticket = PositionGetTicket(i);
@@ -2755,12 +2760,9 @@ void CloseAllSide(ENUM_POSITION_TYPE side)
       justClosedSell = true;
       g_maxDDSell = 0;
    }
-   // v6.93 FIX: signal SAME-side Hero close (was opposite-side in v6.92 — wrong direction).
-   // user spec: Hero closes WITH the same-side basket trail/TP that just succeeded.
-   if(InpHero_Enabled && InpHero_CloseWithOpposite) {
-      g_heroOppCloseSide = (int)side; // SAME side as the basket that just closed
-      g_heroOppCloseTime = TimeCurrent();
-   }
+   // v6.96: same-side Hero close signal REMOVED (was v6.93 wrong direction).
+   //        Hero on this side stays alive; ManageHeroOppositeClose() will detect
+   //        basket-cleared next tick and apply lock-profit BE-SL.
 }
 
 //+------------------------------------------------------------------+
@@ -3919,6 +3921,9 @@ int CountGenOrders(int gen, ENUM_POSITION_TYPE side)
 //+------------------------------------------------------------------+
 void CloseGenSide(int gen, ENUM_POSITION_TYPE side)
 {
+   // v6.96: Hero opposite-helper hook — close opposite-side Heroes (BE_GUARD) first.
+   CloseOppositeHeroOnBasketClose(side);
+
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       ulong ticket = PositionGetTicket(i);
@@ -3939,11 +3944,8 @@ void CloseGenSide(int gen, ENUM_POSITION_TYPE side)
          trade.PositionClose(ticket);
    }
    Print("v6.86 MaxGridTrail: Closed Gen", gen, " side=", (side == POSITION_TYPE_BUY ? "BUY" : "SELL"), " (INIT+GL+GP)");
-   // v6.93 FIX: signal SAME-side Hero close (was opposite in v6.92).
-   if(InpHero_Enabled && InpHero_CloseWithOpposite) {
-      g_heroOppCloseSide = (int)side; // SAME side
-      g_heroOppCloseTime = TimeCurrent();
-   }
+   // v6.96: same-side Hero close signal REMOVED. Same-side Hero stays alive
+   //        and ManageHeroOppositeClose() will apply lock-profit BE-SL next tick.
 }
 
 //+------------------------------------------------------------------+
