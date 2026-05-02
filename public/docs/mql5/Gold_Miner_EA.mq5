@@ -1049,6 +1049,13 @@ int OnInit()
 
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+
+   // v6.92: Hero Order — reset state on init
+   g_heroTicketCount = 0;
+   g_heroLastBuildTime = 0;
+   g_heroOppCloseSide = -1;
+   g_heroOppCloseTime = 0;
+   g_heroLastBlockLog = 0;
    
      Print("Gold Miner EA v6.92 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
