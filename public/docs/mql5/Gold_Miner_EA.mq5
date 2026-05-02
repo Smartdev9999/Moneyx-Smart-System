@@ -1060,19 +1060,26 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
 
-   // v6.92: Hero Order — reset state on init
+   // v6.92/v6.96: Hero Order — reset state on init
    g_heroTicketCount = 0;
    g_heroLastBuildTime = 0;
    g_heroOppCloseSide = -1;
    g_heroOppCloseTime = 0;
    g_heroLastBlockLog = 0;
+   g_heroLockedSide = -1;
+   g_heroPhase_Buy = 0;
+   g_heroPhase_Sell = 0;
+   g_heroBE_Applied_Buy = false;
+   g_heroBE_Applied_Sell = false;
+   g_heroBE_LastLog = 0;
    
-     Print("Gold Miner EA v6.95 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+     Print("Gold Miner EA v6.96 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min",
           " | HedgeOpenDelay=", InpHedge_OpenDelayMin, "min (mode=", (int)InpHedge_OpenDelayMode, ")",
-          " | OppSurvClose=", InpHedge_CloseOppositeSurvivors ? "ON" : "OFF");
+          " | Hero=", InpHero_Enabled ? "ON" : "OFF",
+          " | HeroBE_OffsetPts=", InpHero_BE_OffsetPoints);
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
