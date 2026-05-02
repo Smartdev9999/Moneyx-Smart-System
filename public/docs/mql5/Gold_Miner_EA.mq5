@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.93 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.94 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "6.93"
-#property description "Gold Miner EA v6.93 - Hero Order BUGFIX: cache-rebuild fix (was reset every tick); Hero now closed WITH same-side basket trail/TP (was opposite); ApplyTrailingSL/_TF skip Hero (was force-closing them); Hero blocks same-side INIT/GL/GP grid"
+#property version   "6.94"
+#property description "Gold Miner EA v6.94 - Hero Order REFINEMENT: Hero formed only when side count > N; same-side grid block triggers ONLY when non-Hero basket is empty (Hero survivor); GL/GP runs normally while basket alive"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -1057,7 +1057,7 @@ int OnInit()
    g_heroOppCloseTime = 0;
    g_heroLastBlockLog = 0;
    
-     Print("Gold Miner EA v6.93 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+     Print("Gold Miner EA v6.94 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min",
@@ -1119,7 +1119,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.93 deinitialized");
+   Print("Gold Miner EA v6.94 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -2095,7 +2095,9 @@ bool OpenOrder(ENUM_ORDER_TYPE orderType, double lots, string comment)
       }
    }
 
-   //--- v6.92: Hero Order — block new INIT/GL/GP on side that still holds Hero
+   //--- v6.94: Hero Order — block new INIT/GL/GP on a side ONLY when the side has
+   //          a Hero survivor with NO non-Hero basket order left. While the basket
+   //          is alive, GL/GP must be free to extend it.
    if(InpHero_Enabled && InpHero_BlockSameSideGrid && !IsHedgeComment(comment))
    {
       bool isMain = (StringFind(comment, "_INIT") >= 0
@@ -2106,11 +2108,12 @@ bool OpenOrder(ENUM_ORDER_TYPE orderType, double lots, string comment)
          ENUM_POSITION_TYPE wantSide =
             (orderType == ORDER_TYPE_BUY || orderType == ORDER_TYPE_BUY_LIMIT || orderType == ORDER_TYPE_BUY_STOP)
             ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
-         if(CountHeroOnSide(wantSide) > 0)
+         if(ShouldBlockSameSideGridForHero(wantSide))
          {
             if(TimeCurrent() - g_heroLastBlockLog > 30) {
-               Print("v6.92 Hero BLOCK: side=", EnumToString(wantSide),
-                     " has ", CountHeroOnSide(wantSide), " Hero — skip ", comment);
+               Print("v6.94 Hero BLOCK (survivor): side=", EnumToString(wantSide),
+                     " hero=", CountHeroOnSide(wantSide),
+                     " nonHero=0 — skip ", comment);
                g_heroLastBlockLog = TimeCurrent();
             }
             return false;
@@ -2292,18 +2295,24 @@ void BuildHeroTicketCache()
             for(int b = a; b > 0 && tt[b] > tt[b-1]; b--)
             { datetime _t=tt[b]; tt[b]=tt[b-1]; tt[b-1]=_t;
               ulong _k=tk[b]; tk[b]=tk[b-1]; tk[b-1]=_k; }
-         int take = MathMin(n, InpHero_OrderCount);
+         // v6.94 FIX: form Hero ONLY when side count exceeds Hero count.
+         // Spec: Hero = N newest of (gen,side), but only meaningful once a basket exists.
+         // Old behavior tagged the very first INIT as Hero, which blocked GL/GP from ever opening.
+         if(n <= InpHero_OrderCount) continue;
+         int take = InpHero_OrderCount;
          for(int k = 0; k < take && g_heroTicketCount < 200; k++)
             g_heroTickets[g_heroTicketCount++] = tk[k];
       }
    }
-   // v6.93: throttled audit log
+   // v6.94: throttled audit log — show Hero + non-Hero counts so block reason is visible
    static datetime lastHeroAuditLog = 0;
    if(g_heroTicketCount > 0 && TimeCurrent() - lastHeroAuditLog >= 30) {
-      Print("v6.93 Hero CACHE: total=", g_heroTicketCount,
+      Print("v6.94 Hero CACHE: total=", g_heroTicketCount,
             " heroBUY=", CountHeroOnSide(POSITION_TYPE_BUY),
             " heroSELL=", CountHeroOnSide(POSITION_TYPE_SELL),
-            " (excluded from basket avg/PL/trail; same-side grid blocked)");
+            " nonHeroBUY=", CountNonHeroMainOnSide(POSITION_TYPE_BUY),
+            " nonHeroSELL=", CountNonHeroMainOnSide(POSITION_TYPE_SELL),
+            " (block fires only when nonHero=0 on that side)");
       lastHeroAuditLog = TimeCurrent();
    }
 }
@@ -2325,6 +2334,38 @@ int CountHeroOnSide(ENUM_POSITION_TYPE side)
       if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) == side) n++;
    }
    return n;
+}
+
+// v6.94: Count non-Hero main basket orders (current generation only) for a side.
+// Used by Hero same-side grid block to fire ONLY when basket is empty (Hero survivor).
+int CountNonHeroMainOnSide(ENUM_POSITION_TYPE side)
+{
+   int n = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
+      string c = PositionGetString(POSITION_COMMENT);
+      if(IsHedgeComment(c)) continue;
+      if(IsTicketBound(ticket)) continue;
+      if(IsHeroTicket(ticket)) continue;
+      int g = ExtractGeneration(c);
+      if(g >= 0 && g != g_cycleGeneration) continue;
+      if(StringFind(c, "_INIT") < 0 && StringFind(c, "_GL") < 0 && StringFind(c, "_GP") < 0) continue;
+      n++;
+   }
+   return n;
+}
+
+// v6.94: Hero blocks same-side grid only when no non-Hero basket order remains.
+bool ShouldBlockSameSideGridForHero(ENUM_POSITION_TYPE side)
+{
+   if(!InpHero_Enabled || !InpHero_BlockSameSideGrid) return false;
+   if(CountHeroOnSide(side) <= 0) return false;
+   return (CountNonHeroMainOnSide(side) == 0);
 }
 
 double SumHeroLotsOnSide(ENUM_POSITION_TYPE side)
@@ -4529,7 +4570,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.93 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.93 [ZZ]" : "Gold Miner EA v6.93 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.94 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.94 [ZZ]" : "Gold Miner EA v6.94 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
