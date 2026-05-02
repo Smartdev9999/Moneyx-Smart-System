@@ -2095,7 +2095,9 @@ bool OpenOrder(ENUM_ORDER_TYPE orderType, double lots, string comment)
       }
    }
 
-   //--- v6.92: Hero Order — block new INIT/GL/GP on side that still holds Hero
+   //--- v6.94: Hero Order — block new INIT/GL/GP on a side ONLY when the side has
+   //          a Hero survivor with NO non-Hero basket order left. While the basket
+   //          is alive, GL/GP must be free to extend it.
    if(InpHero_Enabled && InpHero_BlockSameSideGrid && !IsHedgeComment(comment))
    {
       bool isMain = (StringFind(comment, "_INIT") >= 0
@@ -2106,11 +2108,12 @@ bool OpenOrder(ENUM_ORDER_TYPE orderType, double lots, string comment)
          ENUM_POSITION_TYPE wantSide =
             (orderType == ORDER_TYPE_BUY || orderType == ORDER_TYPE_BUY_LIMIT || orderType == ORDER_TYPE_BUY_STOP)
             ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
-         if(CountHeroOnSide(wantSide) > 0)
+         if(ShouldBlockSameSideGridForHero(wantSide))
          {
             if(TimeCurrent() - g_heroLastBlockLog > 30) {
-               Print("v6.92 Hero BLOCK: side=", EnumToString(wantSide),
-                     " has ", CountHeroOnSide(wantSide), " Hero — skip ", comment);
+               Print("v6.94 Hero BLOCK (survivor): side=", EnumToString(wantSide),
+                     " hero=", CountHeroOnSide(wantSide),
+                     " nonHero=0 — skip ", comment);
                g_heroLastBlockLog = TimeCurrent();
             }
             return false;
