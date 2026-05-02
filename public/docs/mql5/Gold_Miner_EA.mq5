@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.92 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.93 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "6.92"
-#property description "Gold Miner EA v6.92 - Hero Order: keep N newest tickets per (gen, side) out of basket avg/PL; basket TP/Trail/SL skips Hero; same-side new INIT/GL/GP blocked while Hero alive; Hero closed when opposite-side basket closes (toggle)"
+#property version   "6.93"
+#property description "Gold Miner EA v6.93 - Hero Order BUGFIX: cache-rebuild fix (was reset every tick); Hero now closed WITH same-side basket trail/TP (was opposite); ApplyTrailingSL/_TF skip Hero (was force-closing them); Hero blocks same-side INIT/GL/GP grid"
 #property strict
 
 #include <Trade/Trade.mqh>
