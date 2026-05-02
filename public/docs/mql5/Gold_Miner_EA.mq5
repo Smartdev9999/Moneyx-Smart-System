@@ -2279,13 +2279,13 @@ bool OpenOrder(ENUM_ORDER_TYPE orderType, double lots, string comment)
 //+------------------------------------------------------------------+
 void BuildHeroTicketCache()
 {
-   // v6.93 FIX: gate BEFORE clearing cache, so throttled ticks keep last-built cache alive
+   // v6.98: NO throttle — rebuild every tick so Hero set is always the latest N
+   //        on the locked side, never stale when grids open between ticks.
    if(!InpHero_Enabled || InpHero_OrderCount <= 0) { g_heroTicketCount = 0; return; }
-   if(g_heroLastBuildTime == TimeCurrent() && g_heroTicketCount > 0) return; // throttle 1/sec, keep last build
    g_heroLastBuildTime = TimeCurrent();
    g_heroTicketCount = 0;
 
-   // v6.97: per-side total (active across ALL generations) drives activation gate.
+   // v6.98: per-side total (active across ALL generations) drives activation gate.
    //         "20 orders" = currently-open basket orders on that side, not per-gen, not cumulative history.
    int sideTotalActive[2] = {0, 0};
    int sideHeroTagged[2]  = {0, 0};
@@ -2293,7 +2293,7 @@ void BuildHeroTicketCache()
    for(int s = 0; s < 2; s++)
    {
       ENUM_POSITION_TYPE side = (s == 0) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
-      ulong  tk[200]; datetime tt[200]; int n = 0;
+      ulong  tk[200]; long ttMs[200]; int n = 0;
 
       // Pass: collect ALL active basket orders on this side, regardless of generation
       for(int i = PositionsTotal() - 1; i >= 0 && n < 200; i--)
@@ -2307,19 +2307,26 @@ void BuildHeroTicketCache()
          if(IsHedgeComment(c)) continue;
          if(IsTicketBound(ticket)) continue; // bound = locked into a hedge set, not part of free basket
          if(StringFind(c,"_INIT")<0 && StringFind(c,"_GL")<0 && StringFind(c,"_GP")<0) continue;
-         tk[n] = ticket;
-         tt[n] = (datetime)PositionGetInteger(POSITION_TIME);
+         tk[n]   = ticket;
+         // v6.98: use POSITION_TIME_MSC for deterministic newest-first ordering
+         ttMs[n] = PositionGetInteger(POSITION_TIME_MSC);
          n++;
       }
       sideTotalActive[s] = n;
 
-      // sort desc by POSITION_TIME (newest first)
+      // v6.98: sort desc by POSITION_TIME_MSC then by ticket (larger ticket = newer)
       for(int a = 1; a < n; a++)
-         for(int b = a; b > 0 && tt[b] > tt[b-1]; b--)
-         { datetime _t=tt[b]; tt[b]=tt[b-1]; tt[b-1]=_t;
-           ulong _k=tk[b]; tk[b]=tk[b-1]; tk[b-1]=_k; }
+         for(int b = a; b > 0; b--)
+         {
+            bool swap = false;
+            if(ttMs[b] > ttMs[b-1]) swap = true;
+            else if(ttMs[b] == ttMs[b-1] && tk[b] > tk[b-1]) swap = true;
+            if(!swap) break;
+            long _t = ttMs[b]; ttMs[b] = ttMs[b-1]; ttMs[b-1] = _t;
+            ulong _k = tk[b];  tk[b]   = tk[b-1];   tk[b-1]   = _k;
+         }
 
-      // v6.97: Activation gate — compare side TOTAL (cross-gen) against threshold
+      // v6.97/v6.98: Activation gate — compare side TOTAL (cross-gen) against threshold
       int activateThreshold = (InpHero_MinOrdersToActivate > 0)
                               ? InpHero_MinOrdersToActivate
                               : (InpHero_OrderCount + 1);
@@ -2329,14 +2336,15 @@ void BuildHeroTicketCache()
       int sideId = (int)side;
       if(g_heroLockedSide == -1) {
          g_heroLockedSide = sideId;
-         Print("v6.97 Hero LOCK acquired: side=", EnumToString(side),
+         Print("v6.98 Hero LOCK acquired: side=", EnumToString(side),
                " activeTotal=", n, " threshold=", activateThreshold);
       }
       if(g_heroLockedSide != sideId) continue;
 
-      // BE_GUARD: freeze existing Hero set (basket may already be 0)
+      // v6.98: ROLLING latest-N — protect newest N tickets every tick.
+      //        Basket alive: keep >=1 non-Hero. BE_GUARD: basket already 0 so take all available.
       int curPhase = (sideId == POSITION_TYPE_BUY) ? g_heroPhase_Buy : g_heroPhase_Sell;
-      int take = MathMin(InpHero_OrderCount, n - 1); // basket alive: keep >=1 non-Hero
+      int take = MathMin(InpHero_OrderCount, n - 1);
       if(curPhase == 3 /*BE_GUARD*/) {
          take = MathMin(InpHero_OrderCount, n);
       }
@@ -2354,17 +2362,27 @@ void BuildHeroTicketCache()
       g_heroPhase_Sell = (sideHeroTagged[1] > 0) ? 2 : 0;
    }
 
-   // v6.97: audit log every 30s — shows side TOTAL active vs threshold so user can see why Hero is/isn't activating
+   // v6.98: audit log every 30s — shows side TOTAL active vs threshold so user can see why Hero is/isn't activating
    static datetime lastHeroAuditLog = 0;
    if(TimeCurrent() - lastHeroAuditLog >= 30) {
       int minAct = (InpHero_MinOrdersToActivate > 0) ? InpHero_MinOrdersToActivate : (InpHero_OrderCount + 1);
-      Print("v6.97 Hero AUDIT: BUY active=", sideTotalActive[0], " hero=", sideHeroTagged[0],
+      Print("v6.98 Hero AUDIT: BUY active=", sideTotalActive[0], " hero=", sideHeroTagged[0],
             " | SELL active=", sideTotalActive[1], " hero=", sideHeroTagged[1],
             " | threshold=", minAct,
             " | lockedSide=", (g_heroLockedSide == POSITION_TYPE_BUY ? "BUY" : (g_heroLockedSide == POSITION_TYPE_SELL ? "SELL" : "NONE")),
             " | phaseBUY=", g_heroPhase_Buy, " phaseSELL=", g_heroPhase_Sell);
       lastHeroAuditLog = TimeCurrent();
    }
+}
+
+// v6.98: Hard real-time Hero protection — rebuild cache + force-strip TP/SL on Hero tickets.
+// Call this immediately BEFORE and AFTER SyncBrokerTPSL() so basket Average TP can never
+// be pushed onto Hero tickets and so any TP that slipped through is immediately wiped.
+void EnsureHeroProtection(string reason)
+{
+   if(!InpHero_Enabled) return;
+   BuildHeroTicketCache();           // always fresh
+   StripBrokerTPSLFromHeroTickets(); // wipe TP/SL on ARMED Hero tickets
 }
 
 bool IsHeroTicket(ulong ticket)
