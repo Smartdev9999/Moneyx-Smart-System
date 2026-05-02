@@ -2082,6 +2082,29 @@ bool OpenOrder(ENUM_ORDER_TYPE orderType, double lots, string comment)
       }
    }
 
+   //--- v6.92: Hero Order — block new INIT/GL/GP on side that still holds Hero
+   if(InpHero_Enabled && InpHero_BlockSameSideGrid && !IsHedgeComment(comment))
+   {
+      bool isMain = (StringFind(comment, "_INIT") >= 0
+                  || StringFind(comment, "_GL")   >= 0
+                  || StringFind(comment, "_GP")   >= 0);
+      if(isMain)
+      {
+         ENUM_POSITION_TYPE wantSide =
+            (orderType == ORDER_TYPE_BUY || orderType == ORDER_TYPE_BUY_LIMIT || orderType == ORDER_TYPE_BUY_STOP)
+            ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
+         if(CountHeroOnSide(wantSide) > 0)
+         {
+            if(TimeCurrent() - g_heroLastBlockLog > 30) {
+               Print("v6.92 Hero BLOCK: side=", EnumToString(wantSide),
+                     " has ", CountHeroOnSide(wantSide), " Hero — skip ", comment);
+               g_heroLastBlockLog = TimeCurrent();
+            }
+            return false;
+         }
+      }
+   }
+
    //--- v6.56: Bollinger Band Entry Filter (Block New Orders Only — exempt hedge orders)
    if(BB_FilterEnable && !IsHedgeComment(comment))
    {
