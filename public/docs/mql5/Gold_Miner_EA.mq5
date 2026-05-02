@@ -3371,6 +3371,8 @@ void ApplyTrailingSL(ENUM_POSITION_TYPE side, double slPrice)
       if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       if(PositionGetInteger(POSITION_TYPE) != side) continue;
+      // v6.93 FIX: never push basket trailing SL onto Hero tickets — they must outlive the basket close
+      if(IsHeroTicket(ticket)) continue;
 
       double currentSL = PositionGetDouble(POSITION_SL);
       double tp = PositionGetDouble(POSITION_TP);
