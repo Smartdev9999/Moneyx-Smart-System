@@ -2285,73 +2285,68 @@ void BuildHeroTicketCache()
    g_heroLastBuildTime = TimeCurrent();
    g_heroTicketCount = 0;
 
-   // v6.96: track per-side raw counts so we can update phase + lock state
-   int sideTotalCount[2]   = {0, 0};   // total non-bound, non-hedge basket orders on each side
-   int sideHeroTagged[2]   = {0, 0};   // how many we tagged as Hero this build
+   // v6.97: per-side total (active across ALL generations) drives activation gate.
+   //         "20 orders" = currently-open basket orders on that side, not per-gen, not cumulative history.
+   int sideTotalActive[2] = {0, 0};
+   int sideHeroTagged[2]  = {0, 0};
 
-   int maxGen = g_maxGridMonitorGen + 5;
-   for(int gen = 0; gen <= maxGen; gen++)
+   for(int s = 0; s < 2; s++)
    {
-      for(int s = 0; s < 2; s++)
+      ENUM_POSITION_TYPE side = (s == 0) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
+      ulong  tk[200]; datetime tt[200]; int n = 0;
+
+      // Pass: collect ALL active basket orders on this side, regardless of generation
+      for(int i = PositionsTotal() - 1; i >= 0 && n < 200; i--)
       {
-         ENUM_POSITION_TYPE side = (s == 0) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
-         ulong  tk[200]; datetime tt[200]; int n = 0;
-         for(int i = PositionsTotal() - 1; i >= 0 && n < 200; i--)
-         {
-            ulong ticket = PositionGetTicket(i);
-            if(ticket == 0) continue;
-            if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
-            if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
-            if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
-            string c = PositionGetString(POSITION_COMMENT);
-            if(IsHedgeComment(c)) continue;
-            if(IsTicketBound(ticket)) continue;
-            if(ExtractGeneration(c) != gen) continue;
-            if(StringFind(c,"_INIT")<0 && StringFind(c,"_GL")<0 && StringFind(c,"_GP")<0) continue;
-            tk[n] = ticket;
-            tt[n] = (datetime)PositionGetInteger(POSITION_TIME);
-            n++;
-         }
-         sideTotalCount[s] += n;
-
-         // sort desc by time
-         for(int a = 1; a < n; a++)
-            for(int b = a; b > 0 && tt[b] > tt[b-1]; b--)
-            { datetime _t=tt[b]; tt[b]=tt[b-1]; tt[b-1]=_t;
-              ulong _k=tk[b]; tk[b]=tk[b-1]; tk[b-1]=_k; }
-
-         int activateThreshold = (InpHero_MinOrdersToActivate > 0)
-                                 ? InpHero_MinOrdersToActivate
-                                 : (InpHero_OrderCount + 1);
-         if(n < activateThreshold) continue;
-
-         // v6.96: Single-side exclusive lock — only the locked side may form Hero.
-         // First side that reaches activation acquires the lock. Opposite side
-         // never tags Hero while lock is held; it will be the one that closes Hero
-         // later via opposite-basket TP/Trail.
-         int sideId = (int)side;
-         if(g_heroLockedSide == -1) {
-            g_heroLockedSide = sideId;
-            Print("v6.96 Hero LOCK acquired: side=", EnumToString(side));
-         }
-         if(g_heroLockedSide != sideId) continue;
-
-         // v6.96: In BE_GUARD phase, lock the existing Hero set — no rolling re-tag.
-         // (basket has cleared, so there is no "newest non-Hero" to swap in.)
-         int curPhase = (sideId == POSITION_TYPE_BUY) ? g_heroPhase_Buy : g_heroPhase_Sell;
-         int take = MathMin(InpHero_OrderCount, n - 1); // guarantee >= 1 non-Hero stays in basket while basket alive
-         if(curPhase == 3 /*BE_GUARD*/) {
-            // freeze: take all newest up to OrderCount (basket may already be 0)
-            take = MathMin(InpHero_OrderCount, n);
-         }
-         if(take <= 0) continue;
-         for(int k = 0; k < take && g_heroTicketCount < 200; k++)
-            g_heroTickets[g_heroTicketCount++] = tk[k];
-         sideHeroTagged[s] += take;
+         ulong ticket = PositionGetTicket(i);
+         if(ticket == 0) continue;
+         if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+         if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+         if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
+         string c = PositionGetString(POSITION_COMMENT);
+         if(IsHedgeComment(c)) continue;
+         if(IsTicketBound(ticket)) continue; // bound = locked into a hedge set, not part of free basket
+         if(StringFind(c,"_INIT")<0 && StringFind(c,"_GL")<0 && StringFind(c,"_GP")<0) continue;
+         tk[n] = ticket;
+         tt[n] = (datetime)PositionGetInteger(POSITION_TIME);
+         n++;
       }
+      sideTotalActive[s] = n;
+
+      // sort desc by POSITION_TIME (newest first)
+      for(int a = 1; a < n; a++)
+         for(int b = a; b > 0 && tt[b] > tt[b-1]; b--)
+         { datetime _t=tt[b]; tt[b]=tt[b-1]; tt[b-1]=_t;
+           ulong _k=tk[b]; tk[b]=tk[b-1]; tk[b-1]=_k; }
+
+      // v6.97: Activation gate — compare side TOTAL (cross-gen) against threshold
+      int activateThreshold = (InpHero_MinOrdersToActivate > 0)
+                              ? InpHero_MinOrdersToActivate
+                              : (InpHero_OrderCount + 1);
+      if(n < activateThreshold) continue;
+
+      // Single-side exclusive lock (preserved from v6.96 — confirmed correct by user)
+      int sideId = (int)side;
+      if(g_heroLockedSide == -1) {
+         g_heroLockedSide = sideId;
+         Print("v6.97 Hero LOCK acquired: side=", EnumToString(side),
+               " activeTotal=", n, " threshold=", activateThreshold);
+      }
+      if(g_heroLockedSide != sideId) continue;
+
+      // BE_GUARD: freeze existing Hero set (basket may already be 0)
+      int curPhase = (sideId == POSITION_TYPE_BUY) ? g_heroPhase_Buy : g_heroPhase_Sell;
+      int take = MathMin(InpHero_OrderCount, n - 1); // basket alive: keep >=1 non-Hero
+      if(curPhase == 3 /*BE_GUARD*/) {
+         take = MathMin(InpHero_OrderCount, n);
+      }
+      if(take <= 0) continue;
+      for(int k = 0; k < take && g_heroTicketCount < 200; k++)
+         g_heroTickets[g_heroTicketCount++] = tk[k];
+      sideHeroTagged[s] += take;
    }
 
-   // v6.96: phase update per side (NONE -> ARMED_WAITING; BE_GUARD set elsewhere, never downgrade here)
+   // Phase update per side (NONE -> ARMED_WAITING; BE_GUARD set elsewhere, never downgrade here)
    if(g_heroPhase_Buy != 3) {
       g_heroPhase_Buy = (sideHeroTagged[0] > 0) ? 2 : 0;
    }
@@ -2359,18 +2354,15 @@ void BuildHeroTicketCache()
       g_heroPhase_Sell = (sideHeroTagged[1] > 0) ? 2 : 0;
    }
 
-   // v6.96: throttled audit log
+   // v6.97: audit log every 30s — shows side TOTAL active vs threshold so user can see why Hero is/isn't activating
    static datetime lastHeroAuditLog = 0;
-   if(g_heroTicketCount > 0 && TimeCurrent() - lastHeroAuditLog >= 30) {
+   if(TimeCurrent() - lastHeroAuditLog >= 30) {
       int minAct = (InpHero_MinOrdersToActivate > 0) ? InpHero_MinOrdersToActivate : (InpHero_OrderCount + 1);
-      Print("v6.96 Hero CACHE: total=", g_heroTicketCount,
-            " heroBUY=", CountHeroOnSide(POSITION_TYPE_BUY),
-            " heroSELL=", CountHeroOnSide(POSITION_TYPE_SELL),
-            " nonHeroBUY=", CountNonHeroMainOnSide(POSITION_TYPE_BUY),
-            " nonHeroSELL=", CountNonHeroMainOnSide(POSITION_TYPE_SELL),
-            " minActivate=", minAct,
-            " lockedSide=", (g_heroLockedSide == POSITION_TYPE_BUY ? "BUY" : (g_heroLockedSide == POSITION_TYPE_SELL ? "SELL" : "NONE")),
-            " phaseBUY=", g_heroPhase_Buy, " phaseSELL=", g_heroPhase_Sell);
+      Print("v6.97 Hero AUDIT: BUY active=", sideTotalActive[0], " hero=", sideHeroTagged[0],
+            " | SELL active=", sideTotalActive[1], " hero=", sideHeroTagged[1],
+            " | threshold=", minAct,
+            " | lockedSide=", (g_heroLockedSide == POSITION_TYPE_BUY ? "BUY" : (g_heroLockedSide == POSITION_TYPE_SELL ? "SELL" : "NONE")),
+            " | phaseBUY=", g_heroPhase_Buy, " phaseSELL=", g_heroPhase_Sell);
       lastHeroAuditLog = TimeCurrent();
    }
 }
