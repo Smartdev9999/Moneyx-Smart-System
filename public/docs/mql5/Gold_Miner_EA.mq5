@@ -3943,6 +3943,8 @@ int CountGenOrders(int gen, ENUM_POSITION_TYPE side)
 //+------------------------------------------------------------------+
 void CloseGenSide(int gen, ENUM_POSITION_TYPE side)
 {
+   // v6.98: refresh Hero cache so latest-N tickets are properly tagged before gen flatten
+   BuildHeroTicketCache();
    // v6.96: Hero opposite-helper hook — close opposite-side Heroes (BE_GUARD) first.
    CloseOppositeHeroOnBasketClose(side);
 
