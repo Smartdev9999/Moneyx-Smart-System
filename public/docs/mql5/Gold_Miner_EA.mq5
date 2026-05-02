@@ -3528,6 +3528,7 @@ int CountGenGridAll(int gen, ENUM_POSITION_TYPE side)
       string comment = PositionGetString(POSITION_COMMENT);
       if(IsHedgeComment(comment)) continue;
       if(IsTicketBound(ticket)) continue;
+      if(IsHeroTicket(ticket)) continue; // v6.92
       int orderGen = ExtractGeneration(comment);
       if(orderGen != gen) continue;
       if(StringFind(comment, "_INIT") >= 0
