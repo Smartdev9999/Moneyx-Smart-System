@@ -3682,9 +3682,9 @@ void CloseGenSide(int gen, ENUM_POSITION_TYPE side)
          trade.PositionClose(ticket);
    }
    Print("v6.86 MaxGridTrail: Closed Gen", gen, " side=", (side == POSITION_TYPE_BUY ? "BUY" : "SELL"), " (INIT+GL+GP)");
-   // v6.92: signal opposite-side Hero close
+   // v6.93 FIX: signal SAME-side Hero close (was opposite in v6.92).
    if(InpHero_Enabled && InpHero_CloseWithOpposite) {
-      g_heroOppCloseSide = (side == POSITION_TYPE_BUY) ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
+      g_heroOppCloseSide = (int)side; // SAME side
       g_heroOppCloseTime = TimeCurrent();
    }
 }
