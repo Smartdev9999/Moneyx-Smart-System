@@ -2331,6 +2331,38 @@ int CountHeroOnSide(ENUM_POSITION_TYPE side)
    return n;
 }
 
+// v6.94: Count non-Hero main basket orders (current generation only) for a side.
+// Used by Hero same-side grid block to fire ONLY when basket is empty (Hero survivor).
+int CountNonHeroMainOnSide(ENUM_POSITION_TYPE side)
+{
+   int n = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
+      string c = PositionGetString(POSITION_COMMENT);
+      if(IsHedgeComment(c)) continue;
+      if(IsTicketBound(ticket)) continue;
+      if(IsHeroTicket(ticket)) continue;
+      int g = ExtractGeneration(c);
+      if(g >= 0 && g != g_cycleGeneration) continue;
+      if(StringFind(c, "_INIT") < 0 && StringFind(c, "_GL") < 0 && StringFind(c, "_GP") < 0) continue;
+      n++;
+   }
+   return n;
+}
+
+// v6.94: Hero blocks same-side grid only when no non-Hero basket order remains.
+bool ShouldBlockSameSideGridForHero(ENUM_POSITION_TYPE side)
+{
+   if(!InpHero_Enabled || !InpHero_BlockSameSideGrid) return false;
+   if(CountHeroOnSide(side) <= 0) return false;
+   return (CountNonHeroMainOnSide(side) == 0);
+}
+
 double SumHeroLotsOnSide(ENUM_POSITION_TYPE side)
 {
    double l = 0;
