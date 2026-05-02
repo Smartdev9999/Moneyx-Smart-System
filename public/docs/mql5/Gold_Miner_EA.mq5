@@ -125,15 +125,17 @@ input bool             StopEAOnDrawdown   = false;     // Stop EA after Emergenc
 input ENUM_TRADE_MODE  TradingMode        = TRADE_BOTH; // Trading Mode (Buy/Sell/Both)
 input ENUM_ENTRY_MODE  EntryMode          = ENTRY_SMA;  // Entry Mode (SMA=Original, ZigZag=MTF)
 
-//--- v6.93: Hero Order ---
-input group "===== Hero Order (v6.93/v6.95) ====="
-input bool   InpHero_Enabled            = false; // Enable Hero Order (exclude N newest from basket avg/PL/trail)
-input int    InpHero_OrderCount         = 2;     // Hero count per (gen, side)
-input int    InpHero_MinOrdersToActivate= 5;     // v6.95: Min orders on side before Hero activates (0=use OrderCount+1)
-input bool   InpHero_CloseWithOpposite  = true;  // Close Hero WITH same-side basket trail/TP (v6.93: was opposite)
-input bool   InpHero_RequireNetProfit   = false; // Only close Hero if Hero PL >= 0
-input bool   InpHero_BlockSameSideGrid  = true;  // Block new INIT/GL/GP on side that has Hero
+//--- v6.96: Hero Order (Opposite-Helper + Lock-Profit BE-SL) ---
+input group "===== Hero Order (v6.96) ====="
+input bool   InpHero_Enabled            = false; // Enable Hero Order (opposite-side helper)
+input int    InpHero_OrderCount         = 2;     // Hero count per (gen, side) — N newest become Hero
+input int    InpHero_MinOrdersToActivate= 5;     // Min orders on side before Hero activates (0=OrderCount+1)
+input int    InpHero_BE_OffsetPoints    = 50;    // v6.96: Lock-profit BE-SL offset in POINTS (SELL=open-offset, BUY=open+offset)
+input bool   InpHero_BlockSameSideGrid  = true;  // Block new INIT/GL/GP on side that has Hero (survivor-only)
 input bool   InpHero_IncludeInMaxOrders = true;  // Count Hero into MaxOpenOrders
+// --- Deprecated (kept for .set compat, NO-OP in v6.96) ---
+input bool   InpHero_CloseWithOpposite  = true;  // [DEPRECATED v6.96] now hard-wired to opposite-basket close
+input bool   InpHero_RequireNetProfit   = false; // [DEPRECATED v6.96] not used (lock-profit SL guarantees floor)
 
 //--- SMA Indicator
 input group "=== SMA Indicator ==="
@@ -722,13 +724,20 @@ int      g_maxGridArmReadyGen   = -1;      // gen that armReady flags refer to (
 // === v6.89: Squeeze Pause Trailing edge state (true while in pause) ===
 bool     g_squeezePauseTrailingActive = false;
 
-// === v6.92: Hero Order state ===
+// === v6.92/v6.96: Hero Order state ===
 ulong    g_heroTickets[200];
 int      g_heroTicketCount        = 0;
 datetime g_heroLastBuildTime      = 0;
-int      g_heroOppCloseSide       = -1;     // POSITION_TYPE_BUY/SELL → side that should close its Hero
+int      g_heroOppCloseSide       = -1;     // legacy (kept; unused in v6.96 for same-side; new v6.96 uses g_heroOppBasketClosedSide)
 datetime g_heroOppCloseTime       = 0;
 datetime g_heroLastBlockLog       = 0;
+// v6.96: Opposite-helper + lock-profit BE-SL
+int      g_heroLockedSide         = -1;     // -1 / POSITION_TYPE_BUY / POSITION_TYPE_SELL — only this side may form Hero
+int      g_heroPhase_Buy          = 0;      // 0=NONE 1=PRE_STAGE 2=ARMED_WAITING 3=BE_GUARD
+int      g_heroPhase_Sell         = 0;
+bool     g_heroBE_Applied_Buy     = false;  // lock-profit SL has been applied to all current Buy Heroes
+bool     g_heroBE_Applied_Sell    = false;
+datetime g_heroBE_LastLog         = 0;
 // === v6.42: Dashboard History Cache ===
 datetime g_lastDashHistoryCalcTime = 0;
 int      g_dashCacheIntervalSec    = 5;  // recalculate every 5 seconds
