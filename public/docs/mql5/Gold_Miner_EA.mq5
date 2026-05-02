@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.91 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.92 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "6.91"
-#property description "Gold Miner EA v6.91 - MaxGridTrail Strict 2-Cross ARM: price must first cross BELOW avg (basket truly stuck) before ARM is allowed when price crosses BACK above avg+activation; prevents instant ARM when count threshold opens while price is already above activation"
+#property version   "6.92"
+#property description "Gold Miner EA v6.92 - Hero Order: keep N newest tickets per (gen, side) out of basket avg/PL; basket TP/Trail/SL skips Hero; same-side new INIT/GL/GP blocked while Hero alive; Hero closed when opposite-side basket closes (toggle)"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -124,6 +124,15 @@ input double           MaxDrawdownDollar  = 5000.0;    // Max Drawdown $ (when m
 input bool             StopEAOnDrawdown   = false;     // Stop EA after Emergency Drawdown Close
 input ENUM_TRADE_MODE  TradingMode        = TRADE_BOTH; // Trading Mode (Buy/Sell/Both)
 input ENUM_ENTRY_MODE  EntryMode          = ENTRY_SMA;  // Entry Mode (SMA=Original, ZigZag=MTF)
+
+//--- v6.92: Hero Order ---
+input group "===== Hero Order (v6.92) ====="
+input bool   InpHero_Enabled            = false; // Enable Hero Order (exclude N newest from basket avg)
+input int    InpHero_OrderCount         = 2;     // Hero count per (gen, side)
+input bool   InpHero_CloseWithOpposite  = true;  // Close Hero when opposite-side basket closes
+input bool   InpHero_RequireNetProfit   = false; // Only close Hero if Hero PL >= 0
+input bool   InpHero_BlockSameSideGrid  = true;  // Block new INIT/GL/GP on side that has Hero
+input bool   InpHero_IncludeInMaxOrders = true;  // Count Hero into MaxOpenOrders
 
 //--- SMA Indicator
 input group "=== SMA Indicator ==="
@@ -712,6 +721,13 @@ int      g_maxGridArmReadyGen   = -1;      // gen that armReady flags refer to (
 // === v6.89: Squeeze Pause Trailing edge state (true while in pause) ===
 bool     g_squeezePauseTrailingActive = false;
 
+// === v6.92: Hero Order state ===
+ulong    g_heroTickets[200];
+int      g_heroTicketCount        = 0;
+datetime g_heroLastBuildTime      = 0;
+int      g_heroOppCloseSide       = -1;     // POSITION_TYPE_BUY/SELL → side that should close its Hero
+datetime g_heroOppCloseTime       = 0;
+datetime g_heroLastBlockLog       = 0;
 // === v6.42: Dashboard History Cache ===
 datetime g_lastDashHistoryCalcTime = 0;
 int      g_dashCacheIntervalSec    = 5;  // recalculate every 5 seconds
@@ -1033,8 +1049,15 @@ int OnInit()
 
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+
+   // v6.92: Hero Order — reset state on init
+   g_heroTicketCount = 0;
+   g_heroLastBuildTime = 0;
+   g_heroOppCloseSide = -1;
+   g_heroOppCloseTime = 0;
+   g_heroLastBlockLog = 0;
    
-     Print("Gold Miner EA v6.91 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+     Print("Gold Miner EA v6.92 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min",
@@ -1096,7 +1119,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.91 deinitialized");
+   Print("Gold Miner EA v6.92 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -1337,6 +1360,10 @@ double CalcDailyPL()
 
 void OnTick()
 {
+   // v6.92: Hero Order — rebuild ticket cache + handle opposite-close signal
+   BuildHeroTicketCache();
+   ManageHeroOppositeClose();
+
    // === HIDE ATR CHART IN BACKTEST (v2.9 / v3.0 simplified) ===
    // When InpSkipATRInTester=true, no ATR handles exist so no subwindow is created.
    // Fallback: if handles exist (InpSkipATRInTester=false), try to hide subwindow.
@@ -2066,6 +2093,29 @@ bool OpenOrder(ENUM_ORDER_TYPE orderType, double lots, string comment)
       }
    }
 
+   //--- v6.92: Hero Order — block new INIT/GL/GP on side that still holds Hero
+   if(InpHero_Enabled && InpHero_BlockSameSideGrid && !IsHedgeComment(comment))
+   {
+      bool isMain = (StringFind(comment, "_INIT") >= 0
+                  || StringFind(comment, "_GL")   >= 0
+                  || StringFind(comment, "_GP")   >= 0);
+      if(isMain)
+      {
+         ENUM_POSITION_TYPE wantSide =
+            (orderType == ORDER_TYPE_BUY || orderType == ORDER_TYPE_BUY_LIMIT || orderType == ORDER_TYPE_BUY_STOP)
+            ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
+         if(CountHeroOnSide(wantSide) > 0)
+         {
+            if(TimeCurrent() - g_heroLastBlockLog > 30) {
+               Print("v6.92 Hero BLOCK: side=", EnumToString(wantSide),
+                     " has ", CountHeroOnSide(wantSide), " Hero — skip ", comment);
+               g_heroLastBlockLog = TimeCurrent();
+            }
+            return false;
+         }
+      }
+   }
+
    //--- v6.56: Bollinger Band Entry Filter (Block New Orders Only — exempt hedge orders)
    if(BB_FilterEnable && !IsHedgeComment(comment))
    {
@@ -2202,6 +2252,120 @@ bool OpenOrder(ENUM_ORDER_TYPE orderType, double lots, string comment)
 }
 
 //+------------------------------------------------------------------+
+//| v6.92 Hero Order helpers                                          |
+//+------------------------------------------------------------------+
+void BuildHeroTicketCache()
+{
+   g_heroTicketCount = 0;
+   if(!InpHero_Enabled || InpHero_OrderCount <= 0) return;
+   if(g_heroLastBuildTime == TimeCurrent()) return; // throttle 1/sec
+   g_heroLastBuildTime = TimeCurrent();
+
+   int maxGen = g_maxGridMonitorGen + 5;
+   for(int gen = 0; gen <= maxGen; gen++)
+   {
+      for(int s = 0; s < 2; s++)
+      {
+         ENUM_POSITION_TYPE side = (s == 0) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
+         ulong  tk[200]; datetime tt[200]; int n = 0;
+         for(int i = PositionsTotal() - 1; i >= 0 && n < 200; i--)
+         {
+            ulong ticket = PositionGetTicket(i);
+            if(ticket == 0) continue;
+            if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
+            if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+            if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
+            string c = PositionGetString(POSITION_COMMENT);
+            if(IsHedgeComment(c)) continue;
+            if(IsTicketBound(ticket)) continue;
+            if(ExtractGeneration(c) != gen) continue;
+            if(StringFind(c,"_INIT")<0 && StringFind(c,"_GL")<0 && StringFind(c,"_GP")<0) continue;
+            tk[n] = ticket;
+            tt[n] = (datetime)PositionGetInteger(POSITION_TIME);
+            n++;
+         }
+         // sort desc by time
+         for(int a = 1; a < n; a++)
+            for(int b = a; b > 0 && tt[b] > tt[b-1]; b--)
+            { datetime _t=tt[b]; tt[b]=tt[b-1]; tt[b-1]=_t;
+              ulong _k=tk[b]; tk[b]=tk[b-1]; tk[b-1]=_k; }
+         int take = MathMin(n, InpHero_OrderCount);
+         for(int k = 0; k < take && g_heroTicketCount < 200; k++)
+            g_heroTickets[g_heroTicketCount++] = tk[k];
+      }
+   }
+}
+
+bool IsHeroTicket(ulong ticket)
+{
+   if(!InpHero_Enabled) return false;
+   for(int i = 0; i < g_heroTicketCount; i++)
+      if(g_heroTickets[i] == ticket) return true;
+   return false;
+}
+
+int CountHeroOnSide(ENUM_POSITION_TYPE side)
+{
+   int n = 0;
+   for(int i = 0; i < g_heroTicketCount; i++)
+   {
+      if(!PositionSelectByTicket(g_heroTickets[i])) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) == side) n++;
+   }
+   return n;
+}
+
+double SumHeroLotsOnSide(ENUM_POSITION_TYPE side)
+{
+   double l = 0;
+   for(int i = 0; i < g_heroTicketCount; i++)
+   {
+      if(!PositionSelectByTicket(g_heroTickets[i])) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
+      l += PositionGetDouble(POSITION_VOLUME);
+   }
+   return l;
+}
+
+double SumHeroProfitOnSide(ENUM_POSITION_TYPE side)
+{
+   double sum = 0;
+   for(int i = 0; i < g_heroTicketCount; i++)
+   {
+      if(!PositionSelectByTicket(g_heroTickets[i])) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
+      sum += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+   }
+   return sum;
+}
+
+void CloseHeroOnSide(ENUM_POSITION_TYPE side, string reason)
+{
+   for(int i = g_heroTicketCount - 1; i >= 0; i--)
+   {
+      ulong ticket = g_heroTickets[i];
+      if(!PositionSelectByTicket(ticket)) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
+      trade.PositionClose(ticket);
+      Print("v6.92 Hero CLOSE: ticket=", ticket, " side=", EnumToString(side), " reason=", reason);
+   }
+   g_heroTicketCount = 0;     // force rebuild
+   g_heroLastBuildTime = 0;
+}
+
+void ManageHeroOppositeClose()
+{
+   if(!InpHero_Enabled || !InpHero_CloseWithOpposite) return;
+   if(g_heroOppCloseSide == -1) return;
+   if(TimeCurrent() - g_heroOppCloseTime > 5) { g_heroOppCloseSide = -1; return; }
+   ENUM_POSITION_TYPE heroSide = (ENUM_POSITION_TYPE)g_heroOppCloseSide;
+   if(CountHeroOnSide(heroSide) == 0) { g_heroOppCloseSide = -1; return; }
+   if(InpHero_RequireNetProfit && SumHeroProfitOnSide(heroSide) < 0) return;
+   CloseHeroOnSide(heroSide, "OppositeBasketClosed");
+   g_heroOppCloseSide = -1;
+}
+
+//+------------------------------------------------------------------+
 //| Calculate Weighted Average Price for one side                      |
 //+------------------------------------------------------------------+
 double CalculateAveragePrice(ENUM_POSITION_TYPE side)
@@ -2220,6 +2384,7 @@ double CalculateAveragePrice(ENUM_POSITION_TYPE side)
       // Skip hedge orders — basket TP/SL must not include hedge positions
       if(IsHedgeComment(PositionGetString(POSITION_COMMENT))) continue;
       if(IsTicketBound(ticket)) continue;  // bound orders managed by Hedge system only
+      if(IsHeroTicket(ticket)) continue;   // v6.92: Hero excluded from basket avg
 
       double vol = PositionGetDouble(POSITION_VOLUME);
       double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
@@ -2249,6 +2414,7 @@ double CalculateFloatingPL(ENUM_POSITION_TYPE side)
       // Skip hedge orders — floating PL calculation must exclude hedge positions
       if(IsHedgeComment(PositionGetString(POSITION_COMMENT))) continue;
       if(IsTicketBound(ticket)) continue;  // bound orders managed by Hedge system only
+      if(IsHeroTicket(ticket)) continue;   // v6.92: Hero excluded from basket PL gate
 
       totalPL += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
    }
@@ -2308,6 +2474,7 @@ void CloseAllSide(ENUM_POSITION_TYPE side)
       // Skip hedge orders — let the Hedge system manage their lifecycle
       if(IsHedgeComment(PositionGetString(POSITION_COMMENT))) continue;
       if(IsTicketBound(ticket)) continue;  // bound orders managed by Hedge system only
+      if(IsHeroTicket(ticket)) continue;   // v6.92: keep Hero, only flatten basket
       
       trade.PositionClose(ticket);
    }
@@ -2321,6 +2488,11 @@ void CloseAllSide(ENUM_POSITION_TYPE side)
    {
       justClosedSell = true;
       g_maxDDSell = 0;
+   }
+   // v6.92: signal opposite-side Hero close
+   if(InpHero_Enabled && InpHero_CloseWithOpposite) {
+      g_heroOppCloseSide = (side == POSITION_TYPE_BUY) ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
+      g_heroOppCloseTime = TimeCurrent();
    }
 }
 
@@ -3396,6 +3568,7 @@ int CountGenGridAll(int gen, ENUM_POSITION_TYPE side)
       string comment = PositionGetString(POSITION_COMMENT);
       if(IsHedgeComment(comment)) continue;
       if(IsTicketBound(ticket)) continue;
+      if(IsHeroTicket(ticket)) continue; // v6.92
       int orderGen = ExtractGeneration(comment);
       if(orderGen != gen) continue;
       if(StringFind(comment, "_INIT") >= 0
@@ -3425,6 +3598,7 @@ double CalcGenAveragePrice(int gen, ENUM_POSITION_TYPE side)
       string comment = PositionGetString(POSITION_COMMENT);
       if(IsHedgeComment(comment)) continue;
       if(IsTicketBound(ticket)) continue;
+      if(IsHeroTicket(ticket)) continue; // v6.92
       int orderGen = ExtractGeneration(comment);
       if(orderGen != gen) continue;
       // v6.86: Include INIT, GL and GP (same generation, same side)
@@ -3458,6 +3632,7 @@ int CountGenOrders(int gen, ENUM_POSITION_TYPE side)
       string comment = PositionGetString(POSITION_COMMENT);
       if(IsHedgeComment(comment)) continue;
       if(IsTicketBound(ticket)) continue;
+      if(IsHeroTicket(ticket)) continue; // v6.92
       int orderGen = ExtractGeneration(comment);
       if(orderGen != gen) continue;
       // v6.86: count INIT, GL and GP
@@ -3485,6 +3660,7 @@ void CloseGenSide(int gen, ENUM_POSITION_TYPE side)
       string comment = PositionGetString(POSITION_COMMENT);
       if(IsHedgeComment(comment)) continue;
       if(IsTicketBound(ticket)) continue;
+      if(IsHeroTicket(ticket)) continue; // v6.92: keep Hero, only flatten basket
       int orderGen = ExtractGeneration(comment);
       if(orderGen != gen) continue;
       // v6.86: include _GP so the trailing close flattens the full basket
@@ -3494,6 +3670,11 @@ void CloseGenSide(int gen, ENUM_POSITION_TYPE side)
          trade.PositionClose(ticket);
    }
    Print("v6.86 MaxGridTrail: Closed Gen", gen, " side=", (side == POSITION_TYPE_BUY ? "BUY" : "SELL"), " (INIT+GL+GP)");
+   // v6.92: signal opposite-side Hero close
+   if(InpHero_Enabled && InpHero_CloseWithOpposite) {
+      g_heroOppCloseSide = (side == POSITION_TYPE_BUY) ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
+      g_heroOppCloseTime = TimeCurrent();
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -4332,7 +4513,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.91 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.91 [ZZ]" : "Gold Miner EA v6.91 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.92 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.92 [ZZ]" : "Gold Miner EA v6.92 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
