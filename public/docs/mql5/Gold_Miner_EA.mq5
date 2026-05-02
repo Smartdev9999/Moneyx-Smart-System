@@ -1136,7 +1136,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.97 deinitialized");
+   Print("Gold Miner EA v6.98 deinitialized");
 }
 
 //+------------------------------------------------------------------+
