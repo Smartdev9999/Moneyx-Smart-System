@@ -2463,17 +2463,172 @@ void CloseHeroOnSide(ENUM_POSITION_TYPE side, string reason)
    g_heroLastBuildTime = 0;
 }
 
-// v6.93: renamed semantically — closes Hero on the SAME side that just flattened its basket
+// v6.96: Detect when same-side basket has fully cleared while Heroes still alive
+//        -> transition phase to BE_GUARD and apply lock-profit BE-SL.
+bool DetectSameSideBasketClearedForHero(ENUM_POSITION_TYPE side)
+{
+   if(!InpHero_Enabled) return false;
+   if((int)side != g_heroLockedSide) return false;
+   if(CountHeroOnSide(side) <= 0) return false;
+   if(CountNonHeroMainOnSide(side) > 0) return false; // basket still alive
+   return true;
+}
+
+// v6.96: Compute the lock-profit BE-SL price for one Hero ticket.
+// SELL Hero -> SL placed BELOW openPrice (profit side of SELL).
+// BUY  Hero -> SL placed ABOVE openPrice (profit side of BUY).
+double ComputeHeroLockProfitSL(ENUM_POSITION_TYPE posType, double openPrice)
+{
+   double pt = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   int    digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+   double offset = (double)InpHero_BE_OffsetPoints * pt;
+   if(posType == POSITION_TYPE_SELL) return NormalizeDouble(openPrice - offset, digits);
+   if(posType == POSITION_TYPE_BUY)  return NormalizeDouble(openPrice + offset, digits);
+   return 0;
+}
+
+// v6.96: Sanity check — SL must be on the profit side of current price AND past stops level.
+bool ValidateHeroLockProfitSL(ENUM_POSITION_TYPE posType, double sl)
+{
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double pt  = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   long   stopsLvl = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   double minDist = (double)stopsLvl * pt;
+   if(posType == POSITION_TYPE_SELL) {
+      // SELL closes at ASK; SL must be < ask - stops
+      return (sl > 0 && sl < (ask - minDist) && sl < ask);
+   }
+   if(posType == POSITION_TYPE_BUY) {
+      // BUY closes at BID; SL must be > bid + stops
+      return (sl > 0 && sl > (bid + minDist) && sl > bid);
+   }
+   return false;
+}
+
+// v6.96: Apply lock-profit BE-SL to all Hero tickets of one side (one-shot per side).
+void ApplyHeroLockProfitSL(ENUM_POSITION_TYPE side)
+{
+   int applied = 0, skipped = 0;
+   string slList = "";
+   for(int i = 0; i < g_heroTicketCount; i++) {
+      ulong ticket = g_heroTickets[i];
+      if(!PositionSelectByTicket(ticket)) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
+      double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+      double curTP     = PositionGetDouble(POSITION_TP);
+      double curSL     = PositionGetDouble(POSITION_SL);
+      ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+      double newSL = ComputeHeroLockProfitSL(posType, openPrice);
+      if(!ValidateHeroLockProfitSL(posType, newSL)) {
+         skipped++;
+         continue; // retry next tick
+      }
+      // keep TP cleared (Hero never closes by basket TP), set lock-profit SL
+      double tgtTP = 0;
+      if(NormalizeDouble(curSL, _Digits) == NormalizeDouble(newSL, _Digits) &&
+         NormalizeDouble(curTP, _Digits) == 0) continue;
+      if(trade.PositionModify(ticket, newSL, tgtTP)) {
+         applied++;
+         slList += StringFormat(" #%I64u@%s", ticket, DoubleToString(newSL, _Digits));
+      } else {
+         Print("v6.96 Hero BE_GUARD modify FAILED ticket=", ticket, " err=", GetLastError());
+      }
+   }
+   if(applied > 0)
+      Print("v6.96 Hero BE_GUARD applied side=", EnumToString(side),
+            " count=", applied, " skipped=", skipped, " (lock-profit SL):", slList);
+}
+
+// v6.96: Strip TP/SL on Hero tickets in PRE/ARMED phase (basket still alive).
+void StripBrokerTPSLFromHeroTickets()
+{
+   if(!InpHero_Enabled || g_heroTicketCount == 0) return;
+   for(int i = 0; i < g_heroTicketCount; i++) {
+      ulong ticket = g_heroTickets[i];
+      if(!PositionSelectByTicket(ticket)) continue;
+      ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+      int phase = (posType == POSITION_TYPE_BUY) ? g_heroPhase_Buy : g_heroPhase_Sell;
+      if(phase == 3 /*BE_GUARD*/) continue; // ApplyHeroLockProfitSL owns it
+      double curTP = PositionGetDouble(POSITION_TP);
+      double curSL = PositionGetDouble(POSITION_SL);
+      if(curTP == 0 && curSL == 0) continue;
+      if(trade.PositionModify(ticket, 0, 0)) {
+         // throttled — single line is fine
+      }
+   }
+}
+
+// v6.96: When opposite-side basket is about to close, force-close all Heroes
+// on the locked Hero side (primary closure path).
+void CloseOppositeHeroOnBasketClose(ENUM_POSITION_TYPE closingSide)
+{
+   if(!InpHero_Enabled) return;
+   ENUM_POSITION_TYPE oppSide = (closingSide == POSITION_TYPE_BUY) ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
+   if((int)oppSide != g_heroLockedSide) return;
+   int phase = (oppSide == POSITION_TYPE_BUY) ? g_heroPhase_Buy : g_heroPhase_Sell;
+   if(phase != 3 /*BE_GUARD*/) return; // only after same-side basket cleared
+   if(CountHeroOnSide(oppSide) <= 0) return;
+   double prof = SumHeroProfitOnSide(oppSide);
+   Print("v6.96 Hero CLOSE (opposite-basket): closingSide=", EnumToString(closingSide),
+         " heroSide=", EnumToString(oppSide), " heroProfit=", DoubleToString(prof, 2));
+   CloseHeroOnSide(oppSide, "OppositeBasketClose");
+}
+
+// v6.96: Reset Hero side state when fully flat (no Hero, no basket).
+void ResetHeroStateIfFlat(ENUM_POSITION_TYPE side)
+{
+   if(CountHeroOnSide(side) > 0) return;
+   if(CountNonHeroMainOnSide(side) > 0) return;
+   if(side == POSITION_TYPE_BUY) {
+      if(g_heroPhase_Buy != 0 || g_heroBE_Applied_Buy)
+         Print("v6.96 Hero RESET side=BUY (flat)");
+      g_heroPhase_Buy = 0;
+      g_heroBE_Applied_Buy = false;
+   } else {
+      if(g_heroPhase_Sell != 0 || g_heroBE_Applied_Sell)
+         Print("v6.96 Hero RESET side=SELL (flat)");
+      g_heroPhase_Sell = 0;
+      g_heroBE_Applied_Sell = false;
+   }
+   if(g_heroLockedSide == (int)side) {
+      // unlock only when BOTH sides flat of Hero
+      if(CountHeroOnSide(POSITION_TYPE_BUY) == 0 && CountHeroOnSide(POSITION_TYPE_SELL) == 0) {
+         Print("v6.96 Hero UNLOCK: side=", EnumToString(side), " fully flat");
+         g_heroLockedSide = -1;
+      }
+   }
+}
+
+// v6.96: Master orchestrator — runs every tick after BuildHeroTicketCache().
+// Replaces v6.93 ManageHeroOppositeClose semantics.
 void ManageHeroOppositeClose()
 {
-   if(!InpHero_Enabled || !InpHero_CloseWithOpposite) return; // input retained for .set compat; now means "close Hero with same-side basket"
-   if(g_heroOppCloseSide == -1) return;
-   if(TimeCurrent() - g_heroOppCloseTime > 5) { g_heroOppCloseSide = -1; return; }
-   ENUM_POSITION_TYPE heroSide = (ENUM_POSITION_TYPE)g_heroOppCloseSide;
-   if(CountHeroOnSide(heroSide) == 0) { g_heroOppCloseSide = -1; return; }
-   if(InpHero_RequireNetProfit && SumHeroProfitOnSide(heroSide) < 0) return;
-   CloseHeroOnSide(heroSide, "SameSideBasketClosed");
-   g_heroOppCloseSide = -1;
+   if(!InpHero_Enabled) return;
+
+   // Strip broker TP/SL from Hero tickets while basket is alive (PRE/ARMED phase)
+   StripBrokerTPSLFromHeroTickets();
+
+   // Per side: detect basket-cleared -> apply lock-profit BE-SL once
+   for(int s = 0; s < 2; s++) {
+      ENUM_POSITION_TYPE side = (s == 0) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
+      bool already = (side == POSITION_TYPE_BUY) ? g_heroBE_Applied_Buy : g_heroBE_Applied_Sell;
+      if(!already && DetectSameSideBasketClearedForHero(side)) {
+         // transition phase first so SyncBrokerTPSL/Strip stops fighting
+         if(side == POSITION_TYPE_BUY)  g_heroPhase_Buy  = 3;
+         else                            g_heroPhase_Sell = 3;
+         ApplyHeroLockProfitSL(side);
+         if(side == POSITION_TYPE_BUY)  g_heroBE_Applied_Buy  = true;
+         else                            g_heroBE_Applied_Sell = true;
+      }
+      // BE_GUARD retry: if some Heroes were skipped due to sanity, retry while still in BE_GUARD
+      int phase = (side == POSITION_TYPE_BUY) ? g_heroPhase_Buy : g_heroPhase_Sell;
+      if(phase == 3 && CountHeroOnSide(side) > 0) {
+         // re-call (cheap): only modifies tickets whose SL still differs from target
+         ApplyHeroLockProfitSL(side);
+      }
+      ResetHeroStateIfFlat(side);
+   }
 }
 
 //+------------------------------------------------------------------+
