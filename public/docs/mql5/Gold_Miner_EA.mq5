@@ -1618,7 +1618,11 @@ void OnTick()
      if(UseTP_Points || UseTP_Dollar || UseTP_PercentBalance || (EnableSL && UseSL_Points))
      {
         if(TimeCurrent() - g_lastBrokerTPSLSync >= g_brokerTPSLIntervalSec)
+        {
+           EnsureHeroProtection("pre-SyncBrokerTPSL");  // v6.98: refresh Hero before TP push
            SyncBrokerTPSL();
+           EnsureHeroProtection("post-SyncBrokerTPSL"); // v6.98: wipe any TP that slipped onto Hero
+        }
      }
 
    //--- Every tick: Matching Close (pair profit vs loss orders)
