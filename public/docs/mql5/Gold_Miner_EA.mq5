@@ -6242,6 +6242,8 @@ void ApplyTrailingSL_TF(int tfIdx, ENUM_POSITION_TYPE side, double slPrice)
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       if(PositionGetInteger(POSITION_TYPE) != side) continue;
       if(!MatchTFPrefix(PositionGetString(POSITION_COMMENT), tfLabel)) continue;
+      // v6.93 FIX: never push TF basket trailing SL onto Hero tickets
+      if(IsHeroTicket(ticket)) continue;
 
       double currentSL = PositionGetDouble(POSITION_SL);
       double tp = PositionGetDouble(POSITION_TP);
