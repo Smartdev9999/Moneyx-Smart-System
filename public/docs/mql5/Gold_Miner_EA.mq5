@@ -1994,6 +1994,8 @@ int NormalOrderCount()
       // v6.22: Skip orders from previous generations
       int orderGen = ExtractGeneration(comment);
       if(orderGen >= 0 && orderGen != g_cycleGeneration) continue;
+      // v6.93: optionally exclude Hero tickets from MaxOpenOrders cap
+      if(InpHero_Enabled && !InpHero_IncludeInMaxOrders && IsHeroTicket(ticket)) continue;
       count++;
    }
    return count;
