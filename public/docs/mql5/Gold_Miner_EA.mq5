@@ -2256,10 +2256,11 @@ bool OpenOrder(ENUM_ORDER_TYPE orderType, double lots, string comment)
 //+------------------------------------------------------------------+
 void BuildHeroTicketCache()
 {
-   g_heroTicketCount = 0;
-   if(!InpHero_Enabled || InpHero_OrderCount <= 0) return;
-   if(g_heroLastBuildTime == TimeCurrent()) return; // throttle 1/sec
+   // v6.93 FIX: gate BEFORE clearing cache, so throttled ticks keep last-built cache alive
+   if(!InpHero_Enabled || InpHero_OrderCount <= 0) { g_heroTicketCount = 0; return; }
+   if(g_heroLastBuildTime == TimeCurrent() && g_heroTicketCount > 0) return; // throttle 1/sec, keep last build
    g_heroLastBuildTime = TimeCurrent();
+   g_heroTicketCount = 0;
 
    int maxGen = g_maxGridMonitorGen + 5;
    for(int gen = 0; gen <= maxGen; gen++)
