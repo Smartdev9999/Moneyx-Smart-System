@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.95 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.96 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "6.95"
-#property description "Gold Miner EA v6.95 - Hero Min Activation: new InpHero_MinOrdersToActivate gate so Hero only forms after side has >= N orders (default 5); keeps v6.94 survivor-only block + v6.93 same-side close"
+#property version   "6.96"
+#property description "Gold Miner EA v6.96 - Hero Opposite-Helper + Lock-Profit BE-SL: Hero excluded from basket avg/PL/trail; same-side basket clears -> apply lock-profit BE-SL (SELL=open-offset, BUY=open+offset); Hero closes WITH opposite-side basket TP/Trail (primary) or BE-SL hit (fallback); single-side exclusive lock"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -125,15 +125,17 @@ input bool             StopEAOnDrawdown   = false;     // Stop EA after Emergenc
 input ENUM_TRADE_MODE  TradingMode        = TRADE_BOTH; // Trading Mode (Buy/Sell/Both)
 input ENUM_ENTRY_MODE  EntryMode          = ENTRY_SMA;  // Entry Mode (SMA=Original, ZigZag=MTF)
 
-//--- v6.93: Hero Order ---
-input group "===== Hero Order (v6.93/v6.95) ====="
-input bool   InpHero_Enabled            = false; // Enable Hero Order (exclude N newest from basket avg/PL/trail)
-input int    InpHero_OrderCount         = 2;     // Hero count per (gen, side)
-input int    InpHero_MinOrdersToActivate= 5;     // v6.95: Min orders on side before Hero activates (0=use OrderCount+1)
-input bool   InpHero_CloseWithOpposite  = true;  // Close Hero WITH same-side basket trail/TP (v6.93: was opposite)
-input bool   InpHero_RequireNetProfit   = false; // Only close Hero if Hero PL >= 0
-input bool   InpHero_BlockSameSideGrid  = true;  // Block new INIT/GL/GP on side that has Hero
+//--- v6.96: Hero Order (Opposite-Helper + Lock-Profit BE-SL) ---
+input group "===== Hero Order (v6.96) ====="
+input bool   InpHero_Enabled            = false; // Enable Hero Order (opposite-side helper)
+input int    InpHero_OrderCount         = 2;     // Hero count per (gen, side) — N newest become Hero
+input int    InpHero_MinOrdersToActivate= 5;     // Min orders on side before Hero activates (0=OrderCount+1)
+input int    InpHero_BE_OffsetPoints    = 50;    // v6.96: Lock-profit BE-SL offset in POINTS (SELL=open-offset, BUY=open+offset)
+input bool   InpHero_BlockSameSideGrid  = true;  // Block new INIT/GL/GP on side that has Hero (survivor-only)
 input bool   InpHero_IncludeInMaxOrders = true;  // Count Hero into MaxOpenOrders
+// --- Deprecated (kept for .set compat, NO-OP in v6.96) ---
+input bool   InpHero_CloseWithOpposite  = true;  // [DEPRECATED v6.96] now hard-wired to opposite-basket close
+input bool   InpHero_RequireNetProfit   = false; // [DEPRECATED v6.96] not used (lock-profit SL guarantees floor)
 
 //--- SMA Indicator
 input group "=== SMA Indicator ==="
@@ -722,13 +724,20 @@ int      g_maxGridArmReadyGen   = -1;      // gen that armReady flags refer to (
 // === v6.89: Squeeze Pause Trailing edge state (true while in pause) ===
 bool     g_squeezePauseTrailingActive = false;
 
-// === v6.92: Hero Order state ===
+// === v6.92/v6.96: Hero Order state ===
 ulong    g_heroTickets[200];
 int      g_heroTicketCount        = 0;
 datetime g_heroLastBuildTime      = 0;
-int      g_heroOppCloseSide       = -1;     // POSITION_TYPE_BUY/SELL → side that should close its Hero
+int      g_heroOppCloseSide       = -1;     // legacy (kept; unused in v6.96 for same-side; new v6.96 uses g_heroOppBasketClosedSide)
 datetime g_heroOppCloseTime       = 0;
 datetime g_heroLastBlockLog       = 0;
+// v6.96: Opposite-helper + lock-profit BE-SL
+int      g_heroLockedSide         = -1;     // -1 / POSITION_TYPE_BUY / POSITION_TYPE_SELL — only this side may form Hero
+int      g_heroPhase_Buy          = 0;      // 0=NONE 1=PRE_STAGE 2=ARMED_WAITING 3=BE_GUARD
+int      g_heroPhase_Sell         = 0;
+bool     g_heroBE_Applied_Buy     = false;  // lock-profit SL has been applied to all current Buy Heroes
+bool     g_heroBE_Applied_Sell    = false;
+datetime g_heroBE_LastLog         = 0;
 // === v6.42: Dashboard History Cache ===
 datetime g_lastDashHistoryCalcTime = 0;
 int      g_dashCacheIntervalSec    = 5;  // recalculate every 5 seconds
@@ -1051,19 +1060,26 @@ int OnInit()
    // v6.32: Initialize daily start balance
    g_dailyStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
 
-   // v6.92: Hero Order — reset state on init
+   // v6.92/v6.96: Hero Order — reset state on init
    g_heroTicketCount = 0;
    g_heroLastBuildTime = 0;
    g_heroOppCloseSide = -1;
    g_heroOppCloseTime = 0;
    g_heroLastBlockLog = 0;
+   g_heroLockedSide = -1;
+   g_heroPhase_Buy = 0;
+   g_heroPhase_Sell = 0;
+   g_heroBE_Applied_Buy = false;
+   g_heroBE_Applied_Sell = false;
+   g_heroBE_LastLog = 0;
    
-     Print("Gold Miner EA v6.95 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+     Print("Gold Miner EA v6.96 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min",
           " | HedgeOpenDelay=", InpHedge_OpenDelayMin, "min (mode=", (int)InpHedge_OpenDelayMode, ")",
-          " | OppSurvClose=", InpHedge_CloseOppositeSurvivors ? "ON" : "OFF");
+          " | Hero=", InpHero_Enabled ? "ON" : "OFF",
+          " | HeroBE_OffsetPts=", InpHero_BE_OffsetPoints);
 
    // === News Filter Init ===
    if(InpEnableNewsFilter)
@@ -1120,7 +1136,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.95 deinitialized");
+   Print("Gold Miner EA v6.96 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -1361,7 +1377,8 @@ double CalcDailyPL()
 
 void OnTick()
 {
-   // v6.92: Hero Order — rebuild ticket cache + handle opposite-close signal
+   // v6.96: Hero Order — rebuild ticket cache + orchestrate phase transitions (strip TP/SL,
+   //                     apply lock-profit BE-SL on basket-clear, reset state when flat)
    BuildHeroTicketCache();
    ManageHeroOppositeClose();
 
@@ -2268,6 +2285,10 @@ void BuildHeroTicketCache()
    g_heroLastBuildTime = TimeCurrent();
    g_heroTicketCount = 0;
 
+   // v6.96: track per-side raw counts so we can update phase + lock state
+   int sideTotalCount[2]   = {0, 0};   // total non-bound, non-hedge basket orders on each side
+   int sideHeroTagged[2]   = {0, 0};   // how many we tagged as Hero this build
+
    int maxGen = g_maxGridMonitorGen + 5;
    for(int gen = 0; gen <= maxGen; gen++)
    {
@@ -2291,35 +2312,65 @@ void BuildHeroTicketCache()
             tt[n] = (datetime)PositionGetInteger(POSITION_TIME);
             n++;
          }
+         sideTotalCount[s] += n;
+
          // sort desc by time
          for(int a = 1; a < n; a++)
             for(int b = a; b > 0 && tt[b] > tt[b-1]; b--)
             { datetime _t=tt[b]; tt[b]=tt[b-1]; tt[b-1]=_t;
               ulong _k=tk[b]; tk[b]=tk[b-1]; tk[b-1]=_k; }
-         // v6.95 FIX: Hero forms only when side count >= InpHero_MinOrdersToActivate.
-         // If MinOrdersToActivate <= 0, fallback to v6.94 behavior (n > InpHero_OrderCount).
-         // Always keep at least 1 non-Hero basket order so Hero never swallows the whole basket.
+
          int activateThreshold = (InpHero_MinOrdersToActivate > 0)
                                  ? InpHero_MinOrdersToActivate
                                  : (InpHero_OrderCount + 1);
          if(n < activateThreshold) continue;
-         int take = MathMin(InpHero_OrderCount, n - 1); // guarantee >= 1 non-Hero stays in basket
+
+         // v6.96: Single-side exclusive lock — only the locked side may form Hero.
+         // First side that reaches activation acquires the lock. Opposite side
+         // never tags Hero while lock is held; it will be the one that closes Hero
+         // later via opposite-basket TP/Trail.
+         int sideId = (int)side;
+         if(g_heroLockedSide == -1) {
+            g_heroLockedSide = sideId;
+            Print("v6.96 Hero LOCK acquired: side=", EnumToString(side));
+         }
+         if(g_heroLockedSide != sideId) continue;
+
+         // v6.96: In BE_GUARD phase, lock the existing Hero set — no rolling re-tag.
+         // (basket has cleared, so there is no "newest non-Hero" to swap in.)
+         int curPhase = (sideId == POSITION_TYPE_BUY) ? g_heroPhase_Buy : g_heroPhase_Sell;
+         int take = MathMin(InpHero_OrderCount, n - 1); // guarantee >= 1 non-Hero stays in basket while basket alive
+         if(curPhase == 3 /*BE_GUARD*/) {
+            // freeze: take all newest up to OrderCount (basket may already be 0)
+            take = MathMin(InpHero_OrderCount, n);
+         }
          if(take <= 0) continue;
          for(int k = 0; k < take && g_heroTicketCount < 200; k++)
             g_heroTickets[g_heroTicketCount++] = tk[k];
+         sideHeroTagged[s] += take;
       }
    }
-   // v6.95: throttled audit log — show Hero + non-Hero counts + min-activate threshold
+
+   // v6.96: phase update per side (NONE -> ARMED_WAITING; BE_GUARD set elsewhere, never downgrade here)
+   if(g_heroPhase_Buy != 3) {
+      g_heroPhase_Buy = (sideHeroTagged[0] > 0) ? 2 : 0;
+   }
+   if(g_heroPhase_Sell != 3) {
+      g_heroPhase_Sell = (sideHeroTagged[1] > 0) ? 2 : 0;
+   }
+
+   // v6.96: throttled audit log
    static datetime lastHeroAuditLog = 0;
    if(g_heroTicketCount > 0 && TimeCurrent() - lastHeroAuditLog >= 30) {
       int minAct = (InpHero_MinOrdersToActivate > 0) ? InpHero_MinOrdersToActivate : (InpHero_OrderCount + 1);
-      Print("v6.95 Hero CACHE: total=", g_heroTicketCount,
+      Print("v6.96 Hero CACHE: total=", g_heroTicketCount,
             " heroBUY=", CountHeroOnSide(POSITION_TYPE_BUY),
             " heroSELL=", CountHeroOnSide(POSITION_TYPE_SELL),
             " nonHeroBUY=", CountNonHeroMainOnSide(POSITION_TYPE_BUY),
             " nonHeroSELL=", CountNonHeroMainOnSide(POSITION_TYPE_SELL),
             " minActivate=", minAct,
-            " (block fires only when nonHero=0 on that side)");
+            " lockedSide=", (g_heroLockedSide == POSITION_TYPE_BUY ? "BUY" : (g_heroLockedSide == POSITION_TYPE_SELL ? "SELL" : "NONE")),
+            " phaseBUY=", g_heroPhase_Buy, " phaseSELL=", g_heroPhase_Sell);
       lastHeroAuditLog = TimeCurrent();
    }
 }
@@ -2413,17 +2464,172 @@ void CloseHeroOnSide(ENUM_POSITION_TYPE side, string reason)
    g_heroLastBuildTime = 0;
 }
 
-// v6.93: renamed semantically — closes Hero on the SAME side that just flattened its basket
+// v6.96: Detect when same-side basket has fully cleared while Heroes still alive
+//        -> transition phase to BE_GUARD and apply lock-profit BE-SL.
+bool DetectSameSideBasketClearedForHero(ENUM_POSITION_TYPE side)
+{
+   if(!InpHero_Enabled) return false;
+   if((int)side != g_heroLockedSide) return false;
+   if(CountHeroOnSide(side) <= 0) return false;
+   if(CountNonHeroMainOnSide(side) > 0) return false; // basket still alive
+   return true;
+}
+
+// v6.96: Compute the lock-profit BE-SL price for one Hero ticket.
+// SELL Hero -> SL placed BELOW openPrice (profit side of SELL).
+// BUY  Hero -> SL placed ABOVE openPrice (profit side of BUY).
+double ComputeHeroLockProfitSL(ENUM_POSITION_TYPE posType, double openPrice)
+{
+   double pt = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   int    digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+   double offset = (double)InpHero_BE_OffsetPoints * pt;
+   if(posType == POSITION_TYPE_SELL) return NormalizeDouble(openPrice - offset, digits);
+   if(posType == POSITION_TYPE_BUY)  return NormalizeDouble(openPrice + offset, digits);
+   return 0;
+}
+
+// v6.96: Sanity check — SL must be on the profit side of current price AND past stops level.
+bool ValidateHeroLockProfitSL(ENUM_POSITION_TYPE posType, double sl)
+{
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double pt  = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   long   stopsLvl = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   double minDist = (double)stopsLvl * pt;
+   if(posType == POSITION_TYPE_SELL) {
+      // SELL closes at ASK; SL must be < ask - stops
+      return (sl > 0 && sl < (ask - minDist) && sl < ask);
+   }
+   if(posType == POSITION_TYPE_BUY) {
+      // BUY closes at BID; SL must be > bid + stops
+      return (sl > 0 && sl > (bid + minDist) && sl > bid);
+   }
+   return false;
+}
+
+// v6.96: Apply lock-profit BE-SL to all Hero tickets of one side (one-shot per side).
+void ApplyHeroLockProfitSL(ENUM_POSITION_TYPE side)
+{
+   int applied = 0, skipped = 0;
+   string slList = "";
+   for(int i = 0; i < g_heroTicketCount; i++) {
+      ulong ticket = g_heroTickets[i];
+      if(!PositionSelectByTicket(ticket)) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
+      double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+      double curTP     = PositionGetDouble(POSITION_TP);
+      double curSL     = PositionGetDouble(POSITION_SL);
+      ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+      double newSL = ComputeHeroLockProfitSL(posType, openPrice);
+      if(!ValidateHeroLockProfitSL(posType, newSL)) {
+         skipped++;
+         continue; // retry next tick
+      }
+      // keep TP cleared (Hero never closes by basket TP), set lock-profit SL
+      double tgtTP = 0;
+      if(NormalizeDouble(curSL, _Digits) == NormalizeDouble(newSL, _Digits) &&
+         NormalizeDouble(curTP, _Digits) == 0) continue;
+      if(trade.PositionModify(ticket, newSL, tgtTP)) {
+         applied++;
+         slList += StringFormat(" #%I64u@%s", ticket, DoubleToString(newSL, _Digits));
+      } else {
+         Print("v6.96 Hero BE_GUARD modify FAILED ticket=", ticket, " err=", GetLastError());
+      }
+   }
+   if(applied > 0)
+      Print("v6.96 Hero BE_GUARD applied side=", EnumToString(side),
+            " count=", applied, " skipped=", skipped, " (lock-profit SL):", slList);
+}
+
+// v6.96: Strip TP/SL on Hero tickets in PRE/ARMED phase (basket still alive).
+void StripBrokerTPSLFromHeroTickets()
+{
+   if(!InpHero_Enabled || g_heroTicketCount == 0) return;
+   for(int i = 0; i < g_heroTicketCount; i++) {
+      ulong ticket = g_heroTickets[i];
+      if(!PositionSelectByTicket(ticket)) continue;
+      ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+      int phase = (posType == POSITION_TYPE_BUY) ? g_heroPhase_Buy : g_heroPhase_Sell;
+      if(phase == 3 /*BE_GUARD*/) continue; // ApplyHeroLockProfitSL owns it
+      double curTP = PositionGetDouble(POSITION_TP);
+      double curSL = PositionGetDouble(POSITION_SL);
+      if(curTP == 0 && curSL == 0) continue;
+      if(trade.PositionModify(ticket, 0, 0)) {
+         // throttled — single line is fine
+      }
+   }
+}
+
+// v6.96: When opposite-side basket is about to close, force-close all Heroes
+// on the locked Hero side (primary closure path).
+void CloseOppositeHeroOnBasketClose(ENUM_POSITION_TYPE closingSide)
+{
+   if(!InpHero_Enabled) return;
+   ENUM_POSITION_TYPE oppSide = (closingSide == POSITION_TYPE_BUY) ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
+   if((int)oppSide != g_heroLockedSide) return;
+   int phase = (oppSide == POSITION_TYPE_BUY) ? g_heroPhase_Buy : g_heroPhase_Sell;
+   if(phase != 3 /*BE_GUARD*/) return; // only after same-side basket cleared
+   if(CountHeroOnSide(oppSide) <= 0) return;
+   double prof = SumHeroProfitOnSide(oppSide);
+   Print("v6.96 Hero CLOSE (opposite-basket): closingSide=", EnumToString(closingSide),
+         " heroSide=", EnumToString(oppSide), " heroProfit=", DoubleToString(prof, 2));
+   CloseHeroOnSide(oppSide, "OppositeBasketClose");
+}
+
+// v6.96: Reset Hero side state when fully flat (no Hero, no basket).
+void ResetHeroStateIfFlat(ENUM_POSITION_TYPE side)
+{
+   if(CountHeroOnSide(side) > 0) return;
+   if(CountNonHeroMainOnSide(side) > 0) return;
+   if(side == POSITION_TYPE_BUY) {
+      if(g_heroPhase_Buy != 0 || g_heroBE_Applied_Buy)
+         Print("v6.96 Hero RESET side=BUY (flat)");
+      g_heroPhase_Buy = 0;
+      g_heroBE_Applied_Buy = false;
+   } else {
+      if(g_heroPhase_Sell != 0 || g_heroBE_Applied_Sell)
+         Print("v6.96 Hero RESET side=SELL (flat)");
+      g_heroPhase_Sell = 0;
+      g_heroBE_Applied_Sell = false;
+   }
+   if(g_heroLockedSide == (int)side) {
+      // unlock only when BOTH sides flat of Hero
+      if(CountHeroOnSide(POSITION_TYPE_BUY) == 0 && CountHeroOnSide(POSITION_TYPE_SELL) == 0) {
+         Print("v6.96 Hero UNLOCK: side=", EnumToString(side), " fully flat");
+         g_heroLockedSide = -1;
+      }
+   }
+}
+
+// v6.96: Master orchestrator — runs every tick after BuildHeroTicketCache().
+// Replaces v6.93 ManageHeroOppositeClose semantics.
 void ManageHeroOppositeClose()
 {
-   if(!InpHero_Enabled || !InpHero_CloseWithOpposite) return; // input retained for .set compat; now means "close Hero with same-side basket"
-   if(g_heroOppCloseSide == -1) return;
-   if(TimeCurrent() - g_heroOppCloseTime > 5) { g_heroOppCloseSide = -1; return; }
-   ENUM_POSITION_TYPE heroSide = (ENUM_POSITION_TYPE)g_heroOppCloseSide;
-   if(CountHeroOnSide(heroSide) == 0) { g_heroOppCloseSide = -1; return; }
-   if(InpHero_RequireNetProfit && SumHeroProfitOnSide(heroSide) < 0) return;
-   CloseHeroOnSide(heroSide, "SameSideBasketClosed");
-   g_heroOppCloseSide = -1;
+   if(!InpHero_Enabled) return;
+
+   // Strip broker TP/SL from Hero tickets while basket is alive (PRE/ARMED phase)
+   StripBrokerTPSLFromHeroTickets();
+
+   // Per side: detect basket-cleared -> apply lock-profit BE-SL once
+   for(int s = 0; s < 2; s++) {
+      ENUM_POSITION_TYPE side = (s == 0) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
+      bool already = (side == POSITION_TYPE_BUY) ? g_heroBE_Applied_Buy : g_heroBE_Applied_Sell;
+      if(!already && DetectSameSideBasketClearedForHero(side)) {
+         // transition phase first so SyncBrokerTPSL/Strip stops fighting
+         if(side == POSITION_TYPE_BUY)  g_heroPhase_Buy  = 3;
+         else                            g_heroPhase_Sell = 3;
+         ApplyHeroLockProfitSL(side);
+         if(side == POSITION_TYPE_BUY)  g_heroBE_Applied_Buy  = true;
+         else                            g_heroBE_Applied_Sell = true;
+      }
+      // BE_GUARD retry: if some Heroes were skipped due to sanity, retry while still in BE_GUARD
+      int phase = (side == POSITION_TYPE_BUY) ? g_heroPhase_Buy : g_heroPhase_Sell;
+      if(phase == 3 && CountHeroOnSide(side) > 0) {
+         // re-call (cheap): only modifies tickets whose SL still differs from target
+         ApplyHeroLockProfitSL(side);
+      }
+      ResetHeroStateIfFlat(side);
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -2524,6 +2730,11 @@ double CalculateTotalLots(ENUM_POSITION_TYPE side)
 //+------------------------------------------------------------------+
 void CloseAllSide(ENUM_POSITION_TYPE side)
 {
+   // v6.96: Hero opposite-helper hook — if THIS side is the basket that's about to close
+   //        and the OPPOSITE side holds Heroes in BE_GUARD, close those Heroes first.
+   //        This realises the primary closure path: Hero closes WITH opposite-side basket.
+   CloseOppositeHeroOnBasketClose(side);
+
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       ulong ticket = PositionGetTicket(i);
@@ -2550,12 +2761,9 @@ void CloseAllSide(ENUM_POSITION_TYPE side)
       justClosedSell = true;
       g_maxDDSell = 0;
    }
-   // v6.93 FIX: signal SAME-side Hero close (was opposite-side in v6.92 — wrong direction).
-   // user spec: Hero closes WITH the same-side basket trail/TP that just succeeded.
-   if(InpHero_Enabled && InpHero_CloseWithOpposite) {
-      g_heroOppCloseSide = (int)side; // SAME side as the basket that just closed
-      g_heroOppCloseTime = TimeCurrent();
-   }
+   // v6.96: same-side Hero close signal REMOVED (was v6.93 wrong direction).
+   //        Hero on this side stays alive; ManageHeroOppositeClose() will detect
+   //        basket-cleared next tick and apply lock-profit BE-SL.
 }
 
 //+------------------------------------------------------------------+
@@ -2713,6 +2921,9 @@ void SyncBrokerTPSL()
       // Skip hedge/bound orders
       if(IsHedgeComment(PositionGetString(POSITION_COMMENT))) continue;
       if(IsTicketBound(ticket)) continue;
+      // v6.96: Hero tickets own their own TP/SL lifecycle (strip in PRE/ARMED, lock-profit in BE_GUARD).
+      //        SyncBrokerTPSL must NEVER overwrite — would push basket avg TP onto Hero or wipe lock-profit SL.
+      if(IsHeroTicket(ticket)) continue;
 
       // v6.63 FIX: Skip orders managed by Recovery Owner — they have their own
       // per-generation avg TP path (ManageRecoveryOwnerAvgTP). Mixing them into
@@ -3714,6 +3925,9 @@ int CountGenOrders(int gen, ENUM_POSITION_TYPE side)
 //+------------------------------------------------------------------+
 void CloseGenSide(int gen, ENUM_POSITION_TYPE side)
 {
+   // v6.96: Hero opposite-helper hook — close opposite-side Heroes (BE_GUARD) first.
+   CloseOppositeHeroOnBasketClose(side);
+
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       ulong ticket = PositionGetTicket(i);
@@ -3734,11 +3948,8 @@ void CloseGenSide(int gen, ENUM_POSITION_TYPE side)
          trade.PositionClose(ticket);
    }
    Print("v6.86 MaxGridTrail: Closed Gen", gen, " side=", (side == POSITION_TYPE_BUY ? "BUY" : "SELL"), " (INIT+GL+GP)");
-   // v6.93 FIX: signal SAME-side Hero close (was opposite in v6.92).
-   if(InpHero_Enabled && InpHero_CloseWithOpposite) {
-      g_heroOppCloseSide = (int)side; // SAME side
-      g_heroOppCloseTime = TimeCurrent();
-   }
+   // v6.96: same-side Hero close signal REMOVED. Same-side Hero stays alive
+   //        and ManageHeroOppositeClose() will apply lock-profit BE-SL next tick.
 }
 
 //+------------------------------------------------------------------+
@@ -4577,7 +4788,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.95 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.95 [ZZ]" : "Gold Miner EA v6.95 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.96 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.96 [ZZ]" : "Gold Miner EA v6.96 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
