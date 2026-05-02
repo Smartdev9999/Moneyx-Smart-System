@@ -2920,6 +2920,9 @@ void SyncBrokerTPSL()
       // Skip hedge/bound orders
       if(IsHedgeComment(PositionGetString(POSITION_COMMENT))) continue;
       if(IsTicketBound(ticket)) continue;
+      // v6.96: Hero tickets own their own TP/SL lifecycle (strip in PRE/ARMED, lock-profit in BE_GUARD).
+      //        SyncBrokerTPSL must NEVER overwrite — would push basket avg TP onto Hero or wipe lock-profit SL.
+      if(IsHeroTicket(ticket)) continue;
 
       // v6.63 FIX: Skip orders managed by Recovery Owner — they have their own
       // per-generation avg TP path (ManageRecoveryOwnerAvgTP). Mixing them into
