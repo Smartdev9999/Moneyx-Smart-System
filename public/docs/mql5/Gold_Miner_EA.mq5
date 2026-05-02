@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.92 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.93 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "6.92"
-#property description "Gold Miner EA v6.92 - Hero Order: keep N newest tickets per (gen, side) out of basket avg/PL; basket TP/Trail/SL skips Hero; same-side new INIT/GL/GP blocked while Hero alive; Hero closed when opposite-side basket closes (toggle)"
+#property version   "6.93"
+#property description "Gold Miner EA v6.93 - Hero Order BUGFIX: cache-rebuild fix (was reset every tick); Hero now closed WITH same-side basket trail/TP (was opposite); ApplyTrailingSL/_TF skip Hero (was force-closing them); Hero blocks same-side INIT/GL/GP grid"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -125,11 +125,11 @@ input bool             StopEAOnDrawdown   = false;     // Stop EA after Emergenc
 input ENUM_TRADE_MODE  TradingMode        = TRADE_BOTH; // Trading Mode (Buy/Sell/Both)
 input ENUM_ENTRY_MODE  EntryMode          = ENTRY_SMA;  // Entry Mode (SMA=Original, ZigZag=MTF)
 
-//--- v6.92: Hero Order ---
-input group "===== Hero Order (v6.92) ====="
-input bool   InpHero_Enabled            = false; // Enable Hero Order (exclude N newest from basket avg)
+//--- v6.93: Hero Order ---
+input group "===== Hero Order (v6.93) ====="
+input bool   InpHero_Enabled            = false; // Enable Hero Order (exclude N newest from basket avg/PL/trail)
 input int    InpHero_OrderCount         = 2;     // Hero count per (gen, side)
-input bool   InpHero_CloseWithOpposite  = true;  // Close Hero when opposite-side basket closes
+input bool   InpHero_CloseWithOpposite  = true;  // Close Hero WITH same-side basket trail/TP (v6.93: was opposite)
 input bool   InpHero_RequireNetProfit   = false; // Only close Hero if Hero PL >= 0
 input bool   InpHero_BlockSameSideGrid  = true;  // Block new INIT/GL/GP on side that has Hero
 input bool   InpHero_IncludeInMaxOrders = true;  // Count Hero into MaxOpenOrders
@@ -1057,7 +1057,7 @@ int OnInit()
    g_heroOppCloseTime = 0;
    g_heroLastBlockLog = 0;
    
-     Print("Gold Miner EA v6.92 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+     Print("Gold Miner EA v6.93 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min",
@@ -1119,7 +1119,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.92 deinitialized");
+   Print("Gold Miner EA v6.93 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -1994,6 +1994,8 @@ int NormalOrderCount()
       // v6.22: Skip orders from previous generations
       int orderGen = ExtractGeneration(comment);
       if(orderGen >= 0 && orderGen != g_cycleGeneration) continue;
+      // v6.93: optionally exclude Hero tickets from MaxOpenOrders cap
+      if(InpHero_Enabled && !InpHero_IncludeInMaxOrders && IsHeroTicket(ticket)) continue;
       count++;
    }
    return count;
@@ -2256,10 +2258,11 @@ bool OpenOrder(ENUM_ORDER_TYPE orderType, double lots, string comment)
 //+------------------------------------------------------------------+
 void BuildHeroTicketCache()
 {
-   g_heroTicketCount = 0;
-   if(!InpHero_Enabled || InpHero_OrderCount <= 0) return;
-   if(g_heroLastBuildTime == TimeCurrent()) return; // throttle 1/sec
+   // v6.93 FIX: gate BEFORE clearing cache, so throttled ticks keep last-built cache alive
+   if(!InpHero_Enabled || InpHero_OrderCount <= 0) { g_heroTicketCount = 0; return; }
+   if(g_heroLastBuildTime == TimeCurrent() && g_heroTicketCount > 0) return; // throttle 1/sec, keep last build
    g_heroLastBuildTime = TimeCurrent();
+   g_heroTicketCount = 0;
 
    int maxGen = g_maxGridMonitorGen + 5;
    for(int gen = 0; gen <= maxGen; gen++)
@@ -2293,6 +2296,15 @@ void BuildHeroTicketCache()
          for(int k = 0; k < take && g_heroTicketCount < 200; k++)
             g_heroTickets[g_heroTicketCount++] = tk[k];
       }
+   }
+   // v6.93: throttled audit log
+   static datetime lastHeroAuditLog = 0;
+   if(g_heroTicketCount > 0 && TimeCurrent() - lastHeroAuditLog >= 30) {
+      Print("v6.93 Hero CACHE: total=", g_heroTicketCount,
+            " heroBUY=", CountHeroOnSide(POSITION_TYPE_BUY),
+            " heroSELL=", CountHeroOnSide(POSITION_TYPE_SELL),
+            " (excluded from basket avg/PL/trail; same-side grid blocked)");
+      lastHeroAuditLog = TimeCurrent();
    }
 }
 
@@ -2353,15 +2365,16 @@ void CloseHeroOnSide(ENUM_POSITION_TYPE side, string reason)
    g_heroLastBuildTime = 0;
 }
 
+// v6.93: renamed semantically — closes Hero on the SAME side that just flattened its basket
 void ManageHeroOppositeClose()
 {
-   if(!InpHero_Enabled || !InpHero_CloseWithOpposite) return;
+   if(!InpHero_Enabled || !InpHero_CloseWithOpposite) return; // input retained for .set compat; now means "close Hero with same-side basket"
    if(g_heroOppCloseSide == -1) return;
    if(TimeCurrent() - g_heroOppCloseTime > 5) { g_heroOppCloseSide = -1; return; }
    ENUM_POSITION_TYPE heroSide = (ENUM_POSITION_TYPE)g_heroOppCloseSide;
    if(CountHeroOnSide(heroSide) == 0) { g_heroOppCloseSide = -1; return; }
    if(InpHero_RequireNetProfit && SumHeroProfitOnSide(heroSide) < 0) return;
-   CloseHeroOnSide(heroSide, "OppositeBasketClosed");
+   CloseHeroOnSide(heroSide, "SameSideBasketClosed");
    g_heroOppCloseSide = -1;
 }
 
@@ -2489,9 +2502,10 @@ void CloseAllSide(ENUM_POSITION_TYPE side)
       justClosedSell = true;
       g_maxDDSell = 0;
    }
-   // v6.92: signal opposite-side Hero close
+   // v6.93 FIX: signal SAME-side Hero close (was opposite-side in v6.92 — wrong direction).
+   // user spec: Hero closes WITH the same-side basket trail/TP that just succeeded.
    if(InpHero_Enabled && InpHero_CloseWithOpposite) {
-      g_heroOppCloseSide = (side == POSITION_TYPE_BUY) ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
+      g_heroOppCloseSide = (int)side; // SAME side as the basket that just closed
       g_heroOppCloseTime = TimeCurrent();
    }
 }
@@ -3357,6 +3371,8 @@ void ApplyTrailingSL(ENUM_POSITION_TYPE side, double slPrice)
       if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       if(PositionGetInteger(POSITION_TYPE) != side) continue;
+      // v6.93 FIX: never push basket trailing SL onto Hero tickets — they must outlive the basket close
+      if(IsHeroTicket(ticket)) continue;
 
       double currentSL = PositionGetDouble(POSITION_SL);
       double tp = PositionGetDouble(POSITION_TP);
@@ -3670,9 +3686,9 @@ void CloseGenSide(int gen, ENUM_POSITION_TYPE side)
          trade.PositionClose(ticket);
    }
    Print("v6.86 MaxGridTrail: Closed Gen", gen, " side=", (side == POSITION_TYPE_BUY ? "BUY" : "SELL"), " (INIT+GL+GP)");
-   // v6.92: signal opposite-side Hero close
+   // v6.93 FIX: signal SAME-side Hero close (was opposite in v6.92).
    if(InpHero_Enabled && InpHero_CloseWithOpposite) {
-      g_heroOppCloseSide = (side == POSITION_TYPE_BUY) ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
+      g_heroOppCloseSide = (int)side; // SAME side
       g_heroOppCloseTime = TimeCurrent();
    }
 }
@@ -4513,7 +4529,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.92 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.92 [ZZ]" : "Gold Miner EA v6.92 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.93 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.93 [ZZ]" : "Gold Miner EA v6.93 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -6226,6 +6242,8 @@ void ApplyTrailingSL_TF(int tfIdx, ENUM_POSITION_TYPE side, double slPrice)
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       if(PositionGetInteger(POSITION_TYPE) != side) continue;
       if(!MatchTFPrefix(PositionGetString(POSITION_COMMENT), tfLabel)) continue;
+      // v6.93 FIX: never push TF basket trailing SL onto Hero tickets
+      if(IsHeroTicket(ticket)) continue;
 
       double currentSL = PositionGetDouble(POSITION_SL);
       double tp = PositionGetDouble(POSITION_TP);

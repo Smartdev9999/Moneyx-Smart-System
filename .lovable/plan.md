@@ -1,339 +1,95 @@
-# Gold Miner EA v6.92 — Hero Order Feature
+# Gold Miner EA v6.93 — Hero Order Bugfix
 
-## เจตนา (สรุปจากที่ user อธิบาย)
+ปัญหาที่ user รายงาน (จากภาพ v6.92):
+1. Average Trailing Stop / basket TP ฝั่ง BUY ปิดสำเร็จ แต่ **Hero BUY ถูกปิดไปด้วย** → ไม่เหลือ Hero ตามต้องการ
+2. มี Hero BUY ค้างอยู่ แต่ระบบยังออก `GM1_GL#1..GL#22 + GM1_GP#1` ฝั่ง BUY ต่อเรื่อยๆ → **Block ไม่ทำงาน**
+3. Hero ที่คงเหลือ ต้อง **ปิดพร้อม same-side basket trail สำเร็จ** (ตาม user: "ฮีโร่ order นี้จะปิดพร้อมกันกับ Average trailing stop **buy**") — ไม่ใช่ปิดเมื่อ opposite-side ปิด
 
-Hero Order = "เก็บ N order ใหม่สุด ของ generation+side ปัจจุบัน" แยกออกจาก basket ที่ใช้คำนวณ Average เพื่อให้:
+## Root Causes ที่พบใน v6.92
 
-1. Avg TP / MaxGrid Trail / Avg SL ปกติ คำนวณจาก order เก่าเท่านั้น (basket = total - N) → ปิด basket ได้เร็วขึ้น
-2. Hero N ตัวที่เหลือ ใช้ trailing-per-order ของเดิม (`ManagePerOrderTrailing`) ล็อคกำไรเอง
-3. ระหว่างที่ยังมี Hero ค้างอยู่บนฝั่งใด → ห้ามออก INIT/GL/GP ฝั่งนั้น (ฝั่งตรงข้ามทำงานปกติเต็มรูปแบบ)
-4. เมื่อฝั่งตรงข้ามถึง TP/Trail แล้วปิด basket → ปิด Hero ฝั่งนี้พร้อมกัน (toggle ได้)
-5. เมื่อปิดทุกอย่าง → cycle reset ตามเดิม
+### Bug A — `BuildHeroTicketCache` รัน throttle 1/sec แต่ถูก reset ทุก tick
+บรรทัด 2259: `g_heroTicketCount = 0;` ถูกตั้งค่าเป็น 0 **ก่อน** check throttle (บรรทัด 2261). ผลคือทุก tick ที่ throttle hit, cache จะถูก clear เหลือ 0 → `IsHeroTicket()` คืน false ทั้งหมด → Hero ไม่ถูก exclude จาก basket, ไม่ block ออเดอร์ใหม่ → Bug ใหญ่ที่สุด ทำให้ feature เสมือนปิดอยู่ตลอด
 
-## พฤติกรรมตัวอย่าง (ตาม user)
+### Bug B — Logic "ปิด Hero" สลับฝั่งผิด (Spec mismatch)
+บรรทัด 2492-2496 + 3673-3677: เมื่อ `CloseGenSide(side)` หรือ `CloseAllSide(side)` ทำงาน → set `g_heroOppCloseSide = OPPOSITE(side)`. แต่ user ต้องการให้ Hero ปิดพร้อม **same-side** basket trail สำเร็จ → ต้องใช้ `side` ตรงๆ ไม่กลับด้าน
 
-```text
-SELL basket gen=0 มี 10 ตัว, InpHero_OrderCount = 2
+### Bug C — Block ไม่ทำงานเพราะ Bug A
+เมื่อ cache=0 ตลอด → `CountHeroOnSide()` คืน 0 → guard ที่ `OpenOrder` ไม่เคย trigger → grid ขยายต่อได้ทั้งฝั่งที่ควรถูกล็อก
 
-[Avg/Trail/SL คำนวณจาก SELL 8 ตัวเก่าสุด]
-        |
-[ราคาย่อลง → 8 ตัวถึง TP/MaxGridTrail] → ปิดเฉพาะ 8 ตัว, เหลือ Hero 2 SELL
-        |
-[Hero 2 SELL อยู่ในมือ trailing-per-order ดูแล]
-        |
-[ห้ามออก SELL INIT/GL/GP เพิ่ม] (เฉพาะฝั่ง SELL ที่มี Hero)
-[BUY ทำงานปกติ → INIT/GL ตามจังหวะปกติ]
-        |
-[ราคาดีดขึ้น → BUY basket ถึง TP/Trail]
-        |
-[ปิด BUY basket + ปิด Hero 2 SELL พร้อมกัน] (ถ้า InpHero_CloseWithOpposite = true)
-        |
-[Account flat → cycle reset]
-```
+## สิ่งที่จะแก้ (v6.93)
 
-## ขอบเขต (เฉพาะที่ user สั่ง)
+### 1. Fix `BuildHeroTicketCache()` (สำคัญสุด)
+- ย้าย throttle check ขึ้นไป **ก่อน** `g_heroTicketCount = 0`
+- รหัสใหม่:
+  ```
+  if(!InpHero_Enabled || InpHero_OrderCount <= 0) { g_heroTicketCount = 0; return; }
+  if(g_heroLastBuildTime == TimeCurrent() && g_heroTicketCount > 0) return; // keep last build
+  g_heroLastBuildTime = TimeCurrent();
+  g_heroTicketCount = 0;
+  // ... rebuild ...
+  ```
+- เพิ่ม debug log ครั้งแรกที่พบ Hero (throttled 30s) เพื่อช่วยตรวจสอบ
 
-- ไฟล์เดียว: `public/docs/mql5/Gold_Miner_EA.mq5`
-- ไม่แตะ Golden2 EA, Asset Miner, Jutlameasu
-- ไม่แตะ License / News / Sync / Hedge / TripleGate / Recovery
+### 2. เปลี่ยน "ปิด Hero" เป็น same-side
+- เปลี่ยนชื่อ input `InpHero_CloseWithOpposite` → `InpHero_CloseWithSameSide` (default `true`)
+- คงตัวแปรเก่าไว้เป็น deprecated alias (no-op) เพื่อไม่ break .set ไฟล์เก่า
+- ในจุดที่ signal (`CloseGenSide` line 2493 + `CloseAllSide` line 3674):
+  ```
+  g_heroOppCloseSide = side;   // ❗ เปลี่ยนจาก OPPOSITE → SAME side
+  ```
+- เปลี่ยนชื่อตัวแปร global → `g_heroSameCloseSide` / `g_heroSameCloseTime` เพื่ออ่านง่าย
+- เปลี่ยน `ManageHeroOppositeClose()` → `ManageHeroSameSideClose()`
+- log ใหม่: `"v6.93 Hero CLOSE: SameSideBasketClosed side=BUY"`
 
----
+### 3. รับประกัน Block ออเดอร์ใหม่ (เสริมความแน่น)
+- บรรทัด 2107: ใช้ `CountHeroOnSide()` ที่ verify ผ่าน `PositionSelectByTicket` แล้ว → ไม่ต้องแก้ logic, จะทำงานทันทีหลัง Bug A หาย
+- เพิ่ม log แบบ throttled 60s ทุกครั้งที่ block เพื่อให้ user เห็น
+- ✅ ครอบคลุมทุก order type: `_INIT`, `_GL`, `_GP` (เดิมแล้ว)
 
-## สิ่งที่ไม่เปลี่ยนแปลง (ยืนยันไม่กระทบ trading logic — ตาม `.lovable/rules.md`)
+### 4. ตรวจสอบจุด exclude Hero ครบถ้วน (audit)
+ตรวจสอบให้ครบทุกจุดที่ `IsHeroTicket()` ควรถูกใช้:
+- ✅ บรรทัด 2387 — `CalculateAveragePrice` (basket avg)
+- ✅ บรรทัด 2417 — `CalculateFloatingPL` (basket PL gate)
+- ✅ บรรทัด 2477 — `CloseGenSide` (skip Hero ตอนปิด basket)
+- ✅ บรรทัด 3571, 3601, 3635 — `CalcGenAveragePrice`, `CountGenOrders`, `CountGenGridAll`
+- ✅ บรรทัด 3663 — `CloseAllSide` (skip Hero)
+- 🔍 จะ scan เพิ่ม: `ManageMaxGridTrailing`, `ManagePerOrderTrailing`, `ManageTrailingStop` — เพื่อให้แน่ใจว่า trail คำนวณจาก non-Hero เท่านั้น
+- 🔍 จะ scan: ทุกจุดที่นับ `MaxOpenOrders` — ถ้า `InpHero_IncludeInMaxOrders=false` ต้อง skip Hero (ตอนนี้ input มีอยู่แต่ยังไม่ผูกที่ไหน → จะผูกให้ทำงานจริง)
 
-- ❌ ไม่แตะ `OrderSend` / `trade.Buy/Sell/PositionClose` (ใช้ `trade.PositionClose` เฉพาะตอนปิด Hero พร้อมฝั่งตรงข้าม ซึ่งเป็น close logic ใหม่ที่ user ขอโดยตรง)
-- ❌ ไม่แตะ Strategy entry: SMA/INSTANT/ZZ signal, shouldEnterBuy/shouldEnterSell
-- ❌ ไม่แตะสูตร Grid Loss/Profit lot, spacing, candle confirm
-- ❌ ไม่แตะ Hedge trigger / release / Triple-Gate / Matching / Recovery
-- ❌ ไม่แตะ Avg TP / DD% TP / Daily Target / Balance Guard formula (เปลี่ยนแค่ "ชุด orders ที่นำเข้าคำนวณ")
-- ❌ ไม่แตะ Per-order trailing (ใช้ของเดิม 100% — Hero ใช้ตัวนี้เลย)
-- ❌ ไม่แตะ MaxGrid Trail v6.90/v6.91 logic (เปลี่ยนแค่ basket scope)
-- ❌ ไม่แตะ Squeeze Pause Trailing v6.87-89
-- ❌ ไม่แตะ Cross-Gen INIT Guard, No-ReHedge Lock, Stuck-TP Scanner
-- ❌ ไม่แตะ License / News / Time / Sync / Dashboard core
-- ✅ แตะเฉพาะ:
-  - Helper ใหม่ `IsHeroTicket()` — ตัดสิน Hero/Non-Hero ของ ticket
-  - `CalculateAveragePrice()`, `CalculateFloatingPL()`, `CalcGenAveragePrice()`, `CountGenOrders()` → skip Hero ตาม flag
-  - `CloseGenSide()` → skip Hero (เพื่อให้ MaxGrid Trail close basket แต่ไม่แตะ Hero)
-  - `OpenOrder()` (ตอนเป็น INIT/GL/GP ฝั่งเดียวกับ Hero) → block
-  - Avg TP path → ตอนปิด basket จาก Avg TP/SL: skip Hero
-  - หลังจาก basket ฝั่งตรงข้ามปิดสำเร็จ → call `CloseHeroIfRequired(side)` ปิด Hero ฝั่งนี้
-  - Dashboard: เพิ่ม row "Hero BUY / Hero SELL" แสดง count + lots + รวม PL
+### 5. Dashboard
+เพิ่ม row แสดง:
+- `Hero BUY: 5 ord 0.43L $-152.30`
+- `Hero SELL: 0 ord`
+ใส่สีเหลือง/ส้มเพื่อแยกจาก main basket
 
----
+### 6. Version bump
+- v6.92 → **v6.93** ทุกจุด:
+  - `#property version`
+  - `#property description` (อัปเดตข้อความ: "Hero closes WITH same-side basket trail; cache-rebuild fix; block enforced")
+  - Header comment block
+  - `OnInit` log
+  - Dashboard header ทุก mode
 
-## Inputs ใหม่
+## สิ่งที่ไม่เปลี่ยนแปลง (ยืนยัน)
 
-```cpp
-input string ___HeroOrder___           = "===== Hero Order (v6.92) =====";
-input bool   InpHero_Enabled           = false;  // master toggle (default OFF — backward compat)
-input int    InpHero_OrderCount        = 2;      // จำนวน order ใหม่สุดต่อ gen+side ที่ถือเป็น Hero
-input bool   InpHero_CloseWithOpposite = true;   // เมื่อฝั่งตรงข้ามปิด basket → ปิด Hero ฝั่งนี้พร้อมกัน
-input bool   InpHero_RequireNetProfit  = false;  // true = ปิด Hero ก็ต่อเมื่อ (กำไรฝั่งตรงข้าม + กำไร/ขาดทุน Hero) >= 0
-input bool   InpHero_BlockSameSideGrid = true;   // ฝั่งที่มี Hero → block INIT/GL/GP เพิ่ม
-input bool   InpHero_IncludeInMaxOrders= true;   // นับ Hero รวมใน MaxOpenOrders หรือไม่
-```
+ตามกฎเหล็ก MQL5 ของโปรเจกต์:
+- ❌ ไม่แตะ `OrderSend` / `trade.Buy` / `trade.Sell` / `trade.PositionClose` execution
+- ❌ ไม่แตะ entry conditions / SMA / EMA / Squeeze / BB filter
+- ❌ ไม่แตะ Grid loss/profit lot/distance calculation
+- ❌ ไม่แตะ Hedge / Triple-Gate / Matching close / Recovery / Auto Recovery
+- ❌ ไม่แตะ DD% TP / Daily Target / Balance Guard
+- ❌ ไม่แตะ Trailing-stop **value calculation** (แค่เพิ่ม guard `IsHeroTicket`)
+- ❌ ไม่แตะ License / News / Time filter / Sync
+- ✅ เปลี่ยนเฉพาะ Hero Order subsystem + dashboard rows
 
-ค่า default ทั้งหมด → backward compatible (Enabled=false ทำให้พฤติกรรมเดิมไม่เปลี่ยนแปลง)
+## Backward Compatibility
+- `.set` ไฟล์เก่าที่มี `InpHero_CloseWithOpposite=true` → จะถูก map ไป `InpHero_CloseWithSameSide=true` (semantic ถูก เพราะ user ต้องการ same-side อยู่แล้ว — input เก่าเข้าใจผิดเอง)
+- เพื่อไม่ให้ MQL5 compile error: คงชื่อ input เดิม `InpHero_CloseWithOpposite` ไว้ แต่เปลี่ยน **comment label** เป็น `"Close Hero WITH same-side basket trail"` และเปลี่ยน behavior internal → เป็น same-side  
+  (ทางเลือก: เพิ่ม input ใหม่แยกก็ได้ แจ้งให้ทราบในแผนถ้าต้องการ)
 
----
-
-## State Variables ใหม่
-
-```cpp
-// Cache: ticket → isHero (rebuild ทุก tick เริ่ม OnTick)
-ulong  g_heroTickets[100];     // dynamic-ish, MAX 100 (มากพอ — N*2 sides * gens)
-int    g_heroTicketCount = 0;
-datetime g_heroLastBuildTime = 0;
-```
-
----
-
-## ตำแหน่งแก้ไข (อ้างอิง line numbers ของไฟล์ปัจจุบัน)
-
-### A. เพิ่ม Inputs (~line 120 หลัง MaxOpenOrders)
-เพิ่ม input block ตามรายการด้านบน
-
-### B. เพิ่ม Helper Functions (วางก่อน `CalculateAveragePrice` ~line 2200)
-
-```cpp
-//+------------------------------------------------------------------+
-//| v6.92 Hero Order: Build cache of Hero tickets per (gen, side)     |
-//| Hero = N newest tickets (by POSITION_TIME) of current gen+side   |
-//| Excludes hedge tickets and bound tickets.                         |
-//+------------------------------------------------------------------+
-void BuildHeroTicketCache()
-{
-   g_heroTicketCount = 0;
-   if(!InpHero_Enabled || InpHero_OrderCount <= 0) return;
-   if(g_heroLastBuildTime == TimeCurrent()) return; // throttle 1/sec
-   g_heroLastBuildTime = TimeCurrent();
-
-   // For each (gen, side) collect tickets sorted by open time desc, take top N
-   // Use simple bucket: scan 0..maxGen, for each side
-   int maxGen = g_maxGridMonitorGen + 5; // safe upper
-   for(int gen = 0; gen <= maxGen; gen++)
-   {
-      for(int s = 0; s < 2; s++)
-      {
-         ENUM_POSITION_TYPE side = (s == 0) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
-         ulong  tk[200]; datetime tt[200]; int n = 0;
-         for(int i = PositionsTotal() - 1; i >= 0 && n < 200; i--)
-         {
-            ulong ticket = PositionGetTicket(i);
-            if(ticket == 0) continue;
-            if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
-            if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
-            if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
-            string c = PositionGetString(POSITION_COMMENT);
-            if(IsHedgeComment(c)) continue;
-            if(IsTicketBound(ticket)) continue;
-            if(ExtractGeneration(c) != gen) continue;
-            if(StringFind(c,"_INIT")<0 && StringFind(c,"_GL")<0 && StringFind(c,"_GP")<0) continue;
-            tk[n] = ticket;
-            tt[n] = (datetime)PositionGetInteger(POSITION_TIME);
-            n++;
-         }
-         // sort desc by tt (insertion sort)
-         for(int a = 1; a < n; a++)
-            for(int b = a; b > 0 && tt[b] > tt[b-1]; b--)
-               { datetime _t=tt[b]; tt[b]=tt[b-1]; tt[b-1]=_t;
-                 ulong _k=tk[b]; tk[b]=tk[b-1]; tk[b-1]=_k; }
-         int take = MathMin(n, InpHero_OrderCount);
-         for(int k = 0; k < take && g_heroTicketCount < 100; k++)
-            g_heroTickets[g_heroTicketCount++] = tk[k];
-      }
-   }
-}
-
-bool IsHeroTicket(ulong ticket)
-{
-   if(!InpHero_Enabled) return false;
-   for(int i = 0; i < g_heroTicketCount; i++)
-      if(g_heroTickets[i] == ticket) return true;
-   return false;
-}
-
-int CountHeroOnSide(ENUM_POSITION_TYPE side)
-{
-   int n = 0;
-   for(int i = 0; i < g_heroTicketCount; i++)
-   {
-      if(!PositionSelectByTicket(g_heroTickets[i])) continue;
-      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) == side) n++;
-   }
-   return n;
-}
-
-double SumHeroProfitOnSide(ENUM_POSITION_TYPE side)
-{
-   double sum = 0;
-   for(int i = 0; i < g_heroTicketCount; i++)
-   {
-      if(!PositionSelectByTicket(g_heroTickets[i])) continue;
-      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
-      sum += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
-   }
-   return sum;
-}
-
-void CloseHeroOnSide(ENUM_POSITION_TYPE side, string reason)
-{
-   for(int i = g_heroTicketCount - 1; i >= 0; i--)
-   {
-      ulong ticket = g_heroTickets[i];
-      if(!PositionSelectByTicket(ticket)) continue;
-      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
-      trade.PositionClose(ticket);
-      Print("v6.92 Hero CLOSE: ticket=", ticket, " side=", EnumToString(side), " reason=", reason);
-   }
-   g_heroTicketCount = 0; // force rebuild next tick
-}
-```
-
-### C. แก้ `CalculateAveragePrice` (line 2207) + `CalculateFloatingPL` (line 2238)
-
-เพิ่มหลังเช็ค `IsTicketBound`:
-```cpp
-if(IsHeroTicket(ticket)) continue; // v6.92 Hero: exclude from basket avg
-```
-
-### D. แก้ `CalcGenAveragePrice` (line 3413) + `CountGenOrders` (line 3448) + `CountGenGridAll` (line 3386)
-
-เพิ่ม guard เดียวกัน — Hero ไม่นับใน basket ของ MaxGrid Trail
-
-### E. แก้ `CloseGenSide` (line 3476)
-
-เพิ่ม guard:
-```cpp
-if(IsHeroTicket(ticket)) continue; // v6.92 Hero: don't close Hero with basket
-```
-
-หลัง loop เสร็จ → call:
-```cpp
-if(InpHero_Enabled && InpHero_CloseWithOpposite) {
-   // Mark side that just closed; opposite-side hero close handled by ManageHeroOppositeClose() in OnTick
-   g_heroOppositeJustClosedSide = (side == POSITION_TYPE_BUY) ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
-   g_heroOppositeJustClosedTime = TimeCurrent();
-}
-```
-
-### F. แก้ Avg TP path (line 2684 / 2758)
-
-หลัง basket close จาก Avg TP/SL → set flag เดียวกับ E เพื่อให้ ManageHeroOppositeClose ทำงาน
-
-### G. เพิ่ม `ManageHeroOppositeClose()` (เรียกใน OnTick หลัง BuildHeroTicketCache)
-
-```cpp
-void ManageHeroOppositeClose()
-{
-   if(!InpHero_Enabled || !InpHero_CloseWithOpposite) return;
-   if(g_heroOppositeJustClosedSide == -1) return;
-   if(TimeCurrent() - g_heroOppositeJustClosedTime > 5) {
-      g_heroOppositeJustClosedSide = -1;
-      return;
-   }
-   ENUM_POSITION_TYPE heroSide = (ENUM_POSITION_TYPE)g_heroOppositeJustClosedSide;
-   if(CountHeroOnSide(heroSide) == 0) {
-      g_heroOppositeJustClosedSide = -1;
-      return;
-   }
-
-   if(InpHero_RequireNetProfit) {
-      double heroPL = SumHeroProfitOnSide(heroSide);
-      // ฝั่งตรงข้ามปิดไปแล้ว — กำไรอยู่ใน history
-      // เพื่อความง่าย: ใช้แค่ heroPL >= 0 เป็นเกณฑ์ minimal
-      if(heroPL < 0) return;
-   }
-   CloseHeroOnSide(heroSide, "OppositeBasketClosed");
-   g_heroOppositeJustClosedSide = -1;
-}
-```
-
-state vars:
-```cpp
-int      g_heroOppositeJustClosedSide = -1;  // POSITION_TYPE_BUY/SELL หรือ -1
-datetime g_heroOppositeJustClosedTime = 0;
-```
-
-### H. แก้ `OpenOrder` (line 2044) — Block ฝั่งที่มี Hero
-
-ใส่หลัง CrossGen guard (~line 2051):
-```cpp
-if(InpHero_Enabled && InpHero_BlockSameSideGrid && !IsHedgeComment(comment))
-{
-   if(StringFind(comment, "_INIT") >= 0 || StringFind(comment, "_GL") >= 0 || StringFind(comment, "_GP") >= 0)
-   {
-      ENUM_POSITION_TYPE wantSide = (orderType == ORDER_TYPE_BUY || orderType == ORDER_TYPE_BUY_LIMIT || orderType == ORDER_TYPE_BUY_STOP)
-                                    ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
-      if(CountHeroOnSide(wantSide) > 0) {
-         static datetime lastLog = 0;
-         if(TimeCurrent() - lastLog > 30) {
-            Print("v6.92 Hero BLOCK: side=", EnumToString(wantSide), " has ", CountHeroOnSide(wantSide), " Hero — skip ", comment);
-            lastLog = TimeCurrent();
-         }
-         return false;
-      }
-   }
-}
-```
-
-### I. แก้ `NormalOrderCount` หรือก่อน `MaxOpenOrders` check
-
-ถ้า `InpHero_IncludeInMaxOrders = false` → หัก Hero ออกจาก count (optional, simple bypass).
-Default true → ไม่ต้องแก้.
-
-### J. OnTick integration (~line 1540)
-
-วาง 2 บรรทัดก่อน `ManagePerOrderTrailing()`:
-```cpp
-BuildHeroTicketCache();      // v6.92
-ManageHeroOppositeClose();   // v6.92
-```
-
-### K. Dashboard (~line 4119 region)
-
-เพิ่ม 2 row ใน panel หลัก เมื่อ `InpHero_Enabled`:
-```
-Hero BUY  | Count: X | Lots: Y | PL: $Z   (สีเหลือง ถ้า X>0)
-Hero SELL | Count: X | Lots: Y | PL: $Z
-```
-
-### L. Versioning
-
-- `#property version "6.92"`
-- `#property description` เพิ่มบรรทัด: `// v6.92 Hero Order — exclude N newest from basket avg, lock with per-order trail`
-- Header comment block update
-- Dashboard `headerVersion` ทุก mode (INST/SMA/ZZ) → "v6.92"
-- OnInit/OnDeinit log → v6.92
-
-### M. OnInit/OnDeinit reset
-
-```cpp
-g_heroTicketCount = 0;
-g_heroLastBuildTime = 0;
-g_heroOppositeJustClosedSide = -1;
-g_heroOppositeJustClosedTime = 0;
-```
-
----
-
-## Edge Cases ที่จัดการ
-
-1. **Hero ตัวเดียวเป็น INIT แล้วปิด** → BuildCache rebuild → Hero set อาจว่าง → grid block ปลด
-2. **EA restart ระหว่างมี Hero** → cache rebuild จาก PositionsTotal บน OnInit / first tick → Hero กลับมาเหมือนเดิม (อิง POSITION_TIME ใหม่สุด)
-3. **MaxGrid Trail ARM ขณะมี Hero** → avg คำนวณจาก non-Hero, CloseGenSide skip Hero → basket ปิด, Hero ค้าง → trailing-per-order ดูแลต่อ → ถูกต้องตามเจตนา
-4. **Squeeze Pause** → ไม่กระทบ Hero (Squeeze pause trailing เดิมยังครอบทุกอย่างเหมือนเดิม)
-5. **InpHero_Enabled = false** → ทุก helper return false/0 → เส้นทางเดิม 100%
-
-## ไฟล์ที่แก้
-
-- `public/docs/mql5/Gold_Miner_EA.mq5` (หลัก)
-- `.lovable/memory/trading/gold-miner-ea/hero-order-v6-92.md` (ใหม่)
-- `.lovable/memory/index.md` (เพิ่ม 1 บรรทัด)
-
-## หลังจาก implement
-
-User สามารถ:
-- Default OFF → ทดสอบเทียบ backtest กับ v6.91 ก่อน → ต้องได้ผลเหมือนเดิม 100%
-- เปิด `InpHero_Enabled = true`, `InpHero_OrderCount = 2` → ดูพฤติกรรม basket ปิดเร็วขึ้น + Hero ค้าง trail
+## Testing Checklist หลัง deploy
+1. เปิด `InpHero_Enabled=true, InpHero_OrderCount=2`
+2. ให้เปิด BUY 5 ตัว → check log `BuildHeroTicketCache` มี Hero=2
+3. ราคาลง → ควร **ไม่** มี GL ใหม่ฝั่ง BUY (block ทำงาน) → check log `Hero BLOCK`
+4. ราคาเด้งขึ้น → basket BUY (3 ตัวที่ไม่ใช่ Hero) trail สำเร็จ → ปิด → Hero BUY 2 ตัวควรปิดพร้อมกัน (ภายใน 5 วินาที) → check log `Hero CLOSE: SameSideBasketClosed`
+5. หลังปิดหมด ระบบ entry ใหม่ปกติ
