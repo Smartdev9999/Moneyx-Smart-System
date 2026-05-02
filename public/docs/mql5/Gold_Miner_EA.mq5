@@ -5,8 +5,8 @@
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "6.96"
-#property description "Gold Miner EA v6.96 - Hero Opposite-Helper + Lock-Profit BE-SL: Hero excluded from basket avg/PL/trail; same-side basket clears -> apply lock-profit BE-SL (SELL=open-offset, BUY=open+offset); Hero closes WITH opposite-side basket TP/Trail (primary) or BE-SL hit (fallback); single-side exclusive lock"
+#property version   "6.97"
+#property description "Gold Miner EA v6.97 - Hero Per-Side Total Activation: activation gate now uses TOTAL active basket orders per side (cross-generation), not per-gen count. Side reaches MinOrdersToActivate -> tag N newest as Hero. Single-side exclusive lock + lock-profit BE-SL + opposite-basket close hook all preserved from v6.96."
 #property strict
 
 #include <Trade/Trade.mqh>
