@@ -2746,6 +2746,8 @@ double CalculateTotalLots(ENUM_POSITION_TYPE side)
 //+------------------------------------------------------------------+
 void CloseAllSide(ENUM_POSITION_TYPE side)
 {
+   // v6.98: refresh Hero cache so latest-N tickets are properly tagged before basket flatten
+   BuildHeroTicketCache();
    // v6.96: Hero opposite-helper hook — if THIS side is the basket that's about to close
    //        and the OPPOSITE side holds Heroes in BE_GUARD, close those Heroes first.
    //        This realises the primary closure path: Hero closes WITH opposite-side basket.
