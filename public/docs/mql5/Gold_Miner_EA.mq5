@@ -2363,15 +2363,16 @@ void CloseHeroOnSide(ENUM_POSITION_TYPE side, string reason)
    g_heroLastBuildTime = 0;
 }
 
+// v6.93: renamed semantically — closes Hero on the SAME side that just flattened its basket
 void ManageHeroOppositeClose()
 {
-   if(!InpHero_Enabled || !InpHero_CloseWithOpposite) return;
+   if(!InpHero_Enabled || !InpHero_CloseWithOpposite) return; // input retained for .set compat; now means "close Hero with same-side basket"
    if(g_heroOppCloseSide == -1) return;
    if(TimeCurrent() - g_heroOppCloseTime > 5) { g_heroOppCloseSide = -1; return; }
    ENUM_POSITION_TYPE heroSide = (ENUM_POSITION_TYPE)g_heroOppCloseSide;
    if(CountHeroOnSide(heroSide) == 0) { g_heroOppCloseSide = -1; return; }
    if(InpHero_RequireNetProfit && SumHeroProfitOnSide(heroSide) < 0) return;
-   CloseHeroOnSide(heroSide, "OppositeBasketClosed");
+   CloseHeroOnSide(heroSide, "SameSideBasketClosed");
    g_heroOppCloseSide = -1;
 }
 
