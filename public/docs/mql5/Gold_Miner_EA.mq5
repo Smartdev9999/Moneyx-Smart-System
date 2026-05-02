@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.94 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.95 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "6.94"
-#property description "Gold Miner EA v6.94 - Hero Order REFINEMENT: Hero formed only when side count > N; same-side grid block triggers ONLY when non-Hero basket is empty (Hero survivor); GL/GP runs normally while basket alive"
+#property version   "6.95"
+#property description "Gold Miner EA v6.95 - Hero Min Activation: new InpHero_MinOrdersToActivate gate so Hero only forms after side has >= N orders (default 5); keeps v6.94 survivor-only block + v6.93 same-side close"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -126,9 +126,10 @@ input ENUM_TRADE_MODE  TradingMode        = TRADE_BOTH; // Trading Mode (Buy/Sel
 input ENUM_ENTRY_MODE  EntryMode          = ENTRY_SMA;  // Entry Mode (SMA=Original, ZigZag=MTF)
 
 //--- v6.93: Hero Order ---
-input group "===== Hero Order (v6.93) ====="
+input group "===== Hero Order (v6.93/v6.95) ====="
 input bool   InpHero_Enabled            = false; // Enable Hero Order (exclude N newest from basket avg/PL/trail)
 input int    InpHero_OrderCount         = 2;     // Hero count per (gen, side)
+input int    InpHero_MinOrdersToActivate= 5;     // v6.95: Min orders on side before Hero activates (0=use OrderCount+1)
 input bool   InpHero_CloseWithOpposite  = true;  // Close Hero WITH same-side basket trail/TP (v6.93: was opposite)
 input bool   InpHero_RequireNetProfit   = false; // Only close Hero if Hero PL >= 0
 input bool   InpHero_BlockSameSideGrid  = true;  // Block new INIT/GL/GP on side that has Hero
@@ -1057,7 +1058,7 @@ int OnInit()
    g_heroOppCloseTime = 0;
    g_heroLastBlockLog = 0;
    
-     Print("Gold Miner EA v6.94 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+     Print("Gold Miner EA v6.95 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min",
@@ -1119,7 +1120,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.94 deinitialized");
+   Print("Gold Miner EA v6.95 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -2295,23 +2296,29 @@ void BuildHeroTicketCache()
             for(int b = a; b > 0 && tt[b] > tt[b-1]; b--)
             { datetime _t=tt[b]; tt[b]=tt[b-1]; tt[b-1]=_t;
               ulong _k=tk[b]; tk[b]=tk[b-1]; tk[b-1]=_k; }
-         // v6.94 FIX: form Hero ONLY when side count exceeds Hero count.
-         // Spec: Hero = N newest of (gen,side), but only meaningful once a basket exists.
-         // Old behavior tagged the very first INIT as Hero, which blocked GL/GP from ever opening.
-         if(n <= InpHero_OrderCount) continue;
-         int take = InpHero_OrderCount;
+         // v6.95 FIX: Hero forms only when side count >= InpHero_MinOrdersToActivate.
+         // If MinOrdersToActivate <= 0, fallback to v6.94 behavior (n > InpHero_OrderCount).
+         // Always keep at least 1 non-Hero basket order so Hero never swallows the whole basket.
+         int activateThreshold = (InpHero_MinOrdersToActivate > 0)
+                                 ? InpHero_MinOrdersToActivate
+                                 : (InpHero_OrderCount + 1);
+         if(n < activateThreshold) continue;
+         int take = MathMin(InpHero_OrderCount, n - 1); // guarantee >= 1 non-Hero stays in basket
+         if(take <= 0) continue;
          for(int k = 0; k < take && g_heroTicketCount < 200; k++)
             g_heroTickets[g_heroTicketCount++] = tk[k];
       }
    }
-   // v6.94: throttled audit log — show Hero + non-Hero counts so block reason is visible
+   // v6.95: throttled audit log — show Hero + non-Hero counts + min-activate threshold
    static datetime lastHeroAuditLog = 0;
    if(g_heroTicketCount > 0 && TimeCurrent() - lastHeroAuditLog >= 30) {
-      Print("v6.94 Hero CACHE: total=", g_heroTicketCount,
+      int minAct = (InpHero_MinOrdersToActivate > 0) ? InpHero_MinOrdersToActivate : (InpHero_OrderCount + 1);
+      Print("v6.95 Hero CACHE: total=", g_heroTicketCount,
             " heroBUY=", CountHeroOnSide(POSITION_TYPE_BUY),
             " heroSELL=", CountHeroOnSide(POSITION_TYPE_SELL),
             " nonHeroBUY=", CountNonHeroMainOnSide(POSITION_TYPE_BUY),
             " nonHeroSELL=", CountNonHeroMainOnSide(POSITION_TYPE_SELL),
+            " minActivate=", minAct,
             " (block fires only when nonHero=0 on that side)");
       lastHeroAuditLog = TimeCurrent();
    }
@@ -4570,7 +4577,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.94 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.94 [ZZ]" : "Gold Miner EA v6.94 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.95 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.95 [ZZ]" : "Gold Miner EA v6.95 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
