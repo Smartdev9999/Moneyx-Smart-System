@@ -721,6 +721,13 @@ int      g_maxGridArmReadyGen   = -1;      // gen that armReady flags refer to (
 // === v6.89: Squeeze Pause Trailing edge state (true while in pause) ===
 bool     g_squeezePauseTrailingActive = false;
 
+// === v6.92: Hero Order state ===
+ulong    g_heroTickets[200];
+int      g_heroTicketCount        = 0;
+datetime g_heroLastBuildTime      = 0;
+int      g_heroOppCloseSide       = -1;     // POSITION_TYPE_BUY/SELL → side that should close its Hero
+datetime g_heroOppCloseTime       = 0;
+datetime g_heroLastBlockLog       = 0;
 // === v6.42: Dashboard History Cache ===
 datetime g_lastDashHistoryCalcTime = 0;
 int      g_dashCacheIntervalSec    = 5;  // recalculate every 5 seconds
