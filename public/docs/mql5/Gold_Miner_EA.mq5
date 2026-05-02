@@ -126,9 +126,10 @@ input ENUM_TRADE_MODE  TradingMode        = TRADE_BOTH; // Trading Mode (Buy/Sel
 input ENUM_ENTRY_MODE  EntryMode          = ENTRY_SMA;  // Entry Mode (SMA=Original, ZigZag=MTF)
 
 //--- v6.93: Hero Order ---
-input group "===== Hero Order (v6.93) ====="
+input group "===== Hero Order (v6.93/v6.95) ====="
 input bool   InpHero_Enabled            = false; // Enable Hero Order (exclude N newest from basket avg/PL/trail)
 input int    InpHero_OrderCount         = 2;     // Hero count per (gen, side)
+input int    InpHero_MinOrdersToActivate= 5;     // v6.95: Min orders on side before Hero activates (0=use OrderCount+1)
 input bool   InpHero_CloseWithOpposite  = true;  // Close Hero WITH same-side basket trail/TP (v6.93: was opposite)
 input bool   InpHero_RequireNetProfit   = false; // Only close Hero if Hero PL >= 0
 input bool   InpHero_BlockSameSideGrid  = true;  // Block new INIT/GL/GP on side that has Hero
