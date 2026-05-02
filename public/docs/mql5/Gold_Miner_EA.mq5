@@ -125,6 +125,15 @@ input bool             StopEAOnDrawdown   = false;     // Stop EA after Emergenc
 input ENUM_TRADE_MODE  TradingMode        = TRADE_BOTH; // Trading Mode (Buy/Sell/Both)
 input ENUM_ENTRY_MODE  EntryMode          = ENTRY_SMA;  // Entry Mode (SMA=Original, ZigZag=MTF)
 
+//--- v6.92: Hero Order ---
+input group "===== Hero Order (v6.92) ====="
+input bool   InpHero_Enabled            = false; // Enable Hero Order (exclude N newest from basket avg)
+input int    InpHero_OrderCount         = 2;     // Hero count per (gen, side)
+input bool   InpHero_CloseWithOpposite  = true;  // Close Hero when opposite-side basket closes
+input bool   InpHero_RequireNetProfit   = false; // Only close Hero if Hero PL >= 0
+input bool   InpHero_BlockSameSideGrid  = true;  // Block new INIT/GL/GP on side that has Hero
+input bool   InpHero_IncludeInMaxOrders = true;  // Count Hero into MaxOpenOrders
+
 //--- SMA Indicator
 input group "=== SMA Indicator ==="
 input int               SMA_Period       = 20;              // SMA Period
