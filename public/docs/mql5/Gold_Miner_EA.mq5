@@ -2304,13 +2304,15 @@ void BuildHeroTicketCache()
             g_heroTickets[g_heroTicketCount++] = tk[k];
       }
    }
-   // v6.93: throttled audit log
+   // v6.94: throttled audit log — show Hero + non-Hero counts so block reason is visible
    static datetime lastHeroAuditLog = 0;
    if(g_heroTicketCount > 0 && TimeCurrent() - lastHeroAuditLog >= 30) {
-      Print("v6.93 Hero CACHE: total=", g_heroTicketCount,
+      Print("v6.94 Hero CACHE: total=", g_heroTicketCount,
             " heroBUY=", CountHeroOnSide(POSITION_TYPE_BUY),
             " heroSELL=", CountHeroOnSide(POSITION_TYPE_SELL),
-            " (excluded from basket avg/PL/trail; same-side grid blocked)");
+            " nonHeroBUY=", CountNonHeroMainOnSide(POSITION_TYPE_BUY),
+            " nonHeroSELL=", CountNonHeroMainOnSide(POSITION_TYPE_SELL),
+            " (block fires only when nonHero=0 on that side)");
       lastHeroAuditLog = TimeCurrent();
    }
 }
