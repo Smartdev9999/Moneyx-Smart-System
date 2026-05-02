@@ -2296,23 +2296,29 @@ void BuildHeroTicketCache()
             for(int b = a; b > 0 && tt[b] > tt[b-1]; b--)
             { datetime _t=tt[b]; tt[b]=tt[b-1]; tt[b-1]=_t;
               ulong _k=tk[b]; tk[b]=tk[b-1]; tk[b-1]=_k; }
-         // v6.94 FIX: form Hero ONLY when side count exceeds Hero count.
-         // Spec: Hero = N newest of (gen,side), but only meaningful once a basket exists.
-         // Old behavior tagged the very first INIT as Hero, which blocked GL/GP from ever opening.
-         if(n <= InpHero_OrderCount) continue;
-         int take = InpHero_OrderCount;
+         // v6.95 FIX: Hero forms only when side count >= InpHero_MinOrdersToActivate.
+         // If MinOrdersToActivate <= 0, fallback to v6.94 behavior (n > InpHero_OrderCount).
+         // Always keep at least 1 non-Hero basket order so Hero never swallows the whole basket.
+         int activateThreshold = (InpHero_MinOrdersToActivate > 0)
+                                 ? InpHero_MinOrdersToActivate
+                                 : (InpHero_OrderCount + 1);
+         if(n < activateThreshold) continue;
+         int take = MathMin(InpHero_OrderCount, n - 1); // guarantee >= 1 non-Hero stays in basket
+         if(take <= 0) continue;
          for(int k = 0; k < take && g_heroTicketCount < 200; k++)
             g_heroTickets[g_heroTicketCount++] = tk[k];
       }
    }
-   // v6.94: throttled audit log — show Hero + non-Hero counts so block reason is visible
+   // v6.95: throttled audit log — show Hero + non-Hero counts + min-activate threshold
    static datetime lastHeroAuditLog = 0;
    if(g_heroTicketCount > 0 && TimeCurrent() - lastHeroAuditLog >= 30) {
-      Print("v6.94 Hero CACHE: total=", g_heroTicketCount,
+      int minAct = (InpHero_MinOrdersToActivate > 0) ? InpHero_MinOrdersToActivate : (InpHero_OrderCount + 1);
+      Print("v6.95 Hero CACHE: total=", g_heroTicketCount,
             " heroBUY=", CountHeroOnSide(POSITION_TYPE_BUY),
             " heroSELL=", CountHeroOnSide(POSITION_TYPE_SELL),
             " nonHeroBUY=", CountNonHeroMainOnSide(POSITION_TYPE_BUY),
             " nonHeroSELL=", CountNonHeroMainOnSide(POSITION_TYPE_SELL),
+            " minActivate=", minAct,
             " (block fires only when nonHero=0 on that side)");
       lastHeroAuditLog = TimeCurrent();
    }
