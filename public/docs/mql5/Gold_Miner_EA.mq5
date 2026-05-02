@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.94 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.95 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "6.94"
-#property description "Gold Miner EA v6.94 - Hero Order REFINEMENT: Hero formed only when side count > N; same-side grid block triggers ONLY when non-Hero basket is empty (Hero survivor); GL/GP runs normally while basket alive"
+#property version   "6.95"
+#property description "Gold Miner EA v6.95 - Hero Min Activation: new InpHero_MinOrdersToActivate gate so Hero only forms after side has >= N orders (default 5); keeps v6.94 survivor-only block + v6.93 same-side close"
 #property strict
 
 #include <Trade/Trade.mqh>
