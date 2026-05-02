@@ -1377,7 +1377,8 @@ double CalcDailyPL()
 
 void OnTick()
 {
-   // v6.92: Hero Order — rebuild ticket cache + handle opposite-close signal
+   // v6.96: Hero Order — rebuild ticket cache + orchestrate phase transitions (strip TP/SL,
+   //                     apply lock-profit BE-SL on basket-clear, reset state when flat)
    BuildHeroTicketCache();
    ManageHeroOppositeClose();
 
