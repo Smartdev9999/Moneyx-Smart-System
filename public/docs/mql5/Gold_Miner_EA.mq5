@@ -2350,17 +2350,12 @@ void BuildHeroTicketCache()
       }
    }
 
-   // v6.96: phase update per side (NONE -> PRE_STAGE -> ARMED_WAITING; BE_GUARD set elsewhere)
-   for(int s2 = 0; s2 < 2; s2++) {
-      int sideId2 = (s2 == 0) ? (int)POSITION_TYPE_BUY : (int)POSITION_TYPE_SELL;
-      int *phasePtr = (sideId2 == POSITION_TYPE_BUY) ? GetPointer(g_heroPhase_Buy) : GetPointer(g_heroPhase_Sell);
-      // (MQL5 doesn't have pointer-to-int easily; use direct branches)
-      int newPhase = (sideHeroTagged[s2] > 0) ? 2 /*ARMED_WAITING*/ : 0;
-      if(sideId2 == POSITION_TYPE_BUY) {
-         if(g_heroPhase_Buy != 3 /*don't downgrade from BE_GUARD here*/) g_heroPhase_Buy = newPhase;
-      } else {
-         if(g_heroPhase_Sell != 3) g_heroPhase_Sell = newPhase;
-      }
+   // v6.96: phase update per side (NONE -> ARMED_WAITING; BE_GUARD set elsewhere, never downgrade here)
+   if(g_heroPhase_Buy != 3) {
+      g_heroPhase_Buy = (sideHeroTagged[0] > 0) ? 2 : 0;
+   }
+   if(g_heroPhase_Sell != 3) {
+      g_heroPhase_Sell = (sideHeroTagged[1] > 0) ? 2 : 0;
    }
 
    // v6.96: throttled audit log
