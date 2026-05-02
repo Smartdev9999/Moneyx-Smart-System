@@ -2272,7 +2272,9 @@ bool OpenOrder(ENUM_ORDER_TYPE orderType, double lots, string comment)
    if(!isHedge && preTP == 0)
    {
       Print("v6.50 InstantTP: Grid order — immediate SyncBrokerTPSL");
+      EnsureHeroProtection("pre-InstantTP");  // v6.98: tag latest-N as Hero before TP push
       SyncBrokerTPSL();
+      EnsureHeroProtection("post-InstantTP"); // v6.98: wipe TP that slipped onto Hero
    }
 
    return true;
