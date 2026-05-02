@@ -5,8 +5,8 @@
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "6.95"
-#property description "Gold Miner EA v6.95 - Hero Min Activation: new InpHero_MinOrdersToActivate gate so Hero only forms after side has >= N orders (default 5); keeps v6.94 survivor-only block + v6.93 same-side close"
+#property version   "6.96"
+#property description "Gold Miner EA v6.96 - Hero Opposite-Helper + Lock-Profit BE-SL: Hero excluded from basket avg/PL/trail; same-side basket clears -> apply lock-profit BE-SL (SELL=open-offset, BUY=open+offset); Hero closes WITH opposite-side basket TP/Trail (primary) or BE-SL hit (fallback); single-side exclusive lock"
 #property strict
 
 #include <Trade/Trade.mqh>
