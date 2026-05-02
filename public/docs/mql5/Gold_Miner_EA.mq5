@@ -6052,6 +6052,10 @@ void CloseAllSideTF(int tfIdx, ENUM_POSITION_TYPE side)
 {
    string tfLabel = g_tfStates[tfIdx].tfLabel;
 
+   // v6.98: refresh Hero cache + opposite-helper hook + skip Hero in TF basket close
+   BuildHeroTicketCache();
+   CloseOppositeHeroOnBasketClose(side);
+
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       ulong ticket = PositionGetTicket(i);
@@ -6060,6 +6064,7 @@ void CloseAllSideTF(int tfIdx, ENUM_POSITION_TYPE side)
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
       if(PositionGetInteger(POSITION_TYPE) != side) continue;
       if(!MatchTFPrefix(PositionGetString(POSITION_COMMENT), tfLabel)) continue;
+      if(IsHeroTicket(ticket)) continue; // v6.98: keep Hero alive across per-TF basket close
       trade.PositionClose(ticket);
    }
 
