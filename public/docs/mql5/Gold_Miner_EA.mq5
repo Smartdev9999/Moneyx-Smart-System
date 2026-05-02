@@ -5,8 +5,8 @@
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "6.97"
-#property description "Gold Miner EA v6.97 - Hero Per-Side Total Activation: activation gate now uses TOTAL active basket orders per side (cross-generation), not per-gen count. Side reaches MinOrdersToActivate -> tag N newest as Hero. Single-side exclusive lock + lock-profit BE-SL + opposite-basket close hook all preserved from v6.96."
+#property version   "6.98"
+#property description "Gold Miner EA v6.98 - Hero Rolling Latest-N Protection: Hero cache rebuilds every tick (no throttle), sorts by POSITION_TIME_MSC + ticket so the newest N active orders on the locked side are ALWAYS the Hero set (eg active 36, HeroCount 3 -> latest 3 tickets). EnsureHeroProtection() force-strips broker TP/SL on Hero before SyncBrokerTPSL runs and again after, so basket Average TP can never close Hero tickets. Hero skip extended to CloseAllSideTF. Single-side exclusive lock + lock-profit BE-SL + opposite-basket close hook preserved from v6.96/97."
 #property strict
 
 #include <Trade/Trade.mqh>
