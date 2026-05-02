@@ -3620,6 +3620,7 @@ void CloseGenSide(int gen, ENUM_POSITION_TYPE side)
       string comment = PositionGetString(POSITION_COMMENT);
       if(IsHedgeComment(comment)) continue;
       if(IsTicketBound(ticket)) continue;
+      if(IsHeroTicket(ticket)) continue; // v6.92: keep Hero, only flatten basket
       int orderGen = ExtractGeneration(comment);
       if(orderGen != gen) continue;
       // v6.86: include _GP so the trailing close flattens the full basket
@@ -3629,6 +3630,11 @@ void CloseGenSide(int gen, ENUM_POSITION_TYPE side)
          trade.PositionClose(ticket);
    }
    Print("v6.86 MaxGridTrail: Closed Gen", gen, " side=", (side == POSITION_TYPE_BUY ? "BUY" : "SELL"), " (INIT+GL+GP)");
+   // v6.92: signal opposite-side Hero close
+   if(InpHero_Enabled && InpHero_CloseWithOpposite) {
+      g_heroOppCloseSide = (side == POSITION_TYPE_BUY) ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
+      g_heroOppCloseTime = TimeCurrent();
+   }
 }
 
 //+------------------------------------------------------------------+
