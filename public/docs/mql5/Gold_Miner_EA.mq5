@@ -1353,6 +1353,10 @@ double CalcDailyPL()
 
 void OnTick()
 {
+   // v6.92: Hero Order — rebuild ticket cache + handle opposite-close signal
+   BuildHeroTicketCache();
+   ManageHeroOppositeClose();
+
    // === HIDE ATR CHART IN BACKTEST (v2.9 / v3.0 simplified) ===
    // When InpSkipATRInTester=true, no ATR handles exist so no subwindow is created.
    // Fallback: if handles exist (InpSkipATRInTester=false), try to hide subwindow.
