@@ -2292,16 +2292,11 @@ void BuildHeroTicketCache()
             for(int b = a; b > 0 && tt[b] > tt[b-1]; b--)
             { datetime _t=tt[b]; tt[b]=tt[b-1]; tt[b-1]=_t;
               ulong _k=tk[b]; tk[b]=tk[b-1]; tk[b-1]=_k; }
-         // v6.94 FIX: do NOT tag Hero unless side count exceeds Hero count.
-         // i.e. Hero is only formed when there is at least 1 non-Hero basket order to protect.
-         // (was: take = MathMin(n, InpHero_OrderCount) → first INIT became Hero immediately,
-         //  which blocked GL/GP from ever opening.)
+         // v6.94 FIX: form Hero ONLY when side count exceeds Hero count.
+         // Spec: Hero = N newest of (gen,side), but only meaningful once a basket exists.
+         // Old behavior tagged the very first INIT as Hero, which blocked GL/GP from ever opening.
          if(n <= InpHero_OrderCount) continue;
-         int take = MathMin(n - InpHero_OrderCount, InpHero_OrderCount); // up to N newest, but only after basket exists
-         // alternative spec: keep N newest as Hero only when there is a remaining non-Hero basket
-         // → ensure take = InpHero_OrderCount when n > InpHero_OrderCount
-         take = MathMin(InpHero_OrderCount, n - 1); // always leave at least 1 non-Hero alive when forming Hero
-         if(take <= 0) continue;
+         int take = InpHero_OrderCount;
          for(int k = 0; k < take && g_heroTicketCount < 200; k++)
             g_heroTickets[g_heroTicketCount++] = tk[k];
       }
