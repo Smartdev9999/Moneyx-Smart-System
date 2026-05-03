@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v7.05 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v7.06 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "7.05"
-#property description "Gold Miner EA v7.05 - Hero Side-Gen Unblock: ShouldBlockSameSideGridForHero now bypasses block when side owns a side-gen override (GM(N+1) IS the new basket). CountNonHeroMainOnSide uses GetActiveGenForSide so its semantics stay correct. CountFreeOlderGenOnSide excludes Hero tickets so cross-gen INIT guard does not falsely treat locked-profit Heroes as free older-gen orders. Result: Hero-owning side actually opens GM(N+1) INIT/GL/GP as v7.04 promised."
+#property version   "7.06"
+#property description "Gold Miner EA v7.06 - Hero Owner = BE_GUARD only + Gen-Locked Pool: Single-Side Lock now triggers ONLY when one side reaches BE_GUARD (basket cleared via TP/Avg-trail). Both sides may stay ARMED in parallel. BuildHeroTicketCache pool is gen-locked to g_heroOwnedGen_<side> after BE_GUARD bump, so new GM(N+1) GL entries never replace original Hero tickets and never get the lock-profit BE-SL stripped/applied wrongly."
 #property strict
 
 #include <Trade/Trade.mqh>
