@@ -2359,6 +2359,13 @@ void BuildHeroTicketCache()
       ulong  tkGL[200]; long ttGLMs[200]; int nGL = 0;
       int    nAll = 0;
 
+      // v7.06: Once BE_GUARD has stamped g_heroOwnedGen_<side>, gen-lock the Hero
+      //         pool to that owned gen. New GM(N+1) GL orders (opened because of
+      //         InpHero_PerSideGenIsolation) MUST NOT roll into Hero — they are
+      //         the new active basket and need normal TP/SL/trailing handling.
+      int ownedGen = (side == POSITION_TYPE_BUY) ? g_heroOwnedGen_Buy : g_heroOwnedGen_Sell;
+      bool gateOwnedGenOnly = (ownedGen > 0);
+
       // Pass 1: collect ALL active basket orders for threshold + isolate _GL for Hero pool
       for(int i = PositionsTotal() - 1; i >= 0; i--)
       {
@@ -2377,6 +2384,11 @@ void BuildHeroTicketCache()
          nAll++;
          // v7.00: ONLY _GL is eligible to be Hero (per user spec — INIT/GP excluded)
          if(isGL && nGL < 200) {
+            // v7.06: gen-lock the GL pool when ownedGen is set
+            if(gateOwnedGenOnly) {
+               int og = ExtractGeneration(c);
+               if(og >= 0 && og != ownedGen) continue; // belongs to GM(N+1) basket — not Hero
+            }
             tkGL[nGL]   = ticket;
             ttGLMs[nGL] = PositionGetInteger(POSITION_TIME_MSC);
             nGL++;
