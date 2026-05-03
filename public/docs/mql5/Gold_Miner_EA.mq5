@@ -824,6 +824,15 @@ string GetCommentPrefixForSide(ENUM_POSITION_TYPE side)
    return "GM" + IntegerToString(g);
 }
 
+// v7.04: Active gen for a side — used by all order counters / grid finders /
+//        recovery scans so that GM(N+1) orders opened on the Hero-owning side
+//        are visible to grid/TP/trail logic. Falls back to global cycle gen.
+int GetActiveGenForSide(ENUM_POSITION_TYPE side)
+{
+   int sg = (side == POSITION_TYPE_BUY) ? g_sideGen_Buy : g_sideGen_Sell;
+   return (sg > 0) ? sg : ((g_cycleGeneration < 1) ? 1 : g_cycleGeneration);
+}
+
 // === v6.53: Persist g_cycleGeneration via GlobalVariable ===
 string GV_CycleGenKey() { return "GM_CycleGen_" + _Symbol + "_" + IntegerToString(MagicNumber); }
 
