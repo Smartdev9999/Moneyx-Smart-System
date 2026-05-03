@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v7.03 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v7.04 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "7.03"
-#property description "Gold Miner EA v7.03 - Hero Post-Close Grace + Per-Side Generation Isolation: Adds InpHero_PostCloseGraceSec (default 5s) so freshly-opened INIT/GL after a Hero close are NOT re-tagged as Hero (fixes phantom locked orders). Adds optional InpHero_PerSideGenIsolation (default OFF) that bumps the per-side comment prefix to GM(N+1) for the side whose Hero survived, while the opposite side keeps trading on GM(N)."
+#property version   "7.04"
+#property description "Gold Miner EA v7.04 - Single-Side Hero Lock + Active Per-Side Gen Isolation: Hero now activates ONLY one side at a time (whichever side gets there first owns Hero; opposite side blocked from Hero tagging until owner's Hero count hits 0). Per-side gen isolation default ON: side that owns surviving Hero opens new INIT/GL/GP under GM(N+1) while opposite side keeps trading GM(N). Order counters/grid step/TP/trailing rewired via GetActiveGenForSide() so GM(N+1) entries are fully managed."
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -133,9 +133,10 @@ input int    InpHero_MinOrdersToActivate= 5;     // Min orders on side before He
 input int    InpHero_BE_OffsetPoints    = 50;    // v6.96: Lock-profit BE-SL offset in POINTS (SELL=open-offset, BUY=open+offset)
 input bool   InpHero_BlockSameSideGrid  = true;  // Block new INIT/GL/GP on side that has Hero (survivor-only)
 input bool   InpHero_IncludeInMaxOrders = true;  // Count Hero into MaxOpenOrders
-// v7.03: Post-close grace + per-side gen isolation
+// v7.03/v7.04: Post-close grace + per-side gen isolation + single-side lock
 input int    InpHero_PostCloseGraceSec  = 5;     // v7.03: Seconds after Hero close to suppress re-tag
-input bool   InpHero_PerSideGenIsolation= false; // v7.03: [EXPERIMENTAL] Bump per-side comment gen when Hero survives
+input bool   InpHero_PerSideGenIsolation= true;  // v7.04: Default ON — side w/ surviving Hero opens GM(N+1)
+input bool   InpHero_SingleSideLock     = true;  // v7.04: Only ONE side may own Hero at a time
 // --- Deprecated (kept for .set compat, NO-OP in v6.96) ---
 input bool   InpHero_CloseWithOpposite  = true;  // [DEPRECATED v6.96] now hard-wired to opposite-basket close
 input bool   InpHero_RequireNetProfit   = false; // [DEPRECATED v6.96] not used (lock-profit SL guarantees floor)
@@ -823,6 +824,15 @@ string GetCommentPrefixForSide(ENUM_POSITION_TYPE side)
    return "GM" + IntegerToString(g);
 }
 
+// v7.04: Active gen for a side — used by all order counters / grid finders /
+//        recovery scans so that GM(N+1) orders opened on the Hero-owning side
+//        are visible to grid/TP/trail logic. Falls back to global cycle gen.
+int GetActiveGenForSide(ENUM_POSITION_TYPE side)
+{
+   int sg = (side == POSITION_TYPE_BUY) ? g_sideGen_Buy : g_sideGen_Sell;
+   return (sg > 0) ? sg : ((g_cycleGeneration < 1) ? 1 : g_cycleGeneration);
+}
+
 // === v6.53: Persist g_cycleGeneration via GlobalVariable ===
 string GV_CycleGenKey() { return "GM_CycleGen_" + _Symbol + "_" + IntegerToString(MagicNumber); }
 
@@ -1105,7 +1115,7 @@ int OnInit()
    g_heroBE_Applied_Sell = false;
    g_heroBE_LastLog = 0;
    
-     Print("Gold Miner EA v7.03 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+     Print("Gold Miner EA v7.04 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min",
@@ -1168,7 +1178,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v7.03 deinitialized");
+   Print("Gold Miner EA v7.04 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -1187,7 +1197,7 @@ void RecoverInitialPrices()
       string comment = PositionGetString(POSITION_COMMENT);
       // v6.23: Skip orders from previous generations
       int orderGen = ExtractGeneration(comment);
-      if(orderGen >= 0 && orderGen != g_cycleGeneration) continue;
+      if(orderGen >= 0 && orderGen != GetActiveGenForSide((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE))) continue; // v7.04: per-side gen
       if(MatchGMSuffix(comment, "_INIT"))
       {
          long posType = PositionGetInteger(POSITION_TYPE);
@@ -1219,7 +1229,7 @@ void RecoverInitialPrices()
          if(IsHedgeComment(comment) || IsReverseHedgeComment(comment)) continue;
          // v6.23: Skip orders from previous generations
          int orderGen = ExtractGeneration(comment);
-         if(orderGen >= 0 && orderGen != g_cycleGeneration) continue;
+         if(orderGen >= 0 && orderGen != GetActiveGenForSide((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE))) continue; // v7.04: per-side gen
 
          //--- Check for GL suffix (grid loss orders)
          if(StringFind(comment, "_GL") >= 0)
@@ -1992,7 +2002,7 @@ void CountPositions(int &buyCount, int &sellCount,
       
       // v6.22: Skip orders from previous generations — only count current gen
       int orderGen = ExtractGeneration(comment);
-      if(orderGen >= 0 && orderGen != g_cycleGeneration) continue;
+      if(orderGen >= 0 && orderGen != GetActiveGenForSide((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE))) continue; // v7.04: per-side gen
       
       long posType = PositionGetInteger(POSITION_TYPE);
 
@@ -2047,7 +2057,7 @@ int NormalOrderCount()
       if(IsTicketBound(ticket)) continue;
       // v6.22: Skip orders from previous generations
       int orderGen = ExtractGeneration(comment);
-      if(orderGen >= 0 && orderGen != g_cycleGeneration) continue;
+      if(orderGen >= 0 && orderGen != GetActiveGenForSide((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE))) continue; // v7.04: per-side gen
       // v6.93: optionally exclude Hero tickets from MaxOpenOrders cap
       if(InpHero_Enabled && !InpHero_IncludeInMaxOrders && IsHeroTicket(ticket)) continue;
       count++;
@@ -2329,6 +2339,18 @@ void BuildHeroTicketCache()
    int sideGLPool[2]      = {0, 0};
    int sideHeroTagged[2]  = {0, 0};
 
+   // v7.04: Single-Side Hero Lock — determine which side already "owns" Hero
+   //         (has tagged tickets OR phase != NONE). Opposite side's first-time
+   //         activation is blocked until owner clears (CountHero == 0 && phase == 0).
+   int activeOwner = -1;
+   if(InpHero_SingleSideLock) {
+      bool buyOwns  = (CountHeroOnSide(POSITION_TYPE_BUY)  > 0) || (g_heroPhase_Buy  != 0);
+      bool sellOwns = (CountHeroOnSide(POSITION_TYPE_SELL) > 0) || (g_heroPhase_Sell != 0);
+      if(buyOwns && !sellOwns)      activeOwner = (int)POSITION_TYPE_BUY;
+      else if(sellOwns && !buyOwns) activeOwner = (int)POSITION_TYPE_SELL;
+      // if both owns simultaneously (legacy / restored state), let both run — no lock change
+   }
+
    for(int s = 0; s < 2; s++)
    {
       ENUM_POSITION_TYPE side = (s == 0) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
@@ -2392,6 +2414,11 @@ void BuildHeroTicketCache()
                               ? InpHero_MinOrdersToActivate
                               : (InpHero_OrderCount + 1);
 
+      // v7.04: Single-side lock — block first-time activation on the non-owner side
+      if(InpHero_SingleSideLock && curPhase == 0 && activeOwner >= 0 && sideId != activeOwner) {
+         if(sideId == POSITION_TYPE_BUY) g_heroPhase_Buy = 0; else g_heroPhase_Sell = 0;
+         continue;
+      }
       // Activation gate ONLY applies for the FIRST tag (phase == NONE).
       if(curPhase == 0 /*NONE*/ && nAll < activateThreshold) continue;
       if(nGL <= 0) continue;
@@ -3928,7 +3955,7 @@ double FindMaxLotOnSide(ENUM_POSITION_TYPE side)
       if(IsHedgeComment(comment)) continue;
       // v6.23: Skip orders from previous generations
       int orderGen = ExtractGeneration(comment);
-      if(orderGen >= 0 && orderGen != g_cycleGeneration) continue;
+      if(orderGen >= 0 && orderGen != GetActiveGenForSide((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE))) continue; // v7.04: per-side gen
       if(MatchGMSuffix(comment, "_GL") || MatchGMSuffix(comment, "_INIT"))
       {
          double lot = PositionGetDouble(POSITION_VOLUME);
@@ -3957,7 +3984,7 @@ int FindMaxGridLevelOnSide(ENUM_POSITION_TYPE side, string suffix)
       if(IsHedgeComment(comment)) continue;
       // Only current generation
       int orderGen = ExtractGeneration(comment);
-      if(orderGen >= 0 && orderGen != g_cycleGeneration) continue;
+      if(orderGen >= 0 && orderGen != GetActiveGenForSide((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE))) continue; // v7.04: per-side gen
       if(!MatchGMSuffix(comment, suffix)) continue;
       // Extract number after '#'
       int hashPos = StringFind(comment, "#");
@@ -4569,7 +4596,7 @@ void FindLastOrder(ENUM_POSITION_TYPE side, string suffix1, string suffix2, doub
       if(IsHedgeComment(comment)) continue;
       // v6.23: Skip orders from previous generations
       int orderGen = ExtractGeneration(comment);
-      if(orderGen >= 0 && orderGen != g_cycleGeneration) continue;
+      if(orderGen >= 0 && orderGen != GetActiveGenForSide((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE))) continue; // v7.04: per-side gen
       if(MatchGMSuffix(comment, suffix1) || MatchGMSuffix(comment, suffix2))
       {
          datetime openTime = (datetime)PositionGetInteger(POSITION_TIME);
@@ -4957,7 +4984,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v7.03 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v7.03 [ZZ]" : "Gold Miner EA v7.03 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v7.04 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v7.04 [ZZ]" : "Gold Miner EA v7.04 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -5022,6 +5049,17 @@ void DisplayDashboard()
 
       string heroHdr = StringFormat("Need >=%d  Keep:%d", minAct, InpHero_OrderCount);
       DrawTableRow(row, "Hero Cfg", heroHdr, clrLavender, COLOR_SECTION_HERO); row++;
+
+      // v7.04: Owner + Side-Gen rows
+      string ownerStr = "NONE";
+      if(g_heroPhase_Buy != 0 || CountHeroOnSide(POSITION_TYPE_BUY) > 0) ownerStr = "BUY";
+      else if(g_heroPhase_Sell != 0 || CountHeroOnSide(POSITION_TYPE_SELL) > 0) ownerStr = "SELL";
+      string lockTag = InpHero_SingleSideLock ? " (locked)" : " (dual)";
+      DrawTableRow(row, "Hero Owner", ownerStr + lockTag, (ownerStr=="NONE"?COLOR_TEXT:clrGold), COLOR_SECTION_HERO); row++;
+      string sgB = "GM" + IntegerToString(GetActiveGenForSide(POSITION_TYPE_BUY))  + (g_sideGen_Buy  > 0 ? " (Hero owns GM"+IntegerToString(g_heroOwnedGen_Buy)+")"  : "");
+      string sgS = "GM" + IntegerToString(GetActiveGenForSide(POSITION_TYPE_SELL)) + (g_sideGen_Sell > 0 ? " (Hero owns GM"+IntegerToString(g_heroOwnedGen_Sell)+")" : "");
+      DrawTableRow(row, "Side Gen BUY",  sgB, (g_sideGen_Buy  > 0 ? clrGold : COLOR_TEXT), COLOR_SECTION_HERO); row++;
+      DrawTableRow(row, "Side Gen SELL", sgS, (g_sideGen_Sell > 0 ? clrGold : COLOR_TEXT), COLOR_SECTION_HERO); row++;
 
       // BUY side
       string phaseB = (g_heroPhase_Buy == 3) ? "BE_GUARD" : (g_heroPhase_Buy == 2) ? "ARMED" : (g_heroDash_BuyActive >= minAct ? "READY" : "WAIT");
@@ -5893,7 +5931,7 @@ void RecoverTFInitialPrices()
       string comment = PositionGetString(POSITION_COMMENT);
       // v6.23: Skip orders from previous generations
       int orderGen = ExtractGeneration(comment);
-      if(orderGen >= 0 && orderGen != g_cycleGeneration) continue;
+      if(orderGen >= 0 && orderGen != GetActiveGenForSide((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE))) continue; // v7.04: per-side gen
       long posType = PositionGetInteger(POSITION_TYPE);
       double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
 
@@ -6088,7 +6126,7 @@ void CountPositionsTF(int tfIdx, int &buyCount, int &sellCount,
        string comment = PositionGetString(POSITION_COMMENT);
       // v6.23: Skip orders from previous generations
       int orderGen = ExtractGeneration(comment);
-      if(orderGen >= 0 && orderGen != g_cycleGeneration) continue;
+      if(orderGen >= 0 && orderGen != GetActiveGenForSide((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE))) continue; // v7.04: per-side gen
       if(!MatchTFPrefix(comment, tfLabel)) continue;
 
       long posType = PositionGetInteger(POSITION_TYPE);
@@ -6191,7 +6229,7 @@ void FindLastOrderTF(int tfIdx, ENUM_POSITION_TYPE side, string suffix1, string 
        string comment = PositionGetString(POSITION_COMMENT);
       // v6.23: Skip orders from previous generations
       int orderGen = ExtractGeneration(comment);
-      if(orderGen >= 0 && orderGen != g_cycleGeneration) continue;
+      if(orderGen >= 0 && orderGen != GetActiveGenForSide((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE))) continue; // v7.04: per-side gen
       if(!MatchTFPrefix(comment, tfLabel)) continue;
       if(StringFind(comment, suffix1) >= 0 || StringFind(comment, suffix2) >= 0)
       {
@@ -6223,7 +6261,7 @@ int FindMaxGridLevelOnSideTF(int tfIdx, ENUM_POSITION_TYPE side, string suffix)
       if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
       string comment = PositionGetString(POSITION_COMMENT);
       int orderGen = ExtractGeneration(comment);
-      if(orderGen >= 0 && orderGen != g_cycleGeneration) continue;
+      if(orderGen >= 0 && orderGen != GetActiveGenForSide((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE))) continue; // v7.04: per-side gen
       if(!MatchTFPrefix(comment, tfLabel)) continue;
       // Look for "_<suffix>#" segment (e.g. "_GL#")
       string needle = "_" + suffix + "#";
@@ -9609,6 +9647,8 @@ void TryResetCycleStateIfFlat(string reason)
       g_hedgeSetCount = 0;
       ClearPrevHedgedTickets();
       ClearAllReleasedGenSideLocks();   // v6.74
+      g_sideGen_Buy = 0; g_sideGen_Sell = 0;             // v7.04: reset per-side gen overrides
+      g_heroOwnedGen_Buy = 0; g_heroOwnedGen_Sell = 0;   // v7.04
       g_lastHedgeBuyTime = 0;   // v6.39: reset side pause
       g_lastHedgeSellTime = 0;  // v6.39: reset side pause
       UpdateDynamicBalanceGuardTarget();  // v6.31: update target immediately when flat
@@ -9707,6 +9747,8 @@ void CheckBalanceGuard()
        SaveCycleGeneration();  // v6.53: persist reset
        ClearPrevHedgedTickets();
        ClearAllReleasedGenSideLocks();   // v6.74
+       g_sideGen_Buy = 0; g_sideGen_Sell = 0;             // v7.04
+       g_heroOwnedGen_Buy = 0; g_heroOwnedGen_Sell = 0;   // v7.04
        g_lastHedgeBuyTime = 0;   // v6.39: reset side pause
        g_lastHedgeSellTime = 0;  // v6.39: reset side pause
        Print("v6.31 Balance Guard: Full reset complete — ready for fresh cycle");
