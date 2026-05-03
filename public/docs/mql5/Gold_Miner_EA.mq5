@@ -2713,6 +2713,23 @@ void ManageHeroOppositeClose()
       }
       ResetHeroStateIfFlat(side);
    }
+
+   // v7.02: Tick-based opposite-clear detector.
+   // Catches the case where opposite-side basket is closed by Broker TP/SL on individual tickets
+   // (not via EA CloseAllSide/CloseGenSide hooks). Once opp non-Hero basket = 0, close Hero on this side.
+   for(int s2 = 0; s2 < 2; s2++) {
+      ENUM_POSITION_TYPE side = (s2 == 0) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
+      ENUM_POSITION_TYPE opp  = (s2 == 0) ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
+      int phase = (side == POSITION_TYPE_BUY) ? g_heroPhase_Buy : g_heroPhase_Sell;
+      if(phase != 3 /*BE_GUARD*/) continue;
+      if(CountHeroOnSide(side) <= 0) continue;
+      if(CountNonHeroMainOnSide(opp) > 0) continue; // opp basket still alive
+      // Safety: don't close if opp also has Hero (let it resolve naturally on its own SL)
+      if(CountHeroOnSide(opp) > 0) continue;
+      Print("v7.02 Hero CLOSE (opp basket flat tick): heroSide=", EnumToString(side),
+            " oppSide=", EnumToString(opp), " heroProfit=", DoubleToString(SumHeroProfitOnSide(side), 2));
+      CloseHeroOnSide(side, "OppositeBasketFlatTick");
+   }
 }
 
 //+------------------------------------------------------------------+
