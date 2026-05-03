@@ -135,7 +135,7 @@ input bool   InpHero_BlockSameSideGrid  = true;  // Block new INIT/GL/GP on side
 input bool   InpHero_IncludeInMaxOrders = true;  // Count Hero into MaxOpenOrders
 // v7.03: Post-close grace + per-side gen isolation
 input int    InpHero_PostCloseGraceSec  = 5;     // v7.03: Seconds after Hero close to suppress re-tag
-input bool   InpHero_PerSideGenIsolation= true;  // v7.03: Bump per-side gen when Hero survives basket close
+input bool   InpHero_PerSideGenIsolation= false; // v7.03: [EXPERIMENTAL] Bump per-side comment gen when Hero survives
 // --- Deprecated (kept for .set compat, NO-OP in v6.96) ---
 input bool   InpHero_CloseWithOpposite  = true;  // [DEPRECATED v6.96] now hard-wired to opposite-basket close
 input bool   InpHero_RequireNetProfit   = false; // [DEPRECATED v6.96] not used (lock-profit SL guarantees floor)
