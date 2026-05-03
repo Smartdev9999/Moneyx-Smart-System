@@ -2519,7 +2519,7 @@ void CloseHeroOnSide(ENUM_POSITION_TYPE side, string reason)
 bool DetectSameSideBasketClearedForHero(ENUM_POSITION_TYPE side)
 {
    if(!InpHero_Enabled) return false;
-   if((int)side != g_heroLockedSide) return false;
+   // v7.00: REMOVED dead lock check (g_heroLockedSide was deprecated to -1 in v6.99 → check always failed → BE_GUARD never triggered → Hero had no SL).
    if(CountHeroOnSide(side) <= 0) return false;
    if(CountNonHeroMainOnSide(side) > 0) return false; // basket still alive
    return true;
