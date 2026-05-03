@@ -2348,16 +2348,11 @@ void BuildHeroTicketCache()
                               : (InpHero_OrderCount + 1);
       if(n < activateThreshold) continue;
 
-      // Single-side exclusive lock (preserved from v6.96 — confirmed correct by user)
+      // v6.99: PER-SIDE INDEPENDENT activation. No single-side lock.
+      // Each side that meets threshold protects its OWN newest N tickets.
       int sideId = (int)side;
-      if(g_heroLockedSide == -1) {
-         g_heroLockedSide = sideId;
-         Print("v6.98 Hero LOCK acquired: side=", EnumToString(side),
-               " activeTotal=", n, " threshold=", activateThreshold);
-      }
-      if(g_heroLockedSide != sideId) continue;
 
-      // v6.98: ROLLING latest-N — protect newest N tickets every tick.
+      // v6.99: ROLLING latest-N — protect newest N tickets every tick.
       //        Basket alive: keep >=1 non-Hero. BE_GUARD: basket already 0 so take all available.
       int curPhase = (sideId == POSITION_TYPE_BUY) ? g_heroPhase_Buy : g_heroPhase_Sell;
       int take = MathMin(InpHero_OrderCount, n - 1);
@@ -2365,6 +2360,18 @@ void BuildHeroTicketCache()
          take = MathMin(InpHero_OrderCount, n);
       }
       if(take <= 0) continue;
+
+      // v6.99: write per-side dashboard ticket list (max 10)
+      if(sideId == POSITION_TYPE_BUY) {
+         g_heroDash_BuyTicketN = 0;
+         for(int k = 0; k < take && g_heroDash_BuyTicketN < 10; k++)
+            g_heroDash_BuyTickets[g_heroDash_BuyTicketN++] = tk[k];
+      } else {
+         g_heroDash_SellTicketN = 0;
+         for(int k = 0; k < take && g_heroDash_SellTicketN < 10; k++)
+            g_heroDash_SellTickets[g_heroDash_SellTicketN++] = tk[k];
+      }
+
       for(int k = 0; k < take && g_heroTicketCount < 200; k++)
          g_heroTickets[g_heroTicketCount++] = tk[k];
       sideHeroTagged[s] += take;
@@ -2378,15 +2385,23 @@ void BuildHeroTicketCache()
       g_heroPhase_Sell = (sideHeroTagged[1] > 0) ? 2 : 0;
    }
 
-   // v6.98: audit log every 30s — shows side TOTAL active vs threshold so user can see why Hero is/isn't activating
+   // v6.99: refresh dashboard counters
+   g_heroDash_BuyActive  = sideTotalActive[0];
+   g_heroDash_SellActive = sideTotalActive[1];
+   g_heroDash_BuyTagged  = sideHeroTagged[0];
+   g_heroDash_SellTagged = sideHeroTagged[1];
+   if(sideHeroTagged[0] == 0) g_heroDash_BuyTicketN = 0;
+   if(sideHeroTagged[1] == 0) g_heroDash_SellTicketN = 0;
+
+   // v6.99: audit log every 30s — dual-side independent activation visibility
    static datetime lastHeroAuditLog = 0;
    if(TimeCurrent() - lastHeroAuditLog >= 30) {
       int minAct = (InpHero_MinOrdersToActivate > 0) ? InpHero_MinOrdersToActivate : (InpHero_OrderCount + 1);
-      Print("v6.98 Hero AUDIT: BUY active=", sideTotalActive[0], " hero=", sideHeroTagged[0],
+      Print("v6.99 Hero AUDIT: BUY active=", sideTotalActive[0], " hero=", sideHeroTagged[0],
+            " phase=", g_heroPhase_Buy,
             " | SELL active=", sideTotalActive[1], " hero=", sideHeroTagged[1],
-            " | threshold=", minAct,
-            " | lockedSide=", (g_heroLockedSide == POSITION_TYPE_BUY ? "BUY" : (g_heroLockedSide == POSITION_TYPE_SELL ? "SELL" : "NONE")),
-            " | phaseBUY=", g_heroPhase_Buy, " phaseSELL=", g_heroPhase_Sell);
+            " phase=", g_heroPhase_Sell,
+            " | threshold=", minAct, " HeroCount=", InpHero_OrderCount);
       lastHeroAuditLog = TimeCurrent();
    }
 }
