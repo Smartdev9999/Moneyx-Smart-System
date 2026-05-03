@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v7.00 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v7.01 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "7.00"
-#property description "Gold Miner EA v7.00 - Hero GL-Only + Close-Path Audit: Hero pool is now ONLY _GL orders (INIT/GP excluded), latest N _GL per side become Hero. Threshold gate still uses total INIT+GL+GP active. Fixed BE_GUARD bug (v6.99 dead g_heroLockedSide check) so lock-profit SL is now actually applied when same-side basket clears. Per-order trailing/breakeven now skips Hero. OnTradeTransaction emits 'v7.00 Hero CLOSED reason=...' audit log to trace any unintended Hero close. Dashboard adds GL pool counter (e.g. 36/20 GL:30 Hero:3 ARMED). Close conditions: (1) lock-profit SL hit, (2) opposite basket close, (3) accumulate/global close ONLY."
+#property version   "7.01"
+#property description "Gold Miner EA v7.01 - Hero Sticky Tag Fix: Once a side's Hero is tagged (phase ARMED/BE_GUARD), the activation threshold gate is bypassed so Hero tickets stay tagged even when the basket shrinks below threshold. Fixes bug where SELL basket closing under 20-order threshold dropped Hero tag, allowing per-order trailing/SyncBrokerTPSL to close them. Hero close conditions remain: (1) lock-profit SL, (2) opposite-basket close, (3) accumulate/global close ONLY."
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -1085,7 +1085,7 @@ int OnInit()
    g_heroBE_Applied_Sell = false;
    g_heroBE_LastLog = 0;
    
-     Print("Gold Miner EA v7.00 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+     Print("Gold Miner EA v7.01 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min",
@@ -1148,7 +1148,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v7.00 deinitialized");
+   Print("Gold Miner EA v7.01 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -2353,21 +2353,27 @@ void BuildHeroTicketCache()
             ulong _k = tkGL[b];  tkGL[b]   = tkGL[b-1];   tkGL[b-1]   = _k;
          }
 
-      // v7.00: Activation gate uses TOTAL active (INIT+GL+GP), not just GL.
-      //        This prevents Hero from forming too early when most orders are GL only.
-      int activateThreshold = (InpHero_MinOrdersToActivate > 0)
-                              ? InpHero_MinOrdersToActivate
-                              : (InpHero_OrderCount + 1);
-      if(nAll < activateThreshold) continue;
-      if(nGL <= 0) continue; // no GL to tag as Hero yet
-
+      // v7.01: Sticky activation — once Hero is tagged on this side, keep it tagged
+      //        regardless of falling thresholds. Fixes bug where SELL basket closing
+      //        below threshold dropped Hero tag → trailing close took them too.
       int sideId = (int)side;
       int curPhase = (sideId == POSITION_TYPE_BUY) ? g_heroPhase_Buy : g_heroPhase_Sell;
 
-      // v7.00: ROLLING latest-N _GL — keep at least 1 GL in basket while alive (for Avg TP/Trail logic).
-      //        BE_GUARD: same-side basket already 0 so safe to take all available GL.
-      int take = MathMin(InpHero_OrderCount, nGL - 1);
-      if(curPhase == 3 /*BE_GUARD*/) {
+      int activateThreshold = (InpHero_MinOrdersToActivate > 0)
+                              ? InpHero_MinOrdersToActivate
+                              : (InpHero_OrderCount + 1);
+
+      // Activation gate ONLY applies for the FIRST tag (phase == NONE).
+      if(curPhase == 0 /*NONE*/ && nAll < activateThreshold) continue;
+      if(nGL <= 0) continue;
+
+      // v7.01 Rolling latest-N _GL:
+      //   - phase NONE (first activation): keep ≥1 GL in basket → take min(N, nGL-1)
+      //   - phase ARMED / BE_GUARD: bypass — take all up to N so Hero outlives basket shrinkage
+      int take;
+      if(curPhase == 0) {
+         take = MathMin(InpHero_OrderCount, nGL - 1);
+      } else {
          take = MathMin(InpHero_OrderCount, nGL);
       }
       if(take <= 0) continue;
@@ -2410,7 +2416,7 @@ void BuildHeroTicketCache()
    static datetime lastHeroAuditLog = 0;
    if(TimeCurrent() - lastHeroAuditLog >= 30) {
       int minAct = (InpHero_MinOrdersToActivate > 0) ? InpHero_MinOrdersToActivate : (InpHero_OrderCount + 1);
-      Print("v7.00 Hero AUDIT: BUY active=", sideTotalActive[0], " GL=", sideGLPool[0],
+      Print("v7.01 Hero AUDIT: BUY active=", sideTotalActive[0], " GL=", sideGLPool[0],
             " hero=", sideHeroTagged[0], " phase=", g_heroPhase_Buy,
             " | SELL active=", sideTotalActive[1], " GL=", sideGLPool[1],
             " hero=", sideHeroTagged[1], " phase=", g_heroPhase_Sell,
@@ -4845,7 +4851,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v7.00 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v7.00 [ZZ]" : "Gold Miner EA v7.00 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v7.01 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v7.01 [ZZ]" : "Gold Miner EA v7.01 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -7238,7 +7244,7 @@ void OnTradeTransaction(const MqlTradeTransaction& trans,
                               : (hReasonInt == DEAL_REASON_CLIENT) ? "Manual"
                               : "Other";
                   double hProfit = HistoryDealGetDouble(trans.deal, DEAL_PROFIT);
-                  Print("v7.00 Hero CLOSED ticket=#", hPosId, " reason=", rname,
+                  Print("v7.01 Hero CLOSED ticket=#", hPosId, " reason=", rname,
                         " profit=", DoubleToString(hProfit, 2));
                   break;
                }
