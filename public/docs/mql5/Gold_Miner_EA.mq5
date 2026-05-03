@@ -2401,6 +2401,8 @@ void BuildHeroTicketCache()
    g_heroDash_SellActive = sideTotalActive[1];
    g_heroDash_BuyTagged  = sideHeroTagged[0];
    g_heroDash_SellTagged = sideHeroTagged[1];
+   g_heroDash_BuyGLPool  = sideGLPool[0];
+   g_heroDash_SellGLPool = sideGLPool[1];
    if(sideHeroTagged[0] == 0) g_heroDash_BuyTicketN = 0;
    if(sideHeroTagged[1] == 0) g_heroDash_SellTicketN = 0;
 
