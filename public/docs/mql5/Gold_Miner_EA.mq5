@@ -133,6 +133,9 @@ input int    InpHero_MinOrdersToActivate= 5;     // Min orders on side before He
 input int    InpHero_BE_OffsetPoints    = 50;    // v6.96: Lock-profit BE-SL offset in POINTS (SELL=open-offset, BUY=open+offset)
 input bool   InpHero_BlockSameSideGrid  = true;  // Block new INIT/GL/GP on side that has Hero (survivor-only)
 input bool   InpHero_IncludeInMaxOrders = true;  // Count Hero into MaxOpenOrders
+// v7.03: Post-close grace + per-side gen isolation
+input int    InpHero_PostCloseGraceSec  = 5;     // v7.03: Seconds after Hero close to suppress re-tag
+input bool   InpHero_PerSideGenIsolation= true;  // v7.03: Bump per-side gen when Hero survives basket close
 // --- Deprecated (kept for .set compat, NO-OP in v6.96) ---
 input bool   InpHero_CloseWithOpposite  = true;  // [DEPRECATED v6.96] now hard-wired to opposite-basket close
 input bool   InpHero_RequireNetProfit   = false; // [DEPRECATED v6.96] not used (lock-profit SL guarantees floor)
