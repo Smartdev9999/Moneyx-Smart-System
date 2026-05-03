@@ -1792,7 +1792,7 @@ void OnTick()
                  {
                     if(shouldEnterBuy)
                     {
-                        if(OpenOrder(ORDER_TYPE_BUY, InitialLotSize, GetCommentPrefix() + "_INIT"))
+                        if(OpenOrder(ORDER_TYPE_BUY, InitialLotSize, GetCommentPrefixForSide(POSITION_TYPE_BUY) + "_INIT"))
                        {
                           g_initialBuyPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
                           lastInitialCandleTime = currentBarTime;
@@ -1813,7 +1813,7 @@ void OnTick()
                  {
                     if(shouldEnterSell)
                     {
-                        if(OpenOrder(ORDER_TYPE_SELL, InitialLotSize, GetCommentPrefix() + "_INIT"))
+                        if(OpenOrder(ORDER_TYPE_SELL, InitialLotSize, GetCommentPrefixForSide(POSITION_TYPE_SELL) + "_INIT"))
                        {
                           g_initialSellPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
                           lastInitialCandleTime = currentBarTime;
@@ -1904,7 +1904,7 @@ void OnTick()
           {
              if(TradingMode == TRADE_BUY_ONLY || TradingMode == TRADE_BOTH)
              {
-                if(OpenOrder(ORDER_TYPE_BUY, InitialLotSize, GetCommentPrefix() + "_INIT"))
+                if(OpenOrder(ORDER_TYPE_BUY, InitialLotSize, GetCommentPrefixForSide(POSITION_TYPE_BUY) + "_INIT"))
                 {
                    g_initialBuyPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
                    lastInitialCandleTime = currentBarTime;
@@ -1918,7 +1918,7 @@ void OnTick()
           {
              if(TradingMode == TRADE_SELL_ONLY || TradingMode == TRADE_BOTH)
              {
-                if(OpenOrder(ORDER_TYPE_SELL, InitialLotSize, GetCommentPrefix() + "_INIT"))
+                if(OpenOrder(ORDER_TYPE_SELL, InitialLotSize, GetCommentPrefixForSide(POSITION_TYPE_SELL) + "_INIT"))
                 {
                    g_initialSellPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
                    lastInitialCandleTime = currentBarTime;
@@ -4413,7 +4413,7 @@ void CheckGridLoss(ENUM_POSITION_TYPE side, int currentGridCount)
       // v6.71: never reuse a level number that's already open after hedge unlock
       int _maxLvlGL = FindMaxGridLevelOnSide(side, "_GL");
       int _nextLvlGL = (int)MathMax(_maxLvlGL + 1, currentGridCount + 1);
-      string comment = GetCommentPrefix() + "_GL#" + IntegerToString(_nextLvlGL);
+      string comment = GetCommentPrefixForSide(side) + "_GL#" + IntegerToString(_nextLvlGL);
       ENUM_ORDER_TYPE orderType = (side == POSITION_TYPE_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
       if(OpenOrder(orderType, lots, comment))
       {
@@ -4494,7 +4494,7 @@ void CheckGridProfit(ENUM_POSITION_TYPE side, int currentGridCount)
       // v6.71: never reuse a level number that's already open
       int _maxLvlGP = FindMaxGridLevelOnSide(side, "_GP");
       int _nextLvlGP = (int)MathMax(_maxLvlGP + 1, currentGridCount + 1);
-      string comment = GetCommentPrefix() + "_GP#" + IntegerToString(_nextLvlGP);
+      string comment = GetCommentPrefixForSide(side) + "_GP#" + IntegerToString(_nextLvlGP);
       ENUM_ORDER_TYPE orderType = (side == POSITION_TYPE_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
       if(OpenOrder(orderType, lots, comment))
       {
