@@ -2325,6 +2325,21 @@ bool OpenOrder(ENUM_ORDER_TYPE orderType, double lots, string comment)
 //+------------------------------------------------------------------+
 //| v6.92 Hero Order helpers                                          |
 //+------------------------------------------------------------------+
+
+// v7.07: Single source of truth for "Hero OWNER".
+//        Owner = a side that has actually transitioned to BE_GUARD (phase==3),
+//        i.e. its non-Hero basket has fully closed via TP / Avg-trailing.
+//        ARMED (phase==2) means CANDIDATE only — both sides may sit ARMED in parallel.
+//        Returns: (int)POSITION_TYPE_BUY, (int)POSITION_TYPE_SELL, or -1 if no owner yet.
+int GetHeroOwnerSide()
+{
+   bool buyOwns  = (g_heroPhase_Buy  == 3);
+   bool sellOwns = (g_heroPhase_Sell == 3);
+   if(buyOwns && !sellOwns)  return (int)POSITION_TYPE_BUY;
+   if(sellOwns && !buyOwns)  return (int)POSITION_TYPE_SELL;
+   return -1; // both NONE / both ARMED / both BE_GUARD (rare) -> no exclusive owner
+}
+
 void BuildHeroTicketCache()
 {
    // v6.98: NO throttle — rebuild every tick so Hero set is always the latest N
