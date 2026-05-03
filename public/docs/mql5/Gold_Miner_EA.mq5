@@ -4893,6 +4893,45 @@ void DisplayDashboard()
    string sellInfo = "$" + DoubleToString(plSell, 2) + "  " + DoubleToString(lotsSell, 2) + "L  " + IntegerToString(sellCount) + "ord";
    DrawTableRow(row, "Position SELL", sellInfo, (plSell >= 0 ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_DETAIL); row++;
 
+   //--- v6.99: HERO Monitor Section
+   if(InpHero_Enabled)
+   {
+      color COLOR_SECTION_HERO = C'120,40,140'; // purple
+      int   minAct = (InpHero_MinOrdersToActivate > 0) ? InpHero_MinOrdersToActivate : (InpHero_OrderCount + 1);
+
+      string heroHdr = StringFormat("Need >=%d  Keep:%d", minAct, InpHero_OrderCount);
+      DrawTableRow(row, "Hero Cfg", heroHdr, clrLavender, COLOR_SECTION_HERO); row++;
+
+      // BUY side
+      string phaseB = (g_heroPhase_Buy == 3) ? "BE_GUARD" : (g_heroPhase_Buy == 2) ? "ARMED" : (g_heroDash_BuyActive >= minAct ? "READY" : "WAIT");
+      color  colB   = (g_heroPhase_Buy == 3) ? clrGold : (g_heroPhase_Buy == 2) ? COLOR_PROFIT : (g_heroDash_BuyActive >= minAct ? clrYellow : COLOR_TEXT);
+      string buyHero = StringFormat("%d/%d  Hero:%d  %s", g_heroDash_BuyActive, minAct, g_heroDash_BuyTagged, phaseB);
+      DrawTableRow(row, "Hero BUY", buyHero, colB, COLOR_SECTION_HERO); row++;
+      if(g_heroDash_BuyTicketN > 0) {
+         string tixB = "";
+         for(int hi = 0; hi < g_heroDash_BuyTicketN; hi++) {
+            if(hi > 0) tixB += ",";
+            tixB += "#" + IntegerToString((long)g_heroDash_BuyTickets[hi]);
+         }
+         DrawTableRow(row, "  Tix BUY", tixB, clrLavender, COLOR_SECTION_HERO); row++;
+      }
+
+      // SELL side
+      string phaseS = (g_heroPhase_Sell == 3) ? "BE_GUARD" : (g_heroPhase_Sell == 2) ? "ARMED" : (g_heroDash_SellActive >= minAct ? "READY" : "WAIT");
+      color  colS   = (g_heroPhase_Sell == 3) ? clrGold : (g_heroPhase_Sell == 2) ? COLOR_PROFIT : (g_heroDash_SellActive >= minAct ? clrYellow : COLOR_TEXT);
+      string sellHero = StringFormat("%d/%d  Hero:%d  %s", g_heroDash_SellActive, minAct, g_heroDash_SellTagged, phaseS);
+      DrawTableRow(row, "Hero SELL", sellHero, colS, COLOR_SECTION_HERO); row++;
+      if(g_heroDash_SellTicketN > 0) {
+         string tixS = "";
+         for(int hi = 0; hi < g_heroDash_SellTicketN; hi++) {
+            if(hi > 0) tixS += ",";
+            tixS += "#" + IntegerToString((long)g_heroDash_SellTickets[hi]);
+         }
+         DrawTableRow(row, "  Tix SELL", tixS, clrLavender, COLOR_SECTION_HERO); row++;
+      }
+   }
+
+
    if(DrawdownMode == DD_FIXED_DOLLAR)
    {
       double ddDollar = balance - equity;
