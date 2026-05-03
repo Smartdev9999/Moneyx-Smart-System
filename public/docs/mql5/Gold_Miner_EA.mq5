@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v7.04 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v7.05 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "7.04"
-#property description "Gold Miner EA v7.04 - Single-Side Hero Lock + Active Per-Side Gen Isolation: Hero now activates ONLY one side at a time (whichever side gets there first owns Hero; opposite side blocked from Hero tagging until owner's Hero count hits 0). Per-side gen isolation default ON: side that owns surviving Hero opens new INIT/GL/GP under GM(N+1) while opposite side keeps trading GM(N). Order counters/grid step/TP/trailing rewired via GetActiveGenForSide() so GM(N+1) entries are fully managed."
+#property version   "7.05"
+#property description "Gold Miner EA v7.05 - Hero Side-Gen Unblock: ShouldBlockSameSideGridForHero now bypasses block when side owns a side-gen override (GM(N+1) IS the new basket). CountNonHeroMainOnSide uses GetActiveGenForSide so its semantics stay correct. CountFreeOlderGenOnSide excludes Hero tickets so cross-gen INIT guard does not falsely treat locked-profit Heroes as free older-gen orders. Result: Hero-owning side actually opens GM(N+1) INIT/GL/GP as v7.04 promised."
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -1115,7 +1115,7 @@ int OnInit()
    g_heroBE_Applied_Sell = false;
    g_heroBE_LastLog = 0;
    
-     Print("Gold Miner EA v7.04 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+     Print("Gold Miner EA v7.05 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min",
@@ -1178,7 +1178,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v7.04 deinitialized");
+   Print("Gold Miner EA v7.05 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -2527,7 +2527,7 @@ int CountNonHeroMainOnSide(ENUM_POSITION_TYPE side)
       if(IsTicketBound(ticket)) continue;
       if(IsHeroTicket(ticket)) continue;
       int g = ExtractGeneration(c);
-      if(g >= 0 && g != g_cycleGeneration) continue;
+      if(g >= 0 && g != GetActiveGenForSide(side)) continue; // v7.05: per-side active gen
       if(StringFind(c, "_INIT") < 0 && StringFind(c, "_GL") < 0 && StringFind(c, "_GP") < 0) continue;
       n++;
    }
@@ -2538,6 +2538,12 @@ int CountNonHeroMainOnSide(ENUM_POSITION_TYPE side)
 bool ShouldBlockSameSideGridForHero(ENUM_POSITION_TYPE side)
 {
    if(!InpHero_Enabled || !InpHero_BlockSameSideGrid) return false;
+   // v7.05: When per-side gen isolation is active and this side has a side-gen
+   //        override, GM(N+1) IS the new basket — do NOT block. Hero (GM(N)) is
+   //        locked at BE-profit and lives separately until opposite basket clears.
+   if(InpHero_PerSideGenIsolation &&
+      ((side == POSITION_TYPE_BUY  && g_sideGen_Buy  > 0) ||
+       (side == POSITION_TYPE_SELL && g_sideGen_Sell > 0))) return false;
    if(CountHeroOnSide(side) <= 0) return false;
    return (CountNonHeroMainOnSide(side) == 0);
 }
@@ -4984,7 +4990,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v7.04 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v7.04 [ZZ]" : "Gold Miner EA v7.04 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v7.05 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v7.05 [ZZ]" : "Gold Miner EA v7.05 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -9411,6 +9417,7 @@ int CountFreeOlderGenOnSide(ENUM_POSITION_TYPE side)
       string cmt = PositionGetString(POSITION_COMMENT);
       if(IsHedgeComment(cmt)) continue;
       if(IsTicketBound(tk)) continue;          // bound = hedge is handling it
+      if(IsHeroTicket(tk)) continue;           // v7.05: Hero is locked-profit, not a "free" older-gen order
       int og = ExtractGeneration(cmt);
       if(og < 1) continue;
       if(og >= g_cycleGeneration) continue;    // only OLDER gens
