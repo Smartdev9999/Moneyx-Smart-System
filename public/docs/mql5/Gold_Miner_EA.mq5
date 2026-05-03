@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.99 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v7.00 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "6.99"
-#property description "Gold Miner EA v6.99 - Hero Dual-Side Independent: Single-side lock removed. BUY and SELL each protect their OWN newest N active orders the moment side TOTAL >= InpHero_MinOrdersToActivate (eg BUY 36 -> latest 3 BUY Hero; SELL 22 -> latest 3 SELL Hero, simultaneously). Rolling latest-N (POSITION_TIME_MSC + ticket); when order #43 opens on a side, oldest Hero on that side gets restored to normal TP/SL. Hero Monitor section added to dashboard (per-side active/threshold/phase + protected ticket IDs). EnsureHeroProtection wraps SyncBrokerTPSL pre+post so basket Avg TP can't close Hero. Lock-profit BE-SL + opposite-basket close hook preserved."
+#property version   "7.00"
+#property description "Gold Miner EA v7.00 - Hero GL-Only + Close-Path Audit: Hero pool is now ONLY _GL orders (INIT/GP excluded), latest N _GL per side become Hero. Threshold gate still uses total INIT+GL+GP active. Fixed BE_GUARD bug (v6.99 dead g_heroLockedSide check) so lock-profit SL is now actually applied when same-side basket clears. Per-order trailing/breakeven now skips Hero. OnTradeTransaction emits 'v7.00 Hero CLOSED reason=...' audit log to trace any unintended Hero close. Dashboard adds GL pool counter (e.g. 36/20 GL:30 Hero:3 ARMED). Close conditions: (1) lock-profit SL hit, (2) opposite basket close, (3) accumulate/global close ONLY."
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -744,6 +744,8 @@ int      g_heroDash_BuyActive     = 0;
 int      g_heroDash_SellActive    = 0;
 int      g_heroDash_BuyTagged     = 0;
 int      g_heroDash_SellTagged    = 0;
+int      g_heroDash_BuyGLPool     = 0;   // v7.00: pool of GL eligible to be Hero
+int      g_heroDash_SellGLPool    = 0;
 ulong    g_heroDash_BuyTickets[10];
 int      g_heroDash_BuyTicketN    = 0;
 ulong    g_heroDash_SellTickets[10];
@@ -1083,7 +1085,7 @@ int OnInit()
    g_heroBE_Applied_Sell = false;
    g_heroBE_LastLog = 0;
    
-     Print("Gold Miner EA v6.99 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+     Print("Gold Miner EA v7.00 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min",
@@ -1146,7 +1148,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.99 deinitialized");
+   Print("Gold Miner EA v7.00 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -2301,18 +2303,20 @@ void BuildHeroTicketCache()
    g_heroLastBuildTime = TimeCurrent();
    g_heroTicketCount = 0;
 
-   // v6.98: per-side total (active across ALL generations) drives activation gate.
-   //         "20 orders" = currently-open basket orders on that side, not per-gen, not cumulative history.
+   // v7.00: per-side total (INIT+GL+GP, cross-gen, free basket) drives the activation gate.
+   //         BUT only _GL orders are eligible to BE TAGGED as Hero (per user spec).
    int sideTotalActive[2] = {0, 0};
+   int sideGLPool[2]      = {0, 0};
    int sideHeroTagged[2]  = {0, 0};
 
    for(int s = 0; s < 2; s++)
    {
       ENUM_POSITION_TYPE side = (s == 0) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
-      ulong  tk[200]; long ttMs[200]; int n = 0;
+      ulong  tkGL[200]; long ttGLMs[200]; int nGL = 0;
+      int    nAll = 0;
 
-      // Pass: collect ALL active basket orders on this side, regardless of generation
-      for(int i = PositionsTotal() - 1; i >= 0 && n < 200; i--)
+      // Pass 1: collect ALL active basket orders for threshold + isolate _GL for Hero pool
+      for(int i = PositionsTotal() - 1; i >= 0; i--)
       {
          ulong ticket = PositionGetTicket(i);
          if(ticket == 0) continue;
@@ -2321,63 +2325,70 @@ void BuildHeroTicketCache()
          if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
          string c = PositionGetString(POSITION_COMMENT);
          if(IsHedgeComment(c)) continue;
-         if(IsTicketBound(ticket)) continue; // bound = locked into a hedge set, not part of free basket
-         if(StringFind(c,"_INIT")<0 && StringFind(c,"_GL")<0 && StringFind(c,"_GP")<0) continue;
-         tk[n]   = ticket;
-         // v6.98: use POSITION_TIME_MSC for deterministic newest-first ordering
-         ttMs[n] = PositionGetInteger(POSITION_TIME_MSC);
-         n++;
+         if(IsTicketBound(ticket)) continue; // bound = locked into a hedge set
+         bool isInit = (StringFind(c,"_INIT") >= 0);
+         bool isGL   = (StringFind(c,"_GL")   >= 0);
+         bool isGP   = (StringFind(c,"_GP")   >= 0);
+         if(!isInit && !isGL && !isGP) continue;
+         nAll++;
+         // v7.00: ONLY _GL is eligible to be Hero (per user spec — INIT/GP excluded)
+         if(isGL && nGL < 200) {
+            tkGL[nGL]   = ticket;
+            ttGLMs[nGL] = PositionGetInteger(POSITION_TIME_MSC);
+            nGL++;
+         }
       }
-      sideTotalActive[s] = n;
+      sideTotalActive[s] = nAll;
+      sideGLPool[s]      = nGL;
 
-      // v6.98: sort desc by POSITION_TIME_MSC then by ticket (larger ticket = newer)
-      for(int a = 1; a < n; a++)
+      // Sort tkGL desc by POSITION_TIME_MSC then by ticket (newest first)
+      for(int a = 1; a < nGL; a++)
          for(int b = a; b > 0; b--)
          {
             bool swap = false;
-            if(ttMs[b] > ttMs[b-1]) swap = true;
-            else if(ttMs[b] == ttMs[b-1] && tk[b] > tk[b-1]) swap = true;
+            if(ttGLMs[b] > ttGLMs[b-1]) swap = true;
+            else if(ttGLMs[b] == ttGLMs[b-1] && tkGL[b] > tkGL[b-1]) swap = true;
             if(!swap) break;
-            long _t = ttMs[b]; ttMs[b] = ttMs[b-1]; ttMs[b-1] = _t;
-            ulong _k = tk[b];  tk[b]   = tk[b-1];   tk[b-1]   = _k;
+            long _t = ttGLMs[b]; ttGLMs[b] = ttGLMs[b-1]; ttGLMs[b-1] = _t;
+            ulong _k = tkGL[b];  tkGL[b]   = tkGL[b-1];   tkGL[b-1]   = _k;
          }
 
-      // v6.97/v6.98: Activation gate — compare side TOTAL (cross-gen) against threshold
+      // v7.00: Activation gate uses TOTAL active (INIT+GL+GP), not just GL.
+      //        This prevents Hero from forming too early when most orders are GL only.
       int activateThreshold = (InpHero_MinOrdersToActivate > 0)
                               ? InpHero_MinOrdersToActivate
                               : (InpHero_OrderCount + 1);
-      if(n < activateThreshold) continue;
+      if(nAll < activateThreshold) continue;
+      if(nGL <= 0) continue; // no GL to tag as Hero yet
 
-      // v6.99: PER-SIDE INDEPENDENT activation. No single-side lock.
-      // Each side that meets threshold protects its OWN newest N tickets.
       int sideId = (int)side;
-
-      // v6.99: ROLLING latest-N — protect newest N tickets every tick.
-      //        Basket alive: keep >=1 non-Hero. BE_GUARD: basket already 0 so take all available.
       int curPhase = (sideId == POSITION_TYPE_BUY) ? g_heroPhase_Buy : g_heroPhase_Sell;
-      int take = MathMin(InpHero_OrderCount, n - 1);
+
+      // v7.00: ROLLING latest-N _GL — keep at least 1 GL in basket while alive (for Avg TP/Trail logic).
+      //        BE_GUARD: same-side basket already 0 so safe to take all available GL.
+      int take = MathMin(InpHero_OrderCount, nGL - 1);
       if(curPhase == 3 /*BE_GUARD*/) {
-         take = MathMin(InpHero_OrderCount, n);
+         take = MathMin(InpHero_OrderCount, nGL);
       }
       if(take <= 0) continue;
 
-      // v6.99: write per-side dashboard ticket list (max 10)
+      // Dashboard ticket list (max 10)
       if(sideId == POSITION_TYPE_BUY) {
          g_heroDash_BuyTicketN = 0;
          for(int k = 0; k < take && g_heroDash_BuyTicketN < 10; k++)
-            g_heroDash_BuyTickets[g_heroDash_BuyTicketN++] = tk[k];
+            g_heroDash_BuyTickets[g_heroDash_BuyTicketN++] = tkGL[k];
       } else {
          g_heroDash_SellTicketN = 0;
          for(int k = 0; k < take && g_heroDash_SellTicketN < 10; k++)
-            g_heroDash_SellTickets[g_heroDash_SellTicketN++] = tk[k];
+            g_heroDash_SellTickets[g_heroDash_SellTicketN++] = tkGL[k];
       }
 
       for(int k = 0; k < take && g_heroTicketCount < 200; k++)
-         g_heroTickets[g_heroTicketCount++] = tk[k];
+         g_heroTickets[g_heroTicketCount++] = tkGL[k];
       sideHeroTagged[s] += take;
    }
 
-   // Phase update per side (NONE -> ARMED_WAITING; BE_GUARD set elsewhere, never downgrade here)
+   // Phase update per side (NONE -> ARMED; BE_GUARD set elsewhere, never downgrade here)
    if(g_heroPhase_Buy != 3) {
       g_heroPhase_Buy = (sideHeroTagged[0] > 0) ? 2 : 0;
    }
@@ -2385,22 +2396,24 @@ void BuildHeroTicketCache()
       g_heroPhase_Sell = (sideHeroTagged[1] > 0) ? 2 : 0;
    }
 
-   // v6.99: refresh dashboard counters
+   // Dashboard counters
    g_heroDash_BuyActive  = sideTotalActive[0];
    g_heroDash_SellActive = sideTotalActive[1];
    g_heroDash_BuyTagged  = sideHeroTagged[0];
    g_heroDash_SellTagged = sideHeroTagged[1];
+   g_heroDash_BuyGLPool  = sideGLPool[0];
+   g_heroDash_SellGLPool = sideGLPool[1];
    if(sideHeroTagged[0] == 0) g_heroDash_BuyTicketN = 0;
    if(sideHeroTagged[1] == 0) g_heroDash_SellTicketN = 0;
 
-   // v6.99: audit log every 30s — dual-side independent activation visibility
+   // v7.00: audit log every 30s — visibility into GL-only Hero selection
    static datetime lastHeroAuditLog = 0;
    if(TimeCurrent() - lastHeroAuditLog >= 30) {
       int minAct = (InpHero_MinOrdersToActivate > 0) ? InpHero_MinOrdersToActivate : (InpHero_OrderCount + 1);
-      Print("v6.99 Hero AUDIT: BUY active=", sideTotalActive[0], " hero=", sideHeroTagged[0],
-            " phase=", g_heroPhase_Buy,
-            " | SELL active=", sideTotalActive[1], " hero=", sideHeroTagged[1],
-            " phase=", g_heroPhase_Sell,
+      Print("v7.00 Hero AUDIT: BUY active=", sideTotalActive[0], " GL=", sideGLPool[0],
+            " hero=", sideHeroTagged[0], " phase=", g_heroPhase_Buy,
+            " | SELL active=", sideTotalActive[1], " GL=", sideGLPool[1],
+            " hero=", sideHeroTagged[1], " phase=", g_heroPhase_Sell,
             " | threshold=", minAct, " HeroCount=", InpHero_OrderCount);
       lastHeroAuditLog = TimeCurrent();
    }
@@ -2510,7 +2523,7 @@ void CloseHeroOnSide(ENUM_POSITION_TYPE side, string reason)
 bool DetectSameSideBasketClearedForHero(ENUM_POSITION_TYPE side)
 {
    if(!InpHero_Enabled) return false;
-   if((int)side != g_heroLockedSide) return false;
+   // v7.00: REMOVED dead lock check (g_heroLockedSide was deprecated to -1 in v6.99 → check always failed → BE_GUARD never triggered → Hero had no SL).
    if(CountHeroOnSide(side) <= 0) return false;
    if(CountNonHeroMainOnSide(side) > 0) return false; // basket still alive
    return true;
@@ -3375,6 +3388,7 @@ void ManagePerOrderTrailing()
       if(ticket == 0) continue;
       if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if(IsHeroTicket(ticket)) continue;   // v7.00: Hero owns own SL (lock-profit BE)
 
       long posType = PositionGetInteger(POSITION_TYPE);
       double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
@@ -4831,7 +4845,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.99 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.99 [ZZ]" : "Gold Miner EA v6.99 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v7.00 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v7.00 [ZZ]" : "Gold Miner EA v7.00 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -4900,7 +4914,7 @@ void DisplayDashboard()
       // BUY side
       string phaseB = (g_heroPhase_Buy == 3) ? "BE_GUARD" : (g_heroPhase_Buy == 2) ? "ARMED" : (g_heroDash_BuyActive >= minAct ? "READY" : "WAIT");
       color  colB   = (g_heroPhase_Buy == 3) ? clrGold : (g_heroPhase_Buy == 2) ? COLOR_PROFIT : (g_heroDash_BuyActive >= minAct ? clrYellow : COLOR_TEXT);
-      string buyHero = StringFormat("%d/%d  Hero:%d  %s", g_heroDash_BuyActive, minAct, g_heroDash_BuyTagged, phaseB);
+      string buyHero = StringFormat("%d/%d  GL:%d  Hero:%d  %s", g_heroDash_BuyActive, minAct, g_heroDash_BuyGLPool, g_heroDash_BuyTagged, phaseB);
       DrawTableRow(row, "Hero BUY", buyHero, colB, COLOR_SECTION_HERO); row++;
       if(g_heroDash_BuyTicketN > 0) {
          string tixB = "";
@@ -4914,7 +4928,7 @@ void DisplayDashboard()
       // SELL side
       string phaseS = (g_heroPhase_Sell == 3) ? "BE_GUARD" : (g_heroPhase_Sell == 2) ? "ARMED" : (g_heroDash_SellActive >= minAct ? "READY" : "WAIT");
       color  colS   = (g_heroPhase_Sell == 3) ? clrGold : (g_heroPhase_Sell == 2) ? COLOR_PROFIT : (g_heroDash_SellActive >= minAct ? clrYellow : COLOR_TEXT);
-      string sellHero = StringFormat("%d/%d  Hero:%d  %s", g_heroDash_SellActive, minAct, g_heroDash_SellTagged, phaseS);
+      string sellHero = StringFormat("%d/%d  GL:%d  Hero:%d  %s", g_heroDash_SellActive, minAct, g_heroDash_SellGLPool, g_heroDash_SellTagged, phaseS);
       DrawTableRow(row, "Hero SELL", sellHero, colS, COLOR_SECTION_HERO); row++;
       if(g_heroDash_SellTicketN > 0) {
          string tixS = "";
@@ -7202,6 +7216,37 @@ void OnTradeTransaction(const MqlTradeTransaction& trans,
                         const MqlTradeRequest& request,
                         const MqlTradeResult& result)
 {
+   // v7.00: Hero close audit — fires for ALL deals (incl. tester) BEFORE early returns
+   //        so we can trace which path closed a Hero ticket.
+   if(InpHero_Enabled && trans.type == TRADE_TRANSACTION_DEAL_ADD && trans.deal != 0)
+   {
+      if(HistoryDealSelect(trans.deal))
+      {
+         long  hMagic = HistoryDealGetInteger(trans.deal, DEAL_MAGIC);
+         ENUM_DEAL_ENTRY hEntry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(trans.deal, DEAL_ENTRY);
+         ulong hPosId = (ulong)HistoryDealGetInteger(trans.deal, DEAL_POSITION_ID);
+         string hReason = "";
+         long hReasonInt = HistoryDealGetInteger(trans.deal, DEAL_REASON);
+         if(hMagic == MagicNumber && (hEntry == DEAL_ENTRY_OUT || hEntry == DEAL_ENTRY_INOUT))
+         {
+            // Was this a Hero ticket?
+            for(int hi = 0; hi < g_heroTicketCount; hi++) {
+               if(g_heroTickets[hi] == hPosId) {
+                  string rname = (hReasonInt == DEAL_REASON_TP) ? "BrokerTP_HIT"
+                              : (hReasonInt == DEAL_REASON_SL) ? "LockProfitSL_HIT"
+                              : (hReasonInt == DEAL_REASON_EXPERT) ? "EA_PositionClose"
+                              : (hReasonInt == DEAL_REASON_CLIENT) ? "Manual"
+                              : "Other";
+                  double hProfit = HistoryDealGetDouble(trans.deal, DEAL_PROFIT);
+                  Print("v7.00 Hero CLOSED ticket=#", hPosId, " reason=", rname,
+                        " profit=", DoubleToString(hProfit, 2));
+                  break;
+               }
+            }
+         }
+      }
+   }
+
    if(!g_isLicenseValid) return;
    if(MQLInfoInteger(MQL_TESTER) || MQLInfoInteger(MQL_OPTIMIZATION)) return;
    
