@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v7.06 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v7.07 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "7.06"
-#property description "Gold Miner EA v7.06 - Hero Owner = BE_GUARD only + Gen-Locked Pool: Single-Side Lock now triggers ONLY when one side reaches BE_GUARD (basket cleared via TP/Avg-trail). Both sides may stay ARMED in parallel. BuildHeroTicketCache pool is gen-locked to g_heroOwnedGen_<side> after BE_GUARD bump, so new GM(N+1) GL entries never replace original Hero tickets and never get the lock-profit BE-SL stripped/applied wrongly."
+#property version   "7.07"
+#property description "Gold Miner EA v7.07 - Candidate vs Owner separation: Reaching the order-count threshold makes a side a Hero CANDIDATE (ARMED) only — both BUY and SELL may sit ARMED in parallel. The first side whose non-Hero basket actually closes (TP / Avg-trailing) transitions to BE_GUARD and becomes the Hero OWNER. Dashboard 'Hero Owner' now reads NONE while only ARMED, and shows BUY/SELL with (locked) tag only after a real BE_GUARD owner exists. New helper GetHeroOwnerSide() unifies owner detection."
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -1115,7 +1115,7 @@ int OnInit()
    g_heroBE_Applied_Sell = false;
    g_heroBE_LastLog = 0;
    
-     Print("Gold Miner EA v7.06 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+     Print("Gold Miner EA v7.07 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min",
@@ -1178,7 +1178,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v7.06 deinitialized");
+   Print("Gold Miner EA v7.07 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -5004,7 +5004,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v7.06 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v7.06 [ZZ]" : "Gold Miner EA v7.06 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v7.07 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v7.07 [ZZ]" : "Gold Miner EA v7.07 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
