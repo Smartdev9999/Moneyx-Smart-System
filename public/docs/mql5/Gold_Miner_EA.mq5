@@ -5082,12 +5082,21 @@ void DisplayDashboard()
       string heroHdr = StringFormat("Need >=%d  Keep:%d", minAct, InpHero_OrderCount);
       DrawTableRow(row, "Hero Cfg", heroHdr, clrLavender, COLOR_SECTION_HERO); row++;
 
-      // v7.04: Owner + Side-Gen rows
-      string ownerStr = "NONE";
-      if(g_heroPhase_Buy != 0 || CountHeroOnSide(POSITION_TYPE_BUY) > 0) ownerStr = "BUY";
-      else if(g_heroPhase_Sell != 0 || CountHeroOnSide(POSITION_TYPE_SELL) > 0) ownerStr = "SELL";
-      string lockTag = InpHero_SingleSideLock ? " (locked)" : " (dual)";
-      DrawTableRow(row, "Hero Owner", ownerStr + lockTag, (ownerStr=="NONE"?COLOR_TEXT:clrGold), COLOR_SECTION_HERO); row++;
+      // v7.07: Owner row uses GetHeroOwnerSide() — only BE_GUARD counts as owner.
+      //         While both sides are merely ARMED (candidates), Owner shows
+      //         "NONE (waiting close)" so it's clear no side is locked yet.
+      int    ownerSide = GetHeroOwnerSide();
+      bool   anyArmed  = (g_heroPhase_Buy == 2 || g_heroPhase_Sell == 2 ||
+                          g_heroPhase_Buy == 3 || g_heroPhase_Sell == 3);
+      string ownerStr  = (ownerSide == (int)POSITION_TYPE_BUY)  ? "BUY"
+                       : (ownerSide == (int)POSITION_TYPE_SELL) ? "SELL"
+                       : "NONE";
+      string ownerTag;
+      if(ownerSide >= 0)        ownerTag = InpHero_SingleSideLock ? " (locked)" : " (dual)";
+      else if(anyArmed)         ownerTag = " (waiting close)";
+      else                       ownerTag = "";
+      color  ownerCol = (ownerSide >= 0) ? clrGold : (anyArmed ? clrYellow : COLOR_TEXT);
+      DrawTableRow(row, "Hero Owner", ownerStr + ownerTag, ownerCol, COLOR_SECTION_HERO); row++;
       string sgB = "GM" + IntegerToString(GetActiveGenForSide(POSITION_TYPE_BUY))  + (g_sideGen_Buy  > 0 ? " (Hero owns GM"+IntegerToString(g_heroOwnedGen_Buy)+")"  : "");
       string sgS = "GM" + IntegerToString(GetActiveGenForSide(POSITION_TYPE_SELL)) + (g_sideGen_Sell > 0 ? " (Hero owns GM"+IntegerToString(g_heroOwnedGen_Sell)+")" : "");
       DrawTableRow(row, "Side Gen BUY",  sgB, (g_sideGen_Buy  > 0 ? clrGold : COLOR_TEXT), COLOR_SECTION_HERO); row++;
