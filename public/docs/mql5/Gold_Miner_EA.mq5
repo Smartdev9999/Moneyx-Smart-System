@@ -2527,7 +2527,7 @@ int CountNonHeroMainOnSide(ENUM_POSITION_TYPE side)
       if(IsTicketBound(ticket)) continue;
       if(IsHeroTicket(ticket)) continue;
       int g = ExtractGeneration(c);
-      if(g >= 0 && g != g_cycleGeneration) continue;
+      if(g >= 0 && g != GetActiveGenForSide(side)) continue; // v7.05: per-side active gen
       if(StringFind(c, "_INIT") < 0 && StringFind(c, "_GL") < 0 && StringFind(c, "_GP") < 0) continue;
       n++;
    }
@@ -2538,6 +2538,12 @@ int CountNonHeroMainOnSide(ENUM_POSITION_TYPE side)
 bool ShouldBlockSameSideGridForHero(ENUM_POSITION_TYPE side)
 {
    if(!InpHero_Enabled || !InpHero_BlockSameSideGrid) return false;
+   // v7.05: When per-side gen isolation is active and this side has a side-gen
+   //        override, GM(N+1) IS the new basket — do NOT block. Hero (GM(N)) is
+   //        locked at BE-profit and lives separately until opposite basket clears.
+   if(InpHero_PerSideGenIsolation &&
+      ((side == POSITION_TYPE_BUY  && g_sideGen_Buy  > 0) ||
+       (side == POSITION_TYPE_SELL && g_sideGen_Sell > 0))) return false;
    if(CountHeroOnSide(side) <= 0) return false;
    return (CountNonHeroMainOnSide(side) == 0);
 }
