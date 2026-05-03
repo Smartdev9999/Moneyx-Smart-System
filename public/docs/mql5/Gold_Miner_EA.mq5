@@ -5050,6 +5050,17 @@ void DisplayDashboard()
       string heroHdr = StringFormat("Need >=%d  Keep:%d", minAct, InpHero_OrderCount);
       DrawTableRow(row, "Hero Cfg", heroHdr, clrLavender, COLOR_SECTION_HERO); row++;
 
+      // v7.04: Owner + Side-Gen rows
+      string ownerStr = "NONE";
+      if(g_heroPhase_Buy != 0 || CountHeroOnSide(POSITION_TYPE_BUY) > 0) ownerStr = "BUY";
+      else if(g_heroPhase_Sell != 0 || CountHeroOnSide(POSITION_TYPE_SELL) > 0) ownerStr = "SELL";
+      string lockTag = InpHero_SingleSideLock ? " (locked)" : " (dual)";
+      DrawTableRow(row, "Hero Owner", ownerStr + lockTag, (ownerStr=="NONE"?COLOR_TEXT:clrGold), COLOR_SECTION_HERO); row++;
+      string sgB = "GM" + IntegerToString(GetActiveGenForSide(POSITION_TYPE_BUY))  + (g_sideGen_Buy  > 0 ? " (Hero owns GM"+IntegerToString(g_heroOwnedGen_Buy)+")"  : "");
+      string sgS = "GM" + IntegerToString(GetActiveGenForSide(POSITION_TYPE_SELL)) + (g_sideGen_Sell > 0 ? " (Hero owns GM"+IntegerToString(g_heroOwnedGen_Sell)+")" : "");
+      DrawTableRow(row, "Side Gen BUY",  sgB, (g_sideGen_Buy  > 0 ? clrGold : COLOR_TEXT), COLOR_SECTION_HERO); row++;
+      DrawTableRow(row, "Side Gen SELL", sgS, (g_sideGen_Sell > 0 ? clrGold : COLOR_TEXT), COLOR_SECTION_HERO); row++;
+
       // BUY side
       string phaseB = (g_heroPhase_Buy == 3) ? "BE_GUARD" : (g_heroPhase_Buy == 2) ? "ARMED" : (g_heroDash_BuyActive >= minAct ? "READY" : "WAIT");
       color  colB   = (g_heroPhase_Buy == 3) ? clrGold : (g_heroPhase_Buy == 2) ? COLOR_PROFIT : (g_heroDash_BuyActive >= minAct ? clrYellow : COLOR_TEXT);
