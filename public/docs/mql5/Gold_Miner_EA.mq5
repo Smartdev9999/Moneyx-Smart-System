@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v7.01 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v7.02 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "7.01"
-#property description "Gold Miner EA v7.01 - Hero Sticky Tag Fix: Once a side's Hero is tagged (phase ARMED/BE_GUARD), the activation threshold gate is bypassed so Hero tickets stay tagged even when the basket shrinks below threshold. Fixes bug where SELL basket closing under 20-order threshold dropped Hero tag, allowing per-order trailing/SyncBrokerTPSL to close them. Hero close conditions remain: (1) lock-profit SL, (2) opposite-basket close, (3) accumulate/global close ONLY."
+#property version   "7.02"
+#property description "Gold Miner EA v7.02 - Hero Lock-Profit SL Fix + Tick-Based Opposite-Clear: Fixes inverted ValidateHeroLockProfitSL (sl-vs-bid/ask comparison was swapped) so BE_GUARD now actually places SL on broker. Adds tick-based detector that closes Hero when opposite-side basket goes flat via Broker TP/SL (not only via EA CloseAllSide hooks)."
 #property strict
 
 #include <Trade/Trade.mqh>
