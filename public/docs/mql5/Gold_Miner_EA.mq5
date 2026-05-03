@@ -1,11 +1,11 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.98 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.99 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "6.98"
+#property version   "6.99"
 #property description "Gold Miner EA v6.98 - Hero Rolling Latest-N Protection: Hero cache rebuilds every tick (no throttle), sorts by POSITION_TIME_MSC + ticket so the newest N active orders on the locked side are ALWAYS the Hero set (eg active 36, HeroCount 3 -> latest 3 tickets). EnsureHeroProtection() force-strips broker TP/SL on Hero before SyncBrokerTPSL runs and again after, so basket Average TP can never close Hero tickets. Hero skip extended to CloseAllSideTF. Single-side exclusive lock + lock-profit BE-SL + opposite-basket close hook preserved from v6.96/97."
 #property strict
 
