@@ -2354,8 +2354,8 @@ void BuildHeroTicketCache()
          }
 
       // v7.01: Sticky activation — once Hero is tagged on this side, keep it tagged
-      //        regardless of falling thresholds. This prevents the bug where SELL basket
-      //        closing below threshold dropped Hero tag → trailing close took them too.
+      //        regardless of falling thresholds. Fixes bug where SELL basket closing
+      //        below threshold dropped Hero tag → trailing close took them too.
       int sideId = (int)side;
       int curPhase = (sideId == POSITION_TYPE_BUY) ? g_heroPhase_Buy : g_heroPhase_Sell;
 
@@ -2364,20 +2364,17 @@ void BuildHeroTicketCache()
                               : (InpHero_OrderCount + 1);
 
       // Activation gate ONLY applies for the FIRST tag (phase == NONE).
-      // If already ARMED or BE_GUARD, bypass — Hero must outlive basket shrinkage.
       if(curPhase == 0 /*NONE*/ && nAll < activateThreshold) continue;
-      if(nGL <= 0) continue; // no GL alive at all → nothing to tag
+      if(nGL <= 0) continue;
 
-      // v7.01: Rolling latest-N _GL.
-      //        - PRE-ARMED (phase NONE→ARMED transition): keep ≥1 GL in basket so Avg TP/Trail still works.
-      //        - ARMED with non-Hero basket alive: same as above (nGL-1).
-      //        - ARMED with non-Hero basket already gone OR BE_GUARD: take all available GL up to N.
-      int nonHeroBasket = CountNonHeroMainOnSide(side);
+      // v7.01 Rolling latest-N _GL:
+      //   - phase NONE (first activation): keep ≥1 GL in basket → take min(N, nGL-1)
+      //   - phase ARMED / BE_GUARD: bypass — take all up to N so Hero outlives basket shrinkage
       int take;
-      if(curPhase == 3 /*BE_GUARD*/ || nonHeroBasket == 0) {
-         take = MathMin(InpHero_OrderCount, nGL);
-      } else {
+      if(curPhase == 0) {
          take = MathMin(InpHero_OrderCount, nGL - 1);
+      } else {
+         take = MathMin(InpHero_OrderCount, nGL);
       }
       if(take <= 0) continue;
 
