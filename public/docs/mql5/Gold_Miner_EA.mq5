@@ -2548,7 +2548,10 @@ double ComputeHeroLockProfitSL(ENUM_POSITION_TYPE posType, double openPrice)
    return 0;
 }
 
-// v6.96: Sanity check — SL must be on the profit side of current price AND past stops level.
+// v7.02: FIXED inverted comparisons.
+// SELL position closes at ASK -> SL must be ABOVE ask + stopsLevel (price rising = stop out).
+// BUY  position closes at BID -> SL must be BELOW bid - stopsLevel (price falling = stop out).
+// Lock-profit SL is set on the profit side of openPrice, but broker-side validity is vs current price.
 bool ValidateHeroLockProfitSL(ENUM_POSITION_TYPE posType, double sl)
 {
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
@@ -2557,12 +2560,34 @@ bool ValidateHeroLockProfitSL(ENUM_POSITION_TYPE posType, double sl)
    long   stopsLvl = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
    double minDist = (double)stopsLvl * pt;
    if(posType == POSITION_TYPE_SELL) {
-      // SELL closes at ASK; SL must be < ask - stops
-      return (sl > 0 && sl < (ask - minDist) && sl < ask);
+      // SELL Hero: lock-profit SL is BELOW openPrice (profit zone for SELL).
+      // For broker validity SL must sit ABOVE ask + stops (so price rising hits it).
+      bool ok = (sl > 0 && sl > (ask + minDist));
+      if(!ok) {
+         static datetime lastLog = 0;
+         if(TimeCurrent() - lastLog > 30) {
+            Print("v7.02 Hero SL VALIDATE FAIL SELL sl=", DoubleToString(sl,_Digits),
+                  " ask=", DoubleToString(ask,_Digits), " minDist=", DoubleToString(minDist,_Digits),
+                  " (need sl > ask+minDist)");
+            lastLog = TimeCurrent();
+         }
+      }
+      return ok;
    }
    if(posType == POSITION_TYPE_BUY) {
-      // BUY closes at BID; SL must be > bid + stops
-      return (sl > 0 && sl > (bid + minDist) && sl > bid);
+      // BUY Hero: lock-profit SL is ABOVE openPrice (profit zone for BUY).
+      // For broker validity SL must sit BELOW bid - stops (so price falling hits it).
+      bool ok = (sl > 0 && sl < (bid - minDist));
+      if(!ok) {
+         static datetime lastLogB = 0;
+         if(TimeCurrent() - lastLogB > 30) {
+            Print("v7.02 Hero SL VALIDATE FAIL BUY sl=", DoubleToString(sl,_Digits),
+                  " bid=", DoubleToString(bid,_Digits), " minDist=", DoubleToString(minDist,_Digits),
+                  " (need sl < bid-minDist)");
+            lastLogB = TimeCurrent();
+         }
+      }
+      return ok;
    }
    return false;
 }
