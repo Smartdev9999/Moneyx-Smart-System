@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v7.03 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v7.04 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "7.03"
-#property description "Gold Miner EA v7.03 - Hero Post-Close Grace + Per-Side Generation Isolation: Adds InpHero_PostCloseGraceSec (default 5s) so freshly-opened INIT/GL after a Hero close are NOT re-tagged as Hero (fixes phantom locked orders). Adds optional InpHero_PerSideGenIsolation (default OFF) that bumps the per-side comment prefix to GM(N+1) for the side whose Hero survived, while the opposite side keeps trading on GM(N)."
+#property version   "7.04"
+#property description "Gold Miner EA v7.04 - Single-Side Hero Lock + Active Per-Side Gen Isolation: Hero now activates ONLY one side at a time (whichever side gets there first owns Hero; opposite side blocked from Hero tagging until owner's Hero count hits 0). Per-side gen isolation default ON: side that owns surviving Hero opens new INIT/GL/GP under GM(N+1) while opposite side keeps trading GM(N). Order counters/grid step/TP/trailing rewired via GetActiveGenForSide() so GM(N+1) entries are fully managed."
 #property strict
 
 #include <Trade/Trade.mqh>
