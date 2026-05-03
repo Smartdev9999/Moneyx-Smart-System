@@ -2747,6 +2747,27 @@ void ManageHeroOppositeClose()
          ApplyHeroLockProfitSL(side);
          if(side == POSITION_TYPE_BUY)  g_heroBE_Applied_Buy  = true;
          else                            g_heroBE_Applied_Sell = true;
+
+         // v7.03: Per-side generation isolation — bump the gen for THIS side so any
+         //        new INIT/GL/GP entries open under GM(N+1) and stay separate from
+         //        the surviving Hero (which keeps GM(N)). The opposite side is left
+         //        on the current global gen to continue normally.
+         if(InpHero_PerSideGenIsolation) {
+            int curGen = (g_cycleGeneration < 1) ? 1 : g_cycleGeneration;
+            if(side == POSITION_TYPE_BUY) {
+               int sg = (g_sideGen_Buy > 0) ? g_sideGen_Buy : curGen;
+               g_sideGen_Buy       = sg + 1;
+               g_heroOwnedGen_Buy  = curGen;
+               Print("v7.03 SIDE-GEN BUMP: side=BUY heroOwnedGen=GM", curGen,
+                     " -> newSideGen=GM", g_sideGen_Buy);
+            } else {
+               int sg = (g_sideGen_Sell > 0) ? g_sideGen_Sell : curGen;
+               g_sideGen_Sell      = sg + 1;
+               g_heroOwnedGen_Sell = curGen;
+               Print("v7.03 SIDE-GEN BUMP: side=SELL heroOwnedGen=GM", curGen,
+                     " -> newSideGen=GM", g_sideGen_Sell);
+            }
+         }
       }
       // BE_GUARD retry: if some Heroes were skipped due to sanity, retry while still in BE_GUARD
       int phase = (side == POSITION_TYPE_BUY) ? g_heroPhase_Buy : g_heroPhase_Sell;
