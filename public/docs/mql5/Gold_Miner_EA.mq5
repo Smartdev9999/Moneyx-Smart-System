@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.99 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v7.00 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "6.99"
-#property description "Gold Miner EA v6.99 - Hero Dual-Side Independent: Single-side lock removed. BUY and SELL each protect their OWN newest N active orders the moment side TOTAL >= InpHero_MinOrdersToActivate (eg BUY 36 -> latest 3 BUY Hero; SELL 22 -> latest 3 SELL Hero, simultaneously). Rolling latest-N (POSITION_TIME_MSC + ticket); when order #43 opens on a side, oldest Hero on that side gets restored to normal TP/SL. Hero Monitor section added to dashboard (per-side active/threshold/phase + protected ticket IDs). EnsureHeroProtection wraps SyncBrokerTPSL pre+post so basket Avg TP can't close Hero. Lock-profit BE-SL + opposite-basket close hook preserved."
+#property version   "7.00"
+#property description "Gold Miner EA v7.00 - Hero GL-Only + Close-Path Audit: Hero pool is now ONLY _GL orders (INIT/GP excluded), latest N _GL per side become Hero. Threshold gate still uses total INIT+GL+GP active. Fixed BE_GUARD bug (v6.99 dead g_heroLockedSide check) so lock-profit SL is now actually applied when same-side basket clears. Per-order trailing/breakeven now skips Hero. OnTradeTransaction emits 'v7.00 Hero CLOSED reason=...' audit log to trace any unintended Hero close. Dashboard adds GL pool counter (e.g. 36/20 GL:30 Hero:3 ARMED). Close conditions: (1) lock-profit SL hit, (2) opposite basket close, (3) accumulate/global close ONLY."
 #property strict
 
 #include <Trade/Trade.mqh>
