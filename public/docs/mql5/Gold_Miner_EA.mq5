@@ -2353,22 +2353,31 @@ void BuildHeroTicketCache()
             ulong _k = tkGL[b];  tkGL[b]   = tkGL[b-1];   tkGL[b-1]   = _k;
          }
 
-      // v7.00: Activation gate uses TOTAL active (INIT+GL+GP), not just GL.
-      //        This prevents Hero from forming too early when most orders are GL only.
-      int activateThreshold = (InpHero_MinOrdersToActivate > 0)
-                              ? InpHero_MinOrdersToActivate
-                              : (InpHero_OrderCount + 1);
-      if(nAll < activateThreshold) continue;
-      if(nGL <= 0) continue; // no GL to tag as Hero yet
-
+      // v7.01: Sticky activation — once Hero is tagged on this side, keep it tagged
+      //        regardless of falling thresholds. This prevents the bug where SELL basket
+      //        closing below threshold dropped Hero tag → trailing close took them too.
       int sideId = (int)side;
       int curPhase = (sideId == POSITION_TYPE_BUY) ? g_heroPhase_Buy : g_heroPhase_Sell;
 
-      // v7.00: ROLLING latest-N _GL — keep at least 1 GL in basket while alive (for Avg TP/Trail logic).
-      //        BE_GUARD: same-side basket already 0 so safe to take all available GL.
-      int take = MathMin(InpHero_OrderCount, nGL - 1);
-      if(curPhase == 3 /*BE_GUARD*/) {
+      int activateThreshold = (InpHero_MinOrdersToActivate > 0)
+                              ? InpHero_MinOrdersToActivate
+                              : (InpHero_OrderCount + 1);
+
+      // Activation gate ONLY applies for the FIRST tag (phase == NONE).
+      // If already ARMED or BE_GUARD, bypass — Hero must outlive basket shrinkage.
+      if(curPhase == 0 /*NONE*/ && nAll < activateThreshold) continue;
+      if(nGL <= 0) continue; // no GL alive at all → nothing to tag
+
+      // v7.01: Rolling latest-N _GL.
+      //        - PRE-ARMED (phase NONE→ARMED transition): keep ≥1 GL in basket so Avg TP/Trail still works.
+      //        - ARMED with non-Hero basket alive: same as above (nGL-1).
+      //        - ARMED with non-Hero basket already gone OR BE_GUARD: take all available GL up to N.
+      int nonHeroBasket = CountNonHeroMainOnSide(side);
+      int take;
+      if(curPhase == 3 /*BE_GUARD*/ || nonHeroBasket == 0) {
          take = MathMin(InpHero_OrderCount, nGL);
+      } else {
+         take = MathMin(InpHero_OrderCount, nGL - 1);
       }
       if(take <= 0) continue;
 
