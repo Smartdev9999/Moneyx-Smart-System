@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v7.01 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v7.02 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "7.01"
-#property description "Gold Miner EA v7.01 - Hero Sticky Tag Fix: Once a side's Hero is tagged (phase ARMED/BE_GUARD), the activation threshold gate is bypassed so Hero tickets stay tagged even when the basket shrinks below threshold. Fixes bug where SELL basket closing under 20-order threshold dropped Hero tag, allowing per-order trailing/SyncBrokerTPSL to close them. Hero close conditions remain: (1) lock-profit SL, (2) opposite-basket close, (3) accumulate/global close ONLY."
+#property version   "7.02"
+#property description "Gold Miner EA v7.02 - Hero Lock-Profit SL Fix + Tick-Based Opposite-Clear: Fixes inverted ValidateHeroLockProfitSL (sl-vs-bid/ask comparison was swapped) so BE_GUARD now actually places SL on broker. Adds tick-based detector that closes Hero when opposite-side basket goes flat via Broker TP/SL (not only via EA CloseAllSide hooks)."
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -1085,7 +1085,7 @@ int OnInit()
    g_heroBE_Applied_Sell = false;
    g_heroBE_LastLog = 0;
    
-     Print("Gold Miner EA v7.01 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+     Print("Gold Miner EA v7.02 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min",
@@ -1148,7 +1148,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v7.01 deinitialized");
+   Print("Gold Miner EA v7.02 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -2548,7 +2548,10 @@ double ComputeHeroLockProfitSL(ENUM_POSITION_TYPE posType, double openPrice)
    return 0;
 }
 
-// v6.96: Sanity check — SL must be on the profit side of current price AND past stops level.
+// v7.02: FIXED inverted comparisons.
+// SELL position closes at ASK -> SL must be ABOVE ask + stopsLevel (price rising = stop out).
+// BUY  position closes at BID -> SL must be BELOW bid - stopsLevel (price falling = stop out).
+// Lock-profit SL is set on the profit side of openPrice, but broker-side validity is vs current price.
 bool ValidateHeroLockProfitSL(ENUM_POSITION_TYPE posType, double sl)
 {
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
@@ -2557,12 +2560,34 @@ bool ValidateHeroLockProfitSL(ENUM_POSITION_TYPE posType, double sl)
    long   stopsLvl = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
    double minDist = (double)stopsLvl * pt;
    if(posType == POSITION_TYPE_SELL) {
-      // SELL closes at ASK; SL must be < ask - stops
-      return (sl > 0 && sl < (ask - minDist) && sl < ask);
+      // SELL Hero: lock-profit SL is BELOW openPrice (profit zone for SELL).
+      // For broker validity SL must sit ABOVE ask + stops (so price rising hits it).
+      bool ok = (sl > 0 && sl > (ask + minDist));
+      if(!ok) {
+         static datetime lastLog = 0;
+         if(TimeCurrent() - lastLog > 30) {
+            Print("v7.02 Hero SL VALIDATE FAIL SELL sl=", DoubleToString(sl,_Digits),
+                  " ask=", DoubleToString(ask,_Digits), " minDist=", DoubleToString(minDist,_Digits),
+                  " (need sl > ask+minDist)");
+            lastLog = TimeCurrent();
+         }
+      }
+      return ok;
    }
    if(posType == POSITION_TYPE_BUY) {
-      // BUY closes at BID; SL must be > bid + stops
-      return (sl > 0 && sl > (bid + minDist) && sl > bid);
+      // BUY Hero: lock-profit SL is ABOVE openPrice (profit zone for BUY).
+      // For broker validity SL must sit BELOW bid - stops (so price falling hits it).
+      bool ok = (sl > 0 && sl < (bid - minDist));
+      if(!ok) {
+         static datetime lastLogB = 0;
+         if(TimeCurrent() - lastLogB > 30) {
+            Print("v7.02 Hero SL VALIDATE FAIL BUY sl=", DoubleToString(sl,_Digits),
+                  " bid=", DoubleToString(bid,_Digits), " minDist=", DoubleToString(minDist,_Digits),
+                  " (need sl < bid-minDist)");
+            lastLogB = TimeCurrent();
+         }
+      }
+      return ok;
    }
    return false;
 }
@@ -2687,6 +2712,23 @@ void ManageHeroOppositeClose()
          ApplyHeroLockProfitSL(side);
       }
       ResetHeroStateIfFlat(side);
+   }
+
+   // v7.02: Tick-based opposite-clear detector.
+   // Catches the case where opposite-side basket is closed by Broker TP/SL on individual tickets
+   // (not via EA CloseAllSide/CloseGenSide hooks). Once opp non-Hero basket = 0, close Hero on this side.
+   for(int s2 = 0; s2 < 2; s2++) {
+      ENUM_POSITION_TYPE side = (s2 == 0) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
+      ENUM_POSITION_TYPE opp  = (s2 == 0) ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
+      int phase = (side == POSITION_TYPE_BUY) ? g_heroPhase_Buy : g_heroPhase_Sell;
+      if(phase != 3 /*BE_GUARD*/) continue;
+      if(CountHeroOnSide(side) <= 0) continue;
+      if(CountNonHeroMainOnSide(opp) > 0) continue; // opp basket still alive
+      // Safety: don't close if opp also has Hero (let it resolve naturally on its own SL)
+      if(CountHeroOnSide(opp) > 0) continue;
+      Print("v7.02 Hero CLOSE (opp basket flat tick): heroSide=", EnumToString(side),
+            " oppSide=", EnumToString(opp), " heroProfit=", DoubleToString(SumHeroProfitOnSide(side), 2));
+      CloseHeroOnSide(side, "OppositeBasketFlatTick");
    }
 }
 
@@ -4851,7 +4893,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v7.01 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v7.01 [ZZ]" : "Gold Miner EA v7.01 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v7.02 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v7.02 [ZZ]" : "Gold Miner EA v7.02 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");

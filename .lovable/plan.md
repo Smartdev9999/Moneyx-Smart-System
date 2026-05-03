@@ -1,105 +1,91 @@
-## แผนแก้ Hero Order v7.00 → v7.01
+# Hero Order v7.01 → v7.02
 
-ปัญหาที่เห็นจากภาพ/คำอธิบาย: ตอนนี้ SELL Hero ถูกกัน TP ออกถูกต้องแล้ว แต่เมื่อ SELL basket ปกติปิดด้วย Average TP / Average Trailing ตัว Hero SELL ถูกปิดตามไปด้วย ทั้งที่ควรเหลืออยู่ก่อน และจะปิดได้เฉพาะเมื่อ BUY ฝั่งตรงข้ามปิด หรือโดน SL กันทุนของตัวเองเท่านั้น
+## บั๊กที่พบจากภาพ + คำอธิบาย
 
-### สาเหตุหลักที่พบในโค้ด
+### บั๊กที่ 1 — BE_GUARD แสดงผล แต่ไม่มี SL กันทุนจริงบน ticket
+ภาพ MT5 ยืนยันชัด: Hero BUY #254 / #253 / #251 ต่างมี `S/L = 0.00` แม้ dashboard ขึ้น `BE_GUARD`
 
-1. `CloseAllSide(side)`, `CloseGenSide(gen, side)`, และ `CloseAllSideTF(tfIdx, side)` เรียก `CloseOppositeHeroOnBasketClose(side)` ตอนเริ่มปิด basket
-2. ฟังก์ชัน `CloseOppositeHeroOnBasketClose()` ใช้ตรรกะ `oppSide = opposite(closingSide)` เสมอ
-3. แต่ใน flow จริงของ Hero แบบใหม่ เมื่อ SELL basket ปกติปิด ควรให้ SELL Hero อยู่ต่อ แล้วเปลี่ยนเป็น `BE_GUARD` + ใส่ SL กันทุน ไม่ใช่ไปปิด Hero ทันที
-4. อีกจุดที่ต้องระวังคือ `BuildHeroTicketCache()` ยัง rebuild แบบ rolling ทุก tick; หลัง basket ฝั่งเดียวกันเหลือน้อย/ปิดแล้ว อาจทำให้ phase/ticket list ไม่คงที่พอสำหรับ Hero survivor
+**Root cause** (`ValidateHeroLockProfitSL` line 2552 ใน `Gold_Miner_EA.mq5`):
 
-### สิ่งที่จะปรับ
+```cpp
+// SELL → SL ที่ถูกต้องต้อง > ask + stops (เพราะ SELL ปิดที่ ask)
+//        แต่โค้ดเช็ค sl < ask - minDist  ← INVERTED
+if(posType == POSITION_TYPE_SELL)
+   return (sl > 0 && sl < (ask - minDist) && sl < ask);
 
-#### 1. เปลี่ยนกฎการปิด Hero ให้ถูกทิศทาง
-
-Hero ฝั่งเดียวกับ basket ที่ปิด จะไม่ถูกปิดทันที
-
-ตัวอย่างตามที่คุณอธิบาย:
-- SELL มี Hero 3 ตัว
-- ราคาไหลลงจน SELL order ปกติปิดด้วย Average TP / Average Trailing
-- SELL Hero ต้องยังอยู่
-- EA ค่อยเปลี่ยน SELL Hero เป็น `BE_GUARD` และใส่ SL กันทุน
-- SELL Hero จะปิดก็ต่อเมื่อ BUY basket ปกติปิด หรือ SL กันทุนของ SELL Hero ถูกชน
-
-#### 2. ทำให้การปิด “พร้อมฝั่งตรงข้าม” ทำงานหลัง Hero อยู่ใน BE_GUARD เท่านั้น
-
-จะปรับ hook ก่อนปิด basket ดังนี้:
-- เมื่อ `CloseAllSide(BUY)` ทำงาน → ถ้ามี SELL Hero ที่อยู่ `BE_GUARD` ให้ปิด SELL Hero พร้อม BUY basket
-- เมื่อ `CloseAllSide(SELL)` ทำงาน → ถ้ามี BUY Hero ที่อยู่ `BE_GUARD` ให้ปิด BUY Hero พร้อม SELL basket
-- แต่ถ้าเป็น Hero ฝั่งเดียวกับ basket ที่กำลังปิด → skip เสมอ
-
-#### 3. เพิ่ม guard กันปิด Hero ใน close path ทั้งหมดที่เป็น basket/trailing/recovery
-
-ตรวจและเพิ่ม `IsHeroTicket(ticket)` skip ในจุดที่อาจปิด position โดยตรง เช่น:
-- `CloseAllSide`
-- `CloseGenSide`
-- `CloseAllSideTF`
-- Recovery owner average TP loop
-- Opposite survivor cleanup
-- Squeeze strip/trailing clear ที่แก้ SL/TP ของ order ปกติ
-
-ยกเว้น path ที่ตั้งใจให้ปิดทั้งหมดจริง ๆ:
-- Accumulate/global close (`CloseAllPositions`)
-- ปุ่ม Close All / manual close all
-- Balance guard / hard global reset ถ้าเป็นการปิดทั้งระบบ
-
-#### 4. เพิ่มสถานะ Hero Survivor ให้ชัดใน Dashboard
-
-ปรับข้อความ Dashboard ให้บอกว่า Hero อยู่ phase ไหน และรออะไร:
-
-```text
-Hero SELL: 21/20 GL:18 Hero:3 ARMED
-Hero SELL: 3 survivor BE_GUARD SL@BE
-Hero SELL wait: BUY basket close / Lock-SL
+// BUY → SL ที่ถูกต้องต้อง < bid - stops (เพราะ BUY ปิดที่ bid)
+//       แต่โค้ดเช็ค sl > bid + minDist  ← INVERTED
+if(posType == POSITION_TYPE_BUY)
+   return (sl > 0 && sl > (bid + minDist) && sl > bid);
 ```
 
-เพื่อให้ดูได้ทันทีว่า:
-- Hero ถูก tag อยู่ไหม
-- เป็น GL-only จริงไหม
-- อยู่ ARMED หรือ BE_GUARD
-- กำลังรอฝั่งตรงข้ามปิด หรือรอ SL กันทุน
+ผลคือ `ValidateHeroLockProfitSL` คืน `false` เกือบทุกครั้ง → `skipped++` → `PositionModify` ไม่ถูกเรียก → SL=0 ตลอด ทั้งที่ phase ขึ้น BE_GUARD แล้ว
 
-#### 5. เพิ่ม log audit ให้จับเหตุปิด Hero ได้ชัดกว่าเดิม
+### บั๊กที่ 2 — ฝั่งตรงข้ามปิดด้วย Broker TP แล้ว Hero ไม่ปิดตาม
+`CloseOppositeHeroOnBasketClose` ถูกเรียกจาก `CloseAllSide` / `CloseGenSide` / `CloseAllSideTF` เท่านั้น แต่เมื่อ basket ฝั่งตรงข้ามปิดด้วย **Broker TP รายตัว** (ไม่ผ่านโค้ด EA) hook นี้ไม่ถูกยิง → Hero ติด BE_GUARD ค้างจนกว่าราคาจะมาแตะ SL กันทุน (ซึ่งบั๊ก 1 ทำให้ SL ไม่มีอยู่จริง วนกัน)
 
-เพิ่ม log prefix v7.01 เช่น:
+## สิ่งที่จะแก้ใน v7.02
 
-```text
-v7.01 Hero SAME-SIDE BASKET CLEARED: side=SELL -> BE_GUARD
-v7.01 Hero HOLD: side=SELL reason=SameSideBasketClosed waitOpposite=BUY
-v7.01 Hero CLOSE: heroSide=SELL triggerBasket=BUY reason=OppositeBasketClose
-v7.01 Hero CLOSED ticket=#... reason=LockProfitSL_HIT|OppositeBasketClose|GlobalClose|UNKNOWN_PATH
+### 1. Fix `ValidateHeroLockProfitSL` — สลับเงื่อนไขให้ถูก
+```cpp
+// SELL Hero: lock-profit SL อยู่ใต้ openPrice แต่ต้อง > ask + stops
+if(posType == POSITION_TYPE_SELL)
+   return (sl > 0 && sl > (ask + minDist));
+
+// BUY Hero: lock-profit SL อยู่เหนือ openPrice แต่ต้อง < bid - stops
+if(posType == POSITION_TYPE_BUY)
+   return (sl > 0 && sl < (bid - minDist));
 ```
 
-ถ้ายังมี Hero ปิดผิดทาง จะเห็น `UNKNOWN_PATH` หรือ trigger side ผิดจาก Journal ได้ทันที
+### 2. เพิ่ม tick-based opposite-clear detector
+ใน `ManageHeroOppositeClose()` เพิ่มลูป per side หลัง BE_GUARD retry:
 
-### Version bump
+```cpp
+// v7.02: ตรวจทุก tick ว่าฝั่งตรงข้าม non-Hero basket = 0 แล้วหรือยัง
+// ครอบคลุมเคสที่ basket ฝั่งตรงข้ามถูกปิดด้วย Broker TP/SL/SLTP รายตัว
+for(int s = 0; s < 2; s++) {
+   ENUM_POSITION_TYPE side = (s == 0) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
+   ENUM_POSITION_TYPE opp  = (s == 0) ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
+   int phase = (side == POSITION_TYPE_BUY) ? g_heroPhase_Buy : g_heroPhase_Sell;
+   if(phase != 3 /*BE_GUARD*/) continue;
+   if(CountHeroOnSide(side) <= 0) continue;
+   if(CountNonHeroMainOnSide(opp) > 0) continue;          // opposite basket ยังอยู่
+   if(CountHeroOnSide(opp) > 0) continue;                  // ปลอดภัย: ห้ามปิดถ้า opp ยังมี Hero
+   Print("v7.02 Hero CLOSE (opp basket flat detected): heroSide=", EnumToString(side));
+   CloseHeroOnSide(side, "OppositeBasketFlatTick");
+}
+```
 
-ตามกฎโปรเจกต์ จะเพิ่ม minor version:
-- `#property version` จาก `7.00` เป็น `7.01`
-- `#property description`
+### 3. ลำดับใน `ManageHeroOppositeClose` ป้องกัน Strip ทับ SL ใน tick เดียวกับ BE_GUARD transition
+ย้าย `StripBrokerTPSLFromHeroTickets()` ลงไปท้ายลูป หรือเช็คว่า side นั้นกำลัง transition อยู่ใน tick นี้แล้ว skip Strip ของ side นั้น (ป้องกัน race condition ระดับ tick — แม้ฟังก์ชัน Strip จะ skip phase==3 อยู่แล้ว)
+
+### 4. Audit log ชัดขึ้น
+- log ทุกครั้งที่ `ValidateHeroLockProfitSL` skip พร้อมเหตุผล (SL value, bid/ask, stopsLevel) เพื่อ debug ในอนาคต
+- log `v7.02 Hero CLOSE (opp basket flat detected)` แยกจาก `OppositeBasketClose` เดิม (ที่ผ่าน CloseAllSide hook)
+
+### 5. Version bump 7.01 → 7.02
+- `#property version "7.02"`
+- `#property description` อธิบายว่า fix lock-profit SL validation + tick-based opp-clear close
 - header comment block
-- dashboard version/header text
-- log prefix ที่เกี่ยวข้องกับ Hero
+- dashboard `headerVersion`
+- log prefix
 
-### สิ่งที่ไม่เปลี่ยนแปลง
+## สิ่งที่ไม่เปลี่ยนแปลง
 
-ยืนยันว่าจะไม่แก้ logic เหล่านี้:
-- ไม่แก้เงื่อนไขเปิดออเดอร์ `OrderSend`, `trade.Buy`, `trade.Sell`
-- ไม่แก้ entry signal: SMA/EMA/ZigZag/BB/Squeeze
-- ไม่แก้ Grid Loss / Grid Profit lot calculation, distance, candle confirmation
-- ไม่แก้สูตร Average TP / Average Trailing Stop เดิม ยกเว้นเพิ่ม guard ไม่ให้ Hero ถูกนำไปปิด/แก้ TPSL ผิดทาง
-- ไม่แก้ Hedge / Triple-Gate / Matching Close core logic
-- ไม่แก้ License / News / Time / Sync module
-- ไม่แก้ Accumulate/global close เพราะเป็นเงื่อนไขปิดทั้งหมดที่อนุญาตไว้
+- ไม่แตะ `OrderSend` / `trade.Buy` / `trade.Sell` / `trade.PositionClose` execution
+- ไม่แตะ entry: SMA / EMA / ZigZag / BB / Squeeze / Z-Score
+- ไม่แตะ Grid Loss / Grid Profit lot / distance / candle confirm
+- ไม่แตะ Hedge / Triple-Gate / Matching Close / Recovery / Auto Recovery
+- ไม่แตะสูตร Average TP / Average Trailing
+- ไม่แตะ DD% TP / Daily Target / Balance Guard
+- ไม่แตะ License / News / Time / Sync
+- ไม่แตะ `BuildHeroTicketCache` (Sticky Tag v7.01 ยังเดิม)
+- ไม่แตะ `CloseOppositeHeroOnBasketClose` hook ใน `CloseAllSide` / `CloseGenSide` / `CloseAllSideTF` (แค่เพิ่ม path ขนานทาง tick)
+- ไม่แตะ `ComputeHeroLockProfitSL` formula (`open ± InpHero_BE_OffsetPoints`)
+- ไม่แตะ `IsHeroTicket` exclusion ในทุก trailing/SyncBrokerTPSL
 
-### ผลลัพธ์ที่คาดหวังหลังแก้
+## ผลลัพธ์ที่คาดหวัง
 
-กรณี SELL Hero:
-1. SELL active ถึง threshold → latest `_GL` 3 ตัวเป็น Hero และ TP/SL ถูกถอด
-2. SELL basket ปกติปิดด้วย Avg TP หรือ Avg Trail → SELL Hero ไม่ปิด
-3. EA ใส่ SL กันทุนให้ SELL Hero เมื่อเข้าสู่ `BE_GUARD`
-4. SELL Hero ปิดได้แค่:
-   - BUY basket ปกติปิด แล้ว SELL Hero ปิดพร้อมกัน
-   - หรือ SELL Hero โดน SL กันทุน
-   - หรือ Accumulate/global close ทั้งระบบ
+1. หลังเข้า BE_GUARD → Hero ทุกตัวจะมี `S/L` ปรากฏบนตั๋วจริงในตาราง MT5 (lock-profit ใต้/เหนือ open)
+2. เมื่อ basket ฝั่งตรงข้ามถูกปิดด้วย Broker TP รายตัว → ภายใน 1 tick ถัดมา Hero ฝั่งนี้จะปิดอัตโนมัติ พร้อม log `OppositeBasketFlatTick`
+3. ถ้าราคาย้อนกลับมาชน lock-profit SL ก่อน → Broker จะปิดให้ พร้อม log `v7.00 Hero CLOSED reason=LockProfitSL_HIT`
