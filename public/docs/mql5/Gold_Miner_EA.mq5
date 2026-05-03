@@ -9417,6 +9417,7 @@ int CountFreeOlderGenOnSide(ENUM_POSITION_TYPE side)
       string cmt = PositionGetString(POSITION_COMMENT);
       if(IsHedgeComment(cmt)) continue;
       if(IsTicketBound(tk)) continue;          // bound = hedge is handling it
+      if(IsHeroTicket(tk)) continue;           // v7.05: Hero is locked-profit, not a "free" older-gen order
       int og = ExtractGeneration(cmt);
       if(og < 1) continue;
       if(og >= g_cycleGeneration) continue;    // only OLDER gens
