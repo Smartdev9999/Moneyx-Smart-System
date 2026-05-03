@@ -2618,17 +2618,47 @@ void CloseHeroOnSide(ENUM_POSITION_TYPE side, string reason)
 
    // v7.03: Hard-reset phase + flag and stamp grace timer so next tick
    //        won't re-tag newly entering INIT/GL as Hero via Sticky logic.
+   // v7.08: Do NOT reset g_sideGen_<side> / g_heroOwnedGen_<side> here — surviving
+   //        GM(N+1) basket on this side may still be alive and must keep being
+   //        managed by grid/TP/Avg-trail. Side-gen revert is deferred to
+   //        MaintainSideGenAfterHeroClose() which fires only when both
+   //        Hero count == 0 AND non-Hero main on this side == 0.
    if(side == POSITION_TYPE_BUY) {
       g_heroPhase_Buy = 0; g_heroBE_Applied_Buy = false;
       g_heroJustClosed_Buy = TimeCurrent();
-      g_sideGen_Buy = 0; g_heroOwnedGen_Buy = 0;
    } else {
       g_heroPhase_Sell = 0; g_heroBE_Applied_Sell = false;
       g_heroJustClosed_Sell = TimeCurrent();
-      g_sideGen_Sell = 0; g_heroOwnedGen_Sell = 0;
    }
-   Print("v7.03 Hero POST-CLOSE reset: side=", EnumToString(side),
-         " gracePeriod=", InpHero_PostCloseGraceSec, "s sideGen reset");
+   Print("v7.08 Hero POST-CLOSE reset: side=", EnumToString(side),
+         " gracePeriod=", InpHero_PostCloseGraceSec, "s (sideGen kept until basket flat)");
+}
+
+// v7.08: Deferred side-gen revert. Once Hero is gone AND surviving GM(N+1)
+//        basket on that side has fully closed, drop the per-side gen override
+//        so the next INIT on that side opens as GM1 and Hero can re-arm.
+void MaintainSideGenAfterHeroClose()
+{
+   if(g_sideGen_Buy > 0
+      && CountHeroOnSide(POSITION_TYPE_BUY) == 0
+      && CountNonHeroMainOnSide(POSITION_TYPE_BUY) == 0)
+   {
+      Print("v7.08 SideGen REVERT BUY: GM", g_sideGen_Buy,
+            " -> GM", (g_cycleGeneration<1?1:g_cycleGeneration),
+            " (Hero gone, GM(N+1) basket flat) - Hero subsystem re-armable");
+      g_sideGen_Buy = 0;
+      g_heroOwnedGen_Buy = 0;
+   }
+   if(g_sideGen_Sell > 0
+      && CountHeroOnSide(POSITION_TYPE_SELL) == 0
+      && CountNonHeroMainOnSide(POSITION_TYPE_SELL) == 0)
+   {
+      Print("v7.08 SideGen REVERT SELL: GM", g_sideGen_Sell,
+            " -> GM", (g_cycleGeneration<1?1:g_cycleGeneration),
+            " (Hero gone, GM(N+1) basket flat) - Hero subsystem re-armable");
+      g_sideGen_Sell = 0;
+      g_heroOwnedGen_Sell = 0;
+   }
 }
 
 // v6.96: Detect when same-side basket has fully cleared while Heroes still alive
