@@ -2354,18 +2354,15 @@ void BuildHeroTicketCache()
    int sideGLPool[2]      = {0, 0};
    int sideHeroTagged[2]  = {0, 0};
 
-   // v7.06: Single-Side Hero Lock — owner is decided ONLY when a side reaches
-   //         BE_GUARD (phase==3). ARMED (phase==2) does NOT lock — both sides
+   // v7.07: Single-Side Hero Lock — owner is decided ONLY when a side reaches
+   //         BE_GUARD (phase==3). ARMED (phase==2) is just CANDIDATE. Both sides
    //         may stay ARMED in parallel until one's basket actually clears
    //         (TP / Avg-trailing). The first side to flatten its non-Hero basket
    //         wins ownership; the opposite side then loses first-time activation.
    int activeOwner = -1;
    if(InpHero_SingleSideLock) {
-      bool buyOwns  = (g_heroPhase_Buy  == 3); // BE_GUARD only
-      bool sellOwns = (g_heroPhase_Sell == 3);
-      if(buyOwns && !sellOwns)      activeOwner = (int)POSITION_TYPE_BUY;
-      else if(sellOwns && !buyOwns) activeOwner = (int)POSITION_TYPE_SELL;
-      // both BE_GUARD simultaneously (rare): no lock — let both keep their Heroes
+      activeOwner = GetHeroOwnerSide(); // BUY / SELL / -1 (no exclusive owner yet)
+      // both BE_GUARD simultaneously (rare): GetHeroOwnerSide() returns -1 — no lock
    }
 
    for(int s = 0; s < 2; s++)
