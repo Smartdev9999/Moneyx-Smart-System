@@ -1422,6 +1422,7 @@ void OnTick()
    // v6.96: Hero Order — rebuild ticket cache + orchestrate phase transitions (strip TP/SL,
    //                     apply lock-profit BE-SL on basket-clear, reset state when flat)
    BuildHeroTicketCache();
+   MaintainSideGenAfterHeroClose();   // v7.08: revert sideGen when Hero gone + basket flat
    ManageHeroOppositeClose();
 
    // === HIDE ATR CHART IN BACKTEST (v2.9 / v3.0 simplified) ===
