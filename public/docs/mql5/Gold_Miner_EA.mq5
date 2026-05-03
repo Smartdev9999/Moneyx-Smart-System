@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v7.02 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v7.03 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "7.02"
-#property description "Gold Miner EA v7.02 - Hero Lock-Profit SL Fix + Tick-Based Opposite-Clear: Fixes inverted ValidateHeroLockProfitSL (sl-vs-bid/ask comparison was swapped) so BE_GUARD now actually places SL on broker. Adds tick-based detector that closes Hero when opposite-side basket goes flat via Broker TP/SL (not only via EA CloseAllSide hooks)."
+#property version   "7.03"
+#property description "Gold Miner EA v7.03 - Hero Post-Close Grace + Per-Side Generation Isolation: Adds InpHero_PostCloseGraceSec (default 5s) so freshly-opened INIT/GL after a Hero close are NOT re-tagged as Hero (fixes phantom locked orders). Adds optional InpHero_PerSideGenIsolation (default OFF) that bumps the per-side comment prefix to GM(N+1) for the side whose Hero survived, while the opposite side keeps trading on GM(N)."
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -1105,7 +1105,7 @@ int OnInit()
    g_heroBE_Applied_Sell = false;
    g_heroBE_LastLog = 0;
    
-     Print("Gold Miner EA v7.02 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+     Print("Gold Miner EA v7.03 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min",
@@ -1168,7 +1168,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v7.02 deinitialized");
+   Print("Gold Miner EA v7.03 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -4957,7 +4957,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v7.02 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v7.02 [ZZ]" : "Gold Miner EA v7.02 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v7.03 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v7.03 [ZZ]" : "Gold Miner EA v7.03 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
