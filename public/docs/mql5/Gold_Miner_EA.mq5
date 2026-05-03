@@ -2601,16 +2601,19 @@ void StripBrokerTPSLFromHeroTickets()
    }
 }
 
-// v6.96: When opposite-side basket is about to close, force-close all Heroes
-// on the locked Hero side (primary closure path).
+// v6.99: Per-side independent — opposite side that has Heroes in BE_GUARD gets force-closed.
 void CloseOppositeHeroOnBasketClose(ENUM_POSITION_TYPE closingSide)
 {
    if(!InpHero_Enabled) return;
    ENUM_POSITION_TYPE oppSide = (closingSide == POSITION_TYPE_BUY) ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
-   if((int)oppSide != g_heroLockedSide) return;
    int phase = (oppSide == POSITION_TYPE_BUY) ? g_heroPhase_Buy : g_heroPhase_Sell;
    if(phase != 3 /*BE_GUARD*/) return; // only after same-side basket cleared
    if(CountHeroOnSide(oppSide) <= 0) return;
+   double prof = SumHeroProfitOnSide(oppSide);
+   Print("v6.99 Hero CLOSE (opposite-basket): closingSide=", EnumToString(closingSide),
+         " heroSide=", EnumToString(oppSide), " heroProfit=", DoubleToString(prof, 2));
+   CloseHeroOnSide(oppSide, "OppositeBasketClose");
+}
    double prof = SumHeroProfitOnSide(oppSide);
    Print("v6.96 Hero CLOSE (opposite-basket): closingSide=", EnumToString(closingSide),
          " heroSide=", EnumToString(oppSide), " heroProfit=", DoubleToString(prof, 2));
