@@ -9636,6 +9636,8 @@ void TryResetCycleStateIfFlat(string reason)
       g_hedgeSetCount = 0;
       ClearPrevHedgedTickets();
       ClearAllReleasedGenSideLocks();   // v6.74
+      g_sideGen_Buy = 0; g_sideGen_Sell = 0;             // v7.04: reset per-side gen overrides
+      g_heroOwnedGen_Buy = 0; g_heroOwnedGen_Sell = 0;   // v7.04
       g_lastHedgeBuyTime = 0;   // v6.39: reset side pause
       g_lastHedgeSellTime = 0;  // v6.39: reset side pause
       UpdateDynamicBalanceGuardTarget();  // v6.31: update target immediately when flat
