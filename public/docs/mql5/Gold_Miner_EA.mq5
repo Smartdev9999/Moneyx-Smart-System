@@ -9736,6 +9736,8 @@ void CheckBalanceGuard()
        SaveCycleGeneration();  // v6.53: persist reset
        ClearPrevHedgedTickets();
        ClearAllReleasedGenSideLocks();   // v6.74
+       g_sideGen_Buy = 0; g_sideGen_Sell = 0;             // v7.04
+       g_heroOwnedGen_Buy = 0; g_heroOwnedGen_Sell = 0;   // v7.04
        g_lastHedgeBuyTime = 0;   // v6.39: reset side pause
        g_lastHedgeSellTime = 0;  // v6.39: reset side pause
        Print("v6.31 Balance Guard: Full reset complete — ready for fresh cycle");
