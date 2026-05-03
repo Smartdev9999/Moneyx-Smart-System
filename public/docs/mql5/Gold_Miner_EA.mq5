@@ -6,7 +6,7 @@
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
 #property version   "6.99"
-#property description "Gold Miner EA v6.98 - Hero Rolling Latest-N Protection: Hero cache rebuilds every tick (no throttle), sorts by POSITION_TIME_MSC + ticket so the newest N active orders on the locked side are ALWAYS the Hero set (eg active 36, HeroCount 3 -> latest 3 tickets). EnsureHeroProtection() force-strips broker TP/SL on Hero before SyncBrokerTPSL runs and again after, so basket Average TP can never close Hero tickets. Hero skip extended to CloseAllSideTF. Single-side exclusive lock + lock-profit BE-SL + opposite-basket close hook preserved from v6.96/97."
+#property description "Gold Miner EA v6.99 - Hero Dual-Side Independent: Single-side lock removed. BUY and SELL each protect their OWN newest N active orders the moment side TOTAL >= InpHero_MinOrdersToActivate (eg BUY 36 -> latest 3 BUY Hero; SELL 22 -> latest 3 SELL Hero, simultaneously). Rolling latest-N (POSITION_TIME_MSC + ticket); when order #43 opens on a side, oldest Hero on that side gets restored to normal TP/SL. Hero Monitor section added to dashboard (per-side active/threshold/phase + protected ticket IDs). EnsureHeroProtection wraps SyncBrokerTPSL pre+post so basket Avg TP can't close Hero. Lock-profit BE-SL + opposite-basket close hook preserved."
 #property strict
 
 #include <Trade/Trade.mqh>
