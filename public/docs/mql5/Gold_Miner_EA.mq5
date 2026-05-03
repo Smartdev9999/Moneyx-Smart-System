@@ -7216,6 +7216,37 @@ void OnTradeTransaction(const MqlTradeTransaction& trans,
                         const MqlTradeRequest& request,
                         const MqlTradeResult& result)
 {
+   // v7.00: Hero close audit — fires for ALL deals (incl. tester) BEFORE early returns
+   //        so we can trace which path closed a Hero ticket.
+   if(InpHero_Enabled && trans.type == TRADE_TRANSACTION_DEAL_ADD && trans.deal != 0)
+   {
+      if(HistoryDealSelect(trans.deal))
+      {
+         long  hMagic = HistoryDealGetInteger(trans.deal, DEAL_MAGIC);
+         ENUM_DEAL_ENTRY hEntry = (ENUM_DEAL_ENTRY)HistoryDealGetInteger(trans.deal, DEAL_ENTRY);
+         ulong hPosId = (ulong)HistoryDealGetInteger(trans.deal, DEAL_POSITION_ID);
+         string hReason = "";
+         long hReasonInt = HistoryDealGetInteger(trans.deal, DEAL_REASON);
+         if(hMagic == MagicNumber && (hEntry == DEAL_ENTRY_OUT || hEntry == DEAL_ENTRY_INOUT))
+         {
+            // Was this a Hero ticket?
+            for(int hi = 0; hi < g_heroTicketCount; hi++) {
+               if(g_heroTickets[hi] == hPosId) {
+                  string rname = (hReasonInt == DEAL_REASON_TP) ? "BrokerTP_HIT"
+                              : (hReasonInt == DEAL_REASON_SL) ? "LockProfitSL_HIT"
+                              : (hReasonInt == DEAL_REASON_EXPERT) ? "EA_PositionClose"
+                              : (hReasonInt == DEAL_REASON_CLIENT) ? "Manual"
+                              : "Other";
+                  double hProfit = HistoryDealGetDouble(trans.deal, DEAL_PROFIT);
+                  Print("v7.00 Hero CLOSED ticket=#", hPosId, " reason=", rname,
+                        " profit=", DoubleToString(hProfit, 2));
+                  break;
+               }
+            }
+         }
+      }
+   }
+
    if(!g_isLicenseValid) return;
    if(MQLInfoInteger(MQL_TESTER) || MQLInfoInteger(MQL_OPTIMIZATION)) return;
    
