@@ -744,6 +744,8 @@ int      g_heroDash_BuyActive     = 0;
 int      g_heroDash_SellActive    = 0;
 int      g_heroDash_BuyTagged     = 0;
 int      g_heroDash_SellTagged    = 0;
+int      g_heroDash_BuyGLPool     = 0;   // v7.00: pool of GL eligible to be Hero
+int      g_heroDash_SellGLPool    = 0;
 ulong    g_heroDash_BuyTickets[10];
 int      g_heroDash_BuyTicketN    = 0;
 ulong    g_heroDash_SellTickets[10];
