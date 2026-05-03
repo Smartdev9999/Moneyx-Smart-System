@@ -732,12 +732,22 @@ int      g_heroOppCloseSide       = -1;     // legacy (kept; unused in v6.96 for
 datetime g_heroOppCloseTime       = 0;
 datetime g_heroLastBlockLog       = 0;
 // v6.96: Opposite-helper + lock-profit BE-SL
-int      g_heroLockedSide         = -1;     // -1 / POSITION_TYPE_BUY / POSITION_TYPE_SELL — only this side may form Hero
+// v6.99: g_heroLockedSide DEPRECATED — Hero now activates per-side independently
+int      g_heroLockedSide         = -1;     // [v6.99 unused] kept for compat; both BUY+SELL eligible simultaneously
 int      g_heroPhase_Buy          = 0;      // 0=NONE 1=PRE_STAGE 2=ARMED_WAITING 3=BE_GUARD
 int      g_heroPhase_Sell         = 0;
 bool     g_heroBE_Applied_Buy     = false;  // lock-profit SL has been applied to all current Buy Heroes
 bool     g_heroBE_Applied_Sell    = false;
 datetime g_heroBE_LastLog         = 0;
+// v6.99: Dashboard monitor — per-side counters refreshed each BuildHeroTicketCache()
+int      g_heroDash_BuyActive     = 0;
+int      g_heroDash_SellActive    = 0;
+int      g_heroDash_BuyTagged     = 0;
+int      g_heroDash_SellTagged    = 0;
+ulong    g_heroDash_BuyTickets[10];
+int      g_heroDash_BuyTicketN    = 0;
+ulong    g_heroDash_SellTickets[10];
+int      g_heroDash_SellTicketN   = 0;
 // === v6.42: Dashboard History Cache ===
 datetime g_lastDashHistoryCalcTime = 0;
 int      g_dashCacheIntervalSec    = 5;  // recalculate every 5 seconds
