@@ -813,6 +813,16 @@ string GetCommentPrefix()
    return "GM" + IntegerToString(g);
 }
 
+// v7.03: Per-side override — when Hero survives, the side that "owns" the Hero
+//         keeps trading new orders under a higher GMx so they don't co-mingle
+//         with the surviving Hero (which stays on the original gen).
+string GetCommentPrefixForSide(ENUM_POSITION_TYPE side)
+{
+   int sg = (side == POSITION_TYPE_BUY) ? g_sideGen_Buy : g_sideGen_Sell;
+   int g  = (sg > 0) ? sg : ((g_cycleGeneration < 1) ? 1 : g_cycleGeneration);
+   return "GM" + IntegerToString(g);
+}
+
 // === v6.53: Persist g_cycleGeneration via GlobalVariable ===
 string GV_CycleGenKey() { return "GM_CycleGen_" + _Symbol + "_" + IntegerToString(MagicNumber); }
 
