@@ -2379,6 +2379,15 @@ void BuildHeroTicketCache()
       int sideId = (int)side;
       int curPhase = (sideId == POSITION_TYPE_BUY) ? g_heroPhase_Buy : g_heroPhase_Sell;
 
+      // v7.03: Post-close grace — after CloseHeroOnSide stamped a timer, ignore tagging
+      //         this side entirely so brand-new INIT/GL aren't mistaken for Heroes while
+      //         the broker is still settling the prior closures.
+      datetime jc = (sideId == POSITION_TYPE_BUY) ? g_heroJustClosed_Buy : g_heroJustClosed_Sell;
+      if(jc > 0 && (TimeCurrent() - jc) < InpHero_PostCloseGraceSec) {
+         if(sideId == POSITION_TYPE_BUY) g_heroPhase_Buy = 0; else g_heroPhase_Sell = 0;
+         continue;
+      }
+
       int activateThreshold = (InpHero_MinOrdersToActivate > 0)
                               ? InpHero_MinOrdersToActivate
                               : (InpHero_OrderCount + 1);
