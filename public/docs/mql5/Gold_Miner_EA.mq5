@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v6.98 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v6.99 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "6.98"
-#property description "Gold Miner EA v6.98 - Hero Rolling Latest-N Protection: Hero cache rebuilds every tick (no throttle), sorts by POSITION_TIME_MSC + ticket so the newest N active orders on the locked side are ALWAYS the Hero set (eg active 36, HeroCount 3 -> latest 3 tickets). EnsureHeroProtection() force-strips broker TP/SL on Hero before SyncBrokerTPSL runs and again after, so basket Average TP can never close Hero tickets. Hero skip extended to CloseAllSideTF. Single-side exclusive lock + lock-profit BE-SL + opposite-basket close hook preserved from v6.96/97."
+#property version   "6.99"
+#property description "Gold Miner EA v6.99 - Hero Dual-Side Independent: Single-side lock removed. BUY and SELL each protect their OWN newest N active orders the moment side TOTAL >= InpHero_MinOrdersToActivate (eg BUY 36 -> latest 3 BUY Hero; SELL 22 -> latest 3 SELL Hero, simultaneously). Rolling latest-N (POSITION_TIME_MSC + ticket); when order #43 opens on a side, oldest Hero on that side gets restored to normal TP/SL. Hero Monitor section added to dashboard (per-side active/threshold/phase + protected ticket IDs). EnsureHeroProtection wraps SyncBrokerTPSL pre+post so basket Avg TP can't close Hero. Lock-profit BE-SL + opposite-basket close hook preserved."
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -732,12 +732,22 @@ int      g_heroOppCloseSide       = -1;     // legacy (kept; unused in v6.96 for
 datetime g_heroOppCloseTime       = 0;
 datetime g_heroLastBlockLog       = 0;
 // v6.96: Opposite-helper + lock-profit BE-SL
-int      g_heroLockedSide         = -1;     // -1 / POSITION_TYPE_BUY / POSITION_TYPE_SELL — only this side may form Hero
+// v6.99: g_heroLockedSide DEPRECATED — Hero now activates per-side independently
+int      g_heroLockedSide         = -1;     // [v6.99 unused] kept for compat; both BUY+SELL eligible simultaneously
 int      g_heroPhase_Buy          = 0;      // 0=NONE 1=PRE_STAGE 2=ARMED_WAITING 3=BE_GUARD
 int      g_heroPhase_Sell         = 0;
 bool     g_heroBE_Applied_Buy     = false;  // lock-profit SL has been applied to all current Buy Heroes
 bool     g_heroBE_Applied_Sell    = false;
 datetime g_heroBE_LastLog         = 0;
+// v6.99: Dashboard monitor — per-side counters refreshed each BuildHeroTicketCache()
+int      g_heroDash_BuyActive     = 0;
+int      g_heroDash_SellActive    = 0;
+int      g_heroDash_BuyTagged     = 0;
+int      g_heroDash_SellTagged    = 0;
+ulong    g_heroDash_BuyTickets[10];
+int      g_heroDash_BuyTicketN    = 0;
+ulong    g_heroDash_SellTickets[10];
+int      g_heroDash_SellTicketN   = 0;
 // === v6.42: Dashboard History Cache ===
 datetime g_lastDashHistoryCalcTime = 0;
 int      g_dashCacheIntervalSec    = 5;  // recalculate every 5 seconds
@@ -1073,7 +1083,7 @@ int OnInit()
    g_heroBE_Applied_Sell = false;
    g_heroBE_LastLog = 0;
    
-     Print("Gold Miner EA v6.98 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+     Print("Gold Miner EA v6.99 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min",
@@ -1136,7 +1146,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v6.98 deinitialized");
+   Print("Gold Miner EA v6.99 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -2338,16 +2348,11 @@ void BuildHeroTicketCache()
                               : (InpHero_OrderCount + 1);
       if(n < activateThreshold) continue;
 
-      // Single-side exclusive lock (preserved from v6.96 — confirmed correct by user)
+      // v6.99: PER-SIDE INDEPENDENT activation. No single-side lock.
+      // Each side that meets threshold protects its OWN newest N tickets.
       int sideId = (int)side;
-      if(g_heroLockedSide == -1) {
-         g_heroLockedSide = sideId;
-         Print("v6.98 Hero LOCK acquired: side=", EnumToString(side),
-               " activeTotal=", n, " threshold=", activateThreshold);
-      }
-      if(g_heroLockedSide != sideId) continue;
 
-      // v6.98: ROLLING latest-N — protect newest N tickets every tick.
+      // v6.99: ROLLING latest-N — protect newest N tickets every tick.
       //        Basket alive: keep >=1 non-Hero. BE_GUARD: basket already 0 so take all available.
       int curPhase = (sideId == POSITION_TYPE_BUY) ? g_heroPhase_Buy : g_heroPhase_Sell;
       int take = MathMin(InpHero_OrderCount, n - 1);
@@ -2355,6 +2360,18 @@ void BuildHeroTicketCache()
          take = MathMin(InpHero_OrderCount, n);
       }
       if(take <= 0) continue;
+
+      // v6.99: write per-side dashboard ticket list (max 10)
+      if(sideId == POSITION_TYPE_BUY) {
+         g_heroDash_BuyTicketN = 0;
+         for(int k = 0; k < take && g_heroDash_BuyTicketN < 10; k++)
+            g_heroDash_BuyTickets[g_heroDash_BuyTicketN++] = tk[k];
+      } else {
+         g_heroDash_SellTicketN = 0;
+         for(int k = 0; k < take && g_heroDash_SellTicketN < 10; k++)
+            g_heroDash_SellTickets[g_heroDash_SellTicketN++] = tk[k];
+      }
+
       for(int k = 0; k < take && g_heroTicketCount < 200; k++)
          g_heroTickets[g_heroTicketCount++] = tk[k];
       sideHeroTagged[s] += take;
@@ -2368,15 +2385,23 @@ void BuildHeroTicketCache()
       g_heroPhase_Sell = (sideHeroTagged[1] > 0) ? 2 : 0;
    }
 
-   // v6.98: audit log every 30s — shows side TOTAL active vs threshold so user can see why Hero is/isn't activating
+   // v6.99: refresh dashboard counters
+   g_heroDash_BuyActive  = sideTotalActive[0];
+   g_heroDash_SellActive = sideTotalActive[1];
+   g_heroDash_BuyTagged  = sideHeroTagged[0];
+   g_heroDash_SellTagged = sideHeroTagged[1];
+   if(sideHeroTagged[0] == 0) g_heroDash_BuyTicketN = 0;
+   if(sideHeroTagged[1] == 0) g_heroDash_SellTicketN = 0;
+
+   // v6.99: audit log every 30s — dual-side independent activation visibility
    static datetime lastHeroAuditLog = 0;
    if(TimeCurrent() - lastHeroAuditLog >= 30) {
       int minAct = (InpHero_MinOrdersToActivate > 0) ? InpHero_MinOrdersToActivate : (InpHero_OrderCount + 1);
-      Print("v6.98 Hero AUDIT: BUY active=", sideTotalActive[0], " hero=", sideHeroTagged[0],
+      Print("v6.99 Hero AUDIT: BUY active=", sideTotalActive[0], " hero=", sideHeroTagged[0],
+            " phase=", g_heroPhase_Buy,
             " | SELL active=", sideTotalActive[1], " hero=", sideHeroTagged[1],
-            " | threshold=", minAct,
-            " | lockedSide=", (g_heroLockedSide == POSITION_TYPE_BUY ? "BUY" : (g_heroLockedSide == POSITION_TYPE_SELL ? "SELL" : "NONE")),
-            " | phaseBUY=", g_heroPhase_Buy, " phaseSELL=", g_heroPhase_Sell);
+            " phase=", g_heroPhase_Sell,
+            " | threshold=", minAct, " HeroCount=", InpHero_OrderCount);
       lastHeroAuditLog = TimeCurrent();
    }
 }
@@ -2576,16 +2601,19 @@ void StripBrokerTPSLFromHeroTickets()
    }
 }
 
-// v6.96: When opposite-side basket is about to close, force-close all Heroes
-// on the locked Hero side (primary closure path).
+// v6.99: Per-side independent — opposite side that has Heroes in BE_GUARD gets force-closed.
 void CloseOppositeHeroOnBasketClose(ENUM_POSITION_TYPE closingSide)
 {
    if(!InpHero_Enabled) return;
    ENUM_POSITION_TYPE oppSide = (closingSide == POSITION_TYPE_BUY) ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
-   if((int)oppSide != g_heroLockedSide) return;
    int phase = (oppSide == POSITION_TYPE_BUY) ? g_heroPhase_Buy : g_heroPhase_Sell;
    if(phase != 3 /*BE_GUARD*/) return; // only after same-side basket cleared
    if(CountHeroOnSide(oppSide) <= 0) return;
+   double prof = SumHeroProfitOnSide(oppSide);
+   Print("v6.99 Hero CLOSE (opposite-basket): closingSide=", EnumToString(closingSide),
+         " heroSide=", EnumToString(oppSide), " heroProfit=", DoubleToString(prof, 2));
+   CloseHeroOnSide(oppSide, "OppositeBasketClose");
+}
    double prof = SumHeroProfitOnSide(oppSide);
    Print("v6.96 Hero CLOSE (opposite-basket): closingSide=", EnumToString(closingSide),
          " heroSide=", EnumToString(oppSide), " heroProfit=", DoubleToString(prof, 2));
@@ -4808,7 +4836,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.98 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.98 [ZZ]" : "Gold Miner EA v6.98 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v6.99 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v6.99 [ZZ]" : "Gold Miner EA v6.99 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -4864,6 +4892,45 @@ void DisplayDashboard()
    // Sell position info
    string sellInfo = "$" + DoubleToString(plSell, 2) + "  " + DoubleToString(lotsSell, 2) + "L  " + IntegerToString(sellCount) + "ord";
    DrawTableRow(row, "Position SELL", sellInfo, (plSell >= 0 ? COLOR_PROFIT : COLOR_LOSS), COLOR_SECTION_DETAIL); row++;
+
+   //--- v6.99: HERO Monitor Section
+   if(InpHero_Enabled)
+   {
+      color COLOR_SECTION_HERO = C'120,40,140'; // purple
+      int   minAct = (InpHero_MinOrdersToActivate > 0) ? InpHero_MinOrdersToActivate : (InpHero_OrderCount + 1);
+
+      string heroHdr = StringFormat("Need >=%d  Keep:%d", minAct, InpHero_OrderCount);
+      DrawTableRow(row, "Hero Cfg", heroHdr, clrLavender, COLOR_SECTION_HERO); row++;
+
+      // BUY side
+      string phaseB = (g_heroPhase_Buy == 3) ? "BE_GUARD" : (g_heroPhase_Buy == 2) ? "ARMED" : (g_heroDash_BuyActive >= minAct ? "READY" : "WAIT");
+      color  colB   = (g_heroPhase_Buy == 3) ? clrGold : (g_heroPhase_Buy == 2) ? COLOR_PROFIT : (g_heroDash_BuyActive >= minAct ? clrYellow : COLOR_TEXT);
+      string buyHero = StringFormat("%d/%d  Hero:%d  %s", g_heroDash_BuyActive, minAct, g_heroDash_BuyTagged, phaseB);
+      DrawTableRow(row, "Hero BUY", buyHero, colB, COLOR_SECTION_HERO); row++;
+      if(g_heroDash_BuyTicketN > 0) {
+         string tixB = "";
+         for(int hi = 0; hi < g_heroDash_BuyTicketN; hi++) {
+            if(hi > 0) tixB += ",";
+            tixB += "#" + IntegerToString((long)g_heroDash_BuyTickets[hi]);
+         }
+         DrawTableRow(row, "  Tix BUY", tixB, clrLavender, COLOR_SECTION_HERO); row++;
+      }
+
+      // SELL side
+      string phaseS = (g_heroPhase_Sell == 3) ? "BE_GUARD" : (g_heroPhase_Sell == 2) ? "ARMED" : (g_heroDash_SellActive >= minAct ? "READY" : "WAIT");
+      color  colS   = (g_heroPhase_Sell == 3) ? clrGold : (g_heroPhase_Sell == 2) ? COLOR_PROFIT : (g_heroDash_SellActive >= minAct ? clrYellow : COLOR_TEXT);
+      string sellHero = StringFormat("%d/%d  Hero:%d  %s", g_heroDash_SellActive, minAct, g_heroDash_SellTagged, phaseS);
+      DrawTableRow(row, "Hero SELL", sellHero, colS, COLOR_SECTION_HERO); row++;
+      if(g_heroDash_SellTicketN > 0) {
+         string tixS = "";
+         for(int hi = 0; hi < g_heroDash_SellTicketN; hi++) {
+            if(hi > 0) tixS += ",";
+            tixS += "#" + IntegerToString((long)g_heroDash_SellTickets[hi]);
+         }
+         DrawTableRow(row, "  Tix SELL", tixS, clrLavender, COLOR_SECTION_HERO); row++;
+      }
+   }
+
 
    if(DrawdownMode == DD_FIXED_DOLLAR)
    {
