@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v7.07 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v7.08 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "7.07"
-#property description "Gold Miner EA v7.07 - Candidate vs Owner separation: Reaching the order-count threshold makes a side a Hero CANDIDATE (ARMED) only — both BUY and SELL may sit ARMED in parallel. The first side whose non-Hero basket actually closes (TP / Avg-trailing) transitions to BE_GUARD and becomes the Hero OWNER. Dashboard 'Hero Owner' now reads NONE while only ARMED, and shows BUY/SELL with (locked) tag only after a real BE_GUARD owner exists. New helper GetHeroOwnerSide() unifies owner detection."
+#property version   "7.08"
+#property description "Gold Miner EA v7.08 - Deferred SideGen revert: Closing a Hero no longer wipes g_sideGen_<side>. The surviving GM(N+1) basket on that side keeps being managed by grid/TP/Avg-trail. Side-gen reverts to GM1 only when (Hero count == 0) AND (non-Hero main on side == 0), allowing the next INIT on that side to open as GM1 and re-arm the Hero subsystem. Builds on v7.07 Candidate vs Owner separation."
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -1115,7 +1115,7 @@ int OnInit()
    g_heroBE_Applied_Sell = false;
    g_heroBE_LastLog = 0;
    
-     Print("Gold Miner EA v7.07 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+     Print("Gold Miner EA v7.08 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min",
@@ -1178,7 +1178,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v7.07 deinitialized");
+   Print("Gold Miner EA v7.08 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -1422,6 +1422,7 @@ void OnTick()
    // v6.96: Hero Order — rebuild ticket cache + orchestrate phase transitions (strip TP/SL,
    //                     apply lock-profit BE-SL on basket-clear, reset state when flat)
    BuildHeroTicketCache();
+   MaintainSideGenAfterHeroClose();   // v7.08: revert sideGen when Hero gone + basket flat
    ManageHeroOppositeClose();
 
    // === HIDE ATR CHART IN BACKTEST (v2.9 / v3.0 simplified) ===
@@ -2326,7 +2327,7 @@ bool OpenOrder(ENUM_ORDER_TYPE orderType, double lots, string comment)
 //| v6.92 Hero Order helpers                                          |
 //+------------------------------------------------------------------+
 
-// v7.07: Single source of truth for "Hero OWNER".
+// v7.08: Single source of truth for "Hero OWNER".
 //        Owner = a side that has actually transitioned to BE_GUARD (phase==3),
 //        i.e. its non-Hero basket has fully closed via TP / Avg-trailing.
 //        ARMED (phase==2) means CANDIDATE only — both sides may sit ARMED in parallel.
@@ -2354,7 +2355,7 @@ void BuildHeroTicketCache()
    int sideGLPool[2]      = {0, 0};
    int sideHeroTagged[2]  = {0, 0};
 
-   // v7.07: Single-Side Hero Lock — owner is decided ONLY when a side reaches
+   // v7.08: Single-Side Hero Lock — owner is decided ONLY when a side reaches
    //         BE_GUARD (phase==3). ARMED (phase==2) is just CANDIDATE. Both sides
    //         may stay ARMED in parallel until one's basket actually clears
    //         (TP / Avg-trailing). The first side to flatten its non-Hero basket
@@ -2494,7 +2495,7 @@ void BuildHeroTicketCache()
    if(sideHeroTagged[0] == 0) g_heroDash_BuyTicketN = 0;
    if(sideHeroTagged[1] == 0) g_heroDash_SellTicketN = 0;
 
-   // v7.00 + v7.07: audit log every 30s — visibility into Candidate vs Owner state.
+   // v7.00 + v7.08: audit log every 30s — visibility into Candidate vs Owner state.
    static datetime lastHeroAuditLog = 0;
    if(TimeCurrent() - lastHeroAuditLog >= 30) {
       int minAct = (InpHero_MinOrdersToActivate > 0) ? InpHero_MinOrdersToActivate : (InpHero_OrderCount + 1);
@@ -2503,7 +2504,7 @@ void BuildHeroTicketCache()
       int    ownerSide = GetHeroOwnerSide();
       string ownerStr  = (ownerSide == (int)POSITION_TYPE_BUY)  ? "BUY"
                        : (ownerSide == (int)POSITION_TYPE_SELL) ? "SELL" : "NONE";
-      Print("v7.07 Hero AUDIT: BUY ", roleB, " active=", sideTotalActive[0], " GL=", sideGLPool[0],
+      Print("v7.08 Hero AUDIT: BUY ", roleB, " active=", sideTotalActive[0], " GL=", sideGLPool[0],
             " hero=", sideHeroTagged[0], " phase=", g_heroPhase_Buy,
             " | SELL ", roleS, " active=", sideTotalActive[1], " GL=", sideGLPool[1],
             " hero=", sideHeroTagged[1], " phase=", g_heroPhase_Sell,
@@ -2618,17 +2619,47 @@ void CloseHeroOnSide(ENUM_POSITION_TYPE side, string reason)
 
    // v7.03: Hard-reset phase + flag and stamp grace timer so next tick
    //        won't re-tag newly entering INIT/GL as Hero via Sticky logic.
+   // v7.08: Do NOT reset g_sideGen_<side> / g_heroOwnedGen_<side> here — surviving
+   //        GM(N+1) basket on this side may still be alive and must keep being
+   //        managed by grid/TP/Avg-trail. Side-gen revert is deferred to
+   //        MaintainSideGenAfterHeroClose() which fires only when both
+   //        Hero count == 0 AND non-Hero main on this side == 0.
    if(side == POSITION_TYPE_BUY) {
       g_heroPhase_Buy = 0; g_heroBE_Applied_Buy = false;
       g_heroJustClosed_Buy = TimeCurrent();
-      g_sideGen_Buy = 0; g_heroOwnedGen_Buy = 0;
    } else {
       g_heroPhase_Sell = 0; g_heroBE_Applied_Sell = false;
       g_heroJustClosed_Sell = TimeCurrent();
-      g_sideGen_Sell = 0; g_heroOwnedGen_Sell = 0;
    }
-   Print("v7.03 Hero POST-CLOSE reset: side=", EnumToString(side),
-         " gracePeriod=", InpHero_PostCloseGraceSec, "s sideGen reset");
+   Print("v7.08 Hero POST-CLOSE reset: side=", EnumToString(side),
+         " gracePeriod=", InpHero_PostCloseGraceSec, "s (sideGen kept until basket flat)");
+}
+
+// v7.08: Deferred side-gen revert. Once Hero is gone AND surviving GM(N+1)
+//        basket on that side has fully closed, drop the per-side gen override
+//        so the next INIT on that side opens as GM1 and Hero can re-arm.
+void MaintainSideGenAfterHeroClose()
+{
+   if(g_sideGen_Buy > 0
+      && CountHeroOnSide(POSITION_TYPE_BUY) == 0
+      && CountNonHeroMainOnSide(POSITION_TYPE_BUY) == 0)
+   {
+      Print("v7.08 SideGen REVERT BUY: GM", g_sideGen_Buy,
+            " -> GM", (g_cycleGeneration<1?1:g_cycleGeneration),
+            " (Hero gone, GM(N+1) basket flat) - Hero subsystem re-armable");
+      g_sideGen_Buy = 0;
+      g_heroOwnedGen_Buy = 0;
+   }
+   if(g_sideGen_Sell > 0
+      && CountHeroOnSide(POSITION_TYPE_SELL) == 0
+      && CountNonHeroMainOnSide(POSITION_TYPE_SELL) == 0)
+   {
+      Print("v7.08 SideGen REVERT SELL: GM", g_sideGen_Sell,
+            " -> GM", (g_cycleGeneration<1?1:g_cycleGeneration),
+            " (Hero gone, GM(N+1) basket flat) - Hero subsystem re-armable");
+      g_sideGen_Sell = 0;
+      g_heroOwnedGen_Sell = 0;
+   }
 }
 
 // v6.96: Detect when same-side basket has fully cleared while Heroes still alive
@@ -5021,7 +5052,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v7.07 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v7.07 [ZZ]" : "Gold Miner EA v7.07 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v7.08 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v7.08 [ZZ]" : "Gold Miner EA v7.08 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
@@ -5087,7 +5118,7 @@ void DisplayDashboard()
       string heroHdr = StringFormat("Need >=%d  Keep:%d", minAct, InpHero_OrderCount);
       DrawTableRow(row, "Hero Cfg", heroHdr, clrLavender, COLOR_SECTION_HERO); row++;
 
-      // v7.07: Owner row uses GetHeroOwnerSide() — only BE_GUARD counts as owner.
+      // v7.08: Owner row uses GetHeroOwnerSide() — only BE_GUARD counts as owner.
       //         While both sides are merely ARMED (candidates), Owner shows
       //         "NONE (waiting close)" so it's clear no side is locked yet.
       int    ownerSide = GetHeroOwnerSide();

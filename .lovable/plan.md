@@ -1,142 +1,94 @@
-## Plan v7.07 — จัด Hero flow ใหม่เป็น 2 ขั้น: Candidate ก่อน, Owner ทีหลัง
+## Goal
+After a Hero is closed, the surviving GM(N+1) basket on that side must keep being managed normally; only **after** that GM(N+1) basket also closes should the side revert to GM1 so the next INIT can re-arm the Hero subsystem.
 
-จากภาพตอนนี้ปัญหาหลักคือ Dashboard แสดง `Hero Owner = BUY (locked)` ทั้งที่ BUY/SELL ยังเป็นแค่ `ARMED` และยังไม่มีฝั่งไหนปิด basket order ธรรมดาออกไปจริง ๆ ดังนั้นระบบยังล็อค owner เร็วเกินไปในเชิงสถานะ/การแสดงผล และอาจทำให้ logic ฝั่งตรงข้ามถูกตีความผิด
+## Current Bug
+In `CloseHeroOnSide()` (line 2606) the EA **immediately** zeroes `g_sideGen_<side>` and `g_heroOwnedGen_<side>` the moment the Hero closes. If GM2 grid orders are still alive on that side, the very next tick `GetActiveGenForSide(side)` returns GM1, the 11+ counter sites filter GM2 tickets out as "older gen", and the surviving GM2 basket becomes invisible to grid / TP / Avg-trail / accumulate. Result: GM2 stays frozen, no Hero can re-arm because the previous side-gen state was wiped while orders remain.
 
-### Flow ใหม่ที่ต้องการ
+## Plan (v7.08 — Deferred Side-Gen Reset)
+
+### Change 1 — `CloseHeroOnSide(side, reason)` (around line 2606)
+Stop wiping `g_sideGen_<side>` / `g_heroOwnedGen_<side>` here. Only do the **Hero-specific** state reset (phase, BE flag, post-close grace).
+
+```cpp
+// v7.08: Do NOT reset g_sideGen_<side> here — GM(N+1) basket may still be alive.
+//        Reset is deferred to MaintainSideGenAfterHeroClose() which fires only
+//        when (Hero count == 0) AND (non-Hero main on this side == 0).
+if(side == POSITION_TYPE_BUY) {
+   g_heroPhase_Buy = 0; g_heroBE_Applied_Buy = false;
+   g_heroJustClosed_Buy = TimeCurrent();
+} else {
+   g_heroPhase_Sell = 0; g_heroBE_Applied_Sell = false;
+   g_heroJustClosed_Sell = TimeCurrent();
+}
+```
+
+### Change 2 — New helper `MaintainSideGenAfterHeroClose()` 
+Add next to `CloseHeroOnSide`. Per-tick, per-side check:
+
+```cpp
+void MaintainSideGenAfterHeroClose()
+{
+   // BUY
+   if(g_sideGen_Buy > 0
+      && CountHeroOnSide(POSITION_TYPE_BUY) == 0
+      && CountNonHeroMainOnSide(POSITION_TYPE_BUY) == 0)
+   {
+      Print("v7.08 SideGen REVERT BUY: GM", g_sideGen_Buy,
+            " -> GM", (g_cycleGeneration<1?1:g_cycleGeneration),
+            " (Hero gone, GM2 basket flat) — Hero subsystem re-armable");
+      g_sideGen_Buy = 0;
+      g_heroOwnedGen_Buy = 0;
+   }
+   // SELL — same pattern
+   if(g_sideGen_Sell > 0
+      && CountHeroOnSide(POSITION_TYPE_SELL) == 0
+      && CountNonHeroMainOnSide(POSITION_TYPE_SELL) == 0)
+   {
+      Print("v7.08 SideGen REVERT SELL: GM", g_sideGen_Sell,
+            " -> GM", (g_cycleGeneration<1?1:g_cycleGeneration),
+            " (Hero gone, GM2 basket flat) — Hero subsystem re-armable");
+      g_sideGen_Sell = 0;
+      g_heroOwnedGen_Sell = 0;
+   }
+}
+```
+
+Call once per tick in `OnTick()` next to the existing Hero maintenance (immediately after `BuildHeroTicketCache` / before `OpenOrder` decisions).
+
+### Change 3 — Counter visibility
+`CountNonHeroMainOnSide(side)` (line 2546) currently filters by `GetActiveGenForSide(side)` (v7.05). That is correct — while `g_sideGen_<side> > 0` it sees the GM(N+1) basket; the new helper above uses the same view, so the revert fires exactly when that GM(N+1) basket flattens. No change needed here.
+
+### Change 4 — Version bump to **v7.08**
+Update `#property version`, `#property description`, header banner comment, `OnInit` / `OnDeinit` Print, and dashboard title (line 5105 area `Gold Miner EA v7.07` → `v7.08`).
+
+## Resulting Flow
 
 ```text
-1) Scan threshold
-   BUY ถึงเกณฑ์ไหม?  SELL ถึงเกณฑ์ไหม?
-
-2) ถ้าถึงเกณฑ์: ตั้งเป็น Candidate / ARMED เท่านั้น
-   - ยังไม่ตั้ง Owner
-   - BUY และ SELL สามารถ ARMED พร้อมกันได้
-   - ยังไม่แสดงว่า locked
-
-3) รอ basket ธรรมดาของฝั่งใดฝั่งหนึ่งปิดหมดก่อน
-   - เช่น ถ้า SELL basket ธรรมดาปิด TP / Average Trailing ก่อน
-   - SELL จึงเปลี่ยนจาก ARMED -> BE_GUARD
-   - SELL จึงเป็น Hero Owner จริง
-
-4) หลังมี Owner จริงแล้ว
-   - Single-side lock จึงเริ่มทำงาน
-   - ฝั่งตรงข้ามจะไม่สามารถสร้าง Hero owner ใหม่ จนกว่า Hero owner เดิมจะปิดหมด/reset
-   - ถ้าเปิด PerSideGenIsolation: เฉพาะฝั่ง owner เปิด GM(N+1) เพื่อเทรดต่อ โดยไม่เอา GM(N+1) ไปปนกับ Hero เดิม
+1. Both sides ARMED (CANDIDATE).
+2. SELL basket closes by TP -> SELL becomes Hero OWNER (BE_GUARD).
+   g_sideGen_Sell bumps GM1 -> GM2, g_heroOwnedGen_Sell = 1.
+3. Hero SELL closes (opposite-basket close / SL / etc.)
+   -> CloseHeroOnSide resets phase + grace timer ONLY.
+   -> g_sideGen_Sell stays GM2; surviving GM2 basket keeps being managed.
+4. GM2 basket flattens via TP / Avg-trail / Accumulate.
+5. MaintainSideGenAfterHeroClose() detects (Hero=0, NonHero=0) on SELL
+   -> g_sideGen_Sell = 0 (revert to GM1).
+6. Next INIT on SELL opens as GM1_INIT -> Hero subsystem can re-arm.
 ```
 
-## จุดที่จะแก้ใน `public/docs/mql5/Gold_Miner_EA.mq5`
+## สิ่งที่ไม่เปลี่ยนแปลง (per project rule)
+- ห้ามแก้ Order Execution: `OrderSend`, `trade.Buy/Sell/PositionClose` — ไม่แตะ
+- Entry strategy (SMA/EMA/Squeeze/BB/ZigZag), grid lot/distance/candle confirm — ไม่แตะ
+- TP/SL/Trailing/Breakeven/Avg-TP formulae — ไม่แตะ
+- Hedge / Triple-Gate / Recovery / DD% TP / Daily Target / Balance Guard — ไม่แตะ
+- License / News / Sync modules — ไม่แตะ
+- Hero formula (`ComputeHeroLockProfitSL`, `ValidateHeroLockProfitSL`, `ApplyHeroLockProfitSL`, BE_GUARD apply path, Post-Close Grace, OnTradeTransaction audit) — ไม่แตะ
+- v7.04 `GetActiveGenForSide` filter sites (11 places), v7.05 unblock helpers, v7.06 GL-pool gen-lock, v7.07 candidate-vs-owner — ไม่แตะ
+- Cycle reset paths (line 9697, 9797) ที่เคลียร์ `g_sideGen_*` ตอนรีเซ็ต cycle ทั้งระบบ — คงไว้
 
-### 1. แก้ Dashboard `Hero Owner`
-ตอนนี้ Dashboard ยังใช้ logic เก่า:
-```cpp
-if(g_heroPhase_Buy != 0 || CountHeroOnSide(BUY) > 0) ownerStr = "BUY";
-```
-ซึ่ง `phase != 0` รวม `ARMED` ด้วย จึงแสดง `BUY (locked)` ทันทีเมื่อ BUY ถึงเกณฑ์ก่อน
+ยืนยันว่าไม่มีการเปลี่ยนแปลง trading logic ใดๆ; การแก้ไขเป็นการเลื่อนเวลา reset ของ side-gen state ให้สอดคล้องกับ lifetime ของ basket จริง
 
-จะแก้ให้ Owner แสดงเฉพาะเมื่อ `phase == 3` เท่านั้น:
-```cpp
-if(g_heroPhase_Buy == 3) ownerStr = "BUY";
-else if(g_heroPhase_Sell == 3) ownerStr = "SELL";
-else ownerStr = "NONE";
-```
-และเปลี่ยน tag เป็น:
-- `WAIT OWNER` หรือ `unlocked` เมื่อยังไม่มี BE_GUARD
-- `locked` เฉพาะเมื่อมี owner จริงแล้ว
-
-ผลที่คาดหวังจากภาพตัวอย่าง:
-- `Hero BUY ... ARMED`
-- `Hero SELL ... ARMED`
-- `Hero Owner = NONE (waiting close)`
-ไม่ใช่ `BUY (locked)`
-
-### 2. แยกสถานะ “Candidate” ออกจาก “Owner” ให้ชัดเจน
-ใน `BuildHeroTicketCache()` จะคง logic ที่ให้ทั้งสองฝั่งเข้า `ARMED` ได้พร้อมกัน แต่จะปรับ comment/audit และ guard ให้ชัดว่า:
-- `phase == 2` = Candidate / ARMED only
-- `phase == 3` = Owner / BE_GUARD only
-
-Single-side lock จะใช้เฉพาะ `phase == 3` เท่านั้น
-
-### 3. เพิ่ม helper สำหรับ owner จริง
-เพิ่ม helper เล็ก ๆ เช่น:
-```cpp
-int GetHeroOwnerSide()
-```
-ให้คืนค่า:
-- BUY เฉพาะ `g_heroPhase_Buy == 3`
-- SELL เฉพาะ `g_heroPhase_Sell == 3`
-- `-1` ถ้ายังไม่มี owner
-
-แล้วใช้ helper นี้ใน:
-- Dashboard owner row
-- `BuildHeroTicketCache()` activeOwner calculation
-- future-safe guard จุดที่ต้องรู้ owner จริง
-
-เพื่อลดโอกาส logic เก่าแบบ `phase != 0` กลับมาอีก
-
-### 4. ตรวจ `DetectSameSideBasketClearedForHero()` ให้ owner ถูกเลือกจากฝั่งที่ basket ธรรมดาปิดก่อนจริง
-ตอนนี้ BE_GUARD ถูกตั้งเมื่อ:
-```cpp
-CountHeroOnSide(side) > 0
-CountNonHeroMainOnSide(side) == 0
-```
-จะคงแนวคิดนี้ แต่จะทำให้ flow ปลอดภัยขึ้นโดย:
-- ฝั่งที่จะเข้า BE_GUARD ต้องมี Hero candidate อยู่แล้ว (`phase == 2` หรือมี tagged Hero)
-- ถ้าอีกฝั่งยังเป็นแค่ ARMED ไม่ถือว่าเป็น owner และไม่ block การชนะของฝั่งที่ basket ปิดก่อน
-- ถ้าฝั่ง SELL basket ปิดก่อนตามตัวอย่าง SELL จะกลายเป็น owner แม้ BUY จะถึงเกณฑ์ก่อน
-
-### 5. เพิ่ม audit log เพื่อไล่ flow ได้เป็นระบบ
-เพิ่ม log แบบ throttle เมื่อสถานะเปลี่ยน:
-- `Hero CANDIDATE: side=BUY active=15 threshold=15 hero=2`
-- `Hero CANDIDATE: side=SELL active=21 threshold=15 hero=4`
-- `Hero OWNER SET: side=SELL reason=BasketCleared phase=BE_GUARD`
-- `Hero OWNER WAIT: BUY/SELL armed, no basket cleared yet`
-
-สิ่งนี้ช่วย debug รอบต่อไปได้ทันทีว่าระบบกำลังอยู่ขั้น Candidate หรือ Owner จริง
-
-### 6. Version bump
-อัปเดตเป็น `v7.07` ทุกจุดตามกฎโปรเจกต์:
-- `#property version`
-- `#property description`
-- header comment block
-- dashboard title/log init/deinit ที่แสดง version
-- memory note สำหรับ v7.07
-
-## สิ่งที่ไม่เปลี่ยนแปลง
-
-ยืนยันว่าจะไม่แตะส่วนต่อไปนี้:
-- ไม่แก้ `OrderSend`, `trade.Buy`, `trade.Sell`, `trade.PositionClose`
-- ไม่แก้ entry strategy: SMA/EMA/Squeeze/BB/ZigZag
-- ไม่แก้ grid entry/exit, lot, distance, candle confirm
-- ไม่แก้ TP/SL/Trailing/Breakeven/Average trailing formula
-- ไม่แก้ Hedge / Triple-Gate / Recovery / DD% TP / Daily Target / Balance Guard
-- ไม่แก้ License / News / Sync modules
-- ไม่เปลี่ยนสูตร Hero lock-profit SL (`ComputeHeroLockProfitSL`, `ValidateHeroLockProfitSL`, `ApplyHeroLockProfitSL`)
-- ไม่ยกเลิก v7.05/v7.06 เรื่อง GM(N+1) isolation และ gen-locked Hero pool
-
-## Expected behavior หลังแก้
-
-จากภาพที่ส่งมา:
-- BUY ถึงเกณฑ์และมี Hero candidate 2 order
-- SELL ถึงเกณฑ์และมี Hero candidate 4 order
-- ยังไม่มีฝั่งไหนปิด basket ธรรมดาหมด
-
-Dashboard ต้องแสดง:
-```text
-Hero Owner   NONE (waiting close)
-Hero BUY     15/15 GL:2  Hero:2  ARMED
-Hero SELL    21/15 GL:12 Hero:4  ARMED
-```
-
-ถ้าต่อมา SELL ปิด basket ธรรมดาก่อน:
-```text
-Hero Owner   SELL (locked)
-Hero SELL    ... BE_GUARD
-```
-
-ถ้าต่อมา BUY ปิด basket ธรรมดาก่อน:
-```text
-Hero Owner   BUY (locked)
-Hero BUY     ... BE_GUARD
-```
-
-สรุปคือ “ถึงเกณฑ์ก่อน” จะเป็นแค่ Candidate เท่านั้น ส่วน “ปิด order ธรรมดาก่อน” เท่านั้นที่เป็น Owner จริง
+## Files
+- `public/docs/mql5/Gold_Miner_EA.mq5` — edits above
+- `.lovable/memory/trading/gold-miner-ea/sidegen-revert-after-basket-flat-v7-08.md` — new memory entry
+- `mem://index.md` — append entry
