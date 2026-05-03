@@ -3384,6 +3384,7 @@ void ManagePerOrderTrailing()
       if(ticket == 0) continue;
       if(PositionGetInteger(POSITION_MAGIC) != MagicNumber) continue;
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if(IsHeroTicket(ticket)) continue;   // v7.00: Hero owns own SL (lock-profit BE)
 
       long posType = PositionGetInteger(POSITION_TYPE);
       double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
