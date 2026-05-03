@@ -4914,7 +4914,7 @@ void DisplayDashboard()
       // BUY side
       string phaseB = (g_heroPhase_Buy == 3) ? "BE_GUARD" : (g_heroPhase_Buy == 2) ? "ARMED" : (g_heroDash_BuyActive >= minAct ? "READY" : "WAIT");
       color  colB   = (g_heroPhase_Buy == 3) ? clrGold : (g_heroPhase_Buy == 2) ? COLOR_PROFIT : (g_heroDash_BuyActive >= minAct ? clrYellow : COLOR_TEXT);
-      string buyHero = StringFormat("%d/%d  Hero:%d  %s", g_heroDash_BuyActive, minAct, g_heroDash_BuyTagged, phaseB);
+      string buyHero = StringFormat("%d/%d  GL:%d  Hero:%d  %s", g_heroDash_BuyActive, minAct, g_heroDash_BuyGLPool, g_heroDash_BuyTagged, phaseB);
       DrawTableRow(row, "Hero BUY", buyHero, colB, COLOR_SECTION_HERO); row++;
       if(g_heroDash_BuyTicketN > 0) {
          string tixB = "";
