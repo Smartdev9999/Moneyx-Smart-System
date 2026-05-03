@@ -2614,11 +2614,6 @@ void CloseOppositeHeroOnBasketClose(ENUM_POSITION_TYPE closingSide)
          " heroSide=", EnumToString(oppSide), " heroProfit=", DoubleToString(prof, 2));
    CloseHeroOnSide(oppSide, "OppositeBasketClose");
 }
-   double prof = SumHeroProfitOnSide(oppSide);
-   Print("v6.96 Hero CLOSE (opposite-basket): closingSide=", EnumToString(closingSide),
-         " heroSide=", EnumToString(oppSide), " heroProfit=", DoubleToString(prof, 2));
-   CloseHeroOnSide(oppSide, "OppositeBasketClose");
-}
 
 // v6.96: Reset Hero side state when fully flat (no Hero, no basket).
 void ResetHeroStateIfFlat(ENUM_POSITION_TYPE side)
