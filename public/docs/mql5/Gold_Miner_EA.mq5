@@ -2339,6 +2339,18 @@ void BuildHeroTicketCache()
    int sideGLPool[2]      = {0, 0};
    int sideHeroTagged[2]  = {0, 0};
 
+   // v7.04: Single-Side Hero Lock — determine which side already "owns" Hero
+   //         (has tagged tickets OR phase != NONE). Opposite side's first-time
+   //         activation is blocked until owner clears (CountHero == 0 && phase == 0).
+   int activeOwner = -1;
+   if(InpHero_SingleSideLock) {
+      bool buyOwns  = (CountHeroOnSide(POSITION_TYPE_BUY)  > 0) || (g_heroPhase_Buy  != 0);
+      bool sellOwns = (CountHeroOnSide(POSITION_TYPE_SELL) > 0) || (g_heroPhase_Sell != 0);
+      if(buyOwns && !sellOwns)      activeOwner = (int)POSITION_TYPE_BUY;
+      else if(sellOwns && !buyOwns) activeOwner = (int)POSITION_TYPE_SELL;
+      // if both owns simultaneously (legacy / restored state), let both run — no lock change
+   }
+
    for(int s = 0; s < 2; s++)
    {
       ENUM_POSITION_TYPE side = (s == 0) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
