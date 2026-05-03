@@ -2542,6 +2542,20 @@ void CloseHeroOnSide(ENUM_POSITION_TYPE side, string reason)
    }
    g_heroTicketCount = 0;     // force rebuild
    g_heroLastBuildTime = 0;
+
+   // v7.03: Hard-reset phase + flag and stamp grace timer so next tick
+   //        won't re-tag newly entering INIT/GL as Hero via Sticky logic.
+   if(side == POSITION_TYPE_BUY) {
+      g_heroPhase_Buy = 0; g_heroBE_Applied_Buy = false;
+      g_heroJustClosed_Buy = TimeCurrent();
+      g_sideGen_Buy = 0; g_heroOwnedGen_Buy = 0;
+   } else {
+      g_heroPhase_Sell = 0; g_heroBE_Applied_Sell = false;
+      g_heroJustClosed_Sell = TimeCurrent();
+      g_sideGen_Sell = 0; g_heroOwnedGen_Sell = 0;
+   }
+   Print("v7.03 Hero POST-CLOSE reset: side=", EnumToString(side),
+         " gracePeriod=", InpHero_PostCloseGraceSec, "s sideGen reset");
 }
 
 // v6.96: Detect when same-side basket has fully cleared while Heroes still alive
