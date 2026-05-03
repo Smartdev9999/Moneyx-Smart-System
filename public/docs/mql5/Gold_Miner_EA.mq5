@@ -750,6 +750,13 @@ ulong    g_heroDash_BuyTickets[10];
 int      g_heroDash_BuyTicketN    = 0;
 ulong    g_heroDash_SellTickets[10];
 int      g_heroDash_SellTicketN   = 0;
+// v7.03: post-close grace + per-side generation isolation
+datetime g_heroJustClosed_Buy     = 0;
+datetime g_heroJustClosed_Sell    = 0;
+int      g_sideGen_Buy            = 0;   // 0 = follow g_cycleGeneration; >0 = override for this side
+int      g_sideGen_Sell           = 0;
+int      g_heroOwnedGen_Buy       = 0;   // gen that surviving Hero BUY belongs to
+int      g_heroOwnedGen_Sell      = 0;
 // === v6.42: Dashboard History Cache ===
 datetime g_lastDashHistoryCalcTime = 0;
 int      g_dashCacheIntervalSec    = 5;  // recalculate every 5 seconds
