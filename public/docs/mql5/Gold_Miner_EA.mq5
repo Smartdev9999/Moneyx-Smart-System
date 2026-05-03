@@ -1197,7 +1197,7 @@ void RecoverInitialPrices()
       string comment = PositionGetString(POSITION_COMMENT);
       // v6.23: Skip orders from previous generations
       int orderGen = ExtractGeneration(comment);
-      if(orderGen >= 0 && orderGen != g_cycleGeneration) continue;
+      if(orderGen >= 0 && orderGen != GetActiveGenForSide((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE))) continue; // v7.04: per-side gen
       if(MatchGMSuffix(comment, "_INIT"))
       {
          long posType = PositionGetInteger(POSITION_TYPE);
@@ -1229,7 +1229,7 @@ void RecoverInitialPrices()
          if(IsHedgeComment(comment) || IsReverseHedgeComment(comment)) continue;
          // v6.23: Skip orders from previous generations
          int orderGen = ExtractGeneration(comment);
-         if(orderGen >= 0 && orderGen != g_cycleGeneration) continue;
+         if(orderGen >= 0 && orderGen != GetActiveGenForSide((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE))) continue; // v7.04: per-side gen
 
          //--- Check for GL suffix (grid loss orders)
          if(StringFind(comment, "_GL") >= 0)
@@ -2002,7 +2002,7 @@ void CountPositions(int &buyCount, int &sellCount,
       
       // v6.22: Skip orders from previous generations — only count current gen
       int orderGen = ExtractGeneration(comment);
-      if(orderGen >= 0 && orderGen != g_cycleGeneration) continue;
+      if(orderGen >= 0 && orderGen != GetActiveGenForSide((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE))) continue; // v7.04: per-side gen
       
       long posType = PositionGetInteger(POSITION_TYPE);
 
@@ -2057,7 +2057,7 @@ int NormalOrderCount()
       if(IsTicketBound(ticket)) continue;
       // v6.22: Skip orders from previous generations
       int orderGen = ExtractGeneration(comment);
-      if(orderGen >= 0 && orderGen != g_cycleGeneration) continue;
+      if(orderGen >= 0 && orderGen != GetActiveGenForSide((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE))) continue; // v7.04: per-side gen
       // v6.93: optionally exclude Hero tickets from MaxOpenOrders cap
       if(InpHero_Enabled && !InpHero_IncludeInMaxOrders && IsHeroTicket(ticket)) continue;
       count++;
@@ -3938,7 +3938,7 @@ double FindMaxLotOnSide(ENUM_POSITION_TYPE side)
       if(IsHedgeComment(comment)) continue;
       // v6.23: Skip orders from previous generations
       int orderGen = ExtractGeneration(comment);
-      if(orderGen >= 0 && orderGen != g_cycleGeneration) continue;
+      if(orderGen >= 0 && orderGen != GetActiveGenForSide((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE))) continue; // v7.04: per-side gen
       if(MatchGMSuffix(comment, "_GL") || MatchGMSuffix(comment, "_INIT"))
       {
          double lot = PositionGetDouble(POSITION_VOLUME);
@@ -3967,7 +3967,7 @@ int FindMaxGridLevelOnSide(ENUM_POSITION_TYPE side, string suffix)
       if(IsHedgeComment(comment)) continue;
       // Only current generation
       int orderGen = ExtractGeneration(comment);
-      if(orderGen >= 0 && orderGen != g_cycleGeneration) continue;
+      if(orderGen >= 0 && orderGen != GetActiveGenForSide((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE))) continue; // v7.04: per-side gen
       if(!MatchGMSuffix(comment, suffix)) continue;
       // Extract number after '#'
       int hashPos = StringFind(comment, "#");
@@ -4579,7 +4579,7 @@ void FindLastOrder(ENUM_POSITION_TYPE side, string suffix1, string suffix2, doub
       if(IsHedgeComment(comment)) continue;
       // v6.23: Skip orders from previous generations
       int orderGen = ExtractGeneration(comment);
-      if(orderGen >= 0 && orderGen != g_cycleGeneration) continue;
+      if(orderGen >= 0 && orderGen != GetActiveGenForSide((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE))) continue; // v7.04: per-side gen
       if(MatchGMSuffix(comment, suffix1) || MatchGMSuffix(comment, suffix2))
       {
          datetime openTime = (datetime)PositionGetInteger(POSITION_TIME);
@@ -5903,7 +5903,7 @@ void RecoverTFInitialPrices()
       string comment = PositionGetString(POSITION_COMMENT);
       // v6.23: Skip orders from previous generations
       int orderGen = ExtractGeneration(comment);
-      if(orderGen >= 0 && orderGen != g_cycleGeneration) continue;
+      if(orderGen >= 0 && orderGen != GetActiveGenForSide((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE))) continue; // v7.04: per-side gen
       long posType = PositionGetInteger(POSITION_TYPE);
       double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
 
@@ -6098,7 +6098,7 @@ void CountPositionsTF(int tfIdx, int &buyCount, int &sellCount,
        string comment = PositionGetString(POSITION_COMMENT);
       // v6.23: Skip orders from previous generations
       int orderGen = ExtractGeneration(comment);
-      if(orderGen >= 0 && orderGen != g_cycleGeneration) continue;
+      if(orderGen >= 0 && orderGen != GetActiveGenForSide((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE))) continue; // v7.04: per-side gen
       if(!MatchTFPrefix(comment, tfLabel)) continue;
 
       long posType = PositionGetInteger(POSITION_TYPE);
@@ -6201,7 +6201,7 @@ void FindLastOrderTF(int tfIdx, ENUM_POSITION_TYPE side, string suffix1, string 
        string comment = PositionGetString(POSITION_COMMENT);
       // v6.23: Skip orders from previous generations
       int orderGen = ExtractGeneration(comment);
-      if(orderGen >= 0 && orderGen != g_cycleGeneration) continue;
+      if(orderGen >= 0 && orderGen != GetActiveGenForSide((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE))) continue; // v7.04: per-side gen
       if(!MatchTFPrefix(comment, tfLabel)) continue;
       if(StringFind(comment, suffix1) >= 0 || StringFind(comment, suffix2) >= 0)
       {
@@ -6233,7 +6233,7 @@ int FindMaxGridLevelOnSideTF(int tfIdx, ENUM_POSITION_TYPE side, string suffix)
       if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
       string comment = PositionGetString(POSITION_COMMENT);
       int orderGen = ExtractGeneration(comment);
-      if(orderGen >= 0 && orderGen != g_cycleGeneration) continue;
+      if(orderGen >= 0 && orderGen != GetActiveGenForSide((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE))) continue; // v7.04: per-side gen
       if(!MatchTFPrefix(comment, tfLabel)) continue;
       // Look for "_<suffix>#" segment (e.g. "_GL#")
       string needle = "_" + suffix + "#";
