@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v7.00 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v7.01 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "7.00"
-#property description "Gold Miner EA v7.00 - Hero GL-Only + Close-Path Audit: Hero pool is now ONLY _GL orders (INIT/GP excluded), latest N _GL per side become Hero. Threshold gate still uses total INIT+GL+GP active. Fixed BE_GUARD bug (v6.99 dead g_heroLockedSide check) so lock-profit SL is now actually applied when same-side basket clears. Per-order trailing/breakeven now skips Hero. OnTradeTransaction emits 'v7.00 Hero CLOSED reason=...' audit log to trace any unintended Hero close. Dashboard adds GL pool counter (e.g. 36/20 GL:30 Hero:3 ARMED). Close conditions: (1) lock-profit SL hit, (2) opposite basket close, (3) accumulate/global close ONLY."
+#property version   "7.01"
+#property description "Gold Miner EA v7.01 - Hero Sticky Tag Fix: Once a side's Hero is tagged (phase ARMED/BE_GUARD), the activation threshold gate is bypassed so Hero tickets stay tagged even when the basket shrinks below threshold. Fixes bug where SELL basket closing under 20-order threshold dropped Hero tag, allowing per-order trailing/SyncBrokerTPSL to close them. Hero close conditions remain: (1) lock-profit SL, (2) opposite-basket close, (3) accumulate/global close ONLY."
 #property strict
 
 #include <Trade/Trade.mqh>
