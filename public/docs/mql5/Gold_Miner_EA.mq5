@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v7.04 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v7.05 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "7.04"
-#property description "Gold Miner EA v7.04 - Single-Side Hero Lock + Active Per-Side Gen Isolation: Hero now activates ONLY one side at a time (whichever side gets there first owns Hero; opposite side blocked from Hero tagging until owner's Hero count hits 0). Per-side gen isolation default ON: side that owns surviving Hero opens new INIT/GL/GP under GM(N+1) while opposite side keeps trading GM(N). Order counters/grid step/TP/trailing rewired via GetActiveGenForSide() so GM(N+1) entries are fully managed."
+#property version   "7.05"
+#property description "Gold Miner EA v7.05 - Hero Side-Gen Unblock: ShouldBlockSameSideGridForHero now bypasses block when side owns a side-gen override (GM(N+1) IS the new basket). CountNonHeroMainOnSide uses GetActiveGenForSide so its semantics stay correct. CountFreeOlderGenOnSide excludes Hero tickets so cross-gen INIT guard does not falsely treat locked-profit Heroes as free older-gen orders. Result: Hero-owning side actually opens GM(N+1) INIT/GL/GP as v7.04 promised."
 #property strict
 
 #include <Trade/Trade.mqh>
