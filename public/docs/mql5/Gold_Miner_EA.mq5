@@ -2301,18 +2301,20 @@ void BuildHeroTicketCache()
    g_heroLastBuildTime = TimeCurrent();
    g_heroTicketCount = 0;
 
-   // v6.98: per-side total (active across ALL generations) drives activation gate.
-   //         "20 orders" = currently-open basket orders on that side, not per-gen, not cumulative history.
+   // v7.00: per-side total (INIT+GL+GP, cross-gen, free basket) drives the activation gate.
+   //         BUT only _GL orders are eligible to BE TAGGED as Hero (per user spec).
    int sideTotalActive[2] = {0, 0};
+   int sideGLPool[2]      = {0, 0};
    int sideHeroTagged[2]  = {0, 0};
 
    for(int s = 0; s < 2; s++)
    {
       ENUM_POSITION_TYPE side = (s == 0) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
-      ulong  tk[200]; long ttMs[200]; int n = 0;
+      ulong  tkGL[200]; long ttGLMs[200]; int nGL = 0;
+      int    nAll = 0;
 
-      // Pass: collect ALL active basket orders on this side, regardless of generation
-      for(int i = PositionsTotal() - 1; i >= 0 && n < 200; i--)
+      // Pass 1: collect ALL active basket orders for threshold + isolate _GL for Hero pool
+      for(int i = PositionsTotal() - 1; i >= 0; i--)
       {
          ulong ticket = PositionGetTicket(i);
          if(ticket == 0) continue;
@@ -2321,63 +2323,70 @@ void BuildHeroTicketCache()
          if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
          string c = PositionGetString(POSITION_COMMENT);
          if(IsHedgeComment(c)) continue;
-         if(IsTicketBound(ticket)) continue; // bound = locked into a hedge set, not part of free basket
-         if(StringFind(c,"_INIT")<0 && StringFind(c,"_GL")<0 && StringFind(c,"_GP")<0) continue;
-         tk[n]   = ticket;
-         // v6.98: use POSITION_TIME_MSC for deterministic newest-first ordering
-         ttMs[n] = PositionGetInteger(POSITION_TIME_MSC);
-         n++;
+         if(IsTicketBound(ticket)) continue; // bound = locked into a hedge set
+         bool isInit = (StringFind(c,"_INIT") >= 0);
+         bool isGL   = (StringFind(c,"_GL")   >= 0);
+         bool isGP   = (StringFind(c,"_GP")   >= 0);
+         if(!isInit && !isGL && !isGP) continue;
+         nAll++;
+         // v7.00: ONLY _GL is eligible to be Hero (per user spec — INIT/GP excluded)
+         if(isGL && nGL < 200) {
+            tkGL[nGL]   = ticket;
+            ttGLMs[nGL] = PositionGetInteger(POSITION_TIME_MSC);
+            nGL++;
+         }
       }
-      sideTotalActive[s] = n;
+      sideTotalActive[s] = nAll;
+      sideGLPool[s]      = nGL;
 
-      // v6.98: sort desc by POSITION_TIME_MSC then by ticket (larger ticket = newer)
-      for(int a = 1; a < n; a++)
+      // Sort tkGL desc by POSITION_TIME_MSC then by ticket (newest first)
+      for(int a = 1; a < nGL; a++)
          for(int b = a; b > 0; b--)
          {
             bool swap = false;
-            if(ttMs[b] > ttMs[b-1]) swap = true;
-            else if(ttMs[b] == ttMs[b-1] && tk[b] > tk[b-1]) swap = true;
+            if(ttGLMs[b] > ttGLMs[b-1]) swap = true;
+            else if(ttGLMs[b] == ttGLMs[b-1] && tkGL[b] > tkGL[b-1]) swap = true;
             if(!swap) break;
-            long _t = ttMs[b]; ttMs[b] = ttMs[b-1]; ttMs[b-1] = _t;
-            ulong _k = tk[b];  tk[b]   = tk[b-1];   tk[b-1]   = _k;
+            long _t = ttGLMs[b]; ttGLMs[b] = ttGLMs[b-1]; ttGLMs[b-1] = _t;
+            ulong _k = tkGL[b];  tkGL[b]   = tkGL[b-1];   tkGL[b-1]   = _k;
          }
 
-      // v6.97/v6.98: Activation gate — compare side TOTAL (cross-gen) against threshold
+      // v7.00: Activation gate uses TOTAL active (INIT+GL+GP), not just GL.
+      //        This prevents Hero from forming too early when most orders are GL only.
       int activateThreshold = (InpHero_MinOrdersToActivate > 0)
                               ? InpHero_MinOrdersToActivate
                               : (InpHero_OrderCount + 1);
-      if(n < activateThreshold) continue;
+      if(nAll < activateThreshold) continue;
+      if(nGL <= 0) continue; // no GL to tag as Hero yet
 
-      // v6.99: PER-SIDE INDEPENDENT activation. No single-side lock.
-      // Each side that meets threshold protects its OWN newest N tickets.
       int sideId = (int)side;
-
-      // v6.99: ROLLING latest-N — protect newest N tickets every tick.
-      //        Basket alive: keep >=1 non-Hero. BE_GUARD: basket already 0 so take all available.
       int curPhase = (sideId == POSITION_TYPE_BUY) ? g_heroPhase_Buy : g_heroPhase_Sell;
-      int take = MathMin(InpHero_OrderCount, n - 1);
+
+      // v7.00: ROLLING latest-N _GL — keep at least 1 GL in basket while alive (for Avg TP/Trail logic).
+      //        BE_GUARD: same-side basket already 0 so safe to take all available GL.
+      int take = MathMin(InpHero_OrderCount, nGL - 1);
       if(curPhase == 3 /*BE_GUARD*/) {
-         take = MathMin(InpHero_OrderCount, n);
+         take = MathMin(InpHero_OrderCount, nGL);
       }
       if(take <= 0) continue;
 
-      // v6.99: write per-side dashboard ticket list (max 10)
+      // Dashboard ticket list (max 10)
       if(sideId == POSITION_TYPE_BUY) {
          g_heroDash_BuyTicketN = 0;
          for(int k = 0; k < take && g_heroDash_BuyTicketN < 10; k++)
-            g_heroDash_BuyTickets[g_heroDash_BuyTicketN++] = tk[k];
+            g_heroDash_BuyTickets[g_heroDash_BuyTicketN++] = tkGL[k];
       } else {
          g_heroDash_SellTicketN = 0;
          for(int k = 0; k < take && g_heroDash_SellTicketN < 10; k++)
-            g_heroDash_SellTickets[g_heroDash_SellTicketN++] = tk[k];
+            g_heroDash_SellTickets[g_heroDash_SellTicketN++] = tkGL[k];
       }
 
       for(int k = 0; k < take && g_heroTicketCount < 200; k++)
-         g_heroTickets[g_heroTicketCount++] = tk[k];
+         g_heroTickets[g_heroTicketCount++] = tkGL[k];
       sideHeroTagged[s] += take;
    }
 
-   // Phase update per side (NONE -> ARMED_WAITING; BE_GUARD set elsewhere, never downgrade here)
+   // Phase update per side (NONE -> ARMED; BE_GUARD set elsewhere, never downgrade here)
    if(g_heroPhase_Buy != 3) {
       g_heroPhase_Buy = (sideHeroTagged[0] > 0) ? 2 : 0;
    }
@@ -2385,7 +2394,7 @@ void BuildHeroTicketCache()
       g_heroPhase_Sell = (sideHeroTagged[1] > 0) ? 2 : 0;
    }
 
-   // v6.99: refresh dashboard counters
+   // Dashboard counters
    g_heroDash_BuyActive  = sideTotalActive[0];
    g_heroDash_SellActive = sideTotalActive[1];
    g_heroDash_BuyTagged  = sideHeroTagged[0];
@@ -2393,14 +2402,14 @@ void BuildHeroTicketCache()
    if(sideHeroTagged[0] == 0) g_heroDash_BuyTicketN = 0;
    if(sideHeroTagged[1] == 0) g_heroDash_SellTicketN = 0;
 
-   // v6.99: audit log every 30s — dual-side independent activation visibility
+   // v7.00: audit log every 30s — visibility into GL-only Hero selection
    static datetime lastHeroAuditLog = 0;
    if(TimeCurrent() - lastHeroAuditLog >= 30) {
       int minAct = (InpHero_MinOrdersToActivate > 0) ? InpHero_MinOrdersToActivate : (InpHero_OrderCount + 1);
-      Print("v6.99 Hero AUDIT: BUY active=", sideTotalActive[0], " hero=", sideHeroTagged[0],
-            " phase=", g_heroPhase_Buy,
-            " | SELL active=", sideTotalActive[1], " hero=", sideHeroTagged[1],
-            " phase=", g_heroPhase_Sell,
+      Print("v7.00 Hero AUDIT: BUY active=", sideTotalActive[0], " GL=", sideGLPool[0],
+            " hero=", sideHeroTagged[0], " phase=", g_heroPhase_Buy,
+            " | SELL active=", sideTotalActive[1], " GL=", sideGLPool[1],
+            " hero=", sideHeroTagged[1], " phase=", g_heroPhase_Sell,
             " | threshold=", minAct, " HeroCount=", InpHero_OrderCount);
       lastHeroAuditLog = TimeCurrent();
    }
