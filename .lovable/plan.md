@@ -1,60 +1,84 @@
-## Issue (Gold Miner EA v7.04 → v7.05)
+## Issues (Gold Miner EA v7.05 → v7.06)
 
-Dashboard shows `Side Gen SELL: GM2 (Hero owns GM1)` + `Hero SELL: BE_GUARD` with 5 Hero tickets surviving on SELL. Per the spec, the SELL side should now open new `GM2_INIT` / `GM2_GL` / `GM2_GP` to keep trading. **It does not.** Tracing `OpenOrder()`, two guards still scope to the **global** `g_cycleGeneration` (= GM1) and falsely block any new GM2 entry on the Hero-owning side:
+User reports two related defects in Hero ownership / per-side gen isolation:
 
-### Root Cause
+### Bug A — Owner is locked too early (at threshold, not at TP-close)
+Spec: ownership of "Hero" should lock to a side ONLY after that side closes its non-Hero basket via TP / Avg-trailing (i.e. transitions to **BE_GUARD**). Both sides may reach the order-count threshold simultaneously and run **ARMED** in parallel; the **first side to actually clear its basket** becomes the Hero owner.
 
-1. **`ShouldBlockSameSideGridForHero(side)`** (line 2538) → calls `CountNonHeroMainOnSide(side)` which filters with `g != g_cycleGeneration` (line 2530). It only sees GM1, finds 0 non-Hero main → returns `block=true`. New `GM2_INIT/GL/GP` is rejected at `OpenOrder` line 2183.
+Current code (`BuildHeroTicketCache`, lines 2342-2352):
+```cpp
+bool buyOwns  = (CountHeroOnSide(BUY)  > 0) || (g_heroPhase_Buy  != 0); // counts ARMED too
+bool sellOwns = (CountHeroOnSide(SELL) > 0) || (g_heroPhase_Sell != 0);
+```
+`phase != 0` includes **ARMED (=2)**, so whichever side hits the threshold first becomes `activeOwner` and the other side's phase is force-cleared every tick (line 2418-2421). The opposite side can never even reach ARMED.
 
-2. **`CountFreeOlderGenOnSide(side)`** (line 9400, used by `InpCrossGen_InitGuard` at line 2147) counts Hero GL tickets as "older-gen still free" (Hero is not bound, not _HEDGE) → `legacyFree > 0` → `GM2_INIT BLOCKED` log fires.
+### Bug B — When `InpHero_PerSideGenIsolation` is ON, Hero gets stripped/closed once GM(N+1) opens
+After BE_GUARD bumps `g_sideGen_<side>` to GM(N+1), new GM(N+1) `_GL` orders open on the same side. `BuildHeroTicketCache` pool selection (lines 2360-2396) collects **ALL** unbound `_GL` tickets on the side regardless of generation, then sorts by `POSITION_TIME_MSC` desc and keeps the **newest N**. The new GM2 GL tickets are newer → they replace the original GM1 Hero tickets in `g_heroTickets[]`. Consequences:
+- `IsHeroTicket(oldGM1ticket)` now returns false → `SyncBrokerTPSL` / `ManagePerOrderTrailing` push basket TP onto them and `ApplyTrailingSL` overwrites the lock-profit SL → Hero closes.
+- The new GM2 GL gets the lock-profit-BE-SL applied incorrectly (or no protection at all).
 
-These two guards predate per-side gen isolation and were not updated in v7.04.
+Turning isolation OFF avoids this because no GM(N+1) entries open on the Hero side, but then Bug A locks the wrong side first.
 
-## Fix (v7.05)
+## Fix (v7.06)
 
 ### Code changes — `public/docs/mql5/Gold_Miner_EA.mq5`
 
-1. **`ShouldBlockSameSideGridForHero(side)`** — bypass when this side has a side-gen override:
+1. **`BuildHeroTicketCache` — owner detection (lines 2345-2352)**
+   Owner only when a side is in **BE_GUARD (phase==3)**. ARMED (phase==2) does not lock.
    ```cpp
-   if(InpHero_PerSideGenIsolation &&
-      ((side==POSITION_TYPE_BUY  && g_sideGen_Buy  > 0) ||
-       (side==POSITION_TYPE_SELL && g_sideGen_Sell > 0))) return false;
+   int activeOwner = -1;
+   if(InpHero_SingleSideLock) {
+      bool buyOwns  = (g_heroPhase_Buy  == 3); // BE_GUARD only
+      bool sellOwns = (g_heroPhase_Sell == 3);
+      if(buyOwns && !sellOwns)      activeOwner = (int)POSITION_TYPE_BUY;
+      else if(sellOwns && !buyOwns) activeOwner = (int)POSITION_TYPE_SELL;
+   }
    ```
-   Rationale: once side-gen is bumped, GM(N+1) IS the new basket — Hero (GM(N)) lives separately under BE_GUARD lock.
+   Both sides are now allowed to enter ARMED in parallel. The single-side block at line 2418 still applies — but only fires once one side reaches BE_GUARD.
 
-2. **`CountNonHeroMainOnSide(side)`** — replace global gen filter with per-side active gen so its semantics stay correct everywhere it's reused:
+2. **`BuildHeroTicketCache` — pool gen-lock for BE_GUARD (around lines 2371-2382)**
+   When the side is already past first activation AND has a recorded `g_heroOwnedGen_<side> > 0`, restrict the `_GL` pool to that owned gen only. New GM(N+1) GL orders are excluded from Hero rolling.
    ```cpp
-   if(g >= 0 && g != GetActiveGenForSide(side)) continue;
+   int ownedGen = (sideId==POSITION_TYPE_BUY) ? g_heroOwnedGen_Buy : g_heroOwnedGen_Sell;
+   bool gateOwnedGenOnly = (ownedGen > 0); // set after BE_GUARD bump
+   ...
+   if(isGL) {
+      if(gateOwnedGenOnly) {
+         int og = ExtractGeneration(c);
+         if(og >= 0 && og != ownedGen) { /* exclude — belongs to GM(N+1) basket */ }
+         else if(nGL < 200) { tkGL[nGL]=ticket; ttGLMs[nGL]=...; nGL++; }
+      } else if(nGL < 200) {
+         tkGL[nGL]=ticket; ttGLMs[nGL]=...; nGL++;
+      }
+   }
    ```
+   Note: `g_heroOwnedGen_<side>` is already stamped to the original gen at the BE_GUARD transition (lines 2793 / 2799). It is reset to 0 by `CloseHeroOnSide` (lines 2593 / 2597) and by cycle reset (lines 9658 / 9758) — no other state plumbing needed.
 
-3. **`CountFreeOlderGenOnSide(side)`** — exclude Hero tickets (they are NOT "free older-gen orders that can self-close"; they are intentionally locked at BE-profit waiting for opposite-basket clear):
-   ```cpp
-   if(IsHeroTicket(tk)) continue;
-   ```
+3. **`BuildHeroTicketCache` — also gate `nAll` activation count (line 2375 area)**
+   For sides still in phase NONE (first activation), keep `nAll` cross-gen as today. For sides already in BE_GUARD with an `ownedGen`, also count only that owned-gen basket — purely for the dashboard `Hero Owner` / counters; does not affect already-tagged Heroes since `take` uses sticky path.
 
-4. **Version bump** — `#property version "7.05"`, `#property description`, header comment, dashboard title (`Gold Miner EA v7.05 [INST]`), Init log line.
+4. **Version bump**
+   `#property version "7.06"`, `#property description`, header comment block, dashboard title (`Gold Miner EA v7.06 [INST]`), Init log line.
 
 ### Files / memory
-- Edit `public/docs/mql5/Gold_Miner_EA.mq5` (4 sites + version markers).
-- Add `mem://trading/gold-miner-ea/hero-side-gen-unblock-v7-05.md`.
+- Edit `public/docs/mql5/Gold_Miner_EA.mq5` (4 spots + version markers).
+- Add `mem://trading/gold-miner-ea/hero-owner-on-be-guard-and-genlock-pool-v7-06.md`.
 - Update `mem://index.md`.
 
 ## What is NOT changed (per project hard rules)
-
 - OrderSend / `trade.Buy` / `trade.Sell` / `trade.PositionClose` — untouched.
 - Entry conditions (SMA / EMA / Squeeze / BB / ZigZag) — untouched.
 - Grid lot / distance / candle-confirm / MaxGrid trailing math — untouched.
 - TP / SL / Trailing / Breakeven / Avg-TP — untouched.
-- Hedge / Triple-Gate / Recovery / DD% TP / Daily Target / Balance Guard activation — untouched.
-- Hero formula: `ComputeHeroLockProfitSL`, `ValidateHeroLockProfitSL` (v7.02), `BE_GUARD` apply path, Post-Close Grace (v7.03), Single-Side Lock (v7.04), `OnTradeTransaction` audit — untouched.
+- Hedge / Triple-Gate / Recovery / DD% TP / Daily Target / Balance Guard — untouched.
+- Hero formula: `ComputeHeroLockProfitSL`, `ValidateHeroLockProfitSL` (v7.02), `ApplyHeroLockProfitSL`, `BE_GUARD` apply path, Post-Close Grace (v7.03), `OnTradeTransaction` audit — untouched.
+- All v7.05 unblock helpers (`ShouldBlockSameSideGridForHero`, `CountNonHeroMainOnSide`, `CountFreeOlderGenOnSide`) — untouched.
 - License / News / Sync modules — untouched.
 
-Only two **block-condition helpers** are widened so the GM(N+1) entries the v7.03/v7.04 plan already promised can actually reach `trade.Buy/Sell`.
+Only **two semantics in `BuildHeroTicketCache`** are tightened: (1) owner = BE_GUARD instead of any active phase, (2) Hero pool is gen-locked to the originally owned generation once BE_GUARD has bumped `g_sideGen_*`. This lets `InpHero_PerSideGenIsolation` stay ON while preserving the original Hero tickets unchanged.
 
 ## Expected behavior after fix
-
-When SELL owns Hero on GM1:
-- Dashboard keeps showing `Side Gen SELL: GM2 (Hero owns GM1)`.
-- New SELL entries open as `GM2_INIT`, then `GM2_GL#1..N` / `GM2_GP#1..N` — fully independent of the GM1 Hero, which keeps its lock-profit BE-SL.
-- BUY side keeps trading on GM1 unchanged.
-- When the SELL GM2 basket closes (TP/match/etc.) AND the Hero closes via opposite-basket-clear hook, `CloseHeroOnSide` resets `g_sideGen_Sell=0` → next cycle returns to global gen.
+- Both BUY and SELL can sit at READY/ARMED simultaneously while their baskets are still open.
+- The first side whose non-Hero basket flattens (TP / Avg-trailing) transitions to **BE_GUARD** and becomes Hero owner; the opposite side is then blocked from new Hero activation until owner clears.
+- With `InpHero_PerSideGenIsolation = true`, GM(N+1) entries on the Hero-owning side open and trade normally, while the original GM(N) Hero tickets keep their lock-profit BE-SL untouched (no strip, no premature close).
+- Dashboard `Hero Owner` row reads NONE while both sides are ARMED, and switches to BUY/SELL only at the BE_GUARD transition.

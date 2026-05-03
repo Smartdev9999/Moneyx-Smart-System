@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v7.05 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v7.06 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "7.05"
-#property description "Gold Miner EA v7.05 - Hero Side-Gen Unblock: ShouldBlockSameSideGridForHero now bypasses block when side owns a side-gen override (GM(N+1) IS the new basket). CountNonHeroMainOnSide uses GetActiveGenForSide so its semantics stay correct. CountFreeOlderGenOnSide excludes Hero tickets so cross-gen INIT guard does not falsely treat locked-profit Heroes as free older-gen orders. Result: Hero-owning side actually opens GM(N+1) INIT/GL/GP as v7.04 promised."
+#property version   "7.06"
+#property description "Gold Miner EA v7.06 - Hero Owner = BE_GUARD only + Gen-Locked Pool: Single-Side Lock now triggers ONLY when one side reaches BE_GUARD (basket cleared via TP/Avg-trail). Both sides may stay ARMED in parallel. BuildHeroTicketCache pool is gen-locked to g_heroOwnedGen_<side> after BE_GUARD bump, so new GM(N+1) GL entries never replace original Hero tickets and never get the lock-profit BE-SL stripped/applied wrongly."
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -1115,7 +1115,7 @@ int OnInit()
    g_heroBE_Applied_Sell = false;
    g_heroBE_LastLog = 0;
    
-     Print("Gold Miner EA v7.05 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+     Print("Gold Miner EA v7.06 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min",
@@ -1178,7 +1178,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v7.05 deinitialized");
+   Print("Gold Miner EA v7.06 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -2339,16 +2339,18 @@ void BuildHeroTicketCache()
    int sideGLPool[2]      = {0, 0};
    int sideHeroTagged[2]  = {0, 0};
 
-   // v7.04: Single-Side Hero Lock — determine which side already "owns" Hero
-   //         (has tagged tickets OR phase != NONE). Opposite side's first-time
-   //         activation is blocked until owner clears (CountHero == 0 && phase == 0).
+   // v7.06: Single-Side Hero Lock — owner is decided ONLY when a side reaches
+   //         BE_GUARD (phase==3). ARMED (phase==2) does NOT lock — both sides
+   //         may stay ARMED in parallel until one's basket actually clears
+   //         (TP / Avg-trailing). The first side to flatten its non-Hero basket
+   //         wins ownership; the opposite side then loses first-time activation.
    int activeOwner = -1;
    if(InpHero_SingleSideLock) {
-      bool buyOwns  = (CountHeroOnSide(POSITION_TYPE_BUY)  > 0) || (g_heroPhase_Buy  != 0);
-      bool sellOwns = (CountHeroOnSide(POSITION_TYPE_SELL) > 0) || (g_heroPhase_Sell != 0);
+      bool buyOwns  = (g_heroPhase_Buy  == 3); // BE_GUARD only
+      bool sellOwns = (g_heroPhase_Sell == 3);
       if(buyOwns && !sellOwns)      activeOwner = (int)POSITION_TYPE_BUY;
       else if(sellOwns && !buyOwns) activeOwner = (int)POSITION_TYPE_SELL;
-      // if both owns simultaneously (legacy / restored state), let both run — no lock change
+      // both BE_GUARD simultaneously (rare): no lock — let both keep their Heroes
    }
 
    for(int s = 0; s < 2; s++)
@@ -2356,6 +2358,13 @@ void BuildHeroTicketCache()
       ENUM_POSITION_TYPE side = (s == 0) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
       ulong  tkGL[200]; long ttGLMs[200]; int nGL = 0;
       int    nAll = 0;
+
+      // v7.06: Once BE_GUARD has stamped g_heroOwnedGen_<side>, gen-lock the Hero
+      //         pool to that owned gen. New GM(N+1) GL orders (opened because of
+      //         InpHero_PerSideGenIsolation) MUST NOT roll into Hero — they are
+      //         the new active basket and need normal TP/SL/trailing handling.
+      int ownedGen = (side == POSITION_TYPE_BUY) ? g_heroOwnedGen_Buy : g_heroOwnedGen_Sell;
+      bool gateOwnedGenOnly = (ownedGen > 0);
 
       // Pass 1: collect ALL active basket orders for threshold + isolate _GL for Hero pool
       for(int i = PositionsTotal() - 1; i >= 0; i--)
@@ -2375,6 +2384,11 @@ void BuildHeroTicketCache()
          nAll++;
          // v7.00: ONLY _GL is eligible to be Hero (per user spec — INIT/GP excluded)
          if(isGL && nGL < 200) {
+            // v7.06: gen-lock the GL pool when ownedGen is set
+            if(gateOwnedGenOnly) {
+               int og = ExtractGeneration(c);
+               if(og >= 0 && og != ownedGen) continue; // belongs to GM(N+1) basket — not Hero
+            }
             tkGL[nGL]   = ticket;
             ttGLMs[nGL] = PositionGetInteger(POSITION_TIME_MSC);
             nGL++;
@@ -4990,7 +5004,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v7.05 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v7.05 [ZZ]" : "Gold Miner EA v7.05 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v7.06 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v7.06 [ZZ]" : "Gold Miner EA v7.06 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
