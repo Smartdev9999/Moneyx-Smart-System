@@ -2414,6 +2414,11 @@ void BuildHeroTicketCache()
                               ? InpHero_MinOrdersToActivate
                               : (InpHero_OrderCount + 1);
 
+      // v7.04: Single-side lock — block first-time activation on the non-owner side
+      if(InpHero_SingleSideLock && curPhase == 0 && activeOwner >= 0 && sideId != activeOwner) {
+         if(sideId == POSITION_TYPE_BUY) g_heroPhase_Buy = 0; else g_heroPhase_Sell = 0;
+         continue;
+      }
       // Activation gate ONLY applies for the FIRST tag (phase == NONE).
       if(curPhase == 0 /*NONE*/ && nAll < activateThreshold) continue;
       if(nGL <= 0) continue;
