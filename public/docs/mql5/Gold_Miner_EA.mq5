@@ -2494,15 +2494,20 @@ void BuildHeroTicketCache()
    if(sideHeroTagged[0] == 0) g_heroDash_BuyTicketN = 0;
    if(sideHeroTagged[1] == 0) g_heroDash_SellTicketN = 0;
 
-   // v7.00: audit log every 30s — visibility into GL-only Hero selection
+   // v7.00 + v7.07: audit log every 30s — visibility into Candidate vs Owner state.
    static datetime lastHeroAuditLog = 0;
    if(TimeCurrent() - lastHeroAuditLog >= 30) {
       int minAct = (InpHero_MinOrdersToActivate > 0) ? InpHero_MinOrdersToActivate : (InpHero_OrderCount + 1);
-      Print("v7.01 Hero AUDIT: BUY active=", sideTotalActive[0], " GL=", sideGLPool[0],
+      string roleB = (g_heroPhase_Buy  == 3) ? "OWNER"     : (g_heroPhase_Buy  == 2) ? "CANDIDATE" : "NONE";
+      string roleS = (g_heroPhase_Sell == 3) ? "OWNER"     : (g_heroPhase_Sell == 2) ? "CANDIDATE" : "NONE";
+      int    ownerSide = GetHeroOwnerSide();
+      string ownerStr  = (ownerSide == (int)POSITION_TYPE_BUY)  ? "BUY"
+                       : (ownerSide == (int)POSITION_TYPE_SELL) ? "SELL" : "NONE";
+      Print("v7.07 Hero AUDIT: BUY ", roleB, " active=", sideTotalActive[0], " GL=", sideGLPool[0],
             " hero=", sideHeroTagged[0], " phase=", g_heroPhase_Buy,
-            " | SELL active=", sideTotalActive[1], " GL=", sideGLPool[1],
+            " | SELL ", roleS, " active=", sideTotalActive[1], " GL=", sideGLPool[1],
             " hero=", sideHeroTagged[1], " phase=", g_heroPhase_Sell,
-            " | threshold=", minAct, " HeroCount=", InpHero_OrderCount);
+            " | OWNER=", ownerStr, " threshold=", minAct, " HeroCount=", InpHero_OrderCount);
       lastHeroAuditLog = TimeCurrent();
    }
 }
