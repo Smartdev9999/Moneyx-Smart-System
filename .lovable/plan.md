@@ -1,91 +1,142 @@
-# Hero Order v7.01 → v7.02
+# Hero Order v7.02 → v7.03
 
-## บั๊กที่พบจากภาพ + คำอธิบาย
+แก้ 2 บั๊ก/ฟีเจอร์ที่ user รายงาน หลังจากที่ Hero + ฝั่งตรงข้ามปิดรวบกันแล้ว
 
-### บั๊กที่ 1 — BE_GUARD แสดงผล แต่ไม่มี SL กันทุนจริงบน ticket
-ภาพ MT5 ยืนยันชัด: Hero BUY #254 / #253 / #251 ต่างมี `S/L = 0.00` แม้ dashboard ขึ้น `BE_GUARD`
+## บั๊ก/พฤติกรรมที่พบ
 
-**Root cause** (`ValidateHeroLockProfitSL` line 2552 ใน `Gold_Miner_EA.mq5`):
+### 1. ออเดอร์ "แปลกปลอม" โผล่หลัง Hero ปิดพร้อมฝั่งตรงข้าม
+จากภาพ: หลัง Hero ฝั่ง BUY ปิดด้วย `OppositeBasketFlatTick` มีออเดอร์ใหม่โผล่มาโดยถูก lock (ไม่มี TP) เหมือน Hero
+
+**Root cause** อยู่ใน `BuildHeroTicketCache` v7.01 (Sticky Tag) ผสมกับ `ResetHeroStateIfFlat`:
+
+- `CloseHeroOnSide()` สั่งปิด แต่ broker ยังคืนผล async — ใน tick เดียวกันอาจยังเห็น Hero ticket อยู่
+- ก่อน `ResetHeroStateIfFlat` จะรันได้สำเร็จ ระบบเข้าเงื่อนไข entry และเปิด INIT/GL ใหม่
+- เพราะ `g_heroPhase_Buy == 3 (BE_GUARD)` ยังไม่ reset → v7.01 sticky logic ข้าม threshold gate → re-tag GL ใหม่เป็น Hero ทันที (`take = MathMin(N, nGL)`)
+- `StripBrokerTPSLFromHeroTickets()` ลบ TP บนตั๋วใหม่ → ดูเหมือน "Hero ผีๆ"
+
+### 2. ฟีเจอร์ใหม่: per-side generation isolation ขณะมี Hero
+สเปกใหม่ของ user:
+- ฝั่งที่มี Hero ยังคง Hero ค้างไว้ใน **gen เดิม (gen N)** จนกว่าจะปิดด้วย lock-profit SL หรือพร้อมฝั่งตรงข้ามใน gen เดียวกัน
+- เมื่อ basket non-Hero ฝั่ง Hero ปิดไปแล้ว ฝั่ง Hero **เริ่มเทรดใหม่ใน gen N+1** โดย Hero gen N ไม่ยุ่ง
+- ฝั่งตรงข้ามที่ยังมี basket ค้าง — ยังเทรดต่อใน gen N เดิมจนปิด
+- เมื่อทั้ง Hero gen N + opposite gen N ปิดหมด → ระบบกลับไปเทรดปกติ (gen ปัจจุบันเหลือ N+1 หรือ reset เป็น GM1 ถ้า account flat)
+
+ตอนนี้ `g_cycleGeneration` เป็น **global ตัวเดียว** — เพิ่มเฉพาะตอน hedge เปิด ไม่มี per-side generation tracking
+
+## สิ่งที่จะแก้ใน v7.03
+
+### Fix A — Reset phase ทันทีหลัง CloseHeroOnSide (ใน `ManageHeroOppositeClose`)
+
+หลัง `CloseHeroOnSide(side, "OppositeBasketFlatTick")` (line 2731):
 
 ```cpp
-// SELL → SL ที่ถูกต้องต้อง > ask + stops (เพราะ SELL ปิดที่ ask)
-//        แต่โค้ดเช็ค sl < ask - minDist  ← INVERTED
-if(posType == POSITION_TYPE_SELL)
-   return (sl > 0 && sl < (ask - minDist) && sl < ask);
-
-// BUY → SL ที่ถูกต้องต้อง < bid - stops (เพราะ BUY ปิดที่ bid)
-//       แต่โค้ดเช็ค sl > bid + minDist  ← INVERTED
-if(posType == POSITION_TYPE_BUY)
-   return (sl > 0 && sl > (bid + minDist) && sl > bid);
+// v7.03: hard-reset phase + applied flag immediately so next tick
+// won't re-tag newly entering INIT/GL as Hero via Sticky logic.
+if(side == POSITION_TYPE_BUY)  { g_heroPhase_Buy  = 0; g_heroBE_Applied_Buy  = false; }
+else                            { g_heroPhase_Sell = 0; g_heroBE_Applied_Sell = false; }
+g_heroTicketCount = 0;          // clear cache so IsHeroTicket false until next build
 ```
 
-ผลคือ `ValidateHeroLockProfitSL` คืน `false` เกือบทุกครั้ง → `skipped++` → `PositionModify` ไม่ถูกเรียก → SL=0 ตลอด ทั้งที่ phase ขึ้น BE_GUARD แล้ว
+ทำเหมือนกันใน `CloseOppositeHeroOnBasketClose` hook (close-path เดิมจาก CloseAllSide)
 
-### บั๊กที่ 2 — ฝั่งตรงข้ามปิดด้วย Broker TP แล้ว Hero ไม่ปิดตาม
-`CloseOppositeHeroOnBasketClose` ถูกเรียกจาก `CloseAllSide` / `CloseGenSide` / `CloseAllSideTF` เท่านั้น แต่เมื่อ basket ฝั่งตรงข้ามปิดด้วย **Broker TP รายตัว** (ไม่ผ่านโค้ด EA) hook นี้ไม่ถูกยิง → Hero ติด BE_GUARD ค้างจนกว่าราคาจะมาแตะ SL กันทุน (ซึ่งบั๊ก 1 ทำให้ SL ไม่มีอยู่จริง วนกัน)
+### Fix B — เพิ่ม guard ใน `BuildHeroTicketCache` ป้องกัน Sticky re-tag ขณะ "ปิดอยู่"
 
-## สิ่งที่จะแก้ใน v7.02
+เพิ่ม flag pending close per side:
 
-### 1. Fix `ValidateHeroLockProfitSL` — สลับเงื่อนไขให้ถูก
 ```cpp
-// SELL Hero: lock-profit SL อยู่ใต้ openPrice แต่ต้อง > ask + stops
-if(posType == POSITION_TYPE_SELL)
-   return (sl > 0 && sl > (ask + minDist));
-
-// BUY Hero: lock-profit SL อยู่เหนือ openPrice แต่ต้อง < bid - stops
-if(posType == POSITION_TYPE_BUY)
-   return (sl > 0 && sl < (bid - minDist));
+datetime g_heroJustClosed_Buy  = 0;
+datetime g_heroJustClosed_Sell = 0;
+const int InpHero_PostCloseGraceSec = 5;  // input ใหม่
 ```
 
-### 2. เพิ่ม tick-based opposite-clear detector
-ใน `ManageHeroOppositeClose()` เพิ่มลูป per side หลัง BE_GUARD retry:
-
+ใน `BuildHeroTicketCache` หลังเช็ค sticky:
 ```cpp
-// v7.02: ตรวจทุก tick ว่าฝั่งตรงข้าม non-Hero basket = 0 แล้วหรือยัง
-// ครอบคลุมเคสที่ basket ฝั่งตรงข้ามถูกปิดด้วย Broker TP/SL/SLTP รายตัว
-for(int s = 0; s < 2; s++) {
-   ENUM_POSITION_TYPE side = (s == 0) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
-   ENUM_POSITION_TYPE opp  = (s == 0) ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
-   int phase = (side == POSITION_TYPE_BUY) ? g_heroPhase_Buy : g_heroPhase_Sell;
-   if(phase != 3 /*BE_GUARD*/) continue;
-   if(CountHeroOnSide(side) <= 0) continue;
-   if(CountNonHeroMainOnSide(opp) > 0) continue;          // opposite basket ยังอยู่
-   if(CountHeroOnSide(opp) > 0) continue;                  // ปลอดภัย: ห้ามปิดถ้า opp ยังมี Hero
-   Print("v7.02 Hero CLOSE (opp basket flat detected): heroSide=", EnumToString(side));
-   CloseHeroOnSide(side, "OppositeBasketFlatTick");
+// v7.03: ถ้าเพิ่งสั่งปิด Hero ฝั่งนี้ใน N วินาทีล่าสุด — บังคับ NONE phase
+// แม้ broker จะยังคืน position อยู่ ก็จะไม่ re-tag เป็น Hero
+datetime jc = (sideId==POSITION_TYPE_BUY) ? g_heroJustClosed_Buy : g_heroJustClosed_Sell;
+if(jc > 0 && TimeCurrent() - jc < InpHero_PostCloseGraceSec) {
+   // skip tagging this side entirely; force phase NONE
+   if(sideId==POSITION_TYPE_BUY) g_heroPhase_Buy=0; else g_heroPhase_Sell=0;
+   continue;
 }
 ```
 
-### 3. ลำดับใน `ManageHeroOppositeClose` ป้องกัน Strip ทับ SL ใน tick เดียวกับ BE_GUARD transition
-ย้าย `StripBrokerTPSLFromHeroTickets()` ลงไปท้ายลูป หรือเช็คว่า side นั้นกำลัง transition อยู่ใน tick นี้แล้ว skip Strip ของ side นั้น (ป้องกัน race condition ระดับ tick — แม้ฟังก์ชัน Strip จะ skip phase==3 อยู่แล้ว)
+ตั้ง `g_heroJustClosed_*` ใน Fix A
 
-### 4. Audit log ชัดขึ้น
-- log ทุกครั้งที่ `ValidateHeroLockProfitSL` skip พร้อมเหตุผล (SL value, bid/ask, stopsLevel) เพื่อ debug ในอนาคต
-- log `v7.02 Hero CLOSE (opp basket flat detected)` แยกจาก `OppositeBasketClose` เดิม (ที่ผ่าน CloseAllSide hook)
+### Fix C — Per-side generation isolation (ฟีเจอร์ใหม่)
 
-### 5. Version bump 7.01 → 7.02
-- `#property version "7.02"`
-- `#property description` อธิบายว่า fix lock-profit SL validation + tick-based opp-clear close
-- header comment block
-- dashboard `headerVersion`
-- log prefix
+เพิ่ม global per-side gen offset:
+```cpp
+int g_sideGen_Buy  = 0;   // 0 = ใช้ g_cycleGeneration ปกติ, >0 = override gen ฝั่งนี้
+int g_sideGen_Sell = 0;
+int g_heroOwnedGen_Buy  = 0;  // gen ที่ Hero BUY ค้างอยู่
+int g_heroOwnedGen_Sell = 0;
+```
+
+แก้ `GetCommentPrefix()` ให้รับ side optional:
+```cpp
+string GetCommentPrefixForSide(ENUM_POSITION_TYPE side) {
+   int sg = (side==POSITION_TYPE_BUY) ? g_sideGen_Buy : g_sideGen_Sell;
+   int g = (sg > 0) ? sg : ((g_cycleGeneration < 1) ? 1 : g_cycleGeneration);
+   return "GM" + IntegerToString(g);
+}
+```
+
+ทุกจุดที่สร้าง comment INIT/GL/GP → ใช้ `GetCommentPrefixForSide(side)` แทน `GetCommentPrefix()`
+(จุดสำคัญ: entry logic line ~1773-1804, GL/GP placement)
+
+**Trigger generation bump per side** — ใน `ManageHeroOppositeClose` เมื่อ Hero เพิ่งเข้า BE_GUARD (basket non-Hero ฝั่งเดียวกันปิดหมด แต่ Hero ยังอยู่):
+
+```cpp
+// v7.03: ฝั่งนี้มี Hero ค้าง + basket non-Hero ปิดหมด → bump side gen ไปอีก 1
+//        เพื่อให้ออเดอร์ใหม่ฝั่งนี้เปิดเป็น GM(N+1) แยกจาก Hero (GM N)
+if(transitioning_to_BE_GUARD && CountNonHeroMainOnSide(side) == 0) {
+   int curGen = (g_cycleGeneration < 1) ? 1 : g_cycleGeneration;
+   int sg     = (side==POSITION_TYPE_BUY) ? g_sideGen_Buy : g_sideGen_Sell;
+   int newSg  = (sg > 0 ? sg : curGen) + 1;
+   if(side==POSITION_TYPE_BUY) { g_sideGen_Buy = newSg; g_heroOwnedGen_Buy = curGen; }
+   else                          { g_sideGen_Sell= newSg; g_heroOwnedGen_Sell= curGen; }
+   Print("v7.03 SIDE-GEN BUMP: side=", EnumToString(side),
+         " heroOwnedGen=GM", curGen, " → newSideGen=GM", newSg);
+}
+```
+
+**Reset side gen** ใน `ResetHeroStateIfFlat` หรือ `CloseHeroOnSide` เมื่อ Hero ฝั่งนั้นปิดหมด:
+```cpp
+if(side==POSITION_TYPE_BUY)  { g_sideGen_Buy  = 0; g_heroOwnedGen_Buy  = 0; }
+else                          { g_sideGen_Sell = 0; g_heroOwnedGen_Sell = 0; }
+```
+
+**ปรับ `CountFreeOlderGenOnSide` / `CrossGen_InitGuard`** ให้ยกเว้น Hero tickets (gen เก่าฝั่ง Hero) เพื่อไม่บล็อก INIT ใหม่ของ side gen ใหม่:
+```cpp
+// ถ้า ticket นั้นเป็น Hero และอยู่ใน g_heroOwnedGen_<side> → ไม่นับ (ไม่ block)
+```
+
+### Fix D — Dashboard
+เพิ่มแถวใน HERO Monitor:
+- `Side Gen BUY: GM2 (Hero owns GM1)` เมื่อ active
+- `Side Gen SELL: GM1` เมื่อ no Hero
+
+### Fix E — Version bump 7.02 → 7.03
+- `#property version "7.03"`
+- `#property description` → "Post-close phase reset + per-side generation isolation when Hero survives"
+- header / dashboard `headerVersion` / log prefix
 
 ## สิ่งที่ไม่เปลี่ยนแปลง
 
 - ไม่แตะ `OrderSend` / `trade.Buy` / `trade.Sell` / `trade.PositionClose` execution
-- ไม่แตะ entry: SMA / EMA / ZigZag / BB / Squeeze / Z-Score
-- ไม่แตะ Grid Loss / Grid Profit lot / distance / candle confirm
-- ไม่แตะ Hedge / Triple-Gate / Matching Close / Recovery / Auto Recovery
-- ไม่แตะสูตร Average TP / Average Trailing
-- ไม่แตะ DD% TP / Daily Target / Balance Guard
+- ไม่แตะ entry conditions (SMA/EMA/ZigZag/BB/Squeeze/Z-Score) — แค่เปลี่ยนค่า prefix ใน comment
+- ไม่แตะ Grid Loss / Grid Profit lot/distance/candle confirm formulas
+- ไม่แตะ Hedge / Triple-Gate / Matching Close / Recovery / Auto Recovery (hedge ยังเพิ่ม `g_cycleGeneration` global ตามเดิม)
+- ไม่แตะ Average TP / Trailing / DD% TP / Daily Target / Balance Guard
 - ไม่แตะ License / News / Time / Sync
-- ไม่แตะ `BuildHeroTicketCache` (Sticky Tag v7.01 ยังเดิม)
-- ไม่แตะ `CloseOppositeHeroOnBasketClose` hook ใน `CloseAllSide` / `CloseGenSide` / `CloseAllSideTF` (แค่เพิ่ม path ขนานทาง tick)
-- ไม่แตะ `ComputeHeroLockProfitSL` formula (`open ± InpHero_BE_OffsetPoints`)
-- ไม่แตะ `IsHeroTicket` exclusion ในทุก trailing/SyncBrokerTPSL
+- ไม่แตะ `ComputeHeroLockProfitSL` / `ValidateHeroLockProfitSL` (v7.02 fix ยังเดิม)
+- ไม่แตะ `IsHeroTicket` exclusion guards ในทุก trailing/SyncBrokerTPSL
+- `g_cycleGeneration` global ยังทำงานเหมือนเดิม — `g_sideGen_*` เป็น override layer เท่านั้น เมื่อทั้งสอง side gen = 0 พฤติกรรม = v7.02
 
 ## ผลลัพธ์ที่คาดหวัง
 
-1. หลังเข้า BE_GUARD → Hero ทุกตัวจะมี `S/L` ปรากฏบนตั๋วจริงในตาราง MT5 (lock-profit ใต้/เหนือ open)
-2. เมื่อ basket ฝั่งตรงข้ามถูกปิดด้วย Broker TP รายตัว → ภายใน 1 tick ถัดมา Hero ฝั่งนี้จะปิดอัตโนมัติ พร้อม log `OppositeBasketFlatTick`
-3. ถ้าราคาย้อนกลับมาชน lock-profit SL ก่อน → Broker จะปิดให้ พร้อม log `v7.00 Hero CLOSED reason=LockProfitSL_HIT`
+1. หลัง Hero ปิดพร้อม opposite (Broker TP/SL): ภายใน grace 5s จะไม่มีตั๋วใหม่ถูก tag เป็น Hero — ตั๋วใหม่จะมี TP ปกติ
+2. ฝั่งที่มี Hero ค้าง: ตั๋วใหม่ออกเป็น `GM(N+1)_INIT` แยกจาก Hero `GM(N)_GL` — เทรดต่อเนื่องโดย Hero ไม่ยุ่ง
+3. ฝั่งตรงข้าม (ไม่มี Hero): เทรดต่อใน `GMN` เดิม
+4. เมื่อ Hero `GMN` + opposite `GMN` ปิดครบ → `ResetHeroStateIfFlat` reset side gen → ฝั่ง Hero กลับมาใช้ `GMN` ปกติ; account flat → cycle reset → `GM1`

@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                           Gold_Miner_SQ_EA.mq5   |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|                Gold Miner EA v7.02 - MTF ZigZag+CDC+Grid+License |
+//|                Gold Miner EA v7.03 - MTF ZigZag+CDC+Grid+License |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "7.02"
-#property description "Gold Miner EA v7.02 - Hero Lock-Profit SL Fix + Tick-Based Opposite-Clear: Fixes inverted ValidateHeroLockProfitSL (sl-vs-bid/ask comparison was swapped) so BE_GUARD now actually places SL on broker. Adds tick-based detector that closes Hero when opposite-side basket goes flat via Broker TP/SL (not only via EA CloseAllSide hooks)."
+#property version   "7.03"
+#property description "Gold Miner EA v7.03 - Hero Post-Close Grace + Per-Side Generation Isolation: Adds InpHero_PostCloseGraceSec (default 5s) so freshly-opened INIT/GL after a Hero close are NOT re-tagged as Hero (fixes phantom locked orders). Adds optional InpHero_PerSideGenIsolation (default OFF) that bumps the per-side comment prefix to GM(N+1) for the side whose Hero survived, while the opposite side keeps trading on GM(N)."
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -133,6 +133,9 @@ input int    InpHero_MinOrdersToActivate= 5;     // Min orders on side before He
 input int    InpHero_BE_OffsetPoints    = 50;    // v6.96: Lock-profit BE-SL offset in POINTS (SELL=open-offset, BUY=open+offset)
 input bool   InpHero_BlockSameSideGrid  = true;  // Block new INIT/GL/GP on side that has Hero (survivor-only)
 input bool   InpHero_IncludeInMaxOrders = true;  // Count Hero into MaxOpenOrders
+// v7.03: Post-close grace + per-side gen isolation
+input int    InpHero_PostCloseGraceSec  = 5;     // v7.03: Seconds after Hero close to suppress re-tag
+input bool   InpHero_PerSideGenIsolation= false; // v7.03: [EXPERIMENTAL] Bump per-side comment gen when Hero survives
 // --- Deprecated (kept for .set compat, NO-OP in v6.96) ---
 input bool   InpHero_CloseWithOpposite  = true;  // [DEPRECATED v6.96] now hard-wired to opposite-basket close
 input bool   InpHero_RequireNetProfit   = false; // [DEPRECATED v6.96] not used (lock-profit SL guarantees floor)
@@ -750,6 +753,13 @@ ulong    g_heroDash_BuyTickets[10];
 int      g_heroDash_BuyTicketN    = 0;
 ulong    g_heroDash_SellTickets[10];
 int      g_heroDash_SellTicketN   = 0;
+// v7.03: post-close grace + per-side generation isolation
+datetime g_heroJustClosed_Buy     = 0;
+datetime g_heroJustClosed_Sell    = 0;
+int      g_sideGen_Buy            = 0;   // 0 = follow g_cycleGeneration; >0 = override for this side
+int      g_sideGen_Sell           = 0;
+int      g_heroOwnedGen_Buy       = 0;   // gen that surviving Hero BUY belongs to
+int      g_heroOwnedGen_Sell      = 0;
 // === v6.42: Dashboard History Cache ===
 datetime g_lastDashHistoryCalcTime = 0;
 int      g_dashCacheIntervalSec    = 5;  // recalculate every 5 seconds
@@ -800,6 +810,16 @@ int g_activeOrphanGroupCount = 0;
 string GetCommentPrefix()
 {
    int g = (g_cycleGeneration < 1) ? 1 : g_cycleGeneration;
+   return "GM" + IntegerToString(g);
+}
+
+// v7.03: Per-side override — when Hero survives, the side that "owns" the Hero
+//         keeps trading new orders under a higher GMx so they don't co-mingle
+//         with the surviving Hero (which stays on the original gen).
+string GetCommentPrefixForSide(ENUM_POSITION_TYPE side)
+{
+   int sg = (side == POSITION_TYPE_BUY) ? g_sideGen_Buy : g_sideGen_Sell;
+   int g  = (sg > 0) ? sg : ((g_cycleGeneration < 1) ? 1 : g_cycleGeneration);
    return "GM" + IntegerToString(g);
 }
 
@@ -1085,7 +1105,7 @@ int OnInit()
    g_heroBE_Applied_Sell = false;
    g_heroBE_LastLog = 0;
    
-     Print("Gold Miner EA v7.02 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
+     Print("Gold Miner EA v7.03 initialized successfully | CycleGen=", g_cycleGeneration, " (base=GM1) | BalanceGuard=", InpBalanceGuard_Enable ? "ON" : "OFF",
           " | Mode=", InpBalanceGuard_Mode == BALGUARD_FIXED ? "Fixed" : "Dynamic",
           " | BalGuardProfit=", DoubleToString(InpBalanceGuard_Profit, 2),
           " | SidePause=", InpHedge_SidePauseMin, "min",
@@ -1148,7 +1168,7 @@ void OnDeinit(const int reason)
    ObjectsDeleteAll(0, "GM_HED_");  // hedge dashboard objects
 
    SaveCycleGeneration();  // v6.53: persist before shutdown
-   Print("Gold Miner EA v7.02 deinitialized");
+   Print("Gold Miner EA v7.03 deinitialized");
 }
 
 //+------------------------------------------------------------------+
@@ -1772,7 +1792,7 @@ void OnTick()
                  {
                     if(shouldEnterBuy)
                     {
-                        if(OpenOrder(ORDER_TYPE_BUY, InitialLotSize, GetCommentPrefix() + "_INIT"))
+                        if(OpenOrder(ORDER_TYPE_BUY, InitialLotSize, GetCommentPrefixForSide(POSITION_TYPE_BUY) + "_INIT"))
                        {
                           g_initialBuyPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
                           lastInitialCandleTime = currentBarTime;
@@ -1793,7 +1813,7 @@ void OnTick()
                  {
                     if(shouldEnterSell)
                     {
-                        if(OpenOrder(ORDER_TYPE_SELL, InitialLotSize, GetCommentPrefix() + "_INIT"))
+                        if(OpenOrder(ORDER_TYPE_SELL, InitialLotSize, GetCommentPrefixForSide(POSITION_TYPE_SELL) + "_INIT"))
                        {
                           g_initialSellPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
                           lastInitialCandleTime = currentBarTime;
@@ -1884,7 +1904,7 @@ void OnTick()
           {
              if(TradingMode == TRADE_BUY_ONLY || TradingMode == TRADE_BOTH)
              {
-                if(OpenOrder(ORDER_TYPE_BUY, InitialLotSize, GetCommentPrefix() + "_INIT"))
+                if(OpenOrder(ORDER_TYPE_BUY, InitialLotSize, GetCommentPrefixForSide(POSITION_TYPE_BUY) + "_INIT"))
                 {
                    g_initialBuyPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
                    lastInitialCandleTime = currentBarTime;
@@ -1898,7 +1918,7 @@ void OnTick()
           {
              if(TradingMode == TRADE_SELL_ONLY || TradingMode == TRADE_BOTH)
              {
-                if(OpenOrder(ORDER_TYPE_SELL, InitialLotSize, GetCommentPrefix() + "_INIT"))
+                if(OpenOrder(ORDER_TYPE_SELL, InitialLotSize, GetCommentPrefixForSide(POSITION_TYPE_SELL) + "_INIT"))
                 {
                    g_initialSellPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID);
                    lastInitialCandleTime = currentBarTime;
@@ -2359,6 +2379,15 @@ void BuildHeroTicketCache()
       int sideId = (int)side;
       int curPhase = (sideId == POSITION_TYPE_BUY) ? g_heroPhase_Buy : g_heroPhase_Sell;
 
+      // v7.03: Post-close grace — after CloseHeroOnSide stamped a timer, ignore tagging
+      //         this side entirely so brand-new INIT/GL aren't mistaken for Heroes while
+      //         the broker is still settling the prior closures.
+      datetime jc = (sideId == POSITION_TYPE_BUY) ? g_heroJustClosed_Buy : g_heroJustClosed_Sell;
+      if(jc > 0 && (TimeCurrent() - jc) < InpHero_PostCloseGraceSec) {
+         if(sideId == POSITION_TYPE_BUY) g_heroPhase_Buy = 0; else g_heroPhase_Sell = 0;
+         continue;
+      }
+
       int activateThreshold = (InpHero_MinOrdersToActivate > 0)
                               ? InpHero_MinOrdersToActivate
                               : (InpHero_OrderCount + 1);
@@ -2522,6 +2551,20 @@ void CloseHeroOnSide(ENUM_POSITION_TYPE side, string reason)
    }
    g_heroTicketCount = 0;     // force rebuild
    g_heroLastBuildTime = 0;
+
+   // v7.03: Hard-reset phase + flag and stamp grace timer so next tick
+   //        won't re-tag newly entering INIT/GL as Hero via Sticky logic.
+   if(side == POSITION_TYPE_BUY) {
+      g_heroPhase_Buy = 0; g_heroBE_Applied_Buy = false;
+      g_heroJustClosed_Buy = TimeCurrent();
+      g_sideGen_Buy = 0; g_heroOwnedGen_Buy = 0;
+   } else {
+      g_heroPhase_Sell = 0; g_heroBE_Applied_Sell = false;
+      g_heroJustClosed_Sell = TimeCurrent();
+      g_sideGen_Sell = 0; g_heroOwnedGen_Sell = 0;
+   }
+   Print("v7.03 Hero POST-CLOSE reset: side=", EnumToString(side),
+         " gracePeriod=", InpHero_PostCloseGraceSec, "s sideGen reset");
 }
 
 // v6.96: Detect when same-side basket has fully cleared while Heroes still alive
@@ -2704,6 +2747,27 @@ void ManageHeroOppositeClose()
          ApplyHeroLockProfitSL(side);
          if(side == POSITION_TYPE_BUY)  g_heroBE_Applied_Buy  = true;
          else                            g_heroBE_Applied_Sell = true;
+
+         // v7.03: Per-side generation isolation — bump the gen for THIS side so any
+         //        new INIT/GL/GP entries open under GM(N+1) and stay separate from
+         //        the surviving Hero (which keeps GM(N)). The opposite side is left
+         //        on the current global gen to continue normally.
+         if(InpHero_PerSideGenIsolation) {
+            int curGen = (g_cycleGeneration < 1) ? 1 : g_cycleGeneration;
+            if(side == POSITION_TYPE_BUY) {
+               int sg = (g_sideGen_Buy > 0) ? g_sideGen_Buy : curGen;
+               g_sideGen_Buy       = sg + 1;
+               g_heroOwnedGen_Buy  = curGen;
+               Print("v7.03 SIDE-GEN BUMP: side=BUY heroOwnedGen=GM", curGen,
+                     " -> newSideGen=GM", g_sideGen_Buy);
+            } else {
+               int sg = (g_sideGen_Sell > 0) ? g_sideGen_Sell : curGen;
+               g_sideGen_Sell      = sg + 1;
+               g_heroOwnedGen_Sell = curGen;
+               Print("v7.03 SIDE-GEN BUMP: side=SELL heroOwnedGen=GM", curGen,
+                     " -> newSideGen=GM", g_sideGen_Sell);
+            }
+         }
       }
       // BE_GUARD retry: if some Heroes were skipped due to sanity, retry while still in BE_GUARD
       int phase = (side == POSITION_TYPE_BUY) ? g_heroPhase_Buy : g_heroPhase_Sell;
@@ -4393,7 +4457,7 @@ void CheckGridLoss(ENUM_POSITION_TYPE side, int currentGridCount)
       // v6.71: never reuse a level number that's already open after hedge unlock
       int _maxLvlGL = FindMaxGridLevelOnSide(side, "_GL");
       int _nextLvlGL = (int)MathMax(_maxLvlGL + 1, currentGridCount + 1);
-      string comment = GetCommentPrefix() + "_GL#" + IntegerToString(_nextLvlGL);
+      string comment = GetCommentPrefixForSide(side) + "_GL#" + IntegerToString(_nextLvlGL);
       ENUM_ORDER_TYPE orderType = (side == POSITION_TYPE_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
       if(OpenOrder(orderType, lots, comment))
       {
@@ -4474,7 +4538,7 @@ void CheckGridProfit(ENUM_POSITION_TYPE side, int currentGridCount)
       // v6.71: never reuse a level number that's already open
       int _maxLvlGP = FindMaxGridLevelOnSide(side, "_GP");
       int _nextLvlGP = (int)MathMax(_maxLvlGP + 1, currentGridCount + 1);
-      string comment = GetCommentPrefix() + "_GP#" + IntegerToString(_nextLvlGP);
+      string comment = GetCommentPrefixForSide(side) + "_GP#" + IntegerToString(_nextLvlGP);
       ENUM_ORDER_TYPE orderType = (side == POSITION_TYPE_BUY) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
       if(OpenOrder(orderType, lots, comment))
       {
@@ -4893,7 +4957,7 @@ void DisplayDashboard()
                            (TradingMode == TRADE_SELL_ONLY) ? "Sell Only" : "Both";
 
    //--- Header
-   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v7.02 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v7.02 [ZZ]" : "Gold Miner EA v7.02 [INST]";
+   string headerVersion = (EntryMode == ENTRY_SMA) ? "Gold Miner EA v7.03 [SMA]" : (EntryMode == ENTRY_ZIGZAG) ? "Gold Miner EA v7.03 [ZZ]" : "Gold Miner EA v7.03 [INST]";
    CreateDashRect("GM_TBL_HDR", DashboardX, DashboardY, tableWidth, headerHeight, COLOR_HEADER_BG);
    CreateDashText("GM_TBL_HDR_T", DashboardX + 8, DashboardY + 3, headerVersion, COLOR_HEADER_TEXT, headerFontSize, "Arial Bold");
    CreateDashText("GM_TBL_HDR_M", DashboardX + (int)(220 * sc), DashboardY + 4, "Mode: " + tradeModeStr, COLOR_HEADER_TEXT, subFontSize, "Consolas");
