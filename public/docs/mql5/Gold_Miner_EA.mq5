@@ -6,7 +6,7 @@
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
 #property version   "7.08"
-#property description "Gold Miner EA v7.08 - Candidate vs Owner separation: Reaching the order-count threshold makes a side a Hero CANDIDATE (ARMED) only — both BUY and SELL may sit ARMED in parallel. The first side whose non-Hero basket actually closes (TP / Avg-trailing) transitions to BE_GUARD and becomes the Hero OWNER. Dashboard 'Hero Owner' now reads NONE while only ARMED, and shows BUY/SELL with (locked) tag only after a real BE_GUARD owner exists. New helper GetHeroOwnerSide() unifies owner detection."
+#property description "Gold Miner EA v7.08 - Deferred SideGen revert: Closing a Hero no longer wipes g_sideGen_<side>. The surviving GM(N+1) basket on that side keeps being managed by grid/TP/Avg-trail. Side-gen reverts to GM1 only when (Hero count == 0) AND (non-Hero main on side == 0), allowing the next INIT on that side to open as GM1 and re-arm the Hero subsystem. Builds on v7.07 Candidate vs Owner separation."
 #property strict
 
 #include <Trade/Trade.mqh>
