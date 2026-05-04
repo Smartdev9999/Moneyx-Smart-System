@@ -2477,6 +2477,24 @@ void BuildHeroTicketCache()
       sideHeroTagged[s] += take;
    }
 
+   // v7.09: Auto-release Hero ownership when phase==BE_GUARD but no Hero tickets remain.
+   //         Covers ALL close paths (Broker TP/SL race, manual close, Daily Target / Balance
+   //         Guard force-close, etc.) — not just CloseHeroOnSide(). Without this, owner lock
+   //         stays forever and blocks the opposite side from ever activating its own Hero
+   //         (even after the surviving GM(N+1) basket is the only thing left on this side).
+   if(g_heroPhase_Buy == 3 && sideHeroTagged[0] == 0) {
+      Print("v7.09 Hero AUTO-RELEASE BUY: phase=BE_GUARD but Hero tickets=0 (closed via non-EA path) — releasing owner lock");
+      g_heroPhase_Buy = 0;
+      g_heroBE_Applied_Buy = false;
+      g_heroJustClosed_Buy = TimeCurrent();
+   }
+   if(g_heroPhase_Sell == 3 && sideHeroTagged[1] == 0) {
+      Print("v7.09 Hero AUTO-RELEASE SELL: phase=BE_GUARD but Hero tickets=0 — releasing owner lock");
+      g_heroPhase_Sell = 0;
+      g_heroBE_Applied_Sell = false;
+      g_heroJustClosed_Sell = TimeCurrent();
+   }
+
    // Phase update per side (NONE -> ARMED; BE_GUARD set elsewhere, never downgrade here)
    if(g_heroPhase_Buy != 3) {
       g_heroPhase_Buy = (sideHeroTagged[0] > 0) ? 2 : 0;
