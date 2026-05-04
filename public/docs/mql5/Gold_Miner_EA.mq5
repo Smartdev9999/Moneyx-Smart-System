@@ -6,7 +6,7 @@
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
 #property version   "7.09"
-#property description "Gold Miner EA v7.09 - Deferred SideGen revert: Closing a Hero no longer wipes g_sideGen_<side>. The surviving GM(N+1) basket on that side keeps being managed by grid/TP/Avg-trail. Side-gen reverts to GM1 only when (Hero count == 0) AND (non-Hero main on side == 0), allowing the next INIT on that side to open as GM1 and re-arm the Hero subsystem. Builds on v7.07 Candidate vs Owner separation."
+#property description "Gold Miner EA v7.09 - Hero auto-release on zero tickets: when phase==BE_GUARD but no Hero tickets remain (closed via Broker TP/SL race, manual, Daily Target, etc.), owner lock is released the next tick so the opposite side can activate its own Hero immediately. Surviving GM(N+1) basket continues to be managed (v7.08 deferred sideGen revert preserved)."
 #property strict
 
 #include <Trade/Trade.mqh>
