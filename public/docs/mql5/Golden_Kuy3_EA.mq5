@@ -1341,44 +1341,45 @@ void DrawDashboard()
    DashRow("Restart Pending", StringFormat("BUY:%s  SELL:%s", rpB, rpS),
            (g_costHit_Pending_Buy||g_costHit_Pending_Sell)?warn:info);
 
-   DashHeader("=== HERO ORDER ===");
-   DashRow("Hero Module", StringFormat("%s  cnt=%d minSide=%d",
-                          OnOff(InpEnableHero), InpHero_Count, InpHero_MinSideOrders),
-                          (InpEnableHero?gold:warn));
-   string hsStatus;
-   if(!InpEnableHero) hsStatus = "DISABLED";
-   else if(!g_hero_Active) hsStatus = "WAIT";
-   else {
-      string ids="";
-      for(int i=0;i<ArraySize(g_hero_Tickets);i++){
-         if(i>0) ids += ",";
-         ids += StringFormat("#%I64u", g_hero_Tickets[i]);
-      }
-      hsStatus = StringFormat("ACTIVE %s %s",
-                  (g_hero_Side==POSITION_TYPE_BUY?"BUY":"SELL"), ids);
+   DashHeader("=== HERO ORDER (v7.09) ===");
+   DashRow("Hero Cfg", StringFormat("%s  N=%d minAct=%d BE=%dpt",
+                          OnOff(InpHero_Enabled), InpHero_OrderCount,
+                          InpHero_MinOrdersToActivate, InpHero_BE_OffsetPoints),
+                          (InpHero_Enabled?gold:warn));
+   {
+      int ownerSide = GetHeroOwnerSide();
+      string ownerStr = (ownerSide == (int)POSITION_TYPE_BUY)  ? "BUY (locked)"
+                      : (ownerSide == (int)POSITION_TYPE_SELL) ? "SELL (locked)"
+                      : (g_heroPhase_Buy == 2 || g_heroPhase_Sell == 2) ? "NONE (waiting close)" : "NONE";
+      color ownClr = (ownerSide >= 0) ? gold : ((g_heroPhase_Buy==2||g_heroPhase_Sell==2)?warn:info);
+      DashRow("Hero Owner", ownerStr, ownClr);
    }
-   DashRow("Hero Status", hsStatus, (g_hero_Active?gold:info));
-   if(g_hero_Active){
-      double tpDist = InpHero_AvgTP_Points * g_point;
-      double bidH = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-      double askH = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-      string aTpInfo;
-      if(g_hero_LastOppCnt < InpHero_AvgTP_MinOrders || g_hero_LastOppAvg<=0){
-         aTpInfo = StringFormat("WAIT  oppCnt=%d/%d", g_hero_LastOppCnt, InpHero_AvgTP_MinOrders);
-      } else {
-         double curDistPt = (g_hero_Side==POSITION_TYPE_BUY)
-                            ? (askH - (g_hero_LastOppAvg - tpDist)) / g_point  // SELL profit dir
-                            : ((g_hero_LastOppAvg + tpDist) - bidH) / g_point; // BUY profit dir
-         aTpInfo = StringFormat("%.0fpt avg=%s cur=%.0fpt",
-                    InpHero_AvgTP_Points, DoubleToString(g_hero_LastOppAvg,g_digits), curDistPt);
+   {
+      string phaseB = (g_heroPhase_Buy == 3) ? "BE_GUARD" : (g_heroPhase_Buy == 2) ? "ARMED" : "WAIT";
+      int minAct = (InpHero_MinOrdersToActivate > 0) ? InpHero_MinOrdersToActivate : (InpHero_OrderCount + 1);
+      DashRow("Hero BUY", StringFormat("active=%d/%d  Hero=%d  %s",
+                          g_heroDash_BuyActive, minAct, g_heroDash_BuyTagged, phaseB),
+                          (g_heroPhase_Buy==3?gold:(g_heroPhase_Buy==2?warn:info)));
+      string ids = "";
+      for(int i = 0; i < g_heroDash_BuyTicketN; i++) {
+         if(i > 0) ids += " ";
+         ids += StringFormat("#%I64u", g_heroDash_BuyTickets[i]);
       }
-      DashRow("Hero AvgTP", aTpInfo, info);
-   } else {
-      DashRow("Hero AvgTP", StringFormat("%.0fpt /%dord", InpHero_AvgTP_Points, InpHero_AvgTP_MinOrders), info);
+      DashRow("Tix BUY", (g_heroDash_BuyTicketN > 0 ? ids : "-"), info);
    }
-   DashRow("Survivor Strip", StringFormat("%s keepN=%d",
-                            OnOff(InpHero_StripBE_OnSurvivor), InpHero_KeepLatestN_Opp),
-                            (InpHero_StripBE_OnSurvivor?ok:warn));
+   {
+      string phaseS = (g_heroPhase_Sell == 3) ? "BE_GUARD" : (g_heroPhase_Sell == 2) ? "ARMED" : "WAIT";
+      int minAct = (InpHero_MinOrdersToActivate > 0) ? InpHero_MinOrdersToActivate : (InpHero_OrderCount + 1);
+      DashRow("Hero SELL", StringFormat("active=%d/%d  Hero=%d  %s",
+                           g_heroDash_SellActive, minAct, g_heroDash_SellTagged, phaseS),
+                           (g_heroPhase_Sell==3?gold:(g_heroPhase_Sell==2?warn:info)));
+      string ids = "";
+      for(int i = 0; i < g_heroDash_SellTicketN; i++) {
+         if(i > 0) ids += " ";
+         ids += StringFormat("#%I64u", g_heroDash_SellTickets[i]);
+      }
+      DashRow("Tix SELL", (g_heroDash_SellTicketN > 0 ? ids : "-"), info);
+   }
 
    // v1.2 high-water trim: remove rows that existed last frame but not this frame
    if(g_dashRow > g_dashRowMax) g_dashRowMax = g_dashRow;
