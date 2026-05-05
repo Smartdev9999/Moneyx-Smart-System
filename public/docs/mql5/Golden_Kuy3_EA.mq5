@@ -251,12 +251,49 @@ double NormalizeLot(double lot)
 
 double CalcGridLot(double lastLot)
 {
-   double v = InpGridLotValue;
-   double l = InpInitialLot;
-   if(InpGridLotMode == GK_LOT_FIXED)         l = v;
-   else if(InpGridLotMode == GK_LOT_ADD)      l = (lastLot>0?lastLot:InpInitialLot) + v;
-   else if(InpGridLotMode == GK_LOT_MULTIPLY) l = (lastLot>0?lastLot:InpInitialLot) * v;
-   return NormalizeLot(l);
+   double v    = InpGridLotValue;
+   double base = (lastLot>0 ? lastLot : InpInitialLot);
+   double raw  = InpInitialLot;
+   if(InpGridLotMode == GK_LOT_FIXED)         raw = v;
+   else if(InpGridLotMode == GK_LOT_ADD)      raw = base + v;
+   else if(InpGridLotMode == GK_LOT_MULTIPLY) raw = base * v;
+
+   double stp  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   double minL = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   double maxL = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+   double out  = raw;
+
+   // ADD/MULTIPLY: ceil to next step so small multipliers (e.g. 1.1 * 0.01) actually grow
+   if(InpGridLotMode==GK_LOT_ADD || InpGridLotMode==GK_LOT_MULTIPLY){
+      if(stp>0) out = MathCeil(raw/stp)*stp;
+      // Force >= base + 1 step so chain always grows
+      if(stp>0 && out <= base + g_point) out = base + stp;
+   } else {
+      if(stp>0) out = MathRound(raw/stp)*stp;
+   }
+
+   if(out < minL) out = minL;
+   if(out > maxL) out = maxL;
+   out = NormalizeDouble(out, 2);
+
+   if(InpGridLotMode==GK_LOT_ADD || InpGridLotMode==GK_LOT_MULTIPLY)
+      Print("GK CalcGridLot mode=",(InpGridLotMode==GK_LOT_ADD?"ADD":"MULT"),
+            " base=",base," v=",v," raw=",raw," out=",out);
+   return out;
+}
+
+// v1.2 distance guard helper — true if any same-side position is within minPips of refPrice
+bool HasNearbyPosition(int side, double refPrice, double minPips)
+{
+   double minDist = PipsToPrice(minPips);
+   if(minDist<=0) return false;
+   for(int i=PositionsTotal()-1;i>=0;i--){
+      if(!pos.SelectByIndex(i)) continue;
+      if(!IsOurPosition()) continue;
+      if((int)pos.PositionType()!=side) continue;
+      if(MathAbs(pos.PriceOpen() - refPrice) < minDist) return true;
+   }
+   return false;
 }
 
 bool SideAllowedForInit(int side)
