@@ -806,6 +806,7 @@ void EnforceClearTPIfDisabled()
    for(int i=PositionsTotal()-1;i>=0;i--){
       if(!pos.SelectByIndex(i)) continue;
       if(!IsOurPosition()) continue;
+      if(IsHeroTicket(pos.Ticket())) continue; // v1.3: keep Hero SL/TP intact
       if(pos.TakeProfit() <= 0) continue;
       if(trade.PositionModify(pos.Ticket(), pos.StopLoss(), 0)) cleared++;
    }
@@ -818,7 +819,7 @@ void ManageTakeProfit()
 
    // 1. Accumulate (whole account) — realized + floating
    if(InpUseAccumulateClose && InpAccumulateTarget>0){
-      double floatingAll = CalcSideFloating(POSITION_TYPE_BUY) + CalcSideFloating(POSITION_TYPE_SELL);
+      double floatingAll = CalcSideFloating_NonHero(POSITION_TYPE_BUY) + CalcSideFloating_NonHero(POSITION_TYPE_SELL);
       if((g_realizedCycle + floatingAll) >= InpAccumulateTarget){
          Print("GK ACCUM CLOSE — realized=",DoubleToString(g_realizedCycle,2)," floating=",DoubleToString(floatingAll,2)," tgt=",InpAccumulateTarget);
          CloseAllOurs();
@@ -830,10 +831,10 @@ void ManageTakeProfit()
 
    for(int sideIdx=0; sideIdx<2; sideIdx++){
       int side = (sideIdx==0)?POSITION_TYPE_BUY:POSITION_TYPE_SELL;
-      int n = CountSideSimple(side);
+      int n = CountSide_NonHero(side); // v1.3 exclude Hero
       if(n<=0) continue;
 
-      double pl = CalcSideFloating(side);
+      double pl = CalcSideFloating_NonHero(side); // v1.3
 
       // 2. Fixed dollar
       if(InpUseTPFixedDollar && InpTPDollarAmount>0 && pl >= InpTPDollarAmount){
@@ -852,10 +853,10 @@ void ManageTakeProfit()
          }
       }
 
-      // 4. Points from average — push broker TP
+      // 4. Points from average — push broker TP (Hero excluded from avg + skipped from modify)
       if(InpUseTPPoints && n >= InpAvgTP_MinOrders){
          double tot=0; int cnt=0;
-         double avg = CalcSideAvgPrice(side, tot, cnt);
+         double avg = CalcSideAvgPrice_NonHero(side, tot, cnt);
          if(avg<=0) continue;
          double minStop = GetMinStopPrice();
          double tpDist = MathMax(InpTPPointsFromAverage * g_point, minStop);
@@ -865,6 +866,7 @@ void ManageTakeProfit()
             if(!pos.SelectByIndex(i)) continue;
             if(!IsOurPosition()) continue;
             if((int)pos.PositionType()!=side) continue;
+            if(IsHeroTicket(pos.Ticket())) continue; // v1.3
             if(MathAbs(pos.TakeProfit()-tpPrice) <= g_point*2) continue;
             trade.PositionModify(pos.Ticket(), pos.StopLoss(), tpPrice);
          }
