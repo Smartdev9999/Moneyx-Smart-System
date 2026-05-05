@@ -887,7 +887,7 @@ void ManageAverageTrailing()
 
    {
       double tot=0; int cnt=0;
-      double avg = CalcSideAvgPrice(POSITION_TYPE_BUY, tot, cnt);
+      double avg = CalcSideAvgPrice_NonHero(POSITION_TYPE_BUY, tot, cnt); // v1.3
       if(cnt >= InpAvgTrail_MinOrders && avg>0){
          if(InpAvgTrail_Strict2Cross && !g_avgTrail_ArmReady_Buy){
             if(bid < avg - InpAvgTrail_UnderAvgBuffer*g_point) g_avgTrail_ArmReady_Buy = true;
@@ -919,7 +919,7 @@ void ManageAverageTrailing()
 
    {
       double tot=0; int cnt=0;
-      double avg = CalcSideAvgPrice(POSITION_TYPE_SELL, tot, cnt);
+      double avg = CalcSideAvgPrice_NonHero(POSITION_TYPE_SELL, tot, cnt); // v1.3
       if(cnt >= InpAvgTrail_MinOrders && avg>0){
          if(InpAvgTrail_Strict2Cross && !g_avgTrail_ArmReady_Sell){
             if(ask > avg + InpAvgTrail_UnderAvgBuffer*g_point) g_avgTrail_ArmReady_Sell = true;
@@ -952,6 +952,7 @@ void ManageAverageTrailing()
    for(int i=PositionsTotal()-1;i>=0;i--){
       if(!pos.SelectByIndex(i)) continue;
       if(!IsOurPosition()) continue;
+      if(IsHeroTicket(pos.Ticket())) continue; // v1.3
       int side = (int)pos.PositionType();
       double targetSL = 0;
       if(side==POSITION_TYPE_BUY  && g_avgTrail_Active_Buy)  targetSL = g_avgTrail_SL_Buy;
