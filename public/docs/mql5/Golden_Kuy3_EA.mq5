@@ -1276,7 +1276,7 @@ void DrawDashboard()
    double plS  = CalcSideFloating(POSITION_TYPE_SELL);
    double plAll= plB+plS;
 
-   DashHeader(StringFormat("Golden Kuy3 v1.3  Side:%s Grid:%s/%s", SideModeStr(), GridModeStr(), LotModeStr()));
+   DashHeader(StringFormat("Golden Kuy3 v1.4  Side:%s Grid:%s/%s", SideModeStr(), GridModeStr(), LotModeStr()));
 
    DashHeader("=== ACCOUNT ===");
    DashRow("Balance",     StringFormat("$%.2f", bal), info);
@@ -1413,9 +1413,9 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
                if(InpEnableCostHitRestart){
                   long reason = HistoryDealGetInteger(trans.deal, DEAL_REASON);
                   if(reason == DEAL_REASON_SL || reason == DEAL_REASON_TP){
-                     // v1.3: suppress during Hero post-close grace
-                     bool inGrace = (InpEnableHero && InpHero_PostCloseGraceSec>0
-                                     && (TimeCurrent()-g_hero_LastCloseTime) < InpHero_PostCloseGraceSec);
+                     // v1.4: suppress during Hero post-close grace
+                     bool inGrace = (InpHero_Enabled && InpHero_PostCloseGraceSec>0
+                                     && (TimeCurrent()-GetHeroLastCloseTime()) < InpHero_PostCloseGraceSec);
                      long dealType = HistoryDealGetInteger(trans.deal, DEAL_TYPE);
                      int closedSide = (dealType == DEAL_TYPE_SELL) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
                      double closePx = HistoryDealGetDouble(trans.deal, DEAL_PRICE);
@@ -1498,7 +1498,9 @@ int OnInit()
       if(c=="GK_INIT_SELL") g_initPrice_Sell = pos.PriceOpen();
    }
 
-   Print("Golden Kuy3 v1.3 init  digits=",g_digits," pip=",g_pip," stopsLvl=",g_stopsLevel);
+   Print("Golden Kuy3 v1.4 init  digits=",g_digits," pip=",g_pip," stopsLvl=",g_stopsLevel,
+         " | Hero=", InpHero_Enabled?"ON":"OFF", " HeroN=", InpHero_OrderCount,
+         " minAct=", InpHero_MinOrdersToActivate, " BE=", InpHero_BE_OffsetPoints, "pt");
    return INIT_SUCCEEDED;
 }
 
@@ -1506,17 +1508,17 @@ void OnDeinit(const int reason)
 {
    DelDash();
    DelLines();
-   Print("Golden Kuy3 v1.3 deinit reason=",reason);
+   Print("Golden Kuy3 v1.4 deinit reason=",reason);
 }
 
 void OnTick()
 {
-   RefreshHero();              // v1.3 — must run before others so skips apply
+   BuildHeroTicketCache();      // v1.4 — must run first
+   ManageHeroOppositeClose();   // v1.4 — orchestrator (strip TP/SL, BE_GUARD, opp-clear close)
    ManageCostHitRestart();
    ManageInitialEntry();
    ManageGridEntry();
    ManagePerOrderTrailing();
-   ManageHeroAvgTP();          // v1.3 — cycle-close trigger before normal TP
    ManageTakeProfit();
    ManageAverageTrailing();
    EnforceClearTPIfDisabled();
