@@ -1323,7 +1323,7 @@ int OnInit()
       if(c=="GK_INIT_SELL") g_initPrice_Sell = pos.PriceOpen();
    }
 
-   Print("Golden Kuy3 v1.2 init  digits=",g_digits," pip=",g_pip," stopsLvl=",g_stopsLevel);
+   Print("Golden Kuy3 v1.3 init  digits=",g_digits," pip=",g_pip," stopsLvl=",g_stopsLevel);
    return INIT_SUCCEEDED;
 }
 
@@ -1331,15 +1331,17 @@ void OnDeinit(const int reason)
 {
    DelDash();
    DelLines();
-   Print("Golden Kuy3 v1.2 deinit reason=",reason);
+   Print("Golden Kuy3 v1.3 deinit reason=",reason);
 }
 
 void OnTick()
 {
+   RefreshHero();              // v1.3 — must run before others so skips apply
    ManageCostHitRestart();
    ManageInitialEntry();
    ManageGridEntry();
    ManagePerOrderTrailing();
+   ManageHeroAvgTP();          // v1.3 — cycle-close trigger before normal TP
    ManageTakeProfit();
    ManageAverageTrailing();
    EnforceClearTPIfDisabled();
