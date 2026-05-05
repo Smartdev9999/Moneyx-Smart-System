@@ -722,6 +722,7 @@ void ManagePerOrderTrailing()
    for(int i=PositionsTotal()-1;i>=0;i--){
       if(!pos.SelectByIndex(i)) continue;
       if(!IsOurPosition()) continue;
+      if(IsHeroTicket(pos.Ticket())) continue; // v1.3: Hero managed separately
       int side = (int)pos.PositionType();
       double op = pos.PriceOpen();
       double curSL = pos.StopLoss();
@@ -747,6 +748,7 @@ void CloseAllSide(int side)
       if(!pos.SelectByIndex(i)) continue;
       if(!IsOurPosition()) continue;
       if((int)pos.PositionType()!=side) continue;
+      if(IsHeroTicket(pos.Ticket())) continue; // v1.3: never close Hero via per-side close
       trade.PositionClose(pos.Ticket());
    }
 }
@@ -756,8 +758,40 @@ void CloseAllOurs()
    for(int i=PositionsTotal()-1;i>=0;i--){
       if(!pos.SelectByIndex(i)) continue;
       if(!IsOurPosition()) continue;
+      if(IsHeroTicket(pos.Ticket())) continue; // v1.3
       trade.PositionClose(pos.Ticket());
    }
+}
+
+// v1.3 Floating excluding Hero tickets (per side)
+double CalcSideFloating_NonHero(int side)
+{
+   double pl=0;
+   for(int i=PositionsTotal()-1;i>=0;i--){
+      if(!pos.SelectByIndex(i)) continue;
+      if(!IsOurPosition()) continue;
+      if((int)pos.PositionType()!=side) continue;
+      if(IsHeroTicket(pos.Ticket())) continue;
+      pl += pos.Profit() + pos.Swap() + pos.Commission();
+   }
+   return pl;
+}
+
+// v1.3 Avg price excl Hero only (per side)
+double CalcSideAvgPrice_NonHero(int side, double &lotsOut, int &cntOut)
+{
+   double sumLP=0, sumL=0; int n=0;
+   for(int i=PositionsTotal()-1;i>=0;i--){
+      if(!pos.SelectByIndex(i)) continue;
+      if(!IsOurPosition()) continue;
+      if((int)pos.PositionType()!=side) continue;
+      if(IsHeroTicket(pos.Ticket())) continue;
+      sumLP += pos.PriceOpen()*pos.Volume();
+      sumL  += pos.Volume();
+      n++;
+   }
+   lotsOut=sumL; cntOut=n;
+   return (sumL>0?sumLP/sumL:0.0);
 }
 
 // Strip stale broker TP from every ticket when no Points-TP mode is active
