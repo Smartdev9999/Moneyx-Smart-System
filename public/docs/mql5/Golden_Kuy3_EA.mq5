@@ -1,14 +1,15 @@
 //+------------------------------------------------------------------+
 //|                                            Golden_Kuy3_EA.mq5    |
-//|                                       Golden Kuy3 EA  v1.1       |
+//|                                       Golden Kuy3 EA  v1.2       |
 //|  Instant entry + Single Grid (Both/Up/Down)                      |
 //|  + Per-Order BE-Lock / Trailing (split toggles)                  |
 //|  + Full TP modes (Dollar / Points / %Bal / Accumulate)           |
 //|  + Avg/TP chart lines + Gold-Miner-style table dashboard         |
+//|  v1.2: dash flicker fix + grid mult fix + Cost-Hit Restart       |
 //+------------------------------------------------------------------+
 #property copyright "Golden Kuy3 EA"
-#property version   "1.10"
-#property description "Golden Kuy3 v1.1 — BE/Trail split + TP modes + Avg/TP lines + table dashboard"
+#property version   "1.20"
+#property description "Golden Kuy3 v1.2 — dashboard flicker fix + grid lot fix + Cost-Hit Restart"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -41,6 +42,9 @@ input double               InpGridLotValue         = 1.5;
 input int                  InpMaxGridOrders        = 20;
 input bool                 InpGridOnlyNewCandle    = true;
 input ENUM_TIMEFRAMES      InpGridCandleTF         = PERIOD_M1;
+input bool                 InpEnableCostHitRestart = false;     // re-open initial-lot when SL/TP closes a ticket
+input double               InpCostHitMinSpacingPips= 100.0;     // min distance from nearest same-side position
+input int                  InpCostHitCooldownSec   = 2;
 
 input group "=== Per-Order Break-Even Lock ==="
 input bool                 InpEnableBreakevenLock     = true;     // lock cost on each ticket independently
@@ -123,6 +127,17 @@ bool     g_tpStripped      = false;
 
 string g_dashPrefix = "GK_DASH_";
 string g_linePrefix = "GK_LINE_";
+
+// v1.2 cost-hit restart
+bool     g_costHit_Pending_Buy  = false;
+bool     g_costHit_Pending_Sell = false;
+double   g_costHit_Price_Buy    = 0.0;
+double   g_costHit_Price_Sell   = 0.0;
+datetime g_costHit_Time_Buy     = 0;
+datetime g_costHit_Time_Sell    = 0;
+
+// v1.2 dashboard high-water row tracker (no full wipe each refresh)
+int      g_dashRowMax = 0;
 
 //========================= HELPERS =================================
 double PipsToPrice(double pips) { return pips * g_pip; }
@@ -236,12 +251,49 @@ double NormalizeLot(double lot)
 
 double CalcGridLot(double lastLot)
 {
-   double v = InpGridLotValue;
-   double l = InpInitialLot;
-   if(InpGridLotMode == GK_LOT_FIXED)         l = v;
-   else if(InpGridLotMode == GK_LOT_ADD)      l = (lastLot>0?lastLot:InpInitialLot) + v;
-   else if(InpGridLotMode == GK_LOT_MULTIPLY) l = (lastLot>0?lastLot:InpInitialLot) * v;
-   return NormalizeLot(l);
+   double v    = InpGridLotValue;
+   double base = (lastLot>0 ? lastLot : InpInitialLot);
+   double raw  = InpInitialLot;
+   if(InpGridLotMode == GK_LOT_FIXED)         raw = v;
+   else if(InpGridLotMode == GK_LOT_ADD)      raw = base + v;
+   else if(InpGridLotMode == GK_LOT_MULTIPLY) raw = base * v;
+
+   double stp  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   double minL = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   double maxL = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+   double out  = raw;
+
+   // ADD/MULTIPLY: ceil to next step so small multipliers (e.g. 1.1 * 0.01) actually grow
+   if(InpGridLotMode==GK_LOT_ADD || InpGridLotMode==GK_LOT_MULTIPLY){
+      if(stp>0) out = MathCeil(raw/stp)*stp;
+      // Force >= base + 1 step so chain always grows
+      if(stp>0 && out <= base + g_point) out = base + stp;
+   } else {
+      if(stp>0) out = MathRound(raw/stp)*stp;
+   }
+
+   if(out < minL) out = minL;
+   if(out > maxL) out = maxL;
+   out = NormalizeDouble(out, 2);
+
+   if(InpGridLotMode==GK_LOT_ADD || InpGridLotMode==GK_LOT_MULTIPLY)
+      Print("GK CalcGridLot mode=",(InpGridLotMode==GK_LOT_ADD?"ADD":"MULT"),
+            " base=",base," v=",v," raw=",raw," out=",out);
+   return out;
+}
+
+// v1.2 distance guard helper — true if any same-side position is within minPips of refPrice
+bool HasNearbyPosition(int side, double refPrice, double minPips)
+{
+   double minDist = PipsToPrice(minPips);
+   if(minDist<=0) return false;
+   for(int i=PositionsTotal()-1;i>=0;i--){
+      if(!pos.SelectByIndex(i)) continue;
+      if(!IsOurPosition()) continue;
+      if((int)pos.PositionType()!=side) continue;
+      if(MathAbs(pos.PriceOpen() - refPrice) < minDist) return true;
+   }
+   return false;
 }
 
 bool SideAllowedForInit(int side)
@@ -363,7 +415,12 @@ void ManageGridEntry()
             }
             if(fire){
                double newLot = CalcGridLot(llot);
-               OpenGrid(POSITION_TYPE_BUY, newLot, NextGridIndex(POSITION_TYPE_BUY));
+               double refPx  = (isUp?ask:bid);
+               if(InpEnableCostHitRestart && HasNearbyPosition(POSITION_TYPE_BUY, refPx, InpCostHitMinSpacingPips)){
+                  // skip — too close to an existing same-side ticket (post-restart guard)
+               } else {
+                  OpenGrid(POSITION_TYPE_BUY, newLot, NextGridIndex(POSITION_TYPE_BUY));
+               }
             }
          }
       }
@@ -384,7 +441,12 @@ void ManageGridEntry()
             }
             if(fire){
                double newLot = CalcGridLot(llot);
-               OpenGrid(POSITION_TYPE_SELL, newLot, NextGridIndex(POSITION_TYPE_SELL));
+               double refPx  = (isUp?ask:bid);
+               if(InpEnableCostHitRestart && HasNearbyPosition(POSITION_TYPE_SELL, refPx, InpCostHitMinSpacingPips)){
+                  // skip — too close
+               } else {
+                  OpenGrid(POSITION_TYPE_SELL, newLot, NextGridIndex(POSITION_TYPE_SELL));
+               }
             }
          }
       }
@@ -768,8 +830,9 @@ void DrawDashboard()
    if(TimeCurrent() - g_lastDashTime < InpDashRefreshSec) return;
    g_lastDashTime = TimeCurrent();
 
-   // Wipe and redraw
-   DelDash();
+   // v1.2: do NOT wipe the entire panel each refresh (caused flicker).
+   // Cells are updated in-place via SetRectBg/SetCell ObjectFind path.
+   int prevMax = g_dashRowMax;
    g_dashRow = 0;
 
    color ok=clrLime, warn=clrOrange, bad=clrTomato, info=clrSilver, gold=clrGold;
@@ -783,7 +846,7 @@ void DrawDashboard()
    double plS  = CalcSideFloating(POSITION_TYPE_SELL);
    double plAll= plB+plS;
 
-   DashHeader(StringFormat("Golden Kuy3 v1.1  Side:%s Grid:%s/%s", SideModeStr(), GridModeStr(), LotModeStr()));
+   DashHeader(StringFormat("Golden Kuy3 v1.2  Side:%s Grid:%s/%s", SideModeStr(), GridModeStr(), LotModeStr()));
 
    DashHeader("=== ACCOUNT ===");
    DashRow("Balance",     StringFormat("$%.2f", bal), info);
@@ -815,6 +878,9 @@ void DrawDashboard()
                             OnOff(InpEnableAvgTrailing), InpAvgTrail_ActivationPips, InpAvgTrail_StepPips,
                             InpAvgTrail_MinOrders, (InpAvgTrail_Strict2Cross?"Y":"N")),
                            (InpEnableAvgTrailing?ok:warn));
+   DashRow("Cost-Hit Restart", StringFormat("%s  spc=%.0fp cd=%ds",
+                            OnOff(InpEnableCostHitRestart), InpCostHitMinSpacingPips, InpCostHitCooldownSec),
+                           (InpEnableCostHitRestart?ok:warn));
 
    DashHeader("=== TAKE PROFIT ===");
    DashRow("Master TP",    OnOff(InpUseTakeProfit), (InpUseTakeProfit?ok:warn));
@@ -840,6 +906,21 @@ void DrawDashboard()
    DashRow("TP Lines", (tpModeOn?"Drawn":"Cleared"), (tpModeOn?ok:warn));
    DashRow("Init BUY Px",  (g_initPrice_Buy>0?DoubleToString(g_initPrice_Buy,g_digits):"-"), info);
    DashRow("Init SELL Px", (g_initPrice_Sell>0?DoubleToString(g_initPrice_Sell,g_digits):"-"), info);
+   string rpB = g_costHit_Pending_Buy  ? StringFormat("WAIT@%s", DoubleToString(g_costHit_Price_Buy, g_digits))  : "-";
+   string rpS = g_costHit_Pending_Sell ? StringFormat("WAIT@%s", DoubleToString(g_costHit_Price_Sell, g_digits)) : "-";
+   DashRow("Restart Pending", StringFormat("BUY:%s  SELL:%s", rpB, rpS),
+           (g_costHit_Pending_Buy||g_costHit_Pending_Sell)?warn:info);
+
+   // v1.2 high-water trim: remove rows that existed last frame but not this frame
+   if(g_dashRow > g_dashRowMax) g_dashRowMax = g_dashRow;
+   for(int r=g_dashRow; r<prevMax; r++){
+      ObjectDelete(0, g_dashPrefix + StringFormat("BG_R%d", r));
+      ObjectDelete(0, g_dashPrefix + StringFormat("R%d",   r));
+      ObjectDelete(0, g_dashPrefix + StringFormat("C%d",   r));
+      ObjectDelete(0, g_dashPrefix + StringFormat("L%d",   r));
+      ObjectDelete(0, g_dashPrefix + StringFormat("V%d",   r));
+   }
+   g_dashRowMax = g_dashRow;
 }
 
 //==================== TRADE TRANSACTION ============================
@@ -857,6 +938,29 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
                          + HistoryDealGetDouble(trans.deal, DEAL_SWAP)
                          + HistoryDealGetDouble(trans.deal, DEAL_COMMISSION);
                g_realizedCycle += pr;
+
+               // v1.2 Cost-Hit detection: was this deal closed by SL or TP?
+               if(InpEnableCostHitRestart){
+                  long reason = HistoryDealGetInteger(trans.deal, DEAL_REASON);
+                  if(reason == DEAL_REASON_SL || reason == DEAL_REASON_TP){
+                     long dealType = HistoryDealGetInteger(trans.deal, DEAL_TYPE);
+                     // closing deal type is OPPOSITE of the position side:
+                     // SELL deal closes a BUY position, BUY deal closes a SELL position
+                     int closedSide = (dealType == DEAL_TYPE_SELL) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
+                     double closePx = HistoryDealGetDouble(trans.deal, DEAL_PRICE);
+                     if(closedSide == POSITION_TYPE_BUY){
+                        g_costHit_Pending_Buy = true;
+                        g_costHit_Price_Buy   = closePx;
+                        g_costHit_Time_Buy    = TimeCurrent();
+                     } else {
+                        g_costHit_Pending_Sell = true;
+                        g_costHit_Price_Sell   = closePx;
+                        g_costHit_Time_Sell    = TimeCurrent();
+                     }
+                     Print("GK COST-HIT detected side=",(closedSide==POSITION_TYPE_BUY?"BUY":"SELL"),
+                           " reason=",reason," px=",DoubleToString(closePx,g_digits));
+                  }
+               }
             }
          }
       }
@@ -868,6 +972,35 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
          // keep g_realizedCycle visible until next entry; reset on next OpenInitial cycle
       }
    }
+}
+
+//================ COST-HIT RESTART (v1.2) ==========================
+void TryRestartSide(int side, bool &pendingFlag, double &pendingPx, datetime pendingTime)
+{
+   if(!pendingFlag) return;
+   if(InpCostHitCooldownSec>0 && (TimeCurrent() - pendingTime) < InpCostHitCooldownSec) return;
+
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double refPx = (side==POSITION_TYPE_BUY)?ask:bid;
+
+   if(HasNearbyPosition(side, refPx, InpCostHitMinSpacingPips)){
+      return; // wait — too close to existing same-side ticket
+   }
+
+   if(OpenInitial(side)){
+      Print("GK COST-HIT RESTART ",(side==POSITION_TYPE_BUY?"BUY":"SELL"),
+            " @ ",DoubleToString(refPx,g_digits)," (closed@",DoubleToString(pendingPx,g_digits),")");
+      pendingFlag = false;
+      pendingPx   = 0.0;
+   }
+}
+
+void ManageCostHitRestart()
+{
+   if(!InpEnableCostHitRestart) return;
+   TryRestartSide(POSITION_TYPE_BUY,  g_costHit_Pending_Buy,  g_costHit_Price_Buy,  g_costHit_Time_Buy);
+   TryRestartSide(POSITION_TYPE_SELL, g_costHit_Pending_Sell, g_costHit_Price_Sell, g_costHit_Time_Sell);
 }
 
 //=========================== INIT/TICK =============================
@@ -890,7 +1023,7 @@ int OnInit()
       if(c=="GK_INIT_SELL") g_initPrice_Sell = pos.PriceOpen();
    }
 
-   Print("Golden Kuy3 v1.1 init  digits=",g_digits," pip=",g_pip," stopsLvl=",g_stopsLevel);
+   Print("Golden Kuy3 v1.2 init  digits=",g_digits," pip=",g_pip," stopsLvl=",g_stopsLevel);
    return INIT_SUCCEEDED;
 }
 
@@ -898,11 +1031,12 @@ void OnDeinit(const int reason)
 {
    DelDash();
    DelLines();
-   Print("Golden Kuy3 v1.1 deinit reason=",reason);
+   Print("Golden Kuy3 v1.2 deinit reason=",reason);
 }
 
 void OnTick()
 {
+   ManageCostHitRestart();
    ManageInitialEntry();
    ManageGridEntry();
    ManagePerOrderTrailing();

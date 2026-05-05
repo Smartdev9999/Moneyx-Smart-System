@@ -1,132 +1,98 @@
-## Golden Kuy3 EA — Upgrade to v1.1
+## Golden Kuy3 EA v1.1 → v1.2
 
-ไฟล์ที่แก้: `public/docs/mql5/Golden_Kuy3_EA.mq5`
-เอกสารใหม่: `.lovable/memory/trading/golden-kuy3/v1-1-be-trail-split-avgtp-modes-dashboard.md`
-
----
-
-### 1) Per-Order Trailing — แยก Break-even / Trailing เลือกได้อิสระ
-
-แทน `InpEnablePerOrderTrailing` ตัวเดียว เป็น 2 toggle:
-
-- `InpEnableBreakevenLock` (default `true`) — ล็อกหน้าทุนต่อ ticket
-  - กระตุ้นเมื่อกำไรจาก `openPrice` ถึง `InpBreakevenActivationPips`
-  - ตั้ง broker SL = `openPrice ± InpBreakevenBufferPips` (BUY = บวก, SELL = ลบ)
-  - ของใครของมัน เปิดเฉพาะตัวที่กำไรพอ ทำงานทั้งฝั่ง BUY/SELL ทุกออเดอร์ (initial + grid)
-- `InpEnableTrailingStop` (default `false`) — ลากต่อจาก BE
-  - ทำงานเฉพาะเมื่อกำไรถึง `InpTrailingActivationPips`
-  - SL = `openPrice ± (profitPips - InpTrailingStepPips)`, เพดานล่าง = `BreakevenBufferPips`
-  - ใช้ได้เดี่ยว / ใช้คู่กับ Breakeven / ปิดทั้งคู่
-
-`ComputePerOrderSL()` ปรับ logic:
-1. ถ้า BreakevenLock ON และ `profit ≥ BeAct` → set SL = BE+buffer
-2. ถ้า TrailingStop ON และ `profit ≥ TrailAct` → wrap SL = trailing (overrides BE ถ้าไกลกว่า)
-3. ถ้าไม่เข้าเงื่อนไขเลย → return 0 (ไม่ modify)
-
-ผลลัพธ์: เลือกใช้ BE-only ก็ได้ (ทุก order มี SL กันทุนของตัวเอง), Trailing-only ก็ได้, ทั้งคู่ก็ได้
+ไฟล์: `public/docs/mql5/Golden_Kuy3_EA.mq5`
+เอกสารใหม่: `.lovable/memory/trading/golden-kuy3/v1-2-dash-flicker-grid-fix-cost-hit-restart.md`
 
 ---
 
-### 2) Take Profit — เพิ่มโหมดให้ครบเหมือน Gold Miner + แก้ stale TP บนชาร์ต
+### 1) แก้แดชบอร์ดกระพริบ (Dashboard Flicker Fix)
 
-#### Bug fix
-ตอนนี้แม้ `InpEnableAverageTP=false` ออเดอร์ initial ยังถูก push `InpInitialTPPips` (default 200) จาก `OpenInitial()` → ชาร์ตจึงยังขีดเส้น TP. แก้:
+ปัญหา: `DrawDashboard()` เรียก `DelDash()` ทุก refresh (default 1s) ลบ object ทั้งหมดแล้วสร้างใหม่ → ตา MT5 เห็นเป็นเฟรมกระพริบเปิด-ปิด
 
-- เพิ่ม master toggle `InpUseTakeProfit` (default `true`). ถ้า `false`:
-  - `OpenInitial()` ส่ง `tp=0`
-  - `EnforceClearTPIfDisabled()` วน positions ของเรา ทุกตัวที่ `pos.TakeProfit()>0` → `PositionModify(sl, 0)` (throttled 5s)
-- `InpEnableAverageTP`/`InpUseTPDollar`/`InpUseTPPoints`/`InpUseTPPercent` ทั้งหมด OFF → ก็เคลียร์เช่นกัน
+แก้:
+- ลบ `DelDash()` ออกจาก `DrawDashboard()` (เก็บไว้ใช้ที่ `OnDeinit`)
+- `SetRectBg()` / `SetCell()` ใช้ `ObjectFind` อยู่แล้ว → update in-place ไม่ต้อง recreate
+- เพิ่ม "high-water row tracker" `g_dashRowMax` — ถ้า row count รอบนี้น้อยกว่ารอบก่อน ให้ลบเฉพาะ row ส่วนเกิน (ไม่กวาดทั้งกระดาน)
+- ใช้ `ChartSetInteger(0, CHART_FOREGROUND, false)` ครั้งเดียวก็พอ ไม่ต้องสั่งทุก tick
 
-#### โหมด TP ใหม่ (port จาก Gold Miner ในรูป)
-เพิ่มกลุ่ม `=== Take Profit ===`:
+ผลลัพธ์: dashboard นิ่ง อัปเดตค่าเฉพาะ cell ที่เปลี่ยน
 
+---
+
+### 2) แก้ Grid Multiplier / Add Lot ไม่ทำงาน
+
+ปัญหา 2 ชั้น:
+- `NormalizeLot()` ใช้ `MathRound(lot/step)*step`. ด้วย step ปกติ 0.01 และ mult 1.1: `0.01*1.1=0.011 → round(1.1)=1 → 0.01` (เท่าเดิม) ทำให้ทุก grid ยังเป็น 0.01 → ดูเหมือน "ไม่ทำงาน"
+- ADD โหมดที่ค่า value < step ก็เจอปัญหาเดียวกัน
+
+แก้ใน `CalcGridLot(double lastLot)`:
+1. คำนวณ raw target lot ตามโหมด (FIXED/ADD/MULTIPLY) เหมือนเดิม
+2. **Force minimum increment**: ถ้าโหมดเป็น ADD/MULTIPLY และ target ที่ normalize แล้ว ≤ lastLot → บังคับเพิ่ม 1 × `SYMBOL_VOLUME_STEP` จาก lastLot
+3. ใช้ `MathCeil` แทน `MathRound` สำหรับโหมด ADD/MULTIPLY (กันการปัดลง)
+
+เพิ่ม diagnostic Print ตอน open grid: `lastLot=… mult=… raw=… normalized=…` เพื่อดูค่าใน Experts log
+
+ไม่แตะ logic การวัดระยะ / เงื่อนไข fire grid / `OrderSend` / `trade.Buy/Sell`
+
+---
+
+### 3) ฟีเจอร์ใหม่: Cost-Hit Restart Grid
+
+แนวคิด: เมื่อออเดอร์ใดถูกปิดเพราะชนกันทุน (BE-Lock SL หรือ Trailing SL) ฝั่งนั้นจะ "เกิดใหม่" ด้วยขนาด initial lot ทันทีที่ราคาปิดออเดอร์ตัวนั้น แล้ว grid multiplier เริ่มนับจากตัวใหม่
+
+#### Inputs ใหม่ (กลุ่ม `=== Grid (single set) ===`)
 | Input | Default | หมายเหตุ |
 |---|---|---|
-| `InpUseTakeProfit` | true | master |
-| `InpUseTPFixedDollar` | false | ปิดทั้งฝั่งเมื่อ floating PL ฝั่งนั้น ≥ `InpTPDollarAmount` |
-| `InpTPDollarAmount` | 100.0 | $ |
-| `InpUseTPPoints` | true | push broker TP ที่ `avg ± points` |
-| `InpTPPointsFromAverage` | 500.0 | points (เดิมใช้ `InpAverageTPPips`; เก็บไว้เป็น alias) |
-| `InpUseTPPercentBalance` | false | ปิดเมื่อ floating ฝั่งนั้น ≥ `% × balance` |
-| `InpTPPercentOfBalance` | 26.0 | % |
-| `InpUseAccumulateClose` | false | ปิดทั้ง 2 ฝั่งเมื่อ realized+floating ≥ `InpAccumulateTarget` (cycle reset เมื่อทุก ticket flat) |
-| `InpAccumulateTarget` | 20000 | $ |
-| `InpAvgTP_MinOrders` | 2 | (เดิม) |
+| `InpEnableCostHitRestart` | `false` | master toggle |
+| `InpCostHitMinSpacingPips` | `100.0` | ระยะขั้นต่ำที่ออเดอร์ใหม่ต้องห่างจาก position เดิมฝั่งเดียวกันที่ใกล้ที่สุด |
+| `InpCostHitCooldownSec` | `2` | กัน double-fire ต่อฝั่ง |
 
-`ManageTakeProfit()` รวมทุกโหมด (เรียงลำดับ): Accumulate → Dollar → Percent → Points (push broker TP)
-- 3 โหมดแรก → close ฝั่ง / ทั้งคู่
-- โหมด Points → push broker TP ทุก ticket ฝั่งนั้น
-- ถ้าโหมด Points OFF → ไม่ push broker TP เลย → คู่กับ `EnforceClearTPIfDisabled()` กันเส้น TP ค้าง
+#### กลไก
+1. **ตรวจจับการชนกันทุน** ใน `OnTradeTransaction` (deal type = `DEAL_ADD`, entry = `DEAL_ENTRY_OUT/INOUT/OUT_BY`):
+   - อ่าน reason ผ่าน `HistoryDealGetInteger(deal, DEAL_REASON)`
+   - นับเป็น "cost-hit" เมื่อ reason ∈ `{DEAL_REASON_SL, DEAL_REASON_TP}` และ deal ของเรา (magic+symbol ตรง)
+   - เก็บ `g_costHit_Pending_Buy/Sell = true`, `g_costHit_Price_Buy/Sell = closePrice`, `g_costHit_Time_*`
+2. **Re-open ใน `OnTick`** (ฟังก์ชันใหม่ `ManageCostHitRestart()`) ก่อน `ManageInitialEntry`/`ManageGridEntry`:
+   - ถ้า pending ฝั่งนั้น = true และ cooldown หมด:
+     - เช็ค **Distance Guard**: ออเดอร์ใหม่ต้องห่างจากทุก position ฝั่งเดียวกันที่เหลืออยู่ ≥ `InpCostHitMinSpacingPips` (วัดจากราคาตลาดปัจจุบัน)
+     - ถ้า OK → เปิด initial lot ใหม่ฝั่งเดิมที่ราคาตลาด (comment = `GK_RESTART_BUY/SELL`) แล้ว clear pending
+     - ถ้าใกล้เกิน → คงสถานะ pending ไว้ รอราคาเลื่อนห่าง (ทุกๆ tick re-check)
+3. **Grid ถัดไป**: เพราะ `CountSide()` คืน "last by highest ticket" อยู่แล้ว ออเดอร์ restart (ticket ใหม่สุด) จะกลายเป็น base ของ multiplier โดยอัตโนมัติ → mult-chain เริ่มจาก `InitialLot` ใหม่ตามที่ user ต้องการ
+4. **Distance Guard ก่อนยิง grid** (ปรับ `ManageGridEntry` เล็กน้อย):
+   - เพิ่ม helper `HasNearbyPosition(side, refPrice, minPips)` ตรวจว่ามี position ฝั่งเดียวกันอยู่ภายใน `InpGridDistancePips` จาก `refPrice` ปัจจุบันหรือไม่
+   - ถ้ามี → skip grid (รอราคาเลื่อนต่อ) — ป้องกันออเดอร์ทับซ้อนหลัง restart
+   - ใช้ guard นี้เฉพาะเมื่อ `InpEnableCostHitRestart=true` (โหมด default ไม่กระทบ)
 
-`InpEnableAverageTP`/`InpAverageTPPips` deprecate เป็น alias (ไม่กระทบ .set เดิม)
+#### ทำไมไม่แตะ logic ปิดออเดอร์
+- ใช้เฉพาะ `OnTradeTransaction` เป็น "ผู้สังเกต" (read-only)
+- ไม่ปิด/ไม่เลื่อน SL ของ BE-Lock หรือ Trailing — ปล่อยให้ broker ปิดเองตามปกติ
+- Re-open ใช้ `trade.Buy/Sell` ผ่าน path เดิม (ไม่สร้างฟังก์ชัน OrderSend ใหม่)
 
----
-
-### 3) เส้นค่าเฉลี่ย + เส้น TP บนชาร์ต (Gold Miner style)
-
-กลุ่ม `=== Chart Lines ===`:
-
-- `InpShowAvgLine` (true)
-- `InpAvgBuyLineColor` (`clrDodgerBlue`)
-- `InpAvgSellLineColor` (`clrOrangeRed`)
-- `InpShowTPLine` (true)
-- `InpTPBuyLineColor` (`clrLime`)
-- `InpTPSellLineColor` (`clrMagenta`)
-
-`DrawAvgAndTPLines()` ใช้ `OBJ_HLINE` prefix `GK_LINE_` 4 เส้น (avg buy / avg sell / tp buy / tp sell), update ทุกครั้งใน `OnTick` หลังคำนวณ avg + tp; ลบเส้นเมื่อฝั่งนั้น 0 ออเดอร์ หรือ toggle OFF; ลบทั้งหมดใน `OnDeinit`
-
----
-
-### 4) Dashboard ตารางแบบ Gold Miner
-
-ใช้ `OBJ_RECTANGLE_LABEL` พื้นหลังต่อ row + `OBJ_LABEL` 2 คอลัมน์ (label / value) เหมือน Golden2 v1.5 และ Gold Miner หน้าตัวอย่าง:
-
+#### Dashboard
+เพิ่ม row ในกลุ่ม `=== MODULES ===`:
 ```
-=== ACCOUNT ===
-Balance / Equity / Floating P/L
-=== POSITIONS ===
-BUY P/L Lot Ord
-SELL P/L Lot Ord
-Total Cur. Lot
-=== MODULES ===
-Init Side / Grid / Per-Order Trail / BE Lock / Avg TP / Avg Trail
-=== TP MODES ===
-Dollar / Points / %Bal / Accumulate (ON/OFF + target)
-=== AVG TRAIL ===
-BUY: WAIT/READY/ARMED  SL:xxx
-SELL: WAIT/READY/ARMED SL:xxx
-=== SYSTEM ===
-Cycle realized / TP-stripped status
+Cost-Hit Restart  ON/OFF  spc=100p cd=2s
+```
+และ row pending status ใน `=== SYSTEM ===`:
+```
+Restart Pending   BUY:- SELL:WAIT@1234.56
 ```
 
-Inputs: `InpDashX` `InpDashY` `InpDashRowH` `InpDashColW1` `InpDashColW2` `InpDashHeaderColor` `InpDashRowBgColor` `InpDashAltRowBgColor` (โทนเดียวกับรูป Golden2)
+---
 
-Throttle ตาม `InpDashRefreshSec`
+### 4) Version + Memory
+
+- `#property version "1.20"`, description, header banner, dashboard title → `Golden Kuy3 v1.2`
+- เพิ่ม `mem://trading/golden-kuy3/v1-2-dash-flicker-grid-fix-cost-hit-restart`
+- อัปเดต `mem://index.md`
 
 ---
 
-### 5) Internals / Plumbing
+### สิ่งที่ "ไม่เปลี่ยน" (กฎเหล็ก MQL5)
 
-- เพิ่ม globals: `g_realizedCycle`, `g_lastTpClearScan`, `g_tpStripped` (bool diag), line-update cache
-- `OnTradeTransaction` (ถ้ายังไม่มี): เก็บ realized profit สะสม cycle, reset เมื่อทุก ticket flat
-- `EnforceClearTPIfDisabled()` เรียกทุก ~5s ใน OnTick
-- `OnDeinit`: ลบ dashboard + ลบเส้น avg/TP
-
----
-
-### 6) Version + Memory
-
-- `#property version "1.10"`, description, header banner, dashboard title อัปเดตเป็น `v1.1`
-- เพิ่มไฟล์ memory + อัปเดต `mem://index.md` แทรกบรรทัด:
-  `- [Kuy3 v1.1 BE/Trail+TP Modes](mem://trading/golden-kuy3/v1-1-be-trail-split-avgtp-modes-dashboard) — BE/Trail toggle split, full TP modes (Dollar/Points/%Bal/Accumulate), avg+TP chart lines, Gold-Miner-style dashboard, stale-TP fix`
-
----
-
-### สิ่งที่ "ไม่เปลี่ยน" (ตามกฎเหล็ก MQL5)
-
-- ❌ ไม่แตะ `OrderSend` / `trade.Buy` / `trade.Sell` / `trade.PositionClose` (เพิ่มเฉพาะ TP=0 เป็น parameter เมื่อ master OFF)
-- ❌ ไม่แตะ Grid entry distance / lot calc / new-candle gate
-- ❌ ไม่แตะ Auto re-entry / Init side mode
-- ❌ ไม่แตะ Avg Trailing strict-2-cross + step + BE_Buffer (ยังคง v6.91 ตามเดิม)
-- ❌ ไม่มี License / News / Sync / Hedge / Hero / Squeeze (โครงสร้างยังคงเดิม)
-- ✅ แก้/เพิ่มเฉพาะ: TP modes, BE/Trail split, Chart lines, Dashboard, Stale-TP cleanup
+- ไม่แตะ `OrderSend` / `trade.Buy` / `trade.Sell` / `trade.PositionClose` / `trade.PositionModify` (เรียกใช้ตามแพทเทิร์นเดิม)
+- ไม่แตะ Grid distance / lot calc สูตร (เพิ่มเฉพาะ ceil + min-step floor)
+- ไม่แตะ Per-Order BE / Trailing / Avg Trailing (strict 2-cross v6.91)
+- ไม่แตะ TP modes (Dollar/Points/%Bal/Accumulate) และ EnforceClearTPIfDisabled
+- ไม่แตะ Auto Re-Entry / Init Side Mode (Cost-Hit Restart เป็นเลเยอร์แยก ทำงานก่อน Auto Re-Entry; ถ้า Cost-Hit OFF พฤติกรรมเดิมทุกอย่าง)
+- ไม่มี License / News / Sync / Hedge / Hero / Squeeze
