@@ -1,98 +1,133 @@
-## Golden Kuy3 EA v1.1 → v1.2
+## Golden Kuy3 EA v1.2 → v1.3 — Hero Order System
 
 ไฟล์: `public/docs/mql5/Golden_Kuy3_EA.mq5`
-เอกสารใหม่: `.lovable/memory/trading/golden-kuy3/v1-2-dash-flicker-grid-fix-cost-hit-restart.md`
+เอกสารใหม่: `.lovable/memory/trading/golden-kuy3/v1-3-hero-order.md`
+อัปเดต: `.lovable/plan.md`, `mem://index.md`
+Version: `#property version "1.30"` + dashboard title `Golden Kuy3 v1.3`
 
 ---
 
-### 1) แก้แดชบอร์ดกระพริบ (Dashboard Flicker Fix)
+### แนวคิดสรุป
 
-ปัญหา: `DrawDashboard()` เรียก `DelDash()` ทุก refresh (default 1s) ลบ object ทั้งหมดแล้วสร้างใหม่ → ตา MT5 เห็นเป็นเฟรมกระพริบเปิด-ปิด
+Hero Order = ออเดอร์ "ใหญ่ที่สุด" (= ใหม่ที่สุด ตาม ticket สูงสุด เพราะ grid โตตาม multiplier) ของฝั่งที่กำลังเป็นภาระ จำนวน N ตัว ที่ระบบจะ **ล็อคไว้** ไม่นำไปคิดในการปิดรวบ และทำหน้าที่เป็น "หน่วยถัว" สำหรับฝั่งตรงข้าม
 
-แก้:
-- ลบ `DelDash()` ออกจาก `DrawDashboard()` (เก็บไว้ใช้ที่ `OnDeinit`)
-- `SetRectBg()` / `SetCell()` ใช้ `ObjectFind` อยู่แล้ว → update in-place ไม่ต้อง recreate
-- เพิ่ม "high-water row tracker" `g_dashRowMax` — ถ้า row count รอบนี้น้อยกว่ารอบก่อน ให้ลบเฉพาะ row ส่วนเกิน (ไม่กวาดทั้งกระดาน)
-- ใช้ `ChartSetInteger(0, CHART_FOREGROUND, false)` ครั้งเดียวก็พอ ไม่ต้องสั่งทุก tick
-
-ผลลัพธ์: dashboard นิ่ง อัปเดตค่าเฉพาะ cell ที่เปลี่ยน
+เมื่อราคาย่อกลับและ Average ของฝั่งตรงข้าม (ไม่นับ initial ชุดล่าสุด N ตัวฝั่งตรงข้าม) ทำกำไรถึงเป้า → ปิดทุกอย่าง **ยกเว้น Hero ฝั่งภาระ และ initial ชุดล่าสุดฝั่งตรงข้าม** → เริ่ม "วงรอบใหม่" โดย Hero ยังถูกล็อคหน้าทุน, ฝั่งตรงข้ามชุดล่าสุดเดินเป็น initial+grid ปกติ
 
 ---
 
-### 2) แก้ Grid Multiplier / Add Lot ไม่ทำงาน
+### Inputs ใหม่ (กลุ่มใหม่ `=== Hero Order ===`)
 
-ปัญหา 2 ชั้น:
-- `NormalizeLot()` ใช้ `MathRound(lot/step)*step`. ด้วย step ปกติ 0.01 และ mult 1.1: `0.01*1.1=0.011 → round(1.1)=1 → 0.01` (เท่าเดิม) ทำให้ทุก grid ยังเป็น 0.01 → ดูเหมือน "ไม่ทำงาน"
-- ADD โหมดที่ค่า value < step ก็เจอปัญหาเดียวกัน
-
-แก้ใน `CalcGridLot(double lastLot)`:
-1. คำนวณ raw target lot ตามโหมด (FIXED/ADD/MULTIPLY) เหมือนเดิม
-2. **Force minimum increment**: ถ้าโหมดเป็น ADD/MULTIPLY และ target ที่ normalize แล้ว ≤ lastLot → บังคับเพิ่ม 1 × `SYMBOL_VOLUME_STEP` จาก lastLot
-3. ใช้ `MathCeil` แทน `MathRound` สำหรับโหมด ADD/MULTIPLY (กันการปัดลง)
-
-เพิ่ม diagnostic Print ตอน open grid: `lastLot=… mult=… raw=… normalized=…` เพื่อดูค่าใน Experts log
-
-ไม่แตะ logic การวัดระยะ / เงื่อนไข fire grid / `OrderSend` / `trade.Buy/Sell`
-
----
-
-### 3) ฟีเจอร์ใหม่: Cost-Hit Restart Grid
-
-แนวคิด: เมื่อออเดอร์ใดถูกปิดเพราะชนกันทุน (BE-Lock SL หรือ Trailing SL) ฝั่งนั้นจะ "เกิดใหม่" ด้วยขนาด initial lot ทันทีที่ราคาปิดออเดอร์ตัวนั้น แล้ว grid multiplier เริ่มนับจากตัวใหม่
-
-#### Inputs ใหม่ (กลุ่ม `=== Grid (single set) ===`)
 | Input | Default | หมายเหตุ |
 |---|---|---|
-| `InpEnableCostHitRestart` | `false` | master toggle |
-| `InpCostHitMinSpacingPips` | `100.0` | ระยะขั้นต่ำที่ออเดอร์ใหม่ต้องห่างจาก position เดิมฝั่งเดียวกันที่ใกล้ที่สุด |
-| `InpCostHitCooldownSec` | `2` | กัน double-fire ต่อฝั่ง |
+| `InpEnableHero` | `false` | master toggle |
+| `InpHero_Count` | `3` | จำนวน order ที่ถูกล็อคเป็น Hero ต่อฝั่ง |
+| `InpHero_MinSideOrders` | `5` | ขั้นต่ำของ order ฝั่งเดียวกันก่อนเข้าเงื่อนไข Hero (ต้อง > Count) |
+| `InpHero_BE_OffsetPips` | `5.0` | offset SL กันหน้าทุนของ Hero (BUY: open+offset, SELL: open-offset) |
+| `InpHero_AvgTP_Points` | `300.0` | TP จาก average ฝั่งตรงข้าม (ไม่นับ Hero ของฝั่งนั้น และไม่นับ "initial ชุดล่าสุด" ฝั่งตรงข้าม) |
+| `InpHero_AvgTP_MinOrders` | `2` | จำนวนขั้นต่ำของ "non-Hero" ฝั่งตรงข้ามเพื่อให้ Hero-AvgTP ทำงาน |
+| `InpHero_KeepLatestN_Opp` | `3` | จำนวน initial ชุดล่าสุดฝั่งตรงข้ามที่จะ "เหลือไว้" หลังปิด cycle (เป็นเมล็ดวงรอบถัดไป) |
+| `InpHero_StripBE_OnSurvivor` | `true` | survivor (ฝั่งตรงข้ามชุดล่าสุดที่เหลือ) จะถูกถอด BE-Lock SL ปล่อยให้กรีดออกตาม multiplier ปกติ |
 
-#### กลไก
-1. **ตรวจจับการชนกันทุน** ใน `OnTradeTransaction` (deal type = `DEAL_ADD`, entry = `DEAL_ENTRY_OUT/INOUT/OUT_BY`):
-   - อ่าน reason ผ่าน `HistoryDealGetInteger(deal, DEAL_REASON)`
-   - นับเป็น "cost-hit" เมื่อ reason ∈ `{DEAL_REASON_SL, DEAL_REASON_TP}` และ deal ของเรา (magic+symbol ตรง)
-   - เก็บ `g_costHit_Pending_Buy/Sell = true`, `g_costHit_Price_Buy/Sell = closePrice`, `g_costHit_Time_*`
-2. **Re-open ใน `OnTick`** (ฟังก์ชันใหม่ `ManageCostHitRestart()`) ก่อน `ManageInitialEntry`/`ManageGridEntry`:
-   - ถ้า pending ฝั่งนั้น = true และ cooldown หมด:
-     - เช็ค **Distance Guard**: ออเดอร์ใหม่ต้องห่างจากทุก position ฝั่งเดียวกันที่เหลืออยู่ ≥ `InpCostHitMinSpacingPips` (วัดจากราคาตลาดปัจจุบัน)
-     - ถ้า OK → เปิด initial lot ใหม่ฝั่งเดิมที่ราคาตลาด (comment = `GK_RESTART_BUY/SELL`) แล้ว clear pending
-     - ถ้าใกล้เกิน → คงสถานะ pending ไว้ รอราคาเลื่อนห่าง (ทุกๆ tick re-check)
-3. **Grid ถัดไป**: เพราะ `CountSide()` คืน "last by highest ticket" อยู่แล้ว ออเดอร์ restart (ticket ใหม่สุด) จะกลายเป็น base ของ multiplier โดยอัตโนมัติ → mult-chain เริ่มจาก `InitialLot` ใหม่ตามที่ user ต้องการ
-4. **Distance Guard ก่อนยิง grid** (ปรับ `ManageGridEntry` เล็กน้อย):
-   - เพิ่ม helper `HasNearbyPosition(side, refPrice, minPips)` ตรวจว่ามี position ฝั่งเดียวกันอยู่ภายใน `InpGridDistancePips` จาก `refPrice` ปัจจุบันหรือไม่
-   - ถ้ามี → skip grid (รอราคาเลื่อนต่อ) — ป้องกันออเดอร์ทับซ้อนหลัง restart
-   - ใช้ guard นี้เฉพาะเมื่อ `InpEnableCostHitRestart=true` (โหมด default ไม่กระทบ)
+---
 
-#### ทำไมไม่แตะ logic ปิดออเดอร์
-- ใช้เฉพาะ `OnTradeTransaction` เป็น "ผู้สังเกต" (read-only)
-- ไม่ปิด/ไม่เลื่อน SL ของ BE-Lock หรือ Trailing — ปล่อยให้ broker ปิดเองตามปกติ
-- Re-open ใช้ `trade.Buy/Sell` ผ่าน path เดิม (ไม่สร้างฟังก์ชัน OrderSend ใหม่)
+### กฎการเลือก Hero Side
 
-#### Dashboard
-เพิ่ม row ในกลุ่ม `=== MODULES ===`:
-```
-Cost-Hit Restart  ON/OFF  spc=100p cd=2s
-```
-และ row pending status ใน `=== SYSTEM ===`:
-```
-Restart Pending   BUY:- SELL:WAIT@1234.56
+- รันการประเมินทุก tick (cheap):
+  - หา "ฝั่งภาระ" = ฝั่งที่ floating ขาดทุนมากกว่า และจำนวน order ฝั่งนั้น `>= InpHero_MinSideOrders`
+  - ถ้าผ่าน → ทำเครื่องหมาย Hero = N ออเดอร์ "ticket สูงสุด N ตัว" ของฝั่งนั้น (sorted desc by ticket)
+- ถ้าจำนวน order ฝั่งนั้นลดลงต่ำกว่า `InpHero_Count` (เพราะถูกปิด) → ยกเลิก Hero state, `g_hero_Active=false`
+- เก็บ state:
+  - `g_hero_Active` (bool)
+  - `g_hero_Side` (int: BUY/SELL)
+  - `g_hero_Tickets[]` (ulong array, refresh ทุก tick จาก top-N ticket ของฝั่งภาระ)
+
+Helper ใหม่:
+```cpp
+bool  IsHeroTicket(ulong tk);
+void  RefreshHeroTickets();             // เลือก top-N ticket ฝั่ง g_hero_Side
+double CalcSideAvgPriceExcl(int side, const ulong &exclude[], int &countOut, double &lotsOut);
 ```
 
 ---
 
-### 4) Version + Memory
+### ผลกระทบต่อ Module ที่มีอยู่
 
-- `#property version "1.20"`, description, header banner, dashboard title → `Golden Kuy3 v1.2`
-- เพิ่ม `mem://trading/golden-kuy3/v1-2-dash-flicker-grid-fix-cost-hit-restart`
-- อัปเดต `mem://index.md`
+ทุกจุดต่อไปนี้เพิ่ม "skip Hero ticket" — ไม่แก้สูตร ไม่แก้ trade.* call:
+
+1. **ManageTakeProfit / Accumulate Close**
+   - คำนวณ floating รวมของ "ออเดอร์ที่ไม่ใช่ Hero" เท่านั้น
+   - ตอน close: `CloseAllOursExceptHeroAndOppSurvivor()` — ปิดทุก ticket ยกเว้น Hero และยกเว้น "ticket สูงสุด `InpHero_KeepLatestN_Opp` ของฝั่งตรงข้าม Hero"
+2. **Average TP (Points mode เดิม)**
+   - คำนวณ avg จาก "non-Hero only"; ใช้ภายในฟังก์ชันใหม่ `CalcSideAvgPrice_NonHero(side)`
+   - ใช้ helper `CountSide_NonHero(side)` ใน gate `n >= InpAvgTP_MinOrders`
+3. **Hero Average TP (ใหม่ ทำงานเฉพาะเมื่อ `g_hero_Active`)**
+   - คำนวณ avg ของ "ฝั่งตรงข้าม Hero" โดย exclude:
+     - Hero ticket (ของฝั่ง Hero — ไม่อยู่ฝั่งนี้อยู่แล้ว)
+     - Top-`InpHero_KeepLatestN_Opp` ticket ของฝั่งตรงข้าม Hero (จะกัน "initial ชุดล่าสุด" ไว้)
+   - เมื่อราคาเคลื่อน `>= InpHero_AvgTP_Points * point` ในทิศทำกำไรของฝั่งตรงข้าม Hero → trigger close-cycle
+4. **Per-Order BE / Trailing**
+   - Hero ticket จะถูกตั้ง SL กันหน้าทุนแบบ "fix once": เมื่อ Hero ถูก tag ใหม่ → คำนวณ SL = open ± `InpHero_BE_OffsetPips` แล้ว `PositionModify` ครั้งเดียว (ไม่เลื่อน)
+   - Per-Order Trailing เดิม: skip Hero ticket
+   - Survivor (top-N ticket ฝั่งตรงข้ามที่ถูกเก็บไว้): ถ้า `InpHero_StripBE_OnSurvivor=true` → strip SL=0 ครั้งเดียวตอน close-cycle เสร็จ
+5. **Average Trailing เดิม**
+   - คำนวณ avg จาก non-Hero เท่านั้น (ใช้ `CalcSideAvgPrice_NonHero`)
+6. **Cost-Hit Restart (v1.2)**
+   - ไม่ trigger restart ถ้า ticket ที่ถูกปิดเป็น Hero (Hero ถูกปิดเพราะ BE-SL ของมันเอง = ตั้งใจ)
+7. **Grid Entry**
+   - **ไม่เปลี่ยน multiplier chain** — เพราะ `CountSide()` คืน "last by highest ticket" → grid ฝั่งตรงข้ามจะไหลตาม survivor ใหม่อยู่แล้ว
+   - ฝั่ง Hero: grid ออกต่อได้ตามปกติ (เงื่อนไขเดิม)
+
+---
+
+### ลำดับเหตุการณ์ตัวอย่าง (BUY = ฝั่งภาระ)
+
+```text
+1. มี BUY 10 ตัว (lot โต) + SELL 1 (initial)
+   → g_hero_Side = BUY, Hero = ticket BUY #8,#9,#10 (top 3)
+   → ตั้ง SL Hero ครั้งเดียว = open + 5pip
+2. ราคาย่อลง, SELL ออก grid เรื่อยๆ ตาม multiplier
+3. คำนวณ avgSELL จาก "SELL ทั้งหมด ยกเว้น top-3 SELL ticket ล่าสุด"
+   เมื่อราคาห่าง avgSELL >= 300pt ในทิศทำกำไร SELL
+4. CloseAllOursExceptHeroAndOppSurvivor():
+   - ปิด BUY #1..#7 (BUY non-Hero)
+   - ปิด SELL ทั้งหมดยกเว้น top-3 SELL ล่าสุด
+   - คง Hero BUY #8,#9,#10 (มี SL กันทุน)
+   - คง SELL top-3 ล่าสุด = "survivor" (strip SL=0)
+5. วงรอบใหม่: SELL survivor 3 ตัว เดินเป็น initial+grid ปกติ,
+   Hero BUY ยังถูกล็อค → กลายเป็นฝั่งถัวให้ SELL
+   ถ้า SELL กลับมาเป็นฝั่งภาระอีก → re-evaluate Hero (อาจสลับ side)
+6. ถ้า Hero BUY ทั้งหมดถูกปิดด้วย SL ของมัน
+   → g_hero_Active=false → กลับสู่โหมดปกติ (entry/grid/TP เดิม v1.2 ทั้งหมด)
+```
+
+---
+
+### Dashboard (เพิ่ม section ใหม่)
+
+```
+=== HERO ORDER ===
+Hero Module       ON  cnt=3 minSide=5
+Hero Status       ACTIVE BUY  tk=#1234,#1235,#1236
+Hero AvgTP        300pt from avgSELL=2456.78  cur dist=210pt
+Survivor Strip    ON keepN=3
+```
+
+แถวเดิมไม่ลบ; ใช้ `g_dashRowMax` (v1.2) จัดการ trim row เกิน
 
 ---
 
 ### สิ่งที่ "ไม่เปลี่ยน" (กฎเหล็ก MQL5)
 
-- ไม่แตะ `OrderSend` / `trade.Buy` / `trade.Sell` / `trade.PositionClose` / `trade.PositionModify` (เรียกใช้ตามแพทเทิร์นเดิม)
-- ไม่แตะ Grid distance / lot calc สูตร (เพิ่มเฉพาะ ceil + min-step floor)
-- ไม่แตะ Per-Order BE / Trailing / Avg Trailing (strict 2-cross v6.91)
-- ไม่แตะ TP modes (Dollar/Points/%Bal/Accumulate) และ EnforceClearTPIfDisabled
-- ไม่แตะ Auto Re-Entry / Init Side Mode (Cost-Hit Restart เป็นเลเยอร์แยก ทำงานก่อน Auto Re-Entry; ถ้า Cost-Hit OFF พฤติกรรมเดิมทุกอย่าง)
-- ไม่มี License / News / Sync / Hedge / Hero / Squeeze
+- ไม่แตะ `OrderSend` / `trade.Buy` / `trade.Sell` / `trade.PositionClose` / `trade.PositionModify` (ใช้ pattern เดิม)
+- ไม่แตะสูตร Grid distance / lot calc (v1.2 ceil + min-step floor)
+- ไม่แตะสูตร Per-Order BE / Trailing / Avg Trailing strict-2-cross / TP modes / EnforceClearTPIfDisabled
+- ไม่แตะ Auto Re-Entry / Init Side Mode / Cost-Hit Restart core
+- ไม่มี License / News / Sync / Hedge / Squeeze
+- ถ้า `InpEnableHero=false` พฤติกรรม EA = v1.2 เป๊ะทุกบรรทัด (ทุก helper Hero return เร็วเมื่อ master OFF)
+
+---
+
+### Memory & Plan
+- สร้าง `mem://trading/golden-kuy3/v1-3-hero-order` พร้อม description สั้นชี้พฤติกรรม Hero/Survivor/AvgTP
+- อัปเดต `mem://index.md` เพิ่ม entry ใต้ Memories
+- อัปเดต `.lovable/plan.md` ให้สะท้อน v1.3
