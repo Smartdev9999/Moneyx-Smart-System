@@ -1,13 +1,13 @@
 //+------------------------------------------------------------------+
 //|                                            Golden_Kuy3_EA.mq5    |
-//|                                       Golden Kuy3 EA  v1.41      |
-//|  v1.41: Fix NonHero count compile reference after Hero port       |
+//|                                       Golden Kuy3 EA  v1.42      |
+//|  v1.42: Accumulate cycle auto-reset on flat (Gold Miner concept)  |
 //|  v1.40: Hero Order ported from Gold Miner v7.09                  |
 //|         (single-side lock, no gen, cycle-based, lock-profit BE-SL)|
 //+------------------------------------------------------------------+
 #property copyright "Golden Kuy3 EA"
-#property version   "1.41"
-#property description "Golden Kuy3 v1.41 — Fix NonHero count compile reference after Hero port"
+#property version   "1.42"
+#property description "Golden Kuy3 v1.42 — Accumulate cycle auto-reset on flat (Gold Miner concept)"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -134,6 +134,9 @@ datetime g_lastDashTime    = 0;
 datetime g_lastTpClearScan = 0;
 double   g_realizedCycle   = 0.0;
 bool     g_tpStripped      = false;
+
+// v1.42 — forward decl
+void TryResetAccumulateCycleIfFlat();
 
 string g_dashPrefix = "GK_DASH_";
 string g_linePrefix = "GK_LINE_";
@@ -1008,7 +1011,7 @@ void ManageTakeProfit()
 
    for(int sideIdx=0; sideIdx<2; sideIdx++){
       int side = (sideIdx==0)?POSITION_TYPE_BUY:POSITION_TYPE_SELL;
-      int n = CountNonHeroMainOnSide((ENUM_POSITION_TYPE)side); // v1.41 exclude Hero
+      int n = CountNonHeroMainOnSide((ENUM_POSITION_TYPE)side); // v1.42 exclude Hero
       if(n<=0) continue;
 
       double pl = CalcSideFloating_NonHero(side); // v1.3
@@ -1279,7 +1282,7 @@ void DrawDashboard()
    double plS  = CalcSideFloating(POSITION_TYPE_SELL);
    double plAll= plB+plS;
 
-   DashHeader(StringFormat("Golden Kuy3 v1.41  Side:%s Grid:%s/%s", SideModeStr(), GridModeStr(), LotModeStr()));
+   DashHeader(StringFormat("Golden Kuy3 v1.42  Side:%s Grid:%s/%s", SideModeStr(), GridModeStr(), LotModeStr()));
 
    DashHeader("=== ACCOUNT ===");
    DashRow("Balance",     StringFormat("$%.2f", bal), info);
@@ -1443,11 +1446,20 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
          }
       }
    }
-   // Reset cycle when fully flat
+   // v1.42 — Reset accumulate cycle when fully flat (Gold Miner concept)
+   if(trans.type==TRADE_TRANSACTION_DEAL_ADD){
+      TryResetAccumulateCycleIfFlat();
+   }
+}
+
+// v1.42 — Gold Miner-style cycle reset: when no EA position exists, zero realized
+void TryResetAccumulateCycleIfFlat()
+{
    if(CountSideSimple(POSITION_TYPE_BUY)==0 && CountSideSimple(POSITION_TYPE_SELL)==0){
-      // small epsilon to avoid resetting in the middle of multi-deal flatten
-      if(MathAbs(g_realizedCycle) > 0.0 && trans.type==TRADE_TRANSACTION_DEAL_ADD){
-         // keep g_realizedCycle visible until next entry; reset on next OpenInitial cycle
+      if(MathAbs(g_realizedCycle) > 0.0001){
+         Print("GK ACCUM CYCLE RESET — flat detected. prev realized=",
+               DoubleToString(g_realizedCycle,2));
+         g_realizedCycle = 0.0;
       }
    }
 }
@@ -1501,7 +1513,7 @@ int OnInit()
       if(c=="GK_INIT_SELL") g_initPrice_Sell = pos.PriceOpen();
    }
 
-   Print("Golden Kuy3 v1.41 init  digits=",g_digits," pip=",g_pip," stopsLvl=",g_stopsLevel,
+   Print("Golden Kuy3 v1.42 init  digits=",g_digits," pip=",g_pip," stopsLvl=",g_stopsLevel,
          " | Hero=", InpHero_Enabled?"ON":"OFF", " HeroN=", InpHero_OrderCount,
          " minAct=", InpHero_MinOrdersToActivate, " BE=", InpHero_BE_OffsetPoints, "pt");
    return INIT_SUCCEEDED;
@@ -1511,11 +1523,12 @@ void OnDeinit(const int reason)
 {
    DelDash();
    DelLines();
-   Print("Golden Kuy3 v1.41 deinit reason=",reason);
+   Print("Golden Kuy3 v1.42 deinit reason=",reason);
 }
 
 void OnTick()
 {
+   TryResetAccumulateCycleIfFlat();   // v1.42 — Gold Miner cycle reset
    BuildHeroTicketCache();      // v1.4 — must run first
    ManageHeroOppositeClose();   // v1.4 — orchestrator (strip TP/SL, BE_GUARD, opp-clear close)
    ManageCostHitRestart();
