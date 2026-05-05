@@ -1,114 +1,132 @@
-## เป้าหมาย
-สร้าง EA ใหม่ `public/docs/mql5/Golden_Kuy3_EA.mq5` v1.0 — เน้นความเรียบง่าย: Instant entry + Grid ชุดเดียว (เลือก Both/Buy/Sell) + ระบบ TP/Trailing แบบ Gold Miner ครบชุด ไม่มี indicator, ไม่มี Hedge/News/License/Sync
+## Golden Kuy3 EA — Upgrade to v1.1
+
+ไฟล์ที่แก้: `public/docs/mql5/Golden_Kuy3_EA.mq5`
+เอกสารใหม่: `.lovable/memory/trading/golden-kuy3/v1-1-be-trail-split-avgtp-modes-dashboard.md`
 
 ---
 
-## 1. Instant Entry (ไม่มี indicator)
-- `InpInitSideMode` — `BOTH` / `BUY_ONLY` / `SELL_ONLY`
-- เมื่อ EA โหลด/ฝั่งใดว่าง → เปิด market BUY ที่ Ask และ/หรือ SELL ที่ Bid ทันทีด้วย `InpInitialLot`
-- Comment ฝั่ง init: `GK_INIT_BUY` / `GK_INIT_SELL` (ใช้ตรวจ initial price กลาง)
-- Re-entry: ฝั่งใดถูกปิดหมด (เหลือ 0 position ฝั่งนั้น) → เปิด initial ใหม่ตามฝั่งที่อนุญาต
+### 1) Per-Order Trailing — แยก Break-even / Trailing เลือกได้อิสระ
 
-## 2. Grid ชุดเดียว (Up/Down รอบ Initial เป็นจุดกลาง)
-หลักการ: ไม่มี Loss/Profit grid แยก — ใช้ลำดับ ticket จากน้อย→มากต่อฝั่ง
-- `InpGridSideMode` — `BOTH` / `UP_ONLY` / `DOWN_ONLY`
-  - UP = ออก grid ขึ้นไปด้านบน (ใช้กับฝั่ง BUY ที่ราคา > initial หรือ SELL ที่ราคา > initial)
-  - DOWN = ตรงข้าม
-- `InpGridDistancePips` — ระยะห่างขั้นต่ำจาก ticket ล่าสุดของฝั่งนั้น
-- `InpGridLotMode` — `FIXED` / `ADD` / `MULTIPLY`
-  - FIXED: lot คงที่ = `InpGridLotValue`
-  - ADD: lot ของ grid ใหม่ = lot ticket ล่าสุด + `InpGridLotValue`
-  - MULTIPLY: lot ของ grid ใหม่ = lot ticket ล่าสุด × `InpGridLotValue`
-- `InpMaxGridOrders` — จำนวน grid สูงสุดต่อฝั่ง (ไม่นับ initial)
-- `InpGridOnlyNewCandle` (bool, M1) — รอแท่งใหม่ก่อนยิง grid ถัดไป
-- ตัวกลาง = ราคาเปิดของ initial ticket ฝั่งนั้น (เก็บไว้ใน global เมื่อ initial เปิด)
-- ทิศทาง: เทียบ Ask/Bid ปัจจุบันกับ "ticket ล่าสุดของฝั่ง" (เรียง ticket น้อย→มาก, ตัวล่าสุด = ticket มากสุด)
-  - ฝั่ง BUY: ราคา ≤ ticket ล่าสุด − distance → ลง grid DOWN; ราคา ≥ ticket ล่าสุด + distance → ลง grid UP
-  - ฝั่ง SELL: เช่นเดียวกัน
-- Comment grid: `GK_GRID_BUY_<n>` / `GK_GRID_SELL_<n>`
+แทน `InpEnablePerOrderTrailing` ตัวเดียว เป็น 2 toggle:
 
-## 3. Trailing Stop Per Order (จาก Gold Miner)
-- `InpEnablePerOrderTrailing` (bool)
-- `InpTrailingActivationPips`, `InpTrailingStepPips`, `InpBreakevenActivationPips`, `InpBreakevenBufferPips`
-- Logic: ทุก ticket (init+grid) → เมื่อกำไร ≥ Activation pips → set SL = entry + Breakeven buffer; กำไรเพิ่ม → trail SL ตาม Step pips
-- Push เป็น broker SL จริง (เหมือน v6.85 Gold Miner) ผ่าน `SyncBrokerTPSL`
+- `InpEnableBreakevenLock` (default `true`) — ล็อกหน้าทุนต่อ ticket
+  - กระตุ้นเมื่อกำไรจาก `openPrice` ถึง `InpBreakevenActivationPips`
+  - ตั้ง broker SL = `openPrice ± InpBreakevenBufferPips` (BUY = บวก, SELL = ลบ)
+  - ของใครของมัน เปิดเฉพาะตัวที่กำไรพอ ทำงานทั้งฝั่ง BUY/SELL ทุกออเดอร์ (initial + grid)
+- `InpEnableTrailingStop` (default `false`) — ลากต่อจาก BE
+  - ทำงานเฉพาะเมื่อกำไรถึง `InpTrailingActivationPips`
+  - SL = `openPrice ± (profitPips - InpTrailingStepPips)`, เพดานล่าง = `BreakevenBufferPips`
+  - ใช้ได้เดี่ยว / ใช้คู่กับ Breakeven / ปิดทั้งคู่
 
-## 4. Average TP (จาก Gold Miner)
-- `InpEnableAverageTP` (bool)
-- `InpAverageTPPips` — ระยะ pips จาก average price
-- คำนวณ weighted average price ต่อฝั่ง (ทุก ticket รวม init+grid)
-- เมื่อจำนวน position ฝั่งนั้น ≥ `InpAvgTP_MinOrders` → push broker TP ของทุก ticket ฝั่งนั้นให้ตรงกัน = avg ± Average TP pips
-- ถ้าจำนวน = 1 → คงค่า TP เริ่มต้นจาก initial (โหมด Initial TP)
-- `InpInitialTPPips`, `InpInitialSLPips` — TP/SL เริ่มต้นของ ticket แรกต่อฝั่ง
-- เคารพ `STOPS_LEVEL` ของโบรก
+`ComputePerOrderSL()` ปรับ logic:
+1. ถ้า BreakevenLock ON และ `profit ≥ BeAct` → set SL = BE+buffer
+2. ถ้า TrailingStop ON และ `profit ≥ TrailAct` → wrap SL = trailing (overrides BE ถ้าไกลกว่า)
+3. ถ้าไม่เข้าเงื่อนไขเลย → return 0 (ไม่ modify)
 
-## 5. Average Trailing Stop (จาก Gold Miner v6.85/v6.86/v6.90/v6.91)
-- `InpEnableAvgTrailing` (bool)
-- `InpAvgTrail_ActivationPips` — กำไร basket (จาก avg price) ต้องถึงค่านี้ถึงจะ ARM
-- `InpAvgTrail_StepPips` — เลื่อน SL ตาม step
-- `InpAvgTrail_BE_Buffer` — buffer breakeven หลัง trail
-- `InpAvgTrail_MinOrders` — จำนวน position ขั้นต่ำต่อฝั่งที่จะเปิดใช้
-- Strict 2-Cross ARM (v6.91): BUY ต้องเห็นราคา < avg ก่อน แล้ว cross กลับมา > avg+activation จึง ARM (กัน ARM-then-close ทันที); SELL กลับด้าน
-- เมื่อ Trail SL โดน hit → ปิดทุก ticket ฝั่งนั้นพร้อมกัน (per-side reset แบบ v6.84 — อีกฝั่งไม่ถูกล้าง state)
-- Push broker SL จริงทุก ticket (avg trailing) — ลำดับความสำคัญสูงกว่า Per-Order Trailing
+ผลลัพธ์: เลือกใช้ BE-only ก็ได้ (ทุก order มี SL กันทุนของตัวเอง), Trailing-only ก็ได้, ทั้งคู่ก็ได้
 
 ---
 
-## Module Boundaries (ห้ามใส่ตามกฎเหล็ก #7)
-- ❌ ไม่มี License / News / Sync / Hedge / Triple-Gate / Recovery / Hero
-- ❌ ไม่มี Squeeze / BB / SMA / EMA / ZigZag (Instant only ไม่มี indicator)
+### 2) Take Profit — เพิ่มโหมดให้ครบเหมือน Gold Miner + แก้ stale TP บนชาร์ต
 
-## Dashboard
-แผงเดียวบน chart — แสดง:
-- Header: `Golden Kuy3 v1.0  Side:BOTH/BUY/SELL  Grid:BOTH/UP/DOWN`
-- BUY block: count, total lot, avg price, floating P/L, last grid ticket, trailing state
-- SELL block: เหมือนกัน
-- Avg TP / Avg Trail สถานะ (WAIT/READY/ARMED) ต่อฝั่ง
+#### Bug fix
+ตอนนี้แม้ `InpEnableAverageTP=false` ออเดอร์ initial ยังถูก push `InpInitialTPPips` (default 200) จาก `OpenInitial()` → ชาร์ตจึงยังขีดเส้น TP. แก้:
 
-## โครงไฟล์
+- เพิ่ม master toggle `InpUseTakeProfit` (default `true`). ถ้า `false`:
+  - `OpenInitial()` ส่ง `tp=0`
+  - `EnforceClearTPIfDisabled()` วน positions ของเรา ทุกตัวที่ `pos.TakeProfit()>0` → `PositionModify(sl, 0)` (throttled 5s)
+- `InpEnableAverageTP`/`InpUseTPDollar`/`InpUseTPPoints`/`InpUseTPPercent` ทั้งหมด OFF → ก็เคลียร์เช่นกัน
+
+#### โหมด TP ใหม่ (port จาก Gold Miner ในรูป)
+เพิ่มกลุ่ม `=== Take Profit ===`:
+
+| Input | Default | หมายเหตุ |
+|---|---|---|
+| `InpUseTakeProfit` | true | master |
+| `InpUseTPFixedDollar` | false | ปิดทั้งฝั่งเมื่อ floating PL ฝั่งนั้น ≥ `InpTPDollarAmount` |
+| `InpTPDollarAmount` | 100.0 | $ |
+| `InpUseTPPoints` | true | push broker TP ที่ `avg ± points` |
+| `InpTPPointsFromAverage` | 500.0 | points (เดิมใช้ `InpAverageTPPips`; เก็บไว้เป็น alias) |
+| `InpUseTPPercentBalance` | false | ปิดเมื่อ floating ฝั่งนั้น ≥ `% × balance` |
+| `InpTPPercentOfBalance` | 26.0 | % |
+| `InpUseAccumulateClose` | false | ปิดทั้ง 2 ฝั่งเมื่อ realized+floating ≥ `InpAccumulateTarget` (cycle reset เมื่อทุก ticket flat) |
+| `InpAccumulateTarget` | 20000 | $ |
+| `InpAvgTP_MinOrders` | 2 | (เดิม) |
+
+`ManageTakeProfit()` รวมทุกโหมด (เรียงลำดับ): Accumulate → Dollar → Percent → Points (push broker TP)
+- 3 โหมดแรก → close ฝั่ง / ทั้งคู่
+- โหมด Points → push broker TP ทุก ticket ฝั่งนั้น
+- ถ้าโหมด Points OFF → ไม่ push broker TP เลย → คู่กับ `EnforceClearTPIfDisabled()` กันเส้น TP ค้าง
+
+`InpEnableAverageTP`/`InpAverageTPPips` deprecate เป็น alias (ไม่กระทบ .set เดิม)
+
+---
+
+### 3) เส้นค่าเฉลี่ย + เส้น TP บนชาร์ต (Gold Miner style)
+
+กลุ่ม `=== Chart Lines ===`:
+
+- `InpShowAvgLine` (true)
+- `InpAvgBuyLineColor` (`clrDodgerBlue`)
+- `InpAvgSellLineColor` (`clrOrangeRed`)
+- `InpShowTPLine` (true)
+- `InpTPBuyLineColor` (`clrLime`)
+- `InpTPSellLineColor` (`clrMagenta`)
+
+`DrawAvgAndTPLines()` ใช้ `OBJ_HLINE` prefix `GK_LINE_` 4 เส้น (avg buy / avg sell / tp buy / tp sell), update ทุกครั้งใน `OnTick` หลังคำนวณ avg + tp; ลบเส้นเมื่อฝั่งนั้น 0 ออเดอร์ หรือ toggle OFF; ลบทั้งหมดใน `OnDeinit`
+
+---
+
+### 4) Dashboard ตารางแบบ Gold Miner
+
+ใช้ `OBJ_RECTANGLE_LABEL` พื้นหลังต่อ row + `OBJ_LABEL` 2 คอลัมน์ (label / value) เหมือน Golden2 v1.5 และ Gold Miner หน้าตัวอย่าง:
+
 ```
-public/docs/mql5/Golden_Kuy3_EA.mq5  (~1500-2000 บรรทัด)
-├─ Inputs (5 group: General / Grid / Per-Order Trail / Avg TP / Avg Trail)
-├─ Globals (initial price ต่อฝั่ง, ticket ล่าสุด, trailing SL state, avg trail state)
-├─ OnInit / OnDeinit / OnTick / OnChartEvent
-├─ Helpers: GetLastTicketLot/Price, CalcAvgPrice, CountSide, MakeComment
-├─ ManageInitialEntry()
-├─ ManageGridEntry()
-├─ ManagePerOrderTrailing()
-├─ ManageAverageTP()
-├─ ManageAverageTrailing()
-├─ SyncBrokerTPSL()  (รวม priority: AvgTrail > PerOrder > Initial)
-└─ DrawDashboard()
+=== ACCOUNT ===
+Balance / Equity / Floating P/L
+=== POSITIONS ===
+BUY P/L Lot Ord
+SELL P/L Lot Ord
+Total Cur. Lot
+=== MODULES ===
+Init Side / Grid / Per-Order Trail / BE Lock / Avg TP / Avg Trail
+=== TP MODES ===
+Dollar / Points / %Bal / Accumulate (ON/OFF + target)
+=== AVG TRAIL ===
+BUY: WAIT/READY/ARMED  SL:xxx
+SELL: WAIT/READY/ARMED SL:xxx
+=== SYSTEM ===
+Cycle realized / TP-stripped status
 ```
 
-## Inputs สำคัญ (สรุป)
-```
-=== General ===
-InpMagicNumber=33001, InpInitSideMode=BOTH, InpInitialLot=0.01,
-InpInitialTPPips=200, InpInitialSLPips=0
-=== Grid ===
-InpEnableGrid=true, InpGridSideMode=BOTH, InpGridDistancePips=150,
-InpGridLotMode=MULTIPLY, InpGridLotValue=1.5, InpMaxGridOrders=20,
-InpGridOnlyNewCandle=true
-=== Per-Order Trailing ===
-InpEnablePerOrderTrailing=false, InpTrailingActivationPips=80,
-InpTrailingStepPips=20, InpBreakevenActivationPips=50, InpBreakevenBufferPips=10
-=== Average TP ===
-InpEnableAverageTP=true, InpAverageTPPips=50, InpAvgTP_MinOrders=2
-=== Average Trailing ===
-InpEnableAvgTrailing=true, InpAvgTrail_ActivationPips=100,
-InpAvgTrail_StepPips=20, InpAvgTrail_BE_Buffer=20, InpAvgTrail_MinOrders=3
-```
+Inputs: `InpDashX` `InpDashY` `InpDashRowH` `InpDashColW1` `InpDashColW2` `InpDashHeaderColor` `InpDashRowBgColor` `InpDashAltRowBgColor` (โทนเดียวกับรูป Golden2)
 
-## สิ่งที่ไม่เปลี่ยนแปลง
-- ไม่แตะ EA ตัวอื่น (Gold Miner / Golden2 / Asset Miner / Jutlameasu / Harmony / MoneyX)
-- ไม่เปลี่ยน schema / supabase / frontend
+Throttle ตาม `InpDashRefreshSec`
 
-## Files
-- `public/docs/mql5/Golden_Kuy3_EA.mq5` — สร้างใหม่
-- `.lovable/memory/trading/golden-kuy3/v1-0-init.md` — บันทึก spec
-- `mem://index.md` — append entry
+---
 
-## ขอยืนยัน 2 จุดก่อนสร้าง
-1. **Initial re-entry**: ฝั่งที่ปิดหมดแล้วต้องการให้ EA เปิด init ใหม่ทันที **ทุกครั้ง** ใช่ไหม? หรือเปิดครั้งเดียวตอน OnInit เท่านั้น?
-2. **เมื่อ Avg TP / Avg Trail ปิด basket ฝั่งใดฝั่งหนึ่ง** — ต้องการให้ EA เปิด initial ฝั่งนั้นใหม่อัตโนมัติเลย หรือรอ user (โดย default ผมจะทำเป็น auto re-entry ตามข้อ 1)
+### 5) Internals / Plumbing
+
+- เพิ่ม globals: `g_realizedCycle`, `g_lastTpClearScan`, `g_tpStripped` (bool diag), line-update cache
+- `OnTradeTransaction` (ถ้ายังไม่มี): เก็บ realized profit สะสม cycle, reset เมื่อทุก ticket flat
+- `EnforceClearTPIfDisabled()` เรียกทุก ~5s ใน OnTick
+- `OnDeinit`: ลบ dashboard + ลบเส้น avg/TP
+
+---
+
+### 6) Version + Memory
+
+- `#property version "1.10"`, description, header banner, dashboard title อัปเดตเป็น `v1.1`
+- เพิ่มไฟล์ memory + อัปเดต `mem://index.md` แทรกบรรทัด:
+  `- [Kuy3 v1.1 BE/Trail+TP Modes](mem://trading/golden-kuy3/v1-1-be-trail-split-avgtp-modes-dashboard) — BE/Trail toggle split, full TP modes (Dollar/Points/%Bal/Accumulate), avg+TP chart lines, Gold-Miner-style dashboard, stale-TP fix`
+
+---
+
+### สิ่งที่ "ไม่เปลี่ยน" (ตามกฎเหล็ก MQL5)
+
+- ❌ ไม่แตะ `OrderSend` / `trade.Buy` / `trade.Sell` / `trade.PositionClose` (เพิ่มเฉพาะ TP=0 เป็น parameter เมื่อ master OFF)
+- ❌ ไม่แตะ Grid entry distance / lot calc / new-candle gate
+- ❌ ไม่แตะ Auto re-entry / Init side mode
+- ❌ ไม่แตะ Avg Trailing strict-2-cross + step + BE_Buffer (ยังคง v6.91 ตามเดิม)
+- ❌ ไม่มี License / News / Sync / Hedge / Hero / Squeeze (โครงสร้างยังคงเดิม)
+- ✅ แก้/เพิ่มเฉพาะ: TP modes, BE/Trail split, Chart lines, Dashboard, Stale-TP cleanup

@@ -1,13 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                            Golden_Kuy3_EA.mq5    |
-//|                                       Golden Kuy3 EA  v1.0       |
-//|  Instant entry (no indicator) + Single Grid (Both/Up/Down)       |
-//|  + Per-Order Trailing + Average TP + Average Trailing            |
-//|  Ported subsystems from Gold Miner EA (v6.85/v6.86/v6.90/v6.91)  |
+//|                                       Golden Kuy3 EA  v1.1       |
+//|  Instant entry + Single Grid (Both/Up/Down)                      |
+//|  + Per-Order BE-Lock / Trailing (split toggles)                  |
+//|  + Full TP modes (Dollar / Points / %Bal / Accumulate)           |
+//|  + Avg/TP chart lines + Gold-Miner-style table dashboard         |
 //+------------------------------------------------------------------+
 #property copyright "Golden Kuy3 EA"
-#property version   "1.00"
-#property description "Golden Kuy3 v1.0 — Instant + Grid + AvgTP + AvgTrailing (no indicator)"
+#property version   "1.10"
+#property description "Golden Kuy3 v1.1 — BE/Trail split + TP modes + Avg/TP lines + table dashboard"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -25,51 +26,77 @@ input group "=== General ==="
 input long                 InpMagicNumber          = 33001;
 input ENUM_GK_SIDE_MODE    InpInitSideMode         = GK_SIDE_BOTH;
 input double               InpInitialLot           = 0.01;
-input double               InpInitialTPPips        = 200.0;     // 0 = none
+input double               InpInitialTPPips        = 200.0;     // 0 = none, also overridden by InpUseTakeProfit/Points
 input double               InpInitialSLPips        = 0.0;       // 0 = none
-input bool                 InpAutoReEntry          = true;      // re-enter side after it goes flat
+input bool                 InpAutoReEntry          = true;
 input int                  InpReEntryCooldownSec   = 5;
 input int                  InpSlippagePoints       = 30;
 
 input group "=== Grid (single set) ==="
 input bool                 InpEnableGrid           = true;
-input ENUM_GK_GRID_SIDE    InpGridSideMode         = GK_GRID_BOTH;     // BOTH / UP / DOWN relative to last ticket
+input ENUM_GK_GRID_SIDE    InpGridSideMode         = GK_GRID_BOTH;
 input double               InpGridDistancePips     = 150.0;
 input ENUM_GK_GRID_LOT     InpGridLotMode          = GK_LOT_MULTIPLY;
-input double               InpGridLotValue         = 1.5;              // FIXED=lot, ADD=+x, MULT=*x
-input int                  InpMaxGridOrders        = 20;               // per side, excl. initial
+input double               InpGridLotValue         = 1.5;
+input int                  InpMaxGridOrders        = 20;
 input bool                 InpGridOnlyNewCandle    = true;
 input ENUM_TIMEFRAMES      InpGridCandleTF         = PERIOD_M1;
 
-input group "=== Per-Order Trailing (Gold Miner style) ==="
-input bool                 InpEnablePerOrderTrailing  = false;
-input double               InpTrailingActivationPips  = 80.0;
-input double               InpTrailingStepPips        = 20.0;
-input double               InpBreakevenActivationPips = 50.0;
-input double               InpBreakevenBufferPips     = 10.0;
+input group "=== Per-Order Break-Even Lock ==="
+input bool                 InpEnableBreakevenLock     = true;     // lock cost on each ticket independently
+input double               InpBreakevenActivationPips = 200.0;    // profit pips required before locking
+input double               InpBreakevenBufferPips     = 10.0;     // SL = open ± buffer
 
-input group "=== Average TP (Gold Miner style) ==="
-input bool                 InpEnableAverageTP      = true;
-input double               InpAverageTPPips        = 50.0;
-input int                  InpAvgTP_MinOrders      = 2;
+input group "=== Per-Order Trailing Stop ==="
+input bool                 InpEnableTrailingStop      = false;    // trail SL after BE
+input double               InpTrailingActivationPips  = 250.0;    // profit pips needed before trailing kicks in
+input double               InpTrailingStepPips        = 20.0;     // distance trailed behind price
 
-input group "=== Average Trailing Stop (Gold Miner v6.85/86/90/91) ==="
+input group "=== Take Profit ==="
+input bool                 InpUseTakeProfit           = true;     // master TP switch
+input bool                 InpUseTPFixedDollar        = false;
+input double               InpTPDollarAmount          = 100.0;
+input bool                 InpUseTPPoints             = true;     // push broker TP at avg ± points
+input double               InpTPPointsFromAverage     = 500.0;
+input bool                 InpUseTPPercentBalance     = false;
+input double               InpTPPercentOfBalance      = 26.0;
+input bool                 InpUseAccumulateClose      = false;
+input double               InpAccumulateTarget        = 20000.0;
+input int                  InpAvgTP_MinOrders         = 2;
+
+input group "=== Average Trailing Stop ==="
 input bool                 InpEnableAvgTrailing       = true;
 input double               InpAvgTrail_ActivationPips = 100.0;
 input double               InpAvgTrail_StepPips       = 20.0;
 input double               InpAvgTrail_BE_Buffer      = 20.0;
 input int                  InpAvgTrail_MinOrders      = 3;
 input bool                 InpAvgTrail_Strict2Cross   = true;
-input double               InpAvgTrail_UnderAvgBuffer = 50.0;     // points below/above avg required to "cross under"
+input double               InpAvgTrail_UnderAvgBuffer = 50.0;
+
+input group "=== Chart Lines ==="
+input bool                 InpShowAvgLine             = true;
+input color                InpAvgBuyLineColor         = clrDodgerBlue;
+input color                InpAvgSellLineColor        = clrOrangeRed;
+input bool                 InpShowTPLine              = true;
+input color                InpTPBuyLineColor          = clrLime;
+input color                InpTPSellLineColor         = clrMagenta;
 
 input group "=== Dashboard ==="
 input bool                 InpShowDashboard        = true;
 input int                  InpDashRefreshSec       = 1;
+input int                  InpDashX                = 10;
+input int                  InpDashY                = 20;
+input int                  InpDashRowH             = 16;
+input int                  InpDashColW1            = 150;
+input int                  InpDashColW2            = 170;
 input color                InpDashTextColor        = clrWhite;
-input color                InpDashBgColor          = clrDarkSlateGray;
+input color                InpDashHeaderColor      = clrAqua;
+input color                InpDashRowBgColor       = C'15,15,30';
+input color                InpDashAltRowBgColor    = C'25,25,45';
+input color                InpDashHeaderBgColor    = C'40,40,80';
 
 //========================= GLOBALS =================================
-double  g_pip            = 0.0;   // 1 pip in price (0.10 for 5-digit gold, 0.0001 for 5-digit fx)
+double  g_pip            = 0.0;
 double  g_point          = 0.0;
 int     g_digits         = 0;
 double  g_stopsLevel     = 0.0;
@@ -79,22 +106,23 @@ datetime g_lastReEntry_Sell  = 0;
 datetime g_lastGridBar_Buy   = 0;
 datetime g_lastGridBar_Sell  = 0;
 
-// Initial center price (open price of side's INIT ticket)
 double  g_initPrice_Buy  = 0.0;
 double  g_initPrice_Sell = 0.0;
 
-// Per-order trailing virtual SL cache (keyed on ticket)
-// We rely on broker SL since we push it; no extra cache needed beyond that.
-
-// Avg trailing state
 bool    g_avgTrail_Active_Buy   = false;
 bool    g_avgTrail_Active_Sell  = false;
 double  g_avgTrail_SL_Buy       = 0.0;
 double  g_avgTrail_SL_Sell      = 0.0;
-bool    g_avgTrail_ArmReady_Buy  = false;  // strict 2-cross gate
+bool    g_avgTrail_ArmReady_Buy  = false;
 bool    g_avgTrail_ArmReady_Sell = false;
 
-datetime g_lastDashTime = 0;
+datetime g_lastDashTime    = 0;
+datetime g_lastTpClearScan = 0;
+double   g_realizedCycle   = 0.0;
+bool     g_tpStripped      = false;
+
+string g_dashPrefix = "GK_DASH_";
+string g_linePrefix = "GK_LINE_";
 
 //========================= HELPERS =================================
 double PipsToPrice(double pips) { return pips * g_pip; }
@@ -226,6 +254,12 @@ bool SideAllowedForInit(int side)
 
 double GetMinStopPrice() { return g_stopsLevel * g_point; }
 
+bool IsTPAnyModeActive()
+{
+   if(!InpUseTakeProfit) return false;
+   return (InpUseTPFixedDollar || InpUseTPPoints || InpUseTPPercentBalance || InpUseAccumulateClose);
+}
+
 //========================== ENTRY ==================================
 bool OpenInitial(int side)
 {
@@ -235,7 +269,8 @@ bool OpenInitial(int side)
    double sl=0, tp=0;
    double minStop = GetMinStopPrice();
 
-   if(InpInitialTPPips>0){
+   // Initial TP only if master TP ON and Points mode is OFF (Points mode pushes its own TP later)
+   if(InpUseTakeProfit && !InpUseTPPoints && InpInitialTPPips>0){
       double dist = MathMax(PipsToPrice(InpInitialTPPips), minStop);
       tp = (side==POSITION_TYPE_BUY)? price + dist : price - dist;
    }
@@ -280,14 +315,12 @@ bool OpenGrid(int side, double lot, int idx)
 //===================== MANAGE INITIAL ==============================
 void ManageInitialEntry()
 {
-   // Side BUY
    if(SideAllowedForInit(POSITION_TYPE_BUY)){
       int n = CountSideSimple(POSITION_TYPE_BUY);
       if(n==0 && (TimeCurrent()-g_lastReEntry_Buy) >= InpReEntryCooldownSec){
          if(g_lastReEntry_Buy==0 || InpAutoReEntry) OpenInitial(POSITION_TYPE_BUY);
       }
    }
-   // Side SELL
    if(SideAllowedForInit(POSITION_TYPE_SELL)){
       int n = CountSideSimple(POSITION_TYPE_SELL);
       if(n==0 && (TimeCurrent()-g_lastReEntry_Sell) >= InpReEntryCooldownSec){
@@ -315,11 +348,10 @@ void ManageGridEntry()
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
 
-   // BUY side
    {
       string lc; ulong ltk; double llot, lprice;
       int n = CountSide(POSITION_TYPE_BUY, lc, ltk, llot, lprice);
-      if(n>0 && (n-1) < InpMaxGridOrders){   // -1 for initial
+      if(n>0 && (n-1) < InpMaxGridOrders){
          bool fire=false; bool isUp=false;
          if(ask >= lprice + dist){ fire=true;  isUp=true;  }
          if(bid <= lprice - dist){ fire=true;  isUp=false; }
@@ -337,7 +369,6 @@ void ManageGridEntry()
       }
    }
 
-   // SELL side
    {
       string lc; ulong ltk; double llot, lprice;
       int n = CountSide(POSITION_TYPE_SELL, lc, ltk, llot, lprice);
@@ -360,34 +391,49 @@ void ManageGridEntry()
    }
 }
 
-//================ PER-ORDER TRAILING (broker SL) ===================
+//================ PER-ORDER BE LOCK + TRAILING =====================
+// Returns target SL price (0 = no change). Combines BE lock + Trailing.
 double ComputePerOrderSL(int side, double openPrice, double curBid, double curAsk)
 {
+   if(!InpEnableBreakevenLock && !InpEnableTrailingStop) return 0.0;
+
    double profitPips = (side==POSITION_TYPE_BUY)
                         ? PriceToPips(curBid - openPrice)
                         : PriceToPips(openPrice - curAsk);
 
-   if(profitPips < InpBreakevenActivationPips) return 0.0;
-
    double slPrice = 0.0;
-   // Breakeven baseline
-   double bePips = InpBreakevenBufferPips;
-   if(side==POSITION_TYPE_BUY)  slPrice = openPrice + PipsToPrice(bePips);
-   else                          slPrice = openPrice - PipsToPrice(bePips);
+   bool   haveSL  = false;
 
-   if(profitPips >= InpTrailingActivationPips){
-      // trail by step
-      double trailPips = profitPips - InpTrailingStepPips;
-      if(trailPips < InpBreakevenBufferPips) trailPips = InpBreakevenBufferPips;
-      if(side==POSITION_TYPE_BUY)  slPrice = openPrice + PipsToPrice(trailPips);
-      else                          slPrice = openPrice - PipsToPrice(trailPips);
+   // Layer 1: Breakeven lock (only when ON and profit reached BE activation)
+   if(InpEnableBreakevenLock && profitPips >= InpBreakevenActivationPips){
+      double bePips = InpBreakevenBufferPips;
+      slPrice = (side==POSITION_TYPE_BUY) ? openPrice + PipsToPrice(bePips)
+                                          : openPrice - PipsToPrice(bePips);
+      haveSL = true;
    }
-   return slPrice;
+
+   // Layer 2: Trailing — only when ON and profit reached trail activation
+   if(InpEnableTrailingStop && profitPips >= InpTrailingActivationPips){
+      double trailPips = profitPips - InpTrailingStepPips;
+      // floor: BE buffer (don't trail tighter than BE if BE is on)
+      double floorPips = InpEnableBreakevenLock ? InpBreakevenBufferPips : 0.0;
+      if(trailPips < floorPips) trailPips = floorPips;
+      double trailSL = (side==POSITION_TYPE_BUY) ? openPrice + PipsToPrice(trailPips)
+                                                 : openPrice - PipsToPrice(trailPips);
+      // pick the more protective SL
+      if(!haveSL){ slPrice = trailSL; haveSL = true; }
+      else {
+         if(side==POSITION_TYPE_BUY  && trailSL > slPrice) slPrice = trailSL;
+         if(side==POSITION_TYPE_SELL && trailSL < slPrice) slPrice = trailSL;
+      }
+   }
+
+   return haveSL ? slPrice : 0.0;
 }
 
 void ManagePerOrderTrailing()
 {
-   if(!InpEnablePerOrderTrailing) return;
+   if(!InpEnableBreakevenLock && !InpEnableTrailingStop) return;
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
    double minStop = GetMinStopPrice();
@@ -401,44 +447,112 @@ void ManagePerOrderTrailing()
       double newSL = ComputePerOrderSL(side, op, bid, ask);
       if(newSL<=0) continue;
 
-      // honor stops level
       if(side==POSITION_TYPE_BUY){
          if(bid - newSL < minStop) newSL = bid - minStop;
-         if(curSL>0 && newSL <= curSL) continue;
+         if(curSL>0 && newSL <= curSL + g_point) continue;
       } else {
          if(newSL - ask < minStop) newSL = ask + minStop;
-         if(curSL>0 && newSL >= curSL) continue;
+         if(curSL>0 && newSL >= curSL - g_point) continue;
       }
 
-      // Skip overwriting if AvgTrail SL already tighter
-      // (handled by SyncBrokerTPSL ordering — per-order runs first, then avg trailing & avg TP overwrite)
       trade.PositionModify(pos.Ticket(), NormalizeDouble(newSL, g_digits), pos.TakeProfit());
    }
 }
 
-//==================== AVERAGE TP (broker push) =====================
-void ManageAverageTP()
+//==================== TAKE PROFIT (multi-mode) =====================
+void CloseAllSide(int side)
 {
-   if(!InpEnableAverageTP) return;
-   double minStop = GetMinStopPrice();
+   for(int i=PositionsTotal()-1;i>=0;i--){
+      if(!pos.SelectByIndex(i)) continue;
+      if(!IsOurPosition()) continue;
+      if((int)pos.PositionType()!=side) continue;
+      trade.PositionClose(pos.Ticket());
+   }
+}
+
+void CloseAllOurs()
+{
+   for(int i=PositionsTotal()-1;i>=0;i--){
+      if(!pos.SelectByIndex(i)) continue;
+      if(!IsOurPosition()) continue;
+      trade.PositionClose(pos.Ticket());
+   }
+}
+
+// Strip stale broker TP from every ticket when no Points-TP mode is active
+void EnforceClearTPIfDisabled()
+{
+   bool pointsActive = (InpUseTakeProfit && InpUseTPPoints);
+   if(pointsActive) { g_tpStripped = false; return; }
+   if(TimeCurrent() - g_lastTpClearScan < 5) return;
+   g_lastTpClearScan = TimeCurrent();
+
+   int cleared = 0;
+   for(int i=PositionsTotal()-1;i>=0;i--){
+      if(!pos.SelectByIndex(i)) continue;
+      if(!IsOurPosition()) continue;
+      if(pos.TakeProfit() <= 0) continue;
+      if(trade.PositionModify(pos.Ticket(), pos.StopLoss(), 0)) cleared++;
+   }
+   g_tpStripped = (cleared>0) || g_tpStripped;
+}
+
+void ManageTakeProfit()
+{
+   if(!InpUseTakeProfit) return;
+
+   // 1. Accumulate (whole account) — realized + floating
+   if(InpUseAccumulateClose && InpAccumulateTarget>0){
+      double floatingAll = CalcSideFloating(POSITION_TYPE_BUY) + CalcSideFloating(POSITION_TYPE_SELL);
+      if((g_realizedCycle + floatingAll) >= InpAccumulateTarget){
+         Print("GK ACCUM CLOSE — realized=",DoubleToString(g_realizedCycle,2)," floating=",DoubleToString(floatingAll,2)," tgt=",InpAccumulateTarget);
+         CloseAllOurs();
+         return;
+      }
+   }
+
+   double bal = AccountInfoDouble(ACCOUNT_BALANCE);
 
    for(int sideIdx=0; sideIdx<2; sideIdx++){
       int side = (sideIdx==0)?POSITION_TYPE_BUY:POSITION_TYPE_SELL;
-      double tot=0; int cnt=0;
-      double avg = CalcSideAvgPrice(side, tot, cnt);
-      if(cnt < InpAvgTP_MinOrders) continue;
-      if(avg<=0) continue;
+      int n = CountSideSimple(side);
+      if(n<=0) continue;
 
-      double tpDist = MathMax(PipsToPrice(InpAverageTPPips), minStop);
-      double tpPrice = (side==POSITION_TYPE_BUY)? avg + tpDist : avg - tpDist;
-      tpPrice = NormalizeDouble(tpPrice, g_digits);
+      double pl = CalcSideFloating(side);
 
-      for(int i=PositionsTotal()-1;i>=0;i--){
-         if(!pos.SelectByIndex(i)) continue;
-         if(!IsOurPosition()) continue;
-         if((int)pos.PositionType()!=side) continue;
-         if(MathAbs(pos.TakeProfit()-tpPrice) <= g_point*2) continue;
-         trade.PositionModify(pos.Ticket(), pos.StopLoss(), tpPrice);
+      // 2. Fixed dollar
+      if(InpUseTPFixedDollar && InpTPDollarAmount>0 && pl >= InpTPDollarAmount){
+         Print("GK TP DOLLAR ",(side==POSITION_TYPE_BUY?"BUY":"SELL")," PL=",DoubleToString(pl,2));
+         CloseAllSide(side);
+         continue;
+      }
+
+      // 3. % of balance
+      if(InpUseTPPercentBalance && InpTPPercentOfBalance>0 && bal>0){
+         double tgt = bal * InpTPPercentOfBalance / 100.0;
+         if(pl >= tgt){
+            Print("GK TP %BAL ",(side==POSITION_TYPE_BUY?"BUY":"SELL")," PL=",DoubleToString(pl,2)," tgt=",DoubleToString(tgt,2));
+            CloseAllSide(side);
+            continue;
+         }
+      }
+
+      // 4. Points from average — push broker TP
+      if(InpUseTPPoints && n >= InpAvgTP_MinOrders){
+         double tot=0; int cnt=0;
+         double avg = CalcSideAvgPrice(side, tot, cnt);
+         if(avg<=0) continue;
+         double minStop = GetMinStopPrice();
+         double tpDist = MathMax(InpTPPointsFromAverage * g_point, minStop);
+         double tpPrice = (side==POSITION_TYPE_BUY)? avg + tpDist : avg - tpDist;
+         tpPrice = NormalizeDouble(tpPrice, g_digits);
+         for(int i=PositionsTotal()-1;i>=0;i--){
+            if(!pos.SelectByIndex(i)) continue;
+            if(!IsOurPosition()) continue;
+            if((int)pos.PositionType()!=side) continue;
+            if(MathAbs(pos.TakeProfit()-tpPrice) <= g_point*2) continue;
+            trade.PositionModify(pos.Ticket(), pos.StopLoss(), tpPrice);
+         }
       }
    }
 }
@@ -454,12 +568,10 @@ void ManageAverageTrailing()
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
    double minStop = GetMinStopPrice();
 
-   // ---------------- BUY ----------------
    {
       double tot=0; int cnt=0;
       double avg = CalcSideAvgPrice(POSITION_TYPE_BUY, tot, cnt);
       if(cnt >= InpAvgTrail_MinOrders && avg>0){
-         // strict 2-cross arm-ready
          if(InpAvgTrail_Strict2Cross && !g_avgTrail_ArmReady_Buy){
             if(bid < avg - InpAvgTrail_UnderAvgBuffer*g_point) g_avgTrail_ArmReady_Buy = true;
          }
@@ -472,13 +584,11 @@ void ManageAverageTrailing()
                Print("GK AVG-TRAIL BUY ARMED avg=",DoubleToString(avg,g_digits)," sl=",DoubleToString(g_avgTrail_SL_Buy,g_digits));
             }
          } else {
-            // trail
             double trailPips = profitPips - InpAvgTrail_StepPips;
             if(trailPips < InpAvgTrail_BE_Buffer) trailPips = InpAvgTrail_BE_Buffer;
             double newSL = avg + PipsToPrice(trailPips);
             if(newSL > g_avgTrail_SL_Buy) g_avgTrail_SL_Buy = newSL;
 
-            // hit?
             if(bid <= g_avgTrail_SL_Buy){
                Print("GK AVG-TRAIL BUY HIT — closing all BUY");
                CloseAllSide(POSITION_TYPE_BUY);
@@ -490,7 +600,6 @@ void ManageAverageTrailing()
       }
    }
 
-   // ---------------- SELL ----------------
    {
       double tot=0; int cnt=0;
       double avg = CalcSideAvgPrice(POSITION_TYPE_SELL, tot, cnt);
@@ -523,7 +632,6 @@ void ManageAverageTrailing()
       }
    }
 
-   // Push avg-trail SL onto broker tickets if armed (overrides per-order trailing)
    for(int i=PositionsTotal()-1;i>=0;i--){
       if(!pos.SelectByIndex(i)) continue;
       if(!IsOurPosition()) continue;
@@ -545,25 +653,74 @@ void ManageAverageTrailing()
    }
 }
 
-void CloseAllSide(int side)
+//===================== CHART LINES (Avg + TP) ======================
+void DelLines() { ObjectsDeleteAll(0, g_linePrefix); }
+
+void DrawHLine(string name, double price, color clr, int width=2, ENUM_LINE_STYLE style=STYLE_SOLID)
 {
-   for(int i=PositionsTotal()-1;i>=0;i--){
-      if(!pos.SelectByIndex(i)) continue;
-      if(!IsOurPosition()) continue;
-      if((int)pos.PositionType()!=side) continue;
-      trade.PositionClose(pos.Ticket());
+   string n = g_linePrefix + name;
+   if(ObjectFind(0,n)<0){
+      ObjectCreate(0,n,OBJ_HLINE,0,0,price);
+      ObjectSetInteger(0,n,OBJPROP_BACK, false);
+      ObjectSetInteger(0,n,OBJPROP_SELECTABLE,false);
    }
+   ObjectSetDouble (0,n,OBJPROP_PRICE, price);
+   ObjectSetInteger(0,n,OBJPROP_COLOR, clr);
+   ObjectSetInteger(0,n,OBJPROP_WIDTH, width);
+   ObjectSetInteger(0,n,OBJPROP_STYLE, style);
+}
+
+void RemoveLine(string name)
+{
+   string n = g_linePrefix + name;
+   if(ObjectFind(0,n)>=0) ObjectDelete(0,n);
+}
+
+void DrawAvgAndTPLines()
+{
+   double tlB=0,tlS=0; int cB=0,cS=0;
+   double avgB = CalcSideAvgPrice(POSITION_TYPE_BUY,  tlB, cB);
+   double avgS = CalcSideAvgPrice(POSITION_TYPE_SELL, tlS, cS);
+
+   // Average lines
+   if(InpShowAvgLine && cB>0 && avgB>0) DrawHLine("AVG_BUY",  avgB, InpAvgBuyLineColor,  3, STYLE_SOLID);
+   else                                  RemoveLine("AVG_BUY");
+   if(InpShowAvgLine && cS>0 && avgS>0) DrawHLine("AVG_SELL", avgS, InpAvgSellLineColor, 3, STYLE_SOLID);
+   else                                  RemoveLine("AVG_SELL");
+
+   // TP lines (Points mode only)
+   bool drawTP = InpShowTPLine && InpUseTakeProfit && InpUseTPPoints;
+   double tpDist = MathMax(InpTPPointsFromAverage * g_point, GetMinStopPrice());
+   if(drawTP && cB >= InpAvgTP_MinOrders && avgB>0)
+      DrawHLine("TP_BUY", avgB + tpDist, InpTPBuyLineColor, 1, STYLE_DASH);
+   else
+      RemoveLine("TP_BUY");
+   if(drawTP && cS >= InpAvgTP_MinOrders && avgS>0)
+      DrawHLine("TP_SELL", avgS - tpDist, InpTPSellLineColor, 1, STYLE_DASH);
+   else
+      RemoveLine("TP_SELL");
 }
 
 //=========================== DASHBOARD =============================
-string g_dashPrefix = "GK_DASH_";
+void DelDash() { ObjectsDeleteAll(0, g_dashPrefix); }
 
-void DelDash()
+void SetRectBg(string name, int x, int y, int w, int h, color bg)
 {
-   ObjectsDeleteAll(0, g_dashPrefix);
+   string n = g_dashPrefix + "BG_" + name;
+   if(ObjectFind(0,n)<0) ObjectCreate(0,n,OBJ_RECTANGLE_LABEL,0,0,0);
+   ObjectSetInteger(0,n,OBJPROP_CORNER, CORNER_LEFT_UPPER);
+   ObjectSetInteger(0,n,OBJPROP_XDISTANCE, x);
+   ObjectSetInteger(0,n,OBJPROP_YDISTANCE, y);
+   ObjectSetInteger(0,n,OBJPROP_XSIZE, w);
+   ObjectSetInteger(0,n,OBJPROP_YSIZE, h);
+   ObjectSetInteger(0,n,OBJPROP_BGCOLOR, bg);
+   ObjectSetInteger(0,n,OBJPROP_BORDER_TYPE, BORDER_FLAT);
+   ObjectSetInteger(0,n,OBJPROP_COLOR, bg);
+   ObjectSetInteger(0,n,OBJPROP_BACK, false);
+   ObjectSetInteger(0,n,OBJPROP_SELECTABLE,false);
 }
 
-void SetLabel(string name, int x, int y, string text, color clr, int sz=9)
+void SetCell(string name, int x, int y, string text, color clr, int sz=9, bool bold=false)
 {
    string n = g_dashPrefix + name;
    if(ObjectFind(0,n)<0) ObjectCreate(0,n,OBJ_LABEL,0,0,0);
@@ -572,8 +729,8 @@ void SetLabel(string name, int x, int y, string text, color clr, int sz=9)
    ObjectSetInteger(0,n,OBJPROP_YDISTANCE, y);
    ObjectSetInteger(0,n,OBJPROP_COLOR, clr);
    ObjectSetInteger(0,n,OBJPROP_FONTSIZE, sz);
-   ObjectSetString(0,n,OBJPROP_TEXT, text);
-   ObjectSetString(0,n,OBJPROP_FONT,"Consolas");
+   ObjectSetString (0,n,OBJPROP_TEXT, text);
+   ObjectSetString (0,n,OBJPROP_FONT, bold?"Consolas Bold":"Consolas");
    ObjectSetInteger(0,n,OBJPROP_BACK, false);
    ObjectSetInteger(0,n,OBJPROP_SELECTABLE,false);
 }
@@ -581,6 +738,29 @@ void SetLabel(string name, int x, int y, string text, color clr, int sz=9)
 string SideModeStr(){ if(InpInitSideMode==GK_SIDE_BUY_ONLY) return "BUY"; if(InpInitSideMode==GK_SIDE_SELL_ONLY) return "SELL"; return "BOTH"; }
 string GridModeStr(){ if(InpGridSideMode==GK_GRID_UP_ONLY)  return "UP";  if(InpGridSideMode==GK_GRID_DOWN_ONLY) return "DOWN"; return "BOTH"; }
 string LotModeStr() { if(InpGridLotMode==GK_LOT_FIXED) return "FIXED"; if(InpGridLotMode==GK_LOT_ADD) return "ADD"; return "MULT"; }
+string OnOff(bool b) { return b?"ON":"OFF"; }
+string AvgTrailStateStr(bool active, bool ready) { return active?"ARMED":(ready?"READY":"WAIT"); }
+
+int g_dashRow = 0;
+
+void DashHeader(string text)
+{
+   int y = InpDashY + g_dashRow * InpDashRowH;
+   int w = InpDashColW1 + InpDashColW2;
+   SetRectBg(StringFormat("R%d",g_dashRow), InpDashX, y, w, InpDashRowH, InpDashHeaderBgColor);
+   SetCell(StringFormat("C%d",g_dashRow), InpDashX+4, y+1, text, InpDashHeaderColor, 9, true);
+   g_dashRow++;
+}
+
+void DashRow(string label, string value, color valColor)
+{
+   int y = InpDashY + g_dashRow * InpDashRowH;
+   color bg = (g_dashRow%2==0) ? InpDashRowBgColor : InpDashAltRowBgColor;
+   SetRectBg(StringFormat("R%d",g_dashRow), InpDashX, y, InpDashColW1+InpDashColW2, InpDashRowH, bg);
+   SetCell(StringFormat("L%d",g_dashRow), InpDashX+4,                y+1, label, InpDashTextColor, 9, false);
+   SetCell(StringFormat("V%d",g_dashRow), InpDashX+InpDashColW1+4,   y+1, value, valColor,         9, false);
+   g_dashRow++;
+}
 
 void DrawDashboard()
 {
@@ -588,45 +768,106 @@ void DrawDashboard()
    if(TimeCurrent() - g_lastDashTime < InpDashRefreshSec) return;
    g_lastDashTime = TimeCurrent();
 
-   int x=10, y=20, lh=15;
-   color title=clrGold, head=clrAqua, ok=clrLime, warn=clrOrange, bad=clrTomato, txt=InpDashTextColor;
+   // Wipe and redraw
+   DelDash();
+   g_dashRow = 0;
 
-   SetLabel("title", x, y, StringFormat("Golden Kuy3 v1.0   Side:%s   Grid:%s/%s", SideModeStr(), GridModeStr(), LotModeStr()), title, 11);
-   y+=lh+4;
+   color ok=clrLime, warn=clrOrange, bad=clrTomato, info=clrSilver, gold=clrGold;
 
+   double bal  = AccountInfoDouble(ACCOUNT_BALANCE);
+   double eq   = AccountInfoDouble(ACCOUNT_EQUITY);
    double tlB=0,tlS=0; int cB=0,cS=0;
    double avgB = CalcSideAvgPrice(POSITION_TYPE_BUY,  tlB, cB);
    double avgS = CalcSideAvgPrice(POSITION_TYPE_SELL, tlS, cS);
-   double plB = CalcSideFloating(POSITION_TYPE_BUY);
-   double plS = CalcSideFloating(POSITION_TYPE_SELL);
+   double plB  = CalcSideFloating(POSITION_TYPE_BUY);
+   double plS  = CalcSideFloating(POSITION_TYPE_SELL);
+   double plAll= plB+plS;
 
-   SetLabel("hbuy", x,y,"--- BUY ---", head); y+=lh;
-   SetLabel("buy1", x,y, StringFormat("Cnt:%d  Lot:%.2f  Avg:%s  PL:%.2f", cB, tlB, (avgB>0?DoubleToString(avgB,g_digits):"-"), plB),
-            (plB>=0?ok:bad)); y+=lh;
-   SetLabel("buy2", x,y, StringFormat("InitPx:%s  AvgTrail:%s SL:%s",
-            (g_initPrice_Buy>0?DoubleToString(g_initPrice_Buy,g_digits):"-"),
-            (g_avgTrail_Active_Buy?"ARMED":(g_avgTrail_ArmReady_Buy?"READY":"WAIT")),
-            (g_avgTrail_SL_Buy>0?DoubleToString(g_avgTrail_SL_Buy,g_digits):"-")),
-            (g_avgTrail_Active_Buy?ok:warn)); y+=lh+3;
+   DashHeader(StringFormat("Golden Kuy3 v1.1  Side:%s Grid:%s/%s", SideModeStr(), GridModeStr(), LotModeStr()));
 
-   SetLabel("hsel", x,y,"--- SELL ---", head); y+=lh;
-   SetLabel("sel1", x,y, StringFormat("Cnt:%d  Lot:%.2f  Avg:%s  PL:%.2f", cS, tlS, (avgS>0?DoubleToString(avgS,g_digits):"-"), plS),
-            (plS>=0?ok:bad)); y+=lh;
-   SetLabel("sel2", x,y, StringFormat("InitPx:%s  AvgTrail:%s SL:%s",
-            (g_initPrice_Sell>0?DoubleToString(g_initPrice_Sell,g_digits):"-"),
-            (g_avgTrail_Active_Sell?"ARMED":(g_avgTrail_ArmReady_Sell?"READY":"WAIT")),
-            (g_avgTrail_SL_Sell>0?DoubleToString(g_avgTrail_SL_Sell,g_digits):"-")),
-            (g_avgTrail_Active_Sell?ok:warn)); y+=lh+3;
+   DashHeader("=== ACCOUNT ===");
+   DashRow("Balance",     StringFormat("$%.2f", bal), info);
+   DashRow("Equity",      StringFormat("$%.2f", eq),  info);
+   DashRow("Floating P/L",StringFormat("$%.2f", plAll), (plAll>=0?ok:bad));
+   DashRow("Realized (cycle)", StringFormat("$%.2f", g_realizedCycle), (g_realizedCycle>=0?ok:bad));
 
-   SetLabel("cfg1", x,y, StringFormat("Grid: dist=%.1fpip  max=%d  candle=%s  AvgTP=%s/%dord/%.1fp",
-            InpGridDistancePips, InpMaxGridOrders, (InpGridOnlyNewCandle?"Y":"N"),
-            (InpEnableAverageTP?"ON":"OFF"), InpAvgTP_MinOrders, InpAverageTPPips), txt); y+=lh;
-   SetLabel("cfg2", x,y, StringFormat("AvgTrail: %s act=%.1fp step=%.1fp BE=%.1fp min=%d 2X=%s",
-            (InpEnableAvgTrailing?"ON":"OFF"), InpAvgTrail_ActivationPips, InpAvgTrail_StepPips,
-            InpAvgTrail_BE_Buffer, InpAvgTrail_MinOrders, (InpAvgTrail_Strict2Cross?"Y":"N")), txt); y+=lh;
-   SetLabel("cfg3", x,y, StringFormat("PerOrderTrail: %s act=%.1fp step=%.1fp BE=%.1f/%.1fp",
-            (InpEnablePerOrderTrailing?"ON":"OFF"), InpTrailingActivationPips, InpTrailingStepPips,
-            InpBreakevenActivationPips, InpBreakevenBufferPips), txt);
+   DashHeader("=== POSITIONS ===");
+   DashRow("BUY  P/L Lot Ord",
+           StringFormat("$%.2f  %.2fL  %dord", plB, tlB, cB),
+           (plB>=0?ok:bad));
+   DashRow("SELL P/L Lot Ord",
+           StringFormat("$%.2f  %.2fL  %dord", plS, tlS, cS),
+           (plS>=0?ok:bad));
+   DashRow("Total Cur. Lot",   StringFormat("%.2f L", tlB+tlS), info);
+   DashRow("Avg BUY",  (avgB>0?DoubleToString(avgB,g_digits):"-"), info);
+   DashRow("Avg SELL", (avgS>0?DoubleToString(avgS,g_digits):"-"), info);
+
+   DashHeader("=== MODULES ===");
+   DashRow("Initial Side", SideModeStr(), info);
+   DashRow("Grid",         StringFormat("%s  dist=%.1fp max=%d %s",
+                            OnOff(InpEnableGrid), InpGridDistancePips, InpMaxGridOrders, (InpGridOnlyNewCandle?"NewBar":"")),
+                           (InpEnableGrid?ok:warn));
+   DashRow("BE Lock",      StringFormat("%s  act=%.0fp buf=%.0fp", OnOff(InpEnableBreakevenLock), InpBreakevenActivationPips, InpBreakevenBufferPips),
+                           (InpEnableBreakevenLock?ok:warn));
+   DashRow("Per-Order Trail", StringFormat("%s  act=%.0fp step=%.0fp", OnOff(InpEnableTrailingStop), InpTrailingActivationPips, InpTrailingStepPips),
+                           (InpEnableTrailingStop?ok:warn));
+   DashRow("Avg Trail",    StringFormat("%s  act=%.0fp step=%.0fp min=%d 2X=%s",
+                            OnOff(InpEnableAvgTrailing), InpAvgTrail_ActivationPips, InpAvgTrail_StepPips,
+                            InpAvgTrail_MinOrders, (InpAvgTrail_Strict2Cross?"Y":"N")),
+                           (InpEnableAvgTrailing?ok:warn));
+
+   DashHeader("=== TAKE PROFIT ===");
+   DashRow("Master TP",    OnOff(InpUseTakeProfit), (InpUseTakeProfit?ok:warn));
+   DashRow("TP Dollar",    StringFormat("%s  $%.2f", OnOff(InpUseTPFixedDollar), InpTPDollarAmount),
+                           (InpUseTPFixedDollar?ok:warn));
+   DashRow("TP Points",    StringFormat("%s  %.0fpt /%dord", OnOff(InpUseTPPoints), InpTPPointsFromAverage, InpAvgTP_MinOrders),
+                           (InpUseTPPoints?ok:warn));
+   DashRow("TP %Bal",      StringFormat("%s  %.1f%%", OnOff(InpUseTPPercentBalance), InpTPPercentOfBalance),
+                           (InpUseTPPercentBalance?ok:warn));
+   DashRow("Accumulate",   StringFormat("%s  $%.0f", OnOff(InpUseAccumulateClose), InpAccumulateTarget),
+                           (InpUseAccumulateClose?ok:warn));
+
+   DashHeader("=== AVG TRAIL STATE ===");
+   DashRow("BUY",  StringFormat("%s  SL:%s", AvgTrailStateStr(g_avgTrail_Active_Buy, g_avgTrail_ArmReady_Buy),
+                    (g_avgTrail_SL_Buy>0?DoubleToString(g_avgTrail_SL_Buy,g_digits):"-")),
+                  (g_avgTrail_Active_Buy?ok:warn));
+   DashRow("SELL", StringFormat("%s  SL:%s", AvgTrailStateStr(g_avgTrail_Active_Sell, g_avgTrail_ArmReady_Sell),
+                    (g_avgTrail_SL_Sell>0?DoubleToString(g_avgTrail_SL_Sell,g_digits):"-")),
+                  (g_avgTrail_Active_Sell?ok:warn));
+
+   DashHeader("=== SYSTEM ===");
+   bool tpModeOn = (InpUseTakeProfit && InpUseTPPoints);
+   DashRow("TP Lines", (tpModeOn?"Drawn":"Cleared"), (tpModeOn?ok:warn));
+   DashRow("Init BUY Px",  (g_initPrice_Buy>0?DoubleToString(g_initPrice_Buy,g_digits):"-"), info);
+   DashRow("Init SELL Px", (g_initPrice_Sell>0?DoubleToString(g_initPrice_Sell,g_digits):"-"), info);
+}
+
+//==================== TRADE TRANSACTION ============================
+void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest& req, const MqlTradeResult& res)
+{
+   // Track realized P/L per cycle (deal-add only)
+   if(trans.type==TRADE_TRANSACTION_DEAL_ADD){
+      if(HistoryDealSelect(trans.deal)){
+         long magic = HistoryDealGetInteger(trans.deal, DEAL_MAGIC);
+         string sym = HistoryDealGetString (trans.deal, DEAL_SYMBOL);
+         if(magic == InpMagicNumber && sym == _Symbol){
+            int entry = (int)HistoryDealGetInteger(trans.deal, DEAL_ENTRY);
+            if(entry == DEAL_ENTRY_OUT || entry == DEAL_ENTRY_INOUT || entry == DEAL_ENTRY_OUT_BY){
+               double pr = HistoryDealGetDouble(trans.deal, DEAL_PROFIT)
+                         + HistoryDealGetDouble(trans.deal, DEAL_SWAP)
+                         + HistoryDealGetDouble(trans.deal, DEAL_COMMISSION);
+               g_realizedCycle += pr;
+            }
+         }
+      }
+   }
+   // Reset cycle when fully flat
+   if(CountSideSimple(POSITION_TYPE_BUY)==0 && CountSideSimple(POSITION_TYPE_SELL)==0){
+      // small epsilon to avoid resetting in the middle of multi-deal flatten
+      if(MathAbs(g_realizedCycle) > 0.0 && trans.type==TRADE_TRANSACTION_DEAL_ADD){
+         // keep g_realizedCycle visible until next entry; reset on next OpenInitial cycle
+      }
+   }
 }
 
 //=========================== INIT/TICK =============================
@@ -634,15 +875,13 @@ int OnInit()
 {
    g_digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
    g_point  = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
-   // pip = 10 * point on 3/5-digit symbols, else = point
-   g_pip = (g_digits==3 || g_digits==5) ? 10.0*g_point : g_point;
+   g_pip    = (g_digits==3 || g_digits==5) ? 10.0*g_point : g_point;
    g_stopsLevel = (double)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
 
    trade.SetExpertMagicNumber(InpMagicNumber);
    trade.SetDeviationInPoints(InpSlippagePoints);
    trade.SetTypeFilling(ORDER_FILLING_FOK);
 
-   // Recover initial price from existing INIT positions (restart safety)
    for(int i=PositionsTotal()-1;i>=0;i--){
       if(!pos.SelectByIndex(i)) continue;
       if(!IsOurPosition()) continue;
@@ -651,14 +890,15 @@ int OnInit()
       if(c=="GK_INIT_SELL") g_initPrice_Sell = pos.PriceOpen();
    }
 
-   Print("Golden Kuy3 v1.0 init  digits=",g_digits," pip=",g_pip," stopsLvl=",g_stopsLevel);
+   Print("Golden Kuy3 v1.1 init  digits=",g_digits," pip=",g_pip," stopsLvl=",g_stopsLevel);
    return INIT_SUCCEEDED;
 }
 
 void OnDeinit(const int reason)
 {
    DelDash();
-   Print("Golden Kuy3 v1.0 deinit reason=",reason);
+   DelLines();
+   Print("Golden Kuy3 v1.1 deinit reason=",reason);
 }
 
 void OnTick()
@@ -666,8 +906,10 @@ void OnTick()
    ManageInitialEntry();
    ManageGridEntry();
    ManagePerOrderTrailing();
-   ManageAverageTP();
+   ManageTakeProfit();
    ManageAverageTrailing();
+   EnforceClearTPIfDisabled();
+   DrawAvgAndTPLines();
    DrawDashboard();
 }
 //+------------------------------------------------------------------+
