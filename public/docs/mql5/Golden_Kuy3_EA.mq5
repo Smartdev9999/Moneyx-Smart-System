@@ -148,13 +148,25 @@ datetime g_costHit_Time_Sell    = 0;
 // v1.2 dashboard high-water row tracker (no full wipe each refresh)
 int      g_dashRowMax = 0;
 
-// v1.3 Hero state
-bool     g_hero_Active        = false;
-int      g_hero_Side          = -1;        // POSITION_TYPE_BUY / SELL
-ulong    g_hero_Tickets[];                 // newest N of g_hero_Side
-datetime g_hero_LastCloseTime = 0;         // for cost-hit grace
-double   g_hero_LastOppAvg    = 0.0;       // dashboard
-int      g_hero_LastOppCnt    = 0;         // dashboard
+// v1.4 Hero Order state (ported from Gold Miner v7.09 — no gen)
+ulong    g_heroTickets[200];
+int      g_heroTicketCount        = 0;
+datetime g_heroLastBuildTime      = 0;
+int      g_heroPhase_Buy          = 0;     // 0=NONE 2=ARMED 3=BE_GUARD
+int      g_heroPhase_Sell         = 0;
+bool     g_heroBE_Applied_Buy     = false;
+bool     g_heroBE_Applied_Sell    = false;
+datetime g_heroJustClosed_Buy     = 0;
+datetime g_heroJustClosed_Sell    = 0;
+// Dashboard counters
+int      g_heroDash_BuyActive     = 0;
+int      g_heroDash_SellActive    = 0;
+int      g_heroDash_BuyTagged     = 0;
+int      g_heroDash_SellTagged    = 0;
+ulong    g_heroDash_BuyTickets[10];
+int      g_heroDash_BuyTicketN    = 0;
+ulong    g_heroDash_SellTickets[10];
+int      g_heroDash_SellTicketN   = 0;
 
 //========================= HELPERS =================================
 double PipsToPrice(double pips) { return pips * g_pip; }
