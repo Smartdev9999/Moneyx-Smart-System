@@ -1102,7 +1102,7 @@ void DrawDashboard()
    double plS  = CalcSideFloating(POSITION_TYPE_SELL);
    double plAll= plB+plS;
 
-   DashHeader(StringFormat("Golden Kuy3 v1.2  Side:%s Grid:%s/%s", SideModeStr(), GridModeStr(), LotModeStr()));
+   DashHeader(StringFormat("Golden Kuy3 v1.3  Side:%s Grid:%s/%s", SideModeStr(), GridModeStr(), LotModeStr()));
 
    DashHeader("=== ACCOUNT ===");
    DashRow("Balance",     StringFormat("$%.2f", bal), info);
@@ -1167,6 +1167,45 @@ void DrawDashboard()
    DashRow("Restart Pending", StringFormat("BUY:%s  SELL:%s", rpB, rpS),
            (g_costHit_Pending_Buy||g_costHit_Pending_Sell)?warn:info);
 
+   DashHeader("=== HERO ORDER ===");
+   DashRow("Hero Module", StringFormat("%s  cnt=%d minSide=%d",
+                          OnOff(InpEnableHero), InpHero_Count, InpHero_MinSideOrders),
+                          (InpEnableHero?gold:warn));
+   string hsStatus;
+   if(!InpEnableHero) hsStatus = "DISABLED";
+   else if(!g_hero_Active) hsStatus = "WAIT";
+   else {
+      string ids="";
+      for(int i=0;i<ArraySize(g_hero_Tickets);i++){
+         if(i>0) ids += ",";
+         ids += StringFormat("#%I64u", g_hero_Tickets[i]);
+      }
+      hsStatus = StringFormat("ACTIVE %s %s",
+                  (g_hero_Side==POSITION_TYPE_BUY?"BUY":"SELL"), ids);
+   }
+   DashRow("Hero Status", hsStatus, (g_hero_Active?gold:info));
+   if(g_hero_Active){
+      double tpDist = InpHero_AvgTP_Points * g_point;
+      double bidH = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+      double askH = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+      string aTpInfo;
+      if(g_hero_LastOppCnt < InpHero_AvgTP_MinOrders || g_hero_LastOppAvg<=0){
+         aTpInfo = StringFormat("WAIT  oppCnt=%d/%d", g_hero_LastOppCnt, InpHero_AvgTP_MinOrders);
+      } else {
+         double curDistPt = (g_hero_Side==POSITION_TYPE_BUY)
+                            ? (askH - (g_hero_LastOppAvg - tpDist)) / g_point  // SELL profit dir
+                            : ((g_hero_LastOppAvg + tpDist) - bidH) / g_point; // BUY profit dir
+         aTpInfo = StringFormat("%.0fpt avg=%s cur=%.0fpt",
+                    InpHero_AvgTP_Points, DoubleToString(g_hero_LastOppAvg,g_digits), curDistPt);
+      }
+      DashRow("Hero AvgTP", aTpInfo, info);
+   } else {
+      DashRow("Hero AvgTP", StringFormat("%.0fpt /%dord", InpHero_AvgTP_Points, InpHero_AvgTP_MinOrders), info);
+   }
+   DashRow("Survivor Strip", StringFormat("%s keepN=%d",
+                            OnOff(InpHero_StripBE_OnSurvivor), InpHero_KeepLatestN_Opp),
+                            (InpHero_StripBE_OnSurvivor?ok:warn));
+
    // v1.2 high-water trim: remove rows that existed last frame but not this frame
    if(g_dashRow > g_dashRowMax) g_dashRowMax = g_dashRow;
    for(int r=g_dashRow; r<prevMax; r++){
@@ -1199,22 +1238,27 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
                if(InpEnableCostHitRestart){
                   long reason = HistoryDealGetInteger(trans.deal, DEAL_REASON);
                   if(reason == DEAL_REASON_SL || reason == DEAL_REASON_TP){
+                     // v1.3: suppress during Hero post-close grace
+                     bool inGrace = (InpEnableHero && InpHero_PostCloseGraceSec>0
+                                     && (TimeCurrent()-g_hero_LastCloseTime) < InpHero_PostCloseGraceSec);
                      long dealType = HistoryDealGetInteger(trans.deal, DEAL_TYPE);
-                     // closing deal type is OPPOSITE of the position side:
-                     // SELL deal closes a BUY position, BUY deal closes a SELL position
                      int closedSide = (dealType == DEAL_TYPE_SELL) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
                      double closePx = HistoryDealGetDouble(trans.deal, DEAL_PRICE);
-                     if(closedSide == POSITION_TYPE_BUY){
-                        g_costHit_Pending_Buy = true;
-                        g_costHit_Price_Buy   = closePx;
-                        g_costHit_Time_Buy    = TimeCurrent();
+                     if(!inGrace){
+                        if(closedSide == POSITION_TYPE_BUY){
+                           g_costHit_Pending_Buy = true;
+                           g_costHit_Price_Buy   = closePx;
+                           g_costHit_Time_Buy    = TimeCurrent();
+                        } else {
+                           g_costHit_Pending_Sell = true;
+                           g_costHit_Price_Sell   = closePx;
+                           g_costHit_Time_Sell    = TimeCurrent();
+                        }
+                        Print("GK COST-HIT detected side=",(closedSide==POSITION_TYPE_BUY?"BUY":"SELL"),
+                              " reason=",reason," px=",DoubleToString(closePx,g_digits));
                      } else {
-                        g_costHit_Pending_Sell = true;
-                        g_costHit_Price_Sell   = closePx;
-                        g_costHit_Time_Sell    = TimeCurrent();
+                        Print("GK COST-HIT suppressed (Hero grace) side=",(closedSide==POSITION_TYPE_BUY?"BUY":"SELL"));
                      }
-                     Print("GK COST-HIT detected side=",(closedSide==POSITION_TYPE_BUY?"BUY":"SELL"),
-                           " reason=",reason," px=",DoubleToString(closePx,g_digits));
                   }
                }
             }
