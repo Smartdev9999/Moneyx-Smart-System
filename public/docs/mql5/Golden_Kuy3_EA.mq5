@@ -1525,6 +1525,7 @@ void OnDeinit(const int reason)
 
 void OnTick()
 {
+   TryResetAccumulateCycleIfFlat();   // v1.42 — Gold Miner cycle reset
    BuildHeroTicketCache();      // v1.4 — must run first
    ManageHeroOppositeClose();   // v1.4 — orchestrator (strip TP/SL, BE_GUARD, opp-clear close)
    ManageCostHitRestart();
