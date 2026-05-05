@@ -249,205 +249,368 @@ double CalcSideFloating(int side)
    return pl;
 }
 
-//================== HERO ORDER HELPERS (v1.3) ======================
-bool IsHeroTicket(ulong tk)
+//============== HERO ORDER (ported from Gold Miner v7.09) ==========
+// Single-side lock, cycle-based, no gen, no hedge.
+// Phase per side: 0=NONE, 2=ARMED (locked, basket alive), 3=BE_GUARD (basket cleared, lock-profit SL applied)
+
+// v7.08: Owner = side at phase==BE_GUARD (basket cleared). ARMED is just CANDIDATE.
+int GetHeroOwnerSide()
 {
-   if(!g_hero_Active) return false;
-   int n = ArraySize(g_hero_Tickets);
-   for(int i=0;i<n;i++) if(g_hero_Tickets[i]==tk) return true;
+   bool buyOwns  = (g_heroPhase_Buy  == 3);
+   bool sellOwns = (g_heroPhase_Sell == 3);
+   if(buyOwns && !sellOwns)  return (int)POSITION_TYPE_BUY;
+   if(sellOwns && !buyOwns)  return (int)POSITION_TYPE_SELL;
+   return -1;
+}
+
+bool IsHeroTicket(ulong ticket)
+{
+   if(!InpHero_Enabled) return false;
+   for(int i = 0; i < g_heroTicketCount; i++)
+      if(g_heroTickets[i] == ticket) return true;
    return false;
 }
 
-// Return top-N newest tickets of side (sorted desc by ticket).
-int GetTopNTickets(int side, int N, ulong &out[])
+int CountHeroOnSide(ENUM_POSITION_TYPE side)
 {
-   ArrayResize(out, 0);
-   if(N<=0) return 0;
-   ulong all[]; ArrayResize(all,0);
-   for(int i=PositionsTotal()-1;i>=0;i--){
-      if(!pos.SelectByIndex(i)) continue;
-      if(!IsOurPosition()) continue;
-      if((int)pos.PositionType()!=side) continue;
-      int sz = ArraySize(all);
-      ArrayResize(all, sz+1);
-      all[sz] = pos.Ticket();
+   int n = 0;
+   for(int i = 0; i < g_heroTicketCount; i++)
+   {
+      if(!PositionSelectByTicket(g_heroTickets[i])) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) == side) n++;
    }
-   int total = ArraySize(all);
-   // simple selection sort desc
-   for(int i=0;i<total;i++){
-      for(int j=i+1;j<total;j++){
-         if(all[j] > all[i]){ ulong t=all[i]; all[i]=all[j]; all[j]=t; }
-      }
-   }
-   int take = MathMin(N, total);
-   ArrayResize(out, take);
-   for(int i=0;i<take;i++) out[i] = all[i];
-   return take;
+   return n;
 }
 
-int OppositeSide(int side)
+// Count basket orders on a side (excluding Hero) — used for survivor-block + reset detection.
+int CountNonHeroMainOnSide(ENUM_POSITION_TYPE side)
 {
-   return (side==POSITION_TYPE_BUY) ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
-}
-
-int CountSide_NonHero(int side)
-{
-   int n=0;
-   for(int i=PositionsTotal()-1;i>=0;i--){
-      if(!pos.SelectByIndex(i)) continue;
-      if(!IsOurPosition()) continue;
-      if((int)pos.PositionType()!=side) continue;
-      if(IsHeroTicket(pos.Ticket())) continue;
+   int n = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
+      if(PositionGetString(POSITION_SYMBOL)  != _Symbol)        continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
+      if(IsHeroTicket(ticket)) continue;
       n++;
    }
    return n;
 }
 
-// Average price excluding Hero tickets and excluding top-N newest of `side`
-double CalcSideAvgPrice_ExclHeroAndTopN(int side, int excludeTopN, int &countOut, double &lotsOut)
+double SumHeroLotsOnSide(ENUM_POSITION_TYPE side)
 {
-   ulong topN[]; GetTopNTickets(side, excludeTopN, topN);
-   double sumLP=0, sumL=0; int n=0;
-   for(int i=PositionsTotal()-1;i>=0;i--){
-      if(!pos.SelectByIndex(i)) continue;
-      if(!IsOurPosition()) continue;
-      if((int)pos.PositionType()!=side) continue;
-      ulong tk = pos.Ticket();
-      if(IsHeroTicket(tk)) continue;
-      bool skip=false;
-      for(int k=0;k<ArraySize(topN);k++){ if(topN[k]==tk){ skip=true; break; } }
-      if(skip) continue;
-      sumLP += pos.PriceOpen()*pos.Volume();
-      sumL  += pos.Volume();
-      n++;
+   double l = 0;
+   for(int i = 0; i < g_heroTicketCount; i++)
+   {
+      if(!PositionSelectByTicket(g_heroTickets[i])) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
+      l += PositionGetDouble(POSITION_VOLUME);
    }
-   countOut=n; lotsOut=sumL;
-   return (sumL>0?sumLP/sumL:0.0);
+   return l;
 }
 
-// Refresh Hero ticket array each tick. Sets g_hero_Active/Side based on rules.
-void RefreshHero()
+double SumHeroProfitOnSide(ENUM_POSITION_TYPE side)
 {
-   if(!InpEnableHero){
-      g_hero_Active=false; g_hero_Side=-1;
-      ArrayResize(g_hero_Tickets,0);
-      return;
+   double sum = 0;
+   for(int i = 0; i < g_heroTicketCount; i++)
+   {
+      if(!PositionSelectByTicket(g_heroTickets[i])) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
+      sum += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
    }
+   return sum;
+}
 
-   int nB = CountSideSimple(POSITION_TYPE_BUY);
-   int nS = CountSideSimple(POSITION_TYPE_SELL);
+// v6.94: Block new same-side entries only when Hero survives ALONE (basket=0).
+bool ShouldBlockSameSideGridForHero(ENUM_POSITION_TYPE side)
+{
+   if(!InpHero_Enabled || !InpHero_BlockSameSideGrid) return false;
+   if(CountHeroOnSide(side) <= 0) return false;
+   return (CountNonHeroMainOnSide(side) == 0);
+}
 
-   // Maintain existing Hero side if it still has >= Count tickets
-   if(g_hero_Active){
-      int nSame = (g_hero_Side==POSITION_TYPE_BUY)?nB:nS;
-      if(nSame < InpHero_Count){
-         // Hero collapsed (closed by their own SL etc.) → release
-         g_hero_Active=false; g_hero_Side=-1;
-         ArrayResize(g_hero_Tickets,0);
-         g_hero_LastCloseTime = TimeCurrent();
-      } else {
-         GetTopNTickets(g_hero_Side, InpHero_Count, g_hero_Tickets);
-         return;
+void BuildHeroTicketCache()
+{
+   // v6.98: rebuild every tick — Hero set is always latest N on each side.
+   if(!InpHero_Enabled || InpHero_OrderCount <= 0) { g_heroTicketCount = 0; return; }
+   g_heroLastBuildTime = TimeCurrent();
+   g_heroTicketCount = 0;
+
+   int sideTotalActive[2] = {0, 0};
+   int sideHeroTagged[2]  = {0, 0};
+
+   // v7.04 Single-Side Lock — owner decided ONLY at phase==BE_GUARD.
+   int activeOwner = -1;
+   if(InpHero_SingleSideLock) activeOwner = GetHeroOwnerSide();
+
+   for(int s = 0; s < 2; s++)
+   {
+      ENUM_POSITION_TYPE side = (s == 0) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
+      ulong  tkPool[200]; long ttMs[200]; int nPool = 0;
+      int    nAll = 0;
+
+      for(int i = PositionsTotal() - 1; i >= 0; i--)
+      {
+         ulong ticket = PositionGetTicket(i);
+         if(ticket == 0) continue;
+         if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
+         if(PositionGetString(POSITION_SYMBOL)  != _Symbol)        continue;
+         if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
+         nAll++;
+         if(nPool < 200) {
+            tkPool[nPool] = ticket;
+            ttMs[nPool]   = PositionGetInteger(POSITION_TIME_MSC);
+            nPool++;
+         }
       }
+      sideTotalActive[s] = nAll;
+
+      // Sort newest first (POSITION_TIME_MSC desc, then ticket desc)
+      for(int a = 1; a < nPool; a++)
+         for(int b = a; b > 0; b--)
+         {
+            bool swap = false;
+            if(ttMs[b] > ttMs[b-1]) swap = true;
+            else if(ttMs[b] == ttMs[b-1] && tkPool[b] > tkPool[b-1]) swap = true;
+            if(!swap) break;
+            long _t = ttMs[b]; ttMs[b] = ttMs[b-1]; ttMs[b-1] = _t;
+            ulong _k = tkPool[b]; tkPool[b] = tkPool[b-1]; tkPool[b-1] = _k;
+         }
+
+      int sideId = (int)side;
+      int curPhase = (sideId == POSITION_TYPE_BUY) ? g_heroPhase_Buy : g_heroPhase_Sell;
+
+      // v7.03 Post-close grace
+      datetime jc = (sideId == POSITION_TYPE_BUY) ? g_heroJustClosed_Buy : g_heroJustClosed_Sell;
+      if(jc > 0 && (TimeCurrent() - jc) < InpHero_PostCloseGraceSec) {
+         if(sideId == POSITION_TYPE_BUY) g_heroPhase_Buy = 0; else g_heroPhase_Sell = 0;
+         continue;
+      }
+
+      int activateThreshold = (InpHero_MinOrdersToActivate > 0)
+                              ? InpHero_MinOrdersToActivate
+                              : (InpHero_OrderCount + 1);
+
+      // v7.04 Single-side lock — block first activation on non-owner side
+      if(InpHero_SingleSideLock && curPhase == 0 && activeOwner >= 0 && sideId != activeOwner) {
+         if(sideId == POSITION_TYPE_BUY) g_heroPhase_Buy = 0; else g_heroPhase_Sell = 0;
+         continue;
+      }
+
+      // Activation gate ONLY for first tag (sticky after that)
+      if(curPhase == 0 && nAll < activateThreshold) continue;
+      if(nPool <= 0) continue;
+
+      // v7.01 Sticky tag rolling latest-N
+      int take;
+      if(curPhase == 0) take = MathMin(InpHero_OrderCount, nPool - 1);
+      else              take = MathMin(InpHero_OrderCount, nPool);
+      if(take <= 0) continue;
+
+      if(sideId == POSITION_TYPE_BUY) {
+         g_heroDash_BuyTicketN = 0;
+         for(int k = 0; k < take && g_heroDash_BuyTicketN < 10; k++)
+            g_heroDash_BuyTickets[g_heroDash_BuyTicketN++] = tkPool[k];
+      } else {
+         g_heroDash_SellTicketN = 0;
+         for(int k = 0; k < take && g_heroDash_SellTicketN < 10; k++)
+            g_heroDash_SellTickets[g_heroDash_SellTicketN++] = tkPool[k];
+      }
+
+      for(int k = 0; k < take && g_heroTicketCount < 200; k++)
+         g_heroTickets[g_heroTicketCount++] = tkPool[k];
+      sideHeroTagged[s] += take;
    }
 
-   // Try to arm: pick the side that is currently the burden (more negative floating)
-   double plB = CalcSideFloating(POSITION_TYPE_BUY);
-   double plS = CalcSideFloating(POSITION_TYPE_SELL);
-   int candidate = -1;
-   if(plB < plS && nB >= InpHero_MinSideOrders) candidate = POSITION_TYPE_BUY;
-   else if(plS < plB && nS >= InpHero_MinSideOrders) candidate = POSITION_TYPE_SELL;
-
-   if(candidate<0) return;
-   if(InpHero_Count<=0) return;
-
-   g_hero_Side = candidate;
-   GetTopNTickets(g_hero_Side, InpHero_Count, g_hero_Tickets);
-   if(ArraySize(g_hero_Tickets) < InpHero_Count){
-      g_hero_Active=false; ArrayResize(g_hero_Tickets,0); return;
+   // v7.09 Auto-release ownership when phase==BE_GUARD but Hero tickets=0
+   if(g_heroPhase_Buy == 3 && sideHeroTagged[0] == 0) {
+      Print("v7.09 Hero AUTO-RELEASE BUY: phase=BE_GUARD but Hero tickets=0 — releasing owner lock");
+      g_heroPhase_Buy = 0; g_heroBE_Applied_Buy = false; g_heroJustClosed_Buy = TimeCurrent();
    }
-   g_hero_Active = true;
-   Print("GK HERO ARMED side=",(g_hero_Side==POSITION_TYPE_BUY?"BUY":"SELL"),
-         " count=",ArraySize(g_hero_Tickets));
+   if(g_heroPhase_Sell == 3 && sideHeroTagged[1] == 0) {
+      Print("v7.09 Hero AUTO-RELEASE SELL: phase=BE_GUARD but Hero tickets=0 — releasing owner lock");
+      g_heroPhase_Sell = 0; g_heroBE_Applied_Sell = false; g_heroJustClosed_Sell = TimeCurrent();
+   }
 
-   // Apply BE-Lock SL to each Hero ticket once (open ± offset)
-   double minStop = GetMinStopPrice();
+   // Phase NONE -> ARMED auto-promote (BE_GUARD set elsewhere)
+   if(g_heroPhase_Buy  != 3) g_heroPhase_Buy  = (sideHeroTagged[0] > 0) ? 2 : 0;
+   if(g_heroPhase_Sell != 3) g_heroPhase_Sell = (sideHeroTagged[1] > 0) ? 2 : 0;
+
+   g_heroDash_BuyActive  = sideTotalActive[0];
+   g_heroDash_SellActive = sideTotalActive[1];
+   g_heroDash_BuyTagged  = sideHeroTagged[0];
+   g_heroDash_SellTagged = sideHeroTagged[1];
+   if(sideHeroTagged[0] == 0) g_heroDash_BuyTicketN = 0;
+   if(sideHeroTagged[1] == 0) g_heroDash_SellTicketN = 0;
+
+   // Audit log every 30s
+   static datetime lastHeroAuditLog = 0;
+   if(TimeCurrent() - lastHeroAuditLog >= 30) {
+      int minAct = (InpHero_MinOrdersToActivate > 0) ? InpHero_MinOrdersToActivate : (InpHero_OrderCount + 1);
+      string roleB = (g_heroPhase_Buy  == 3) ? "OWNER" : (g_heroPhase_Buy  == 2) ? "CANDIDATE" : "NONE";
+      string roleS = (g_heroPhase_Sell == 3) ? "OWNER" : (g_heroPhase_Sell == 2) ? "CANDIDATE" : "NONE";
+      int    ownerSide = GetHeroOwnerSide();
+      string ownerStr  = (ownerSide == (int)POSITION_TYPE_BUY)  ? "BUY"
+                       : (ownerSide == (int)POSITION_TYPE_SELL) ? "SELL" : "NONE";
+      Print("v1.4 Hero AUDIT: BUY ", roleB, " active=", sideTotalActive[0],
+            " hero=", sideHeroTagged[0], " phase=", g_heroPhase_Buy,
+            " | SELL ", roleS, " active=", sideTotalActive[1],
+            " hero=", sideHeroTagged[1], " phase=", g_heroPhase_Sell,
+            " | OWNER=", ownerStr, " threshold=", minAct, " HeroCount=", InpHero_OrderCount);
+      lastHeroAuditLog = TimeCurrent();
+   }
+}
+
+// v7.02 SL validation (FIXED comparisons)
+double ComputeHeroLockProfitSL(ENUM_POSITION_TYPE posType, double openPrice)
+{
+   double offset = (double)InpHero_BE_OffsetPoints * g_point;
+   if(posType == POSITION_TYPE_SELL) return NormalizeDouble(openPrice - offset, g_digits);
+   if(posType == POSITION_TYPE_BUY)  return NormalizeDouble(openPrice + offset, g_digits);
+   return 0;
+}
+
+bool ValidateHeroLockProfitSL(ENUM_POSITION_TYPE posType, double sl)
+{
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-   for(int i=0;i<ArraySize(g_hero_Tickets);i++){
-      ulong tk = g_hero_Tickets[i];
-      if(!pos.SelectByTicket(tk)) continue;
-      double op = pos.PriceOpen();
-      double sl = (g_hero_Side==POSITION_TYPE_BUY)
-                   ? op + PipsToPrice(InpHero_BE_OffsetPips)
-                   : op - PipsToPrice(InpHero_BE_OffsetPips);
-      if(g_hero_Side==POSITION_TYPE_BUY){
-         if(bid - sl < minStop) sl = bid - minStop;
-         if(sl >= bid)          continue; // skip — invalid (already past)
-      } else {
-         if(sl - ask < minStop) sl = ask + minStop;
-         if(sl <= ask)          continue;
+   double minDist = g_stopsLevel * g_point;
+   if(posType == POSITION_TYPE_SELL) return (sl > 0 && sl > (ask + minDist));
+   if(posType == POSITION_TYPE_BUY)  return (sl > 0 && sl < (bid - minDist));
+   return false;
+}
+
+void ApplyHeroLockProfitSL(ENUM_POSITION_TYPE side)
+{
+   int applied = 0, skipped = 0;
+   string slList = "";
+   for(int i = 0; i < g_heroTicketCount; i++) {
+      ulong ticket = g_heroTickets[i];
+      if(!PositionSelectByTicket(ticket)) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
+      double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+      double curTP     = PositionGetDouble(POSITION_TP);
+      double curSL     = PositionGetDouble(POSITION_SL);
+      ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+      double newSL = ComputeHeroLockProfitSL(posType, openPrice);
+      if(!ValidateHeroLockProfitSL(posType, newSL)) { skipped++; continue; }
+      if(NormalizeDouble(curSL, g_digits) == NormalizeDouble(newSL, g_digits) &&
+         NormalizeDouble(curTP, g_digits) == 0) continue;
+      if(trade.PositionModify(ticket, newSL, 0)) {
+         applied++;
+         slList += StringFormat(" #%I64u@%s", ticket, DoubleToString(newSL, g_digits));
       }
-      sl = NormalizeDouble(sl, g_digits);
-      double curSL = pos.StopLoss();
-      if(MathAbs(curSL - sl) <= g_point*2) continue;
-      trade.PositionModify(tk, sl, pos.TakeProfit());
+   }
+   if(applied > 0)
+      Print("v1.4 Hero BE_GUARD applied side=", EnumToString(side),
+            " count=", applied, " skipped=", skipped, " (lock-profit SL):", slList);
+}
+
+void StripBrokerTPSLFromHeroTickets()
+{
+   if(!InpHero_Enabled || g_heroTicketCount == 0) return;
+   for(int i = 0; i < g_heroTicketCount; i++) {
+      ulong ticket = g_heroTickets[i];
+      if(!PositionSelectByTicket(ticket)) continue;
+      ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+      int phase = (posType == POSITION_TYPE_BUY) ? g_heroPhase_Buy : g_heroPhase_Sell;
+      if(phase == 3) continue; // BE_GUARD owns it
+      double curTP = PositionGetDouble(POSITION_TP);
+      double curSL = PositionGetDouble(POSITION_SL);
+      if(curTP == 0 && curSL == 0) continue;
+      trade.PositionModify(ticket, 0, 0);
    }
 }
 
-// Close all our positions EXCEPT Hero tickets and EXCEPT top-N of opposite side (survivor seed).
-void CloseAllExceptHeroAndOppSurvivor()
+void CloseHeroOnSide(ENUM_POSITION_TYPE side, string reason)
 {
-   int oppSide = OppositeSide(g_hero_Side);
-   ulong oppKeep[]; GetTopNTickets(oppSide, InpHero_KeepLatestN_Opp, oppKeep);
-   for(int i=PositionsTotal()-1;i>=0;i--){
-      if(!pos.SelectByIndex(i)) continue;
-      if(!IsOurPosition()) continue;
-      ulong tk = pos.Ticket();
-      if(IsHeroTicket(tk)) continue;
-      bool keepOpp=false;
-      for(int k=0;k<ArraySize(oppKeep);k++){ if(oppKeep[k]==tk){ keepOpp=true; break; } }
-      if(keepOpp) continue;
-      trade.PositionClose(tk);
+   for(int i = g_heroTicketCount - 1; i >= 0; i--)
+   {
+      ulong ticket = g_heroTickets[i];
+      if(!PositionSelectByTicket(ticket)) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
+      trade.PositionClose(ticket);
+      Print("v1.4 Hero CLOSE: ticket=", ticket, " side=", EnumToString(side), " reason=", reason);
    }
-   // Strip SL from survivors
-   if(InpHero_StripBE_OnSurvivor){
-      for(int k=0;k<ArraySize(oppKeep);k++){
-         if(!pos.SelectByTicket(oppKeep[k])) continue;
-         if(pos.StopLoss()==0 && pos.TakeProfit()==0) continue;
-         trade.PositionModify(oppKeep[k], 0, 0);
-      }
-   }
-   g_hero_LastCloseTime = TimeCurrent();
-}
-
-// Hero AvgTP — close cycle when opp non-Hero (excl. top-N) avg has moved enough in profit
-void ManageHeroAvgTP()
-{
-   if(!g_hero_Active) return;
-   int oppSide = OppositeSide(g_hero_Side);
-
-   int cnt=0; double lots=0;
-   double avg = CalcSideAvgPrice_ExclHeroAndTopN(oppSide, InpHero_KeepLatestN_Opp, cnt, lots);
-   g_hero_LastOppAvg = avg;
-   g_hero_LastOppCnt = cnt;
-   if(cnt < InpHero_AvgTP_MinOrders || avg<=0) return;
-
-   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-   double tpDist = InpHero_AvgTP_Points * g_point;
-
-   bool hit=false;
-   if(oppSide==POSITION_TYPE_BUY){
-      if(bid >= avg + tpDist) hit=true;
+   g_heroTicketCount = 0;
+   g_heroLastBuildTime = 0;
+   if(side == POSITION_TYPE_BUY) {
+      g_heroPhase_Buy = 0; g_heroBE_Applied_Buy = false;
+      g_heroJustClosed_Buy = TimeCurrent();
    } else {
-      if(ask <= avg - tpDist) hit=true;
+      g_heroPhase_Sell = 0; g_heroBE_Applied_Sell = false;
+      g_heroJustClosed_Sell = TimeCurrent();
    }
-   if(!hit) return;
+}
 
-   Print("GK HERO AVG-TP HIT  oppSide=",(oppSide==POSITION_TYPE_BUY?"BUY":"SELL"),
-         " avg=",DoubleToString(avg,g_digits)," dist=",InpHero_AvgTP_Points,"pt — closing cycle");
-   CloseAllExceptHeroAndOppSurvivor();
+bool DetectSameSideBasketClearedForHero(ENUM_POSITION_TYPE side)
+{
+   if(!InpHero_Enabled) return false;
+   if(CountHeroOnSide(side) <= 0) return false;
+   if(CountNonHeroMainOnSide(side) > 0) return false;
+   return true;
+}
+
+void ResetHeroStateIfFlat(ENUM_POSITION_TYPE side)
+{
+   if(CountHeroOnSide(side) > 0) return;
+   if(CountNonHeroMainOnSide(side) > 0) return;
+   if(side == POSITION_TYPE_BUY) {
+      if(g_heroPhase_Buy != 0 || g_heroBE_Applied_Buy)
+         Print("v1.4 Hero RESET side=BUY (flat)");
+      g_heroPhase_Buy = 0; g_heroBE_Applied_Buy = false;
+   } else {
+      if(g_heroPhase_Sell != 0 || g_heroBE_Applied_Sell)
+         Print("v1.4 Hero RESET side=SELL (flat)");
+      g_heroPhase_Sell = 0; g_heroBE_Applied_Sell = false;
+   }
+}
+
+// v6.96 Master orchestrator — runs every tick after BuildHeroTicketCache().
+void ManageHeroOppositeClose()
+{
+   if(!InpHero_Enabled) return;
+
+   StripBrokerTPSLFromHeroTickets();
+
+   for(int s = 0; s < 2; s++) {
+      ENUM_POSITION_TYPE side = (s == 0) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
+      bool already = (side == POSITION_TYPE_BUY) ? g_heroBE_Applied_Buy : g_heroBE_Applied_Sell;
+      if(!already && DetectSameSideBasketClearedForHero(side)) {
+         if(side == POSITION_TYPE_BUY)  g_heroPhase_Buy  = 3;
+         else                            g_heroPhase_Sell = 3;
+         ApplyHeroLockProfitSL(side);
+         if(side == POSITION_TYPE_BUY)  g_heroBE_Applied_Buy  = true;
+         else                            g_heroBE_Applied_Sell = true;
+      }
+      int phase = (side == POSITION_TYPE_BUY) ? g_heroPhase_Buy : g_heroPhase_Sell;
+      if(phase == 3 && CountHeroOnSide(side) > 0) ApplyHeroLockProfitSL(side);
+      ResetHeroStateIfFlat(side);
+   }
+
+   // v7.02 Tick-based opposite-clear detector (Broker TP race)
+   for(int s2 = 0; s2 < 2; s2++) {
+      ENUM_POSITION_TYPE side = (s2 == 0) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
+      ENUM_POSITION_TYPE opp  = (s2 == 0) ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
+      int phase = (side == POSITION_TYPE_BUY) ? g_heroPhase_Buy : g_heroPhase_Sell;
+      if(phase != 3) continue;
+      if(CountHeroOnSide(side) <= 0) continue;
+      if(CountNonHeroMainOnSide(opp) > 0) continue;
+      if(CountHeroOnSide(opp) > 0) continue;
+      Print("v1.4 Hero CLOSE (opp basket flat tick): heroSide=", EnumToString(side),
+            " oppSide=", EnumToString(opp), " heroProfit=", DoubleToString(SumHeroProfitOnSide(side), 2));
+      CloseHeroOnSide(side, "OppositeBasketFlatTick");
+   }
+}
+
+// v1.4 helper: latest Hero-close timestamp across both sides — used by Cost-Hit grace.
+datetime GetHeroLastCloseTime()
+{
+   datetime t = g_heroJustClosed_Buy;
+   if(g_heroJustClosed_Sell > t) t = g_heroJustClosed_Sell;
+   return t;
 }
 
 int NextGridIndex(int side)
