@@ -1,7 +1,7 @@
 //+------------------------------------------------------------------+
 //|                                            Golden_Kuy3_EA.mq5    |
 //|                                       Golden Kuy3 EA  v1.41      |
-//|  v1.41: Fix NonHero count compile reference after Hero port       |
+//|  v1.42: Accumulate cycle auto-reset on flat (Gold Miner concept)  |
 //|  v1.40: Hero Order ported from Gold Miner v7.09                  |
 //|         (single-side lock, no gen, cycle-based, lock-profit BE-SL)|
 //+------------------------------------------------------------------+
