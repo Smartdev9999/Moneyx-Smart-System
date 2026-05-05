@@ -1,16 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                            Golden_Kuy3_EA.mq5    |
-//|                                       Golden Kuy3 EA  v1.3       |
-//|  Instant entry + Single Grid (Both/Up/Down)                      |
-//|  + Per-Order BE-Lock / Trailing (split toggles)                  |
-//|  + Full TP modes (Dollar / Points / %Bal / Accumulate)           |
-//|  + Avg/TP chart lines + Gold-Miner-style table dashboard         |
-//|  v1.2: dash flicker fix + grid mult fix + Cost-Hit Restart       |
-//|  v1.3: Hero Order (lock newest N + opp survivor + Hero AvgTP)    |
+//|                                       Golden Kuy3 EA  v1.4       |
+//|  v1.4: Hero Order ported from Gold Miner v7.09                   |
+//|        (single-side lock, no gen, cycle-based, lock-profit BE-SL)|
 //+------------------------------------------------------------------+
 #property copyright "Golden Kuy3 EA"
-#property version   "1.30"
-#property description "Golden Kuy3 v1.3 — Hero Order system (lock + survivor cycle close)"
+#property version   "1.40"
+#property description "Golden Kuy3 v1.4 — Hero Order ported from Gold Miner v7.09 (single-side lock, cycle-based, no gen)"
 #property strict
 
 #include <Trade/Trade.mqh>
