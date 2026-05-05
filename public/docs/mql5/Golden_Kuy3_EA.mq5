@@ -974,6 +974,35 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
    }
 }
 
+//================ COST-HIT RESTART (v1.2) ==========================
+void TryRestartSide(int side, bool &pendingFlag, double &pendingPx, datetime pendingTime)
+{
+   if(!pendingFlag) return;
+   if(InpCostHitCooldownSec>0 && (TimeCurrent() - pendingTime) < InpCostHitCooldownSec) return;
+
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double refPx = (side==POSITION_TYPE_BUY)?ask:bid;
+
+   if(HasNearbyPosition(side, refPx, InpCostHitMinSpacingPips)){
+      return; // wait — too close to existing same-side ticket
+   }
+
+   if(OpenInitial(side)){
+      Print("GK COST-HIT RESTART ",(side==POSITION_TYPE_BUY?"BUY":"SELL"),
+            " @ ",DoubleToString(refPx,g_digits)," (closed@",DoubleToString(pendingPx,g_digits),")");
+      pendingFlag = false;
+      pendingPx   = 0.0;
+   }
+}
+
+void ManageCostHitRestart()
+{
+   if(!InpEnableCostHitRestart) return;
+   TryRestartSide(POSITION_TYPE_BUY,  g_costHit_Pending_Buy,  g_costHit_Price_Buy,  g_costHit_Time_Buy);
+   TryRestartSide(POSITION_TYPE_SELL, g_costHit_Pending_Sell, g_costHit_Price_Sell, g_costHit_Time_Sell);
+}
+
 //=========================== INIT/TICK =============================
 int OnInit()
 {
