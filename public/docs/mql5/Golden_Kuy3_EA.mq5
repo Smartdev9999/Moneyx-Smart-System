@@ -74,16 +74,17 @@ input int                  InpAvgTrail_MinOrders      = 3;
 input bool                 InpAvgTrail_Strict2Cross   = true;
 input double               InpAvgTrail_UnderAvgBuffer = 50.0;
 
-input group "=== Hero Order ==="
-input bool                 InpEnableHero              = false;    // master toggle
-input int                  InpHero_Count              = 3;        // # of newest tickets to lock per loaded side
-input int                  InpHero_MinSideOrders      = 5;        // min same-side orders before Hero arms
-input double               InpHero_BE_OffsetPips      = 5.0;      // SL = open ± offset for Hero (lock cost)
-input double               InpHero_AvgTP_Points       = 300.0;    // points from non-Hero opp avg to trigger cycle close
-input int                  InpHero_AvgTP_MinOrders    = 2;        // min non-Hero opp orders before Hero AvgTP arms
-input int                  InpHero_KeepLatestN_Opp    = 3;        // keep top-N opp tickets as survivor seed
-input bool                 InpHero_StripBE_OnSurvivor = true;     // remove SL on survivors after cycle close
-input int                  InpHero_PostCloseGraceSec  = 5;        // suppress Cost-Hit registration after cycle close
+input group "===== Hero Order (v7.09) ====="
+input bool   InpHero_Enabled            = false;  // Enable Hero Order (opposite-side helper)
+input int    InpHero_OrderCount         = 2;      // Hero count per side — N newest become Hero
+input int    InpHero_MinOrdersToActivate= 5;      // Min orders on side before Hero activates (0=OrderCount+1)
+input int    InpHero_BE_OffsetPoints    = 50;     // Lock-profit BE-SL offset in POINTS (SELL=open-offset, BUY=open+offset)
+input bool   InpHero_BlockSameSideGrid  = true;   // Block new entries on side that has Hero survivor only
+input bool   InpHero_IncludeInMaxOrders = true;   // Count Hero into MaxGridOrders cap
+input int    InpHero_PostCloseGraceSec  = 5;      // Seconds after Hero close to suppress re-tag
+input bool   InpHero_SingleSideLock     = true;   // Only ONE side may own Hero at a time (sleep opposite first activation)
+input bool   InpHero_CloseWithOpposite  = true;   // [DEPRECATED] hard-wired to opposite-basket close
+input bool   InpHero_RequireNetProfit   = false;  // [DEPRECATED] not used (lock-profit SL guarantees floor)
 
 input group "=== Chart Lines ==="
 input bool                 InpShowAvgLine             = true;
