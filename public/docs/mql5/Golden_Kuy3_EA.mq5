@@ -878,6 +878,9 @@ void DrawDashboard()
                             OnOff(InpEnableAvgTrailing), InpAvgTrail_ActivationPips, InpAvgTrail_StepPips,
                             InpAvgTrail_MinOrders, (InpAvgTrail_Strict2Cross?"Y":"N")),
                            (InpEnableAvgTrailing?ok:warn));
+   DashRow("Cost-Hit Restart", StringFormat("%s  spc=%.0fp cd=%ds",
+                            OnOff(InpEnableCostHitRestart), InpCostHitMinSpacingPips, InpCostHitCooldownSec),
+                           (InpEnableCostHitRestart?ok:warn));
 
    DashHeader("=== TAKE PROFIT ===");
    DashRow("Master TP",    OnOff(InpUseTakeProfit), (InpUseTakeProfit?ok:warn));
