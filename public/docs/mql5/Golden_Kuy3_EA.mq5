@@ -440,6 +440,8 @@ void ManageHeroAvgTP()
          " avg=",DoubleToString(avg,g_digits)," dist=",InpHero_AvgTP_Points,"pt — closing cycle");
    CloseAllExceptHeroAndOppSurvivor();
 }
+
+int NextGridIndex(int side)
 {
    int maxIdx = 0;
    for(int i=PositionsTotal()-1;i>=0;i--){
