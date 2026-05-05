@@ -938,6 +938,29 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
                          + HistoryDealGetDouble(trans.deal, DEAL_SWAP)
                          + HistoryDealGetDouble(trans.deal, DEAL_COMMISSION);
                g_realizedCycle += pr;
+
+               // v1.2 Cost-Hit detection: was this deal closed by SL or TP?
+               if(InpEnableCostHitRestart){
+                  long reason = HistoryDealGetInteger(trans.deal, DEAL_REASON);
+                  if(reason == DEAL_REASON_SL || reason == DEAL_REASON_TP){
+                     long dealType = HistoryDealGetInteger(trans.deal, DEAL_TYPE);
+                     // closing deal type is OPPOSITE of the position side:
+                     // SELL deal closes a BUY position, BUY deal closes a SELL position
+                     int closedSide = (dealType == DEAL_TYPE_SELL) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
+                     double closePx = HistoryDealGetDouble(trans.deal, DEAL_PRICE);
+                     if(closedSide == POSITION_TYPE_BUY){
+                        g_costHit_Pending_Buy = true;
+                        g_costHit_Price_Buy   = closePx;
+                        g_costHit_Time_Buy    = TimeCurrent();
+                     } else {
+                        g_costHit_Pending_Sell = true;
+                        g_costHit_Price_Sell   = closePx;
+                        g_costHit_Time_Sell    = TimeCurrent();
+                     }
+                     Print("GK COST-HIT detected side=",(closedSide==POSITION_TYPE_BUY?"BUY":"SELL"),
+                           " reason=",reason," px=",DoubleToString(closePx,g_digits));
+                  }
+               }
             }
          }
       }
