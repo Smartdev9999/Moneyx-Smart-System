@@ -1,14 +1,15 @@
 //+------------------------------------------------------------------+
 //|                                            Golden_Kuy3_EA.mq5    |
-//|                                       Golden Kuy3 EA  v1.1       |
+//|                                       Golden Kuy3 EA  v1.2       |
 //|  Instant entry + Single Grid (Both/Up/Down)                      |
 //|  + Per-Order BE-Lock / Trailing (split toggles)                  |
 //|  + Full TP modes (Dollar / Points / %Bal / Accumulate)           |
 //|  + Avg/TP chart lines + Gold-Miner-style table dashboard         |
+//|  v1.2: dash flicker fix + grid mult fix + Cost-Hit Restart       |
 //+------------------------------------------------------------------+
 #property copyright "Golden Kuy3 EA"
-#property version   "1.10"
-#property description "Golden Kuy3 v1.1 — BE/Trail split + TP modes + Avg/TP lines + table dashboard"
+#property version   "1.20"
+#property description "Golden Kuy3 v1.2 — dashboard flicker fix + grid lot fix + Cost-Hit Restart"
 #property strict
 
 #include <Trade/Trade.mqh>
