@@ -812,7 +812,8 @@ void ManageGridEntry()
                if(InpEnableCostHitRestart && HasNearbyPosition(POSITION_TYPE_BUY, refPx, InpCostHitMinSpacingPips)){
                   // skip — too close to an existing same-side ticket (post-restart guard)
                } else {
-                  OpenGrid(POSITION_TYPE_BUY, newLot, NextGridIndex(POSITION_TYPE_BUY));
+                  if(!ShouldBlockSameSideGridForHero(POSITION_TYPE_BUY))
+                     OpenGrid(POSITION_TYPE_BUY, newLot, NextGridIndex(POSITION_TYPE_BUY));
                }
             }
          }
@@ -838,7 +839,8 @@ void ManageGridEntry()
                if(InpEnableCostHitRestart && HasNearbyPosition(POSITION_TYPE_SELL, refPx, InpCostHitMinSpacingPips)){
                   // skip — too close
                } else {
-                  OpenGrid(POSITION_TYPE_SELL, newLot, NextGridIndex(POSITION_TYPE_SELL));
+                  if(!ShouldBlockSameSideGridForHero(POSITION_TYPE_SELL))
+                     OpenGrid(POSITION_TYPE_SELL, newLot, NextGridIndex(POSITION_TYPE_SELL));
                }
             }
          }
