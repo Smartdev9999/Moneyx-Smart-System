@@ -830,8 +830,9 @@ void DrawDashboard()
    if(TimeCurrent() - g_lastDashTime < InpDashRefreshSec) return;
    g_lastDashTime = TimeCurrent();
 
-   // Wipe and redraw
-   DelDash();
+   // v1.2: do NOT wipe the entire panel each refresh (caused flicker).
+   // Cells are updated in-place via SetRectBg/SetCell ObjectFind path.
+   int prevMax = g_dashRowMax;
    g_dashRow = 0;
 
    color ok=clrLime, warn=clrOrange, bad=clrTomato, info=clrSilver, gold=clrGold;
