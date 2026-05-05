@@ -441,7 +441,12 @@ void ManageGridEntry()
             }
             if(fire){
                double newLot = CalcGridLot(llot);
-               OpenGrid(POSITION_TYPE_SELL, newLot, NextGridIndex(POSITION_TYPE_SELL));
+               double refPx  = (isUp?ask:bid);
+               if(InpEnableCostHitRestart && HasNearbyPosition(POSITION_TYPE_SELL, refPx, InpCostHitMinSpacingPips)){
+                  // skip — too close
+               } else {
+                  OpenGrid(POSITION_TYPE_SELL, newLot, NextGridIndex(POSITION_TYPE_SELL));
+               }
             }
          }
       }
