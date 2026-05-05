@@ -135,6 +135,9 @@ datetime g_lastTpClearScan = 0;
 double   g_realizedCycle   = 0.0;
 bool     g_tpStripped      = false;
 
+// v1.42 — forward decl
+void TryResetAccumulateCycleIfFlat();
+
 string g_dashPrefix = "GK_DASH_";
 string g_linePrefix = "GK_LINE_";
 
