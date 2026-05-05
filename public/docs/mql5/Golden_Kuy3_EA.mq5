@@ -1443,11 +1443,20 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
          }
       }
    }
-   // Reset cycle when fully flat
+   // v1.42 — Reset accumulate cycle when fully flat (Gold Miner concept)
+   if(trans.type==TRADE_TRANSACTION_DEAL_ADD){
+      TryResetAccumulateCycleIfFlat();
+   }
+}
+
+// v1.42 — Gold Miner-style cycle reset: when no EA position exists, zero realized
+void TryResetAccumulateCycleIfFlat()
+{
    if(CountSideSimple(POSITION_TYPE_BUY)==0 && CountSideSimple(POSITION_TYPE_SELL)==0){
-      // small epsilon to avoid resetting in the middle of multi-deal flatten
-      if(MathAbs(g_realizedCycle) > 0.0 && trans.type==TRADE_TRANSACTION_DEAL_ADD){
-         // keep g_realizedCycle visible until next entry; reset on next OpenInitial cycle
+      if(MathAbs(g_realizedCycle) > 0.0001){
+         Print("GK ACCUM CYCLE RESET — flat detected. prev realized=",
+               DoubleToString(g_realizedCycle,2));
+         g_realizedCycle = 0.0;
       }
    }
 }
