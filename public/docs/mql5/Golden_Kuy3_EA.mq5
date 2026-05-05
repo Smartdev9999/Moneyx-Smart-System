@@ -906,6 +906,21 @@ void DrawDashboard()
    DashRow("TP Lines", (tpModeOn?"Drawn":"Cleared"), (tpModeOn?ok:warn));
    DashRow("Init BUY Px",  (g_initPrice_Buy>0?DoubleToString(g_initPrice_Buy,g_digits):"-"), info);
    DashRow("Init SELL Px", (g_initPrice_Sell>0?DoubleToString(g_initPrice_Sell,g_digits):"-"), info);
+   string rpB = g_costHit_Pending_Buy  ? StringFormat("WAIT@%s", DoubleToString(g_costHit_Price_Buy, g_digits))  : "-";
+   string rpS = g_costHit_Pending_Sell ? StringFormat("WAIT@%s", DoubleToString(g_costHit_Price_Sell, g_digits)) : "-";
+   DashRow("Restart Pending", StringFormat("BUY:%s  SELL:%s", rpB, rpS),
+           (g_costHit_Pending_Buy||g_costHit_Pending_Sell)?warn:info);
+
+   // v1.2 high-water trim: remove rows that existed last frame but not this frame
+   if(g_dashRow > g_dashRowMax) g_dashRowMax = g_dashRow;
+   for(int r=g_dashRow; r<prevMax; r++){
+      ObjectDelete(0, g_dashPrefix + StringFormat("BG_R%d", r));
+      ObjectDelete(0, g_dashPrefix + StringFormat("R%d",   r));
+      ObjectDelete(0, g_dashPrefix + StringFormat("C%d",   r));
+      ObjectDelete(0, g_dashPrefix + StringFormat("L%d",   r));
+      ObjectDelete(0, g_dashPrefix + StringFormat("V%d",   r));
+   }
+   g_dashRowMax = g_dashRow;
 }
 
 //==================== TRADE TRANSACTION ============================
