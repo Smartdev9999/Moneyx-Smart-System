@@ -1,15 +1,16 @@
 //+------------------------------------------------------------------+
 //|                                            Golden_Kuy3_EA.mq5    |
-//|                                       Golden Kuy3 EA  v1.2       |
+//|                                       Golden Kuy3 EA  v1.3       |
 //|  Instant entry + Single Grid (Both/Up/Down)                      |
 //|  + Per-Order BE-Lock / Trailing (split toggles)                  |
 //|  + Full TP modes (Dollar / Points / %Bal / Accumulate)           |
 //|  + Avg/TP chart lines + Gold-Miner-style table dashboard         |
 //|  v1.2: dash flicker fix + grid mult fix + Cost-Hit Restart       |
+//|  v1.3: Hero Order (lock newest N + opp survivor + Hero AvgTP)    |
 //+------------------------------------------------------------------+
 #property copyright "Golden Kuy3 EA"
-#property version   "1.20"
-#property description "Golden Kuy3 v1.2 — dashboard flicker fix + grid lot fix + Cost-Hit Restart"
+#property version   "1.30"
+#property description "Golden Kuy3 v1.3 — Hero Order system (lock + survivor cycle close)"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -77,6 +78,17 @@ input int                  InpAvgTrail_MinOrders      = 3;
 input bool                 InpAvgTrail_Strict2Cross   = true;
 input double               InpAvgTrail_UnderAvgBuffer = 50.0;
 
+input group "=== Hero Order ==="
+input bool                 InpEnableHero              = false;    // master toggle
+input int                  InpHero_Count              = 3;        // # of newest tickets to lock per loaded side
+input int                  InpHero_MinSideOrders      = 5;        // min same-side orders before Hero arms
+input double               InpHero_BE_OffsetPips      = 5.0;      // SL = open ± offset for Hero (lock cost)
+input double               InpHero_AvgTP_Points       = 300.0;    // points from non-Hero opp avg to trigger cycle close
+input int                  InpHero_AvgTP_MinOrders    = 2;        // min non-Hero opp orders before Hero AvgTP arms
+input int                  InpHero_KeepLatestN_Opp    = 3;        // keep top-N opp tickets as survivor seed
+input bool                 InpHero_StripBE_OnSurvivor = true;     // remove SL on survivors after cycle close
+input int                  InpHero_PostCloseGraceSec  = 5;        // suppress Cost-Hit registration after cycle close
+
 input group "=== Chart Lines ==="
 input bool                 InpShowAvgLine             = true;
 input color                InpAvgBuyLineColor         = clrDodgerBlue;
@@ -138,6 +150,14 @@ datetime g_costHit_Time_Sell    = 0;
 
 // v1.2 dashboard high-water row tracker (no full wipe each refresh)
 int      g_dashRowMax = 0;
+
+// v1.3 Hero state
+bool     g_hero_Active        = false;
+int      g_hero_Side          = -1;        // POSITION_TYPE_BUY / SELL
+ulong    g_hero_Tickets[];                 // newest N of g_hero_Side
+datetime g_hero_LastCloseTime = 0;         // for cost-hit grace
+double   g_hero_LastOppAvg    = 0.0;       // dashboard
+int      g_hero_LastOppCnt    = 0;         // dashboard
 
 //========================= HELPERS =================================
 double PipsToPrice(double pips) { return pips * g_pip; }
