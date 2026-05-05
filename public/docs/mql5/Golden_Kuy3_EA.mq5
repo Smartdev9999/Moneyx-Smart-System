@@ -1,15 +1,16 @@
 //+------------------------------------------------------------------+
 //|                                            Golden_Kuy3_EA.mq5    |
-//|                                       Golden Kuy3 EA  v1.2       |
+//|                                       Golden Kuy3 EA  v1.3       |
 //|  Instant entry + Single Grid (Both/Up/Down)                      |
 //|  + Per-Order BE-Lock / Trailing (split toggles)                  |
 //|  + Full TP modes (Dollar / Points / %Bal / Accumulate)           |
 //|  + Avg/TP chart lines + Gold-Miner-style table dashboard         |
 //|  v1.2: dash flicker fix + grid mult fix + Cost-Hit Restart       |
+//|  v1.3: Hero Order (lock newest N + opp survivor + Hero AvgTP)    |
 //+------------------------------------------------------------------+
 #property copyright "Golden Kuy3 EA"
-#property version   "1.20"
-#property description "Golden Kuy3 v1.2 — dashboard flicker fix + grid lot fix + Cost-Hit Restart"
+#property version   "1.30"
+#property description "Golden Kuy3 v1.3 — Hero Order system (lock + survivor cycle close)"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -77,6 +78,17 @@ input int                  InpAvgTrail_MinOrders      = 3;
 input bool                 InpAvgTrail_Strict2Cross   = true;
 input double               InpAvgTrail_UnderAvgBuffer = 50.0;
 
+input group "=== Hero Order ==="
+input bool                 InpEnableHero              = false;    // master toggle
+input int                  InpHero_Count              = 3;        // # of newest tickets to lock per loaded side
+input int                  InpHero_MinSideOrders      = 5;        // min same-side orders before Hero arms
+input double               InpHero_BE_OffsetPips      = 5.0;      // SL = open ± offset for Hero (lock cost)
+input double               InpHero_AvgTP_Points       = 300.0;    // points from non-Hero opp avg to trigger cycle close
+input int                  InpHero_AvgTP_MinOrders    = 2;        // min non-Hero opp orders before Hero AvgTP arms
+input int                  InpHero_KeepLatestN_Opp    = 3;        // keep top-N opp tickets as survivor seed
+input bool                 InpHero_StripBE_OnSurvivor = true;     // remove SL on survivors after cycle close
+input int                  InpHero_PostCloseGraceSec  = 5;        // suppress Cost-Hit registration after cycle close
+
 input group "=== Chart Lines ==="
 input bool                 InpShowAvgLine             = true;
 input color                InpAvgBuyLineColor         = clrDodgerBlue;
@@ -138,6 +150,14 @@ datetime g_costHit_Time_Sell    = 0;
 
 // v1.2 dashboard high-water row tracker (no full wipe each refresh)
 int      g_dashRowMax = 0;
+
+// v1.3 Hero state
+bool     g_hero_Active        = false;
+int      g_hero_Side          = -1;        // POSITION_TYPE_BUY / SELL
+ulong    g_hero_Tickets[];                 // newest N of g_hero_Side
+datetime g_hero_LastCloseTime = 0;         // for cost-hit grace
+double   g_hero_LastOppAvg    = 0.0;       // dashboard
+int      g_hero_LastOppCnt    = 0;         // dashboard
 
 //========================= HELPERS =================================
 double PipsToPrice(double pips) { return pips * g_pip; }
@@ -220,7 +240,206 @@ double CalcSideFloating(int side)
    return pl;
 }
 
-int NextGridIndex(int side)
+//================== HERO ORDER HELPERS (v1.3) ======================
+bool IsHeroTicket(ulong tk)
+{
+   if(!g_hero_Active) return false;
+   int n = ArraySize(g_hero_Tickets);
+   for(int i=0;i<n;i++) if(g_hero_Tickets[i]==tk) return true;
+   return false;
+}
+
+// Return top-N newest tickets of side (sorted desc by ticket).
+int GetTopNTickets(int side, int N, ulong &out[])
+{
+   ArrayResize(out, 0);
+   if(N<=0) return 0;
+   ulong all[]; ArrayResize(all,0);
+   for(int i=PositionsTotal()-1;i>=0;i--){
+      if(!pos.SelectByIndex(i)) continue;
+      if(!IsOurPosition()) continue;
+      if((int)pos.PositionType()!=side) continue;
+      int sz = ArraySize(all);
+      ArrayResize(all, sz+1);
+      all[sz] = pos.Ticket();
+   }
+   int total = ArraySize(all);
+   // simple selection sort desc
+   for(int i=0;i<total;i++){
+      for(int j=i+1;j<total;j++){
+         if(all[j] > all[i]){ ulong t=all[i]; all[i]=all[j]; all[j]=t; }
+      }
+   }
+   int take = MathMin(N, total);
+   ArrayResize(out, take);
+   for(int i=0;i<take;i++) out[i] = all[i];
+   return take;
+}
+
+int OppositeSide(int side)
+{
+   return (side==POSITION_TYPE_BUY) ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
+}
+
+int CountSide_NonHero(int side)
+{
+   int n=0;
+   for(int i=PositionsTotal()-1;i>=0;i--){
+      if(!pos.SelectByIndex(i)) continue;
+      if(!IsOurPosition()) continue;
+      if((int)pos.PositionType()!=side) continue;
+      if(IsHeroTicket(pos.Ticket())) continue;
+      n++;
+   }
+   return n;
+}
+
+// Average price excluding Hero tickets and excluding top-N newest of `side`
+double CalcSideAvgPrice_ExclHeroAndTopN(int side, int excludeTopN, int &countOut, double &lotsOut)
+{
+   ulong topN[]; GetTopNTickets(side, excludeTopN, topN);
+   double sumLP=0, sumL=0; int n=0;
+   for(int i=PositionsTotal()-1;i>=0;i--){
+      if(!pos.SelectByIndex(i)) continue;
+      if(!IsOurPosition()) continue;
+      if((int)pos.PositionType()!=side) continue;
+      ulong tk = pos.Ticket();
+      if(IsHeroTicket(tk)) continue;
+      bool skip=false;
+      for(int k=0;k<ArraySize(topN);k++){ if(topN[k]==tk){ skip=true; break; } }
+      if(skip) continue;
+      sumLP += pos.PriceOpen()*pos.Volume();
+      sumL  += pos.Volume();
+      n++;
+   }
+   countOut=n; lotsOut=sumL;
+   return (sumL>0?sumLP/sumL:0.0);
+}
+
+// Refresh Hero ticket array each tick. Sets g_hero_Active/Side based on rules.
+void RefreshHero()
+{
+   if(!InpEnableHero){
+      g_hero_Active=false; g_hero_Side=-1;
+      ArrayResize(g_hero_Tickets,0);
+      return;
+   }
+
+   int nB = CountSideSimple(POSITION_TYPE_BUY);
+   int nS = CountSideSimple(POSITION_TYPE_SELL);
+
+   // Maintain existing Hero side if it still has >= Count tickets
+   if(g_hero_Active){
+      int nSame = (g_hero_Side==POSITION_TYPE_BUY)?nB:nS;
+      if(nSame < InpHero_Count){
+         // Hero collapsed (closed by their own SL etc.) → release
+         g_hero_Active=false; g_hero_Side=-1;
+         ArrayResize(g_hero_Tickets,0);
+         g_hero_LastCloseTime = TimeCurrent();
+      } else {
+         GetTopNTickets(g_hero_Side, InpHero_Count, g_hero_Tickets);
+         return;
+      }
+   }
+
+   // Try to arm: pick the side that is currently the burden (more negative floating)
+   double plB = CalcSideFloating(POSITION_TYPE_BUY);
+   double plS = CalcSideFloating(POSITION_TYPE_SELL);
+   int candidate = -1;
+   if(plB < plS && nB >= InpHero_MinSideOrders) candidate = POSITION_TYPE_BUY;
+   else if(plS < plB && nS >= InpHero_MinSideOrders) candidate = POSITION_TYPE_SELL;
+
+   if(candidate<0) return;
+   if(InpHero_Count<=0) return;
+
+   g_hero_Side = candidate;
+   GetTopNTickets(g_hero_Side, InpHero_Count, g_hero_Tickets);
+   if(ArraySize(g_hero_Tickets) < InpHero_Count){
+      g_hero_Active=false; ArrayResize(g_hero_Tickets,0); return;
+   }
+   g_hero_Active = true;
+   Print("GK HERO ARMED side=",(g_hero_Side==POSITION_TYPE_BUY?"BUY":"SELL"),
+         " count=",ArraySize(g_hero_Tickets));
+
+   // Apply BE-Lock SL to each Hero ticket once (open ± offset)
+   double minStop = GetMinStopPrice();
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   for(int i=0;i<ArraySize(g_hero_Tickets);i++){
+      ulong tk = g_hero_Tickets[i];
+      if(!pos.SelectByTicket(tk)) continue;
+      double op = pos.PriceOpen();
+      double sl = (g_hero_Side==POSITION_TYPE_BUY)
+                   ? op + PipsToPrice(InpHero_BE_OffsetPips)
+                   : op - PipsToPrice(InpHero_BE_OffsetPips);
+      if(g_hero_Side==POSITION_TYPE_BUY){
+         if(bid - sl < minStop) sl = bid - minStop;
+         if(sl >= bid)          continue; // skip — invalid (already past)
+      } else {
+         if(sl - ask < minStop) sl = ask + minStop;
+         if(sl <= ask)          continue;
+      }
+      sl = NormalizeDouble(sl, g_digits);
+      double curSL = pos.StopLoss();
+      if(MathAbs(curSL - sl) <= g_point*2) continue;
+      trade.PositionModify(tk, sl, pos.TakeProfit());
+   }
+}
+
+// Close all our positions EXCEPT Hero tickets and EXCEPT top-N of opposite side (survivor seed).
+void CloseAllExceptHeroAndOppSurvivor()
+{
+   int oppSide = OppositeSide(g_hero_Side);
+   ulong oppKeep[]; GetTopNTickets(oppSide, InpHero_KeepLatestN_Opp, oppKeep);
+   for(int i=PositionsTotal()-1;i>=0;i--){
+      if(!pos.SelectByIndex(i)) continue;
+      if(!IsOurPosition()) continue;
+      ulong tk = pos.Ticket();
+      if(IsHeroTicket(tk)) continue;
+      bool keepOpp=false;
+      for(int k=0;k<ArraySize(oppKeep);k++){ if(oppKeep[k]==tk){ keepOpp=true; break; } }
+      if(keepOpp) continue;
+      trade.PositionClose(tk);
+   }
+   // Strip SL from survivors
+   if(InpHero_StripBE_OnSurvivor){
+      for(int k=0;k<ArraySize(oppKeep);k++){
+         if(!pos.SelectByTicket(oppKeep[k])) continue;
+         if(pos.StopLoss()==0 && pos.TakeProfit()==0) continue;
+         trade.PositionModify(oppKeep[k], 0, 0);
+      }
+   }
+   g_hero_LastCloseTime = TimeCurrent();
+}
+
+// Hero AvgTP — close cycle when opp non-Hero (excl. top-N) avg has moved enough in profit
+void ManageHeroAvgTP()
+{
+   if(!g_hero_Active) return;
+   int oppSide = OppositeSide(g_hero_Side);
+
+   int cnt=0; double lots=0;
+   double avg = CalcSideAvgPrice_ExclHeroAndTopN(oppSide, InpHero_KeepLatestN_Opp, cnt, lots);
+   g_hero_LastOppAvg = avg;
+   g_hero_LastOppCnt = cnt;
+   if(cnt < InpHero_AvgTP_MinOrders || avg<=0) return;
+
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double tpDist = InpHero_AvgTP_Points * g_point;
+
+   bool hit=false;
+   if(oppSide==POSITION_TYPE_BUY){
+      if(bid >= avg + tpDist) hit=true;
+   } else {
+      if(ask <= avg - tpDist) hit=true;
+   }
+   if(!hit) return;
+
+   Print("GK HERO AVG-TP HIT  oppSide=",(oppSide==POSITION_TYPE_BUY?"BUY":"SELL"),
+         " avg=",DoubleToString(avg,g_digits)," dist=",InpHero_AvgTP_Points,"pt — closing cycle");
+   CloseAllExceptHeroAndOppSurvivor();
+}
 {
    int maxIdx = 0;
    for(int i=PositionsTotal()-1;i>=0;i--){
@@ -503,6 +722,7 @@ void ManagePerOrderTrailing()
    for(int i=PositionsTotal()-1;i>=0;i--){
       if(!pos.SelectByIndex(i)) continue;
       if(!IsOurPosition()) continue;
+      if(IsHeroTicket(pos.Ticket())) continue; // v1.3: Hero managed separately
       int side = (int)pos.PositionType();
       double op = pos.PriceOpen();
       double curSL = pos.StopLoss();
@@ -528,6 +748,7 @@ void CloseAllSide(int side)
       if(!pos.SelectByIndex(i)) continue;
       if(!IsOurPosition()) continue;
       if((int)pos.PositionType()!=side) continue;
+      if(IsHeroTicket(pos.Ticket())) continue; // v1.3: never close Hero via per-side close
       trade.PositionClose(pos.Ticket());
    }
 }
@@ -537,8 +758,40 @@ void CloseAllOurs()
    for(int i=PositionsTotal()-1;i>=0;i--){
       if(!pos.SelectByIndex(i)) continue;
       if(!IsOurPosition()) continue;
+      if(IsHeroTicket(pos.Ticket())) continue; // v1.3
       trade.PositionClose(pos.Ticket());
    }
+}
+
+// v1.3 Floating excluding Hero tickets (per side)
+double CalcSideFloating_NonHero(int side)
+{
+   double pl=0;
+   for(int i=PositionsTotal()-1;i>=0;i--){
+      if(!pos.SelectByIndex(i)) continue;
+      if(!IsOurPosition()) continue;
+      if((int)pos.PositionType()!=side) continue;
+      if(IsHeroTicket(pos.Ticket())) continue;
+      pl += pos.Profit() + pos.Swap() + pos.Commission();
+   }
+   return pl;
+}
+
+// v1.3 Avg price excl Hero only (per side)
+double CalcSideAvgPrice_NonHero(int side, double &lotsOut, int &cntOut)
+{
+   double sumLP=0, sumL=0; int n=0;
+   for(int i=PositionsTotal()-1;i>=0;i--){
+      if(!pos.SelectByIndex(i)) continue;
+      if(!IsOurPosition()) continue;
+      if((int)pos.PositionType()!=side) continue;
+      if(IsHeroTicket(pos.Ticket())) continue;
+      sumLP += pos.PriceOpen()*pos.Volume();
+      sumL  += pos.Volume();
+      n++;
+   }
+   lotsOut=sumL; cntOut=n;
+   return (sumL>0?sumLP/sumL:0.0);
 }
 
 // Strip stale broker TP from every ticket when no Points-TP mode is active
@@ -553,6 +806,7 @@ void EnforceClearTPIfDisabled()
    for(int i=PositionsTotal()-1;i>=0;i--){
       if(!pos.SelectByIndex(i)) continue;
       if(!IsOurPosition()) continue;
+      if(IsHeroTicket(pos.Ticket())) continue; // v1.3: keep Hero SL/TP intact
       if(pos.TakeProfit() <= 0) continue;
       if(trade.PositionModify(pos.Ticket(), pos.StopLoss(), 0)) cleared++;
    }
@@ -565,7 +819,7 @@ void ManageTakeProfit()
 
    // 1. Accumulate (whole account) — realized + floating
    if(InpUseAccumulateClose && InpAccumulateTarget>0){
-      double floatingAll = CalcSideFloating(POSITION_TYPE_BUY) + CalcSideFloating(POSITION_TYPE_SELL);
+      double floatingAll = CalcSideFloating_NonHero(POSITION_TYPE_BUY) + CalcSideFloating_NonHero(POSITION_TYPE_SELL);
       if((g_realizedCycle + floatingAll) >= InpAccumulateTarget){
          Print("GK ACCUM CLOSE — realized=",DoubleToString(g_realizedCycle,2)," floating=",DoubleToString(floatingAll,2)," tgt=",InpAccumulateTarget);
          CloseAllOurs();
@@ -577,10 +831,10 @@ void ManageTakeProfit()
 
    for(int sideIdx=0; sideIdx<2; sideIdx++){
       int side = (sideIdx==0)?POSITION_TYPE_BUY:POSITION_TYPE_SELL;
-      int n = CountSideSimple(side);
+      int n = CountSide_NonHero(side); // v1.3 exclude Hero
       if(n<=0) continue;
 
-      double pl = CalcSideFloating(side);
+      double pl = CalcSideFloating_NonHero(side); // v1.3
 
       // 2. Fixed dollar
       if(InpUseTPFixedDollar && InpTPDollarAmount>0 && pl >= InpTPDollarAmount){
@@ -599,10 +853,10 @@ void ManageTakeProfit()
          }
       }
 
-      // 4. Points from average — push broker TP
+      // 4. Points from average — push broker TP (Hero excluded from avg + skipped from modify)
       if(InpUseTPPoints && n >= InpAvgTP_MinOrders){
          double tot=0; int cnt=0;
-         double avg = CalcSideAvgPrice(side, tot, cnt);
+         double avg = CalcSideAvgPrice_NonHero(side, tot, cnt);
          if(avg<=0) continue;
          double minStop = GetMinStopPrice();
          double tpDist = MathMax(InpTPPointsFromAverage * g_point, minStop);
@@ -612,6 +866,7 @@ void ManageTakeProfit()
             if(!pos.SelectByIndex(i)) continue;
             if(!IsOurPosition()) continue;
             if((int)pos.PositionType()!=side) continue;
+            if(IsHeroTicket(pos.Ticket())) continue; // v1.3
             if(MathAbs(pos.TakeProfit()-tpPrice) <= g_point*2) continue;
             trade.PositionModify(pos.Ticket(), pos.StopLoss(), tpPrice);
          }
@@ -632,7 +887,7 @@ void ManageAverageTrailing()
 
    {
       double tot=0; int cnt=0;
-      double avg = CalcSideAvgPrice(POSITION_TYPE_BUY, tot, cnt);
+      double avg = CalcSideAvgPrice_NonHero(POSITION_TYPE_BUY, tot, cnt); // v1.3
       if(cnt >= InpAvgTrail_MinOrders && avg>0){
          if(InpAvgTrail_Strict2Cross && !g_avgTrail_ArmReady_Buy){
             if(bid < avg - InpAvgTrail_UnderAvgBuffer*g_point) g_avgTrail_ArmReady_Buy = true;
@@ -664,7 +919,7 @@ void ManageAverageTrailing()
 
    {
       double tot=0; int cnt=0;
-      double avg = CalcSideAvgPrice(POSITION_TYPE_SELL, tot, cnt);
+      double avg = CalcSideAvgPrice_NonHero(POSITION_TYPE_SELL, tot, cnt); // v1.3
       if(cnt >= InpAvgTrail_MinOrders && avg>0){
          if(InpAvgTrail_Strict2Cross && !g_avgTrail_ArmReady_Sell){
             if(ask > avg + InpAvgTrail_UnderAvgBuffer*g_point) g_avgTrail_ArmReady_Sell = true;
@@ -697,6 +952,7 @@ void ManageAverageTrailing()
    for(int i=PositionsTotal()-1;i>=0;i--){
       if(!pos.SelectByIndex(i)) continue;
       if(!IsOurPosition()) continue;
+      if(IsHeroTicket(pos.Ticket())) continue; // v1.3
       int side = (int)pos.PositionType();
       double targetSL = 0;
       if(side==POSITION_TYPE_BUY  && g_avgTrail_Active_Buy)  targetSL = g_avgTrail_SL_Buy;
@@ -846,7 +1102,7 @@ void DrawDashboard()
    double plS  = CalcSideFloating(POSITION_TYPE_SELL);
    double plAll= plB+plS;
 
-   DashHeader(StringFormat("Golden Kuy3 v1.2  Side:%s Grid:%s/%s", SideModeStr(), GridModeStr(), LotModeStr()));
+   DashHeader(StringFormat("Golden Kuy3 v1.3  Side:%s Grid:%s/%s", SideModeStr(), GridModeStr(), LotModeStr()));
 
    DashHeader("=== ACCOUNT ===");
    DashRow("Balance",     StringFormat("$%.2f", bal), info);
@@ -911,6 +1167,45 @@ void DrawDashboard()
    DashRow("Restart Pending", StringFormat("BUY:%s  SELL:%s", rpB, rpS),
            (g_costHit_Pending_Buy||g_costHit_Pending_Sell)?warn:info);
 
+   DashHeader("=== HERO ORDER ===");
+   DashRow("Hero Module", StringFormat("%s  cnt=%d minSide=%d",
+                          OnOff(InpEnableHero), InpHero_Count, InpHero_MinSideOrders),
+                          (InpEnableHero?gold:warn));
+   string hsStatus;
+   if(!InpEnableHero) hsStatus = "DISABLED";
+   else if(!g_hero_Active) hsStatus = "WAIT";
+   else {
+      string ids="";
+      for(int i=0;i<ArraySize(g_hero_Tickets);i++){
+         if(i>0) ids += ",";
+         ids += StringFormat("#%I64u", g_hero_Tickets[i]);
+      }
+      hsStatus = StringFormat("ACTIVE %s %s",
+                  (g_hero_Side==POSITION_TYPE_BUY?"BUY":"SELL"), ids);
+   }
+   DashRow("Hero Status", hsStatus, (g_hero_Active?gold:info));
+   if(g_hero_Active){
+      double tpDist = InpHero_AvgTP_Points * g_point;
+      double bidH = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+      double askH = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+      string aTpInfo;
+      if(g_hero_LastOppCnt < InpHero_AvgTP_MinOrders || g_hero_LastOppAvg<=0){
+         aTpInfo = StringFormat("WAIT  oppCnt=%d/%d", g_hero_LastOppCnt, InpHero_AvgTP_MinOrders);
+      } else {
+         double curDistPt = (g_hero_Side==POSITION_TYPE_BUY)
+                            ? (askH - (g_hero_LastOppAvg - tpDist)) / g_point  // SELL profit dir
+                            : ((g_hero_LastOppAvg + tpDist) - bidH) / g_point; // BUY profit dir
+         aTpInfo = StringFormat("%.0fpt avg=%s cur=%.0fpt",
+                    InpHero_AvgTP_Points, DoubleToString(g_hero_LastOppAvg,g_digits), curDistPt);
+      }
+      DashRow("Hero AvgTP", aTpInfo, info);
+   } else {
+      DashRow("Hero AvgTP", StringFormat("%.0fpt /%dord", InpHero_AvgTP_Points, InpHero_AvgTP_MinOrders), info);
+   }
+   DashRow("Survivor Strip", StringFormat("%s keepN=%d",
+                            OnOff(InpHero_StripBE_OnSurvivor), InpHero_KeepLatestN_Opp),
+                            (InpHero_StripBE_OnSurvivor?ok:warn));
+
    // v1.2 high-water trim: remove rows that existed last frame but not this frame
    if(g_dashRow > g_dashRowMax) g_dashRowMax = g_dashRow;
    for(int r=g_dashRow; r<prevMax; r++){
@@ -943,22 +1238,27 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
                if(InpEnableCostHitRestart){
                   long reason = HistoryDealGetInteger(trans.deal, DEAL_REASON);
                   if(reason == DEAL_REASON_SL || reason == DEAL_REASON_TP){
+                     // v1.3: suppress during Hero post-close grace
+                     bool inGrace = (InpEnableHero && InpHero_PostCloseGraceSec>0
+                                     && (TimeCurrent()-g_hero_LastCloseTime) < InpHero_PostCloseGraceSec);
                      long dealType = HistoryDealGetInteger(trans.deal, DEAL_TYPE);
-                     // closing deal type is OPPOSITE of the position side:
-                     // SELL deal closes a BUY position, BUY deal closes a SELL position
                      int closedSide = (dealType == DEAL_TYPE_SELL) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
                      double closePx = HistoryDealGetDouble(trans.deal, DEAL_PRICE);
-                     if(closedSide == POSITION_TYPE_BUY){
-                        g_costHit_Pending_Buy = true;
-                        g_costHit_Price_Buy   = closePx;
-                        g_costHit_Time_Buy    = TimeCurrent();
+                     if(!inGrace){
+                        if(closedSide == POSITION_TYPE_BUY){
+                           g_costHit_Pending_Buy = true;
+                           g_costHit_Price_Buy   = closePx;
+                           g_costHit_Time_Buy    = TimeCurrent();
+                        } else {
+                           g_costHit_Pending_Sell = true;
+                           g_costHit_Price_Sell   = closePx;
+                           g_costHit_Time_Sell    = TimeCurrent();
+                        }
+                        Print("GK COST-HIT detected side=",(closedSide==POSITION_TYPE_BUY?"BUY":"SELL"),
+                              " reason=",reason," px=",DoubleToString(closePx,g_digits));
                      } else {
-                        g_costHit_Pending_Sell = true;
-                        g_costHit_Price_Sell   = closePx;
-                        g_costHit_Time_Sell    = TimeCurrent();
+                        Print("GK COST-HIT suppressed (Hero grace) side=",(closedSide==POSITION_TYPE_BUY?"BUY":"SELL"));
                      }
-                     Print("GK COST-HIT detected side=",(closedSide==POSITION_TYPE_BUY?"BUY":"SELL"),
-                           " reason=",reason," px=",DoubleToString(closePx,g_digits));
                   }
                }
             }
@@ -1023,7 +1323,7 @@ int OnInit()
       if(c=="GK_INIT_SELL") g_initPrice_Sell = pos.PriceOpen();
    }
 
-   Print("Golden Kuy3 v1.2 init  digits=",g_digits," pip=",g_pip," stopsLvl=",g_stopsLevel);
+   Print("Golden Kuy3 v1.3 init  digits=",g_digits," pip=",g_pip," stopsLvl=",g_stopsLevel);
    return INIT_SUCCEEDED;
 }
 
@@ -1031,15 +1331,17 @@ void OnDeinit(const int reason)
 {
    DelDash();
    DelLines();
-   Print("Golden Kuy3 v1.2 deinit reason=",reason);
+   Print("Golden Kuy3 v1.3 deinit reason=",reason);
 }
 
 void OnTick()
 {
+   RefreshHero();              // v1.3 — must run before others so skips apply
    ManageCostHitRestart();
    ManageInitialEntry();
    ManageGridEntry();
    ManagePerOrderTrailing();
+   ManageHeroAvgTP();          // v1.3 — cycle-close trigger before normal TP
    ManageTakeProfit();
    ManageAverageTrailing();
    EnforceClearTPIfDisabled();
