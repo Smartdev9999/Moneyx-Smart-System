@@ -128,6 +128,17 @@ bool     g_tpStripped      = false;
 string g_dashPrefix = "GK_DASH_";
 string g_linePrefix = "GK_LINE_";
 
+// v1.2 cost-hit restart
+bool     g_costHit_Pending_Buy  = false;
+bool     g_costHit_Pending_Sell = false;
+double   g_costHit_Price_Buy    = 0.0;
+double   g_costHit_Price_Sell   = 0.0;
+datetime g_costHit_Time_Buy     = 0;
+datetime g_costHit_Time_Sell    = 0;
+
+// v1.2 dashboard high-water row tracker (no full wipe each refresh)
+int      g_dashRowMax = 0;
+
 //========================= HELPERS =================================
 double PipsToPrice(double pips) { return pips * g_pip; }
 double PriceToPips(double pr)   { return (g_pip>0) ? pr / g_pip : 0; }
