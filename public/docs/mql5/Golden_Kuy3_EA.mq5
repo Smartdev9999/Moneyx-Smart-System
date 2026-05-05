@@ -42,6 +42,9 @@ input double               InpGridLotValue         = 1.5;
 input int                  InpMaxGridOrders        = 20;
 input bool                 InpGridOnlyNewCandle    = true;
 input ENUM_TIMEFRAMES      InpGridCandleTF         = PERIOD_M1;
+input bool                 InpEnableCostHitRestart = false;     // re-open initial-lot when SL/TP closes a ticket
+input double               InpCostHitMinSpacingPips= 100.0;     // min distance from nearest same-side position
+input int                  InpCostHitCooldownSec   = 2;
 
 input group "=== Per-Order Break-Even Lock ==="
 input bool                 InpEnableBreakevenLock     = true;     // lock cost on each ticket independently
