@@ -663,25 +663,46 @@ void BuildHeroTicketCache()
                               ? InpHero_MinOrdersToActivate
                               : (InpHero_OrderCount + 1);
 
-      // STRICT Single-side lock — only block when REAL owner exists (BE_GUARD)
-      if(InpHero_SingleSideLock && activeOwner >= 0 && sideId != activeOwner) {
-         continue;
-      }
+      // v1.58 Handoff Reserve: Single-Side Lock no longer blocks opposite side from
+      //         ARMing as Reserve while owner is BE_GUARD. Reserve protects the
+      //         opposite-side Hero set so the next basket TP keeps a Hero
+      //         instead of closing all. Owner promotion (BE_GUARD) still
+      //         handled by DetectSameSideBasketClearedForHero per side.
+      // (Old strict-lock block removed.)
 
-      // v1.56 — Strict Side-Alternation: opposite side must take its turn first.
-      //         g_heroNextAllowedSide is set when a Hero closes (CloseHeroOnSide) or
-      //         auto-releases. Cleared once that opposite side actually activates Hero.
+      // v1.58 Conditional Alternation Lock — gate clears itself if the
+      //         designated next-allowed side has no realistic chance of
+      //         becoming Hero soon (active count < threshold AND phase==NONE).
+      //         This implements: when both sides are flat/under threshold,
+      //         system resets like a fresh start — first side to hit TP wins Hero.
       if(g_heroNextAllowedSide >= 0 && sideId != g_heroNextAllowedSide) {
-         static datetime lastNextBlockLog_B = 0, lastNextBlockLog_S = 0;
-         datetime lastLogN = (sideId == POSITION_TYPE_BUY) ? lastNextBlockLog_B : lastNextBlockLog_S;
-         if(TimeCurrent() - lastLogN >= 30) {
-            string nextStr = (g_heroNextAllowedSide == (int)POSITION_TYPE_BUY) ? "BUY" : "SELL";
-            Print("v1.56 Hero ALT-BLOCK side=", (sideId==POSITION_TYPE_BUY?"BUY":"SELL"),
-                  " waitingNext=", nextStr, " — opposite must take next Hero turn");
-            if(sideId == POSITION_TYPE_BUY) lastNextBlockLog_B = TimeCurrent();
-            else                            lastNextBlockLog_S = TimeCurrent();
+         int oppActiveCnt   = (g_heroNextAllowedSide == (int)POSITION_TYPE_BUY)
+                              ? sideTotalActive[0] : sideTotalActive[1];
+         int oppPhaseCheck  = (g_heroNextAllowedSide == (int)POSITION_TYPE_BUY)
+                              ? g_heroPhase_Buy : g_heroPhase_Sell;
+         bool oppCanArm     = (oppPhaseCheck > 0) || (oppActiveCnt >= activateThreshold);
+         if(!oppCanArm) {
+            // Designated next-allowed side has nothing — auto-clear lock
+            static datetime lastAltResetLog = 0;
+            if(TimeCurrent() - lastAltResetLog >= 30) {
+               Print("v1.58 Hero ALT-RESET — designated next=", (g_heroNextAllowedSide==(int)POSITION_TYPE_BUY?"BUY":"SELL"),
+                     " has no path to Hero (active=", oppActiveCnt, " thr=", activateThreshold,
+                     " phase=", oppPhaseCheck, ") — clearing lock, allowing this side");
+               lastAltResetLog = TimeCurrent();
+            }
+            g_heroNextAllowedSide = -1;
+         } else {
+            static datetime lastNextBlockLog_B = 0, lastNextBlockLog_S = 0;
+            datetime lastLogN = (sideId == POSITION_TYPE_BUY) ? lastNextBlockLog_B : lastNextBlockLog_S;
+            if(TimeCurrent() - lastLogN >= 30) {
+               string nextStr = (g_heroNextAllowedSide == (int)POSITION_TYPE_BUY) ? "BUY" : "SELL";
+               Print("v1.58 Hero ALT-BLOCK side=", (sideId==POSITION_TYPE_BUY?"BUY":"SELL"),
+                     " waitingNext=", nextStr, " (opp ready: active=", oppActiveCnt, " phase=", oppPhaseCheck, ")");
+               if(sideId == POSITION_TYPE_BUY) lastNextBlockLog_B = TimeCurrent();
+               else                            lastNextBlockLog_S = TimeCurrent();
+            }
+            continue;
          }
-         continue;
       }
 
       // Activation gate
