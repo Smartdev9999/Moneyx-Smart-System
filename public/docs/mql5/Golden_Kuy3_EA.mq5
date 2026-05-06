@@ -1,6 +1,9 @@
 //+------------------------------------------------------------------+
 //|                                            Golden_Kuy3_EA.mq5    |
-//|                                       Golden Kuy3 EA  v1.50      |
+//|                                       Golden Kuy3 EA  v1.51      |
+//|  v1.51: Hero AvgTP-Trigger Only — Hero closes only when opp       |
+//|         basket flattened by Avg-TP/Avg-Trail/Master TP/Accumulate |
+//|         (intent flag), NOT by Per-Order Trail/SL/Cost-Hit.        |
 //|  v1.50: Hero TP-Only Opposite Close — Hero closes only when opp   |
 //|         basket flattened with realized profit (TP); SL/loss=hold  |
 //|  v1.49: Hero Guard After Basket Close — keep Hero set even when   |
