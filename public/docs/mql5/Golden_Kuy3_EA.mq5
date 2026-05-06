@@ -507,12 +507,13 @@ void BuildHeroTicketCache()
             g_heroLastClosedSide = -1; // ปลด lock
          } else {
             static datetime lastAltBlockLog_B = 0, lastAltBlockLog_S = 0;
-            datetime &lastLog = (sideId == POSITION_TYPE_BUY) ? lastAltBlockLog_B : lastAltBlockLog_S;
+            datetime lastLog = (sideId == POSITION_TYPE_BUY) ? lastAltBlockLog_B : lastAltBlockLog_S;
             if(TimeCurrent() - lastLog >= 30) {
                Print("v1.47 Hero ALT-BLOCK side=", (sideId==POSITION_TYPE_BUY?"BUY":"SELL"),
                      " lastClosed=", (sideId==POSITION_TYPE_BUY?"BUY":"SELL"),
                      " — waiting opposite-side Hero or self flat");
-               lastLog = TimeCurrent();
+               if(sideId == POSITION_TYPE_BUY) lastAltBlockLog_B = TimeCurrent();
+               else                            lastAltBlockLog_S = TimeCurrent();
             }
             continue;
          }
