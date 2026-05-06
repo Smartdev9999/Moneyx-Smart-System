@@ -797,9 +797,13 @@ void CloseHeroOnSide(ENUM_POSITION_TYPE side, string reason)
    if(side == POSITION_TYPE_BUY) {
       g_heroPhase_Buy = 0; g_heroBE_Applied_Buy = false;
       g_heroJustClosed_Buy = TimeCurrent();
+      g_oppBasketRealized_HeroBuy = 0.0;            // v1.50 reset
+      g_oppBasketLastDealTime_HeroBuy = 0;
    } else {
       g_heroPhase_Sell = 0; g_heroBE_Applied_Sell = false;
       g_heroJustClosed_Sell = TimeCurrent();
+      g_oppBasketRealized_HeroSell = 0.0;           // v1.50 reset
+      g_oppBasketLastDealTime_HeroSell = 0;
    }
    // v1.46 Side-Alternation Lock — จำฝั่งที่เพิ่งปิด Hero
    g_heroLastClosedSide = (int)side;
