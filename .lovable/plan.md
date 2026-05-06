@@ -1,78 +1,38 @@
-# แผนแก้ Hero v1.52 — Sticky Set + Strict Alternation
+## ปัญหา v1.52
+Sticky Set ทำให้ Hero ล็อคที่ ticket แรกตอน activate (เช่น SELL #41,#42) แม้จะมี SELL ใหม่เปิดที่ราคาสูงกว่าตามที่ผู้ใช้ต้องการ. ผู้ใช้ต้องการให้ Hero อัปเดต ticket ตามราคา-สุดขอบเสมอ (BUY = ต่ำสุด N ตัว, SELL = สูงสุด N ตัว) จนกว่าฝั่งตรงข้ามจะปิดกำไร non-Hero แบบปกติ.
 
-## สาเหตุที่แท้จริงของอาการ
+## v1.53 — Dynamic Hero Refresh + Demote Restore
 
-จาก log + screenshot (`Hero BUY active=21/15 Hero=5 BE_GUARD`, `Hero SELL active=10/15 Hero=0 WAIT`, `Owner=BUY locked`, `Last Closed=-`)
+หลักการ: ฟื้น dynamic refresh แบบ v1.48 พร้อมแก้ bug 2 อย่างที่เคยทำให้ ticket หลุดถูก BE close:
+1. **Promote (เพิ่ม Hero ใหม่):** เคลียร์ `g_heroBE_Applied_<side>` ให้ `ApplyHeroLockProfitSL` วาง BE-SL ลงไม้ใหม่ (มีอยู่แล้วใน v1.48)
+2. **Demote (Hero เก่าหลุดเป็น non-Hero):** เพิ่ม helper `RestoreInitialTPOnDemoted(prevSet, newSet, side)` คืน TP เดิม (`InpInitialTPPips`) และล้าง lock-profit SL ออกจาก ticket ที่ถูก push ออก เพื่อให้ join basket ปกติได้ ปิดร่วมกับ Avg-TP ของฝั่งเดียวกันได้
 
-ปัญหามาจาก **Branch A ใน `BuildHeroTicketCache()` (v1.48 dynamic refresh)** ที่ public/docs/mql5/Golden_Kuy3_EA.mq5:526-583 — ทุก tick มันจะ **เลือก Hero ใหม่** ตาม price-extreme ปัจจุบัน แม้ phase จะอยู่ BE_GUARD แล้วก็ตาม:
+### จุดแก้ใน `public/docs/mql5/Golden_Kuy3_EA.mq5`
 
-1. ตอนแรก Hero BUY = ticket #805,#825,#902,#931,#972 (5 ตัว lowest price) → BE_GUARD lock SL ไว้
-2. ราคาลงต่อ → grid เปิด BUY ใหม่ที่ราคาต่ำกว่า (#1010, #1050 …)
-3. Branch A เรียงใหม่ทุก tick → Hero set กลายเป็น #1010,#1050,… (5 ใหม่ที่ต่ำสุด) → push #805,#825 ออกจาก stable set
-4. Ticket ที่ถูก push ออก: TP ถูก strip ไปแล้ว, SL เดิมที่ ApplyHeroLockProfitSL เคยใส่ก็ยังอยู่แต่ตอนนี้นับเป็น "non-Hero" → Per-Order Trail/BE จะเข้าจัดการ → ปิดพร้อมไม้อื่น
-5. Hero owner ยังเป็น BUY (BE_GUARD ไม่ reset) → SELL ไม่มีโอกาสได้ Hero แม้ basket จะใหญ่กว่า threshold
-6. `g_heroLastClosedSide` ไม่ถูก stamp เพราะ Hero ไม่เคย "ปิดยกชุด" — มันแค่ถูก demote เงียบ ๆ → Alternation Lock v1.46 ใช้ไม่ได้
-
-ผลลัพธ์ตรงกับที่ user เห็น: Hero BUY ทับซ้อน, BUY ใหม่กลายเป็น Hero ทันที, ไม้เก่าถูกปิดคู่กับ break-even, ฝั่ง SELL ไม่ได้สลับเป็น Hero เลย
-
-## หลักการแก้ v1.52
-
-> **Hero ticket set = STICKY ห้ามเปลี่ยนตัวจน phase รีเซ็ตเป็น NONE**
-
-1. **Branch A เปลี่ยนเป็น Sticky-Only (ตามแบบ v1.47)**
-   - เมื่อ `curPhase != 0` (ARMED/BE_GUARD): **ไม่ re-select** จาก price-extreme อีก
-   - แค่ prune ticket ที่ปิดไปแล้วจาก stable set (PruneStableSet ทำอยู่แล้วใน STEP 1)
-   - ไม่เติม ticket ใหม่เข้า stable set ในระหว่าง phase นี้
-   - `sideHeroTagged[s] = stableN` (จำนวนปัจจุบันหลัง prune)
-
-2. **ไม้ใหม่ที่เปิดหลัง Hero ARMED = ไม้ basket ปกติ ไม่ใช่ Hero**
-   - ไม่ต้อง strip TP, ไม่ต้อง lock SL
-   - Per-Order Trail/BE/Avg-TP จัดการตามปกติ
-
-3. **Stable set ลดลงจน `stableN == 0` → trigger Auto-Release**
-   - STEP 5 (line 685-694) มีอยู่แล้ว: ถ้า BE_GUARD แต่ stable set ว่าง → reset phase + `g_heroLastClosedSide = side`
-   - ทำให้ Alternation Lock v1.46 ทำงานต่อ → SELL ได้ Hero รอบถัดไป
-
-4. **STEP 1 external-close detection ปรับเป็น "set drained" generically**
-   - `prevN > 0 && nowN == 0 && curPhase > 0` → stamp `g_heroLastClosedSide` (เดิมทำอยู่แล้ว ดี)
-   - กรณีใหม่: `nowN < prevN && curPhase == 3` → log อย่างเดียว (Hero บางตัวถูกปิด, ที่เหลือยังคุมต่อ)
-
-5. **ลบ logic clear `g_heroBE_Applied_*` บน REFRESH** (line 577-581)
-   - ไม่จำเป็นแล้ว เพราะไม่ refresh stable set อีก
-
-6. **Toggle รักษาความเข้ากันได้**
-   - เพิ่ม input `InpHero_StickySet = true` (default ON)
-   - false = พฤติกรรมเดิม v1.51 (dynamic refresh) สำหรับ rollback ฉุกเฉิน
-
-## รายละเอียดทางเทคนิค (สำหรับ dev)
-
-ไฟล์: `public/docs/mql5/Golden_Kuy3_EA.mq5`
-
-| จุดแก้ | บรรทัดเดิม | การเปลี่ยน |
+| จุด | บรรทัดเดิม | การเปลี่ยน |
 |---|---|---|
-| Header `#property version` + description | 23, 4-19 | bump v1.51 → v1.52, เพิ่มบรรทัด `v1.52: Hero Sticky Set` |
-| `input bool InpHero_StickySet` | ใหม่ ใต้บรรทัด 105 | default `true` |
-| `BuildHeroTicketCache` Branch A | 523-584 | ตัด sort + re-add เป็น "if sticky: keep current stable set, sideHeroTagged = stableN, continue" |
-| Comment Branch A | 524-525 | เขียนใหม่อธิบาย sticky |
-| Dashboard `headerVersion` | (search "v1.51") | bump string |
-| `OnInit`/`OnDeinit` Print | (search) | bump version string |
-| Memory file | `.lovable/memory/trading/golden-kuy3/v1-52-hero-sticky-set.md` | สร้างใหม่ |
-| `mem://index.md` | Memories list | เพิ่ม entry v1.52 |
+| `#property version` + description | 23, 4-19 | bump v1.52 → v1.53 + บรรทัด `v1.53: Hero Dynamic Refresh + Demote Restore` |
+| `InpHero_StickySet` default | 110 | เปลี่ยน default เป็น `false` (= dynamic refresh) แต่คง input ไว้สำหรับ rollback |
+| Branch A (line 534-592) | | ตัด `if(InpHero_StickySet) {...continue;}` shortcut ออก เมื่อ default=false. คง logic v1.51 dynamic refresh + diff detection |
+| **ใหม่:** ก่อน `ClearStableSet` (ราว 571) | | เก็บ `prevSet[]` (มีอยู่แล้ว 564-569). หลัง rebuild ที่ 572-573 → คำนวณ `demoted[]` = ticket ที่อยู่ใน prevSet แต่ไม่อยู่ใน newSet → เรียก `RestoreInitialTPOnDemoted` |
+| **ใหม่:** function `RestoreInitialTPOnDemoted` | ใต้ `StripBrokerTPSLFromHeroTickets` | สำหรับแต่ละ demoted ticket: คำนวณ TP ใหม่จาก `openPrice ± PipsToPrice(InpInitialTPPips)` (เคารพ STOPS_LEVEL); ตั้ง SL = 0 (หรือคง SL เดิมถ้า InpUseBreakeven/Trail เปิด); `trade.PositionModify(ticket, newSL, newTP)`. Print log `v1.53 Hero DEMOTE restore TP: #ticket TP=...` |
+| `g_heroBE_Applied_<side> = false` | 587-588 | คงไว้ (v1.48 logic) — ไม้ใหม่จะถูก lock-profit SL ใน BE_GUARD รอบถัดไป |
+| Dashboard version string | (search "v1.52") | bump |
 
-## สิ่งที่ไม่เปลี่ยน (กฎเหล็ก)
+### ผลลัพธ์
+- มี SELL ใหม่เปิดราคา 3354.06 → Hero set อัปเดตเป็น 5 ตัว highest price → ticket #41,#42 (ราคาต่ำกว่า) ถูก demote → ได้ TP เดิมคืน → ปิดร่วม Avg-TP ฝั่ง SELL ปกติ
+- Hero (5 ตัว top extreme) ยังคง strip TP / lock SL เพื่อกันหน้าทุน
+- เมื่อฝั่งตรงข้าม (BUY basket) ปิดกำไรครบ → Hero SELL ทั้ง 5 ตัวปิดด้วย gating v1.51 (Avg-TP intent) → side-alternation ทำงานปกติ
+- Single-Side Lock v1.45 / Alternation v1.46 / Post-close grace ทำงานเหมือนเดิม เพราะ "Hero CLOSE" event เกิดเฉพาะ ManageHeroOppositeClose → CloseHeroOnSide เท่านั้น (demote ไม่ใช่ close)
 
-- ❌ `trade.Buy/Sell/PositionClose/OrderSend` ไม่แตะ
-- ❌ Grid entry/exit/lot multiplier ไม่แตะ
-- ❌ Per-Order BE/Trail/SL/TP/Cost-Hit Restart ไม่แตะ
-- ❌ Avg-TP/Avg-Trail strict-2-cross ไม่แตะ
-- ❌ Accumulate close logic ไม่แตะ
-- ❌ Squeeze/News/License/Sync — ไม่มีในไฟล์นี้อยู่แล้ว
-- ❌ `ApplyHeroLockProfitSL` / `ComputeHeroLockProfitSL` / `StripBrokerTPSLFromHeroTickets` ไม่แตะ
-- ❌ STEP 2 dual BE_GUARD pre-guard, STEP 4 flat rebuild, STEP 5 auto-release, STEP 6 audit log ไม่แตะ
-- ❌ Side-Alternation Lock v1.46, Single-Side Lock v1.45, Post-close grace, External-close detection ทำงานต่อปกติ
-- ❌ v1.50 `oppRealized` gate, v1.51 Avg-TP intent flag (5 จุด set + Master TP safety net + 60s expiry) ทำงานต่อปกติ
-- ❌ `IsHeroProtectedTicket` 9 guards ทำงานต่อปกติ
-- ❌ `InpHero_Enabled = false` → behavior เดิม
-- ❌ `InpHero_StickySet = false` → fallback v1.51 dynamic refresh เป๊ะ ๆ
-
-ยืนยันว่าไม่กระทบ trading logic — เป็นการเปลี่ยนแค่ "ใครจะถูก tag เป็น Hero" หลัง phase active เท่านั้น
+### สิ่งที่ไม่เปลี่ยน (กฎเหล็ก)
+- ไม่แตะ `trade.Buy/Sell/PositionClose`/OrderSend
+- ไม่แตะ Grid entry/exit/lot multiplier
+- ไม่แตะ Per-Order BE/Trail/SL/TP/Cost-Hit
+- ไม่แตะ Avg-TP/Avg-Trail strict-2-cross/Accumulate
+- ไม่แตะ `ApplyHeroLockProfitSL`/`ComputeHeroLockProfitSL`/`StripBrokerTPSLFromHeroTickets`
+- ไม่แตะ Single-Side Lock v1.45, Side-Alternation Lock v1.46, Post-close grace, External-close detection
+- ไม่แตะ v1.50 `oppRealized` gate, v1.51 Avg-TP intent flag (5 จุด set + Master TP safety + 60s expiry)
+- ไม่แตะ `IsHeroProtectedTicket` 9 guards
+- `InpHero_Enabled=false` → behavior เดิม
+- `InpHero_StickySet=true` → fallback v1.52 sticky behavior (no-op refresh + no demote restore)
