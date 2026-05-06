@@ -38,8 +38,8 @@
 //|  v1.40: Hero Order ported from Gold Miner v7.09                  |
 //+------------------------------------------------------------------+
 #property copyright "Golden Kuy3 EA"
-#property version   "1.55"
-#property description "Golden Kuy3 v1.55 — Hero TRUE Dynamic Refresh: InpHero_StickySet deprecated/ignored; Hero set is ALWAYS rebuilt every tick from current price-extreme so newly-opened tickets at better prices replace stale ones immediately on Dashboard + IsHeroProtectedTicket guards. v1.54 post-entry refresh preserved."
+#property version   "1.56"
+#property description "Golden Kuy3 v1.56 — Strict Side-Alternation + BE_GUARD Freeze: Hero set FROZEN once phase=BE_GUARD (Dynamic refresh ARMED-only). After a Hero closes, opposite side MUST be next Hero; original side cannot re-arm until opposite completes its Hero cycle. Dashboard shows Next Allowed."
 #property strict
 
 #include <Trade/Trade.mqh>
