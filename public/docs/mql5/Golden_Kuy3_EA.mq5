@@ -1,6 +1,10 @@
 //+------------------------------------------------------------------+
 //|                                            Golden_Kuy3_EA.mq5    |
-//|                                       Golden Kuy3 EA  v1.53      |
+//|                                       Golden Kuy3 EA  v1.54      |
+//|  v1.54: Live Hero Refresh After Entries — BuildHeroTicketCache    |
+//|         runs again after ManageInitialEntry/ManageGridEntry so    |
+//|         orders opened in the same tick are immediately considered |
+//|         for Hero price-extreme selection (no stale dashboard).    |
 //|  v1.53: Hero Dynamic Refresh + Demote Restore — Hero set tracks   |
 //|         current price-extreme every tick; demoted tickets get     |
 //|         their Initial TP restored + lock-profit SL cleared so     |
