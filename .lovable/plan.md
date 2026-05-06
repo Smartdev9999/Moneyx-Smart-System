@@ -1,53 +1,52 @@
-## แผน v1.59: Max Lot + Max DD Close (minimal)
+## ปัญหา (จากภาพ Dashboard v1.59)
 
-### Inputs ที่เพิ่ม (น้อยที่สุด)
+- Realized (cycle) = **$11,575.28**
+- Floating P/L (รวมทั้งบัญชี) = **$92,352.59**
+- Accumulate Target = **$50,000** (ON)
+- รวม realized + floating = **~$103,927** → เกิน target ไปไกลมาก แต่ Accumulate Close **ไม่ยิง**
 
-**Group ใหม่ `=== Risk Limits ===`**
-- `InpMaxLotPerOrder` (double, default 0) — 0 = ไม่จำกัด, ค่ามากกว่า 0 = cap lot ต่อ order
-- `ENUM_GK_DD_MODE { GK_DD_OFF=0, GK_DD_PERCENT=1, GK_DD_DOLLAR=2 }`
-- `InpMaxDDMode` (enum, default GK_DD_OFF)
-- `InpMaxDDValue` (double, default 20.0) — ความหมายตาม mode (% ของ balance หรือ $ floating loss)
+### สาเหตุ
+ใน `ManageTakeProfit()` บรรทัด 1563:
+```cpp
+double floatingAll = CalcSideFloating_NonHero(BUY) + CalcSideFloating_NonHero(SELL);
+if((g_realizedCycle + floatingAll) >= InpAccumulateTarget) ...
+```
+ใช้ **`_NonHero`** → ตัดกำไรของ Hero tickets (5 ตัวบนสุดของ SELL) ออก ซึ่งในเคสนี้ Hero ฝั่ง SELL ถือกำไรก้อนใหญ่ → floating ที่เห็นในสูตรเหลือน้อยกว่า threshold มาก จึงไม่ trigger
 
-แค่ 3 inputs
+ส่วน Gold Miner ใช้ `CalculateTotalFloatingPL()` ซึ่ง**รวมทุก position** → trigger ถูกต้อง ตามที่ผู้ใช้ต้องการ
 
-### การทำงาน
+## v1.60 — แก้ minimal
 
-**1. Max Lot per Order**
-- แก้ `CalcGridLot()` (line 1163) เพิ่ม cap ก่อน normalize:
-  - ถ้า `InpMaxLotPerOrder > 0` และ `out > InpMaxLotPerOrder` → `out = InpMaxLotPerOrder`
-- ป้องกัน lot โตเกินตอนคูณไปไกลๆ
-- ไม่กระทบ `InpInitialLot` หรือ FIXED/ADD/MULTIPLY logic
+**ไฟล์:** `public/docs/mql5/Golden_Kuy3_EA.mq5`
 
-**2. Max DD Close**
-- helper `ManageMaxDDClose()` รันต้น `OnTick` ก่อน `ManageTakeProfit`
-- ถ้า `InpMaxDDMode == GK_DD_OFF` → return
-- คำนวณ floating รวมทั้ง 2 ฝั่ง (รวม Hero ด้วยเพื่อความปลอดภัย)
-- เช็ค trigger:
-  - `GK_DD_PERCENT`: ถ้า `floating < 0` และ `|floating|/balance*100 >= InpMaxDDValue` → ยิง
-  - `GK_DD_DOLLAR`: ถ้า `floating <= -InpMaxDDValue` → ยิง
-- เมื่อ trigger:
-  - set `g_oppCloseIntent_AvgTP_Buy/Sell = true` (ให้ Hero ปิดตามตามกติกา v1.51/v1.57)
-  - เรียก `CloseAllOurs()` (ฟังก์ชันที่มีอยู่แล้ว)
-  - log throttled
-- ใช้ cooldown 30s ภายใน (hardcoded) กันยิงซ้ำ
+### 1. แก้ `ManageTakeProfit()` (line ~1561-1572)
+เปลี่ยน Accumulate ให้ใช้ floating **รวม Hero** (เหมือน Gold Miner):
+```cpp
+double floatingAll = CalcSideFloating(POSITION_TYPE_BUY) + CalcSideFloating(POSITION_TYPE_SELL);
+if((g_realizedCycle + floatingAll) >= InpAccumulateTarget){
+   ... // intent + CloseAllOurs() เดิม (CloseAllOurs ก็ปิด Hero อยู่แล้ว)
+}
+```
+ส่วน TP Dollar / TP %Bal / TP Points (ต่อฝั่ง) **คงเดิมใช้ `_NonHero`** เพราะเป็น per-side และ Hero ถูกออกแบบให้ไม่ trigger TP รายฝั่ง
 
-### Dashboard (1 บรรทัด)
-ใน section `=== TAKE PROFIT ===` เพิ่มหลัง row Accumulate:
-- `Risk Limits`: `MaxLot:1.00  DD:PERCENT 20.0% (curr 4.3%)`
-  - หรือ `MaxLot:OFF  DD:OFF` ถ้าปิดทั้งคู่
+### 2. Dashboard
+เพิ่มข้อมูลใน row Accumulate ให้เห็นว่ารวมแล้วเท่าไหร่:
+- เปลี่ยนจาก `Accumulate  ON  $50000` → `Accumulate  ON  $50000 (cur $103927)`
+- สีเขียวเมื่อ cur ≥ target (เกือบทันทีก่อนยิง)
 
-### Version bump v1.58 → v1.59
-- `#property version "1.59"`, description, header (สั้น), dashboard title
+### 3. Version bump v1.59 → v1.60
+- `#property version "1.60"`, description, header banner, dashboard title
+- log prefix `v1.60 ACCUM CLOSE` แทน `GK ACCUM CLOSE`
 
-### ไฟล์
-- `public/docs/mql5/Golden_Kuy3_EA.mq5`
-- create `mem://trading/golden-kuy3/v1-59-max-lot-and-max-dd-close`
+### 4. Memory
+- create `mem://trading/golden-kuy3/v1-60-accumulate-include-hero-floating`
 - update `mem://index.md`
 
-### สิ่งที่ไม่เปลี่ยนแปลง (กฎเหล็ก)
-- ไม่แตะ `OrderSend` / `trade.Buy` / `trade.Sell` / `trade.PositionClose` (ใช้ `CloseAllOurs()` เดิม)
-- ไม่แตะ Grid entry / new-candle gate / distance check / lot mode logic
-- ไม่แตะ Per-Order BE/Trail, Avg-TP, Avg-Trail strict 2-cross, Accumulate, Cost-Hit
-- ไม่แตะ Hero logic ทั้งหมด (Handoff Reserve, Conditional Lock, Alternation, Single-Side Lock, IsHeroProtectedTicket, ApplyHeroLockProfitSL, TP-event latch)
-- ไม่แตะ Auto re-entry / Init side mode
-- `InpMaxLotPerOrder=0` + `InpMaxDDMode=OFF` → behavior เหมือน v1.58 ทุกประการ
+## สิ่งที่ไม่เปลี่ยนแปลง (กฎเหล็ก)
+- ไม่แตะ `OrderSend` / `trade.*` / `CloseAllOurs()` / `CloseAllSide()`
+- ไม่แตะ Grid / new-candle / lot mode / Max Lot cap (v1.59) / Max DD Close (v1.59)
+- ไม่แตะ Per-Order BE/Trail, Avg-TP, Avg-Trail strict 2-cross, Cost-Hit
+- ไม่แตะ Hero logic ทั้งชุด (Handoff Reserve, Conditional Lock, Alternation, lock-profit SL, TP-event latch, Dynamic refresh, IsHeroProtectedTicket)
+- ไม่แตะ TP Dollar / TP %Bal / TP Points ต่อฝั่ง — ยังใช้ `_NonHero` เหมือนเดิม
+- ไม่แตะ `g_realizedCycle` accounting + `TryResetAccumulateCycleIfFlat` (v1.42)
+- ถ้า `InpUseAccumulateClose=false` → behavior เหมือน v1.59 ทุกบรรทัด
