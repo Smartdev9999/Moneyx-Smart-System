@@ -1,84 +1,71 @@
-## สาเหตุที่ยังเห็น Ticket Hero ค้างหลัง v1.53
-จากโค้ดตอนนี้ `BuildHeroTicketCache()` ทำ dynamic refresh เฉพาะตอนที่มันถูกเรียกช่วงต้น `OnTick()` เท่านั้น แต่ลำดับ `OnTick()` ปัจจุบันคือ:
+## แผนแก้ไข v1.55 — Hero Dynamic Refresh ให้เปลี่ยน Ticket จริง ไม่ล็อคค้าง
 
-```text
-BuildHeroTicketCache()
-ManageHeroOppositeClose()
-ManageCostHitRestart()
-ManageInitialEntry()
-ManageGridEntry()      <- ออเดอร์ใหม่อาจเกิดตรงนี้
-ManagePerOrderTrailing()
-ManageTakeProfit()
-...
-DrawDashboard()        <- dashboard ยังใช้ Hero cache จากก่อนเปิดออเดอร์ใหม่
-```
+จากโค้ดปัจจุบันพบจุดสำคัญว่า ถึงแม้ `InpHero_StickySet=false` แล้ว แต่โครงสร้างภายในยังใช้ `g_heroBuyStable/g_heroSellStable` แบบ “stable set” และมีคอมเมนต์/logic บางส่วนที่ยังยึดแนวคิด freeze จาก v1.49/v1.52 อยู่ ทำให้ในบางจังหวะ ticket เดิมยังถูกมองเป็น Hero ต่อ และ ticket ใหม่ที่ราคาดีกว่าไม่ถูกสลับเข้า Hero จริงทั้งบน Dashboard และใน guard ของออเดอร์จริง
 
-ดังนั้นถ้า Grid เปิด order SELL ใหม่ที่ราคาสูงกว่าใน `ManageGridEntry()` หลังจาก refresh ไปแล้ว รอบ tick เดียวกัน Dashboard จะยังโชว์ชุด Hero เก่า เช่น `#42 #41 #39 #29 #28` และ order ใหม่ยังไม่ถูกนำเข้า pool เพื่อคัด Hero จนกว่าจะ tick ถัดไปหรือจนกว่า `BuildHeroTicketCache()` ถูกเรียกใหม่จริง ๆ
+### เป้าหมายพฤติกรรมที่จะแก้
 
-อีกจุดที่ต้องปรับคือ comment/logic ยังอิงคำว่า stable/sticky หลายจุด ทำให้ถึงแม้ default `InpHero_StickySet=false` แล้ว แต่โครงสร้างยังทำงานแบบ cache set เก่าอยู่ในบางจังหวะ
+- SELL Hero ต้องเลือก ticket ที่ราคาเปิดสูงที่สุด N ใบเสมอ
+- BUY Hero ต้องเลือก ticket ที่ราคาเปิดต่ำที่สุด N ใบเสมอ
+- เมื่อมี order ใหม่ที่ “ดีกว่า” เข้ามา ต้องสลับ Hero set ทันทีใน tick เดียวกัน
+- Ticket ที่หลุดจาก Hero ต้องกลับไปเป็น non-Hero จริง: restore TP เดิม และล้าง SL lock-profit ที่มาจาก Hero
+- Ticket ที่เข้ามาเป็น Hero ใหม่ต้องถูกถอด TP ทันที เพื่อไม่ให้ basket TP/Avg TP ปิดผิดตัว
+- Dashboard `Tix SELL/Tix BUY` ต้องแสดงชุดเดียวกับที่ `IsHeroProtectedTicket()` ใช้งานจริง
 
-## แผนแก้ v1.54 — Live Hero Refresh After Entries
+### สิ่งที่จะเปลี่ยนในไฟล์ `public/docs/mql5/Golden_Kuy3_EA.mq5`
 
-### 1) เพิ่ม version เป็น v1.54 ทุกจุด
-- `#property version` 1.53 → 1.54
-- Header description ด้านบนไฟล์
-- `#property description`
-- Dashboard title `Golden Kuy3 v1.54` และ `HERO ORDER (v1.54)`
-- log init/deinit เป็น v1.54
+1. **เพิ่ม version เป็น v1.55 ทุกจุดตามกฎ EA**
+   - `#property version`
+   - `#property description`
+   - header comment
+   - Dashboard title / Hero panel
+   - log init/deinit และ log Hero ที่เกี่ยวข้อง
 
-### 2) แก้ `BuildHeroTicketCache()` ให้สื่อชัดว่า default คือ Dynamic ไม่ใช่ Sticky
-- เปลี่ยน comment จาก “STICKY stable sets chosen once” เป็น “dynamic price-extreme cache by default”
-- Branch active phase (`curPhase != 0`) จะคง logic เดิมของ v1.53: sort pool ใหม่ทุกครั้งตาม open price
-  - BUY: เลือก ticket ราคาต่ำสุด N ตัว
-  - SELL: เลือก ticket ราคาสูงสุด N ตัว
-- ถ้า `InpHero_StickySet=true` ยัง fallback เป็น v1.52 sticky เหมือนเดิม
+2. **แก้ `BuildHeroTicketCache()` Branch A ให้เป็น dynamic rebuild จริง**
+   - ตอน `curPhase != 0` และ `InpHero_StickySet=false`:
+     - scan order ฝั่งนั้นทั้งหมด
+     - sort ตาม price-extreme
+       - BUY: ราคาต่ำสุดก่อน
+       - SELL: ราคาสูงสุดก่อน
+     - เลือกจำนวน `InpHero_OrderCount`
+     - rebuild `g_heroBuyStable/g_heroSellStable` ใหม่ทุกครั้งจากผล sort
+   - เปลี่ยนชื่อ/คอมเมนต์ใน log จาก `STABLE/FROZEN` ให้ชัดว่าเป็น `DYNAMIC PRICE-EXTREME`
 
-### 3) เรียก refresh ซ้ำหลัง order-entry modules
-เพิ่ม `BuildHeroTicketCache()` รอบที่ 2 หลัง `ManageInitialEntry()` และ `ManageGridEntry()` เพื่อให้ order ที่เพิ่งเปิดใน tick เดียวกันถูกนำมาคัด Hero ทันทีก่อน TP/Trail/Dashboard ทำงาน:
+3. **แก้ activation ครั้งแรกให้สอดคล้องกับ dynamic mode**
+   - ตอน phase ยังเป็น `NONE`:
+     - ถ้า `InpHero_StickySet=false` ใช้ `take = MathMin(InpHero_OrderCount, nPool)` เพื่อให้ Hero นับครบ N ใบจริงตามที่ Dashboard แสดง
+     - ถ้า `InpHero_StickySet=true` คงพฤติกรรมเดิมแบบ fallback sticky ได้
+   - ยังคง activation threshold (`InpHero_MinOrdersToActivate`) เดิม ไม่เปลี่ยนเงื่อนไขการเริ่ม Hero
 
-```text
-BuildHeroTicketCache();      // pre-pass: ใช้ guard Hero ก่อน logic อื่น
-ManageHeroOppositeClose();
-ManageCostHitRestart();
-ManageInitialEntry();
-ManageGridEntry();
-BuildHeroTicketCache();      // v1.54 post-entry refresh: จับ order ใหม่ทันที
-ManageHeroOppositeClose();   // apply strip/BE guard ให้ Hero set ใหม่ทันที
-ManagePerOrderTrailing();
-ManageTakeProfit();
-ManageAverageTrailing();
-...
-DrawDashboard();
-```
+4. **ทำ sync ตอน Hero set เปลี่ยนให้ครบทั้ง demote และ promote**
+   - คง `RestoreInitialTPOnDemoted()` ไว้ แต่จะให้ทำงานทุกครั้งที่มี ticket หลุดจาก Hero set
+   - เพิ่ม helper สำหรับ ticket ที่ถูก promote เข้า Hero ใหม่ ให้ถอด TP ทันที (`TP=0`) โดยคง SL เดิมไว้ใน ARMED phase ตามกฎ v1.45
+   - ถ้าอยู่ BE_GUARD แล้วมี Hero set เปลี่ยน จะ reset `g_heroBE_Applied_* = false` เพื่อให้ `ApplyHeroLockProfitSL()` ลง SL lock-profit ให้ ticket Hero ชุดใหม่
 
-ผลคือ ถ้า SELL ใหม่เปิดสูงกว่า หลัง `ManageGridEntry()` จะถูก refresh เข้า Hero set ทันทีใน tick เดียวกัน ไม่ต้องรอ tick ถัดไป และ Dashboard/TP/Trailing จะเห็นชุด Hero ใหม่ทันที
+5. **ป้องกัน dashboard/guard ใช้ข้อมูลคนละชุด**
+   - หลัง rebuild จะสร้าง `g_heroTickets[]` จาก stable set ล่าสุดทันที
+   - Dashboard ticket list จะอ่านจากชุดล่าสุดเดียวกัน
+   - เพิ่ม audit log แบบ throttle แสดง `oldSet -> newSet` พร้อม price เพื่อยืนยันว่ามีการสลับจริง เช่น SELL ควรเห็น ticket ราคาสูงสุดล่าสุดเข้ามาแทน ticket เก่า
 
-### 4) เพิ่ม helper ป้องกันการ modify ซ้ำเกินจำเป็นตอน demote restore
-ปรับ `RestoreInitialTPOnDemoted()` ให้ตรวจค่าปัจจุบันก่อน `PositionModify()`:
-- ถ้า SL เป็น 0 อยู่แล้ว และ TP เท่าค่าเป้าหมายอยู่แล้ว ให้ skip
-- ลด log/modify spam เมื่อ dynamic refresh เปลี่ยนชุดบ่อย
-- ยังคงหลัก v1.53: ticket ที่หลุดจาก Hero จะถูกล้าง lock-SL และกลับไปเป็น non-Hero basket
+6. **คง `InpHero_StickySet=true` เป็นโหมด fallback เท่านั้น**
+   - หากผู้ใช้ตั้งค่าเป็น true จะยังกลับไปพฤติกรรม freeze แบบ v1.52 ได้
+   - แต่ default จะยังเป็น false และ dashboard จะแสดงให้ชัดว่า mode เป็น Dynamic ไม่ใช่ Sticky
 
-### 5) เพิ่ม audit log สำหรับ post-entry refresh
-เพิ่ม log แบบ throttle 10–30 วินาทีเมื่อ set เปลี่ยนหลังเปิด order เพื่อให้ตรวจใน Journal ได้ว่า:
-```text
-v1.54 Hero POST-ENTRY REFRESH side=SELL topN=#...@price ...
-```
-และ dashboard ยังโชว์ `Tick SELL` จาก stable array ล่าสุด
+### สิ่งที่ไม่เปลี่ยนแปลง / ไม่กระทบ Trading Logic
 
-## ผลลัพธ์ที่คาดหวัง
-- ถ้า Hero SELL กำหนด N=5 และมี SELL ใหม่ที่ราคาสูงกว่าเข้ามา ชุด Hero จะเลื่อนเป็น 5 ticket ราคาสูงสุดทันที
-- ticket เก่าที่ถูกดันออกจาก Hero จะกลับไปเป็น non-Hero และปิดร่วมกับ Average TP ของฝั่ง SELL ได้
-- Dashboard จะไม่ค้างที่ ticket เก่าแบบในภาพ หลัง order ใหม่ถูกเปิดใน tick เดียวกัน
-- Alternation Lock ยังเหมือนเดิม: ฝั่งที่เพิ่งปิด Hero ต้องสลับไปอีกฝั่งก่อน หรือรอฝั่งเดิม flat ตามกติกาเดิม
+- ไม่แก้ `trade.Buy`, `trade.Sell`, `OrderSend`, logic เปิดออเดอร์
+- ไม่แก้เงื่อนไข Grid entry / Grid lot / Grid distance
+- ไม่แก้ Per-order trailing, BE, TP, SL calculation
+- ไม่แก้ Average TP / Average Trailing strict 2-cross
+- ไม่แก้ Accumulate close / Cost-Hit Restart
+- ไม่แก้ logic ปิดออเดอร์ Hero (`CloseHeroOnSide`) ยกเว้นการทำให้ ticket ที่เป็น Hero จริงตรงกับชุด dynamic ล่าสุด
+- ไม่แก้ Side-Alternation v1.46 และ Single-Side Lock v1.45
+- ไม่แก้ gate v1.50/v1.51 ที่ให้ Hero ปิดเฉพาะเมื่อ opposite basket ปิดด้วย Avg-TP/Avg-Trail/Master TP/Accumulate
 
-## สิ่งที่ไม่เปลี่ยนแปลง
-- ไม่แก้ `trade.Buy`, `trade.Sell`, `trade.PositionClose`, `OrderSend`
-- ไม่แก้เงื่อนไขเปิดออเดอร์, grid entry, lot multiplier, grid distance
-- ไม่แก้ Per-Order BE/Trail/SL/TP/Cost-Hit calculation
-- ไม่แก้ Avg-TP / Avg-Trailing strict-2-cross / Accumulate logic
-- ไม่แก้ `ApplyHeroLockProfitSL()` และสูตร lock-profit SL
-- ไม่แก้ Side-Alternation v1.46, Single-Side Lock v1.45, Post-close grace
-- ไม่แก้ v1.51 Avg-TP intent gate ที่ป้องกัน Hero ปิดจาก Per-Order SL/Trail/Cost-Hit
-- `InpHero_Enabled=false` ยัง behavior เดิม
-- `InpHero_StickySet=true` ยังใช้ fallback sticky แบบ v1.52
+### ผลลัพธ์ที่คาดหวัง
+
+จากเคสในรูปที่ SELL มี active 36 และ Hero=5:
+
+- `Tix SELL` จะต้องอัปเดตเป็น 5 ticket ที่ราคา SELL สูงสุดล่าสุด ไม่ค้างที่ `#42 #41 #39 #29 #28`
+- Ticket SELL เดิมที่ไม่ติด top 5 แล้ว จะกลับไปเป็น non-Hero และมี TP/SL ตามระบบปกติ
+- Ticket SELL ใหม่ที่ราคาสูงกว่า จะถูก protect เป็น Hero จริงทั้ง Dashboard และ guard (`IsHeroProtectedTicket`) ใน tick เดียวกัน
+- ไม่มีการล็อค Hero ตาม ticket เก่าอีกต่อไปใน dynamic mode
