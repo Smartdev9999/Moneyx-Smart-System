@@ -1873,11 +1873,11 @@ void DrawDashboard()
    DashRow("Restart Pending", StringFormat("BUY:%s  SELL:%s", rpB, rpS),
            (g_costHit_Pending_Buy||g_costHit_Pending_Sell)?warn:info);
 
-   DashHeader("=== HERO ORDER (v1.57) ===");
-   DashRow("Hero Cfg", StringFormat("%s  N=%d minAct=%d BE=%dpt  Mode=ARMED-DYN Lock=%s Alt=%s",
+   DashHeader("=== HERO ORDER (v1.58) ===");
+   DashRow("Hero Cfg", StringFormat("%s  N=%d minAct=%d BE=%dpt  Mode=HANDOFF Lock=%s Alt=%s",
                           OnOff(InpHero_Enabled), InpHero_OrderCount,
                           InpHero_MinOrdersToActivate, InpHero_BE_OffsetPoints,
-                          (InpHero_SingleSideLock?"STRICT":"OFF"),
+                          (InpHero_SingleSideLock?"COND":"OFF"),
                           (InpHero_AlternateSides?"ON":"OFF")),
                           (InpHero_Enabled?gold:warn));
    {
@@ -1887,12 +1887,18 @@ void DrawDashboard()
                       : (g_heroPhase_Buy == 2 || g_heroPhase_Sell == 2) ? "NONE (waiting close)" : "NONE";
       color ownClr = (ownerSide >= 0) ? gold : ((g_heroPhase_Buy==2||g_heroPhase_Sell==2)?warn:info);
       DashRow("Hero Owner", ownerStr, ownClr);
+      // v1.58 Reserve = ARMED side opposite to current Owner
+      string reserveStr = "-";
+      color  reserveClr = info;
+      if(ownerSide == (int)POSITION_TYPE_BUY  && g_heroPhase_Sell == 2) { reserveStr = "SELL armed (reserve)"; reserveClr = gold; }
+      if(ownerSide == (int)POSITION_TYPE_SELL && g_heroPhase_Buy  == 2) { reserveStr = "BUY armed (reserve)";  reserveClr = gold; }
+      DashRow("Handoff Reserve", reserveStr, reserveClr);
       string lcStr = (g_heroLastClosedSide == (int)POSITION_TYPE_BUY)  ? "BUY"
                    : (g_heroLastClosedSide == (int)POSITION_TYPE_SELL) ? "SELL" : "-";
       DashRow("Last Closed", lcStr, (g_heroLastClosedSide>=0?warn:info));
       string nextStr = (g_heroNextAllowedSide == (int)POSITION_TYPE_BUY)  ? "BUY only"
-                     : (g_heroNextAllowedSide == (int)POSITION_TYPE_SELL) ? "SELL only" : "ANY";
-      DashRow("Next Allowed", nextStr, (g_heroNextAllowedSide>=0?warn:info));
+                     : (g_heroNextAllowedSide == (int)POSITION_TYPE_SELL) ? "SELL only" : "ANY (no lock)";
+      DashRow("Next Allowed", nextStr, (g_heroNextAllowedSide>=0?warn:ok));
       string tpEvStr = "-";
       if(g_oppTPEvent_HeroBuy)  tpEvStr = "SELL->BUY (waiting close)";
       if(g_oppTPEvent_HeroSell) tpEvStr = (tpEvStr=="-") ? "BUY->SELL (waiting close)" : "BOTH";
