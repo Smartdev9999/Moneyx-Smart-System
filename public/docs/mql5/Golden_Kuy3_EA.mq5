@@ -1382,10 +1382,11 @@ void DrawDashboard()
    DashRow("Restart Pending", StringFormat("BUY:%s  SELL:%s", rpB, rpS),
            (g_costHit_Pending_Buy||g_costHit_Pending_Sell)?warn:info);
 
-   DashHeader("=== HERO ORDER (v7.09) ===");
-   DashRow("Hero Cfg", StringFormat("%s  N=%d minAct=%d BE=%dpt",
+   DashHeader("=== HERO ORDER (v1.43) ===");
+   DashRow("Hero Cfg", StringFormat("%s  N=%d minAct=%d BE=%dpt  Mode=PRICE_EXTREME Lock=%s",
                           OnOff(InpHero_Enabled), InpHero_OrderCount,
-                          InpHero_MinOrdersToActivate, InpHero_BE_OffsetPoints),
+                          InpHero_MinOrdersToActivate, InpHero_BE_OffsetPoints,
+                          (InpHero_SingleSideLock?"STRICT":"OFF")),
                           (InpHero_Enabled?gold:warn));
    {
       int ownerSide = GetHeroOwnerSide();
