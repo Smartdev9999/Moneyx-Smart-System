@@ -518,7 +518,9 @@ void BuildHeroTicketCache()
                ulong  _k = tkPool[b]; tkPool[b] = tkPool[b-1]; tkPool[b-1] = _k;
             }
 
-         int takeA = MathMin(InpHero_OrderCount, nPool - 1); // keep ≥1 non-Hero
+         // v1.49: Hero already active — keep ALL stable tickets even when basket shrinks to Hero-only.
+         //        Branch B (activation) still uses (nPool-1) to ensure ≥1 non-Hero at first promotion.
+         int takeA = MathMin(InpHero_OrderCount, nPool); // v1.49 — was nPool-1; let Hero survive alone
          if(takeA <= 0) { sideHeroTagged[s] = 0; continue; }
 
          // Snapshot prev set for diff log
