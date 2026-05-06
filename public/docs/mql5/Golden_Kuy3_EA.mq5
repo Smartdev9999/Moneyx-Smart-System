@@ -1,6 +1,7 @@
 //+------------------------------------------------------------------+
 //|                                            Golden_Kuy3_EA.mq5    |
-//|                                       Golden Kuy3 EA  v1.45      |
+//|                                       Golden Kuy3 EA  v1.46      |
+//|  v1.46: Hero Side-Alternation Lock — ห้าม re-arm ฝั่งเดิมจนสลับ   |
 //|  v1.45: Hero CANDIDATE strips TP only (keeps SL cost-lock)        |
 //|  v1.43: Hero Price-Extreme select + Strict Single-Side Lock      |
 //|  v1.42: Accumulate cycle auto-reset on flat (Gold Miner concept) |
