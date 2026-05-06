@@ -1710,6 +1710,33 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
                          + HistoryDealGetDouble(trans.deal, DEAL_COMMISSION);
                g_realizedCycle += pr;
 
+               // v1.50 — Accumulate opp-basket realized P/L per Hero side.
+               //  When a non-Hero ticket of side X closes, attribute P/L to Hero of opp(X) if armed.
+               if(InpHero_Enabled){
+                  long dealTypeH = HistoryDealGetInteger(trans.deal, DEAL_TYPE);
+                  int closedSideH = (dealTypeH == DEAL_TYPE_SELL) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
+                  ulong posTicketH = (ulong)trans.position;
+                  bool wasHero = IsHeroProtectedTicket(posTicketH);
+                  if(!wasHero){
+                     // Closed ticket is opp basket relative to Hero on the OTHER side.
+                     int heroSide = (closedSideH == POSITION_TYPE_BUY) ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
+                     int heroPhase = (heroSide == POSITION_TYPE_BUY) ? g_heroPhase_Buy : g_heroPhase_Sell;
+                     if(heroPhase == 2 || heroPhase == 3){
+                        if(heroSide == POSITION_TYPE_BUY){
+                           g_oppBasketRealized_HeroBuy  += pr;
+                           g_oppBasketLastDealTime_HeroBuy = TimeCurrent();
+                        } else {
+                           g_oppBasketRealized_HeroSell += pr;
+                           g_oppBasketLastDealTime_HeroSell = TimeCurrent();
+                        }
+                        Print("v1.50 OppBasket dealOut heroSide=", (heroSide==POSITION_TYPE_BUY?"BUY":"SELL"),
+                              " closedSide=", (closedSideH==POSITION_TYPE_BUY?"BUY":"SELL"),
+                              " pr=", DoubleToString(pr,2),
+                              " accum=", DoubleToString(heroSide==POSITION_TYPE_BUY?g_oppBasketRealized_HeroBuy:g_oppBasketRealized_HeroSell,2));
+                     }
+                  }
+               }
+
                // v1.2 Cost-Hit detection: was this deal closed by SL or TP?
                if(InpEnableCostHitRestart){
                   long reason = HistoryDealGetInteger(trans.deal, DEAL_REASON);
