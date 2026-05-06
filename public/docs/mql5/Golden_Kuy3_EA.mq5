@@ -467,6 +467,8 @@ void RestoreInitialTPOnDemoted(const ulong &prevSet[], int prevCnt,
       if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
 
       double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+      double curSL     = PositionGetDouble(POSITION_SL);
+      double curTP     = PositionGetDouble(POSITION_TP);
       double newTP = 0.0;
       if(InpUseTakeProfit && !InpUseTPPoints && InpInitialTPPips > 0) {
          double minStop = GetMinStopPrice();
@@ -476,6 +478,9 @@ void RestoreInitialTPOnDemoted(const ulong &prevSet[], int prevCnt,
       // Clear lock-profit SL we placed earlier; per-order BE/Trail/Cost-Hit will
       // re-apply their own SL on later ticks if enabled.
       double newSL = 0.0;
+      // v1.54 — idempotency: skip modify when state already matches target
+      if(NormalizeDouble(curSL, g_digits) == NormalizeDouble(newSL, g_digits) &&
+         NormalizeDouble(curTP, g_digits) == NormalizeDouble(newTP, g_digits)) continue;
       if(trade.PositionModify(tk, newSL, newTP)) {
          restored++;
          demotedLog += StringFormat(" #%I64u@open=%s->TP=%s",
@@ -484,7 +489,7 @@ void RestoreInitialTPOnDemoted(const ulong &prevSet[], int prevCnt,
       }
    }
    if(restored > 0)
-      Print("v1.53 Hero DEMOTE restore side=", EnumToString(side),
+      Print("v1.54 Hero DEMOTE restore side=", EnumToString(side),
             " count=", restored, " (TP restored, lock-SL cleared):", demotedLog);
 }
 
