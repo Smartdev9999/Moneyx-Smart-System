@@ -587,11 +587,16 @@ void BuildHeroTicketCache()
       int curPhase = (sideId == POSITION_TYPE_BUY) ? g_heroPhase_Buy : g_heroPhase_Sell;
       int stableN  = GetStableCount(sideId);
 
-      // ===== Branch A v1.55: phase active — ALWAYS rebuild Hero set every tick by price-extreme =====
-      // v1.55: InpHero_StickySet is DEPRECATED/IGNORED. Hero set must always reflect the current
-      //        best price-extreme so brand-new tickets at better prices immediately replace
-      //        stale Hero tickets. Demote-restore returns demoted tickets to normal basket.
-      if(curPhase != 0) {
+      // ===== Branch A v1.56: phase active =====
+      // v1.56: Dynamic Price-Extreme refresh ONLY when phase == ARMED (2).
+      //        When phase == BE_GUARD (3) the Hero set is FROZEN — new same-side tickets
+      //        opened after the non-Hero basket closed are NOT allowed to extend Hero ownership.
+      //        PruneStableSet (STEP 1) already removed closed tickets; nothing else to do.
+      if(curPhase == 3) {
+         sideHeroTagged[s] = stableN;
+         continue;
+      }
+      if(curPhase == 2) {
          if(nPool <= 0) { sideHeroTagged[s] = 0; continue; }
 
          // Sort pool by price-extreme (BUY ascending lowest first / SELL descending highest first)
@@ -634,13 +639,8 @@ void BuildHeroTicketCache()
             string newList = "";
             for(int k = 0; k < takeA; k++)
                newList += StringFormat(" #%I64u@%s", tkPool[k], DoubleToString(pxPool[k], g_digits));
-            Print("v1.55 Hero DYNAMIC REFRESH side=", (sideId==POSITION_TYPE_BUY?"BUY":"SELL"),
-                  " phase=", (curPhase==3?"BE_GUARD":"ARMED"), " count=", takeA, " new set:", newList);
-            if(curPhase == 3) {
-               // BE_GUARD: new entrants need lock-profit SL re-applied
-               if(sideId == POSITION_TYPE_BUY) g_heroBE_Applied_Buy = false;
-               else                            g_heroBE_Applied_Sell = false;
-            }
+            Print("v1.56 Hero DYNAMIC REFRESH (ARMED only) side=", (sideId==POSITION_TYPE_BUY?"BUY":"SELL"),
+                  " count=", takeA, " new set:", newList);
             // Demote restore: tickets pushed out get Initial TP back + lock-SL cleared
             RestoreInitialTPOnDemoted(prevSet, prevCnt, tkPool, takeA, (ENUM_POSITION_TYPE)sideId);
          }
