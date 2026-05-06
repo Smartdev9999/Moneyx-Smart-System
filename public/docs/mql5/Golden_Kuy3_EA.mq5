@@ -1,15 +1,19 @@
 //+------------------------------------------------------------------+
 //|                                            Golden_Kuy3_EA.mq5    |
-//|                                       Golden Kuy3 EA  v1.46      |
-//|  v1.46: Hero Side-Alternation Lock — ห้าม re-arm ฝั่งเดิมจนสลับ   |
-//|  v1.45: Hero CANDIDATE strips TP only (keeps SL cost-lock)        |
+//|                                       Golden Kuy3 EA  v1.47      |
+//|  v1.47: Strict Hero Ticket Ownership — sticky stable sets per-side|
+//|         + extended alternation guard (broker close detected)     |
+//|         + DrawAvgAndTPLines uses non-Hero average                 |
+//|  v1.46: Hero Side-Alternation Lock                                |
+//|  v1.45: Hero CANDIDATE vs OWNER (BE_GUARD only)                   |
+//|  v1.44: Hero CANDIDATE strips TP only (keeps SL cost-lock)        |
 //|  v1.43: Hero Price-Extreme select + Strict Single-Side Lock      |
 //|  v1.42: Accumulate cycle auto-reset on flat (Gold Miner concept) |
 //|  v1.40: Hero Order ported from Gold Miner v7.09                  |
 //+------------------------------------------------------------------+
 #property copyright "Golden Kuy3 EA"
-#property version   "1.46"
-#property description "Golden Kuy3 v1.46 — Hero Side-Alternation Lock: ฝั่งที่เพิ่งปิด Hero ห้าม re-arm จนกว่าฝั่งตรงข้ามจะ Hero หรือฝั่งเดิม flat"
+#property version   "1.47"
+#property description "Golden Kuy3 v1.47 — Strict Hero Ticket Ownership: stable sticky Hero sets per side; broker/SL/TP close also stamps last-closed for hard side-alternation"
 #property strict
 
 #include <Trade/Trade.mqh>
