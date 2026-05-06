@@ -421,7 +421,8 @@ void BuildHeroTicketCache()
                               ? InpHero_MinOrdersToActivate
                               : (InpHero_OrderCount + 1);
 
-      // v1.44 STRICT Single-side lock — block ARMED ก่อน BE_GUARD ก็ block
+      // v1.45 STRICT Single-side lock — block ใหม่เฉพาะเมื่อมี OWNER จริง (BE_GUARD)
+      //         ARMED ทั้งสองฝั่งสามารถทำงานคู่กันได้จนกว่าฝั่งใดฝั่งหนึ่งถึง BE_GUARD
       if(InpHero_SingleSideLock && curPhase == 0 && activeOwner >= 0 && sideId != activeOwner) {
          if(sideId == POSITION_TYPE_BUY) g_heroPhase_Buy = 0; else g_heroPhase_Sell = 0;
          continue;
