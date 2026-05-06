@@ -621,6 +621,11 @@ void ResetHeroStateIfFlat(ENUM_POSITION_TYPE side)
          Print("v1.4 Hero RESET side=SELL (flat)");
       g_heroPhase_Sell = 0; g_heroBE_Applied_Sell = false;
    }
+   // v1.46 — เคลียร์ alternation lock เมื่อฝั่งที่เพิ่งปิดกลับมา flat สนิท
+   if(g_heroLastClosedSide == (int)side) {
+      Print("v1.46 Hero ALTERNATION CLEAR — side=", EnumToString(side), " is flat");
+      g_heroLastClosedSide = -1;
+   }
 }
 
 // v6.96 Master orchestrator — runs every tick after BuildHeroTicketCache().
