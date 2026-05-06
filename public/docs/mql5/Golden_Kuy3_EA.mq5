@@ -1811,8 +1811,8 @@ void DrawDashboard()
    DashRow("Restart Pending", StringFormat("BUY:%s  SELL:%s", rpB, rpS),
            (g_costHit_Pending_Buy||g_costHit_Pending_Sell)?warn:info);
 
-   DashHeader("=== HERO ORDER (v1.55) ===");
-   DashRow("Hero Cfg", StringFormat("%s  N=%d minAct=%d BE=%dpt  Mode=DYNAMIC Lock=%s Alt=%s",
+   DashHeader("=== HERO ORDER (v1.56) ===");
+   DashRow("Hero Cfg", StringFormat("%s  N=%d minAct=%d BE=%dpt  Mode=ARMED-DYN Lock=%s Alt=%s",
                           OnOff(InpHero_Enabled), InpHero_OrderCount,
                           InpHero_MinOrdersToActivate, InpHero_BE_OffsetPoints,
                           (InpHero_SingleSideLock?"STRICT":"OFF"),
@@ -1828,6 +1828,9 @@ void DrawDashboard()
       string lcStr = (g_heroLastClosedSide == (int)POSITION_TYPE_BUY)  ? "BUY"
                    : (g_heroLastClosedSide == (int)POSITION_TYPE_SELL) ? "SELL" : "-";
       DashRow("Last Closed", lcStr, (g_heroLastClosedSide>=0?warn:info));
+      string nextStr = (g_heroNextAllowedSide == (int)POSITION_TYPE_BUY)  ? "BUY only"
+                     : (g_heroNextAllowedSide == (int)POSITION_TYPE_SELL) ? "SELL only" : "ANY";
+      DashRow("Next Allowed", nextStr, (g_heroNextAllowedSide>=0?warn:info));
    }
    {
       string phaseB = (g_heroPhase_Buy == 3) ? "BE_GUARD" : (g_heroPhase_Buy == 2) ? "ARMED" : "WAIT";
