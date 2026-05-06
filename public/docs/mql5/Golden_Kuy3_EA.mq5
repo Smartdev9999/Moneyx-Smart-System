@@ -1901,6 +1901,14 @@ void DrawDashboard()
                            (InpUseTPPercentBalance?ok:warn));
    DashRow("Accumulate",   StringFormat("%s  $%.0f", OnOff(InpUseAccumulateClose), InpAccumulateTarget),
                            (InpUseAccumulateClose?ok:warn));
+   // v1.59 — Risk Limits one-liner
+   string mlStr = (InpMaxLotPerOrder>0 ? StringFormat("%.2f", InpMaxLotPerOrder) : "OFF");
+   string ddStr;
+   if(InpMaxDDMode == GK_DD_OFF)        ddStr = "OFF";
+   else if(InpMaxDDMode == GK_DD_PERCENT) ddStr = StringFormat("PCT %.1f%% (cur %.2f%%)", InpMaxDDValue, g_maxDD_CurrPct);
+   else                                  ddStr = StringFormat("USD $%.0f (cur $%.2f)",  InpMaxDDValue, g_maxDD_CurrAbs);
+   bool riskOn = (InpMaxLotPerOrder>0 || InpMaxDDMode!=GK_DD_OFF);
+   DashRow("Risk Limits",  StringFormat("MaxLot:%s  DD:%s", mlStr, ddStr), (riskOn?ok:warn));
 
    DashHeader("=== AVG TRAIL STATE ===");
    DashRow("BUY",  StringFormat("%s  SL:%s", AvgTrailStateStr(g_avgTrail_Active_Buy, g_avgTrail_ArmReady_Buy),
