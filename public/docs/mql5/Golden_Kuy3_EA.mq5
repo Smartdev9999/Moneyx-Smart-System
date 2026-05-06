@@ -1,6 +1,11 @@
 //+------------------------------------------------------------------+
 //|                                            Golden_Kuy3_EA.mq5    |
-//|                                       Golden Kuy3 EA  v1.54      |
+//|                                       Golden Kuy3 EA  v1.55      |
+//|  v1.55: Hero TRUE Dynamic Refresh — InpHero_StickySet deprecated  |
+//|         (ignored). Branch A always rebuilds Hero set every tick   |
+//|         from current price-extreme. Dashboard shows Mode=DYNAMIC. |
+//|         Fixes stale Hero ticket lock when old .set file forced    |
+//|         StickySet=true.                                           |
 //|  v1.54: Live Hero Refresh After Entries — BuildHeroTicketCache    |
 //|         runs again after ManageInitialEntry/ManageGridEntry so    |
 //|         orders opened in the same tick are immediately considered |
@@ -28,8 +33,8 @@
 //|  v1.40: Hero Order ported from Gold Miner v7.09                  |
 //+------------------------------------------------------------------+
 #property copyright "Golden Kuy3 EA"
-#property version   "1.54"
-#property description "Golden Kuy3 v1.54 — Live Hero Refresh After Entries: BuildHeroTicketCache re-runs after order-entry modules so Hero price-extreme selection picks up brand-new tickets in the same tick (dashboard never stale). v1.53 dynamic refresh + demote-restore preserved."
+#property version   "1.55"
+#property description "Golden Kuy3 v1.55 — Hero TRUE Dynamic Refresh: InpHero_StickySet deprecated/ignored; Hero set is ALWAYS rebuilt every tick from current price-extreme so newly-opened tickets at better prices replace stale ones immediately on Dashboard + IsHeroProtectedTicket guards. v1.54 post-entry refresh preserved."
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -112,7 +117,7 @@ input bool   InpHero_RequireNetProfit   = false;  // [DEPRECATED] not used (lock
 input bool   InpHero_OppCloseRequireTP    = true;   // v1.50 — close Hero ONLY when opp basket realized > min profit
 input double InpHero_OppCloseMinProfit    = 0.0;    // v1.50 — minimum opp realized profit to qualify as TP close ($)
 input bool   InpHero_OppCloseRequireAvgTP = true;   // v1.51 — close Hero ONLY when opp basket flattened by Avg-TP/Avg-Trail/Master TP/Accumulate (intent flag); Per-Order Trail/SL/Cost-Hit do NOT count
-input bool   InpHero_StickySet              = false;  // v1.53 — default OFF (Dynamic Refresh + Demote Restore). true = v1.52 sticky-set fallback (Hero frozen at activation)
+input bool   InpHero_StickySet              = false;  // v1.55 — [DEPRECATED/IGNORED] Hero set is always rebuilt every tick from price-extreme. Kept only for .set file backward compatibility.
 
 input group "=== Chart Lines ==="
 input bool                 InpShowAvgLine             = true;
