@@ -926,7 +926,11 @@ void CloseHeroOnSide(ENUM_POSITION_TYPE side, string reason)
    }
    // v1.46 Side-Alternation Lock — จำฝั่งที่เพิ่งปิด Hero
    g_heroLastClosedSide = (int)side;
-   Print("v1.49 Hero LAST-CLOSED side=", EnumToString(side), " — opp side must Hero next or self must flat");
+   // v1.56 — บังคับฝั่งตรงข้ามให้เป็น Hero รอบถัดไปเท่านั้น
+   g_heroNextAllowedSide = (side == POSITION_TYPE_BUY) ? (int)POSITION_TYPE_SELL : (int)POSITION_TYPE_BUY;
+   Print("v1.56 Hero LAST-CLOSED side=", EnumToString(side),
+         " — NEXT-ALLOWED=", (g_heroNextAllowedSide==(int)POSITION_TYPE_BUY?"BUY":"SELL"),
+         " (opposite must complete its own Hero cycle before this side can re-arm)");
 }
 
 bool DetectSameSideBasketClearedForHero(ENUM_POSITION_TYPE side)
