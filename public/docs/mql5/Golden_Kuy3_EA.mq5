@@ -870,6 +870,19 @@ void ManageHeroOppositeClose()
 
    StripBrokerTPSLFromHeroTickets();
 
+   // v1.51 — auto-expire stale Avg-TP intent flags (basket re-armed without consuming flag, 60s timeout)
+   {
+      datetime now = TimeCurrent();
+      if(g_oppCloseIntent_AvgTP_Buy && CountNonHeroMainOnSide(POSITION_TYPE_BUY) > 0
+         && now - g_oppCloseIntentTime_Buy > 60) {
+         Print("v1.51 Avg-TP intent EXPIRED side=BUY (basket re-armed)"); g_oppCloseIntent_AvgTP_Buy = false;
+      }
+      if(g_oppCloseIntent_AvgTP_Sell && CountNonHeroMainOnSide(POSITION_TYPE_SELL) > 0
+         && now - g_oppCloseIntentTime_Sell > 60) {
+         Print("v1.51 Avg-TP intent EXPIRED side=SELL (basket re-armed)"); g_oppCloseIntent_AvgTP_Sell = false;
+      }
+   }
+
    for(int s = 0; s < 2; s++) {
       ENUM_POSITION_TYPE side = (s == 0) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
       bool already = (side == POSITION_TYPE_BUY) ? g_heroBE_Applied_Buy : g_heroBE_Applied_Sell;
