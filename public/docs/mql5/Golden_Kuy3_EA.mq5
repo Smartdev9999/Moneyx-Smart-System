@@ -773,11 +773,15 @@ void BuildHeroTicketCache()
       Print("v1.49 Hero AUTO-RELEASE BUY: phase=BE_GUARD but stable set empty — releasing owner lock");
       g_heroPhase_Buy = 0; g_heroBE_Applied_Buy = false; g_heroJustClosed_Buy = TimeCurrent();
       g_heroLastClosedSide = (int)POSITION_TYPE_BUY;
+      g_heroNextAllowedSide = (int)POSITION_TYPE_SELL; // v1.56 — opposite must take next turn
+      Print("v1.56 Hero NEXT-ALLOWED set to SELL after BUY auto-release");
    }
    if(g_heroPhase_Sell == 3 && g_heroSellStableN == 0) {
       Print("v1.49 Hero AUTO-RELEASE SELL: phase=BE_GUARD but stable set empty — releasing owner lock");
       g_heroPhase_Sell = 0; g_heroBE_Applied_Sell = false; g_heroJustClosed_Sell = TimeCurrent();
       g_heroLastClosedSide = (int)POSITION_TYPE_SELL;
+      g_heroNextAllowedSide = (int)POSITION_TYPE_BUY; // v1.56 — opposite must take next turn
+      Print("v1.56 Hero NEXT-ALLOWED set to BUY after SELL auto-release");
    }
 
    // Phase fallback: keep ARMED if stable set populated, drop to NONE only if empty (BE_GUARD respected)
