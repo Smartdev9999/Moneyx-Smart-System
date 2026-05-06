@@ -1,6 +1,8 @@
 //+------------------------------------------------------------------+
 //|                                            Golden_Kuy3_EA.mq5    |
-//|                                       Golden Kuy3 EA  v1.49      |
+//|                                       Golden Kuy3 EA  v1.50      |
+//|  v1.50: Hero TP-Only Opposite Close — Hero closes only when opp   |
+//|         basket flattened with realized profit (TP); SL/loss=hold  |
 //|  v1.49: Hero Guard After Basket Close — keep Hero set even when   |
 //|         non-Hero basket is closed; IsHeroProtectedTicket guard    |
 //|  v1.48: Dynamic Price-Extreme Hero — refresh within side-locked Hero  |
@@ -14,8 +16,8 @@
 //|  v1.40: Hero Order ported from Gold Miner v7.09                  |
 //+------------------------------------------------------------------+
 #property copyright "Golden Kuy3 EA"
-#property version   "1.49"
-#property description "Golden Kuy3 v1.49 — Hero Guard After Basket Close: Hero set never shrinks below total side count; IsHeroProtectedTicket prevents TP/AvgTrail/CloseAll from touching Hero or stable-set tickets"
+#property version   "1.50"
+#property description "Golden Kuy3 v1.50 — Hero TP-Only Opposite Close: Hero closes only when opposite basket flattens with TP/profit; SL/loss = Hero holds locked at BE-SL waiting for next opposite TP"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -95,6 +97,8 @@ input bool   InpHero_SingleSideLock     = true;   // Only ONE side may own Hero 
 input bool   InpHero_AlternateSides     = true;   // v1.46 — ฝั่งที่เพิ่งปิด Hero ห้าม re-arm จนกว่าฝั่งตรงข้ามจะ Hero หรือฝั่งเดิม flat สนิท
 input bool   InpHero_CloseWithOpposite  = true;   // [DEPRECATED] hard-wired to opposite-basket close
 input bool   InpHero_RequireNetProfit   = false;  // [DEPRECATED] not used (lock-profit SL guarantees floor)
+input bool   InpHero_OppCloseRequireTP  = true;   // v1.50 — close Hero ONLY when opp basket closed by TP/profit; SL/loss = Hero holds
+input double InpHero_OppCloseMinProfit  = 0.0;    // v1.50 — minimum opp realized profit to qualify as TP close ($)
 
 input group "=== Chart Lines ==="
 input bool                 InpShowAvgLine             = true;
@@ -177,6 +181,12 @@ ulong    g_heroBuyStable[200];
 int      g_heroBuyStableN         = 0;
 ulong    g_heroSellStable[200];
 int      g_heroSellStableN        = 0;
+// v1.50 — Per-side accumulator of opposite-basket realized P/L since hero ARMED.
+// Indexed by HERO side (BUY/SELL). When opp basket flattens with positive net -> close hero.
+double   g_oppBasketRealized_HeroBuy   = 0.0; // realized P/L of SELL deals while BUY hero alive
+double   g_oppBasketRealized_HeroSell  = 0.0; // realized P/L of BUY  deals while SELL hero alive
+datetime g_oppBasketLastDealTime_HeroBuy  = 0;
+datetime g_oppBasketLastDealTime_HeroSell = 0;
 // Dashboard counters
 int      g_heroDash_BuyActive     = 0;
 int      g_heroDash_SellActive    = 0;
@@ -626,9 +636,16 @@ void BuildHeroTicketCache()
       ClearStableSet(sideId);
       for(int k = 0; k < take; k++) AddToStableSet(sideId, tkPool[k]);
 
-      // Promote phase ARMED
-      if(sideId == POSITION_TYPE_BUY) g_heroPhase_Buy  = 2;
-      else                            g_heroPhase_Sell = 2;
+      // Promote phase ARMED — reset opp accumulator (fresh window starts NOW)
+      if(sideId == POSITION_TYPE_BUY) {
+         g_heroPhase_Buy  = 2;
+         g_oppBasketRealized_HeroBuy  = 0.0;
+         g_oppBasketLastDealTime_HeroBuy = 0;
+      } else {
+         g_heroPhase_Sell = 2;
+         g_oppBasketRealized_HeroSell = 0.0;
+         g_oppBasketLastDealTime_HeroSell = 0;
+      }
       sideHeroTagged[s] = take;
 
       string fixedList = "";
@@ -787,9 +804,13 @@ void CloseHeroOnSide(ENUM_POSITION_TYPE side, string reason)
    if(side == POSITION_TYPE_BUY) {
       g_heroPhase_Buy = 0; g_heroBE_Applied_Buy = false;
       g_heroJustClosed_Buy = TimeCurrent();
+      g_oppBasketRealized_HeroBuy = 0.0;            // v1.50 reset
+      g_oppBasketLastDealTime_HeroBuy = 0;
    } else {
       g_heroPhase_Sell = 0; g_heroBE_Applied_Sell = false;
       g_heroJustClosed_Sell = TimeCurrent();
+      g_oppBasketRealized_HeroSell = 0.0;           // v1.50 reset
+      g_oppBasketLastDealTime_HeroSell = 0;
    }
    // v1.46 Side-Alternation Lock — จำฝั่งที่เพิ่งปิด Hero
    g_heroLastClosedSide = (int)side;
@@ -846,7 +867,9 @@ void ManageHeroOppositeClose()
       ResetHeroStateIfFlat(side);
    }
 
-   // v7.02 Tick-based opposite-clear detector (Broker TP race)
+   // v1.50 Tick-based opposite-clear detector — gated by TP/profit requirement.
+   //  Hero closes ONLY when opp basket flat AND opp realized P/L since hero ARMED is positive (TP).
+   //  If opp closed by SL/loss => Hero HOLDS (BE-SL keeps lock-profit floor) waiting next opp TP cycle.
    for(int s2 = 0; s2 < 2; s2++) {
       ENUM_POSITION_TYPE side = (s2 == 0) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
       ENUM_POSITION_TYPE opp  = (s2 == 0) ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
@@ -855,9 +878,34 @@ void ManageHeroOppositeClose()
       if(CountHeroOnSide(side) <= 0) continue;
       if(CountNonHeroMainOnSide(opp) > 0) continue;
       if(CountHeroOnSide(opp) > 0) continue;
-      Print("v1.4 Hero CLOSE (opp basket flat tick): heroSide=", EnumToString(side),
-            " oppSide=", EnumToString(opp), " heroProfit=", DoubleToString(SumHeroProfitOnSide(side), 2));
-      CloseHeroOnSide(side, "OppositeBasketFlatTick");
+
+      double oppRealized = (side == POSITION_TYPE_BUY) ? g_oppBasketRealized_HeroBuy
+                                                       : g_oppBasketRealized_HeroSell;
+      if(InpHero_OppCloseRequireTP) {
+         if(oppRealized <= InpHero_OppCloseMinProfit) {
+            // SL / loss / no realized profit yet — HOLD Hero, reset accumulator so next opp basket cycle is judged fresh.
+            static datetime lastHoldLog_B = 0, lastHoldLog_S = 0;
+            datetime lastLog = (side == POSITION_TYPE_BUY) ? lastHoldLog_B : lastHoldLog_S;
+            if(TimeCurrent() - lastLog >= 30) {
+               Print("v1.50 Hero HOLD heroSide=", EnumToString(side),
+                     " oppSide=", EnumToString(opp), " oppRealized=", DoubleToString(oppRealized, 2),
+                     " minTP=", DoubleToString(InpHero_OppCloseMinProfit, 2),
+                     " — opp closed by SL/loss, keep Hero locked at BE-SL waiting next opp TP");
+               if(side == POSITION_TYPE_BUY) lastHoldLog_B = TimeCurrent();
+               else                          lastHoldLog_S = TimeCurrent();
+            }
+            // Reset opp accumulator for next opposite basket cycle
+            if(side == POSITION_TYPE_BUY) g_oppBasketRealized_HeroBuy  = 0.0;
+            else                          g_oppBasketRealized_HeroSell = 0.0;
+            continue;
+         }
+      }
+
+      Print("v1.50 Hero CLOSE (opp TP/profit hit): heroSide=", EnumToString(side),
+            " oppSide=", EnumToString(opp),
+            " oppRealized=", DoubleToString(oppRealized, 2),
+            " heroProfit=", DoubleToString(SumHeroProfitOnSide(side), 2));
+      CloseHeroOnSide(side, "OppositeBasketTPClose");
    }
 }
 
@@ -1535,7 +1583,7 @@ void DrawDashboard()
    double plS  = CalcSideFloating(POSITION_TYPE_SELL);
    double plAll= plB+plS;
 
-   DashHeader(StringFormat("Golden Kuy3 v1.49  Side:%s Grid:%s/%s", SideModeStr(), GridModeStr(), LotModeStr()));
+   DashHeader(StringFormat("Golden Kuy3 v1.50  Side:%s Grid:%s/%s", SideModeStr(), GridModeStr(), LotModeStr()));
 
    DashHeader("=== ACCOUNT ===");
    DashRow("Balance",     StringFormat("$%.2f", bal), info);
@@ -1600,7 +1648,7 @@ void DrawDashboard()
    DashRow("Restart Pending", StringFormat("BUY:%s  SELL:%s", rpB, rpS),
            (g_costHit_Pending_Buy||g_costHit_Pending_Sell)?warn:info);
 
-   DashHeader("=== HERO ORDER (v1.49) ===");
+   DashHeader("=== HERO ORDER (v1.50) ===");
    DashRow("Hero Cfg", StringFormat("%s  N=%d minAct=%d BE=%dpt  Mode=PRICE_EXTREME Lock=%s Alt=%s",
                           OnOff(InpHero_Enabled), InpHero_OrderCount,
                           InpHero_MinOrdersToActivate, InpHero_BE_OffsetPoints,
@@ -1672,6 +1720,33 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
                          + HistoryDealGetDouble(trans.deal, DEAL_SWAP)
                          + HistoryDealGetDouble(trans.deal, DEAL_COMMISSION);
                g_realizedCycle += pr;
+
+               // v1.50 — Accumulate opp-basket realized P/L per Hero side.
+               //  When a non-Hero ticket of side X closes, attribute P/L to Hero of opp(X) if armed.
+               if(InpHero_Enabled){
+                  long dealTypeH = HistoryDealGetInteger(trans.deal, DEAL_TYPE);
+                  int closedSideH = (dealTypeH == DEAL_TYPE_SELL) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
+                  ulong posTicketH = (ulong)trans.position;
+                  bool wasHero = IsHeroProtectedTicket(posTicketH);
+                  if(!wasHero){
+                     // Closed ticket is opp basket relative to Hero on the OTHER side.
+                     int heroSide = (closedSideH == POSITION_TYPE_BUY) ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
+                     int heroPhase = (heroSide == POSITION_TYPE_BUY) ? g_heroPhase_Buy : g_heroPhase_Sell;
+                     if(heroPhase == 2 || heroPhase == 3){
+                        if(heroSide == POSITION_TYPE_BUY){
+                           g_oppBasketRealized_HeroBuy  += pr;
+                           g_oppBasketLastDealTime_HeroBuy = TimeCurrent();
+                        } else {
+                           g_oppBasketRealized_HeroSell += pr;
+                           g_oppBasketLastDealTime_HeroSell = TimeCurrent();
+                        }
+                        Print("v1.50 OppBasket dealOut heroSide=", (heroSide==POSITION_TYPE_BUY?"BUY":"SELL"),
+                              " closedSide=", (closedSideH==POSITION_TYPE_BUY?"BUY":"SELL"),
+                              " pr=", DoubleToString(pr,2),
+                              " accum=", DoubleToString(heroSide==POSITION_TYPE_BUY?g_oppBasketRealized_HeroBuy:g_oppBasketRealized_HeroSell,2));
+                     }
+                  }
+               }
 
                // v1.2 Cost-Hit detection: was this deal closed by SL or TP?
                if(InpEnableCostHitRestart){
@@ -1771,7 +1846,7 @@ int OnInit()
       if(c=="GK_INIT_SELL") g_initPrice_Sell = pos.PriceOpen();
    }
 
-   Print("Golden Kuy3 v1.49 init  digits=",g_digits," pip=",g_pip," stopsLvl=",g_stopsLevel,
+   Print("Golden Kuy3 v1.50 init  digits=",g_digits," pip=",g_pip," stopsLvl=",g_stopsLevel,
          " | Hero=", InpHero_Enabled?"ON":"OFF", " HeroN=", InpHero_OrderCount,
          " minAct=", InpHero_MinOrdersToActivate, " BE=", InpHero_BE_OffsetPoints, "pt");
    return INIT_SUCCEEDED;
@@ -1781,7 +1856,7 @@ void OnDeinit(const int reason)
 {
    DelDash();
    DelLines();
-   Print("Golden Kuy3 v1.49 deinit reason=",reason);
+   Print("Golden Kuy3 v1.50 deinit reason=",reason);
 }
 
 void OnTick()
