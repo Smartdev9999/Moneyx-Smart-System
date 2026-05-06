@@ -1751,7 +1751,7 @@ void DrawDashboard()
    double plS  = CalcSideFloating(POSITION_TYPE_SELL);
    double plAll= plB+plS;
 
-   DashHeader(StringFormat("Golden Kuy3 v1.56  Side:%s Grid:%s/%s", SideModeStr(), GridModeStr(), LotModeStr()));
+   DashHeader(StringFormat("Golden Kuy3 v1.57  Side:%s Grid:%s/%s", SideModeStr(), GridModeStr(), LotModeStr()));
 
    DashHeader("=== ACCOUNT ===");
    DashRow("Balance",     StringFormat("$%.2f", bal), info);
@@ -1816,7 +1816,7 @@ void DrawDashboard()
    DashRow("Restart Pending", StringFormat("BUY:%s  SELL:%s", rpB, rpS),
            (g_costHit_Pending_Buy||g_costHit_Pending_Sell)?warn:info);
 
-   DashHeader("=== HERO ORDER (v1.56) ===");
+   DashHeader("=== HERO ORDER (v1.57) ===");
    DashRow("Hero Cfg", StringFormat("%s  N=%d minAct=%d BE=%dpt  Mode=ARMED-DYN Lock=%s Alt=%s",
                           OnOff(InpHero_Enabled), InpHero_OrderCount,
                           InpHero_MinOrdersToActivate, InpHero_BE_OffsetPoints,
@@ -1910,6 +1910,20 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
                         } else {
                            g_oppBasketRealized_HeroSell += pr;
                            g_oppBasketLastDealTime_HeroSell = TimeCurrent();
+                        }
+                        // v1.57 — TP-event latch: if BE_GUARD and the closing reason was TP / Avg-TP intent,
+                        //         arm latch so Hero closes even if AutoReEntry/Grid opens new opp ticket same tick.
+                        if(heroPhase == 3){
+                           long reasonE = HistoryDealGetInteger(trans.deal, DEAL_REASON);
+                           bool intentE = (closedSideH == POSITION_TYPE_BUY) ? g_oppCloseIntent_AvgTP_Buy
+                                                                              : g_oppCloseIntent_AvgTP_Sell;
+                           if(reasonE == DEAL_REASON_TP || intentE){
+                              if(heroSide == POSITION_TYPE_BUY) { g_oppTPEvent_HeroBuy  = true; g_oppTPEventTime_HeroBuy  = TimeCurrent(); }
+                              else                              { g_oppTPEvent_HeroSell = true; g_oppTPEventTime_HeroSell = TimeCurrent(); }
+                              Print("v1.57 Hero TP-EVENT LATCH ARMED heroSide=", (heroSide==POSITION_TYPE_BUY?"BUY":"SELL"),
+                                    " closedSide=", (closedSideH==POSITION_TYPE_BUY?"BUY":"SELL"),
+                                    " reason=", reasonE, " intent=", (intentE?"YES":"NO"));
+                           }
                         }
                         Print("v1.50 OppBasket dealOut heroSide=", (heroSide==POSITION_TYPE_BUY?"BUY":"SELL"),
                               " closedSide=", (closedSideH==POSITION_TYPE_BUY?"BUY":"SELL"),
@@ -2042,7 +2056,7 @@ int OnInit()
       if(c=="GK_INIT_SELL") g_initPrice_Sell = pos.PriceOpen();
    }
 
-   Print("Golden Kuy3 v1.56 init  digits=",g_digits," pip=",g_pip," stopsLvl=",g_stopsLevel,
+   Print("Golden Kuy3 v1.57 init  digits=",g_digits," pip=",g_pip," stopsLvl=",g_stopsLevel,
          " | Hero=", InpHero_Enabled?"ON":"OFF", " HeroN=", InpHero_OrderCount,
          " minAct=", InpHero_MinOrdersToActivate, " BE=", InpHero_BE_OffsetPoints, "pt");
    return INIT_SUCCEEDED;
@@ -2052,7 +2066,7 @@ void OnDeinit(const int reason)
 {
    DelDash();
    DelLines();
-   Print("Golden Kuy3 v1.56 deinit reason=",reason);
+   Print("Golden Kuy3 v1.57 deinit reason=",reason);
 }
 
 void OnTick()
