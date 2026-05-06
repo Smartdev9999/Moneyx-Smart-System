@@ -1836,6 +1836,10 @@ void DrawDashboard()
       string nextStr = (g_heroNextAllowedSide == (int)POSITION_TYPE_BUY)  ? "BUY only"
                      : (g_heroNextAllowedSide == (int)POSITION_TYPE_SELL) ? "SELL only" : "ANY";
       DashRow("Next Allowed", nextStr, (g_heroNextAllowedSide>=0?warn:info));
+      string tpEvStr = "-";
+      if(g_oppTPEvent_HeroBuy)  tpEvStr = "SELL->BUY (waiting close)";
+      if(g_oppTPEvent_HeroSell) tpEvStr = (tpEvStr=="-") ? "BUY->SELL (waiting close)" : "BOTH";
+      DashRow("TP Event", tpEvStr, ((g_oppTPEvent_HeroBuy||g_oppTPEvent_HeroSell)?gold:info));
    }
    {
       string phaseB = (g_heroPhase_Buy == 3) ? "BE_GUARD" : (g_heroPhase_Buy == 2) ? "ARMED" : "WAIT";
