@@ -816,6 +816,9 @@ void CloseHeroOnSide(ENUM_POSITION_TYPE side, string reason)
    g_heroTicketCount = 0;
    g_heroLastBuildTime = 0;
    ClearStableSet((int)side); // v1.49 — clear sticky set for this side
+   // v1.51 — clear intent flags (consumed)
+   g_oppCloseIntent_AvgTP_Buy  = false;
+   g_oppCloseIntent_AvgTP_Sell = false;
    if(side == POSITION_TYPE_BUY) {
       g_heroPhase_Buy = 0; g_heroBE_Applied_Buy = false;
       g_heroJustClosed_Buy = TimeCurrent();
