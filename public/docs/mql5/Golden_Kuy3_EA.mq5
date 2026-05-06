@@ -547,19 +547,32 @@ void ApplyHeroLockProfitSL(ENUM_POSITION_TYPE side)
             " count=", applied, " skipped=", skipped, " (lock-profit SL):", slList);
 }
 
+// v1.44: ระหว่าง CANDIDATE/ARMED — ถอดเฉพาะ TP เพื่อกันโดน basket Avg-TP/per-order TP ปิดก่อนเวลา
+//        คง SL เดิม (BE/cost-lock จาก Per-Order BE/Trail) เพื่อกันราคาวิ่งกลับทะลุทุน
+//        เมื่อ basket ฝั่งเดียวกันปิดหมด phase->BE_GUARD แล้ว ApplyHeroLockProfitSL จะตั้ง SL ใหม่ทับ
 void StripBrokerTPSLFromHeroTickets()
 {
    if(!InpHero_Enabled || g_heroTicketCount == 0) return;
+   static datetime lastDiagLog = 0;
+   bool doLog = (TimeCurrent() - lastDiagLog) >= 30;
+   string diag = "";
    for(int i = 0; i < g_heroTicketCount; i++) {
       ulong ticket = g_heroTickets[i];
       if(!PositionSelectByTicket(ticket)) continue;
       ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
       int phase = (posType == POSITION_TYPE_BUY) ? g_heroPhase_Buy : g_heroPhase_Sell;
-      if(phase == 3) continue; // BE_GUARD owns it
+      if(phase == 3) continue; // BE_GUARD owns it (ApplyHeroLockProfitSL จัดการเอง)
       double curTP = PositionGetDouble(POSITION_TP);
       double curSL = PositionGetDouble(POSITION_SL);
-      if(curTP == 0 && curSL == 0) continue;
-      trade.PositionModify(ticket, 0, 0);
+      if(curTP == 0) continue; // TP ถอดอยู่แล้ว — ไม่ต้องแตะ SL
+      // v1.44 ถอดเฉพาะ TP, คง SL เดิมไว้
+      if(trade.PositionModify(ticket, curSL, 0)) {
+         if(doLog) diag += StringFormat(" #%I64u(SL=%s)", ticket, DoubleToString(curSL, g_digits));
+      }
+   }
+   if(doLog && StringLen(diag) > 0) {
+      Print("v1.44 Hero CANDIDATE strip TP only (SL kept):", diag);
+      lastDiagLog = TimeCurrent();
    }
 }
 
