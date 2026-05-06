@@ -210,9 +210,9 @@ int      g_heroDash_BuyActive     = 0;
 int      g_heroDash_SellActive    = 0;
 int      g_heroDash_BuyTagged     = 0;
 int      g_heroDash_SellTagged    = 0;
-ulong    g_heroDash_BuyTickets[10];
+ulong    g_heroDash_BuyTickets[20];
 int      g_heroDash_BuyTicketN    = 0;
-ulong    g_heroDash_SellTickets[10];
+ulong    g_heroDash_SellTickets[20];
 int      g_heroDash_SellTicketN   = 0;
 
 //========================= HELPERS =================================
