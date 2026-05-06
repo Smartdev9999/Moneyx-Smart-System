@@ -1358,8 +1358,9 @@ void RemoveLine(string name)
 void DrawAvgAndTPLines()
 {
    double tlB=0,tlS=0; int cB=0,cS=0;
-   double avgB = CalcSideAvgPrice(POSITION_TYPE_BUY,  tlB, cB);
-   double avgS = CalcSideAvgPrice(POSITION_TYPE_SELL, tlS, cS);
+   // v1.47 — display lines exclude Hero/Candidate so chart matches actual TP logic
+   double avgB = CalcSideAvgPrice_NonHero(POSITION_TYPE_BUY,  tlB, cB);
+   double avgS = CalcSideAvgPrice_NonHero(POSITION_TYPE_SELL, tlS, cS);
 
    // Average lines
    if(InpShowAvgLine && cB>0 && avgB>0) DrawHLine("AVG_BUY",  avgB, InpAvgBuyLineColor,  3, STYLE_SOLID);
