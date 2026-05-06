@@ -1899,8 +1899,11 @@ void DrawDashboard()
                            (InpUseTPPoints?ok:warn));
    DashRow("TP %Bal",      StringFormat("%s  %.1f%%", OnOff(InpUseTPPercentBalance), InpTPPercentOfBalance),
                            (InpUseTPPercentBalance?ok:warn));
-   DashRow("Accumulate",   StringFormat("%s  $%.0f", OnOff(InpUseAccumulateClose), InpAccumulateTarget),
-                           (InpUseAccumulateClose?ok:warn));
+   // v1.60 — show current sum (realized + floating incl Hero) so we see how close to trigger
+   double accCur = g_realizedCycle + CalcSideFloating(POSITION_TYPE_BUY) + CalcSideFloating(POSITION_TYPE_SELL);
+   color accClr = (InpUseAccumulateClose ? (accCur >= InpAccumulateTarget ? ok : warn) : warn);
+   DashRow("Accumulate",   StringFormat("%s  $%.0f (cur $%.2f)", OnOff(InpUseAccumulateClose), InpAccumulateTarget, accCur),
+                           accClr);
    // v1.59 — Risk Limits one-liner
    string mlStr = (InpMaxLotPerOrder>0 ? StringFormat("%.2f", InpMaxLotPerOrder) : "OFF");
    string ddStr;
