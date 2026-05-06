@@ -917,9 +917,12 @@ void CloseHeroOnSide(ENUM_POSITION_TYPE side, string reason)
       trade.PositionClose(ticket);
       Print("v1.4 Hero CLOSE: ticket=", ticket, " side=", EnumToString(side), " reason=", reason);
    }
+   ClearStableSet((int)side); // v1.49 — clear sticky set for this side ONLY
+   // v1.58 — rebuild flat g_heroTickets[] from REMAINING stable set so opposite-side Reserve survives this tick
    g_heroTicketCount = 0;
+   for(int i=0; i<g_heroBuyStableN  && g_heroTicketCount<200; i++) g_heroTickets[g_heroTicketCount++] = g_heroBuyStable[i];
+   for(int i=0; i<g_heroSellStableN && g_heroTicketCount<200; i++) g_heroTickets[g_heroTicketCount++] = g_heroSellStable[i];
    g_heroLastBuildTime = 0;
-   ClearStableSet((int)side); // v1.49 — clear sticky set for this side
    // v1.51 — clear intent flags (consumed)
    g_oppCloseIntent_AvgTP_Buy  = false;
    g_oppCloseIntent_AvgTP_Sell = false;
@@ -934,16 +937,36 @@ void CloseHeroOnSide(ENUM_POSITION_TYPE side, string reason)
       g_oppBasketRealized_HeroSell = 0.0;           // v1.50 reset
       g_oppBasketLastDealTime_HeroSell = 0;
    }
-   // v1.46 Side-Alternation Lock — จำฝั่งที่เพิ่งปิด Hero
    g_heroLastClosedSide = (int)side;
-   // v1.57 — opposite must take next Hero turn AND close it before this side may re-arm
-   g_heroNextAllowedSide = (side == POSITION_TYPE_BUY) ? (int)POSITION_TYPE_SELL : (int)POSITION_TYPE_BUY;
-   // v1.57 — clear TP-event latch belonging to the side we just closed; arm fresh latch reset
+   // v1.58 — Stamp next-allowed only when opposite side has realistic chance of becoming Hero.
+   //         If opposite already has Reserve (ARMED) or enough orders, lock alternation.
+   //         Otherwise leave Next-Allowed = ANY so first side to qualify wins.
+   {
+      ENUM_POSITION_TYPE opp = (side == POSITION_TYPE_BUY) ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
+      int oppPhase = (opp == POSITION_TYPE_BUY) ? g_heroPhase_Buy : g_heroPhase_Sell;
+      int oppActive = 0;
+      for(int i = PositionsTotal() - 1; i >= 0; i--) {
+         ulong tk = PositionGetTicket(i);
+         if(tk == 0) continue;
+         if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
+         if(PositionGetString(POSITION_SYMBOL)  != _Symbol)        continue;
+         if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) == opp) oppActive++;
+      }
+      int thrC = (InpHero_MinOrdersToActivate > 0) ? InpHero_MinOrdersToActivate : (InpHero_OrderCount + 1);
+      if(oppPhase > 0 || oppActive >= thrC) {
+         g_heroNextAllowedSide = (int)opp;
+         Print("v1.58 Hero LAST-CLOSED side=", EnumToString(side),
+               " — NEXT-ALLOWED=", (g_heroNextAllowedSide==(int)POSITION_TYPE_BUY?"BUY":"SELL"),
+               " (opp ready: phase=", oppPhase, " active=", oppActive, "/", thrC, ")");
+      } else {
+         g_heroNextAllowedSide = -1;
+         Print("v1.58 Hero LAST-CLOSED side=", EnumToString(side),
+               " — NEXT-ALLOWED=ANY (opp not ready: phase=", oppPhase, " active=", oppActive, "/", thrC, ")");
+      }
+   }
+   // v1.57 — clear TP-event latch belonging to the side we just closed
    if(side == POSITION_TYPE_BUY) { g_oppTPEvent_HeroBuy  = false; g_oppTPEventTime_HeroBuy  = 0; }
    else                          { g_oppTPEvent_HeroSell = false; g_oppTPEventTime_HeroSell = 0; }
-   Print("v1.57 Hero LAST-CLOSED side=", EnumToString(side),
-         " — NEXT-ALLOWED=", (g_heroNextAllowedSide==(int)POSITION_TYPE_BUY?"BUY":"SELL"),
-         " (opposite Hero must complete its OWN cycle before this side re-arms)");
 }
 
 bool DetectSameSideBasketClearedForHero(ENUM_POSITION_TYPE side)
