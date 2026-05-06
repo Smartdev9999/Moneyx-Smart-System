@@ -8,7 +8,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Golden Kuy3 EA"
 #property version   "1.61"
-#property description "Golden Kuy3 v1.61 — Accumulate Close counts floating incl. Hero (Gold Miner concept)."
+#property description "Golden Kuy3 v1.61 — Hero dashboard Tix rows widened to show all Hero ticket IDs."
 #property strict
 
 #include <Trade/Trade.mqh>
