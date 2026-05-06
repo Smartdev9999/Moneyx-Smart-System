@@ -636,9 +636,16 @@ void BuildHeroTicketCache()
       ClearStableSet(sideId);
       for(int k = 0; k < take; k++) AddToStableSet(sideId, tkPool[k]);
 
-      // Promote phase ARMED
-      if(sideId == POSITION_TYPE_BUY) g_heroPhase_Buy  = 2;
-      else                            g_heroPhase_Sell = 2;
+      // Promote phase ARMED — reset opp accumulator (fresh window starts NOW)
+      if(sideId == POSITION_TYPE_BUY) {
+         g_heroPhase_Buy  = 2;
+         g_oppBasketRealized_HeroBuy  = 0.0;
+         g_oppBasketLastDealTime_HeroBuy = 0;
+      } else {
+         g_heroPhase_Sell = 2;
+         g_oppBasketRealized_HeroSell = 0.0;
+         g_oppBasketLastDealTime_HeroSell = 0;
+      }
       sideHeroTagged[s] = take;
 
       string fixedList = "";
