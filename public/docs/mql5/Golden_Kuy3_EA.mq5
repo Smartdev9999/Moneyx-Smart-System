@@ -1594,7 +1594,7 @@ int OnInit()
       if(c=="GK_INIT_SELL") g_initPrice_Sell = pos.PriceOpen();
    }
 
-   Print("Golden Kuy3 v1.45 init  digits=",g_digits," pip=",g_pip," stopsLvl=",g_stopsLevel,
+   Print("Golden Kuy3 v1.46 init  digits=",g_digits," pip=",g_pip," stopsLvl=",g_stopsLevel,
          " | Hero=", InpHero_Enabled?"ON":"OFF", " HeroN=", InpHero_OrderCount,
          " minAct=", InpHero_MinOrdersToActivate, " BE=", InpHero_BE_OffsetPoints, "pt");
    return INIT_SUCCEEDED;
@@ -1604,7 +1604,7 @@ void OnDeinit(const int reason)
 {
    DelDash();
    DelLines();
-   Print("Golden Kuy3 v1.45 deinit reason=",reason);
+   Print("Golden Kuy3 v1.46 deinit reason=",reason);
 }
 
 void OnTick()
