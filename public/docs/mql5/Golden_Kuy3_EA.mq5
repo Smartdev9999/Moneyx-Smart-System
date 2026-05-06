@@ -443,6 +443,47 @@ bool IsInStableSet(int sideId, ulong t)
    return false;
 }
 
+// v1.53 — Demote Restore: tickets that were Hero in prevSet but no longer in newSet
+//          get their broker-side Initial TP restored and any lock-profit SL cleared,
+//          so they re-join the normal basket. Skipped when InpHero_StickySet=true.
+void RestoreInitialTPOnDemoted(const ulong &prevSet[], int prevCnt,
+                               const ulong &newSet[],  int newCnt,
+                               ENUM_POSITION_TYPE side)
+{
+   if(prevCnt <= 0) return;
+   string demotedLog = "";
+   int restored = 0;
+   for(int i = 0; i < prevCnt; i++) {
+      ulong tk = prevSet[i];
+      bool stillHero = false;
+      for(int j = 0; j < newCnt; j++) if(newSet[j] == tk) { stillHero = true; break; }
+      if(stillHero) continue;
+
+      if(!PositionSelectByTicket(tk)) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
+
+      double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+      double newTP = 0.0;
+      if(InpUseTakeProfit && !InpUseTPPoints && InpInitialTPPips > 0) {
+         double minStop = GetMinStopPrice();
+         double dist    = MathMax(PipsToPrice(InpInitialTPPips), minStop);
+         newTP = (side == POSITION_TYPE_BUY) ? openPrice + dist : openPrice - dist;
+      }
+      // Clear lock-profit SL we placed earlier; per-order BE/Trail/Cost-Hit will
+      // re-apply their own SL on later ticks if enabled.
+      double newSL = 0.0;
+      if(trade.PositionModify(tk, newSL, newTP)) {
+         restored++;
+         demotedLog += StringFormat(" #%I64u@open=%s->TP=%s",
+                          tk, DoubleToString(openPrice, g_digits),
+                          DoubleToString(newTP, g_digits));
+      }
+   }
+   if(restored > 0)
+      Print("v1.53 Hero DEMOTE restore side=", EnumToString(side),
+            " count=", restored, " (TP restored, lock-SL cleared):", demotedLog);
+}
+
 void BuildHeroTicketCache()
 {
    // v1.49: STICKY stable sets per side — chosen ONCE at activation, never re-selected
