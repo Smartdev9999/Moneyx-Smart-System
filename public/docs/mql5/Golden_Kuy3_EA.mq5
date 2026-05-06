@@ -1,10 +1,11 @@
 //+------------------------------------------------------------------+
 //|                                            Golden_Kuy3_EA.mq5    |
-//|                                       Golden Kuy3 EA  v1.52      |
-//|  v1.52: Hero Sticky Set — Hero ticket set frozen at activation;   |
-//|         no mid-phase price-extreme refresh; new orders after      |
-//|         ARMED/BE_GUARD = normal basket (not Hero). Fixes Hero     |
-//|         overlap, dropped tickets, missing side-alternation.       |
+//|                                       Golden Kuy3 EA  v1.53      |
+//|  v1.53: Hero Dynamic Refresh + Demote Restore — Hero set tracks   |
+//|         current price-extreme every tick; demoted tickets get     |
+//|         their Initial TP restored + lock-profit SL cleared so     |
+//|         they re-join the normal basket.                           |
+//|  v1.52: Hero Sticky Set (rolled back as default; toggle remains). |
 //|  v1.51: Hero AvgTP-Trigger Only — Hero closes only when opp       |
 //|         basket flattened by Avg-TP/Avg-Trail/Master TP/Accumulate |
 //|         (intent flag), NOT by Per-Order Trail/SL/Cost-Hit.        |
