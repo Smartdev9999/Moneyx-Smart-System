@@ -2197,6 +2197,7 @@ void OnTick()
    BuildHeroTicketCache();
    ManageHeroOppositeClose();
    ManagePerOrderTrailing();
+   ManageMaxDDClose();   // v1.59 — flatten on excessive floating loss
    ManageTakeProfit();
    ManageAverageTrailing();
    EnforceClearTPIfDisabled();
