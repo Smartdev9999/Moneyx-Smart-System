@@ -165,6 +165,7 @@ bool     g_heroBE_Applied_Buy     = false;
 bool     g_heroBE_Applied_Sell    = false;
 datetime g_heroJustClosed_Buy     = 0;
 datetime g_heroJustClosed_Sell    = 0;
+int      g_heroLastClosedSide     = -1;    // v1.46 — ฝั่ง Hero ที่เพิ่งปิดล่าสุด (POSITION_TYPE_BUY/SELL หรือ -1)
 // Dashboard counters
 int      g_heroDash_BuyActive     = 0;
 int      g_heroDash_SellActive    = 0;
