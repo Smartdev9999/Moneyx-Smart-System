@@ -1,6 +1,10 @@
 //+------------------------------------------------------------------+
 //|                                            Golden_Kuy3_EA.mq5    |
-//|                                       Golden Kuy3 EA  v1.53      |
+//|                                       Golden Kuy3 EA  v1.54      |
+//|  v1.54: Live Hero Refresh After Entries — BuildHeroTicketCache    |
+//|         runs again after ManageInitialEntry/ManageGridEntry so    |
+//|         orders opened in the same tick are immediately considered |
+//|         for Hero price-extreme selection (no stale dashboard).    |
 //|  v1.53: Hero Dynamic Refresh + Demote Restore — Hero set tracks   |
 //|         current price-extreme every tick; demoted tickets get     |
 //|         their Initial TP restored + lock-profit SL cleared so     |
@@ -24,8 +28,8 @@
 //|  v1.40: Hero Order ported from Gold Miner v7.09                  |
 //+------------------------------------------------------------------+
 #property copyright "Golden Kuy3 EA"
-#property version   "1.53"
-#property description "Golden Kuy3 v1.53 — Hero Dynamic Refresh + Demote Restore: Hero set tracks current price-extreme every tick; tickets pushed out of the set get their Initial TP restored and lock-profit SL cleared so they re-join the normal basket and close together with Avg-TP"
+#property version   "1.54"
+#property description "Golden Kuy3 v1.54 — Live Hero Refresh After Entries: BuildHeroTicketCache re-runs after order-entry modules so Hero price-extreme selection picks up brand-new tickets in the same tick (dashboard never stale). v1.53 dynamic refresh + demote-restore preserved."
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -463,6 +467,8 @@ void RestoreInitialTPOnDemoted(const ulong &prevSet[], int prevCnt,
       if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
 
       double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+      double curSL     = PositionGetDouble(POSITION_SL);
+      double curTP     = PositionGetDouble(POSITION_TP);
       double newTP = 0.0;
       if(InpUseTakeProfit && !InpUseTPPoints && InpInitialTPPips > 0) {
          double minStop = GetMinStopPrice();
@@ -472,6 +478,9 @@ void RestoreInitialTPOnDemoted(const ulong &prevSet[], int prevCnt,
       // Clear lock-profit SL we placed earlier; per-order BE/Trail/Cost-Hit will
       // re-apply their own SL on later ticks if enabled.
       double newSL = 0.0;
+      // v1.54 — idempotency: skip modify when state already matches target
+      if(NormalizeDouble(curSL, g_digits) == NormalizeDouble(newSL, g_digits) &&
+         NormalizeDouble(curTP, g_digits) == NormalizeDouble(newTP, g_digits)) continue;
       if(trade.PositionModify(tk, newSL, newTP)) {
          restored++;
          demotedLog += StringFormat(" #%I64u@open=%s->TP=%s",
@@ -480,7 +489,7 @@ void RestoreInitialTPOnDemoted(const ulong &prevSet[], int prevCnt,
       }
    }
    if(restored > 0)
-      Print("v1.53 Hero DEMOTE restore side=", EnumToString(side),
+      Print("v1.54 Hero DEMOTE restore side=", EnumToString(side),
             " count=", restored, " (TP restored, lock-SL cleared):", demotedLog);
 }
 
@@ -1702,7 +1711,7 @@ void DrawDashboard()
    double plS  = CalcSideFloating(POSITION_TYPE_SELL);
    double plAll= plB+plS;
 
-   DashHeader(StringFormat("Golden Kuy3 v1.53  Side:%s Grid:%s/%s", SideModeStr(), GridModeStr(), LotModeStr()));
+   DashHeader(StringFormat("Golden Kuy3 v1.54  Side:%s Grid:%s/%s", SideModeStr(), GridModeStr(), LotModeStr()));
 
    DashHeader("=== ACCOUNT ===");
    DashRow("Balance",     StringFormat("$%.2f", bal), info);
@@ -1767,7 +1776,7 @@ void DrawDashboard()
    DashRow("Restart Pending", StringFormat("BUY:%s  SELL:%s", rpB, rpS),
            (g_costHit_Pending_Buy||g_costHit_Pending_Sell)?warn:info);
 
-   DashHeader("=== HERO ORDER (v1.53) ===");
+   DashHeader("=== HERO ORDER (v1.54) ===");
    DashRow("Hero Cfg", StringFormat("%s  N=%d minAct=%d BE=%dpt  Mode=PRICE_EXTREME Lock=%s Alt=%s",
                           OnOff(InpHero_Enabled), InpHero_OrderCount,
                           InpHero_MinOrdersToActivate, InpHero_BE_OffsetPoints,
@@ -1990,7 +1999,7 @@ int OnInit()
       if(c=="GK_INIT_SELL") g_initPrice_Sell = pos.PriceOpen();
    }
 
-   Print("Golden Kuy3 v1.53 init  digits=",g_digits," pip=",g_pip," stopsLvl=",g_stopsLevel,
+   Print("Golden Kuy3 v1.54 init  digits=",g_digits," pip=",g_pip," stopsLvl=",g_stopsLevel,
          " | Hero=", InpHero_Enabled?"ON":"OFF", " HeroN=", InpHero_OrderCount,
          " minAct=", InpHero_MinOrdersToActivate, " BE=", InpHero_BE_OffsetPoints, "pt");
    return INIT_SUCCEEDED;
@@ -2000,7 +2009,7 @@ void OnDeinit(const int reason)
 {
    DelDash();
    DelLines();
-   Print("Golden Kuy3 v1.53 deinit reason=",reason);
+   Print("Golden Kuy3 v1.54 deinit reason=",reason);
 }
 
 void OnTick()
@@ -2011,6 +2020,11 @@ void OnTick()
    ManageCostHitRestart();
    ManageInitialEntry();
    ManageGridEntry();
+   // v1.54 — re-run Hero refresh AFTER order-entry modules so brand-new tickets
+   //         are immediately considered for price-extreme Hero selection
+   //         (prevents stale Hero set / dashboard showing old tickets).
+   BuildHeroTicketCache();
+   ManageHeroOppositeClose();
    ManagePerOrderTrailing();
    ManageTakeProfit();
    ManageAverageTrailing();
