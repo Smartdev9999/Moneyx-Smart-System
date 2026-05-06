@@ -1,13 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                            Golden_Kuy3_EA.mq5    |
-//|                                       Golden Kuy3 EA  v1.59      |
-//|  v1.59: Risk Limits — Max Lot per Order cap (post-multiplier)    |
-//|         + Max DD Close (PERCENT of balance OR DOLLAR floating).  |
-//|         Full history in mem://trading/golden-kuy3/*.             |
+//|                                       Golden Kuy3 EA  v1.60      |
+//|  v1.60: Accumulate Close now counts FLOATING incl. Hero (Gold     |
+//|         Miner concept) — fix: Hero floating no longer hides total |
+//|         realized+floating from accumulate trigger.                |
+//|         Full history in mem://trading/golden-kuy3/*.              |
 //+------------------------------------------------------------------+
 #property copyright "Golden Kuy3 EA"
-#property version   "1.59"
-#property description "Golden Kuy3 v1.59 — Adds Max Lot per Order cap + Max DD Close (Percent/Dollar)."
+#property version   "1.60"
+#property description "Golden Kuy3 v1.60 — Accumulate Close counts floating incl. Hero (Gold Miner concept)."
 #property strict
 
 #include <Trade/Trade.mqh>
