@@ -1,14 +1,15 @@
 //+------------------------------------------------------------------+
 //|                                            Golden_Kuy3_EA.mq5    |
-//|                                       Golden Kuy3 EA  v1.45      |
+//|                                       Golden Kuy3 EA  v1.46      |
+//|  v1.46: Hero Side-Alternation Lock — ห้าม re-arm ฝั่งเดิมจนสลับ   |
 //|  v1.45: Hero CANDIDATE strips TP only (keeps SL cost-lock)        |
 //|  v1.43: Hero Price-Extreme select + Strict Single-Side Lock      |
 //|  v1.42: Accumulate cycle auto-reset on flat (Gold Miner concept) |
 //|  v1.40: Hero Order ported from Gold Miner v7.09                  |
 //+------------------------------------------------------------------+
 #property copyright "Golden Kuy3 EA"
-#property version   "1.45"
-#property description "Golden Kuy3 v1.45 — Hero CANDIDATE strips TP only (SL kept); BE_GUARD applies lock-profit SL after same-side basket TP"
+#property version   "1.46"
+#property description "Golden Kuy3 v1.46 — Hero Side-Alternation Lock: ฝั่งที่เพิ่งปิด Hero ห้าม re-arm จนกว่าฝั่งตรงข้ามจะ Hero หรือฝั่งเดิม flat"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -85,6 +86,7 @@ input bool   InpHero_BlockSameSideGrid  = true;   // Block new entries on side t
 input bool   InpHero_IncludeInMaxOrders = true;   // Count Hero into MaxGridOrders cap
 input int    InpHero_PostCloseGraceSec  = 5;      // Seconds after Hero close to suppress re-tag
 input bool   InpHero_SingleSideLock     = true;   // Only ONE side may own Hero at a time (sleep opposite first activation)
+input bool   InpHero_AlternateSides     = true;   // v1.46 — ฝั่งที่เพิ่งปิด Hero ห้าม re-arm จนกว่าฝั่งตรงข้ามจะ Hero หรือฝั่งเดิม flat สนิท
 input bool   InpHero_CloseWithOpposite  = true;   // [DEPRECATED] hard-wired to opposite-basket close
 input bool   InpHero_RequireNetProfit   = false;  // [DEPRECATED] not used (lock-profit SL guarantees floor)
 
@@ -163,6 +165,7 @@ bool     g_heroBE_Applied_Buy     = false;
 bool     g_heroBE_Applied_Sell    = false;
 datetime g_heroJustClosed_Buy     = 0;
 datetime g_heroJustClosed_Sell    = 0;
+int      g_heroLastClosedSide     = -1;    // v1.46 — ฝั่ง Hero ที่เพิ่งปิดล่าสุด (POSITION_TYPE_BUY/SELL หรือ -1)
 // Dashboard counters
 int      g_heroDash_BuyActive     = 0;
 int      g_heroDash_SellActive    = 0;
@@ -417,6 +420,23 @@ void BuildHeroTicketCache()
          continue;
       }
 
+      // v1.46 Side-Alternation Lock — ฝั่งที่เพิ่งปิด Hero ห้าม re-arm
+      //        จนกว่าฝั่งตรงข้ามจะ ARMED/BE_GUARD หรือฝั่งนี้กลับมา flat สนิท
+      if(InpHero_AlternateSides && g_heroLastClosedSide >= 0
+         && sideId == g_heroLastClosedSide && curPhase == 0)
+      {
+         int oppPhase  = (sideId == POSITION_TYPE_BUY) ? g_heroPhase_Sell : g_heroPhase_Buy;
+         bool oppActive = (oppPhase == 2 || oppPhase == 3);
+         bool selfFlat  = (CountHeroOnSide((ENUM_POSITION_TYPE)sideId) == 0
+                        && CountNonHeroMainOnSide((ENUM_POSITION_TYPE)sideId) == 0);
+         if(oppActive || selfFlat) {
+            g_heroLastClosedSide = -1; // ปลด lock
+         } else {
+            if(sideId == POSITION_TYPE_BUY) g_heroPhase_Buy = 0; else g_heroPhase_Sell = 0;
+            continue;
+         }
+      }
+
       int activateThreshold = (InpHero_MinOrdersToActivate > 0)
                               ? InpHero_MinOrdersToActivate
                               : (InpHero_OrderCount + 1);
@@ -490,11 +510,14 @@ void BuildHeroTicketCache()
          heroPxList += StringFormat(" #%I64u@%s", g_heroTickets[i],
                        DoubleToString(PositionGetDouble(POSITION_PRICE_OPEN), g_digits));
       }
-      Print("v1.45 Hero AUDIT [PriceExtreme/StrictLock]: BUY ", roleB, " active=", sideTotalActive[0],
+      string lcStr2 = (g_heroLastClosedSide == (int)POSITION_TYPE_BUY) ? "BUY"
+                    : (g_heroLastClosedSide == (int)POSITION_TYPE_SELL) ? "SELL" : "-";
+      Print("v1.46 Hero AUDIT [PriceExtreme/StrictLock/Alt]: BUY ", roleB, " active=", sideTotalActive[0],
             " hero=", sideHeroTagged[0],
             " | SELL ", roleS, " active=", sideTotalActive[1],
             " hero=", sideHeroTagged[1],
-            " | OWNER=", ownerStr, " thr=", minAct, " N=", InpHero_OrderCount, " |", heroPxList);
+            " | OWNER=", ownerStr, " lastClosed=", lcStr2,
+            " thr=", minAct, " N=", InpHero_OrderCount, " |", heroPxList);
       lastHeroAuditLog = TimeCurrent();
    }
 }
@@ -592,6 +615,9 @@ void CloseHeroOnSide(ENUM_POSITION_TYPE side, string reason)
       g_heroPhase_Sell = 0; g_heroBE_Applied_Sell = false;
       g_heroJustClosed_Sell = TimeCurrent();
    }
+   // v1.46 Side-Alternation Lock — จำฝั่งที่เพิ่งปิด Hero
+   g_heroLastClosedSide = (int)side;
+   Print("v1.46 Hero LAST-CLOSED side=", EnumToString(side), " — opp side must Hero next or self must flat");
 }
 
 bool DetectSameSideBasketClearedForHero(ENUM_POSITION_TYPE side)
@@ -614,6 +640,11 @@ void ResetHeroStateIfFlat(ENUM_POSITION_TYPE side)
       if(g_heroPhase_Sell != 0 || g_heroBE_Applied_Sell)
          Print("v1.4 Hero RESET side=SELL (flat)");
       g_heroPhase_Sell = 0; g_heroBE_Applied_Sell = false;
+   }
+   // v1.46 — เคลียร์ alternation lock เมื่อฝั่งที่เพิ่งปิดกลับมา flat สนิท
+   if(g_heroLastClosedSide == (int)side) {
+      Print("v1.46 Hero ALTERNATION CLEAR — side=", EnumToString(side), " is flat");
+      g_heroLastClosedSide = -1;
    }
 }
 
@@ -1327,7 +1358,7 @@ void DrawDashboard()
    double plS  = CalcSideFloating(POSITION_TYPE_SELL);
    double plAll= plB+plS;
 
-   DashHeader(StringFormat("Golden Kuy3 v1.45  Side:%s Grid:%s/%s", SideModeStr(), GridModeStr(), LotModeStr()));
+   DashHeader(StringFormat("Golden Kuy3 v1.46  Side:%s Grid:%s/%s", SideModeStr(), GridModeStr(), LotModeStr()));
 
    DashHeader("=== ACCOUNT ===");
    DashRow("Balance",     StringFormat("$%.2f", bal), info);
@@ -1392,11 +1423,12 @@ void DrawDashboard()
    DashRow("Restart Pending", StringFormat("BUY:%s  SELL:%s", rpB, rpS),
            (g_costHit_Pending_Buy||g_costHit_Pending_Sell)?warn:info);
 
-   DashHeader("=== HERO ORDER (v1.45) ===");
-   DashRow("Hero Cfg", StringFormat("%s  N=%d minAct=%d BE=%dpt  Mode=PRICE_EXTREME Lock=%s",
+   DashHeader("=== HERO ORDER (v1.46) ===");
+   DashRow("Hero Cfg", StringFormat("%s  N=%d minAct=%d BE=%dpt  Mode=PRICE_EXTREME Lock=%s Alt=%s",
                           OnOff(InpHero_Enabled), InpHero_OrderCount,
                           InpHero_MinOrdersToActivate, InpHero_BE_OffsetPoints,
-                          (InpHero_SingleSideLock?"STRICT":"OFF")),
+                          (InpHero_SingleSideLock?"STRICT":"OFF"),
+                          (InpHero_AlternateSides?"ON":"OFF")),
                           (InpHero_Enabled?gold:warn));
    {
       int ownerSide = GetHeroOwnerSide();
@@ -1405,6 +1437,9 @@ void DrawDashboard()
                       : (g_heroPhase_Buy == 2 || g_heroPhase_Sell == 2) ? "NONE (waiting close)" : "NONE";
       color ownClr = (ownerSide >= 0) ? gold : ((g_heroPhase_Buy==2||g_heroPhase_Sell==2)?warn:info);
       DashRow("Hero Owner", ownerStr, ownClr);
+      string lcStr = (g_heroLastClosedSide == (int)POSITION_TYPE_BUY)  ? "BUY"
+                   : (g_heroLastClosedSide == (int)POSITION_TYPE_SELL) ? "SELL" : "-";
+      DashRow("Last Closed", lcStr, (g_heroLastClosedSide>=0?warn:info));
    }
    {
       string phaseB = (g_heroPhase_Buy == 3) ? "BE_GUARD" : (g_heroPhase_Buy == 2) ? "ARMED" : "WAIT";
@@ -1559,7 +1594,7 @@ int OnInit()
       if(c=="GK_INIT_SELL") g_initPrice_Sell = pos.PriceOpen();
    }
 
-   Print("Golden Kuy3 v1.45 init  digits=",g_digits," pip=",g_pip," stopsLvl=",g_stopsLevel,
+   Print("Golden Kuy3 v1.46 init  digits=",g_digits," pip=",g_pip," stopsLvl=",g_stopsLevel,
          " | Hero=", InpHero_Enabled?"ON":"OFF", " HeroN=", InpHero_OrderCount,
          " minAct=", InpHero_MinOrdersToActivate, " BE=", InpHero_BE_OffsetPoints, "pt");
    return INIT_SUCCEEDED;
@@ -1569,7 +1604,7 @@ void OnDeinit(const int reason)
 {
    DelDash();
    DelLines();
-   Print("Golden Kuy3 v1.45 deinit reason=",reason);
+   Print("Golden Kuy3 v1.46 deinit reason=",reason);
 }
 
 void OnTick()
