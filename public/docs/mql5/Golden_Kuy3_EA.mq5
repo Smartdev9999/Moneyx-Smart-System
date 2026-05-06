@@ -787,6 +787,20 @@ void BuildHeroTicketCache()
    if(g_heroPhase_Buy  != 3) g_heroPhase_Buy  = (g_heroBuyStableN  > 0) ? 2 : 0;
    if(g_heroPhase_Sell != 3) g_heroPhase_Sell = (g_heroSellStableN > 0) ? 2 : 0;
 
+   // v1.58 Conditional Alternation Reset — if BOTH sides have no Hero phase
+   //         AND both sides are below activation threshold, clear next-allowed
+   //         lock so the system behaves like a fresh start (no forced side).
+   {
+      int thrR = (InpHero_MinOrdersToActivate > 0) ? InpHero_MinOrdersToActivate : (InpHero_OrderCount + 1);
+      bool buyIdle  = (g_heroPhase_Buy  == 0 && sideTotalActive[0] < thrR);
+      bool sellIdle = (g_heroPhase_Sell == 0 && sideTotalActive[1] < thrR);
+      if(g_heroNextAllowedSide >= 0 && buyIdle && sellIdle) {
+         Print("v1.58 Hero ALT-RESET (both sides idle/under threshold) — Next-Allowed cleared");
+         g_heroNextAllowedSide = -1;
+         g_heroLastClosedSide  = -1;
+      }
+   }
+
    g_heroDash_BuyActive  = sideTotalActive[0];
    g_heroDash_SellActive = sideTotalActive[1];
    g_heroDash_BuyTagged  = g_heroBuyStableN;
