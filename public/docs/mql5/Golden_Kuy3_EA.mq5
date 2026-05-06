@@ -19,8 +19,8 @@
 //|  v1.40: Hero Order ported from Gold Miner v7.09                  |
 //+------------------------------------------------------------------+
 #property copyright "Golden Kuy3 EA"
-#property version   "1.50"
-#property description "Golden Kuy3 v1.50 — Hero TP-Only Opposite Close: Hero closes only when opposite basket flattens with TP/profit; SL/loss = Hero holds locked at BE-SL waiting for next opposite TP"
+#property version   "1.51"
+#property description "Golden Kuy3 v1.51 — Hero AvgTP-Trigger Only: Hero closes only when opposite basket is flattened by Avg-TP/Avg-Trail/Master TP/Accumulate (intent flag); Per-Order Trail / SL / Cost-Hit do NOT trigger Hero close"
 #property strict
 
 #include <Trade/Trade.mqh>
