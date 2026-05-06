@@ -687,6 +687,22 @@ void BuildHeroTicketCache()
          continue;
       }
 
+      // v1.56 — Strict Side-Alternation: opposite side must take its turn first.
+      //         g_heroNextAllowedSide is set when a Hero closes (CloseHeroOnSide) or
+      //         auto-releases. Cleared once that opposite side actually activates Hero.
+      if(g_heroNextAllowedSide >= 0 && sideId != g_heroNextAllowedSide) {
+         static datetime lastNextBlockLog_B = 0, lastNextBlockLog_S = 0;
+         datetime lastLogN = (sideId == POSITION_TYPE_BUY) ? lastNextBlockLog_B : lastNextBlockLog_S;
+         if(TimeCurrent() - lastLogN >= 30) {
+            string nextStr = (g_heroNextAllowedSide == (int)POSITION_TYPE_BUY) ? "BUY" : "SELL";
+            Print("v1.56 Hero ALT-BLOCK side=", (sideId==POSITION_TYPE_BUY?"BUY":"SELL"),
+                  " waitingNext=", nextStr, " — opposite must take next Hero turn");
+            if(sideId == POSITION_TYPE_BUY) lastNextBlockLog_B = TimeCurrent();
+            else                            lastNextBlockLog_S = TimeCurrent();
+         }
+         continue;
+      }
+
       // Activation gate
       if(nAll < activateThreshold) continue;
       if(nPool <= 0) continue;
