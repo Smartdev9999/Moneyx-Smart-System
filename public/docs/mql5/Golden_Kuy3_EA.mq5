@@ -1,16 +1,13 @@
 //+------------------------------------------------------------------+
 //|                                            Golden_Kuy3_EA.mq5    |
-//|                                       Golden Kuy3 EA  v1.58      |
-//|  v1.58: Hero Handoff Reserve + Conditional Alternation Lock —    |
-//|         While owner side is BE_GUARD, opposite may pre-arm as    |
-//|         Reserve so the next basket TP keeps a Hero set instead   |
-//|         of closing all. If both sides are below threshold,       |
-//|         Next-Allowed lock auto-resets (no forced alternation).   |
+//|                                       Golden Kuy3 EA  v1.59      |
+//|  v1.59: Risk Limits — Max Lot per Order cap (post-multiplier)    |
+//|         + Max DD Close (PERCENT of balance OR DOLLAR floating).  |
 //|         Full history in mem://trading/golden-kuy3/*.             |
 //+------------------------------------------------------------------+
 #property copyright "Golden Kuy3 EA"
-#property version   "1.58"
-#property description "Golden Kuy3 v1.58 — Hero Handoff Reserve + Conditional Alternation: opposite side may pre-arm Reserve while owner is BE_GUARD; alternation lock auto-resets when both sides under threshold."
+#property version   "1.59"
+#property description "Golden Kuy3 v1.59 — Adds Max Lot per Order cap + Max DD Close (Percent/Dollar)."
 #property strict
 
 #include <Trade/Trade.mqh>
