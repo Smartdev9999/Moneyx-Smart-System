@@ -1558,11 +1558,11 @@ void ManageTakeProfit()
 {
    if(!InpUseTakeProfit) return;
 
-   // 1. Accumulate (whole account) — realized + floating
+   // 1. Accumulate (whole account) — realized + floating (v1.60: include Hero, Gold Miner concept)
    if(InpUseAccumulateClose && InpAccumulateTarget>0){
-      double floatingAll = CalcSideFloating_NonHero(POSITION_TYPE_BUY) + CalcSideFloating_NonHero(POSITION_TYPE_SELL);
+      double floatingAll = CalcSideFloating(POSITION_TYPE_BUY) + CalcSideFloating(POSITION_TYPE_SELL);
       if((g_realizedCycle + floatingAll) >= InpAccumulateTarget){
-         Print("GK ACCUM CLOSE — realized=",DoubleToString(g_realizedCycle,2)," floating=",DoubleToString(floatingAll,2)," tgt=",InpAccumulateTarget);
+         Print("v1.60 ACCUM CLOSE — realized=",DoubleToString(g_realizedCycle,2)," floating(all,inclHero)=",DoubleToString(floatingAll,2)," sum=",DoubleToString(g_realizedCycle+floatingAll,2)," tgt=",InpAccumulateTarget);
          // v1.51 — mark intent on BOTH sides (CloseAllOurs flattens both baskets)
          g_oppCloseIntent_AvgTP_Buy  = true; g_oppCloseIntentTime_Buy  = TimeCurrent();
          g_oppCloseIntent_AvgTP_Sell = true; g_oppCloseIntentTime_Sell = TimeCurrent();
