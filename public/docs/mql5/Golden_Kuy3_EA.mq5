@@ -743,11 +743,18 @@ void BuildHeroTicketCache()
       }
       sideHeroTagged[s] = take;
 
+      // v1.56 — clear next-allowed gate once this side actually activates Hero
+      if(g_heroNextAllowedSide == sideId) {
+         Print("v1.56 Hero ALT-CONSUMED side=", (sideId==POSITION_TYPE_BUY?"BUY":"SELL"),
+               " — opposite-turn satisfied, next-allowed reset to ANY");
+         g_heroNextAllowedSide = -1;
+      }
+
       string fixedList = "";
       for(int k = 0; k < take; k++)
          fixedList += StringFormat(" #%I64u", tkPool[k]);
-      Print("v1.49 Hero STABLE-SET FROZEN side=", (sideId==POSITION_TYPE_BUY?"BUY":"SELL"),
-            " count=", take, " (sticky — won't be replaced until phase resets):", fixedList);
+      Print("v1.56 Hero STABLE-SET FROZEN side=", (sideId==POSITION_TYPE_BUY?"BUY":"SELL"),
+            " count=", take, " (ARMED — refresh by price-extreme until BE_GUARD):", fixedList);
    }
 
    // ============ STEP 4: Rebuild flat g_heroTickets[] from both stable sets ============
