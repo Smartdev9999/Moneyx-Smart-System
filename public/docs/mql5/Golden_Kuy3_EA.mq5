@@ -1834,6 +1834,19 @@ void DashRow(string label, string value, color valColor)
    g_dashRow++;
 }
 
+// v1.61 — Wide value row for long content (Hero ticket lists). Background + value cell
+//         extend by extraW pixels so all ticket IDs fit; label width unchanged.
+void DashRowWide(string label, string value, color valColor, int extraW, int fontSize=8)
+{
+   int y = InpDashY + g_dashRow * InpDashRowH;
+   color bg = (g_dashRow%2==0) ? InpDashRowBgColor : InpDashAltRowBgColor;
+   int totalW = InpDashColW1 + InpDashColW2 + extraW;
+   SetRectBg(StringFormat("R%d",g_dashRow), InpDashX, y, totalW, InpDashRowH, bg);
+   SetCell(StringFormat("L%d",g_dashRow), InpDashX+4,                y+1, label, InpDashTextColor, 9,        false);
+   SetCell(StringFormat("V%d",g_dashRow), InpDashX+InpDashColW1+4,   y+1, value, valColor,         fontSize, false);
+   g_dashRow++;
+}
+
 void DrawDashboard()
 {
    if(!InpShowDashboard) return;
