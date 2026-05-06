@@ -874,13 +874,14 @@ void ManageHeroOppositeClose()
          if(oppRealized <= InpHero_OppCloseMinProfit) {
             // SL / loss / no realized profit yet — HOLD Hero, reset accumulator so next opp basket cycle is judged fresh.
             static datetime lastHoldLog_B = 0, lastHoldLog_S = 0;
-            datetime &lastLog = (side == POSITION_TYPE_BUY) ? lastHoldLog_B : lastHoldLog_S;
+            datetime lastLog = (side == POSITION_TYPE_BUY) ? lastHoldLog_B : lastHoldLog_S;
             if(TimeCurrent() - lastLog >= 30) {
                Print("v1.50 Hero HOLD heroSide=", EnumToString(side),
                      " oppSide=", EnumToString(opp), " oppRealized=", DoubleToString(oppRealized, 2),
                      " minTP=", DoubleToString(InpHero_OppCloseMinProfit, 2),
                      " — opp closed by SL/loss, keep Hero locked at BE-SL waiting next opp TP");
-               lastLog = TimeCurrent();
+               if(side == POSITION_TYPE_BUY) lastHoldLog_B = TimeCurrent();
+               else                          lastHoldLog_S = TimeCurrent();
             }
             // Reset opp accumulator for next opposite basket cycle
             if(side == POSITION_TYPE_BUY) g_oppBasketRealized_HeroBuy  = 0.0;
