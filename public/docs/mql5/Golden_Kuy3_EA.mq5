@@ -1317,6 +1317,9 @@ void ManageTakeProfit()
       double floatingAll = CalcSideFloating_NonHero(POSITION_TYPE_BUY) + CalcSideFloating_NonHero(POSITION_TYPE_SELL);
       if((g_realizedCycle + floatingAll) >= InpAccumulateTarget){
          Print("GK ACCUM CLOSE — realized=",DoubleToString(g_realizedCycle,2)," floating=",DoubleToString(floatingAll,2)," tgt=",InpAccumulateTarget);
+         // v1.51 — mark intent on BOTH sides (CloseAllOurs flattens both baskets)
+         g_oppCloseIntent_AvgTP_Buy  = true; g_oppCloseIntentTime_Buy  = TimeCurrent();
+         g_oppCloseIntent_AvgTP_Sell = true; g_oppCloseIntentTime_Sell = TimeCurrent();
          CloseAllOurs();
          return;
       }
