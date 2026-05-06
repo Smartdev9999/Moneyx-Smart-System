@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                            Golden_Kuy3_EA.mq5    |
-//|                                       Golden Kuy3 EA  v1.44      |
-//|  v1.44: Hero CANDIDATE strips TP only (keeps SL cost-lock)        |
+//|                                       Golden Kuy3 EA  v1.45      |
+//|  v1.45: Hero CANDIDATE strips TP only (keeps SL cost-lock)        |
 //|  v1.43: Hero Price-Extreme select + Strict Single-Side Lock      |
 //|  v1.42: Accumulate cycle auto-reset on flat (Gold Miner concept) |
 //|  v1.40: Hero Order ported from Gold Miner v7.09                  |
 //+------------------------------------------------------------------+
 #property copyright "Golden Kuy3 EA"
-#property version   "1.44"
-#property description "Golden Kuy3 v1.44 — Hero CANDIDATE strips TP only (SL kept); BE_GUARD applies lock-profit SL after same-side basket TP"
+#property version   "1.45"
+#property description "Golden Kuy3 v1.45 — Hero CANDIDATE strips TP only (SL kept); BE_GUARD applies lock-profit SL after same-side basket TP"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -339,7 +339,7 @@ bool ShouldBlockSameSideGridForHero(ENUM_POSITION_TYPE side)
 
 void BuildHeroTicketCache()
 {
-   // v1.44: rebuild ทุก tick + sort ด้วยราคาเปิด (BUY ต่ำสุด / SELL สูงสุด)
+   // v1.45: rebuild ทุก tick + sort ด้วยราคาเปิด (BUY ต่ำสุด / SELL สูงสุด)
    if(!InpHero_Enabled || InpHero_OrderCount <= 0) { g_heroTicketCount = 0; return; }
    g_heroLastBuildTime = TimeCurrent();
    g_heroTicketCount = 0;
@@ -387,7 +387,7 @@ void BuildHeroTicketCache()
       }
       sideTotalActive[s] = nAll;
 
-      // v1.44 Sort by OPEN PRICE — BUY: ascending (ต่ำสุดมาก่อน = Hero ล่างสุด)
+      // v1.45 Sort by OPEN PRICE — BUY: ascending (ต่ำสุดมาก่อน = Hero ล่างสุด)
       //                            SELL: descending (สูงสุดมาก่อน = Hero บนสุด)
       // tie-break: ticket จากน้อยไปมาก (เก่ากว่ามาก่อน เพื่อความเสถียร)
       bool buySide = (side == POSITION_TYPE_BUY);
@@ -457,11 +457,11 @@ void BuildHeroTicketCache()
 
    // v7.09 Auto-release ownership when phase==BE_GUARD but Hero tickets=0
    if(g_heroPhase_Buy == 3 && sideHeroTagged[0] == 0) {
-      Print("v1.44 Hero AUTO-RELEASE BUY: phase=BE_GUARD but Hero tickets=0 — releasing owner lock");
+      Print("v1.45 Hero AUTO-RELEASE BUY: phase=BE_GUARD but Hero tickets=0 — releasing owner lock");
       g_heroPhase_Buy = 0; g_heroBE_Applied_Buy = false; g_heroJustClosed_Buy = TimeCurrent();
    }
    if(g_heroPhase_Sell == 3 && sideHeroTagged[1] == 0) {
-      Print("v1.44 Hero AUTO-RELEASE SELL: phase=BE_GUARD but Hero tickets=0 — releasing owner lock");
+      Print("v1.45 Hero AUTO-RELEASE SELL: phase=BE_GUARD but Hero tickets=0 — releasing owner lock");
       g_heroPhase_Sell = 0; g_heroBE_Applied_Sell = false; g_heroJustClosed_Sell = TimeCurrent();
    }
 
@@ -490,7 +490,7 @@ void BuildHeroTicketCache()
          heroPxList += StringFormat(" #%I64u@%s", g_heroTickets[i],
                        DoubleToString(PositionGetDouble(POSITION_PRICE_OPEN), g_digits));
       }
-      Print("v1.44 Hero AUDIT [PriceExtreme/StrictLock]: BUY ", roleB, " active=", sideTotalActive[0],
+      Print("v1.45 Hero AUDIT [PriceExtreme/StrictLock]: BUY ", roleB, " active=", sideTotalActive[0],
             " hero=", sideHeroTagged[0],
             " | SELL ", roleS, " active=", sideTotalActive[1],
             " hero=", sideHeroTagged[1],
@@ -544,7 +544,7 @@ void ApplyHeroLockProfitSL(ENUM_POSITION_TYPE side)
             " count=", applied, " skipped=", skipped, " (lock-profit SL):", slList);
 }
 
-// v1.44: ระหว่าง CANDIDATE/ARMED — ถอดเฉพาะ TP เพื่อกันโดน basket Avg-TP/per-order TP ปิดก่อนเวลา
+// v1.45: ระหว่าง CANDIDATE/ARMED — ถอดเฉพาะ TP เพื่อกันโดน basket Avg-TP/per-order TP ปิดก่อนเวลา
 //        คง SL เดิม (BE/cost-lock จาก Per-Order BE/Trail) เพื่อกันราคาวิ่งกลับทะลุทุน
 //        เมื่อ basket ฝั่งเดียวกันปิดหมด phase->BE_GUARD แล้ว ApplyHeroLockProfitSL จะตั้ง SL ใหม่ทับ
 void StripBrokerTPSLFromHeroTickets()
@@ -562,13 +562,13 @@ void StripBrokerTPSLFromHeroTickets()
       double curTP = PositionGetDouble(POSITION_TP);
       double curSL = PositionGetDouble(POSITION_SL);
       if(curTP == 0) continue; // TP ถอดอยู่แล้ว — ไม่ต้องแตะ SL
-      // v1.44 ถอดเฉพาะ TP, คง SL เดิมไว้
+      // v1.45 ถอดเฉพาะ TP, คง SL เดิมไว้
       if(trade.PositionModify(ticket, curSL, 0)) {
          if(doLog) diag += StringFormat(" #%I64u(SL=%s)", ticket, DoubleToString(curSL, g_digits));
       }
    }
    if(doLog && StringLen(diag) > 0) {
-      Print("v1.44 Hero CANDIDATE strip TP only (SL kept):", diag);
+      Print("v1.45 Hero CANDIDATE strip TP only (SL kept):", diag);
       lastDiagLog = TimeCurrent();
    }
 }
@@ -1327,7 +1327,7 @@ void DrawDashboard()
    double plS  = CalcSideFloating(POSITION_TYPE_SELL);
    double plAll= plB+plS;
 
-   DashHeader(StringFormat("Golden Kuy3 v1.44  Side:%s Grid:%s/%s", SideModeStr(), GridModeStr(), LotModeStr()));
+   DashHeader(StringFormat("Golden Kuy3 v1.45  Side:%s Grid:%s/%s", SideModeStr(), GridModeStr(), LotModeStr()));
 
    DashHeader("=== ACCOUNT ===");
    DashRow("Balance",     StringFormat("$%.2f", bal), info);
@@ -1392,7 +1392,7 @@ void DrawDashboard()
    DashRow("Restart Pending", StringFormat("BUY:%s  SELL:%s", rpB, rpS),
            (g_costHit_Pending_Buy||g_costHit_Pending_Sell)?warn:info);
 
-   DashHeader("=== HERO ORDER (v1.44) ===");
+   DashHeader("=== HERO ORDER (v1.45) ===");
    DashRow("Hero Cfg", StringFormat("%s  N=%d minAct=%d BE=%dpt  Mode=PRICE_EXTREME Lock=%s",
                           OnOff(InpHero_Enabled), InpHero_OrderCount,
                           InpHero_MinOrdersToActivate, InpHero_BE_OffsetPoints,
@@ -1559,7 +1559,7 @@ int OnInit()
       if(c=="GK_INIT_SELL") g_initPrice_Sell = pos.PriceOpen();
    }
 
-   Print("Golden Kuy3 v1.44 init  digits=",g_digits," pip=",g_pip," stopsLvl=",g_stopsLevel,
+   Print("Golden Kuy3 v1.45 init  digits=",g_digits," pip=",g_pip," stopsLvl=",g_stopsLevel,
          " | Hero=", InpHero_Enabled?"ON":"OFF", " HeroN=", InpHero_OrderCount,
          " minAct=", InpHero_MinOrdersToActivate, " BE=", InpHero_BE_OffsetPoints, "pt");
    return INIT_SUCCEEDED;
@@ -1569,7 +1569,7 @@ void OnDeinit(const int reason)
 {
    DelDash();
    DelLines();
-   Print("Golden Kuy3 v1.44 deinit reason=",reason);
+   Print("Golden Kuy3 v1.45 deinit reason=",reason);
 }
 
 void OnTick()
