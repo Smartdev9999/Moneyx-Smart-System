@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                            Golden_Kuy3_EA.mq5    |
-//|                                       Golden Kuy3 EA  v1.60      |
-//|  v1.60: Accumulate Close now counts FLOATING incl. Hero (Gold     |
+//|                                       Golden Kuy3 EA  v1.61      |
+//|  v1.61: Accumulate Close now counts FLOATING incl. Hero (Gold     |
 //|         Miner concept) — fix: Hero floating no longer hides total |
 //|         realized+floating from accumulate trigger.                |
 //|         Full history in mem://trading/golden-kuy3/*.              |
 //+------------------------------------------------------------------+
 #property copyright "Golden Kuy3 EA"
-#property version   "1.60"
-#property description "Golden Kuy3 v1.60 — Accumulate Close counts floating incl. Hero (Gold Miner concept)."
+#property version   "1.61"
+#property description "Golden Kuy3 v1.61 — Accumulate Close counts floating incl. Hero (Gold Miner concept)."
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -1559,11 +1559,11 @@ void ManageTakeProfit()
 {
    if(!InpUseTakeProfit) return;
 
-   // 1. Accumulate (whole account) — realized + floating (v1.60: include Hero, Gold Miner concept)
+   // 1. Accumulate (whole account) — realized + floating (v1.61: include Hero, Gold Miner concept)
    if(InpUseAccumulateClose && InpAccumulateTarget>0){
       double floatingAll = CalcSideFloating(POSITION_TYPE_BUY) + CalcSideFloating(POSITION_TYPE_SELL);
       if((g_realizedCycle + floatingAll) >= InpAccumulateTarget){
-         Print("v1.60 ACCUM CLOSE — realized=",DoubleToString(g_realizedCycle,2)," floating(all,inclHero)=",DoubleToString(floatingAll,2)," sum=",DoubleToString(g_realizedCycle+floatingAll,2)," tgt=",InpAccumulateTarget);
+         Print("v1.61 ACCUM CLOSE — realized=",DoubleToString(g_realizedCycle,2)," floating(all,inclHero)=",DoubleToString(floatingAll,2)," sum=",DoubleToString(g_realizedCycle+floatingAll,2)," tgt=",InpAccumulateTarget);
          // v1.51 — mark intent on BOTH sides (CloseAllOurs flattens both baskets)
          g_oppCloseIntent_AvgTP_Buy  = true; g_oppCloseIntentTime_Buy  = TimeCurrent();
          g_oppCloseIntent_AvgTP_Sell = true; g_oppCloseIntentTime_Sell = TimeCurrent();
@@ -1869,7 +1869,7 @@ void DrawDashboard()
    double plS  = CalcSideFloating(POSITION_TYPE_SELL);
    double plAll= plB+plS;
 
-   DashHeader(StringFormat("Golden Kuy3 v1.60  Side:%s Grid:%s/%s", SideModeStr(), GridModeStr(), LotModeStr()));
+   DashHeader(StringFormat("Golden Kuy3 v1.61  Side:%s Grid:%s/%s", SideModeStr(), GridModeStr(), LotModeStr()));
 
    DashHeader("=== ACCOUNT ===");
    DashRow("Balance",     StringFormat("$%.2f", bal), info);
@@ -1913,7 +1913,7 @@ void DrawDashboard()
                            (InpUseTPPoints?ok:warn));
    DashRow("TP %Bal",      StringFormat("%s  %.1f%%", OnOff(InpUseTPPercentBalance), InpTPPercentOfBalance),
                            (InpUseTPPercentBalance?ok:warn));
-   // v1.60 — show current sum (realized + floating incl Hero) so we see how close to trigger
+   // v1.61 — show current sum (realized + floating incl Hero) so we see how close to trigger
    double accCur = g_realizedCycle + CalcSideFloating(POSITION_TYPE_BUY) + CalcSideFloating(POSITION_TYPE_SELL);
    color accClr = (InpUseAccumulateClose ? (accCur >= InpAccumulateTarget ? ok : warn) : warn);
    DashRow("Accumulate",   StringFormat("%s  $%.0f (cur $%.2f)", OnOff(InpUseAccumulateClose), InpAccumulateTarget, accCur),
@@ -1945,7 +1945,7 @@ void DrawDashboard()
    DashRow("Restart Pending", StringFormat("BUY:%s  SELL:%s", rpB, rpS),
            (g_costHit_Pending_Buy||g_costHit_Pending_Sell)?warn:info);
 
-   DashHeader("=== HERO ORDER (v1.60) ===");
+   DashHeader("=== HERO ORDER (v1.61) ===");
    DashRow("Hero Cfg", StringFormat("%s  N=%d minAct=%d BE=%dpt  Mode=HANDOFF Lock=%s Alt=%s",
                           OnOff(InpHero_Enabled), InpHero_OrderCount,
                           InpHero_MinOrdersToActivate, InpHero_BE_OffsetPoints,
@@ -2195,7 +2195,7 @@ int OnInit()
       if(c=="GK_INIT_SELL") g_initPrice_Sell = pos.PriceOpen();
    }
 
-   Print("Golden Kuy3 v1.60 init  digits=",g_digits," pip=",g_pip," stopsLvl=",g_stopsLevel,
+   Print("Golden Kuy3 v1.61 init  digits=",g_digits," pip=",g_pip," stopsLvl=",g_stopsLevel,
          " | Hero=", InpHero_Enabled?"ON":"OFF", " HeroN=", InpHero_OrderCount,
          " minAct=", InpHero_MinOrdersToActivate, " BE=", InpHero_BE_OffsetPoints, "pt");
    return INIT_SUCCEEDED;
@@ -2205,7 +2205,7 @@ void OnDeinit(const int reason)
 {
    DelDash();
    DelLines();
-   Print("Golden Kuy3 v1.60 deinit reason=",reason);
+   Print("Golden Kuy3 v1.61 deinit reason=",reason);
 }
 
 void OnTick()
