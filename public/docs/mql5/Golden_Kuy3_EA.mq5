@@ -1,6 +1,8 @@
 //+------------------------------------------------------------------+
 //|                                            Golden_Kuy3_EA.mq5    |
-//|                                       Golden Kuy3 EA  v1.48      |
+//|                                       Golden Kuy3 EA  v1.49      |
+//|  v1.49: Hero Guard After Basket Close — keep Hero set even when   |
+//|         non-Hero basket is closed; IsHeroProtectedTicket guard    |
 //|  v1.48: Dynamic Price-Extreme Hero — refresh within side-locked Hero  |
 //|         + extended alternation guard (broker close detected)     |
 //|         + DrawAvgAndTPLines uses non-Hero average                 |

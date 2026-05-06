@@ -1,63 +1,95 @@
-# Golden Kuy3 v1.48 — Dynamic Price-Extreme Hero (Side-Locked)
+## สรุปที่ตรวจเจอ
 
-## ปัญหา
-v1.47 freeze stable set ครั้งเดียวตอน activate → ถ้ามีออเดอร์ใหม่เปิดที่ราคา extreme กว่า (BUY ต่ำกว่า / SELL สูงกว่า) ระบบไม่ swap เข้า Hero set
-- ตัวอย่าง: SELL Hero stuck ที่ #28@3313.63 ทั้งที่ #742@3319.17 สูงกว่า
+จากโค้ด `Golden_Kuy3_EA.mq5` ปัญหาหลักอยู่ใน `BuildHeroTicketCache()` ของ v1.48 ฝั่ง Branch A ตอน Hero active แล้ว:
 
-## หลักการ v1.48
-ผสานสองสิ่งที่เคยขัดกัน:
-1. **Side-Alternation Lock (v1.46/v1.47)** — คงไว้ทั้งหมด: เมื่อ Hero ฝั่งหนึ่งปิดหมด → stamp `g_heroLastClosedSide` → ฝั่งเดิมห้าม re-arm จนกว่าฝั่งตรงข้าม ARMED/BE_GUARD หรือ flat สนิท
-2. **Per-Tick Price-Extreme Refresh (NEW)** — ภายในฝั่งที่ phase active แล้ว stable set รีเฟรชทุก tick ตาม price-extreme ปัจจุบัน (BUY = N ตัวล่างสุด, SELL = N ตัวบนสุด)
-
-## Algorithm `BuildHeroTicketCache()` v1.48
-
-### STEP 1 — Snapshot prev stable set
-```
-prevBuyStable[] = copy of g_heroBuyStable[] (เพื่อ detect external close)
-prevSellStable[] = copy of g_heroSellStable[]
+```text
+int takeA = MathMin(InpHero_OrderCount, nPool - 1);
 ```
 
-### STEP 2 — Prune dead tickets (เหมือน v1.47)
-ถ้า prevN>0 && nowN==0 && phase>0 → external Hero close → reset phase + stamp lastClosedSide
+เงื่อนไข `nPool - 1` นี้ถูกต้องเฉพาะตอน “เริ่ม activate” เพราะต้องเหลือ non-Hero อย่างน้อย 1 ตัวไว้เป็น basket ปกติ แต่พอ Hero active อยู่แล้ว และ basket ปกติถูกปิดด้วย TP/Avg/เงื่อนไขปิด ระบบยังบังคับ `nPool - 1` ทำให้ Hero หลุดออกจากชุด Hero ทีละตัว กลายเป็น non-Hero ชั่วคราว จากนั้นระบบ TP/Avg/Close ต่าง ๆ สามารถไปปิดตัวที่หลุดนี้ได้ จึงเกิดอาการ “Hero ไม่ถูกกัน / ปิดหมด” และ Dashboard ยังขึ้น `Hero Owner = NONE (waiting close)` เพราะระบบยังเห็นว่ามี non-Hero เหลืออยู่ จึงไม่เข้า `BE_GUARD` ให้ Hero จริง
 
-### STEP 3 — Per-side processing
-สำหรับแต่ละฝั่ง:
-- รวบรวม pool ออเดอร์ปัจจุบัน + sort ตาม price-extreme (BUY asc / SELL desc)
-- คำนวณ `desiredSet[] = top min(N, nPool-1) tickets`
+## แผนแก้ v1.49 — Hero Guard After Basket Close
 
-**Branch A: phase active (ARMED/BE_GUARD)**
-- **REFRESH** stable set = `desiredSet` (ไม่ freeze แล้ว)
-- ถ้ามี ticket ใหม่เข้า set → strip broker TP (StripBrokerTPSLFromHeroTickets ทำใน step ถัดไป)
-- ถ้ามี ticket หลุดจาก set (มีออเดอร์ extreme กว่ามาแทน) → restore broker TP ตาม Avg-mode (handled by SyncBrokerTPSL ใน next sync)
-- ถ้า BE_GUARD → re-apply ApplyHeroLockProfitSL กับ set ใหม่ (เฉพาะ ticket ใหม่ที่ยังไม่มี SL)
+### 1. แก้ Branch A ของ `BuildHeroTicketCache()`
+- ตอน `curPhase != 0` หรือ Hero active แล้ว จะเปลี่ยนจาก:
 
-**Branch B: phase == NONE**
-- ผ่าน post-close grace + alt-lock + single-side-lock + threshold → activate
-- ตั้ง stable set = desiredSet, phase = ARMED
+```text
+takeA = min(N, nPool - 1)
+```
 
-### STEP 4-5 — Rebuild flat array + auto-release (เหมือน v1.47)
+เป็น:
 
-## โค้ดที่ต้องเพิ่ม
-1. `RestoreBrokerTPForReleasedHeroTickets(prevSet, newSet)` — เปรียบเทียบ prev vs new; ticket ที่หลุดจาก Hero ควรกลับเข้า Avg TP คำนวณใหม่ (ปกติ SyncBrokerTPSL จะ push TP ให้เองเมื่อไม่อยู่ใน g_heroTickets — ไม่ต้องทำเพิ่ม)
-2. `StripTPOnNewHeroEntrants(prevSet, newSet)` — ticket ใหม่ที่เพิ่งเข้า Hero set → strip broker TP ทันที
-3. ใน Branch A: เรียก StripTPOnNewHeroEntrants + (ถ้า phase==BE_GUARD) ApplyHeroLockProfitSL กับ set ใหม่
+```text
+takeA = min(N, nPool)
+```
 
-## ส่วนที่ไม่เปลี่ยน (กฎเหล็ก)
-- ❌ OrderSend / trade.Buy/Sell/PositionClose
-- ❌ OpenInitial / OpenGrid / Manage*Entry / CalcGridLot
-- ❌ Per-Order BE/Trail / Avg-Trail strict-2-cross / TP modes / Accumulate / Cost-Hit Restart
-- ❌ ComputeHeroLockProfitSL / ApplyHeroLockProfitSL formula
-- ❌ Side-Alternation Lock v1.46/v1.47 condition (oppActive || selfFlat)
-- ❌ Single-Side Lock v1.45 (BE_GUARD-only owner)
-- ❌ v1.42 Accumulate cycle reset
-- `InpHero_Enabled=false` → behavior = v1.47
+ผลลัพธ์:
+- ตอนยังมี basket ปกติอยู่: Hero ยังเลือก N ตัว extreme ตามเดิม และ non-Hero ยังเหลือถ้าจำนวน order มากกว่า N
+- ตอน basket ปกติปิดหมด เหลือแต่ Hero: ระบบจะไม่ปล่อย Hero ออกมาเป็น non-Hero อีก
+- `CountNonHeroMainOnSide()` จะเห็นเป็น 0 แล้ว `DetectSameSideBasketClearedForHero()` จะเปลี่ยน phase เป็น `BE_GUARD`
+- Dashboard จะเปลี่ยนจาก `NONE (waiting close)` เป็น owner ฝั่งที่ควรล็อกจริง เช่น `BUY (locked)` หรือ `SELL (locked)`
 
-## ผลลัพธ์ที่คาดหวัง
-- SELL Hero (N=5) ตอนมี SELL 4 ตัว: #742@3319.17, #736@3317.16, #746@3315.17, #28@3313.63 → take=min(5, 4-1)=3 → Hero=[#742, #736, #746] (3 ตัวบนสุด)
-- ถ้า SELL ใหม่เปิดที่ราคา 3325 → Hero refresh เป็น [#newTicket, #742, #736] อัตโนมัติ tick ถัดไป
-- ถ้า BUY ปิดหมดก่อน → alt-lock ยังกัน BUY re-arm → SELL ครอง Hero ต่อ
+### 2. เพิ่ม helper กัน Hero แบบแข็งแรงขึ้น
+เพิ่ม helper เช่น:
 
-## Version + Memory
-- Version bump 1.47 → 1.48 ทุกจุด (`#property version`, `#property description`, header, dashboard, OnInit/OnDeinit Print, audit log)
-- เพิ่ม memory: `mem://trading/golden-kuy3/v1-48-hero-dynamic-price-extreme.md`
-- อัปเดต `mem://index.md` (แทนที่บรรทัด v1.47)
+```text
+IsHeroProtectedTicket(ticket)
+```
+
+ให้เช็คทั้ง:
+- `g_heroTickets[]`
+- `g_heroBuyStable[]`
+- `g_heroSellStable[]`
+
+เพื่อกันช่วง cache ยังไม่ rebuild หรือ flat array ยังไม่ตรงกับ stable set
+
+### 3. ใช้ helper ใหม่นี้กับทุกจุดที่ “ไม่ควรแตะ Hero”
+จะเปลี่ยนเฉพาะ guard จาก `IsHeroTicket(ticket)` เป็น `IsHeroProtectedTicket(ticket)` ในจุดเหล่านี้:
+- `CountNonHeroMainOnSide()`
+- `CloseAllSide()`
+- `CloseAllOurs()`
+- `CalcSideFloating_NonHero()`
+- `CalcSideAvgPrice_NonHero()`
+- `EnforceClearTPIfDisabled()`
+- `ManageTakeProfit()` ตอน push broker TP
+- `ManageAverageTrailing()`
+- `ManagePerOrderTrailing()`
+
+เป้าหมายคือ ถ้า ticket เคยอยู่ใน stable Hero set จะไม่ถูกนับเป็น non-Hero และไม่ถูก TP/AvgTrail/CloseAll ปิดผิดฝั่ง
+
+### 4. เพิ่ม log ตรวจสอบให้เห็นชัด
+เพิ่ม audit log เฉพาะจุดสำคัญ เช่น:
+
+```text
+v1.49 Hero ACTIVE-KEEP side=BUY nPool=5 take=5 phase=ARMED/BE_GUARD
+v1.49 Hero BASKET-CLEARED side=BUY -> BE_GUARD protected=5
+```
+
+เพื่อให้เวลา backtest เห็นว่าเมื่อ basket ปกติปิดแล้ว Hero ยังถูกกันอยู่ครบ ไม่หลุดไปเป็น non-Hero
+
+### 5. อัปเดต Version และ Memory
+ตามกฎเวอร์ชัน EA จะอัปเดตทั้งหมดจาก v1.48 เป็น v1.49:
+- Header comment block
+- `#property version`
+- `#property description`
+- Dashboard title / Hero section
+- `Print()` init/deinit/audit logs ที่เกี่ยวกับ version
+- เพิ่ม memory: `Golden Kuy3 v1.49 Hero Guard After Basket Close`
+
+## สิ่งที่ไม่เปลี่ยนแปลง
+
+ยืนยันว่าจะไม่แก้ logic เหล่านี้:
+- ไม่แก้ `trade.Buy`, `trade.Sell`, `trade.PositionClose`, `OrderSend` วิธีส่งคำสั่ง
+- ไม่แก้สูตร grid entry, lot multiplier, initial entry
+- ไม่แก้ TP/SL/Trailing/Breakeven calculation เดิม
+- ไม่แก้ Accumulate / AvgTrailing strategy เดิม
+- ไม่แก้สูตรเลือก Hero แบบ price-extreme: BUY = order ราคาต่ำสุด, SELL = order ราคาสูงสุด
+- ไม่แก้ Side-Alternation Lock เดิม: Hero ต้องสลับฝั่ง ไม่ออกซ้ำฝั่งเดิมจนกว่าเงื่อนไขปลดล็อกจะครบ
+- `InpHero_Enabled=false` จะยังทำงานเหมือนเดิม
+
+## ผลที่คาดหวังหลังแก้
+
+- เมื่อ BUY Hero active และ BUY basket ปกติชน TP ปิด เหลือแต่ BUY Hero: ระบบจะไม่ปล่อย Hero ตัวใดออกจาก Hero set
+- Dashboard จะไม่ค้าง `NONE (waiting close)` ในจุดที่ควรเป็น owner แล้ว แต่จะเข้า `BE_GUARD`
+- TP/AvgTrail/CloseAll จะไม่ปิด Hero ผิดพลาด
+- ถ้า Hero ถูกปิดตามเงื่อนไขของ Hero จริง จึงค่อย stamp `Last Closed` และบังคับให้รอบถัดไปต้องสลับฝั่ง
