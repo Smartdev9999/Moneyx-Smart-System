@@ -1420,11 +1420,12 @@ void DrawDashboard()
    DashRow("Restart Pending", StringFormat("BUY:%s  SELL:%s", rpB, rpS),
            (g_costHit_Pending_Buy||g_costHit_Pending_Sell)?warn:info);
 
-   DashHeader("=== HERO ORDER (v1.45) ===");
-   DashRow("Hero Cfg", StringFormat("%s  N=%d minAct=%d BE=%dpt  Mode=PRICE_EXTREME Lock=%s",
+   DashHeader("=== HERO ORDER (v1.46) ===");
+   DashRow("Hero Cfg", StringFormat("%s  N=%d minAct=%d BE=%dpt  Mode=PRICE_EXTREME Lock=%s Alt=%s",
                           OnOff(InpHero_Enabled), InpHero_OrderCount,
                           InpHero_MinOrdersToActivate, InpHero_BE_OffsetPoints,
-                          (InpHero_SingleSideLock?"STRICT":"OFF")),
+                          (InpHero_SingleSideLock?"STRICT":"OFF"),
+                          (InpHero_AlternateSides?"ON":"OFF")),
                           (InpHero_Enabled?gold:warn));
    {
       int ownerSide = GetHeroOwnerSide();
@@ -1433,6 +1434,9 @@ void DrawDashboard()
                       : (g_heroPhase_Buy == 2 || g_heroPhase_Sell == 2) ? "NONE (waiting close)" : "NONE";
       color ownClr = (ownerSide >= 0) ? gold : ((g_heroPhase_Buy==2||g_heroPhase_Sell==2)?warn:info);
       DashRow("Hero Owner", ownerStr, ownClr);
+      string lcStr = (g_heroLastClosedSide == (int)POSITION_TYPE_BUY)  ? "BUY"
+                   : (g_heroLastClosedSide == (int)POSITION_TYPE_SELL) ? "SELL" : "-";
+      DashRow("Last Closed", lcStr, (g_heroLastClosedSide>=0?warn:info));
    }
    {
       string phaseB = (g_heroPhase_Buy == 3) ? "BE_GUARD" : (g_heroPhase_Buy == 2) ? "ARMED" : "WAIT";
