@@ -1,6 +1,11 @@
 //+------------------------------------------------------------------+
 //|                                            Golden_Kuy3_EA.mq5    |
-//|                                       Golden Kuy3 EA  v1.55      |
+//|                                       Golden Kuy3 EA  v1.56      |
+//|  v1.56: Strict Side-Alternation + BE_GUARD Freeze — Hero set is   |
+//|         FROZEN once phase=BE_GUARD (no new BUY ticket can extend  |
+//|         the BUY Hero owner). After a Hero side closes, the next   |
+//|         Hero must be on the OPPOSITE side; same side cannot       |
+//|         re-arm until opposite side completes its own Hero cycle.  |
 //|  v1.55: Hero TRUE Dynamic Refresh — InpHero_StickySet deprecated  |
 //|         (ignored). Branch A always rebuilds Hero set every tick   |
 //|         from current price-extreme. Dashboard shows Mode=DYNAMIC. |

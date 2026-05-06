@@ -1,71 +1,126 @@
-## แผนแก้ไข v1.55 — Hero Dynamic Refresh ให้เปลี่ยน Ticket จริง ไม่ล็อคค้าง
+## แผนแก้ไข v1.56 — Hero ต้องสลับฝั่งแบบครบวงจร และห้าม BUY ล็อคซ้ำเอง
 
-จากโค้ดปัจจุบันพบจุดสำคัญว่า ถึงแม้ `InpHero_StickySet=false` แล้ว แต่โครงสร้างภายในยังใช้ `g_heroBuyStable/g_heroSellStable` แบบ “stable set” และมีคอมเมนต์/logic บางส่วนที่ยังยึดแนวคิด freeze จาก v1.49/v1.52 อยู่ ทำให้ในบางจังหวะ ticket เดิมยังถูกมองเป็น Hero ต่อ และ ticket ใหม่ที่ราคาดีกว่าไม่ถูกสลับเข้า Hero จริงทั้งบน Dashboard และใน guard ของออเดอร์จริง
+จากภาพและโค้ดปัจจุบัน จุดที่ผิดมี 2 ส่วนหลัก:
 
-### เป้าหมายพฤติกรรมที่จะแก้
+1. `BuildHeroTicketCache()` v1.55 ใช้เงื่อนไข `curPhase != 0` ทำให้ Dynamic Refresh ทำงานทั้งตอน `ARMED` และ `BE_GUARD`  
+   ผลคือเมื่อ BUY เข้า `BE_GUARD` แล้ว หากมี BUY order ใหม่/ราคาดีกว่าเข้ามา ระบบยังเอา order ใหม่มาแทนชุด Hero เดิมได้ ทำให้ BUY Hero ถูกต่ออายุเองไม่จบ และ Dashboard ยังขึ้น `Hero Owner = BUY (locked)` ต่อเนื่อง
 
-- SELL Hero ต้องเลือก ticket ที่ราคาเปิดสูงที่สุด N ใบเสมอ
-- BUY Hero ต้องเลือก ticket ที่ราคาเปิดต่ำที่สุด N ใบเสมอ
-- เมื่อมี order ใหม่ที่ “ดีกว่า” เข้ามา ต้องสลับ Hero set ทันทีใน tick เดียวกัน
-- Ticket ที่หลุดจาก Hero ต้องกลับไปเป็น non-Hero จริง: restore TP เดิม และล้าง SL lock-profit ที่มาจาก Hero
-- Ticket ที่เข้ามาเป็น Hero ใหม่ต้องถูกถอด TP ทันที เพื่อไม่ให้ basket TP/Avg TP ปิดผิดตัว
-- Dashboard `Tix SELL/Tix BUY` ต้องแสดงชุดเดียวกับที่ `IsHeroProtectedTicket()` ใช้งานจริง
+2. `Side-Alternation Lock` เดิมยังปลดล็อคง่ายเกินไป เพราะดูแค่ opposite side active หรือ self flat ในบางจังหวะ  
+   แต่ requirement ที่ต้องการคือ: หลัง Hero ฝั่ง BUY ปิดแล้ว ต้องรอให้ SELL ได้เป็น Hero และ SELL Hero ต้องปิดก่อนเท่านั้น BUY ถึงจะมีสิทธิ์เป็น Hero รอบใหม่ได้
 
-### สิ่งที่จะเปลี่ยนในไฟล์ `public/docs/mql5/Golden_Kuy3_EA.mq5`
+## พฤติกรรมใหม่ที่จะแก้ให้ถูกต้อง
 
-1. **เพิ่ม version เป็น v1.55 ทุกจุดตามกฎ EA**
-   - `#property version`
-   - `#property description`
-   - header comment
-   - Dashboard title / Hero panel
-   - log init/deinit และ log Hero ที่เกี่ยวข้อง
+ลำดับจะเป็นแบบนี้:
 
-2. **แก้ `BuildHeroTicketCache()` Branch A ให้เป็น dynamic rebuild จริง**
-   - ตอน `curPhase != 0` และ `InpHero_StickySet=false`:
-     - scan order ฝั่งนั้นทั้งหมด
-     - sort ตาม price-extreme
-       - BUY: ราคาต่ำสุดก่อน
-       - SELL: ราคาสูงสุดก่อน
-     - เลือกจำนวน `InpHero_OrderCount`
-     - rebuild `g_heroBuyStable/g_heroSellStable` ใหม่ทุกครั้งจากผล sort
-   - เปลี่ยนชื่อ/คอมเมนต์ใน log จาก `STABLE/FROZEN` ให้ชัดว่าเป็น `DYNAMIC PRICE-EXTREME`
+```text
+BUY Hero active/armed
+  -> BUY non-Hero basket ปิดกำไรปกติ
+  -> BUY Hero เข้า BE_GUARD และล็อค ticket ชุดสุดท้ายไว้
+  -> BUY Hero ปิดตามกฎ Opposite AvgTP/TP gate
+  -> ระบบตั้งสถานะ: รอบถัดไปอนุญาตเฉพาะ SELL Hero เท่านั้น
+  -> SELL Hero ต้องเกิดขึ้นและปิดจบก่อน
+  -> จากนั้นจึงอนุญาต BUY Hero รอบใหม่
+```
 
-3. **แก้ activation ครั้งแรกให้สอดคล้องกับ dynamic mode**
-   - ตอน phase ยังเป็น `NONE`:
-     - ถ้า `InpHero_StickySet=false` ใช้ `take = MathMin(InpHero_OrderCount, nPool)` เพื่อให้ Hero นับครบ N ใบจริงตามที่ Dashboard แสดง
-     - ถ้า `InpHero_StickySet=true` คงพฤติกรรมเดิมแบบ fallback sticky ได้
-   - ยังคง activation threshold (`InpHero_MinOrdersToActivate`) เดิม ไม่เปลี่ยนเงื่อนไขการเริ่ม Hero
+ดังนั้นจะไม่มีกรณี `Hero Owner = BUY (locked)` ซ้ำต่อเนื่องหลังจาก BUY Hero cycle จบแล้ว โดยยังไม่ได้ผ่าน SELL Hero cycle ก่อน
 
-4. **ทำ sync ตอน Hero set เปลี่ยนให้ครบทั้ง demote และ promote**
-   - คง `RestoreInitialTPOnDemoted()` ไว้ แต่จะให้ทำงานทุกครั้งที่มี ticket หลุดจาก Hero set
-   - เพิ่ม helper สำหรับ ticket ที่ถูก promote เข้า Hero ใหม่ ให้ถอด TP ทันที (`TP=0`) โดยคง SL เดิมไว้ใน ARMED phase ตามกฎ v1.45
-   - ถ้าอยู่ BE_GUARD แล้วมี Hero set เปลี่ยน จะ reset `g_heroBE_Applied_* = false` เพื่อให้ `ApplyHeroLockProfitSL()` ลง SL lock-profit ให้ ticket Hero ชุดใหม่
+## สิ่งที่จะเปลี่ยนใน `public/docs/mql5/Golden_Kuy3_EA.mq5`
 
-5. **ป้องกัน dashboard/guard ใช้ข้อมูลคนละชุด**
-   - หลัง rebuild จะสร้าง `g_heroTickets[]` จาก stable set ล่าสุดทันที
-   - Dashboard ticket list จะอ่านจากชุดล่าสุดเดียวกัน
-   - เพิ่ม audit log แบบ throttle แสดง `oldSet -> newSet` พร้อม price เพื่อยืนยันว่ามีการสลับจริง เช่น SELL ควรเห็น ticket ราคาสูงสุดล่าสุดเข้ามาแทน ticket เก่า
+### 1. เพิ่ม Version เป็น v1.56 ทุกจุด
+- `#property version` 1.55 -> 1.56
+- `#property description`
+- Header comment block
+- Dashboard title `Golden Kuy3 v1.56`
+- Hero panel `HERO ORDER (v1.56)`
+- Init/Deinit logs และ Hero audit logs ที่เกี่ยวข้อง
 
-6. **คง `InpHero_StickySet=true` เป็นโหมด fallback เท่านั้น**
-   - หากผู้ใช้ตั้งค่าเป็น true จะยังกลับไปพฤติกรรม freeze แบบ v1.52 ได้
-   - แต่ default จะยังเป็น false และ dashboard จะแสดงให้ชัดว่า mode เป็น Dynamic ไม่ใช่ Sticky
+### 2. แยก Dynamic Refresh ให้ทำเฉพาะช่วง `ARMED` เท่านั้น
+แก้ใน `BuildHeroTicketCache()`:
 
-### สิ่งที่ไม่เปลี่ยนแปลง / ไม่กระทบ Trading Logic
+- ถ้า `curPhase == 2` (`ARMED`):
+  - ยังคง Dynamic Price-Extreme เหมือน v1.55
+  - BUY เลือก ticket ราคาเปิดต่ำสุด N ใบ
+  - SELL เลือก ticket ราคาเปิดสูงสุด N ใบ
+  - อัปเดต Dashboard และ `IsHeroProtectedTicket()` จากชุดเดียวกัน
 
-- ไม่แก้ `trade.Buy`, `trade.Sell`, `OrderSend`, logic เปิดออเดอร์
-- ไม่แก้เงื่อนไข Grid entry / Grid lot / Grid distance
-- ไม่แก้ Per-order trailing, BE, TP, SL calculation
+- ถ้า `curPhase == 3` (`BE_GUARD`):
+  - ห้าม rebuild จาก order ใหม่อีก
+  - ทำได้แค่ prune ticket ที่ปิดไปแล้วจากชุด Hero เดิม
+  - order ใหม่ฝั่งเดียวกันหลังเข้า BE_GUARD จะถือเป็น non-Hero ตามปกติ ไม่ได้มาต่ออายุ Hero owner
+
+นี่ตรงกับ requirement เดิมที่ว่า Hero ควรอัปเดตไปเรื่อยๆ “จนกว่าจะมีการปิดกำไรแบบปกติของ non-Hero” — หลังจาก non-Hero basket ปิดแล้วและเข้า BE_GUARD จะไม่ refresh ต่อแล้ว
+
+### 3. เพิ่ม Alternation State แบบบังคับรอบถัดไป
+เพิ่มตัวแปรสถานะใหม่ เช่น:
+
+```text
+g_heroNextAllowedSide = -1 / BUY / SELL
+```
+
+กติกา:
+
+- ตอนเริ่ม EA หรือยังไม่เคยมี Hero close: `-1` = ฝั่งไหนก็เริ่มได้ตามเงื่อนไข
+- เมื่อ `CloseHeroOnSide(BUY)` หรือ BUY Hero ถูกปิด/auto-release จริง:
+  - ตั้ง `g_heroNextAllowedSide = SELL`
+- เมื่อ `CloseHeroOnSide(SELL)` หรือ SELL Hero ถูกปิด/auto-release จริง:
+  - ตั้ง `g_heroNextAllowedSide = BUY`
+- ตอนจะ activate Hero ใหม่ใน Branch B:
+  - ถ้า `g_heroNextAllowedSide` ถูกตั้งไว้ และ side ปัจจุบันไม่ใช่ฝั่งที่อนุญาต -> block
+  - ฝั่งเดิมจึงไม่สามารถเป็น Hero ซ้ำได้จนกว่าฝั่งตรงข้ามจะเป็น Hero และปิดจบก่อน
+
+### 4. ทำให้ Dashboard แสดงสถานะรอฝั่งถัดไปชัดเจน
+เพิ่ม/แก้ row ใน Hero panel:
+
+- `Hero Owner`: แสดง owner จริงเฉพาะ phase `BE_GUARD`
+- `Next Allowed`: แสดง `BUY`, `SELL`, หรือ `ANY`
+- `Last Closed`: แสดงฝั่ง Hero ที่เพิ่งปิดล่าสุด
+- ถ้า BUY ถูก block เพราะต้องรอ SELL ก่อน ให้ Dashboard แสดงประมาณ:
+
+```text
+Next Allowed    SELL
+Hero BUY        active=... Hero=0 WAIT/ALT-BLOCK
+Hero SELL       active=... Hero=... ARMED/BE_GUARD
+```
+
+### 5. Harden Reset/Recovery สำหรับเคสที่ state ค้างจากเวอร์ชันเก่า
+เพิ่ม logic recovery แบบปลอดภัย:
+
+- ถ้า phase เป็น `BE_GUARD` แต่ stable set ว่างจริง -> reset phase และตั้ง next allowed เป็นฝั่งตรงข้าม
+- ถ้า stable ticket ถูกปิดจาก broker/manual/SL/TP -> stamp last closed + next allowed เหมือน `CloseHeroOnSide()`
+- ถ้า Dashboard owner ยังเป็น BUY แต่ BUY Hero tickets หมดแล้ว -> ไม่ให้ค้าง owner หลอก
+
+### 6. ปรับ log เพื่อ debug ได้ชัด
+เพิ่ม log แบบ throttle:
+
+```text
+v1.56 Hero ALT-STATE lastClosed=BUY nextAllowed=SELL owner=NONE/BUY/SELL
+v1.56 Hero ALT-BLOCK side=BUY waitingNext=SELL
+v1.56 Hero BE_GUARD FREEZE side=BUY heroTickets=...
+```
+
+จะช่วยยืนยันว่า EA ไม่ได้เลือก BUY Hero ซ้ำเอง และกำลังรอ SELL ตามกฎใหม่
+
+## สิ่งที่ไม่เปลี่ยนแปลง / ไม่กระทบ Trading Logic
+
+ยืนยันว่าแผนนี้ไม่แก้ logic เทรดหลัก:
+
+- ไม่แก้ `trade.Buy`, `trade.Sell`, `trade.PositionClose`, `OrderSend`
+- ไม่แก้เงื่อนไขเปิด order
+- ไม่แก้ Grid entry / Grid distance / Grid lot multiplier
+- ไม่แก้ TP/SL/Trailing/Breakeven calculation
 - ไม่แก้ Average TP / Average Trailing strict 2-cross
 - ไม่แก้ Accumulate close / Cost-Hit Restart
-- ไม่แก้ logic ปิดออเดอร์ Hero (`CloseHeroOnSide`) ยกเว้นการทำให้ ticket ที่เป็น Hero จริงตรงกับชุด dynamic ล่าสุด
-- ไม่แก้ Side-Alternation v1.46 และ Single-Side Lock v1.45
-- ไม่แก้ gate v1.50/v1.51 ที่ให้ Hero ปิดเฉพาะเมื่อ opposite basket ปิดด้วย Avg-TP/Avg-Trail/Master TP/Accumulate
+- ไม่แก้ Master TP / TP mode
+- ไม่แก้ logic ปิด Hero ด้วย Opposite AvgTP/TP gate v1.50/v1.51
+- ไม่แก้ `InpHero_MinOrdersToActivate` ดังนั้นถ้า SELL ยัง active `8/15` ตาม Dashboard จะยังไม่ activate จนถึง threshold 15 เว้นแต่ผู้ใช้ปรับ input เอง
 
-### ผลลัพธ์ที่คาดหวัง
+## ผลลัพธ์ที่คาดหวัง
 
-จากเคสในรูปที่ SELL มี active 36 และ Hero=5:
+หลังแก้ v1.56:
 
-- `Tix SELL` จะต้องอัปเดตเป็น 5 ticket ที่ราคา SELL สูงสุดล่าสุด ไม่ค้างที่ `#42 #41 #39 #29 #28`
-- Ticket SELL เดิมที่ไม่ติด top 5 แล้ว จะกลับไปเป็น non-Hero และมี TP/SL ตามระบบปกติ
-- Ticket SELL ใหม่ที่ราคาสูงกว่า จะถูก protect เป็น Hero จริงทั้ง Dashboard และ guard (`IsHeroProtectedTicket`) ใน tick เดียวกัน
-- ไม่มีการล็อค Hero ตาม ticket เก่าอีกต่อไปใน dynamic mode
+- BUY Hero จะไม่ต่ออายุตัวเองด้วย order BUY ใหม่หลังเข้า `BE_GUARD`
+- เมื่อ BUY Hero ปิดจบ ระบบจะบังคับรอ SELL Hero ก่อน
+- BUY จะไม่สามารถกลับมาเป็น Hero รอบใหม่ได้จนกว่า SELL Hero จะเกิดขึ้นและปิดจบ
+- Dashboard จะไม่ขึ้น `Hero Owner = BUY (locked)` ค้างผิดจังหวะ
+- Dashboard จะแสดง `Next Allowed` ให้เห็นชัดว่าตอนนี้ระบบกำลังรอฝั่งไหน
+- ถ้า SELL ยังไม่ถึง `minAct` Dashboard จะบอกว่า SELL ยังรอจำนวน order ไม่ใช่ปล่อยให้ BUY lock ซ้ำ
