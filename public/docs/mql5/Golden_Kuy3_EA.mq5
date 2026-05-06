@@ -1,10 +1,11 @@
 //+------------------------------------------------------------------+
 //|                                            Golden_Kuy3_EA.mq5    |
-//|                                       Golden Kuy3 EA  v1.52      |
-//|  v1.52: Hero Sticky Set — Hero ticket set frozen at activation;   |
-//|         no mid-phase price-extreme refresh; new orders after      |
-//|         ARMED/BE_GUARD = normal basket (not Hero). Fixes Hero     |
-//|         overlap, dropped tickets, missing side-alternation.       |
+//|                                       Golden Kuy3 EA  v1.53      |
+//|  v1.53: Hero Dynamic Refresh + Demote Restore — Hero set tracks   |
+//|         current price-extreme every tick; demoted tickets get     |
+//|         their Initial TP restored + lock-profit SL cleared so     |
+//|         they re-join the normal basket.                           |
+//|  v1.52: Hero Sticky Set (rolled back as default; toggle remains). |
 //|  v1.51: Hero AvgTP-Trigger Only — Hero closes only when opp       |
 //|         basket flattened by Avg-TP/Avg-Trail/Master TP/Accumulate |
 //|         (intent flag), NOT by Per-Order Trail/SL/Cost-Hit.        |
@@ -23,8 +24,8 @@
 //|  v1.40: Hero Order ported from Gold Miner v7.09                  |
 //+------------------------------------------------------------------+
 #property copyright "Golden Kuy3 EA"
-#property version   "1.52"
-#property description "Golden Kuy3 v1.52 — Hero Sticky Set: Hero ticket set frozen at activation; no mid-phase refresh from price-extreme; new orders after ARMED/BE_GUARD remain normal basket — fixes Hero overlap and missing side-alternation"
+#property version   "1.53"
+#property description "Golden Kuy3 v1.53 — Hero Dynamic Refresh + Demote Restore: Hero set tracks current price-extreme every tick; tickets pushed out of the set get their Initial TP restored and lock-profit SL cleared so they re-join the normal basket and close together with Avg-TP"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -107,7 +108,7 @@ input bool   InpHero_RequireNetProfit   = false;  // [DEPRECATED] not used (lock
 input bool   InpHero_OppCloseRequireTP    = true;   // v1.50 — close Hero ONLY when opp basket realized > min profit
 input double InpHero_OppCloseMinProfit    = 0.0;    // v1.50 — minimum opp realized profit to qualify as TP close ($)
 input bool   InpHero_OppCloseRequireAvgTP = true;   // v1.51 — close Hero ONLY when opp basket flattened by Avg-TP/Avg-Trail/Master TP/Accumulate (intent flag); Per-Order Trail/SL/Cost-Hit do NOT count
-input bool   InpHero_StickySet              = true;   // v1.52 — STICKY: Hero ticket set frozen at activation; no mid-phase price-extreme refresh (new orders stay normal basket). false=v1.51 dynamic refresh
+input bool   InpHero_StickySet              = false;  // v1.53 — default OFF (Dynamic Refresh + Demote Restore). true = v1.52 sticky-set fallback (Hero frozen at activation)
 
 input group "=== Chart Lines ==="
 input bool                 InpShowAvgLine             = true;
@@ -442,6 +443,47 @@ bool IsInStableSet(int sideId, ulong t)
    return false;
 }
 
+// v1.53 — Demote Restore: tickets that were Hero in prevSet but no longer in newSet
+//          get their broker-side Initial TP restored and any lock-profit SL cleared,
+//          so they re-join the normal basket. Skipped when InpHero_StickySet=true.
+void RestoreInitialTPOnDemoted(const ulong &prevSet[], int prevCnt,
+                               const ulong &newSet[],  int newCnt,
+                               ENUM_POSITION_TYPE side)
+{
+   if(prevCnt <= 0) return;
+   string demotedLog = "";
+   int restored = 0;
+   for(int i = 0; i < prevCnt; i++) {
+      ulong tk = prevSet[i];
+      bool stillHero = false;
+      for(int j = 0; j < newCnt; j++) if(newSet[j] == tk) { stillHero = true; break; }
+      if(stillHero) continue;
+
+      if(!PositionSelectByTicket(tk)) continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
+
+      double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+      double newTP = 0.0;
+      if(InpUseTakeProfit && !InpUseTPPoints && InpInitialTPPips > 0) {
+         double minStop = GetMinStopPrice();
+         double dist    = MathMax(PipsToPrice(InpInitialTPPips), minStop);
+         newTP = (side == POSITION_TYPE_BUY) ? openPrice + dist : openPrice - dist;
+      }
+      // Clear lock-profit SL we placed earlier; per-order BE/Trail/Cost-Hit will
+      // re-apply their own SL on later ticks if enabled.
+      double newSL = 0.0;
+      if(trade.PositionModify(tk, newSL, newTP)) {
+         restored++;
+         demotedLog += StringFormat(" #%I64u@open=%s->TP=%s",
+                          tk, DoubleToString(openPrice, g_digits),
+                          DoubleToString(newTP, g_digits));
+      }
+   }
+   if(restored > 0)
+      Print("v1.53 Hero DEMOTE restore side=", EnumToString(side),
+            " count=", restored, " (TP restored, lock-SL cleared):", demotedLog);
+}
+
 void BuildHeroTicketCache()
 {
    // v1.49: STICKY stable sets per side — chosen ONCE at activation, never re-selected
@@ -581,12 +623,16 @@ void BuildHeroTicketCache()
             string newList = "";
             for(int k = 0; k < takeA; k++)
                newList += StringFormat(" #%I64u@%s", tkPool[k], DoubleToString(pxPool[k], g_digits));
-            Print("v1.51 Hero REFRESH side=", (sideId==POSITION_TYPE_BUY?"BUY":"SELL"),
+            Print("v1.53 Hero REFRESH side=", (sideId==POSITION_TYPE_BUY?"BUY":"SELL"),
                   " phase=", (curPhase==3?"BE_GUARD":"ARMED"), " count=", takeA, " new set:", newList);
             if(curPhase == 3) {
                if(sideId == POSITION_TYPE_BUY) g_heroBE_Applied_Buy = false;
                else                            g_heroBE_Applied_Sell = false;
             }
+            // v1.53 — demote restore: any ticket in prevSet but not in newSet has been pushed
+            //         out of Hero protection; restore Initial TP and clear lock-profit SL so it
+            //         re-joins the normal basket and closes with Avg-TP/per-order rules.
+            RestoreInitialTPOnDemoted(prevSet, prevCnt, tkPool, takeA, (ENUM_POSITION_TYPE)sideId);
          }
          continue;
       }
@@ -1656,7 +1702,7 @@ void DrawDashboard()
    double plS  = CalcSideFloating(POSITION_TYPE_SELL);
    double plAll= plB+plS;
 
-   DashHeader(StringFormat("Golden Kuy3 v1.52  Side:%s Grid:%s/%s", SideModeStr(), GridModeStr(), LotModeStr()));
+   DashHeader(StringFormat("Golden Kuy3 v1.53  Side:%s Grid:%s/%s", SideModeStr(), GridModeStr(), LotModeStr()));
 
    DashHeader("=== ACCOUNT ===");
    DashRow("Balance",     StringFormat("$%.2f", bal), info);
@@ -1721,7 +1767,7 @@ void DrawDashboard()
    DashRow("Restart Pending", StringFormat("BUY:%s  SELL:%s", rpB, rpS),
            (g_costHit_Pending_Buy||g_costHit_Pending_Sell)?warn:info);
 
-   DashHeader("=== HERO ORDER (v1.51) ===");
+   DashHeader("=== HERO ORDER (v1.53) ===");
    DashRow("Hero Cfg", StringFormat("%s  N=%d minAct=%d BE=%dpt  Mode=PRICE_EXTREME Lock=%s Alt=%s",
                           OnOff(InpHero_Enabled), InpHero_OrderCount,
                           InpHero_MinOrdersToActivate, InpHero_BE_OffsetPoints,
@@ -1944,7 +1990,7 @@ int OnInit()
       if(c=="GK_INIT_SELL") g_initPrice_Sell = pos.PriceOpen();
    }
 
-   Print("Golden Kuy3 v1.52 init  digits=",g_digits," pip=",g_pip," stopsLvl=",g_stopsLevel,
+   Print("Golden Kuy3 v1.53 init  digits=",g_digits," pip=",g_pip," stopsLvl=",g_stopsLevel,
          " | Hero=", InpHero_Enabled?"ON":"OFF", " HeroN=", InpHero_OrderCount,
          " minAct=", InpHero_MinOrdersToActivate, " BE=", InpHero_BE_OffsetPoints, "pt");
    return INIT_SUCCEEDED;
@@ -1954,7 +2000,7 @@ void OnDeinit(const int reason)
 {
    DelDash();
    DelLines();
-   Print("Golden Kuy3 v1.52 deinit reason=",reason);
+   Print("Golden Kuy3 v1.53 deinit reason=",reason);
 }
 
 void OnTick()
