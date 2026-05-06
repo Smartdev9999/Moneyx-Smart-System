@@ -1,6 +1,11 @@
 //+------------------------------------------------------------------+
 //|                                            Golden_Kuy3_EA.mq5    |
-//|                                       Golden Kuy3 EA  v1.55      |
+//|                                       Golden Kuy3 EA  v1.56      |
+//|  v1.56: Strict Side-Alternation + BE_GUARD Freeze — Hero set is   |
+//|         FROZEN once phase=BE_GUARD (no new BUY ticket can extend  |
+//|         the BUY Hero owner). After a Hero side closes, the next   |
+//|         Hero must be on the OPPOSITE side; same side cannot       |
+//|         re-arm until opposite side completes its own Hero cycle.  |
 //|  v1.55: Hero TRUE Dynamic Refresh — InpHero_StickySet deprecated  |
 //|         (ignored). Branch A always rebuilds Hero set every tick   |
 //|         from current price-extreme. Dashboard shows Mode=DYNAMIC. |
@@ -33,8 +38,8 @@
 //|  v1.40: Hero Order ported from Gold Miner v7.09                  |
 //+------------------------------------------------------------------+
 #property copyright "Golden Kuy3 EA"
-#property version   "1.55"
-#property description "Golden Kuy3 v1.55 — Hero TRUE Dynamic Refresh: InpHero_StickySet deprecated/ignored; Hero set is ALWAYS rebuilt every tick from current price-extreme so newly-opened tickets at better prices replace stale ones immediately on Dashboard + IsHeroProtectedTicket guards. v1.54 post-entry refresh preserved."
+#property version   "1.56"
+#property description "Golden Kuy3 v1.56 — Strict Side-Alternation + BE_GUARD Freeze: Hero set FROZEN once phase=BE_GUARD (Dynamic refresh ARMED-only). After a Hero closes, opposite side MUST be next Hero; original side cannot re-arm until opposite completes its Hero cycle. Dashboard shows Next Allowed."
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -195,6 +200,7 @@ bool     g_heroBE_Applied_Sell    = false;
 datetime g_heroJustClosed_Buy     = 0;
 datetime g_heroJustClosed_Sell    = 0;
 int      g_heroLastClosedSide     = -1;    // v1.46 — ฝั่ง Hero ที่เพิ่งปิดล่าสุด (POSITION_TYPE_BUY/SELL หรือ -1)
+int      g_heroNextAllowedSide    = -1;    // v1.56 — ฝั่งที่อนุญาตให้เป็น Hero รอบถัดไป (-1=any, BUY=POSITION_TYPE_BUY, SELL=POSITION_TYPE_SELL)
 // v1.49 Stable per-side Hero ticket sets — chosen ONCE at first activation, never replaced
 ulong    g_heroBuyStable[200];
 int      g_heroBuyStableN         = 0;
@@ -530,6 +536,9 @@ void BuildHeroTicketCache()
             g_heroPhase_Sell = 0; g_heroBE_Applied_Sell = false; g_heroJustClosed_Sell = TimeCurrent();
          }
          g_heroLastClosedSide = sideId;
+         g_heroNextAllowedSide = (sideId == (int)POSITION_TYPE_BUY) ? (int)POSITION_TYPE_SELL : (int)POSITION_TYPE_BUY; // v1.56
+         Print("v1.56 Hero NEXT-ALLOWED set to ", (g_heroNextAllowedSide==(int)POSITION_TYPE_BUY?"BUY":"SELL"),
+               " after external close on ", (sideId==POSITION_TYPE_BUY?"BUY":"SELL"));
       }
    }
 
@@ -581,11 +590,16 @@ void BuildHeroTicketCache()
       int curPhase = (sideId == POSITION_TYPE_BUY) ? g_heroPhase_Buy : g_heroPhase_Sell;
       int stableN  = GetStableCount(sideId);
 
-      // ===== Branch A v1.55: phase active — ALWAYS rebuild Hero set every tick by price-extreme =====
-      // v1.55: InpHero_StickySet is DEPRECATED/IGNORED. Hero set must always reflect the current
-      //        best price-extreme so brand-new tickets at better prices immediately replace
-      //        stale Hero tickets. Demote-restore returns demoted tickets to normal basket.
-      if(curPhase != 0) {
+      // ===== Branch A v1.56: phase active =====
+      // v1.56: Dynamic Price-Extreme refresh ONLY when phase == ARMED (2).
+      //        When phase == BE_GUARD (3) the Hero set is FROZEN — new same-side tickets
+      //        opened after the non-Hero basket closed are NOT allowed to extend Hero ownership.
+      //        PruneStableSet (STEP 1) already removed closed tickets; nothing else to do.
+      if(curPhase == 3) {
+         sideHeroTagged[s] = stableN;
+         continue;
+      }
+      if(curPhase == 2) {
          if(nPool <= 0) { sideHeroTagged[s] = 0; continue; }
 
          // Sort pool by price-extreme (BUY ascending lowest first / SELL descending highest first)
@@ -628,13 +642,8 @@ void BuildHeroTicketCache()
             string newList = "";
             for(int k = 0; k < takeA; k++)
                newList += StringFormat(" #%I64u@%s", tkPool[k], DoubleToString(pxPool[k], g_digits));
-            Print("v1.55 Hero DYNAMIC REFRESH side=", (sideId==POSITION_TYPE_BUY?"BUY":"SELL"),
-                  " phase=", (curPhase==3?"BE_GUARD":"ARMED"), " count=", takeA, " new set:", newList);
-            if(curPhase == 3) {
-               // BE_GUARD: new entrants need lock-profit SL re-applied
-               if(sideId == POSITION_TYPE_BUY) g_heroBE_Applied_Buy = false;
-               else                            g_heroBE_Applied_Sell = false;
-            }
+            Print("v1.56 Hero DYNAMIC REFRESH (ARMED only) side=", (sideId==POSITION_TYPE_BUY?"BUY":"SELL"),
+                  " count=", takeA, " new set:", newList);
             // Demote restore: tickets pushed out get Initial TP back + lock-SL cleared
             RestoreInitialTPOnDemoted(prevSet, prevCnt, tkPool, takeA, (ENUM_POSITION_TYPE)sideId);
          }
@@ -681,6 +690,22 @@ void BuildHeroTicketCache()
          continue;
       }
 
+      // v1.56 — Strict Side-Alternation: opposite side must take its turn first.
+      //         g_heroNextAllowedSide is set when a Hero closes (CloseHeroOnSide) or
+      //         auto-releases. Cleared once that opposite side actually activates Hero.
+      if(g_heroNextAllowedSide >= 0 && sideId != g_heroNextAllowedSide) {
+         static datetime lastNextBlockLog_B = 0, lastNextBlockLog_S = 0;
+         datetime lastLogN = (sideId == POSITION_TYPE_BUY) ? lastNextBlockLog_B : lastNextBlockLog_S;
+         if(TimeCurrent() - lastLogN >= 30) {
+            string nextStr = (g_heroNextAllowedSide == (int)POSITION_TYPE_BUY) ? "BUY" : "SELL";
+            Print("v1.56 Hero ALT-BLOCK side=", (sideId==POSITION_TYPE_BUY?"BUY":"SELL"),
+                  " waitingNext=", nextStr, " — opposite must take next Hero turn");
+            if(sideId == POSITION_TYPE_BUY) lastNextBlockLog_B = TimeCurrent();
+            else                            lastNextBlockLog_S = TimeCurrent();
+         }
+         continue;
+      }
+
       // Activation gate
       if(nAll < activateThreshold) continue;
       if(nPool <= 0) continue;
@@ -721,11 +746,18 @@ void BuildHeroTicketCache()
       }
       sideHeroTagged[s] = take;
 
+      // v1.56 — clear next-allowed gate once this side actually activates Hero
+      if(g_heroNextAllowedSide == sideId) {
+         Print("v1.56 Hero ALT-CONSUMED side=", (sideId==POSITION_TYPE_BUY?"BUY":"SELL"),
+               " — opposite-turn satisfied, next-allowed reset to ANY");
+         g_heroNextAllowedSide = -1;
+      }
+
       string fixedList = "";
       for(int k = 0; k < take; k++)
          fixedList += StringFormat(" #%I64u", tkPool[k]);
-      Print("v1.49 Hero STABLE-SET FROZEN side=", (sideId==POSITION_TYPE_BUY?"BUY":"SELL"),
-            " count=", take, " (sticky — won't be replaced until phase resets):", fixedList);
+      Print("v1.56 Hero STABLE-SET FROZEN side=", (sideId==POSITION_TYPE_BUY?"BUY":"SELL"),
+            " count=", take, " (ARMED — refresh by price-extreme until BE_GUARD):", fixedList);
    }
 
    // ============ STEP 4: Rebuild flat g_heroTickets[] from both stable sets ============
@@ -744,11 +776,15 @@ void BuildHeroTicketCache()
       Print("v1.49 Hero AUTO-RELEASE BUY: phase=BE_GUARD but stable set empty — releasing owner lock");
       g_heroPhase_Buy = 0; g_heroBE_Applied_Buy = false; g_heroJustClosed_Buy = TimeCurrent();
       g_heroLastClosedSide = (int)POSITION_TYPE_BUY;
+      g_heroNextAllowedSide = (int)POSITION_TYPE_SELL; // v1.56 — opposite must take next turn
+      Print("v1.56 Hero NEXT-ALLOWED set to SELL after BUY auto-release");
    }
    if(g_heroPhase_Sell == 3 && g_heroSellStableN == 0) {
       Print("v1.49 Hero AUTO-RELEASE SELL: phase=BE_GUARD but stable set empty — releasing owner lock");
       g_heroPhase_Sell = 0; g_heroBE_Applied_Sell = false; g_heroJustClosed_Sell = TimeCurrent();
       g_heroLastClosedSide = (int)POSITION_TYPE_SELL;
+      g_heroNextAllowedSide = (int)POSITION_TYPE_BUY; // v1.56 — opposite must take next turn
+      Print("v1.56 Hero NEXT-ALLOWED set to BUY after SELL auto-release");
    }
 
    // Phase fallback: keep ARMED if stable set populated, drop to NONE only if empty (BE_GUARD respected)
@@ -890,7 +926,11 @@ void CloseHeroOnSide(ENUM_POSITION_TYPE side, string reason)
    }
    // v1.46 Side-Alternation Lock — จำฝั่งที่เพิ่งปิด Hero
    g_heroLastClosedSide = (int)side;
-   Print("v1.49 Hero LAST-CLOSED side=", EnumToString(side), " — opp side must Hero next or self must flat");
+   // v1.56 — บังคับฝั่งตรงข้ามให้เป็น Hero รอบถัดไปเท่านั้น
+   g_heroNextAllowedSide = (side == POSITION_TYPE_BUY) ? (int)POSITION_TYPE_SELL : (int)POSITION_TYPE_BUY;
+   Print("v1.56 Hero LAST-CLOSED side=", EnumToString(side),
+         " — NEXT-ALLOWED=", (g_heroNextAllowedSide==(int)POSITION_TYPE_BUY?"BUY":"SELL"),
+         " (opposite must complete its own Hero cycle before this side can re-arm)");
 }
 
 bool DetectSameSideBasketClearedForHero(ENUM_POSITION_TYPE side)
@@ -1706,7 +1746,7 @@ void DrawDashboard()
    double plS  = CalcSideFloating(POSITION_TYPE_SELL);
    double plAll= plB+plS;
 
-   DashHeader(StringFormat("Golden Kuy3 v1.55  Side:%s Grid:%s/%s", SideModeStr(), GridModeStr(), LotModeStr()));
+   DashHeader(StringFormat("Golden Kuy3 v1.56  Side:%s Grid:%s/%s", SideModeStr(), GridModeStr(), LotModeStr()));
 
    DashHeader("=== ACCOUNT ===");
    DashRow("Balance",     StringFormat("$%.2f", bal), info);
@@ -1771,8 +1811,8 @@ void DrawDashboard()
    DashRow("Restart Pending", StringFormat("BUY:%s  SELL:%s", rpB, rpS),
            (g_costHit_Pending_Buy||g_costHit_Pending_Sell)?warn:info);
 
-   DashHeader("=== HERO ORDER (v1.55) ===");
-   DashRow("Hero Cfg", StringFormat("%s  N=%d minAct=%d BE=%dpt  Mode=DYNAMIC Lock=%s Alt=%s",
+   DashHeader("=== HERO ORDER (v1.56) ===");
+   DashRow("Hero Cfg", StringFormat("%s  N=%d minAct=%d BE=%dpt  Mode=ARMED-DYN Lock=%s Alt=%s",
                           OnOff(InpHero_Enabled), InpHero_OrderCount,
                           InpHero_MinOrdersToActivate, InpHero_BE_OffsetPoints,
                           (InpHero_SingleSideLock?"STRICT":"OFF"),
@@ -1788,6 +1828,9 @@ void DrawDashboard()
       string lcStr = (g_heroLastClosedSide == (int)POSITION_TYPE_BUY)  ? "BUY"
                    : (g_heroLastClosedSide == (int)POSITION_TYPE_SELL) ? "SELL" : "-";
       DashRow("Last Closed", lcStr, (g_heroLastClosedSide>=0?warn:info));
+      string nextStr = (g_heroNextAllowedSide == (int)POSITION_TYPE_BUY)  ? "BUY only"
+                     : (g_heroNextAllowedSide == (int)POSITION_TYPE_SELL) ? "SELL only" : "ANY";
+      DashRow("Next Allowed", nextStr, (g_heroNextAllowedSide>=0?warn:info));
    }
    {
       string phaseB = (g_heroPhase_Buy == 3) ? "BE_GUARD" : (g_heroPhase_Buy == 2) ? "ARMED" : "WAIT";
@@ -1994,7 +2037,7 @@ int OnInit()
       if(c=="GK_INIT_SELL") g_initPrice_Sell = pos.PriceOpen();
    }
 
-   Print("Golden Kuy3 v1.55 init  digits=",g_digits," pip=",g_pip," stopsLvl=",g_stopsLevel,
+   Print("Golden Kuy3 v1.56 init  digits=",g_digits," pip=",g_pip," stopsLvl=",g_stopsLevel,
          " | Hero=", InpHero_Enabled?"ON":"OFF", " HeroN=", InpHero_OrderCount,
          " minAct=", InpHero_MinOrdersToActivate, " BE=", InpHero_BE_OffsetPoints, "pt");
    return INIT_SUCCEEDED;
@@ -2004,7 +2047,7 @@ void OnDeinit(const int reason)
 {
    DelDash();
    DelLines();
-   Print("Golden Kuy3 v1.55 deinit reason=",reason);
+   Print("Golden Kuy3 v1.56 deinit reason=",reason);
 }
 
 void OnTick()
