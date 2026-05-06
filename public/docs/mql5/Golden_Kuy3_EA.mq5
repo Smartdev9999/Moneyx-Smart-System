@@ -1412,6 +1412,7 @@ void ManageAverageTrailing()
 
             if(bid <= g_avgTrail_SL_Buy){
                Print("GK AVG-TRAIL BUY HIT — closing all BUY");
+               g_oppCloseIntent_AvgTP_Buy = true; g_oppCloseIntentTime_Buy = TimeCurrent(); // v1.51
                CloseAllSide(POSITION_TYPE_BUY);
                ResetAvgTrailBuy();
             }
