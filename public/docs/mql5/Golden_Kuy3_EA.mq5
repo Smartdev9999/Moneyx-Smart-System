@@ -86,6 +86,7 @@ input bool   InpHero_BlockSameSideGrid  = true;   // Block new entries on side t
 input bool   InpHero_IncludeInMaxOrders = true;   // Count Hero into MaxGridOrders cap
 input int    InpHero_PostCloseGraceSec  = 5;      // Seconds after Hero close to suppress re-tag
 input bool   InpHero_SingleSideLock     = true;   // Only ONE side may own Hero at a time (sleep opposite first activation)
+input bool   InpHero_AlternateSides     = true;   // v1.46 — ฝั่งที่เพิ่งปิด Hero ห้าม re-arm จนกว่าฝั่งตรงข้ามจะ Hero หรือฝั่งเดิม flat สนิท
 input bool   InpHero_CloseWithOpposite  = true;   // [DEPRECATED] hard-wired to opposite-basket close
 input bool   InpHero_RequireNetProfit   = false;  // [DEPRECATED] not used (lock-profit SL guarantees floor)
 
