@@ -8,8 +8,8 @@
 //|  v1.40: Hero Order ported from Gold Miner v7.09                  |
 //+------------------------------------------------------------------+
 #property copyright "Golden Kuy3 EA"
-#property version   "1.45"
-#property description "Golden Kuy3 v1.45 — Hero CANDIDATE strips TP only (SL kept); BE_GUARD applies lock-profit SL after same-side basket TP"
+#property version   "1.46"
+#property description "Golden Kuy3 v1.46 — Hero Side-Alternation Lock: ฝั่งที่เพิ่งปิด Hero ห้าม re-arm จนกว่าฝั่งตรงข้ามจะ Hero หรือฝั่งเดิม flat"
 #property strict
 
 #include <Trade/Trade.mqh>
