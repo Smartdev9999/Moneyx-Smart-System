@@ -1,89 +1,58 @@
+## ปัญหาที่พบ
 
-# Golden Kuy3 v1.42 — Accumulate cycle reset (Gold Miner concept)
+จาก screenshot และโค้ดที่อ่าน ระบบ Hero v1.42 มี 2 จุดผิด:
 
-## ปัญหา (จาก log + screenshot)
-```
-GK ACCUM CLOSE — realized=20008.26 floating=-6.31 tgt=20000.0
-```
-ปัจจุบันมีแค่ 2 ออเดอร์ floating รวม -20.80 USD แต่ยังโดนปิด
-สาเหตุ: `g_realizedCycle` **ไม่เคยถูกรีเซ็ต** หลังรอบจบ → สะสมข้ามรอบไปจนแตะ target แล้วก็ทริกตลอด
+1. **คัด Hero จาก ticket/เวลาใหม่สุด** — `BuildHeroTicketCache()` sort ด้วย `POSITION_TIME_MSC + ticket` ทำให้ฝั่ง BUY ที่มีออเดอร์เก่าราคาต่ำ (#431 @3363, #484 @3361) ไม่ถูกเลือก แต่ไปเลือกตัวที่เปิดทีหลังแทน → Hero BUY ไม่ใช่ตัว “ล่างสุด”
+2. **Single-side lock หลวม** — โค้ดยอมให้ทั้ง BUY และ SELL ขึ้น `ARMED` พร้อมกัน แล้วต่างก็ไหลไป `BE_GUARD` ได้ ทำให้ภาพเห็น Hero BUY = BE_GUARD และ Hero SELL = BE_GUARD พร้อมกัน (Owner = NONE) ซึ่งผิดสเปก
 
-### หลักฐานในโค้ด (line 1446-1452)
-```cpp
-if(CountSideSimple(BUY)==0 && CountSideSimple(SELL)==0){
-   if(MathAbs(g_realizedCycle) > 0.0 && trans.type==TRADE_TRANSACTION_DEAL_ADD){
-      // keep g_realizedCycle visible until next entry; reset on next OpenInitial cycle
-   }   ← block ว่าง / `OpenInitial` ก็ไม่ได้รีเซ็ต
-}
-```
+## สิ่งที่จะทำ — Golden Kuy3 v1.43
 
-## คอนเซ็ปต์ Gold Miner ที่จะ port มา
-- ตอน flat (ไม่มี position ใดๆ ของ EA) → **รีเซ็ต** `g_realizedCycle = 0` ทันที
-- ครั้งต่อไปเริ่มนับ realized ใหม่จาก 0
-- ภาพเดียวกับ Gold Miner v6 ที่ใช้ baseline แบบ recompute
+### 1. เปลี่ยนเกณฑ์เลือก Hero เป็น “ราคาเปิด” (price-extreme)
 
----
+ใน `BuildHeroTicketCache()` แทนที่ sort key เดิม ใช้:
 
-## สิ่งที่จะแก้ (เฉพาะ accumulate cycle reset — ไม่แตะอย่างอื่น)
-
-### A. เพิ่มฟังก์ชัน reset
-```cpp
-void TryResetAccumulateCycleIfFlat()
-{
-   // เช็คทุก position ของเรา (รวม Hero) — flat = ไม่มีอะไรของ EA
-   if(CountSideSimple(POSITION_TYPE_BUY)==0 && CountSideSimple(POSITION_TYPE_SELL)==0){
-      if(MathAbs(g_realizedCycle) > 0.0001){
-         Print("GK ACCUM CYCLE RESET — flat detected. prev realized=",
-               DoubleToString(g_realizedCycle,2));
-         g_realizedCycle = 0.0;
-      }
-   }
-}
+```text
+ฝั่ง BUY  → sort ด้วย open price จากต่ำสุดขึ้นไป  (เลือก N ตัว “ล่างสุด”)
+ฝั่ง SELL → sort ด้วย open price จากสูงสุดลงมา   (เลือก N ตัว “บนสุด”)
 ```
 
-### B. เรียก 2 จุด (เพื่อความชัวร์)
-1. **`OnTick()`** — เพิ่มเป็นบรรทัดแรกสุด (ก่อน `BuildHeroTicketCache`):
-   ```cpp
-   TryResetAccumulateCycleIfFlat();   // v1.42 — Gold Miner cycle reset
-   ```
-2. **`OnTradeTransaction()`** — แทนที่ block ว่างที่ line 1446-1452:
-   ```cpp
-   if(trans.type==TRADE_TRANSACTION_DEAL_ADD){
-      TryResetAccumulateCycleIfFlat();
-   }
-   ```
-ทั้งสองจุดเรียกฟังก์ชันเดียวกัน → idempotent ปลอดภัย
+ผลกับภาพตัวอย่าง:
+- BUY pool [#431 @3363.38, #484 @3361.83] → Hero BUY (N=2) คือ #484 ก่อน แล้ว #431
+- SELL pool [#1071 @3327.39, #1109 @3319.37, #1145 @3300.76, #1147 @3306.01] → Hero SELL (N=2) คือ #1071 แล้ว #1109
 
-### C. Dashboard
-แถว `Realized (cycle)` (line 1288) ตอนนี้แสดง `g_realizedCycle` อยู่แล้ว → จะกลายเป็น $0.00 ทันทีหลัง flat → ผู้ใช้เห็นชัดว่ารีเซ็ตแล้ว
-เพิ่มแถวใหม่ใต้ Accumulate ใน dashboard (แถวเดียว):
-```
-Accum Pool      $19.50 / $20000     (= realized + floating non-Hero current)
-```
+แทนที่ array `ttMs[]` (POSITION_TIME_MSC) ด้วย `pxOpen[]` (POSITION_PRICE_OPEN) และเปลี่ยนทิศ swap ตามฝั่ง
 
-### D. ไม่แตะอะไรอีก
-- โครง `ManageTakeProfit` เดิม (master gate, AvgTP push, FixedDollar, %Bal) — เก็บไว้ตามเดิมทั้งหมด
-- `CalcSideFloating_NonHero` / `CloseAllOurs` skip-Hero — เก็บเดิม (พี่ไม่อนุมัติแผนก่อนหน้า)
-- Hero v1.4 ทุกฟังก์ชัน — ไม่แตะ
+### 2. Strict Single-Side Lock
 
----
+เปลี่ยน `GetHeroOwnerSide()` ให้ถือว่า **ฝั่งใดก็ตามที่ phase != NONE คือ owner** (ARMED หรือ BE_GUARD ก็นับ) ไม่ใช่เฉพาะ BE_GUARD เท่านั้น
 
-## Version
-- `#property version "1.42"`
-- `#property description` → "Accumulate cycle auto-reset on flat (Gold Miner concept)"
-- Header + Dashboard title → `Golden Kuy3 v1.42`
+ผลที่ได้:
+- ถ้า BUY ขึ้น ARMED ก่อน → SELL จะถูก block ที่ activation gate ทันที ไปต่อ BE_GUARD ฝั่งเดียวกัน
+- จะไม่มีกรณี Hero ทั้ง 2 ฝั่งพร้อมกันอีก
+- ปลด lock เมื่อ owner ฝั่งนั้นปิด Hero และผ่าน post-close grace
 
-## ไม่เปลี่ยน (กฎเหล็ก .mq5)
-- ไม่แตะ `OrderSend` / `trade.Buy/Sell/PositionClose/PositionModify`
-- ไม่แตะ Entry / Grid distance / `CalcGridLot` / Cost-Hit core
-- ไม่แตะ Per-Order BE/Trail / Avg-Trail (strict 2-cross)
-- ไม่แตะ TP modes (FixedDollar / AvgTP push / %Bal) — ทำงานเหมือนเดิมทุกบรรทัด
-- ไม่แตะ Hero v1.4: BuildHeroTicketCache, ManageHeroOppositeClose, BE-Lock SL, Single-Side Lock, sticky tag, Post-Close Grace
+เพิ่ม guard ในกรณีที่ state ค้างจาก v1.42: ถ้าเจอ phase != 0 ทั้ง 2 ฝั่ง ให้เลือกฝั่งที่มี Hero tickets จริงก่อน อีกฝั่ง force reset เป็น NONE
+
+### 3. ลบ tie-break ที่ไม่จำเป็นออก
+
+เนื่องจากใช้ราคาเปิดแล้ว ตัด POSITION_TIME_MSC ออกจาก sort เลย (ใช้ ticket เป็น tie-break แทนกรณีราคาเท่ากันเป๊ะ)
+
+### 4. Version + Dashboard + Memory
+
+- `Golden_Kuy3_EA.mq5` v1.42 → **v1.43** (header / `#property version` / `#property description` / OnInit + OnDeinit log / Dashboard header)
+- Dashboard “Hero Cfg” แสดง mode = `PRICE_EXTREME` และ `Lock=STRICT`
+- เพิ่ม log `v1.43 Hero AUDIT` พิมพ์ราคาของแต่ละ Hero ticket เพื่อตรวจสอบได้
+- เพิ่ม memory `mem://trading/golden-kuy3/v1-43-hero-price-extreme-strict-lock.md` และอัปเดต `mem://index.md`
+
+## ส่วนที่ไม่แก้ไข (ยืนยันตามกฎ MQL5)
+
+- ไม่แตะ `OrderSend` / `trade.Buy` / `trade.Sell` / `trade.PositionClose` / `trade.PositionModify` (ใช้ pattern เดิม)
+- ไม่แตะ `OpenInitial` / `OpenGrid` / `ManageInitialEntry` / `ManageGridEntry`
+- ไม่แตะ `CalcGridLot` (v1.2 MathCeil + force-step)
+- ไม่แตะ Per-Order BE / Trailing สูตร
+- ไม่แตะ Avg Trailing strict-2-cross
+- ไม่แตะ TP modes ทั้งหมด (FixedDollar / Points push / %Bal)
+- ไม่แตะ Accumulate Close + cycle-reset v1.42
+- ไม่แตะ Cost-Hit Restart core
 - ไม่มี License / News / Sync / Hedge / Squeeze
-
-## ไฟล์ที่จะแก้
-- `public/docs/mql5/Golden_Kuy3_EA.mq5` (1531 → ~1545 บรรทัด, v1.41 → v1.42)
-- สร้าง `.lovable/memory/trading/golden-kuy3/v1-42-accum-cycle-reset.md`
-- อัปเดต `mem://index.md`
-
-ยืนยันแผนนี้ไหมครับ? (สรุป: เพิ่ม `TryResetAccumulateCycleIfFlat()` เรียกทั้ง OnTick + OnTradeTransaction → realized=0 ทันทีตอน flat → Accumulate target นับใหม่ทุกรอบเหมือน Gold Miner)
+- ถ้า `InpHero_Enabled = false` พฤติกรรม = v1.42 ทุกบรรทัด
