@@ -108,7 +108,7 @@ input bool   InpHero_RequireNetProfit   = false;  // [DEPRECATED] not used (lock
 input bool   InpHero_OppCloseRequireTP    = true;   // v1.50 — close Hero ONLY when opp basket realized > min profit
 input double InpHero_OppCloseMinProfit    = 0.0;    // v1.50 — minimum opp realized profit to qualify as TP close ($)
 input bool   InpHero_OppCloseRequireAvgTP = true;   // v1.51 — close Hero ONLY when opp basket flattened by Avg-TP/Avg-Trail/Master TP/Accumulate (intent flag); Per-Order Trail/SL/Cost-Hit do NOT count
-input bool   InpHero_StickySet              = true;   // v1.52 — STICKY: Hero ticket set frozen at activation; no mid-phase price-extreme refresh (new orders stay normal basket). false=v1.51 dynamic refresh
+input bool   InpHero_StickySet              = false;  // v1.53 — default OFF (Dynamic Refresh + Demote Restore). true = v1.52 sticky-set fallback (Hero frozen at activation)
 
 input group "=== Chart Lines ==="
 input bool                 InpShowAvgLine             = true;
