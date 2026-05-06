@@ -1794,6 +1794,31 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
                               " pr=", DoubleToString(pr,2),
                               " accum=", DoubleToString(heroSide==POSITION_TYPE_BUY?g_oppBasketRealized_HeroBuy:g_oppBasketRealized_HeroSell,2));
                      }
+
+                     // v1.51 — Master TP Points safety net: detect simultaneous broker TP closes (>=N within 2s)
+                     //   on a side. If so, auto-set Avg-TP intent flag for that side so Hero gate can fire.
+                     if(InpUseTPPoints){
+                        long reasonH = HistoryDealGetInteger(trans.deal, DEAL_REASON);
+                        if(reasonH == DEAL_REASON_TP){
+                           datetime now = TimeCurrent();
+                           int needed = MathMax(2, InpAvgTP_MinOrders);
+                           if(closedSideH == POSITION_TYPE_BUY){
+                              if(now - g_oppTPDealWindow_Buy > 2) { g_oppTPDealCount_Buy = 0; g_oppTPDealWindow_Buy = now; }
+                              g_oppTPDealCount_Buy++;
+                              if(g_oppTPDealCount_Buy >= needed && !g_oppCloseIntent_AvgTP_Buy){
+                                 g_oppCloseIntent_AvgTP_Buy = true; g_oppCloseIntentTime_Buy = now;
+                                 Print("v1.51 Master-TP intent AUTO-SET side=BUY (",g_oppTPDealCount_Buy," TP closes in 2s)");
+                              }
+                           } else {
+                              if(now - g_oppTPDealWindow_Sell > 2) { g_oppTPDealCount_Sell = 0; g_oppTPDealWindow_Sell = now; }
+                              g_oppTPDealCount_Sell++;
+                              if(g_oppTPDealCount_Sell >= needed && !g_oppCloseIntent_AvgTP_Sell){
+                                 g_oppCloseIntent_AvgTP_Sell = true; g_oppCloseIntentTime_Sell = now;
+                                 Print("v1.51 Master-TP intent AUTO-SET side=SELL (",g_oppTPDealCount_Sell," TP closes in 2s)");
+                              }
+                           }
+                        }
+                     }
                   }
                }
 
