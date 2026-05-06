@@ -1,45 +1,17 @@
 //+------------------------------------------------------------------+
 //|                                            Golden_Kuy3_EA.mq5    |
-//|                                       Golden Kuy3 EA  v1.56      |
-//|  v1.56: Strict Side-Alternation + BE_GUARD Freeze — Hero set is   |
-//|         FROZEN once phase=BE_GUARD (no new BUY ticket can extend  |
-//|         the BUY Hero owner). After a Hero side closes, the next   |
-//|         Hero must be on the OPPOSITE side; same side cannot       |
-//|         re-arm until opposite side completes its own Hero cycle.  |
-//|  v1.55: Hero TRUE Dynamic Refresh — InpHero_StickySet deprecated  |
-//|         (ignored). Branch A always rebuilds Hero set every tick   |
-//|         from current price-extreme. Dashboard shows Mode=DYNAMIC. |
-//|         Fixes stale Hero ticket lock when old .set file forced    |
-//|         StickySet=true.                                           |
-//|  v1.54: Live Hero Refresh After Entries — BuildHeroTicketCache    |
-//|         runs again after ManageInitialEntry/ManageGridEntry so    |
-//|         orders opened in the same tick are immediately considered |
-//|         for Hero price-extreme selection (no stale dashboard).    |
-//|  v1.53: Hero Dynamic Refresh + Demote Restore — Hero set tracks   |
-//|         current price-extreme every tick; demoted tickets get     |
-//|         their Initial TP restored + lock-profit SL cleared so     |
-//|         they re-join the normal basket.                           |
-//|  v1.52: Hero Sticky Set (rolled back as default; toggle remains). |
-//|  v1.51: Hero AvgTP-Trigger Only — Hero closes only when opp       |
-//|         basket flattened by Avg-TP/Avg-Trail/Master TP/Accumulate |
-//|         (intent flag), NOT by Per-Order Trail/SL/Cost-Hit.        |
-//|  v1.50: Hero TP-Only Opposite Close — Hero closes only when opp   |
-//|         basket flattened with realized profit (TP); SL/loss=hold  |
-//|  v1.49: Hero Guard After Basket Close — keep Hero set even when   |
-//|         non-Hero basket is closed; IsHeroProtectedTicket guard    |
-//|  v1.48: Dynamic Price-Extreme Hero — refresh within side-locked Hero  |
-//|         + extended alternation guard (broker close detected)     |
-//|         + DrawAvgAndTPLines uses non-Hero average                 |
-//|  v1.46: Hero Side-Alternation Lock                                |
-//|  v1.45: Hero CANDIDATE vs OWNER (BE_GUARD only)                   |
-//|  v1.44: Hero CANDIDATE strips TP only (keeps SL cost-lock)        |
-//|  v1.43: Hero Price-Extreme select + Strict Single-Side Lock      |
-//|  v1.42: Accumulate cycle auto-reset on flat (Gold Miner concept) |
-//|  v1.40: Hero Order ported from Gold Miner v7.09                  |
+//|                                       Golden Kuy3 EA  v1.57      |
+//|  v1.57: Opposite TP-Event Latch — Hero closes when opposite      |
+//|         basket scores a TP/Avg-TP event, even if AutoReEntry/     |
+//|         Grid opens new opp tickets the same tick. Strict-Alt      |
+//|         consume moved to Hero CLOSE (not activation) so the       |
+//|         alternation gate truly waits for opposite Hero cycle      |
+//|         to finish. Header changelog trimmed (full history in      |
+//|         project memory mem://trading/golden-kuy3/*).              |
 //+------------------------------------------------------------------+
 #property copyright "Golden Kuy3 EA"
-#property version   "1.56"
-#property description "Golden Kuy3 v1.56 — Strict Side-Alternation + BE_GUARD Freeze: Hero set FROZEN once phase=BE_GUARD (Dynamic refresh ARMED-only). After a Hero closes, opposite side MUST be next Hero; original side cannot re-arm until opposite completes its Hero cycle. Dashboard shows Next Allowed."
+#property version   "1.57"
+#property description "Golden Kuy3 v1.57 — Opposite TP-Event Latch: SELL Hero closes the moment BUY basket logs a TP/Avg-TP event even if BUY re-entry already opened a new ticket; strict alternation released only when opposite Hero cycle truly closes."
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -223,6 +195,13 @@ int      g_oppTPDealCount_Buy         = 0;     // count of non-Hero BUY  tickets
 int      g_oppTPDealCount_Sell        = 0;
 datetime g_oppTPDealWindow_Buy        = 0;
 datetime g_oppTPDealWindow_Sell       = 0;
+// v1.57 — Opposite TP-event latch (per Hero side). Set when opposite basket logs a TP/Avg-TP
+//          event so Hero can close even after AutoReEntry/Grid re-opens an opposite ticket
+//          on the same tick. Consumed by ManageHeroOppositeClose() and CloseHeroOnSide().
+bool     g_oppTPEvent_HeroBuy         = false; // BUY  Hero waiting on SELL basket TP event
+bool     g_oppTPEvent_HeroSell        = false; // SELL Hero waiting on BUY  basket TP event
+datetime g_oppTPEventTime_HeroBuy     = 0;
+datetime g_oppTPEventTime_HeroSell    = 0;
 // Dashboard counters
 int      g_heroDash_BuyActive     = 0;
 int      g_heroDash_SellActive    = 0;
@@ -746,12 +725,9 @@ void BuildHeroTicketCache()
       }
       sideHeroTagged[s] = take;
 
-      // v1.56 — clear next-allowed gate once this side actually activates Hero
-      if(g_heroNextAllowedSide == sideId) {
-         Print("v1.56 Hero ALT-CONSUMED side=", (sideId==POSITION_TYPE_BUY?"BUY":"SELL"),
-               " — opposite-turn satisfied, next-allowed reset to ANY");
-         g_heroNextAllowedSide = -1;
-      }
+      // v1.57 — DO NOT clear g_heroNextAllowedSide on activation.
+      //         The alternation gate is consumed only when the opposite Hero CYCLE actually closes
+      //         (CloseHeroOnSide / external close / auto-release). Activating Hero alone is not enough.
 
       string fixedList = "";
       for(int k = 0; k < take; k++)
@@ -926,11 +902,14 @@ void CloseHeroOnSide(ENUM_POSITION_TYPE side, string reason)
    }
    // v1.46 Side-Alternation Lock — จำฝั่งที่เพิ่งปิด Hero
    g_heroLastClosedSide = (int)side;
-   // v1.56 — บังคับฝั่งตรงข้ามให้เป็น Hero รอบถัดไปเท่านั้น
+   // v1.57 — opposite must take next Hero turn AND close it before this side may re-arm
    g_heroNextAllowedSide = (side == POSITION_TYPE_BUY) ? (int)POSITION_TYPE_SELL : (int)POSITION_TYPE_BUY;
-   Print("v1.56 Hero LAST-CLOSED side=", EnumToString(side),
+   // v1.57 — clear TP-event latch belonging to the side we just closed; arm fresh latch reset
+   if(side == POSITION_TYPE_BUY) { g_oppTPEvent_HeroBuy  = false; g_oppTPEventTime_HeroBuy  = 0; }
+   else                          { g_oppTPEvent_HeroSell = false; g_oppTPEventTime_HeroSell = 0; }
+   Print("v1.57 Hero LAST-CLOSED side=", EnumToString(side),
          " — NEXT-ALLOWED=", (g_heroNextAllowedSide==(int)POSITION_TYPE_BUY?"BUY":"SELL"),
-         " (opposite must complete its own Hero cycle before this side can re-arm)");
+         " (opposite Hero must complete its OWN cycle before this side re-arms)");
 }
 
 bool DetectSameSideBasketClearedForHero(ENUM_POSITION_TYPE side)
@@ -999,6 +978,32 @@ void ManageHeroOppositeClose()
    // v1.51 Tick-based opposite-clear detector — gated by Avg-TP intent flag (preferred) + realized P/L.
    //  Hero closes ONLY when opp basket flat AND opp was flattened by Avg-TP/Avg-Trail/Master TP/Accumulate.
    //  Per-Order Trail / SL / Cost-Hit / manual close => Hero HOLDS locked at BE-SL.
+   // v1.57 — TP-EVENT LATCH FAST CLOSE: if a TP/Avg-TP event was logged on the opposite basket,
+   //          close Hero immediately even if AutoReEntry/Grid already opened a NEW opposite ticket
+   //          on the same tick (legacy gate required CountNonHeroMainOnSide(opp)==0 which races).
+   for(int sL = 0; sL < 2; sL++) {
+      ENUM_POSITION_TYPE side = (sL == 0) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
+      ENUM_POSITION_TYPE opp  = (sL == 0) ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
+      int phase = (side == POSITION_TYPE_BUY) ? g_heroPhase_Buy : g_heroPhase_Sell;
+      if(phase != 3) continue;
+      if(CountHeroOnSide(side) <= 0) continue;
+      bool latch = (side == POSITION_TYPE_BUY) ? g_oppTPEvent_HeroBuy : g_oppTPEvent_HeroSell;
+      if(!latch) continue;
+      double oppRealized = (side == POSITION_TYPE_BUY) ? g_oppBasketRealized_HeroBuy
+                                                       : g_oppBasketRealized_HeroSell;
+      if(InpHero_OppCloseRequireTP && oppRealized <= InpHero_OppCloseMinProfit) {
+         // Wait for accumulator to confirm net profit (TP event may still be settling)
+         continue;
+      }
+      Print("v1.57 Hero CLOSE (opp TP-event latch): heroSide=", EnumToString(side),
+            " oppSide=", EnumToString(opp),
+            " oppRealized=", DoubleToString(oppRealized, 2),
+            " heroProfit=", DoubleToString(SumHeroProfitOnSide(side), 2));
+      CloseHeroOnSide(side, "OppositeTPEventLatch");
+      g_oppCloseIntent_AvgTP_Buy  = false;
+      g_oppCloseIntent_AvgTP_Sell = false;
+   }
+
    for(int s2 = 0; s2 < 2; s2++) {
       ENUM_POSITION_TYPE side = (s2 == 0) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
       ENUM_POSITION_TYPE opp  = (s2 == 0) ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
@@ -1746,7 +1751,7 @@ void DrawDashboard()
    double plS  = CalcSideFloating(POSITION_TYPE_SELL);
    double plAll= plB+plS;
 
-   DashHeader(StringFormat("Golden Kuy3 v1.56  Side:%s Grid:%s/%s", SideModeStr(), GridModeStr(), LotModeStr()));
+   DashHeader(StringFormat("Golden Kuy3 v1.57  Side:%s Grid:%s/%s", SideModeStr(), GridModeStr(), LotModeStr()));
 
    DashHeader("=== ACCOUNT ===");
    DashRow("Balance",     StringFormat("$%.2f", bal), info);
@@ -1811,7 +1816,7 @@ void DrawDashboard()
    DashRow("Restart Pending", StringFormat("BUY:%s  SELL:%s", rpB, rpS),
            (g_costHit_Pending_Buy||g_costHit_Pending_Sell)?warn:info);
 
-   DashHeader("=== HERO ORDER (v1.56) ===");
+   DashHeader("=== HERO ORDER (v1.57) ===");
    DashRow("Hero Cfg", StringFormat("%s  N=%d minAct=%d BE=%dpt  Mode=ARMED-DYN Lock=%s Alt=%s",
                           OnOff(InpHero_Enabled), InpHero_OrderCount,
                           InpHero_MinOrdersToActivate, InpHero_BE_OffsetPoints,
@@ -1831,6 +1836,10 @@ void DrawDashboard()
       string nextStr = (g_heroNextAllowedSide == (int)POSITION_TYPE_BUY)  ? "BUY only"
                      : (g_heroNextAllowedSide == (int)POSITION_TYPE_SELL) ? "SELL only" : "ANY";
       DashRow("Next Allowed", nextStr, (g_heroNextAllowedSide>=0?warn:info));
+      string tpEvStr = "-";
+      if(g_oppTPEvent_HeroBuy)  tpEvStr = "SELL->BUY (waiting close)";
+      if(g_oppTPEvent_HeroSell) tpEvStr = (tpEvStr=="-") ? "BUY->SELL (waiting close)" : "BOTH";
+      DashRow("TP Event", tpEvStr, ((g_oppTPEvent_HeroBuy||g_oppTPEvent_HeroSell)?gold:info));
    }
    {
       string phaseB = (g_heroPhase_Buy == 3) ? "BE_GUARD" : (g_heroPhase_Buy == 2) ? "ARMED" : "WAIT";
@@ -1905,6 +1914,20 @@ void OnTradeTransaction(const MqlTradeTransaction& trans, const MqlTradeRequest&
                         } else {
                            g_oppBasketRealized_HeroSell += pr;
                            g_oppBasketLastDealTime_HeroSell = TimeCurrent();
+                        }
+                        // v1.57 — TP-event latch: if BE_GUARD and the closing reason was TP / Avg-TP intent,
+                        //         arm latch so Hero closes even if AutoReEntry/Grid opens new opp ticket same tick.
+                        if(heroPhase == 3){
+                           long reasonE = HistoryDealGetInteger(trans.deal, DEAL_REASON);
+                           bool intentE = (closedSideH == POSITION_TYPE_BUY) ? g_oppCloseIntent_AvgTP_Buy
+                                                                              : g_oppCloseIntent_AvgTP_Sell;
+                           if(reasonE == DEAL_REASON_TP || intentE){
+                              if(heroSide == POSITION_TYPE_BUY) { g_oppTPEvent_HeroBuy  = true; g_oppTPEventTime_HeroBuy  = TimeCurrent(); }
+                              else                              { g_oppTPEvent_HeroSell = true; g_oppTPEventTime_HeroSell = TimeCurrent(); }
+                              Print("v1.57 Hero TP-EVENT LATCH ARMED heroSide=", (heroSide==POSITION_TYPE_BUY?"BUY":"SELL"),
+                                    " closedSide=", (closedSideH==POSITION_TYPE_BUY?"BUY":"SELL"),
+                                    " reason=", reasonE, " intent=", (intentE?"YES":"NO"));
+                           }
                         }
                         Print("v1.50 OppBasket dealOut heroSide=", (heroSide==POSITION_TYPE_BUY?"BUY":"SELL"),
                               " closedSide=", (closedSideH==POSITION_TYPE_BUY?"BUY":"SELL"),
@@ -2037,7 +2060,7 @@ int OnInit()
       if(c=="GK_INIT_SELL") g_initPrice_Sell = pos.PriceOpen();
    }
 
-   Print("Golden Kuy3 v1.56 init  digits=",g_digits," pip=",g_pip," stopsLvl=",g_stopsLevel,
+   Print("Golden Kuy3 v1.57 init  digits=",g_digits," pip=",g_pip," stopsLvl=",g_stopsLevel,
          " | Hero=", InpHero_Enabled?"ON":"OFF", " HeroN=", InpHero_OrderCount,
          " minAct=", InpHero_MinOrdersToActivate, " BE=", InpHero_BE_OffsetPoints, "pt");
    return INIT_SUCCEEDED;
@@ -2047,7 +2070,7 @@ void OnDeinit(const int reason)
 {
    DelDash();
    DelLines();
-   Print("Golden Kuy3 v1.56 deinit reason=",reason);
+   Print("Golden Kuy3 v1.57 deinit reason=",reason);
 }
 
 void OnTick()
