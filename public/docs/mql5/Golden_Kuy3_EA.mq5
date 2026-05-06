@@ -1,14 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                            Golden_Kuy3_EA.mq5    |
-//|                                       Golden Kuy3 EA  v1.60      |
-//|  v1.60: Accumulate Close now counts FLOATING incl. Hero (Gold     |
+//|                                       Golden Kuy3 EA  v1.61      |
+//|  v1.61: Hero dashboard Tix rows widened — show all Hero IDs       |
 //|         Miner concept) — fix: Hero floating no longer hides total |
 //|         realized+floating from accumulate trigger.                |
 //|         Full history in mem://trading/golden-kuy3/*.              |
 //+------------------------------------------------------------------+
 #property copyright "Golden Kuy3 EA"
-#property version   "1.60"
-#property description "Golden Kuy3 v1.60 — Accumulate Close counts floating incl. Hero (Gold Miner concept)."
+#property version   "1.61"
+#property description "Golden Kuy3 v1.61 — Hero dashboard Tix rows widened to show all Hero ticket IDs."
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -210,9 +210,9 @@ int      g_heroDash_BuyActive     = 0;
 int      g_heroDash_SellActive    = 0;
 int      g_heroDash_BuyTagged     = 0;
 int      g_heroDash_SellTagged    = 0;
-ulong    g_heroDash_BuyTickets[10];
+ulong    g_heroDash_BuyTickets[20];
 int      g_heroDash_BuyTicketN    = 0;
-ulong    g_heroDash_SellTickets[10];
+ulong    g_heroDash_SellTickets[20];
 int      g_heroDash_SellTicketN   = 0;
 
 //========================= HELPERS =================================
@@ -767,9 +767,9 @@ void BuildHeroTicketCache()
 
    // Dashboard ticket lists
    g_heroDash_BuyTicketN = 0;
-   for(int i=0; i<g_heroBuyStableN  && g_heroDash_BuyTicketN  < 10; i++) g_heroDash_BuyTickets[g_heroDash_BuyTicketN++]  = g_heroBuyStable[i];
+   for(int i=0; i<g_heroBuyStableN  && g_heroDash_BuyTicketN  < 20; i++) g_heroDash_BuyTickets[g_heroDash_BuyTicketN++]  = g_heroBuyStable[i];
    g_heroDash_SellTicketN = 0;
-   for(int i=0; i<g_heroSellStableN && g_heroDash_SellTicketN < 10; i++) g_heroDash_SellTickets[g_heroDash_SellTicketN++] = g_heroSellStable[i];
+   for(int i=0; i<g_heroSellStableN && g_heroDash_SellTicketN < 20; i++) g_heroDash_SellTickets[g_heroDash_SellTicketN++] = g_heroSellStable[i];
 
    // ============ STEP 5: Auto-release stale BE_GUARD when stable set is empty ============
    if(g_heroPhase_Buy == 3 && g_heroBuyStableN == 0) {
@@ -1559,11 +1559,11 @@ void ManageTakeProfit()
 {
    if(!InpUseTakeProfit) return;
 
-   // 1. Accumulate (whole account) — realized + floating (v1.60: include Hero, Gold Miner concept)
+   // 1. Accumulate (whole account) — realized + floating (v1.61: include Hero, Gold Miner concept)
    if(InpUseAccumulateClose && InpAccumulateTarget>0){
       double floatingAll = CalcSideFloating(POSITION_TYPE_BUY) + CalcSideFloating(POSITION_TYPE_SELL);
       if((g_realizedCycle + floatingAll) >= InpAccumulateTarget){
-         Print("v1.60 ACCUM CLOSE — realized=",DoubleToString(g_realizedCycle,2)," floating(all,inclHero)=",DoubleToString(floatingAll,2)," sum=",DoubleToString(g_realizedCycle+floatingAll,2)," tgt=",InpAccumulateTarget);
+         Print("v1.61 ACCUM CLOSE — realized=",DoubleToString(g_realizedCycle,2)," floating(all,inclHero)=",DoubleToString(floatingAll,2)," sum=",DoubleToString(g_realizedCycle+floatingAll,2)," tgt=",InpAccumulateTarget);
          // v1.51 — mark intent on BOTH sides (CloseAllOurs flattens both baskets)
          g_oppCloseIntent_AvgTP_Buy  = true; g_oppCloseIntentTime_Buy  = TimeCurrent();
          g_oppCloseIntent_AvgTP_Sell = true; g_oppCloseIntentTime_Sell = TimeCurrent();
@@ -1834,6 +1834,19 @@ void DashRow(string label, string value, color valColor)
    g_dashRow++;
 }
 
+// v1.61 — Wide value row for long content (Hero ticket lists). Background + value cell
+//         extend by extraW pixels so all ticket IDs fit; label width unchanged.
+void DashRowWide(string label, string value, color valColor, int extraW, int fontSize=8)
+{
+   int y = InpDashY + g_dashRow * InpDashRowH;
+   color bg = (g_dashRow%2==0) ? InpDashRowBgColor : InpDashAltRowBgColor;
+   int totalW = InpDashColW1 + InpDashColW2 + extraW;
+   SetRectBg(StringFormat("R%d",g_dashRow), InpDashX, y, totalW, InpDashRowH, bg);
+   SetCell(StringFormat("L%d",g_dashRow), InpDashX+4,                y+1, label, InpDashTextColor, 9,        false);
+   SetCell(StringFormat("V%d",g_dashRow), InpDashX+InpDashColW1+4,   y+1, value, valColor,         fontSize, false);
+   g_dashRow++;
+}
+
 void DrawDashboard()
 {
    if(!InpShowDashboard) return;
@@ -1856,7 +1869,7 @@ void DrawDashboard()
    double plS  = CalcSideFloating(POSITION_TYPE_SELL);
    double plAll= plB+plS;
 
-   DashHeader(StringFormat("Golden Kuy3 v1.60  Side:%s Grid:%s/%s", SideModeStr(), GridModeStr(), LotModeStr()));
+   DashHeader(StringFormat("Golden Kuy3 v1.61  Side:%s Grid:%s/%s", SideModeStr(), GridModeStr(), LotModeStr()));
 
    DashHeader("=== ACCOUNT ===");
    DashRow("Balance",     StringFormat("$%.2f", bal), info);
@@ -1900,7 +1913,7 @@ void DrawDashboard()
                            (InpUseTPPoints?ok:warn));
    DashRow("TP %Bal",      StringFormat("%s  %.1f%%", OnOff(InpUseTPPercentBalance), InpTPPercentOfBalance),
                            (InpUseTPPercentBalance?ok:warn));
-   // v1.60 — show current sum (realized + floating incl Hero) so we see how close to trigger
+   // v1.61 — show current sum (realized + floating incl Hero) so we see how close to trigger
    double accCur = g_realizedCycle + CalcSideFloating(POSITION_TYPE_BUY) + CalcSideFloating(POSITION_TYPE_SELL);
    color accClr = (InpUseAccumulateClose ? (accCur >= InpAccumulateTarget ? ok : warn) : warn);
    DashRow("Accumulate",   StringFormat("%s  $%.0f (cur $%.2f)", OnOff(InpUseAccumulateClose), InpAccumulateTarget, accCur),
@@ -1932,7 +1945,7 @@ void DrawDashboard()
    DashRow("Restart Pending", StringFormat("BUY:%s  SELL:%s", rpB, rpS),
            (g_costHit_Pending_Buy||g_costHit_Pending_Sell)?warn:info);
 
-   DashHeader("=== HERO ORDER (v1.60) ===");
+   DashHeader("=== HERO ORDER (v1.61) ===");
    DashRow("Hero Cfg", StringFormat("%s  N=%d minAct=%d BE=%dpt  Mode=HANDOFF Lock=%s Alt=%s",
                           OnOff(InpHero_Enabled), InpHero_OrderCount,
                           InpHero_MinOrdersToActivate, InpHero_BE_OffsetPoints,
@@ -1974,7 +1987,7 @@ void DrawDashboard()
          if(i > 0) ids += " ";
          ids += StringFormat("#%I64u", g_heroDash_BuyTickets[i]);
       }
-      DashRow("Tix BUY", (g_heroDash_BuyTicketN > 0 ? ids : "-"), info);
+      DashRowWide("Tix BUY", (g_heroDash_BuyTicketN > 0 ? ids : "-"), info, 260, 8);
    }
    {
       string phaseS = (g_heroPhase_Sell == 3) ? "BE_GUARD" : (g_heroPhase_Sell == 2) ? "ARMED" : "WAIT";
@@ -1987,7 +2000,7 @@ void DrawDashboard()
          if(i > 0) ids += " ";
          ids += StringFormat("#%I64u", g_heroDash_SellTickets[i]);
       }
-      DashRow("Tix SELL", (g_heroDash_SellTicketN > 0 ? ids : "-"), info);
+      DashRowWide("Tix SELL", (g_heroDash_SellTicketN > 0 ? ids : "-"), info, 260, 8);
    }
 
    // v1.2 high-water trim: remove rows that existed last frame but not this frame
@@ -2182,7 +2195,7 @@ int OnInit()
       if(c=="GK_INIT_SELL") g_initPrice_Sell = pos.PriceOpen();
    }
 
-   Print("Golden Kuy3 v1.60 init  digits=",g_digits," pip=",g_pip," stopsLvl=",g_stopsLevel,
+   Print("Golden Kuy3 v1.61 init  digits=",g_digits," pip=",g_pip," stopsLvl=",g_stopsLevel,
          " | Hero=", InpHero_Enabled?"ON":"OFF", " HeroN=", InpHero_OrderCount,
          " minAct=", InpHero_MinOrdersToActivate, " BE=", InpHero_BE_OffsetPoints, "pt");
    return INIT_SUCCEEDED;
@@ -2192,7 +2205,7 @@ void OnDeinit(const int reason)
 {
    DelDash();
    DelLines();
-   Print("Golden Kuy3 v1.60 deinit reason=",reason);
+   Print("Golden Kuy3 v1.61 deinit reason=",reason);
 }
 
 void OnTick()
