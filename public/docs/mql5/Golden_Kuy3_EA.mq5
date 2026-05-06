@@ -1337,6 +1337,9 @@ void ManageTakeProfit()
       // 2. Fixed dollar
       if(InpUseTPFixedDollar && InpTPDollarAmount>0 && pl >= InpTPDollarAmount){
          Print("GK TP DOLLAR ",(side==POSITION_TYPE_BUY?"BUY":"SELL")," PL=",DoubleToString(pl,2));
+         // v1.51 — mark intent for this side
+         if(side==POSITION_TYPE_BUY){ g_oppCloseIntent_AvgTP_Buy=true;  g_oppCloseIntentTime_Buy =TimeCurrent(); }
+         else                       { g_oppCloseIntent_AvgTP_Sell=true; g_oppCloseIntentTime_Sell=TimeCurrent(); }
          CloseAllSide(side);
          continue;
       }
@@ -1346,6 +1349,9 @@ void ManageTakeProfit()
          double tgt = bal * InpTPPercentOfBalance / 100.0;
          if(pl >= tgt){
             Print("GK TP %BAL ",(side==POSITION_TYPE_BUY?"BUY":"SELL")," PL=",DoubleToString(pl,2)," tgt=",DoubleToString(tgt,2));
+            // v1.51 — mark intent for this side
+            if(side==POSITION_TYPE_BUY){ g_oppCloseIntent_AvgTP_Buy=true;  g_oppCloseIntentTime_Buy =TimeCurrent(); }
+            else                       { g_oppCloseIntent_AvgTP_Sell=true; g_oppCloseIntentTime_Sell=TimeCurrent(); }
             CloseAllSide(side);
             continue;
          }
