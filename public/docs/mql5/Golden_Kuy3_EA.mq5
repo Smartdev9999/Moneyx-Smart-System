@@ -1,45 +1,17 @@
 //+------------------------------------------------------------------+
 //|                                            Golden_Kuy3_EA.mq5    |
-//|                                       Golden Kuy3 EA  v1.56      |
-//|  v1.56: Strict Side-Alternation + BE_GUARD Freeze — Hero set is   |
-//|         FROZEN once phase=BE_GUARD (no new BUY ticket can extend  |
-//|         the BUY Hero owner). After a Hero side closes, the next   |
-//|         Hero must be on the OPPOSITE side; same side cannot       |
-//|         re-arm until opposite side completes its own Hero cycle.  |
-//|  v1.55: Hero TRUE Dynamic Refresh — InpHero_StickySet deprecated  |
-//|         (ignored). Branch A always rebuilds Hero set every tick   |
-//|         from current price-extreme. Dashboard shows Mode=DYNAMIC. |
-//|         Fixes stale Hero ticket lock when old .set file forced    |
-//|         StickySet=true.                                           |
-//|  v1.54: Live Hero Refresh After Entries — BuildHeroTicketCache    |
-//|         runs again after ManageInitialEntry/ManageGridEntry so    |
-//|         orders opened in the same tick are immediately considered |
-//|         for Hero price-extreme selection (no stale dashboard).    |
-//|  v1.53: Hero Dynamic Refresh + Demote Restore — Hero set tracks   |
-//|         current price-extreme every tick; demoted tickets get     |
-//|         their Initial TP restored + lock-profit SL cleared so     |
-//|         they re-join the normal basket.                           |
-//|  v1.52: Hero Sticky Set (rolled back as default; toggle remains). |
-//|  v1.51: Hero AvgTP-Trigger Only — Hero closes only when opp       |
-//|         basket flattened by Avg-TP/Avg-Trail/Master TP/Accumulate |
-//|         (intent flag), NOT by Per-Order Trail/SL/Cost-Hit.        |
-//|  v1.50: Hero TP-Only Opposite Close — Hero closes only when opp   |
-//|         basket flattened with realized profit (TP); SL/loss=hold  |
-//|  v1.49: Hero Guard After Basket Close — keep Hero set even when   |
-//|         non-Hero basket is closed; IsHeroProtectedTicket guard    |
-//|  v1.48: Dynamic Price-Extreme Hero — refresh within side-locked Hero  |
-//|         + extended alternation guard (broker close detected)     |
-//|         + DrawAvgAndTPLines uses non-Hero average                 |
-//|  v1.46: Hero Side-Alternation Lock                                |
-//|  v1.45: Hero CANDIDATE vs OWNER (BE_GUARD only)                   |
-//|  v1.44: Hero CANDIDATE strips TP only (keeps SL cost-lock)        |
-//|  v1.43: Hero Price-Extreme select + Strict Single-Side Lock      |
-//|  v1.42: Accumulate cycle auto-reset on flat (Gold Miner concept) |
-//|  v1.40: Hero Order ported from Gold Miner v7.09                  |
+//|                                       Golden Kuy3 EA  v1.57      |
+//|  v1.57: Opposite TP-Event Latch — Hero closes when opposite      |
+//|         basket scores a TP/Avg-TP event, even if AutoReEntry/     |
+//|         Grid opens new opp tickets the same tick. Strict-Alt      |
+//|         consume moved to Hero CLOSE (not activation) so the       |
+//|         alternation gate truly waits for opposite Hero cycle      |
+//|         to finish. Header changelog trimmed (full history in      |
+//|         project memory mem://trading/golden-kuy3/*).              |
 //+------------------------------------------------------------------+
 #property copyright "Golden Kuy3 EA"
-#property version   "1.56"
-#property description "Golden Kuy3 v1.56 — Strict Side-Alternation + BE_GUARD Freeze: Hero set FROZEN once phase=BE_GUARD (Dynamic refresh ARMED-only). After a Hero closes, opposite side MUST be next Hero; original side cannot re-arm until opposite completes its Hero cycle. Dashboard shows Next Allowed."
+#property version   "1.57"
+#property description "Golden Kuy3 v1.57 — Opposite TP-Event Latch: SELL Hero closes the moment BUY basket logs a TP/Avg-TP event even if BUY re-entry already opened a new ticket; strict alternation released only when opposite Hero cycle truly closes."
 #property strict
 
 #include <Trade/Trade.mqh>
