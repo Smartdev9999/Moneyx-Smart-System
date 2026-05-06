@@ -1,6 +1,8 @@
 //+------------------------------------------------------------------+
 //|                                            Golden_Kuy3_EA.mq5    |
-//|                                       Golden Kuy3 EA  v1.49      |
+//|                                       Golden Kuy3 EA  v1.50      |
+//|  v1.50: Hero TP-Only Opposite Close — Hero closes only when opp   |
+//|         basket flattened with realized profit (TP); SL/loss=hold  |
 //|  v1.49: Hero Guard After Basket Close — keep Hero set even when   |
 //|         non-Hero basket is closed; IsHeroProtectedTicket guard    |
 //|  v1.48: Dynamic Price-Extreme Hero — refresh within side-locked Hero  |
