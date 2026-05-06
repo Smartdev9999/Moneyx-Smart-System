@@ -181,6 +181,12 @@ ulong    g_heroBuyStable[200];
 int      g_heroBuyStableN         = 0;
 ulong    g_heroSellStable[200];
 int      g_heroSellStableN        = 0;
+// v1.50 — Per-side accumulator of opposite-basket realized P/L since hero ARMED.
+// Indexed by HERO side (BUY/SELL). When opp basket flattens with positive net -> close hero.
+double   g_oppBasketRealized_HeroBuy   = 0.0; // realized P/L of SELL deals while BUY hero alive
+double   g_oppBasketRealized_HeroSell  = 0.0; // realized P/L of BUY  deals while SELL hero alive
+datetime g_oppBasketLastDealTime_HeroBuy  = 0;
+datetime g_oppBasketLastDealTime_HeroSell = 0;
 // Dashboard counters
 int      g_heroDash_BuyActive     = 0;
 int      g_heroDash_SellActive    = 0;
