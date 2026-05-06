@@ -200,6 +200,7 @@ bool     g_heroBE_Applied_Sell    = false;
 datetime g_heroJustClosed_Buy     = 0;
 datetime g_heroJustClosed_Sell    = 0;
 int      g_heroLastClosedSide     = -1;    // v1.46 — ฝั่ง Hero ที่เพิ่งปิดล่าสุด (POSITION_TYPE_BUY/SELL หรือ -1)
+int      g_heroNextAllowedSide    = -1;    // v1.56 — ฝั่งที่อนุญาตให้เป็น Hero รอบถัดไป (-1=any, BUY=POSITION_TYPE_BUY, SELL=POSITION_TYPE_SELL)
 // v1.49 Stable per-side Hero ticket sets — chosen ONCE at first activation, never replaced
 ulong    g_heroBuyStable[200];
 int      g_heroBuyStableN         = 0;
