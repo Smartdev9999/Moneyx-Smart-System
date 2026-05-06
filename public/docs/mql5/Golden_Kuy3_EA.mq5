@@ -349,37 +349,117 @@ bool ShouldBlockSameSideGridForHero(ENUM_POSITION_TYPE side)
    return (CountNonHeroMainOnSide(side) == 0);
 }
 
+// v1.47 helpers — stable per-side Hero ticket set management
+int  GetStableCount(int sideId) { return (sideId==POSITION_TYPE_BUY) ? g_heroBuyStableN : g_heroSellStableN; }
+
+bool IsTicketStillOpen(ulong t)
+{
+   return PositionSelectByTicket(t);
+}
+
+// Drop tickets that are no longer open. Returns previous count for change detection.
+int PruneStableSet(int sideId)
+{
+   int prev = GetStableCount(sideId);
+   if(sideId==POSITION_TYPE_BUY) {
+      int w = 0;
+      for(int i=0; i<g_heroBuyStableN; i++)
+         if(IsTicketStillOpen(g_heroBuyStable[i])) g_heroBuyStable[w++] = g_heroBuyStable[i];
+      g_heroBuyStableN = w;
+   } else {
+      int w = 0;
+      for(int i=0; i<g_heroSellStableN; i++)
+         if(IsTicketStillOpen(g_heroSellStable[i])) g_heroSellStable[w++] = g_heroSellStable[i];
+      g_heroSellStableN = w;
+   }
+   return prev;
+}
+
+void ClearStableSet(int sideId)
+{
+   if(sideId==POSITION_TYPE_BUY) g_heroBuyStableN = 0; else g_heroSellStableN = 0;
+}
+
+void AddToStableSet(int sideId, ulong t)
+{
+   if(sideId==POSITION_TYPE_BUY) {
+      if(g_heroBuyStableN < 200) g_heroBuyStable[g_heroBuyStableN++] = t;
+   } else {
+      if(g_heroSellStableN < 200) g_heroSellStable[g_heroSellStableN++] = t;
+   }
+}
+
+bool IsInStableSet(int sideId, ulong t)
+{
+   if(sideId==POSITION_TYPE_BUY) {
+      for(int i=0; i<g_heroBuyStableN; i++) if(g_heroBuyStable[i]==t) return true;
+   } else {
+      for(int i=0; i<g_heroSellStableN; i++) if(g_heroSellStable[i]==t) return true;
+   }
+   return false;
+}
+
 void BuildHeroTicketCache()
 {
-   // v1.45: rebuild ทุก tick + sort ด้วยราคาเปิด (BUY ต่ำสุด / SELL สูงสุด)
-   if(!InpHero_Enabled || InpHero_OrderCount <= 0) { g_heroTicketCount = 0; return; }
+   // v1.47: STICKY stable sets per side — chosen ONCE at activation, never re-selected
+   if(!InpHero_Enabled || InpHero_OrderCount <= 0) {
+      g_heroTicketCount = 0;
+      g_heroBuyStableN = 0;
+      g_heroSellStableN = 0;
+      return;
+   }
    g_heroLastBuildTime = TimeCurrent();
-   g_heroTicketCount = 0;
 
    int sideTotalActive[2] = {0, 0};
    int sideHeroTagged[2]  = {0, 0};
 
-   // v1.45 PRE-GUARD — เฉพาะกรณีหายาก: ทั้งสองฝั่ง phase == BE_GUARD พร้อมกัน
-   //  (ARMED+ARMED, ARMED+BE_GUARD ไม่ใช่ปัญหา — ปล่อยให้ทำงานคู่กันได้)
+   // ============ STEP 1: Prune stable sets + detect external Hero close ============
+   for(int s = 0; s < 2; s++) {
+      int sideId = (s==0) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
+      int prevN = (sideId==POSITION_TYPE_BUY) ? g_heroBuyStableN : g_heroSellStableN;
+      PruneStableSet(sideId);
+      int nowN  = (sideId==POSITION_TYPE_BUY) ? g_heroBuyStableN : g_heroSellStableN;
+
+      int curPhase = (sideId == POSITION_TYPE_BUY) ? g_heroPhase_Buy : g_heroPhase_Sell;
+      // External-close detection: stable set drained while phase was active -> treat as Hero closed
+      if(prevN > 0 && nowN == 0 && curPhase > 0) {
+         Print("v1.47 Hero TICKET-SET LOST side=", (sideId==POSITION_TYPE_BUY?"BUY":"SELL"),
+               " — all stable Hero tickets closed externally (broker/SL/TP/manual). Resetting phase + stamping last-closed.");
+         if(sideId == POSITION_TYPE_BUY) {
+            g_heroPhase_Buy = 0; g_heroBE_Applied_Buy = false; g_heroJustClosed_Buy = TimeCurrent();
+         } else {
+            g_heroPhase_Sell = 0; g_heroBE_Applied_Sell = false; g_heroJustClosed_Sell = TimeCurrent();
+         }
+         g_heroLastClosedSide = sideId;
+      }
+   }
+
+   // ============ STEP 2: Dual BE_GUARD pre-guard (rare safety net) ============
    if(InpHero_SingleSideLock && g_heroPhase_Buy == 3 && g_heroPhase_Sell == 3) {
       int nB = CountSideSimple(POSITION_TYPE_BUY);
       int nS = CountSideSimple(POSITION_TYPE_SELL);
       int keep = (nB >= nS) ? (int)POSITION_TYPE_BUY : (int)POSITION_TYPE_SELL;
       if(keep == (int)POSITION_TYPE_BUY) {
-         Print("v1.45 Hero PRE-GUARD: dual BE_GUARD detected, keeping BUY, resetting SELL");
+         Print("v1.47 Hero PRE-GUARD: dual BE_GUARD detected, keeping BUY, resetting SELL");
          g_heroPhase_Sell = 0; g_heroBE_Applied_Sell = false; g_heroJustClosed_Sell = TimeCurrent();
+         ClearStableSet(POSITION_TYPE_SELL);
       } else {
-         Print("v1.45 Hero PRE-GUARD: dual BE_GUARD detected, keeping SELL, resetting BUY");
+         Print("v1.47 Hero PRE-GUARD: dual BE_GUARD detected, keeping SELL, resetting BUY");
          g_heroPhase_Buy = 0; g_heroBE_Applied_Buy = false; g_heroJustClosed_Buy = TimeCurrent();
+         ClearStableSet(POSITION_TYPE_BUY);
       }
    }
 
    int activeOwner = -1;
    if(InpHero_SingleSideLock) activeOwner = GetHeroOwnerSide();
 
+   // ============ STEP 3: Per-side processing — only SELECT new Hero when phase==NONE ============
    for(int s = 0; s < 2; s++)
    {
       ENUM_POSITION_TYPE side = (s == 0) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
+      int sideId = (int)side;
+
+      // Scan all current open positions on this side (for activation count + price-extreme select)
       ulong  tkPool[200]; double pxPool[200]; int nPool = 0;
       int    nAll = 0;
 
@@ -399,13 +479,62 @@ void BuildHeroTicketCache()
       }
       sideTotalActive[s] = nAll;
 
-      // v1.45 Sort by OPEN PRICE — BUY: ascending (ต่ำสุดมาก่อน = Hero ล่างสุด)
-      //                            SELL: descending (สูงสุดมาก่อน = Hero บนสุด)
-      // tie-break: ticket จากน้อยไปมาก (เก่ากว่ามาก่อน เพื่อความเสถียร)
+      int curPhase = (sideId == POSITION_TYPE_BUY) ? g_heroPhase_Buy : g_heroPhase_Sell;
+      int stableN  = GetStableCount(sideId);
+
+      // ===== Branch A: phase active (ARMED/BE_GUARD) — KEEP existing stable set, never re-select =====
+      if(curPhase != 0 && stableN > 0) {
+         sideHeroTagged[s] = stableN;
+         continue;
+      }
+
+      // ===== Branch B: phase NONE — consider activating a NEW stable set =====
+
+      // Post-close grace
+      datetime jc = (sideId == POSITION_TYPE_BUY) ? g_heroJustClosed_Buy : g_heroJustClosed_Sell;
+      if(jc > 0 && (TimeCurrent() - jc) < InpHero_PostCloseGraceSec) {
+         continue;
+      }
+
+      // v1.46/v1.47 Side-Alternation Lock — ฝั่งที่เพิ่งปิด Hero ห้าม re-arm
+      if(InpHero_AlternateSides && g_heroLastClosedSide >= 0 && sideId == g_heroLastClosedSide)
+      {
+         int oppPhase  = (sideId == POSITION_TYPE_BUY) ? g_heroPhase_Sell : g_heroPhase_Buy;
+         bool oppActive = (oppPhase == 2 || oppPhase == 3);
+         bool selfFlat  = (CountHeroOnSide((ENUM_POSITION_TYPE)sideId) == 0
+                        && CountNonHeroMainOnSide((ENUM_POSITION_TYPE)sideId) == 0);
+         if(oppActive || selfFlat) {
+            g_heroLastClosedSide = -1; // ปลด lock
+         } else {
+            static datetime lastAltBlockLog_B = 0, lastAltBlockLog_S = 0;
+            datetime &lastLog = (sideId == POSITION_TYPE_BUY) ? lastAltBlockLog_B : lastAltBlockLog_S;
+            if(TimeCurrent() - lastLog >= 30) {
+               Print("v1.47 Hero ALT-BLOCK side=", (sideId==POSITION_TYPE_BUY?"BUY":"SELL"),
+                     " lastClosed=", (sideId==POSITION_TYPE_BUY?"BUY":"SELL"),
+                     " — waiting opposite-side Hero or self flat");
+               lastLog = TimeCurrent();
+            }
+            continue;
+         }
+      }
+
+      int activateThreshold = (InpHero_MinOrdersToActivate > 0)
+                              ? InpHero_MinOrdersToActivate
+                              : (InpHero_OrderCount + 1);
+
+      // STRICT Single-side lock — only block when REAL owner exists (BE_GUARD)
+      if(InpHero_SingleSideLock && activeOwner >= 0 && sideId != activeOwner) {
+         continue;
+      }
+
+      // Activation gate
+      if(nAll < activateThreshold) continue;
+      if(nPool <= 0) continue;
+
+      // Sort by OPEN PRICE: BUY ascending (lowest first); SELL descending (highest first)
       bool buySide = (side == POSITION_TYPE_BUY);
       for(int a = 1; a < nPool; a++)
-         for(int b = a; b > 0; b--)
-         {
+         for(int b = a; b > 0; b--) {
             bool swap = false;
             if(buySide) {
                if(pxPool[b] < pxPool[b-1]) swap = true;
@@ -419,92 +548,58 @@ void BuildHeroTicketCache()
             ulong  _k = tkPool[b]; tkPool[b] = tkPool[b-1]; tkPool[b-1] = _k;
          }
 
-      int sideId = (int)side;
-      int curPhase = (sideId == POSITION_TYPE_BUY) ? g_heroPhase_Buy : g_heroPhase_Sell;
-
-      // Post-close grace
-      datetime jc = (sideId == POSITION_TYPE_BUY) ? g_heroJustClosed_Buy : g_heroJustClosed_Sell;
-      if(jc > 0 && (TimeCurrent() - jc) < InpHero_PostCloseGraceSec) {
-         if(sideId == POSITION_TYPE_BUY) g_heroPhase_Buy = 0; else g_heroPhase_Sell = 0;
-         continue;
-      }
-
-      // v1.46 Side-Alternation Lock — ฝั่งที่เพิ่งปิด Hero ห้าม re-arm
-      //        จนกว่าฝั่งตรงข้ามจะ ARMED/BE_GUARD หรือฝั่งนี้กลับมา flat สนิท
-      if(InpHero_AlternateSides && g_heroLastClosedSide >= 0
-         && sideId == g_heroLastClosedSide && curPhase == 0)
-      {
-         int oppPhase  = (sideId == POSITION_TYPE_BUY) ? g_heroPhase_Sell : g_heroPhase_Buy;
-         bool oppActive = (oppPhase == 2 || oppPhase == 3);
-         bool selfFlat  = (CountHeroOnSide((ENUM_POSITION_TYPE)sideId) == 0
-                        && CountNonHeroMainOnSide((ENUM_POSITION_TYPE)sideId) == 0);
-         if(oppActive || selfFlat) {
-            g_heroLastClosedSide = -1; // ปลด lock
-         } else {
-            if(sideId == POSITION_TYPE_BUY) g_heroPhase_Buy = 0; else g_heroPhase_Sell = 0;
-            continue;
-         }
-      }
-
-      int activateThreshold = (InpHero_MinOrdersToActivate > 0)
-                              ? InpHero_MinOrdersToActivate
-                              : (InpHero_OrderCount + 1);
-
-      // v1.45 STRICT Single-side lock — block ใหม่เฉพาะเมื่อมี OWNER จริง (BE_GUARD)
-      //         ARMED ทั้งสองฝั่งสามารถทำงานคู่กันได้จนกว่าฝั่งใดฝั่งหนึ่งถึง BE_GUARD
-      if(InpHero_SingleSideLock && curPhase == 0 && activeOwner >= 0 && sideId != activeOwner) {
-         if(sideId == POSITION_TYPE_BUY) g_heroPhase_Buy = 0; else g_heroPhase_Sell = 0;
-         continue;
-      }
-
-      // Activation gate (sticky after first tag)
-      if(curPhase == 0 && nAll < activateThreshold) continue;
-      if(nPool <= 0) continue;
-
-      int take;
-      if(curPhase == 0) take = MathMin(InpHero_OrderCount, nPool - 1);
-      else              take = MathMin(InpHero_OrderCount, nPool);
+      int take = MathMin(InpHero_OrderCount, nPool - 1); // keep ≥1 non-Hero
       if(take <= 0) continue;
 
-      if(sideId == POSITION_TYPE_BUY) {
-         g_heroDash_BuyTicketN = 0;
-         for(int k = 0; k < take && g_heroDash_BuyTicketN < 10; k++)
-            g_heroDash_BuyTickets[g_heroDash_BuyTicketN++] = tkPool[k];
-      } else {
-         g_heroDash_SellTicketN = 0;
-         for(int k = 0; k < take && g_heroDash_SellTicketN < 10; k++)
-            g_heroDash_SellTickets[g_heroDash_SellTicketN++] = tkPool[k];
-      }
+      // FREEZE the stable set NOW — never replaced until phase resets to NONE
+      ClearStableSet(sideId);
+      for(int k = 0; k < take; k++) AddToStableSet(sideId, tkPool[k]);
 
-      for(int k = 0; k < take && g_heroTicketCount < 200; k++)
-         g_heroTickets[g_heroTicketCount++] = tkPool[k];
-      sideHeroTagged[s] += take;
+      // Promote phase ARMED
+      if(sideId == POSITION_TYPE_BUY) g_heroPhase_Buy  = 2;
+      else                            g_heroPhase_Sell = 2;
+      sideHeroTagged[s] = take;
 
-      // v1.45 ไม่อัปเดต activeOwner ทันที — ARMED ไม่ใช่ owner; ฝั่งถัดไป loop เดียวกันยัง ARMED ได้
-
+      string fixedList = "";
+      for(int k = 0; k < take; k++)
+         fixedList += StringFormat(" #%I64u", tkPool[k]);
+      Print("v1.47 Hero STABLE-SET FROZEN side=", (sideId==POSITION_TYPE_BUY?"BUY":"SELL"),
+            " count=", take, " (sticky — won't be replaced until phase resets):", fixedList);
    }
 
-   // v7.09 Auto-release ownership when phase==BE_GUARD but Hero tickets=0
-   if(g_heroPhase_Buy == 3 && sideHeroTagged[0] == 0) {
-      Print("v1.45 Hero AUTO-RELEASE BUY: phase=BE_GUARD but Hero tickets=0 — releasing owner lock");
+   // ============ STEP 4: Rebuild flat g_heroTickets[] from both stable sets ============
+   g_heroTicketCount = 0;
+   for(int i=0; i<g_heroBuyStableN  && g_heroTicketCount<200; i++) g_heroTickets[g_heroTicketCount++] = g_heroBuyStable[i];
+   for(int i=0; i<g_heroSellStableN && g_heroTicketCount<200; i++) g_heroTickets[g_heroTicketCount++] = g_heroSellStable[i];
+
+   // Dashboard ticket lists
+   g_heroDash_BuyTicketN = 0;
+   for(int i=0; i<g_heroBuyStableN  && g_heroDash_BuyTicketN  < 10; i++) g_heroDash_BuyTickets[g_heroDash_BuyTicketN++]  = g_heroBuyStable[i];
+   g_heroDash_SellTicketN = 0;
+   for(int i=0; i<g_heroSellStableN && g_heroDash_SellTicketN < 10; i++) g_heroDash_SellTickets[g_heroDash_SellTicketN++] = g_heroSellStable[i];
+
+   // ============ STEP 5: Auto-release stale BE_GUARD when stable set is empty ============
+   if(g_heroPhase_Buy == 3 && g_heroBuyStableN == 0) {
+      Print("v1.47 Hero AUTO-RELEASE BUY: phase=BE_GUARD but stable set empty — releasing owner lock");
       g_heroPhase_Buy = 0; g_heroBE_Applied_Buy = false; g_heroJustClosed_Buy = TimeCurrent();
+      g_heroLastClosedSide = (int)POSITION_TYPE_BUY;
    }
-   if(g_heroPhase_Sell == 3 && sideHeroTagged[1] == 0) {
-      Print("v1.45 Hero AUTO-RELEASE SELL: phase=BE_GUARD but Hero tickets=0 — releasing owner lock");
+   if(g_heroPhase_Sell == 3 && g_heroSellStableN == 0) {
+      Print("v1.47 Hero AUTO-RELEASE SELL: phase=BE_GUARD but stable set empty — releasing owner lock");
       g_heroPhase_Sell = 0; g_heroBE_Applied_Sell = false; g_heroJustClosed_Sell = TimeCurrent();
+      g_heroLastClosedSide = (int)POSITION_TYPE_SELL;
    }
 
-   if(g_heroPhase_Buy  != 3) g_heroPhase_Buy  = (sideHeroTagged[0] > 0) ? 2 : 0;
-   if(g_heroPhase_Sell != 3) g_heroPhase_Sell = (sideHeroTagged[1] > 0) ? 2 : 0;
+   // Phase fallback: keep ARMED if stable set populated, drop to NONE only if empty (BE_GUARD respected)
+   if(g_heroPhase_Buy  != 3) g_heroPhase_Buy  = (g_heroBuyStableN  > 0) ? 2 : 0;
+   if(g_heroPhase_Sell != 3) g_heroPhase_Sell = (g_heroSellStableN > 0) ? 2 : 0;
 
    g_heroDash_BuyActive  = sideTotalActive[0];
    g_heroDash_SellActive = sideTotalActive[1];
-   g_heroDash_BuyTagged  = sideHeroTagged[0];
-   g_heroDash_SellTagged = sideHeroTagged[1];
-   if(sideHeroTagged[0] == 0) g_heroDash_BuyTicketN = 0;
-   if(sideHeroTagged[1] == 0) g_heroDash_SellTicketN = 0;
+   g_heroDash_BuyTagged  = g_heroBuyStableN;
+   g_heroDash_SellTagged = g_heroSellStableN;
 
-   // Audit log every 30s — แสดงราคาเปิดของ Hero ด้วย
+   // Audit log every 30s
    static datetime lastHeroAuditLog = 0;
    if(TimeCurrent() - lastHeroAuditLog >= 30) {
       int minAct = (InpHero_MinOrdersToActivate > 0) ? InpHero_MinOrdersToActivate : (InpHero_OrderCount + 1);
@@ -521,10 +616,10 @@ void BuildHeroTicketCache()
       }
       string lcStr2 = (g_heroLastClosedSide == (int)POSITION_TYPE_BUY) ? "BUY"
                     : (g_heroLastClosedSide == (int)POSITION_TYPE_SELL) ? "SELL" : "-";
-      Print("v1.46 Hero AUDIT [PriceExtreme/StrictLock/Alt]: BUY ", roleB, " active=", sideTotalActive[0],
-            " hero=", sideHeroTagged[0],
+      Print("v1.47 Hero AUDIT [Sticky/StrictLock/Alt]: BUY ", roleB, " active=", sideTotalActive[0],
+            " stable=", g_heroBuyStableN,
             " | SELL ", roleS, " active=", sideTotalActive[1],
-            " hero=", sideHeroTagged[1],
+            " stable=", g_heroSellStableN,
             " | OWNER=", ownerStr, " lastClosed=", lcStr2,
             " thr=", minAct, " N=", InpHero_OrderCount, " |", heroPxList);
       lastHeroAuditLog = TimeCurrent();
