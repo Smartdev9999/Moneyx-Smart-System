@@ -1514,6 +1514,46 @@ void EnforceClearTPIfDisabled()
    g_tpStripped = (cleared>0) || g_tpStripped;
 }
 
+// v1.59 — Max DD Close: flatten everything when floating loss exceeds threshold
+datetime g_maxDD_LastFire = 0;
+double   g_maxDD_CurrAbs  = 0.0;   // current floating loss in $ (positive number)
+double   g_maxDD_CurrPct  = 0.0;   // current floating loss as % of balance
+
+void ManageMaxDDClose()
+{
+   if(InpMaxDDMode == GK_DD_OFF) return;
+   if(TimeCurrent() - g_maxDD_LastFire < 30) return; // 30s cooldown
+
+   double floating = 0.0;
+   for(int i=PositionsTotal()-1;i>=0;i--){
+      if(!pos.SelectByIndex(i)) continue;
+      if(!IsOurPosition()) continue;
+      floating += pos.Profit() + pos.Swap() + pos.Commission();
+   }
+   double bal = AccountInfoDouble(ACCOUNT_BALANCE);
+   g_maxDD_CurrAbs = (floating < 0) ? -floating : 0.0;
+   g_maxDD_CurrPct = (bal > 0 && floating < 0) ? (g_maxDD_CurrAbs / bal * 100.0) : 0.0;
+
+   if(floating >= 0) return;
+
+   bool fire = false;
+   if(InpMaxDDMode == GK_DD_PERCENT && InpMaxDDValue > 0 && g_maxDD_CurrPct >= InpMaxDDValue) fire = true;
+   if(InpMaxDDMode == GK_DD_DOLLAR  && InpMaxDDValue > 0 && g_maxDD_CurrAbs >= InpMaxDDValue) fire = true;
+
+   if(!fire) return;
+
+   Print("v1.59 MAX DD CLOSE — mode=", (InpMaxDDMode==GK_DD_PERCENT?"PERCENT":"DOLLAR"),
+         " floating=$", DoubleToString(floating,2),
+         " absDD=$", DoubleToString(g_maxDD_CurrAbs,2),
+         " pct=", DoubleToString(g_maxDD_CurrPct,2), "%",
+         " threshold=", DoubleToString(InpMaxDDValue,2));
+   // mark intent on BOTH sides so Hero closes alongside (v1.51/v1.57)
+   g_oppCloseIntent_AvgTP_Buy  = true; g_oppCloseIntentTime_Buy  = TimeCurrent();
+   g_oppCloseIntent_AvgTP_Sell = true; g_oppCloseIntentTime_Sell = TimeCurrent();
+   CloseAllOurs();
+   g_maxDD_LastFire = TimeCurrent();
+}
+
 void ManageTakeProfit()
 {
    if(!InpUseTakeProfit) return;
