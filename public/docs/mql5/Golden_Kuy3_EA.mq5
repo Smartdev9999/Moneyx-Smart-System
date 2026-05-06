@@ -75,6 +75,12 @@ input int                  InpAvgTrail_MinOrders      = 3;
 input bool                 InpAvgTrail_Strict2Cross   = true;
 input double               InpAvgTrail_UnderAvgBuffer = 50.0;
 
+input group "=== Risk Limits (v1.59) ==="
+enum ENUM_GK_DD_MODE { GK_DD_OFF=0, GK_DD_PERCENT=1, GK_DD_DOLLAR=2 };
+input double               InpMaxLotPerOrder       = 0.0;     // 0 = no cap; cap each grid order's lot after multiplier
+input ENUM_GK_DD_MODE      InpMaxDDMode            = GK_DD_OFF;
+input double               InpMaxDDValue           = 20.0;    // PERCENT: % of balance | DOLLAR: $ floating loss
+
 input group "===== Hero Order (v7.09) ====="
 input bool   InpHero_Enabled            = false;  // Enable Hero Order (opposite-side helper)
 input int    InpHero_OrderCount         = 2;      // Hero count per side — N newest become Hero
