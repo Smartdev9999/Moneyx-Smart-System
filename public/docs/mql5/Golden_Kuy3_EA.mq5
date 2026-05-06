@@ -1,6 +1,11 @@
 //+------------------------------------------------------------------+
 //|                                            Golden_Kuy3_EA.mq5    |
-//|                                       Golden Kuy3 EA  v1.54      |
+//|                                       Golden Kuy3 EA  v1.55      |
+//|  v1.55: Hero TRUE Dynamic Refresh — InpHero_StickySet deprecated  |
+//|         (ignored). Branch A always rebuilds Hero set every tick   |
+//|         from current price-extreme. Dashboard shows Mode=DYNAMIC. |
+//|         Fixes stale Hero ticket lock when old .set file forced    |
+//|         StickySet=true.                                           |
 //|  v1.54: Live Hero Refresh After Entries — BuildHeroTicketCache    |
 //|         runs again after ManageInitialEntry/ManageGridEntry so    |
 //|         orders opened in the same tick are immediately considered |
@@ -28,8 +33,8 @@
 //|  v1.40: Hero Order ported from Gold Miner v7.09                  |
 //+------------------------------------------------------------------+
 #property copyright "Golden Kuy3 EA"
-#property version   "1.54"
-#property description "Golden Kuy3 v1.54 — Live Hero Refresh After Entries: BuildHeroTicketCache re-runs after order-entry modules so Hero price-extreme selection picks up brand-new tickets in the same tick (dashboard never stale). v1.53 dynamic refresh + demote-restore preserved."
+#property version   "1.55"
+#property description "Golden Kuy3 v1.55 — Hero TRUE Dynamic Refresh: InpHero_StickySet deprecated/ignored; Hero set is ALWAYS rebuilt every tick from current price-extreme so newly-opened tickets at better prices replace stale ones immediately on Dashboard + IsHeroProtectedTicket guards. v1.54 post-entry refresh preserved."
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -112,7 +117,7 @@ input bool   InpHero_RequireNetProfit   = false;  // [DEPRECATED] not used (lock
 input bool   InpHero_OppCloseRequireTP    = true;   // v1.50 — close Hero ONLY when opp basket realized > min profit
 input double InpHero_OppCloseMinProfit    = 0.0;    // v1.50 — minimum opp realized profit to qualify as TP close ($)
 input bool   InpHero_OppCloseRequireAvgTP = true;   // v1.51 — close Hero ONLY when opp basket flattened by Avg-TP/Avg-Trail/Master TP/Accumulate (intent flag); Per-Order Trail/SL/Cost-Hit do NOT count
-input bool   InpHero_StickySet              = false;  // v1.53 — default OFF (Dynamic Refresh + Demote Restore). true = v1.52 sticky-set fallback (Hero frozen at activation)
+input bool   InpHero_StickySet              = false;  // v1.55 — [DEPRECATED/IGNORED] Hero set is always rebuilt every tick from price-extreme. Kept only for .set file backward compatibility.
 
 input group "=== Chart Lines ==="
 input bool                 InpShowAvgLine             = true;
@@ -576,20 +581,11 @@ void BuildHeroTicketCache()
       int curPhase = (sideId == POSITION_TYPE_BUY) ? g_heroPhase_Buy : g_heroPhase_Sell;
       int stableN  = GetStableCount(sideId);
 
-      // ===== Branch A v1.52: phase active — STICKY (default) or v1.51 dynamic refresh =====
-      // v1.52: when InpHero_StickySet=true, Hero set is frozen at activation. PruneStableSet
-      //        in STEP 1 already removed any closed tickets. New orders opened after ARMED/BE_GUARD
-      //        remain normal basket (not Hero). This prevents Hero overlap, dropped-ticket BE close,
-      //        and missing side-alternation that v1.48 dynamic refresh caused.
-      // v1.51 fallback (InpHero_StickySet=false): re-select Hero set every tick by price-extreme.
+      // ===== Branch A v1.55: phase active — ALWAYS rebuild Hero set every tick by price-extreme =====
+      // v1.55: InpHero_StickySet is DEPRECATED/IGNORED. Hero set must always reflect the current
+      //        best price-extreme so brand-new tickets at better prices immediately replace
+      //        stale Hero tickets. Demote-restore returns demoted tickets to normal basket.
       if(curPhase != 0) {
-         if(InpHero_StickySet) {
-            // STICKY: keep current stable set as-is (already pruned in STEP 1)
-            sideHeroTagged[s] = stableN;
-            continue;
-         }
-
-         // ----- v1.51 dynamic refresh (legacy fallback) -----
          if(nPool <= 0) { sideHeroTagged[s] = 0; continue; }
 
          // Sort pool by price-extreme (BUY ascending lowest first / SELL descending highest first)
@@ -632,15 +628,14 @@ void BuildHeroTicketCache()
             string newList = "";
             for(int k = 0; k < takeA; k++)
                newList += StringFormat(" #%I64u@%s", tkPool[k], DoubleToString(pxPool[k], g_digits));
-            Print("v1.53 Hero REFRESH side=", (sideId==POSITION_TYPE_BUY?"BUY":"SELL"),
+            Print("v1.55 Hero DYNAMIC REFRESH side=", (sideId==POSITION_TYPE_BUY?"BUY":"SELL"),
                   " phase=", (curPhase==3?"BE_GUARD":"ARMED"), " count=", takeA, " new set:", newList);
             if(curPhase == 3) {
+               // BE_GUARD: new entrants need lock-profit SL re-applied
                if(sideId == POSITION_TYPE_BUY) g_heroBE_Applied_Buy = false;
                else                            g_heroBE_Applied_Sell = false;
             }
-            // v1.53 — demote restore: any ticket in prevSet but not in newSet has been pushed
-            //         out of Hero protection; restore Initial TP and clear lock-profit SL so it
-            //         re-joins the normal basket and closes with Avg-TP/per-order rules.
+            // Demote restore: tickets pushed out get Initial TP back + lock-SL cleared
             RestoreInitialTPOnDemoted(prevSet, prevCnt, tkPool, takeA, (ENUM_POSITION_TYPE)sideId);
          }
          continue;
@@ -1711,7 +1706,7 @@ void DrawDashboard()
    double plS  = CalcSideFloating(POSITION_TYPE_SELL);
    double plAll= plB+plS;
 
-   DashHeader(StringFormat("Golden Kuy3 v1.54  Side:%s Grid:%s/%s", SideModeStr(), GridModeStr(), LotModeStr()));
+   DashHeader(StringFormat("Golden Kuy3 v1.55  Side:%s Grid:%s/%s", SideModeStr(), GridModeStr(), LotModeStr()));
 
    DashHeader("=== ACCOUNT ===");
    DashRow("Balance",     StringFormat("$%.2f", bal), info);
@@ -1776,8 +1771,8 @@ void DrawDashboard()
    DashRow("Restart Pending", StringFormat("BUY:%s  SELL:%s", rpB, rpS),
            (g_costHit_Pending_Buy||g_costHit_Pending_Sell)?warn:info);
 
-   DashHeader("=== HERO ORDER (v1.54) ===");
-   DashRow("Hero Cfg", StringFormat("%s  N=%d minAct=%d BE=%dpt  Mode=PRICE_EXTREME Lock=%s Alt=%s",
+   DashHeader("=== HERO ORDER (v1.55) ===");
+   DashRow("Hero Cfg", StringFormat("%s  N=%d minAct=%d BE=%dpt  Mode=DYNAMIC Lock=%s Alt=%s",
                           OnOff(InpHero_Enabled), InpHero_OrderCount,
                           InpHero_MinOrdersToActivate, InpHero_BE_OffsetPoints,
                           (InpHero_SingleSideLock?"STRICT":"OFF"),
@@ -1999,7 +1994,7 @@ int OnInit()
       if(c=="GK_INIT_SELL") g_initPrice_Sell = pos.PriceOpen();
    }
 
-   Print("Golden Kuy3 v1.54 init  digits=",g_digits," pip=",g_pip," stopsLvl=",g_stopsLevel,
+   Print("Golden Kuy3 v1.55 init  digits=",g_digits," pip=",g_pip," stopsLvl=",g_stopsLevel,
          " | Hero=", InpHero_Enabled?"ON":"OFF", " HeroN=", InpHero_OrderCount,
          " minAct=", InpHero_MinOrdersToActivate, " BE=", InpHero_BE_OffsetPoints, "pt");
    return INIT_SUCCEEDED;
@@ -2009,7 +2004,7 @@ void OnDeinit(const int reason)
 {
    DelDash();
    DelLines();
-   Print("Golden Kuy3 v1.54 deinit reason=",reason);
+   Print("Golden Kuy3 v1.55 deinit reason=",reason);
 }
 
 void OnTick()
