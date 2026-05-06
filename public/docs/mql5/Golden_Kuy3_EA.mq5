@@ -191,6 +191,17 @@ double   g_oppBasketRealized_HeroBuy   = 0.0; // realized P/L of SELL deals whil
 double   g_oppBasketRealized_HeroSell  = 0.0; // realized P/L of BUY  deals while SELL hero alive
 datetime g_oppBasketLastDealTime_HeroBuy  = 0;
 datetime g_oppBasketLastDealTime_HeroSell = 0;
+// v1.51 — Intent flag: set TRUE just before CloseAllSide/CloseAllOurs from Avg-TP/Avg-Trail/Master TP/Accumulate.
+// Hero opposite-clear close gate requires this flag (per opp side) to be true.
+bool     g_oppCloseIntent_AvgTP_Buy   = false; // BUY  basket about to be flattened by Avg-TP/Avg-Trail/Accum
+bool     g_oppCloseIntent_AvgTP_Sell  = false; // SELL basket about to be flattened by Avg-TP/Avg-Trail/Accum
+datetime g_oppCloseIntentTime_Buy     = 0;
+datetime g_oppCloseIntentTime_Sell    = 0;
+// v1.51 — Master TP Points safety net: count broker TP closes per side in short window
+int      g_oppTPDealCount_Buy         = 0;     // count of non-Hero BUY  tickets closed by DEAL_REASON_TP recently
+int      g_oppTPDealCount_Sell        = 0;
+datetime g_oppTPDealWindow_Buy        = 0;
+datetime g_oppTPDealWindow_Sell       = 0;
 // Dashboard counters
 int      g_heroDash_BuyActive     = 0;
 int      g_heroDash_SellActive    = 0;
