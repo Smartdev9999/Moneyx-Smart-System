@@ -420,6 +420,23 @@ void BuildHeroTicketCache()
          continue;
       }
 
+      // v1.46 Side-Alternation Lock — ฝั่งที่เพิ่งปิด Hero ห้าม re-arm
+      //        จนกว่าฝั่งตรงข้ามจะ ARMED/BE_GUARD หรือฝั่งนี้กลับมา flat สนิท
+      if(InpHero_AlternateSides && g_heroLastClosedSide >= 0
+         && sideId == g_heroLastClosedSide && curPhase == 0)
+      {
+         int oppPhase  = (sideId == POSITION_TYPE_BUY) ? g_heroPhase_Sell : g_heroPhase_Buy;
+         bool oppActive = (oppPhase == 2 || oppPhase == 3);
+         bool selfFlat  = (CountHeroOnSide((ENUM_POSITION_TYPE)sideId) == 0
+                        && CountNonHeroMainOnSide((ENUM_POSITION_TYPE)sideId) == 0);
+         if(oppActive || selfFlat) {
+            g_heroLastClosedSide = -1; // ปลด lock
+         } else {
+            if(sideId == POSITION_TYPE_BUY) g_heroPhase_Buy = 0; else g_heroPhase_Sell = 0;
+            continue;
+         }
+      }
+
       int activateThreshold = (InpHero_MinOrdersToActivate > 0)
                               ? InpHero_MinOrdersToActivate
                               : (InpHero_OrderCount + 1);
