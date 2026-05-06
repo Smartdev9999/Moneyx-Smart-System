@@ -291,6 +291,17 @@ bool IsHeroTicket(ulong ticket)
    return false;
 }
 
+// v1.49 — Hero protection helper: ticket is protected if it's in flat array OR either stable set.
+// Used by every "skip Hero" guard so Hero is never touched even between rebuilds.
+bool IsHeroProtectedTicket(ulong ticket)
+{
+   if(!InpHero_Enabled) return false;
+   if(IsHeroTicket(ticket)) return true;
+   for(int i = 0; i < g_heroBuyStableN;  i++) if(g_heroBuyStable[i]  == ticket) return true;
+   for(int i = 0; i < g_heroSellStableN; i++) if(g_heroSellStable[i] == ticket) return true;
+   return false;
+}
+
 int CountHeroOnSide(ENUM_POSITION_TYPE side)
 {
    int n = 0;
