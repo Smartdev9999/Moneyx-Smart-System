@@ -767,9 +767,9 @@ void BuildHeroTicketCache()
 
    // Dashboard ticket lists
    g_heroDash_BuyTicketN = 0;
-   for(int i=0; i<g_heroBuyStableN  && g_heroDash_BuyTicketN  < 10; i++) g_heroDash_BuyTickets[g_heroDash_BuyTicketN++]  = g_heroBuyStable[i];
+   for(int i=0; i<g_heroBuyStableN  && g_heroDash_BuyTicketN  < 20; i++) g_heroDash_BuyTickets[g_heroDash_BuyTicketN++]  = g_heroBuyStable[i];
    g_heroDash_SellTicketN = 0;
-   for(int i=0; i<g_heroSellStableN && g_heroDash_SellTicketN < 10; i++) g_heroDash_SellTickets[g_heroDash_SellTicketN++] = g_heroSellStable[i];
+   for(int i=0; i<g_heroSellStableN && g_heroDash_SellTicketN < 20; i++) g_heroDash_SellTickets[g_heroDash_SellTicketN++] = g_heroSellStable[i];
 
    // ============ STEP 5: Auto-release stale BE_GUARD when stable set is empty ============
    if(g_heroPhase_Buy == 3 && g_heroBuyStableN == 0) {
