@@ -3,7 +3,7 @@
 //|                                       Golden Kuy3 EA  v1.49      |
 //|  v1.49: Hero Guard After Basket Close — keep Hero set even when   |
 //|         non-Hero basket is closed; IsHeroProtectedTicket guard    |
-//|  v1.48: Dynamic Price-Extreme Hero — refresh within side-locked Hero  |
+//|  v1.49: Dynamic Price-Extreme Hero — refresh within side-locked Hero  |
 //|         + extended alternation guard (broker close detected)     |
 //|         + DrawAvgAndTPLines uses non-Hero average                 |
 //|  v1.46: Hero Side-Alternation Lock                                |
@@ -172,7 +172,7 @@ bool     g_heroBE_Applied_Sell    = false;
 datetime g_heroJustClosed_Buy     = 0;
 datetime g_heroJustClosed_Sell    = 0;
 int      g_heroLastClosedSide     = -1;    // v1.46 — ฝั่ง Hero ที่เพิ่งปิดล่าสุด (POSITION_TYPE_BUY/SELL หรือ -1)
-// v1.48 Stable per-side Hero ticket sets — chosen ONCE at first activation, never replaced
+// v1.49 Stable per-side Hero ticket sets — chosen ONCE at first activation, never replaced
 ulong    g_heroBuyStable[200];
 int      g_heroBuyStableN         = 0;
 ulong    g_heroSellStable[200];
@@ -362,7 +362,7 @@ bool ShouldBlockSameSideGridForHero(ENUM_POSITION_TYPE side)
    return (CountNonHeroMainOnSide(side) == 0);
 }
 
-// v1.48 helpers — stable per-side Hero ticket set management
+// v1.49 helpers — stable per-side Hero ticket set management
 int  GetStableCount(int sideId) { return (sideId==POSITION_TYPE_BUY) ? g_heroBuyStableN : g_heroSellStableN; }
 
 bool IsTicketStillOpen(ulong t)
@@ -414,7 +414,7 @@ bool IsInStableSet(int sideId, ulong t)
 
 void BuildHeroTicketCache()
 {
-   // v1.48: STICKY stable sets per side — chosen ONCE at activation, never re-selected
+   // v1.49: STICKY stable sets per side — chosen ONCE at activation, never re-selected
    if(!InpHero_Enabled || InpHero_OrderCount <= 0) {
       g_heroTicketCount = 0;
       g_heroBuyStableN = 0;
@@ -436,7 +436,7 @@ void BuildHeroTicketCache()
       int curPhase = (sideId == POSITION_TYPE_BUY) ? g_heroPhase_Buy : g_heroPhase_Sell;
       // External-close detection: stable set drained while phase was active -> treat as Hero closed
       if(prevN > 0 && nowN == 0 && curPhase > 0) {
-         Print("v1.48 Hero TICKET-SET LOST side=", (sideId==POSITION_TYPE_BUY?"BUY":"SELL"),
+         Print("v1.49 Hero TICKET-SET LOST side=", (sideId==POSITION_TYPE_BUY?"BUY":"SELL"),
                " — all stable Hero tickets closed externally (broker/SL/TP/manual). Resetting phase + stamping last-closed.");
          if(sideId == POSITION_TYPE_BUY) {
             g_heroPhase_Buy = 0; g_heroBE_Applied_Buy = false; g_heroJustClosed_Buy = TimeCurrent();
@@ -453,11 +453,11 @@ void BuildHeroTicketCache()
       int nS = CountSideSimple(POSITION_TYPE_SELL);
       int keep = (nB >= nS) ? (int)POSITION_TYPE_BUY : (int)POSITION_TYPE_SELL;
       if(keep == (int)POSITION_TYPE_BUY) {
-         Print("v1.48 Hero PRE-GUARD: dual BE_GUARD detected, keeping BUY, resetting SELL");
+         Print("v1.49 Hero PRE-GUARD: dual BE_GUARD detected, keeping BUY, resetting SELL");
          g_heroPhase_Sell = 0; g_heroBE_Applied_Sell = false; g_heroJustClosed_Sell = TimeCurrent();
          ClearStableSet(POSITION_TYPE_SELL);
       } else {
-         Print("v1.48 Hero PRE-GUARD: dual BE_GUARD detected, keeping SELL, resetting BUY");
+         Print("v1.49 Hero PRE-GUARD: dual BE_GUARD detected, keeping SELL, resetting BUY");
          g_heroPhase_Buy = 0; g_heroBE_Applied_Buy = false; g_heroJustClosed_Buy = TimeCurrent();
          ClearStableSet(POSITION_TYPE_BUY);
       }
@@ -495,8 +495,8 @@ void BuildHeroTicketCache()
       int curPhase = (sideId == POSITION_TYPE_BUY) ? g_heroPhase_Buy : g_heroPhase_Sell;
       int stableN  = GetStableCount(sideId);
 
-      // ===== Branch A v1.48: phase active — REFRESH stable set with current price-extreme =====
-      // (was v1.48 STICKY freeze — caused Hero to be stuck on old non-extreme tickets when newer
+      // ===== Branch A v1.49: phase active — REFRESH stable set with current price-extreme =====
+      // (was v1.49 STICKY freeze — caused Hero to be stuck on old non-extreme tickets when newer
       //  more-extreme orders opened. Now re-selected every tick within the locked side.)
       if(curPhase != 0) {
          if(nPool <= 0) { sideHeroTagged[s] = 0; continue; }
@@ -546,7 +546,7 @@ void BuildHeroTicketCache()
             string newList = "";
             for(int k = 0; k < takeA; k++)
                newList += StringFormat(" #%I64u@%s", tkPool[k], DoubleToString(pxPool[k], g_digits));
-            Print("v1.48 Hero REFRESH side=", (sideId==POSITION_TYPE_BUY?"BUY":"SELL"),
+            Print("v1.49 Hero REFRESH side=", (sideId==POSITION_TYPE_BUY?"BUY":"SELL"),
                   " phase=", (curPhase==3?"BE_GUARD":"ARMED"), " count=", takeA, " new set:", newList);
 
             // BE_GUARD: clear stale BE flag so ApplyHeroLockProfitSL re-applies SL on the new ticket set
@@ -566,7 +566,7 @@ void BuildHeroTicketCache()
          continue;
       }
 
-      // v1.46/v1.48 Side-Alternation Lock — ฝั่งที่เพิ่งปิด Hero ห้าม re-arm
+      // v1.46/v1.49 Side-Alternation Lock — ฝั่งที่เพิ่งปิด Hero ห้าม re-arm
       if(InpHero_AlternateSides && g_heroLastClosedSide >= 0 && sideId == g_heroLastClosedSide)
       {
          int oppPhase  = (sideId == POSITION_TYPE_BUY) ? g_heroPhase_Sell : g_heroPhase_Buy;
@@ -579,7 +579,7 @@ void BuildHeroTicketCache()
             static datetime lastAltBlockLog_B = 0, lastAltBlockLog_S = 0;
             datetime lastLog = (sideId == POSITION_TYPE_BUY) ? lastAltBlockLog_B : lastAltBlockLog_S;
             if(TimeCurrent() - lastLog >= 30) {
-               Print("v1.48 Hero ALT-BLOCK side=", (sideId==POSITION_TYPE_BUY?"BUY":"SELL"),
+               Print("v1.49 Hero ALT-BLOCK side=", (sideId==POSITION_TYPE_BUY?"BUY":"SELL"),
                      " lastClosed=", (sideId==POSITION_TYPE_BUY?"BUY":"SELL"),
                      " — waiting opposite-side Hero or self flat");
                if(sideId == POSITION_TYPE_BUY) lastAltBlockLog_B = TimeCurrent();
@@ -634,7 +634,7 @@ void BuildHeroTicketCache()
       string fixedList = "";
       for(int k = 0; k < take; k++)
          fixedList += StringFormat(" #%I64u", tkPool[k]);
-      Print("v1.48 Hero STABLE-SET FROZEN side=", (sideId==POSITION_TYPE_BUY?"BUY":"SELL"),
+      Print("v1.49 Hero STABLE-SET FROZEN side=", (sideId==POSITION_TYPE_BUY?"BUY":"SELL"),
             " count=", take, " (sticky — won't be replaced until phase resets):", fixedList);
    }
 
@@ -651,12 +651,12 @@ void BuildHeroTicketCache()
 
    // ============ STEP 5: Auto-release stale BE_GUARD when stable set is empty ============
    if(g_heroPhase_Buy == 3 && g_heroBuyStableN == 0) {
-      Print("v1.48 Hero AUTO-RELEASE BUY: phase=BE_GUARD but stable set empty — releasing owner lock");
+      Print("v1.49 Hero AUTO-RELEASE BUY: phase=BE_GUARD but stable set empty — releasing owner lock");
       g_heroPhase_Buy = 0; g_heroBE_Applied_Buy = false; g_heroJustClosed_Buy = TimeCurrent();
       g_heroLastClosedSide = (int)POSITION_TYPE_BUY;
    }
    if(g_heroPhase_Sell == 3 && g_heroSellStableN == 0) {
-      Print("v1.48 Hero AUTO-RELEASE SELL: phase=BE_GUARD but stable set empty — releasing owner lock");
+      Print("v1.49 Hero AUTO-RELEASE SELL: phase=BE_GUARD but stable set empty — releasing owner lock");
       g_heroPhase_Sell = 0; g_heroBE_Applied_Sell = false; g_heroJustClosed_Sell = TimeCurrent();
       g_heroLastClosedSide = (int)POSITION_TYPE_SELL;
    }
@@ -687,7 +687,7 @@ void BuildHeroTicketCache()
       }
       string lcStr2 = (g_heroLastClosedSide == (int)POSITION_TYPE_BUY) ? "BUY"
                     : (g_heroLastClosedSide == (int)POSITION_TYPE_SELL) ? "SELL" : "-";
-      Print("v1.48 Hero AUDIT [Sticky/StrictLock/Alt]: BUY ", roleB, " active=", sideTotalActive[0],
+      Print("v1.49 Hero AUDIT [Sticky/StrictLock/Alt]: BUY ", roleB, " active=", sideTotalActive[0],
             " stable=", g_heroBuyStableN,
             " | SELL ", roleS, " active=", sideTotalActive[1],
             " stable=", g_heroSellStableN,
@@ -783,7 +783,7 @@ void CloseHeroOnSide(ENUM_POSITION_TYPE side, string reason)
    }
    g_heroTicketCount = 0;
    g_heroLastBuildTime = 0;
-   ClearStableSet((int)side); // v1.48 — clear sticky set for this side
+   ClearStableSet((int)side); // v1.49 — clear sticky set for this side
    if(side == POSITION_TYPE_BUY) {
       g_heroPhase_Buy = 0; g_heroBE_Applied_Buy = false;
       g_heroJustClosed_Buy = TimeCurrent();
@@ -793,7 +793,7 @@ void CloseHeroOnSide(ENUM_POSITION_TYPE side, string reason)
    }
    // v1.46 Side-Alternation Lock — จำฝั่งที่เพิ่งปิด Hero
    g_heroLastClosedSide = (int)side;
-   Print("v1.48 Hero LAST-CLOSED side=", EnumToString(side), " — opp side must Hero next or self must flat");
+   Print("v1.49 Hero LAST-CLOSED side=", EnumToString(side), " — opp side must Hero next or self must flat");
 }
 
 bool DetectSameSideBasketClearedForHero(ENUM_POSITION_TYPE side)
@@ -1429,7 +1429,7 @@ void RemoveLine(string name)
 void DrawAvgAndTPLines()
 {
    double tlB=0,tlS=0; int cB=0,cS=0;
-   // v1.48 — display lines exclude Hero/Candidate so chart matches actual TP logic
+   // v1.49 — display lines exclude Hero/Candidate so chart matches actual TP logic
    double avgB = CalcSideAvgPrice_NonHero(POSITION_TYPE_BUY,  tlB, cB);
    double avgS = CalcSideAvgPrice_NonHero(POSITION_TYPE_SELL, tlS, cS);
 
@@ -1535,7 +1535,7 @@ void DrawDashboard()
    double plS  = CalcSideFloating(POSITION_TYPE_SELL);
    double plAll= plB+plS;
 
-   DashHeader(StringFormat("Golden Kuy3 v1.48  Side:%s Grid:%s/%s", SideModeStr(), GridModeStr(), LotModeStr()));
+   DashHeader(StringFormat("Golden Kuy3 v1.49  Side:%s Grid:%s/%s", SideModeStr(), GridModeStr(), LotModeStr()));
 
    DashHeader("=== ACCOUNT ===");
    DashRow("Balance",     StringFormat("$%.2f", bal), info);
@@ -1600,7 +1600,7 @@ void DrawDashboard()
    DashRow("Restart Pending", StringFormat("BUY:%s  SELL:%s", rpB, rpS),
            (g_costHit_Pending_Buy||g_costHit_Pending_Sell)?warn:info);
 
-   DashHeader("=== HERO ORDER (v1.48) ===");
+   DashHeader("=== HERO ORDER (v1.49) ===");
    DashRow("Hero Cfg", StringFormat("%s  N=%d minAct=%d BE=%dpt  Mode=PRICE_EXTREME Lock=%s Alt=%s",
                           OnOff(InpHero_Enabled), InpHero_OrderCount,
                           InpHero_MinOrdersToActivate, InpHero_BE_OffsetPoints,
@@ -1771,7 +1771,7 @@ int OnInit()
       if(c=="GK_INIT_SELL") g_initPrice_Sell = pos.PriceOpen();
    }
 
-   Print("Golden Kuy3 v1.48 init  digits=",g_digits," pip=",g_pip," stopsLvl=",g_stopsLevel,
+   Print("Golden Kuy3 v1.49 init  digits=",g_digits," pip=",g_pip," stopsLvl=",g_stopsLevel,
          " | Hero=", InpHero_Enabled?"ON":"OFF", " HeroN=", InpHero_OrderCount,
          " minAct=", InpHero_MinOrdersToActivate, " BE=", InpHero_BE_OffsetPoints, "pt");
    return INIT_SUCCEEDED;
@@ -1781,7 +1781,7 @@ void OnDeinit(const int reason)
 {
    DelDash();
    DelLines();
-   Print("Golden Kuy3 v1.48 deinit reason=",reason);
+   Print("Golden Kuy3 v1.49 deinit reason=",reason);
 }
 
 void OnTick()
