@@ -1648,7 +1648,7 @@ void DrawDashboard()
    double plS  = CalcSideFloating(POSITION_TYPE_SELL);
    double plAll= plB+plS;
 
-   DashHeader(StringFormat("Golden Kuy3 v1.50  Side:%s Grid:%s/%s", SideModeStr(), GridModeStr(), LotModeStr()));
+   DashHeader(StringFormat("Golden Kuy3 v1.51  Side:%s Grid:%s/%s", SideModeStr(), GridModeStr(), LotModeStr()));
 
    DashHeader("=== ACCOUNT ===");
    DashRow("Balance",     StringFormat("$%.2f", bal), info);
@@ -1713,7 +1713,7 @@ void DrawDashboard()
    DashRow("Restart Pending", StringFormat("BUY:%s  SELL:%s", rpB, rpS),
            (g_costHit_Pending_Buy||g_costHit_Pending_Sell)?warn:info);
 
-   DashHeader("=== HERO ORDER (v1.50) ===");
+   DashHeader("=== HERO ORDER (v1.51) ===");
    DashRow("Hero Cfg", StringFormat("%s  N=%d minAct=%d BE=%dpt  Mode=PRICE_EXTREME Lock=%s Alt=%s",
                           OnOff(InpHero_Enabled), InpHero_OrderCount,
                           InpHero_MinOrdersToActivate, InpHero_BE_OffsetPoints,
@@ -1936,7 +1936,7 @@ int OnInit()
       if(c=="GK_INIT_SELL") g_initPrice_Sell = pos.PriceOpen();
    }
 
-   Print("Golden Kuy3 v1.50 init  digits=",g_digits," pip=",g_pip," stopsLvl=",g_stopsLevel,
+   Print("Golden Kuy3 v1.51 init  digits=",g_digits," pip=",g_pip," stopsLvl=",g_stopsLevel,
          " | Hero=", InpHero_Enabled?"ON":"OFF", " HeroN=", InpHero_OrderCount,
          " minAct=", InpHero_MinOrdersToActivate, " BE=", InpHero_BE_OffsetPoints, "pt");
    return INIT_SUCCEEDED;
@@ -1946,7 +1946,7 @@ void OnDeinit(const int reason)
 {
    DelDash();
    DelLines();
-   Print("Golden Kuy3 v1.50 deinit reason=",reason);
+   Print("Golden Kuy3 v1.51 deinit reason=",reason);
 }
 
 void OnTick()
