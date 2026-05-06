@@ -1987,7 +1987,7 @@ void DrawDashboard()
          if(i > 0) ids += " ";
          ids += StringFormat("#%I64u", g_heroDash_BuyTickets[i]);
       }
-      DashRow("Tix BUY", (g_heroDash_BuyTicketN > 0 ? ids : "-"), info);
+      DashRowWide("Tix BUY", (g_heroDash_BuyTicketN > 0 ? ids : "-"), info, 260, 8);
    }
    {
       string phaseS = (g_heroPhase_Sell == 3) ? "BE_GUARD" : (g_heroPhase_Sell == 2) ? "ARMED" : "WAIT";
@@ -2000,7 +2000,7 @@ void DrawDashboard()
          if(i > 0) ids += " ";
          ids += StringFormat("#%I64u", g_heroDash_SellTickets[i]);
       }
-      DashRow("Tix SELL", (g_heroDash_SellTicketN > 0 ? ids : "-"), info);
+      DashRowWide("Tix SELL", (g_heroDash_SellTicketN > 0 ? ids : "-"), info, 260, 8);
    }
 
    // v1.2 high-water trim: remove rows that existed last frame but not this frame
