@@ -510,11 +510,14 @@ void BuildHeroTicketCache()
          heroPxList += StringFormat(" #%I64u@%s", g_heroTickets[i],
                        DoubleToString(PositionGetDouble(POSITION_PRICE_OPEN), g_digits));
       }
-      Print("v1.45 Hero AUDIT [PriceExtreme/StrictLock]: BUY ", roleB, " active=", sideTotalActive[0],
+      string lcStr2 = (g_heroLastClosedSide == (int)POSITION_TYPE_BUY) ? "BUY"
+                    : (g_heroLastClosedSide == (int)POSITION_TYPE_SELL) ? "SELL" : "-";
+      Print("v1.46 Hero AUDIT [PriceExtreme/StrictLock/Alt]: BUY ", roleB, " active=", sideTotalActive[0],
             " hero=", sideHeroTagged[0],
             " | SELL ", roleS, " active=", sideTotalActive[1],
             " hero=", sideHeroTagged[1],
-            " | OWNER=", ownerStr, " thr=", minAct, " N=", InpHero_OrderCount, " |", heroPxList);
+            " | OWNER=", ownerStr, " lastClosed=", lcStr2,
+            " thr=", minAct, " N=", InpHero_OrderCount, " |", heroPxList);
       lastHeroAuditLog = TimeCurrent();
    }
 }
