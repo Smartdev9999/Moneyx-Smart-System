@@ -1,13 +1,13 @@
 //+------------------------------------------------------------------+
 //|                                            Golden_Kuy3_EA.mq5    |
-//|                                       Golden Kuy3 EA  v1.42      |
+//|                                       Golden Kuy3 EA  v1.43      |
+//|  v1.43: Hero Price-Extreme select + Strict Single-Side Lock      |
 //|  v1.42: Accumulate cycle auto-reset on flat (Gold Miner concept)  |
 //|  v1.40: Hero Order ported from Gold Miner v7.09                  |
-//|         (single-side lock, no gen, cycle-based, lock-profit BE-SL)|
 //+------------------------------------------------------------------+
 #property copyright "Golden Kuy3 EA"
-#property version   "1.42"
-#property description "Golden Kuy3 v1.42 — Accumulate cycle auto-reset on flat (Gold Miner concept)"
+#property version   "1.43"
+#property description "Golden Kuy3 v1.43 — Hero=Price Extreme (BUY lowest / SELL highest) + Strict Single-Side Lock"
 #property strict
 
 #include <Trade/Trade.mqh>
