@@ -725,12 +725,9 @@ void BuildHeroTicketCache()
       }
       sideHeroTagged[s] = take;
 
-      // v1.56 — clear next-allowed gate once this side actually activates Hero
-      if(g_heroNextAllowedSide == sideId) {
-         Print("v1.56 Hero ALT-CONSUMED side=", (sideId==POSITION_TYPE_BUY?"BUY":"SELL"),
-               " — opposite-turn satisfied, next-allowed reset to ANY");
-         g_heroNextAllowedSide = -1;
-      }
+      // v1.57 — DO NOT clear g_heroNextAllowedSide on activation.
+      //         The alternation gate is consumed only when the opposite Hero CYCLE actually closes
+      //         (CloseHeroOnSide / external close / auto-release). Activating Hero alone is not enough.
 
       string fixedList = "";
       for(int k = 0; k < take; k++)
@@ -905,11 +902,14 @@ void CloseHeroOnSide(ENUM_POSITION_TYPE side, string reason)
    }
    // v1.46 Side-Alternation Lock — จำฝั่งที่เพิ่งปิด Hero
    g_heroLastClosedSide = (int)side;
-   // v1.56 — บังคับฝั่งตรงข้ามให้เป็น Hero รอบถัดไปเท่านั้น
+   // v1.57 — opposite must take next Hero turn AND close it before this side may re-arm
    g_heroNextAllowedSide = (side == POSITION_TYPE_BUY) ? (int)POSITION_TYPE_SELL : (int)POSITION_TYPE_BUY;
-   Print("v1.56 Hero LAST-CLOSED side=", EnumToString(side),
+   // v1.57 — clear TP-event latch belonging to the side we just closed; arm fresh latch reset
+   if(side == POSITION_TYPE_BUY) { g_oppTPEvent_HeroBuy  = false; g_oppTPEventTime_HeroBuy  = 0; }
+   else                          { g_oppTPEvent_HeroSell = false; g_oppTPEventTime_HeroSell = 0; }
+   Print("v1.57 Hero LAST-CLOSED side=", EnumToString(side),
          " — NEXT-ALLOWED=", (g_heroNextAllowedSide==(int)POSITION_TYPE_BUY?"BUY":"SELL"),
-         " (opposite must complete its own Hero cycle before this side can re-arm)");
+         " (opposite Hero must complete its OWN cycle before this side re-arms)");
 }
 
 bool DetectSameSideBasketClearedForHero(ENUM_POSITION_TYPE side)
@@ -978,6 +978,32 @@ void ManageHeroOppositeClose()
    // v1.51 Tick-based opposite-clear detector — gated by Avg-TP intent flag (preferred) + realized P/L.
    //  Hero closes ONLY when opp basket flat AND opp was flattened by Avg-TP/Avg-Trail/Master TP/Accumulate.
    //  Per-Order Trail / SL / Cost-Hit / manual close => Hero HOLDS locked at BE-SL.
+   // v1.57 — TP-EVENT LATCH FAST CLOSE: if a TP/Avg-TP event was logged on the opposite basket,
+   //          close Hero immediately even if AutoReEntry/Grid already opened a NEW opposite ticket
+   //          on the same tick (legacy gate required CountNonHeroMainOnSide(opp)==0 which races).
+   for(int sL = 0; sL < 2; sL++) {
+      ENUM_POSITION_TYPE side = (sL == 0) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
+      ENUM_POSITION_TYPE opp  = (sL == 0) ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
+      int phase = (side == POSITION_TYPE_BUY) ? g_heroPhase_Buy : g_heroPhase_Sell;
+      if(phase != 3) continue;
+      if(CountHeroOnSide(side) <= 0) continue;
+      bool latch = (side == POSITION_TYPE_BUY) ? g_oppTPEvent_HeroBuy : g_oppTPEvent_HeroSell;
+      if(!latch) continue;
+      double oppRealized = (side == POSITION_TYPE_BUY) ? g_oppBasketRealized_HeroBuy
+                                                       : g_oppBasketRealized_HeroSell;
+      if(InpHero_OppCloseRequireTP && oppRealized <= InpHero_OppCloseMinProfit) {
+         // Wait for accumulator to confirm net profit (TP event may still be settling)
+         continue;
+      }
+      Print("v1.57 Hero CLOSE (opp TP-event latch): heroSide=", EnumToString(side),
+            " oppSide=", EnumToString(opp),
+            " oppRealized=", DoubleToString(oppRealized, 2),
+            " heroProfit=", DoubleToString(SumHeroProfitOnSide(side), 2));
+      CloseHeroOnSide(side, "OppositeTPEventLatch");
+      g_oppCloseIntent_AvgTP_Buy  = false;
+      g_oppCloseIntent_AvgTP_Sell = false;
+   }
+
    for(int s2 = 0; s2 < 2; s2++) {
       ENUM_POSITION_TYPE side = (s2 == 0) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
       ENUM_POSITION_TYPE opp  = (s2 == 0) ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
