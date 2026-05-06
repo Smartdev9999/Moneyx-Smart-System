@@ -1,7 +1,7 @@
 //+------------------------------------------------------------------+
 //|                                            Golden_Kuy3_EA.mq5    |
 //|                                       Golden Kuy3 EA  v1.61      |
-//|  v1.61: Accumulate Close now counts FLOATING incl. Hero (Gold     |
+//|  v1.61: Hero dashboard Tix rows widened — show all Hero IDs       |
 //|         Miner concept) — fix: Hero floating no longer hides total |
 //|         realized+floating from accumulate trigger.                |
 //|         Full history in mem://trading/golden-kuy3/*.              |
