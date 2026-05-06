@@ -582,12 +582,16 @@ void BuildHeroTicketCache()
             string newList = "";
             for(int k = 0; k < takeA; k++)
                newList += StringFormat(" #%I64u@%s", tkPool[k], DoubleToString(pxPool[k], g_digits));
-            Print("v1.51 Hero REFRESH side=", (sideId==POSITION_TYPE_BUY?"BUY":"SELL"),
+            Print("v1.53 Hero REFRESH side=", (sideId==POSITION_TYPE_BUY?"BUY":"SELL"),
                   " phase=", (curPhase==3?"BE_GUARD":"ARMED"), " count=", takeA, " new set:", newList);
             if(curPhase == 3) {
                if(sideId == POSITION_TYPE_BUY) g_heroBE_Applied_Buy = false;
                else                            g_heroBE_Applied_Sell = false;
             }
+            // v1.53 — demote restore: any ticket in prevSet but not in newSet has been pushed
+            //         out of Hero protection; restore Initial TP and clear lock-profit SL so it
+            //         re-joins the normal basket and closes with Avg-TP/per-order rules.
+            RestoreInitialTPOnDemoted(prevSet, prevCnt, tkPool, takeA, (ENUM_POSITION_TYPE)sideId);
          }
          continue;
       }
