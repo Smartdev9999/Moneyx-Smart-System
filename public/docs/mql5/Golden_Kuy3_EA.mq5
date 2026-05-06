@@ -257,14 +257,15 @@ double CalcSideFloating(int side)
 // Single-side lock, cycle-based, no gen, no hedge.
 // Phase per side: 0=NONE, 2=ARMED (locked, basket alive), 3=BE_GUARD (basket cleared, lock-profit SL applied)
 
-// v7.08: Owner = side at phase==BE_GUARD (basket cleared). ARMED is just CANDIDATE.
+// v1.43: STRICT Single-Side Lock — owner = side ที่ phase != NONE (ARMED หรือ BE_GUARD)
+//         ถ้าฝั่งใดเริ่ม ARMED แล้ว อีกฝั่งห้ามเริ่ม Hero ใหม่จนกว่าฝั่งนั้นจะปิด/reset
 int GetHeroOwnerSide()
 {
-   bool buyOwns  = (g_heroPhase_Buy  == 3);
-   bool sellOwns = (g_heroPhase_Sell == 3);
+   bool buyOwns  = (g_heroPhase_Buy  != 0);
+   bool sellOwns = (g_heroPhase_Sell != 0);
    if(buyOwns && !sellOwns)  return (int)POSITION_TYPE_BUY;
    if(sellOwns && !buyOwns)  return (int)POSITION_TYPE_SELL;
-   return -1;
+   return -1; // ทั้งสองฝั่ง 0 หรือทั้งสองฝั่งติด (เคสค้างจาก v1.42 — handle ที่ pre-guard)
 }
 
 bool IsHeroTicket(ulong ticket)
