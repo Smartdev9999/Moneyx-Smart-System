@@ -712,6 +712,7 @@ void CloseHeroOnSide(ENUM_POSITION_TYPE side, string reason)
    }
    g_heroTicketCount = 0;
    g_heroLastBuildTime = 0;
+   ClearStableSet((int)side); // v1.47 — clear sticky set for this side
    if(side == POSITION_TYPE_BUY) {
       g_heroPhase_Buy = 0; g_heroBE_Applied_Buy = false;
       g_heroJustClosed_Buy = TimeCurrent();
@@ -721,7 +722,7 @@ void CloseHeroOnSide(ENUM_POSITION_TYPE side, string reason)
    }
    // v1.46 Side-Alternation Lock — จำฝั่งที่เพิ่งปิด Hero
    g_heroLastClosedSide = (int)side;
-   Print("v1.46 Hero LAST-CLOSED side=", EnumToString(side), " — opp side must Hero next or self must flat");
+   Print("v1.47 Hero LAST-CLOSED side=", EnumToString(side), " — opp side must Hero next or self must flat");
 }
 
 bool DetectSameSideBasketClearedForHero(ENUM_POSITION_TYPE side)
