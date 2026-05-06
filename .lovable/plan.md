@@ -1,82 +1,100 @@
-## ปัญหาที่พบ (v1.45)
+Do I know what the issue is? Yes.
 
-จากภาพ: หลัง Hero BUY ตัวเก่าปิดไปแล้ว (ราคาวิ่งลง → SELL TP + Hero BUY ปิด) ระบบกลับ **tag Hero BUY ใหม่อีกรอบ** แทนที่จะสลับให้ SELL เป็น Hero ฝั่งใหม่ (เพราะตอนนี้ SELL คือฝั่งที่กำลังถือออเดอร์เพิ่มจากราคาวิ่งลงต่อ)
+ปัญหาหลักไม่ได้อยู่ที่การคำนวณ TP โดยตรง แต่เกิดจาก Hero cache ปัจจุบัน “rebuild ใหม่ทุก tick” จากออเดอร์ที่ยังเปิดอยู่ ทำให้เมื่อ Hero/Candidate ฝั่ง BUY ถูกปิดบางส่วนหรือปิดหมดด้วย SL/TP/broker/manual ก่อนที่ฝั่ง SELL จะชน TP ระบบไม่จำว่า BUY เคยถูกกันเป็น Hero แล้ว และสามารถเลือกออเดอร์ BUY ชุดใหม่มาเป็น Hero ซ้ำได้อีกครั้ง
 
-สาเหตุ: หลัง `CloseHeroOnSide(BUY)` ระบบแค่ stamp `g_heroJustClosed_Buy` + grace 5 วินาที. เมื่อพ้น grace แล้ว BUY ฝั่งเดิมยังเข้าเกณฑ์ activation ได้ทันทีถ้าจำนวน BUY orders ≥ threshold → BUY กลายเป็น Hero ซ้ำ. ไม่มีกลไก "ฝั่งที่เพิ่งปิด Hero ต้องรอให้ฝั่งตรงข้ามได้เป็น Hero ก่อน หรือรอให้ตัวเองกลับมา flat สนิท"
+นอกจากนี้ v1.46 stamp `g_heroLastClosedSide` เฉพาะตอน `CloseHeroOnSide()` เท่านั้น ถ้า Hero ถูกปิดด้วยทางอื่น เช่น broker SL/TP หรือ candidate SL โดนก่อน ระบบอาจไม่ stamp ฝั่งที่เพิ่งปิด Hero จึงยัง re-arm ฝั่งเดิมได้
 
-## สเปกที่ถูกต้อง (ยืนยัน)
+## แผนแก้ v1.47 — Strict Hero Ticket Ownership + No Same-Side Re-arm
 
-```
-Hero ทำงานฝั่งเดียวในเวลาเดียวกัน
-หลัง Hero side X ปิด (CloseHeroOnSide):
-  → side X ห้าม re-arm เป็น Hero candidate อีก
-  → จนกว่าจะเกิดเหตุการณ์ใดเหตุการณ์หนึ่ง:
-     (a) side Y (ตรงข้าม) ถึงเกณฑ์ → กลายเป็น Hero candidate / owner
-     (b) side X กลับมา flat สนิท (no positions both Hero+normal) → reset
-```
+### 1. ทำ Hero ticket ให้เป็น “ชุดที่ล็อคแล้ว” ไม่ใช่เลือกใหม่ทุก tick
+เพิ่ม state แยกฝั่งเพื่อจำ ticket ที่ถูก tag เป็น Hero/Candidate ตั้งแต่แรก เช่น
+- `g_heroBuyTickets[]`, `g_heroBuyTicketCount`
+- `g_heroSellTickets[]`, `g_heroSellTicketCount`
 
-## แผนแก้ไข v1.46 (Hero Side-Alternation Lock — port v7.09 + เพิ่ม alternation guard)
+หลักการใหม่:
+```text
+phase == NONE:
+  ถ้าผ่าน threshold และไม่ติด alternation guard -> เลือก Hero candidates ครั้งเดียว แล้วจำ ticket ชุดนั้น
 
-### 1. State ใหม่
-- `int g_heroLastClosedSide = -1;` — จำว่า Hero ฝั่งไหนเพิ่งปิดล่าสุด (0=BUY, 1=SELL, -1=none)
-- ตั้งค่าใน `CloseHeroOnSide(side, ...)` ทันทีหลัง stamp `g_heroJustClosed_*`
-
-### 2. Activation guard ใน `BuildHeroTicketCache()` (หลัง Post-close grace บรรทัด 415–418, ก่อน activation gate บรรทัด 420)
-```
-// v1.46 Side-Alternation Lock — ฝั่งที่เพิ่งปิด Hero ห้าม re-arm
-//        จนกว่าฝั่งตรงข้ามจะ ARMED/BE_GUARD หรือฝั่งนี้ flat สนิท
-if(InpHero_AlternateSides && g_heroLastClosedSide >= 0
-   && sideId == g_heroLastClosedSide && curPhase == 0)
-{
-   int oppSideId = (sideId == POSITION_TYPE_BUY) ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
-   int oppPhase  = (oppSideId == POSITION_TYPE_BUY) ? g_heroPhase_Buy : g_heroPhase_Sell;
-   bool oppActive = (oppPhase == 2 || oppPhase == 3);
-   bool selfFlat  = (CountHeroOnSide((ENUM_POSITION_TYPE)sideId) == 0
-                  && CountNonHeroMainOnSide((ENUM_POSITION_TYPE)sideId) == 0);
-   if(!oppActive && !selfFlat) {
-      if(sideId == POSITION_TYPE_BUY) g_heroPhase_Buy = 0; else g_heroPhase_Sell = 0;
-      continue;
-   }
-   // เคลียร์ alternation เมื่อเงื่อนไขปลด lock เกิดขึ้น
-   if(oppActive || selfFlat) g_heroLastClosedSide = -1;
-}
+phase == ARMED/BE_GUARD:
+  ห้าม top-up / ห้ามเลือก ticket ใหม่แทนตัวที่ปิดไป
+  ใช้เฉพาะ ticket ชุดเดิมที่ยังรอดอยู่เท่านั้น
 ```
 
-### 3. Input ใหม่
+ผลลัพธ์:
+- ถ้า Hero BUY ปิดไปบาง ticket -> BUY จะเหลือ Hero เท่าที่รอด ไม่ดึง BUY ticket ใหม่มาแทน
+- ถ้า Hero BUY ปิดหมด -> BUY phase reset + stamp ว่า BUY เพิ่งปิด Hero แล้ว
+- BUY จะไม่ออก Hero ซ้ำจนกว่า SELL จะได้เป็น Hero candidate/owner หรือ BUY flat สนิท
+
+### 2. ขยาย Alternation Guard ให้ครอบคลุม broker/manual/SL/TP close
+แก้ logic ใน `BuildHeroTicketCache()`:
+- ถ้า side มี `phase > 0` แต่ stable Hero ticket ของฝั่งนั้นเหลือ 0:
+  - reset phase ฝั่งนั้นเป็น NONE
+  - clear BE flag
+  - stamp `g_heroJustClosed_<side>`
+  - stamp `g_heroLastClosedSide = side`
+  - ไม่เลือก ticket ใหม่ใน tick เดียวกัน
+- ถ้า `g_heroLastClosedSide == side` และฝั่งตรงข้ามยังไม่ ARMED/BE_GUARD และ side เดิมยังไม่ flat:
+  - block side เดิมจากการ tag Hero ใหม่
+
+### 3. เพิ่ม guard ใน `OnTradeTransaction()` เพื่อจับ Hero close ทันที
+เพิ่มเฉพาะ state detection ไม่เปลี่ยน order execution:
+- เมื่อมี closed deal (`DEAL_ENTRY_OUT/INOUT/OUT_BY`)
+- ตรวจว่า position ที่ปิดตรงกับ stable Hero ticket ฝั่งไหนหรือไม่
+- ถ้าใช่ ให้ prune ticket และถ้า Hero ฝั่งนั้นหมด ให้ stamp `g_heroLastClosedSide`
+
+ตัวนี้ช่วยกรณีที่ broker ปิด Hero ด้วย SL/TP ก่อน `BuildHeroTicketCache()` รอบถัดไป
+
+### 4. บังคับ “มี Hero owner ได้ฝั่งเดียวจริงๆ” หลัง BE_GUARD
+คงกติกาเดิม:
+- ARMED = candidate ยังไม่ใช่ owner
+- owner เกิดเมื่อ non-Hero basket ฝั่งเดียวกันปิดหมด (`BE_GUARD`)
+
+แต่เมื่อฝั่งใดฝั่งหนึ่งเข้า `BE_GUARD` แล้ว:
+- clear candidate ฝั่งตรงข้ามที่ยังเป็น ARMED อยู่
+- restore ให้ฝั่งตรงข้ามกลับเป็น normal order set ที่สามารถเข้า Average TP ตามระบบปกติใน tick ถัดไป
+- ไม่ปิดออเดอร์ฝั่งตรงข้าม และไม่แก้สูตร TP/SL
+
+### 5. Align เส้น Average/TP บนชาร์ตให้ไม่รวม Hero/Candidate
+Trading TP จริง (`ManageTakeProfit`) ใช้ `CalcSideAvgPrice_NonHero()` อยู่แล้ว แต่เส้นบนชาร์ตตอนนี้ยังใช้ `CalcSideAvgPrice()` ที่รวม Hero ด้วย
+
+จะแก้เฉพาะ display line:
+- `DrawAvgAndTPLines()` ใช้ `CalcSideAvgPrice_NonHero()`
+- เพื่อให้เส้น Average/TP ที่เห็นบนชาร์ตตรงกับ logic ที่ไม่เอา Hero/Candidate ไปคำนวณ
+
+ไม่กระทบการเปิด/ปิดออเดอร์
+
+### 6. Dashboard + audit log
+เพิ่มข้อมูลช่วย debug:
+- `Last Closed: BUY/SELL/-`
+- `Stable BUY/SELL hero tickets`
+- log เมื่อ block re-arm ฝั่งเดิม เช่น
+```text
+v1.47 Hero ALT-BLOCK BUY: lastClosed=BUY, waiting SELL hero or BUY flat
+v1.47 Hero TICKET-SET LOST BUY: all stable hero tickets closed externally -> lock same side
 ```
-input bool InpHero_AlternateSides = true; // v1.46 — บังคับสลับฝั่ง Hero หลังปิด
-```
 
-### 4. Reset `g_heroLastClosedSide`
-- ใน `ResetHeroStateIfFlat(side)`: ถ้า side == g_heroLastClosedSide และทั้งคู่ flat → `g_heroLastClosedSide = -1`
-- ใน Cost-Hit Restart cycle reset (ถ้ามี) — เคลียร์ด้วย
+### 7. Version + memory
+อัปเดตทุกจุดตามกฎ version:
+- header comment: v1.47
+- `#property version "1.47"`
+- `#property description`
+- OnInit/OnDeinit logs
+- Dashboard title/version
+- สร้าง memory ใหม่ `golden-kuy3/v1-47-strict-hero-ticket-ownership`
+- อัปเดต plan/memory index
 
-### 5. Dashboard "Hero Cfg" row (บรรทัด ~1395)
-- เพิ่มสตริง `Alt=ON/OFF` ต่อท้าย `Lock=STRICT`
-- เพิ่มแถวใหม่ "Last Closed: BUY/SELL/-" (สีเทา) เมื่อ `g_heroLastClosedSide >= 0`
+## สิ่งที่ไม่เปลี่ยนแปลง
+- ไม่แก้ `OrderSend`, `trade.Buy`, `trade.Sell`
+- ไม่แก้บรรทัด `trade.PositionClose()` หรือพฤติกรรมการปิดออเดอร์เดิม
+- ไม่แก้สูตร Grid entry / lot / distance / candle condition
+- ไม่แก้สูตร Per-order BE/Trailing
+- ไม่แก้สูตร Average Trailing strict-2-cross
+- ไม่แก้ TP mode / Accumulate Close / Cost-Hit Restart
+- ไม่แก้ `ComputeHeroLockProfitSL()` หรือ `ApplyHeroLockProfitSL()`
+- ไม่แก้หลักการ v1.44: Candidate ถอดเฉพาะ TP และคง SL เดิมไว้
+- ไม่แก้หลักการ v1.45: ARMED เป็นแค่ Candidate, BE_GUARD เท่านั้นคือ Owner
+- ถ้า `InpHero_Enabled=false` พฤติกรรมเดิมเหมือนเดิม
 
-### 6. Audit log (บรรทัด 482–488)
-- เพิ่ม `lastClosed=BUY/SELL/-` ใน Print ทุก 30 วิ
-
-### 7. Version bump → v1.46
-- `#property version "1.46"`, `#property description`, header, OnInit/OnDeinit, Dashboard title
-
-### 8. Memory + Plan
-- สร้าง `.lovable/memory/trading/golden-kuy3/v1-46-hero-side-alternation.md`
-- อัปเดต `mem://index.md` + `.lovable/plan.md`
-
-## Flow ที่คาดหวัง
-1. SELL ปกติเปิดเยอะ → ราคาวิ่งขึ้น → SELL ARMED → BE_GUARD → BUY ปกติโดน TP → Hero SELL ปิด → `g_heroLastClosedSide = SELL`
-2. ราคาวิ่งกลับลง → BUY orders เปิดเพิ่ม → ถึง threshold
-3. **SELL ห้าม re-arm** (lastClosed=SELL, opp BUY ไม่ active, SELL ยัง flat ไม่สนิท ถ้ายังเหลือ orders) → BUY กลายเป็น Hero candidate ตามสเปก
-4. ถ้า BUY ARMED/BE_GUARD → เคลียร์ `g_heroLastClosedSide = -1`
-
-## ไม่เปลี่ยน (กฎเหล็ก)
-- ❌ OrderSend / `trade.*` / OpenInitial / OpenGrid / Manage*Entry / CalcGridLot
-- ❌ Per-Order BE/Trail / Avg-Trail strict-2-cross / TP modes / Accumulate Close v1.42 / Cost-Hit Restart
-- ❌ `StripBrokerTPSLFromHeroTickets` v1.44 (TP only, SL kept)
-- ❌ `ComputeHeroLockProfitSL` / `ApplyHeroLockProfitSL` (BE_GUARD path)
-- ❌ `BuildHeroTicketCache` price-extreme sort v1.43
-- ❌ `DetectSameSideBasketClearedForHero` / `ManageHeroOppositeClose` flow
-- ❌ v1.45 CANDIDATE-vs-OWNER separation (GetHeroOwnerSide BE_GUARD-only)
-- `InpHero_Enabled=false` หรือ `InpHero_AlternateSides=false` → พฤติกรรม = v1.45
+## หมายเหตุจากภาพ Invalid Stops
+ภาพมี log `Invalid stops` จากการ modify TP ฝั่ง SELL ด้วย ราคาที่ broker มองว่า TP ไม่ valid แล้ว กรณีนี้อาจเป็นอีกประเด็นของ TP broker-sync แยกจาก Hero alternation ผมจะยังไม่แตะ execution/TP-close logic ในรอบ v1.47 นี้ เพื่อไม่กระทบ trading logic ตามกฎเหล็ก เว้นแต่คุณสั่งให้แก้ส่วนนั้นแยกต่างหาก
