@@ -451,8 +451,8 @@ void BuildHeroTicketCache()
          g_heroTickets[g_heroTicketCount++] = tkPool[k];
       sideHeroTagged[s] += take;
 
-      // v1.44 มี active owner แล้ว — อัปเดต activeOwner ทันทีเพื่อบล็อกฝั่งถัดไปใน loop เดียวกัน
-      if(InpHero_SingleSideLock && activeOwner < 0) activeOwner = sideId;
+      // v1.45 ไม่อัปเดต activeOwner ทันที — ARMED ไม่ใช่ owner; ฝั่งถัดไป loop เดียวกันยัง ARMED ได้
+
    }
 
    // v7.09 Auto-release ownership when phase==BE_GUARD but Hero tickets=0
