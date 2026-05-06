@@ -1188,6 +1188,10 @@ double CalcGridLot(double lastLot)
 
    if(out < minL) out = minL;
    if(out > maxL) out = maxL;
+   // v1.59 — Max Lot per Order cap (post-multiplier safety)
+   if(InpMaxLotPerOrder > 0.0 && out > InpMaxLotPerOrder) out = InpMaxLotPerOrder;
+   if(stp>0) out = MathFloor(out/stp)*stp;
+   if(out < minL) out = minL;
    out = NormalizeDouble(out, 2);
 
    if(InpGridLotMode==GK_LOT_ADD || InpGridLotMode==GK_LOT_MULTIPLY)
