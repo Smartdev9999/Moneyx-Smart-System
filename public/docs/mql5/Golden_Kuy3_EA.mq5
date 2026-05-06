@@ -3,7 +3,7 @@
 //|                                       Golden Kuy3 EA  v1.49      |
 //|  v1.49: Hero Guard After Basket Close — keep Hero set even when   |
 //|         non-Hero basket is closed; IsHeroProtectedTicket guard    |
-//|  v1.49: Dynamic Price-Extreme Hero — refresh within side-locked Hero  |
+//|  v1.48: Dynamic Price-Extreme Hero — refresh within side-locked Hero  |
 //|         + extended alternation guard (broker close detected)     |
 //|         + DrawAvgAndTPLines uses non-Hero average                 |
 //|  v1.46: Hero Side-Alternation Lock                                |
