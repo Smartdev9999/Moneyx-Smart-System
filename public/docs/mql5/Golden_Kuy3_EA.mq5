@@ -2004,7 +2004,7 @@ void OnDeinit(const int reason)
 {
    DelDash();
    DelLines();
-   Print("Golden Kuy3 v1.53 deinit reason=",reason);
+   Print("Golden Kuy3 v1.54 deinit reason=",reason);
 }
 
 void OnTick()
