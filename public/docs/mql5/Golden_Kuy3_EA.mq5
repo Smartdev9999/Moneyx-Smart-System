@@ -1,13 +1,14 @@
 //+------------------------------------------------------------------+
 //|                                            Golden_Kuy3_EA.mq5    |
 //|                                       Golden Kuy3 EA  v1.44      |
-//|  v1.44: Hero Price-Extreme select + Strict Single-Side Lock      |
-//|  v1.42: Accumulate cycle auto-reset on flat (Gold Miner concept)  |
+//|  v1.44: Hero CANDIDATE strips TP only (keeps SL cost-lock)        |
+//|  v1.43: Hero Price-Extreme select + Strict Single-Side Lock      |
+//|  v1.42: Accumulate cycle auto-reset on flat (Gold Miner concept) |
 //|  v1.40: Hero Order ported from Gold Miner v7.09                  |
 //+------------------------------------------------------------------+
 #property copyright "Golden Kuy3 EA"
 #property version   "1.44"
-#property description "Golden Kuy3 v1.44 — Hero=Price Extreme (BUY lowest / SELL highest) + Strict Single-Side Lock"
+#property description "Golden Kuy3 v1.44 — Hero CANDIDATE strips TP only (SL kept); BE_GUARD applies lock-profit SL after same-side basket TP"
 #property strict
 
 #include <Trade/Trade.mqh>
