@@ -24,8 +24,8 @@
 //|  v1.40: Hero Order ported from Gold Miner v7.09                  |
 //+------------------------------------------------------------------+
 #property copyright "Golden Kuy3 EA"
-#property version   "1.52"
-#property description "Golden Kuy3 v1.52 — Hero Sticky Set: Hero ticket set frozen at activation; no mid-phase refresh from price-extreme; new orders after ARMED/BE_GUARD remain normal basket — fixes Hero overlap and missing side-alternation"
+#property version   "1.53"
+#property description "Golden Kuy3 v1.53 — Hero Dynamic Refresh + Demote Restore: Hero set tracks current price-extreme every tick; tickets pushed out of the set get their Initial TP restored and lock-profit SL cleared so they re-join the normal basket and close together with Avg-TP"
 #property strict
 
 #include <Trade/Trade.mqh>
