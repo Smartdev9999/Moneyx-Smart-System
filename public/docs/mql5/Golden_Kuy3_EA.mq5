@@ -1445,6 +1445,7 @@ void ManageAverageTrailing()
 
             if(ask >= g_avgTrail_SL_Sell){
                Print("GK AVG-TRAIL SELL HIT — closing all SELL");
+               g_oppCloseIntent_AvgTP_Sell = true; g_oppCloseIntentTime_Sell = TimeCurrent(); // v1.51
                CloseAllSide(POSITION_TYPE_SELL);
                ResetAvgTrailSell();
             }
