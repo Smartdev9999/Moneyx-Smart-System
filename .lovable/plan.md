@@ -1,117 +1,70 @@
-## สรุปปัญหาที่แท้จริง
+แผน v1.58: Hero Handoff Reserve + Conditional Alternation Lock
 
-ตอนนี้ v1.56 แก้เรื่อง “ฝั่งเดิมเป็น Hero ซ้ำทันที” ได้บางส่วนแล้ว แต่ปัญหาใหม่คือจังหวะสลับรอบยังไม่ครบ:
+ปัญหาที่ต้องแก้
+1. Hero ออกฝั่งเดียวสลับได้ครบ 2 รอบ แต่รอบที่ 3 ระบบ "ปิดรวบ" ทุกออเดอร์ฝั่งตรงข้ามรวมทั้งตัวที่ควรกันไว้เป็น Hero ชุดถัดไป
+2. ถ้าทั้งสองฝั่งยังไม่ครบเงื่อนไข Hero (จำนวนออเดอร์ไม่ถึง `InpHero_MinOrdersToActivate`) — ระบบไม่ควร "ล็อค" ฝั่งใดไว้ก่อน ให้รีเซ็ตเสมือนเริ่มเทรดใหม่ ฝั่งไหนชน TP ก่อนก็ได้สิทธิ์เป็น Hero รอบใหม่
 
-```text
-รอบก่อน: BUY Hero ปิดจบ
--> ระบบบังคับ Next Allowed = SELL
--> SELL กลายเป็น Hero และถูก lock ไว้แล้ว
--> ราคาดีดขึ้น ทำให้ BUY basket ชุดใหม่ปิด TP
--> สิ่งที่ควรเกิด: SELL Hero ต้องปิดพร้อมการปิด TP ของ BUY basket
--> จากนั้นจึงอนุญาตให้ BUY กลับมาเป็น Hero รอบถัดไป
+หลักการ flow ที่ต้องการ
+```
+[เริ่มเทรด] ทั้ง BUY/SELL ยังไม่ถึง threshold -> Next Allowed = ANY
+    ฝั่งใดถึง threshold ก่อน -> Hero ฝั่งนั้น (เช่น BUY)
+    SELL basket ชน TP -> ปิด BUY Hero + กัน SELL Hero ชุดถัดไป
+    BUY basket ชน TP -> ปิด SELL Hero + กัน BUY Hero ชุดถัดไป
+    วนสลับต่อเนื่อง
+
+[ถ้าทั้งสองฝั่ง flat / ไม่ถึง threshold พร้อมกัน]
+    ปลด Next Allowed กลับเป็น ANY
+    ระบบไม่ผูกฝั่ง — รอฝั่งไหนถึง threshold ก่อนค่อย Hero ฝั่งนั้น
 ```
 
-แต่จากภาพ Dashboard ตอนนี้ `Hero Owner = SELL (locked)` และ SELL Hero ยังไม่ปิด แม้ BUY ฝั่งตรงข้ามชน TP แล้ว สาเหตุหลักมี 2 จุด:
+การเปลี่ยนแปลงในโค้ด `public/docs/mql5/Golden_Kuy3_EA.mq5`
 
-1. `ManageHeroOppositeClose()` ปิด Hero เฉพาะเมื่อ `CountNonHeroMainOnSide(opp) == 0` เท่านั้น  
-   แต่หลัง BUY basket ชน TP ระบบ `AutoReEntry/Grid` เปิด BUY ชุดใหม่เร็วมาก ทำให้ตอนตรวจ Hero ฝั่งตรงข้ามกลับเห็นว่า BUY มี order ใหม่แล้ว จึงไม่เข้าเงื่อนไข `opp basket flat` และ SELL Hero ค้าง
+1. เลข version v1.57 -> v1.58 ทุกจุด
+- `#property version`, `#property description`
+- Header comment block แบบสั้น (ไม่มี history ยาวตามที่คุณขอ)
+- Dashboard title `Golden Kuy3 v1.58`, Hero panel `=== HERO ORDER (v1.58) ===`
+- Log prefix `v1.58 Hero ...`
 
-2. v1.56 ล้าง `g_heroNextAllowedSide` ทันทีเมื่อ SELL “activate Hero” (`ALT-CONSUMED`)  
-   ทำให้สถานะการสลับฝั่งหมดเร็วเกินไป ทั้งที่ requirement ใหม่คือ ฝั่งตรงข้ามต้อง “เป็น Hero และปิด Hero จบ” ก่อน จึงถือว่ารอบสลับสมบูรณ์
+2. Hero Handoff Reserve (กันชุด Hero ฝั่งตรงข้ามล่วงหน้า)
+- ขณะฝั่งหนึ่งเป็น Owner (`BE_GUARD`) เช่น SELL Hero ค้าง — อนุญาตให้ฝั่ง BUY ถูกเลือกเป็น Hero Candidate (`ARMED`) ล่วงหน้าได้แม้ Single-Side Lock เปิดอยู่
+- Candidate ถูก Strip TP-only เหมือน ARMED ปกติ → BUY basket ชน TP จะปิดเฉพาะ non-Hero, ส่วน BUY Reserve รอด
+- เมื่อ TP-event latch ปิด SELL Hero แล้ว — BUY ที่กันไว้กลายเป็น Owner ของรอบถัดไปทันที
 
-## แผนแก้ไข v1.57
+3. Conditional Alternation Lock (ใหม่ตามที่ user ขอ)
+- `g_heroNextAllowedSide` จะถูก stamp เฉพาะตอนฝั่งตรงข้าม "ครบ threshold พร้อมเป็น Reserve" หรือ "มี Hero จริงแล้ว"
+- ถ้าฝั่งตรงข้ามยังไม่ถึง threshold → ไม่ stamp Next Allowed (ปล่อยเป็น ANY)
+- เพิ่มฟังก์ชัน `MaintainNextAllowedReset()` รันทุก tick:
+  - ถ้า BUY และ SELL ทั้งคู่ phase=NONE และ active < threshold ทั้งสองฝั่ง → reset `g_heroNextAllowedSide = -1`
+  - log throttled 30s: `v1.58 Hero ALT-RESET — both sides under threshold, lock cleared`
+- ผลลัพธ์: ถ้าหลังปิด Hero แล้วทั้งสองฝั่ง flat/น้อย → ระบบกลับเป็น ANY ไม่บังคับสลับฝั่ง
 
-### 1. เพิ่ม Version เป็น v1.57 ทุกจุด
-แก้ใน `public/docs/mql5/Golden_Kuy3_EA.mq5`:
+4. แก้การ rebuild หลัง CloseHeroOnSide()
+- ปิดเฉพาะ Hero ฝั่งที่กำหนด, clear stable set เฉพาะฝั่งนั้น
+- rebuild `g_heroTickets[]` จาก stable set ที่เหลือทันทีใน tick เดียว
+- Reserve ฝั่งตรงข้ามยังถูกป้องกันต่อเนื่อง
 
-- `#property version` เป็น `1.57`
-- `#property description`
-- Dashboard `Golden Kuy3 v1.57` / `HERO ORDER (v1.57)`
-- Init/Deinit logs
-- Log prefix ที่เกี่ยวข้องกับ Hero cycle เป็น v1.57
+5. Dashboard ปรับให้เห็นชัด
+- `Hero Owner`: BUY/SELL locked หรือ NONE
+- `Next Allowed`: BUY only / SELL only / **ANY (no lock)**
+- `Handoff Reserve`: เช่น `BUY armed (reserve while SELL owner)` หรือ `-`
+- `TP Event`: คงเดิม
 
-### 2. ลดประวัติ version ใน Header ตามที่ขอ
-จะไม่เก็บ changelog ยาวทุกเวอร์ชันไว้บนหัวไฟล์อีกแล้ว โดยจะย่อให้เหลือเฉพาะ:
+ไม่เปลี่ยนแปลง (กฎเหล็ก)
+- Grid entry/exit logic, Lot multiplier (`CalcGridLot`)
+- `trade.Buy` / `trade.Sell` / `trade.PositionClose` ทุกจุด
+- Per-Order BE/Trail/SL/TP, Avg-TP/Avg-Trail strict-2-cross
+- Accumulate Close, Cost-Hit Restart
+- `IsHeroProtectedTicket` 9 guards
+- `ApplyHeroLockProfitSL` / `ComputeHeroLockProfitSL`
+- หลักการเลือก Hero: BUY ราคาต่ำสุด N ตัว / SELL ราคาสูงสุด N ตัว
+- จำนวน Hero ใช้ `InpHero_OrderCount`, threshold `InpHero_MinOrdersToActivate`
+- `InpHero_Enabled=false` → behavior เดิม
 
-- ชื่อ EA / version ปัจจุบัน
-- สรุป v1.57 แบบสั้น
-- หมายเหตุว่า previous detailed changelog ถูกเก็บไว้ใน project memory/docs แล้ว
+ไฟล์ที่จะปรับหลังอนุมัติ
+- `public/docs/mql5/Golden_Kuy3_EA.mq5`
+- สร้าง memory `mem://trading/golden-kuy3/v1-58-handoff-reserve-conditional-lock`
+- update `mem://index.md`
 
-จะไม่ลบ memory เก่าในระบบ แต่จะทำให้หัวไฟล์ `.mq5` ไม่ยาวขึ้นเรื่อยๆ
-
-### 3. เพิ่ม “Opposite TP Event” latch เพื่อไม่พลาดจังหวะ TP ที่ถูกเปิด order ใหม่ทับ
-เพิ่ม state ใหม่สำหรับ Hero closure:
-
-```text
-g_oppTPEventForHeroBuy
-g_oppTPEventForHeroSell
-```
-
-หลักการ:
-
-- ถ้า Hero ฝั่ง SELL อยู่ใน `BE_GUARD`
-- แล้วมี BUY non-Hero close ด้วย TP / Avg-TP intent / Master TP points / Avg-trailing intent
-- ให้ latch ว่า “BUY basket TP event สำหรับ SELL Hero เกิดขึ้นแล้ว”
-- `ManageHeroOppositeClose()` จะปิด SELL Hero จาก latch นี้ได้ ถึงแม้ BUY order ใหม่จะถูกเปิดเข้ามาแล้วก็ตาม
-
-ผลคือ SELL Hero จะไม่ค้างเพราะ `AutoReEntry` หรือ grid เปิด BUY ชุดใหม่เร็วกว่า tick ที่ Hero closure ตรวจเจอ
-
-### 4. แก้ `ManageHeroOppositeClose()` ให้ปิด Hero จาก TP-event latch
-ปรับลำดับตรวจปิด Hero:
-
-- ถ้า `phase == BE_GUARD` และมี Hero ticket อยู่
-- ถ้ามี TP-event latch ของฝั่งตรงข้าม และ realized profit ผ่านเงื่อนไข `InpHero_OppCloseMinProfit`
-- ให้ `CloseHeroOnSide(side, "OppositeTPEventClose")` ทันที
-- ไม่ต้องรอ `CountNonHeroMainOnSide(opp) == 0` อีกในเคส latch เพราะ event ยืนยันแล้วว่า basket ฝั่งตรงข้ามถูก TP/AvgTP ปิดจริง
-
-ส่วน behavior เดิมยังคงอยู่เป็น fallback สำหรับกรณีที่ basket flat และ intent flag ยังอยู่
-
-### 5. แก้ strict alternation ให้ “consume” ตอนปิด Hero ไม่ใช่ตอน activate
-เปลี่ยนกติกาของ `g_heroNextAllowedSide`:
-
-- หลัง BUY Hero ปิด: `NextAllowed = SELL`
-- SELL activate Hero: ยังไม่ล้าง NextAllowed
-- SELL Hero ปิดจบจริง: ค่อยเปลี่ยนเป็น `NextAllowed = BUY`
-- BUY activate Hero: ยังไม่ล้าง NextAllowed
-- BUY Hero ปิดจบจริง: ค่อยเปลี่ยนเป็น `NextAllowed = SELL`
-
-ดังนั้นคำว่า “สลับรอบ” จะหมายถึงฝั่งตรงข้ามต้องปิด Hero จบจริง ไม่ใช่แค่เริ่มเป็น Hero
-
-### 6. กัน order ใหม่ฝั่งเดียวกันหลัง BE_GUARD ไม่ให้กลายเป็น Hero รอบใหม่ก่อน cycle จบ
-คงกฎ v1.56 เดิม:
-
-- `ARMED` = Hero set dynamic refresh ได้
-- `BE_GUARD` = Hero set freeze
-- order ใหม่หลัง BE_GUARD เป็น non-Hero ปกติ
-
-แต่จะเพิ่ม log/dashboard ให้เห็นว่า SELL locked อยู่เพราะรอ BUY TP-event หรือกำลังปิดจาก BUY TP-event
-
-### 7. ปรับ Dashboard ให้เห็นสถานะ cycle ชัดขึ้น
-เพิ่ม/แก้ row ใน Hero panel:
-
-- `Next Allowed`: แสดงฝั่งที่ต้องจบรอบถัดไป
-- `TP Event`: แสดง `BUY->SELL` หรือ `SELL->BUY` เมื่อมี latch ที่กำลังรอปิด Hero
-- `Hero BUY/SELL`: แสดง phase เดิม (`WAIT/ARMED/BE_GUARD`) แต่ถ้าถูก block ด้วย cycle จะขึ้น `ALT-BLOCK`
-
-## สิ่งที่ไม่เปลี่ยนแปลง / ยืนยันไม่กระทบ Trading Logic
-
-แผนนี้จะไม่แก้สิ่งต่อไปนี้:
-
-- ไม่แก้ `trade.Buy`, `trade.Sell`, `OrderSend`
-- ไม่แก้เงื่อนไขเปิด order หลัก
-- ไม่แก้ Grid entry / Grid distance / Grid lot multiplier
-- ไม่แก้ Per-Order BE/Trailing calculation
-- ไม่แก้ Average TP / Average Trailing strict 2-cross calculation
-- ไม่แก้ TP price calculation
-- ไม่แก้ Accumulate close target calculation
-- ไม่แก้ Cost-Hit Restart entry logic
-
-จุดที่จะแตะ `trade.PositionClose` มีเฉพาะ flow ปิด Hero เดิม (`CloseHeroOnSide`) โดยเพิ่ม trigger ให้เรียกในจังหวะ TP-event ที่ถูกต้องเท่านั้น ไม่ใช่การเปลี่ยน strategy เปิด/ปิด order หลัก
-
-## ผลลัพธ์ที่คาดหวังหลัง v1.57
-
-- หลัง SELL เป็น Hero และ BUY basket ชน TP: SELL Hero จะปิดตาม TP-event นั้น แม้ระบบจะเปิด BUY order ใหม่ทันที
-- หลัง SELL Hero ปิดจบ: รอบถัดไปจะอนุญาต BUY Hero ได้
-- ถัดไปเมื่อ BUY Hero ปิดจบ: รอบถัดไปจะต้องเป็น SELL อีกครั้ง
-- ระบบจะสลับ BUY/SELL/BUY/SELL ตามรอบ Hero close จริง ไม่ใช่ล็อคฝั่งเดียวค้าง
-- Header code จะไม่ยาวจากการบันทึก changelog ทุกเวอร์ชันอีกต่อไป
+<lov-actions>
+<lov-link url="https://docs.lovable.dev/tips-tricks/troubleshooting">Troubleshooting docs</lov-link>
+</lov-actions>

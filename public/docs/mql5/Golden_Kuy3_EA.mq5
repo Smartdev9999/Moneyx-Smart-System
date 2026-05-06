@@ -1,17 +1,16 @@
 //+------------------------------------------------------------------+
 //|                                            Golden_Kuy3_EA.mq5    |
-//|                                       Golden Kuy3 EA  v1.57      |
-//|  v1.57: Opposite TP-Event Latch — Hero closes when opposite      |
-//|         basket scores a TP/Avg-TP event, even if AutoReEntry/     |
-//|         Grid opens new opp tickets the same tick. Strict-Alt      |
-//|         consume moved to Hero CLOSE (not activation) so the       |
-//|         alternation gate truly waits for opposite Hero cycle      |
-//|         to finish. Header changelog trimmed (full history in      |
-//|         project memory mem://trading/golden-kuy3/*).              |
+//|                                       Golden Kuy3 EA  v1.58      |
+//|  v1.58: Hero Handoff Reserve + Conditional Alternation Lock —    |
+//|         While owner side is BE_GUARD, opposite may pre-arm as    |
+//|         Reserve so the next basket TP keeps a Hero set instead   |
+//|         of closing all. If both sides are below threshold,       |
+//|         Next-Allowed lock auto-resets (no forced alternation).   |
+//|         Full history in mem://trading/golden-kuy3/*.             |
 //+------------------------------------------------------------------+
 #property copyright "Golden Kuy3 EA"
-#property version   "1.57"
-#property description "Golden Kuy3 v1.57 — Opposite TP-Event Latch: SELL Hero closes the moment BUY basket logs a TP/Avg-TP event even if BUY re-entry already opened a new ticket; strict alternation released only when opposite Hero cycle truly closes."
+#property version   "1.58"
+#property description "Golden Kuy3 v1.58 — Hero Handoff Reserve + Conditional Alternation: opposite side may pre-arm Reserve while owner is BE_GUARD; alternation lock auto-resets when both sides under threshold."
 #property strict
 
 #include <Trade/Trade.mqh>
