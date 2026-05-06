@@ -882,9 +882,9 @@ void ManageHeroOppositeClose()
       ResetHeroStateIfFlat(side);
    }
 
-   // v1.50 Tick-based opposite-clear detector — gated by TP/profit requirement.
-   //  Hero closes ONLY when opp basket flat AND opp realized P/L since hero ARMED is positive (TP).
-   //  If opp closed by SL/loss => Hero HOLDS (BE-SL keeps lock-profit floor) waiting next opp TP cycle.
+   // v1.51 Tick-based opposite-clear detector — gated by Avg-TP intent flag (preferred) + realized P/L.
+   //  Hero closes ONLY when opp basket flat AND opp was flattened by Avg-TP/Avg-Trail/Master TP/Accumulate.
+   //  Per-Order Trail / SL / Cost-Hit / manual close => Hero HOLDS locked at BE-SL.
    for(int s2 = 0; s2 < 2; s2++) {
       ENUM_POSITION_TYPE side = (s2 == 0) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
       ENUM_POSITION_TYPE opp  = (s2 == 0) ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
@@ -896,31 +896,54 @@ void ManageHeroOppositeClose()
 
       double oppRealized = (side == POSITION_TYPE_BUY) ? g_oppBasketRealized_HeroBuy
                                                        : g_oppBasketRealized_HeroSell;
+      bool   intentFlag  = (opp  == POSITION_TYPE_BUY) ? g_oppCloseIntent_AvgTP_Buy
+                                                       : g_oppCloseIntent_AvgTP_Sell;
+
+      // v1.51 — Avg-TP intent gate (primary)
+      if(InpHero_OppCloseRequireAvgTP && !intentFlag) {
+         static datetime lastHoldLog_B51 = 0, lastHoldLog_S51 = 0;
+         datetime lastLog51 = (side == POSITION_TYPE_BUY) ? lastHoldLog_B51 : lastHoldLog_S51;
+         if(TimeCurrent() - lastLog51 >= 30) {
+            Print("v1.51 Hero HOLD heroSide=", EnumToString(side),
+                  " oppSide=", EnumToString(opp),
+                  " — opp basket flat WITHOUT Avg-TP intent (Per-Order Trail/SL/Cost-Hit) — keep Hero locked at BE-SL");
+            if(side == POSITION_TYPE_BUY) lastHoldLog_B51 = TimeCurrent();
+            else                          lastHoldLog_S51 = TimeCurrent();
+         }
+         // Reset opp accumulator so next basket cycle is judged fresh
+         if(side == POSITION_TYPE_BUY) g_oppBasketRealized_HeroBuy  = 0.0;
+         else                          g_oppBasketRealized_HeroSell = 0.0;
+         continue;
+      }
+
+      // v1.50 — TP/profit gate (secondary, retained)
       if(InpHero_OppCloseRequireTP) {
          if(oppRealized <= InpHero_OppCloseMinProfit) {
-            // SL / loss / no realized profit yet — HOLD Hero, reset accumulator so next opp basket cycle is judged fresh.
             static datetime lastHoldLog_B = 0, lastHoldLog_S = 0;
             datetime lastLog = (side == POSITION_TYPE_BUY) ? lastHoldLog_B : lastHoldLog_S;
             if(TimeCurrent() - lastLog >= 30) {
                Print("v1.50 Hero HOLD heroSide=", EnumToString(side),
                      " oppSide=", EnumToString(opp), " oppRealized=", DoubleToString(oppRealized, 2),
                      " minTP=", DoubleToString(InpHero_OppCloseMinProfit, 2),
-                     " — opp closed by SL/loss, keep Hero locked at BE-SL waiting next opp TP");
+                     " — opp realized below min profit, keep Hero locked at BE-SL");
                if(side == POSITION_TYPE_BUY) lastHoldLog_B = TimeCurrent();
                else                          lastHoldLog_S = TimeCurrent();
             }
-            // Reset opp accumulator for next opposite basket cycle
             if(side == POSITION_TYPE_BUY) g_oppBasketRealized_HeroBuy  = 0.0;
             else                          g_oppBasketRealized_HeroSell = 0.0;
             continue;
          }
       }
 
-      Print("v1.50 Hero CLOSE (opp TP/profit hit): heroSide=", EnumToString(side),
+      Print("v1.51 Hero CLOSE (opp Avg-TP intent + realized): heroSide=", EnumToString(side),
             " oppSide=", EnumToString(opp),
             " oppRealized=", DoubleToString(oppRealized, 2),
+            " intent=", (intentFlag?"YES":"NO"),
             " heroProfit=", DoubleToString(SumHeroProfitOnSide(side), 2));
-      CloseHeroOnSide(side, "OppositeBasketTPClose");
+      CloseHeroOnSide(side, "OppositeBasketAvgTPClose");
+      // Clear intent flags after consuming
+      g_oppCloseIntent_AvgTP_Buy  = false;
+      g_oppCloseIntent_AvgTP_Sell = false;
    }
 }
 
