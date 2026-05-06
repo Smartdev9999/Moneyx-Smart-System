@@ -856,7 +856,9 @@ void ManageHeroOppositeClose()
       ResetHeroStateIfFlat(side);
    }
 
-   // v7.02 Tick-based opposite-clear detector (Broker TP race)
+   // v1.50 Tick-based opposite-clear detector — gated by TP/profit requirement.
+   //  Hero closes ONLY when opp basket flat AND opp realized P/L since hero ARMED is positive (TP).
+   //  If opp closed by SL/loss => Hero HOLDS (BE-SL keeps lock-profit floor) waiting next opp TP cycle.
    for(int s2 = 0; s2 < 2; s2++) {
       ENUM_POSITION_TYPE side = (s2 == 0) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
       ENUM_POSITION_TYPE opp  = (s2 == 0) ? POSITION_TYPE_SELL : POSITION_TYPE_BUY;
@@ -865,9 +867,33 @@ void ManageHeroOppositeClose()
       if(CountHeroOnSide(side) <= 0) continue;
       if(CountNonHeroMainOnSide(opp) > 0) continue;
       if(CountHeroOnSide(opp) > 0) continue;
-      Print("v1.4 Hero CLOSE (opp basket flat tick): heroSide=", EnumToString(side),
-            " oppSide=", EnumToString(opp), " heroProfit=", DoubleToString(SumHeroProfitOnSide(side), 2));
-      CloseHeroOnSide(side, "OppositeBasketFlatTick");
+
+      double oppRealized = (side == POSITION_TYPE_BUY) ? g_oppBasketRealized_HeroBuy
+                                                       : g_oppBasketRealized_HeroSell;
+      if(InpHero_OppCloseRequireTP) {
+         if(oppRealized <= InpHero_OppCloseMinProfit) {
+            // SL / loss / no realized profit yet — HOLD Hero, reset accumulator so next opp basket cycle is judged fresh.
+            static datetime lastHoldLog_B = 0, lastHoldLog_S = 0;
+            datetime &lastLog = (side == POSITION_TYPE_BUY) ? lastHoldLog_B : lastHoldLog_S;
+            if(TimeCurrent() - lastLog >= 30) {
+               Print("v1.50 Hero HOLD heroSide=", EnumToString(side),
+                     " oppSide=", EnumToString(opp), " oppRealized=", DoubleToString(oppRealized, 2),
+                     " minTP=", DoubleToString(InpHero_OppCloseMinProfit, 2),
+                     " — opp closed by SL/loss, keep Hero locked at BE-SL waiting next opp TP");
+               lastLog = TimeCurrent();
+            }
+            // Reset opp accumulator for next opposite basket cycle
+            if(side == POSITION_TYPE_BUY) g_oppBasketRealized_HeroBuy  = 0.0;
+            else                          g_oppBasketRealized_HeroSell = 0.0;
+            continue;
+         }
+      }
+
+      Print("v1.50 Hero CLOSE (opp TP/profit hit): heroSide=", EnumToString(side),
+            " oppSide=", EnumToString(opp),
+            " oppRealized=", DoubleToString(oppRealized, 2),
+            " heroProfit=", DoubleToString(SumHeroProfitOnSide(side), 2));
+      CloseHeroOnSide(side, "OppositeBasketTPClose");
    }
 }
 
