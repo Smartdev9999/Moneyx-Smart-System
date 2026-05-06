@@ -536,6 +536,9 @@ void BuildHeroTicketCache()
             g_heroPhase_Sell = 0; g_heroBE_Applied_Sell = false; g_heroJustClosed_Sell = TimeCurrent();
          }
          g_heroLastClosedSide = sideId;
+         g_heroNextAllowedSide = (sideId == (int)POSITION_TYPE_BUY) ? (int)POSITION_TYPE_SELL : (int)POSITION_TYPE_BUY; // v1.56
+         Print("v1.56 Hero NEXT-ALLOWED set to ", (g_heroNextAllowedSide==(int)POSITION_TYPE_BUY?"BUY":"SELL"),
+               " after external close on ", (sideId==POSITION_TYPE_BUY?"BUY":"SELL"));
       }
    }
 
