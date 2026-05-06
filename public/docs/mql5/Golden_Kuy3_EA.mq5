@@ -195,6 +195,13 @@ int      g_oppTPDealCount_Buy         = 0;     // count of non-Hero BUY  tickets
 int      g_oppTPDealCount_Sell        = 0;
 datetime g_oppTPDealWindow_Buy        = 0;
 datetime g_oppTPDealWindow_Sell       = 0;
+// v1.57 — Opposite TP-event latch (per Hero side). Set when opposite basket logs a TP/Avg-TP
+//          event so Hero can close even after AutoReEntry/Grid re-opens an opposite ticket
+//          on the same tick. Consumed by ManageHeroOppositeClose() and CloseHeroOnSide().
+bool     g_oppTPEvent_HeroBuy         = false; // BUY  Hero waiting on SELL basket TP event
+bool     g_oppTPEvent_HeroSell        = false; // SELL Hero waiting on BUY  basket TP event
+datetime g_oppTPEventTime_HeroBuy     = 0;
+datetime g_oppTPEventTime_HeroSell    = 0;
 // Dashboard counters
 int      g_heroDash_BuyActive     = 0;
 int      g_heroDash_SellActive    = 0;
