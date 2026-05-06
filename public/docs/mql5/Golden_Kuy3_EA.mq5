@@ -482,9 +482,64 @@ void BuildHeroTicketCache()
       int curPhase = (sideId == POSITION_TYPE_BUY) ? g_heroPhase_Buy : g_heroPhase_Sell;
       int stableN  = GetStableCount(sideId);
 
-      // ===== Branch A: phase active (ARMED/BE_GUARD) — KEEP existing stable set, never re-select =====
-      if(curPhase != 0 && stableN > 0) {
-         sideHeroTagged[s] = stableN;
+      // ===== Branch A v1.48: phase active — REFRESH stable set with current price-extreme =====
+      // (was v1.47 STICKY freeze — caused Hero to be stuck on old non-extreme tickets when newer
+      //  more-extreme orders opened. Now re-selected every tick within the locked side.)
+      if(curPhase != 0) {
+         if(nPool <= 0) { sideHeroTagged[s] = 0; continue; }
+
+         // Sort pool by price-extreme (BUY ascending lowest first / SELL descending highest first)
+         bool buySideA = (side == POSITION_TYPE_BUY);
+         for(int a = 1; a < nPool; a++)
+            for(int b = a; b > 0; b--) {
+               bool swap = false;
+               if(buySideA) {
+                  if(pxPool[b] < pxPool[b-1]) swap = true;
+                  else if(pxPool[b] == pxPool[b-1] && tkPool[b] < tkPool[b-1]) swap = true;
+               } else {
+                  if(pxPool[b] > pxPool[b-1]) swap = true;
+                  else if(pxPool[b] == pxPool[b-1] && tkPool[b] < tkPool[b-1]) swap = true;
+               }
+               if(!swap) break;
+               double _p = pxPool[b]; pxPool[b] = pxPool[b-1]; pxPool[b-1] = _p;
+               ulong  _k = tkPool[b]; tkPool[b] = tkPool[b-1]; tkPool[b-1] = _k;
+            }
+
+         int takeA = MathMin(InpHero_OrderCount, nPool - 1); // keep ≥1 non-Hero
+         if(takeA <= 0) { sideHeroTagged[s] = 0; continue; }
+
+         // Snapshot prev set for diff log
+         ulong prevSet[200]; int prevCnt = 0;
+         if(sideId == POSITION_TYPE_BUY) {
+            for(int i=0; i<g_heroBuyStableN; i++) prevSet[prevCnt++] = g_heroBuyStable[i];
+         } else {
+            for(int i=0; i<g_heroSellStableN; i++) prevSet[prevCnt++] = g_heroSellStable[i];
+         }
+
+         // Rebuild stable set = current price-extreme top N
+         ClearStableSet(sideId);
+         for(int k = 0; k < takeA; k++) AddToStableSet(sideId, tkPool[k]);
+         sideHeroTagged[s] = takeA;
+
+         // Diff: detect changes
+         bool changed = (prevCnt != takeA);
+         if(!changed) {
+            for(int k = 0; k < takeA && !changed; k++)
+               if(prevSet[k] != tkPool[k]) changed = true;
+         }
+         if(changed) {
+            string newList = "";
+            for(int k = 0; k < takeA; k++)
+               newList += StringFormat(" #%I64u@%s", tkPool[k], DoubleToString(pxPool[k], g_digits));
+            Print("v1.48 Hero REFRESH side=", (sideId==POSITION_TYPE_BUY?"BUY":"SELL"),
+                  " phase=", (curPhase==3?"BE_GUARD":"ARMED"), " count=", takeA, " new set:", newList);
+
+            // BE_GUARD: clear stale BE flag so ApplyHeroLockProfitSL re-applies SL on the new ticket set
+            if(curPhase == 3) {
+               if(sideId == POSITION_TYPE_BUY) g_heroBE_Applied_Buy = false;
+               else                            g_heroBE_Applied_Sell = false;
+            }
+         }
          continue;
       }
 
