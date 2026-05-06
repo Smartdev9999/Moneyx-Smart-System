@@ -100,8 +100,9 @@ input bool   InpHero_SingleSideLock     = true;   // Only ONE side may own Hero 
 input bool   InpHero_AlternateSides     = true;   // v1.46 — ฝั่งที่เพิ่งปิด Hero ห้าม re-arm จนกว่าฝั่งตรงข้ามจะ Hero หรือฝั่งเดิม flat สนิท
 input bool   InpHero_CloseWithOpposite  = true;   // [DEPRECATED] hard-wired to opposite-basket close
 input bool   InpHero_RequireNetProfit   = false;  // [DEPRECATED] not used (lock-profit SL guarantees floor)
-input bool   InpHero_OppCloseRequireTP  = true;   // v1.50 — close Hero ONLY when opp basket closed by TP/profit; SL/loss = Hero holds
-input double InpHero_OppCloseMinProfit  = 0.0;    // v1.50 — minimum opp realized profit to qualify as TP close ($)
+input bool   InpHero_OppCloseRequireTP    = true;   // v1.50 — close Hero ONLY when opp basket realized > min profit
+input double InpHero_OppCloseMinProfit    = 0.0;    // v1.50 — minimum opp realized profit to qualify as TP close ($)
+input bool   InpHero_OppCloseRequireAvgTP = true;   // v1.51 — close Hero ONLY when opp basket flattened by Avg-TP/Avg-Trail/Master TP/Accumulate (intent flag); Per-Order Trail/SL/Cost-Hit do NOT count
 
 input group "=== Chart Lines ==="
 input bool                 InpShowAvgLine             = true;
