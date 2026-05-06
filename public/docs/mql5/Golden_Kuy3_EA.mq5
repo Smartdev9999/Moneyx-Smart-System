@@ -2020,6 +2020,11 @@ void OnTick()
    ManageCostHitRestart();
    ManageInitialEntry();
    ManageGridEntry();
+   // v1.54 — re-run Hero refresh AFTER order-entry modules so brand-new tickets
+   //         are immediately considered for price-extreme Hero selection
+   //         (prevents stale Hero set / dashboard showing old tickets).
+   BuildHeroTicketCache();
+   ManageHeroOppositeClose();
    ManagePerOrderTrailing();
    ManageTakeProfit();
    ManageAverageTrailing();
