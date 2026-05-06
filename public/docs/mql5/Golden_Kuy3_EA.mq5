@@ -16,8 +16,8 @@
 //|  v1.40: Hero Order ported from Gold Miner v7.09                  |
 //+------------------------------------------------------------------+
 #property copyright "Golden Kuy3 EA"
-#property version   "1.49"
-#property description "Golden Kuy3 v1.49 — Hero Guard After Basket Close: Hero set never shrinks below total side count; IsHeroProtectedTicket prevents TP/AvgTrail/CloseAll from touching Hero or stable-set tickets"
+#property version   "1.50"
+#property description "Golden Kuy3 v1.50 — Hero TP-Only Opposite Close: Hero closes only when opposite basket flattens with TP/profit; SL/loss = Hero holds locked at BE-SL waiting for next opposite TP"
 #property strict
 
 #include <Trade/Trade.mqh>
