@@ -347,22 +347,17 @@ void BuildHeroTicketCache()
    int sideTotalActive[2] = {0, 0};
    int sideHeroTagged[2]  = {0, 0};
 
-   // v1.44 PRE-GUARD — ถ้าทั้งสองฝั่ง phase != NONE (state ค้างจาก version เก่า)
-   //  ให้รักษาฝั่งที่ phase สูงกว่า (BE_GUARD ชนะ ARMED), tie-break = ฝั่งที่มี orders มากกว่า
-   if(InpHero_SingleSideLock && g_heroPhase_Buy != 0 && g_heroPhase_Sell != 0) {
-      int keep;
-      if(g_heroPhase_Buy != g_heroPhase_Sell)
-         keep = (g_heroPhase_Buy > g_heroPhase_Sell) ? (int)POSITION_TYPE_BUY : (int)POSITION_TYPE_SELL;
-      else {
-         int nB = CountSideSimple(POSITION_TYPE_BUY);
-         int nS = CountSideSimple(POSITION_TYPE_SELL);
-         keep = (nB >= nS) ? (int)POSITION_TYPE_BUY : (int)POSITION_TYPE_SELL;
-      }
+   // v1.45 PRE-GUARD — เฉพาะกรณีหายาก: ทั้งสองฝั่ง phase == BE_GUARD พร้อมกัน
+   //  (ARMED+ARMED, ARMED+BE_GUARD ไม่ใช่ปัญหา — ปล่อยให้ทำงานคู่กันได้)
+   if(InpHero_SingleSideLock && g_heroPhase_Buy == 3 && g_heroPhase_Sell == 3) {
+      int nB = CountSideSimple(POSITION_TYPE_BUY);
+      int nS = CountSideSimple(POSITION_TYPE_SELL);
+      int keep = (nB >= nS) ? (int)POSITION_TYPE_BUY : (int)POSITION_TYPE_SELL;
       if(keep == (int)POSITION_TYPE_BUY) {
-         Print("v1.44 Hero PRE-GUARD: dual-side state detected, keeping BUY, resetting SELL");
+         Print("v1.45 Hero PRE-GUARD: dual BE_GUARD detected, keeping BUY, resetting SELL");
          g_heroPhase_Sell = 0; g_heroBE_Applied_Sell = false; g_heroJustClosed_Sell = TimeCurrent();
       } else {
-         Print("v1.44 Hero PRE-GUARD: dual-side state detected, keeping SELL, resetting BUY");
+         Print("v1.45 Hero PRE-GUARD: dual BE_GUARD detected, keeping SELL, resetting BUY");
          g_heroPhase_Buy = 0; g_heroBE_Applied_Buy = false; g_heroJustClosed_Buy = TimeCurrent();
       }
    }
