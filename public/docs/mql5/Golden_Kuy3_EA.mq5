@@ -324,7 +324,7 @@ int CountNonHeroMainOnSide(ENUM_POSITION_TYPE side)
       if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
       if(PositionGetString(POSITION_SYMBOL)  != _Symbol)        continue;
       if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != side) continue;
-      if(IsHeroTicket(ticket)) continue;
+      if(IsHeroProtectedTicket(ticket)) continue;
       n++;
    }
    return n;
@@ -1154,7 +1154,7 @@ void ManagePerOrderTrailing()
    for(int i=PositionsTotal()-1;i>=0;i--){
       if(!pos.SelectByIndex(i)) continue;
       if(!IsOurPosition()) continue;
-      if(IsHeroTicket(pos.Ticket())) continue; // v1.3: Hero managed separately
+      if(IsHeroProtectedTicket(pos.Ticket())) continue; // v1.3: Hero managed separately
       int side = (int)pos.PositionType();
       double op = pos.PriceOpen();
       double curSL = pos.StopLoss();
@@ -1180,7 +1180,7 @@ void CloseAllSide(int side)
       if(!pos.SelectByIndex(i)) continue;
       if(!IsOurPosition()) continue;
       if((int)pos.PositionType()!=side) continue;
-      if(IsHeroTicket(pos.Ticket())) continue; // v1.3: never close Hero via per-side close
+      if(IsHeroProtectedTicket(pos.Ticket())) continue; // v1.3: never close Hero via per-side close
       trade.PositionClose(pos.Ticket());
    }
 }
@@ -1190,7 +1190,7 @@ void CloseAllOurs()
    for(int i=PositionsTotal()-1;i>=0;i--){
       if(!pos.SelectByIndex(i)) continue;
       if(!IsOurPosition()) continue;
-      if(IsHeroTicket(pos.Ticket())) continue; // v1.3
+      if(IsHeroProtectedTicket(pos.Ticket())) continue; // v1.3
       trade.PositionClose(pos.Ticket());
    }
 }
@@ -1203,7 +1203,7 @@ double CalcSideFloating_NonHero(int side)
       if(!pos.SelectByIndex(i)) continue;
       if(!IsOurPosition()) continue;
       if((int)pos.PositionType()!=side) continue;
-      if(IsHeroTicket(pos.Ticket())) continue;
+      if(IsHeroProtectedTicket(pos.Ticket())) continue;
       pl += pos.Profit() + pos.Swap() + pos.Commission();
    }
    return pl;
@@ -1217,7 +1217,7 @@ double CalcSideAvgPrice_NonHero(int side, double &lotsOut, int &cntOut)
       if(!pos.SelectByIndex(i)) continue;
       if(!IsOurPosition()) continue;
       if((int)pos.PositionType()!=side) continue;
-      if(IsHeroTicket(pos.Ticket())) continue;
+      if(IsHeroProtectedTicket(pos.Ticket())) continue;
       sumLP += pos.PriceOpen()*pos.Volume();
       sumL  += pos.Volume();
       n++;
@@ -1238,7 +1238,7 @@ void EnforceClearTPIfDisabled()
    for(int i=PositionsTotal()-1;i>=0;i--){
       if(!pos.SelectByIndex(i)) continue;
       if(!IsOurPosition()) continue;
-      if(IsHeroTicket(pos.Ticket())) continue; // v1.3: keep Hero SL/TP intact
+      if(IsHeroProtectedTicket(pos.Ticket())) continue; // v1.3: keep Hero SL/TP intact
       if(pos.TakeProfit() <= 0) continue;
       if(trade.PositionModify(pos.Ticket(), pos.StopLoss(), 0)) cleared++;
    }
@@ -1298,7 +1298,7 @@ void ManageTakeProfit()
             if(!pos.SelectByIndex(i)) continue;
             if(!IsOurPosition()) continue;
             if((int)pos.PositionType()!=side) continue;
-            if(IsHeroTicket(pos.Ticket())) continue; // v1.3
+            if(IsHeroProtectedTicket(pos.Ticket())) continue; // v1.3
             if(MathAbs(pos.TakeProfit()-tpPrice) <= g_point*2) continue;
             trade.PositionModify(pos.Ticket(), pos.StopLoss(), tpPrice);
          }
@@ -1384,7 +1384,7 @@ void ManageAverageTrailing()
    for(int i=PositionsTotal()-1;i>=0;i--){
       if(!pos.SelectByIndex(i)) continue;
       if(!IsOurPosition()) continue;
-      if(IsHeroTicket(pos.Ticket())) continue; // v1.3
+      if(IsHeroProtectedTicket(pos.Ticket())) continue; // v1.3
       int side = (int)pos.PositionType();
       double targetSL = 0;
       if(side==POSITION_TYPE_BUY  && g_avgTrail_Active_Buy)  targetSL = g_avgTrail_SL_Buy;
