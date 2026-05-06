@@ -28,8 +28,8 @@
 //|  v1.40: Hero Order ported from Gold Miner v7.09                  |
 //+------------------------------------------------------------------+
 #property copyright "Golden Kuy3 EA"
-#property version   "1.53"
-#property description "Golden Kuy3 v1.53 — Hero Dynamic Refresh + Demote Restore: Hero set tracks current price-extreme every tick; tickets pushed out of the set get their Initial TP restored and lock-profit SL cleared so they re-join the normal basket and close together with Avg-TP"
+#property version   "1.54"
+#property description "Golden Kuy3 v1.54 — Live Hero Refresh After Entries: BuildHeroTicketCache re-runs after order-entry modules so Hero price-extreme selection picks up brand-new tickets in the same tick (dashboard never stale). v1.53 dynamic refresh + demote-restore preserved."
 #property strict
 
 #include <Trade/Trade.mqh>
