@@ -581,20 +581,11 @@ void BuildHeroTicketCache()
       int curPhase = (sideId == POSITION_TYPE_BUY) ? g_heroPhase_Buy : g_heroPhase_Sell;
       int stableN  = GetStableCount(sideId);
 
-      // ===== Branch A v1.52: phase active — STICKY (default) or v1.51 dynamic refresh =====
-      // v1.52: when InpHero_StickySet=true, Hero set is frozen at activation. PruneStableSet
-      //        in STEP 1 already removed any closed tickets. New orders opened after ARMED/BE_GUARD
-      //        remain normal basket (not Hero). This prevents Hero overlap, dropped-ticket BE close,
-      //        and missing side-alternation that v1.48 dynamic refresh caused.
-      // v1.51 fallback (InpHero_StickySet=false): re-select Hero set every tick by price-extreme.
+      // ===== Branch A v1.55: phase active — ALWAYS rebuild Hero set every tick by price-extreme =====
+      // v1.55: InpHero_StickySet is DEPRECATED/IGNORED. Hero set must always reflect the current
+      //        best price-extreme so brand-new tickets at better prices immediately replace
+      //        stale Hero tickets. Demote-restore returns demoted tickets to normal basket.
       if(curPhase != 0) {
-         if(InpHero_StickySet) {
-            // STICKY: keep current stable set as-is (already pruned in STEP 1)
-            sideHeroTagged[s] = stableN;
-            continue;
-         }
-
-         // ----- v1.51 dynamic refresh (legacy fallback) -----
          if(nPool <= 0) { sideHeroTagged[s] = 0; continue; }
 
          // Sort pool by price-extreme (BUY ascending lowest first / SELL descending highest first)
@@ -637,15 +628,14 @@ void BuildHeroTicketCache()
             string newList = "";
             for(int k = 0; k < takeA; k++)
                newList += StringFormat(" #%I64u@%s", tkPool[k], DoubleToString(pxPool[k], g_digits));
-            Print("v1.53 Hero REFRESH side=", (sideId==POSITION_TYPE_BUY?"BUY":"SELL"),
+            Print("v1.55 Hero DYNAMIC REFRESH side=", (sideId==POSITION_TYPE_BUY?"BUY":"SELL"),
                   " phase=", (curPhase==3?"BE_GUARD":"ARMED"), " count=", takeA, " new set:", newList);
             if(curPhase == 3) {
+               // BE_GUARD: new entrants need lock-profit SL re-applied
                if(sideId == POSITION_TYPE_BUY) g_heroBE_Applied_Buy = false;
                else                            g_heroBE_Applied_Sell = false;
             }
-            // v1.53 — demote restore: any ticket in prevSet but not in newSet has been pushed
-            //         out of Hero protection; restore Initial TP and clear lock-profit SL so it
-            //         re-joins the normal basket and closes with Avg-TP/per-order rules.
+            // Demote restore: tickets pushed out get Initial TP back + lock-SL cleared
             RestoreInitialTPOnDemoted(prevSet, prevCnt, tkPool, takeA, (ENUM_POSITION_TYPE)sideId);
          }
          continue;
@@ -1716,7 +1706,7 @@ void DrawDashboard()
    double plS  = CalcSideFloating(POSITION_TYPE_SELL);
    double plAll= plB+plS;
 
-   DashHeader(StringFormat("Golden Kuy3 v1.54  Side:%s Grid:%s/%s", SideModeStr(), GridModeStr(), LotModeStr()));
+   DashHeader(StringFormat("Golden Kuy3 v1.55  Side:%s Grid:%s/%s", SideModeStr(), GridModeStr(), LotModeStr()));
 
    DashHeader("=== ACCOUNT ===");
    DashRow("Balance",     StringFormat("$%.2f", bal), info);
@@ -1781,8 +1771,8 @@ void DrawDashboard()
    DashRow("Restart Pending", StringFormat("BUY:%s  SELL:%s", rpB, rpS),
            (g_costHit_Pending_Buy||g_costHit_Pending_Sell)?warn:info);
 
-   DashHeader("=== HERO ORDER (v1.54) ===");
-   DashRow("Hero Cfg", StringFormat("%s  N=%d minAct=%d BE=%dpt  Mode=PRICE_EXTREME Lock=%s Alt=%s",
+   DashHeader("=== HERO ORDER (v1.55) ===");
+   DashRow("Hero Cfg", StringFormat("%s  N=%d minAct=%d BE=%dpt  Mode=DYNAMIC Lock=%s Alt=%s",
                           OnOff(InpHero_Enabled), InpHero_OrderCount,
                           InpHero_MinOrdersToActivate, InpHero_BE_OffsetPoints,
                           (InpHero_SingleSideLock?"STRICT":"OFF"),
