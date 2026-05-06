@@ -1,16 +1,13 @@
 //+------------------------------------------------------------------+
 //|                                            Golden_Kuy3_EA.mq5    |
-//|                                       Golden Kuy3 EA  v1.58      |
-//|  v1.58: Hero Handoff Reserve + Conditional Alternation Lock —    |
-//|         While owner side is BE_GUARD, opposite may pre-arm as    |
-//|         Reserve so the next basket TP keeps a Hero set instead   |
-//|         of closing all. If both sides are below threshold,       |
-//|         Next-Allowed lock auto-resets (no forced alternation).   |
+//|                                       Golden Kuy3 EA  v1.59      |
+//|  v1.59: Risk Limits — Max Lot per Order cap (post-multiplier)    |
+//|         + Max DD Close (PERCENT of balance OR DOLLAR floating).  |
 //|         Full history in mem://trading/golden-kuy3/*.             |
 //+------------------------------------------------------------------+
 #property copyright "Golden Kuy3 EA"
-#property version   "1.58"
-#property description "Golden Kuy3 v1.58 — Hero Handoff Reserve + Conditional Alternation: opposite side may pre-arm Reserve while owner is BE_GUARD; alternation lock auto-resets when both sides under threshold."
+#property version   "1.59"
+#property description "Golden Kuy3 v1.59 — Adds Max Lot per Order cap + Max DD Close (Percent/Dollar)."
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -77,6 +74,12 @@ input double               InpAvgTrail_BE_Buffer      = 20.0;
 input int                  InpAvgTrail_MinOrders      = 3;
 input bool                 InpAvgTrail_Strict2Cross   = true;
 input double               InpAvgTrail_UnderAvgBuffer = 50.0;
+
+input group "=== Risk Limits (v1.59) ==="
+enum ENUM_GK_DD_MODE { GK_DD_OFF=0, GK_DD_PERCENT=1, GK_DD_DOLLAR=2 };
+input double               InpMaxLotPerOrder       = 0.0;     // 0 = no cap; cap each grid order's lot after multiplier
+input ENUM_GK_DD_MODE      InpMaxDDMode            = GK_DD_OFF;
+input double               InpMaxDDValue           = 20.0;    // PERCENT: % of balance | DOLLAR: $ floating loss
 
 input group "===== Hero Order (v7.09) ====="
 input bool   InpHero_Enabled            = false;  // Enable Hero Order (opposite-side helper)
@@ -1185,6 +1188,10 @@ double CalcGridLot(double lastLot)
 
    if(out < minL) out = minL;
    if(out > maxL) out = maxL;
+   // v1.59 — Max Lot per Order cap (post-multiplier safety)
+   if(InpMaxLotPerOrder > 0.0 && out > InpMaxLotPerOrder) out = InpMaxLotPerOrder;
+   if(stp>0) out = MathFloor(out/stp)*stp;
+   if(out < minL) out = minL;
    out = NormalizeDouble(out, 2);
 
    if(InpGridLotMode==GK_LOT_ADD || InpGridLotMode==GK_LOT_MULTIPLY)
@@ -1507,6 +1514,46 @@ void EnforceClearTPIfDisabled()
    g_tpStripped = (cleared>0) || g_tpStripped;
 }
 
+// v1.59 — Max DD Close: flatten everything when floating loss exceeds threshold
+datetime g_maxDD_LastFire = 0;
+double   g_maxDD_CurrAbs  = 0.0;   // current floating loss in $ (positive number)
+double   g_maxDD_CurrPct  = 0.0;   // current floating loss as % of balance
+
+void ManageMaxDDClose()
+{
+   if(InpMaxDDMode == GK_DD_OFF) return;
+   if(TimeCurrent() - g_maxDD_LastFire < 30) return; // 30s cooldown
+
+   double floating = 0.0;
+   for(int i=PositionsTotal()-1;i>=0;i--){
+      if(!pos.SelectByIndex(i)) continue;
+      if(!IsOurPosition()) continue;
+      floating += pos.Profit() + pos.Swap() + pos.Commission();
+   }
+   double bal = AccountInfoDouble(ACCOUNT_BALANCE);
+   g_maxDD_CurrAbs = (floating < 0) ? -floating : 0.0;
+   g_maxDD_CurrPct = (bal > 0 && floating < 0) ? (g_maxDD_CurrAbs / bal * 100.0) : 0.0;
+
+   if(floating >= 0) return;
+
+   bool fire = false;
+   if(InpMaxDDMode == GK_DD_PERCENT && InpMaxDDValue > 0 && g_maxDD_CurrPct >= InpMaxDDValue) fire = true;
+   if(InpMaxDDMode == GK_DD_DOLLAR  && InpMaxDDValue > 0 && g_maxDD_CurrAbs >= InpMaxDDValue) fire = true;
+
+   if(!fire) return;
+
+   Print("v1.59 MAX DD CLOSE — mode=", (InpMaxDDMode==GK_DD_PERCENT?"PERCENT":"DOLLAR"),
+         " floating=$", DoubleToString(floating,2),
+         " absDD=$", DoubleToString(g_maxDD_CurrAbs,2),
+         " pct=", DoubleToString(g_maxDD_CurrPct,2), "%",
+         " threshold=", DoubleToString(InpMaxDDValue,2));
+   // mark intent on BOTH sides so Hero closes alongside (v1.51/v1.57)
+   g_oppCloseIntent_AvgTP_Buy  = true; g_oppCloseIntentTime_Buy  = TimeCurrent();
+   g_oppCloseIntent_AvgTP_Sell = true; g_oppCloseIntentTime_Sell = TimeCurrent();
+   CloseAllOurs();
+   g_maxDD_LastFire = TimeCurrent();
+}
+
 void ManageTakeProfit()
 {
    if(!InpUseTakeProfit) return;
@@ -1808,7 +1855,7 @@ void DrawDashboard()
    double plS  = CalcSideFloating(POSITION_TYPE_SELL);
    double plAll= plB+plS;
 
-   DashHeader(StringFormat("Golden Kuy3 v1.58  Side:%s Grid:%s/%s", SideModeStr(), GridModeStr(), LotModeStr()));
+   DashHeader(StringFormat("Golden Kuy3 v1.59  Side:%s Grid:%s/%s", SideModeStr(), GridModeStr(), LotModeStr()));
 
    DashHeader("=== ACCOUNT ===");
    DashRow("Balance",     StringFormat("$%.2f", bal), info);
@@ -1854,6 +1901,14 @@ void DrawDashboard()
                            (InpUseTPPercentBalance?ok:warn));
    DashRow("Accumulate",   StringFormat("%s  $%.0f", OnOff(InpUseAccumulateClose), InpAccumulateTarget),
                            (InpUseAccumulateClose?ok:warn));
+   // v1.59 — Risk Limits one-liner
+   string mlStr = (InpMaxLotPerOrder>0 ? StringFormat("%.2f", InpMaxLotPerOrder) : "OFF");
+   string ddStr;
+   if(InpMaxDDMode == GK_DD_OFF)        ddStr = "OFF";
+   else if(InpMaxDDMode == GK_DD_PERCENT) ddStr = StringFormat("PCT %.1f%% (cur %.2f%%)", InpMaxDDValue, g_maxDD_CurrPct);
+   else                                  ddStr = StringFormat("USD $%.0f (cur $%.2f)",  InpMaxDDValue, g_maxDD_CurrAbs);
+   bool riskOn = (InpMaxLotPerOrder>0 || InpMaxDDMode!=GK_DD_OFF);
+   DashRow("Risk Limits",  StringFormat("MaxLot:%s  DD:%s", mlStr, ddStr), (riskOn?ok:warn));
 
    DashHeader("=== AVG TRAIL STATE ===");
    DashRow("BUY",  StringFormat("%s  SL:%s", AvgTrailStateStr(g_avgTrail_Active_Buy, g_avgTrail_ArmReady_Buy),
@@ -1873,7 +1928,7 @@ void DrawDashboard()
    DashRow("Restart Pending", StringFormat("BUY:%s  SELL:%s", rpB, rpS),
            (g_costHit_Pending_Buy||g_costHit_Pending_Sell)?warn:info);
 
-   DashHeader("=== HERO ORDER (v1.58) ===");
+   DashHeader("=== HERO ORDER (v1.59) ===");
    DashRow("Hero Cfg", StringFormat("%s  N=%d minAct=%d BE=%dpt  Mode=HANDOFF Lock=%s Alt=%s",
                           OnOff(InpHero_Enabled), InpHero_OrderCount,
                           InpHero_MinOrdersToActivate, InpHero_BE_OffsetPoints,
@@ -2123,7 +2178,7 @@ int OnInit()
       if(c=="GK_INIT_SELL") g_initPrice_Sell = pos.PriceOpen();
    }
 
-   Print("Golden Kuy3 v1.58 init  digits=",g_digits," pip=",g_pip," stopsLvl=",g_stopsLevel,
+   Print("Golden Kuy3 v1.59 init  digits=",g_digits," pip=",g_pip," stopsLvl=",g_stopsLevel,
          " | Hero=", InpHero_Enabled?"ON":"OFF", " HeroN=", InpHero_OrderCount,
          " minAct=", InpHero_MinOrdersToActivate, " BE=", InpHero_BE_OffsetPoints, "pt");
    return INIT_SUCCEEDED;
@@ -2133,7 +2188,7 @@ void OnDeinit(const int reason)
 {
    DelDash();
    DelLines();
-   Print("Golden Kuy3 v1.58 deinit reason=",reason);
+   Print("Golden Kuy3 v1.59 deinit reason=",reason);
 }
 
 void OnTick()
@@ -2150,6 +2205,7 @@ void OnTick()
    BuildHeroTicketCache();
    ManageHeroOppositeClose();
    ManagePerOrderTrailing();
+   ManageMaxDDClose();   // v1.59 — flatten on excessive floating loss
    ManageTakeProfit();
    ManageAverageTrailing();
    EnforceClearTPIfDisabled();
