@@ -3392,8 +3392,11 @@ void DrawDashboard(){
 
             // ---- [v2.8.3] Per-grid Loss/Hedge pair rows (Gold-Miner style) ----
             // Pair GL#N (main losing) with HD_GL#N (hedge winning) and show floating P/L.
-            int losSideRow = (winSide==0) ? 1 : 0; // losing side
-            int winSideRow = winSide;
+            // Determine losing side from main-only floating P/L (worse side = losing).
+            double plBuyMainRow  = GroupFloatingPL(g, 0, 0);
+            double plSellMainRow = GroupFloatingPL(g, 1, 0);
+            int losSideRow = (plBuyMainRow <= plSellMainRow) ? 0 : 1;
+            int winSideRow = (losSideRow==0) ? 1 : 0;
             int maxPair = MathMin(InpDashGridPairsMax, GridLoss_MaxTrades);
             int shownPairs = 0;
             for(int lvl=1; lvl<=maxPair; lvl++){
