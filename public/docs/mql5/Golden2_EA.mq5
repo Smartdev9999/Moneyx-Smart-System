@@ -3309,7 +3309,7 @@ int OnInit(){
 
    string entryModeLbl = (InpEntryMode == G2_ENTRY_PENDING) ? "PENDING" :
                          (InpEntryMode == G2_ENTRY_SMA)     ? "SMA"     : "INSTANT";
-   PrintFormat("Golden2 EA v2.7.9 initialized | Magic=%I64d | MaxGroups=%d | EntryMode=%s | InitMode=%d | GridLoss=%s | Squeeze=%s [BB:%s ADX:%s(>=%.1f) ATR:%s EMA:%s(P=%d)] | TripleGate=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | ProfitSideUnhedgedAdv=%s | ForceCloseOppUnhedged=%s(%ds) | Tester=%s Visual=%s Opt=%s DashInterval=%ds | TesterChartCleanup=%s SideTaggedComments=ON",
+   PrintFormat("Golden2 EA v2.8.0 initialized | Magic=%I64d | MaxGroups=%d | EntryMode=%s | InitMode=%d | GridLoss=%s | Squeeze=%s [BB:%s ADX:%s(>=%.1f) ATR:%s EMA:%s(P=%d)] | TripleGate=%s | MinGainUSD=%.1f | SeqQueue=%s | RecoveryAdvUnblock=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | ProfitSideUnhedgedAdv=%s | ForceCloseOppUnhedged=%s(%ds) | Tester=%s Visual=%s Opt=%s DashInterval=%ds | TesterChartCleanup=POST_HANDLES SideTaggedComments=ON",
                (long)InpMagic, InpMaxGroups, entryModeLbl, (int)InpInitSideMode,
                GridLoss_Enable?"ON":"OFF", InpSQ_Enable?"ON":"OFF",
                InpSQ_UseBBBreakout?"ON":"OFF", InpSQ_UseADX?"ON":"OFF", InpSQ_ADXThreshold,
