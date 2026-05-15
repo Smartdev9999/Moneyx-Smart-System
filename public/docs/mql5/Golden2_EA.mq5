@@ -3424,7 +3424,19 @@ void OnTick(){
          g_maxGridTrailArmed[g][0]=false; g_maxGridTrailArmed[g][1]=false;
          g_avgTPSynced[g][0]=0; g_avgTPSynced[g][1]=0;
          g_avgSLSynced[g][0]=0; g_avgSLSynced[g][1]=0;
+         // [v2.8.0] clear hedge-baseline + recovery flag when group becomes flat
+         g_groupHedgeBaselineSet[g] = false;
+         g_groupNetAtHedgeStart[g]  = 0.0;
+         g_groupInRecovery[g]       = false;
          continue;
+      }
+      // [v2.8.0] Stamp baseline net P/L the first tick a hedge is observed
+      // in this group. Used by TryMatchingCloseForGroup to enforce
+      // InpExit_MinGainUSD before allowing matching close.
+      if(!g_groupHedgeBaselineSet[g] && CountGroupPositions(g, -1, 1) > 0){
+         g_groupNetAtHedgeStart[g]  = GroupFloatingPL(g, -1, -1);
+         g_groupHedgeBaselineSet[g] = true;
+         if(InpVerboseLog) PrintFormat("Golden2 v2.8.0: G%d hedge baseline net P/L=%.2f stamped", g, g_groupNetAtHedgeStart[g]);
       }
       EnforceFrameMutualExclusion(g);
       TrackInitialCandle(g);
