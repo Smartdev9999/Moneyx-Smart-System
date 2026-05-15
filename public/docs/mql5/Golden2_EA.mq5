@@ -877,8 +877,8 @@ void PlaceInitialMarket(int g, bool placeBuy, bool placeSell){
    trade.SetExpertMagicNumber(InpMagic);
    trade.SetDeviationInPoints(InpSlippage);
 
-   string cBuy  = MakeComment(g, false, "IN");
-   string cSell = MakeComment(g, false, "IN");
+   string cBuy  = MakeComment(g, SIDE_BUY,  false, "IN");
+   string cSell = MakeComment(g, SIDE_SELL, false, "IN");
 
    bool anySent = false;
    if(placeBuy){
@@ -1057,8 +1057,8 @@ void PlaceInitialFrame(int g){
    trade.SetExpertMagicNumber(InpMagic);
    trade.SetDeviationInPoints(InpSlippage);
 
-   string cBuy  = MakeComment(g, false, "IN");
-   string cSell = MakeComment(g, false, "IN");
+   string cBuy  = MakeComment(g, SIDE_BUY,  false, "IN");
+   string cSell = MakeComment(g, SIDE_SELL, false, "IN");
 
    bool anySent = false;
    if(placeBuy){
@@ -1410,7 +1410,7 @@ void ManageInitialReArm(int g){
       double upPx = NormalizeDouble(ask + dist, g_digits);
       double tp   = (InpInitialTPPips>0)? NormalizeDouble(upPx + InpInitialTPPips*g_point, g_digits) : 0;
       double sl   = (InpInitialSLPips>0)? NormalizeDouble(upPx - InpInitialSLPips*g_point, g_digits) : 0;
-      string c    = MakeComment(g, false, "IN");
+      string c    = MakeComment(g, SIDE_BUY, false, "IN");
       if(trade.BuyStop(InpInitialLot, upPx, _Symbol, sl, tp, ORDER_TIME_GTC, 0, c)){
          if(InpVerboseLog) PrintFormat("Golden2 v2.6: Re-entry BuyStop G%d at %.5f (sellPos=%d)", g, upPx, sellPos);
       }
@@ -1420,7 +1420,7 @@ void ManageInitialReArm(int g){
       double dnPx = NormalizeDouble(bid - dist, g_digits);
       double tp   = (InpInitialTPPips>0)? NormalizeDouble(dnPx - InpInitialTPPips*g_point, g_digits) : 0;
       double sl   = (InpInitialSLPips>0)? NormalizeDouble(dnPx + InpInitialSLPips*g_point, g_digits) : 0;
-      string c    = MakeComment(g, false, "IN");
+      string c    = MakeComment(g, SIDE_SELL, false, "IN");
       if(trade.SellStop(InpInitialLot, dnPx, _Symbol, sl, tp, ORDER_TIME_GTC, 0, c)){
          if(InpVerboseLog) PrintFormat("Golden2 v2.6: Re-entry SellStop G%d at %.5f (buyPos=%d)", g, dnPx, buyPos);
       }
@@ -1681,7 +1681,7 @@ void TryPlaceGridLoss(int g){
 
       double lot = ResolveLot(gl+1, GridLoss_LotMode, GridLoss_CustomLots,
                               GridLoss_AddLotPerLevel, GridLoss_MultiplyFactor);
-      string c = MakeComment(g, false, StringFormat("GL#%d", gl+1));
+      string c = MakeComment(g, (ENUM_SIDE)sd, false, StringFormat("GL#%d", gl+1));
       bool ok = (sd==0) ? trade.Buy(lot, _Symbol, ask, 0, 0, c)
                         : trade.Sell(lot, _Symbol, bid, 0, 0, c);
       if(ok){
@@ -1731,7 +1731,7 @@ void TryPlaceGridProfit(int g){
 
       double lot = ResolveLot(gp+1, GridProfit_LotMode, GridProfit_CustomLots,
                               GridProfit_AddLotPerLevel, GridProfit_MultiplyFactor);
-      string c = MakeComment(g, false, StringFormat("GP#%d", gp+1));
+      string c = MakeComment(g, (ENUM_SIDE)sd, false, StringFormat("GP#%d", gp+1));
       bool ok = (sd==0) ? trade.Buy(lot, _Symbol, ask, 0, 0, c)
                         : trade.Sell(lot, _Symbol, bid, 0, 0, c);
       if(ok){
@@ -1905,7 +1905,7 @@ void MirrorLossSideToHedgePendings(int g, int lossSide){
 
    // 2) Add missing hedge pendings for each loss tag
    for(int k=0;k<ArraySize(lossTags);k++){
-      string newC = MakeComment(g, true, lossTags[k]);
+      string newC = MakeComment(g, (ENUM_SIDE)hedgeSide, true, lossTags[k]);
       if(HasPendingByComment(newC)) continue;
       double lot = lossLots[k];
       bool ok;
@@ -1921,7 +1921,7 @@ void PlaceHedgePendingSet_Legacy(int g, int lossSide){
    int hedgeSide = (lossSide==0)?1:0;
    double price = HedgePendingAnchorPrice(hedgeSide);
    double lotIN = InpInitialLot;
-   string c = MakeComment(g, true, "IN");
+   string c = MakeComment(g, (ENUM_SIDE)hedgeSide, true, "IN");
    bool ok;
    if(hedgeSide==1) ok = trade.SellStop(lotIN, price, _Symbol, 0, 0, ORDER_TIME_GTC, 0, c);
    else             ok = trade.BuyStop (lotIN, price, _Symbol, 0, 0, ORDER_TIME_GTC, 0, c);
@@ -1930,7 +1930,7 @@ void PlaceHedgePendingSet_Legacy(int g, int lossSide){
    int oppMaxLvl = HighestGridLevel(g, (ENUM_SIDE)lossSide, false, "GL");
    for(int lvl=1; lvl<=oppMaxLvl; lvl++){
       double lot = LotForLevel(lvl);
-      string cg = MakeComment(g, true, StringFormat("GL#%d", lvl));
+      string cg = MakeComment(g, (ENUM_SIDE)hedgeSide, true, StringFormat("GL#%d", lvl));
       bool ok2;
       double pStack = price + ((hedgeSide==1?-1:1) * lvl * 1 * g_point);
       pStack = NormalizeDouble(pStack, g_digits);
@@ -2504,7 +2504,7 @@ void PlaceContinuationGridIfNeeded(int g){
          int gl = HighestGridLevel(g, (ENUM_SIDE)sd, (hd==1), "GL");
          if(gl >= InpMaxGridLevels) continue;
          double lot = LotForLevel(gl+1);
-         string c = MakeComment(g, hd==1, StringFormat("GL#%d", gl+1));
+         string c = MakeComment(g, (ENUM_SIDE)sd, hd==1, StringFormat("GL#%d", gl+1));
          double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
          double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
          bool ok = (sd==0) ? trade.Buy(lot,_Symbol,ask,0,0,c) : trade.Sell(lot,_Symbol,bid,0,0,c);
