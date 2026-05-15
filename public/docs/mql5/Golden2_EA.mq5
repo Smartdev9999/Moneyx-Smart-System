@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|     Golden2 EA v2.8.0 — MinGain Hedge Exit + Tester Cleanup Fix     |
+//|     Golden2 EA v2.8.1 — Squeeze-Based Exit Gate + TesterHideInd      |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.80"
-#property description "Golden2 EA v2.8.0 — Hedge Exit Min Gain USD gate + Sequential Queue + Recovery-mode advance unblock (fix stuck-order deadlock) + Tester chart cleanup ordering fix (ATR/ADX subwindows now actually removed)"
+#property version   "2.81"
+#property description "Golden2 EA v2.8.1 — Hedge Exit gate now reuses Volatility Squeeze (largest TF) instead of duplicate Exit BB/Keltner inputs + per-group Expansion->Normal latch + Hedging dashboard shows Cy/Zone/Gain status (Gold-Miner-style) + TesterHideIndicators() called BEFORE indicator handles so ATR/ADX never attach to backtest chart"
 #property strict
 
 #include <Trade/Trade.mqh>
