@@ -3260,6 +3260,11 @@ int OnInit(){
       g_maxGridTrailArmed[i][0]=false; g_maxGridTrailArmed[i][1]=false;
       g_avgTPSynced[i][0]=0; g_avgTPSynced[i][1]=0;
       g_avgSLSynced[i][0]=0; g_avgSLSynced[i][1]=0;
+      // [v2.8.0]
+      g_groupNetAtHedgeStart[i]   = 0.0;
+      g_groupHedgeBaselineSet[i]  = false;
+      g_groupInRecovery[i]        = false;
+      g_groupHedgeFirstSeen[i]    = 0;
    }
 
    g_bbHandle  = iBands(_Symbol, InpExitTF, InpExitBBPeriod, 0, InpExitBBDev, PRICE_CLOSE);
