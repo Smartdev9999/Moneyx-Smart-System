@@ -2608,6 +2608,57 @@ void PlaceContinuationGridIfNeeded(int g){
    }
 }
 
+// [v2.8.3] Recovery Grid — placed once per match-close cycle on the residual
+// losing side. Uses a market order (we are already past hedge & breakout, so
+// there is no candle/squeeze guard reason to wait). Lot = StartLot or last
+// residual ticket lot, multiplied by Multiplier^level. Distance is informational
+// only (logged) — market entry is immediate; the order joins next match-close
+// cycle via ParseComment(gp==g).
+void PlaceRecoveryGridIfNeeded(int g, int losSide){
+   if(!InpRecovery_Enable) return;
+   if(g_groupRecoveryLevel[g] >= InpRecovery_MaxLevels){
+      if(InpVerboseLog) PrintFormat("Golden2 v2.8.3: G%d Recovery max levels (%d) reached — skip", g, InpRecovery_MaxLevels);
+      return;
+   }
+   // Find lot of largest residual ticket on losing side as fallback seed
+   double seedLot = 0.0;
+   int total = PositionsTotal();
+   for(int i=0;i<total;i++){
+      ulong tk = PositionGetTicket(i);
+      if(tk==0) continue;
+      if(!PositionSelectByTicket(tk)) continue;
+      if((long)PositionGetInteger(POSITION_MAGIC) != InpMagic) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      string c = PositionGetString(POSITION_COMMENT);
+      int gp; bool hd; string tag;
+      if(!ParseComment(c, gp, hd, tag)) continue;
+      if(gp != g) continue;
+      int sd = (PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY)?0:1;
+      if(sd != losSide) continue;
+      double lt = PositionGetDouble(POSITION_VOLUME);
+      if(lt > seedLot) seedLot = lt;
+   }
+   double base = (InpRecovery_StartLot > 0.0) ? InpRecovery_StartLot : seedLot;
+   if(base <= 0.0) base = InpInitialLot;
+   int level = g_groupRecoveryLevel[g] + 1;
+   double lot = NormalizeLot(base * MathPow(InpRecovery_Multiplier, (double)(level-1)));
+   int distPts = (InpRecovery_DistancePips > 0) ? InpRecovery_DistancePips : GridLoss_Points;
+
+   string c = MakeComment(g, (ENUM_SIDE)losSide, false, StringFormat("RC#%d", level));
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   bool ok = (losSide==0) ? trade.Buy(lot, _Symbol, ask, 0, 0, c)
+                          : trade.Sell(lot, _Symbol, bid, 0, 0, c);
+   if(ok){
+      g_groupRecoveryLevel[g] = level;
+      PrintFormat("Golden2 v2.8.3: G%d Recovery RC#%d %s lot=%.2f distHint=%dpt seed=%.2f base=%.2f mult=%.2f",
+                  g, level, losSide==0?"BUY":"SELL", lot, distPts, seedLot, base, InpRecovery_Multiplier);
+   } else {
+      PrintFormat("Golden2 v2.8.3: G%d Recovery RC#%d %s FAILED ret=%d err=%d",
+                  g, level, losSide==0?"BUY":"SELL", trade.ResultRetcode(), GetLastError());
+   }
+}
+
 //================ CYCLE / GROUP LIFECYCLE ================
 
 // [v2.0] Account-wide accumulate-close: sums realized (since last reset) +
