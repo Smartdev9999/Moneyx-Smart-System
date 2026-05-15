@@ -2515,12 +2515,16 @@ void TryMatchingCloseForGroup(int g){
    CloseAllGroupSide(g, winSide);
    double pool = winProfit;
    ShredCloseLosingSide(g, losSide, pool);
+   // [v2.8.4] Second pass: pool every remaining profitable order in the group
+   // (any side, main or hedge) and use it to close more losing tickets BEFORE
+   // we resort to placing a Recovery Grid order.
+   ShredAllNegativeFromAllProfit(g);
    int losAfter = CountGroupPositions(g, losSide, -1);
 
    g_lastHedgeCloseTime = TimeCurrent();
    ReleaseMutex(g);
 
-   PrintFormat("Golden2 v2.8.3: G%d MATCH-CLOSE win=%s pool=$%.2f lossBefore=%d lossAfter=%d",
+   PrintFormat("Golden2 v2.8.4: G%d MATCH-CLOSE win=%s pool=$%.2f lossBefore=%d lossAfter=%d",
                g, winSide==0?"BUY":"SELL", winProfit, losBefore, losAfter);
 
    // [v2.8.0+] If group still has residual positions after partial close,
@@ -2528,8 +2532,13 @@ void TryMatchingCloseForGroup(int g){
    // [v2.8.3] place a Recovery Grid order on the residual losing side.
    if(GroupHasAnyPositions(g)){
       g_groupInRecovery[g] = true;
-      if(InpVerboseLog) PrintFormat("Golden2 v2.8.3: G%d entered RECOVERY mode (post-match residual; advance unblocked)", g);
+      if(InpVerboseLog) PrintFormat("Golden2 v2.8.4: G%d entered RECOVERY mode (post-match residual; advance unblocked)", g);
       if(InpRecovery_Enable) PlaceRecoveryGridIfNeeded(g, losSide);
+      // [v2.8.4] Force-resync post-match avg-TP/SL immediately so RC#N + residual
+      // get broker TP/SL on this same tick instead of waiting for next OnTick.
+      g_postMatchTP[g][0]=0; g_postMatchTP[g][1]=0;
+      g_postMatchSL[g][0]=0; g_postMatchSL[g][1]=0;
+      SyncPostMatchAvgTPSL(g);
    }
 
    if(InpPostHedge_AllowContinuation) PlaceContinuationGridIfNeeded(g); // [v1.6] off by default = freeze
