@@ -2895,7 +2895,8 @@ void TryAdvanceToNextGroup(){
                         CountGroupPositions(cur,0,0), CountGroupPositions(cur,1,0),
                         CountGroupPositions(cur,0,1), CountGroupPositions(cur,1,1),
                         GroupFloatingPL(cur,0,0), GroupFloatingPL(cur,1,0),
-                        InpAdvance_AllowProfitSideUnhedged?"ON":"OFF");
+                        InpAdvance_AllowProfitSideUnhedged?"ON":"OFF",
+                        g_groupInRecovery[cur]?"ON":"OFF");
             lastHoldLog = TimeCurrent();
          }
          return;
