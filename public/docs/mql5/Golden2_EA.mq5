@@ -332,6 +332,15 @@ double g_maxDDPerSide[51][2];   // [group][side] track max floating loss USD see
 bool   g_blockNewOrders[51];    // per-group: pre-hedge block (DD% near arm threshold)
 bool   g_hedgeMasterCleared = false; // one-shot cleanup when master toggle is OFF
 datetime g_groupHedgeFirstSeen[51]; // [v2.7.8] timestamp when group first observed any hedge position (for force-close delay)
+// [v2.8.0] Per-group baseline net P/L captured the first tick a hedge appears
+// in the group. Used by TryMatchingCloseForGroup to enforce InpExit_MinGainUSD
+// (group must have GAINED at least N USD vs. hedge-open snapshot before close).
+double   g_groupNetAtHedgeStart[51];
+bool     g_groupHedgeBaselineSet[51];
+// [v2.8.0] After matching close, if group still holds losing residual positions
+// it is flagged "in recovery" so IsGroupSafeToAdvance unblocks G(N+1) and the
+// system stops deadlocking. Cleared automatically when group becomes flat.
+bool     g_groupInRecovery[51];
 
 // Snapshot of ATR (in points) at the moment last grid order was placed (per group, side, family 0=GL/1=GP)
 double   g_atrAtLastGridLoss[51][2];
