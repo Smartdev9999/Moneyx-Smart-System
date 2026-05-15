@@ -2663,7 +2663,129 @@ void PlaceRecoveryGridIfNeeded(int g, int losSide){
    }
 }
 
-//================ CYCLE / GROUP LIFECYCLE ================
+//================ [v2.8.4] CROSS-SIDE PROFIT-POOL SHRED ================
+// After CloseAllGroupSide(winSide) + ShredCloseLosingSide(losSide,pool), there
+// can still be profitable orders left (eg. hedge ticks of the losing side that
+// happen to be positive after a swing, or stragglers). This sweeps the whole
+// group: collects every position with profit+swap >= 0 as a budget pool, then
+// closes losing tickets cheapest-first while pool stays >= InpExitMinNetUSD.
+void ShredAllNegativeFromAllProfit(int g){
+   ulong  prTk[];   double prAmt[];   int nP=0;
+   ulong  loTk[];   double loAmt[];   int nL=0;
+   int total = PositionsTotal();
+   for(int i=0;i<total;i++){
+      ulong tk = PositionGetTicket(i);
+      if(tk==0) continue;
+      if(!PositionSelectByTicket(tk)) continue;
+      if((long)PositionGetInteger(POSITION_MAGIC) != InpMagic) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      string c = PositionGetString(POSITION_COMMENT);
+      int gp; bool hd; string tag;
+      if(!ParseComment(c, gp, hd, tag)) continue;
+      if(gp != g) continue;
+      double p = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+      if(p >= 0){
+         ArrayResize(prTk, nP+1); ArrayResize(prAmt, nP+1);
+         prTk[nP]=tk; prAmt[nP]=p; nP++;
+      } else {
+         ArrayResize(loTk, nL+1); ArrayResize(loAmt, nL+1);
+         loTk[nL]=tk; loAmt[nL]=p; nL++;
+      }
+   }
+   if(nP==0 || nL==0) return;
+   // sort losing cheapest (smallest |loss|) first  ->  loAmt ascending by abs == descending by value
+   for(int i=0;i<nL-1;i++) for(int j=i+1;j<nL;j++) if(loAmt[j] > loAmt[i]){
+      double t=loAmt[i]; loAmt[i]=loAmt[j]; loAmt[j]=t;
+      ulong tt=loTk[i]; loTk[i]=loTk[j]; loTk[j]=tt;
+   }
+   double pool = 0; for(int i=0;i<nP;i++) pool += prAmt[i];
+   int closedProfit=0, closedLoss=0;
+   // close all profitable first (lock budget into realized)
+   for(int i=0;i<nP;i++){
+      if(PositionSelectByTicket(prTk[i]) && trade.PositionClose(prTk[i])) closedProfit++;
+   }
+   // shred losses while pool can absorb them and keep net >= MinNetUSD
+   for(int i=0;i<nL;i++){
+      double p = loAmt[i]; // negative
+      if(pool + p >= InpExitMinNetUSD){
+         if(PositionSelectByTicket(loTk[i]) && trade.PositionClose(loTk[i])){
+            pool += p; closedLoss++;
+         }
+      } else break;
+   }
+   if(closedProfit>0 || closedLoss>0)
+      PrintFormat("Golden2 v2.8.4: G%d CROSS-SIDE SHRED profitClosed=%d lossClosed=%d residualPool=$%.2f",
+                  g, closedProfit, closedLoss, pool);
+}
+
+//================ [v2.8.4] POST-MATCH AVG BROKER TP/SL ================
+// Once a group has gone through Triple-Gate (g_stripped[g]==true), the v1.3
+// SyncSideTPSLToBroker manager bails. Residual main + hedge + RC#N orders are
+// then naked vs the broker. This pushes per-side avg-price TP/SL onto every
+// residual ticket (using ALL positions in the group on that side, both main
+// and hedge) so the broker closes them naturally when price reaches the
+// average + InpTP_PointsFromAvg offset. Recomputes whenever a new RC opens.
+void SyncPostMatchAvgTPSL(int g){
+   if(!InpPostMatch_AvgBrokerTP) return;
+   if(!g_stripped[g] && !IsGroupHedgeMatched(g)) return;
+   if(!GroupHasAnyPositions(g)){
+      g_postMatchTP[g][0]=0; g_postMatchTP[g][1]=0;
+      g_postMatchSL[g][0]=0; g_postMatchSL[g][1]=0;
+      return;
+   }
+   long stopsLvl = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   double minDist = stopsLvl * g_point;
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+
+   for(int side=0; side<2; side++){
+      int cnt = CountGroupPositions(g, side, -1); // include main + hedge on this side
+      if(cnt <= 0){ g_postMatchTP[g][side]=0; g_postMatchSL[g][side]=0; continue; }
+      double avg = GroupAveragePrice(g, side, -1);
+      if(avg <= 0) continue;
+      double offTP = InpTP_PointsFromAvg * g_point;
+      double tpPx  = NormalizeDouble((side==0) ? (avg + offTP) : (avg - offTP), g_digits);
+      double slPx  = 0.0;
+      if(InpSL_Enable && InpSL_UsePointsFromAvg){
+         double offSL = InpSL_PointsFromAvg * g_point;
+         slPx = NormalizeDouble((side==0) ? (avg - offSL) : (avg + offSL), g_digits);
+      }
+      // stops-level guard
+      if(side==0){
+         if(tpPx < bid + minDist) tpPx = NormalizeDouble(bid + minDist + g_point, g_digits);
+         if(slPx>0 && slPx > bid - minDist) slPx = NormalizeDouble(bid - minDist - g_point, g_digits);
+      } else {
+         if(tpPx > ask - minDist) tpPx = NormalizeDouble(ask - minDist - g_point, g_digits);
+         if(slPx>0 && slPx < ask + minDist) slPx = NormalizeDouble(ask + minDist + g_point, g_digits);
+      }
+      bool changed = (MathAbs(g_postMatchTP[g][side]-tpPx) > g_point) ||
+                     (MathAbs(g_postMatchSL[g][side]-slPx) > g_point);
+      // push to every ticket on this side (main + hedge)
+      int total = PositionsTotal();
+      int modified = 0;
+      for(int i=0;i<total;i++){
+         ulong tk = PositionGetTicket(i);
+         if(tk==0) continue;
+         if(!PositionSelectByTicket(tk)) continue;
+         if((long)PositionGetInteger(POSITION_MAGIC) != InpMagic) continue;
+         if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+         string c = PositionGetString(POSITION_COMMENT);
+         int gp; bool hd; string tag;
+         if(!ParseComment(c, gp, hd, tag)) continue;
+         if(gp != g) continue;
+         int sd = (PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY)?0:1;
+         if(sd != side) continue;
+         if(ModifyIfDifferent(tk, slPx, tpPx)) modified++;
+      }
+      g_postMatchTP[g][side] = tpPx;
+      g_postMatchSL[g][side] = slPx;
+      if(changed && modified>0)
+         PrintFormat("Golden2 v2.8.4: G%d POST-MATCH AVG-TP synced side=%s avg=%.5f tp=%.5f sl=%.5f tickets=%d",
+                     g, side==0?"BUY":"SELL", avg, tpPx, slPx, modified);
+   }
+}
+
+
 
 // [v2.0] Account-wide accumulate-close: sums realized (since last reset) +
 // floating across ALL groups + sides. Resets to 0 each time the account
