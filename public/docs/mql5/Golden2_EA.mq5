@@ -3315,6 +3315,9 @@ int OnInit(){
                InpSQ_UseBBBreakout?"ON":"OFF", InpSQ_UseADX?"ON":"OFF", InpSQ_ADXThreshold,
                InpSQ_UseATRConfirm?"ON":"OFF", InpSQ_UseEMA?"ON":"OFF", InpSQ_EMAPeriod,
                InpExitTripleGate_Enable?"ON":"OFF",
+               InpExit_MinGainUSD,
+               InpExit_SequentialQueue?"ON":"OFF",
+               InpExit_RecoveryAdvanceUnblock?"ON":"OFF",
                InpInitTrailOnBarClose?"ON":"OFF",
                InpFrameRecenterMinPips,
                InpInitReEntryOnClose?"ON":"OFF",
@@ -3325,8 +3328,7 @@ int OnInit(){
                InpAdvance_AllowProfitSideUnhedged?"ON":"OFF",
                InpHedge_ForceCloseOppUnhedged?"ON":"OFF", InpHedge_ForceCloseDelaySec,
                g_isTesterMode?"YES":"NO", g_isVisualMode?"YES":"NO", g_isOptimization?"YES":"NO",
-                InpDashRenderIntervalSec,
-                g_isTesterMode?"ON":"OFF");
+                InpDashRenderIntervalSec);
    return INIT_SUCCEEDED;
 }
 
