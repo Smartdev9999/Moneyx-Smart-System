@@ -3917,6 +3917,10 @@ void OnTick(){
       // Triple-Gate Matching Close (only acts when matched)
       TryMatchingCloseForGroup(g);
 
+      // [v2.8.4] Push per-side avg-TP/SL onto every residual + RC ticket
+      // (no-op while pre-hedge; v1.3 SyncSideTPSLToBroker handles that phase).
+      SyncPostMatchAvgTPSL(g);
+
       // Chart visualization (internally skipped in tester non-visual)
       DrawAverageAndTPLinesForGroup(g);
    }
