@@ -3739,6 +3739,9 @@ void OnTick(){
          g_groupExpToNormal[g]      = false;
          // [v2.8.3] reset Recovery Grid level counter
          g_groupRecoveryLevel[g]    = 0;
+         // [v2.8.4] reset post-match avg-TP cache
+         g_postMatchTP[g][0]=0; g_postMatchTP[g][1]=0;
+         g_postMatchSL[g][0]=0; g_postMatchSL[g][1]=0;
          continue;
       }
       // [v2.8.0] Stamp baseline net P/L the first tick a hedge is observed
