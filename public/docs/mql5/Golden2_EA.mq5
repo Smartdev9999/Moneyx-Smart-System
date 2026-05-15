@@ -346,6 +346,12 @@ bool     g_groupHedgeBaselineSet[51];
 // it is flagged "in recovery" so IsGroupSafeToAdvance unblocks G(N+1) and the
 // system stops deadlocking. Cleared automatically when group becomes flat.
 bool     g_groupInRecovery[51];
+// [v2.8.1] Per-group Expansion->Normal latch (largest Squeeze TF, index 2).
+// Tracks whether the group has, since its hedge appeared, observed at least
+// one Expansion bar on TF3 and then returned to Normal. Triple-Gate matching
+// close requires this latch to be ARMED.
+bool     g_groupSeenExp[51];        // saw g_sqExpansion[2]==true while hedge active
+bool     g_groupExpToNormal[51];    // saw Expansion AND now back to Normal -> gate ready
 
 // Snapshot of ATR (in points) at the moment last grid order was placed (per group, side, family 0=GL/1=GP)
 double   g_atrAtLastGridLoss[51][2];
