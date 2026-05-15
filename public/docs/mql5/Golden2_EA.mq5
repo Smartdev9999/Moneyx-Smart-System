@@ -3301,6 +3301,12 @@ int OnInit(){
          PrintFormat("Golden2 v2.73: SMA handle init FAILED (period=%d tf=%d)", InpSMA_Period, (int)InpSMA_TF);
    }
 
+   // [v2.8.0] Re-run tester chart cleanup AFTER all indicator handles are
+   // created — the v2.7.9 OnInit-only call ran BEFORE iATR/iADX/iBands/iMA
+   // existed, so MT5 Tester re-attached subwindows post-init. Now wipe again.
+   CleanupChartIndicatorsInTester();
+   HideAuxiliaryTesterCharts();
+
    string entryModeLbl = (InpEntryMode == G2_ENTRY_PENDING) ? "PENDING" :
                          (InpEntryMode == G2_ENTRY_SMA)     ? "SMA"     : "INSTANT";
    PrintFormat("Golden2 EA v2.7.9 initialized | Magic=%I64d | MaxGroups=%d | EntryMode=%s | InitMode=%d | GridLoss=%s | Squeeze=%s [BB:%s ADX:%s(>=%.1f) ATR:%s EMA:%s(P=%d)] | TripleGate=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | ProfitSideUnhedgedAdv=%s | ForceCloseOppUnhedged=%s(%ds) | Tester=%s Visual=%s Opt=%s DashInterval=%ds | TesterChartCleanup=%s SideTaggedComments=ON",
