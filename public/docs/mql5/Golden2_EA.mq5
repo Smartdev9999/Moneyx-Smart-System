@@ -5,8 +5,8 @@
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.83"
-#property description "Golden2 EA v2.8.3 — Fixes Triple-Gate matching close that never fired when group net was deeply negative: gate now uses winning-side pool (winProfit) instead of full netCheck, so winning side is closed and its profit shreds losing side. Adds Recovery Grid (RC#N) auto-placed on remaining losing side after partial match-close, plus per-grid pair + Recovery rows on Hedging dashboard."
+#property version   "2.84"
+#property description "Golden2 EA v2.8.4 — After Triple-Gate partial close + Recovery placement, residual main+hedge+RC#N orders had no broker TP/SL (g_stripped early-returns SyncSideTPSLToBroker) so broker never closed them. v2.8.4 adds SyncPostMatchAvgTPSL: per-side avg-price TP/SL pushed to broker on every residual ticket (rebinds when new RC orders open). Adds ShredAllNegativeFromAllProfit cross-side pool that uses ALL profitable orders in the group (main+hedge+loss-bound) to close losing orders before placing Recovery. Hedging dashboard simplified — removes per-grid Grid#N rows + verbose Recovery row, adds compact AvgTP B/S row."
 #property strict
 
 #include <Trade/Trade.mqh>
