@@ -2482,18 +2482,22 @@ void TryMatchingCloseForGroup(int g){
 
    double winProfit = (winSide==0) ? (plBuyMain + plBuyHedge) : (plSellMain + plSellHedge);
    double netCheck = plBuyMain+plSellMain+plBuyHedge+plSellHedge;
-   if(netCheck < InpExitMinNetUSD) return;
+   // [v2.8.3] FIX: Old code used `netCheck < InpExitMinNetUSD` which never
+   // fires when group net is deeply negative (the whole point of matching
+   // close is to USE winning-side profit to shred losing side). Now we gate
+   // on the WINNING-SIDE pool: if winProfit covers MinNetUSD we can start
+   // closing the winning side and using its profit to shred losers.
+   if(winProfit < InpExitMinNetUSD) return;
 
    // [v2.8.0] Min Gain gate — group net P/L must have IMPROVED by at least
    // InpExit_MinGainUSD vs. the snapshot taken when hedge first appeared.
-   // Without this gate, matching close fires the moment netCheck > MinNetUSD,
-   // even if the group is still deeply underwater overall.
+   // Keeps the choppy-market guard intact (uses netCheck delta, not abs net).
    if(g_groupHedgeBaselineSet[g] && InpExit_MinGainUSD > 0.0){
       double gainNow = netCheck - g_groupNetAtHedgeStart[g];
       if(gainNow < InpExit_MinGainUSD){
          static datetime lastMinGainLog = 0;
          if(InpVerboseLog && TimeCurrent() - lastMinGainLog >= 60){
-            PrintFormat("Golden2 v2.8.0: G%d MinGain hold gain=%.2f need=%.2f baseline=%.2f net=%.2f",
+            PrintFormat("Golden2 v2.8.3: G%d MinGain hold gain=%.2f need=%.2f baseline=%.2f net=%.2f",
                         g, gainNow, InpExit_MinGainUSD, g_groupNetAtHedgeStart[g], netCheck);
             lastMinGainLog = TimeCurrent();
          }
@@ -2503,19 +2507,25 @@ void TryMatchingCloseForGroup(int g){
 
    if(!ClaimMutex(g)) return;
 
+   int losBefore = CountGroupPositions(g, losSide, -1);
    CloseAllGroupSide(g, winSide);
    double pool = winProfit;
    ShredCloseLosingSide(g, losSide, pool);
+   int losAfter = CountGroupPositions(g, losSide, -1);
 
    g_lastHedgeCloseTime = TimeCurrent();
    ReleaseMutex(g);
 
-   // [v2.8.0] If group still has residual positions after partial close,
-   // flag it as "in recovery" so IsGroupSafeToAdvance unblocks G(N+1).
-   // Recovery flag auto-clears in OnTick group-empty branch.
+   PrintFormat("Golden2 v2.8.3: G%d MATCH-CLOSE win=%s pool=$%.2f lossBefore=%d lossAfter=%d",
+               g, winSide==0?"BUY":"SELL", winProfit, losBefore, losAfter);
+
+   // [v2.8.0+] If group still has residual positions after partial close,
+   // flag it as "in recovery" so IsGroupSafeToAdvance unblocks G(N+1) and
+   // [v2.8.3] place a Recovery Grid order on the residual losing side.
    if(GroupHasAnyPositions(g)){
       g_groupInRecovery[g] = true;
-      if(InpVerboseLog) PrintFormat("Golden2 v2.8.0: G%d entered RECOVERY mode (post-match residual; advance unblocked)", g);
+      if(InpVerboseLog) PrintFormat("Golden2 v2.8.3: G%d entered RECOVERY mode (post-match residual; advance unblocked)", g);
+      if(InpRecovery_Enable) PlaceRecoveryGridIfNeeded(g, losSide);
    }
 
    if(InpPostHedge_AllowContinuation) PlaceContinuationGridIfNeeded(g); // [v1.6] off by default = freeze
