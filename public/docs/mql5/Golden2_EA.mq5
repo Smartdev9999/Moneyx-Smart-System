@@ -3371,6 +3371,13 @@ void OnTick(){
    if(!InpAllowTrade){ RenderDashboardThrottled(); return; }
    RefreshSqueezeStateThrottled(); // [v2.72] one refresh per new M1 bar
 
+   // [v2.7.9] Re-sweep auxiliary tester charts every 60s — Tester may spawn
+   // hidden per-TF charts whenever a new indicator handle is touched.
+   if(g_isTesterMode && (TimeCurrent() - g_lastAuxChartSweep) >= 60){
+      HideAuxiliaryTesterCharts();
+      g_lastAuxChartSweep = TimeCurrent();
+   }
+
    // [v1.6] Optional close-on-expansion (default off)
    if(InpSQ_Enable && InpSQ_CloseOnExpansion && g_sqExpCount >= InpSQ_MinExpansionTFs){
       // safety: do not auto-close matched groups (Triple-Gate handles them)
