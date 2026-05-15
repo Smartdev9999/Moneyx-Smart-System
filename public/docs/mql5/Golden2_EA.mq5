@@ -2414,6 +2414,16 @@ void TryMatchingCloseForGroup(int g){
    if(!InpExitTripleGate_Enable) return; // [v1.6] master toggle for Triple-Gate
    if(!IsExpansionToNormal()) return;
 
+   // [v2.8.0] Sequential queue gate — older active hedge group must be flat first
+   if(InpExit_SequentialQueue){
+      for(int og = 1; og < g; og++){
+         if(GroupHasAnyPositions(og)){
+            // older group still has positions → block this group's close
+            return;
+         }
+      }
+   }
+
    double avgMain  = GroupAveragePrice(g, -1, 0);
    double avgHedge = GroupAveragePrice(g, -1, 1);
    if(avgMain<=0 || avgHedge<=0) return;
@@ -2438,6 +2448,23 @@ void TryMatchingCloseForGroup(int g){
    double netCheck = plBuyMain+plSellMain+plBuyHedge+plSellHedge;
    if(netCheck < InpExitMinNetUSD) return;
 
+   // [v2.8.0] Min Gain gate — group net P/L must have IMPROVED by at least
+   // InpExit_MinGainUSD vs. the snapshot taken when hedge first appeared.
+   // Without this gate, matching close fires the moment netCheck > MinNetUSD,
+   // even if the group is still deeply underwater overall.
+   if(g_groupHedgeBaselineSet[g] && InpExit_MinGainUSD > 0.0){
+      double gainNow = netCheck - g_groupNetAtHedgeStart[g];
+      if(gainNow < InpExit_MinGainUSD){
+         static datetime lastMinGainLog = 0;
+         if(InpVerboseLog && TimeCurrent() - lastMinGainLog >= 60){
+            PrintFormat("Golden2 v2.8.0: G%d MinGain hold gain=%.2f need=%.2f baseline=%.2f net=%.2f",
+                        g, gainNow, InpExit_MinGainUSD, g_groupNetAtHedgeStart[g], netCheck);
+            lastMinGainLog = TimeCurrent();
+         }
+         return;
+      }
+   }
+
    if(!ClaimMutex(g)) return;
 
    CloseAllGroupSide(g, winSide);
@@ -2446,6 +2473,14 @@ void TryMatchingCloseForGroup(int g){
 
    g_lastHedgeCloseTime = TimeCurrent();
    ReleaseMutex(g);
+
+   // [v2.8.0] If group still has residual positions after partial close,
+   // flag it as "in recovery" so IsGroupSafeToAdvance unblocks G(N+1).
+   // Recovery flag auto-clears in OnTick group-empty branch.
+   if(GroupHasAnyPositions(g)){
+      g_groupInRecovery[g] = true;
+      if(InpVerboseLog) PrintFormat("Golden2 v2.8.0: G%d entered RECOVERY mode (post-match residual; advance unblocked)", g);
+   }
 
    if(InpPostHedge_AllowContinuation) PlaceContinuationGridIfNeeded(g); // [v1.6] off by default = freeze
 }
