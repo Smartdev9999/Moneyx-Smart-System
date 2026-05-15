@@ -236,7 +236,8 @@ input double  InpRecovery_StartLot      = 0.0;                       // [v2.8.3]
 input double  InpRecovery_Multiplier    = 1.5;                       // [v2.8.3] Recovery lot multiplier per RC level
 input int     InpRecovery_DistancePips  = 0;                         // [v2.8.3] Recovery distance points (0 = reuse GridLoss_Points)
 input int     InpRecovery_MaxLevels     = 5;                         // [v2.8.3] Max RC levels per group
-input int     InpDashGridPairsMax       = 5;                         // [v2.8.3] Max Grid#N pair rows shown on Hedging dashboard
+input bool    InpPostMatch_AvgBrokerTP  = true;                      // [v2.8.4] After hedge match: push per-side Avg TP/SL onto every residual+RC ticket (broker-side close)
+const int     InpDashGridPairsMax       = 0;                         // [v2.8.4] DEPRECATED — per-grid Grid#N rows removed; kept as const for .set backward-compat
 
 //--- === Volatility Squeeze Filter === [v1.6 ported from Gold Miner]
 input string  __sec_sq__              = "=== Volatility Squeeze Filter ==="; // ---
