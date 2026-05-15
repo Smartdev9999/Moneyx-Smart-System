@@ -215,11 +215,16 @@ input int     InpHedge_ForceCloseDelaySec    = 3;                    // [v2.7.8]
 input string  __sec_exit__            = "=== Exit Triple Gate ==="; // ---
 input bool    InpExitTripleGate_Enable= true;                        // [v1.6] Enable Triple-Gate matching close
 input bool    InpPostHedge_AllowContinuation = false;                // [v1.6] Allow continuation grid AFTER hedge activates (default OFF = freeze group)
-input ENUM_TIMEFRAMES InpExitTF       = PERIOD_H4;                   // Higher TF for Expansion->Normal gate
-input int     InpExitBBPeriod         = 20;                          // BB period
-input double  InpExitBBDev            = 2.0;                         // BB deviation
-input int     InpExitKeltnerATR       = 20;                          // Keltner ATR period
-input double  InpExitKeltnerMult      = 1.5;                         // Keltner multiplier
+// [v2.8.1] Exit BB/Keltner indicator settings REMOVED from input panel.
+// The hedge-exit Expansion->Normal gate now reuses the Volatility Squeeze
+// Filter state on the LARGEST Squeeze TF (InpSQ_TF3) — see IsExpansionToNormalForGroup().
+// These constants are kept ONLY so legacy .set files / log strings still compile;
+// they are not read by the new gate.
+const ENUM_TIMEFRAMES InpExitTF       = PERIOD_H4;
+const int             InpExitBBPeriod = 20;
+const double          InpExitBBDev    = 2.0;
+const int             InpExitKeltnerATR  = 20;
+const double          InpExitKeltnerMult = 1.5;
 input int     InpExitBreakoutPips     = 300;                         // Breakout distance from average (points)
 input double  InpExitMinNetUSD        = 1.0;                         // Min net USD profit to allow exit
 input double  InpExit_MinGainUSD      = 100.0;                       // [v2.8.0] Min hedge-group GAIN (USD) since hedge opened, before matching close
