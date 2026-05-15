@@ -3338,16 +3338,19 @@ int OnInit(){
       g_groupHedgeBaselineSet[i]  = false;
       g_groupInRecovery[i]        = false;
       g_groupHedgeFirstSeen[i]    = 0;
+      // [v2.8.1]
+      g_groupSeenExp[i]           = false;
+      g_groupExpToNormal[i]       = false;
    }
 
-   g_bbHandle  = iBands(_Symbol, InpExitTF, InpExitBBPeriod, 0, InpExitBBDev, PRICE_CLOSE);
-   g_atrHandle = iATR(_Symbol, InpExitTF, InpExitKeltnerATR);
+   // [v2.8.1] g_bbHandle / g_atrHandle (the old Exit BB/Keltner) are NOT
+   // created anymore — IsExpansionToNormalForGroup() reuses Squeeze TF3 state.
+   // Removing the iBands/iATR(InpExitTF) calls also stops MT5 Tester from
+   // spawning that extra ATR subwindow on the chart.
+   g_bbHandle  = INVALID_HANDLE;
+   g_atrHandle = INVALID_HANDLE;
    g_atrLossHandle   = iATR(_Symbol, GridLoss_ATR_TF,   GridLoss_ATR_Period);
    g_atrProfitHandle = iATR(_Symbol, GridProfit_ATR_TF, GridProfit_ATR_Period);
-   if(g_bbHandle == INVALID_HANDLE || g_atrHandle == INVALID_HANDLE){
-      Print("Golden2 v1.7: indicator init failed");
-      return INIT_FAILED;
-   }
 
    // [v1.6] Squeeze Filter handles
    g_sqTF[0] = InpSQ_TF1; g_sqTF[1] = InpSQ_TF2; g_sqTF[2] = InpSQ_TF3;
