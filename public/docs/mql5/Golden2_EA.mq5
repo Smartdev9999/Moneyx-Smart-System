@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|     Golden2 EA v2.7.9 — Tester Chart Cleanup + Side-Tagged Comments |
+//|     Golden2 EA v2.8.0 — MinGain Hedge Exit + Tester Cleanup Fix     |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.79"
-#property description "Golden2 EA v2.7.9 — Tester chart cleanup (hide ATR/ADX/aux subwindow indicators in Strategy Tester) + side-tagged order comments (G2_B_IN, G2_S_GL#1, G3_B_HD_IN, ...)"
+#property version   "2.80"
+#property description "Golden2 EA v2.8.0 — Hedge Exit Min Gain USD gate + Sequential Queue + Recovery-mode advance unblock (fix stuck-order deadlock) + Tester chart cleanup ordering fix (ATR/ADX subwindows now actually removed)"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -222,6 +222,9 @@ input int     InpExitKeltnerATR       = 20;                          // Keltner 
 input double  InpExitKeltnerMult      = 1.5;                         // Keltner multiplier
 input int     InpExitBreakoutPips     = 300;                         // Breakout distance from average (points)
 input double  InpExitMinNetUSD        = 1.0;                         // Min net USD profit to allow exit
+input double  InpExit_MinGainUSD      = 100.0;                       // [v2.8.0] Min hedge-group GAIN (USD) since hedge opened, before matching close
+input bool    InpExit_SequentialQueue = true;                        // [v2.8.0] Close hedge groups sequentially: G1 must be flat before G2 can match-close
+input bool    InpExit_RecoveryAdvanceUnblock = true;                 // [v2.8.0] Treat groups still in matching-close recovery as 'safe' so G(N+1) can open
 
 //--- === Volatility Squeeze Filter === [v1.6 ported from Gold Miner]
 input string  __sec_sq__              = "=== Volatility Squeeze Filter ==="; // ---
@@ -329,6 +332,15 @@ double g_maxDDPerSide[51][2];   // [group][side] track max floating loss USD see
 bool   g_blockNewOrders[51];    // per-group: pre-hedge block (DD% near arm threshold)
 bool   g_hedgeMasterCleared = false; // one-shot cleanup when master toggle is OFF
 datetime g_groupHedgeFirstSeen[51]; // [v2.7.8] timestamp when group first observed any hedge position (for force-close delay)
+// [v2.8.0] Per-group baseline net P/L captured the first tick a hedge appears
+// in the group. Used by TryMatchingCloseForGroup to enforce InpExit_MinGainUSD
+// (group must have GAINED at least N USD vs. hedge-open snapshot before close).
+double   g_groupNetAtHedgeStart[51];
+bool     g_groupHedgeBaselineSet[51];
+// [v2.8.0] After matching close, if group still holds losing residual positions
+// it is flagged "in recovery" so IsGroupSafeToAdvance unblocks G(N+1) and the
+// system stops deadlocking. Cleared automatically when group becomes flat.
+bool     g_groupInRecovery[51];
 
 // Snapshot of ATR (in points) at the moment last grid order was placed (per group, side, family 0=GL/1=GP)
 double   g_atrAtLastGridLoss[51][2];
@@ -2402,6 +2414,16 @@ void TryMatchingCloseForGroup(int g){
    if(!InpExitTripleGate_Enable) return; // [v1.6] master toggle for Triple-Gate
    if(!IsExpansionToNormal()) return;
 
+   // [v2.8.0] Sequential queue gate — older active hedge group must be flat first
+   if(InpExit_SequentialQueue){
+      for(int og = 1; og < g; og++){
+         if(GroupHasAnyPositions(og)){
+            // older group still has positions → block this group's close
+            return;
+         }
+      }
+   }
+
    double avgMain  = GroupAveragePrice(g, -1, 0);
    double avgHedge = GroupAveragePrice(g, -1, 1);
    if(avgMain<=0 || avgHedge<=0) return;
@@ -2426,6 +2448,23 @@ void TryMatchingCloseForGroup(int g){
    double netCheck = plBuyMain+plSellMain+plBuyHedge+plSellHedge;
    if(netCheck < InpExitMinNetUSD) return;
 
+   // [v2.8.0] Min Gain gate — group net P/L must have IMPROVED by at least
+   // InpExit_MinGainUSD vs. the snapshot taken when hedge first appeared.
+   // Without this gate, matching close fires the moment netCheck > MinNetUSD,
+   // even if the group is still deeply underwater overall.
+   if(g_groupHedgeBaselineSet[g] && InpExit_MinGainUSD > 0.0){
+      double gainNow = netCheck - g_groupNetAtHedgeStart[g];
+      if(gainNow < InpExit_MinGainUSD){
+         static datetime lastMinGainLog = 0;
+         if(InpVerboseLog && TimeCurrent() - lastMinGainLog >= 60){
+            PrintFormat("Golden2 v2.8.0: G%d MinGain hold gain=%.2f need=%.2f baseline=%.2f net=%.2f",
+                        g, gainNow, InpExit_MinGainUSD, g_groupNetAtHedgeStart[g], netCheck);
+            lastMinGainLog = TimeCurrent();
+         }
+         return;
+      }
+   }
+
    if(!ClaimMutex(g)) return;
 
    CloseAllGroupSide(g, winSide);
@@ -2434,6 +2473,14 @@ void TryMatchingCloseForGroup(int g){
 
    g_lastHedgeCloseTime = TimeCurrent();
    ReleaseMutex(g);
+
+   // [v2.8.0] If group still has residual positions after partial close,
+   // flag it as "in recovery" so IsGroupSafeToAdvance unblocks G(N+1).
+   // Recovery flag auto-clears in OnTick group-empty branch.
+   if(GroupHasAnyPositions(g)){
+      g_groupInRecovery[g] = true;
+      if(InpVerboseLog) PrintFormat("Golden2 v2.8.0: G%d entered RECOVERY mode (post-match residual; advance unblocked)", g);
+   }
 
    if(InpPostHedge_AllowContinuation) PlaceContinuationGridIfNeeded(g); // [v1.6] off by default = freeze
 }
@@ -2731,6 +2778,10 @@ bool IsSideEffectivelySafeForAdvance(int g, int side){
 // [v2.7.4] Now delegates per-side decision to IsSideEffectivelySafeForAdvance
 // so a profitable unhedged side does not block advance (INSTANT/SMA fix).
 bool IsGroupSafeToAdvance(int g){
+   // [v2.8.0] Group is in recovery (post-matching-close residual) — unblock
+   // advance so the system doesn't deadlock waiting for losing residual to
+   // resolve. Recovery group manages its own exit independently.
+   if(InpExit_RecoveryAdvanceUnblock && g_groupInRecovery[g]) return true;
    int buyMain  = CountBlockingMainPositionsForAdvance(g, 0);
    int sellMain = CountBlockingMainPositionsForAdvance(g, 1);
    if(buyMain == 0 && sellMain == 0) return true;
@@ -2837,14 +2888,15 @@ void TryAdvanceToNextGroup(){
       if(!IsGroupSafeToAdvance(cur) || !AreAllPriorGroupsSafe(cur)){
          static datetime lastHoldLog = 0;
          if(InpVerboseLog && TimeCurrent() - lastHoldLog >= 60){
-            PrintFormat("Golden2 v2.7.4: hold G%d->G%d (cur safe=%d priors safe=%d blkBUY=%d blkSELL=%d rawBUY=%d rawSELL=%d hedgeBuy=%d hedgeSell=%d plBUY=%.2f plSELL=%.2f profitBypass=%s)",
+            PrintFormat("Golden2 v2.8.0: hold G%d->G%d (cur safe=%d priors safe=%d blkBUY=%d blkSELL=%d rawBUY=%d rawSELL=%d hedgeBuy=%d hedgeSell=%d plBUY=%.2f plSELL=%.2f profitBypass=%s recovery=%s)",
                         cur, cur+1,
                         IsGroupSafeToAdvance(cur), AreAllPriorGroupsSafe(cur),
                         CountBlockingMainPositionsForAdvance(cur,0), CountBlockingMainPositionsForAdvance(cur,1),
                         CountGroupPositions(cur,0,0), CountGroupPositions(cur,1,0),
                         CountGroupPositions(cur,0,1), CountGroupPositions(cur,1,1),
                         GroupFloatingPL(cur,0,0), GroupFloatingPL(cur,1,0),
-                        InpAdvance_AllowProfitSideUnhedged?"ON":"OFF");
+                        InpAdvance_AllowProfitSideUnhedged?"ON":"OFF",
+                        g_groupInRecovery[cur]?"ON":"OFF");
             lastHoldLog = TimeCurrent();
          }
          return;
@@ -3248,6 +3300,11 @@ int OnInit(){
       g_maxGridTrailArmed[i][0]=false; g_maxGridTrailArmed[i][1]=false;
       g_avgTPSynced[i][0]=0; g_avgTPSynced[i][1]=0;
       g_avgSLSynced[i][0]=0; g_avgSLSynced[i][1]=0;
+      // [v2.8.0]
+      g_groupNetAtHedgeStart[i]   = 0.0;
+      g_groupHedgeBaselineSet[i]  = false;
+      g_groupInRecovery[i]        = false;
+      g_groupHedgeFirstSeen[i]    = 0;
    }
 
    g_bbHandle  = iBands(_Symbol, InpExitTF, InpExitBBPeriod, 0, InpExitBBDev, PRICE_CLOSE);
@@ -3284,14 +3341,23 @@ int OnInit(){
          PrintFormat("Golden2 v2.73: SMA handle init FAILED (period=%d tf=%d)", InpSMA_Period, (int)InpSMA_TF);
    }
 
+   // [v2.8.0] Re-run tester chart cleanup AFTER all indicator handles are
+   // created — the v2.7.9 OnInit-only call ran BEFORE iATR/iADX/iBands/iMA
+   // existed, so MT5 Tester re-attached subwindows post-init. Now wipe again.
+   CleanupChartIndicatorsInTester();
+   HideAuxiliaryTesterCharts();
+
    string entryModeLbl = (InpEntryMode == G2_ENTRY_PENDING) ? "PENDING" :
                          (InpEntryMode == G2_ENTRY_SMA)     ? "SMA"     : "INSTANT";
-   PrintFormat("Golden2 EA v2.7.9 initialized | Magic=%I64d | MaxGroups=%d | EntryMode=%s | InitMode=%d | GridLoss=%s | Squeeze=%s [BB:%s ADX:%s(>=%.1f) ATR:%s EMA:%s(P=%d)] | TripleGate=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | ProfitSideUnhedgedAdv=%s | ForceCloseOppUnhedged=%s(%ds) | Tester=%s Visual=%s Opt=%s DashInterval=%ds | TesterChartCleanup=%s SideTaggedComments=ON",
+   PrintFormat("Golden2 EA v2.8.0 initialized | Magic=%I64d | MaxGroups=%d | EntryMode=%s | InitMode=%d | GridLoss=%s | Squeeze=%s [BB:%s ADX:%s(>=%.1f) ATR:%s EMA:%s(P=%d)] | TripleGate=%s | MinGainUSD=%.1f | SeqQueue=%s | RecoveryAdvUnblock=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | ProfitSideUnhedgedAdv=%s | ForceCloseOppUnhedged=%s(%ds) | Tester=%s Visual=%s Opt=%s DashInterval=%ds | TesterChartCleanup=POST_HANDLES SideTaggedComments=ON",
                (long)InpMagic, InpMaxGroups, entryModeLbl, (int)InpInitSideMode,
                GridLoss_Enable?"ON":"OFF", InpSQ_Enable?"ON":"OFF",
                InpSQ_UseBBBreakout?"ON":"OFF", InpSQ_UseADX?"ON":"OFF", InpSQ_ADXThreshold,
                InpSQ_UseATRConfirm?"ON":"OFF", InpSQ_UseEMA?"ON":"OFF", InpSQ_EMAPeriod,
                InpExitTripleGate_Enable?"ON":"OFF",
+               InpExit_MinGainUSD,
+               InpExit_SequentialQueue?"ON":"OFF",
+               InpExit_RecoveryAdvanceUnblock?"ON":"OFF",
                InpInitTrailOnBarClose?"ON":"OFF",
                InpFrameRecenterMinPips,
                InpInitReEntryOnClose?"ON":"OFF",
@@ -3302,8 +3368,7 @@ int OnInit(){
                InpAdvance_AllowProfitSideUnhedged?"ON":"OFF",
                InpHedge_ForceCloseOppUnhedged?"ON":"OFF", InpHedge_ForceCloseDelaySec,
                g_isTesterMode?"YES":"NO", g_isVisualMode?"YES":"NO", g_isOptimization?"YES":"NO",
-                InpDashRenderIntervalSec,
-                g_isTesterMode?"ON":"OFF");
+                InpDashRenderIntervalSec);
    return INIT_SUCCEEDED;
 }
 
@@ -3375,6 +3440,7 @@ void OnTick(){
    // hidden per-TF charts whenever a new indicator handle is touched.
    if(g_isTesterMode && (TimeCurrent() - g_lastAuxChartSweep) >= 60){
       HideAuxiliaryTesterCharts();
+      CleanupChartIndicatorsInTester(); // [v2.8.0] also re-strip subwindows
       g_lastAuxChartSweep = TimeCurrent();
    }
 
@@ -3398,7 +3464,19 @@ void OnTick(){
          g_maxGridTrailArmed[g][0]=false; g_maxGridTrailArmed[g][1]=false;
          g_avgTPSynced[g][0]=0; g_avgTPSynced[g][1]=0;
          g_avgSLSynced[g][0]=0; g_avgSLSynced[g][1]=0;
+         // [v2.8.0] clear hedge-baseline + recovery flag when group becomes flat
+         g_groupHedgeBaselineSet[g] = false;
+         g_groupNetAtHedgeStart[g]  = 0.0;
+         g_groupInRecovery[g]       = false;
          continue;
+      }
+      // [v2.8.0] Stamp baseline net P/L the first tick a hedge is observed
+      // in this group. Used by TryMatchingCloseForGroup to enforce
+      // InpExit_MinGainUSD before allowing matching close.
+      if(!g_groupHedgeBaselineSet[g] && CountGroupPositions(g, -1, 1) > 0){
+         g_groupNetAtHedgeStart[g]  = GroupFloatingPL(g, -1, -1);
+         g_groupHedgeBaselineSet[g] = true;
+         if(InpVerboseLog) PrintFormat("Golden2 v2.8.0: G%d hedge baseline net P/L=%.2f stamped", g, g_groupNetAtHedgeStart[g]);
       }
       EnforceFrameMutualExclusion(g);
       TrackInitialCandle(g);
