@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|     Golden2 EA v2.8.1 — Squeeze-Based Exit Gate + TesterHideInd      |
+//|     Golden2 EA v2.8.2 — Prior-Group Advance Deadlock Fix             |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.81"
-#property description "Golden2 EA v2.8.1 — Hedge Exit gate now reuses Volatility Squeeze (largest TF) instead of duplicate Exit BB/Keltner inputs + per-group Expansion->Normal latch + Hedging dashboard shows Cy/Zone/Gain status (Gold-Miner-style) + TesterHideIndicators() called BEFORE indicator handles so ATR/ADX never attach to backtest chart"
+#property version   "2.82"
+#property description "Golden2 EA v2.8.2 — Fixes 'priors safe=0' deadlock that froze new order placement. Prior-group advance guard now treats hedge-locked groups as safe even while Triple-Gate / MinGain / Expansion->Normal is still pending; only truly unhedged exposure blocks G(N+1). Hold-log identifies blocking prior group + reason."
 #property strict
 
 #include <Trade/Trade.mqh>
