@@ -3513,6 +3513,8 @@ int OnInit(){
       // [v2.8.1]
       g_groupSeenExp[i]           = false;
       g_groupExpToNormal[i]       = false;
+      // [v2.8.3]
+      g_groupRecoveryLevel[i]     = 0;
    }
 
    // [v2.8.1] g_bbHandle / g_atrHandle (the old Exit BB/Keltner) are NOT
@@ -3679,6 +3681,8 @@ void OnTick(){
          // [v2.8.1] reset per-group Expansion->Normal latch when group is flat
          g_groupSeenExp[g]          = false;
          g_groupExpToNormal[g]      = false;
+         // [v2.8.3] reset Recovery Grid level counter
+         g_groupRecoveryLevel[g]    = 0;
          continue;
       }
       // [v2.8.0] Stamp baseline net P/L the first tick a hedge is observed
