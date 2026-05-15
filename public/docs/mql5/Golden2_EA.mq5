@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|     Golden2 EA v2.7.8 — Force-Close Opp Unhedged on Lock         |
+//|     Golden2 EA v2.7.9 — Tester Chart Cleanup + Side-Tagged Comments |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.78"
-#property description "Golden2 EA v2.7.8 — Force-close opposite unhedged main side when group is hedge-locked, freeing next group to open"
+#property version   "2.79"
+#property description "Golden2 EA v2.7.9 — Tester chart cleanup (hide ATR/ADX/aux subwindow indicators in Strategy Tester) + side-tagged order comments (G2_B_IN, G2_S_GL#1, G3_B_HD_IN, ...)"
 #property strict
 
 #include <Trade/Trade.mqh>
