@@ -3504,6 +3504,9 @@ void OnTick(){
          g_groupHedgeBaselineSet[g] = false;
          g_groupNetAtHedgeStart[g]  = 0.0;
          g_groupInRecovery[g]       = false;
+         // [v2.8.1] reset per-group Expansion->Normal latch when group is flat
+         g_groupSeenExp[g]          = false;
+         g_groupExpToNormal[g]      = false;
          continue;
       }
       // [v2.8.0] Stamp baseline net P/L the first tick a hedge is observed
@@ -3514,6 +3517,8 @@ void OnTick(){
          g_groupHedgeBaselineSet[g] = true;
          if(InpVerboseLog) PrintFormat("Golden2 v2.8.0: G%d hedge baseline net P/L=%.2f stamped", g, g_groupNetAtHedgeStart[g]);
       }
+      // [v2.8.1] Refresh per-group Expansion->Normal latch from Squeeze TF3.
+      RefreshGroupExpansionLatch(g);
       EnforceFrameMutualExclusion(g);
       TrackInitialCandle(g);
       ManageInitialTrailOnBarClose(g); // [v1.8] bar-close trail (preferred)
