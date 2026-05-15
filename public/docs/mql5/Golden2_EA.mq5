@@ -2778,6 +2778,10 @@ bool IsSideEffectivelySafeForAdvance(int g, int side){
 // [v2.7.4] Now delegates per-side decision to IsSideEffectivelySafeForAdvance
 // so a profitable unhedged side does not block advance (INSTANT/SMA fix).
 bool IsGroupSafeToAdvance(int g){
+   // [v2.8.0] Group is in recovery (post-matching-close residual) — unblock
+   // advance so the system doesn't deadlock waiting for losing residual to
+   // resolve. Recovery group manages its own exit independently.
+   if(InpExit_RecoveryAdvanceUnblock && g_groupInRecovery[g]) return true;
    int buyMain  = CountBlockingMainPositionsForAdvance(g, 0);
    int sellMain = CountBlockingMainPositionsForAdvance(g, 1);
    if(buyMain == 0 && sellMain == 0) return true;
