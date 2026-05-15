@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|     Golden2 EA v2.7.8 — Force-Close Opp Unhedged on Lock         |
+//|     Golden2 EA v2.7.9 — Tester Chart Cleanup + Side-Tagged Comments |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.78"
-#property description "Golden2 EA v2.7.8 — Force-close opposite unhedged main side when group is hedge-locked, freeing next group to open"
+#property version   "2.79"
+#property description "Golden2 EA v2.7.9 — Tester chart cleanup (hide ATR/ADX/aux subwindow indicators in Strategy Tester) + side-tagged order comments (G2_B_IN, G2_S_GL#1, G3_B_HD_IN, ...)"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -316,6 +316,7 @@ bool     g_isTesterMode          = false;          // MQL_TESTER
 bool     g_isVisualMode          = false;          // MQL_VISUAL_MODE
 bool     g_isOptimization        = false;          // MQL_OPTIMIZATION
 datetime g_lastDashRender        = 0;              // throttle DrawDashboard
+datetime g_lastAuxChartSweep     = 0;              // [v2.7.9] throttle HideAuxiliaryTesterCharts
 datetime g_lastSqueezeBar        = 0;              // refresh Squeeze on new M1 bar only
 int      g_highestActiveGroup    = 0;              // bound per-tick group loop
 // HasClosedMainOnSide cache: per (group, side)
@@ -361,8 +362,13 @@ datetime g_accumTriggerTime        = 0;
 //================ HELPERS: comments / parsing ================
 string SidePrefix(ENUM_SIDE s){ return (s==SIDE_BUY?"B":"S"); }
 
-string MakeComment(int g, bool hedge, string tag){
-   string base = StringFormat("G%d_", g);
+// [v2.7.9] MakeComment now embeds B_/S_ side tag after group: G{n}_{B|S}_{tag}
+// or G{n}_{B|S}_HD_{tag} for hedge. Backward-compatible parser still accepts
+// legacy G{n}_{tag} / G{n}_HD_{tag} (without B_/S_) so historical positions
+// from older versions parse cleanly.
+string MakeComment(int g, ENUM_SIDE side, bool hedge, string tag){
+   string sd   = (side==SIDE_BUY ? "B_" : "S_");
+   string base = StringFormat("G%d_%s", g, sd);
    if(hedge) base += "HD_";
    return base + tag;
 }
@@ -376,6 +382,9 @@ bool ParseComment(string c, int &grp, bool &isHedge, string &tag){
    string gnum = StringSubstr(c, 1, us-1);
    grp = (int)StringToInteger(gnum);
    string rest = StringSubstr(c, us+1);
+   // [v2.7.9] Optional B_/S_ side tag — peel if present (backward-compat)
+   if(StringFind(rest,"B_") == 0)      rest = StringSubstr(rest, 2);
+   else if(StringFind(rest,"S_") == 0) rest = StringSubstr(rest, 2);
    if(StringFind(rest,"HD_") == 0){
       isHedge = true;
       tag = StringSubstr(rest, 3);
@@ -869,8 +878,8 @@ void PlaceInitialMarket(int g, bool placeBuy, bool placeSell){
    trade.SetExpertMagicNumber(InpMagic);
    trade.SetDeviationInPoints(InpSlippage);
 
-   string cBuy  = MakeComment(g, false, "IN");
-   string cSell = MakeComment(g, false, "IN");
+   string cBuy  = MakeComment(g, SIDE_BUY,  false, "IN");
+   string cSell = MakeComment(g, SIDE_SELL, false, "IN");
 
    bool anySent = false;
    if(placeBuy){
@@ -1049,8 +1058,8 @@ void PlaceInitialFrame(int g){
    trade.SetExpertMagicNumber(InpMagic);
    trade.SetDeviationInPoints(InpSlippage);
 
-   string cBuy  = MakeComment(g, false, "IN");
-   string cSell = MakeComment(g, false, "IN");
+   string cBuy  = MakeComment(g, SIDE_BUY,  false, "IN");
+   string cSell = MakeComment(g, SIDE_SELL, false, "IN");
 
    bool anySent = false;
    if(placeBuy){
@@ -1402,7 +1411,7 @@ void ManageInitialReArm(int g){
       double upPx = NormalizeDouble(ask + dist, g_digits);
       double tp   = (InpInitialTPPips>0)? NormalizeDouble(upPx + InpInitialTPPips*g_point, g_digits) : 0;
       double sl   = (InpInitialSLPips>0)? NormalizeDouble(upPx - InpInitialSLPips*g_point, g_digits) : 0;
-      string c    = MakeComment(g, false, "IN");
+      string c    = MakeComment(g, SIDE_BUY, false, "IN");
       if(trade.BuyStop(InpInitialLot, upPx, _Symbol, sl, tp, ORDER_TIME_GTC, 0, c)){
          if(InpVerboseLog) PrintFormat("Golden2 v2.6: Re-entry BuyStop G%d at %.5f (sellPos=%d)", g, upPx, sellPos);
       }
@@ -1412,7 +1421,7 @@ void ManageInitialReArm(int g){
       double dnPx = NormalizeDouble(bid - dist, g_digits);
       double tp   = (InpInitialTPPips>0)? NormalizeDouble(dnPx - InpInitialTPPips*g_point, g_digits) : 0;
       double sl   = (InpInitialSLPips>0)? NormalizeDouble(dnPx + InpInitialSLPips*g_point, g_digits) : 0;
-      string c    = MakeComment(g, false, "IN");
+      string c    = MakeComment(g, SIDE_SELL, false, "IN");
       if(trade.SellStop(InpInitialLot, dnPx, _Symbol, sl, tp, ORDER_TIME_GTC, 0, c)){
          if(InpVerboseLog) PrintFormat("Golden2 v2.6: Re-entry SellStop G%d at %.5f (buyPos=%d)", g, dnPx, buyPos);
       }
@@ -1673,7 +1682,7 @@ void TryPlaceGridLoss(int g){
 
       double lot = ResolveLot(gl+1, GridLoss_LotMode, GridLoss_CustomLots,
                               GridLoss_AddLotPerLevel, GridLoss_MultiplyFactor);
-      string c = MakeComment(g, false, StringFormat("GL#%d", gl+1));
+      string c = MakeComment(g, (ENUM_SIDE)sd, false, StringFormat("GL#%d", gl+1));
       bool ok = (sd==0) ? trade.Buy(lot, _Symbol, ask, 0, 0, c)
                         : trade.Sell(lot, _Symbol, bid, 0, 0, c);
       if(ok){
@@ -1723,7 +1732,7 @@ void TryPlaceGridProfit(int g){
 
       double lot = ResolveLot(gp+1, GridProfit_LotMode, GridProfit_CustomLots,
                               GridProfit_AddLotPerLevel, GridProfit_MultiplyFactor);
-      string c = MakeComment(g, false, StringFormat("GP#%d", gp+1));
+      string c = MakeComment(g, (ENUM_SIDE)sd, false, StringFormat("GP#%d", gp+1));
       bool ok = (sd==0) ? trade.Buy(lot, _Symbol, ask, 0, 0, c)
                         : trade.Sell(lot, _Symbol, bid, 0, 0, c);
       if(ok){
@@ -1897,7 +1906,7 @@ void MirrorLossSideToHedgePendings(int g, int lossSide){
 
    // 2) Add missing hedge pendings for each loss tag
    for(int k=0;k<ArraySize(lossTags);k++){
-      string newC = MakeComment(g, true, lossTags[k]);
+      string newC = MakeComment(g, (ENUM_SIDE)hedgeSide, true, lossTags[k]);
       if(HasPendingByComment(newC)) continue;
       double lot = lossLots[k];
       bool ok;
@@ -1913,7 +1922,7 @@ void PlaceHedgePendingSet_Legacy(int g, int lossSide){
    int hedgeSide = (lossSide==0)?1:0;
    double price = HedgePendingAnchorPrice(hedgeSide);
    double lotIN = InpInitialLot;
-   string c = MakeComment(g, true, "IN");
+   string c = MakeComment(g, (ENUM_SIDE)hedgeSide, true, "IN");
    bool ok;
    if(hedgeSide==1) ok = trade.SellStop(lotIN, price, _Symbol, 0, 0, ORDER_TIME_GTC, 0, c);
    else             ok = trade.BuyStop (lotIN, price, _Symbol, 0, 0, ORDER_TIME_GTC, 0, c);
@@ -1922,7 +1931,7 @@ void PlaceHedgePendingSet_Legacy(int g, int lossSide){
    int oppMaxLvl = HighestGridLevel(g, (ENUM_SIDE)lossSide, false, "GL");
    for(int lvl=1; lvl<=oppMaxLvl; lvl++){
       double lot = LotForLevel(lvl);
-      string cg = MakeComment(g, true, StringFormat("GL#%d", lvl));
+      string cg = MakeComment(g, (ENUM_SIDE)hedgeSide, true, StringFormat("GL#%d", lvl));
       bool ok2;
       double pStack = price + ((hedgeSide==1?-1:1) * lvl * 1 * g_point);
       pStack = NormalizeDouble(pStack, g_digits);
@@ -2496,7 +2505,7 @@ void PlaceContinuationGridIfNeeded(int g){
          int gl = HighestGridLevel(g, (ENUM_SIDE)sd, (hd==1), "GL");
          if(gl >= InpMaxGridLevels) continue;
          double lot = LotForLevel(gl+1);
-         string c = MakeComment(g, hd==1, StringFormat("GL#%d", gl+1));
+         string c = MakeComment(g, (ENUM_SIDE)sd, hd==1, StringFormat("GL#%d", gl+1));
          double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
          double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
          bool ok = (sd==0) ? trade.Buy(lot,_Symbol,ask,0,0,c) : trade.Sell(lot,_Symbol,bid,0,0,c);
@@ -3000,7 +3009,7 @@ void DrawDashboard(){
 
    // Header
    string entryLbl = (InpEntryMode == G2_ENTRY_PENDING) ? "PENDING" : (InpEntryMode == G2_ENTRY_SMA) ? "SMA" : "INSTANT"; // [v2.73]
-   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.7.8    Entry: %s    Side: %s", entryLbl, modeLbl), InpDashAccent);
+   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.7.9    Entry: %s    Side: %s", entryLbl, modeLbl), InpDashAccent);
    y += rowH+2;
 
    // ==== Account section ====
@@ -3158,6 +3167,48 @@ double GroupAggLotSell(){
    return s;
 }
 
+// [v2.7.9] Tester chart cleanup — strip ATR/ADX/BB/KC/EMA/MA/ZigZag graphics
+// from main + every sub-window so backtest renders 5–10x faster. Indicator
+// HANDLES still compute in background; we only delete chart graphics.
+void CleanupChartIndicatorsInTester(){
+   if(!g_isTesterMode) return;
+   long cid = ChartID();
+   int wins  = (int)ChartGetInteger(cid, CHART_WINDOWS_TOTAL);
+   for(int w = wins - 1; w >= 0; w--){
+      int total = ChartIndicatorsTotal(cid, w);
+      for(int i = total - 1; i >= 0; i--){
+         string nm = ChartIndicatorName(cid, w, i);
+         if(nm == "") continue;
+         ChartIndicatorDelete(cid, w, nm);
+      }
+   }
+   ChartSetInteger(cid, CHART_SHOW_GRID,        false);
+   ChartSetInteger(cid, CHART_SHOW_PERIOD_SEP,  false);
+   ChartSetInteger(cid, CHART_SHOW_VOLUMES,     CHART_VOLUME_HIDE);
+   if(!g_isVisualMode){
+      ChartSetInteger(cid, CHART_SHOW_TRADE_LEVELS, false);
+      ChartSetInteger(cid, CHART_AUTOSCROLL,        false);
+   }
+   ChartRedraw(cid);
+}
+
+// [v2.7.9] Strategy Tester spawns a hidden chart per (symbol,TF) for each
+// indicator handle (BB/KC/ATR/ADX/EMA across 3 SQ TFs). Close every chart
+// except our main one — handles stay bound to (symbol,TF) so calculations
+// keep running. Called once in OnInit and re-swept ~60s in OnTick.
+void HideAuxiliaryTesterCharts(){
+   if(!g_isTesterMode) return;
+   long mainId = ChartID();
+   long id = ChartFirst();
+   int  guard = 0;
+   while(id >= 0 && guard < 256){
+      long next = ChartNext(id);
+      if(id != mainId) ChartClose(id);
+      id = next;
+      guard++;
+   }
+}
+
 //================ INIT / DEINIT / TICK ================
 int OnInit(){
    g_point  = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
@@ -3170,6 +3221,11 @@ int OnInit(){
    g_isTesterMode   = (bool)MQLInfoInteger(MQL_TESTER);
    g_isVisualMode   = (bool)MQLInfoInteger(MQL_VISUAL_MODE);
    g_isOptimization = (bool)MQLInfoInteger(MQL_OPTIMIZATION);
+   g_lastAuxChartSweep = 0;
+   // [v2.7.9] Tester chart cleanup — speeds up backtest by removing ATR/ADX
+   // and other indicator graphics + auxiliary per-TF charts. No-op live.
+   CleanupChartIndicatorsInTester();
+   HideAuxiliaryTesterCharts();
    g_lastDashRender = 0;
    g_lastSqueezeBar = 0;
    g_highestActiveGroup = 0;
@@ -3230,7 +3286,7 @@ int OnInit(){
 
    string entryModeLbl = (InpEntryMode == G2_ENTRY_PENDING) ? "PENDING" :
                          (InpEntryMode == G2_ENTRY_SMA)     ? "SMA"     : "INSTANT";
-   PrintFormat("Golden2 EA v2.7.8 initialized | Magic=%I64d | MaxGroups=%d | EntryMode=%s | InitMode=%d | GridLoss=%s | Squeeze=%s [BB:%s ADX:%s(>=%.1f) ATR:%s EMA:%s(P=%d)] | TripleGate=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | ProfitSideUnhedgedAdv=%s | ForceCloseOppUnhedged=%s(%ds) | Tester=%s Visual=%s Opt=%s DashInterval=%ds",
+   PrintFormat("Golden2 EA v2.7.9 initialized | Magic=%I64d | MaxGroups=%d | EntryMode=%s | InitMode=%d | GridLoss=%s | Squeeze=%s [BB:%s ADX:%s(>=%.1f) ATR:%s EMA:%s(P=%d)] | TripleGate=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | ProfitSideUnhedgedAdv=%s | ForceCloseOppUnhedged=%s(%ds) | Tester=%s Visual=%s Opt=%s DashInterval=%ds | TesterChartCleanup=%s SideTaggedComments=ON",
                (long)InpMagic, InpMaxGroups, entryModeLbl, (int)InpInitSideMode,
                GridLoss_Enable?"ON":"OFF", InpSQ_Enable?"ON":"OFF",
                InpSQ_UseBBBreakout?"ON":"OFF", InpSQ_UseADX?"ON":"OFF", InpSQ_ADXThreshold,
@@ -3246,7 +3302,8 @@ int OnInit(){
                InpAdvance_AllowProfitSideUnhedged?"ON":"OFF",
                InpHedge_ForceCloseOppUnhedged?"ON":"OFF", InpHedge_ForceCloseDelaySec,
                g_isTesterMode?"YES":"NO", g_isVisualMode?"YES":"NO", g_isOptimization?"YES":"NO",
-               InpDashRenderIntervalSec);
+                InpDashRenderIntervalSec,
+                g_isTesterMode?"ON":"OFF");
    return INIT_SUCCEEDED;
 }
 
@@ -3313,6 +3370,13 @@ int ComputeLoopUpperBound(){
 void OnTick(){
    if(!InpAllowTrade){ RenderDashboardThrottled(); return; }
    RefreshSqueezeStateThrottled(); // [v2.72] one refresh per new M1 bar
+
+   // [v2.7.9] Re-sweep auxiliary tester charts every 60s — Tester may spawn
+   // hidden per-TF charts whenever a new indicator handle is touched.
+   if(g_isTesterMode && (TimeCurrent() - g_lastAuxChartSweep) >= 60){
+      HideAuxiliaryTesterCharts();
+      g_lastAuxChartSweep = TimeCurrent();
+   }
 
    // [v1.6] Optional close-on-expansion (default off)
    if(InpSQ_Enable && InpSQ_CloseOnExpansion && g_sqExpCount >= InpSQ_MinExpansionTFs){
