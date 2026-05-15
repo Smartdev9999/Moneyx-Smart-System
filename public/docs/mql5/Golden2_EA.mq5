@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|     Golden2 EA v2.8.0 — MinGain Hedge Exit + Tester Cleanup Fix     |
+//|     Golden2 EA v2.8.1 — Squeeze-Based Exit Gate + TesterHideInd      |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.80"
-#property description "Golden2 EA v2.8.0 — Hedge Exit Min Gain USD gate + Sequential Queue + Recovery-mode advance unblock (fix stuck-order deadlock) + Tester chart cleanup ordering fix (ATR/ADX subwindows now actually removed)"
+#property version   "2.81"
+#property description "Golden2 EA v2.8.1 — Hedge Exit gate now reuses Volatility Squeeze (largest TF) instead of duplicate Exit BB/Keltner inputs + per-group Expansion->Normal latch + Hedging dashboard shows Cy/Zone/Gain status (Gold-Miner-style) + TesterHideIndicators() called BEFORE indicator handles so ATR/ADX never attach to backtest chart"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -215,11 +215,16 @@ input int     InpHedge_ForceCloseDelaySec    = 3;                    // [v2.7.8]
 input string  __sec_exit__            = "=== Exit Triple Gate ==="; // ---
 input bool    InpExitTripleGate_Enable= true;                        // [v1.6] Enable Triple-Gate matching close
 input bool    InpPostHedge_AllowContinuation = false;                // [v1.6] Allow continuation grid AFTER hedge activates (default OFF = freeze group)
-input ENUM_TIMEFRAMES InpExitTF       = PERIOD_H4;                   // Higher TF for Expansion->Normal gate
-input int     InpExitBBPeriod         = 20;                          // BB period
-input double  InpExitBBDev            = 2.0;                         // BB deviation
-input int     InpExitKeltnerATR       = 20;                          // Keltner ATR period
-input double  InpExitKeltnerMult      = 1.5;                         // Keltner multiplier
+// [v2.8.1] Exit BB/Keltner indicator settings REMOVED from input panel.
+// The hedge-exit Expansion->Normal gate now reuses the Volatility Squeeze
+// Filter state on the LARGEST Squeeze TF (InpSQ_TF3) — see IsExpansionToNormalForGroup().
+// These constants are kept ONLY so legacy .set files / log strings still compile;
+// they are not read by the new gate.
+const ENUM_TIMEFRAMES InpExitTF       = PERIOD_H4;
+const int             InpExitBBPeriod = 20;
+const double          InpExitBBDev    = 2.0;
+const int             InpExitKeltnerATR  = 20;
+const double          InpExitKeltnerMult = 1.5;
 input int     InpExitBreakoutPips     = 300;                         // Breakout distance from average (points)
 input double  InpExitMinNetUSD        = 1.0;                         // Min net USD profit to allow exit
 input double  InpExit_MinGainUSD      = 100.0;                       // [v2.8.0] Min hedge-group GAIN (USD) since hedge opened, before matching close
@@ -341,6 +346,12 @@ bool     g_groupHedgeBaselineSet[51];
 // it is flagged "in recovery" so IsGroupSafeToAdvance unblocks G(N+1) and the
 // system stops deadlocking. Cleared automatically when group becomes flat.
 bool     g_groupInRecovery[51];
+// [v2.8.1] Per-group Expansion->Normal latch (largest Squeeze TF, index 2).
+// Tracks whether the group has, since its hedge appeared, observed at least
+// one Expansion bar on TF3 and then returned to Normal. Triple-Gate matching
+// close requires this latch to be ARMED.
+bool     g_groupSeenExp[51];        // saw g_sqExpansion[2]==true while hedge active
+bool     g_groupExpToNormal[51];    // saw Expansion AND now back to Normal -> gate ready
 
 // Snapshot of ATR (in points) at the moment last grid order was placed (per group, side, family 0=GL/1=GP)
 double   g_atrAtLastGridLoss[51][2];
@@ -565,21 +576,37 @@ bool IsHedgeOpenDelayActive(int &remainSec){
    return true;
 }
 
-//================ EXPANSION->NORMAL GATE ================
-bool IsExpansionToNormal(){
-   double bbU[3], bbL[3], bbM[3], atr[3];
-   if(g_bbHandle == INVALID_HANDLE || g_atrHandle == INVALID_HANDLE) return false;
-   if(CopyBuffer(g_bbHandle, 1, 0, 3, bbU) <= 0) return false;
-   if(CopyBuffer(g_bbHandle, 2, 0, 3, bbL) <= 0) return false;
-   if(CopyBuffer(g_bbHandle, 0, 0, 3, bbM) <= 0) return false;
-   if(CopyBuffer(g_atrHandle, 0, 0, 3, atr) <= 0) return false;
-   double bbW1 = bbU[1] - bbL[1];
-   double bbW2 = bbU[2] - bbL[2];
-   double keW1 = 2.0 * InpExitKeltnerMult * atr[1];
-   double keW2 = 2.0 * InpExitKeltnerMult * atr[2];
-   bool wasExpansion = (bbW2 > keW2);
-   bool nowNormal    = (bbW1 <= keW1);
-   return (wasExpansion && nowNormal);
+//================ EXPANSION->NORMAL GATE (v2.8.1: Squeeze-based, per-group) ================
+// Replaces the old single-shot BB/Keltner snapshot. The gate is ARMED when:
+//   1) The group has observed an Expansion bar on the LARGEST Squeeze TF
+//      (g_sqExpansion[2] == true) at any point since the hedge appeared.
+//   2) The same TF has subsequently returned to Normal (g_sqExpansion[2] == false).
+// State refreshed each tick by RefreshGroupExpansionLatch(g) (called from OnTick).
+void RefreshGroupExpansionLatch(int g){
+   if(!InpSQ_Enable) {
+      // Squeeze disabled: gate auto-arms so Triple-Gate behaves like prior versions.
+      g_groupSeenExp[g] = true;
+      g_groupExpToNormal[g] = true;
+      return;
+   }
+   bool hasHedge = (CountGroupPositions(g, -1, 1) > 0);
+   if(!hasHedge) return; // latches reset elsewhere when group becomes flat
+   bool expNow = g_sqExpansion[2]; // largest TF (InpSQ_TF3)
+   if(expNow) g_groupSeenExp[g] = true;
+   else if(g_groupSeenExp[g]) g_groupExpToNormal[g] = true;
+}
+
+bool IsExpansionToNormalForGroup(int g){
+   if(!InpSQ_Enable) return true; // see note above
+   return g_groupExpToNormal[g];
+}
+
+// [v2.8.1] Cycle status string for dashboard ("Wait Exp" / "Wait Norm" / "Ready").
+string GroupCycleStatus(int g){
+   if(!InpSQ_Enable) return "Ready";
+   if(!g_groupSeenExp[g])      return "Wait Exp";
+   if(!g_groupExpToNormal[g])  return "Wait Norm";
+   return "Ready";
 }
 
 //================ [v1.6] VOLATILITY SQUEEZE FILTER ================
@@ -2412,7 +2439,7 @@ void CleanupAllLinesByPrefix(){
 //================ MATCHING CLOSE (Triple Gate) ================
 void TryMatchingCloseForGroup(int g){
    if(!InpExitTripleGate_Enable) return; // [v1.6] master toggle for Triple-Gate
-   if(!IsExpansionToNormal()) return;
+   if(!IsExpansionToNormalForGroup(g)) return; // [v2.8.1] per-group Squeeze TF3 latch
 
    // [v2.8.0] Sequential queue gate — older active hedge group must be flat first
    if(InpExit_SequentialQueue){
@@ -3061,7 +3088,7 @@ void DrawDashboard(){
 
    // Header
    string entryLbl = (InpEntryMode == G2_ENTRY_PENDING) ? "PENDING" : (InpEntryMode == G2_ENTRY_SMA) ? "SMA" : "INSTANT"; // [v2.73]
-   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.7.9    Entry: %s    Side: %s", entryLbl, modeLbl), InpDashAccent);
+   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.8.1    Entry: %s    Side: %s", entryLbl, modeLbl), InpDashAccent);
    y += rowH+2;
 
    // ==== Account section ====
@@ -3191,6 +3218,45 @@ void DrawDashboard(){
          // Override key color separately
          ObjectSetInteger(0, g_dashPrefix + "K_" + StringFormat("R_G%d", g), OBJPROP_COLOR, stClr);
          yR += rowH;
+
+         // [v2.8.1] Gold-Miner-style Triple-Gate detail rows for hedge-active groups
+         if(hPos > 0){
+            // ---- Gate row: T:SQ Cy:<...> Z:<...> ----
+            string cyStat = GroupCycleStatus(g);
+            string zStat  = "N/A";
+            double avgMain  = GroupAveragePrice(g, -1, 0);
+            double avgHedge = GroupAveragePrice(g, -1, 1);
+            if(avgMain > 0 && avgHedge > 0){
+               double bidPx = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+               double askPx = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+               double midPx = (bidPx + askPx) * 0.5;
+               double avgMidPx = (avgMain + avgHedge) * 0.5;
+               double zHi = MathMax(avgMain, avgHedge);
+               double zLo = MathMin(avgMain, avgHedge);
+               if(midPx > zLo && midPx < zHi){
+                  zStat = "IN ZONE";
+               } else {
+                  double distPts = MathAbs(midPx - avgMidPx) / g_point;
+                  if(distPts < InpExitBreakoutPips)
+                     zStat = StringFormat("OUT %d/%dpts", (int)distPts, InpExitBreakoutPips);
+                  else
+                     zStat = StringFormat("OUT OK %dpts", (int)distPts);
+               }
+            }
+            string gateInfo = StringFormat("T:SQ Cy:%s Z:%s", cyStat, zStat);
+            color gateClr = (cyStat=="Ready" && StringFind(zStat,"OUT OK")>=0) ? InpDashGood : InpDashAccent;
+            DashRow(StringFormat("R_G%d_GATE", g), xR, yR, wR, rowH, "  Gate", gateInfo, gateClr);
+            yR += rowH;
+
+            // ---- Gain row: G:<gainNow>/<need> Recovery flag ----
+            double netNow = GroupFloatingPL(g, -1, -1);
+            double gainNow = g_groupHedgeBaselineSet[g] ? (netNow - g_groupNetAtHedgeStart[g]) : 0.0;
+            string recLbl = g_groupInRecovery[g] ? " RECOV" : "";
+            string gainInfo = StringFormat("G:$%.2f/$%.2f%s", gainNow, InpExit_MinGainUSD, recLbl);
+            color gainClr = (gainNow >= InpExit_MinGainUSD) ? InpDashGood : InpDashAccent;
+            DashRow(StringFormat("R_G%d_GAIN", g), xR, yR, wR, rowH, "  TripleGrid", gainInfo, gainClr);
+            yR += rowH;
+         }
       }
       if(!any){
          DashRow("R_EMPTY", xR, yR, wR, rowH, "(no active groups)", "-", InpDashColor);
@@ -3274,6 +3340,12 @@ int OnInit(){
    g_isVisualMode   = (bool)MQLInfoInteger(MQL_VISUAL_MODE);
    g_isOptimization = (bool)MQLInfoInteger(MQL_OPTIMIZATION);
    g_lastAuxChartSweep = 0;
+   // [v2.8.1] CRITICAL: TesterHideIndicators(true) MUST be called BEFORE any
+   // iATR/iADX/iBands/iMA handle is created. Per MQL5 docs, every indicator
+   // handle created AFTER this call is flagged "hide" so MT5 Strategy Tester
+   // never attaches it to the visual chart or the auto-opened result chart.
+   // This is the canonical fix for "ATR/ADX still visible in backtest".
+   if(g_isTesterMode) TesterHideIndicators(true);
    // [v2.7.9] Tester chart cleanup — speeds up backtest by removing ATR/ADX
    // and other indicator graphics + auxiliary per-TF charts. No-op live.
    CleanupChartIndicatorsInTester();
@@ -3305,16 +3377,19 @@ int OnInit(){
       g_groupHedgeBaselineSet[i]  = false;
       g_groupInRecovery[i]        = false;
       g_groupHedgeFirstSeen[i]    = 0;
+      // [v2.8.1]
+      g_groupSeenExp[i]           = false;
+      g_groupExpToNormal[i]       = false;
    }
 
-   g_bbHandle  = iBands(_Symbol, InpExitTF, InpExitBBPeriod, 0, InpExitBBDev, PRICE_CLOSE);
-   g_atrHandle = iATR(_Symbol, InpExitTF, InpExitKeltnerATR);
+   // [v2.8.1] g_bbHandle / g_atrHandle (the old Exit BB/Keltner) are NOT
+   // created anymore — IsExpansionToNormalForGroup() reuses Squeeze TF3 state.
+   // Removing the iBands/iATR(InpExitTF) calls also stops MT5 Tester from
+   // spawning that extra ATR subwindow on the chart.
+   g_bbHandle  = INVALID_HANDLE;
+   g_atrHandle = INVALID_HANDLE;
    g_atrLossHandle   = iATR(_Symbol, GridLoss_ATR_TF,   GridLoss_ATR_Period);
    g_atrProfitHandle = iATR(_Symbol, GridProfit_ATR_TF, GridProfit_ATR_Period);
-   if(g_bbHandle == INVALID_HANDLE || g_atrHandle == INVALID_HANDLE){
-      Print("Golden2 v1.7: indicator init failed");
-      return INIT_FAILED;
-   }
 
    // [v1.6] Squeeze Filter handles
    g_sqTF[0] = InpSQ_TF1; g_sqTF[1] = InpSQ_TF2; g_sqTF[2] = InpSQ_TF3;
@@ -3349,7 +3424,7 @@ int OnInit(){
 
    string entryModeLbl = (InpEntryMode == G2_ENTRY_PENDING) ? "PENDING" :
                          (InpEntryMode == G2_ENTRY_SMA)     ? "SMA"     : "INSTANT";
-   PrintFormat("Golden2 EA v2.8.0 initialized | Magic=%I64d | MaxGroups=%d | EntryMode=%s | InitMode=%d | GridLoss=%s | Squeeze=%s [BB:%s ADX:%s(>=%.1f) ATR:%s EMA:%s(P=%d)] | TripleGate=%s | MinGainUSD=%.1f | SeqQueue=%s | RecoveryAdvUnblock=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | ProfitSideUnhedgedAdv=%s | ForceCloseOppUnhedged=%s(%ds) | Tester=%s Visual=%s Opt=%s DashInterval=%ds | TesterChartCleanup=POST_HANDLES SideTaggedComments=ON",
+   PrintFormat("Golden2 EA v2.8.1 initialized | Magic=%I64d | MaxGroups=%d | EntryMode=%s | InitMode=%d | GridLoss=%s | Squeeze=%s [BB:%s ADX:%s(>=%.1f) ATR:%s EMA:%s(P=%d)] | TripleGate=%s | ExitGate=Squeeze-TF3-Latch | MinGainUSD=%.1f | SeqQueue=%s | RecoveryAdvUnblock=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | ProfitSideUnhedgedAdv=%s | ForceCloseOppUnhedged=%s(%ds) | Tester=%s Visual=%s Opt=%s DashInterval=%ds | TesterHideIndicators=%s SideTaggedComments=ON",
                (long)InpMagic, InpMaxGroups, entryModeLbl, (int)InpInitSideMode,
                GridLoss_Enable?"ON":"OFF", InpSQ_Enable?"ON":"OFF",
                InpSQ_UseBBBreakout?"ON":"OFF", InpSQ_UseADX?"ON":"OFF", InpSQ_ADXThreshold,
@@ -3368,7 +3443,7 @@ int OnInit(){
                InpAdvance_AllowProfitSideUnhedged?"ON":"OFF",
                InpHedge_ForceCloseOppUnhedged?"ON":"OFF", InpHedge_ForceCloseDelaySec,
                g_isTesterMode?"YES":"NO", g_isVisualMode?"YES":"NO", g_isOptimization?"YES":"NO",
-                InpDashRenderIntervalSec);
+                InpDashRenderIntervalSec, g_isTesterMode?"ON":"OFF");
    return INIT_SUCCEEDED;
 }
 
@@ -3468,6 +3543,9 @@ void OnTick(){
          g_groupHedgeBaselineSet[g] = false;
          g_groupNetAtHedgeStart[g]  = 0.0;
          g_groupInRecovery[g]       = false;
+         // [v2.8.1] reset per-group Expansion->Normal latch when group is flat
+         g_groupSeenExp[g]          = false;
+         g_groupExpToNormal[g]      = false;
          continue;
       }
       // [v2.8.0] Stamp baseline net P/L the first tick a hedge is observed
@@ -3478,6 +3556,8 @@ void OnTick(){
          g_groupHedgeBaselineSet[g] = true;
          if(InpVerboseLog) PrintFormat("Golden2 v2.8.0: G%d hedge baseline net P/L=%.2f stamped", g, g_groupNetAtHedgeStart[g]);
       }
+      // [v2.8.1] Refresh per-group Expansion->Normal latch from Squeeze TF3.
+      RefreshGroupExpansionLatch(g);
       EnforceFrameMutualExclusion(g);
       TrackInitialCandle(g);
       ManageInitialTrailOnBarClose(g); // [v1.8] bar-close trail (preferred)
