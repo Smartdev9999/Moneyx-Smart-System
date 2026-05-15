@@ -3389,6 +3389,51 @@ void DrawDashboard(){
             color gainClr = (gainNow >= InpExit_MinGainUSD) ? InpDashGood : InpDashAccent;
             DashRow(StringFormat("R_G%d_GAIN", g), xR, yR, wR, rowH, "  TripleGrid", gainInfo, gainClr);
             yR += rowH;
+
+            // ---- [v2.8.3] Per-grid Loss/Hedge pair rows (Gold-Miner style) ----
+            // Pair GL#N (main losing) with HD_GL#N (hedge winning) and show floating P/L.
+            int losSideRow = (winSide==0) ? 1 : 0; // losing side
+            int winSideRow = winSide;
+            int maxPair = MathMin(InpDashGridPairsMax, GridLoss_MaxTrades);
+            int shownPairs = 0;
+            for(int lvl=1; lvl<=maxPair; lvl++){
+               double pLoss = 0, pHedge = 0; bool foundLoss=false, foundHedge=false;
+               int totp = PositionsTotal();
+               for(int i=0;i<totp;i++){
+                  ulong tk = PositionGetTicket(i);
+                  if(tk==0) continue;
+                  if(!PositionSelectByTicket(tk)) continue;
+                  if((long)PositionGetInteger(POSITION_MAGIC) != InpMagic) continue;
+                  if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+                  string cm = PositionGetString(POSITION_COMMENT);
+                  int gp; bool hd; string tg;
+                  if(!ParseComment(cm, gp, hd, tg)) continue;
+                  if(gp != g) continue;
+                  if(tg != StringFormat("GL#%d", lvl)) continue;
+                  int sd = (PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY)?0:1;
+                  double pp = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+                  if(!hd && sd==losSideRow){ pLoss = pp; foundLoss = true; }
+                  else if(hd && sd==winSideRow){ pHedge = pp; foundHedge = true; }
+               }
+               if(!foundLoss && !foundHedge) continue;
+               double net = pLoss + pHedge;
+               string gridInfo = StringFormat("L:%+.0f H:%+.0f N:%+.0f", pLoss, pHedge, net);
+               color gridClr = (net >= 0) ? InpDashGood : InpDashBad;
+               DashRow(StringFormat("R_G%d_GRID%d", g, lvl), xR, yR, wR, rowH,
+                       StringFormat("  Grid#%d", lvl), gridInfo, gridClr);
+               yR += rowH;
+               shownPairs++;
+               if(shownPairs >= InpDashGridPairsMax) break;
+            }
+
+            // ---- [v2.8.3] Recovery row (only when in recovery) ----
+            if(g_groupInRecovery[g]){
+               int rcLvl = g_groupRecoveryLevel[g];
+               string rcInfo = StringFormat("RC#%d/%d  mult=%.2f", rcLvl, InpRecovery_MaxLevels, InpRecovery_Multiplier);
+               DashRow(StringFormat("R_G%d_RECOV", g), xR, yR, wR, rowH,
+                       "  Recovery", rcInfo, InpDashAccent);
+               yR += rowH;
+            }
          }
       }
       if(!any){
