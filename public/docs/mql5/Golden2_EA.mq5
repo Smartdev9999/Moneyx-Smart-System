@@ -1,7 +1,7 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|     Golden2 EA v2.8.3 — Match-Close Win-Pool Gate + Recovery Grid    |
+//|  Golden2 EA v2.8.4 — Post-Match Avg Broker TP/SL + Cross-Side Shred  |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
