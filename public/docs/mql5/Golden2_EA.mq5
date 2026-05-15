@@ -3302,7 +3302,8 @@ int OnInit(){
                InpAdvance_AllowProfitSideUnhedged?"ON":"OFF",
                InpHedge_ForceCloseOppUnhedged?"ON":"OFF", InpHedge_ForceCloseDelaySec,
                g_isTesterMode?"YES":"NO", g_isVisualMode?"YES":"NO", g_isOptimization?"YES":"NO",
-               InpDashRenderIntervalSec);
+                InpDashRenderIntervalSec,
+                g_isTesterMode?"ON":"OFF");
    return INIT_SUCCEEDED;
 }
 
