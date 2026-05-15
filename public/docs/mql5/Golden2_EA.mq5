@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|     Golden2 EA v2.7.9 — Tester Chart Cleanup + Side-Tagged Comments |
+//|     Golden2 EA v2.8.0 — MinGain Hedge Exit + Tester Cleanup Fix     |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.79"
-#property description "Golden2 EA v2.7.9 — Tester chart cleanup (hide ATR/ADX/aux subwindow indicators in Strategy Tester) + side-tagged order comments (G2_B_IN, G2_S_GL#1, G3_B_HD_IN, ...)"
+#property version   "2.80"
+#property description "Golden2 EA v2.8.0 — Hedge Exit Min Gain USD gate + Sequential Queue + Recovery-mode advance unblock (fix stuck-order deadlock) + Tester chart cleanup ordering fix (ATR/ADX subwindows now actually removed)"
 #property strict
 
 #include <Trade/Trade.mqh>
