@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|     Golden2 EA v2.8.2 — Prior-Group Advance Deadlock Fix             |
+//|     Golden2 EA v2.8.3 — Match-Close Win-Pool Gate + Recovery Grid    |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.82"
-#property description "Golden2 EA v2.8.2 — Fixes 'priors safe=0' deadlock that froze new order placement. Prior-group advance guard now treats hedge-locked groups as safe even while Triple-Gate / MinGain / Expansion->Normal is still pending; only truly unhedged exposure blocks G(N+1). Hold-log identifies blocking prior group + reason."
+#property version   "2.83"
+#property description "Golden2 EA v2.8.3 — Fixes Triple-Gate matching close that never fired when group net was deeply negative: gate now uses winning-side pool (winProfit) instead of full netCheck, so winning side is closed and its profit shreds losing side. Adds Recovery Grid (RC#N) auto-placed on remaining losing side after partial match-close, plus per-grid pair + Recovery rows on Hedging dashboard."
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -230,6 +230,13 @@ input double  InpExitMinNetUSD        = 1.0;                         // Min net 
 input double  InpExit_MinGainUSD      = 100.0;                       // [v2.8.0] Min hedge-group GAIN (USD) since hedge opened, before matching close
 input bool    InpExit_SequentialQueue = true;                        // [v2.8.0] Close hedge groups sequentially: G1 must be flat before G2 can match-close
 input bool    InpExit_RecoveryAdvanceUnblock = true;                 // [v2.8.0] Treat groups still in matching-close recovery as 'safe' so G(N+1) can open
+// [v2.8.3] Recovery Grid — auto-placed on losing side after partial match-close
+input bool    InpRecovery_Enable        = true;                      // [v2.8.3] Enable Recovery Grid (RC#N) after Triple-Gate partial close
+input double  InpRecovery_StartLot      = 0.0;                       // [v2.8.3] Recovery seed lot (0 = use last residual ticket lot)
+input double  InpRecovery_Multiplier    = 1.5;                       // [v2.8.3] Recovery lot multiplier per RC level
+input int     InpRecovery_DistancePips  = 0;                         // [v2.8.3] Recovery distance points (0 = reuse GridLoss_Points)
+input int     InpRecovery_MaxLevels     = 5;                         // [v2.8.3] Max RC levels per group
+input int     InpDashGridPairsMax       = 5;                         // [v2.8.3] Max Grid#N pair rows shown on Hedging dashboard
 
 //--- === Volatility Squeeze Filter === [v1.6 ported from Gold Miner]
 input string  __sec_sq__              = "=== Volatility Squeeze Filter ==="; // ---
@@ -352,6 +359,8 @@ bool     g_groupInRecovery[51];
 // close requires this latch to be ARMED.
 bool     g_groupSeenExp[51];        // saw g_sqExpansion[2]==true while hedge active
 bool     g_groupExpToNormal[51];    // saw Expansion AND now back to Normal -> gate ready
+// [v2.8.3] Recovery Grid level counter per group (RC#1..N already placed)
+int      g_groupRecoveryLevel[51];
 
 // Snapshot of ATR (in points) at the moment last grid order was placed (per group, side, family 0=GL/1=GP)
 double   g_atrAtLastGridLoss[51][2];
