@@ -3167,6 +3167,48 @@ double GroupAggLotSell(){
    return s;
 }
 
+// [v2.7.9] Tester chart cleanup — strip ATR/ADX/BB/KC/EMA/MA/ZigZag graphics
+// from main + every sub-window so backtest renders 5–10x faster. Indicator
+// HANDLES still compute in background; we only delete chart graphics.
+void CleanupChartIndicatorsInTester(){
+   if(!g_isTesterMode) return;
+   long cid = ChartID();
+   int wins  = (int)ChartGetInteger(cid, CHART_WINDOWS_TOTAL);
+   for(int w = wins - 1; w >= 0; w--){
+      int total = ChartIndicatorsTotal(cid, w);
+      for(int i = total - 1; i >= 0; i--){
+         string nm = ChartIndicatorName(cid, w, i);
+         if(nm == "") continue;
+         ChartIndicatorDelete(cid, w, nm);
+      }
+   }
+   ChartSetInteger(cid, CHART_SHOW_GRID,        false);
+   ChartSetInteger(cid, CHART_SHOW_PERIOD_SEP,  false);
+   ChartSetInteger(cid, CHART_SHOW_VOLUMES,     CHART_VOLUME_HIDE);
+   if(!g_isVisualMode){
+      ChartSetInteger(cid, CHART_SHOW_TRADE_LEVELS, false);
+      ChartSetInteger(cid, CHART_AUTOSCROLL,        false);
+   }
+   ChartRedraw(cid);
+}
+
+// [v2.7.9] Strategy Tester spawns a hidden chart per (symbol,TF) for each
+// indicator handle (BB/KC/ATR/ADX/EMA across 3 SQ TFs). Close every chart
+// except our main one — handles stay bound to (symbol,TF) so calculations
+// keep running. Called once in OnInit and re-swept ~60s in OnTick.
+void HideAuxiliaryTesterCharts(){
+   if(!g_isTesterMode) return;
+   long mainId = ChartID();
+   long id = ChartFirst();
+   int  guard = 0;
+   while(id >= 0 && guard < 256){
+      long next = ChartNext(id);
+      if(id != mainId) ChartClose(id);
+      id = next;
+      guard++;
+   }
+}
+
 //================ INIT / DEINIT / TICK ================
 int OnInit(){
    g_point  = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
