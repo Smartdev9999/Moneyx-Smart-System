@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|     Golden2 EA v2.8.1 — Squeeze-Based Exit Gate + TesterHideInd      |
+//|     Golden2 EA v2.8.2 — Prior-Group Advance Deadlock Fix             |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.81"
-#property description "Golden2 EA v2.8.1 — Hedge Exit gate now reuses Volatility Squeeze (largest TF) instead of duplicate Exit BB/Keltner inputs + per-group Expansion->Normal latch + Hedging dashboard shows Cy/Zone/Gain status (Gold-Miner-style) + TesterHideIndicators() called BEFORE indicator handles so ATR/ADX never attach to backtest chart"
+#property version   "2.82"
+#property description "Golden2 EA v2.8.2 — Fixes 'priors safe=0' deadlock that froze new order placement. Prior-group advance guard now treats hedge-locked groups as safe even while Triple-Gate / MinGain / Expansion->Normal is still pending; only truly unhedged exposure blocks G(N+1). Hold-log identifies blocking prior group + reason."
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -2819,14 +2819,65 @@ bool IsGroupSafeToAdvance(int g){
    return (buyOK && sellOK);
 }
 
+// [v2.8.2] Lighter "safe enough to advance past" check for PRIOR groups.
+// Distinct from IsGroupSafeToAdvance (which is used for the CURRENT group and
+// blocks until the group is fully resolved). For prior groups we only need to
+// guarantee no UNHEDGED exposure remains — Triple-Gate / MinGain / Expansion
+// Gate are CLOSE conditions, not advancement conditions, and waiting for them
+// here caused the queue to deadlock ("priors safe=0" forever).
+//
+// A prior group is safe-for-advance when ANY of:
+//   1) it has no positions left (already flat),
+//   2) recovery flag is set (post-matching residual, managed independently),
+//   3) it has hedge positions AND every surviving main side is either empty,
+//      profitable (when InpAdvance_AllowProfitSideUnhedged), or covered by
+//      opposite-side hedge — i.e. no unhedged losing exposure.
+//
+// Returns reason code via out-param for diagnostic logging:
+//   0=safe-flat, 1=safe-recovery, 2=safe-hedge-locked,
+//   3=block-no-hedge, 4=block-unhedged-main, 5=block-pending-only
+bool IsPriorGroupSafeForAdvance(int g, int &reason){
+   reason = 0;
+   if(!GroupHasAnyPositions(g)){
+      // Pendings without positions = idle frame waiting to fill, that's still
+      // a live unhedged risk for that group. Treat as not-safe.
+      if(GroupHasAnyPendings(g)){ reason = 5; return false; }
+      return true; // truly empty
+   }
+   if(InpExit_RecoveryAdvanceUnblock && g_groupInRecovery[g]){
+      reason = 1; return true;
+   }
+   bool hedgeAny = (CountGroupPositions(g, -1, 1) > 0);
+   if(!hedgeAny){
+      reason = 3; return false; // main positions but no hedge = unsafe
+   }
+   bool buyOK  = IsSideEffectivelySafeForAdvance(g, 0);
+   bool sellOK = IsSideEffectivelySafeForAdvance(g, 1);
+   if(buyOK && sellOK){ reason = 2; return true; }
+   reason = 4; return false;
+}
+
+// [v2.8.2] Returns blocking prior group (1..curG-1) or -1 if all safe.
+// Out-param 'reason' set per IsPriorGroupSafeForAdvance codes.
+int FindBlockingPriorGroup(int curG, int &reason){
+   reason = 0;
+   for(int i=1; i<curG; i++){
+      int r = 0;
+      if(!IsPriorGroupSafeForAdvance(i, r)){
+         reason = r;
+         return i;
+      }
+   }
+   return -1;
+}
+
 // [v2.2] Verify every group BEFORE curG is also safe (no orphan unlocked main
 // in groups 1..curG-1). Prevents skipping past a stuck older group.
+// [v2.8.2] Now uses IsPriorGroupSafeForAdvance — no longer blocks on pending
+// Triple-Gate close, only on real unhedged exposure.
 bool AreAllPriorGroupsSafe(int curG){
-   for(int i=1; i<curG; i++){
-      if(!GroupHasAnyPositions(i)) continue; // empty group is fine
-      if(!IsGroupSafeToAdvance(i)) return false;
-   }
-   return true;
+   int dummy = 0;
+   return (FindBlockingPriorGroup(curG, dummy) < 0);
 }
 
 // [v2.7.8] Force-close opposite unhedged main side when group is hedge-locked.
@@ -2912,12 +2963,24 @@ void TryAdvanceToNextGroup(){
       // legacy edge-only behaviour preserved for users who want v2.1 semantics
    }
    if(InpGroup_RequireFullLockBeforeNext){
-      if(!IsGroupSafeToAdvance(cur) || !AreAllPriorGroupsSafe(cur)){
+      int blockReason = 0;
+      int blockPrior  = FindBlockingPriorGroup(cur, blockReason);
+      bool curSafe    = IsGroupSafeToAdvance(cur);
+      bool priorsSafe = (blockPrior < 0);
+      if(!curSafe || !priorsSafe){
          static datetime lastHoldLog = 0;
          if(InpVerboseLog && TimeCurrent() - lastHoldLog >= 60){
-            PrintFormat("Golden2 v2.8.0: hold G%d->G%d (cur safe=%d priors safe=%d blkBUY=%d blkSELL=%d rawBUY=%d rawSELL=%d hedgeBuy=%d hedgeSell=%d plBUY=%.2f plSELL=%.2f profitBypass=%s recovery=%s)",
+            string reasonLbl = "none";
+            switch(blockReason){
+               case 3: reasonLbl = "no-hedge";       break;
+               case 4: reasonLbl = "unhedged-main";  break;
+               case 5: reasonLbl = "pending-only";   break;
+               default: reasonLbl = (blockPrior<0?"none":"unknown"); break;
+            }
+            PrintFormat("Golden2 v2.8.2: hold G%d->G%d (cur safe=%d priors safe=%d blockPrior=%s reason=%s blkBUY=%d blkSELL=%d rawBUY=%d rawSELL=%d hedgeBuy=%d hedgeSell=%d plBUY=%.2f plSELL=%.2f profitBypass=%s recovery=%s)",
                         cur, cur+1,
-                        IsGroupSafeToAdvance(cur), AreAllPriorGroupsSafe(cur),
+                        curSafe?1:0, priorsSafe?1:0,
+                        (blockPrior<0?"-":StringFormat("G%d", blockPrior)), reasonLbl,
                         CountBlockingMainPositionsForAdvance(cur,0), CountBlockingMainPositionsForAdvance(cur,1),
                         CountGroupPositions(cur,0,0), CountGroupPositions(cur,1,0),
                         CountGroupPositions(cur,0,1), CountGroupPositions(cur,1,1),
@@ -3088,7 +3151,7 @@ void DrawDashboard(){
 
    // Header
    string entryLbl = (InpEntryMode == G2_ENTRY_PENDING) ? "PENDING" : (InpEntryMode == G2_ENTRY_SMA) ? "SMA" : "INSTANT"; // [v2.73]
-   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.8.1    Entry: %s    Side: %s", entryLbl, modeLbl), InpDashAccent);
+   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.8.2    Entry: %s    Side: %s", entryLbl, modeLbl), InpDashAccent);
    y += rowH+2;
 
    // ==== Account section ====
@@ -3424,7 +3487,7 @@ int OnInit(){
 
    string entryModeLbl = (InpEntryMode == G2_ENTRY_PENDING) ? "PENDING" :
                          (InpEntryMode == G2_ENTRY_SMA)     ? "SMA"     : "INSTANT";
-   PrintFormat("Golden2 EA v2.8.1 initialized | Magic=%I64d | MaxGroups=%d | EntryMode=%s | InitMode=%d | GridLoss=%s | Squeeze=%s [BB:%s ADX:%s(>=%.1f) ATR:%s EMA:%s(P=%d)] | TripleGate=%s | ExitGate=Squeeze-TF3-Latch | MinGainUSD=%.1f | SeqQueue=%s | RecoveryAdvUnblock=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | ProfitSideUnhedgedAdv=%s | ForceCloseOppUnhedged=%s(%ds) | Tester=%s Visual=%s Opt=%s DashInterval=%ds | TesterHideIndicators=%s SideTaggedComments=ON",
+   PrintFormat("Golden2 EA v2.8.2 initialized | Magic=%I64d | MaxGroups=%d | EntryMode=%s | InitMode=%d | GridLoss=%s | Squeeze=%s [BB:%s ADX:%s(>=%.1f) ATR:%s EMA:%s(P=%d)] | TripleGate=%s | ExitGate=Squeeze-TF3-Latch | MinGainUSD=%.1f | SeqQueue=%s | RecoveryAdvUnblock=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | ProfitSideUnhedgedAdv=%s | ForceCloseOppUnhedged=%s(%ds) | Tester=%s Visual=%s Opt=%s DashInterval=%ds | TesterHideIndicators=%s SideTaggedComments=ON",
                (long)InpMagic, InpMaxGroups, entryModeLbl, (int)InpInitSideMode,
                GridLoss_Enable?"ON":"OFF", InpSQ_Enable?"ON":"OFF",
                InpSQ_UseBBBreakout?"ON":"OFF", InpSQ_UseADX?"ON":"OFF", InpSQ_ADXThreshold,
