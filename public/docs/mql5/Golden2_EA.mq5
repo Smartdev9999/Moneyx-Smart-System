@@ -3400,6 +3400,7 @@ void OnTick(){
    // hidden per-TF charts whenever a new indicator handle is touched.
    if(g_isTesterMode && (TimeCurrent() - g_lastAuxChartSweep) >= 60){
       HideAuxiliaryTesterCharts();
+      CleanupChartIndicatorsInTester(); // [v2.8.0] also re-strip subwindows
       g_lastAuxChartSweep = TimeCurrent();
    }
 
