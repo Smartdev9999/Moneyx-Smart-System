@@ -576,21 +576,37 @@ bool IsHedgeOpenDelayActive(int &remainSec){
    return true;
 }
 
-//================ EXPANSION->NORMAL GATE ================
-bool IsExpansionToNormal(){
-   double bbU[3], bbL[3], bbM[3], atr[3];
-   if(g_bbHandle == INVALID_HANDLE || g_atrHandle == INVALID_HANDLE) return false;
-   if(CopyBuffer(g_bbHandle, 1, 0, 3, bbU) <= 0) return false;
-   if(CopyBuffer(g_bbHandle, 2, 0, 3, bbL) <= 0) return false;
-   if(CopyBuffer(g_bbHandle, 0, 0, 3, bbM) <= 0) return false;
-   if(CopyBuffer(g_atrHandle, 0, 0, 3, atr) <= 0) return false;
-   double bbW1 = bbU[1] - bbL[1];
-   double bbW2 = bbU[2] - bbL[2];
-   double keW1 = 2.0 * InpExitKeltnerMult * atr[1];
-   double keW2 = 2.0 * InpExitKeltnerMult * atr[2];
-   bool wasExpansion = (bbW2 > keW2);
-   bool nowNormal    = (bbW1 <= keW1);
-   return (wasExpansion && nowNormal);
+//================ EXPANSION->NORMAL GATE (v2.8.1: Squeeze-based, per-group) ================
+// Replaces the old single-shot BB/Keltner snapshot. The gate is ARMED when:
+//   1) The group has observed an Expansion bar on the LARGEST Squeeze TF
+//      (g_sqExpansion[2] == true) at any point since the hedge appeared.
+//   2) The same TF has subsequently returned to Normal (g_sqExpansion[2] == false).
+// State refreshed each tick by RefreshGroupExpansionLatch(g) (called from OnTick).
+void RefreshGroupExpansionLatch(int g){
+   if(!InpSQ_Enable) {
+      // Squeeze disabled: gate auto-arms so Triple-Gate behaves like prior versions.
+      g_groupSeenExp[g] = true;
+      g_groupExpToNormal[g] = true;
+      return;
+   }
+   bool hasHedge = (CountGroupPositions(g, -1, 1) > 0);
+   if(!hasHedge) return; // latches reset elsewhere when group becomes flat
+   bool expNow = g_sqExpansion[2]; // largest TF (InpSQ_TF3)
+   if(expNow) g_groupSeenExp[g] = true;
+   else if(g_groupSeenExp[g]) g_groupExpToNormal[g] = true;
+}
+
+bool IsExpansionToNormalForGroup(int g){
+   if(!InpSQ_Enable) return true; // see note above
+   return g_groupExpToNormal[g];
+}
+
+// [v2.8.1] Cycle status string for dashboard ("Wait Exp" / "Wait Norm" / "Ready").
+string GroupCycleStatus(int g){
+   if(!InpSQ_Enable) return "Ready";
+   if(!g_groupSeenExp[g])      return "Wait Exp";
+   if(!g_groupExpToNormal[g])  return "Wait Norm";
+   return "Ready";
 }
 
 //================ [v1.6] VOLATILITY SQUEEZE FILTER ================
