@@ -222,6 +222,9 @@ input int     InpExitKeltnerATR       = 20;                          // Keltner 
 input double  InpExitKeltnerMult      = 1.5;                         // Keltner multiplier
 input int     InpExitBreakoutPips     = 300;                         // Breakout distance from average (points)
 input double  InpExitMinNetUSD        = 1.0;                         // Min net USD profit to allow exit
+input double  InpExit_MinGainUSD      = 100.0;                       // [v2.8.0] Min hedge-group GAIN (USD) since hedge opened, before matching close
+input bool    InpExit_SequentialQueue = true;                        // [v2.8.0] Close hedge groups sequentially: G1 must be flat before G2 can match-close
+input bool    InpExit_RecoveryAdvanceUnblock = true;                 // [v2.8.0] Treat groups still in matching-close recovery as 'safe' so G(N+1) can open
 
 //--- === Volatility Squeeze Filter === [v1.6 ported from Gold Miner]
 input string  __sec_sq__              = "=== Volatility Squeeze Filter ==="; // ---
