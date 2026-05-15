@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|     Golden2 EA v2.8.2 — Prior-Group Advance Deadlock Fix             |
+//|     Golden2 EA v2.8.3 — Match-Close Win-Pool Gate + Recovery Grid    |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.82"
-#property description "Golden2 EA v2.8.2 — Fixes 'priors safe=0' deadlock that froze new order placement. Prior-group advance guard now treats hedge-locked groups as safe even while Triple-Gate / MinGain / Expansion->Normal is still pending; only truly unhedged exposure blocks G(N+1). Hold-log identifies blocking prior group + reason."
+#property version   "2.83"
+#property description "Golden2 EA v2.8.3 — Fixes Triple-Gate matching close that never fired when group net was deeply negative: gate now uses winning-side pool (winProfit) instead of full netCheck, so winning side is closed and its profit shreds losing side. Adds Recovery Grid (RC#N) auto-placed on remaining losing side after partial match-close, plus per-grid pair + Recovery rows on Hedging dashboard."
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -230,6 +230,13 @@ input double  InpExitMinNetUSD        = 1.0;                         // Min net 
 input double  InpExit_MinGainUSD      = 100.0;                       // [v2.8.0] Min hedge-group GAIN (USD) since hedge opened, before matching close
 input bool    InpExit_SequentialQueue = true;                        // [v2.8.0] Close hedge groups sequentially: G1 must be flat before G2 can match-close
 input bool    InpExit_RecoveryAdvanceUnblock = true;                 // [v2.8.0] Treat groups still in matching-close recovery as 'safe' so G(N+1) can open
+// [v2.8.3] Recovery Grid — auto-placed on losing side after partial match-close
+input bool    InpRecovery_Enable        = true;                      // [v2.8.3] Enable Recovery Grid (RC#N) after Triple-Gate partial close
+input double  InpRecovery_StartLot      = 0.0;                       // [v2.8.3] Recovery seed lot (0 = use last residual ticket lot)
+input double  InpRecovery_Multiplier    = 1.5;                       // [v2.8.3] Recovery lot multiplier per RC level
+input int     InpRecovery_DistancePips  = 0;                         // [v2.8.3] Recovery distance points (0 = reuse GridLoss_Points)
+input int     InpRecovery_MaxLevels     = 5;                         // [v2.8.3] Max RC levels per group
+input int     InpDashGridPairsMax       = 5;                         // [v2.8.3] Max Grid#N pair rows shown on Hedging dashboard
 
 //--- === Volatility Squeeze Filter === [v1.6 ported from Gold Miner]
 input string  __sec_sq__              = "=== Volatility Squeeze Filter ==="; // ---
@@ -352,6 +359,8 @@ bool     g_groupInRecovery[51];
 // close requires this latch to be ARMED.
 bool     g_groupSeenExp[51];        // saw g_sqExpansion[2]==true while hedge active
 bool     g_groupExpToNormal[51];    // saw Expansion AND now back to Normal -> gate ready
+// [v2.8.3] Recovery Grid level counter per group (RC#1..N already placed)
+int      g_groupRecoveryLevel[51];
 
 // Snapshot of ATR (in points) at the moment last grid order was placed (per group, side, family 0=GL/1=GP)
 double   g_atrAtLastGridLoss[51][2];
@@ -2473,18 +2482,22 @@ void TryMatchingCloseForGroup(int g){
 
    double winProfit = (winSide==0) ? (plBuyMain + plBuyHedge) : (plSellMain + plSellHedge);
    double netCheck = plBuyMain+plSellMain+plBuyHedge+plSellHedge;
-   if(netCheck < InpExitMinNetUSD) return;
+   // [v2.8.3] FIX: Old code used `netCheck < InpExitMinNetUSD` which never
+   // fires when group net is deeply negative (the whole point of matching
+   // close is to USE winning-side profit to shred losing side). Now we gate
+   // on the WINNING-SIDE pool: if winProfit covers MinNetUSD we can start
+   // closing the winning side and using its profit to shred losers.
+   if(winProfit < InpExitMinNetUSD) return;
 
    // [v2.8.0] Min Gain gate — group net P/L must have IMPROVED by at least
    // InpExit_MinGainUSD vs. the snapshot taken when hedge first appeared.
-   // Without this gate, matching close fires the moment netCheck > MinNetUSD,
-   // even if the group is still deeply underwater overall.
+   // Keeps the choppy-market guard intact (uses netCheck delta, not abs net).
    if(g_groupHedgeBaselineSet[g] && InpExit_MinGainUSD > 0.0){
       double gainNow = netCheck - g_groupNetAtHedgeStart[g];
       if(gainNow < InpExit_MinGainUSD){
          static datetime lastMinGainLog = 0;
          if(InpVerboseLog && TimeCurrent() - lastMinGainLog >= 60){
-            PrintFormat("Golden2 v2.8.0: G%d MinGain hold gain=%.2f need=%.2f baseline=%.2f net=%.2f",
+            PrintFormat("Golden2 v2.8.3: G%d MinGain hold gain=%.2f need=%.2f baseline=%.2f net=%.2f",
                         g, gainNow, InpExit_MinGainUSD, g_groupNetAtHedgeStart[g], netCheck);
             lastMinGainLog = TimeCurrent();
          }
@@ -2494,19 +2507,25 @@ void TryMatchingCloseForGroup(int g){
 
    if(!ClaimMutex(g)) return;
 
+   int losBefore = CountGroupPositions(g, losSide, -1);
    CloseAllGroupSide(g, winSide);
    double pool = winProfit;
    ShredCloseLosingSide(g, losSide, pool);
+   int losAfter = CountGroupPositions(g, losSide, -1);
 
    g_lastHedgeCloseTime = TimeCurrent();
    ReleaseMutex(g);
 
-   // [v2.8.0] If group still has residual positions after partial close,
-   // flag it as "in recovery" so IsGroupSafeToAdvance unblocks G(N+1).
-   // Recovery flag auto-clears in OnTick group-empty branch.
+   PrintFormat("Golden2 v2.8.3: G%d MATCH-CLOSE win=%s pool=$%.2f lossBefore=%d lossAfter=%d",
+               g, winSide==0?"BUY":"SELL", winProfit, losBefore, losAfter);
+
+   // [v2.8.0+] If group still has residual positions after partial close,
+   // flag it as "in recovery" so IsGroupSafeToAdvance unblocks G(N+1) and
+   // [v2.8.3] place a Recovery Grid order on the residual losing side.
    if(GroupHasAnyPositions(g)){
       g_groupInRecovery[g] = true;
-      if(InpVerboseLog) PrintFormat("Golden2 v2.8.0: G%d entered RECOVERY mode (post-match residual; advance unblocked)", g);
+      if(InpVerboseLog) PrintFormat("Golden2 v2.8.3: G%d entered RECOVERY mode (post-match residual; advance unblocked)", g);
+      if(InpRecovery_Enable) PlaceRecoveryGridIfNeeded(g, losSide);
    }
 
    if(InpPostHedge_AllowContinuation) PlaceContinuationGridIfNeeded(g); // [v1.6] off by default = freeze
@@ -2586,6 +2605,57 @@ void PlaceContinuationGridIfNeeded(int g){
          if(InpVerboseLog) PrintFormat("Golden2 v1.1: Continuation GL#%d %s G%d hedge=%d lot=%.2f ok=%d",
             gl+1, sd==0?"BUY":"SELL", g, hd, lot, ok);
       }
+   }
+}
+
+// [v2.8.3] Recovery Grid — placed once per match-close cycle on the residual
+// losing side. Uses a market order (we are already past hedge & breakout, so
+// there is no candle/squeeze guard reason to wait). Lot = StartLot or last
+// residual ticket lot, multiplied by Multiplier^level. Distance is informational
+// only (logged) — market entry is immediate; the order joins next match-close
+// cycle via ParseComment(gp==g).
+void PlaceRecoveryGridIfNeeded(int g, int losSide){
+   if(!InpRecovery_Enable) return;
+   if(g_groupRecoveryLevel[g] >= InpRecovery_MaxLevels){
+      if(InpVerboseLog) PrintFormat("Golden2 v2.8.3: G%d Recovery max levels (%d) reached — skip", g, InpRecovery_MaxLevels);
+      return;
+   }
+   // Find lot of largest residual ticket on losing side as fallback seed
+   double seedLot = 0.0;
+   int total = PositionsTotal();
+   for(int i=0;i<total;i++){
+      ulong tk = PositionGetTicket(i);
+      if(tk==0) continue;
+      if(!PositionSelectByTicket(tk)) continue;
+      if((long)PositionGetInteger(POSITION_MAGIC) != InpMagic) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      string c = PositionGetString(POSITION_COMMENT);
+      int gp; bool hd; string tag;
+      if(!ParseComment(c, gp, hd, tag)) continue;
+      if(gp != g) continue;
+      int sd = (PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY)?0:1;
+      if(sd != losSide) continue;
+      double lt = PositionGetDouble(POSITION_VOLUME);
+      if(lt > seedLot) seedLot = lt;
+   }
+   double base = (InpRecovery_StartLot > 0.0) ? InpRecovery_StartLot : seedLot;
+   if(base <= 0.0) base = InpInitialLot;
+   int level = g_groupRecoveryLevel[g] + 1;
+   double lot = NormalizeLot(base * MathPow(InpRecovery_Multiplier, (double)(level-1)));
+   int distPts = (InpRecovery_DistancePips > 0) ? InpRecovery_DistancePips : GridLoss_Points;
+
+   string c = MakeComment(g, (ENUM_SIDE)losSide, false, StringFormat("RC#%d", level));
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   bool ok = (losSide==0) ? trade.Buy(lot, _Symbol, ask, 0, 0, c)
+                          : trade.Sell(lot, _Symbol, bid, 0, 0, c);
+   if(ok){
+      g_groupRecoveryLevel[g] = level;
+      PrintFormat("Golden2 v2.8.3: G%d Recovery RC#%d %s lot=%.2f distHint=%dpt seed=%.2f base=%.2f mult=%.2f",
+                  g, level, losSide==0?"BUY":"SELL", lot, distPts, seedLot, base, InpRecovery_Multiplier);
+   } else {
+      PrintFormat("Golden2 v2.8.3: G%d Recovery RC#%d %s FAILED ret=%d err=%d",
+                  g, level, losSide==0?"BUY":"SELL", trade.ResultRetcode(), GetLastError());
    }
 }
 
@@ -3151,7 +3221,7 @@ void DrawDashboard(){
 
    // Header
    string entryLbl = (InpEntryMode == G2_ENTRY_PENDING) ? "PENDING" : (InpEntryMode == G2_ENTRY_SMA) ? "SMA" : "INSTANT"; // [v2.73]
-   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.8.2    Entry: %s    Side: %s", entryLbl, modeLbl), InpDashAccent);
+   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.8.3    Entry: %s    Side: %s", entryLbl, modeLbl), InpDashAccent);
    y += rowH+2;
 
    // ==== Account section ====
@@ -3319,6 +3389,54 @@ void DrawDashboard(){
             color gainClr = (gainNow >= InpExit_MinGainUSD) ? InpDashGood : InpDashAccent;
             DashRow(StringFormat("R_G%d_GAIN", g), xR, yR, wR, rowH, "  TripleGrid", gainInfo, gainClr);
             yR += rowH;
+
+            // ---- [v2.8.3] Per-grid Loss/Hedge pair rows (Gold-Miner style) ----
+            // Pair GL#N (main losing) with HD_GL#N (hedge winning) and show floating P/L.
+            // Determine losing side from main-only floating P/L (worse side = losing).
+            double plBuyMainRow  = GroupFloatingPL(g, 0, 0);
+            double plSellMainRow = GroupFloatingPL(g, 1, 0);
+            int losSideRow = (plBuyMainRow <= plSellMainRow) ? 0 : 1;
+            int winSideRow = (losSideRow==0) ? 1 : 0;
+            int maxPair = MathMin(InpDashGridPairsMax, GridLoss_MaxTrades);
+            int shownPairs = 0;
+            for(int lvl=1; lvl<=maxPair; lvl++){
+               double pLoss = 0, pHedge = 0; bool foundLoss=false, foundHedge=false;
+               int totp = PositionsTotal();
+               for(int i=0;i<totp;i++){
+                  ulong tk = PositionGetTicket(i);
+                  if(tk==0) continue;
+                  if(!PositionSelectByTicket(tk)) continue;
+                  if((long)PositionGetInteger(POSITION_MAGIC) != InpMagic) continue;
+                  if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+                  string cm = PositionGetString(POSITION_COMMENT);
+                  int gp; bool hd; string tg;
+                  if(!ParseComment(cm, gp, hd, tg)) continue;
+                  if(gp != g) continue;
+                  if(tg != StringFormat("GL#%d", lvl)) continue;
+                  int sd = (PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY)?0:1;
+                  double pp = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+                  if(!hd && sd==losSideRow){ pLoss = pp; foundLoss = true; }
+                  else if(hd && sd==winSideRow){ pHedge = pp; foundHedge = true; }
+               }
+               if(!foundLoss && !foundHedge) continue;
+               double net = pLoss + pHedge;
+               string gridInfo = StringFormat("L:%+.0f H:%+.0f N:%+.0f", pLoss, pHedge, net);
+               color gridClr = (net >= 0) ? InpDashGood : InpDashBad;
+               DashRow(StringFormat("R_G%d_GRID%d", g, lvl), xR, yR, wR, rowH,
+                       StringFormat("  Grid#%d", lvl), gridInfo, gridClr);
+               yR += rowH;
+               shownPairs++;
+               if(shownPairs >= InpDashGridPairsMax) break;
+            }
+
+            // ---- [v2.8.3] Recovery row (only when in recovery) ----
+            if(g_groupInRecovery[g]){
+               int rcLvl = g_groupRecoveryLevel[g];
+               string rcInfo = StringFormat("RC#%d/%d  mult=%.2f", rcLvl, InpRecovery_MaxLevels, InpRecovery_Multiplier);
+               DashRow(StringFormat("R_G%d_RECOV", g), xR, yR, wR, rowH,
+                       "  Recovery", rcInfo, InpDashAccent);
+               yR += rowH;
+            }
          }
       }
       if(!any){
@@ -3443,6 +3561,8 @@ int OnInit(){
       // [v2.8.1]
       g_groupSeenExp[i]           = false;
       g_groupExpToNormal[i]       = false;
+      // [v2.8.3]
+      g_groupRecoveryLevel[i]     = 0;
    }
 
    // [v2.8.1] g_bbHandle / g_atrHandle (the old Exit BB/Keltner) are NOT
@@ -3487,7 +3607,7 @@ int OnInit(){
 
    string entryModeLbl = (InpEntryMode == G2_ENTRY_PENDING) ? "PENDING" :
                          (InpEntryMode == G2_ENTRY_SMA)     ? "SMA"     : "INSTANT";
-   PrintFormat("Golden2 EA v2.8.2 initialized | Magic=%I64d | MaxGroups=%d | EntryMode=%s | InitMode=%d | GridLoss=%s | Squeeze=%s [BB:%s ADX:%s(>=%.1f) ATR:%s EMA:%s(P=%d)] | TripleGate=%s | ExitGate=Squeeze-TF3-Latch | MinGainUSD=%.1f | SeqQueue=%s | RecoveryAdvUnblock=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | ProfitSideUnhedgedAdv=%s | ForceCloseOppUnhedged=%s(%ds) | Tester=%s Visual=%s Opt=%s DashInterval=%ds | TesterHideIndicators=%s SideTaggedComments=ON",
+   PrintFormat("Golden2 EA v2.8.3 initialized | Magic=%I64d | MaxGroups=%d | EntryMode=%s | InitMode=%d | GridLoss=%s | Squeeze=%s [BB:%s ADX:%s(>=%.1f) ATR:%s EMA:%s(P=%d)] | TripleGate=%s | ExitGate=Squeeze-TF3-Latch+WinPool | MinGainUSD=%.1f | SeqQueue=%s | RecoveryAdvUnblock=%s | RecoveryGrid=%s(mult=%.2f max=%d) | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | ProfitSideUnhedgedAdv=%s | ForceCloseOppUnhedged=%s(%ds) | Tester=%s Visual=%s Opt=%s DashInterval=%ds | TesterHideIndicators=%s SideTaggedComments=ON",
                (long)InpMagic, InpMaxGroups, entryModeLbl, (int)InpInitSideMode,
                GridLoss_Enable?"ON":"OFF", InpSQ_Enable?"ON":"OFF",
                InpSQ_UseBBBreakout?"ON":"OFF", InpSQ_UseADX?"ON":"OFF", InpSQ_ADXThreshold,
@@ -3496,6 +3616,7 @@ int OnInit(){
                InpExit_MinGainUSD,
                InpExit_SequentialQueue?"ON":"OFF",
                InpExit_RecoveryAdvanceUnblock?"ON":"OFF",
+               InpRecovery_Enable?"ON":"OFF", InpRecovery_Multiplier, InpRecovery_MaxLevels,
                InpInitTrailOnBarClose?"ON":"OFF",
                InpFrameRecenterMinPips,
                InpInitReEntryOnClose?"ON":"OFF",
@@ -3609,6 +3730,8 @@ void OnTick(){
          // [v2.8.1] reset per-group Expansion->Normal latch when group is flat
          g_groupSeenExp[g]          = false;
          g_groupExpToNormal[g]      = false;
+         // [v2.8.3] reset Recovery Grid level counter
+         g_groupRecoveryLevel[g]    = 0;
          continue;
       }
       // [v2.8.0] Stamp baseline net P/L the first tick a hedge is observed

@@ -1,48 +1,100 @@
-## ปัญหาที่พบ
-จาก log ในภาพ: `hold G2->G3 (cur safe=1 priors safe=0 ... recovery=OFF)` หมายความว่า **G2 พร้อมจะไป G3 แล้ว** แต่ระบบถูกบล็อกโดย `AreAllPriorGroupsSafe(cur)` เพราะยังมีกลุ่มก่อนหน้า เช่น G1 ที่มี position ค้างและยังไม่ถูกนับว่า `safe`.
+## ปัญหาที่พบจริงในภาพ
 
-สาเหตุหลักในโค้ดตอนนี้คือ `TryAdvanceToNextGroup()` เลือก `cur` เป็น **กลุ่ม active ล่าสุด/สูงสุด** แล้วเช็กว่า prior groups ทุกกลุ่มต้อง safe ก่อน แต่หาก prior group ยังรอ Triple-Gate/MinGain/Expansion→Normal หรือยังไม่ถูก flag เป็น recovery ระบบจะ block การเปิดกลุ่มถัดไปตลอด จึงเกิดอาการ “นิ่ง ไม่ออกออเดอร์ต่อ”.
+จาก Hedging Table:
+- G1* ACTIVE: MainL=3.67, HdgL=3.43, **P/L = -2981.59**, DD=412.3%
+- Gate: `T:SQ Cy:Ready Z:OUT OK 2468pts` (ผ่านหมด)
+- TripleGrid: `G:$484.08 / $100.00` (gain ผ่าน MinGain แล้ว)
 
-## แผนแก้ไข
+**แต่ระบบไม่ปิดออเดอร์เลย**
 
-### 1) แยกสถานะ “safe สำหรับเปิดกลุ่มถัดไป” ออกจาก “รอปิด Matching Close”
-- เพิ่ม helper ใหม่สำหรับตรวจ prior group แบบไม่เข้มเกินไป เช่น `IsPriorGroupSafeForAdvance()`
-- ถ้ากลุ่มก่อนหน้ามี hedge position แล้ว และ main side ที่ติดลบมี hedge ครอบอยู่ ให้ถือว่า “ปลอดภัยพอสำหรับให้ G ถัดไปเปิดต่อ”
-- ไม่ต้องรอให้ Triple-Gate ปิดสำเร็จหรือเข้า `g_groupInRecovery` ก่อน เพราะนั่นคือ logic ปิด/ฟื้นตัว ไม่ใช่เงื่อนไขเปิดกลุ่มใหม่
+### Root cause (ยืนยันจากโค้ด `TryMatchingCloseForGroup` บรรทัด 2475–2476)
 
-### 2) ปรับ `AreAllPriorGroupsSafe()` ให้ไม่ deadlock
-- เปลี่ยนให้ใช้ helper ใหม่แทน `IsGroupSafeToAdvance()` แบบเดิม
-- ยังคงบล็อกกรณีอันตรายจริง:
-  - prior group มี main position แต่ไม่มี hedge เลย
-  - prior group ยังมี pending initial/main ที่ยังไม่ hedge-lock
-  - prior group ยังไม่เข้า hedge state
-- แต่ไม่บล็อกกรณีที่ prior group hedge-lock แล้ว แม้ยังมี floating loss และยังรอ MinGain/Expansion gate อยู่
+```mql5
+double netCheck = plBuyMain + plSellMain + plBuyHedge + plSellHedge; // = -2981.59
+if(netCheck < InpExitMinNetUSD) return;   // -2981 < 1.0 → return ทันที
+```
 
-### 3) เพิ่ม diagnostic log ให้ชี้กลุ่มที่เป็นตัวบล็อกจริง
-- แก้ log `hold G%d->G%d ... priors safe=0` ให้บอกเลขกลุ่ม prior ที่ block เช่น `blockPrior=G1 reason=unhedged-main/no-hedge/wait-lock`
-- จะช่วยให้ดู Journal แล้วรู้ทันทีว่าติดที่ G ไหน ไม่ใช่เห็นแค่ `priors safe=0`
+`netCheck` คือ **floating P/L รวมทั้งกลุ่ม** ซึ่งติดลบลึก (-$2981) เพราะฝั่งที่แพ้ใหญ่กว่าฝั่งชนะ. การจะให้ "Matching Close" ทำงานก็คือใช้กำไรฝั่งชนะไปหักลบฝั่งแพ้ — ไม่ใช่รอให้ทั้งกลุ่มกลับมาเป็นบวกก่อน. การ์ดบรรทัดนี้คือสาเหตุที่ทำให้ Gate ผ่านหมดแล้วยังไม่มีอะไรเกิดขึ้น.
 
-### 4) อัปเดต version ตามกฎ EA
-- เพิ่มจาก v2.8.1 เป็น v2.8.2
-- อัปเดต:
-  - header comment
-  - `#property version`
-  - `#property description`
-  - dashboard title
-  - init log / hold log version ที่เกี่ยวข้อง
+นอกจากนี้ `InpPostHedge_AllowContinuation = false` (default) ทำให้กลุ่มถูก freeze หลัง hedge — ไม่มี Recovery Grid โผล่มาช่วยเลย.
 
-### 5) บันทึก memory หลังแก้
-- เพิ่ม memory ใหม่สำหรับ Golden2 v2.8.2 ว่า prior-group advance guard ต้องไม่ผูกกับ Triple-Gate/Recovery close state จนทำให้ queue deadlock
+## แผนแก้ไข v2.8.3 (`public/docs/mql5/Golden2_EA.mq5`)
 
-## สิ่งที่ไม่เปลี่ยนแปลง
-- ไม่แก้ `trade.Buy`, `trade.Sell`, `trade.PositionClose`, `OrderSend`, `OrderModify`, `OrderDelete`
-- ไม่แก้ Entry Mode: PENDING / SMA / INSTANT
-- ไม่แก้ Grid Loss / Grid Profit lot, distance, candle confirm, ATR snapshot
-- ไม่แก้ Hedge mirror 1:1, pending hedge, arm/disarm, block percent
-- ไม่แก้ Average TP/SL, MaxGrid trailing, per-order trailing, accumulate close
-- ไม่แก้ Force-close opposite unhedged
-- ไม่แก้ ParseComment/MakeComment side-tag format
-- ไม่แก้ ATR/ADX hide logic ในรอบนี้ นอกจากคงของเดิมไว้
+### 1) แก้ Matching-Close Gate ให้ใช้ฝั่งชนะเป็นเกณฑ์
+
+เปลี่ยนเงื่อนไขใน `TryMatchingCloseForGroup`:
+
+```mql5
+// เดิม: ทั้งกลุ่มต้องเป็นบวก (เป็นไปไม่ได้ตอน hedge ลึก)
+if(netCheck < InpExitMinNetUSD) return;
+
+// ใหม่: pool ฝั่งชนะต้องพอที่จะเริ่ม shred ฝั่งแพ้
+if(winProfit < InpExitMinNetUSD) return;
+```
+
+- `winProfit` = `plBuyMain+plBuyHedge` หรือ `plSellMain+plSellHedge` ของฝั่งที่ราคาวิ่งไปทาง avg-mid
+- `MinGainUSD` gate (gain since hedge open) คงเดิม — เป็นการกัน choppy
+- Pool ใน `ShredCloseLosingSide` ใช้ `winProfit` เป็นทุนตั้งต้น (ของเดิมอยู่แล้ว) เพื่อปิดไม้แพ้ทีละไม้จากกำไรมากสุด
+
+### 2) เปิด Recovery Grid อัตโนมัติหลัง Partial Match-Close
+
+หลัง `CloseAllGroupSide(winSide)` + `ShredCloseLosingSide(losSide, pool)` ถ้ายังเหลือไม้ค้างฝั่งแพ้ → set `g_groupInRecovery[g]=true` (มีอยู่แล้ว) **และ** เปิด Recovery Grid ครั้งเดียวต่อรอบ:
+
+- เพิ่ม input ใหม่:
+  - `InpRecovery_Enable = true` — เปิด/ปิดฟีเจอร์
+  - `InpRecovery_StartLot = 0.0` — 0 = ใช้ lot ของไม้ล่าสุดฝั่งที่เหลือ
+  - `InpRecovery_Multiplier = 1.5`
+  - `InpRecovery_DistancePips = 0` — 0 = ใช้ค่าจาก Grid Loss settings เดิม
+  - `InpRecovery_MaxLevels = 5`
+- เพิ่ม global `int g_groupRecoveryLevel[51]`
+- ฟังก์ชันใหม่ `PlaceRecoveryGridIfNeeded(g, losSide)` วาง pending stop ฝั่งแพ้ตาม distance + multiplier; ใช้ comment tag `RC#N` (ไม่ชน `GL#N`)
+- เรียกหลัง Match-Close (แทนที่ `PlaceContinuationGridIfNeeded` flow เดิม)
+- Recovery Grid มีสิทธิ์ปิดร่วมใน Match-Close รอบถัดไป (เพราะ ParseComment คืน `gp==g` อยู่แล้ว)
+
+### 3) เพิ่ม Triple-Grid Dashboard (สไตล์ Gold Miner)
+
+ใน Right Panel ที่ block ของกลุ่มที่ hedge active เพิ่ม 3 บรรทัดใต้ `TripleGrid`:
+
+```
+G1* ACTIVE          MainL HdgL  P/L      Pend DD%
+  Gate    T:SQ Cy:Ready Z:OUT OK 2468pts
+  TripleGrid  G:$484.08/$100.00
+  Grid#1  Loss:-2124  Hedge:+1473  Net:-651      ← per-grid pair
+  Grid#2  Loss:-1559  Hedge:+1061  Net:-498
+  Recovery RC#1 lot=1.05 dist=120pt Lv=1/5       ← recovery status
+```
+
+- ดึงคู่ Loss/Hedge จาก ParseComment โดยจับคู่ `GL#N (main losing side)` ↔ `HD_GL#N (hedge winning side)` แล้วโชว์ floating ต่อคู่
+- โชว์สูงสุด N คู่ (default 5) เพื่อกัน panel ล้น
+- บรรทัด Recovery โชว์ตอน `g_groupInRecovery[g]==true`
+
+### 4) Version & Logging
+
+- Header / `#property version "2.83"` / `#property description` / dashboard title / init log → v2.8.3
+- เพิ่ม log ตอน Match-Close ทำงานจริง: `Golden2 v2.8.3: G%d MATCH-CLOSE win=%s pool=%.2f lossClosed=%d residual=%d`
+
+### 5) Memory
+
+- สร้าง `mem://trading/golden2-ea/v2-8-3-matchclose-winpool-recovery-grid.md`
+- อัปเดต index
+
+## สิ่งที่ "ห้ามแตะ" (ตามกฎเหล็ก MQL5)
+
+- ❌ `trade.Buy/Sell/PositionClose/OrderModify/OrderSend/OrderDelete` (เพิ่ม OrderSend ใหม่สำหรับ Recovery Grid เท่านั้น — เป็นฟีเจอร์ใหม่ ไม่แก้ของเดิม)
+- ❌ Entry Mode: PENDING / SMA / INSTANT
+- ❌ Squeeze BB/KC/ADX/EMA/ATR computation
+- ❌ Grid Loss / Grid Profit lot, distance, candle confirm
+- ❌ Hedge mirror 1:1, pending hedge, arm/disarm, block percent
+- ❌ Average TP/SL, MaxGrid trailing, per-order trailing, accumulate close
+- ❌ Force-close opposite unhedged
+- ❌ ParseComment / MakeComment B_/S_ side tags (Recovery ใช้ tag `RC#N` ผ่าน MakeComment เดิม)
+- ❌ ATR/ADX TesterHideIndicators wiring (v2.8.1)
+- ❌ Sequential Queue / MinGainUSD / Squeeze TF3 latch logic (v2.8.0/v2.8.1) — แก้แค่บรรทัด `netCheck` → `winProfit`
+- ❌ Prior-group advance guard (v2.8.2)
 
 ## ผลลัพธ์ที่คาดหวัง
-เมื่อ G2 ขึ้น `cur safe=1` แต่ prior group ยังมี hedge-lock ค้างอยู่ ระบบจะไม่หยุดที่ `priors safe=0` แบบเดิม และสามารถเปิด G3 ต่อได้ โดยยังรักษา guard ไม่ให้ข้ามกลุ่มที่ยังเป็น unhedged exposure จริง
+
+- ในเคสภาพ: `winProfit ≈ $484 ≥ MinNetUSD($1)` → เริ่ม `CloseAllGroupSide(winSide)` ปิดฝั่งชนะทั้งหมด, ใช้ $484 เป็น pool ไป `ShredCloseLosingSide` ปิดไม้แพ้ใหญ่สุดที่ pool รับไหว
+- กลุ่มเหลือไม้แพ้ค้าง → ติดธง Recovery + วาง `RC#1` ฝั่งเดียวกัน
+- Match-Close รอบถัดไป จะรวม `RC#N` เข้าคู่กำไรชุดใหม่
+- Dashboard โชว์ Grid#N pair + Recovery status ชัดเจนแบบ Gold Miner
