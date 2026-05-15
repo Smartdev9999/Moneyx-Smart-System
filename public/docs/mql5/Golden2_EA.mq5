@@ -3218,6 +3218,45 @@ void DrawDashboard(){
          // Override key color separately
          ObjectSetInteger(0, g_dashPrefix + "K_" + StringFormat("R_G%d", g), OBJPROP_COLOR, stClr);
          yR += rowH;
+
+         // [v2.8.1] Gold-Miner-style Triple-Gate detail rows for hedge-active groups
+         if(hPos > 0){
+            // ---- Gate row: T:SQ Cy:<...> Z:<...> ----
+            string cyStat = GroupCycleStatus(g);
+            string zStat  = "N/A";
+            double avgMain  = GroupAveragePrice(g, -1, 0);
+            double avgHedge = GroupAveragePrice(g, -1, 1);
+            if(avgMain > 0 && avgHedge > 0){
+               double bidPx = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+               double askPx = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+               double midPx = (bidPx + askPx) * 0.5;
+               double avgMidPx = (avgMain + avgHedge) * 0.5;
+               double zHi = MathMax(avgMain, avgHedge);
+               double zLo = MathMin(avgMain, avgHedge);
+               if(midPx > zLo && midPx < zHi){
+                  zStat = "IN ZONE";
+               } else {
+                  double distPts = MathAbs(midPx - avgMidPx) / g_point;
+                  if(distPts < InpExitBreakoutPips)
+                     zStat = StringFormat("OUT %d/%dpts", (int)distPts, InpExitBreakoutPips);
+                  else
+                     zStat = StringFormat("OUT OK %dpts", (int)distPts);
+               }
+            }
+            string gateInfo = StringFormat("T:SQ Cy:%s Z:%s", cyStat, zStat);
+            color gateClr = (cyStat=="Ready" && StringFind(zStat,"OUT OK")>=0) ? InpDashGood : InpDashAccent;
+            DashRow(StringFormat("R_G%d_GATE", g), xR, yR, wR, rowH, "  Gate", gateInfo, gateClr);
+            yR += rowH;
+
+            // ---- Gain row: G:<gainNow>/<need> Recovery flag ----
+            double netNow = GroupFloatingPL(g, -1, -1);
+            double gainNow = g_groupHedgeBaselineSet[g] ? (netNow - g_groupNetAtHedgeStart[g]) : 0.0;
+            string recLbl = g_groupInRecovery[g] ? " RECOV" : "";
+            string gainInfo = StringFormat("G:$%.2f/$%.2f%s", gainNow, InpExit_MinGainUSD, recLbl);
+            color gainClr = (gainNow >= InpExit_MinGainUSD) ? InpDashGood : InpDashAccent;
+            DashRow(StringFormat("R_G%d_GAIN", g), xR, yR, wR, rowH, "  TripleGrid", gainInfo, gainClr);
+            yR += rowH;
+         }
       }
       if(!any){
          DashRow("R_EMPTY", xR, yR, wR, rowH, "(no active groups)", "-", InpDashColor);
