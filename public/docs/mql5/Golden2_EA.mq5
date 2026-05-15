@@ -2963,12 +2963,24 @@ void TryAdvanceToNextGroup(){
       // legacy edge-only behaviour preserved for users who want v2.1 semantics
    }
    if(InpGroup_RequireFullLockBeforeNext){
-      if(!IsGroupSafeToAdvance(cur) || !AreAllPriorGroupsSafe(cur)){
+      int blockReason = 0;
+      int blockPrior  = FindBlockingPriorGroup(cur, blockReason);
+      bool curSafe    = IsGroupSafeToAdvance(cur);
+      bool priorsSafe = (blockPrior < 0);
+      if(!curSafe || !priorsSafe){
          static datetime lastHoldLog = 0;
          if(InpVerboseLog && TimeCurrent() - lastHoldLog >= 60){
-            PrintFormat("Golden2 v2.8.0: hold G%d->G%d (cur safe=%d priors safe=%d blkBUY=%d blkSELL=%d rawBUY=%d rawSELL=%d hedgeBuy=%d hedgeSell=%d plBUY=%.2f plSELL=%.2f profitBypass=%s recovery=%s)",
+            string reasonLbl = "none";
+            switch(blockReason){
+               case 3: reasonLbl = "no-hedge";       break;
+               case 4: reasonLbl = "unhedged-main";  break;
+               case 5: reasonLbl = "pending-only";   break;
+               default: reasonLbl = (blockPrior<0?"none":"unknown"); break;
+            }
+            PrintFormat("Golden2 v2.8.2: hold G%d->G%d (cur safe=%d priors safe=%d blockPrior=%s reason=%s blkBUY=%d blkSELL=%d rawBUY=%d rawSELL=%d hedgeBuy=%d hedgeSell=%d plBUY=%.2f plSELL=%.2f profitBypass=%s recovery=%s)",
                         cur, cur+1,
-                        IsGroupSafeToAdvance(cur), AreAllPriorGroupsSafe(cur),
+                        curSafe?1:0, priorsSafe?1:0,
+                        (blockPrior<0?"-":StringFormat("G%d", blockPrior)), reasonLbl,
                         CountBlockingMainPositionsForAdvance(cur,0), CountBlockingMainPositionsForAdvance(cur,1),
                         CountGroupPositions(cur,0,0), CountGroupPositions(cur,1,0),
                         CountGroupPositions(cur,0,1), CountGroupPositions(cur,1,1),
