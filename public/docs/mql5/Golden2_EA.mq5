@@ -362,6 +362,9 @@ bool     g_groupSeenExp[51];        // saw g_sqExpansion[2]==true while hedge ac
 bool     g_groupExpToNormal[51];    // saw Expansion AND now back to Normal -> gate ready
 // [v2.8.3] Recovery Grid level counter per group (RC#1..N already placed)
 int      g_groupRecoveryLevel[51];
+// [v2.8.4] Post-match avg-TP/SL synced to broker per (group, side); 0 = none
+double   g_postMatchTP[51][2];
+double   g_postMatchSL[51][2];
 
 // Snapshot of ATR (in points) at the moment last grid order was placed (per group, side, family 0=GL/1=GP)
 double   g_atrAtLastGridLoss[51][2];
