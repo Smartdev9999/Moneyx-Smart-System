@@ -3301,6 +3301,12 @@ int OnInit(){
    g_isVisualMode   = (bool)MQLInfoInteger(MQL_VISUAL_MODE);
    g_isOptimization = (bool)MQLInfoInteger(MQL_OPTIMIZATION);
    g_lastAuxChartSweep = 0;
+   // [v2.8.1] CRITICAL: TesterHideIndicators(true) MUST be called BEFORE any
+   // iATR/iADX/iBands/iMA handle is created. Per MQL5 docs, every indicator
+   // handle created AFTER this call is flagged "hide" so MT5 Strategy Tester
+   // never attaches it to the visual chart or the auto-opened result chart.
+   // This is the canonical fix for "ATR/ADX still visible in backtest".
+   if(g_isTesterMode) TesterHideIndicators(true);
    // [v2.7.9] Tester chart cleanup — speeds up backtest by removing ATR/ADX
    // and other indicator graphics + auxiliary per-TF charts. No-op live.
    CleanupChartIndicatorsInTester();
