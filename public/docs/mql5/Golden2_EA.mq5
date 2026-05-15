@@ -2819,14 +2819,65 @@ bool IsGroupSafeToAdvance(int g){
    return (buyOK && sellOK);
 }
 
+// [v2.8.2] Lighter "safe enough to advance past" check for PRIOR groups.
+// Distinct from IsGroupSafeToAdvance (which is used for the CURRENT group and
+// blocks until the group is fully resolved). For prior groups we only need to
+// guarantee no UNHEDGED exposure remains — Triple-Gate / MinGain / Expansion
+// Gate are CLOSE conditions, not advancement conditions, and waiting for them
+// here caused the queue to deadlock ("priors safe=0" forever).
+//
+// A prior group is safe-for-advance when ANY of:
+//   1) it has no positions left (already flat),
+//   2) recovery flag is set (post-matching residual, managed independently),
+//   3) it has hedge positions AND every surviving main side is either empty,
+//      profitable (when InpAdvance_AllowProfitSideUnhedged), or covered by
+//      opposite-side hedge — i.e. no unhedged losing exposure.
+//
+// Returns reason code via out-param for diagnostic logging:
+//   0=safe-flat, 1=safe-recovery, 2=safe-hedge-locked,
+//   3=block-no-hedge, 4=block-unhedged-main, 5=block-pending-only
+bool IsPriorGroupSafeForAdvance(int g, int &reason){
+   reason = 0;
+   if(!GroupHasAnyPositions(g)){
+      // Pendings without positions = idle frame waiting to fill, that's still
+      // a live unhedged risk for that group. Treat as not-safe.
+      if(GroupHasAnyPendings(g)){ reason = 5; return false; }
+      return true; // truly empty
+   }
+   if(InpExit_RecoveryAdvanceUnblock && g_groupInRecovery[g]){
+      reason = 1; return true;
+   }
+   bool hedgeAny = (CountGroupPositions(g, -1, 1) > 0);
+   if(!hedgeAny){
+      reason = 3; return false; // main positions but no hedge = unsafe
+   }
+   bool buyOK  = IsSideEffectivelySafeForAdvance(g, 0);
+   bool sellOK = IsSideEffectivelySafeForAdvance(g, 1);
+   if(buyOK && sellOK){ reason = 2; return true; }
+   reason = 4; return false;
+}
+
+// [v2.8.2] Returns blocking prior group (1..curG-1) or -1 if all safe.
+// Out-param 'reason' set per IsPriorGroupSafeForAdvance codes.
+int FindBlockingPriorGroup(int curG, int &reason){
+   reason = 0;
+   for(int i=1; i<curG; i++){
+      int r = 0;
+      if(!IsPriorGroupSafeForAdvance(i, r)){
+         reason = r;
+         return i;
+      }
+   }
+   return -1;
+}
+
 // [v2.2] Verify every group BEFORE curG is also safe (no orphan unlocked main
 // in groups 1..curG-1). Prevents skipping past a stuck older group.
+// [v2.8.2] Now uses IsPriorGroupSafeForAdvance — no longer blocks on pending
+// Triple-Gate close, only on real unhedged exposure.
 bool AreAllPriorGroupsSafe(int curG){
-   for(int i=1; i<curG; i++){
-      if(!GroupHasAnyPositions(i)) continue; // empty group is fine
-      if(!IsGroupSafeToAdvance(i)) return false;
-   }
-   return true;
+   int dummy = 0;
+   return (FindBlockingPriorGroup(curG, dummy) < 0);
 }
 
 // [v2.7.8] Force-close opposite unhedged main side when group is hedge-locked.
