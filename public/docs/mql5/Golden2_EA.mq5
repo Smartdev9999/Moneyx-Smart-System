@@ -361,8 +361,13 @@ datetime g_accumTriggerTime        = 0;
 //================ HELPERS: comments / parsing ================
 string SidePrefix(ENUM_SIDE s){ return (s==SIDE_BUY?"B":"S"); }
 
-string MakeComment(int g, bool hedge, string tag){
-   string base = StringFormat("G%d_", g);
+// [v2.7.9] MakeComment now embeds B_/S_ side tag after group: G{n}_{B|S}_{tag}
+// or G{n}_{B|S}_HD_{tag} for hedge. Backward-compatible parser still accepts
+// legacy G{n}_{tag} / G{n}_HD_{tag} (without B_/S_) so historical positions
+// from older versions parse cleanly.
+string MakeComment(int g, ENUM_SIDE side, bool hedge, string tag){
+   string sd   = (side==SIDE_BUY ? "B_" : "S_");
+   string base = StringFormat("G%d_%s", g, sd);
    if(hedge) base += "HD_";
    return base + tag;
 }
@@ -376,6 +381,9 @@ bool ParseComment(string c, int &grp, bool &isHedge, string &tag){
    string gnum = StringSubstr(c, 1, us-1);
    grp = (int)StringToInteger(gnum);
    string rest = StringSubstr(c, us+1);
+   // [v2.7.9] Optional B_/S_ side tag — peel if present (backward-compat)
+   if(StringFind(rest,"B_") == 0)      rest = StringSubstr(rest, 2);
+   else if(StringFind(rest,"S_") == 0) rest = StringSubstr(rest, 2);
    if(StringFind(rest,"HD_") == 0){
       isHedge = true;
       tag = StringSubstr(rest, 3);
