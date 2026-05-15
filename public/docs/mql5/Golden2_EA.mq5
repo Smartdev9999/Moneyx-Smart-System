@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|     Golden2 EA v2.8.3 — Match-Close Win-Pool Gate + Recovery Grid    |
+//|  Golden2 EA v2.8.4 — Post-Match Avg Broker TP/SL + Cross-Side Shred  |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.83"
-#property description "Golden2 EA v2.8.3 — Fixes Triple-Gate matching close that never fired when group net was deeply negative: gate now uses winning-side pool (winProfit) instead of full netCheck, so winning side is closed and its profit shreds losing side. Adds Recovery Grid (RC#N) auto-placed on remaining losing side after partial match-close, plus per-grid pair + Recovery rows on Hedging dashboard."
+#property version   "2.84"
+#property description "Golden2 EA v2.8.4 — After Triple-Gate partial close + Recovery placement, residual main+hedge+RC#N orders had no broker TP/SL (g_stripped early-returns SyncSideTPSLToBroker) so broker never closed them. v2.8.4 adds SyncPostMatchAvgTPSL: per-side avg-price TP/SL pushed to broker on every residual ticket (rebinds when new RC orders open). Adds ShredAllNegativeFromAllProfit cross-side pool that uses ALL profitable orders in the group (main+hedge+loss-bound) to close losing orders before placing Recovery. Hedging dashboard simplified — removes per-grid Grid#N rows + verbose Recovery row, adds compact AvgTP B/S row."
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -236,7 +236,8 @@ input double  InpRecovery_StartLot      = 0.0;                       // [v2.8.3]
 input double  InpRecovery_Multiplier    = 1.5;                       // [v2.8.3] Recovery lot multiplier per RC level
 input int     InpRecovery_DistancePips  = 0;                         // [v2.8.3] Recovery distance points (0 = reuse GridLoss_Points)
 input int     InpRecovery_MaxLevels     = 5;                         // [v2.8.3] Max RC levels per group
-input int     InpDashGridPairsMax       = 5;                         // [v2.8.3] Max Grid#N pair rows shown on Hedging dashboard
+input bool    InpPostMatch_AvgBrokerTP  = true;                      // [v2.8.4] After hedge match: push per-side Avg TP/SL onto every residual+RC ticket (broker-side close)
+const int     InpDashGridPairsMax       = 0;                         // [v2.8.4] DEPRECATED — per-grid Grid#N rows removed; kept as const for .set backward-compat
 
 //--- === Volatility Squeeze Filter === [v1.6 ported from Gold Miner]
 input string  __sec_sq__              = "=== Volatility Squeeze Filter ==="; // ---
@@ -361,6 +362,9 @@ bool     g_groupSeenExp[51];        // saw g_sqExpansion[2]==true while hedge ac
 bool     g_groupExpToNormal[51];    // saw Expansion AND now back to Normal -> gate ready
 // [v2.8.3] Recovery Grid level counter per group (RC#1..N already placed)
 int      g_groupRecoveryLevel[51];
+// [v2.8.4] Post-match avg-TP/SL synced to broker per (group, side); 0 = none
+double   g_postMatchTP[51][2];
+double   g_postMatchSL[51][2];
 
 // Snapshot of ATR (in points) at the moment last grid order was placed (per group, side, family 0=GL/1=GP)
 double   g_atrAtLastGridLoss[51][2];
@@ -2511,12 +2515,16 @@ void TryMatchingCloseForGroup(int g){
    CloseAllGroupSide(g, winSide);
    double pool = winProfit;
    ShredCloseLosingSide(g, losSide, pool);
+   // [v2.8.4] Second pass: pool every remaining profitable order in the group
+   // (any side, main or hedge) and use it to close more losing tickets BEFORE
+   // we resort to placing a Recovery Grid order.
+   ShredAllNegativeFromAllProfit(g);
    int losAfter = CountGroupPositions(g, losSide, -1);
 
    g_lastHedgeCloseTime = TimeCurrent();
    ReleaseMutex(g);
 
-   PrintFormat("Golden2 v2.8.3: G%d MATCH-CLOSE win=%s pool=$%.2f lossBefore=%d lossAfter=%d",
+   PrintFormat("Golden2 v2.8.4: G%d MATCH-CLOSE win=%s pool=$%.2f lossBefore=%d lossAfter=%d",
                g, winSide==0?"BUY":"SELL", winProfit, losBefore, losAfter);
 
    // [v2.8.0+] If group still has residual positions after partial close,
@@ -2524,8 +2532,13 @@ void TryMatchingCloseForGroup(int g){
    // [v2.8.3] place a Recovery Grid order on the residual losing side.
    if(GroupHasAnyPositions(g)){
       g_groupInRecovery[g] = true;
-      if(InpVerboseLog) PrintFormat("Golden2 v2.8.3: G%d entered RECOVERY mode (post-match residual; advance unblocked)", g);
+      if(InpVerboseLog) PrintFormat("Golden2 v2.8.4: G%d entered RECOVERY mode (post-match residual; advance unblocked)", g);
       if(InpRecovery_Enable) PlaceRecoveryGridIfNeeded(g, losSide);
+      // [v2.8.4] Force-resync post-match avg-TP/SL immediately so RC#N + residual
+      // get broker TP/SL on this same tick instead of waiting for next OnTick.
+      g_postMatchTP[g][0]=0; g_postMatchTP[g][1]=0;
+      g_postMatchSL[g][0]=0; g_postMatchSL[g][1]=0;
+      SyncPostMatchAvgTPSL(g);
    }
 
    if(InpPostHedge_AllowContinuation) PlaceContinuationGridIfNeeded(g); // [v1.6] off by default = freeze
@@ -2659,7 +2672,129 @@ void PlaceRecoveryGridIfNeeded(int g, int losSide){
    }
 }
 
-//================ CYCLE / GROUP LIFECYCLE ================
+//================ [v2.8.4] CROSS-SIDE PROFIT-POOL SHRED ================
+// After CloseAllGroupSide(winSide) + ShredCloseLosingSide(losSide,pool), there
+// can still be profitable orders left (eg. hedge ticks of the losing side that
+// happen to be positive after a swing, or stragglers). This sweeps the whole
+// group: collects every position with profit+swap >= 0 as a budget pool, then
+// closes losing tickets cheapest-first while pool stays >= InpExitMinNetUSD.
+void ShredAllNegativeFromAllProfit(int g){
+   ulong  prTk[];   double prAmt[];   int nP=0;
+   ulong  loTk[];   double loAmt[];   int nL=0;
+   int total = PositionsTotal();
+   for(int i=0;i<total;i++){
+      ulong tk = PositionGetTicket(i);
+      if(tk==0) continue;
+      if(!PositionSelectByTicket(tk)) continue;
+      if((long)PositionGetInteger(POSITION_MAGIC) != InpMagic) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      string c = PositionGetString(POSITION_COMMENT);
+      int gp; bool hd; string tag;
+      if(!ParseComment(c, gp, hd, tag)) continue;
+      if(gp != g) continue;
+      double p = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+      if(p >= 0){
+         ArrayResize(prTk, nP+1); ArrayResize(prAmt, nP+1);
+         prTk[nP]=tk; prAmt[nP]=p; nP++;
+      } else {
+         ArrayResize(loTk, nL+1); ArrayResize(loAmt, nL+1);
+         loTk[nL]=tk; loAmt[nL]=p; nL++;
+      }
+   }
+   if(nP==0 || nL==0) return;
+   // sort losing cheapest (smallest |loss|) first  ->  loAmt ascending by abs == descending by value
+   for(int i=0;i<nL-1;i++) for(int j=i+1;j<nL;j++) if(loAmt[j] > loAmt[i]){
+      double t=loAmt[i]; loAmt[i]=loAmt[j]; loAmt[j]=t;
+      ulong tt=loTk[i]; loTk[i]=loTk[j]; loTk[j]=tt;
+   }
+   double pool = 0; for(int i=0;i<nP;i++) pool += prAmt[i];
+   int closedProfit=0, closedLoss=0;
+   // close all profitable first (lock budget into realized)
+   for(int i=0;i<nP;i++){
+      if(PositionSelectByTicket(prTk[i]) && trade.PositionClose(prTk[i])) closedProfit++;
+   }
+   // shred losses while pool can absorb them and keep net >= MinNetUSD
+   for(int i=0;i<nL;i++){
+      double p = loAmt[i]; // negative
+      if(pool + p >= InpExitMinNetUSD){
+         if(PositionSelectByTicket(loTk[i]) && trade.PositionClose(loTk[i])){
+            pool += p; closedLoss++;
+         }
+      } else break;
+   }
+   if(closedProfit>0 || closedLoss>0)
+      PrintFormat("Golden2 v2.8.4: G%d CROSS-SIDE SHRED profitClosed=%d lossClosed=%d residualPool=$%.2f",
+                  g, closedProfit, closedLoss, pool);
+}
+
+//================ [v2.8.4] POST-MATCH AVG BROKER TP/SL ================
+// Once a group has gone through Triple-Gate (g_stripped[g]==true), the v1.3
+// SyncSideTPSLToBroker manager bails. Residual main + hedge + RC#N orders are
+// then naked vs the broker. This pushes per-side avg-price TP/SL onto every
+// residual ticket (using ALL positions in the group on that side, both main
+// and hedge) so the broker closes them naturally when price reaches the
+// average + InpTP_PointsFromAvg offset. Recomputes whenever a new RC opens.
+void SyncPostMatchAvgTPSL(int g){
+   if(!InpPostMatch_AvgBrokerTP) return;
+   if(!g_stripped[g] && !IsGroupHedgeMatched(g)) return;
+   if(!GroupHasAnyPositions(g)){
+      g_postMatchTP[g][0]=0; g_postMatchTP[g][1]=0;
+      g_postMatchSL[g][0]=0; g_postMatchSL[g][1]=0;
+      return;
+   }
+   long stopsLvl = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   double minDist = stopsLvl * g_point;
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+
+   for(int side=0; side<2; side++){
+      int cnt = CountGroupPositions(g, side, -1); // include main + hedge on this side
+      if(cnt <= 0){ g_postMatchTP[g][side]=0; g_postMatchSL[g][side]=0; continue; }
+      double avg = GroupAveragePrice(g, side, -1);
+      if(avg <= 0) continue;
+      double offTP = InpTP_PointsFromAvg * g_point;
+      double tpPx  = NormalizeDouble((side==0) ? (avg + offTP) : (avg - offTP), g_digits);
+      double slPx  = 0.0;
+      if(InpSL_Enable && InpSL_UsePointsFromAvg){
+         double offSL = InpSL_PointsFromAvg * g_point;
+         slPx = NormalizeDouble((side==0) ? (avg - offSL) : (avg + offSL), g_digits);
+      }
+      // stops-level guard
+      if(side==0){
+         if(tpPx < bid + minDist) tpPx = NormalizeDouble(bid + minDist + g_point, g_digits);
+         if(slPx>0 && slPx > bid - minDist) slPx = NormalizeDouble(bid - minDist - g_point, g_digits);
+      } else {
+         if(tpPx > ask - minDist) tpPx = NormalizeDouble(ask - minDist - g_point, g_digits);
+         if(slPx>0 && slPx < ask + minDist) slPx = NormalizeDouble(ask + minDist + g_point, g_digits);
+      }
+      bool changed = (MathAbs(g_postMatchTP[g][side]-tpPx) > g_point) ||
+                     (MathAbs(g_postMatchSL[g][side]-slPx) > g_point);
+      // push to every ticket on this side (main + hedge)
+      int total = PositionsTotal();
+      int modified = 0;
+      for(int i=0;i<total;i++){
+         ulong tk = PositionGetTicket(i);
+         if(tk==0) continue;
+         if(!PositionSelectByTicket(tk)) continue;
+         if((long)PositionGetInteger(POSITION_MAGIC) != InpMagic) continue;
+         if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+         string c = PositionGetString(POSITION_COMMENT);
+         int gp; bool hd; string tag;
+         if(!ParseComment(c, gp, hd, tag)) continue;
+         if(gp != g) continue;
+         int sd = (PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY)?0:1;
+         if(sd != side) continue;
+         if(ModifyIfDifferent(tk, slPx, tpPx)) modified++;
+      }
+      g_postMatchTP[g][side] = tpPx;
+      g_postMatchSL[g][side] = slPx;
+      if(changed && modified>0)
+         PrintFormat("Golden2 v2.8.4: G%d POST-MATCH AVG-TP synced side=%s avg=%.5f tp=%.5f sl=%.5f tickets=%d",
+                     g, side==0?"BUY":"SELL", avg, tpPx, slPx, modified);
+   }
+}
+
+
 
 // [v2.0] Account-wide accumulate-close: sums realized (since last reset) +
 // floating across ALL groups + sides. Resets to 0 each time the account
@@ -3221,7 +3356,7 @@ void DrawDashboard(){
 
    // Header
    string entryLbl = (InpEntryMode == G2_ENTRY_PENDING) ? "PENDING" : (InpEntryMode == G2_ENTRY_SMA) ? "SMA" : "INSTANT"; // [v2.73]
-   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.8.3    Entry: %s    Side: %s", entryLbl, modeLbl), InpDashAccent);
+   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.8.4    Entry: %s    Side: %s", entryLbl, modeLbl), InpDashAccent);
    y += rowH+2;
 
    // ==== Account section ====
@@ -3384,57 +3519,22 @@ void DrawDashboard(){
             // ---- Gain row: G:<gainNow>/<need> Recovery flag ----
             double netNow = GroupFloatingPL(g, -1, -1);
             double gainNow = g_groupHedgeBaselineSet[g] ? (netNow - g_groupNetAtHedgeStart[g]) : 0.0;
-            string recLbl = g_groupInRecovery[g] ? " RECOV" : "";
+            string recLbl = "";
+            if(g_groupInRecovery[g])
+               recLbl = StringFormat(" RECOV RC#%d/%d", g_groupRecoveryLevel[g], InpRecovery_MaxLevels);
             string gainInfo = StringFormat("G:$%.2f/$%.2f%s", gainNow, InpExit_MinGainUSD, recLbl);
             color gainClr = (gainNow >= InpExit_MinGainUSD) ? InpDashGood : InpDashAccent;
             DashRow(StringFormat("R_G%d_GAIN", g), xR, yR, wR, rowH, "  TripleGrid", gainInfo, gainClr);
             yR += rowH;
 
-            // ---- [v2.8.3] Per-grid Loss/Hedge pair rows (Gold-Miner style) ----
-            // Pair GL#N (main losing) with HD_GL#N (hedge winning) and show floating P/L.
-            // Determine losing side from main-only floating P/L (worse side = losing).
-            double plBuyMainRow  = GroupFloatingPL(g, 0, 0);
-            double plSellMainRow = GroupFloatingPL(g, 1, 0);
-            int losSideRow = (plBuyMainRow <= plSellMainRow) ? 0 : 1;
-            int winSideRow = (losSideRow==0) ? 1 : 0;
-            int maxPair = MathMin(InpDashGridPairsMax, GridLoss_MaxTrades);
-            int shownPairs = 0;
-            for(int lvl=1; lvl<=maxPair; lvl++){
-               double pLoss = 0, pHedge = 0; bool foundLoss=false, foundHedge=false;
-               int totp = PositionsTotal();
-               for(int i=0;i<totp;i++){
-                  ulong tk = PositionGetTicket(i);
-                  if(tk==0) continue;
-                  if(!PositionSelectByTicket(tk)) continue;
-                  if((long)PositionGetInteger(POSITION_MAGIC) != InpMagic) continue;
-                  if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
-                  string cm = PositionGetString(POSITION_COMMENT);
-                  int gp; bool hd; string tg;
-                  if(!ParseComment(cm, gp, hd, tg)) continue;
-                  if(gp != g) continue;
-                  if(tg != StringFormat("GL#%d", lvl)) continue;
-                  int sd = (PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY)?0:1;
-                  double pp = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
-                  if(!hd && sd==losSideRow){ pLoss = pp; foundLoss = true; }
-                  else if(hd && sd==winSideRow){ pHedge = pp; foundHedge = true; }
-               }
-               if(!foundLoss && !foundHedge) continue;
-               double net = pLoss + pHedge;
-               string gridInfo = StringFormat("L:%+.0f H:%+.0f N:%+.0f", pLoss, pHedge, net);
-               color gridClr = (net >= 0) ? InpDashGood : InpDashBad;
-               DashRow(StringFormat("R_G%d_GRID%d", g, lvl), xR, yR, wR, rowH,
-                       StringFormat("  Grid#%d", lvl), gridInfo, gridClr);
-               yR += rowH;
-               shownPairs++;
-               if(shownPairs >= InpDashGridPairsMax) break;
-            }
-
-            // ---- [v2.8.3] Recovery row (only when in recovery) ----
-            if(g_groupInRecovery[g]){
-               int rcLvl = g_groupRecoveryLevel[g];
-               string rcInfo = StringFormat("RC#%d/%d  mult=%.2f", rcLvl, InpRecovery_MaxLevels, InpRecovery_Multiplier);
-               DashRow(StringFormat("R_G%d_RECOV", g), xR, yR, wR, rowH,
-                       "  Recovery", rcInfo, InpDashAccent);
+            // ---- [v2.8.4] Compact post-match Avg-TP row (broker-side close prices) ----
+            if(InpPostMatch_AvgBrokerTP && (g_stripped[g] || IsGroupHedgeMatched(g))){
+               double tpB = g_postMatchTP[g][0];
+               double tpS = g_postMatchTP[g][1];
+               string avgInfo = StringFormat("B:%s  S:%s",
+                                  tpB>0?DoubleToString(tpB,g_digits):"-",
+                                  tpS>0?DoubleToString(tpS,g_digits):"-");
+               DashRow(StringFormat("R_G%d_ATP", g), xR, yR, wR, rowH, "  Avg TP", avgInfo, InpDashColor);
                yR += rowH;
             }
          }
@@ -3563,6 +3663,9 @@ int OnInit(){
       g_groupExpToNormal[i]       = false;
       // [v2.8.3]
       g_groupRecoveryLevel[i]     = 0;
+      // [v2.8.4]
+      g_postMatchTP[i][0]=0; g_postMatchTP[i][1]=0;
+      g_postMatchSL[i][0]=0; g_postMatchSL[i][1]=0;
    }
 
    // [v2.8.1] g_bbHandle / g_atrHandle (the old Exit BB/Keltner) are NOT
@@ -3607,7 +3710,7 @@ int OnInit(){
 
    string entryModeLbl = (InpEntryMode == G2_ENTRY_PENDING) ? "PENDING" :
                          (InpEntryMode == G2_ENTRY_SMA)     ? "SMA"     : "INSTANT";
-   PrintFormat("Golden2 EA v2.8.3 initialized | Magic=%I64d | MaxGroups=%d | EntryMode=%s | InitMode=%d | GridLoss=%s | Squeeze=%s [BB:%s ADX:%s(>=%.1f) ATR:%s EMA:%s(P=%d)] | TripleGate=%s | ExitGate=Squeeze-TF3-Latch+WinPool | MinGainUSD=%.1f | SeqQueue=%s | RecoveryAdvUnblock=%s | RecoveryGrid=%s(mult=%.2f max=%d) | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | ProfitSideUnhedgedAdv=%s | ForceCloseOppUnhedged=%s(%ds) | Tester=%s Visual=%s Opt=%s DashInterval=%ds | TesterHideIndicators=%s SideTaggedComments=ON",
+   PrintFormat("Golden2 EA v2.8.4 initialized | Magic=%I64d | MaxGroups=%d | EntryMode=%s | InitMode=%d | GridLoss=%s | Squeeze=%s [BB:%s ADX:%s(>=%.1f) ATR:%s EMA:%s(P=%d)] | TripleGate=%s | ExitGate=Squeeze-TF3-Latch+WinPool+CrossSideShred | MinGainUSD=%.1f | SeqQueue=%s | RecoveryAdvUnblock=%s | RecoveryGrid=%s(mult=%.2f max=%d) | PostMatchAvgBrokerTP=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | ProfitSideUnhedgedAdv=%s | ForceCloseOppUnhedged=%s(%ds) | Tester=%s Visual=%s Opt=%s DashInterval=%ds | TesterHideIndicators=%s SideTaggedComments=ON",
                (long)InpMagic, InpMaxGroups, entryModeLbl, (int)InpInitSideMode,
                GridLoss_Enable?"ON":"OFF", InpSQ_Enable?"ON":"OFF",
                InpSQ_UseBBBreakout?"ON":"OFF", InpSQ_UseADX?"ON":"OFF", InpSQ_ADXThreshold,
@@ -3616,7 +3719,8 @@ int OnInit(){
                InpExit_MinGainUSD,
                InpExit_SequentialQueue?"ON":"OFF",
                InpExit_RecoveryAdvanceUnblock?"ON":"OFF",
-               InpRecovery_Enable?"ON":"OFF", InpRecovery_Multiplier, InpRecovery_MaxLevels,
+                InpRecovery_Enable?"ON":"OFF", InpRecovery_Multiplier, InpRecovery_MaxLevels,
+                InpPostMatch_AvgBrokerTP?"ON":"OFF",
                InpInitTrailOnBarClose?"ON":"OFF",
                InpFrameRecenterMinPips,
                InpInitReEntryOnClose?"ON":"OFF",
@@ -3732,6 +3836,9 @@ void OnTick(){
          g_groupExpToNormal[g]      = false;
          // [v2.8.3] reset Recovery Grid level counter
          g_groupRecoveryLevel[g]    = 0;
+         // [v2.8.4] reset post-match avg-TP cache
+         g_postMatchTP[g][0]=0; g_postMatchTP[g][1]=0;
+         g_postMatchSL[g][0]=0; g_postMatchSL[g][1]=0;
          continue;
       }
       // [v2.8.0] Stamp baseline net P/L the first tick a hedge is observed
@@ -3775,6 +3882,10 @@ void OnTick(){
 
       // Triple-Gate Matching Close (only acts when matched)
       TryMatchingCloseForGroup(g);
+
+      // [v2.8.4] Push per-side avg-TP/SL onto every residual + RC ticket
+      // (no-op while pre-hedge; v1.3 SyncSideTPSLToBroker handles that phase).
+      SyncPostMatchAvgTPSL(g);
 
       // Chart visualization (internally skipped in tester non-visual)
       DrawAverageAndTPLinesForGroup(g);
