@@ -2439,7 +2439,7 @@ void CleanupAllLinesByPrefix(){
 //================ MATCHING CLOSE (Triple Gate) ================
 void TryMatchingCloseForGroup(int g){
    if(!InpExitTripleGate_Enable) return; // [v1.6] master toggle for Triple-Gate
-   if(!IsExpansionToNormal()) return;
+   if(!IsExpansionToNormalForGroup(g)) return; // [v2.8.1] per-group Squeeze TF3 latch
 
    // [v2.8.0] Sequential queue gate — older active hedge group must be flat first
    if(InpExit_SequentialQueue){
