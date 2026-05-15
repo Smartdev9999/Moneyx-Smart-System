@@ -316,6 +316,7 @@ bool     g_isTesterMode          = false;          // MQL_TESTER
 bool     g_isVisualMode          = false;          // MQL_VISUAL_MODE
 bool     g_isOptimization        = false;          // MQL_OPTIMIZATION
 datetime g_lastDashRender        = 0;              // throttle DrawDashboard
+datetime g_lastAuxChartSweep     = 0;              // [v2.7.9] throttle HideAuxiliaryTesterCharts
 datetime g_lastSqueezeBar        = 0;              // refresh Squeeze on new M1 bar only
 int      g_highestActiveGroup    = 0;              // bound per-tick group loop
 // HasClosedMainOnSide cache: per (group, side)
