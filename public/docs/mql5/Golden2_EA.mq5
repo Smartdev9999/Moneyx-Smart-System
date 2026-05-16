@@ -3954,6 +3954,7 @@ void OnTick(){
       ManageInitialMarketReEntry(g); // [v2.7.6] re-entry market for INSTANT/SMA
       TryPlaceGridLoss(g);
       TryPlaceGridProfit(g);
+      TryPlaceRecoveryGridContinuation(g); // [v2.8.8] RC#2..N at distance while in recovery
       ManageGroupHedgeArm(g);
 
       // [v2.8.5] Continuously enforce stripped broker TP/SL while hedge is
