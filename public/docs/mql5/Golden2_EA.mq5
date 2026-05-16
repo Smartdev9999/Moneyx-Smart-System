@@ -4066,6 +4066,17 @@ void OnTick(){
       TryPlaceRecoveryGridContinuation(g); // [v2.8.8] RC#2..N at distance while in recovery
       ManageGroupHedgeArm(g);
 
+      // [v2.9.2] Post-match / hedge-positions-gone full sweep of hedge pendings.
+      //   เมื่อ group เข้า post-match (Avg-TP active) หรือ hedge positions ปิด
+      //   หมดแล้ว → ไม่ต้องเหลือ hedge pending ใดๆ. กันค้างจาก edge case ที่
+      //   sweep ใน ManageGroupHedgeArm ไม่จับ (เช่น activeHedgeSide==-1)
+      if(g_groupHedgeUsed[g] && (g_groupPostMatchAvgActive[g] || CountGroupPositions(g,-1,1)==0)){
+         if(CountGroupPendingsByTagPrefix(g, true, "") > 0){
+            DeleteGroupPendings(g, 1);
+            if(g_verboseEffective) PrintFormat("Golden2 v2.9.2: G%d post-match hedge pending full sweep", g);
+         }
+      }
+
       // [v2.8.5] Continuously enforce stripped broker TP/SL while hedge is
       // "used" but Matching Close hasn't activated the post-match Avg TP/SL
       // yet. This catches:
