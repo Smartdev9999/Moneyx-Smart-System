@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|  Golden2 EA v2.8.9 — Recovery-Mode Order Lock + Prior-Advance Bypass |
+//|  Golden2 EA v2.9.0 — Recovery Seed Lock                          |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.89"
-#property description "Golden2 EA v2.8.9 — Recovery-Mode Order Lock + Prior-Advance Bypass: freezes GL/GP/Initial-trail/Initial-rearm/Initial-market-reentry the instant g_groupInRecovery[g] is true so only RC#N ladder fires on the residual losing side. Prior-group advance now treats post-match groups (g_groupHedgeUsed && g_groupPostMatchAvgActive) or any group with g_groupRecoveryLevel>0 as safe-pass, unblocking the queue when G1 sits in recovery. All v2.8.8 Recovery Continuation + v2.8.7 Reserve-Profit + v2.8.6 Hedge Orphan Offset preserved."
+#property version   "2.90"
+#property description "Golden2 EA v2.9.0 — Recovery Seed Lock: seed lot for the RC# ladder is computed once (excluding RC# tickets) and reused for every RC#N so Multiplier never compounds on an already-multiplied lot. Fixes RC lot explosion. All v2.8.9 Recovery-Mode Order Lock + v2.8.8 Continuation + v2.8.7 Reserve-Profit preserved."
 #property strict
 
 #include <Trade/Trade.mqh>
