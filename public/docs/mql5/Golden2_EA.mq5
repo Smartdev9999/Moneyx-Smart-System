@@ -3807,7 +3807,7 @@ int OnInit(){
                InpExit_ReserveProfitUSD, InpExit_MinGainUSD, InpExitMinNetUSD,
                InpExit_SequentialQueue?"ON":"OFF",
                InpExit_RecoveryAdvanceUnblock?"ON":"OFF",
-                InpRecovery_Enable?"ON":"OFF", InpRecovery_Multiplier, InpRecovery_MaxLevels,
+                InpRecovery_Enable?"ON":"OFF", InpRecovery_Multiplier, InpRecovery_MaxLevels, "ON", InpRecovery_OnlyNewCandle?"ON":"OFF",
                 InpPostMatch_AvgBrokerTP?"ON":"OFF",
                InpInitTrailOnBarClose?"ON":"OFF",
                InpFrameRecenterMinPips,
