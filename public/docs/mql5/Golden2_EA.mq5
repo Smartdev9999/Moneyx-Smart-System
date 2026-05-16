@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|  Golden2 EA v2.9.4 — Max Lot Caps + Max DD Close                     |
+//|  Golden2 EA v2.9.5 — Stranded HD-Pending Sweep + MaxDD Always-On      |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.94"
-#property description "Golden2 EA v2.9.4 — Max Lot Caps (independent for NORMAL orders via InpMaxLotPerOrder and TRIPLE-GATE exit Recovery RC#N via InpMaxLotTripleGate) + Max DD Close global kill switch (OFF/PERCENT-of-balance/DOLLAR floating-loss modes via InpMaxDDMode + InpMaxDDValue, 30s cooldown, flattens all EA positions+pendings). All v2.9.3 Disarm Partial-Fill + Diagnostic preserved. Zero changes to entry/grid/hedge/Triple-Gate/Recovery strategy logic."
+#property version   "2.95"
+#property description "Golden2 EA v2.9.5 — Stranded Hedge-Pending Sweep (unconditional cleanup when group has 0 positions but hedge pendings remain — fixes advance-queue freeze from block-pending-only) + Max DD Always-On (kill switch runs even when AutoTrading disabled) + MAX-DD-CHK 30s diagnostic log. All v2.9.4 Max Lot Caps + Max DD Close preserved. Zero changes to entry/grid/hedge/Triple-Gate/Recovery strategy logic."
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -302,6 +302,7 @@ datetime g_lastDisarmChkLog[51];      // [v2.9.3] throttle DISARM-CHK diagnostic
 datetime g_maxDDCloseLastFire = 0;
 double   g_maxDDCurrAbs       = 0.0;  // current absolute floating loss USD (>=0)
 double   g_maxDDCurrPct       = 0.0;  // current floating loss as % of balance
+datetime g_lastMaxDDLog       = 0;    // [v2.9.5] throttle MAX-DD-CHK diagnostic (30s)
 
 string g_dashName    = "Golden2_DASH";   // legacy single-label (kept for cleanup)
 string g_dashPrefix  = "G2DASH_";         // [v1.5] prefix for all dashboard label objects
@@ -3574,7 +3575,7 @@ void DrawDashboard(){
 
    // Header
    string entryLbl = (InpEntryMode == G2_ENTRY_PENDING) ? "PENDING" : (InpEntryMode == G2_ENTRY_SMA) ? "SMA" : "INSTANT"; // [v2.73]
-   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.9.4    Entry: %s    Side: %s", entryLbl, modeLbl), InpDashAccent);
+   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.9.5    Entry: %s    Side: %s", entryLbl, modeLbl), InpDashAccent);
    y += rowH+2;
 
    // ==== Account section ====
@@ -3961,7 +3962,7 @@ int OnInit(){
 
    string entryModeLbl = (InpEntryMode == G2_ENTRY_PENDING) ? "PENDING" :
                          (InpEntryMode == G2_ENTRY_SMA)     ? "SMA"     : "INSTANT";
-   PrintFormat("Golden2 EA v2.9.4 initialized | MaxLotPerOrder=%.2f MaxLotTripleGate=%.2f MaxDDMode=%s MaxDDValue=%.2f | DisarmPartialFill=ON | HedgeUsedAdvanceBypass=ON | StalePendingCleanup=ON(MirrorSideFilter+ArmStaleSweep+PostMatchFullSweep) | RecoverySeed=LOCKED-First-NonRC | Magic=%I64d | MaxGroups=%d | EntryMode=%s | InitMode=%d | GridLoss=%s | Squeeze=%s [BB/KC ratio only, deprecated inputs PURGED] | HedgeOrphanOffset=ON | TripleGate=%s | ExitGate=Squeeze-TF3-Latch+ReserveProfit+CrossSideShred | OneHedgePerGroup=ON | PostMatchAvgTP=PostMatch-Active-Only | RecoveryOrderLock=ON | PriorAdvBypass=HedgeUsed+RecLvl>0 | ReserveProfitUSD=%.1f MinGainUSD=%.1f MinNetUSD=%.1f | SeqQueue=%s | RecoveryAdvUnblock=%s | RecoveryGrid=%s(mult=%.2f max=%d cont=%s newCandle=%s) | PostMatchAvgBrokerTP=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | ProfitSideUnhedgedAdv=%s | ForceCloseOppUnhedged=%s(%ds) | Tester=%s Visual=%s Opt=%s DashInterval=%ds | TesterHideIndicators=%s SideTaggedComments=ON",
+   PrintFormat("Golden2 EA v2.9.5 initialized | StrandedHDPendingSweep=ON | MaxDDAlwaysOn=ON(runs-before-AllowTrade) | MaxDDDiagLog=30s | MaxLotPerOrder=%.2f MaxLotTripleGate=%.2f MaxDDMode=%s MaxDDValue=%.2f | DisarmPartialFill=ON | HedgeUsedAdvanceBypass=ON | StalePendingCleanup=ON(MirrorSideFilter+ArmStaleSweep+PostMatchFullSweep) | RecoverySeed=LOCKED-First-NonRC | Magic=%I64d | MaxGroups=%d | EntryMode=%s | InitMode=%d | GridLoss=%s | Squeeze=%s [BB/KC ratio only, deprecated inputs PURGED] | HedgeOrphanOffset=ON | TripleGate=%s | ExitGate=Squeeze-TF3-Latch+ReserveProfit+CrossSideShred | OneHedgePerGroup=ON | PostMatchAvgTP=PostMatch-Active-Only | RecoveryOrderLock=ON | PriorAdvBypass=HedgeUsed+RecLvl>0 | ReserveProfitUSD=%.1f MinGainUSD=%.1f MinNetUSD=%.1f | SeqQueue=%s | RecoveryAdvUnblock=%s | RecoveryGrid=%s(mult=%.2f max=%d cont=%s newCandle=%s) | PostMatchAvgBrokerTP=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | ProfitSideUnhedgedAdv=%s | ForceCloseOppUnhedged=%s(%ds) | Tester=%s Visual=%s Opt=%s DashInterval=%ds | TesterHideIndicators=%s SideTaggedComments=ON",
                InpMaxLotPerOrder, InpMaxLotTripleGate,
                (InpMaxDDMode==G2_DD_OFF?"OFF":(InpMaxDDMode==G2_DD_PERCENT?"PERCENT":"DOLLAR")),
                InpMaxDDValue,
@@ -4054,6 +4055,18 @@ void ManageMaxDDClose(){
    bool trig = false;
    if(InpMaxDDMode == G2_DD_PERCENT && pct   >= InpMaxDDValue) trig = true;
    if(InpMaxDDMode == G2_DD_DOLLAR  && absDD >= InpMaxDDValue) trig = true;
+   // [v2.9.5] MAX-DD-CHK diagnostic — log every 30s regardless of trigger so user
+   //   can see current EA floating vs threshold (and compare with account-wide
+   //   AccountInfoDouble(ACCOUNT_PROFIT) to detect threshold misconfiguration).
+   if(g_verboseEffective && TimeCurrent() - g_lastMaxDDLog >= 30){
+      g_lastMaxDDLog = TimeCurrent();
+      double acctFloat = AccountInfoDouble(ACCOUNT_PROFIT);
+      PrintFormat("Golden2 v2.9.5: MAX-DD-CHK mode=%s curEA=$%.2f (%.2f%%) threshold=%s%.2f bal=$%.2f acctFloat=$%.2f trig=%s",
+         (InpMaxDDMode==G2_DD_OFF?"OFF":(InpMaxDDMode==G2_DD_PERCENT?"PERCENT":"DOLLAR")),
+         absDD, pct,
+         (InpMaxDDMode==G2_DD_PERCENT?"%":"$"), InpMaxDDValue,
+         bal, acctFloat, trig?"YES":"no");
+   }
    if(!trig) return;
    if(TimeCurrent() - g_maxDDCloseLastFire < 30) return;
    g_maxDDCloseLastFire = TimeCurrent();
@@ -4099,9 +4112,11 @@ void OnTick(){
       if(g_lastTickMs != 0 && (nowMs - g_lastTickMs) < (ulong)InpTester_TickStrideMs) return;
       g_lastTickMs = nowMs;
    }
+   // [v2.9.5] Max DD kill switch runs BEFORE AllowTrade guard so it always
+   //   fires even if the user disables AutoTrading on the EA/terminal.
+   ManageMaxDDClose();
    if(!InpAllowTrade){ RenderDashboardThrottled(); return; }
    RefreshSqueezeStateThrottled(); // [v2.72] one refresh per new M1 bar
-   ManageMaxDDClose(); // [v2.9.4] global Max DD kill switch (runs every tick; internal cooldown)
 
    // [v2.7.9/v2.9.1] Aux-chart sweep — only useful when a chart is actually
    // visible. Skip entirely in non-visual Tester (saves ChartIndicatorDelete
@@ -4127,6 +4142,20 @@ void OnTick(){
       // ticket count between close calls in a single tick).
       if(hasPos && g_groupRecoveryLevel[g] > 0 && !g_groupInRecovery[g]){
          g_groupInRecovery[g] = true;
+      }
+      // [v2.9.5] Stranded hedge-pending sweep — symmetric safety net.
+      //   ถ้า group ไม่มี position ใดๆ แต่ยังมี hedge pending ค้าง → ลบทิ้ง
+      //   ทันที โดยไม่พึ่ง g_groupHedgeUsed / disarm flow. ครอบคลุม edge case:
+      //   main TP ก่อนราคาชน hedge pending → pendings ค้าง →
+      //   IsPriorGroupSafeForAdvance คืน block-pending-only → freeze advance.
+      //   Main pendings (G_IN) ไม่ถูกแตะเพราะ filter=1 (hedge only).
+      if(!hasPos && hasPend){
+         if(CountGroupPendingsByTagPrefix(g, true, "") > 0){
+            DeleteGroupPendings(g, 1);
+            if(g_verboseEffective)
+               PrintFormat("Golden2 v2.9.5: G%d stranded HD-pending sweep (no positions)", g);
+            hasPend = GroupHasAnyPendings(g); // refresh so flat-branch can fire same tick if now empty
+         }
       }
       if(!hasPos && !hasPend){
          // group empty: reset trackers
