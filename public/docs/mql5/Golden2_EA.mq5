@@ -3582,8 +3582,16 @@ void DrawDashboard(){
             DashRow(StringFormat("R_G%d_GAIN", g), xR, yR, wR, rowH, "  TripleGrid", gainInfo, gainClr);
             yR += rowH;
 
-            // ---- [v2.8.4] Compact post-match Avg-TP row (broker-side close prices) ----
-            if(InpPostMatch_AvgBrokerTP && (g_stripped[g] || IsGroupHedgeMatched(g))){
+            // ---- [v2.8.5] Compact Hedge / PostAvg status row ----
+            string hStat = g_groupHedgeUsed[g] ? "USED/LOCKED" : "ARMED";
+            string pStat = g_groupPostMatchAvgActive[g] ? "ACTIVE" : "WAITING";
+            color hClr   = g_groupPostMatchAvgActive[g] ? InpDashGood : InpDashAccent;
+            DashRow(StringFormat("R_G%d_HST", g), xR, yR, wR, rowH, "  Hedge",
+                    StringFormat("%s  PostAvg:%s", hStat, pStat), hClr);
+            yR += rowH;
+
+            // ---- [v2.8.4] Compact post-match Avg-TP row (only when ACTIVE) ----
+            if(InpPostMatch_AvgBrokerTP && g_groupPostMatchAvgActive[g]){
                double tpB = g_postMatchTP[g][0];
                double tpS = g_postMatchTP[g][1];
                string avgInfo = StringFormat("B:%s  S:%s",
