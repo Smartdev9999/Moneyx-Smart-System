@@ -2542,28 +2542,48 @@ void TryMatchingCloseForGroup(int g){
 
    if(!ClaimMutex(g)) return;
 
+   // [v2.8.5] Snapshot whole-group ticket count BEFORE shred so we can prove
+   // Matching Close actually closed something. Orphan main on either side is
+   // already in this count because all scans use gp==g.
+   int totalBefore = CountGroupPositions(g, -1, -1);
+   int mainBefore  = CountGroupPositions(g, -1, 0);
+   int hedgeBefore = CountGroupPositions(g, -1, 1);
+   PrintFormat("Golden2 v2.8.5: G%d MATCH-PREP totalTickets=%d (main=%d hedge=%d) winSide=%s winPool=$%.2f",
+               g, totalBefore, mainBefore, hedgeBefore,
+               winSide==0?"BUY":"SELL", winProfit);
+
    int losBefore = CountGroupPositions(g, losSide, -1);
    CloseAllGroupSide(g, winSide);
    double pool = winProfit;
    ShredCloseLosingSide(g, losSide, pool);
    // [v2.8.4] Second pass: pool every remaining profitable order in the group
-   // (any side, main or hedge) and use it to close more losing tickets BEFORE
-   // we resort to placing a Recovery Grid order.
+   // (any side, main or hedge — includes orphan main) and use it to close
+   // more losing tickets BEFORE we resort to placing a Recovery Grid order.
    ShredAllNegativeFromAllProfit(g);
-   int losAfter = CountGroupPositions(g, losSide, -1);
+   int losAfter   = CountGroupPositions(g, losSide, -1);
+   int totalAfter = CountGroupPositions(g, -1, -1);
+   int closedAny  = totalBefore - totalAfter;
 
    g_lastHedgeCloseTime = TimeCurrent();
    ReleaseMutex(g);
 
-   PrintFormat("Golden2 v2.8.4: G%d MATCH-CLOSE win=%s pool=$%.2f lossBefore=%d lossAfter=%d",
-               g, winSide==0?"BUY":"SELL", winProfit, losBefore, losAfter);
+   PrintFormat("Golden2 v2.8.5: G%d MATCH-CLOSE win=%s pool=$%.2f lossBefore=%d lossAfter=%d ticketsClosed=%d",
+               g, winSide==0?"BUY":"SELL", winProfit, losBefore, losAfter, closedAny);
 
    // [v2.8.0+] If group still has residual positions after partial close,
    // flag it as "in recovery" so IsGroupSafeToAdvance unblocks G(N+1) and
    // [v2.8.3] place a Recovery Grid order on the residual losing side.
+   // [v2.8.5] Activate post-match Avg Broker TP/SL only AFTER Matching Close
+   // actually closed >=1 ticket and residual remains. This is the single
+   // trigger for SyncPostMatchAvgTPSL — before this point, residual orders
+   // stay naked (no broker TP/SL) while we wait for the 3 Gate.
    if(GroupHasAnyPositions(g)){
       g_groupInRecovery[g] = true;
-      if(InpVerboseLog) PrintFormat("Golden2 v2.8.4: G%d entered RECOVERY mode (post-match residual; advance unblocked)", g);
+      if(closedAny > 0){
+         g_groupPostMatchAvgActive[g] = true;
+         if(InpVerboseLog) PrintFormat("Golden2 v2.8.5: G%d POST-MATCH AVG-TP ACTIVE (closed=%d residual=%d)", g, closedAny, totalAfter);
+      }
+      if(InpVerboseLog) PrintFormat("Golden2 v2.8.5: G%d entered RECOVERY mode (post-match residual; advance unblocked)", g);
       if(InpRecovery_Enable) PlaceRecoveryGridIfNeeded(g, losSide);
       // [v2.8.4] Force-resync post-match avg-TP/SL immediately so RC#N + residual
       // get broker TP/SL on this same tick instead of waiting for next OnTick.
