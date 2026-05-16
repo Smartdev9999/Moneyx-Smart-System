@@ -2701,6 +2701,52 @@ void PlaceRecoveryGridIfNeeded(int g, int losSide){
    }
 }
 
+// [v2.8.8] Recovery Grid Continuation — runs every tick while group is in
+// recovery state. After the initial RC#1 (placed inside TryMatchingCloseForGroup),
+// TryPlaceGridLoss is permanently blocked by IsGroupHedgeMatched() because the
+// losing side still carries its hedge-orphan-offset ticket. This function picks
+// up where match-close left off and fires RC#2..N at the configured distance,
+// applying the same multiplier ladder via PlaceRecoveryGridIfNeeded().
+void TryPlaceRecoveryGridContinuation(int g){
+   if(!InpRecovery_Enable) return;
+   if(!g_groupInRecovery[g]) return;
+   if(g_groupRecoveryLevel[g] >= InpRecovery_MaxLevels) return;
+
+   // Determine residual losing side: after match-close the winning side was
+   // fully closed, so whichever side still has positions IS the losing side.
+   int losSide = -1;
+   int nB = CountGroupPositions(g, 0, -1);
+   int nS = CountGroupPositions(g, 1, -1);
+   if(nB > 0 && nS == 0) losSide = 0;
+   else if(nS > 0 && nB == 0) losSide = 1;
+   else return; // both sides present (shouldn't happen post-match) or empty -> housekeeping clears recovery
+
+   double lastPrice = LastEntryPrice(g, losSide, false);
+   if(lastPrice <= 0) return;
+
+   int gapPts = (InpRecovery_DistancePips > 0) ? InpRecovery_DistancePips : GridLoss_Points;
+   if(gapPts <= 0) return;
+
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   bool trigger = false;
+   if(losSide == 0) trigger = (ask <= lastPrice - gapPts*g_point);
+   else             trigger = (bid >= lastPrice + gapPts*g_point);
+   if(!trigger) return;
+
+   // OnlyNewCandle: at most one RC continuation per bar
+   datetime curBar     = iTime(_Symbol, PERIOD_CURRENT, 0);
+   datetime lastClosed = iTime(_Symbol, PERIOD_CURRENT, 1);
+   if(InpRecovery_OnlyNewCandle && g_lastRecoveryCandle[g] != 0
+      && lastClosed <= g_lastRecoveryCandle[g]) return;
+
+   int beforeLvl = g_groupRecoveryLevel[g];
+   PlaceRecoveryGridIfNeeded(g, losSide);
+   if(g_groupRecoveryLevel[g] > beforeLvl){
+      g_lastRecoveryCandle[g] = curBar;
+   }
+}
+
 //================ [v2.8.4] CROSS-SIDE PROFIT-POOL SHRED ================
 // After CloseAllGroupSide(winSide) + ShredCloseLosingSide(losSide,pool), there
 // can still be profitable orders left (eg. hedge ticks of the losing side that
