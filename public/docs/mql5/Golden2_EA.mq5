@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|  Golden2 EA v2.9.2 — Hedge Advance Bypass + Stale Pending Sweep  |
+//|  Golden2 EA v2.9.3 — Disarm Partial-Fill + DD Diagnostic         |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.92"
-#property description "Golden2 EA v2.9.2 — Hedge-Used Advance Bypass (prior groups with g_groupHedgeUsed safe-pass advance queue regardless of PostMatch state) + Stale Opposite-Side Hedge Pending Cleanup (Mirror cleanup filters by order-type; ManageGroupHedgeArm sweeps opposite-side hedge pendings before early-return; OnTick group loop full-sweeps hedge pendings when post-match active or hedge positions all gone). Zero changes to trade execution, entry, grid, recovery, Triple-Gate. All v2.9.1 Backtest Performance Pack preserved."
+#property version   "2.93"
+#property description "Golden2 EA v2.9.3 — Disarm Partial-Fill (remaining hedge pendings are now deleted when DD% drops below InpHedgeDisarmPercent even after some HD positions filled — filled positions remain for Triple-Gate/Recovery) + Disarm-Check verbose diagnostic (per-group 10s-throttled log of pct vs arm/disarm threshold). All v2.9.2 Hedge-Used Advance Bypass and Stale Opposite-Side Pending Cleanup preserved. Zero changes to trade execution, entry, grid, recovery, Triple-Gate."
 #property strict
 
 #include <Trade/Trade.mqh>
