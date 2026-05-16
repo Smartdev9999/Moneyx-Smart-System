@@ -2060,6 +2060,17 @@ void ManageGroupHedgeArm(int g){
       g_blockNewOrders[g] = false;
    }
 
+   // [v2.9.3] DISARM-CHK diagnostic (per-group 10s throttle) — verbose only
+   if(g_verboseEffective && g>=0 && g<51){
+      if(TimeCurrent() - g_lastDisarmChkLog[g] >= 10){
+         g_lastDisarmChkLog[g] = TimeCurrent();
+         PrintFormat("Golden2 v2.9.3: HD DISARM-CHK G%d pct=%.1f arm=%.1f disarm=%.1f hPend=%d hPos=%d lossSide=%d",
+                     g, pct, InpHedgeArmPercent, InpHedgeDisarmPercent,
+                     CountGroupPendingsByTagPrefix(g,true,""),
+                     CountGroupPositions(g,-1,1), GroupLossSide(g));
+      }
+   }
+
    // [v1.6] Disarm: drop pending if DD recovers, no loss side, or no main positions exist
    if(!hedgePosExists && hedgePendingExists){
       int lossSideNow = GroupLossSide(g);
@@ -2084,6 +2095,16 @@ void ManageGroupHedgeArm(int g){
    //   ค้างจะไม่มีประโยชน์อีก (One-Hedge-Per-Group ห้าม arm ฝั่งใหม่). ลบทิ้ง
    //   ก่อน early-return เพื่อกัน pending ผีค้างใน group เก่า.
    if(hedgePosExists){
+      // [v2.9.3] Partial-fill DISARM — ลบ pending ที่เหลือเมื่อ DD ลดต่ำกว่า disarm%
+      //   (position ที่ filled แล้วยังอยู่ ให้ Triple-Gate/Recovery จัดการ)
+      if(hedgePendingExists && pct < InpHedgeDisarmPercent){
+         DeleteGroupPendings(g, 1);
+         if(g_verboseEffective)
+            PrintFormat("Golden2 v2.9.3: HD DISARM(partial-fill) G%d pct=%.1f<%.1f — kept %d filled HD pos",
+                        g, pct, InpHedgeDisarmPercent, CountGroupPositions(g,-1,1));
+         // ตกลงไปต่อทำ stale-side sweep ตามเดิม (ส่วนใหญ่จะไม่เหลือ pending แล้ว)
+      }
+
       int activeHedgeSide = (CountGroupPositions(g, 0, 1) > 0) ? 0
                           : (CountGroupPositions(g, 1, 1) > 0) ? 1 : -1;
       if(activeHedgeSide >= 0){
