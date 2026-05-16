@@ -3341,6 +3341,7 @@ void TryAdvanceToNextGroup(){
          if(g_verboseEffective && TimeCurrent() - lastHoldLog >= 60){
             string reasonLbl = "none";
             switch(blockReason){
+               case 2: reasonLbl = "hedge-locked";   break;
                case 3: reasonLbl = "no-hedge";       break;
                case 4: reasonLbl = "unhedged-main";  break;
                case 5: reasonLbl = "pending-only";   break;
