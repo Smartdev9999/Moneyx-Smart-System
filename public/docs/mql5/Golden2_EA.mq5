@@ -2204,6 +2204,12 @@ void SyncSideTPSLToBroker(int g, int side){
    if(!InpTPAvg_AutoSyncToBroker) return;
    if(g_stripped[g]) return;                        // hedge already matched
    if(IsGroupHedgeMatched(g)) return;
+   // [v2.8.5] Block pre-match Avg-TP sync the instant a group has ever held a
+   // hedge position. Without this guard, an orphan main on the side opposite
+   // the loss side (e.g. a SELL main that opened just before a BUY-side
+   // hedge fires) would keep receiving Initial/Avg TP from this manager,
+   // even though the post-hedge strip just cleared it.
+   if(g_groupHedgeUsed[g]) return;
    int cnt = CountGroupPositions(g, side, 0);
    if(cnt <= 0){
       g_avgTPSynced[g][side] = 0; g_avgSLSynced[g][side] = 0;
