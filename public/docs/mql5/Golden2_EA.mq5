@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|  Golden2 EA v2.8.4 — Post-Match Avg Broker TP/SL + Cross-Side Shred  |
+//|  Golden2 EA v2.8.5 — One-Hedge-Per-Group + Post-Match-Only Avg TP  |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.84"
-#property description "Golden2 EA v2.8.4 — After Triple-Gate partial close + Recovery placement, residual main+hedge+RC#N orders had no broker TP/SL (g_stripped early-returns SyncSideTPSLToBroker) so broker never closed them. v2.8.4 adds SyncPostMatchAvgTPSL: per-side avg-price TP/SL pushed to broker on every residual ticket (rebinds when new RC orders open). Adds ShredAllNegativeFromAllProfit cross-side pool that uses ALL profitable orders in the group (main+hedge+loss-bound) to close losing orders before placing Recovery. Hedging dashboard simplified — removes per-grid Grid#N rows + verbose Recovery row, adds compact AvgTP B/S row."
+#property version   "2.85"
+#property description "Golden2 EA v2.8.5 — Locks each group to ONE hedge round (no re-hedge after broker TP/SL closes hedge). Continuously strips broker TP/SL on every ticket in a hedge-used group (incl. orphan main on opposite side) so the 3 Gate can fire cleanly. Post-Match Avg Broker TP/SL is gated on g_groupPostMatchAvgActive — set ONLY after TryMatchingCloseForGroup closes >=1 ticket and residual remains, so hedge can't be pre-empted by an early TP. Matching Close still pools every group ticket (main+hedge+orphan, profit+loss) before placing Recovery RC#N."
 #property strict
 
 #include <Trade/Trade.mqh>
