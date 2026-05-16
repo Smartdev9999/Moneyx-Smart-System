@@ -71,7 +71,10 @@ input string  __sec_general__         = "=== General ===";          // ---
 input long    InpMagic                = 22220001;                    // Magic number
 input int     InpSlippage             = 30;                          // Slippage (points)
 input bool    InpAllowTrade           = true;                        // Master allow trade
-input bool    g_verboseEffective           = true;                        // Verbose log
+input bool    InpVerboseLog                = true;                        // Verbose log (auto-silenced in Tester when InpTester_SilenceLogs=true)
+input bool    InpTester_SilenceLogs        = true;                        // [v2.9.1] Silence all Print/PrintFormat in Strategy Tester
+input bool    InpTester_DisableChartDraw   = true;                        // [v2.9.1] Skip Avg/TP chart line drawing in Tester (visual mode too)
+input int     InpTester_TickStrideMs       = 0;                           // [v2.9.1] Tester only: skip OnTick if last tick < N ms ago (0=off, accuracy first)
 
 //--- === Frame & Initial Order ===
 input string  __sec_frame__           = "=== Frame & Initial Order ==="; // ---
