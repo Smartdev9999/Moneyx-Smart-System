@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|  Golden2 EA v2.8.5 — One-Hedge-Per-Group + Post-Match-Only Avg TP  |
+//|  Golden2 EA v2.8.6 — Squeeze=BB/KC-ratio-only + Hedge Orphan Offset  |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.85"
-#property description "Golden2 EA v2.8.5 — Locks each group to ONE hedge round (no re-hedge after broker TP/SL closes hedge). Continuously strips broker TP/SL on every ticket in a hedge-used group (incl. orphan main on opposite side) so the 3 Gate can fire cleanly. Post-Match Avg Broker TP/SL is gated on g_groupPostMatchAvgActive — set ONLY after TryMatchingCloseForGroup closes >=1 ticket and residual remains, so hedge can't be pre-empted by an early TP. Matching Close still pools every group ticket (main+hedge+orphan, profit+loss) before placing Recovery RC#N."
+#property version   "2.86"
+#property description "Golden2 EA v2.8.6 — Squeeze filter reverted to pure BB/KC ratio (Gold Miner Original behavior); BB-breakout/ADX/ATR-MA/EMA confirm stages removed so Expansion latches the moment ratio>=InpSQ_ExpansionThreshold, unblocking the Triple-Gate latch. Hedge mirror now offsets orphan main on the hedge side: counts unbound positions on opposite side and skips the oldest N loss tickets so total volume stays balanced (e.g. BUY 8 + SELL orphan 4 → only 4 SELL_STOP placed, not 8). All v2.8.5 One-Hedge-Per-Group / Post-Match Avg TP / strip-TP-SL behavior preserved."
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -638,97 +638,39 @@ string GroupCycleStatus(int g){
 //================ [v1.6] VOLATILITY SQUEEZE FILTER ================
 // Per TF: BBwidth/KCwidth on closed bar (shift=1). Expansion when ratio >= threshold.
 // Direction = sign(close - BBmid) on shift=1.
+// [v2.8.6] Reverted to Gold Miner Original behavior: pure BB/KC ratio.
+// BB-breakout / ADX / ATR-MA / EMA confirm stages REMOVED (they caused the
+// Triple-Gate latch never to arm and Hedging to close too early in v2.7.7).
 bool ComputeSqueezeForTF(int idx, bool &isExp, int &dir){
    isExp = false; dir = 0;
-   // [v2.7.7] reset per-stage flags
-   g_sqPassBB[idx]  = false;
-   g_sqPassADX[idx] = false;
-   g_sqPassATR[idx] = false;
-   g_sqPassEMA[idx] = false;
+   // Stage flags kept as no-op (always true) for dashboard backward-compat
+   g_sqPassBB[idx]  = true;
+   g_sqPassADX[idx] = true;
+   g_sqPassATR[idx] = true;
+   g_sqPassEMA[idx] = true;
    g_sqADXVal[idx]  = 0.0;
 
-   if(g_sqBB[idx] == INVALID_HANDLE || g_sqKCEMA[idx] == INVALID_HANDLE || g_sqATR[idx] == INVALID_HANDLE) return false;
-   // ATR-MA ต้องอ่านอย่างน้อย ATRMAPeriod แท่งจาก shift=1
-   int atrNeed = MathMax(3, InpSQ_ATRMAPeriod + 2);
-   double bbU[], bbL[], bbM[], ema[], atr[];
+   if(g_sqBB[idx] == INVALID_HANDLE || g_sqATR[idx] == INVALID_HANDLE) return false;
+   double bbU[], bbL[], bbM[], atr[];
    ArraySetAsSeries(bbU,true); ArraySetAsSeries(bbL,true); ArraySetAsSeries(bbM,true);
-   ArraySetAsSeries(ema,true); ArraySetAsSeries(atr,true);
-   if(CopyBuffer(g_sqBB[idx],   1, 0, 3,       bbU) <= 0) return false;
-   if(CopyBuffer(g_sqBB[idx],   2, 0, 3,       bbL) <= 0) return false;
-   if(CopyBuffer(g_sqBB[idx],   0, 0, 3,       bbM) <= 0) return false;
-   if(CopyBuffer(g_sqKCEMA[idx],0, 0, 3,       ema) <= 0) return false;
-   if(CopyBuffer(g_sqATR[idx],  0, 0, atrNeed, atr) <= 0) return false;
+   ArraySetAsSeries(atr,true);
+   if(CopyBuffer(g_sqBB[idx],  1, 0, 3, bbU) <= 0) return false;
+   if(CopyBuffer(g_sqBB[idx],  2, 0, 3, bbL) <= 0) return false;
+   if(CopyBuffer(g_sqBB[idx],  0, 0, 3, bbM) <= 0) return false;
+   if(CopyBuffer(g_sqATR[idx], 0, 0, 3, atr) <= 0) return false;
    double bbW = bbU[1] - bbL[1]; // shift=1 = closed bar
    double kcW = 2.0 * InpSQ_KCMult * atr[1];
    if(kcW <= 0) return false;
    double ratio = bbW / kcW;
    g_sqRatio[idx] = ratio;
 
-   // ===== Stage 1: BB vs KC ratio =====
-   bool passRatio = (ratio >= InpSQ_ExpansionThreshold);
-
-   // ทิศทางพื้นฐานจาก BB-mid (ใช้ตอนยังไม่ได้เปิด BB-Breakout)
+   // Direction from BB-mid on closed bar
    double cl = iClose(_Symbol, g_sqTF[idx], 1);
-   int bbDir = 0;
-   if(cl > bbM[1]) bbDir = +1;
-   else if(cl < bbM[1]) bbDir = -1;
-   dir = bbDir;
+   if(cl > bbM[1])      dir = +1;
+   else if(cl < bbM[1]) dir = -1;
+   else                 dir = 0;
 
-   // ===== Stage 2: BB Breakout (close beyond Upper/Lower) =====
-   bool passBB = true;
-   if(InpSQ_UseBBBreakout){
-      if(cl > bbU[1])      { passBB = true;  dir = +1; }
-      else if(cl < bbL[1]) { passBB = true;  dir = -1; }
-      else                 { passBB = false; }
-   }
-   g_sqPassBB[idx] = passBB;
-
-   // ===== Stage 3: ADX strength + DI direction =====
-   bool passADX = true;
-   if(InpSQ_UseADX && g_sqADX[idx] != INVALID_HANDLE){
-      double adxMain[], adxPlus[], adxMinus[];
-      ArraySetAsSeries(adxMain,true); ArraySetAsSeries(adxPlus,true); ArraySetAsSeries(adxMinus,true);
-      if(CopyBuffer(g_sqADX[idx], 0, 0, 3, adxMain)  > 0 &&
-         CopyBuffer(g_sqADX[idx], 1, 0, 3, adxPlus)  > 0 &&
-         CopyBuffer(g_sqADX[idx], 2, 0, 3, adxMinus) > 0){
-         g_sqADXVal[idx] = adxMain[1];
-         bool strong = (adxMain[1] >= InpSQ_ADXThreshold);
-         bool diDirOK = true;
-         if(dir > 0)      diDirOK = (adxPlus[1] > adxMinus[1]);
-         else if(dir < 0) diDirOK = (adxMinus[1] > adxPlus[1]);
-         else             diDirOK = false;
-         passADX = (strong && diDirOK);
-      } else passADX = false;
-   }
-   g_sqPassADX[idx] = passADX;
-
-   // ===== Stage 4: ATR > ATR-MA * mult =====
-   bool passATR = true;
-   if(InpSQ_UseATRConfirm){
-      int N = MathMax(2, InpSQ_ATRMAPeriod);
-      double sum = 0.0; int cnt = 0;
-      // ค่าเฉลี่ย ATR ของ N แท่งก่อนหน้า shift=1
-      for(int k=1; k<=N && k<atrNeed; k++){ sum += atr[k]; cnt++; }
-      double atrMA = (cnt>0) ? (sum / cnt) : 0.0;
-      passATR = (atrMA > 0 && atr[1] >= atrMA * InpSQ_ATRMult);
-   }
-   g_sqPassATR[idx] = passATR;
-
-   // ===== Stage 5: EMA trend confirm =====
-   bool passEMA = true;
-   if(InpSQ_UseEMA && g_sqEMA[idx] != INVALID_HANDLE){
-      double emaBuf[];
-      ArraySetAsSeries(emaBuf,true);
-      if(CopyBuffer(g_sqEMA[idx], 0, 0, 3, emaBuf) > 0){
-         if(dir > 0)      passEMA = (cl > emaBuf[1]);
-         else if(dir < 0) passEMA = (cl < emaBuf[1]);
-         else             passEMA = false;
-      } else passEMA = false;
-   }
-   g_sqPassEMA[idx] = passEMA;
-
-   // ===== Final: AND ของทุก stage ที่ enable =====
-   isExp = passRatio && passBB && passADX && passATR && passEMA;
+   isExp = (ratio >= InpSQ_ExpansionThreshold);
    if(!isExp) dir = 0;
    return true;
 }
@@ -1918,15 +1860,43 @@ bool HasPendingByComment(string targetComment){
    return false;
 }
 
+// [v2.8.6] Count orphan main positions on the HEDGE side (same group, side=hedgeSide, hd=false).
+// These are existing same-group positions on the opposite-of-loss side that were opened
+// BEFORE the hedge fired (e.g. previous initial/grid SELLs while BUY is the loss side).
+// They act as natural hedges, so we must SKIP that many of the oldest loss tickets when
+// mirroring — otherwise we end up over-hedged (e.g. BUY 8 + SELL orphan 4 → 12 vs 8).
+int CountOrphanMainOnHedgeSide(int g, int hedgeSide){
+   int cnt = 0;
+   int total = PositionsTotal();
+   for(int i=0;i<total;i++){
+      ulong tk = PositionGetTicket(i);
+      if(tk==0) continue;
+      if(!PositionSelectByTicket(tk)) continue;
+      if((long)PositionGetInteger(POSITION_MAGIC) != InpMagic) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      string c = PositionGetString(POSITION_COMMENT);
+      int gp; bool hd; string tag;
+      if(!ParseComment(c, gp, hd, tag)) continue;
+      if(gp != g || hd) continue;
+      int sd = (PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY)?0:1;
+      if(sd == hedgeSide) cnt++;
+   }
+   return cnt;
+}
+
 // Mirror loss-side positions to hedge-side pending stops (1:1 lot+tag).
-// Adds missing pendings, removes pendings whose source loss tag no longer exists.
+// [v2.8.6] Now offsets orphan main on hedge side: sorts loss tickets oldest→newest
+// and skips the oldest N (where N = orphan count on hedge side) so total exposure
+// balances. E.g. BUY loss×8 + SELL orphan×4 → place hedge for newest 4 only.
 void MirrorLossSideToHedgePendings(int g, int lossSide){
    int hedgeSide = (lossSide==0)?1:0;
    double anchor = HedgePendingAnchorPrice(hedgeSide);
 
-   // Build set of current loss-side tags (e.g. "IN", "GL#1", "GL#7", "GP#2") with their lots
+   // Build loss-side tickets sorted oldest→newest (by POSITION_TIME_MSC then ticket)
    string  lossTags[];
    double  lossLots[];
+   long    lossTimes[];
+   ulong   lossTickets[];
    int total = PositionsTotal();
    for(int i=0;i<total;i++){
       ulong tk = PositionGetTicket(i);
@@ -1941,13 +1911,41 @@ void MirrorLossSideToHedgePendings(int g, int lossSide){
       int sd = (PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY)?0:1;
       if(sd != lossSide) continue;
       int n = ArraySize(lossTags);
-      ArrayResize(lossTags, n+1);
-      ArrayResize(lossLots, n+1);
-      lossTags[n] = tag;
-      lossLots[n] = PositionGetDouble(POSITION_VOLUME);
+      ArrayResize(lossTags,    n+1);
+      ArrayResize(lossLots,    n+1);
+      ArrayResize(lossTimes,   n+1);
+      ArrayResize(lossTickets, n+1);
+      lossTags[n]    = tag;
+      lossLots[n]    = PositionGetDouble(POSITION_VOLUME);
+      lossTimes[n]   = (long)PositionGetInteger(POSITION_TIME_MSC);
+      lossTickets[n] = tk;
+   }
+   // Bubble-sort oldest→newest (small N, simple)
+   int nL = ArraySize(lossTags);
+   for(int a=0; a<nL-1; a++){
+      for(int b=0; b<nL-1-a; b++){
+         bool swap = (lossTimes[b] > lossTimes[b+1]) ||
+                     (lossTimes[b] == lossTimes[b+1] && lossTickets[b] > lossTickets[b+1]);
+         if(swap){
+            long   tT = lossTimes[b];   lossTimes[b]   = lossTimes[b+1];   lossTimes[b+1]   = tT;
+            ulong  tK = lossTickets[b]; lossTickets[b] = lossTickets[b+1]; lossTickets[b+1] = tK;
+            double tD = lossLots[b];    lossLots[b]    = lossLots[b+1];    lossLots[b+1]    = tD;
+            string tS = lossTags[b];    lossTags[b]    = lossTags[b+1];    lossTags[b+1]    = tS;
+         }
+      }
    }
 
-   // 1) Remove orphan hedge pendings (tag not in loss set)
+   // [v2.8.6] Count orphan main on hedge side and SKIP that many oldest loss tickets
+   int orphanOnHedge = CountOrphanMainOnHedgeSide(g, hedgeSide);
+   int skipN = orphanOnHedge;
+   if(skipN > nL) skipN = nL;
+   int keepFrom = skipN; // indices [keepFrom .. nL-1] get a hedge pending
+
+   if(InpVerboseLog)
+      PrintFormat("Golden2 v2.8.6: HD-MIRROR G%d lossSide=%s lossN=%d orphanOnHedge=%d mirror=%d (skip oldest %d)",
+                  g, lossSide==0?"BUY":"SELL", nL, orphanOnHedge, nL-skipN, skipN);
+
+   // 1) Remove orphan hedge pendings whose tag is not in the KEEP slice
    int ot = OrdersTotal();
    for(int i=ot-1;i>=0;i--){
       ulong tk = OrderGetTicket(i);
@@ -1960,24 +1958,24 @@ void MirrorLossSideToHedgePendings(int g, int lossSide){
       if(!ParseComment(c, gp, hd, tag)) continue;
       if(gp != g || !hd) continue;
       bool keep = false;
-      for(int k=0;k<ArraySize(lossTags);k++){
+      for(int k=keepFrom; k<nL; k++){
          if(lossTags[k] == tag){ keep = true; break; }
       }
       if(!keep){
          trade.OrderDelete(tk);
-         if(InpVerboseLog) PrintFormat("Golden2 v1.4: HD trim G%d %s (loss tag gone)", g, c);
+         if(InpVerboseLog) PrintFormat("Golden2 v2.8.6: HD trim G%d %s (offset/loss gone)", g, c);
       }
    }
 
-   // 2) Add missing hedge pendings for each loss tag
-   for(int k=0;k<ArraySize(lossTags);k++){
+   // 2) Add missing hedge pendings for each KEPT loss tag
+   for(int k=keepFrom; k<nL; k++){
       string newC = MakeComment(g, (ENUM_SIDE)hedgeSide, true, lossTags[k]);
       if(HasPendingByComment(newC)) continue;
       double lot = lossLots[k];
       bool ok;
       if(hedgeSide==1) ok = trade.SellStop(lot, anchor, _Symbol, 0, 0, ORDER_TIME_GTC, 0, newC);
       else             ok = trade.BuyStop (lot, anchor, _Symbol, 0, 0, ORDER_TIME_GTC, 0, newC);
-      if(InpVerboseLog) PrintFormat("Golden2 v1.4: HD mirror G%d %s lot=%.2f price=%.5f comment=%s ok=%d",
+      if(InpVerboseLog) PrintFormat("Golden2 v2.8.6: HD mirror G%d %s lot=%.2f price=%.5f comment=%s ok=%d",
          g, hedgeSide==1?"SELL_STOP":"BUY_STOP", lot, anchor, newC, ok);
    }
 }
@@ -3411,7 +3409,7 @@ void DrawDashboard(){
 
    // Header
    string entryLbl = (InpEntryMode == G2_ENTRY_PENDING) ? "PENDING" : (InpEntryMode == G2_ENTRY_SMA) ? "SMA" : "INSTANT"; // [v2.73]
-   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.8.5    Entry: %s    Side: %s", entryLbl, modeLbl), InpDashAccent);
+   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.8.6    Entry: %s    Side: %s", entryLbl, modeLbl), InpDashAccent);
    y += rowH+2;
 
    // ==== Account section ====
@@ -3477,13 +3475,7 @@ void DrawDashboard(){
          else if((g_sqDir[si]>0 && g_sqBlockSell) || (g_sqDir[si]<0 && g_sqBlockBuy)) cc = InpDashBad;
          else cc = InpDashAccent;
          DashRow(StringFormat("L_SQ_%d", si), x, y, w, rowH, lbl, val, cc); y+=rowH;
-         // [v2.7.7] confirm-stage summary row per TF
-         string cf = StringFormat("BB:%s ADX:%s(%.1f) ATR:%s EMA:%s",
-                        g_sqPassBB[si]?"v":"x",
-                        g_sqPassADX[si]?"v":"x", g_sqADXVal[si],
-                        g_sqPassATR[si]?"v":"x",
-                        g_sqPassEMA[si]?"v":"x");
-         DashRow(StringFormat("L_SQ_CF_%d", si), x, y, w, rowH, "  Confirm", cf, InpDashColor); y+=rowH;
+          // [v2.8.6] confirm row removed — Squeeze uses BB/KC ratio only
       }
       string ov = SqueezeOverallLabel();
       color  ovC = (ov=="READY")? InpDashGood : InpDashBad;
@@ -3589,6 +3581,12 @@ void DrawDashboard(){
             DashRow(StringFormat("R_G%d_HST", g), xR, yR, wR, rowH, "  Hedge",
                     StringFormat("%s  PostAvg:%s", hStat, pStat), hClr);
             yR += rowH;
+
+            // ---- [v2.8.6] Hedge orphan offset diagnostic ----
+            int orphBuy  = CountOrphanMainOnHedgeSide(g, 0);
+            int orphSell = CountOrphanMainOnHedgeSide(g, 1);
+            DashRow(StringFormat("R_G%d_ORPH", g), xR, yR, wR, rowH, "  Orph",
+                    StringFormat("B:%d  S:%d", orphBuy, orphSell), InpDashColor);
 
             // ---- [v2.8.4] Compact post-match Avg-TP row (only when ACTIVE) ----
             if(InpPostMatch_AvgBrokerTP && g_groupPostMatchAvgActive[g]){
@@ -3749,16 +3747,12 @@ int OnInit(){
       g_sqBB[i]    = iBands(_Symbol, g_sqTF[i], InpSQ_BBPeriod, 0, InpSQ_BBMult, PRICE_CLOSE);
       g_sqKCEMA[i] = iMA   (_Symbol, g_sqTF[i], InpSQ_KCPeriod, 0, MODE_EMA, PRICE_CLOSE);
       g_sqATR[i]   = iATR  (_Symbol, g_sqTF[i], InpSQ_ATRPeriod);
-      // [v2.7.7] ADX + EMA per TF
-      g_sqADX[i]   = iADX  (_Symbol, g_sqTF[i], InpSQ_ADXPeriod);
-      g_sqEMA[i]   = iMA   (_Symbol, g_sqTF[i], InpSQ_EMAPeriod, 0, MODE_EMA, InpSQ_EMAPrice);
+      // [v2.8.6] ADX + EMA confirm stages removed — handles no longer created
+      g_sqADX[i]   = INVALID_HANDLE;
+      g_sqEMA[i]   = INVALID_HANDLE;
       if(InpSQ_Enable && (g_sqBB[i]==INVALID_HANDLE || g_sqKCEMA[i]==INVALID_HANDLE || g_sqATR[i]==INVALID_HANDLE)){
          PrintFormat("Golden2 v1.6: Squeeze indicator init failed TF[%d]", i);
       }
-      if(InpSQ_Enable && InpSQ_UseADX && g_sqADX[i]==INVALID_HANDLE)
-         PrintFormat("Golden2 v2.7.7: ADX init failed TF[%d]", i);
-      if(InpSQ_Enable && InpSQ_UseEMA && g_sqEMA[i]==INVALID_HANDLE)
-         PrintFormat("Golden2 v2.7.7: EMA init failed TF[%d]", i);
    }
 
    // [v2.73] SMA handle for ENTRY_SMA mode (skip if not used to save resources).
@@ -3776,11 +3770,9 @@ int OnInit(){
 
    string entryModeLbl = (InpEntryMode == G2_ENTRY_PENDING) ? "PENDING" :
                          (InpEntryMode == G2_ENTRY_SMA)     ? "SMA"     : "INSTANT";
-   PrintFormat("Golden2 EA v2.8.5 initialized | Magic=%I64d | MaxGroups=%d | EntryMode=%s | InitMode=%d | GridLoss=%s | Squeeze=%s [BB:%s ADX:%s(>=%.1f) ATR:%s EMA:%s(P=%d)] | TripleGate=%s | ExitGate=Squeeze-TF3-Latch+WinPool+CrossSideShred | OneHedgePerGroup=ON | PostMatchAvgTP=PostMatch-Active-Only | MinGainUSD=%.1f | SeqQueue=%s | RecoveryAdvUnblock=%s | RecoveryGrid=%s(mult=%.2f max=%d) | PostMatchAvgBrokerTP=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | ProfitSideUnhedgedAdv=%s | ForceCloseOppUnhedged=%s(%ds) | Tester=%s Visual=%s Opt=%s DashInterval=%ds | TesterHideIndicators=%s SideTaggedComments=ON",
+   PrintFormat("Golden2 EA v2.8.6 initialized | Magic=%I64d | MaxGroups=%d | EntryMode=%s | InitMode=%d | GridLoss=%s | Squeeze=%s [BB/KC ratio only, multi-confirm REMOVED] | HedgeOrphanOffset=ON | TripleGate=%s | ExitGate=Squeeze-TF3-Latch+WinPool+CrossSideShred | OneHedgePerGroup=ON | PostMatchAvgTP=PostMatch-Active-Only | MinGainUSD=%.1f | SeqQueue=%s | RecoveryAdvUnblock=%s | RecoveryGrid=%s(mult=%.2f max=%d) | PostMatchAvgBrokerTP=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | ProfitSideUnhedgedAdv=%s | ForceCloseOppUnhedged=%s(%ds) | Tester=%s Visual=%s Opt=%s DashInterval=%ds | TesterHideIndicators=%s SideTaggedComments=ON",
                (long)InpMagic, InpMaxGroups, entryModeLbl, (int)InpInitSideMode,
                GridLoss_Enable?"ON":"OFF", InpSQ_Enable?"ON":"OFF",
-               InpSQ_UseBBBreakout?"ON":"OFF", InpSQ_UseADX?"ON":"OFF", InpSQ_ADXThreshold,
-               InpSQ_UseATRConfirm?"ON":"OFF", InpSQ_UseEMA?"ON":"OFF", InpSQ_EMAPeriod,
                InpExitTripleGate_Enable?"ON":"OFF",
                InpExit_MinGainUSD,
                InpExit_SequentialQueue?"ON":"OFF",

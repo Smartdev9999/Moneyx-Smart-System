@@ -1,85 +1,75 @@
-## แผนแก้ Golden2 EA v2.8.5
+## v2.8.6 — รวม 2 งานในไฟล์ `public/docs/mql5/Golden2_EA.mq5`
 
-### เป้าหมาย
-แก้ 4 จุด:
-1. หลัง Hedging เปิด ต้องถอด Broker TP/SL ของ **ทุก Order ในกรุ๊ป** (รวม main, hedge, และ "orphan main" ที่เกิดก่อน hedge) และคงสภาพ "ไม่มี TP/SL" จนกว่าจะผ่าน 3 Gate
-2. หนึ่งกรุ๊ป Hedging ได้เพียงครั้งเดียวเท่านั้น ห้าม re-hedge กรุ๊ปเดิม
-3. Matching Close ต้องรวม **Order ที่ไม่ได้ผูกกับ Hedging** (orphan main, ไม่ว่ากำไรหรือขาดทุน) เข้าไปคำนวณด้วย ก่อนที่จะวาง Recovery
-4. Broker Avg TP/SL ใส่กลับเฉพาะหลัง Matching Close — รวม Bound order + residual + remaining hedge + recovery + orphan ที่เหลือทั้งหมดเป็นค่าเฉลี่ยเดียว
+---
 
-## ปัญหาที่พบจากโค้ด v2.8.4
+# Part A — Squeeze Filter: ตัด Multi-Confirm ออก (เหลือ BB/KC ratio เหมือน Gold Miner Original)
 
-### A) Post-Match Avg TP ทำงานเร็วเกินไป
-`SyncPostMatchAvgTPSL(g)` trigger เมื่อ `g_stripped[g] || IsGroupHedgeMatched(g)` → แค่ strip เสร็จก็เริ่มใส่ Avg TP กลับเข้าไปก่อน 3 Gate / Matching Close จะทำงาน → hedge โดน TP ก่อนเวลา
+## ปัญหา
+v2.7.7 เพิ่ม BB Breakout + ADX + ATR-MA + EMA เป็นเงื่อนไข AND กับ ratio → ratio ผ่าน 1.6 แล้ว แต่ตัวอื่นไม่ผ่าน → `g_sqExpansion[tf]` = false → `g_groupSeenExp[g]` ไม่ latch → Triple-Gate ไม่เปิด → Matching Close pool-based ลั่นปิด Hedging เร็วเกินไป
 
-### B) Strip ครั้งเดียว ไม่ครอบคลุม orphan ที่เพิ่มทีหลัง
-`StripBrokerTPSL_OnHedgeMatch()` เรียกครั้งเดียวเมื่อ `!g_stripped[g]` → ถ้ามี orphan order (main ฝั่งตรงข้าม loss side) มี TP/SL ติดมาก่อน hedge หรือถูก v1.3 SyncSideTPSL ใส่กลับ จะไม่ถูก strip ซ้ำ
+## สิ่งที่จะทำ
+1. **ลบ logic Multi-Confirm ออกจาก `ComputeSqueezeForTF()`** — เหลือเฉพาะ BB upper-lower / KC upper-lower → `ratio = bbWidth / kcWidth`
+   - `g_sqExpansion[tf] = (ratio >= InpSQ_ExpansionThreshold)` ตรง ๆ
+   - `g_sqNormal[tf]    = (ratio <  InpSQ_ExpansionThreshold)`
+2. **ลบ Input ที่ไม่ใช้แล้ว** (เก็บไว้เป็น `const` no-op เพื่อให้ `.set` ไฟล์เก่ายังโหลดได้):
+   - `InpSQ_UseBBBreakout`
+   - `InpSQ_UseADX`, `InpSQ_ADXPeriod`, `InpSQ_ADXThreshold`
+   - `InpSQ_UseATRConfirm`, `InpSQ_ATRMAPeriod`, `InpSQ_ATRMult`
+   - `InpSQ_UseEMA`, `InpSQ_EMAPeriod`, `InpSQ_EMAPrice`
+3. **ลบ indicator handle ที่เกี่ยวข้อง** (`g_adxHandle[3]`, `g_atrHandleSQ[3]`, `g_emaHandle[3]`) + `IndicatorRelease` ใน `OnDeinit`
+4. **Dashboard** — แถว `Confirm BB:v ADX:v ATR:v EMA:v` ออก เหลือ `TF1/TF2/TF3  ratio=X.XX  EXP/NORMAL`
+5. **Init log** — ตัด `MultiConfirm=ON` ออก
 
-### C) ไม่มี state "กรุ๊ปนี้ใช้ Hedge ไปแล้ว"
-`ManageGroupHedgeArm()` ดูแค่ว่ายังมี hedge position อยู่ไหม — ถ้า hedge ตัวเดิมโดน TP ไป จะกลับไป arm hedge pending ใหม่ได้ ขัดหลัก 1 group = 1 hedge
+## ผลข้างเคียงที่ได้ฟรี (ไม่ต้องแก้แยก)
+- `RefreshGroupExpansionLatch(g)` อ่าน `g_sqExpansion[2]` เหมือนเดิม แต่ตอนนี้สะท้อน ratio จริง → latch ทำงานได้ทันที (ไม่ต้องเพิ่ม `g_sqExpansionRaw[]` แยก)
+- Block New Orders / Close-on-Expansion ใช้ ratio เดียวกัน → พฤติกรรมเทียบเท่า Gold Miner Original
 
-### D) Orphan Main Order ฝั่งเดียวกับ Hedge
-ตอนนี้ทุก ScanByComment ใช้ `gp==g` อยู่แล้ว ดังนั้น orphan main จะถูก strip + matching close ได้โดยอัตโนมัติ — แต่ต้อง **ยืนยันชัดเจน** ว่า: pre-match SyncSideTPSLToBroker ต้องหยุดเขียน TP/SL ลงไปทันทีเมื่อ `g_groupHedgeUsed[g]==true` (ไม่ใช่แค่ตอน matched) มิฉะนั้น orphan main ฝั่งตรงข้ามจะถูกใส่ Initial TP กลับโดย v1.3 manager หลัง strip
+---
 
-## สิ่งที่จะปรับ
+# Part B — Hedge Orphan Offset (ตามภาพที่ส่งมา)
 
-### 1) State Lifecycle ใหม่
-เพิ่ม global:
-- `bool g_groupHedgeUsed[51]` — true ทันทีที่กรุ๊ปเคยมี hedge position
-- `bool g_groupPostMatchAvgActive[51]` — true เฉพาะหลัง Matching Close สำเร็จและยังเหลือ residual
+## ปัญหา
+`MirrorLossSideToHedgePendings(g, lossSide)` วาง pending hedge 1:1 ต่อ loss-side ticket โดยไม่หัก orphan main ฝั่งตรงข้ามที่มีอยู่ก่อน
+ผล: BUY 8 + SELL orphan 4 → SELL_STOP 8 ตัว trigger ครบ = SELL 12 vs BUY 8 ไม่บาลานซ์
 
-Reset ทั้งสองค่าเฉพาะตอน group flat จริง (`!hasPos && !hasPend`)
+## ตัวอย่างตามภาพ
+- BUY (loss side, 8 ไม้): `IN, GL#1..GL#7`
+- SELL orphan main (4 ไม้): `IN, GL#1..GL#3`
+- ที่ถูก: วาง pending hedge เฉพาะ `HD_GL#4..HD_GL#7` = 4 ตัว lot ต่อจาก orphan ตัวสุดท้าย
 
-### 2) ห้าม Re-Hedge
-ใน `ManageGroupHedgeArm(g)`:
-- ถ้า `g_groupHedgeUsed[g]==true` → ห้าม arm pending hedge ใหม่ทั้งหมด
-- ลบ hedge pending ที่หลงเหลือทิ้ง
+## สิ่งที่จะทำ
+1. ฟังก์ชันใหม่ `CountOrphanMainOnHedgeSide(g, hedgeSide)` — นับ position group `g`, side=`hedgeSide`, `hd==false`
+2. แก้ `MirrorLossSideToHedgePendings`:
+   - Sort `lossTags[]` เก่า→ใหม่ ตาม `POSITION_TIME_MSC`
+   - `int skipN = CountOrphanMainOnHedgeSide(g, oppositeSide)`
+   - **ข้าม `skipN` ตัวแรก** (loss เก่าถือว่าถูก orphan ฝั่งตรงข้าม hedge แทนแล้ว)
+   - ถ้า `skipN >= ArraySize(lossTags)` → ไม่วาง hedge เลย + ลบ pending hedge เก่าทั้งหมด
+   - วาง pending เฉพาะ tag/lot ของ loss ที่เหลือ (lot = lot ของ loss ticket นั้น)
+3. แก้ block "Remove orphan hedge pendings":
+   - `keepTags[]` = `lossTags[skipN..end]` (ไม่ใช่ทั้ง array)
+4. Log: `Golden2 v2.8.6: HD-MIRROR G%d lossSide=%s lossN=%d orphanOnHedge=%d → mirror=%d (skip oldest %d)`
+5. Dashboard: เพิ่ม `Orph:<n>` ใต้แถว `Hedge USED/LOCKED` ต่อกรุ๊ป
 
-### 3) Strip TP/SL ต่อเนื่องหลัง Hedge Used
-- เมื่อพบ hedge position → stamp `g_groupHedgeUsed[g]=true` (ใน OnTick block)
-- เรียก `StripBrokerTPSL_OnHedgeMatch(g)` ได้ทุก tick ตราบ `g_groupHedgeUsed[g] && !g_groupPostMatchAvgActive[g]` (ไม่ใช่แค่ครั้งแรก)
-- `ModifyIfDifferent` มี early-return อยู่แล้ว ดังนั้น tick ที่ TP/SL=0 อยู่แล้วจะไม่ยิง modify ซ้ำ
+---
 
-### 4) บล็อก v1.3 Pre-Match Sync เมื่อ Hedge Used
-ปรับเงื่อนไข early-return ของ `SyncSideTPSLToBroker(g, side)`:
-- จากเดิม `if(g_stripped[g] || IsGroupHedgeMatched(g)) return;`
-- เปลี่ยนเป็น `if(g_stripped[g] || IsGroupHedgeMatched(g) || g_groupHedgeUsed[g]) return;`
-ผลคือ orphan main ฝั่งใดก็ตามที่เคยมี hedge อยู่ในกรุ๊ป จะไม่ถูกใส่ Initial TP กลับเข้าไปอีก
+# Version + Memory
+- `#property version "2.86"` + description + header banner + Dashboard title + OnInit log → v2.8.6
+- Init log: `HedgeOrphanOffset=ON  Squeeze=BB/KC-ratio-only`
+- Memory: `.lovable/memory/trading/golden2-ea/v2-8-6-hedge-orphan-offset-and-squeeze-simplify.md` + อัปเดต `index.md`
 
-### 5) Matching Close รวม Orphan Order
-ใน `TryMatchingCloseForGroup(g)`:
-- `winProfit` / `netCheck` ปัจจุบันรวม main+hedge ทั้งสองฝั่งอยู่แล้ว (ครอบคลุม orphan) — คงไว้
-- `ShredCloseLosingSide` + `ShredAllNegativeFromAllProfit` scan โดย `gp==g` → จับ orphan ทุกตัวอยู่แล้ว — คงไว้
-- เพิ่ม log สรุปก่อน Matching: `MATCH-PREP G%d totalTickets=N (main=%d hedge=%d) profitable=%d losing=%d` เพื่อยืนยันว่า orphan ถูกนับ
-- หลัง Matching Close ถ้ายังเหลือ residual: เรียก `PlaceRecoveryGridIfNeeded` เหมือนเดิม
+---
 
-### 6) Post-Match Avg TP เปิดเฉพาะหลัง Matching Close
-ปรับ `SyncPostMatchAvgTPSL(g)`:
-- Trigger ใหม่: `InpPostMatch_AvgBrokerTP && g_groupPostMatchAvgActive[g] && GroupHasAnyPositions(g)`
-- ไม่ใช้ `g_stripped` หรือ `IsGroupHedgeMatched` เป็น trigger อีก
-- คำนวณ avg ต่อฝั่งจากทุก position (main+hedge+RC+orphan) ที่ยังเหลือในกรุ๊ป — เหมือน v2.8.4 (ใช้ `GroupAveragePrice(g, side, -1)` อยู่แล้ว)
+# สิ่งที่ไม่เปลี่ยนแปลง (ตามกฎเหล็ก)
+- ไม่แตะ `trade.SellStop/BuyStop/OrderDelete/PositionClose/OrderSend`
+- ไม่แตะ `LotForLevel`, `HedgePendingAnchorPrice`, `ParseComment`, `MakeComment`, `HighestGridLevel`
+- ไม่แตะ Trigger: `pct >= InpHedgeArmPercent`, mutex, hedge open delay
+- ไม่แตะ v2.8.5 One-Hedge-Per-Group, Strip TP/SL, Post-Match Avg TP
+- ไม่แตะ Triple-Gate / Matching Close / Recovery Grid
+- ไม่แตะ Entry mode PENDING/SMA/INSTANT, Grid Loss/Profit, Per-order trail, Accumulate
+- ไม่แตะ License / News / Time / Sync
+- ไม่แตะการคำนวณ BB/KC pipeline (เก็บแค่ ratio path, ตัด ADX/ATR/EMA/BB-breakout ที่เคยเพิ่มใน v2.7.7)
 
-ตั้ง `g_groupPostMatchAvgActive[g] = true` เฉพาะหลัง `TryMatchingCloseForGroup` ทำ matching จริง (มีอย่างน้อย 1 ticket ถูกปิด) และยังเหลือ residual
-
-### 7) Dashboard & Version
-- `#property version "2.85"` + description + dashboard title + init log → v2.8.5
-- Dashboard hedging panel เพิ่มสถานะสั้น ๆ:
-  - `Hedge: ARMED / USED / LOCKED`
-  - `PostAvg: WAITING / ACTIVE`
-- ไม่เพิ่มรายการ ticket ยาว ๆ (คง slim layout v2.8.4)
-
-## สิ่งที่ไม่เปลี่ยนแปลง
-- Entry mode PENDING/SMA/INSTANT, Squeeze BB/KC/ADX/EMA/ATR
-- Grid Loss/Profit lot, distance, candle confirm, ATR snapshot
-- 3 Gate condition: Squeeze TF3 latch + breakout + WinPool/MinGain
-- สูตร Matching Close (winning pool shred + cross-side pool) ของ v2.8.4
-- Recovery Grid placement และสูตร multiplier
-- ParseComment / MakeComment / B_/S_ side tags
-- Per-order trail, Bar-close trail, Cost-Hit, Accumulate, Force-close opp unhedged
-- Tester cleanup, prior-group advance guard
-
-## ผลลัพธ์ที่คาดหวัง
-- Hedge เปิด → TP/SL ของทุก order ในกรุ๊ป (รวม orphan main, hedge, future grid) ถูกถอด และคงสภาพจนกว่า Matching Close จะทำงาน
-- กรุ๊ปเดิมจะไม่ re-hedge แม้ hedge ตัวแรกโดน TP
-- Matching Close นำ orphan order (ทั้งกำไร/ขาดทุน) มาคำนวณรวมกับ bound+hedge → ปิดได้สูงสุด
-- Order ที่เหลือ + Recovery → คำนวณ Average เดียวกัน → วาง Broker Avg TP/SL ปิดทั้งกรุ๊ปด้วย broker
+# ไฟล์
+- `public/docs/mql5/Golden2_EA.mq5`
+- `.lovable/memory/trading/golden2-ea/v2-8-6-hedge-orphan-offset-and-squeeze-simplify.md` (สร้าง)
+- `.lovable/memory/index.md` (อัปเดต entry)
