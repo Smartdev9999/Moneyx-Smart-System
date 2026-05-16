@@ -3755,6 +3755,8 @@ int OnInit(){
       g_groupExpToNormal[i]       = false;
       // [v2.8.3]
       g_groupRecoveryLevel[i]     = 0;
+      // [v2.8.8]
+      g_lastRecoveryCandle[i]     = 0;
       // [v2.8.4]
       g_postMatchTP[i][0]=0; g_postMatchTP[i][1]=0;
       g_postMatchSL[i][0]=0; g_postMatchSL[i][1]=0;
