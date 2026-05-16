@@ -365,6 +365,19 @@ int      g_groupRecoveryLevel[51];
 // [v2.8.4] Post-match avg-TP/SL synced to broker per (group, side); 0 = none
 double   g_postMatchTP[51][2];
 double   g_postMatchSL[51][2];
+// [v2.8.5] Per-group hedge lifecycle:
+//   g_groupHedgeUsed[g]          = true once the group has ever held a hedge
+//                                  position. Locks out re-hedging and blocks
+//                                  v1.3 pre-match Avg-TP sync from writing
+//                                  TP/SL back onto residual / orphan main
+//                                  orders. Cleared only when group is flat.
+//   g_groupPostMatchAvgActive[g] = true only after TryMatchingCloseForGroup
+//                                  actually closed >=1 ticket and residual
+//                                  remains. Gates SyncPostMatchAvgTPSL so the
+//                                  broker-side Avg TP/SL never returns to the
+//                                  group before Matching Close runs.
+bool     g_groupHedgeUsed[51];
+bool     g_groupPostMatchAvgActive[51];
 
 // Snapshot of ATR (in points) at the moment last grid order was placed (per group, side, family 0=GL/1=GP)
 double   g_atrAtLastGridLoss[51][2];
