@@ -2025,6 +2025,18 @@ void ManageGroupHedgeArm(int g){
    }
    g_hedgeMasterCleared = false;
 
+   // [v2.8.5] One-shot hedge per group. Once this group has ever held a hedge
+   // position, lock out any new hedge arming/pendings — the group must resolve
+   // via Triple-Gate Matching Close + Recovery Grid, never via re-hedging.
+   if(g_groupHedgeUsed[g]){
+      if(CountGroupPendingsByTagPrefix(g, true, "") > 0){
+         DeleteGroupPendings(g, 1);
+         if(InpVerboseLog) PrintFormat("Golden2 v2.8.5: G%d re-hedge LOCKED — stray hedge pending(s) deleted", g);
+      }
+      g_blockNewOrders[g] = false;
+      return;
+   }
+
    bool hedgePosExists = (CountGroupPositions(g,-1,1) > 0);
    bool hedgePendingExists = (CountGroupPendingsByTagPrefix(g, true, "") > 0);
 
