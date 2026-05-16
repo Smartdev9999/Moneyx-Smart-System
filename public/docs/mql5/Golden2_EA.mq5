@@ -4112,9 +4112,11 @@ void OnTick(){
       if(g_lastTickMs != 0 && (nowMs - g_lastTickMs) < (ulong)InpTester_TickStrideMs) return;
       g_lastTickMs = nowMs;
    }
+   // [v2.9.5] Max DD kill switch runs BEFORE AllowTrade guard so it always
+   //   fires even if the user disables AutoTrading on the EA/terminal.
+   ManageMaxDDClose();
    if(!InpAllowTrade){ RenderDashboardThrottled(); return; }
    RefreshSqueezeStateThrottled(); // [v2.72] one refresh per new M1 bar
-   ManageMaxDDClose(); // [v2.9.4] global Max DD kill switch (runs every tick; internal cooldown)
 
    // [v2.7.9/v2.9.1] Aux-chart sweep — only useful when a chart is actually
    // visible. Skip entirely in non-visual Tester (saves ChartIndicatorDelete
