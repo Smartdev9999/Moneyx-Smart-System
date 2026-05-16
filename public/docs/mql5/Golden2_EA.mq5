@@ -1860,15 +1860,43 @@ bool HasPendingByComment(string targetComment){
    return false;
 }
 
+// [v2.8.6] Count orphan main positions on the HEDGE side (same group, side=hedgeSide, hd=false).
+// These are existing same-group positions on the opposite-of-loss side that were opened
+// BEFORE the hedge fired (e.g. previous initial/grid SELLs while BUY is the loss side).
+// They act as natural hedges, so we must SKIP that many of the oldest loss tickets when
+// mirroring — otherwise we end up over-hedged (e.g. BUY 8 + SELL orphan 4 → 12 vs 8).
+int CountOrphanMainOnHedgeSide(int g, int hedgeSide){
+   int cnt = 0;
+   int total = PositionsTotal();
+   for(int i=0;i<total;i++){
+      ulong tk = PositionGetTicket(i);
+      if(tk==0) continue;
+      if(!PositionSelectByTicket(tk)) continue;
+      if((long)PositionGetInteger(POSITION_MAGIC) != InpMagic) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      string c = PositionGetString(POSITION_COMMENT);
+      int gp; bool hd; string tag;
+      if(!ParseComment(c, gp, hd, tag)) continue;
+      if(gp != g || hd) continue;
+      int sd = (PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY)?0:1;
+      if(sd == hedgeSide) cnt++;
+   }
+   return cnt;
+}
+
 // Mirror loss-side positions to hedge-side pending stops (1:1 lot+tag).
-// Adds missing pendings, removes pendings whose source loss tag no longer exists.
+// [v2.8.6] Now offsets orphan main on hedge side: sorts loss tickets oldest→newest
+// and skips the oldest N (where N = orphan count on hedge side) so total exposure
+// balances. E.g. BUY loss×8 + SELL orphan×4 → place hedge for newest 4 only.
 void MirrorLossSideToHedgePendings(int g, int lossSide){
    int hedgeSide = (lossSide==0)?1:0;
    double anchor = HedgePendingAnchorPrice(hedgeSide);
 
-   // Build set of current loss-side tags (e.g. "IN", "GL#1", "GL#7", "GP#2") with their lots
+   // Build loss-side tickets sorted oldest→newest (by POSITION_TIME_MSC then ticket)
    string  lossTags[];
    double  lossLots[];
+   long    lossTimes[];
+   ulong   lossTickets[];
    int total = PositionsTotal();
    for(int i=0;i<total;i++){
       ulong tk = PositionGetTicket(i);
@@ -1883,13 +1911,41 @@ void MirrorLossSideToHedgePendings(int g, int lossSide){
       int sd = (PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY)?0:1;
       if(sd != lossSide) continue;
       int n = ArraySize(lossTags);
-      ArrayResize(lossTags, n+1);
-      ArrayResize(lossLots, n+1);
-      lossTags[n] = tag;
-      lossLots[n] = PositionGetDouble(POSITION_VOLUME);
+      ArrayResize(lossTags,    n+1);
+      ArrayResize(lossLots,    n+1);
+      ArrayResize(lossTimes,   n+1);
+      ArrayResize(lossTickets, n+1);
+      lossTags[n]    = tag;
+      lossLots[n]    = PositionGetDouble(POSITION_VOLUME);
+      lossTimes[n]   = (long)PositionGetInteger(POSITION_TIME_MSC);
+      lossTickets[n] = tk;
+   }
+   // Bubble-sort oldest→newest (small N, simple)
+   int nL = ArraySize(lossTags);
+   for(int a=0; a<nL-1; a++){
+      for(int b=0; b<nL-1-a; b++){
+         bool swap = (lossTimes[b] > lossTimes[b+1]) ||
+                     (lossTimes[b] == lossTimes[b+1] && lossTickets[b] > lossTickets[b+1]);
+         if(swap){
+            long   tT = lossTimes[b];   lossTimes[b]   = lossTimes[b+1];   lossTimes[b+1]   = tT;
+            ulong  tK = lossTickets[b]; lossTickets[b] = lossTickets[b+1]; lossTickets[b+1] = tK;
+            double tD = lossLots[b];    lossLots[b]    = lossLots[b+1];    lossLots[b+1]    = tD;
+            string tS = lossTags[b];    lossTags[b]    = lossTags[b+1];    lossTags[b+1]    = tS;
+         }
+      }
    }
 
-   // 1) Remove orphan hedge pendings (tag not in loss set)
+   // [v2.8.6] Count orphan main on hedge side and SKIP that many oldest loss tickets
+   int orphanOnHedge = CountOrphanMainOnHedgeSide(g, hedgeSide);
+   int skipN = orphanOnHedge;
+   if(skipN > nL) skipN = nL;
+   int keepFrom = skipN; // indices [keepFrom .. nL-1] get a hedge pending
+
+   if(InpVerboseLog)
+      PrintFormat("Golden2 v2.8.6: HD-MIRROR G%d lossSide=%s lossN=%d orphanOnHedge=%d mirror=%d (skip oldest %d)",
+                  g, lossSide==0?"BUY":"SELL", nL, orphanOnHedge, nL-skipN, skipN);
+
+   // 1) Remove orphan hedge pendings whose tag is not in the KEEP slice
    int ot = OrdersTotal();
    for(int i=ot-1;i>=0;i--){
       ulong tk = OrderGetTicket(i);
@@ -1902,24 +1958,24 @@ void MirrorLossSideToHedgePendings(int g, int lossSide){
       if(!ParseComment(c, gp, hd, tag)) continue;
       if(gp != g || !hd) continue;
       bool keep = false;
-      for(int k=0;k<ArraySize(lossTags);k++){
+      for(int k=keepFrom; k<nL; k++){
          if(lossTags[k] == tag){ keep = true; break; }
       }
       if(!keep){
          trade.OrderDelete(tk);
-         if(InpVerboseLog) PrintFormat("Golden2 v1.4: HD trim G%d %s (loss tag gone)", g, c);
+         if(InpVerboseLog) PrintFormat("Golden2 v2.8.6: HD trim G%d %s (offset/loss gone)", g, c);
       }
    }
 
-   // 2) Add missing hedge pendings for each loss tag
-   for(int k=0;k<ArraySize(lossTags);k++){
+   // 2) Add missing hedge pendings for each KEPT loss tag
+   for(int k=keepFrom; k<nL; k++){
       string newC = MakeComment(g, (ENUM_SIDE)hedgeSide, true, lossTags[k]);
       if(HasPendingByComment(newC)) continue;
       double lot = lossLots[k];
       bool ok;
       if(hedgeSide==1) ok = trade.SellStop(lot, anchor, _Symbol, 0, 0, ORDER_TIME_GTC, 0, newC);
       else             ok = trade.BuyStop (lot, anchor, _Symbol, 0, 0, ORDER_TIME_GTC, 0, newC);
-      if(InpVerboseLog) PrintFormat("Golden2 v1.4: HD mirror G%d %s lot=%.2f price=%.5f comment=%s ok=%d",
+      if(InpVerboseLog) PrintFormat("Golden2 v2.8.6: HD mirror G%d %s lot=%.2f price=%.5f comment=%s ok=%d",
          g, hedgeSide==1?"SELL_STOP":"BUY_STOP", lot, anchor, newC, ok);
    }
 }
