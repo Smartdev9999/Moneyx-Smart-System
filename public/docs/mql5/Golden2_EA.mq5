@@ -6,7 +6,7 @@
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
 #property version   "2.94"
-#property description "Golden2 EA v2.9.3 — Disarm Partial-Fill (remaining hedge pendings are now deleted when DD% drops below InpHedgeDisarmPercent even after some HD positions filled — filled positions remain for Triple-Gate/Recovery) + Disarm-Check verbose diagnostic (per-group 10s-throttled log of pct vs arm/disarm threshold). All v2.9.2 Hedge-Used Advance Bypass and Stale Opposite-Side Pending Cleanup preserved. Zero changes to trade execution, entry, grid, recovery, Triple-Gate."
+#property description "Golden2 EA v2.9.4 — Max Lot Caps (independent for NORMAL orders via InpMaxLotPerOrder and TRIPLE-GATE exit Recovery RC#N via InpMaxLotTripleGate) + Max DD Close global kill switch (OFF/PERCENT-of-balance/DOLLAR floating-loss modes via InpMaxDDMode + InpMaxDDValue, 30s cooldown, flattens all EA positions+pendings). All v2.9.3 Disarm Partial-Fill + Diagnostic preserved. Zero changes to entry/grid/hedge/Triple-Gate/Recovery strategy logic."
 #property strict
 
 #include <Trade/Trade.mqh>
