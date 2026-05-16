@@ -5,8 +5,8 @@
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.94"
-#property description "Golden2 EA v2.9.4 — Max Lot Caps (independent for NORMAL orders via InpMaxLotPerOrder and TRIPLE-GATE exit Recovery RC#N via InpMaxLotTripleGate) + Max DD Close global kill switch (OFF/PERCENT-of-balance/DOLLAR floating-loss modes via InpMaxDDMode + InpMaxDDValue, 30s cooldown, flattens all EA positions+pendings). All v2.9.3 Disarm Partial-Fill + Diagnostic preserved. Zero changes to entry/grid/hedge/Triple-Gate/Recovery strategy logic."
+#property version   "2.95"
+#property description "Golden2 EA v2.9.5 — Stranded Hedge-Pending Sweep (unconditional cleanup when group has 0 positions but hedge pendings remain — fixes advance-queue freeze from block-pending-only) + Max DD Always-On (kill switch runs even when AutoTrading disabled) + MAX-DD-CHK 30s diagnostic log. All v2.9.4 Max Lot Caps + Max DD Close preserved. Zero changes to entry/grid/hedge/Triple-Gate/Recovery strategy logic."
 #property strict
 
 #include <Trade/Trade.mqh>
