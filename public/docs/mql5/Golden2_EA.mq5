@@ -244,6 +244,14 @@ input bool    InpRecovery_OnlyNewCandle = true;                      // [v2.8.8]
 input bool    InpPostMatch_AvgBrokerTP  = true;                      // [v2.8.4] After hedge match: push per-side Avg TP/SL onto every residual+RC ticket (broker-side close)
 const int     InpDashGridPairsMax       = 0;                         // [v2.8.4] DEPRECATED — per-grid Grid#N rows removed; kept as const for .set backward-compat
 
+//--- === Risk Limits (v2.9.4) === independent caps & global DD-close kill switch
+input string  __sec_risk__              = "=== Risk Limits ==="; // ---
+input double  InpMaxLotPerOrder         = 0.0;                       // [v2.9.4] Max lot per NORMAL order (entry/grid/hedge mirror). 0 = OFF
+input double  InpMaxLotTripleGate       = 0.0;                       // [v2.9.4] Max lot per TRIPLE-GATE EXIT order (Recovery RC#N). 0 = OFF
+enum ENUM_G2_DDMODE { G2_DD_OFF=0, G2_DD_PERCENT=1, G2_DD_DOLLAR=2 };
+input ENUM_G2_DDMODE InpMaxDDMode       = G2_DD_OFF;                 // [v2.9.4] Max DD Close mode (OFF / PERCENT / DOLLAR)
+input double  InpMaxDDValue             = 20.0;                      // [v2.9.4] Max DD value (% of balance, or USD floating loss)
+
 //--- === Volatility Squeeze Filter === [v1.6 ported from Gold Miner]
 input string  __sec_sq__              = "=== Volatility Squeeze Filter ==="; // ---
 input bool    InpSQ_Enable            = true;                        // Enable Squeeze Filter
