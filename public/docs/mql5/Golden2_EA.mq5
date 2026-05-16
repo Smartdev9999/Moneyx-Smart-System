@@ -4077,6 +4077,7 @@ void OnTick(){
    }
    if(!InpAllowTrade){ RenderDashboardThrottled(); return; }
    RefreshSqueezeStateThrottled(); // [v2.72] one refresh per new M1 bar
+   ManageMaxDDClose(); // [v2.9.4] global Max DD kill switch (runs every tick; internal cooldown)
 
    // [v2.7.9/v2.9.1] Aux-chart sweep — only useful when a chart is actually
    // visible. Skip entirely in non-visual Tester (saves ChartIndicatorDelete
