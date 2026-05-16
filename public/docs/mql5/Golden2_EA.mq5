@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|  Golden2 EA v2.9.0 — Recovery Seed Lock                          |
+//|  Golden2 EA v2.9.1 — Backtest Performance Pack                   |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.90"
-#property description "Golden2 EA v2.9.0 — Recovery Seed Lock: seed lot for the RC# ladder is computed once (excluding RC# tickets) and reused for every RC#N so Multiplier never compounds on an already-multiplied lot. Fixes RC lot explosion. All v2.8.9 Recovery-Mode Order Lock + v2.8.8 Continuation + v2.8.7 Reserve-Profit preserved."
+#property version   "2.91"
+#property description "Golden2 EA v2.9.1 — Backtest Performance Pack: tester-aware log silencing (InpTester_SilenceLogs), chart-draw skip (InpTester_DisableChartDraw), aux-chart sweep limited to visual mode, optional tick-stride throttle (InpTester_TickStrideMs). Zero changes to trading logic / order execution / strategy. All v2.9.0 Recovery Seed Lock + v2.8.9 Recovery-Mode Order Lock preserved."
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -71,7 +71,10 @@ input string  __sec_general__         = "=== General ===";          // ---
 input long    InpMagic                = 22220001;                    // Magic number
 input int     InpSlippage             = 30;                          // Slippage (points)
 input bool    InpAllowTrade           = true;                        // Master allow trade
-input bool    InpVerboseLog           = true;                        // Verbose log
+input bool    InpVerboseLog                = true;                        // Verbose log (auto-silenced in Tester when InpTester_SilenceLogs=true)
+input bool    InpTester_SilenceLogs        = true;                        // [v2.9.1] Silence all Print/PrintFormat in Strategy Tester
+input bool    InpTester_DisableChartDraw   = true;                        // [v2.9.1] Skip Avg/TP chart line drawing in Tester (visual mode too)
+input int     InpTester_TickStrideMs       = 0;                           // [v2.9.1] Tester only: skip OnTick if last tick < N ms ago (0=off, accuracy first)
 
 //--- === Frame & Initial Order ===
 input string  __sec_frame__           = "=== Frame & Initial Order ==="; // ---
@@ -317,6 +320,8 @@ int      g_smaHandle             = INVALID_HANDLE; // [v2.73] SMA handle for ENT
 bool     g_isTesterMode          = false;          // MQL_TESTER
 bool     g_isVisualMode          = false;          // MQL_VISUAL_MODE
 bool     g_isOptimization        = false;          // MQL_OPTIMIZATION
+bool     g_verboseEffective      = true;           // [v2.9.1] = InpVerboseLog && !(tester && silence)
+ulong    g_lastTickMs            = 0;              // [v2.9.1] for InpTester_TickStrideMs throttle
 datetime g_lastDashRender        = 0;              // throttle DrawDashboard
 datetime g_lastAuxChartSweep     = 0;              // [v2.7.9] throttle HideAuxiliaryTesterCharts
 datetime g_lastSqueezeBar        = 0;              // refresh Squeeze on new M1 bar only
@@ -825,11 +830,11 @@ void PlaceInitialMarket(int g, bool placeBuy, bool placeSell){
    if(InpSQ_Enable && InpSQ_BlockNewOrders){
       if(placeBuy && SqueezeBlocksSide(0)){
          placeBuy = false;
-         if(InpVerboseLog) PrintFormat("Golden2 v2.73: [MKT] Squeeze BLOCK BUY G%d (%s)", g, SqueezeStatusString());
+         if(g_verboseEffective) PrintFormat("Golden2 v2.73: [MKT] Squeeze BLOCK BUY G%d (%s)", g, SqueezeStatusString());
       }
       if(placeSell && SqueezeBlocksSide(1)){
          placeSell = false;
-         if(InpVerboseLog) PrintFormat("Golden2 v2.73: [MKT] Squeeze BLOCK SELL G%d (%s)", g, SqueezeStatusString());
+         if(g_verboseEffective) PrintFormat("Golden2 v2.73: [MKT] Squeeze BLOCK SELL G%d (%s)", g, SqueezeStatusString());
       }
       if(!placeBuy && !placeSell) return;
    }
@@ -837,7 +842,7 @@ void PlaceInitialMarket(int g, bool placeBuy, bool placeSell){
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
    if(ask <= 0 || bid <= 0){
-      if(InpVerboseLog) PrintFormat("Golden2 v2.73: [MKT] G%d skipped — no quotes", g);
+      if(g_verboseEffective) PrintFormat("Golden2 v2.73: [MKT] G%d skipped — no quotes", g);
       return;
    }
 
@@ -855,11 +860,11 @@ void PlaceInitialMarket(int g, bool placeBuy, bool placeSell){
       // Price > SMA -> only BUY allowed; Price < SMA -> only SELL allowed.
       // Use bid as reference (same as Gold Miner currentPrice).
       if(placeBuy  && bid <= sma){
-         if(InpVerboseLog) PrintFormat("Golden2 v2.73: [MKT-SMA] G%d skip BUY (bid=%.*f <= SMA=%.*f)", g, g_digits, bid, g_digits, sma);
+         if(g_verboseEffective) PrintFormat("Golden2 v2.73: [MKT-SMA] G%d skip BUY (bid=%.*f <= SMA=%.*f)", g, g_digits, bid, g_digits, sma);
          placeBuy = false;
       }
       if(placeSell && bid >= sma){
-         if(InpVerboseLog) PrintFormat("Golden2 v2.73: [MKT-SMA] G%d skip SELL (bid=%.*f >= SMA=%.*f)", g, g_digits, bid, g_digits, sma);
+         if(g_verboseEffective) PrintFormat("Golden2 v2.73: [MKT-SMA] G%d skip SELL (bid=%.*f >= SMA=%.*f)", g, g_digits, bid, g_digits, sma);
          placeSell = false;
       }
       if(!placeBuy && !placeSell) return;
@@ -889,7 +894,7 @@ void PlaceInitialMarket(int g, bool placeBuy, bool placeSell){
          PrintFormat("Golden2 v2.73: [MKT] BUY FAIL G%d err=%d retcode=%d", g, GetLastError(), trade.ResultRetcode());
       } else {
          anySent = true;
-         if(InpVerboseLog) PrintFormat("Golden2 v2.73: [MKT] BUY G%d ask=%.*f tp=%.*f sl=%.*f", g, g_digits, ask, g_digits, tp, g_digits, sl);
+         if(g_verboseEffective) PrintFormat("Golden2 v2.73: [MKT] BUY G%d ask=%.*f tp=%.*f sl=%.*f", g, g_digits, ask, g_digits, tp, g_digits, sl);
       }
    }
    if(placeSell){
@@ -906,7 +911,7 @@ void PlaceInitialMarket(int g, bool placeBuy, bool placeSell){
          PrintFormat("Golden2 v2.73: [MKT] SELL FAIL G%d err=%d retcode=%d", g, GetLastError(), trade.ResultRetcode());
       } else {
          anySent = true;
-         if(InpVerboseLog) PrintFormat("Golden2 v2.73: [MKT] SELL G%d bid=%.*f tp=%.*f sl=%.*f", g, g_digits, bid, g_digits, tp, g_digits, sl);
+         if(g_verboseEffective) PrintFormat("Golden2 v2.73: [MKT] SELL G%d bid=%.*f tp=%.*f sl=%.*f", g, g_digits, bid, g_digits, tp, g_digits, sl);
       }
    }
    if(!anySent){
@@ -921,7 +926,7 @@ void PlaceInitialFrame(int g){
    //        the per-tick close→reopen→close loop seen when broker history is
    //        slow to reflect the just-realized profit.
    if(g_accumJustTriggered){
-      if(InpVerboseLog) PrintFormat("Golden2 v2.1: PlaceInitialFrame G%d skipped (accum cooldown active)", g);
+      if(g_verboseEffective) PrintFormat("Golden2 v2.1: PlaceInitialFrame G%d skipped (accum cooldown active)", g);
       return;
    }
    // [v2.72] Squeeze block moved to per-side and applied AFTER placeBuy/placeSell
@@ -968,14 +973,14 @@ void PlaceInitialFrame(int g){
    if(InpSQ_Enable && InpSQ_BlockNewOrders){
       if(placeBuy && SqueezeBlocksSide(0)){
          placeBuy = false;
-         if(InpVerboseLog) PrintFormat("Golden2 v2.72: Squeeze BLOCK BUY G%d (%s) — SELL still allowed", g, SqueezeStatusString());
+         if(g_verboseEffective) PrintFormat("Golden2 v2.72: Squeeze BLOCK BUY G%d (%s) — SELL still allowed", g, SqueezeStatusString());
       }
       if(placeSell && SqueezeBlocksSide(1)){
          placeSell = false;
-         if(InpVerboseLog) PrintFormat("Golden2 v2.72: Squeeze BLOCK SELL G%d (%s) — BUY still allowed", g, SqueezeStatusString());
+         if(g_verboseEffective) PrintFormat("Golden2 v2.72: Squeeze BLOCK SELL G%d (%s) — BUY still allowed", g, SqueezeStatusString());
       }
       if(!placeBuy && !placeSell){
-         if(InpVerboseLog) PrintFormat("Golden2 v2.72: Squeeze BLOCK BOTH G%d (%s) — frame skipped", g, SqueezeStatusString());
+         if(g_verboseEffective) PrintFormat("Golden2 v2.72: Squeeze BLOCK BOTH G%d (%s) — frame skipped", g, SqueezeStatusString());
          return;
       }
    }
@@ -995,7 +1000,7 @@ void PlaceInitialFrame(int g){
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
    if(ask <= 0 || bid <= 0){
-      if(InpVerboseLog) PrintFormat("Golden2 v2.6.1: PlaceInitialFrame G%d skipped — no quotes (ask=%.5f bid=%.5f)", g, ask, bid);
+      if(g_verboseEffective) PrintFormat("Golden2 v2.6.1: PlaceInitialFrame G%d skipped — no quotes (ask=%.5f bid=%.5f)", g, ask, bid);
       return;
    }
    double mid = (ask+bid)*0.5;
@@ -1061,7 +1066,7 @@ void PlaceInitialFrame(int g){
                      g, GetLastError(), trade.ResultRetcode(), g_digits, upPx, g_digits, tpUp, g_digits, slUp);
       } else {
          anySent = true;
-         if(InpVerboseLog)
+         if(g_verboseEffective)
             PrintFormat("Golden2 v2.6.1: BuyStop G%d open=%.*f tp=%.*f sl=%.*f", g, g_digits, upPx, g_digits, tpUp, g_digits, slUp);
       }
    }
@@ -1071,7 +1076,7 @@ void PlaceInitialFrame(int g){
                      g, GetLastError(), trade.ResultRetcode(), g_digits, dnPx, g_digits, tpDn, g_digits, slDn);
       } else {
          anySent = true;
-         if(InpVerboseLog)
+         if(g_verboseEffective)
             PrintFormat("Golden2 v2.6.1: SellStop G%d open=%.*f tp=%.*f sl=%.*f", g, g_digits, dnPx, g_digits, tpDn, g_digits, slDn);
       }
    }
@@ -1080,7 +1085,7 @@ void PlaceInitialFrame(int g){
       s_lastAttempt[gi] = TimeCurrent() + 25;
       return;
    }
-   if(InpVerboseLog)
+   if(g_verboseEffective)
       PrintFormat("Golden2 v2.6.1: Placed initial frame G%d mode=%d mid=%.5f up=%s dn=%s",
                   g, sideMode, mid,
                   placeBuy?DoubleToString(upPx,g_digits):"-",
@@ -1198,7 +1203,7 @@ void ManageInitialTrailOnBarClose(int g){
                sl = oldSL;
             }
             if(trade.OrderModify(tBuy, newPx, sl, tp, ORDER_TIME_GTC, 0)){
-               if(InpVerboseLog) PrintFormat("Golden2 v2.5: TrailIn BuyStop G%d %.5f -> %.5f ask=%.5f tp=%.5f sl=%.5f",
+               if(g_verboseEffective) PrintFormat("Golden2 v2.5: TrailIn BuyStop G%d %.5f -> %.5f ask=%.5f tp=%.5f sl=%.5f",
                                              g, oldPx, newPx, ask, tp, sl);
             } else {
                PrintFormat("Golden2 v2.5: BuyStop modify FAIL G%d err=%d", g, GetLastError());
@@ -1231,7 +1236,7 @@ void ManageInitialTrailOnBarClose(int g){
                sl = oldSL;
             }
             if(trade.OrderModify(tSell, newPx, sl, tp, ORDER_TIME_GTC, 0)){
-               if(InpVerboseLog) PrintFormat("Golden2 v2.5: TrailIn SellStop G%d %.5f -> %.5f bid=%.5f tp=%.5f sl=%.5f",
+               if(g_verboseEffective) PrintFormat("Golden2 v2.5: TrailIn SellStop G%d %.5f -> %.5f bid=%.5f tp=%.5f sl=%.5f",
                                              g, oldPx, newPx, bid, tp, sl);
             } else {
                PrintFormat("Golden2 v2.5: SellStop modify FAIL G%d err=%d", g, GetLastError());
@@ -1278,7 +1283,7 @@ void ManageInitialTrail(int g){
          double tp = (InpInitialTPPips>0)? NormalizeDouble(newSellPx - InpInitialTPPips*g_point, g_digits) : 0;
          double newSL = (InpInitialSLPips>0)? NormalizeDouble(newSellPx + InpInitialSLPips*g_point, g_digits) : sl;
          if(trade.OrderModify(tSell, newSellPx, newSL, tp, ORDER_TIME_GTC, 0)){
-            if(InpVerboseLog) PrintFormat("Golden2 v1.7: Trail SellStop G%d %.5f -> %.5f", g, sellPx, newSellPx);
+            if(g_verboseEffective) PrintFormat("Golden2 v1.7: Trail SellStop G%d %.5f -> %.5f", g, sellPx, newSellPx);
          }
       }
    }
@@ -1292,7 +1297,7 @@ void ManageInitialTrail(int g){
          double tp = (InpInitialTPPips>0)? NormalizeDouble(newBuyPx + InpInitialTPPips*g_point, g_digits) : 0;
          double newSL = (InpInitialSLPips>0)? NormalizeDouble(newBuyPx - InpInitialSLPips*g_point, g_digits) : sl;
          if(trade.OrderModify(tBuy, newBuyPx, newSL, tp, ORDER_TIME_GTC, 0)){
-            if(InpVerboseLog) PrintFormat("Golden2 v1.7: Trail BuyStop G%d %.5f -> %.5f", g, buyPx, newBuyPx);
+            if(g_verboseEffective) PrintFormat("Golden2 v1.7: Trail BuyStop G%d %.5f -> %.5f", g, buyPx, newBuyPx);
          }
       }
    }
@@ -1409,7 +1414,7 @@ void ManageInitialReArm(int g){
       double sl   = (InpInitialSLPips>0)? NormalizeDouble(upPx - InpInitialSLPips*g_point, g_digits) : 0;
       string c    = MakeComment(g, SIDE_BUY, false, "IN");
       if(trade.BuyStop(InpInitialLot, upPx, _Symbol, sl, tp, ORDER_TIME_GTC, 0, c)){
-         if(InpVerboseLog) PrintFormat("Golden2 v2.6: Re-entry BuyStop G%d at %.5f (sellPos=%d)", g, upPx, sellPos);
+         if(g_verboseEffective) PrintFormat("Golden2 v2.6: Re-entry BuyStop G%d at %.5f (sellPos=%d)", g, upPx, sellPos);
       }
    }
    // Re-arm SELL: side empty + pending missing + trigger condition met
@@ -1419,7 +1424,7 @@ void ManageInitialReArm(int g){
       double sl   = (InpInitialSLPips>0)? NormalizeDouble(dnPx + InpInitialSLPips*g_point, g_digits) : 0;
       string c    = MakeComment(g, SIDE_SELL, false, "IN");
       if(trade.SellStop(InpInitialLot, dnPx, _Symbol, sl, tp, ORDER_TIME_GTC, 0, c)){
-         if(InpVerboseLog) PrintFormat("Golden2 v2.6: Re-entry SellStop G%d at %.5f (buyPos=%d)", g, dnPx, buyPos);
+         if(g_verboseEffective) PrintFormat("Golden2 v2.6: Re-entry SellStop G%d at %.5f (buyPos=%d)", g, dnPx, buyPos);
       }
    }
 }
@@ -1454,7 +1459,7 @@ void ManageInitialMarketReEntry(int g){
    bool needSell = sellAllowed && (sellPos == 0);
    if(!needBuy && !needSell) return;
 
-   if(InpVerboseLog) PrintFormat("Golden2 v2.7.6: market re-entry G%d needBuy=%d needSell=%d (buyPos=%d sellPos=%d)", g, needBuy, needSell, buyPos, sellPos);
+   if(g_verboseEffective) PrintFormat("Golden2 v2.7.6: market re-entry G%d needBuy=%d needSell=%d (buyPos=%d sellPos=%d)", g, needBuy, needSell, buyPos, sellPos);
    PlaceInitialMarket(g, needBuy, needSell);
 }
 
@@ -1687,7 +1692,7 @@ void TryPlaceGridLoss(int g){
          g_lastGridCandleLoss[g][sd] = curBar;
          g_atrAtLastGridLoss[g][sd]  = GetATRPoints(g_atrLossHandle);
       }
-      if(InpVerboseLog) PrintFormat("Golden2 v1.2: GL#%d %s G%d lot=%.2f gap=%dpts ok=%d",
+      if(g_verboseEffective) PrintFormat("Golden2 v1.2: GL#%d %s G%d lot=%.2f gap=%dpts ok=%d",
                                     gl+1, sd==0?"BUY":"SELL", g, lot, gapPts, ok);
    }
 }
@@ -1738,7 +1743,7 @@ void TryPlaceGridProfit(int g){
          g_lastGridCandleProfit[g][sd] = curBar;
          g_atrAtLastGridProfit[g][sd]  = GetATRPoints(g_atrProfitHandle);
       }
-      if(InpVerboseLog) PrintFormat("Golden2 v1.2: GP#%d %s G%d lot=%.2f gap=%dpts ok=%d",
+      if(g_verboseEffective) PrintFormat("Golden2 v1.2: GP#%d %s G%d lot=%.2f gap=%dpts ok=%d",
                                     gp+1, sd==0?"BUY":"SELL", g, lot, gapPts, ok);
    }
 }
@@ -1801,7 +1806,7 @@ void ManageMaxGridTrailing(int g){
       if(update){
          g_maxGridTrailSL[g][sd] = desiredSL;
          g_maxGridTrailArmed[g][sd] = true;
-         if(InpVerboseLog) PrintFormat("Golden2 v1.2: MaxGridTrail G%d %s virtSL=%.5f (avg=%.5f)",
+         if(g_verboseEffective) PrintFormat("Golden2 v1.2: MaxGridTrail G%d %s virtSL=%.5f (avg=%.5f)",
                                        g, sd==0?"BUY":"SELL", desiredSL, avg);
       }
 
@@ -1810,7 +1815,7 @@ void ManageMaxGridTrailing(int g){
       if(sd==0 && bid <= g_maxGridTrailSL[g][sd]) hit = true;
       if(sd==1 && ask >= g_maxGridTrailSL[g][sd]) hit = true;
       if(hit && g_maxGridTrailArmed[g][sd]){
-         if(InpVerboseLog) PrintFormat("Golden2 v1.2: MaxGridTrail G%d %s HIT virtSL=%.5f -> close side",
+         if(g_verboseEffective) PrintFormat("Golden2 v1.2: MaxGridTrail G%d %s HIT virtSL=%.5f -> close side",
                                        g, sd==0?"BUY":"SELL", g_maxGridTrailSL[g][sd]);
          CloseMainSideOfGroup(g, sd);
          g_maxGridTrailSL[g][sd] = 0;
@@ -1933,7 +1938,7 @@ void MirrorLossSideToHedgePendings(int g, int lossSide){
    if(skipN > nL) skipN = nL;
    int keepFrom = skipN; // indices [keepFrom .. nL-1] get a hedge pending
 
-   if(InpVerboseLog)
+   if(g_verboseEffective)
       PrintFormat("Golden2 v2.8.6: HD-MIRROR G%d lossSide=%s lossN=%d orphanOnHedge=%d mirror=%d (skip oldest %d)",
                   g, lossSide==0?"BUY":"SELL", nL, orphanOnHedge, nL-skipN, skipN);
 
@@ -1955,7 +1960,7 @@ void MirrorLossSideToHedgePendings(int g, int lossSide){
       }
       if(!keep){
          trade.OrderDelete(tk);
-         if(InpVerboseLog) PrintFormat("Golden2 v2.8.6: HD trim G%d %s (offset/loss gone)", g, c);
+         if(g_verboseEffective) PrintFormat("Golden2 v2.8.6: HD trim G%d %s (offset/loss gone)", g, c);
       }
    }
 
@@ -1967,7 +1972,7 @@ void MirrorLossSideToHedgePendings(int g, int lossSide){
       bool ok;
       if(hedgeSide==1) ok = trade.SellStop(lot, anchor, _Symbol, 0, 0, ORDER_TIME_GTC, 0, newC);
       else             ok = trade.BuyStop (lot, anchor, _Symbol, 0, 0, ORDER_TIME_GTC, 0, newC);
-      if(InpVerboseLog) PrintFormat("Golden2 v2.8.6: HD mirror G%d %s lot=%.2f price=%.5f comment=%s ok=%d",
+      if(g_verboseEffective) PrintFormat("Golden2 v2.8.6: HD mirror G%d %s lot=%.2f price=%.5f comment=%s ok=%d",
          g, hedgeSide==1?"SELL_STOP":"BUY_STOP", lot, anchor, newC, ok);
    }
 }
@@ -1981,7 +1986,7 @@ void PlaceHedgePendingSet_Legacy(int g, int lossSide){
    bool ok;
    if(hedgeSide==1) ok = trade.SellStop(lotIN, price, _Symbol, 0, 0, ORDER_TIME_GTC, 0, c);
    else             ok = trade.BuyStop (lotIN, price, _Symbol, 0, 0, ORDER_TIME_GTC, 0, c);
-   if(InpVerboseLog) PrintFormat("Golden2 v1.4: HD_IN(legacy) G%d %s lot=%.2f price=%.5f ok=%d",
+   if(g_verboseEffective) PrintFormat("Golden2 v1.4: HD_IN(legacy) G%d %s lot=%.2f price=%.5f ok=%d",
       g, hedgeSide==1?"SELL_STOP":"BUY_STOP", lotIN, price, ok);
    int oppMaxLvl = HighestGridLevel(g, (ENUM_SIDE)lossSide, false, "GL");
    for(int lvl=1; lvl<=oppMaxLvl; lvl++){
@@ -1992,7 +1997,7 @@ void PlaceHedgePendingSet_Legacy(int g, int lossSide){
       pStack = NormalizeDouble(pStack, g_digits);
       if(hedgeSide==1) ok2 = trade.SellStop(lot, pStack, _Symbol, 0, 0, ORDER_TIME_GTC, 0, cg);
       else             ok2 = trade.BuyStop (lot, pStack, _Symbol, 0, 0, ORDER_TIME_GTC, 0, cg);
-      if(InpVerboseLog) PrintFormat("Golden2 v1.4: HD_GL#%d(legacy) G%d lot=%.2f price=%.5f ok=%d", lvl, g, lot, pStack, ok2);
+      if(g_verboseEffective) PrintFormat("Golden2 v1.4: HD_GL#%d(legacy) G%d lot=%.2f price=%.5f ok=%d", lvl, g, lot, pStack, ok2);
    }
 }
 
@@ -2008,7 +2013,7 @@ void ManageGroupHedgeArm(int g){
       if(!g_hedgeMasterCleared){
          for(int gi=1; gi<=InpMaxGroups; gi++) DeleteGroupPendings(gi, 1);
          g_hedgeMasterCleared = true;
-         if(InpVerboseLog) Print("Golden2 v1.4: HEDGE MASTER OFF - cleared all pending hedges");
+         if(g_verboseEffective) Print("Golden2 v1.4: HEDGE MASTER OFF - cleared all pending hedges");
       }
       g_blockNewOrders[g] = false;
       return;
@@ -2021,7 +2026,7 @@ void ManageGroupHedgeArm(int g){
    if(g_groupHedgeUsed[g]){
       if(CountGroupPendingsByTagPrefix(g, true, "") > 0){
          DeleteGroupPendings(g, 1);
-         if(InpVerboseLog) PrintFormat("Golden2 v2.8.5: G%d re-hedge LOCKED — stray hedge pending(s) deleted", g);
+         if(g_verboseEffective) PrintFormat("Golden2 v2.8.5: G%d re-hedge LOCKED — stray hedge pending(s) deleted", g);
       }
       g_blockNewOrders[g] = false;
       return;
@@ -2051,7 +2056,7 @@ void ManageGroupHedgeArm(int g){
       if(ddRecovered || noLossSide || noMainPos){
          DeleteGroupPendings(g, 1);
          g_blockNewOrders[g] = false;
-         if(InpVerboseLog) PrintFormat("Golden2 v1.6: HD DISARM G%d pct=%.1f reason=%s",
+         if(g_verboseEffective) PrintFormat("Golden2 v1.6: HD DISARM G%d pct=%.1f reason=%s",
             g, pct, ddRecovered?"recover":(noMainPos?"noMain":"noLossSide"));
          return;
       }
@@ -2117,7 +2122,7 @@ void StripBrokerTPSL_OnHedgeMatch(int g){
       }
    }
    g_stripped[g] = true;
-   if(InpVerboseLog && modified>0)
+   if(g_verboseEffective && modified>0)
       PrintFormat("Golden2 v1.1: G%d hedge MATCHED -> stripped broker TP/SL on %d position(s). Awaiting Avg TP/SL or Triple-Gate.", g, modified);
 }
 
@@ -2182,7 +2187,7 @@ bool ModifyIfDifferent(ulong tk, double newSL, double newTP){
    double tol   = g_point; // 1 point tolerance
    if(MathAbs(curTP-newTP) <= tol && MathAbs(curSL-newSL) <= tol) return true;
    if(!trade.PositionModify(tk, newSL, newTP)){
-      if(InpVerboseLog)
+      if(g_verboseEffective)
          PrintFormat("Golden2 v1.3: PositionModify fail tk=%I64u sl=%.5f tp=%.5f err=%d",
                      tk, newSL, newTP, GetLastError());
       return false;
@@ -2229,7 +2234,7 @@ void SyncSideTPSLToBroker(int g, int side){
          }
          g_avgTPSynced[g][side] = 0;
          g_avgSLSynced[g][side] = 0;
-         if(InpVerboseLog)
+         if(g_verboseEffective)
             PrintFormat("Golden2 v1.3: G%d side=%d back to INITIAL-TP mode (count=%d)", g, side, cnt);
       }
       return;
@@ -2274,7 +2279,7 @@ void SyncSideTPSLToBroker(int g, int side){
    }
    g_avgTPSynced[g][side] = tpPrice;
    g_avgSLSynced[g][side] = slPrice;
-   if(InpVerboseLog && changed && modified>0)
+   if(g_verboseEffective && changed && modified>0)
       PrintFormat("Golden2 v1.3: G%d side=%d AVG-TP synced -> %d ticket(s) tp=%.5f sl=%.5f (count=%d)",
                   g, side, modified, tpPrice, slPrice, cnt);
 }
@@ -2330,7 +2335,7 @@ void CheckAndCloseByAverageTP(int g){
 
       // 1) Fixed dollar
       if(InpTP_UseFixedDollar && pl >= InpTP_DollarAmount){
-         if(InpVerboseLog) PrintFormat("Golden2 v1.1: TP FixedUSD G%d %s pl=%.2f", g, sd==0?"BUY":"SELL", pl);
+         if(g_verboseEffective) PrintFormat("Golden2 v1.1: TP FixedUSD G%d %s pl=%.2f", g, sd==0?"BUY":"SELL", pl);
          CloseMainSideOfGroup(g, sd); continue;
       }
       // 2) Points from average
@@ -2340,7 +2345,7 @@ void CheckAndCloseByAverageTP(int g){
          double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
          bool hit = (sd==0) ? (bid >= tpPx) : (ask <= tpPx);
          if(tpPx > 0 && hit){
-            if(InpVerboseLog) PrintFormat("Golden2 v1.1: TP AvgPts G%d %s tp=%.5f", g, sd==0?"BUY":"SELL", tpPx);
+            if(g_verboseEffective) PrintFormat("Golden2 v1.1: TP AvgPts G%d %s tp=%.5f", g, sd==0?"BUY":"SELL", tpPx);
             CloseMainSideOfGroup(g, sd); continue;
          }
       }
@@ -2348,7 +2353,7 @@ void CheckAndCloseByAverageTP(int g){
       if(InpTP_UsePctBalance && bal > 0){
          double tgt = bal * InpTP_PctBalance / 100.0;
          if(pl >= tgt){
-            if(InpVerboseLog) PrintFormat("Golden2 v1.1: TP %%Bal G%d %s pl=%.2f tgt=%.2f", g, sd==0?"BUY":"SELL", pl, tgt);
+            if(g_verboseEffective) PrintFormat("Golden2 v1.1: TP %%Bal G%d %s pl=%.2f tgt=%.2f", g, sd==0?"BUY":"SELL", pl, tgt);
             CloseMainSideOfGroup(g, sd); continue;
          }
       }
@@ -2358,7 +2363,7 @@ void CheckAndCloseByAverageTP(int g){
          if(mdd > 0){
             double tgt = mdd * InpTP_PctMaxDD / 100.0;
             if(pl >= tgt){
-               if(InpVerboseLog) PrintFormat("Golden2 v1.1: TP %%MaxDD G%d %s pl=%.2f tgt=%.2f (mdd=%.2f)",
+               if(g_verboseEffective) PrintFormat("Golden2 v1.1: TP %%MaxDD G%d %s pl=%.2f tgt=%.2f (mdd=%.2f)",
                                              g, sd==0?"BUY":"SELL", pl, tgt, mdd);
                CloseMainSideOfGroup(g, sd); continue;
             }
@@ -2379,7 +2384,7 @@ void CheckAndCloseByAverageSL(int g){
       double loss = (pl < 0) ? -pl : 0.0;
 
       if(InpSL_UseFixedDollar && loss >= InpSL_DollarAmount){
-         if(InpVerboseLog) PrintFormat("Golden2 v1.1: SL FixedUSD G%d %s loss=%.2f", g, sd==0?"BUY":"SELL", loss);
+         if(g_verboseEffective) PrintFormat("Golden2 v1.1: SL FixedUSD G%d %s loss=%.2f", g, sd==0?"BUY":"SELL", loss);
          CloseMainSideOfGroup(g, sd); continue;
       }
       if(InpSL_UsePointsFromAvg){
@@ -2388,14 +2393,14 @@ void CheckAndCloseByAverageSL(int g){
          double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
          bool hit = (sd==0) ? (bid <= slPx) : (ask >= slPx);
          if(slPx > 0 && hit){
-            if(InpVerboseLog) PrintFormat("Golden2 v1.1: SL AvgPts G%d %s sl=%.5f", g, sd==0?"BUY":"SELL", slPx);
+            if(g_verboseEffective) PrintFormat("Golden2 v1.1: SL AvgPts G%d %s sl=%.5f", g, sd==0?"BUY":"SELL", slPx);
             CloseMainSideOfGroup(g, sd); continue;
          }
       }
       if(InpSL_UsePctBalance && bal > 0){
          double tgt = bal * InpSL_PctBalance / 100.0;
          if(loss >= tgt){
-            if(InpVerboseLog) PrintFormat("Golden2 v1.1: SL %%Bal G%d %s loss=%.2f tgt=%.2f", g, sd==0?"BUY":"SELL", loss, tgt);
+            if(g_verboseEffective) PrintFormat("Golden2 v1.1: SL %%Bal G%d %s loss=%.2f tgt=%.2f", g, sd==0?"BUY":"SELL", loss, tgt);
             CloseMainSideOfGroup(g, sd); continue;
          }
       }
@@ -2427,6 +2432,7 @@ void DrawAverageAndTPLinesForGroup(int g){
    // [v2.72] No chart in optimization / non-visual tester — skip line objects.
    if(g_isOptimization) return;
    if(g_isTesterMode && !g_isVisualMode) return;
+   if(g_isTesterMode && InpTester_DisableChartDraw) return; // [v2.9.1]
    // Skip if hedge matched (Triple-Gate is in charge)
    if(IsGroupHedgeMatched(g)){ DeleteLinesForGroup(g); return; }
    if(!GroupHasAnyPositions(g)){ DeleteLinesForGroup(g); return; }
@@ -2517,7 +2523,7 @@ void TryMatchingCloseForGroup(int g){
    double needWin = InpExit_ReserveProfitUSD + InpExit_MinGainUSD;
    if(winProfit < needWin){
       static datetime lastMinGainLog = 0;
-      if(InpVerboseLog && TimeCurrent() - lastMinGainLog >= 60){
+      if(g_verboseEffective && TimeCurrent() - lastMinGainLog >= 60){
          PrintFormat("Golden2 v2.8.7: G%d MATCH hold winProfit=$%.2f need=$%.2f (reserve=$%.2f + minGain=$%.2f) net=$%.2f",
                      g, winProfit, needWin, InpExit_ReserveProfitUSD, InpExit_MinGainUSD, netCheck);
          lastMinGainLog = TimeCurrent();
@@ -2567,9 +2573,9 @@ void TryMatchingCloseForGroup(int g){
       g_groupInRecovery[g] = true;
       if(closedAny > 0){
          g_groupPostMatchAvgActive[g] = true;
-         if(InpVerboseLog) PrintFormat("Golden2 v2.8.5: G%d POST-MATCH AVG-TP ACTIVE (closed=%d residual=%d)", g, closedAny, totalAfter);
+         if(g_verboseEffective) PrintFormat("Golden2 v2.8.5: G%d POST-MATCH AVG-TP ACTIVE (closed=%d residual=%d)", g, closedAny, totalAfter);
       }
-      if(InpVerboseLog) PrintFormat("Golden2 v2.8.5: G%d entered RECOVERY mode (post-match residual; advance unblocked)", g);
+      if(g_verboseEffective) PrintFormat("Golden2 v2.8.5: G%d entered RECOVERY mode (post-match residual; advance unblocked)", g);
       if(InpRecovery_Enable) PlaceRecoveryGridIfNeeded(g, losSide);
       // [v2.8.4] Force-resync post-match avg-TP/SL immediately so RC#N + residual
       // get broker TP/SL on this same tick instead of waiting for next OnTick.
@@ -2654,7 +2660,7 @@ void PlaceContinuationGridIfNeeded(int g){
          double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
          double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
          bool ok = (sd==0) ? trade.Buy(lot,_Symbol,ask,0,0,c) : trade.Sell(lot,_Symbol,bid,0,0,c);
-         if(InpVerboseLog) PrintFormat("Golden2 v1.1: Continuation GL#%d %s G%d hedge=%d lot=%.2f ok=%d",
+         if(g_verboseEffective) PrintFormat("Golden2 v1.1: Continuation GL#%d %s G%d hedge=%d lot=%.2f ok=%d",
             gl+1, sd==0?"BUY":"SELL", g, hd, lot, ok);
       }
    }
@@ -2669,7 +2675,7 @@ void PlaceContinuationGridIfNeeded(int g){
 void PlaceRecoveryGridIfNeeded(int g, int losSide){
    if(!InpRecovery_Enable) return;
    if(g_groupRecoveryLevel[g] >= InpRecovery_MaxLevels){
-      if(InpVerboseLog) PrintFormat("Golden2 v2.8.3: G%d Recovery max levels (%d) reached — skip", g, InpRecovery_MaxLevels);
+      if(g_verboseEffective) PrintFormat("Golden2 v2.8.3: G%d Recovery max levels (%d) reached — skip", g, InpRecovery_MaxLevels);
       return;
    }
    // [v2.9.0] Compute seedLot ONCE per group then lock it. Subsequent RC#N
@@ -2982,7 +2988,7 @@ void ManageGlobalAccumulateClose(){
          g_accumNetCached          = 0.0;
          g_accumFloatingCached     = 0.0;
          g_accumJustTriggered      = false;
-         if(InpVerboseLog) Print("Golden2 v2.1: Accumulate cooldown DONE — cycle reset, trading resumes");
+         if(g_verboseEffective) Print("Golden2 v2.1: Accumulate cooldown DONE — cycle reset, trading resumes");
       } else {
          // Still cooling down — refresh dashboard cache only, do not re-trigger.
          g_accumFloatingCached = floating;
@@ -2998,7 +3004,7 @@ void ManageGlobalAccumulateClose(){
       g_accumResetTime          = TimeCurrent();
       g_accumNetCached          = 0.0;
       g_accumFloatingCached     = 0.0;
-      if(InpVerboseLog) Print("Golden2 v2.1: Accumulate cycle RESET (no orders in system)");
+      if(g_verboseEffective) Print("Golden2 v2.1: Accumulate cycle RESET (no orders in system)");
    }
    if(g_accumResetTime == 0) g_accumResetTime = TimeCurrent();
 
@@ -3072,7 +3078,7 @@ void DeleteLeftoverInitialPendingsAfterHedge(int g){
       if(hd) continue;            // never delete hedge pendings
       if(tag != "IN") continue;   // only target initial-frame pendings
       if(trade.OrderDelete(tk)){
-         if(InpVerboseLog) PrintFormat("Golden2 v2.3: post-hedge cleanup G%d deleted leftover IN pending #%I64u", g, tk);
+         if(g_verboseEffective) PrintFormat("Golden2 v2.3: post-hedge cleanup G%d deleted leftover IN pending #%I64u", g, tk);
       } else {
          PrintFormat("Golden2 v2.3: post-hedge cleanup G%d delete IN #%I64u FAIL err=%d", g, tk, GetLastError());
       }
@@ -3285,7 +3291,7 @@ void TryAdvanceToNextGroup(){
       bool priorsSafe = (blockPrior < 0);
       if(!curSafe || !priorsSafe){
          static datetime lastHoldLog = 0;
-         if(InpVerboseLog && TimeCurrent() - lastHoldLog >= 60){
+         if(g_verboseEffective && TimeCurrent() - lastHoldLog >= 60){
             string reasonLbl = "none";
             switch(blockReason){
                case 3: reasonLbl = "no-hedge";       break;
@@ -3311,7 +3317,7 @@ void TryAdvanceToNextGroup(){
    if(cur < InpMaxGroups){
       int next = cur + 1;
       if(!GroupHasAnyPositions(next) && !GroupHasAnyPendings(next)){
-         if(InpVerboseLog) PrintFormat("Golden2 v2.3: advance G%d -> G%d (placing initial frame)", cur, next);
+         if(g_verboseEffective) PrintFormat("Golden2 v2.3: advance G%d -> G%d (placing initial frame)", cur, next);
          PlaceInitialFrame(next);
       }
    } else {
@@ -3467,7 +3473,7 @@ void DrawDashboard(){
 
    // Header
    string entryLbl = (InpEntryMode == G2_ENTRY_PENDING) ? "PENDING" : (InpEntryMode == G2_ENTRY_SMA) ? "SMA" : "INSTANT"; // [v2.73]
-   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.9.0    Entry: %s    Side: %s", entryLbl, modeLbl), InpDashAccent);
+   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.9.1    Entry: %s    Side: %s", entryLbl, modeLbl), InpDashAccent);
    y += rowH+2;
 
    // ==== Account section ====
@@ -3743,6 +3749,9 @@ int OnInit(){
    g_isTesterMode   = (bool)MQLInfoInteger(MQL_TESTER);
    g_isVisualMode   = (bool)MQLInfoInteger(MQL_VISUAL_MODE);
    g_isOptimization = (bool)MQLInfoInteger(MQL_OPTIMIZATION);
+   // [v2.9.1] effective verbose flag — silenced in Tester when InpTester_SilenceLogs=true
+   g_verboseEffective = InpVerboseLog && !(g_isTesterMode && InpTester_SilenceLogs);
+   g_lastTickMs = 0;
    g_lastAuxChartSweep = 0;
    // [v2.8.1] CRITICAL: TesterHideIndicators(true) MUST be called BEFORE any
    // iATR/iADX/iBands/iMA handle is created. Per MQL5 docs, every indicator
@@ -3833,7 +3842,7 @@ int OnInit(){
 
    string entryModeLbl = (InpEntryMode == G2_ENTRY_PENDING) ? "PENDING" :
                          (InpEntryMode == G2_ENTRY_SMA)     ? "SMA"     : "INSTANT";
-   PrintFormat("Golden2 EA v2.9.0 initialized | RecoverySeed=LOCKED-First-NonRC | Magic=%I64d | MaxGroups=%d | EntryMode=%s | InitMode=%d | GridLoss=%s | Squeeze=%s [BB/KC ratio only, deprecated inputs PURGED] | HedgeOrphanOffset=ON | TripleGate=%s | ExitGate=Squeeze-TF3-Latch+ReserveProfit+CrossSideShred | OneHedgePerGroup=ON | PostMatchAvgTP=PostMatch-Active-Only | RecoveryOrderLock=ON | PriorAdvBypass=PostMatch+RecLvl>0 | ReserveProfitUSD=%.1f MinGainUSD=%.1f MinNetUSD=%.1f | SeqQueue=%s | RecoveryAdvUnblock=%s | RecoveryGrid=%s(mult=%.2f max=%d cont=%s newCandle=%s) | PostMatchAvgBrokerTP=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | ProfitSideUnhedgedAdv=%s | ForceCloseOppUnhedged=%s(%ds) | Tester=%s Visual=%s Opt=%s DashInterval=%ds | TesterHideIndicators=%s SideTaggedComments=ON",
+   PrintFormat("Golden2 EA v2.9.1 initialized | RecoverySeed=LOCKED-First-NonRC | Magic=%I64d | MaxGroups=%d | EntryMode=%s | InitMode=%d | GridLoss=%s | Squeeze=%s [BB/KC ratio only, deprecated inputs PURGED] | HedgeOrphanOffset=ON | TripleGate=%s | ExitGate=Squeeze-TF3-Latch+ReserveProfit+CrossSideShred | OneHedgePerGroup=ON | PostMatchAvgTP=PostMatch-Active-Only | RecoveryOrderLock=ON | PriorAdvBypass=PostMatch+RecLvl>0 | ReserveProfitUSD=%.1f MinGainUSD=%.1f MinNetUSD=%.1f | SeqQueue=%s | RecoveryAdvUnblock=%s | RecoveryGrid=%s(mult=%.2f max=%d cont=%s newCandle=%s) | PostMatchAvgBrokerTP=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | ProfitSideUnhedgedAdv=%s | ForceCloseOppUnhedged=%s(%ds) | Tester=%s Visual=%s Opt=%s DashInterval=%ds | TesterHideIndicators=%s SideTaggedComments=ON",
                (long)InpMagic, InpMaxGroups, entryModeLbl, (int)InpInitSideMode,
                GridLoss_Enable?"ON":"OFF", InpSQ_Enable?"ON":"OFF",
                InpExitTripleGate_Enable?"ON":"OFF",
@@ -3916,14 +3925,21 @@ int ComputeLoopUpperBound(){
 }
 
 void OnTick(){
+   // [v2.9.1] Optional Tester tick-stride throttle (0 = off, full accuracy)
+   if(g_isTesterMode && InpTester_TickStrideMs > 0){
+      ulong nowMs = GetTickCount();
+      if(g_lastTickMs != 0 && (nowMs - g_lastTickMs) < (ulong)InpTester_TickStrideMs) return;
+      g_lastTickMs = nowMs;
+   }
    if(!InpAllowTrade){ RenderDashboardThrottled(); return; }
    RefreshSqueezeStateThrottled(); // [v2.72] one refresh per new M1 bar
 
-   // [v2.7.9] Re-sweep auxiliary tester charts every 60s — Tester may spawn
-   // hidden per-TF charts whenever a new indicator handle is touched.
-   if(g_isTesterMode && (TimeCurrent() - g_lastAuxChartSweep) >= 60){
+   // [v2.7.9/v2.9.1] Aux-chart sweep — only useful when a chart is actually
+   // visible. Skip entirely in non-visual Tester (saves ChartIndicatorDelete
+   // calls every 60s of model time).
+   if(g_isTesterMode && g_isVisualMode && (TimeCurrent() - g_lastAuxChartSweep) >= 60){
       HideAuxiliaryTesterCharts();
-      CleanupChartIndicatorsInTester(); // [v2.8.0] also re-strip subwindows
+      CleanupChartIndicatorsInTester();
       g_lastAuxChartSweep = TimeCurrent();
    }
 
@@ -3980,14 +3996,14 @@ void OnTick(){
       if(!g_groupHedgeBaselineSet[g] && CountGroupPositions(g, -1, 1) > 0){
          g_groupNetAtHedgeStart[g]  = GroupFloatingPL(g, -1, -1);
          g_groupHedgeBaselineSet[g] = true;
-         if(InpVerboseLog) PrintFormat("Golden2 v2.8.0: G%d hedge baseline net P/L=%.2f stamped", g, g_groupNetAtHedgeStart[g]);
+         if(g_verboseEffective) PrintFormat("Golden2 v2.8.0: G%d hedge baseline net P/L=%.2f stamped", g, g_groupNetAtHedgeStart[g]);
       }
       // [v2.8.5] Stamp one-shot hedge-used flag the moment a hedge position
       // is observed. Locks out re-hedge (ManageGroupHedgeArm) AND blocks the
       // v1.3 pre-match Avg-TP sync from writing TP/SL back onto orphan main.
       if(!g_groupHedgeUsed[g] && CountGroupPositions(g, -1, 1) > 0){
          g_groupHedgeUsed[g] = true;
-         if(InpVerboseLog) PrintFormat("Golden2 v2.8.5: G%d HEDGE USED -> re-hedge LOCKED, pre-match Avg-TP sync DISABLED for this group", g);
+         if(g_verboseEffective) PrintFormat("Golden2 v2.8.5: G%d HEDGE USED -> re-hedge LOCKED, pre-match Avg-TP sync DISABLED for this group", g);
       }
       // [v2.8.1] Refresh per-group Expansion->Normal latch from Squeeze TF3.
       RefreshGroupExpansionLatch(g);
