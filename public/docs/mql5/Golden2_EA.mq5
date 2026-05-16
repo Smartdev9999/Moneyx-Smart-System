@@ -3897,6 +3897,9 @@ void OnTick(){
          // [v2.8.4] reset post-match avg-TP cache
          g_postMatchTP[g][0]=0; g_postMatchTP[g][1]=0;
          g_postMatchSL[g][0]=0; g_postMatchSL[g][1]=0;
+         // [v2.8.5] reset hedge-used + post-match-active flags when group flat
+         g_groupHedgeUsed[g]          = false;
+         g_groupPostMatchAvgActive[g] = false;
          continue;
       }
       // [v2.8.0] Stamp baseline net P/L the first tick a hedge is observed
@@ -3906,6 +3909,13 @@ void OnTick(){
          g_groupNetAtHedgeStart[g]  = GroupFloatingPL(g, -1, -1);
          g_groupHedgeBaselineSet[g] = true;
          if(InpVerboseLog) PrintFormat("Golden2 v2.8.0: G%d hedge baseline net P/L=%.2f stamped", g, g_groupNetAtHedgeStart[g]);
+      }
+      // [v2.8.5] Stamp one-shot hedge-used flag the moment a hedge position
+      // is observed. Locks out re-hedge (ManageGroupHedgeArm) AND blocks the
+      // v1.3 pre-match Avg-TP sync from writing TP/SL back onto orphan main.
+      if(!g_groupHedgeUsed[g] && CountGroupPositions(g, -1, 1) > 0){
+         g_groupHedgeUsed[g] = true;
+         if(InpVerboseLog) PrintFormat("Golden2 v2.8.5: G%d HEDGE USED -> re-hedge LOCKED, pre-match Avg-TP sync DISABLED for this group", g);
       }
       // [v2.8.1] Refresh per-group Expansion->Normal latch from Squeeze TF3.
       RefreshGroupExpansionLatch(g);
@@ -3919,8 +3929,16 @@ void OnTick(){
       TryPlaceGridProfit(g);
       ManageGroupHedgeArm(g);
 
-      // Auto-strip broker TP/SL when main + hedge coexist (matched set)
-      if(IsGroupHedgeMatched(g) && !g_stripped[g]){
+      // [v2.8.5] Continuously enforce stripped broker TP/SL while hedge is
+      // "used" but Matching Close hasn't activated the post-match Avg TP/SL
+      // yet. This catches:
+      //   - first matched-hedge tick (legacy path)
+      //   - orphan main on the side opposite the hedge that still carries
+      //     an Initial TP/SL from before the hedge fired
+      //   - newly placed orders (e.g. mirror top-up) that arrive with TP/SL
+      // ModifyIfDifferent is a no-op when TP/SL are already 0, so this stays
+      // cheap on quiet ticks.
+      if(g_groupHedgeUsed[g] && !g_groupPostMatchAvgActive[g]){
          StripBrokerTPSL_OnHedgeMatch(g);
       }
 
