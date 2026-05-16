@@ -1943,6 +1943,9 @@ void MirrorLossSideToHedgePendings(int g, int lossSide){
                   g, lossSide==0?"BUY":"SELL", nL, orphanOnHedge, nL-skipN, skipN);
 
    // 1) Remove orphan hedge pendings whose tag is not in the KEEP slice
+   //    [v2.9.2] Also delete any hedge pending whose order-type does NOT
+   //    match the current hedgeSide (= legacy opposite-side pendings left
+   //    over from a previous mirror call where the losing side had flipped).
    int ot = OrdersTotal();
    for(int i=ot-1;i>=0;i--){
       ulong tk = OrderGetTicket(i);
@@ -1954,6 +1957,15 @@ void MirrorLossSideToHedgePendings(int g, int lossSide){
       int gp; bool hd; string tag;
       if(!ParseComment(c, gp, hd, tag)) continue;
       if(gp != g || !hd) continue;
+      // [v2.9.2] Opposite-side hedge pending: delete unconditionally
+      ENUM_ORDER_TYPE otp = (ENUM_ORDER_TYPE)OrderGetInteger(ORDER_TYPE);
+      bool isHedgeSideMatch = (hedgeSide==0 && (otp==ORDER_TYPE_BUY_STOP || otp==ORDER_TYPE_BUY_LIMIT))
+                           || (hedgeSide==1 && (otp==ORDER_TYPE_SELL_STOP|| otp==ORDER_TYPE_SELL_LIMIT));
+      if(!isHedgeSideMatch){
+         if(trade.OrderDelete(tk) && g_verboseEffective)
+            PrintFormat("Golden2 v2.9.2: HD stale-opposite-side delete G%d %s", g, c);
+         continue;
+      }
       bool keep = false;
       for(int k=keepFrom; k<nL; k++){
          if(lossTags[k] == tag){ keep = true; break; }
