@@ -3202,11 +3202,14 @@ bool IsPriorGroupSafeForAdvance(int g, int &reason){
    if(InpExit_RecoveryAdvanceUnblock && g_groupInRecovery[g]){
       reason = 1; return true;
    }
-   // [v2.8.9] Post-match group (hedge used + Avg-TP broker active) is managed
-   // by per-side Avg TP/SL on every residual+RC ticket — no further hedge will
-   // ever be armed (One-Hedge-Per-Group). Treat as safe so the queue advances.
-   if(g_groupHedgeUsed[g] && g_groupPostMatchAvgActive[g]){
-      reason = 1; return true;
+   // [v2.9.2] Any group with g_groupHedgeUsed=true is hedge-locked by
+   // One-Hedge-Per-Group (v2.8.5). No new hedge can arm, and the group will
+   // resolve via Triple-Gate / Recovery on its own. Safe-pass for advance
+   // queue REGARDLESS of PostMatch activation state — fixes deadlock where
+   // every prior group sat in Hedge USED/LOCKED PostAvg:WAITING and froze
+   // the entire queue.
+   if(g_groupHedgeUsed[g]){
+      reason = 2; return true;
    }
    // [v2.8.9] Any group with active RC ladder = recovery state even if the
    // g_groupInRecovery flag was momentarily cleared by housekeeping.
