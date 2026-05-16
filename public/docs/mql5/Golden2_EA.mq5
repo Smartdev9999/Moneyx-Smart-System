@@ -4143,6 +4143,20 @@ void OnTick(){
       if(hasPos && g_groupRecoveryLevel[g] > 0 && !g_groupInRecovery[g]){
          g_groupInRecovery[g] = true;
       }
+      // [v2.9.5] Stranded hedge-pending sweep — symmetric safety net.
+      //   ถ้า group ไม่มี position ใดๆ แต่ยังมี hedge pending ค้าง → ลบทิ้ง
+      //   ทันที โดยไม่พึ่ง g_groupHedgeUsed / disarm flow. ครอบคลุม edge case:
+      //   main TP ก่อนราคาชน hedge pending → pendings ค้าง →
+      //   IsPriorGroupSafeForAdvance คืน block-pending-only → freeze advance.
+      //   Main pendings (G_IN) ไม่ถูกแตะเพราะ filter=1 (hedge only).
+      if(!hasPos && hasPend){
+         if(CountGroupPendingsByTagPrefix(g, true, "") > 0){
+            DeleteGroupPendings(g, 1);
+            if(g_verboseEffective)
+               PrintFormat("Golden2 v2.9.5: G%d stranded HD-pending sweep (no positions)", g);
+            hasPend = GroupHasAnyPendings(g); // refresh so flat-branch can fire same tick if now empty
+         }
+      }
       if(!hasPos && !hasPend){
          // group empty: reset trackers
          if(g_stripped[g]) g_stripped[g] = false;
