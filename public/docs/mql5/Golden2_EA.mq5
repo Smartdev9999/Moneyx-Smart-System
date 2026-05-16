@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|  Golden2 EA v2.8.6 — Squeeze=BB/KC-ratio-only + Hedge Orphan Offset  |
+//|  Golden2 EA v2.8.7 — Purge Deprecated Squeeze Inputs + Reserve Profit Fix |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.86"
-#property description "Golden2 EA v2.8.6 — Squeeze filter reverted to pure BB/KC ratio (Gold Miner Original behavior); BB-breakout/ADX/ATR-MA/EMA confirm stages removed so Expansion latches the moment ratio>=InpSQ_ExpansionThreshold, unblocking the Triple-Gate latch. Hedge mirror now offsets orphan main on the hedge side: counts unbound positions on opposite side and skips the oldest N loss tickets so total volume stays balanced (e.g. BUY 8 + SELL orphan 4 → only 4 SELL_STOP placed, not 8). All v2.8.5 One-Hedge-Per-Group / Post-Match Avg TP / strip-TP-SL behavior preserved."
+#property version   "2.87"
+#property description "Golden2 EA v2.8.7 — (A) Purges all deprecated multi-confirm Squeeze inputs/globals/handles (BB-breakout/ADX/ATR-MA/EMA). (B) Triple-Gate Reserve-Profit fix: replaces broken MinGain-delta HOLD gate with reserve-aware budget — winProfit must cover InpExit_ReserveProfitUSD + InpExit_MinGainUSD before matching close starts; shred passes use ReserveProfitUSD as the pool floor (was MinNetUSD=$1 hardcoded) so the configured profit is actually preserved while losses get shredded BEFORE Recovery Grid is placed. All v2.8.6 Hedge Orphan Offset + One-Hedge-Per-Group preserved."
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -226,8 +226,9 @@ const double          InpExitBBDev    = 2.0;
 const int             InpExitKeltnerATR  = 20;
 const double          InpExitKeltnerMult = 1.5;
 input int     InpExitBreakoutPips     = 300;                         // Breakout distance from average (points)
-input double  InpExitMinNetUSD        = 1.0;                         // Min net USD profit to allow exit
-input double  InpExit_MinGainUSD      = 100.0;                       // [v2.8.0] Min hedge-group GAIN (USD) since hedge opened, before matching close
+input double  InpExitMinNetUSD        = 1.0;                         // Min net USD profit to allow exit (sanity floor only)
+input double  InpExit_MinGainUSD      = 10.0;                        // [v2.8.7] Min winProfit headroom above reserve required to START shredding (anti-chop)
+input double  InpExit_ReserveProfitUSD= 50.0;                        // [v2.8.7] Profit USD to KEEP after matching close (pool floor — pool can drop to this but not below) before Recovery
 input bool    InpExit_SequentialQueue = true;                        // [v2.8.0] Close hedge groups sequentially: G1 must be flat before G2 can match-close
 input bool    InpExit_RecoveryAdvanceUnblock = true;                 // [v2.8.0] Treat groups still in matching-close recovery as 'safe' so G(N+1) can open
 // [v2.8.3] Recovery Grid — auto-placed on losing side after partial match-close
@@ -255,17 +256,7 @@ input bool    InpSQ_BlockNewOrders    = true;                        // Block Ne
 input int     InpSQ_MinExpansionTFs   = 1;                           // Min TFs in Expansion to Block (1-3)
 input bool    InpSQ_DirectionalBlock  = true;                        // Directional Block (block counter-trend only)
 input bool    InpSQ_CloseOnExpansion  = false;                       // Close All Orders on Expansion
-// [v2.7.7] Multi-confirm filters — all enabled checks must pass to confirm Expansion
-input bool    InpSQ_UseBBBreakout     = true;                        // [v2.7.7] Require close beyond BB Upper/Lower
-input bool    InpSQ_UseADX            = true;                        // [v2.7.7] Use ADX trend strength confirm
-input int     InpSQ_ADXPeriod         = 14;                          // [v2.7.7] ADX Period
-input double  InpSQ_ADXThreshold      = 25.0;                        // [v2.7.7] ADX min threshold (std=25)
-input bool    InpSQ_UseATRConfirm     = true;                        // [v2.7.7] Require ATR > ATR-MA * mult
-input int     InpSQ_ATRMAPeriod       = 20;                          // [v2.7.7] ATR moving avg period
-input double  InpSQ_ATRMult           = 1.0;                         // [v2.7.7] ATR multiplier vs MA
-input bool    InpSQ_UseEMA            = true;                        // [v2.7.7] EMA trend direction confirm
-input int     InpSQ_EMAPeriod         = 50;                          // [v2.7.7] EMA period
-input ENUM_APPLIED_PRICE InpSQ_EMAPrice = PRICE_CLOSE;               // [v2.7.7] EMA applied price
+// [v2.8.7] Multi-confirm Squeeze stages (BB-breakout/ADX/ATR-MA/EMA) PURGED — inputs/globals/handles all removed
 
 //--- === Dashboard ===
 input string  __sec_dash__            = "=== Dashboard ===";         // ---
@@ -317,13 +308,7 @@ bool   g_sqBlockBuy       = false;
 bool   g_sqBlockSell      = false;
 double g_sqRatio[3]       = {0.0, 0.0, 0.0};      // [v1.8] BBwidth/KCwidth ratio per TF (for dashboard)
 // [v2.7.7] Extra confirm indicator handles + per-stage pass flags (for dashboard)
-int    g_sqADX[3]         = {INVALID_HANDLE, INVALID_HANDLE, INVALID_HANDLE};
-int    g_sqEMA[3]         = {INVALID_HANDLE, INVALID_HANDLE, INVALID_HANDLE};
-bool   g_sqPassBB[3]      = {false,false,false};
-bool   g_sqPassADX[3]     = {false,false,false};
-bool   g_sqPassATR[3]     = {false,false,false};
-bool   g_sqPassEMA[3]     = {false,false,false};
-double g_sqADXVal[3]      = {0.0, 0.0, 0.0};
+// [v2.8.7] g_sqADX/g_sqEMA handles + g_sqPass{BB,ADX,ATR,EMA} + g_sqADXVal globals PURGED
 datetime g_lastTrailBar[51];                      // [v1.8] last bar time we ran bar-close trail (per group)
 
 // [v2.72] Backtest speed accel — Tester/Visual mode + throttles + caches
@@ -643,12 +628,6 @@ string GroupCycleStatus(int g){
 // Triple-Gate latch never to arm and Hedging to close too early in v2.7.7).
 bool ComputeSqueezeForTF(int idx, bool &isExp, int &dir){
    isExp = false; dir = 0;
-   // Stage flags kept as no-op (always true) for dashboard backward-compat
-   g_sqPassBB[idx]  = true;
-   g_sqPassADX[idx] = true;
-   g_sqPassATR[idx] = true;
-   g_sqPassEMA[idx] = true;
-   g_sqADXVal[idx]  = 0.0;
 
    if(g_sqBB[idx] == INVALID_HANDLE || g_sqATR[idx] == INVALID_HANDLE) return false;
    double bbU[], bbL[], bbM[], atr[];
@@ -2514,29 +2493,25 @@ void TryMatchingCloseForGroup(int g){
    int losSide = priceUp ? 1 : 0;
 
    double winProfit = (winSide==0) ? (plBuyMain + plBuyHedge) : (plSellMain + plSellHedge);
-   double netCheck = plBuyMain+plSellMain+plBuyHedge+plSellHedge;
-   // [v2.8.3] FIX: Old code used `netCheck < InpExitMinNetUSD` which never
-   // fires when group net is deeply negative (the whole point of matching
-   // close is to USE winning-side profit to shred losing side). Now we gate
-   // on the WINNING-SIDE pool: if winProfit covers MinNetUSD we can start
-   // closing the winning side and using its profit to shred losers.
-   if(winProfit < InpExitMinNetUSD) return;
+   double netCheck  = plBuyMain+plSellMain+plBuyHedge+plSellHedge;
 
-   // [v2.8.0] Min Gain gate — group net P/L must have IMPROVED by at least
-   // InpExit_MinGainUSD vs. the snapshot taken when hedge first appeared.
-   // Keeps the choppy-market guard intact (uses netCheck delta, not abs net).
-   if(g_groupHedgeBaselineSet[g] && InpExit_MinGainUSD > 0.0){
-      double gainNow = netCheck - g_groupNetAtHedgeStart[g];
-      if(gainNow < InpExit_MinGainUSD){
-         static datetime lastMinGainLog = 0;
-         if(InpVerboseLog && TimeCurrent() - lastMinGainLog >= 60){
-            PrintFormat("Golden2 v2.8.3: G%d MinGain hold gain=%.2f need=%.2f baseline=%.2f net=%.2f",
-                        g, gainNow, InpExit_MinGainUSD, g_groupNetAtHedgeStart[g], netCheck);
-            lastMinGainLog = TimeCurrent();
-         }
-         return;
+   // [v2.8.7] Reserve-Profit gate (replaces broken v2.8.0 MinGain-delta HOLD).
+   // Old gate compared netCheck delta vs baseline — when group was deeply
+   // negative netCheck barely moved and the gate blocked matching close
+   // FOREVER (no orders ever closed). New gate uses winProfit directly:
+   //   winProfit must be >= ReserveProfitUSD + MinGainUSD
+   // so we have at least the reserve to keep + a small headroom to shred.
+   double needWin = InpExit_ReserveProfitUSD + InpExit_MinGainUSD;
+   if(winProfit < needWin){
+      static datetime lastMinGainLog = 0;
+      if(InpVerboseLog && TimeCurrent() - lastMinGainLog >= 60){
+         PrintFormat("Golden2 v2.8.7: G%d MATCH hold winProfit=$%.2f need=$%.2f (reserve=$%.2f + minGain=$%.2f) net=$%.2f",
+                     g, winProfit, needWin, InpExit_ReserveProfitUSD, InpExit_MinGainUSD, netCheck);
+         lastMinGainLog = TimeCurrent();
       }
+      return;
    }
+   if(winProfit < InpExitMinNetUSD) return; // legacy sanity floor
 
    if(!ClaimMutex(g)) return;
 
@@ -2546,9 +2521,9 @@ void TryMatchingCloseForGroup(int g){
    int totalBefore = CountGroupPositions(g, -1, -1);
    int mainBefore  = CountGroupPositions(g, -1, 0);
    int hedgeBefore = CountGroupPositions(g, -1, 1);
-   PrintFormat("Golden2 v2.8.5: G%d MATCH-PREP totalTickets=%d (main=%d hedge=%d) winSide=%s winPool=$%.2f",
+   PrintFormat("Golden2 v2.8.7: G%d MATCH-PREP totalTickets=%d (main=%d hedge=%d) winSide=%s winPool=$%.2f reserve=$%.2f",
                g, totalBefore, mainBefore, hedgeBefore,
-               winSide==0?"BUY":"SELL", winProfit);
+               winSide==0?"BUY":"SELL", winProfit, InpExit_ReserveProfitUSD);
 
    int losBefore = CountGroupPositions(g, losSide, -1);
    CloseAllGroupSide(g, winSide);
@@ -2640,9 +2615,11 @@ void ShredCloseLosingSide(int g, int side, double pool){
          }
       }
    }
+   // [v2.8.7] reserve floor = configured KEEP profit (was MinNetUSD=$1)
+   double reserve = MathMax(InpExit_ReserveProfitUSD, InpExitMinNetUSD);
    for(int i=0;i<n;i++){
-      double p = profits[i];
-      if(pool + p >= InpExitMinNetUSD){
+      double p = profits[i]; // negative
+      if(pool + p >= reserve){
          if(PositionSelectByTicket(tickets[i])){
             if(trade.PositionClose(tickets[i])) pool += p;
          }
@@ -2762,10 +2739,11 @@ void ShredAllNegativeFromAllProfit(int g){
    for(int i=0;i<nP;i++){
       if(PositionSelectByTicket(prTk[i]) && trade.PositionClose(prTk[i])) closedProfit++;
    }
-   // shred losses while pool can absorb them and keep net >= MinNetUSD
+   // [v2.8.7] shred losses while pool stays >= configured reserve (was MinNetUSD=$1)
+   double reserve = MathMax(InpExit_ReserveProfitUSD, InpExitMinNetUSD);
    for(int i=0;i<nL;i++){
       double p = loAmt[i]; // negative
-      if(pool + p >= InpExitMinNetUSD){
+      if(pool + p >= reserve){
          if(PositionSelectByTicket(loTk[i]) && trade.PositionClose(loTk[i])){
             pool += p; closedLoss++;
          }
@@ -3409,7 +3387,7 @@ void DrawDashboard(){
 
    // Header
    string entryLbl = (InpEntryMode == G2_ENTRY_PENDING) ? "PENDING" : (InpEntryMode == G2_ENTRY_SMA) ? "SMA" : "INSTANT"; // [v2.73]
-   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.8.6    Entry: %s    Side: %s", entryLbl, modeLbl), InpDashAccent);
+   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.8.7    Entry: %s    Side: %s", entryLbl, modeLbl), InpDashAccent);
    y += rowH+2;
 
    // ==== Account section ====
@@ -3563,14 +3541,18 @@ void DrawDashboard(){
             DashRow(StringFormat("R_G%d_GATE", g), xR, yR, wR, rowH, "  Gate", gateInfo, gateClr);
             yR += rowH;
 
-            // ---- Gain row: G:<gainNow>/<need> Recovery flag ----
-            double netNow = GroupFloatingPL(g, -1, -1);
-            double gainNow = g_groupHedgeBaselineSet[g] ? (netNow - g_groupNetAtHedgeStart[g]) : 0.0;
+            // ---- [v2.8.7] Win/Reserve row: Win:$X Resv:$Y need:$Z + Recovery flag ----
+            double plBM=GroupFloatingPL(g,0,0), plSM=GroupFloatingPL(g,1,0);
+            double plBH=GroupFloatingPL(g,0,1), plSH=GroupFloatingPL(g,1,1);
+            double winB = plBM+plBH, winS = plSM+plSH;
+            double winShown = MathMax(winB, winS);
+            double needShown = InpExit_ReserveProfitUSD + InpExit_MinGainUSD;
             string recLbl = "";
             if(g_groupInRecovery[g])
                recLbl = StringFormat(" RECOV RC#%d/%d", g_groupRecoveryLevel[g], InpRecovery_MaxLevels);
-            string gainInfo = StringFormat("G:$%.2f/$%.2f%s", gainNow, InpExit_MinGainUSD, recLbl);
-            color gainClr = (gainNow >= InpExit_MinGainUSD) ? InpDashGood : InpDashAccent;
+            string gainInfo = StringFormat("Win:$%.2f need:$%.2f (resv:$%.0f)%s",
+                                           winShown, needShown, InpExit_ReserveProfitUSD, recLbl);
+            color gainClr = (winShown >= needShown) ? InpDashGood : InpDashAccent;
             DashRow(StringFormat("R_G%d_GAIN", g), xR, yR, wR, rowH, "  TripleGrid", gainInfo, gainClr);
             yR += rowH;
 
@@ -3741,15 +3723,12 @@ int OnInit(){
    g_atrLossHandle   = iATR(_Symbol, GridLoss_ATR_TF,   GridLoss_ATR_Period);
    g_atrProfitHandle = iATR(_Symbol, GridProfit_ATR_TF, GridProfit_ATR_Period);
 
-   // [v1.6] Squeeze Filter handles
+   // [v1.6] Squeeze Filter handles ([v2.8.7] ADX/EMA handles purged)
    g_sqTF[0] = InpSQ_TF1; g_sqTF[1] = InpSQ_TF2; g_sqTF[2] = InpSQ_TF3;
    for(int i=0;i<3;i++){
       g_sqBB[i]    = iBands(_Symbol, g_sqTF[i], InpSQ_BBPeriod, 0, InpSQ_BBMult, PRICE_CLOSE);
       g_sqKCEMA[i] = iMA   (_Symbol, g_sqTF[i], InpSQ_KCPeriod, 0, MODE_EMA, PRICE_CLOSE);
       g_sqATR[i]   = iATR  (_Symbol, g_sqTF[i], InpSQ_ATRPeriod);
-      // [v2.8.6] ADX + EMA confirm stages removed — handles no longer created
-      g_sqADX[i]   = INVALID_HANDLE;
-      g_sqEMA[i]   = INVALID_HANDLE;
       if(InpSQ_Enable && (g_sqBB[i]==INVALID_HANDLE || g_sqKCEMA[i]==INVALID_HANDLE || g_sqATR[i]==INVALID_HANDLE)){
          PrintFormat("Golden2 v1.6: Squeeze indicator init failed TF[%d]", i);
       }
@@ -3770,11 +3749,11 @@ int OnInit(){
 
    string entryModeLbl = (InpEntryMode == G2_ENTRY_PENDING) ? "PENDING" :
                          (InpEntryMode == G2_ENTRY_SMA)     ? "SMA"     : "INSTANT";
-   PrintFormat("Golden2 EA v2.8.6 initialized | Magic=%I64d | MaxGroups=%d | EntryMode=%s | InitMode=%d | GridLoss=%s | Squeeze=%s [BB/KC ratio only, multi-confirm REMOVED] | HedgeOrphanOffset=ON | TripleGate=%s | ExitGate=Squeeze-TF3-Latch+WinPool+CrossSideShred | OneHedgePerGroup=ON | PostMatchAvgTP=PostMatch-Active-Only | MinGainUSD=%.1f | SeqQueue=%s | RecoveryAdvUnblock=%s | RecoveryGrid=%s(mult=%.2f max=%d) | PostMatchAvgBrokerTP=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | ProfitSideUnhedgedAdv=%s | ForceCloseOppUnhedged=%s(%ds) | Tester=%s Visual=%s Opt=%s DashInterval=%ds | TesterHideIndicators=%s SideTaggedComments=ON",
+   PrintFormat("Golden2 EA v2.8.7 initialized | Magic=%I64d | MaxGroups=%d | EntryMode=%s | InitMode=%d | GridLoss=%s | Squeeze=%s [BB/KC ratio only, deprecated inputs PURGED] | HedgeOrphanOffset=ON | TripleGate=%s | ExitGate=Squeeze-TF3-Latch+ReserveProfit+CrossSideShred | OneHedgePerGroup=ON | PostMatchAvgTP=PostMatch-Active-Only | ReserveProfitUSD=%.1f MinGainUSD=%.1f MinNetUSD=%.1f | SeqQueue=%s | RecoveryAdvUnblock=%s | RecoveryGrid=%s(mult=%.2f max=%d) | PostMatchAvgBrokerTP=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | ProfitSideUnhedgedAdv=%s | ForceCloseOppUnhedged=%s(%ds) | Tester=%s Visual=%s Opt=%s DashInterval=%ds | TesterHideIndicators=%s SideTaggedComments=ON",
                (long)InpMagic, InpMaxGroups, entryModeLbl, (int)InpInitSideMode,
                GridLoss_Enable?"ON":"OFF", InpSQ_Enable?"ON":"OFF",
                InpExitTripleGate_Enable?"ON":"OFF",
-               InpExit_MinGainUSD,
+               InpExit_ReserveProfitUSD, InpExit_MinGainUSD, InpExitMinNetUSD,
                InpExit_SequentialQueue?"ON":"OFF",
                InpExit_RecoveryAdvanceUnblock?"ON":"OFF",
                 InpRecovery_Enable?"ON":"OFF", InpRecovery_Multiplier, InpRecovery_MaxLevels,
@@ -3804,8 +3783,7 @@ void OnDeinit(const int reason){
       if(g_sqBB[i]    != INVALID_HANDLE) IndicatorRelease(g_sqBB[i]);
       if(g_sqKCEMA[i] != INVALID_HANDLE) IndicatorRelease(g_sqKCEMA[i]);
       if(g_sqATR[i]   != INVALID_HANDLE) IndicatorRelease(g_sqATR[i]);
-      if(g_sqADX[i]   != INVALID_HANDLE) IndicatorRelease(g_sqADX[i]); // [v2.7.7]
-      if(g_sqEMA[i]   != INVALID_HANDLE) IndicatorRelease(g_sqEMA[i]); // [v2.7.7]
+      // [v2.8.7] g_sqADX/g_sqEMA handles PURGED
    }
    if(g_smaHandle != INVALID_HANDLE){ IndicatorRelease(g_smaHandle); g_smaHandle = INVALID_HANDLE; } // [v2.73]
 }
