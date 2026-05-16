@@ -638,97 +638,39 @@ string GroupCycleStatus(int g){
 //================ [v1.6] VOLATILITY SQUEEZE FILTER ================
 // Per TF: BBwidth/KCwidth on closed bar (shift=1). Expansion when ratio >= threshold.
 // Direction = sign(close - BBmid) on shift=1.
+// [v2.8.6] Reverted to Gold Miner Original behavior: pure BB/KC ratio.
+// BB-breakout / ADX / ATR-MA / EMA confirm stages REMOVED (they caused the
+// Triple-Gate latch never to arm and Hedging to close too early in v2.7.7).
 bool ComputeSqueezeForTF(int idx, bool &isExp, int &dir){
    isExp = false; dir = 0;
-   // [v2.7.7] reset per-stage flags
-   g_sqPassBB[idx]  = false;
-   g_sqPassADX[idx] = false;
-   g_sqPassATR[idx] = false;
-   g_sqPassEMA[idx] = false;
+   // Stage flags kept as no-op (always true) for dashboard backward-compat
+   g_sqPassBB[idx]  = true;
+   g_sqPassADX[idx] = true;
+   g_sqPassATR[idx] = true;
+   g_sqPassEMA[idx] = true;
    g_sqADXVal[idx]  = 0.0;
 
-   if(g_sqBB[idx] == INVALID_HANDLE || g_sqKCEMA[idx] == INVALID_HANDLE || g_sqATR[idx] == INVALID_HANDLE) return false;
-   // ATR-MA ต้องอ่านอย่างน้อย ATRMAPeriod แท่งจาก shift=1
-   int atrNeed = MathMax(3, InpSQ_ATRMAPeriod + 2);
-   double bbU[], bbL[], bbM[], ema[], atr[];
+   if(g_sqBB[idx] == INVALID_HANDLE || g_sqATR[idx] == INVALID_HANDLE) return false;
+   double bbU[], bbL[], bbM[], atr[];
    ArraySetAsSeries(bbU,true); ArraySetAsSeries(bbL,true); ArraySetAsSeries(bbM,true);
-   ArraySetAsSeries(ema,true); ArraySetAsSeries(atr,true);
-   if(CopyBuffer(g_sqBB[idx],   1, 0, 3,       bbU) <= 0) return false;
-   if(CopyBuffer(g_sqBB[idx],   2, 0, 3,       bbL) <= 0) return false;
-   if(CopyBuffer(g_sqBB[idx],   0, 0, 3,       bbM) <= 0) return false;
-   if(CopyBuffer(g_sqKCEMA[idx],0, 0, 3,       ema) <= 0) return false;
-   if(CopyBuffer(g_sqATR[idx],  0, 0, atrNeed, atr) <= 0) return false;
+   ArraySetAsSeries(atr,true);
+   if(CopyBuffer(g_sqBB[idx],  1, 0, 3, bbU) <= 0) return false;
+   if(CopyBuffer(g_sqBB[idx],  2, 0, 3, bbL) <= 0) return false;
+   if(CopyBuffer(g_sqBB[idx],  0, 0, 3, bbM) <= 0) return false;
+   if(CopyBuffer(g_sqATR[idx], 0, 0, 3, atr) <= 0) return false;
    double bbW = bbU[1] - bbL[1]; // shift=1 = closed bar
    double kcW = 2.0 * InpSQ_KCMult * atr[1];
    if(kcW <= 0) return false;
    double ratio = bbW / kcW;
    g_sqRatio[idx] = ratio;
 
-   // ===== Stage 1: BB vs KC ratio =====
-   bool passRatio = (ratio >= InpSQ_ExpansionThreshold);
-
-   // ทิศทางพื้นฐานจาก BB-mid (ใช้ตอนยังไม่ได้เปิด BB-Breakout)
+   // Direction from BB-mid on closed bar
    double cl = iClose(_Symbol, g_sqTF[idx], 1);
-   int bbDir = 0;
-   if(cl > bbM[1]) bbDir = +1;
-   else if(cl < bbM[1]) bbDir = -1;
-   dir = bbDir;
+   if(cl > bbM[1])      dir = +1;
+   else if(cl < bbM[1]) dir = -1;
+   else                 dir = 0;
 
-   // ===== Stage 2: BB Breakout (close beyond Upper/Lower) =====
-   bool passBB = true;
-   if(InpSQ_UseBBBreakout){
-      if(cl > bbU[1])      { passBB = true;  dir = +1; }
-      else if(cl < bbL[1]) { passBB = true;  dir = -1; }
-      else                 { passBB = false; }
-   }
-   g_sqPassBB[idx] = passBB;
-
-   // ===== Stage 3: ADX strength + DI direction =====
-   bool passADX = true;
-   if(InpSQ_UseADX && g_sqADX[idx] != INVALID_HANDLE){
-      double adxMain[], adxPlus[], adxMinus[];
-      ArraySetAsSeries(adxMain,true); ArraySetAsSeries(adxPlus,true); ArraySetAsSeries(adxMinus,true);
-      if(CopyBuffer(g_sqADX[idx], 0, 0, 3, adxMain)  > 0 &&
-         CopyBuffer(g_sqADX[idx], 1, 0, 3, adxPlus)  > 0 &&
-         CopyBuffer(g_sqADX[idx], 2, 0, 3, adxMinus) > 0){
-         g_sqADXVal[idx] = adxMain[1];
-         bool strong = (adxMain[1] >= InpSQ_ADXThreshold);
-         bool diDirOK = true;
-         if(dir > 0)      diDirOK = (adxPlus[1] > adxMinus[1]);
-         else if(dir < 0) diDirOK = (adxMinus[1] > adxPlus[1]);
-         else             diDirOK = false;
-         passADX = (strong && diDirOK);
-      } else passADX = false;
-   }
-   g_sqPassADX[idx] = passADX;
-
-   // ===== Stage 4: ATR > ATR-MA * mult =====
-   bool passATR = true;
-   if(InpSQ_UseATRConfirm){
-      int N = MathMax(2, InpSQ_ATRMAPeriod);
-      double sum = 0.0; int cnt = 0;
-      // ค่าเฉลี่ย ATR ของ N แท่งก่อนหน้า shift=1
-      for(int k=1; k<=N && k<atrNeed; k++){ sum += atr[k]; cnt++; }
-      double atrMA = (cnt>0) ? (sum / cnt) : 0.0;
-      passATR = (atrMA > 0 && atr[1] >= atrMA * InpSQ_ATRMult);
-   }
-   g_sqPassATR[idx] = passATR;
-
-   // ===== Stage 5: EMA trend confirm =====
-   bool passEMA = true;
-   if(InpSQ_UseEMA && g_sqEMA[idx] != INVALID_HANDLE){
-      double emaBuf[];
-      ArraySetAsSeries(emaBuf,true);
-      if(CopyBuffer(g_sqEMA[idx], 0, 0, 3, emaBuf) > 0){
-         if(dir > 0)      passEMA = (cl > emaBuf[1]);
-         else if(dir < 0) passEMA = (cl < emaBuf[1]);
-         else             passEMA = false;
-      } else passEMA = false;
-   }
-   g_sqPassEMA[idx] = passEMA;
-
-   // ===== Final: AND ของทุก stage ที่ enable =====
-   isExp = passRatio && passBB && passADX && passATR && passEMA;
+   isExp = (ratio >= InpSQ_ExpansionThreshold);
    if(!isExp) dir = 0;
    return true;
 }
