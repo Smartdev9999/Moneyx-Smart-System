@@ -3160,6 +3160,10 @@ bool IsGroupSafeToAdvance(int g){
    // advance so the system doesn't deadlock waiting for losing residual to
    // resolve. Recovery group manages its own exit independently.
    if(InpExit_RecoveryAdvanceUnblock && g_groupInRecovery[g]) return true;
+   // [v2.9.2] Hedge-used groups are locked by One-Hedge-Per-Group and will
+   // resolve via Triple-Gate matching close + Recovery. No further hedge can
+   // arm. Safe to advance past regardless of PostMatch activation state.
+   if(g_groupHedgeUsed[g]) return true;
    int buyMain  = CountBlockingMainPositionsForAdvance(g, 0);
    int sellMain = CountBlockingMainPositionsForAdvance(g, 1);
    if(buyMain == 0 && sellMain == 0) return true;
