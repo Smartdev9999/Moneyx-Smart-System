@@ -2432,6 +2432,7 @@ void DrawAverageAndTPLinesForGroup(int g){
    // [v2.72] No chart in optimization / non-visual tester — skip line objects.
    if(g_isOptimization) return;
    if(g_isTesterMode && !g_isVisualMode) return;
+   if(g_isTesterMode && InpTester_DisableChartDraw) return; // [v2.9.1]
    // Skip if hedge matched (Triple-Gate is in charge)
    if(IsGroupHedgeMatched(g)){ DeleteLinesForGroup(g); return; }
    if(!GroupHasAnyPositions(g)){ DeleteLinesForGroup(g); return; }
