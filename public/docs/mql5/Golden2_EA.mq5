@@ -899,7 +899,7 @@ void PlaceInitialMarket(int g, bool placeBuy, bool placeSell){
          double d = MathMax(InpInitialSLPips * g_point, minDist + g_point);
          sl = NormalizeDouble(ask - d, g_digits);
       }
-      if(!trade.Buy(InpInitialLot, _Symbol, ask, sl, tp, cBuy)){
+      if(!trade.Buy(EntryInitialLotG2(), _Symbol, ask, sl, tp, cBuy)){
          PrintFormat("Golden2 v2.73: [MKT] BUY FAIL G%d err=%d retcode=%d", g, GetLastError(), trade.ResultRetcode());
       } else {
          anySent = true;
@@ -916,7 +916,7 @@ void PlaceInitialMarket(int g, bool placeBuy, bool placeSell){
          double d = MathMax(InpInitialSLPips * g_point, minDist + g_point);
          sl = NormalizeDouble(bid + d, g_digits);
       }
-      if(!trade.Sell(InpInitialLot, _Symbol, bid, sl, tp, cSell)){
+      if(!trade.Sell(EntryInitialLotG2(), _Symbol, bid, sl, tp, cSell)){
          PrintFormat("Golden2 v2.73: [MKT] SELL FAIL G%d err=%d retcode=%d", g, GetLastError(), trade.ResultRetcode());
       } else {
          anySent = true;
@@ -1070,7 +1070,7 @@ void PlaceInitialFrame(int g){
 
    bool anySent = false;
    if(placeBuy){
-      if(!trade.BuyStop(InpInitialLot, upPx, _Symbol, slUp, tpUp, ORDER_TIME_GTC, 0, cBuy)){
+      if(!trade.BuyStop(EntryInitialLotG2(), upPx, _Symbol, slUp, tpUp, ORDER_TIME_GTC, 0, cBuy)){
          PrintFormat("Golden2 v2.6.1: BuyStop FAIL G%d err=%d retcode=%d open=%.*f tp=%.*f sl=%.*f",
                      g, GetLastError(), trade.ResultRetcode(), g_digits, upPx, g_digits, tpUp, g_digits, slUp);
       } else {
@@ -1080,7 +1080,7 @@ void PlaceInitialFrame(int g){
       }
    }
    if(placeSell){
-      if(!trade.SellStop(InpInitialLot, dnPx, _Symbol, slDn, tpDn, ORDER_TIME_GTC, 0, cSell)){
+      if(!trade.SellStop(EntryInitialLotG2(), dnPx, _Symbol, slDn, tpDn, ORDER_TIME_GTC, 0, cSell)){
          PrintFormat("Golden2 v2.6.1: SellStop FAIL G%d err=%d retcode=%d open=%.*f tp=%.*f sl=%.*f",
                      g, GetLastError(), trade.ResultRetcode(), g_digits, dnPx, g_digits, tpDn, g_digits, slDn);
       } else {
@@ -1422,7 +1422,7 @@ void ManageInitialReArm(int g){
       double tp   = (InpInitialTPPips>0)? NormalizeDouble(upPx + InpInitialTPPips*g_point, g_digits) : 0;
       double sl   = (InpInitialSLPips>0)? NormalizeDouble(upPx - InpInitialSLPips*g_point, g_digits) : 0;
       string c    = MakeComment(g, SIDE_BUY, false, "IN");
-      if(trade.BuyStop(InpInitialLot, upPx, _Symbol, sl, tp, ORDER_TIME_GTC, 0, c)){
+      if(trade.BuyStop(EntryInitialLotG2(), upPx, _Symbol, sl, tp, ORDER_TIME_GTC, 0, c)){
          if(g_verboseEffective) PrintFormat("Golden2 v2.6: Re-entry BuyStop G%d at %.5f (sellPos=%d)", g, upPx, sellPos);
       }
    }
@@ -1432,7 +1432,7 @@ void ManageInitialReArm(int g){
       double tp   = (InpInitialTPPips>0)? NormalizeDouble(dnPx - InpInitialTPPips*g_point, g_digits) : 0;
       double sl   = (InpInitialSLPips>0)? NormalizeDouble(dnPx + InpInitialSLPips*g_point, g_digits) : 0;
       string c    = MakeComment(g, SIDE_SELL, false, "IN");
-      if(trade.SellStop(InpInitialLot, dnPx, _Symbol, sl, tp, ORDER_TIME_GTC, 0, c)){
+      if(trade.SellStop(EntryInitialLotG2(), dnPx, _Symbol, sl, tp, ORDER_TIME_GTC, 0, c)){
          if(g_verboseEffective) PrintFormat("Golden2 v2.6: Re-entry SellStop G%d at %.5f (buyPos=%d)", g, dnPx, buyPos);
       }
    }
