@@ -3748,6 +3748,9 @@ int OnInit(){
    g_isTesterMode   = (bool)MQLInfoInteger(MQL_TESTER);
    g_isVisualMode   = (bool)MQLInfoInteger(MQL_VISUAL_MODE);
    g_isOptimization = (bool)MQLInfoInteger(MQL_OPTIMIZATION);
+   // [v2.9.1] effective verbose flag — silenced in Tester when InpTester_SilenceLogs=true
+   g_verboseEffective = InpVerboseLog && !(g_isTesterMode && InpTester_SilenceLogs);
+   g_lastTickMs = 0;
    g_lastAuxChartSweep = 0;
    // [v2.8.1] CRITICAL: TesterHideIndicators(true) MUST be called BEFORE any
    // iATR/iADX/iBands/iMA handle is created. Per MQL5 docs, every indicator
