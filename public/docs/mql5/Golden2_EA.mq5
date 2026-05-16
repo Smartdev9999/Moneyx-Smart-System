@@ -2787,7 +2787,11 @@ void ShredAllNegativeFromAllProfit(int g){
 // average + InpTP_PointsFromAvg offset. Recomputes whenever a new RC opens.
 void SyncPostMatchAvgTPSL(int g){
    if(!InpPostMatch_AvgBrokerTP) return;
-   if(!g_stripped[g] && !IsGroupHedgeMatched(g)) return;
+   // [v2.8.5] Gate the broker-side Avg TP/SL sync STRICTLY on the
+   // post-match-active flag set by TryMatchingCloseForGroup after it actually
+   // closed >=1 ticket. Pre-3-Gate hedges therefore stay naked (broker can't
+   // pre-empt the 3-Gate flow with a Hedge-side TP).
+   if(!g_groupPostMatchAvgActive[g]) return;
    if(!GroupHasAnyPositions(g)){
       g_postMatchTP[g][0]=0; g_postMatchTP[g][1]=0;
       g_postMatchSL[g][0]=0; g_postMatchSL[g][1]=0;
