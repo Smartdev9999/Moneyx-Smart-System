@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|  Golden2 EA v2.9.1 — Backtest Performance Pack                   |
+//|  Golden2 EA v2.9.2 — Hedge Advance Bypass + Stale Pending Sweep  |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.91"
-#property description "Golden2 EA v2.9.1 — Backtest Performance Pack: tester-aware log silencing (InpTester_SilenceLogs), chart-draw skip (InpTester_DisableChartDraw), aux-chart sweep limited to visual mode, optional tick-stride throttle (InpTester_TickStrideMs). Zero changes to trading logic / order execution / strategy. All v2.9.0 Recovery Seed Lock + v2.8.9 Recovery-Mode Order Lock preserved."
+#property version   "2.92"
+#property description "Golden2 EA v2.9.2 — Hedge-Used Advance Bypass (prior groups with g_groupHedgeUsed safe-pass advance queue regardless of PostMatch state) + Stale Opposite-Side Hedge Pending Cleanup (Mirror cleanup filters by order-type; ManageGroupHedgeArm sweeps opposite-side hedge pendings before early-return; OnTick group loop full-sweeps hedge pendings when post-match active or hedge positions all gone). Zero changes to trade execution, entry, grid, recovery, Triple-Gate. All v2.9.1 Backtest Performance Pack preserved."
 #property strict
 
 #include <Trade/Trade.mqh>
