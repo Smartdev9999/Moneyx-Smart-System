@@ -3625,6 +3625,24 @@ void DrawDashboard(){
    string fc = InpHedge_ForceCloseOppUnhedged ? StringFormat("ON (%ds)", InpHedge_ForceCloseDelaySec) : "OFF";
    DashRow("L_FCOPP", x, y, w, rowH, "Force-Close Opp",  fc, InpHedge_ForceCloseOppUnhedged?InpDashGood:InpDashColor); y+=rowH;
    DashRow("L_TG",    x, y, w, rowH, "Triple-Gate",      InpExitTripleGate_Enable?"ON":"OFF", InpExitTripleGate_Enable?InpDashGood:InpDashBad); y+=rowH;
+   // [v2.9.4] Risk Limits — Max Lot caps + Max DD Close
+   string mlN = (InpMaxLotPerOrder   > 0.0) ? StringFormat("%.2f", InpMaxLotPerOrder)   : "OFF";
+   string mlT = (InpMaxLotTripleGate > 0.0) ? StringFormat("%.2f", InpMaxLotTripleGate) : "OFF";
+   string ddTxt;
+   color  ddClr = InpDashColor;
+   if(InpMaxDDMode == G2_DD_OFF){
+      ddTxt = "OFF";
+   } else if(InpMaxDDMode == G2_DD_PERCENT){
+      ddTxt = StringFormat("PCT %.1f%% (cur %.2f%%)", InpMaxDDValue, g_maxDDCurrPct);
+      if(g_maxDDCurrPct >= InpMaxDDValue) ddClr = InpDashBad;
+      else if(g_maxDDCurrPct >= InpMaxDDValue*0.7) ddClr = InpDashAccent;
+   } else {
+      ddTxt = StringFormat("USD $%.0f (cur $%.2f)", InpMaxDDValue, g_maxDDCurrAbs);
+      if(g_maxDDCurrAbs >= InpMaxDDValue) ddClr = InpDashBad;
+      else if(g_maxDDCurrAbs >= InpMaxDDValue*0.7) ddClr = InpDashAccent;
+   }
+   DashRow("L_RISK", x, y, w, rowH, "Risk MaxLotN/TG", StringFormat("%s / %s", mlN, mlT), InpDashColor); y+=rowH;
+   DashRow("L_DDCL", x, y, w, rowH, "Max DD Close",    ddTxt, ddClr); y+=rowH;
    // ==== [v1.8] Gold-Miner-style Squeeze panel (multi-row) ====
    if(InpSQ_Enable){
       DashHeader("L_S_SQ", x, y, w, rowH, " === SQUEEZE ===", InpDashAccent); y+=rowH;
