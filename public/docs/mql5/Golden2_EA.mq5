@@ -3582,6 +3582,12 @@ void DrawDashboard(){
                     StringFormat("%s  PostAvg:%s", hStat, pStat), hClr);
             yR += rowH;
 
+            // ---- [v2.8.6] Hedge orphan offset diagnostic ----
+            int orphBuy  = CountOrphanMainOnHedgeSide(g, 0);
+            int orphSell = CountOrphanMainOnHedgeSide(g, 1);
+            DashRow(StringFormat("R_G%d_ORPH", g), xR, yR, wR, rowH, "  Orph",
+                    StringFormat("B:%d  S:%d", orphBuy, orphSell), InpDashColor);
+
             // ---- [v2.8.4] Compact post-match Avg-TP row (only when ACTIVE) ----
             if(InpPostMatch_AvgBrokerTP && g_groupPostMatchAvgActive[g]){
                double tpB = g_postMatchTP[g][0];
