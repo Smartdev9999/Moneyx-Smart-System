@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|  Golden2 EA v2.9.2 — Hedge Advance Bypass + Stale Pending Sweep  |
+//|  Golden2 EA v2.9.3 — Disarm Partial-Fill + DD Diagnostic         |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.92"
-#property description "Golden2 EA v2.9.2 — Hedge-Used Advance Bypass (prior groups with g_groupHedgeUsed safe-pass advance queue regardless of PostMatch state) + Stale Opposite-Side Hedge Pending Cleanup (Mirror cleanup filters by order-type; ManageGroupHedgeArm sweeps opposite-side hedge pendings before early-return; OnTick group loop full-sweeps hedge pendings when post-match active or hedge positions all gone). Zero changes to trade execution, entry, grid, recovery, Triple-Gate. All v2.9.1 Backtest Performance Pack preserved."
+#property version   "2.93"
+#property description "Golden2 EA v2.9.3 — Disarm Partial-Fill (remaining hedge pendings are now deleted when DD% drops below InpHedgeDisarmPercent even after some HD positions filled — filled positions remain for Triple-Gate/Recovery) + Disarm-Check verbose diagnostic (per-group 10s-throttled log of pct vs arm/disarm threshold). All v2.9.2 Hedge-Used Advance Bypass and Stale Opposite-Side Pending Cleanup preserved. Zero changes to trade execution, entry, grid, recovery, Triple-Gate."
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -289,6 +289,7 @@ datetime g_activeOpsClaimedAt = 0;
 datetime g_lastHedgeOpenTime  = 0;
 datetime g_lastHedgeCloseTime = 0;
 datetime g_lastDelayLog       = 0;
+datetime g_lastDisarmChkLog[51];      // [v2.9.3] throttle DISARM-CHK diagnostic per group
 
 string g_dashName    = "Golden2_DASH";   // legacy single-label (kept for cleanup)
 string g_dashPrefix  = "G2DASH_";         // [v1.5] prefix for all dashboard label objects
@@ -2059,6 +2060,17 @@ void ManageGroupHedgeArm(int g){
       g_blockNewOrders[g] = false;
    }
 
+   // [v2.9.3] DISARM-CHK diagnostic (per-group 10s throttle) — verbose only
+   if(g_verboseEffective && g>=0 && g<51){
+      if(TimeCurrent() - g_lastDisarmChkLog[g] >= 10){
+         g_lastDisarmChkLog[g] = TimeCurrent();
+         PrintFormat("Golden2 v2.9.3: HD DISARM-CHK G%d pct=%.1f arm=%.1f disarm=%.1f hPend=%d hPos=%d lossSide=%d",
+                     g, pct, InpHedgeArmPercent, InpHedgeDisarmPercent,
+                     CountGroupPendingsByTagPrefix(g,true,""),
+                     CountGroupPositions(g,-1,1), GroupLossSide(g));
+      }
+   }
+
    // [v1.6] Disarm: drop pending if DD recovers, no loss side, or no main positions exist
    if(!hedgePosExists && hedgePendingExists){
       int lossSideNow = GroupLossSide(g);
@@ -2083,6 +2095,16 @@ void ManageGroupHedgeArm(int g){
    //   ค้างจะไม่มีประโยชน์อีก (One-Hedge-Per-Group ห้าม arm ฝั่งใหม่). ลบทิ้ง
    //   ก่อน early-return เพื่อกัน pending ผีค้างใน group เก่า.
    if(hedgePosExists){
+      // [v2.9.3] Partial-fill DISARM — ลบ pending ที่เหลือเมื่อ DD ลดต่ำกว่า disarm%
+      //   (position ที่ filled แล้วยังอยู่ ให้ Triple-Gate/Recovery จัดการ)
+      if(hedgePendingExists && pct < InpHedgeDisarmPercent){
+         DeleteGroupPendings(g, 1);
+         if(g_verboseEffective)
+            PrintFormat("Golden2 v2.9.3: HD DISARM(partial-fill) G%d pct=%.1f<%.1f — kept %d filled HD pos",
+                        g, pct, InpHedgeDisarmPercent, CountGroupPositions(g,-1,1));
+         // ตกลงไปต่อทำ stale-side sweep ตามเดิม (ส่วนใหญ่จะไม่เหลือ pending แล้ว)
+      }
+
       int activeHedgeSide = (CountGroupPositions(g, 0, 1) > 0) ? 0
                           : (CountGroupPositions(g, 1, 1) > 0) ? 1 : -1;
       if(activeHedgeSide >= 0){
@@ -3521,7 +3543,7 @@ void DrawDashboard(){
 
    // Header
    string entryLbl = (InpEntryMode == G2_ENTRY_PENDING) ? "PENDING" : (InpEntryMode == G2_ENTRY_SMA) ? "SMA" : "INSTANT"; // [v2.73]
-   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.9.2    Entry: %s    Side: %s", entryLbl, modeLbl), InpDashAccent);
+   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.9.3    Entry: %s    Side: %s", entryLbl, modeLbl), InpDashAccent);
    y += rowH+2;
 
    // ==== Account section ====
@@ -3890,7 +3912,7 @@ int OnInit(){
 
    string entryModeLbl = (InpEntryMode == G2_ENTRY_PENDING) ? "PENDING" :
                          (InpEntryMode == G2_ENTRY_SMA)     ? "SMA"     : "INSTANT";
-   PrintFormat("Golden2 EA v2.9.2 initialized | HedgeUsedAdvanceBypass=ON | StalePendingCleanup=ON(MirrorSideFilter+ArmStaleSweep+PostMatchFullSweep) | RecoverySeed=LOCKED-First-NonRC | Magic=%I64d | MaxGroups=%d | EntryMode=%s | InitMode=%d | GridLoss=%s | Squeeze=%s [BB/KC ratio only, deprecated inputs PURGED] | HedgeOrphanOffset=ON | TripleGate=%s | ExitGate=Squeeze-TF3-Latch+ReserveProfit+CrossSideShred | OneHedgePerGroup=ON | PostMatchAvgTP=PostMatch-Active-Only | RecoveryOrderLock=ON | PriorAdvBypass=HedgeUsed+RecLvl>0 | ReserveProfitUSD=%.1f MinGainUSD=%.1f MinNetUSD=%.1f | SeqQueue=%s | RecoveryAdvUnblock=%s | RecoveryGrid=%s(mult=%.2f max=%d cont=%s newCandle=%s) | PostMatchAvgBrokerTP=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | ProfitSideUnhedgedAdv=%s | ForceCloseOppUnhedged=%s(%ds) | Tester=%s Visual=%s Opt=%s DashInterval=%ds | TesterHideIndicators=%s SideTaggedComments=ON",
+   PrintFormat("Golden2 EA v2.9.3 initialized | DisarmPartialFill=ON | HedgeUsedAdvanceBypass=ON | StalePendingCleanup=ON(MirrorSideFilter+ArmStaleSweep+PostMatchFullSweep) | RecoverySeed=LOCKED-First-NonRC | Magic=%I64d | MaxGroups=%d | EntryMode=%s | InitMode=%d | GridLoss=%s | Squeeze=%s [BB/KC ratio only, deprecated inputs PURGED] | HedgeOrphanOffset=ON | TripleGate=%s | ExitGate=Squeeze-TF3-Latch+ReserveProfit+CrossSideShred | OneHedgePerGroup=ON | PostMatchAvgTP=PostMatch-Active-Only | RecoveryOrderLock=ON | PriorAdvBypass=HedgeUsed+RecLvl>0 | ReserveProfitUSD=%.1f MinGainUSD=%.1f MinNetUSD=%.1f | SeqQueue=%s | RecoveryAdvUnblock=%s | RecoveryGrid=%s(mult=%.2f max=%d cont=%s newCandle=%s) | PostMatchAvgBrokerTP=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | ProfitSideUnhedgedAdv=%s | ForceCloseOppUnhedged=%s(%ds) | Tester=%s Visual=%s Opt=%s DashInterval=%ds | TesterHideIndicators=%s SideTaggedComments=ON",
                (long)InpMagic, InpMaxGroups, entryModeLbl, (int)InpInitSideMode,
                GridLoss_Enable?"ON":"OFF", InpSQ_Enable?"ON":"OFF",
                InpExitTripleGate_Enable?"ON":"OFF",
