@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|  Golden2 EA v2.8.9 — Recovery-Mode Order Lock + Prior-Advance Bypass |
+//|  Golden2 EA v2.9.0 — Recovery Seed Lock                          |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.89"
-#property description "Golden2 EA v2.8.9 — Recovery-Mode Order Lock + Prior-Advance Bypass: freezes GL/GP/Initial-trail/Initial-rearm/Initial-market-reentry the instant g_groupInRecovery[g] is true so only RC#N ladder fires on the residual losing side. Prior-group advance now treats post-match groups (g_groupHedgeUsed && g_groupPostMatchAvgActive) or any group with g_groupRecoveryLevel>0 as safe-pass, unblocking the queue when G1 sits in recovery. All v2.8.8 Recovery Continuation + v2.8.7 Reserve-Profit + v2.8.6 Hedge Orphan Offset preserved."
+#property version   "2.90"
+#property description "Golden2 EA v2.9.0 — Recovery Seed Lock: seed lot for the RC# ladder is computed once (excluding RC# tickets) and reused for every RC#N so Multiplier never compounds on an already-multiplied lot. Fixes RC lot explosion. All v2.8.9 Recovery-Mode Order Lock + v2.8.8 Continuation + v2.8.7 Reserve-Profit preserved."
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -348,6 +348,10 @@ bool     g_groupSeenExp[51];        // saw g_sqExpansion[2]==true while hedge ac
 bool     g_groupExpToNormal[51];    // saw Expansion AND now back to Normal -> gate ready
 // [v2.8.3] Recovery Grid level counter per group (RC#1..N already placed)
 int      g_groupRecoveryLevel[51];
+// [v2.9.0] Recovery seed lot locked at first RC# fire — reused for RC#2..N so
+// Multiplier^level applies to a STABLE base instead of compounding on the prior
+// RC ticket's lot (which caused exponential lot explosion in v2.8.x).
+double   g_groupRecoverySeedLot[51];
 // [v2.8.8] Last bar time when an RC continuation order fired (OnlyNewCandle guard)
 datetime g_lastRecoveryCandle[51];
 // [v2.8.4] Post-match avg-TP/SL synced to broker per (group, side); 0 = none
@@ -2668,26 +2672,36 @@ void PlaceRecoveryGridIfNeeded(int g, int losSide){
       if(InpVerboseLog) PrintFormat("Golden2 v2.8.3: G%d Recovery max levels (%d) reached — skip", g, InpRecovery_MaxLevels);
       return;
    }
-   // Find lot of largest residual ticket on losing side as fallback seed
-   double seedLot = 0.0;
-   int total = PositionsTotal();
-   for(int i=0;i<total;i++){
-      ulong tk = PositionGetTicket(i);
-      if(tk==0) continue;
-      if(!PositionSelectByTicket(tk)) continue;
-      if((long)PositionGetInteger(POSITION_MAGIC) != InpMagic) continue;
-      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
-      string c = PositionGetString(POSITION_COMMENT);
-      int gp; bool hd; string tag;
-      if(!ParseComment(c, gp, hd, tag)) continue;
-      if(gp != g) continue;
-      int sd = (PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY)?0:1;
-      if(sd != losSide) continue;
-      double lt = PositionGetDouble(POSITION_VOLUME);
-      if(lt > seedLot) seedLot = lt;
+   // [v2.9.0] Compute seedLot ONCE per group then lock it. Subsequent RC#N
+   // calls reuse the locked seed so Multiplier^(level-1) applies to a stable
+   // base. Also EXCLUDE prior RC# tickets from the scan defensively even on
+   // first call (otherwise re-entry into recovery from a partially-shredded
+   // residual could pick up a previous RC lot).
+   double seedLot = g_groupRecoverySeedLot[g];
+   if(seedLot <= 0.0){
+      int total = PositionsTotal();
+      for(int i=0;i<total;i++){
+         ulong tk = PositionGetTicket(i);
+         if(tk==0) continue;
+         if(!PositionSelectByTicket(tk)) continue;
+         if((long)PositionGetInteger(POSITION_MAGIC) != InpMagic) continue;
+         if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+         string cc = PositionGetString(POSITION_COMMENT);
+         int gp; bool hd; string tag;
+         if(!ParseComment(cc, gp, hd, tag)) continue;
+         if(gp != g) continue;
+         int sd = (PositionGetInteger(POSITION_TYPE)==POSITION_TYPE_BUY)?0:1;
+         if(sd != losSide) continue;
+         // [v2.9.0] skip prior RC# tickets so seed never compounds
+         if(StringFind(tag, "RC") == 0) continue;
+         double lt = PositionGetDouble(POSITION_VOLUME);
+         if(lt > seedLot) seedLot = lt;
+      }
    }
    double base = (InpRecovery_StartLot > 0.0) ? InpRecovery_StartLot : seedLot;
    if(base <= 0.0) base = InpInitialLot;
+   // [v2.9.0] Lock the seed for the rest of this recovery cycle
+   if(g_groupRecoverySeedLot[g] <= 0.0) g_groupRecoverySeedLot[g] = base;
    int level = g_groupRecoveryLevel[g] + 1;
    double lot = NormalizeLot(base * MathPow(InpRecovery_Multiplier, (double)(level-1)));
    int distPts = (InpRecovery_DistancePips > 0) ? InpRecovery_DistancePips : GridLoss_Points;
@@ -2699,10 +2713,10 @@ void PlaceRecoveryGridIfNeeded(int g, int losSide){
                           : trade.Sell(lot, _Symbol, bid, 0, 0, c);
    if(ok){
       g_groupRecoveryLevel[g] = level;
-      PrintFormat("Golden2 v2.8.3: G%d Recovery RC#%d %s lot=%.2f distHint=%dpt seed=%.2f base=%.2f mult=%.2f",
-                  g, level, losSide==0?"BUY":"SELL", lot, distPts, seedLot, base, InpRecovery_Multiplier);
+      PrintFormat("Golden2 v2.9.0: G%d Recovery RC#%d %s lot=%.2f distHint=%dpt lockedSeed=%.2f base=%.2f mult=%.2f",
+                  g, level, losSide==0?"BUY":"SELL", lot, distPts, g_groupRecoverySeedLot[g], base, InpRecovery_Multiplier);
    } else {
-      PrintFormat("Golden2 v2.8.3: G%d Recovery RC#%d %s FAILED ret=%d err=%d",
+      PrintFormat("Golden2 v2.9.0: G%d Recovery RC#%d %s FAILED ret=%d err=%d",
                   g, level, losSide==0?"BUY":"SELL", trade.ResultRetcode(), GetLastError());
    }
 }
@@ -3453,7 +3467,7 @@ void DrawDashboard(){
 
    // Header
    string entryLbl = (InpEntryMode == G2_ENTRY_PENDING) ? "PENDING" : (InpEntryMode == G2_ENTRY_SMA) ? "SMA" : "INSTANT"; // [v2.73]
-   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.8.9    Entry: %s    Side: %s", entryLbl, modeLbl), InpDashAccent);
+   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.9.0    Entry: %s    Side: %s", entryLbl, modeLbl), InpDashAccent);
    y += rowH+2;
 
    // ==== Account section ====
@@ -3772,6 +3786,8 @@ int OnInit(){
       g_groupExpToNormal[i]       = false;
       // [v2.8.3]
       g_groupRecoveryLevel[i]     = 0;
+      // [v2.9.0]
+      g_groupRecoverySeedLot[i]   = 0.0;
       // [v2.8.8]
       g_lastRecoveryCandle[i]     = 0;
       // [v2.8.4]
@@ -3817,7 +3833,7 @@ int OnInit(){
 
    string entryModeLbl = (InpEntryMode == G2_ENTRY_PENDING) ? "PENDING" :
                          (InpEntryMode == G2_ENTRY_SMA)     ? "SMA"     : "INSTANT";
-   PrintFormat("Golden2 EA v2.8.9 initialized | Magic=%I64d | MaxGroups=%d | EntryMode=%s | InitMode=%d | GridLoss=%s | Squeeze=%s [BB/KC ratio only, deprecated inputs PURGED] | HedgeOrphanOffset=ON | TripleGate=%s | ExitGate=Squeeze-TF3-Latch+ReserveProfit+CrossSideShred | OneHedgePerGroup=ON | PostMatchAvgTP=PostMatch-Active-Only | RecoveryOrderLock=ON | PriorAdvBypass=PostMatch+RecLvl>0 | ReserveProfitUSD=%.1f MinGainUSD=%.1f MinNetUSD=%.1f | SeqQueue=%s | RecoveryAdvUnblock=%s | RecoveryGrid=%s(mult=%.2f max=%d cont=%s newCandle=%s) | PostMatchAvgBrokerTP=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | ProfitSideUnhedgedAdv=%s | ForceCloseOppUnhedged=%s(%ds) | Tester=%s Visual=%s Opt=%s DashInterval=%ds | TesterHideIndicators=%s SideTaggedComments=ON",
+   PrintFormat("Golden2 EA v2.9.0 initialized | RecoverySeed=LOCKED-First-NonRC | Magic=%I64d | MaxGroups=%d | EntryMode=%s | InitMode=%d | GridLoss=%s | Squeeze=%s [BB/KC ratio only, deprecated inputs PURGED] | HedgeOrphanOffset=ON | TripleGate=%s | ExitGate=Squeeze-TF3-Latch+ReserveProfit+CrossSideShred | OneHedgePerGroup=ON | PostMatchAvgTP=PostMatch-Active-Only | RecoveryOrderLock=ON | PriorAdvBypass=PostMatch+RecLvl>0 | ReserveProfitUSD=%.1f MinGainUSD=%.1f MinNetUSD=%.1f | SeqQueue=%s | RecoveryAdvUnblock=%s | RecoveryGrid=%s(mult=%.2f max=%d cont=%s newCandle=%s) | PostMatchAvgBrokerTP=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | ProfitSideUnhedgedAdv=%s | ForceCloseOppUnhedged=%s(%ds) | Tester=%s Visual=%s Opt=%s DashInterval=%ds | TesterHideIndicators=%s SideTaggedComments=ON",
                (long)InpMagic, InpMaxGroups, entryModeLbl, (int)InpInitSideMode,
                GridLoss_Enable?"ON":"OFF", InpSQ_Enable?"ON":"OFF",
                InpExitTripleGate_Enable?"ON":"OFF",
@@ -3946,6 +3962,8 @@ void OnTick(){
          g_groupExpToNormal[g]      = false;
          // [v2.8.3] reset Recovery Grid level counter
          g_groupRecoveryLevel[g]    = 0;
+         // [v2.9.0] reset locked recovery seed when group flat
+         g_groupRecoverySeedLot[g]  = 0.0;
          // [v2.8.8] reset RC continuation candle marker when group flat
          g_lastRecoveryCandle[g]    = 0;
          // [v2.8.4] reset post-match avg-TP cache
