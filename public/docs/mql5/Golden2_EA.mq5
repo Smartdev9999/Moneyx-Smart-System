@@ -2078,7 +2078,35 @@ void ManageGroupHedgeArm(int g){
       }
       return;
    }
-   if(hedgePosExists) return;
+   // [v2.9.2] Stale opposite-side hedge pending sweep.
+   //   เมื่อ hedge ฝั่งใดฝั่งหนึ่ง filled แล้ว pending hedge ฝั่งตรงข้ามที่ยัง
+   //   ค้างจะไม่มีประโยชน์อีก (One-Hedge-Per-Group ห้าม arm ฝั่งใหม่). ลบทิ้ง
+   //   ก่อน early-return เพื่อกัน pending ผีค้างใน group เก่า.
+   if(hedgePosExists){
+      int activeHedgeSide = (CountGroupPositions(g, 0, 1) > 0) ? 0
+                          : (CountGroupPositions(g, 1, 1) > 0) ? 1 : -1;
+      if(activeHedgeSide >= 0){
+         int otot = OrdersTotal();
+         for(int i=otot-1; i>=0; i--){
+            ulong tk = OrderGetTicket(i);
+            if(tk==0 || !OrderSelect(tk)) continue;
+            if((long)OrderGetInteger(ORDER_MAGIC) != InpMagic) continue;
+            if(OrderGetString(ORDER_SYMBOL) != _Symbol) continue;
+            string c = OrderGetString(ORDER_COMMENT);
+            int gp; bool hd; string tag;
+            if(!ParseComment(c, gp, hd, tag)) continue;
+            if(gp != g || !hd) continue;
+            ENUM_ORDER_TYPE otp = (ENUM_ORDER_TYPE)OrderGetInteger(ORDER_TYPE);
+            bool isMatch = (activeHedgeSide==0 && (otp==ORDER_TYPE_BUY_STOP || otp==ORDER_TYPE_BUY_LIMIT))
+                        || (activeHedgeSide==1 && (otp==ORDER_TYPE_SELL_STOP|| otp==ORDER_TYPE_SELL_LIMIT));
+            if(!isMatch){
+               if(trade.OrderDelete(tk) && g_verboseEffective)
+                  PrintFormat("Golden2 v2.9.2: G%d post-hedge stale-side sweep %s", g, c);
+            }
+         }
+      }
+      return;
+   }
 
    if(pct >= InpHedgeArmPercent){
       int rem = 0;
