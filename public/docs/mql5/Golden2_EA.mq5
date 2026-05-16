@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|  Golden2 EA v2.9.1 — Backtest Performance Pack                   |
+//|  Golden2 EA v2.9.2 — Hedge Advance Bypass + Stale Pending Sweep  |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.91"
-#property description "Golden2 EA v2.9.1 — Backtest Performance Pack: tester-aware log silencing (InpTester_SilenceLogs), chart-draw skip (InpTester_DisableChartDraw), aux-chart sweep limited to visual mode, optional tick-stride throttle (InpTester_TickStrideMs). Zero changes to trading logic / order execution / strategy. All v2.9.0 Recovery Seed Lock + v2.8.9 Recovery-Mode Order Lock preserved."
+#property version   "2.92"
+#property description "Golden2 EA v2.9.2 — Hedge-Used Advance Bypass (prior groups with g_groupHedgeUsed safe-pass advance queue regardless of PostMatch state) + Stale Opposite-Side Hedge Pending Cleanup (Mirror cleanup filters by order-type; ManageGroupHedgeArm sweeps opposite-side hedge pendings before early-return; OnTick group loop full-sweeps hedge pendings when post-match active or hedge positions all gone). Zero changes to trade execution, entry, grid, recovery, Triple-Gate. All v2.9.1 Backtest Performance Pack preserved."
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -1943,6 +1943,9 @@ void MirrorLossSideToHedgePendings(int g, int lossSide){
                   g, lossSide==0?"BUY":"SELL", nL, orphanOnHedge, nL-skipN, skipN);
 
    // 1) Remove orphan hedge pendings whose tag is not in the KEEP slice
+   //    [v2.9.2] Also delete any hedge pending whose order-type does NOT
+   //    match the current hedgeSide (= legacy opposite-side pendings left
+   //    over from a previous mirror call where the losing side had flipped).
    int ot = OrdersTotal();
    for(int i=ot-1;i>=0;i--){
       ulong tk = OrderGetTicket(i);
@@ -1954,6 +1957,15 @@ void MirrorLossSideToHedgePendings(int g, int lossSide){
       int gp; bool hd; string tag;
       if(!ParseComment(c, gp, hd, tag)) continue;
       if(gp != g || !hd) continue;
+      // [v2.9.2] Opposite-side hedge pending: delete unconditionally
+      ENUM_ORDER_TYPE otp = (ENUM_ORDER_TYPE)OrderGetInteger(ORDER_TYPE);
+      bool isHedgeSideMatch = (hedgeSide==0 && (otp==ORDER_TYPE_BUY_STOP || otp==ORDER_TYPE_BUY_LIMIT))
+                           || (hedgeSide==1 && (otp==ORDER_TYPE_SELL_STOP|| otp==ORDER_TYPE_SELL_LIMIT));
+      if(!isHedgeSideMatch){
+         if(trade.OrderDelete(tk) && g_verboseEffective)
+            PrintFormat("Golden2 v2.9.2: HD stale-opposite-side delete G%d %s", g, c);
+         continue;
+      }
       bool keep = false;
       for(int k=keepFrom; k<nL; k++){
          if(lossTags[k] == tag){ keep = true; break; }
@@ -2066,7 +2078,35 @@ void ManageGroupHedgeArm(int g){
       }
       return;
    }
-   if(hedgePosExists) return;
+   // [v2.9.2] Stale opposite-side hedge pending sweep.
+   //   เมื่อ hedge ฝั่งใดฝั่งหนึ่ง filled แล้ว pending hedge ฝั่งตรงข้ามที่ยัง
+   //   ค้างจะไม่มีประโยชน์อีก (One-Hedge-Per-Group ห้าม arm ฝั่งใหม่). ลบทิ้ง
+   //   ก่อน early-return เพื่อกัน pending ผีค้างใน group เก่า.
+   if(hedgePosExists){
+      int activeHedgeSide = (CountGroupPositions(g, 0, 1) > 0) ? 0
+                          : (CountGroupPositions(g, 1, 1) > 0) ? 1 : -1;
+      if(activeHedgeSide >= 0){
+         int otot = OrdersTotal();
+         for(int i=otot-1; i>=0; i--){
+            ulong tk = OrderGetTicket(i);
+            if(tk==0 || !OrderSelect(tk)) continue;
+            if((long)OrderGetInteger(ORDER_MAGIC) != InpMagic) continue;
+            if(OrderGetString(ORDER_SYMBOL) != _Symbol) continue;
+            string c = OrderGetString(ORDER_COMMENT);
+            int gp; bool hd; string tag;
+            if(!ParseComment(c, gp, hd, tag)) continue;
+            if(gp != g || !hd) continue;
+            ENUM_ORDER_TYPE otp = (ENUM_ORDER_TYPE)OrderGetInteger(ORDER_TYPE);
+            bool isMatch = (activeHedgeSide==0 && (otp==ORDER_TYPE_BUY_STOP || otp==ORDER_TYPE_BUY_LIMIT))
+                        || (activeHedgeSide==1 && (otp==ORDER_TYPE_SELL_STOP|| otp==ORDER_TYPE_SELL_LIMIT));
+            if(!isMatch){
+               if(trade.OrderDelete(tk) && g_verboseEffective)
+                  PrintFormat("Golden2 v2.9.2: G%d post-hedge stale-side sweep %s", g, c);
+            }
+         }
+      }
+      return;
+   }
 
    if(pct >= InpHedgeArmPercent){
       int rem = 0;
@@ -3120,6 +3160,10 @@ bool IsGroupSafeToAdvance(int g){
    // advance so the system doesn't deadlock waiting for losing residual to
    // resolve. Recovery group manages its own exit independently.
    if(InpExit_RecoveryAdvanceUnblock && g_groupInRecovery[g]) return true;
+   // [v2.9.2] Hedge-used groups are locked by One-Hedge-Per-Group and will
+   // resolve via Triple-Gate matching close + Recovery. No further hedge can
+   // arm. Safe to advance past regardless of PostMatch activation state.
+   if(g_groupHedgeUsed[g]) return true;
    int buyMain  = CountBlockingMainPositionsForAdvance(g, 0);
    int sellMain = CountBlockingMainPositionsForAdvance(g, 1);
    if(buyMain == 0 && sellMain == 0) return true;
@@ -3158,11 +3202,14 @@ bool IsPriorGroupSafeForAdvance(int g, int &reason){
    if(InpExit_RecoveryAdvanceUnblock && g_groupInRecovery[g]){
       reason = 1; return true;
    }
-   // [v2.8.9] Post-match group (hedge used + Avg-TP broker active) is managed
-   // by per-side Avg TP/SL on every residual+RC ticket — no further hedge will
-   // ever be armed (One-Hedge-Per-Group). Treat as safe so the queue advances.
-   if(g_groupHedgeUsed[g] && g_groupPostMatchAvgActive[g]){
-      reason = 1; return true;
+   // [v2.9.2] Any group with g_groupHedgeUsed=true is hedge-locked by
+   // One-Hedge-Per-Group (v2.8.5). No new hedge can arm, and the group will
+   // resolve via Triple-Gate / Recovery on its own. Safe-pass for advance
+   // queue REGARDLESS of PostMatch activation state — fixes deadlock where
+   // every prior group sat in Hedge USED/LOCKED PostAvg:WAITING and froze
+   // the entire queue.
+   if(g_groupHedgeUsed[g]){
+      reason = 2; return true;
    }
    // [v2.8.9] Any group with active RC ladder = recovery state even if the
    // g_groupInRecovery flag was momentarily cleared by housekeeping.
@@ -3294,6 +3341,7 @@ void TryAdvanceToNextGroup(){
          if(g_verboseEffective && TimeCurrent() - lastHoldLog >= 60){
             string reasonLbl = "none";
             switch(blockReason){
+               case 2: reasonLbl = "hedge-locked";   break;
                case 3: reasonLbl = "no-hedge";       break;
                case 4: reasonLbl = "unhedged-main";  break;
                case 5: reasonLbl = "pending-only";   break;
@@ -3473,7 +3521,7 @@ void DrawDashboard(){
 
    // Header
    string entryLbl = (InpEntryMode == G2_ENTRY_PENDING) ? "PENDING" : (InpEntryMode == G2_ENTRY_SMA) ? "SMA" : "INSTANT"; // [v2.73]
-   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.9.1    Entry: %s    Side: %s", entryLbl, modeLbl), InpDashAccent);
+   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.9.2    Entry: %s    Side: %s", entryLbl, modeLbl), InpDashAccent);
    y += rowH+2;
 
    // ==== Account section ====
@@ -3842,7 +3890,7 @@ int OnInit(){
 
    string entryModeLbl = (InpEntryMode == G2_ENTRY_PENDING) ? "PENDING" :
                          (InpEntryMode == G2_ENTRY_SMA)     ? "SMA"     : "INSTANT";
-   PrintFormat("Golden2 EA v2.9.1 initialized | RecoverySeed=LOCKED-First-NonRC | Magic=%I64d | MaxGroups=%d | EntryMode=%s | InitMode=%d | GridLoss=%s | Squeeze=%s [BB/KC ratio only, deprecated inputs PURGED] | HedgeOrphanOffset=ON | TripleGate=%s | ExitGate=Squeeze-TF3-Latch+ReserveProfit+CrossSideShred | OneHedgePerGroup=ON | PostMatchAvgTP=PostMatch-Active-Only | RecoveryOrderLock=ON | PriorAdvBypass=PostMatch+RecLvl>0 | ReserveProfitUSD=%.1f MinGainUSD=%.1f MinNetUSD=%.1f | SeqQueue=%s | RecoveryAdvUnblock=%s | RecoveryGrid=%s(mult=%.2f max=%d cont=%s newCandle=%s) | PostMatchAvgBrokerTP=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | ProfitSideUnhedgedAdv=%s | ForceCloseOppUnhedged=%s(%ds) | Tester=%s Visual=%s Opt=%s DashInterval=%ds | TesterHideIndicators=%s SideTaggedComments=ON",
+   PrintFormat("Golden2 EA v2.9.2 initialized | HedgeUsedAdvanceBypass=ON | StalePendingCleanup=ON(MirrorSideFilter+ArmStaleSweep+PostMatchFullSweep) | RecoverySeed=LOCKED-First-NonRC | Magic=%I64d | MaxGroups=%d | EntryMode=%s | InitMode=%d | GridLoss=%s | Squeeze=%s [BB/KC ratio only, deprecated inputs PURGED] | HedgeOrphanOffset=ON | TripleGate=%s | ExitGate=Squeeze-TF3-Latch+ReserveProfit+CrossSideShred | OneHedgePerGroup=ON | PostMatchAvgTP=PostMatch-Active-Only | RecoveryOrderLock=ON | PriorAdvBypass=HedgeUsed+RecLvl>0 | ReserveProfitUSD=%.1f MinGainUSD=%.1f MinNetUSD=%.1f | SeqQueue=%s | RecoveryAdvUnblock=%s | RecoveryGrid=%s(mult=%.2f max=%d cont=%s newCandle=%s) | PostMatchAvgBrokerTP=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | ProfitSideUnhedgedAdv=%s | ForceCloseOppUnhedged=%s(%ds) | Tester=%s Visual=%s Opt=%s DashInterval=%ds | TesterHideIndicators=%s SideTaggedComments=ON",
                (long)InpMagic, InpMaxGroups, entryModeLbl, (int)InpInitSideMode,
                GridLoss_Enable?"ON":"OFF", InpSQ_Enable?"ON":"OFF",
                InpExitTripleGate_Enable?"ON":"OFF",
@@ -4017,6 +4065,17 @@ void OnTick(){
       TryPlaceGridProfit(g);
       TryPlaceRecoveryGridContinuation(g); // [v2.8.8] RC#2..N at distance while in recovery
       ManageGroupHedgeArm(g);
+
+      // [v2.9.2] Post-match / hedge-positions-gone full sweep of hedge pendings.
+      //   เมื่อ group เข้า post-match (Avg-TP active) หรือ hedge positions ปิด
+      //   หมดแล้ว → ไม่ต้องเหลือ hedge pending ใดๆ. กันค้างจาก edge case ที่
+      //   sweep ใน ManageGroupHedgeArm ไม่จับ (เช่น activeHedgeSide==-1)
+      if(g_groupHedgeUsed[g] && (g_groupPostMatchAvgActive[g] || CountGroupPositions(g,-1,1)==0)){
+         if(CountGroupPendingsByTagPrefix(g, true, "") > 0){
+            DeleteGroupPendings(g, 1);
+            if(g_verboseEffective) PrintFormat("Golden2 v2.9.2: G%d post-match hedge pending full sweep", g);
+         }
+      }
 
       // [v2.8.5] Continuously enforce stripped broker TP/SL while hedge is
       // "used" but Matching Close hasn't activated the post-match Avg TP/SL
