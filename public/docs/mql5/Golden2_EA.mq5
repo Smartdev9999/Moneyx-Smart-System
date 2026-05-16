@@ -2795,7 +2795,7 @@ void PlaceRecoveryGridIfNeeded(int g, int losSide){
    // [v2.9.0] Lock the seed for the rest of this recovery cycle
    if(g_groupRecoverySeedLot[g] <= 0.0) g_groupRecoverySeedLot[g] = base;
    int level = g_groupRecoveryLevel[g] + 1;
-   double lot = NormalizeLot(base * MathPow(InpRecovery_Multiplier, (double)(level-1)));
+   double lot = CapTripleGateLotG2(NormalizeLot(base * MathPow(InpRecovery_Multiplier, (double)(level-1)))); // [v2.9.4] Triple-Gate exit cap
    int distPts = (InpRecovery_DistancePips > 0) ? InpRecovery_DistancePips : GridLoss_Points;
 
    string c = MakeComment(g, (ENUM_SIDE)losSide, false, StringFormat("RC#%d", level));
