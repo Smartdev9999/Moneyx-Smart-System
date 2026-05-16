@@ -1481,7 +1481,7 @@ double LotForLevel(int level){
    double step = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
    if(step>0) l = MathRound(l/step)*step;
    if(l<minL) l = minL;
-   return NormalizeDouble(l, 2);
+   return CapNormalLotG2(NormalizeDouble(l, 2)); // [v2.9.4] cap legacy ladder
 }
 
 //----- Gold-Miner-style helpers -----
@@ -1521,7 +1521,7 @@ double ResolveLot(int level, ENUM_LOT_MODE_G2 mode, const string customStr,
    } else { // MULTIPLY
       l = InpInitialLot * MathPow(mulFactor, (double)level);
    }
-   return NormalizeLot(l);
+   return CapNormalLotG2(NormalizeLot(l)); // [v2.9.4] cap normal grid lot
 }
 
 // [v2.9.4] Independent lot caps — applied AFTER NormalizeLot/multiplier so
