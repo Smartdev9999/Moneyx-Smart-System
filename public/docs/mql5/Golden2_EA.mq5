@@ -1545,6 +1545,9 @@ double CapNormalLotG2(double lot){      return CapLotMaxG2(lot, InpMaxLotPerOrde
 double CapTripleGateLotG2(double lot){  return CapLotMaxG2(lot, InpMaxLotTripleGate); }
 // Capped raw InpInitialLot for direct trade.Buy/Sell/BuyStop/SellStop call sites
 double EntryInitialLotG2(){             return CapNormalLotG2(InpInitialLot); }
+
+// Get ATR value in points from indicator handle
+double GetATRPoints(int handle){
    if(handle == INVALID_HANDLE) return 0.0;
    double buf[2];
    if(CopyBuffer(handle, 0, 0, 2, buf) <= 0) return 0.0;
