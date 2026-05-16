@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|  Golden2 EA v2.8.8 — Recovery Grid Continuation (RC#2..N at distance) |
+//|  Golden2 EA v2.8.9 — Recovery-Mode Order Lock + Prior-Advance Bypass |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.88"
-#property description "Golden2 EA v2.8.8 — Recovery Grid Continuation: after Triple-Gate Matching Close places RC#1, additional RC#2..N now auto-fire on the residual losing side whenever price moves InpRecovery_DistancePips (or GridLoss_Points) further from the last entry, up to InpRecovery_MaxLevels. Fixes the freeze where RC#1 sat alone because TryPlaceGridLoss was blocked by hedge-matched guard. All v2.8.7 Reserve-Profit gate + v2.8.6 Hedge Orphan Offset + v2.8.5 One-Hedge-Per-Group preserved."
+#property version   "2.89"
+#property description "Golden2 EA v2.8.9 — Recovery-Mode Order Lock + Prior-Advance Bypass: freezes GL/GP/Initial-trail/Initial-rearm/Initial-market-reentry the instant g_groupInRecovery[g] is true so only RC#N ladder fires on the residual losing side. Prior-group advance now treats post-match groups (g_groupHedgeUsed && g_groupPostMatchAvgActive) or any group with g_groupRecoveryLevel>0 as safe-pass, unblocking the queue when G1 sits in recovery. All v2.8.8 Recovery Continuation + v2.8.7 Reserve-Profit + v2.8.6 Hedge Orphan Offset preserved."
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -1147,6 +1147,7 @@ void ManageInitialTrailOnBarClose(int g){
    if(CountGroupPositions(g, -1, 1) > 0) return;
    if(IsGroupHedgeMatched(g)) return;
    if(g_blockNewOrders[g]) return;
+   if(g_groupInRecovery[g]) return; // [v2.8.9] no new initial activity in recovery
 
    datetime curBar = iTime(_Symbol, InpInitTrailTF, 0);
    if(curBar == 0) return;
@@ -1248,6 +1249,7 @@ void ManageInitialTrail(int g){
    // [v2.3] Same hedge-active freeze as bar-close trail.
    if(CountGroupPositions(g, -1, 1) > 0) return;
    if(IsGroupHedgeMatched(g)) return;
+   if(g_groupInRecovery[g]) return; // [v2.8.9] no opposite-trail in recovery
 
    ulong tBuy  = FindInitialPendingTicket(g, 0);
    ulong tSell = FindInitialPendingTicket(g, 1);
@@ -1373,6 +1375,7 @@ void ManageInitialReArm(int g){
    if(CountGroupPositions(g, -1, 1) > 0) return;
    if(IsGroupHedgeMatched(g)) return;
    if(g_blockNewOrders[g]) return;
+   if(g_groupInRecovery[g]) return; // [v2.8.9] no IN re-arm in recovery
 
    bool buyAllowed  = (InpInitSideMode == INIT_BOTH || InpInitSideMode == INIT_BUY_ONLY);
    bool sellAllowed = (InpInitSideMode == INIT_BOTH || InpInitSideMode == INIT_SELL_ONLY);
@@ -1428,6 +1431,7 @@ void ManageInitialMarketReEntry(int g){
    if(CountGroupPositions(g, -1, 1) > 0) return;   // hedge position exists -> freeze
    if(g_blockNewOrders[g]) return;                 // pre-hedge DD% block
    if(g_stripped[g]) return;                       // group already locked
+   if(g_groupInRecovery[g]) return;                // [v2.8.9] recovery mode: no market re-entry
 
    // Pending hedge present? freeze (mirrors v2.3 post-hedge behaviour)
    if(CountGroupPendingsByTagPrefix(g, true, "") > 0) return;
@@ -1617,6 +1621,7 @@ void TryPlaceGridLoss(int g){
    if(!GridLoss_Enable) return; // [v1.7] Master toggle: disable grid → Initial-only mode
    if(g_blockNewOrders[g]) return; // [v1.4] Pre-hedge block
    if(IsGroupHedgeMatched(g)) return; // [v1.6] Post-hedge lock: freeze grid until Triple-Gate close
+   if(g_groupInRecovery[g]) return; // [v2.8.9] Recovery mode: only RC# ladder fires, normal GL frozen
    for(int sd=0; sd<2; sd++){
       if(SqueezeBlocksSide(sd)) continue; // [v1.6] Squeeze directional block
       int posCount = CountGroupPositions(g, sd, 0);
@@ -1687,6 +1692,7 @@ void TryPlaceGridProfit(int g){
    if(!GridProfit_Enable) return;
    if(g_blockNewOrders[g]) return; // [v1.4] Pre-hedge block
    if(IsGroupHedgeMatched(g)) return; // pre-hedge only
+   if(g_groupInRecovery[g]) return; // [v2.8.9] Recovery mode: GP frozen
    for(int sd=0; sd<2; sd++){
       if(SqueezeBlocksSide(sd)) continue; // [v1.6] Squeeze directional block
       int posCount = CountGroupPositions(g, sd, 0);
@@ -3132,6 +3138,17 @@ bool IsPriorGroupSafeForAdvance(int g, int &reason){
    if(InpExit_RecoveryAdvanceUnblock && g_groupInRecovery[g]){
       reason = 1; return true;
    }
+   // [v2.8.9] Post-match group (hedge used + Avg-TP broker active) is managed
+   // by per-side Avg TP/SL on every residual+RC ticket — no further hedge will
+   // ever be armed (One-Hedge-Per-Group). Treat as safe so the queue advances.
+   if(g_groupHedgeUsed[g] && g_groupPostMatchAvgActive[g]){
+      reason = 1; return true;
+   }
+   // [v2.8.9] Any group with active RC ladder = recovery state even if the
+   // g_groupInRecovery flag was momentarily cleared by housekeeping.
+   if(g_groupRecoveryLevel[g] > 0){
+      reason = 1; return true;
+   }
    bool hedgeAny = (CountGroupPositions(g, -1, 1) > 0);
    if(!hedgeAny){
       reason = 3; return false; // main positions but no hedge = unsafe
@@ -3436,7 +3453,7 @@ void DrawDashboard(){
 
    // Header
    string entryLbl = (InpEntryMode == G2_ENTRY_PENDING) ? "PENDING" : (InpEntryMode == G2_ENTRY_SMA) ? "SMA" : "INSTANT"; // [v2.73]
-   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.8.8    Entry: %s    Side: %s", entryLbl, modeLbl), InpDashAccent);
+   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.8.9    Entry: %s    Side: %s", entryLbl, modeLbl), InpDashAccent);
    y += rowH+2;
 
    // ==== Account section ====
@@ -3598,7 +3615,7 @@ void DrawDashboard(){
             double needShown = InpExit_ReserveProfitUSD + InpExit_MinGainUSD;
             string recLbl = "";
             if(g_groupInRecovery[g])
-               recLbl = StringFormat(" RECOV RC#%d/%d", g_groupRecoveryLevel[g], InpRecovery_MaxLevels);
+               recLbl = StringFormat(" [GL-LOCK RC#%d/%d]", g_groupRecoveryLevel[g], InpRecovery_MaxLevels);
             string gainInfo = StringFormat("Win:$%.2f need:$%.2f (resv:$%.0f)%s",
                                            winShown, needShown, InpExit_ReserveProfitUSD, recLbl);
             color gainClr = (winShown >= needShown) ? InpDashGood : InpDashAccent;
@@ -3800,7 +3817,7 @@ int OnInit(){
 
    string entryModeLbl = (InpEntryMode == G2_ENTRY_PENDING) ? "PENDING" :
                          (InpEntryMode == G2_ENTRY_SMA)     ? "SMA"     : "INSTANT";
-   PrintFormat("Golden2 EA v2.8.8 initialized | Magic=%I64d | MaxGroups=%d | EntryMode=%s | InitMode=%d | GridLoss=%s | Squeeze=%s [BB/KC ratio only, deprecated inputs PURGED] | HedgeOrphanOffset=ON | TripleGate=%s | ExitGate=Squeeze-TF3-Latch+ReserveProfit+CrossSideShred | OneHedgePerGroup=ON | PostMatchAvgTP=PostMatch-Active-Only | ReserveProfitUSD=%.1f MinGainUSD=%.1f MinNetUSD=%.1f | SeqQueue=%s | RecoveryAdvUnblock=%s | RecoveryGrid=%s(mult=%.2f max=%d cont=%s newCandle=%s) | PostMatchAvgBrokerTP=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | ProfitSideUnhedgedAdv=%s | ForceCloseOppUnhedged=%s(%ds) | Tester=%s Visual=%s Opt=%s DashInterval=%ds | TesterHideIndicators=%s SideTaggedComments=ON",
+   PrintFormat("Golden2 EA v2.8.9 initialized | Magic=%I64d | MaxGroups=%d | EntryMode=%s | InitMode=%d | GridLoss=%s | Squeeze=%s [BB/KC ratio only, deprecated inputs PURGED] | HedgeOrphanOffset=ON | TripleGate=%s | ExitGate=Squeeze-TF3-Latch+ReserveProfit+CrossSideShred | OneHedgePerGroup=ON | PostMatchAvgTP=PostMatch-Active-Only | RecoveryOrderLock=ON | PriorAdvBypass=PostMatch+RecLvl>0 | ReserveProfitUSD=%.1f MinGainUSD=%.1f MinNetUSD=%.1f | SeqQueue=%s | RecoveryAdvUnblock=%s | RecoveryGrid=%s(mult=%.2f max=%d cont=%s newCandle=%s) | PostMatchAvgBrokerTP=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | ProfitSideUnhedgedAdv=%s | ForceCloseOppUnhedged=%s(%ds) | Tester=%s Visual=%s Opt=%s DashInterval=%ds | TesterHideIndicators=%s SideTaggedComments=ON",
                (long)InpMagic, InpMaxGroups, entryModeLbl, (int)InpInitSideMode,
                GridLoss_Enable?"ON":"OFF", InpSQ_Enable?"ON":"OFF",
                InpExitTripleGate_Enable?"ON":"OFF",
@@ -3904,6 +3921,12 @@ void OnTick(){
    for(int g=1; g<=upper; g++){
       bool hasPos = GroupHasAnyPositions(g);
       bool hasPend= GroupHasAnyPendings(g);
+      // [v2.8.9] Defensive: never clear recovery flag while RC ladder is alive
+      // and group still has positions (shred pass may momentarily reduce
+      // ticket count between close calls in a single tick).
+      if(hasPos && g_groupRecoveryLevel[g] > 0 && !g_groupInRecovery[g]){
+         g_groupInRecovery[g] = true;
+      }
       if(!hasPos && !hasPend){
          // group empty: reset trackers
          if(g_stripped[g]) g_stripped[g] = false;
