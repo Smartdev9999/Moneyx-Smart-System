@@ -4007,7 +4007,53 @@ void RenderDashboardThrottled(){
    DrawDashboard();
 }
 
-// [v2.72] Track highest active group so the per-tick loop can exit early
+// [v2.9.4] Max DD Close — global kill switch.
+// Closes ALL EA positions + deletes ALL EA pendings when floating loss exceeds
+// configured DD vs balance (PERCENT) or absolute floating loss in USD (DOLLAR).
+// 30-second cooldown between fires to prevent multi-tick re-trigger spam.
+void ManageMaxDDClose(){
+   if(InpMaxDDMode == G2_DD_OFF) return;
+   double bal = AccountInfoDouble(ACCOUNT_BALANCE);
+   if(bal <= 0.0) return;
+   double floating = 0.0;
+   int total = PositionsTotal();
+   for(int i=0;i<total;i++){
+      ulong tk = PositionGetTicket(i); if(tk==0) continue;
+      if(!PositionSelectByTicket(tk)) continue;
+      if((long)PositionGetInteger(POSITION_MAGIC) != InpMagic) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      floating += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+   }
+   double absDD = (floating < 0.0) ? -floating : 0.0;
+   double pct   = absDD * 100.0 / bal;
+   g_maxDDCurrAbs = absDD; g_maxDDCurrPct = pct;
+   bool trig = false;
+   if(InpMaxDDMode == G2_DD_PERCENT && pct   >= InpMaxDDValue) trig = true;
+   if(InpMaxDDMode == G2_DD_DOLLAR  && absDD >= InpMaxDDValue) trig = true;
+   if(!trig) return;
+   if(TimeCurrent() - g_maxDDCloseLastFire < 30) return;
+   g_maxDDCloseLastFire = TimeCurrent();
+   PrintFormat("Golden2 v2.9.4: MAX-DD CLOSE FIRED mode=%s dd=$%.2f (%.2f%%) bal=$%.2f -> flatten all EA positions+pendings",
+               (InpMaxDDMode==G2_DD_PERCENT?"PERCENT":"DOLLAR"), absDD, pct, bal);
+   // close positions
+   for(int i=PositionsTotal()-1; i>=0; i--){
+      ulong tk = PositionGetTicket(i); if(tk==0) continue;
+      if(!PositionSelectByTicket(tk)) continue;
+      if((long)PositionGetInteger(POSITION_MAGIC) != InpMagic) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      trade.PositionClose(tk);
+   }
+   // delete pendings
+   for(int i=OrdersTotal()-1; i>=0; i--){
+      ulong tk = OrderGetTicket(i); if(tk==0) continue;
+      if(!OrderSelect(tk)) continue;
+      if((long)OrderGetInteger(ORDER_MAGIC) != InpMagic) continue;
+      if(OrderGetString(ORDER_SYMBOL) != _Symbol) continue;
+      trade.OrderDelete(tk);
+   }
+}
+
+
 //         once it reaches an empty tail. Updated each tick.
 int ComputeLoopUpperBound(){
    int hi = 0;
