@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|  Golden2 EA v2.8.5 — One-Hedge-Per-Group + Post-Match-Only Avg TP  |
+//|  Golden2 EA v2.8.6 — Squeeze=BB/KC-ratio-only + Hedge Orphan Offset  |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.85"
-#property description "Golden2 EA v2.8.5 — Locks each group to ONE hedge round (no re-hedge after broker TP/SL closes hedge). Continuously strips broker TP/SL on every ticket in a hedge-used group (incl. orphan main on opposite side) so the 3 Gate can fire cleanly. Post-Match Avg Broker TP/SL is gated on g_groupPostMatchAvgActive — set ONLY after TryMatchingCloseForGroup closes >=1 ticket and residual remains, so hedge can't be pre-empted by an early TP. Matching Close still pools every group ticket (main+hedge+orphan, profit+loss) before placing Recovery RC#N."
+#property version   "2.86"
+#property description "Golden2 EA v2.8.6 — Squeeze filter reverted to pure BB/KC ratio (Gold Miner Original behavior); BB-breakout/ADX/ATR-MA/EMA confirm stages removed so Expansion latches the moment ratio>=InpSQ_ExpansionThreshold, unblocking the Triple-Gate latch. Hedge mirror now offsets orphan main on the hedge side: counts unbound positions on opposite side and skips the oldest N loss tickets so total volume stays balanced (e.g. BUY 8 + SELL orphan 4 → only 4 SELL_STOP placed, not 8). All v2.8.5 One-Hedge-Per-Group / Post-Match Avg TP / strip-TP-SL behavior preserved."
 #property strict
 
 #include <Trade/Trade.mqh>
