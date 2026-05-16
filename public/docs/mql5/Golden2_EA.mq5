@@ -4055,6 +4055,18 @@ void ManageMaxDDClose(){
    bool trig = false;
    if(InpMaxDDMode == G2_DD_PERCENT && pct   >= InpMaxDDValue) trig = true;
    if(InpMaxDDMode == G2_DD_DOLLAR  && absDD >= InpMaxDDValue) trig = true;
+   // [v2.9.5] MAX-DD-CHK diagnostic — log every 30s regardless of trigger so user
+   //   can see current EA floating vs threshold (and compare with account-wide
+   //   AccountInfoDouble(ACCOUNT_PROFIT) to detect threshold misconfiguration).
+   if(g_verboseEffective && TimeCurrent() - g_lastMaxDDLog >= 30){
+      g_lastMaxDDLog = TimeCurrent();
+      double acctFloat = AccountInfoDouble(ACCOUNT_PROFIT);
+      PrintFormat("Golden2 v2.9.5: MAX-DD-CHK mode=%s curEA=$%.2f (%.2f%%) threshold=%s%.2f bal=$%.2f acctFloat=$%.2f trig=%s",
+         (InpMaxDDMode==G2_DD_OFF?"OFF":(InpMaxDDMode==G2_DD_PERCENT?"PERCENT":"DOLLAR")),
+         absDD, pct,
+         (InpMaxDDMode==G2_DD_PERCENT?"%":"$"), InpMaxDDValue,
+         bal, acctFloat, trig?"YES":"no");
+   }
    if(!trig) return;
    if(TimeCurrent() - g_maxDDCloseLastFire < 30) return;
    g_maxDDCloseLastFire = TimeCurrent();
