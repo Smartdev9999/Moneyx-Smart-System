@@ -1,7 +1,7 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|  Golden2 EA v2.9.4 — Max Lot Caps + Max DD Close                     |
+//|  Golden2 EA v2.9.5 — Stranded HD-Pending Sweep + MaxDD Always-On      |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
