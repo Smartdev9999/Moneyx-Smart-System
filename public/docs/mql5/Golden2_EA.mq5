@@ -3923,6 +3923,8 @@ void OnTick(){
          g_groupExpToNormal[g]      = false;
          // [v2.8.3] reset Recovery Grid level counter
          g_groupRecoveryLevel[g]    = 0;
+         // [v2.8.8] reset RC continuation candle marker when group flat
+         g_lastRecoveryCandle[g]    = 0;
          // [v2.8.4] reset post-match avg-TP cache
          g_postMatchTP[g][0]=0; g_postMatchTP[g][1]=0;
          g_postMatchSL[g][0]=0; g_postMatchSL[g][1]=0;
