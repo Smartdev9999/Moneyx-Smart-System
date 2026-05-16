@@ -1524,7 +1524,23 @@ double ResolveLot(int level, ENUM_LOT_MODE_G2 mode, const string customStr,
    return NormalizeLot(l);
 }
 
-double GetATRPoints(int handle){
+// [v2.9.4] Independent lot caps — applied AFTER NormalizeLot/multiplier so
+// the cap is the final word. step-floor (not round) so cap is never exceeded.
+double CapLotMaxG2(double lot, double cap){
+   if(cap <= 0.0) return lot;
+   if(lot > cap) lot = cap;
+   double step = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   if(step > 0) lot = MathFloor(lot/step) * step;
+   double minL = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   if(lot < minL) lot = minL;
+   double maxL = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+   if(maxL > 0 && lot > maxL) lot = maxL;
+   return NormalizeDouble(lot, 2);
+}
+double CapNormalLotG2(double lot){      return CapLotMaxG2(lot, InpMaxLotPerOrder); }
+double CapTripleGateLotG2(double lot){  return CapLotMaxG2(lot, InpMaxLotTripleGate); }
+// Capped raw InpInitialLot for direct trade.Buy/Sell/BuyStop/SellStop call sites
+double EntryInitialLotG2(){             return CapNormalLotG2(InpInitialLot); }
    if(handle == INVALID_HANDLE) return 0.0;
    double buf[2];
    if(CopyBuffer(handle, 0, 0, 2, buf) <= 0) return 0.0;
