@@ -289,6 +289,7 @@ datetime g_activeOpsClaimedAt = 0;
 datetime g_lastHedgeOpenTime  = 0;
 datetime g_lastHedgeCloseTime = 0;
 datetime g_lastDelayLog       = 0;
+datetime g_lastDisarmChkLog[51];      // [v2.9.3] throttle DISARM-CHK diagnostic per group
 
 string g_dashName    = "Golden2_DASH";   // legacy single-label (kept for cleanup)
 string g_dashPrefix  = "G2DASH_";         // [v1.5] prefix for all dashboard label objects
