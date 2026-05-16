@@ -298,6 +298,10 @@ datetime g_lastHedgeOpenTime  = 0;
 datetime g_lastHedgeCloseTime = 0;
 datetime g_lastDelayLog       = 0;
 datetime g_lastDisarmChkLog[51];      // [v2.9.3] throttle DISARM-CHK diagnostic per group
+// [v2.9.4] Max DD Close tracker
+datetime g_maxDDCloseLastFire = 0;
+double   g_maxDDCurrAbs       = 0.0;  // current absolute floating loss USD (>=0)
+double   g_maxDDCurrPct       = 0.0;  // current floating loss as % of balance
 
 string g_dashName    = "Golden2_DASH";   // legacy single-label (kept for cleanup)
 string g_dashPrefix  = "G2DASH_";         // [v1.5] prefix for all dashboard label objects
