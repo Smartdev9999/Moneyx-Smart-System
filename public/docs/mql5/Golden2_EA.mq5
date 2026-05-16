@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|  Golden2 EA v2.8.7 — Purge Deprecated Squeeze Inputs + Reserve Profit Fix |
+//|  Golden2 EA v2.8.8 — Recovery Grid Continuation (RC#2..N at distance) |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.87"
-#property description "Golden2 EA v2.8.7 — (A) Purges all deprecated multi-confirm Squeeze inputs/globals/handles (BB-breakout/ADX/ATR-MA/EMA). (B) Triple-Gate Reserve-Profit fix: replaces broken MinGain-delta HOLD gate with reserve-aware budget — winProfit must cover InpExit_ReserveProfitUSD + InpExit_MinGainUSD before matching close starts; shred passes use ReserveProfitUSD as the pool floor (was MinNetUSD=$1 hardcoded) so the configured profit is actually preserved while losses get shredded BEFORE Recovery Grid is placed. All v2.8.6 Hedge Orphan Offset + One-Hedge-Per-Group preserved."
+#property version   "2.88"
+#property description "Golden2 EA v2.8.8 — Recovery Grid Continuation: after Triple-Gate Matching Close places RC#1, additional RC#2..N now auto-fire on the residual losing side whenever price moves InpRecovery_DistancePips (or GridLoss_Points) further from the last entry, up to InpRecovery_MaxLevels. Fixes the freeze where RC#1 sat alone because TryPlaceGridLoss was blocked by hedge-matched guard. All v2.8.7 Reserve-Profit gate + v2.8.6 Hedge Orphan Offset + v2.8.5 One-Hedge-Per-Group preserved."
 #property strict
 
 #include <Trade/Trade.mqh>
