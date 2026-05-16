@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|  Golden2 EA v2.8.4 — Post-Match Avg Broker TP/SL + Cross-Side Shred  |
+//|  Golden2 EA v2.8.5 — One-Hedge-Per-Group + Post-Match-Only Avg TP  |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.84"
-#property description "Golden2 EA v2.8.4 — After Triple-Gate partial close + Recovery placement, residual main+hedge+RC#N orders had no broker TP/SL (g_stripped early-returns SyncSideTPSLToBroker) so broker never closed them. v2.8.4 adds SyncPostMatchAvgTPSL: per-side avg-price TP/SL pushed to broker on every residual ticket (rebinds when new RC orders open). Adds ShredAllNegativeFromAllProfit cross-side pool that uses ALL profitable orders in the group (main+hedge+loss-bound) to close losing orders before placing Recovery. Hedging dashboard simplified — removes per-grid Grid#N rows + verbose Recovery row, adds compact AvgTP B/S row."
+#property version   "2.85"
+#property description "Golden2 EA v2.8.5 — Locks each group to ONE hedge round (no re-hedge after broker TP/SL closes hedge). Continuously strips broker TP/SL on every ticket in a hedge-used group (incl. orphan main on opposite side) so the 3 Gate can fire cleanly. Post-Match Avg Broker TP/SL is gated on g_groupPostMatchAvgActive — set ONLY after TryMatchingCloseForGroup closes >=1 ticket and residual remains, so hedge can't be pre-empted by an early TP. Matching Close still pools every group ticket (main+hedge+orphan, profit+loss) before placing Recovery RC#N."
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -365,6 +365,19 @@ int      g_groupRecoveryLevel[51];
 // [v2.8.4] Post-match avg-TP/SL synced to broker per (group, side); 0 = none
 double   g_postMatchTP[51][2];
 double   g_postMatchSL[51][2];
+// [v2.8.5] Per-group hedge lifecycle:
+//   g_groupHedgeUsed[g]          = true once the group has ever held a hedge
+//                                  position. Locks out re-hedging and blocks
+//                                  v1.3 pre-match Avg-TP sync from writing
+//                                  TP/SL back onto residual / orphan main
+//                                  orders. Cleared only when group is flat.
+//   g_groupPostMatchAvgActive[g] = true only after TryMatchingCloseForGroup
+//                                  actually closed >=1 ticket and residual
+//                                  remains. Gates SyncPostMatchAvgTPSL so the
+//                                  broker-side Avg TP/SL never returns to the
+//                                  group before Matching Close runs.
+bool     g_groupHedgeUsed[51];
+bool     g_groupPostMatchAvgActive[51];
 
 // Snapshot of ATR (in points) at the moment last grid order was placed (per group, side, family 0=GL/1=GP)
 double   g_atrAtLastGridLoss[51][2];
@@ -2012,6 +2025,18 @@ void ManageGroupHedgeArm(int g){
    }
    g_hedgeMasterCleared = false;
 
+   // [v2.8.5] One-shot hedge per group. Once this group has ever held a hedge
+   // position, lock out any new hedge arming/pendings — the group must resolve
+   // via Triple-Gate Matching Close + Recovery Grid, never via re-hedging.
+   if(g_groupHedgeUsed[g]){
+      if(CountGroupPendingsByTagPrefix(g, true, "") > 0){
+         DeleteGroupPendings(g, 1);
+         if(InpVerboseLog) PrintFormat("Golden2 v2.8.5: G%d re-hedge LOCKED — stray hedge pending(s) deleted", g);
+      }
+      g_blockNewOrders[g] = false;
+      return;
+   }
+
    bool hedgePosExists = (CountGroupPositions(g,-1,1) > 0);
    bool hedgePendingExists = (CountGroupPendingsByTagPrefix(g, true, "") > 0);
 
@@ -2179,6 +2204,12 @@ void SyncSideTPSLToBroker(int g, int side){
    if(!InpTPAvg_AutoSyncToBroker) return;
    if(g_stripped[g]) return;                        // hedge already matched
    if(IsGroupHedgeMatched(g)) return;
+   // [v2.8.5] Block pre-match Avg-TP sync the instant a group has ever held a
+   // hedge position. Without this guard, an orphan main on the side opposite
+   // the loss side (e.g. a SELL main that opened just before a BUY-side
+   // hedge fires) would keep receiving Initial/Avg TP from this manager,
+   // even though the post-hedge strip just cleared it.
+   if(g_groupHedgeUsed[g]) return;
    int cnt = CountGroupPositions(g, side, 0);
    if(cnt <= 0){
       g_avgTPSynced[g][side] = 0; g_avgSLSynced[g][side] = 0;
@@ -2511,28 +2542,48 @@ void TryMatchingCloseForGroup(int g){
 
    if(!ClaimMutex(g)) return;
 
+   // [v2.8.5] Snapshot whole-group ticket count BEFORE shred so we can prove
+   // Matching Close actually closed something. Orphan main on either side is
+   // already in this count because all scans use gp==g.
+   int totalBefore = CountGroupPositions(g, -1, -1);
+   int mainBefore  = CountGroupPositions(g, -1, 0);
+   int hedgeBefore = CountGroupPositions(g, -1, 1);
+   PrintFormat("Golden2 v2.8.5: G%d MATCH-PREP totalTickets=%d (main=%d hedge=%d) winSide=%s winPool=$%.2f",
+               g, totalBefore, mainBefore, hedgeBefore,
+               winSide==0?"BUY":"SELL", winProfit);
+
    int losBefore = CountGroupPositions(g, losSide, -1);
    CloseAllGroupSide(g, winSide);
    double pool = winProfit;
    ShredCloseLosingSide(g, losSide, pool);
    // [v2.8.4] Second pass: pool every remaining profitable order in the group
-   // (any side, main or hedge) and use it to close more losing tickets BEFORE
-   // we resort to placing a Recovery Grid order.
+   // (any side, main or hedge — includes orphan main) and use it to close
+   // more losing tickets BEFORE we resort to placing a Recovery Grid order.
    ShredAllNegativeFromAllProfit(g);
-   int losAfter = CountGroupPositions(g, losSide, -1);
+   int losAfter   = CountGroupPositions(g, losSide, -1);
+   int totalAfter = CountGroupPositions(g, -1, -1);
+   int closedAny  = totalBefore - totalAfter;
 
    g_lastHedgeCloseTime = TimeCurrent();
    ReleaseMutex(g);
 
-   PrintFormat("Golden2 v2.8.4: G%d MATCH-CLOSE win=%s pool=$%.2f lossBefore=%d lossAfter=%d",
-               g, winSide==0?"BUY":"SELL", winProfit, losBefore, losAfter);
+   PrintFormat("Golden2 v2.8.5: G%d MATCH-CLOSE win=%s pool=$%.2f lossBefore=%d lossAfter=%d ticketsClosed=%d",
+               g, winSide==0?"BUY":"SELL", winProfit, losBefore, losAfter, closedAny);
 
    // [v2.8.0+] If group still has residual positions after partial close,
    // flag it as "in recovery" so IsGroupSafeToAdvance unblocks G(N+1) and
    // [v2.8.3] place a Recovery Grid order on the residual losing side.
+   // [v2.8.5] Activate post-match Avg Broker TP/SL only AFTER Matching Close
+   // actually closed >=1 ticket and residual remains. This is the single
+   // trigger for SyncPostMatchAvgTPSL — before this point, residual orders
+   // stay naked (no broker TP/SL) while we wait for the 3 Gate.
    if(GroupHasAnyPositions(g)){
       g_groupInRecovery[g] = true;
-      if(InpVerboseLog) PrintFormat("Golden2 v2.8.4: G%d entered RECOVERY mode (post-match residual; advance unblocked)", g);
+      if(closedAny > 0){
+         g_groupPostMatchAvgActive[g] = true;
+         if(InpVerboseLog) PrintFormat("Golden2 v2.8.5: G%d POST-MATCH AVG-TP ACTIVE (closed=%d residual=%d)", g, closedAny, totalAfter);
+      }
+      if(InpVerboseLog) PrintFormat("Golden2 v2.8.5: G%d entered RECOVERY mode (post-match residual; advance unblocked)", g);
       if(InpRecovery_Enable) PlaceRecoveryGridIfNeeded(g, losSide);
       // [v2.8.4] Force-resync post-match avg-TP/SL immediately so RC#N + residual
       // get broker TP/SL on this same tick instead of waiting for next OnTick.
@@ -2736,7 +2787,11 @@ void ShredAllNegativeFromAllProfit(int g){
 // average + InpTP_PointsFromAvg offset. Recomputes whenever a new RC opens.
 void SyncPostMatchAvgTPSL(int g){
    if(!InpPostMatch_AvgBrokerTP) return;
-   if(!g_stripped[g] && !IsGroupHedgeMatched(g)) return;
+   // [v2.8.5] Gate the broker-side Avg TP/SL sync STRICTLY on the
+   // post-match-active flag set by TryMatchingCloseForGroup after it actually
+   // closed >=1 ticket. Pre-3-Gate hedges therefore stay naked (broker can't
+   // pre-empt the 3-Gate flow with a Hedge-side TP).
+   if(!g_groupPostMatchAvgActive[g]) return;
    if(!GroupHasAnyPositions(g)){
       g_postMatchTP[g][0]=0; g_postMatchTP[g][1]=0;
       g_postMatchSL[g][0]=0; g_postMatchSL[g][1]=0;
@@ -3356,7 +3411,7 @@ void DrawDashboard(){
 
    // Header
    string entryLbl = (InpEntryMode == G2_ENTRY_PENDING) ? "PENDING" : (InpEntryMode == G2_ENTRY_SMA) ? "SMA" : "INSTANT"; // [v2.73]
-   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.8.4    Entry: %s    Side: %s", entryLbl, modeLbl), InpDashAccent);
+   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.8.5    Entry: %s    Side: %s", entryLbl, modeLbl), InpDashAccent);
    y += rowH+2;
 
    // ==== Account section ====
@@ -3527,8 +3582,16 @@ void DrawDashboard(){
             DashRow(StringFormat("R_G%d_GAIN", g), xR, yR, wR, rowH, "  TripleGrid", gainInfo, gainClr);
             yR += rowH;
 
-            // ---- [v2.8.4] Compact post-match Avg-TP row (broker-side close prices) ----
-            if(InpPostMatch_AvgBrokerTP && (g_stripped[g] || IsGroupHedgeMatched(g))){
+            // ---- [v2.8.5] Compact Hedge / PostAvg status row ----
+            string hStat = g_groupHedgeUsed[g] ? "USED/LOCKED" : "ARMED";
+            string pStat = g_groupPostMatchAvgActive[g] ? "ACTIVE" : "WAITING";
+            color hClr   = g_groupPostMatchAvgActive[g] ? InpDashGood : InpDashAccent;
+            DashRow(StringFormat("R_G%d_HST", g), xR, yR, wR, rowH, "  Hedge",
+                    StringFormat("%s  PostAvg:%s", hStat, pStat), hClr);
+            yR += rowH;
+
+            // ---- [v2.8.4] Compact post-match Avg-TP row (only when ACTIVE) ----
+            if(InpPostMatch_AvgBrokerTP && g_groupPostMatchAvgActive[g]){
                double tpB = g_postMatchTP[g][0];
                double tpS = g_postMatchTP[g][1];
                string avgInfo = StringFormat("B:%s  S:%s",
@@ -3666,6 +3729,9 @@ int OnInit(){
       // [v2.8.4]
       g_postMatchTP[i][0]=0; g_postMatchTP[i][1]=0;
       g_postMatchSL[i][0]=0; g_postMatchSL[i][1]=0;
+      // [v2.8.5]
+      g_groupHedgeUsed[i]          = false;
+      g_groupPostMatchAvgActive[i] = false;
    }
 
    // [v2.8.1] g_bbHandle / g_atrHandle (the old Exit BB/Keltner) are NOT
@@ -3710,7 +3776,7 @@ int OnInit(){
 
    string entryModeLbl = (InpEntryMode == G2_ENTRY_PENDING) ? "PENDING" :
                          (InpEntryMode == G2_ENTRY_SMA)     ? "SMA"     : "INSTANT";
-   PrintFormat("Golden2 EA v2.8.4 initialized | Magic=%I64d | MaxGroups=%d | EntryMode=%s | InitMode=%d | GridLoss=%s | Squeeze=%s [BB:%s ADX:%s(>=%.1f) ATR:%s EMA:%s(P=%d)] | TripleGate=%s | ExitGate=Squeeze-TF3-Latch+WinPool+CrossSideShred | MinGainUSD=%.1f | SeqQueue=%s | RecoveryAdvUnblock=%s | RecoveryGrid=%s(mult=%.2f max=%d) | PostMatchAvgBrokerTP=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | ProfitSideUnhedgedAdv=%s | ForceCloseOppUnhedged=%s(%ds) | Tester=%s Visual=%s Opt=%s DashInterval=%ds | TesterHideIndicators=%s SideTaggedComments=ON",
+   PrintFormat("Golden2 EA v2.8.5 initialized | Magic=%I64d | MaxGroups=%d | EntryMode=%s | InitMode=%d | GridLoss=%s | Squeeze=%s [BB:%s ADX:%s(>=%.1f) ATR:%s EMA:%s(P=%d)] | TripleGate=%s | ExitGate=Squeeze-TF3-Latch+WinPool+CrossSideShred | OneHedgePerGroup=ON | PostMatchAvgTP=PostMatch-Active-Only | MinGainUSD=%.1f | SeqQueue=%s | RecoveryAdvUnblock=%s | RecoveryGrid=%s(mult=%.2f max=%d) | PostMatchAvgBrokerTP=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | ProfitSideUnhedgedAdv=%s | ForceCloseOppUnhedged=%s(%ds) | Tester=%s Visual=%s Opt=%s DashInterval=%ds | TesterHideIndicators=%s SideTaggedComments=ON",
                (long)InpMagic, InpMaxGroups, entryModeLbl, (int)InpInitSideMode,
                GridLoss_Enable?"ON":"OFF", InpSQ_Enable?"ON":"OFF",
                InpSQ_UseBBBreakout?"ON":"OFF", InpSQ_UseADX?"ON":"OFF", InpSQ_ADXThreshold,
@@ -3839,6 +3905,9 @@ void OnTick(){
          // [v2.8.4] reset post-match avg-TP cache
          g_postMatchTP[g][0]=0; g_postMatchTP[g][1]=0;
          g_postMatchSL[g][0]=0; g_postMatchSL[g][1]=0;
+         // [v2.8.5] reset hedge-used + post-match-active flags when group flat
+         g_groupHedgeUsed[g]          = false;
+         g_groupPostMatchAvgActive[g] = false;
          continue;
       }
       // [v2.8.0] Stamp baseline net P/L the first tick a hedge is observed
@@ -3848,6 +3917,13 @@ void OnTick(){
          g_groupNetAtHedgeStart[g]  = GroupFloatingPL(g, -1, -1);
          g_groupHedgeBaselineSet[g] = true;
          if(InpVerboseLog) PrintFormat("Golden2 v2.8.0: G%d hedge baseline net P/L=%.2f stamped", g, g_groupNetAtHedgeStart[g]);
+      }
+      // [v2.8.5] Stamp one-shot hedge-used flag the moment a hedge position
+      // is observed. Locks out re-hedge (ManageGroupHedgeArm) AND blocks the
+      // v1.3 pre-match Avg-TP sync from writing TP/SL back onto orphan main.
+      if(!g_groupHedgeUsed[g] && CountGroupPositions(g, -1, 1) > 0){
+         g_groupHedgeUsed[g] = true;
+         if(InpVerboseLog) PrintFormat("Golden2 v2.8.5: G%d HEDGE USED -> re-hedge LOCKED, pre-match Avg-TP sync DISABLED for this group", g);
       }
       // [v2.8.1] Refresh per-group Expansion->Normal latch from Squeeze TF3.
       RefreshGroupExpansionLatch(g);
@@ -3861,8 +3937,16 @@ void OnTick(){
       TryPlaceGridProfit(g);
       ManageGroupHedgeArm(g);
 
-      // Auto-strip broker TP/SL when main + hedge coexist (matched set)
-      if(IsGroupHedgeMatched(g) && !g_stripped[g]){
+      // [v2.8.5] Continuously enforce stripped broker TP/SL while hedge is
+      // "used" but Matching Close hasn't activated the post-match Avg TP/SL
+      // yet. This catches:
+      //   - first matched-hedge tick (legacy path)
+      //   - orphan main on the side opposite the hedge that still carries
+      //     an Initial TP/SL from before the hedge fired
+      //   - newly placed orders (e.g. mirror top-up) that arrive with TP/SL
+      // ModifyIfDifferent is a no-op when TP/SL are already 0, so this stays
+      // cheap on quiet ticks.
+      if(g_groupHedgeUsed[g] && !g_groupPostMatchAvgActive[g]){
          StripBrokerTPSL_OnHedgeMatch(g);
       }
 

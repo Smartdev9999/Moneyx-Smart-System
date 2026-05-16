@@ -1,69 +1,85 @@
-## ปัญหาที่พบ (จากภาพและคำอธิบาย)
+## แผนแก้ Golden2 EA v2.8.5
 
-1. **Match-Close ทำงาน + วาง Recovery แล้ว แต่ระบบไม่ปิดต่อ** — เพราะหลัง hedge matched ครั้งแรก โค้ด v1.1 ตั้ง `g_stripped[g]=true` แล้ว `SyncSideTPSLToBroker()` `early-return` ทันที ทำให้ออเดอร์ที่เหลือ (residual main + hedge + RC#N ใหม่) **ไม่มี broker TP/SL เลย** — ต้องรอราคาวิ่งแล้วให้ Triple-Gate รอบใหม่ปิดเท่านั้น ซึ่งอาจไม่เกิดขึ้น
-2. **Dashboard Hedging panel ยาวเกินไป** — โชว์ `Grid#1..#5 L:.. H:.. N:..` ทุกกลุ่ม กินพื้นที่
-3. **ลำดับการปิดยังไม่ครบตามที่ต้องการ** — User ต้องการให้ก่อนวาง Recovery ระบบต้องรวม "ทุก order ที่บวก" ในกรุ๊ป (ไม่ว่าจะ Bound/Hedge/Loss-Bound) มาเป็น pool ปิดออเดอร์ที่ลบให้มากที่สุดก่อน
+### เป้าหมาย
+แก้ 4 จุด:
+1. หลัง Hedging เปิด ต้องถอด Broker TP/SL ของ **ทุก Order ในกรุ๊ป** (รวม main, hedge, และ "orphan main" ที่เกิดก่อน hedge) และคงสภาพ "ไม่มี TP/SL" จนกว่าจะผ่าน 3 Gate
+2. หนึ่งกรุ๊ป Hedging ได้เพียงครั้งเดียวเท่านั้น ห้าม re-hedge กรุ๊ปเดิม
+3. Matching Close ต้องรวม **Order ที่ไม่ได้ผูกกับ Hedging** (orphan main, ไม่ว่ากำไรหรือขาดทุน) เข้าไปคำนวณด้วย ก่อนที่จะวาง Recovery
+4. Broker Avg TP/SL ใส่กลับเฉพาะหลัง Matching Close — รวม Bound order + residual + remaining hedge + recovery + orphan ที่เหลือทั้งหมดเป็นค่าเฉลี่ยเดียว
 
-## แผนแก้ไข v2.8.4 (`public/docs/mql5/Golden2_EA.mq5` เท่านั้น)
+## ปัญหาที่พบจากโค้ด v2.8.4
 
-### 1) Post-Match Avg Broker TP/SL Manager (ฟีเจอร์ใหม่)
+### A) Post-Match Avg TP ทำงานเร็วเกินไป
+`SyncPostMatchAvgTPSL(g)` trigger เมื่อ `g_stripped[g] || IsGroupHedgeMatched(g)` → แค่ strip เสร็จก็เริ่มใส่ Avg TP กลับเข้าไปก่อน 3 Gate / Matching Close จะทำงาน → hedge โดน TP ก่อนเวลา
 
-ฟังก์ชันใหม่ `SyncPostMatchAvgTPSL(int g)` — เรียกทุก tick สำหรับกลุ่มที่ `g_stripped[g]==true && GroupHasAnyPositions(g)`:
+### B) Strip ครั้งเดียว ไม่ครอบคลุม orphan ที่เพิ่มทีหลัง
+`StripBrokerTPSL_OnHedgeMatch()` เรียกครั้งเดียวเมื่อ `!g_stripped[g]` → ถ้ามี orphan order (main ฝั่งตรงข้าม loss side) มี TP/SL ติดมาก่อน hedge หรือถูก v1.3 SyncSideTPSL ใส่กลับ จะไม่ถูก strip ซ้ำ
 
-- คำนวณ **avg price แยกฝั่ง** จาก *ทุก* position ในกรุ๊ป (รวม main+hedge+RC) ตาม side BUY/SELL — ใช้ helper เดิม `GroupAveragePrice(g, side, -1)` (hedge=-1 = ทุกประเภท)
-- คำนวณ TP price ต่อฝั่ง: `avgBuy + InpTP_PointsFromAvg*g_point` / `avgSell - InpTP_PointsFromAvg*g_point`  
-  SL price (ถ้า `InpSL_Enable && InpSL_UsePointsFromAvg`)
-- เคารพ `SYMBOL_TRADE_STOPS_LEVEL` (โค้ดเดิมใน `SyncSideTPSLToBroker` มีอยู่แล้ว — ลอกแบบ)
-- วน push TP/SL เดียวกันลงทุก ticket ฝั่งนั้น (รวม hedge ตรงข้าม side ด้วย — แต่ละด้านใช้ avg ของฝั่งตัวเอง)
-- Cache `g_postMatchTP[g][side]` + `g_postMatchSL[g][side]` กัน MODIFY ซ้ำเกิน tolerance 1 point
-- เคลียร์ cache เมื่อ group flat
-- เปิด/ปิดด้วย input ใหม่ `InpPostMatch_AvgBrokerTP = true`
+### C) ไม่มี state "กรุ๊ปนี้ใช้ Hedge ไปแล้ว"
+`ManageGroupHedgeArm()` ดูแค่ว่ายังมี hedge position อยู่ไหม — ถ้า hedge ตัวเดิมโดน TP ไป จะกลับไป arm hedge pending ใหม่ได้ ขัดหลัก 1 group = 1 hedge
 
-จุดเรียก: ใน OnTick group loop หลัง `TryMatchingCloseForGroup(g)` — ถ้า `IsGroupHedgeMatched(g)` หรือ `g_stripped[g]` → `SyncPostMatchAvgTPSL(g)`
+### D) Orphan Main Order ฝั่งเดียวกับ Hedge
+ตอนนี้ทุก ScanByComment ใช้ `gp==g` อยู่แล้ว ดังนั้น orphan main จะถูก strip + matching close ได้โดยอัตโนมัติ — แต่ต้อง **ยืนยันชัดเจน** ว่า: pre-match SyncSideTPSLToBroker ต้องหยุดเขียน TP/SL ลงไปทันทีเมื่อ `g_groupHedgeUsed[g]==true` (ไม่ใช่แค่ตอน matched) มิฉะนั้น orphan main ฝั่งตรงข้ามจะถูกใส่ Initial TP กลับโดย v1.3 manager หลัง strip
 
-### 2) Pre-Recovery Pool Close (ทำให้สเปคชัดขึ้น)
+## สิ่งที่จะปรับ
 
-ก่อนเรียก `PlaceRecoveryGridIfNeeded()` ใน `TryMatchingCloseForGroup`:
+### 1) State Lifecycle ใหม่
+เพิ่ม global:
+- `bool g_groupHedgeUsed[51]` — true ทันทีที่กรุ๊ปเคยมี hedge position
+- `bool g_groupPostMatchAvgActive[51]` — true เฉพาะหลัง Matching Close สำเร็จและยังเหลือ residual
 
-- เพิ่มฟังก์ชัน `ShredAllNegativeFromAllProfit(int g)` — สแกนทุก position ในกรุ๊ป (ทุก side, main+hedge), แยก `profitable[]` (P+swap≥0) กับ `losing[]` (P+swap<0), เรียงกำไรมากสุด→น้อยสุด, ขาดทุนน้อยสุด→มากสุด, แล้วใช้ pool กำไรปิดไม้ขาดทุนตราบที่ `pool + p ≥ InpExitMinNetUSD`
-- เรียกหลัง `CloseAllGroupSide(winSide)` + `ShredCloseLosingSide(losSide,pool)` (ของเดิม) — เป็น "second pass" ที่กวาดกำไรเหลือไปปิดขาดทุนเพิ่มเติมข้ามฝั่ง
-- ถ้ายังเหลือ residual → set `g_groupInRecovery=true` + เรียก `PlaceRecoveryGridIfNeeded` (เหมือนเดิม)
+Reset ทั้งสองค่าเฉพาะตอน group flat จริง (`!hasPos && !hasPend`)
 
-### 3) ลด Dashboard Hedging Panel
+### 2) ห้าม Re-Hedge
+ใน `ManageGroupHedgeArm(g)`:
+- ถ้า `g_groupHedgeUsed[g]==true` → ห้าม arm pending hedge ใหม่ทั้งหมด
+- ลบ hedge pending ที่หลงเหลือทิ้ง
 
-ใน DrawRightPanel ส่วน hedge-active groups (รอบ line 3393–3439):
-- **ลบ** loop `Grid#N L:.. H:.. N:..` (lines 3393–3430) ออกทั้งหมด
-- **ลบ** Recovery row แบบยาว เปลี่ยนเป็น 1 บรรทัดสรุป
-- เก็บไว้: `G{n}* ACTIVE  MainL  HdgL  P/L  Pend  DD%`, `Gate ...`, `TripleGrid G:gain/need [RECOV RC#N/Max]`
-- เพิ่มบรรทัดเดียว `Avg TP  B:<price>  S:<price>` เมื่อ post-match avg sync ทำงานอยู่ (จาก cache `g_postMatchTP`)
-- Drop input `InpDashGridPairsMax` (เก็บไว้เป็น const เพื่อ .set backward-compat)
+### 3) Strip TP/SL ต่อเนื่องหลัง Hedge Used
+- เมื่อพบ hedge position → stamp `g_groupHedgeUsed[g]=true` (ใน OnTick block)
+- เรียก `StripBrokerTPSL_OnHedgeMatch(g)` ได้ทุก tick ตราบ `g_groupHedgeUsed[g] && !g_groupPostMatchAvgActive[g]` (ไม่ใช่แค่ครั้งแรก)
+- `ModifyIfDifferent` มี early-return อยู่แล้ว ดังนั้น tick ที่ TP/SL=0 อยู่แล้วจะไม่ยิง modify ซ้ำ
 
-### 4) Version & Logging
+### 4) บล็อก v1.3 Pre-Match Sync เมื่อ Hedge Used
+ปรับเงื่อนไข early-return ของ `SyncSideTPSLToBroker(g, side)`:
+- จากเดิม `if(g_stripped[g] || IsGroupHedgeMatched(g)) return;`
+- เปลี่ยนเป็น `if(g_stripped[g] || IsGroupHedgeMatched(g) || g_groupHedgeUsed[g]) return;`
+ผลคือ orphan main ฝั่งใดก็ตามที่เคยมี hedge อยู่ในกรุ๊ป จะไม่ถูกใส่ Initial TP กลับเข้าไปอีก
 
-- `#property version "2.84"` + description + dashboard title `Golden2 EA v2.8.4` + init log
-- Log เมื่อ post-match sync ทำงานครั้งแรกต่อกรุ๊ป: `G%d POST-MATCH AVG-TP synced BUY tp=... SELL tp=... tickets=N`
-- Log pre-recovery cross-side shred: `G%d CROSS-SIDE SHRED pool=... closed=N residual=N`
+### 5) Matching Close รวม Orphan Order
+ใน `TryMatchingCloseForGroup(g)`:
+- `winProfit` / `netCheck` ปัจจุบันรวม main+hedge ทั้งสองฝั่งอยู่แล้ว (ครอบคลุม orphan) — คงไว้
+- `ShredCloseLosingSide` + `ShredAllNegativeFromAllProfit` scan โดย `gp==g` → จับ orphan ทุกตัวอยู่แล้ว — คงไว้
+- เพิ่ม log สรุปก่อน Matching: `MATCH-PREP G%d totalTickets=N (main=%d hedge=%d) profitable=%d losing=%d` เพื่อยืนยันว่า orphan ถูกนับ
+- หลัง Matching Close ถ้ายังเหลือ residual: เรียก `PlaceRecoveryGridIfNeeded` เหมือนเดิม
 
-### 5) Memory
+### 6) Post-Match Avg TP เปิดเฉพาะหลัง Matching Close
+ปรับ `SyncPostMatchAvgTPSL(g)`:
+- Trigger ใหม่: `InpPostMatch_AvgBrokerTP && g_groupPostMatchAvgActive[g] && GroupHasAnyPositions(g)`
+- ไม่ใช้ `g_stripped` หรือ `IsGroupHedgeMatched` เป็น trigger อีก
+- คำนวณ avg ต่อฝั่งจากทุก position (main+hedge+RC+orphan) ที่ยังเหลือในกรุ๊ป — เหมือน v2.8.4 (ใช้ `GroupAveragePrice(g, side, -1)` อยู่แล้ว)
 
-- สร้าง `mem://trading/golden2-ea/v2-8-4-post-match-avg-broker-tp-recovery.md`
-- อัปเดต `mem://index.md`
+ตั้ง `g_groupPostMatchAvgActive[g] = true` เฉพาะหลัง `TryMatchingCloseForGroup` ทำ matching จริง (มีอย่างน้อย 1 ticket ถูกปิด) และยังเหลือ residual
 
-## สิ่งที่ "ห้ามแตะ" (กฎเหล็ก MQL5)
+### 7) Dashboard & Version
+- `#property version "2.85"` + description + dashboard title + init log → v2.8.5
+- Dashboard hedging panel เพิ่มสถานะสั้น ๆ:
+  - `Hedge: ARMED / USED / LOCKED`
+  - `PostAvg: WAITING / ACTIVE`
+- ไม่เพิ่มรายการ ticket ยาว ๆ (คง slim layout v2.8.4)
 
-- ❌ Entry SMA/INSTANT/PENDING flow, Squeeze BB/KC/ADX/EMA/ATR
-- ❌ Grid Loss/Profit lot/distance/candle confirm
-- ❌ Hedge mirror 1:1, pending hedge, arm/disarm, block percent
-- ❌ Avg TP/SL ฝั่ง pre-hedge (`SyncSideTPSLToBroker`) — เพิ่มฟังก์ชัน *ใหม่* แยกต่างหาก ไม่แก้อันเดิม
-- ❌ Per-order trail / Bar-close trail / Cost-Hit / Accumulate
-- ❌ ParseComment / MakeComment B_/S_ tags
-- ❌ ATR/ADX TesterHideIndicators (v2.8.1)
-- ❌ Sequential Queue / MinGainUSD / Squeeze TF3 latch (v2.8.0/v2.8.1)
-- ❌ Prior-group advance guard (v2.8.2)
-- ❌ Win-Pool gate + Recovery placement (v2.8.3) — ขยายเพิ่ม ไม่แก้ของเดิม
+## สิ่งที่ไม่เปลี่ยนแปลง
+- Entry mode PENDING/SMA/INSTANT, Squeeze BB/KC/ADX/EMA/ATR
+- Grid Loss/Profit lot, distance, candle confirm, ATR snapshot
+- 3 Gate condition: Squeeze TF3 latch + breakout + WinPool/MinGain
+- สูตร Matching Close (winning pool shred + cross-side pool) ของ v2.8.4
+- Recovery Grid placement และสูตร multiplier
+- ParseComment / MakeComment / B_/S_ side tags
+- Per-order trail, Bar-close trail, Cost-Hit, Accumulate, Force-close opp unhedged
+- Tester cleanup, prior-group advance guard
 
 ## ผลลัพธ์ที่คาดหวัง
-
-- หลัง Match-Close ครั้งแรก: ออเดอร์ที่เหลือทั้งกรุ๊ป (main residual + hedge + RC#N) ทุกตัวจะมี broker TP/SL ตามค่าเฉลี่ยฝั่งตัวเอง → broker ปิดให้เองเมื่อราคาแตะ avg+offset แม้ EA ไม่ trigger Match-Close รอบใหม่
-- ก่อนวาง Recovery: ระบบจะกวาดกำไรทุกออเดอร์ในกรุ๊ป (รวม hedge ฝั่งกำไร + bound/loss-bound ที่บังเอิญบวก) ไปปิดไม้ขาดทุนให้มากที่สุดก่อน → Recovery ใช้เป็น "ตัวต่อ" จริง ๆ ไม่ใช่ทางรอดเดียว
-- Dashboard กระชับ: ต่อกรุ๊ปเหลือ 3–4 บรรทัด (Status/Gate/TripleGrid/AvgTP เมื่อมี) ไม่ยาวล้นจอ
+- Hedge เปิด → TP/SL ของทุก order ในกรุ๊ป (รวม orphan main, hedge, future grid) ถูกถอด และคงสภาพจนกว่า Matching Close จะทำงาน
+- กรุ๊ปเดิมจะไม่ re-hedge แม้ hedge ตัวแรกโดน TP
+- Matching Close นำ orphan order (ทั้งกำไร/ขาดทุน) มาคำนวณรวมกับ bound+hedge → ปิดได้สูงสุด
+- Order ที่เหลือ + Recovery → คำนวณ Average เดียวกัน → วาง Broker Avg TP/SL ปิดทั้งกรุ๊ปด้วย broker
