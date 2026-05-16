@@ -1,76 +1,62 @@
-## ปัญหา 2 จุด (v2.8.8 → v2.8.9)
+## ปัญหา — Recovery Lot โตเกิน multiplier
 
-### ปัญหา A — GL ปกติยังออกพร้อม RC หลัง Matching Close
-หลัง Triple-Gate Matching Close ฝั่งกำไรถูกปิดหมด → `IsGroupHedgeMatched(g)` กลับเป็น FALSE (เพราะต้องมีทั้ง main BUY + main SELL พร้อมกัน) → guard ใน `TryPlaceGridLoss` / `TryPlaceGridProfit` ปลดล็อก → ระบบกลับมายิง **GL#N ปกติบนฝั่งติดลบพร้อมกับ RC#N** ใน group เดียวกัน
+จากภาพ (mult = 1.4):
+- RC#1 = 0.20
+- RC#2 = 0.30 (ควร 0.28)
+- RC#3 = 0.67 (ควร 0.39) ← เริ่มเพี้ยน
+- RC#4 = 2.26 (ควร 0.55)
+- RC#5 = 11.44 (ควร 0.77)
 
-ผู้ใช้ต้องการ: เมื่อ group อยู่ใน Recovery → **หยุดยิง GL/GP/Hedge/Initial ปกติทั้งหมด** เหลือเฉพาะ RC ladder ที่ต่อจาก GL ตัวล่าสุด
+## Root Cause
 
-### ปัญหา B — Prior-Group Advance ค้าง (G4 ติด G1 ตลอด)
-Log: `hold G4->G5 ... blockPrior=G1 reason=unhedged-main ... recovery=OFF` ยิงทุกนาทีไม่หยุด
+`PlaceRecoveryGridIfNeeded` (line 2671-2692) คำนวณ `seedLot` ใหม่ทุกครั้งโดยสแกนหา **lot ใหญ่สุดของฝั่งติดลบทั้งกลุ่ม** — ซึ่งรวม `RC#` ตัวก่อนหน้าที่เพิ่งวางไปด้วย แล้วเอามาคูณ `Multiplier^(level-1)` อีกที → lot ทบบน lot ที่ทบไปแล้ว = exponential explosion
 
-G1 หลัง match-close + RC ladder เหลือฝั่ง SELL ติดลบอย่างเดียว (ไม่มี hedge แล้วเพราะฝั่งชนะปิดหมด) → ใน `IsPriorGroupSafeForAdvance(1)`:
-- `hedgeAny = CountGroupPositions(1,-1,1) > 0` → FALSE (hedge ปิดไปกับ match-close)
-- `reason=3 block-no-hedge` หรือถ้ามี hedge-orphan-offset เหลือก็ตก `unhedged-main`
-- guard `g_groupInRecovery[1]` ควรผ่าน แต่ flag อาจถูกเคลียร์ (group เคย flat ชั่วขณะระหว่าง shred pass) หรือ `InpExit_RecoveryAdvanceUnblock=false`
+ลำดับที่เกิดจริง:
+```
+RC#2: seed=max(0.20)=0.20, level=2 → 0.20 * 1.4 = 0.28 → 0.30
+RC#3: seed=max(0.30)=0.30, level=3 → 0.30 * 1.4^2 = 0.59 → 0.67  ← seed ดึง RC#2 มาเป็นฐาน
+RC#4: seed=max(0.67)=0.67, level=4 → 0.67 * 1.4^3 = 1.84 → 2.26
+RC#5: seed=max(2.26)=2.26, level=5 → 2.26 * 1.4^4 = 8.68 → 11.44
+```
 
-ผลคือ G4 ที่ hedge-active แล้วถูกค้างไม่ขยับไป G5 ได้ตลอดกาล
+## แผน v2.9.0 — Recovery Seed Lock
 
-## แผน v2.8.9 — Recovery-Mode Order Lock + Prior-Advance Bypass
+### A) ล็อก seed lot ครั้งเดียวต่อ group (ไฟล์: `public/docs/mql5/Golden2_EA.mq5`)
 
-### A) Block GL/GP/Hedge/Initial ปกติเมื่ออยู่ใน Recovery
+- เพิ่ม global `double g_groupRecoverySeedLot[51];` (init = 0)
+- ใน `PlaceRecoveryGridIfNeeded`:
+  - ถ้า `g_groupRecoverySeedLot[g] <= 0` → คำนวณ seed ครั้งแรกเท่านั้น **โดย exclude RC# tickets** (parse tag ขึ้นต้น "RC" → ข้าม) แล้วเก็บค่าไว้
+  - ครั้งถัดไปใช้ค่าที่ล็อกไว้เลย
+- สูตร lot คงเดิม: `base * Multiplier^(level-1)` — แต่คราวนี้ `base` คงที่
+- เคลียร์ `g_groupRecoverySeedLot[g] = 0` ในจุดเดียวกับที่เคลียร์ `g_groupRecoveryLevel[g]` (OnInit + group-flat housekeeping ~line 3774, 3948)
 
-ใส่ guard `if(g_groupInRecovery[g]) return;` ทันทีต้นฟังก์ชันทั้งหมดนี้ (สาย entry ใหม่):
-- `TryPlaceGridLoss(int g)` ~line 1620 (ต่อจาก `IsGroupHedgeMatched`)
-- `TryPlaceGridProfit(int g)` ~line 1690
-- `TryPlaceHedge` / `ManageGroupHedgeArm` ~line 1148, 1250
-- `TryPlaceInitial` / `TryPlaceSqueezeEntries` ~line 1374, 1427
+### B) Defensive — Exclude RC# จาก seed scan แม้ค่ายังไม่ถูกล็อก
 
-→ เหลือเฉพาะ `TryPlaceRecoveryGridContinuation(g)` ที่ทำงาน RC ladder
+ใน loop หา seedLot (line 2680-2687): ถ้า `StringFind(tag, "RC") == 0` → `continue;` กัน RC ตัวก่อนหน้ามาเป็นฐาน edge case อื่นๆ
 
-### B) แก้ Prior-Group Advance ให้ผ่าน "post-match group"
+### C) Log + Version
 
-ใน `IsPriorGroupSafeForAdvance(int g, int &reason)` (line 3124) เพิ่ม 2 เงื่อนไข safe-pass ก่อน hedge check:
+- Log line 2702: เพิ่ม `lockedSeed=%.2f` เพื่อ debug
+- `#property version "2.90"`, description, dashboard title, init log → v2.9.0
+- Init log: `RecoverySeed=LOCKED-First-NonRC`
 
-1. `if(g_groupHedgeUsed[g] && g_groupPostMatchAvgActive[g]){ reason=1; return true; }`
-   — กลุ่มที่ผ่าน hedge + match-close แล้ว (Avg-TP broker คุมอยู่) → ไม่ block prior ถัดไป
-2. `if(g_groupRecoveryLevel[g] > 0){ reason=1; return true; }`
-   — มี RC อย่างน้อย 1 ตั๋ว → ถือว่าอยู่ในสถานะ recovery แม้ `g_groupInRecovery` ถูกเคลียร์ชั่วคราว
+### D) Memory
 
-(เก็บ default ของ `InpExit_RecoveryAdvanceUnblock` ให้ ON)
-
-### C) ป้องกัน `g_groupInRecovery` ถูกเคลียร์ผิดพลาด
-
-ใน OnTick housekeeping ที่เคลียร์ flag เมื่อ group flat (line ~3920) — เคลียร์เฉพาะเมื่อ `!GroupHasAnyPositions(g) && !GroupHasAnyPendings(g)` (เงื่อนไขเดิมเก็บไว้) แต่เพิ่มกัน: ห้ามเคลียร์ขณะที่ `g_groupRecoveryLevel[g] > 0 && GroupHasAnyPositions(g)` (กันเคสที่ shred pass ปิดแล้วเปิดใหม่ใน tick เดียวกัน)
-
-### D) Dashboard + Log
-
-- แถว group ใน recovery → tag `[GL-LOCK RC#n/N]` ข้าง `TripleGrid`
-- `hold G%d->G%d` log: เพิ่ม `priorRecLvl=N` เพื่อเห็นว่า G1 มี RC อยู่เท่าไหร่
-
-### E) Version
-
-- `#property version "2.89"`
-- `#property description` → "v2.8.9: Recovery-Mode Order Lock + Prior-Advance Bypass — freezes GL/GP/Hedge/Initial when g_groupInRecovery; prior-group advance treats post-match (g_groupHedgeUsed && g_groupPostMatchAvgActive) or g_groupRecoveryLevel>0 as safe-pass to unblock queue."
-- Dashboard title + init log → v2.8.9
-
-## Avg TP + Broker TP สำหรับ RC (ตรวจแล้ว — ไม่ต้องแก้)
-
-`SyncPostMatchAvgTPSL` (line 2813) ใช้ `CountGroupPositions(g,side,-1)` + `GroupAveragePrice(g,side,-1)` ซึ่งรวม main(hd=false) + hedge(hd=true). RC# ถูกสร้างด้วย `hd=false` → เข้า avg อัตโนมัติและถูก push TP ลง broker ทุก tick ✓
+- สร้าง `.lovable/memory/trading/golden2-ea/v2-9-0-recovery-seed-lock.md`
+- Append index entry
 
 ## สิ่งที่ไม่เปลี่ยนแปลง (Rules of Steel)
 
-- ❌ Order execution (`trade.Buy/Sell/PositionClose`)
-- ❌ `PlaceRecoveryGridIfNeeded` / `TryPlaceRecoveryGridContinuation` ladder (v2.8.8)
-- ❌ Triple-Gate Matching Close + Reserve-Profit (v2.8.7) + shred passes
+- ❌ `trade.Buy/Sell` execution
+- ❌ Multiplier formula, MaxLevels, distance trigger, OnlyNewCandle gate
+- ❌ `TryPlaceRecoveryGridContinuation` body (v2.8.8)
+- ❌ Triple-Gate Match-Close, Reserve-Profit (v2.8.7), shred passes
+- ❌ Recovery-Mode Order Lock (v2.8.9), Prior-Advance Bypass
 - ❌ Hedge Orphan Offset (v2.8.6), One-Hedge-Per-Group (v2.8.5)
-- ❌ Post-Match Avg Broker TP/SL (v2.8.4) — สูตร/timing ของเดิม
-- ❌ Squeeze BB/KC ratio, Entry SMA/INSTANT/PENDING
-- ❌ License/News/Time/Sync
-- ❌ `IsGroupHedgeMatched` / `IsGroupSafeToAdvance` (current group) semantics — แก้เฉพาะ `IsPriorGroupSafeForAdvance`
-- ❌ `CountBlockingMainPositionsForAdvance` / `IsSideEffectivelySafeForAdvance`
+- ❌ Post-Match Avg Broker TP/SL (v2.8.4) — RC ยังคงเข้า avg ปกติ
+- ❌ Entry/Squeeze/License/News/Time/Sync ทั้งหมด
 
-## ไฟล์ที่แก้
+## ผลที่คาด
 
-- `public/docs/mql5/Golden2_EA.mq5` (version → 2.89)
-- สร้าง `.lovable/memory/trading/golden2-ea/v2-8-9-recovery-lock-and-prior-advance-bypass.md`
-- อัปเดต `.lovable/memory/index.md`
+ด้วย seed = 0.20 ล็อก, mult = 1.4:
+- RC#1=0.20, RC#2=0.28, RC#3=0.39, RC#4=0.55, RC#5=0.77 — ต่อเนื่องเรียบ ไม่มีกระโดด
