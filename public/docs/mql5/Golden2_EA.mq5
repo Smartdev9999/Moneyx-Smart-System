@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|  Golden2 EA v2.9.3 — Disarm Partial-Fill + DD Diagnostic         |
+//|  Golden2 EA v2.9.4 — Max Lot Caps + Max DD Close                     |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.93"
-#property description "Golden2 EA v2.9.3 — Disarm Partial-Fill (remaining hedge pendings are now deleted when DD% drops below InpHedgeDisarmPercent even after some HD positions filled — filled positions remain for Triple-Gate/Recovery) + Disarm-Check verbose diagnostic (per-group 10s-throttled log of pct vs arm/disarm threshold). All v2.9.2 Hedge-Used Advance Bypass and Stale Opposite-Side Pending Cleanup preserved. Zero changes to trade execution, entry, grid, recovery, Triple-Gate."
+#property version   "2.94"
+#property description "Golden2 EA v2.9.4 — Max Lot Caps (independent for NORMAL orders via InpMaxLotPerOrder and TRIPLE-GATE exit Recovery RC#N via InpMaxLotTripleGate) + Max DD Close global kill switch (OFF/PERCENT-of-balance/DOLLAR floating-loss modes via InpMaxDDMode + InpMaxDDValue, 30s cooldown, flattens all EA positions+pendings). All v2.9.3 Disarm Partial-Fill + Diagnostic preserved. Zero changes to entry/grid/hedge/Triple-Gate/Recovery strategy logic."
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -244,6 +244,14 @@ input bool    InpRecovery_OnlyNewCandle = true;                      // [v2.8.8]
 input bool    InpPostMatch_AvgBrokerTP  = true;                      // [v2.8.4] After hedge match: push per-side Avg TP/SL onto every residual+RC ticket (broker-side close)
 const int     InpDashGridPairsMax       = 0;                         // [v2.8.4] DEPRECATED — per-grid Grid#N rows removed; kept as const for .set backward-compat
 
+//--- === Risk Limits (v2.9.4) === independent caps & global DD-close kill switch
+input string  __sec_risk__              = "=== Risk Limits ==="; // ---
+input double  InpMaxLotPerOrder         = 0.0;                       // [v2.9.4] Max lot per NORMAL order (entry/grid/hedge mirror). 0 = OFF
+input double  InpMaxLotTripleGate       = 0.0;                       // [v2.9.4] Max lot per TRIPLE-GATE EXIT order (Recovery RC#N). 0 = OFF
+enum ENUM_G2_DDMODE { G2_DD_OFF=0, G2_DD_PERCENT=1, G2_DD_DOLLAR=2 };
+input ENUM_G2_DDMODE InpMaxDDMode       = G2_DD_OFF;                 // [v2.9.4] Max DD Close mode (OFF / PERCENT / DOLLAR)
+input double  InpMaxDDValue             = 20.0;                      // [v2.9.4] Max DD value (% of balance, or USD floating loss)
+
 //--- === Volatility Squeeze Filter === [v1.6 ported from Gold Miner]
 input string  __sec_sq__              = "=== Volatility Squeeze Filter ==="; // ---
 input bool    InpSQ_Enable            = true;                        // Enable Squeeze Filter
@@ -290,6 +298,10 @@ datetime g_lastHedgeOpenTime  = 0;
 datetime g_lastHedgeCloseTime = 0;
 datetime g_lastDelayLog       = 0;
 datetime g_lastDisarmChkLog[51];      // [v2.9.3] throttle DISARM-CHK diagnostic per group
+// [v2.9.4] Max DD Close tracker
+datetime g_maxDDCloseLastFire = 0;
+double   g_maxDDCurrAbs       = 0.0;  // current absolute floating loss USD (>=0)
+double   g_maxDDCurrPct       = 0.0;  // current floating loss as % of balance
 
 string g_dashName    = "Golden2_DASH";   // legacy single-label (kept for cleanup)
 string g_dashPrefix  = "G2DASH_";         // [v1.5] prefix for all dashboard label objects
@@ -891,7 +903,7 @@ void PlaceInitialMarket(int g, bool placeBuy, bool placeSell){
          double d = MathMax(InpInitialSLPips * g_point, minDist + g_point);
          sl = NormalizeDouble(ask - d, g_digits);
       }
-      if(!trade.Buy(InpInitialLot, _Symbol, ask, sl, tp, cBuy)){
+      if(!trade.Buy(EntryInitialLotG2(), _Symbol, ask, sl, tp, cBuy)){
          PrintFormat("Golden2 v2.73: [MKT] BUY FAIL G%d err=%d retcode=%d", g, GetLastError(), trade.ResultRetcode());
       } else {
          anySent = true;
@@ -908,7 +920,7 @@ void PlaceInitialMarket(int g, bool placeBuy, bool placeSell){
          double d = MathMax(InpInitialSLPips * g_point, minDist + g_point);
          sl = NormalizeDouble(bid + d, g_digits);
       }
-      if(!trade.Sell(InpInitialLot, _Symbol, bid, sl, tp, cSell)){
+      if(!trade.Sell(EntryInitialLotG2(), _Symbol, bid, sl, tp, cSell)){
          PrintFormat("Golden2 v2.73: [MKT] SELL FAIL G%d err=%d retcode=%d", g, GetLastError(), trade.ResultRetcode());
       } else {
          anySent = true;
@@ -1062,7 +1074,7 @@ void PlaceInitialFrame(int g){
 
    bool anySent = false;
    if(placeBuy){
-      if(!trade.BuyStop(InpInitialLot, upPx, _Symbol, slUp, tpUp, ORDER_TIME_GTC, 0, cBuy)){
+      if(!trade.BuyStop(EntryInitialLotG2(), upPx, _Symbol, slUp, tpUp, ORDER_TIME_GTC, 0, cBuy)){
          PrintFormat("Golden2 v2.6.1: BuyStop FAIL G%d err=%d retcode=%d open=%.*f tp=%.*f sl=%.*f",
                      g, GetLastError(), trade.ResultRetcode(), g_digits, upPx, g_digits, tpUp, g_digits, slUp);
       } else {
@@ -1072,7 +1084,7 @@ void PlaceInitialFrame(int g){
       }
    }
    if(placeSell){
-      if(!trade.SellStop(InpInitialLot, dnPx, _Symbol, slDn, tpDn, ORDER_TIME_GTC, 0, cSell)){
+      if(!trade.SellStop(EntryInitialLotG2(), dnPx, _Symbol, slDn, tpDn, ORDER_TIME_GTC, 0, cSell)){
          PrintFormat("Golden2 v2.6.1: SellStop FAIL G%d err=%d retcode=%d open=%.*f tp=%.*f sl=%.*f",
                      g, GetLastError(), trade.ResultRetcode(), g_digits, dnPx, g_digits, tpDn, g_digits, slDn);
       } else {
@@ -1414,7 +1426,7 @@ void ManageInitialReArm(int g){
       double tp   = (InpInitialTPPips>0)? NormalizeDouble(upPx + InpInitialTPPips*g_point, g_digits) : 0;
       double sl   = (InpInitialSLPips>0)? NormalizeDouble(upPx - InpInitialSLPips*g_point, g_digits) : 0;
       string c    = MakeComment(g, SIDE_BUY, false, "IN");
-      if(trade.BuyStop(InpInitialLot, upPx, _Symbol, sl, tp, ORDER_TIME_GTC, 0, c)){
+      if(trade.BuyStop(EntryInitialLotG2(), upPx, _Symbol, sl, tp, ORDER_TIME_GTC, 0, c)){
          if(g_verboseEffective) PrintFormat("Golden2 v2.6: Re-entry BuyStop G%d at %.5f (sellPos=%d)", g, upPx, sellPos);
       }
    }
@@ -1424,7 +1436,7 @@ void ManageInitialReArm(int g){
       double tp   = (InpInitialTPPips>0)? NormalizeDouble(dnPx - InpInitialTPPips*g_point, g_digits) : 0;
       double sl   = (InpInitialSLPips>0)? NormalizeDouble(dnPx + InpInitialSLPips*g_point, g_digits) : 0;
       string c    = MakeComment(g, SIDE_SELL, false, "IN");
-      if(trade.SellStop(InpInitialLot, dnPx, _Symbol, sl, tp, ORDER_TIME_GTC, 0, c)){
+      if(trade.SellStop(EntryInitialLotG2(), dnPx, _Symbol, sl, tp, ORDER_TIME_GTC, 0, c)){
          if(g_verboseEffective) PrintFormat("Golden2 v2.6: Re-entry SellStop G%d at %.5f (buyPos=%d)", g, dnPx, buyPos);
       }
    }
@@ -1473,7 +1485,7 @@ double LotForLevel(int level){
    double step = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
    if(step>0) l = MathRound(l/step)*step;
    if(l<minL) l = minL;
-   return NormalizeDouble(l, 2);
+   return CapNormalLotG2(NormalizeDouble(l, 2)); // [v2.9.4] cap legacy ladder
 }
 
 //----- Gold-Miner-style helpers -----
@@ -1513,10 +1525,26 @@ double ResolveLot(int level, ENUM_LOT_MODE_G2 mode, const string customStr,
    } else { // MULTIPLY
       l = InpInitialLot * MathPow(mulFactor, (double)level);
    }
-   return NormalizeLot(l);
+   return CapNormalLotG2(NormalizeLot(l)); // [v2.9.4] cap normal grid lot
 }
 
-double GetATRPoints(int handle){
+// [v2.9.4] Independent lot caps — applied AFTER NormalizeLot/multiplier so
+// the cap is the final word. step-floor (not round) so cap is never exceeded.
+double CapLotMaxG2(double lot, double cap){
+   if(cap <= 0.0) return lot;
+   if(lot > cap) lot = cap;
+   double step = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   if(step > 0) lot = MathFloor(lot/step) * step;
+   double minL = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   if(lot < minL) lot = minL;
+   double maxL = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+   if(maxL > 0 && lot > maxL) lot = maxL;
+   return NormalizeDouble(lot, 2);
+}
+double CapNormalLotG2(double lot){      return CapLotMaxG2(lot, InpMaxLotPerOrder); }
+double CapTripleGateLotG2(double lot){  return CapLotMaxG2(lot, InpMaxLotTripleGate); }
+// Capped raw InpInitialLot for direct trade.Buy/Sell/BuyStop/SellStop call sites
+double EntryInitialLotG2(){             return CapNormalLotG2(InpInitialLot); }
    if(handle == INVALID_HANDLE) return 0.0;
    double buf[2];
    if(CopyBuffer(handle, 0, 0, 2, buf) <= 0) return 0.0;
@@ -2771,7 +2799,7 @@ void PlaceRecoveryGridIfNeeded(int g, int losSide){
    // [v2.9.0] Lock the seed for the rest of this recovery cycle
    if(g_groupRecoverySeedLot[g] <= 0.0) g_groupRecoverySeedLot[g] = base;
    int level = g_groupRecoveryLevel[g] + 1;
-   double lot = NormalizeLot(base * MathPow(InpRecovery_Multiplier, (double)(level-1)));
+   double lot = CapTripleGateLotG2(NormalizeLot(base * MathPow(InpRecovery_Multiplier, (double)(level-1)))); // [v2.9.4] Triple-Gate exit cap
    int distPts = (InpRecovery_DistancePips > 0) ? InpRecovery_DistancePips : GridLoss_Points;
 
    string c = MakeComment(g, (ENUM_SIDE)losSide, false, StringFormat("RC#%d", level));
@@ -3543,7 +3571,7 @@ void DrawDashboard(){
 
    // Header
    string entryLbl = (InpEntryMode == G2_ENTRY_PENDING) ? "PENDING" : (InpEntryMode == G2_ENTRY_SMA) ? "SMA" : "INSTANT"; // [v2.73]
-   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.9.3    Entry: %s    Side: %s", entryLbl, modeLbl), InpDashAccent);
+   DashHeader("L_TITLE", x, y, w, rowH+2, StringFormat(" Golden2 EA v2.9.4    Entry: %s    Side: %s", entryLbl, modeLbl), InpDashAccent);
    y += rowH+2;
 
    // ==== Account section ====
@@ -3597,6 +3625,24 @@ void DrawDashboard(){
    string fc = InpHedge_ForceCloseOppUnhedged ? StringFormat("ON (%ds)", InpHedge_ForceCloseDelaySec) : "OFF";
    DashRow("L_FCOPP", x, y, w, rowH, "Force-Close Opp",  fc, InpHedge_ForceCloseOppUnhedged?InpDashGood:InpDashColor); y+=rowH;
    DashRow("L_TG",    x, y, w, rowH, "Triple-Gate",      InpExitTripleGate_Enable?"ON":"OFF", InpExitTripleGate_Enable?InpDashGood:InpDashBad); y+=rowH;
+   // [v2.9.4] Risk Limits — Max Lot caps + Max DD Close
+   string mlN = (InpMaxLotPerOrder   > 0.0) ? StringFormat("%.2f", InpMaxLotPerOrder)   : "OFF";
+   string mlT = (InpMaxLotTripleGate > 0.0) ? StringFormat("%.2f", InpMaxLotTripleGate) : "OFF";
+   string ddTxt;
+   color  ddClr = InpDashColor;
+   if(InpMaxDDMode == G2_DD_OFF){
+      ddTxt = "OFF";
+   } else if(InpMaxDDMode == G2_DD_PERCENT){
+      ddTxt = StringFormat("PCT %.1f%% (cur %.2f%%)", InpMaxDDValue, g_maxDDCurrPct);
+      if(g_maxDDCurrPct >= InpMaxDDValue) ddClr = InpDashBad;
+      else if(g_maxDDCurrPct >= InpMaxDDValue*0.7) ddClr = InpDashAccent;
+   } else {
+      ddTxt = StringFormat("USD $%.0f (cur $%.2f)", InpMaxDDValue, g_maxDDCurrAbs);
+      if(g_maxDDCurrAbs >= InpMaxDDValue) ddClr = InpDashBad;
+      else if(g_maxDDCurrAbs >= InpMaxDDValue*0.7) ddClr = InpDashAccent;
+   }
+   DashRow("L_RISK", x, y, w, rowH, "Risk MaxLotN/TG", StringFormat("%s / %s", mlN, mlT), InpDashColor); y+=rowH;
+   DashRow("L_DDCL", x, y, w, rowH, "Max DD Close",    ddTxt, ddClr); y+=rowH;
    // ==== [v1.8] Gold-Miner-style Squeeze panel (multi-row) ====
    if(InpSQ_Enable){
       DashHeader("L_S_SQ", x, y, w, rowH, " === SQUEEZE ===", InpDashAccent); y+=rowH;
@@ -3912,7 +3958,10 @@ int OnInit(){
 
    string entryModeLbl = (InpEntryMode == G2_ENTRY_PENDING) ? "PENDING" :
                          (InpEntryMode == G2_ENTRY_SMA)     ? "SMA"     : "INSTANT";
-   PrintFormat("Golden2 EA v2.9.3 initialized | DisarmPartialFill=ON | HedgeUsedAdvanceBypass=ON | StalePendingCleanup=ON(MirrorSideFilter+ArmStaleSweep+PostMatchFullSweep) | RecoverySeed=LOCKED-First-NonRC | Magic=%I64d | MaxGroups=%d | EntryMode=%s | InitMode=%d | GridLoss=%s | Squeeze=%s [BB/KC ratio only, deprecated inputs PURGED] | HedgeOrphanOffset=ON | TripleGate=%s | ExitGate=Squeeze-TF3-Latch+ReserveProfit+CrossSideShred | OneHedgePerGroup=ON | PostMatchAvgTP=PostMatch-Active-Only | RecoveryOrderLock=ON | PriorAdvBypass=HedgeUsed+RecLvl>0 | ReserveProfitUSD=%.1f MinGainUSD=%.1f MinNetUSD=%.1f | SeqQueue=%s | RecoveryAdvUnblock=%s | RecoveryGrid=%s(mult=%.2f max=%d cont=%s newCandle=%s) | PostMatchAvgBrokerTP=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | ProfitSideUnhedgedAdv=%s | ForceCloseOppUnhedged=%s(%ds) | Tester=%s Visual=%s Opt=%s DashInterval=%ds | TesterHideIndicators=%s SideTaggedComments=ON",
+   PrintFormat("Golden2 EA v2.9.4 initialized | MaxLotPerOrder=%.2f MaxLotTripleGate=%.2f MaxDDMode=%s MaxDDValue=%.2f | DisarmPartialFill=ON | HedgeUsedAdvanceBypass=ON | StalePendingCleanup=ON(MirrorSideFilter+ArmStaleSweep+PostMatchFullSweep) | RecoverySeed=LOCKED-First-NonRC | Magic=%I64d | MaxGroups=%d | EntryMode=%s | InitMode=%d | GridLoss=%s | Squeeze=%s [BB/KC ratio only, deprecated inputs PURGED] | HedgeOrphanOffset=ON | TripleGate=%s | ExitGate=Squeeze-TF3-Latch+ReserveProfit+CrossSideShred | OneHedgePerGroup=ON | PostMatchAvgTP=PostMatch-Active-Only | RecoveryOrderLock=ON | PriorAdvBypass=HedgeUsed+RecLvl>0 | ReserveProfitUSD=%.1f MinGainUSD=%.1f MinNetUSD=%.1f | SeqQueue=%s | RecoveryAdvUnblock=%s | RecoveryGrid=%s(mult=%.2f max=%d cont=%s newCandle=%s) | PostMatchAvgBrokerTP=%s | BarTrail=%s | TrailMode=ToWardPriceOnly | MinStep=%dpt | ReEntryOnClose=%s | Accum=%s | AccumCooldown=%ds | GroupLock=%s | AdvancePerTick=%s | ProfitSideUnhedgedAdv=%s | ForceCloseOppUnhedged=%s(%ds) | Tester=%s Visual=%s Opt=%s DashInterval=%ds | TesterHideIndicators=%s SideTaggedComments=ON",
+               InpMaxLotPerOrder, InpMaxLotTripleGate,
+               (InpMaxDDMode==G2_DD_OFF?"OFF":(InpMaxDDMode==G2_DD_PERCENT?"PERCENT":"DOLLAR")),
+               InpMaxDDValue,
                (long)InpMagic, InpMaxGroups, entryModeLbl, (int)InpInitSideMode,
                GridLoss_Enable?"ON":"OFF", InpSQ_Enable?"ON":"OFF",
                InpExitTripleGate_Enable?"ON":"OFF",
@@ -3979,7 +4028,53 @@ void RenderDashboardThrottled(){
    DrawDashboard();
 }
 
-// [v2.72] Track highest active group so the per-tick loop can exit early
+// [v2.9.4] Max DD Close — global kill switch.
+// Closes ALL EA positions + deletes ALL EA pendings when floating loss exceeds
+// configured DD vs balance (PERCENT) or absolute floating loss in USD (DOLLAR).
+// 30-second cooldown between fires to prevent multi-tick re-trigger spam.
+void ManageMaxDDClose(){
+   if(InpMaxDDMode == G2_DD_OFF) return;
+   double bal = AccountInfoDouble(ACCOUNT_BALANCE);
+   if(bal <= 0.0) return;
+   double floating = 0.0;
+   int total = PositionsTotal();
+   for(int i=0;i<total;i++){
+      ulong tk = PositionGetTicket(i); if(tk==0) continue;
+      if(!PositionSelectByTicket(tk)) continue;
+      if((long)PositionGetInteger(POSITION_MAGIC) != InpMagic) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      floating += PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+   }
+   double absDD = (floating < 0.0) ? -floating : 0.0;
+   double pct   = absDD * 100.0 / bal;
+   g_maxDDCurrAbs = absDD; g_maxDDCurrPct = pct;
+   bool trig = false;
+   if(InpMaxDDMode == G2_DD_PERCENT && pct   >= InpMaxDDValue) trig = true;
+   if(InpMaxDDMode == G2_DD_DOLLAR  && absDD >= InpMaxDDValue) trig = true;
+   if(!trig) return;
+   if(TimeCurrent() - g_maxDDCloseLastFire < 30) return;
+   g_maxDDCloseLastFire = TimeCurrent();
+   PrintFormat("Golden2 v2.9.4: MAX-DD CLOSE FIRED mode=%s dd=$%.2f (%.2f%%) bal=$%.2f -> flatten all EA positions+pendings",
+               (InpMaxDDMode==G2_DD_PERCENT?"PERCENT":"DOLLAR"), absDD, pct, bal);
+   // close positions
+   for(int i=PositionsTotal()-1; i>=0; i--){
+      ulong tk = PositionGetTicket(i); if(tk==0) continue;
+      if(!PositionSelectByTicket(tk)) continue;
+      if((long)PositionGetInteger(POSITION_MAGIC) != InpMagic) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      trade.PositionClose(tk);
+   }
+   // delete pendings
+   for(int i=OrdersTotal()-1; i>=0; i--){
+      ulong tk = OrderGetTicket(i); if(tk==0) continue;
+      if(!OrderSelect(tk)) continue;
+      if((long)OrderGetInteger(ORDER_MAGIC) != InpMagic) continue;
+      if(OrderGetString(ORDER_SYMBOL) != _Symbol) continue;
+      trade.OrderDelete(tk);
+   }
+}
+
+
 //         once it reaches an empty tail. Updated each tick.
 int ComputeLoopUpperBound(){
    int hi = 0;
@@ -4003,6 +4098,7 @@ void OnTick(){
    }
    if(!InpAllowTrade){ RenderDashboardThrottled(); return; }
    RefreshSqueezeStateThrottled(); // [v2.72] one refresh per new M1 bar
+   ManageMaxDDClose(); // [v2.9.4] global Max DD kill switch (runs every tick; internal cooldown)
 
    // [v2.7.9/v2.9.1] Aux-chart sweep — only useful when a chart is actually
    // visible. Skip entirely in non-visual Tester (saves ChartIndicatorDelete
