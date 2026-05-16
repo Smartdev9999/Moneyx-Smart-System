@@ -1,12 +1,12 @@
 //+------------------------------------------------------------------+
 //|                                                   Golden2_EA.mq5 |
 //|                                    Copyright 2025, MoneyX Smart  |
-//|  Golden2 EA v2.9.0 — Recovery Seed Lock                          |
+//|  Golden2 EA v2.9.1 — Backtest Performance Pack                   |
 //+------------------------------------------------------------------+
 #property copyright "MoneyX"
 #property link      "https://moneyx.com"
-#property version   "2.90"
-#property description "Golden2 EA v2.9.0 — Recovery Seed Lock: seed lot for the RC# ladder is computed once (excluding RC# tickets) and reused for every RC#N so Multiplier never compounds on an already-multiplied lot. Fixes RC lot explosion. All v2.8.9 Recovery-Mode Order Lock + v2.8.8 Continuation + v2.8.7 Reserve-Profit preserved."
+#property version   "2.91"
+#property description "Golden2 EA v2.9.1 — Backtest Performance Pack: tester-aware log silencing (InpTester_SilenceLogs), chart-draw skip (InpTester_DisableChartDraw), aux-chart sweep limited to visual mode, optional tick-stride throttle (InpTester_TickStrideMs). Zero changes to trading logic / order execution / strategy. All v2.9.0 Recovery Seed Lock + v2.8.9 Recovery-Mode Order Lock preserved."
 #property strict
 
 #include <Trade/Trade.mqh>
